@@ -100,6 +100,36 @@ describe("agent stream orchestrator", () => {
     );
   });
 
+  test("formats AI SDK no-output errors with Papr proxy guidance", async () => {
+    const iterator = orchestrateModelStream(
+      chunkStream([
+        {
+          type: "error",
+          error: {
+            name: "AI_NoOutputGeneratedError",
+            message: "No output generated. Check the stream for errors.",
+          },
+        },
+      ]),
+      "chat-no-output",
+      [],
+    );
+    const emitted: Array<{ type: string; payload: unknown }> = [];
+
+    while (true) {
+      const next = await iterator.next();
+      if (next.done) break;
+      emitted.push({ type: next.value.type, payload: next.value.payload });
+    }
+
+    const streamError = emitted.find((entry) => entry.type === "error");
+    expect(streamError).toBeDefined();
+    const payload = streamError?.payload as { error?: string };
+    expect(payload.error).toContain("empty response");
+    expect(payload.error).toContain("sign in with Papr");
+    expect(payload.error).not.toContain("Check the stream for errors");
+  });
+
   test("formats Papr proxy connect timeout errors clearly", async () => {
     const connectTimeoutError = {
       name: "AI_RetryError",
@@ -145,5 +175,66 @@ describe("agent stream orchestrator", () => {
     expect(payload.error).toContain("timed out after several retries");
     expect(payload.error).not.toContain("requestBodyValues");
     expect(payload.error).not.toContain("AI_RetryError");
+  });
+});
+
+describe("agent stream orchestrator — caller-owned sequence on abort", () => {
+  test("interrupted stream leaves live sequence in caller array (no NULL sequence)", async () => {
+    // Reproduces: user stops / sends new message mid-turn. Generator is
+    // aborted via iterator.return() before it can return its result, so the
+    // caller must be able to read the sequence from the array it passed in.
+    const chunks = [
+      { type: "text-delta", text: "First narration. " },
+      {
+        type: "tool-call",
+        toolCallId: "call-1",
+        toolName: "bash",
+        input: { command: "ls" },
+      },
+      { type: "tool-result", toolCallId: "call-1", toolName: "bash", output: "ok" },
+      { type: "text-delta", text: "Second narration after tool." },
+      // Stream never reaches finish — simulates abort
+    ];
+
+    const liveSequence: Array<{ type: "text" | "tool" | "thinking"; data: any }> = [];
+    const iterator = orchestrateModelStream(chunkStream(chunks), "chat-abort", [], {
+      textBufferMin: 1,
+      sequence: liveSequence,
+    });
+
+    // Consume until the last chunk, then abort like AgentService does when
+    // the abort signal fires (generator's finally runs, no normal return).
+    for await (const _ of iterator) {
+      // drain
+    }
+    await iterator.return(undefined as never);
+
+    const types = liveSequence.map((s) => s.type);
+    expect(types).toEqual(["text", "tool", "text"]);
+    expect(liveSequence[0].data).toBe("First narration.");
+    expect(liveSequence[2].data).toBe("Second narration after tool.");
+    expect((liveSequence[1].data as { name: string }).name).toBe("bash");
+  });
+
+  test("default (no caller array) still returns sequence on normal completion", async () => {
+    const chunks = [
+      { type: "text-delta", text: "only text" },
+      { type: "finish" },
+    ];
+    const iterator = orchestrateModelStream(chunkStream(chunks), "chat-default", [], {
+      textBufferMin: 1,
+    });
+    let result: Awaited<ReturnType<typeof iterator.next>> | undefined;
+    while (true) {
+      const next = await iterator.next();
+      if (next.done) {
+        result = next;
+        break;
+      }
+    }
+    expect(result?.done).toBe(true);
+    expect((result!.value as { sequence: unknown[] }).sequence).toEqual([
+      { type: "text", data: "only text" },
+    ]);
   });
 });

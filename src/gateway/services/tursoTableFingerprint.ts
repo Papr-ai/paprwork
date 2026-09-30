@@ -2,8 +2,11 @@
  * Content fingerprints for Turso sync — skip unchanged tables and detect real edits.
  */
 
+import { openDiagnosticDatabase } from "./databaseDiagnostics/sqlite.js";
+
 import { createHash } from "crypto";
 import Database from "better-sqlite3";
+import { isReplicaManagedDbPath } from "./tursoReplica/tursoReplicaFileGuard.js";
 import {
   filterSyncableTables,
   listUserTables,
@@ -15,8 +18,18 @@ import {
 const FINGERPRINT_VERSION = "v2";
 const ROW_BATCH_SIZE = 1_000;
 
+/** Platform-managed columns (sync metadata) — excluded from user schema drift checks. */
+export function isPlatformManagedColumn(name: string): boolean {
+  return name.startsWith("_papr_");
+}
+
+export function userSchemaColumns(columns: readonly TableColumn[]): TableColumn[] {
+  return columns.filter((col) => !isPlatformManagedColumn(col.name));
+}
+
 function schemaSignature(columns: TableColumn[]): string {
-  return columns
+  return [...columns]
+    .sort((a, b) => a.name.localeCompare(b.name))
     .map((col) => `${col.name}:${col.type}:${col.primaryKey ? 1 : 0}`)
     .join(",");
 }
@@ -75,9 +88,13 @@ export function computeSyncableTableFingerprints(
 export function computeSyncableTableFingerprintsForPath(
   dbPath: string,
 ): Record<string, string> | null {
+  if (isReplicaManagedDbPath(dbPath)) {
+    return null;
+  }
   let db: Database.Database | null = null;
   try {
-    db = new Database(dbPath, { readonly: true });
+    // Short busy timeout — a contended file must not block the event loop for 5s.
+    db = openDiagnosticDatabase(Database, "services/tursoTableFingerprint", dbPath, { readonly: true, timeout: 100 });
     return computeSyncableTableFingerprints(db);
   } catch {
     return null;
@@ -109,7 +126,21 @@ export function fingerprintsEqual(
   return true;
 }
 
-export function schemasMatch(
+/** Compare user-defined columns only — for UI drift (ignore platform _papr_*). */
+export function userSchemasMatch(
+  left: TableColumn[],
+  right: TableColumn[],
+): boolean {
+  const userLeft = userSchemaColumns(left);
+  const userRight = userSchemaColumns(right);
+  if (userLeft.length !== userRight.length) {
+    return false;
+  }
+  return schemaSignature(userLeft) === schemaSignature(userRight);
+}
+
+/** Compare full table schemas including platform columns — for sync migration. */
+export function fullSchemasMatch(
   left: TableColumn[],
   right: TableColumn[],
 ): boolean {
@@ -117,4 +148,9 @@ export function schemasMatch(
     return false;
   }
   return schemaSignature(left) === schemaSignature(right);
+}
+
+/** @deprecated Prefer userSchemasMatch (UI) or fullSchemasMatch (sync). */
+export function schemasMatch(left: TableColumn[], right: TableColumn[]): boolean {
+  return fullSchemasMatch(left, right);
 }

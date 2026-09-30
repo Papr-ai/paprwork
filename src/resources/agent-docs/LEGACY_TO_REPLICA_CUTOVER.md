@@ -1,0 +1,70 @@
+# Legacy → Plan A Replica Cutover
+
+When `PAPR_TURSO_REPLICA_SYNC=replica-records`, legacy registry databases migrate to Turso Sync replica **on Publish / Publish changes in the app tab** for that app only. Same Turso instance (`d-*` / `tursoShortName`) — never delete/recreate.
+
+## CDC terminology (read before diagnosing)
+
+**"CDC" does not always mean legacy.** Check `syncMode` in `get_cloud_sync_status` / `papr_db_sync_status`:
+
+| Signal | Meaning |
+|--------|---------|
+| `syncMode: "legacy"` | Old Papr row sync (workspace log, `_papr_sync_log`, `turso_cdc*` tables) until cutover |
+| `syncMode: "replica"` + `pendingOps` / `cdcOperations` > 0 | **Normal Plan A** — unpushed local DML on Turso Sync. Fix: Publish changes / `papr_db_push`. Applies to **new apps born post-replica** too |
+| `turso_cdc`, `turso_sync_last_change_id` tables on disk | Legacy artifact tables — strip at cutover; not proof the app is still on legacy sync if `syncMode` is already `replica` |
+
+Do **not** tell users a replica DB is "on legacy CDC" because status shows pending ops or mentions CDC.
+
+## Decision tree
+
+```
+User: Publish / Publish changes / push_cloud_sync({ appId }) / schema drift on legacy DB
+  │
+  ├─ syncMode already replica → papr_db_apply_migration / repair_cloud_sync
+  │
+  └─ syncMode legacy (Plan A rollout)
+        │
+        ├─ Real user schema drift (columns/tables differ)
+        │     → papr_db_apply_migration (missing migrations)
+        │     → NEVER delete_database / recreate Turso
+        │
+        ├─ Local-only legacy CDC artifacts only
+        │     (turso_sync_last_change_id, turso_cdc_*)
+        │     → push_cloud_sync({ appId }) or Publish / Publish changes (strip + cutover)
+        │     → Do NOT drop Turso or reseed from scratch
+        │
+        └─ Turso empty, local has rows
+              → cutover seed_local (snapshot push to existing Turso)
+```
+
+## What cutover does
+
+1. Backup local `data.db` → `.pre-replica.bak`
+2. Drop local-only legacy CDC artifact tables
+3. Final legacy push if dirty (same Turso)
+4. Provision embedded replica file
+5. Set `syncMode: "replica"`
+
+## Publish order (Plan A)
+
+Same ordered pipeline for **Publish / Publish changes in the app tab** (UI) and **`push_cloud_sync({ appId })`** (agent) when default targets include both github + turso.
+
+1. `applyLocalMigrationsForApp` — apply pending local migrations
+2. Per-app legacy → replica cutover
+3. Replica push
+4. Git writer + publish
+
+## Never do
+
+- `delete_database` / create new Turso when legacy already has data on `d-*`
+- `bash` / `sqlite3` INSERT on registry DB files (use `papr_db_*` or replica path)
+- Legacy `schema drift heal` under `replica-records` (disabled)
+- `force_local` when Turso has more rows than local (use `papr_db_push` after restore — not bash INSERT)
+- `bootstrap_remote` when local has rows but Turso is empty (reseed wipes local; use migration_cloud + push instead)
+
+## Recovery after mistaken delete/recreate or cross-namespace copy
+
+1. Restore `data.db` from `.pre-replica.bak`, `.sync-backup`, or known good backup if the live file is empty
+2. Fix `databases.json` to the target namespace `tursoShortName` (`d-{dbId8}`)
+3. Strip replica sidecars next to `data.db` (`-changes`, `-info`, `-shm`, `-wal`) — cross-namespace copy and community install do this automatically via portable replica prep
+4. Seed Turso: `papr_db_apply_migration_cloud({ dbId, migrationId })` for each pending migration, then `papr_db_push({ dbId })`
+5. Use `repair_cloud_sync({ strategy: "bootstrap_remote" })` **only** when Turso already has rows and you need to re-pull a verified remote into local — it verifies remote row count before reseed and **fails without wiping** if Turso stays empty

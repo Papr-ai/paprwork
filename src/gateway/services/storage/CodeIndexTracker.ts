@@ -5,11 +5,14 @@
  * Provides hash-based change detection to skip unchanged files.
  */
 
+import { openDiagnosticDatabase } from "../databaseDiagnostics/sqlite.js";
+
 import Database from 'better-sqlite3';
 import * as crypto from 'crypto';
 import * as fs from 'fs';
 import * as path from 'path';
 import { resolvePaprUserDataPath } from '../../../core/utils/paprWorkspace.js';
+import { normalizeIndexPath } from './codeIndexPaths.js';
 
 export interface IndexedFile {
   file_path: string;
@@ -68,7 +71,7 @@ export class CodeIndexTracker {
     }
     
     this.dbPath = path.join(baseDir, 'code-index.db');
-    this.db = new Database(this.dbPath);
+    this.db = openDiagnosticDatabase(Database, "services/storage/CodeIndexTracker", this.dbPath);
     
     // Performance optimizations
     this.db.pragma('journal_mode = WAL');
@@ -111,7 +114,9 @@ export class CodeIndexTracker {
       CREATE TABLE IF NOT EXISTS index_queue (
         file_path TEXT PRIMARY KEY,
         queued_at DATETIME NOT NULL,
-        priority INTEGER DEFAULT 0
+        priority INTEGER DEFAULT 0,
+        attempts INTEGER DEFAULT 0,
+        last_error TEXT
       );
       
       CREATE INDEX IF NOT EXISTS idx_queue_priority ON index_queue(priority DESC, queued_at ASC);
@@ -138,6 +143,26 @@ export class CodeIndexTracker {
 
       CREATE INDEX IF NOT EXISTS idx_file_summaries_project ON file_summaries(project_id);
     `);
+
+    this.migrateIndexQueueColumns();
+  }
+
+  /**
+   * Existing installs already have index_queue, so CREATE TABLE IF NOT EXISTS
+   * will not add newer columns. Add them idempotently.
+   */
+  private migrateIndexQueueColumns(): void {
+    const cols = this.db
+      .prepare(`PRAGMA table_info(index_queue)`)
+      .all() as Array<{ name: string }>;
+    const have = new Set(cols.map((c) => c.name));
+
+    if (!have.has('attempts')) {
+      this.db.exec(`ALTER TABLE index_queue ADD COLUMN attempts INTEGER DEFAULT 0`);
+    }
+    if (!have.has('last_error')) {
+      this.db.exec(`ALTER TABLE index_queue ADD COLUMN last_error TEXT`);
+    }
   }
   
   /**
@@ -154,16 +179,22 @@ export class CodeIndexTracker {
   needsIndexing(filePath: string): boolean {
     if (this.closed) return false;
     const currentHash = this.calculateFileHash(filePath);
-    
+    return this.needsIndexingWithHash(filePath, currentHash);
+  }
+
+  /** Same as needsIndexing but caller already read content off the main thread. */
+  needsIndexingWithHash(filePath: string, contentHash: string): boolean {
+    if (this.closed) return false;
+
     const row = this.db.prepare(
-      'SELECT content_hash FROM indexed_files WHERE file_path = ?'
-    ).get(filePath) as { content_hash: string } | undefined;
-    
+      "SELECT content_hash FROM indexed_files WHERE file_path = ?",
+    ).get(normalizeIndexPath(filePath)) as { content_hash: string } | undefined;
+
     if (!row) {
-      return true; // New file
+      return true;
     }
-    
-    return row.content_hash !== currentHash; // Changed file
+
+    return row.content_hash !== contentHash;
   }
   
   /**
@@ -176,7 +207,7 @@ export class CodeIndexTracker {
       (file_path, content_hash, last_indexed_at, schema_version, memory_id, project_id, lines_of_code, language)
       VALUES (?, ?, ?, ?, ?, ?, ?, ?)
     `).run(
-      file.file_path,
+      normalizeIndexPath(file.file_path),
       file.content_hash,
       file.last_indexed_at.toISOString(),
       file.schema_version,
@@ -210,10 +241,34 @@ export class CodeIndexTracker {
    */
   queueFile(filePath: string, priority: number = 0): void {
     if (this.closed) return;
+    // Preserve attempts across re-queues of the same path so a poison file
+    // cannot reset its own retry budget and spin forever.
     this.db.prepare(`
-      INSERT OR REPLACE INTO index_queue (file_path, queued_at, priority)
-      VALUES (?, ?, ?)
-    `).run(filePath, new Date().toISOString(), priority);
+      INSERT INTO index_queue (file_path, queued_at, priority, attempts)
+      VALUES (?, ?, ?, 0)
+      ON CONFLICT(file_path) DO UPDATE SET
+        queued_at = excluded.queued_at,
+        priority = excluded.priority
+    `).run(normalizeIndexPath(filePath), new Date().toISOString(), priority);
+  }
+
+  /**
+   * Record a failed indexing attempt. Returns the new attempt count so the
+   * caller can decide whether to give up and dequeue.
+   */
+  recordQueueFailure(filePath: string, errorMessage: string): number {
+    if (this.closed) return 0;
+    this.db.prepare(`
+      UPDATE index_queue
+      SET attempts = COALESCE(attempts, 0) + 1, last_error = ?
+      WHERE file_path = ?
+    `).run(errorMessage.slice(0, 500), normalizeIndexPath(filePath));
+
+    const row = this.db.prepare(
+      'SELECT attempts FROM index_queue WHERE file_path = ?'
+    ).get(normalizeIndexPath(filePath)) as { attempts: number } | undefined;
+
+    return row?.attempts ?? 0;
   }
   
   /**
@@ -240,7 +295,9 @@ export class CodeIndexTracker {
    */
   dequeueFile(filePath: string): void {
     if (this.closed) return;
-    this.db.prepare('DELETE FROM index_queue WHERE file_path = ?').run(filePath);
+    // Canonical AND raw: rows written before normalization keep their spelling.
+    this.db.prepare('DELETE FROM index_queue WHERE file_path IN (?, ?)')
+      .run(normalizeIndexPath(filePath), filePath);
   }
   
   /**
@@ -333,7 +390,7 @@ export class CodeIndexTracker {
     if (this.closed) return false;
     const row = this.db.prepare(
       'SELECT content_hash FROM file_summaries WHERE file_path = ?'
-    ).get(filePath) as { content_hash: string } | undefined;
+    ).get(normalizeIndexPath(filePath)) as { content_hash: string } | undefined;
 
     if (!row) {
       return true;
@@ -349,7 +406,7 @@ export class CodeIndexTracker {
       (file_path, project_id, file_name, summary_text, content_hash, memory_id, language, updated_at)
       VALUES (?, ?, ?, ?, ?, ?, ?, ?)
     `).run(
-      summary.file_path,
+      normalizeIndexPath(summary.file_path),
       summary.project_id,
       summary.file_name,
       summary.summary_text,
@@ -364,7 +421,7 @@ export class CodeIndexTracker {
     if (this.closed) return null;
     const row = this.db.prepare(
       'SELECT * FROM file_summaries WHERE file_path = ?'
-    ).get(filePath) as {
+    ).get(normalizeIndexPath(filePath)) as {
       file_path: string;
       project_id: string;
       file_name: string;
@@ -420,7 +477,8 @@ export class CodeIndexTracker {
 
   deleteFileSummary(filePath: string): void {
     if (this.closed) return;
-    this.db.prepare('DELETE FROM file_summaries WHERE file_path = ?').run(filePath);
+    this.db.prepare('DELETE FROM file_summaries WHERE file_path IN (?, ?)')
+      .run(normalizeIndexPath(filePath), filePath);
   }
 
   saveProjectOverview(overview: ProjectOverviewRecord): void {
@@ -466,11 +524,41 @@ export class CodeIndexTracker {
     };
   }
 
+  /**
+   * Papr memory id for a RAW indexed code file (not its summary).
+   *
+   * `indexed_files.memory_id` has existed since the table was created but was
+   * never written: SmartCodeIndexManager calls recordIndexedFile() without a
+   * memory_id, so every re-index had no id to update against and issued a
+   * fresh `memory.add()` instead. These two accessors close that gap.
+   */
+  getIndexedFileMemoryId(filePath: string): string | undefined {
+    if (this.closed) return undefined;
+    const row = this.db.prepare(
+      'SELECT memory_id FROM indexed_files WHERE file_path = ?'
+    ).get(normalizeIndexPath(filePath)) as { memory_id?: string } | undefined;
+    return row?.memory_id ?? undefined;
+  }
+
+  /**
+   * Persist the memory id for an indexed file.
+   *
+   * UPDATE (not INSERT OR REPLACE) on purpose: recordIndexedFile() owns row
+   * creation and would clobber memory_id back to NULL if used here, which is
+   * the exact hazard that kept the column empty.
+   */
+  setIndexedFileMemoryId(filePath: string, memoryId: string): void {
+    if (this.closed) return;
+    this.db.prepare(
+      'UPDATE indexed_files SET memory_id = ? WHERE file_path = ?'
+    ).run(memoryId, normalizeIndexPath(filePath));
+  }
+
   getFileSummaryMemoryId(filePath: string): string | undefined {
     if (this.closed) return undefined;
     const row = this.db.prepare(
       'SELECT memory_id FROM file_summaries WHERE file_path = ?'
-    ).get(filePath) as { memory_id?: string } | undefined;
+    ).get(normalizeIndexPath(filePath)) as { memory_id?: string } | undefined;
     return row?.memory_id;
   }
 
@@ -484,7 +572,8 @@ export class CodeIndexTracker {
 
   removeIndexedFile(filePath: string): void {
     if (this.closed) return;
-    this.db.prepare('DELETE FROM indexed_files WHERE file_path = ?').run(filePath);
+    this.db.prepare('DELETE FROM indexed_files WHERE file_path IN (?, ?)')
+      .run(normalizeIndexPath(filePath), filePath);
   }
 
   /**

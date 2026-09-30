@@ -6,7 +6,7 @@
  * This is the recommended pattern for preload scripts
  */
 
-const { contextBridge, ipcRenderer } = require("electron");
+const { contextBridge, ipcRenderer, webUtils } = require("electron");
 
 console.log("[Preload] Script loaded");
 
@@ -59,21 +59,34 @@ contextBridge.exposeInMainWorld("electronAPI", {
   // OAuth API
   oauth: {
     openai: {
-      startOAuth: () => ipcRenderer.invoke("auth:openai:start-oauth"),
+      startOAuth: (options) => ipcRenderer.invoke("auth:openai:start-oauth", options),
       getStatus: () => ipcRenderer.invoke("auth:openai:get-status"),
       disconnect: () => ipcRenderer.invoke("auth:openai:disconnect"),
+      getUsageLimits: () => ipcRenderer.invoke("auth:openai:get-usage-limits"),
     },
     claude: {
-      startOAuth: () => ipcRenderer.invoke("auth:claude:start-oauth"),
+      startOAuth: (options) => ipcRenderer.invoke("auth:claude:start-oauth", options),
       getStatus: () => ipcRenderer.invoke("auth:claude:get-status"),
       disconnect: () => ipcRenderer.invoke("auth:claude:disconnect"),
-      pasteToken: (token) => ipcRenderer.invoke("auth:claude:paste-token", token),
+      pasteToken: (token, options) =>
+        ipcRenderer.invoke("auth:claude:paste-token", token, options),
+      trySyncFromStorage: (options) =>
+        ipcRenderer.invoke("auth:claude:try-sync-from-storage", options),
       getToken: () => ipcRenderer.invoke("auth:claude:get-token"),
+      getUsageLimits: () => ipcRenderer.invoke("auth:claude:get-usage-limits"),
+      onboardingRunCheck: (options) =>
+        ipcRenderer.invoke("auth:claude:onboarding-run-check", options),
+      onboardingInstallCli: (options) =>
+        ipcRenderer.invoke("auth:claude:onboarding-install-cli", options),
+      openSetupTokenTerminal: (options) =>
+        ipcRenderer.invoke("auth:claude:open-setup-token-terminal", options),
+      getSetupTokenShellCommand: () =>
+        ipcRenderer.invoke("auth:claude:get-setup-token-shell-command"),
     },
     // Generic paste token that maps providers correctly
-    pasteToken: (provider, token) => {
+    pasteToken: (provider, token, options) => {
       const channel = provider === "anthropic" ? "auth:claude:paste-token" : `auth:${provider}:paste-token`;
-      return ipcRenderer.invoke(channel, token);
+      return ipcRenderer.invoke(channel, token, options);
     },
     // Push-based auth status from main process (no polling needed)
     onAuthStatus: (callback) => {
@@ -85,25 +98,43 @@ contextBridge.exposeInMainWorld("electronAPI", {
 
   // Papr Login API - Authenticate with Papr platform for automatic API key provisioning
   papr: (() => {
+    // Always forward login events to DOM so AuthWall works even before onLoginSuccess is registered.
+    ipcRenderer.on("papr:login-success", (_event, data) => {
+      window.dispatchEvent(new CustomEvent("papr-auth-success", { detail: data }));
+    });
+    ipcRenderer.on("papr:login-error", (_event, data) => {
+      window.dispatchEvent(new CustomEvent("papr-login-error", { detail: data }));
+    });
+    ipcRenderer.on("papr:setup-required", (_event, data) => {
+      window.dispatchEvent(new CustomEvent("papr-setup-required", { detail: data }));
+    });
+
     const loginSuccessListenerMap = new WeakMap();
     const loginErrorListenerMap = new WeakMap();
+    const setupRequiredListenerMap = new WeakMap();
     const logoutSuccessListenerMap = new WeakMap();
     const namespaceChangedListenerMap = new WeakMap();
     const organizationChangedListenerMap = new WeakMap();
+    const workspaceSwitchStartingListenerMap = new WeakMap();
     const workspaceCacheUpdatedListenerMap = new WeakMap();
 
     return {
       checkLoginStatus: () => ipcRenderer.invoke("papr:check-login-status"),
+      completeOrgSetup: (input) => ipcRenderer.invoke("papr:complete-org-setup", input),
       startLogin: (mode, source) => ipcRenderer.invoke("papr:start-login", mode, source),
       logout: () => ipcRenderer.invoke("papr:logout"),
+      verifyManualCode: (code) => ipcRenderer.invoke("papr:verify-manual-code", code),
       getProfile: () => ipcRenderer.invoke("papr:get-profile"),
+      refreshProfile: () => ipcRenderer.invoke("papr:refresh-profile"),
+      syncProfile: (input) => ipcRenderer.invoke("papr:sync-profile", input),
+      getOnboardingState: () => ipcRenderer.invoke("papr:get-onboarding-state"),
+      setOnboardingState: (update) => ipcRenderer.invoke("papr:set-onboarding-state", update),
+      getActiveWorkspace: () => ipcRenderer.invoke("papr:get-active-workspace"),
       
       // Listen for successful login (via deep link callback)
       onLoginSuccess: (callback) => {
         const wrapper = (_event, data) => {
           callback(data);
-          // Also dispatch a DOM event for easier listening
-          window.dispatchEvent(new CustomEvent('papr-auth-success', { detail: data }));
         };
         loginSuccessListenerMap.set(callback, wrapper);
         ipcRenderer.on("papr:login-success", wrapper);
@@ -119,7 +150,6 @@ contextBridge.exposeInMainWorld("electronAPI", {
       onLoginError: (callback) => {
         const wrapper = (_event, data) => {
           callback(data);
-          window.dispatchEvent(new CustomEvent("papr-login-error", { detail: data }));
         };
         loginErrorListenerMap.set(callback, wrapper);
         ipcRenderer.on("papr:login-error", wrapper);
@@ -129,6 +159,21 @@ contextBridge.exposeInMainWorld("electronAPI", {
         if (wrapper) {
           ipcRenderer.removeListener("papr:login-error", wrapper);
           loginErrorListenerMap.delete(callback);
+        }
+      },
+
+      onSetupRequired: (callback) => {
+        const wrapper = (_event, data) => {
+          callback(data);
+        };
+        setupRequiredListenerMap.set(callback, wrapper);
+        ipcRenderer.on("papr:setup-required", wrapper);
+      },
+      removeSetupRequiredListener: (callback) => {
+        const wrapper = setupRequiredListenerMap.get(callback);
+        if (wrapper) {
+          ipcRenderer.removeListener("papr:setup-required", wrapper);
+          setupRequiredListenerMap.delete(callback);
         }
       },
       
@@ -150,7 +195,8 @@ contextBridge.exposeInMainWorld("electronAPI", {
       },
       
       listNamespaces: (options) => ipcRenderer.invoke("papr:list-namespaces", options),
-      switchNamespace: (namespaceId, namespaceName) => ipcRenderer.invoke("papr:switch-namespace", namespaceId, namespaceName),
+      listAllNamespaces: (options) => ipcRenderer.invoke("papr:list-all-namespaces", options),
+      switchNamespace: (namespaceId, namespaceName, organizationId) => ipcRenderer.invoke("papr:switch-namespace", namespaceId, namespaceName, organizationId),
       onNamespaceChanged: (callback) => {
         const wrapper = (_event, data) => {
           callback(data);
@@ -168,7 +214,7 @@ contextBridge.exposeInMainWorld("electronAPI", {
       },
       
       listOrganizations: () => ipcRenderer.invoke("papr:list-organizations"),
-      switchOrganization: (organizationId, organizationName) => ipcRenderer.invoke("papr:switch-organization", organizationId, organizationName),
+      switchOrganization: (organizationId, organizationName, options) => ipcRenderer.invoke("papr:switch-organization", organizationId, organizationName, options),
       onOrganizationChanged: (callback) => {
         const wrapper = (_event, data) => {
           callback(data);
@@ -182,6 +228,24 @@ contextBridge.exposeInMainWorld("electronAPI", {
         if (wrapper) {
           ipcRenderer.removeListener("papr:organization-changed", wrapper);
           organizationChangedListenerMap.delete(callback);
+        }
+      },
+
+      onWorkspaceSwitchStarting: (callback) => {
+        const wrapper = (_event, data) => {
+          callback(data);
+          window.dispatchEvent(
+            new CustomEvent("papr-workspace-switch-starting", { detail: data }),
+          );
+        };
+        workspaceSwitchStartingListenerMap.set(callback, wrapper);
+        ipcRenderer.on("papr:workspace-switch-starting", wrapper);
+      },
+      removeWorkspaceSwitchStartingListener: (callback) => {
+        const wrapper = workspaceSwitchStartingListenerMap.get(callback);
+        if (wrapper) {
+          ipcRenderer.removeListener("papr:workspace-switch-starting", wrapper);
+          workspaceSwitchStartingListenerMap.delete(callback);
         }
       },
 
@@ -203,9 +267,25 @@ contextBridge.exposeInMainWorld("electronAPI", {
       listWorkspaceMembers: () => ipcRenderer.invoke("papr:list-workspace-members"),
       inviteWorkspaceMember: (email) =>
         ipcRenderer.invoke("papr:invite-workspace-member", email),
+      updateWorkspaceMemberRole: (input) =>
+        ipcRenderer.invoke("papr:update-workspace-member-role", input),
       openWorkspaceTeam: () => ipcRenderer.invoke("papr:open-workspace-team"),
+      getPlanSummary: (options) =>
+        ipcRenderer.invoke("papr:get-plan-summary", options),
+      openBillingPortal: (input) =>
+        ipcRenderer.invoke("papr:open-billing-portal", input),
+      openUsageDashboard: () => ipcRenderer.invoke("papr:open-usage-dashboard"),
+      startCheckout: (input) => ipcRenderer.invoke("papr:start-checkout", input),
+      subscribeDeveloperPlan: () =>
+        ipcRenderer.invoke("papr:subscribe-developer-plan"),
+      setMeteredBilling: (enabled) =>
+        ipcRenderer.invoke("papr:set-metered-billing", enabled),
     };
   })(),
+
+  cloudPreview: {
+    seedSession: (input) => ipcRenderer.invoke("cloud-preview:seed-session", input),
+  },
 
   // Ollama API - Auto-install and manage local AI models
   ollama: (() => {
@@ -244,6 +324,9 @@ contextBridge.exposeInMainWorld("electronAPI", {
     removeStatusListener: () => {
       ipcRenderer.removeAllListeners("gateway:status");
     },
+    // For a renderer that loaded after the one-shot push (reload, HMR, crash
+    // recovery) and would otherwise sit at "unknown" forever.
+    getStatus: () => ipcRenderer.invoke("gateway:get-status"),
   },
 
   // Auto-updater API
@@ -278,8 +361,71 @@ contextBridge.exposeInMainWorld("electronAPI", {
       ipcRenderer.invoke("telemetry:set-enabled", enabled),
   },
 
+  replicaE2e: {
+    list: () => ipcRenderer.invoke("replica-e2e:list"),
+    run: (testId) => ipcRenderer.invoke("replica-e2e:run", testId),
+    cancel: () => ipcRenderer.invoke("replica-e2e:cancel"),
+  },
+
+  providerAuth: {
+    getPreference: (provider) =>
+      ipcRenderer.invoke("provider-auth:get-preference", provider),
+    setPreference: (provider, preference) =>
+      ipcRenderer.invoke("provider-auth:set-preference", provider, preference),
+  },
+
   chatAttachments: {
     save: (input) => ipcRenderer.invoke("chat:save-attachment", input),
+    readPreview: (input) =>
+      ipcRenderer.invoke("chat:read-attachment-preview", input),
+  },
+
+  // Electron 32 removed File.path, so a dropped file's real location is only
+  // reachable through webUtils. Without this every drop has to be base64'd in
+  // the renderer and copied through IPC, which is slow and fails outright on
+  // large files. Throws for a File not backed by disk (a pasted blob), so the
+  // caller treats any failure as "no path" and falls back to copying.
+  files: {
+    getPathForFile: (file) => {
+      try {
+        return webUtils.getPathForFile(file) || "";
+      } catch {
+        return "";
+      }
+    },
+  },
+
+  agentPreview: {
+    show: (webviewId) => ipcRenderer.invoke("agent-preview:show", webviewId),
+    isActive: (webviewId) =>
+      ipcRenderer.invoke("agent-preview:is-active", webviewId),
+    captureThumbnail: (webviewId) =>
+      ipcRenderer.invoke("agent-preview:capture-thumbnail", webviewId),
+  },
+
+  platformBrowser: {
+    setBounds: (payload) =>
+      ipcRenderer.invoke("platform-browser:set-bounds", payload),
+    openLogin: (platformId) =>
+      ipcRenderer.invoke("platform-browser:open-login", { platformId }),
+    getState: (platformId) =>
+      ipcRenderer.invoke("platform-browser:get-state", { platformId }),
+    reload: (platformId) =>
+      ipcRenderer.invoke("platform-browser:reload", { platformId }),
+    onUrlChanged: (callback) => {
+      const wrapper = (_event, data) => callback(data);
+      ipcRenderer.on("platform-browser:url-changed", wrapper);
+      return () => {
+        ipcRenderer.removeListener("platform-browser:url-changed", wrapper);
+      };
+    },
+    onRedirectLoop: (callback) => {
+      const wrapper = (_event, data) => callback(data);
+      ipcRenderer.on("platform-browser:redirect-loop", wrapper);
+      return () => {
+        ipcRenderer.removeListener("platform-browser:redirect-loop", wrapper);
+      };
+    },
   },
 
   // App metadata
@@ -301,6 +447,12 @@ contextBridge.exposeInMainWorld("electronAPI", {
 console.log("[Preload] Initializing chat listener");
 ipcRenderer.on("chat:open", (_event, data) => {
   window.dispatchEvent(new CustomEvent('papr-chat-open', { detail: data }));
+});
+
+ipcRenderer.on("platform-browser:open-tab", (_event, data) => {
+  window.dispatchEvent(
+    new CustomEvent("papr-platform-browser-open", { detail: data }),
+  );
 });
 
 // Initialize system power state listeners (forward to DOM events)

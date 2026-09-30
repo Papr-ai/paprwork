@@ -1,24 +1,35 @@
 /**
- * Sidebar - Left navigation panel with enhanced navigation
- * Reference: Paprwork v1 index.html lines 21-215
+ * Sidebar — the left rail. 96px, icon-first, clears the macOS traffic lights.
+ * Your agent sits on top and is Focus (Home) — its peek shows your three goals; Chats / Apps / Docs show Pinned + Recent in hover peeks
+ * (replacing the always-on Favorites list); account, settings and personalization live on the avatar.
+ * Every destination and action from the previous 240px sidebar is still here.
  */
 
-import { useMemo, useCallback, useEffect } from "react";
+import { useMemo, useCallback, useEffect, useState } from "react";
 import { useChat } from "../../hooks/useChat";
 import { useTabs } from "../../hooks/useTabs";
 import type { TabType } from "../../types/tabs";
-import { WeatherWidget } from "./WeatherWidget";
-import { NavButton } from "./NavButton";
-import { FavoritesList } from "./FavoritesList";
-import { NewChatButton } from "./NewChatButton";
+import { FocusPeek, openFocusGoal } from "./FocusPeek";
 import { OnboardingCard } from "./OnboardingCard";
 import { ProfileFooter } from "./ProfileFooter";
-import { SidebarToggleButton } from "./SidebarToggleButton";
-import { MemoryIcon } from "../Memory/MemoryIcon";
-import { switchToChatTab } from "../../lib/ensureDefaultChatTab";
+import { RailItem } from "./RailItem";
+import { RailPeek } from "./RailPeek";
+import { RailIcons } from "./railIcons";
+import { useSidebarFavorites } from "./useSidebarFavorites";
+import { useRailPeeks } from "./useRailPeeks";
+import { AgentGlyph } from "../Agent/AgentGlyph";
+import { useAgentIdentity, useAgentName } from "../Agent/agentIdentityStore";
+import { useAgentWork } from "../Agent/agentWork";
+import { AgentNudge } from "../Agent/AgentNudge";
+import { useAgentNudge, type NudgeAction } from "../Agent/useAgentNudge";
+import { shouldShowOnboarding } from "../../utils/onboardingState";
+import { switchToChatTab, switchToFocusTab, switchToMemoryTab } from "../../lib/ensureDefaultChatTab";
 import "./Sidebar.css";
 
-type View = "chat" | "apps" | "memory" | "documents";
+const IS_MAC = typeof navigator !== "undefined" && /Mac|iPhone|iPad/.test(navigator.platform);
+const SEARCH_SHORTCUT = IS_MAC ? "⌘K" : "Ctrl K";
+
+type View = "chat" | "apps" | "focus" | "memory" | "documents";
 
 /** Map tab types to sidebar nav views */
 function tabTypeToView(type: TabType | undefined): View {
@@ -26,6 +37,9 @@ function tabTypeToView(type: TabType | undefined): View {
     case "app":
     case "apps":
       return "apps";
+    case "focus":
+    case "home":
+      return "focus";
     case "memory":
       return "memory";
     case "document":
@@ -37,14 +51,14 @@ function tabTypeToView(type: TabType | undefined): View {
   }
 }
 
-export function Sidebar({ onToggleCollapse }: { onToggleCollapse?: () => void }) {
+export function Sidebar() {
   const { createChat } = useChat();
   const { tabs, createTab, switchToTab, activeLeftTab } = useTabs();
 
   // Derive active view from the current left-pane tab type
   // For split view, activeLeftTab is the parent/left pane
   const activeView = useMemo<View>(() => {
-    if (!activeLeftTab) return "chat";
+    if (!activeLeftTab) return "focus";
     const tab = tabs.find((t) => t.id === activeLeftTab);
     if (!tab) return "chat";
 
@@ -74,6 +88,17 @@ export function Sidebar({ onToggleCollapse }: { onToggleCollapse?: () => void })
     switchToTab(tabId);
   }, [createTab, switchToTab]);
 
+  const handleNewChat = useCallback(async () => {
+    const chatId = await createChat();
+    if (chatId) {
+      // Explicit click: always open a fresh standalone chat. Folding into an
+      // existing blank chat looked like a dead button whenever that chat was
+      // already on screen (e.g. merged with an app in split view).
+      const tabId = createTab("chat", chatId, "New Chat", {}, { forceNew: true });
+      switchToTab(tabId);
+    }
+  }, [createChat, createTab, switchToTab]);
+
   const handleOnboardingSendMessage = useCallback(
     async (message: string) => {
       // Create a new chat, switch to it, then dispatch event for ChatContainer to send
@@ -96,8 +121,12 @@ export function Sidebar({ onToggleCollapse }: { onToggleCollapse?: () => void })
     let tabId: string | undefined;
     if (view === "apps") {
       tabId = createTab("apps" as TabType, "apps", "Apps");
+    } else if (view === "focus") {
+      switchToFocusTab();
+      return;
     } else if (view === "memory") {
-      tabId = createTab("memory" as TabType, "memory", "Memory");
+      switchToMemoryTab();
+      return;
     } else if (view === "documents") {
       tabId = createTab("documents" as TabType, "documents", "Documents");
     } else if (view === "chat") {
@@ -124,148 +153,158 @@ export function Sidebar({ onToggleCollapse }: { onToggleCollapse?: () => void })
     return () => window.removeEventListener("papr-open-community-apps", openCommunity);
   }, [createTab, switchToTab]);
 
+  const favoritesApi = useSidebarFavorites();
+  const { chatGroups, appGroups, docGroups, hasUnreadChats } = useRailPeeks(favoritesApi);
+  const agentName = useAgentName();
+  const agentLook = useAgentIdentity((s) => s.look);
+  const work = useAgentWork();
+  const workingLabel = `${agentName} is working · ${work.count} ${work.count === 1 ? "chat" : "chats"}`;
+  const nudge = useAgentNudge(work.state, (action: NudgeAction) => {
+    if (action.type === "chat") void handleOnboardingSendMessage(action.prompt);
+    else if (action.type === "app") switchToTab(createTab("app", action.appId, "App"));
+    else {
+      handleNavClick("focus");
+      if (action.goalId) openFocusGoal(action.goalId);
+    }
+  });
+  const [showOnboarding, setShowOnboarding] = useState(shouldShowOnboarding);
+
+  useEffect(() => {
+    const sync = () => setShowOnboarding(shouldShowOnboarding());
+    window.addEventListener("papr-onboarding-changed", sync);
+    return () => window.removeEventListener("papr-onboarding-changed", sync);
+  }, []);
+
+  const openSearch = () => window.dispatchEvent(new CustomEvent("papr-open-command-palette"));
+  const openChatHistory = () => {
+    switchToChatTab();
+    window.setTimeout(() => window.dispatchEvent(new CustomEvent("papr-open-chat-history")), 60);
+  };
+
   return (
-    <div className="sidebar">
-      <div className="sidebar__header">
-        {onToggleCollapse && (
-          <SidebarToggleButton
-            onClick={onToggleCollapse}
-            ariaLabel="Hide sidebar"
+    <nav
+      className={`sidebar rail${favoritesApi.isDragOver ? " rail--drag-over" : ""}`}
+      aria-label="Main"
+      {...favoritesApi.dropHandlers}
+    >
+      <div className="rail__drag" aria-hidden="true" />
+
+      <RailItem
+        variant="agent"
+        label={work.state === "working" ? workingLabel : `Focus · ${agentName}`}
+        ariaLabel={work.state === "working" ? `Focus · ${workingLabel}` : "Focus"}
+        busy={work.state === "working"}
+        active={activeView === "focus"}
+        onClick={() => handleNavClick("focus")}
+        icon={<AgentGlyph size={agentLook === "papr" ? 28 : 36} state={work.state} />}
+        className={nudge.phase === "off" ? undefined : `rail-item--nudge-${nudge.phase}`}
+        overlay={
+          <AgentNudge
+            nudge={nudge.nudge}
+            phase={nudge.phase}
+            onGo={nudge.go}
+            onLater={nudge.later}
+            onDismiss={nudge.dismiss}
+            onReopen={nudge.reopen}
+            onHold={nudge.hold}
           />
-        )}
-      </div>
-
-      <div className="sidebar__content">
-        <WeatherWidget />
-
-        <NewChatButton onClick={() => handleNavClick("apps")} />
-
-        <div className="sidebar__nav">
-          <NavButton
-            icon={
-              <svg width="20" height="20" viewBox="0 0 24 24" fill="none">
-                <path
-                  d="M21 15a2 2 0 01-2 2H7l-4 4V5a2 2 0 012-2h14a2 2 0 012 2z"
-                  stroke="currentColor"
-                  strokeWidth="1.5"
-                  strokeLinecap="round"
-                  strokeLinejoin="round"
-                />
-              </svg>
-            }
-            label="Chat"
-            isActive={activeView === "chat"}
-            onClick={() => handleNavClick("chat")}
+        }
+        peek={
+          <FocusPeek
+            status={work.state === "working" ? workingLabel : <>{agentName}&apos;s picks</>}
+            onOpen={(goalId) => {
+              handleNavClick("focus");
+              if (goalId) openFocusGoal(goalId);
+            }}
           />
-          <NavButton
-            icon={
-              <svg width="20" height="20" viewBox="0 0 24 24" fill="none">
-                <rect
-                  x="3"
-                  y="3"
-                  width="7"
-                  height="7"
-                  rx="2"
-                  stroke="currentColor"
-                  strokeWidth="1.5"
-                />
-                <rect
-                  x="14"
-                  y="3"
-                  width="7"
-                  height="7"
-                  rx="2"
-                  stroke="currentColor"
-                  strokeWidth="1.5"
-                />
-                <rect
-                  x="3"
-                  y="14"
-                  width="7"
-                  height="7"
-                  rx="2"
-                  stroke="currentColor"
-                  strokeWidth="1.5"
-                />
-                <rect
-                  x="14"
-                  y="14"
-                  width="7"
-                  height="7"
-                  rx="2"
-                  stroke="currentColor"
-                  strokeWidth="1.5"
-                />
-              </svg>
-            }
-            label="Apps"
-            isActive={activeView === "apps"}
-            onClick={() => handleNavClick("apps")}
-          />
-          <NavButton
-            icon={<MemoryIcon size={20} />}
-            label="Memory"
-            isActive={activeView === "memory"}
-            onClick={() => handleNavClick("memory")}
-          />
-          <NavButton
-            icon={
-              <svg width="20" height="20" viewBox="0 0 24 24" fill="none">
-                <path
-                  d="M14 2H6a2 2 0 00-2 2v16a2 2 0 002 2h12a2 2 0 002-2V8z"
-                  stroke="currentColor"
-                  strokeWidth="1.5"
-                  strokeLinecap="round"
-                  strokeLinejoin="round"
-                />
-                <path
-                  d="M14 2v6h6"
-                  stroke="currentColor"
-                  strokeWidth="1.5"
-                  strokeLinecap="round"
-                  strokeLinejoin="round"
-                />
-                <line
-                  x1="9"
-                  y1="13"
-                  x2="15"
-                  y2="13"
-                  stroke="currentColor"
-                  strokeWidth="1.5"
-                  strokeLinecap="round"
-                />
-                <line
-                  x1="9"
-                  y1="17"
-                  x2="15"
-                  y2="17"
-                  stroke="currentColor"
-                  strokeWidth="1.5"
-                  strokeLinecap="round"
-                />
-              </svg>
-            }
-            label="Documents"
-            isActive={activeView === "documents"}
-            onClick={() => handleNavClick("documents")}
-          />
-        </div>
+        }
+      />
+      <RailItem
+        variant="new"
+        label="New chat"
+        onClick={handleNewChat}
+        testId="new-chat-button"
+        icon={
+          <span className="rail-btn__new-orb">
+            <RailIcons.plus />
+          </span>
+        }
+      />
+      <RailItem label="Search" shortcut={SEARCH_SHORTCUT} onClick={openSearch} icon={<RailIcons.search />} />
 
-        <FavoritesList />
+      <span className="rail__sep" aria-hidden="true" />
 
-        {/* Spacer between nav and favorites */}
-      </div>
+      <RailItem
+        label="Chats"
+        active={activeView === "chat"}
+        onClick={() => handleNavClick("chat")}
+        icon={<RailIcons.chats />}
+        badge={hasUnreadChats}
+        peek={
+          <RailPeek
+            title="Chats"
+            groups={chatGroups}
+            empty="No chats yet. Start one with +."
+            footer={{ label: "All chats", onClick: openChatHistory }}
+          />
+        }
+      />
+      <RailItem
+        label="Apps"
+        active={activeView === "apps"}
+        onClick={() => handleNavClick("apps")}
+        icon={<RailIcons.apps />}
+        peek={
+          <RailPeek
+            title="Apps"
+            groups={appGroups}
+            empty="Drag an app here to pin it."
+            footer={{ label: "See all apps", onClick: () => handleNavClick("apps") }}
+          />
+        }
+      />
+      <RailItem
+        label="Docs"
+        ariaLabel="Documents"
+        active={activeView === "documents"}
+        onClick={() => handleNavClick("documents")}
+        icon={<RailIcons.docs />}
+        peek={
+          <RailPeek
+            title="Docs"
+            groups={docGroups}
+            empty="Drag a doc here to pin it."
+            footer={{ label: "See all docs", onClick: () => handleNavClick("documents") }}
+          />
+        }
+      />
 
-      <div className="sidebar__footer">
-        <OnboardingCard
-          onOpenGettingStarted={handleOpenGettingStarted}
-          onSendMessage={handleOnboardingSendMessage}
-        />
-        <ProfileFooter
-          onOpenProfile={handleOpenProfile}
-          onOpenSettings={handleOpenSettings}
-        />
-      </div>
-    </div>
+      <span className="rail__grow" />
+
+      <RailItem
+        label="Memory"
+        ariaLabel={`Memory · what ${agentName} knows`}
+        active={activeView === "memory"}
+        onClick={() => handleNavClick("memory")}
+        icon={<RailIcons.memory />}
+      />
+
+      <RailItem
+        label="Getting started"
+        onClick={handleOpenGettingStarted}
+        icon={<RailIcons.start />}
+        badge={showOnboarding}
+        peekFromBottom
+        peek={
+          showOnboarding ? (
+            <OnboardingCard
+              onOpenGettingStarted={handleOpenGettingStarted}
+              onSendMessage={handleOnboardingSendMessage}
+            />
+          ) : undefined
+        }
+      />
+      <ProfileFooter onOpenProfile={handleOpenProfile} onOpenSettings={handleOpenSettings} />
+    </nav>
   );
 }

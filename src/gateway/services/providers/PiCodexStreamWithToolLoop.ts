@@ -1,3 +1,4 @@
+import { DiagnosticOperation } from "../../../core/utils/performanceDiagnostics.js";
 /**
  * Pi Codex Stream with Tool Loop - Multi-turn tool execution for pi-ai openai-codex
  *
@@ -6,27 +7,60 @@
  * 2. Add assistant message + tool results to context
  * 3. Call streamSimple again
  * 4. Repeat until we get stop/length or hit maxSteps
+ *
+ * When pi-ai emits toolcall_end then done with reason stop/length (orphan drain),
+ * pending tools are executed and the loop continues until the model is truly done.
+ * After the stream finishes, AgentService may add a text-only summary if the
+ * sequence ends on tool(s). Forced text-only steps (memory / limits) run in-loop.
  */
 
 import type { AssistantMessageEvent } from "@mariozechner/pi-ai";
 import {
+  applyForcedTextOnlyWrapUpStep,
+  applyPlanContinuationStep,
+  buildRepetitionRecoveryPlanNudge,
+  buildRepetitionRecoveryTextOnlyNudge,
+  WRAP_UP_AFTER_TOOLS_NO_TEXT,
+} from "../agent/wrapUpContinuation.js";
+import {
   sanitizeToolOutput,
 } from "../../../core/tools/index.js";
+import type { MidTurnTrimOpts } from "../agent/midTurnContextTrim.js";
 import {
-  MID_TURN_MAX_TOKENS,
-  trimOldestHistoryTurns,
-  type HistoryTrimBounds,
-} from "../agent/midTurnContextTrim.js";
+  recordLoopSteps,
+  recordObservedContext,
+  recordWidthNudge,
+  type TurnMetrics,
+} from "../agent/turnMetrics.js";
+import { resolveParallelWidthNudge } from "../agent/parallelWidthNudge.js";
 import {
-  compactStaleAssistantReasoning,
-  compactStaleToolResults,
+  estimateMessagesTokens,
+  stripAllAssistantReasoning,
 } from "../agent/compactToolResults.js";
 import {
   checkPiStreamMemory,
   PI_PROCESS_MEMORY_BACKSTOP_BYTES,
   PI_STREAM_MEMORY_BUDGET_BYTES,
 } from "./piStreamMemoryLimits.js";
+import {
+  applyMidTurnContextShaping,
+  resolvePiStreamMemoryLoopAction,
+  type PiStreamMemoryLoopAction,
+  WRAP_UP_AFTER_MEMORY_BUDGET,
+} from "./piStreamMemoryWrapUp.js";
+import {
+  logPiStreamMemoryCheck,
+  logPiTurnEnd,
+  logWrapUpTrigger,
+  type PiTurnEndReason,
+} from "../agent/turnEndDiagnostics.js";
+import { toolRepetitionDedupKey } from "../agent/toolRepetitionKey.js";
 import { truncateToolResultForModelContext } from "../agent/toolResultTruncation.js";
+import {
+  buildTrimGoal,
+  scheduleJevTrim,
+  type JevTrimRegistry,
+} from "../agent/jevToolResultTrim.js";
 import {
   EMPTY_PI_AI_BILLING_USAGE,
   accumulatePiAiBillingUsage,
@@ -36,8 +70,12 @@ import {
 } from "./piAiUsage.js";
 import {
   MAX_PROVIDER_RATE_LIMIT_RETRIES,
+  type CredentialDescriptor,
+  classifyCredentialToken,
   computeRateLimitBackoffMs,
+  createProviderQuotaExhaustedError,
   createRateLimitExhaustedError,
+  detectProviderQuotaExhaustion,
   isRetryableProviderCapacityError,
   sleepMs,
 } from "../../utils/providerRateLimitRetry.js";
@@ -45,8 +83,48 @@ import {
  * Truncate tool call ID to 64 characters (OpenAI's maximum length requirement).
  * IDs from various APIs may exceed this limit, causing validation errors.
  */
-function yieldRateLimitExhausted(): { type: "error"; error: ReturnType<typeof createRateLimitExhaustedError> } {
-  return { type: "error", error: createRateLimitExhaustedError() };
+function yieldRateLimitExhausted(
+  error?: unknown,
+  credential?: CredentialDescriptor,
+): {
+  type: "error";
+  error: ReturnType<typeof createRateLimitExhaustedError>;
+} {
+  return {
+    type: "error",
+    error: createRateLimitExhaustedError(error, credential),
+  };
+}
+
+/**
+ * A refusal that waiting cannot fix, described so the user knows where to go.
+ *
+ * Returns null when the failure is ordinary capacity pressure, leaving the
+ * retry-then-Resume path in charge. Checked before the retry branch at every
+ * site that can raise one, so a spent month never spends three attempts
+ * discovering it is still spent.
+ */
+function quotaExhaustedChunk(
+  error: unknown,
+  credential?: CredentialDescriptor,
+): {
+  type: "error";
+  error: ReturnType<typeof createProviderQuotaExhaustedError>;
+} | null {
+  const detail = detectProviderQuotaExhaustion(error);
+  if (!detail) return null;
+  console.warn(
+    `[PiCodexToolLoop] Provider quota exhausted (${detail.remedy})` +
+      (detail.resetsAt ? `, resets ${detail.resetsAt.toISOString()}` : "") +
+      (credential?.kind && credential.kind !== "unknown"
+        ? `, credential=${credential.kind}`
+        : "") +
+      " — not retrying",
+  );
+  return {
+    type: "error",
+    error: createProviderQuotaExhaustedError(detail, credential),
+  };
 }
 
 function truncateToolCallId(id: string): string {
@@ -96,6 +174,22 @@ type OurChunk =
  * - Stringified JSON arrays/objects → parsed values
  * Applied before Mastra validation so tools don't silently fail.
  */
+function tryParseJsonString(value: string): unknown {
+  const trimmed = value.trim();
+  if (
+    !trimmed.startsWith("[") &&
+    !trimmed.startsWith("{") &&
+    !trimmed.startsWith('"')
+  ) {
+    return value;
+  }
+  try {
+    return JSON.parse(trimmed) as unknown;
+  } catch {
+    return value;
+  }
+}
+
 function coerceArgTypes(args: Record<string, unknown>): Record<string, unknown> {
   const result: Record<string, unknown> = {};
   for (const [key, value] of Object.entries(args)) {
@@ -110,6 +204,12 @@ function coerceArgTypes(args: Record<string, unknown>): Record<string, unknown> 
         result[key] = value === "true";
         continue;
       }
+      // Stringified JSON arrays/objects → parsed values
+      const parsed = tryParseJsonString(value);
+      if (parsed !== value) {
+        result[key] = parsed;
+        continue;
+      }
     }
     result[key] = value;
   }
@@ -118,7 +218,6 @@ function coerceArgTypes(args: Record<string, unknown>): Record<string, unknown> 
 
 /**
  * Execute a single tool call using Mastra tools
- 
  */
 async function executeToolCall(
   toolCall: ToolCallAccum,
@@ -127,6 +226,15 @@ async function executeToolCall(
     { execute?: (args: unknown) => Promise<unknown> }
   >,
   apiKeys: string[],
+  toolContext: {
+    chatId: string;
+    activeAppId?: string;
+    jobEnv?: Record<string, string>;
+    delegationJobId?: string;
+    turnMetrics?: TurnMetrics;
+    jevTrim?: JevTrimRegistry;
+    userMessage?: string;
+  },
 ): Promise<{ toolCallId: string; toolName: string; result: unknown }> {
   const tool = mastraTools[toolCall.toolName];
   if (!tool?.execute) {
@@ -137,7 +245,17 @@ async function executeToolCall(
     };
   }
   try {
-    const rawResult = await tool.execute(coerceArgTypes(toolCall.args));
+    const { runWithToolContext } = await import("../../../core/tools/context.js");
+    const rawResult = await runWithToolContext(
+      toolContext.chatId,
+      () => tool.execute!(coerceArgTypes(toolCall.args)),
+      {
+        activeAppId: toolContext.activeAppId,
+        jobEnv: toolContext.jobEnv,
+        delegationJobId: toolContext.delegationJobId,
+        turnMetrics: toolContext.turnMetrics,
+      },
+    );
 
     // Validate result exists (catch undefined/null from tool crashes/timeouts)
     if (rawResult === undefined || rawResult === null) {
@@ -223,6 +341,11 @@ function appendToolTurnToContext(
   },
   toolResults: Array<{ toolCallId: string; toolName: string; result: unknown }>,
   _cumulativeTokens: number,
+  trim?: {
+    registry?: JevTrimRegistry;
+    userMessage?: string;
+    argsByCallId?: Map<string, unknown>;
+  },
 ): void {
   context.messages.push(assistantMessage);
   const now = Date.now();
@@ -252,6 +375,17 @@ function appendToolTurnToContext(
     const isError = resultObj
       ? resultObj.success === false || typeof resultObj.error === "string"
       : false;
+
+    if (trim?.registry) {
+      const args = trim.argsByCallId?.get(tr.toolCallId) as { command?: unknown } | undefined;
+      scheduleJevTrim(
+        trim.registry,
+        tr.toolCallId,
+        tr.toolName,
+        text,
+        buildTrimGoal(trim.userMessage ?? "", typeof args?.command === "string" ? args.command : ""),
+      );
+    }
 
     // Cap pathological results; full data remains in SQLite for get_full_tool_result.
     context.messages.push({
@@ -322,11 +456,47 @@ export async function* createPiCodexStreamWithToolLoop(
   >,
   apiKeys: string[],
   maxSteps: number,
-  historyTrimBounds?: HistoryTrimBounds,
+  /** Bounds plus `maxTokens` — the model-aware budget this turn must stay inside. */
+  historyTrimBounds?: MidTurnTrimOpts,
+  toolContext?: {
+    chatId: string;
+    activeAppId?: string;
+    jobEnv?: Record<string, string>;
+    delegationJobId?: string;
+    turnMetrics?: TurnMetrics;
+    /** JEV_TOOL_TRIM experiment registry for this turn (see jevToolResultTrim.ts). */
+    jevTrim?: JevTrimRegistry;
+    /** The user's message, for the Jev trim goal. */
+    userMessage?: string;
+  },
+  /**
+   * Consulted when the model stops on its own. Returning a nudge keeps the loop
+   * running with tools intact, which is how a turn that stopped mid-plan gets
+   * resumed. Owned by AgentService so this layer stays free of PlanService.
+   */
+  resolveModelStop?: (info: {
+    trailingText: string;
+    step: number;
+    totalToolCalls: number;
+    continuationsUsed: number;
+  }) => Promise<{ nudge: string; pendingSteps: number } | null>,
+  /**
+   * Which credential this turn goes out with, so a refusal can name it. Only
+   * the provider is worth passing — the kind is read off the token below.
+   */
+  credential?: { provider?: string },
 ): AsyncGenerator<OurChunk> {
   const context = {
     ...initialContext,
     messages: [...initialContext.messages],
+  };
+
+  // Read from the token rather than from the caller's auth-mode setting: a
+  // refusal has to say what was *sent*, since that is the only thing that can
+  // tell a user whether flipping the Settings toggle reached the request.
+  const activeCredential: CredentialDescriptor = {
+    provider: credential?.provider,
+    kind: classifyCredentialToken(streamOptions.apiKey),
   };
 
   let step = 0;
@@ -341,20 +511,84 @@ export async function* createPiCodexStreamWithToolLoop(
   // Per-stream memory budget (baseline captured before context/tool accumulation)
   const baselineHeap = process.memoryUsage().heapUsed;
 
+  /** One forced text-only step (memory budget or hard tool/step limits). */
+  let textOnlyWrapUpStepUsed = false;
+
+  /** One recovery step after identical tool+args loop detection. */
+  let repetitionRecoveryUsed = false;
+
   // Detect repetitive tool calls (possible infinite loop)
   const recentToolCalls: Array<{ name: string; args: string }> = [];
   const MAX_RECENT_TOOL_CALLS = 10;
-  const REPETITION_THRESHOLD = 5; // If same tool called 5+ times recently, warn
+  const REPETITION_THRESHOLD = 5; // Same tool+args 5+ times in recent window → warn
+  const REPETITION_ABORT_THRESHOLD = 8; // Hard abort on identical tool+args loops only
 
-  // Estimate initial context tokens
-  const initialContextStr = JSON.stringify(context.messages);
-  cumulativeTokens = Math.ceil(initialContextStr.length / 4);
+  // Fast char-based estimate — avoid JSON.stringify on 100K+ token contexts.
+  // Messages only: the system prompt and the tool schemas are separate fields
+  // on the pi-ai context, so the first request is far larger than this reads.
+  // Kept for the turn metric's estimate; the provider's own figure replaces
+  // `cumulativeTokens` as soon as a step reports usage.
+  cumulativeTokens = estimateMessagesTokens(context.messages);
+  const initialEstimatedTokens = cumulativeTokens;
 
   console.log(
-    `[PiCodexToolLoop] Starting with ~${Math.round(cumulativeTokens / 1000)}K tokens`,
+    `[PiCodexToolLoop] Starting with ~${Math.round(cumulativeTokens / 1000)}K tokens ` +
+      `(chatId=${toolContext?.chatId ?? "unknown"}, sessionId=${streamOptions.sessionId})`,
   );
 
+  let turnEndLogged = false;
+  let lastModelFinishReason: string | null = null;
+  let streamedTextChars = 0;
+
+  /** Text streamed during the current step — i.e. after the previous step's tools. */
+  let stepText = "";
+  let planContinuationsUsed = 0;
+  /** Bounded by MAX_WIDTH_NUDGES_PER_TURN — see parallelWidthNudge.ts. */
+  let widthNudgesIssued = 0;
+
+  const emitTurnEnd = (
+    reason: PiTurnEndReason,
+    extra?: {
+      memoryCheck?: ReturnType<typeof checkPiStreamMemory>;
+      memoryAction?: PiStreamMemoryLoopAction["kind"];
+    },
+  ): void => {
+    if (turnEndLogged) {
+      return;
+    }
+    turnEndLogged = true;
+    // The loop counts its own steps, and this runs exactly once per turn.
+    // `initialEstimatedTokens` rather than `cumulativeTokens`, which by now
+    // holds a provider-reported figure and belongs on the observed peak.
+    recordLoopSteps(toolContext?.turnMetrics, {
+      steps: step,
+      estimatedTokens: initialEstimatedTokens,
+      historyTokenBudget: historyTrimBounds?.maxTokens,
+    });
+    logPiTurnEnd({
+      chatId: toolContext?.chatId,
+      sessionId: streamOptions.sessionId,
+      reason,
+      step,
+      maxSteps,
+      totalToolCalls,
+      cumulativeTokens,
+      modelFinishReason: lastModelFinishReason,
+      textOnlyWrapUpUsed: textOnlyWrapUpStepUsed,
+      validationErrorCount,
+      memoryCheck: extra?.memoryCheck,
+      memoryAction: extra?.memoryAction,
+      assistantTextPreview:
+        streamedTextChars > 0 ? `~${streamedTextChars} chars streamed to UI` : undefined,
+    });
+  };
+
   stepLoop: while (step < maxSteps) {
+    if (streamOptions.signal?.aborted) {
+      emitTurnEnd("aborted");
+      break stepLoop;
+    }
+
     // CIRCUIT BREAKER 1: Check validation error count (Issue 65)
     if (validationErrorCount >= MAX_VALIDATION_ERRORS) {
       console.error(
@@ -368,59 +602,104 @@ export async function* createPiCodexStreamWithToolLoop(
           message: `Too many validation errors (${validationErrorCount}). This usually indicates a schema mismatch or malformed data. Please refresh and try again.`,
         },
       };
+      emitTurnEnd("validation_loop");
       break;
     }
     
     // CIRCUIT BREAKER 2: Per-stream + process backstop memory checks
     const memoryCheck = checkPiStreamMemory(baselineHeap);
-    if (memoryCheck.overStreamBudget || memoryCheck.overProcessBackstop) {
+    const memoryAction = resolvePiStreamMemoryLoopAction(
+      memoryCheck,
+      textOnlyWrapUpStepUsed,
+    );
+
+    logPiStreamMemoryCheck({
+      chatId: toolContext?.chatId,
+      step,
+      check: memoryCheck,
+      action: memoryAction,
+    });
+
+    if (memoryAction.kind === "process_error") {
       const streamMb = Math.round(memoryCheck.streamDelta / 1024 / 1024);
       const heapMb = Math.round(memoryCheck.heapUsed / 1024 / 1024);
       const budgetMb = Math.round(PI_STREAM_MEMORY_BUDGET_BYTES / 1024 / 1024);
       const backstopMb = Math.round(PI_PROCESS_MEMORY_BACKSTOP_BYTES / 1024 / 1024);
       console.error(
-        `[PiCodexToolLoop] 🚨 CRITICAL: Stream memory budget exceeded — ` +
+        `[PiCodexToolLoop] 🚨 CRITICAL: Process memory backstop exceeded — ` +
           `stream +${streamMb}MB (limit ${budgetMb}MB), process heap ${heapMb}MB ` +
           `(backstop ${backstopMb}MB). Aborting this stream.`,
       );
       yield {
         type: "error",
         error: {
-          type: memoryCheck.overProcessBackstop
-            ? "process_memory_exhaustion"
-            : "stream_memory_exhaustion",
+          type: "process_memory_exhaustion",
           message:
-            memoryCheck.overProcessBackstop
-              ? "The agent service is under heavy load (too many parallel tasks). " +
-                "Try again shortly, restart the app, or stagger scheduled agent jobs."
-              : "This agent task used too much memory (heavy tool use or long reasoning). " +
-                "Start a fresh chat or simplify the task, then try again.",
+            "The agent service is under heavy load (too many parallel tasks). " +
+            "Try again shortly, restart the app, or stagger scheduled agent jobs.",
         },
       };
+      emitTurnEnd("process_memory_error", {
+        memoryCheck,
+        memoryAction: memoryAction.kind,
+      });
       break;
     }
-    if (memoryCheck.overStreamWarning) {
+
+    if (memoryAction.kind === "graceful_end") {
       console.warn(
-        `[PiCodexToolLoop] ⚠️ High stream memory: +${Math.round(memoryCheck.streamDelta / 1024 / 1024)}MB ` +
-          `(process heap ${Math.round(memoryCheck.heapUsed / 1024 / 1024)}MB)`,
+        `[PiCodexToolLoop] Stream memory still high after wrap-up step ` +
+          `(+${Math.round(memoryCheck.streamDelta / 1024 / 1024)}MB) — ending turn gracefully`,
       );
+      emitTurnEnd("memory_graceful_end", {
+        memoryCheck,
+        memoryAction: memoryAction.kind,
+      });
+      break stepLoop;
+    }
+
+    let memoryPressure = false;
+    if (memoryAction.kind === "force_wrap_up") {
+      textOnlyWrapUpStepUsed = true;
+      applyForcedTextOnlyWrapUpStep(context, WRAP_UP_AFTER_MEMORY_BUDGET);
+      memoryPressure = true;
+      logWrapUpTrigger({
+        chatId: toolContext?.chatId,
+        sessionId: streamOptions.sessionId,
+        trigger: "memory_force_wrap_up",
+        step,
+        totalToolCalls,
+        memoryCheck,
+      });
+      console.warn(
+        `[PiCodexToolLoop] Stream memory budget exceeded ` +
+          `(+${Math.round(memoryCheck.streamDelta / 1024 / 1024)}MB) — ` +
+          `compacting context and forcing wrap-up summary (tools disabled)`,
+      );
+    } else {
+      memoryPressure = memoryAction.memoryPressure;
+      if (memoryPressure) {
+        console.warn(
+          `[PiCodexToolLoop] ⚠️ High stream memory: +${Math.round(memoryCheck.streamDelta / 1024 / 1024)}MB ` +
+            `(process heap ${Math.round(memoryCheck.heapUsed / 1024 / 1024)}MB) — applying aggressive compaction`,
+        );
+      }
     }
 
     if (step > 0) {
       yield { type: "start-step" };
     }
 
-    if (historyTrimBounds) {
-      compactStaleAssistantReasoning(context.messages as unknown[]);
-      compactStaleToolResults(context.messages as unknown[]);
-      trimOldestHistoryTurns(
-        context.messages as Array<{ role?: unknown; content?: unknown }>,
-        {
-          ...historyTrimBounds,
-          maxTokens: MID_TURN_MAX_TOKENS,
-        },
-      );
-    }
+    applyMidTurnContextShaping(
+      context.messages,
+      historyTrimBounds,
+      memoryPressure,
+      {
+        skipStaleToolCompaction: step === 0,
+        jevTrim: toolContext?.jevTrim,
+        turnMetrics: toolContext?.turnMetrics,
+      },
+    );
 
     const toolCallsThisTurn: ToolCallAccum[] = [];
     let lastFinishReason: string | null = null;
@@ -441,21 +720,35 @@ export async function* createPiCodexStreamWithToolLoop(
       toolCallsThisTurn.length = 0;
       lastFinishReason = null;
       finalMessage = null;
+      stepText = "";
 
       let capacityError: unknown | null = null;
       let shouldRetryCapacity = false;
 
+      const requestTrace = new DiagnosticOperation("model", "provider-request", {
+        chatId: toolContext?.chatId, provider: credential?.provider,
+      });
+      let requestCompleted = false;
+      let requestFailed = false;
       try {
         let piStream: AsyncIterable<AssistantMessageEvent>;
         try {
           piStream = streamSimple(piModel, context, streamOptions);
         } catch (err) {
+          requestFailed = true; requestTrace.error(err);
+          const quotaChunk = quotaExhaustedChunk(err, activeCredential);
+          if (quotaChunk) {
+            yield quotaChunk;
+            emitTurnEnd("rate_limit_exhausted");
+            return;
+          }
           if (isRetryableProviderCapacityError(err)) {
             if (rateLimitAttempt < MAX_PROVIDER_RATE_LIMIT_RETRIES) {
               capacityError = err;
               shouldRetryCapacity = true;
             } else {
-              yield yieldRateLimitExhausted();
+              yield yieldRateLimitExhausted(err, activeCredential);
+              emitTurnEnd("rate_limit_exhausted");
               return;
             }
           } else if (err && typeof err === "object" && "errors" in err) {
@@ -476,6 +769,7 @@ export async function* createPiCodexStreamWithToolLoop(
                     "Too many validation errors. This usually indicates a schema mismatch. Please refresh and try again.",
                 },
               };
+              emitTurnEnd("validation_loop");
               return;
             }
 
@@ -488,16 +782,26 @@ export async function* createPiCodexStreamWithToolLoop(
 
         if (!shouldRetryCapacity) {
           for await (const event of piStream!) {
+            if (event.type === "done") requestCompleted = true;
+            if (["text_delta", "thinking_delta", "toolcall_delta"].includes(event.type)) requestTrace.event(event.type === "text_delta");
+            if (event.type === "error") { requestFailed = true; requestTrace.error(event.error); }
             if (event.type === "error") {
               const apiError =
                 (event as { error?: unknown }).error ?? event;
+              const quotaChunk = quotaExhaustedChunk(apiError, activeCredential);
+              if (quotaChunk) {
+                yield quotaChunk;
+                emitTurnEnd("rate_limit_exhausted");
+                return;
+              }
               if (isRetryableProviderCapacityError(apiError)) {
                 if (rateLimitAttempt < MAX_PROVIDER_RATE_LIMIT_RETRIES) {
                   capacityError = apiError;
                   shouldRetryCapacity = true;
                   break;
                 }
-                yield yieldRateLimitExhausted();
+                yield yieldRateLimitExhausted(apiError, activeCredential);
+                emitTurnEnd("rate_limit_exhausted");
                 return;
               }
             }
@@ -516,6 +820,7 @@ export async function* createPiCodexStreamWithToolLoop(
                   : event.reason === "length"
                     ? "length"
                     : "stop";
+              lastModelFinishReason = lastFinishReason;
               finalMessage = event.message;
 
               const stepUsage = extractPiAiUsageFromDoneEvent(event);
@@ -527,6 +832,10 @@ export async function* createPiCodexStreamWithToolLoop(
               }
               if (stepUsage) {
                 cumulativeTokens = getPiAiContextTokensFromStep(stepUsage);
+                recordObservedContext(
+                  toolContext?.turnMetrics,
+                  cumulativeTokens,
+                );
                 accumulatedBilling = accumulatePiAiBillingUsage(
                   accumulatedBilling,
                   stepUsage,
@@ -551,6 +860,17 @@ export async function* createPiCodexStreamWithToolLoop(
 
               if (event.reason === "toolUse") continue;
 
+              // Anthropic can hit maxTokens mid-turn after streaming complete tool_use
+              // blocks. Do not yield finish here — orchestrator would terminate and
+              // orphan them. shouldDrainOrphanedTools executes pending calls below.
+              if (event.reason === "length" && toolCallsThisTurn.length > 0) {
+                console.warn(
+                  `[PiCodexToolLoop] ⚠️ Model hit maxTokens mid-turn with ${toolCallsThisTurn.length} pending tool call(s). ` +
+                    `Skipping finish yield; draining pending tools instead.`,
+                );
+                continue;
+              }
+
               const finishChunk = adaptPiStreamToAISDKEvent(
                 event,
                 accumulatedBilling,
@@ -569,31 +889,60 @@ export async function* createPiCodexStreamWithToolLoop(
 
             const chunk = adaptPiStreamToAISDKEvent(event);
             if (chunk?.type === "error") {
+              const quotaChunk = quotaExhaustedChunk(chunk.error, activeCredential);
+              if (quotaChunk) {
+                yield quotaChunk;
+                emitTurnEnd("rate_limit_exhausted");
+                return;
+              }
               if (isRetryableProviderCapacityError(chunk.error)) {
                 if (rateLimitAttempt < MAX_PROVIDER_RATE_LIMIT_RETRIES) {
                   capacityError = chunk.error;
                   shouldRetryCapacity = true;
                   break;
                 }
-                yield yieldRateLimitExhausted();
+                yield yieldRateLimitExhausted(chunk.error, activeCredential);
+                emitTurnEnd("rate_limit_exhausted");
                 return;
+              }
+            }
+            // Defer tool-call UI until we execute — emitting early orphans the
+            // turn when capacity retries or wrap-up ends before execution.
+            if (chunk?.type === "tool-call") {
+              continue;
+            }
+            if (chunk?.type === "text-delta") {
+              const delta = (chunk as { text?: string }).text;
+              if (typeof delta === "string") {
+                streamedTextChars += delta.length;
+                stepText += delta;
               }
             }
             if (chunk) yield chunk;
           }
         }
       } catch (err) {
+        requestFailed = true; requestTrace.error(err);
+        const quotaChunk = quotaExhaustedChunk(err, activeCredential);
+        if (quotaChunk) {
+          yield quotaChunk;
+          emitTurnEnd("rate_limit_exhausted");
+          return;
+        }
         if (isRetryableProviderCapacityError(err)) {
           if (rateLimitAttempt < MAX_PROVIDER_RATE_LIMIT_RETRIES) {
             capacityError = err;
             shouldRetryCapacity = true;
           } else {
-            yield yieldRateLimitExhausted();
+            yield yieldRateLimitExhausted(err, activeCredential);
+            emitTurnEnd("rate_limit_exhausted");
             return;
           }
         } else {
           throw err;
         }
+      } finally {
+        requestTrace.finish(requestFailed ? "error" : requestCompleted ? "completed" : "cancelled");
       }
 
       if (shouldRetryCapacity && capacityError) {
@@ -612,11 +961,41 @@ export async function* createPiCodexStreamWithToolLoop(
       stepStreamCompleted = true;
     }
 
-    if (
+    const isToolUseStep =
       lastFinishReason === "tool-calls" &&
       toolCallsThisTurn.length > 0 &&
-      finalMessage
+      finalMessage != null;
+    // pi-ai can emit toolcall_end (UI shows the call) then done with reason stop/length
+    // instead of toolUse — previously we skipped execution and streamOrchestrator
+    // marked them orphaned. Drain pending calls before ending the turn.
+    const shouldDrainOrphanedTools =
+      toolCallsThisTurn.length > 0 &&
+      finalMessage != null &&
+      (lastFinishReason === "stop" || lastFinishReason === "length");
+
+    if (
+      (isToolUseStep || shouldDrainOrphanedTools) &&
+      finalMessage != null &&
+      !streamOptions.signal?.aborted
     ) {
+      if (textOnlyWrapUpStepUsed) {
+        // Forced text-only step — pending calls were never emitted to the UI.
+        console.warn(
+          `[PiCodexToolLoop] Text-only wrap-up: ignoring ${toolCallsThisTurn.length} tool call(s)`,
+        );
+        emitTurnEnd("text_only_wrap_up_ignored_tools");
+        break stepLoop;
+      }
+
+      const doneMessage = finalMessage;
+      if (shouldDrainOrphanedTools) {
+        console.warn(
+          `[PiCodexToolLoop] ⚠️ Draining ${toolCallsThisTurn.length} pending tool call(s) ` +
+            `after finish reason "${lastFinishReason}" (expected toolUse). ` +
+            `Executing to prevent orphaned tool results.`,
+        );
+      }
+
       // Update total tool call counter
       totalToolCalls += toolCallsThisTurn.length;
       
@@ -629,10 +1008,10 @@ export async function* createPiCodexStreamWithToolLoop(
         recentToolCalls.splice(0, recentToolCalls.length - MAX_RECENT_TOOL_CALLS);
       }
       
-      // Check for repetitive tool calls (same tool with similar args)
+      // Check for repetitive tool calls (identical tool + full args)
       const toolCallCounts = new Map<string, number>();
       for (const tc of recentToolCalls) {
-        const key = `${tc.name}:${tc.args.substring(0, 100)}`; // First 100 chars of args
+        const key = toolRepetitionDedupKey(tc.name, tc.args);
         toolCallCounts.set(key, (toolCallCounts.get(key) || 0) + 1);
       }
       
@@ -645,6 +1024,103 @@ export async function* createPiCodexStreamWithToolLoop(
           `[PiCodexToolLoop] ⚠️ LOOP DETECTED: Tool call repeated ${maxRepetitions} times in last ${MAX_RECENT_TOOL_CALLS} calls. ` +
           `Call: ${repetitiveCall?.[0].substring(0, 80)}...`
         );
+      }
+
+      // Hard stop only on identical tool+args loops (not same tool with different args).
+      // Agent jobs legitimately call bash many times with different commands.
+      if (maxRepetitions >= REPETITION_ABORT_THRESHOLD) {
+        const repetitiveCall = Array.from(toolCallCounts.entries()).find(
+          ([, count]) => count === maxRepetitions,
+        );
+        const toolName = repetitiveCall?.[0].split(":")[0] ?? "tool";
+
+        if (!repetitionRecoveryUsed) {
+          repetitionRecoveryUsed = true;
+          recentToolCalls.length = 0;
+
+          console.warn(
+            `[PiCodexToolLoop] 🔄 Repetition recovery: identical ${toolName} call ${maxRepetitions}× in last ${MAX_RECENT_TOOL_CALLS} — nudging model instead of ending turn.`,
+          );
+
+          const skippedResults = toolCallsThisTurn.map((tc) => ({
+            toolCallId: tc.toolCallId,
+            toolName: tc.toolName,
+            result:
+              `Skipped — identical ${toolName} call repeated ${maxRepetitions} times. ` +
+              `Do not retry this exact call; use a different approach.`,
+          }));
+          appendToolTurnToContext(
+            context,
+            doneMessage,
+            skippedResults,
+            cumulativeTokens,
+          );
+          stripAllAssistantReasoning(context.messages as unknown[]);
+
+          let usedPlanContinuation = false;
+          if (resolveModelStop) {
+            try {
+              const continuation = await resolveModelStop({
+                trailingText: stepText,
+                step,
+                totalToolCalls,
+                continuationsUsed: planContinuationsUsed,
+              });
+              if (continuation) {
+                planContinuationsUsed += 1;
+                usedPlanContinuation = true;
+                applyPlanContinuationStep(
+                  context,
+                  buildRepetitionRecoveryPlanNudge(
+                    toolName,
+                    maxRepetitions,
+                    continuation.nudge,
+                  ),
+                );
+                console.warn(
+                  `[TurnEnd:repetition-recovery] ${JSON.stringify({
+                    ts: new Date().toISOString(),
+                    chatId: toolContext?.chatId ?? null,
+                    sessionId: streamOptions.sessionId,
+                    toolName,
+                    repetitions: maxRepetitions,
+                    pendingSteps: continuation.pendingSteps,
+                    continuation: planContinuationsUsed,
+                  })}`,
+                );
+              }
+            } catch (err) {
+              console.warn(
+                `[PiCodexToolLoop] Repetition recovery plan check failed:`,
+                err instanceof Error ? err.message : err,
+              );
+            }
+          }
+
+          if (!usedPlanContinuation) {
+            applyForcedTextOnlyWrapUpStep(
+              context,
+              buildRepetitionRecoveryTextOnlyNudge(toolName, maxRepetitions),
+            );
+            textOnlyWrapUpStepUsed = true;
+          }
+
+          step++;
+          stepText = "";
+          continue stepLoop;
+        }
+
+        console.error(
+          `[PiCodexToolLoop] 🛑 HARD STOP: Identical ${toolName} call repeated ${maxRepetitions} times after recovery — forcing text-only wrap-up.`,
+        );
+        applyForcedTextOnlyWrapUpStep(
+          context,
+          buildRepetitionRecoveryTextOnlyNudge(toolName, maxRepetitions),
+        );
+        textOnlyWrapUpStepUsed = true;
+        emitTurnEnd("repetition_abort");
+        step++;
+        continue stepLoop;
       }
       
       console.log(
@@ -676,27 +1152,58 @@ export async function* createPiCodexStreamWithToolLoop(
       if (totalToolCalls >= MAX_TOTAL_TOOL_CALLS) {
         console.error(
           `[PiCodexToolLoop] 🛑 HARD LIMIT: ${totalToolCalls} tool calls exceeds maximum (${MAX_TOTAL_TOOL_CALLS}). ` +
-          `Forcing stop to prevent infinite loops.`
+          `Forcing text-only wrap-up.`,
         );
-        
-        // Add a system instruction to force a response
-        context.messages.push({
-          role: "user",
-          content: `[SYSTEM: You've made ${totalToolCalls} tool calls, which exceeds the maximum limit of ${MAX_TOTAL_TOOL_CALLS}. You MUST stop making tool calls and provide your final response now. Summarize what you've learned and respond to the user.]`,
-        } as any);
-        
-        break; // Force stop the loop
+        textOnlyWrapUpStepUsed = true;
+        applyForcedTextOnlyWrapUpStep(context, WRAP_UP_AFTER_TOOLS_NO_TEXT);
+        logWrapUpTrigger({
+          chatId: toolContext?.chatId,
+          sessionId: streamOptions.sessionId,
+          trigger: "tool_call_hard_limit",
+          step,
+          totalToolCalls,
+        });
+        continue stepLoop;
       }
       
       // Execute all tools in parallel — full results preserved for this turn.
       // Stale results from prior turns are compacted before the next model call.
+      if (streamOptions.signal?.aborted) {
+        emitTurnEnd("aborted");
+        break stepLoop;
+      }
+
+      for (const tc of toolCallsThisTurn) {
+        yield {
+          type: "tool-call",
+          toolCallId: tc.toolCallId,
+          toolName: tc.toolName,
+          args: tc.args,
+        };
+      }
+
       const toolResults = await Promise.all(
         toolCallsThisTurn.map((tc) =>
-          executeToolCall(tc, mastraTools, apiKeys),
+          executeToolCall(
+            tc,
+            mastraTools,
+            apiKeys,
+            toolContext ?? { chatId: streamOptions.sessionId },
+          ),
         ),
       );
 
       for (const tr of toolResults) {
+        if (
+          tr.result &&
+          typeof tr.result === "object" &&
+          typeof (tr.result as Record<string, unknown>).error === "string" &&
+          String((tr.result as Record<string, unknown>).error).includes(
+            "Tool input validation failed",
+          )
+        ) {
+          validationErrorCount++;
+        }
         yield {
           type: "tool-result",
           toolCallId: tr.toolCallId,
@@ -705,24 +1212,39 @@ export async function* createPiCodexStreamWithToolLoop(
         };
       }
 
+      if (validationErrorCount >= MAX_VALIDATION_ERRORS) {
+        console.error(
+          `[PiCodexToolLoop] 🚨 CRITICAL: ${validationErrorCount} validation errors detected. Aborting.`,
+        );
+        yield {
+          type: "error",
+          error: {
+            type: "validation_loop",
+            message: `Too many validation errors (${validationErrorCount}). This usually indicates a schema mismatch or malformed tool arguments. Please refresh and try again.`,
+          },
+        };
+        emitTurnEnd("validation_loop");
+        break stepLoop;
+      }
+
       // Check if approaching step limit
       const STEP_WARNING_THRESHOLD = 90;
       const STEP_FORCE_STOP_THRESHOLD = 95;
       
       if (step >= STEP_FORCE_STOP_THRESHOLD) {
-        // Force stop at 95 steps - inject final instruction and break
         console.warn(
-          `[PiCodexToolLoop] 🛑 Reached ${step} steps (force stop threshold). ` +
-          `Breaking tool loop and forcing final response.`
+          `[PiCodexToolLoop] 🛑 Reached ${step} steps (force stop threshold). Text-only wrap-up.`,
         );
-        
-        // Add a system instruction as the last tool result to force a response
-        context.messages.push({
-          role: "user",
-          content: `[SYSTEM: You've made ${step} tool calls. You MUST provide your final response now. Do not make any more tool calls. Summarize your findings and respond to the user.]`,
-        } as any);
-        
-        break; // Force stop the loop
+        textOnlyWrapUpStepUsed = true;
+        applyForcedTextOnlyWrapUpStep(context, WRAP_UP_AFTER_TOOLS_NO_TEXT);
+        logWrapUpTrigger({
+          chatId: toolContext?.chatId,
+          sessionId: streamOptions.sessionId,
+          trigger: "step_limit",
+          step,
+          totalToolCalls,
+        });
+        continue stepLoop;
       } else if (step >= STEP_WARNING_THRESHOLD) {
         // At 90+ steps, warn the model
         console.warn(
@@ -743,26 +1265,124 @@ export async function* createPiCodexStreamWithToolLoop(
         }
       }
 
-      // Append full tool results for the current turn (never truncated mid-turn).
-      appendToolTurnToContext(context, finalMessage, toolResults, cumulativeTokens);
+      if (isToolUseStep) {
+        // Append full tool results for the current turn (never truncated mid-turn).
+        appendToolTurnToContext(context, doneMessage, toolResults, cumulativeTokens, {
+          registry: toolContext?.jevTrim,
+          userMessage: toolContext?.userMessage,
+          argsByCallId: new Map(toolCallsThisTurn.map((tc) => [tc.toolCallId, tc.args])),
+        });
 
-      // Do NOT update cumulativeTokens here from raw context size — that
-      // double-counts results that will be compacted before the next model call.
-      // The next streamSimple() will set cumulativeTokens from usage.input_tokens
-      // (line ~378), which reflects the COMPACTED prompt the model actually saw.
-      // For the threshold check on the NEXT iteration we estimate post-compaction
-      // size by simulating compaction on a clone (cheap — just walks the array).
+        // Reasoning blocks are only needed while the model is thinking — drop immediately.
+        stripAllAssistantReasoning(context.messages as unknown[]);
 
-      step++;
-      console.log(
-        `[PiCodexToolLoop] Step ${step}: executed ${toolCallsThisTurn.length} tools, ` +
-          `cumulative context: ~${Math.round(cumulativeTokens / 1000)}K tokens, ` +
-          `total tool calls: ${totalToolCalls}`,
-      );
+        // Do NOT update cumulativeTokens here from raw context size — that
+        // double-counts results that will be compacted before the next model call.
+        // The next streamSimple() will set cumulativeTokens from usage.input_tokens
+        // (line ~378), which reflects the COMPACTED prompt the model actually saw.
+        // For the threshold check on the NEXT iteration we estimate post-compaction
+        // size by simulating compaction on a clone (cheap — just walks the array).
+
+        // A step is the billed unit — it re-sends the whole prefix — so a turn
+        // calling one tool per step pays N times for work that could have gone
+        // out in one request. Appended as a context step so it rides with the
+        // next request rather than being re-sent from history.
+        const widthNudge = resolveParallelWidthNudge({
+          stepNumber: step,
+          lastStepToolCalls: toolCallsThisTurn.length,
+          nudgesUsed: widthNudgesIssued,
+          maxSteps,
+        });
+        if (widthNudge) {
+          widthNudgesIssued += 1;
+          recordWidthNudge(toolContext?.turnMetrics);
+          applyPlanContinuationStep(context, widthNudge.text);
+        }
+
+        step++;
+        console.log(
+          `[PiCodexToolLoop] Step ${step}: executed ${toolCallsThisTurn.length} tools, ` +
+            `cumulative context: ~${Math.round(cumulativeTokens / 1000)}K tokens, ` +
+            `total tool calls: ${totalToolCalls}` +
+            (widthNudge ? `, width nudge -> ${widthNudge.target}` : ""),
+        );
+      } else {
+        // Orphan drain — tools ran after stop/length; continue so the model sees results.
+        appendToolTurnToContext(context, doneMessage, toolResults, cumulativeTokens, {
+          registry: toolContext?.jevTrim,
+          userMessage: toolContext?.userMessage,
+          argsByCallId: new Map(toolCallsThisTurn.map((tc) => [tc.toolCallId, tc.args])),
+        });
+        stripAllAssistantReasoning(context.messages as unknown[]);
+        step++;
+        console.log(
+          `[PiCodexToolLoop] Step ${step}: orphan drain executed ${toolCallsThisTurn.length} tool(s), continuing`,
+        );
+        continue stepLoop;
+      }
     } else {
-      // Done - no more tool turns
-      break;
+      // Model stopped without pending tools. If an active plan still has
+      // pending steps this is usually a stop mid-work, not a finished turn —
+      // resume the loop (tools intact) instead of ending. Bounded by
+      // MAX_PLAN_CONTINUATIONS_PER_TURN in the resolver.
+      if (
+        resolveModelStop &&
+        lastFinishReason !== "length" &&
+        !textOnlyWrapUpStepUsed &&
+        !streamOptions.signal?.aborted &&
+        finalMessage != null
+      ) {
+        let continuation: { nudge: string; pendingSteps: number } | null = null;
+        try {
+          continuation = await resolveModelStop({
+            trailingText: stepText,
+            step,
+            totalToolCalls,
+            continuationsUsed: planContinuationsUsed,
+          });
+        } catch (err) {
+          // Never let the policy check break a turn that already succeeded.
+          console.warn(
+            `[PiCodexToolLoop] Plan continuation check failed:`,
+            err instanceof Error ? err.message : err,
+          );
+        }
+
+        if (continuation) {
+          planContinuationsUsed += 1;
+          console.warn(
+            `[TurnEnd:plan-continuation] ${JSON.stringify({
+              ts: new Date().toISOString(),
+              chatId: toolContext?.chatId ?? null,
+              sessionId: streamOptions.sessionId,
+              step,
+              totalToolCalls,
+              pendingSteps: continuation.pendingSteps,
+              continuation: planContinuationsUsed,
+              trailingTextChars: stepText.trim().length,
+            })}`,
+          );
+          // The assistant's own closing text must land in context before the
+          // nudge, or the resumed step cannot see what it just said.
+          appendToolTurnToContext(context, finalMessage, [], cumulativeTokens);
+          applyPlanContinuationStep(context, continuation.nudge);
+          stripAllAssistantReasoning(context.messages as unknown[]);
+          step++;
+          continue stepLoop;
+        }
+      }
+
+      // Turn is done; post-stream wrap-up in AgentService adds user text if the
+      // sequence ends on tool(s).
+      emitTurnEnd(
+        lastFinishReason === "length" ? "model_length" : "model_stop",
+      );
+      break stepLoop;
     }
+  }
+
+  if (!turnEndLogged) {
+    emitTurnEnd("max_steps_exhausted");
   }
 }
 

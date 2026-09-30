@@ -247,6 +247,41 @@ describe("TabStore", () => {
     });
   });
 
+  describe("Orphan child tabs", () => {
+    it("promotes orphan child to standalone when opening existing app tab", () => {
+      useTabStore.setState({
+        tabs: [
+          {
+            id: "app-deck-id",
+            type: "app",
+            entityId: "deck-id",
+            title: "Deck Studio",
+            parentTabId: null,
+            childTabIds: [],
+            displayMode: "child",
+          },
+        ],
+        activeTabId: null,
+        activeLeftTab: null,
+        activeRightTab: null,
+        isSplitView: false,
+      });
+
+      expect(useTabStore.getState().getVisibleTabs()).toHaveLength(0);
+
+      const tabId = useTabStore
+        .getState()
+        .createTab("app", "deck-id", "Deck Studio");
+
+      expect(tabId).toBe("app-deck-id");
+      expect(useTabStore.getState().getVisibleTabs()).toHaveLength(1);
+      expect(useTabStore.getState().getTab("app-deck-id")?.displayMode).toBe(
+        "standalone",
+      );
+      expect(useTabStore.getState().activeTabId).toBe("app-deck-id");
+    });
+  });
+
   describe("getTab", () => {
     it("should return tab by ID", () => {
       const tabId = useTabStore

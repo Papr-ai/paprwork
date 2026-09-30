@@ -6,6 +6,7 @@
 import React, { useState, useCallback } from "react";
 import { Prism as SyntaxHighlighter } from "react-syntax-highlighter";
 import { oneDark } from "react-syntax-highlighter/dist/esm/styles/prism";
+import { copyTextToClipboard } from "../../utils/copyToClipboard";
 import "./CodeBlock.css";
 
 interface CodeBlockProps {
@@ -27,11 +28,13 @@ export const CodeBlock: React.FC<CodeBlockProps> = ({
   const hasLineBreak = rawText.includes("\n");
   const isInline = !className && !hasLineBreak;
 
-  const handleCopy = useCallback(() => {
-    navigator.clipboard.writeText(rawText).then(() => {
-      setCopied(true);
-      setTimeout(() => setCopied(false), 2000);
-    });
+  const handleCopy = useCallback(async () => {
+    const ok = await copyTextToClipboard(rawText, { trim: false });
+    if (!ok) {
+      return;
+    }
+    setCopied(true);
+    setTimeout(() => setCopied(false), 2000);
   }, [rawText]);
 
   if (isInline) {
@@ -44,7 +47,7 @@ export const CodeBlock: React.FC<CodeBlockProps> = ({
         {language && <span className="code-block-language">{language}</span>}
         <button
           className="code-block-copy"
-          onClick={handleCopy}
+          onClick={() => void handleCopy()}
           title={copied ? "Copied!" : "Copy code"}
           type="button"
         >

@@ -12,12 +12,17 @@ import {
   type MemoryScopeContext,
 } from "../../core/utils/memoryScope.js";
 import type { MemoryAddPolicy } from "@papr/memory/resources/shared.js";
+import type { MemoryMetadata } from "@papr/memory/resources/memory.js";
 import {
   applyExplicitReadAclToPolicy,
   hasExplicitMemoryReadAcl,
   type ExplicitMemoryReadAclInput,
 } from "../../core/utils/memoryAcl.js";
 import { loadSettings } from "../services/settingsStore.js";
+import {
+  mergeUserIdentityIntoMetadata,
+  spreadMemoryScopeUserIdentity,
+} from "../../core/utils/paprMemoryUserIdentity.js";
 import { getPaprUserId } from "./paprUserId.js";
 
 export function getMemoryScopeContext(): MemoryScopeContext {
@@ -28,6 +33,40 @@ export function getMemoryScopeContext(): MemoryScopeContext {
       process.env.PAPR_NAMESPACE_ID?.trim() || pointer?.namespaceId,
     organizationId:
       process.env.PAPR_ORG_ID?.trim() || pointer?.organizationId,
+  };
+}
+
+export interface MemoryReadAclToolArgs {
+  readAcl?: string[];
+  shareWithUserIds?: string[];
+  shareWithTeam?: boolean;
+  shareWithOrganization?: boolean;
+}
+
+/** Map agent tool ACL fields to explicit read ACL for memory.add / create_entities. */
+export function resolveExplicitReadAclFromToolArgs(
+  args: MemoryReadAclToolArgs,
+  ctx?: MemoryScopeContext,
+): ExplicitMemoryReadAclInput | undefined {
+  if (
+    !args.readAcl?.length &&
+    !args.shareWithUserIds?.length &&
+    !args.shareWithTeam &&
+    !args.shareWithOrganization
+  ) {
+    return undefined;
+  }
+
+  const scopeCtx = ctx ?? getMemoryScopeContext();
+  return {
+    readAcl: args.readAcl,
+    shareWithUserIds: args.shareWithUserIds,
+    shareWithNamespaceId: args.shareWithTeam
+      ? scopeCtx.namespaceId
+      : undefined,
+    shareWithOrganizationId: args.shareWithOrganization
+      ? scopeCtx.organizationId
+      : undefined,
   };
 }
 
@@ -61,6 +100,7 @@ export async function buildPaprMemoryWriteScope(input?: {
   /** When set, replaces chat/settings read ACL (writer still gets write ACL). */
   explicitReadAcl?: ExplicitMemoryReadAclInput;
 }): Promise<{
+  user_id?: string;
   external_user_id?: string;
   namespace_id?: string;
   policy?: MemoryAddPolicy;
@@ -81,12 +121,13 @@ export async function buildPaprMemoryWriteScope(input?: {
 
   if (useExplicitRead && input.explicitReadAcl && ctx.userId) {
     policy = applyExplicitReadAclToPolicy(policy, {
-      writerExternalUserId: ctx.userId,
+      writerUserId: ctx.userId,
       explicitRead: input.explicitReadAcl,
     });
   }
 
   return {
+    user_id: fields.user_id,
     external_user_id: fields.external_user_id,
     namespace_id: fields.namespace_id,
     policy,
@@ -97,6 +138,7 @@ export async function buildPaprMemorySearchScope(input?: {
   chatId?: string;
   explicitAudience?: MemoryAudience;
 }): Promise<{
+  user_id?: string;
   external_user_id?: string;
   search_acl?: { read: string[]; write?: string[] };
 }> {
@@ -112,15 +154,14 @@ export async function paprMemoryScopeSpread(input?: {
   explicitAudience?: MemoryAudience;
   addPolicy?: MemoryAddPolicy;
 }): Promise<{
+  user_id?: string;
   external_user_id?: string;
   namespace_id?: string;
   policy?: MemoryAddPolicy;
 }> {
   const scope = await buildPaprMemoryWriteScope(input);
   return {
-    ...(scope.external_user_id
-      ? { external_user_id: scope.external_user_id }
-      : {}),
+    ...spreadMemoryScopeUserIdentity(scope),
     ...(scope.namespace_id ? { namespace_id: scope.namespace_id } : {}),
     ...(scope.policy ? { policy: scope.policy } : {}),
   };
@@ -131,14 +172,13 @@ export async function paprMemorySearchScopeSpread(input?: {
   chatId?: string;
   explicitAudience?: MemoryAudience;
 }): Promise<{
+  user_id?: string;
   external_user_id?: string;
   search_acl?: { read: string[]; write?: string[] };
 }> {
   const scope = await buildPaprMemorySearchScope(input);
   return {
-    ...(scope.external_user_id
-      ? { external_user_id: scope.external_user_id }
-      : {}),
+    ...spreadMemoryScopeUserIdentity(scope),
     ...(scope.search_acl ? { search_acl: scope.search_acl } : {}),
   };
 }
@@ -149,6 +189,7 @@ export function buildPaprMemoryWriteScopeSync(input: {
   addPolicy?: MemoryAddPolicy;
   ctx?: MemoryScopeContext;
 }): {
+  user_id?: string;
   external_user_id?: string;
   namespace_id?: string;
   policy?: MemoryAddPolicy;
@@ -158,8 +199,40 @@ export function buildPaprMemoryWriteScopeSync(input: {
     input.ctx ?? getMemoryScopeContext(),
   );
   return {
+    user_id: fields.user_id,
     external_user_id: fields.external_user_id,
     namespace_id: fields.namespace_id,
     policy: mergeMemoryAddPolicy(input.addPolicy, fields.policy),
   };
+}
+
+/** Document upload expects policy as a JSON string, not a MemoryAddPolicy object. */
+export function paprMemoryDocumentUploadFields(scope: {
+  user_id?: string;
+  external_user_id?: string;
+  namespace_id?: string;
+  policy?: MemoryAddPolicy;
+}): {
+  user_id?: string;
+  external_user_id?: string;
+  namespace_id?: string;
+  policy?: string;
+} {
+  const { policy, namespace_id, ...identity } = scope;
+  return {
+    ...identity,
+    ...(namespace_id ? { namespace_id } : {}),
+    ...(policy ? { policy: JSON.stringify(policy) } : {}),
+  };
+}
+
+/** Merge user identity into metadata for single-add (v2 auth reads metadata). */
+export function withMemoryScopeMetadata(
+  metadata: MemoryMetadata,
+  scope: { user_id?: string; external_user_id?: string },
+): MemoryMetadata {
+  return mergeUserIdentityIntoMetadata(
+    metadata,
+    scope.user_id ?? scope.external_user_id,
+  );
 }

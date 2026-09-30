@@ -3,38 +3,160 @@
  */
 
 import { getPaprAppsRoot } from "../../core/utils/paprRoot.js";
-import { discoverTursoLinkedSources, findLinkedSourceForJob, linkedSourceSyncKey } from "./tursoLinkedSources.js";
-import { getTursoSyncBridge, type TursoSyncBridge } from "./TursoSyncBridge.js";
 import {
+  discoverTursoLinkedSources,
+  dedupeLinkedSourcesBySyncKey,
+  findLinkedSourceForJob,
+  linkedSourceSyncKey,
+  type TursoLinkedSource,
+} from "./tursoLinkedSources.js";
+import {
+  canPerformWorkspaceDbWrite,
+  getWorkspaceWriteGeneration,
+} from "./workspaceWriteGuard.js";
+import { ensureTursoSyncBridge, type TursoSyncBridge } from "./TursoSyncBridge.js";
+import { isLegacyWorkspaceRowSyncEnabled } from "../utils/tursoReplicaEnabled.js";
+import {
+  clearDirtyAfterPush,
+  isJobDbQuarantined,
+  isTursoStateDbPathInWorkspace,
+  loadTursoSyncState,
   recordTursoPushQuarantine,
   recordTursoPushSuccess,
 } from "./tursoSyncState.js";
+import type { PushResult } from "./tursoSyncBridgeCore.js";
 import {
   isTursoDatabaseLimitError,
   isTursoLocalDatabaseCorruptError,
   isTursoProvisioningRateLimitError,
   isTursoSqliteBindTypeError,
 } from "./tursoSyncBridgeCore.js";
+import { resetTursoSyncSessionStatsForTests } from "./tursoSyncSession.js";
+import { shouldAutoUploadJobFolder, shouldAutoUploadTursoForApp } from "./cloudUploadMode.js";
 
 /** Default debounce for file-watcher / API write triggers. */
 const DEFAULT_DEBOUNCE_MS = 60_000;
 /** Faster debounce after job completion or explicit user link. */
 const COMPLETION_DEBOUNCE_MS = 5_000;
+/** Force a flush this long after the first dirty signal (debounce may keep resetting). */
+const DEFAULT_MAX_WAIT_MS = 120_000;
 const DEFAULT_PUSH_INTERVAL_MS = 1_500;
 const DEFAULT_RATE_LIMIT_BACKOFF_MS = 30_000;
+/** Back off scheduler retries after a failed push (avoids max-wait log storms). */
+const DEFAULT_PUSH_FAILURE_BACKOFF_MS = 60_000;
+/** Do not retry Turso push when local state cannot produce a remote delta. */
+const PERMANENT_PUSH_SKIP_REASONS = new Set([
+  "no_syncable_tables",
+  "no_matching_tables",
+  "local_db_empty",
+  "local_db_missing",
+]);
+
+function isPermanentPushSkip(result: PushResult): boolean {
+  return (
+    result.status === "skipped" &&
+    result.reason !== undefined &&
+    PERMANENT_PUSH_SKIP_REASONS.has(result.reason)
+  );
+}
+/** Minimum gap between repeated max-wait flush logs for the same sync key. */
+const MAX_WAIT_LOG_COOLDOWN_MS = 30_000;
+
+export type TursoPushPriority = "normal" | "completion" | "interactive";
+
+export type TursoPushTrigger =
+  | "watcher"
+  | "manual"
+  | "post_git"
+  | "startup"
+  | "completion"
+  | "api_write"
+  | "max_wait"
+  | "migration"
+  | "unknown";
 
 const jobTimers = new Map<string, NodeJS.Timeout>();
+const maxWaitTimers = new Map<string, NodeJS.Timeout>();
+/** First dirty timestamp per syncKey — not reset on subsequent writes until push succeeds. */
+const firstDirtyAtMs = new Map<string, number>();
 let allLinkedTimer: NodeJS.Timeout | null = null;
+
+export interface TursoPushSchedulerStats {
+  schedules: number;
+  enqueues: number;
+  pushJobCalls: number;
+  schedulesByKey: Record<string, number>;
+  enqueuesByKey: Record<string, number>;
+}
+
+let pushSchedulerStats: TursoPushSchedulerStats = {
+  schedules: 0,
+  enqueues: 0,
+  pushJobCalls: 0,
+  schedulesByKey: {},
+  enqueuesByKey: {},
+};
+
+function bumpStat(
+  bucket: Record<string, number>,
+  syncKey: string,
+): void {
+  bucket[syncKey] = (bucket[syncKey] ?? 0) + 1;
+}
+
+export function getTursoPushSchedulerStatsForTests(): TursoPushSchedulerStats {
+  return {
+    ...pushSchedulerStats,
+    schedulesByKey: { ...pushSchedulerStats.schedulesByKey },
+    enqueuesByKey: { ...pushSchedulerStats.enqueuesByKey },
+  };
+}
+
+export function resetTursoPushSchedulerStatsForTests(): void {
+  pushSchedulerStats = {
+    schedules: 0,
+    enqueues: 0,
+    pushJobCalls: 0,
+    schedulesByKey: {},
+    enqueuesByKey: {},
+  };
+}
 
 const pushQueue: string[] = [];
 const queuedJobIds = new Set<string>();
+/** Jobs currently executing pushJob — still pending from max-wait's perspective. */
+const pushInFlightSyncKeys = new Set<string>();
+const pushFailureBackoffUntilMs = new Map<string, number>();
+/**
+ * Consecutive follow-up pushes that shipped nothing while the dirty check kept
+ * saying there was work. The two answers come from different evidence — the
+ * push asks the sync log whether anything is unshipped, the dirty check also
+ * asks whether the remote is missing local tables — so they can disagree
+ * permanently. Re-running immediately cannot break that tie: nothing about the
+ * state changed between the two calls, so the next round returns the same pair
+ * of answers. Counting them is what turns an unbounded spin into a backoff.
+ */
+const noProgressFollowUps = new Map<string, number>();
+/** Allows for a genuine write landing mid-push before treating it as a stall. */
+const MAX_NO_PROGRESS_FOLLOW_UPS = 2;
+const lastMaxWaitLogAtMs = new Map<string, number>();
 let queueProcessing = false;
 let rateLimitUntilMs = 0;
 let rateLimitBackoffMs = DEFAULT_RATE_LIMIT_BACKOFF_MS;
 
-export type TursoPushPriority = "normal" | "completion";
+const INTERACTIVE_DEBOUNCE_MS = 2_500;
 
 function debounceMs(priority: TursoPushPriority): number {
+  if (priority === "interactive") {
+    const raw = process.env.TURSO_PUSH_INTERACTIVE_DEBOUNCE_MS;
+    if (raw) {
+      const parsed = Number(raw);
+      if (Number.isFinite(parsed) && parsed >= 0) {
+        return parsed;
+      }
+    }
+    return INTERACTIVE_DEBOUNCE_MS;
+  }
   if (priority === "completion") {
     const raw = process.env.TURSO_PUSH_COMPLETION_DEBOUNCE_MS;
     if (raw) {
@@ -63,6 +185,15 @@ function pushIntervalMs(): number {
   return Number.isFinite(parsed) && parsed >= 0 ? parsed : DEFAULT_PUSH_INTERVAL_MS;
 }
 
+function maxWaitMs(): number {
+  const raw = process.env.TURSO_PUSH_MAX_WAIT_MS;
+  if (!raw) {
+    return DEFAULT_MAX_WAIT_MS;
+  }
+  const parsed = Number(raw);
+  return Number.isFinite(parsed) && parsed >= 0 ? parsed : DEFAULT_MAX_WAIT_MS;
+}
+
 function defaultAppsRoot(): string {
   return getPaprAppsRoot();
 }
@@ -71,60 +202,296 @@ function sleep(ms: number): Promise<void> {
   return new Promise((resolve) => setTimeout(resolve, ms));
 }
 
+function logTursoSchedule(
+  syncKey: string,
+  trigger: TursoPushTrigger,
+  detail?: string,
+): void {
+  const suffix = detail ? ` — ${detail}` : "";
+  console.log(
+    `[TursoPushScheduler] Schedule push for ${syncKey} (trigger=${trigger}${suffix})`,
+  );
+}
+
+function clearDebounceTimer(syncKey: string): void {
+  const debounceTimer = jobTimers.get(syncKey);
+  if (debounceTimer) {
+    clearTimeout(debounceTimer);
+    jobTimers.delete(syncKey);
+  }
+}
+
+function clearMaxWaitTimer(syncKey: string): void {
+  const maxWaitTimer = maxWaitTimers.get(syncKey);
+  if (maxWaitTimer) {
+    clearTimeout(maxWaitTimer);
+    maxWaitTimers.delete(syncKey);
+  }
+}
+
+function clearDirtyTracking(syncKey: string): void {
+  clearDebounceTimer(syncKey);
+  clearMaxWaitTimer(syncKey);
+  firstDirtyAtMs.delete(syncKey);
+  lastMaxWaitLogAtMs.delete(syncKey);
+  pushFailureBackoffUntilMs.delete(syncKey);
+  noProgressFollowUps.delete(syncKey);
+}
+
+function pushFailureBackoffMs(): number {
+  const raw = process.env.TURSO_PUSH_FAILURE_BACKOFF_MS;
+  if (!raw) {
+    return DEFAULT_PUSH_FAILURE_BACKOFF_MS;
+  }
+  const parsed = Number(raw);
+  return Number.isFinite(parsed) && parsed >= 0
+    ? parsed
+    : DEFAULT_PUSH_FAILURE_BACKOFF_MS;
+}
+
+function isInPushFailureBackoff(syncKey: string): boolean {
+  const until = pushFailureBackoffUntilMs.get(syncKey);
+  return until !== undefined && Date.now() < until;
+}
+
+function notePushFailureBackoff(syncKey: string): void {
+  pushFailureBackoffUntilMs.set(syncKey, Date.now() + pushFailureBackoffMs());
+}
+
+function clearPushSchedulerJob(schedulerKey: string, dbPath?: string, stateKey?: string): void {
+  clearDirtyTracking(schedulerKey);
+  const dirtyKey = stateKey ?? schedulerKey;
+  if (dbPath) {
+    clearDirtyAfterPush(dirtyKey);
+  }
+}
+
+function recordSuccessfulPush(
+  stateKey: string,
+  dbPath: string,
+  result: PushResult,
+): void {
+  recordTursoPushSuccess(stateKey, dbPath, undefined, result.lastPushedLogId);
+}
+
+function armMaxWaitTimer(syncKey: string): void {
+  if (maxWaitTimers.has(syncKey) || isMaxWaitFlushPending(syncKey)) {
+    return;
+  }
+
+  const first = firstDirtyAtMs.get(syncKey) ?? Date.now();
+  firstDirtyAtMs.set(syncKey, first);
+  const remaining = Math.max(0, maxWaitMs() - (Date.now() - first));
+
+  const timer = setTimeout(() => {
+    maxWaitTimers.delete(syncKey);
+    clearDebounceTimer(syncKey);
+    if (isMaxWaitFlushPending(syncKey)) {
+      return;
+    }
+    logTursoSchedule(syncKey, "max_wait", `elapsed ${maxWaitMs()}ms`);
+    enqueueTursoPush(syncKey, true);
+  }, remaining);
+
+  maxWaitTimers.set(syncKey, timer);
+}
+
+function noteDirty(syncKey: string): void {
+  if (!firstDirtyAtMs.has(syncKey)) {
+    firstDirtyAtMs.set(syncKey, Date.now());
+  }
+  armMaxWaitTimer(syncKey);
+}
+
+/** True when max-wait already triggered a flush and the job is queued or pushing. */
+function isMaxWaitFlushPending(syncKey: string): boolean {
+  return queuedJobIds.has(syncKey) || pushInFlightSyncKeys.has(syncKey);
+}
+
+function flushIfMaxWaitElapsed(syncKey: string, trigger: TursoPushTrigger): boolean {
+  const first = firstDirtyAtMs.get(syncKey);
+  if (first === undefined) {
+    return false;
+  }
+  if (Date.now() - first < maxWaitMs()) {
+    return false;
+  }
+  clearDebounceTimer(syncKey);
+  clearMaxWaitTimer(syncKey);
+  if (isMaxWaitFlushPending(syncKey)) {
+    return true;
+  }
+  if (isInPushFailureBackoff(syncKey)) {
+    return true;
+  }
+  const lastLogAt = lastMaxWaitLogAtMs.get(syncKey) ?? 0;
+  const logCooldownElapsed = Date.now() - lastLogAt >= MAX_WAIT_LOG_COOLDOWN_MS;
+  if (logCooldownElapsed) {
+    logTursoSchedule(syncKey, trigger, "max-wait elapsed — flushing now");
+    lastMaxWaitLogAtMs.set(syncKey, Date.now());
+  }
+  enqueueTursoPush(syncKey, true);
+  return true;
+}
+
+async function finishTursoPushTracking(
+  bridge: TursoSyncBridge,
+  linked: TursoLinkedSource,
+  schedulerKey: string,
+  resolvedSyncKey: string,
+  shippedWork: boolean,
+): Promise<void> {
+  const stillDirty = await bridge.linkedSourceNeedsPush(linked);
+  if (!stillDirty) {
+    clearDirtyTracking(schedulerKey);
+    return;
+  }
+
+  // Still dirty after a push that actually shipped rows means the backlog is
+  // draining, so keep going at full speed.
+  if (shippedWork) {
+    noteDirty(schedulerKey);
+    noProgressFollowUps.delete(schedulerKey);
+    enqueueTursoPush(schedulerKey, true);
+    console.log(
+      `[TursoPushScheduler] Backlog remains for ${resolvedSyncKey} — queued follow-up push`,
+    );
+    return;
+  }
+
+  // Shipped nothing and still dirty. Re-queuing at the front with no delay is
+  // what turned this into a hot loop: the push reports the log has nothing
+  // unshipped, the dirty check reports the remote is missing tables, and
+  // neither answer moves. Allow a couple of rounds for a write that genuinely
+  // landed mid-push, then back off so the tie costs a retry a minute rather
+  // than a core.
+  const attempts = (noProgressFollowUps.get(schedulerKey) ?? 0) + 1;
+  noProgressFollowUps.set(schedulerKey, attempts);
+
+  if (attempts > MAX_NO_PROGRESS_FOLLOW_UPS) {
+    notePushFailureBackoff(schedulerKey);
+    console.warn(
+      `[TursoPushScheduler] ${resolvedSyncKey} still reports pending work after ` +
+        `${attempts} pushes that shipped nothing — backing off for ` +
+        `${pushFailureBackoffMs()}ms. The sync log and the dirty check disagree; ` +
+        `the remote is likely missing tables the log considers already shipped.`,
+    );
+    return;
+  }
+
+  noteDirty(schedulerKey);
+  enqueueTursoPush(schedulerKey, true);
+  console.log(
+    `[TursoPushScheduler] Backlog remains for ${resolvedSyncKey} — queued follow-up push`,
+  );
+}
+
 async function executePushForJob(
   bridge: TursoSyncBridge,
   syncKey: string,
 ): Promise<void> {
   if (!(await bridge.isJobLinkedToApp(syncKey))) {
+    clearDirtyTracking(syncKey);
     return;
   }
 
   const sources = await bridge.listLinkedSources(true);
   const linked = findLinkedSourceForJob(sources, syncKey);
   if (!linked) {
+    clearDirtyTracking(syncKey);
     return;
   }
 
-  if (!(await bridge.linkedSourceNeedsPush(linked))) {
+  const { shouldSuppressLegacyTursoPush } = await import(
+    "./tursoReplica/tursoReplicaRouting.js"
+  );
+  if (
+    shouldSuppressLegacyTursoPush({
+      syncKey: linkedSourceSyncKey(linked),
+      dbPath: linked.dbPath,
+      dbId: linked.dbId,
+    })
+  ) {
+    clearDirtyTracking(syncKey);
+    return;
+  }
+
+  const resolvedSyncKey = linkedSourceSyncKey(linked);
+
+  if (
+    !canPerformWorkspaceDbWrite(
+      getWorkspaceWriteGeneration(),
+      linked.dbPath,
+      `turso push ${resolvedSyncKey}`,
+    )
+  ) {
+    clearDirtyTracking(syncKey);
+    clearPushSchedulerJob(syncKey, linked.dbPath, resolvedSyncKey);
     return;
   }
 
   try {
-    const result = await bridge.pushJob(syncKey);
-    if (result.status === "pushed") {
-      recordTursoPushSuccess(
-        linkedSourceSyncKey(linked),
-        linked.dbPath,
-        undefined,
-        result.tableFingerprints,
+    const pushResult = await bridge.pushLinkedSourceIfNeeded(linked);
+    if (pushResult === null) {
+      clearPushSchedulerJob(syncKey, linked.dbPath, resolvedSyncKey);
+      return;
+    }
+    pushSchedulerStats.pushJobCalls += 1;
+    if (pushResult.status === "pushed") {
+      recordSuccessfulPush(resolvedSyncKey, linked.dbPath, pushResult);
+      await finishTursoPushTracking(
+        bridge,
+        linked,
+        syncKey,
+        resolvedSyncKey,
+        true,
       );
       const skipped =
-        result.skippedTables && result.skippedTables.length > 0
-          ? `, skipped ${result.skippedTables.length} unchanged table(s)`
+        pushResult.skippedTables && pushResult.skippedTables.length > 0
+          ? `, skipped ${pushResult.skippedTables.length} unchanged table(s)`
           : "";
       console.log(
-        `[TursoPushScheduler] Pushed ${linkedSourceSyncKey(linked)} (${result.tables.length} table(s)${skipped})`,
+        `[TursoPushScheduler] Pushed ${resolvedSyncKey} (${pushResult.tables.length} table(s)${skipped})`,
       );
       return;
     }
 
-    if (result.reason === "all_tables_unchanged" && result.tableFingerprints) {
-      recordTursoPushSuccess(
-        linkedSourceSyncKey(linked),
-        linked.dbPath,
-        undefined,
-        result.tableFingerprints,
+    if (
+      pushResult.reason === "all_tables_unchanged" &&
+      pushResult.lastPushedLogId !== undefined
+    ) {
+      recordSuccessfulPush(resolvedSyncKey, linked.dbPath, pushResult);
+      await finishTursoPushTracking(
+        bridge,
+        linked,
+        syncKey,
+        resolvedSyncKey,
+        false,
       );
+      return;
     }
+
+    if (isPermanentPushSkip(pushResult)) {
+      recordSuccessfulPush(resolvedSyncKey, linked.dbPath, pushResult);
+      clearPushSchedulerJob(syncKey, linked.dbPath, resolvedSyncKey);
+      return;
+    }
+
+    notePushFailureBackoff(syncKey);
+    console.warn(
+      `[TursoPushScheduler] Push skipped for ${resolvedSyncKey}: ${pushResult.reason ?? "unknown"}`,
+    );
   } catch (error) {
     const message = (error as Error).message;
     if (
       isTursoLocalDatabaseCorruptError(message) ||
       isTursoSqliteBindTypeError(message)
     ) {
-      recordTursoPushQuarantine(linkedSourceSyncKey(linked), linked.dbPath, message);
+      recordTursoPushQuarantine(resolvedSyncKey, linked.dbPath, message);
+      clearDirtyTracking(syncKey);
       return;
     }
+    notePushFailureBackoff(syncKey);
     throw error;
   }
 }
@@ -145,9 +512,16 @@ function logPushFailure(jobId: string, message: string): void {
 }
 
 function enqueueTursoPush(jobId: string, front = false): void {
+  if (pushInFlightSyncKeys.has(jobId)) {
+    console.warn(
+      `[TursoPushScheduler] Push already in-flight for ${jobId} — coalescing enqueue`,
+    );
+  }
   if (queuedJobIds.has(jobId)) {
     return;
   }
+  pushSchedulerStats.enqueues += 1;
+  bumpStat(pushSchedulerStats.enqueuesByKey, jobId);
   queuedJobIds.add(jobId);
   if (front) {
     pushQueue.unshift(jobId);
@@ -163,8 +537,8 @@ async function processTursoPushQueue(): Promise<void> {
   }
   queueProcessing = true;
 
-  const bridge = getTursoSyncBridge();
-  if (!bridge) {
+  const bridge = ensureTursoSyncBridge();
+  if (!bridge.enabled) {
     pushQueue.length = 0;
     queuedJobIds.clear();
     queueProcessing = false;
@@ -183,6 +557,7 @@ async function processTursoPushQueue(): Promise<void> {
         break;
       }
       queuedJobIds.delete(jobId);
+      pushInFlightSyncKeys.add(jobId);
 
       try {
         await executePushForJob(bridge, jobId);
@@ -198,6 +573,7 @@ async function processTursoPushQueue(): Promise<void> {
           if (linked) {
             recordTursoPushQuarantine(linkedSourceSyncKey(linked), linked.dbPath, message);
           }
+          clearDirtyTracking(jobId);
           continue;
         }
         if (isTursoDatabaseLimitError(message)) {
@@ -217,6 +593,8 @@ async function processTursoPushQueue(): Promise<void> {
           break;
         }
         logPushFailure(jobId, message);
+      } finally {
+        pushInFlightSyncKeys.delete(jobId);
       }
 
       if (pushQueue.length > 0) {
@@ -234,55 +612,155 @@ async function processTursoPushQueue(): Promise<void> {
 export function scheduleTursoPushForJob(
   jobId: string,
   priority: TursoPushPriority = "normal",
+  trigger: TursoPushTrigger = "unknown",
 ): void {
-  const bridge = getTursoSyncBridge();
-  if (!bridge) {
+  const bridge = ensureTursoSyncBridge();
+  if (!bridge.enabled) {
     return;
   }
 
-  const existing = jobTimers.get(jobId);
-  if (existing) {
-    clearTimeout(existing);
+  void import("./tursoReplica/tursoReplicaRouting.js").then(
+    ({ shouldSuppressLegacyTursoPush }) => {
+      if (shouldSuppressLegacyTursoPush({ syncKey: jobId })) {
+        void import("./tursoReplica/tursoReplicaPushScheduler.js").then(
+          ({ scheduleTursoReplicaPushForSyncKey }) => {
+            scheduleTursoReplicaPushForSyncKey(jobId, priority, trigger);
+          },
+        );
+        return;
+      }
+      if (!isLegacyWorkspaceRowSyncEnabled()) {
+        return;
+      }
+      scheduleTursoPushForJobLegacy(jobId, priority, trigger);
+    },
+  );
+}
+
+function scheduleTursoPushForJobLegacy(
+  jobId: string,
+  priority: TursoPushPriority = "normal",
+  trigger: TursoPushTrigger = "unknown",
+): void {
+  const bridge = ensureTursoSyncBridge();
+  if (!bridge.enabled) {
+    return;
   }
+
+  const syncState = loadTursoSyncState();
+  if (isJobDbQuarantined(jobId, syncState)) {
+    return;
+  }
+
+  const syncEntry = syncState.jobs[jobId];
+  if (
+    syncEntry?.dbPath &&
+    !isTursoStateDbPathInWorkspace(syncEntry.dbPath)
+  ) {
+    return;
+  }
+
+  if (trigger !== "manual" && isInPushFailureBackoff(jobId)) {
+    return;
+  }
+
+  if (trigger !== "manual" && !shouldAutoUploadJobFolder(jobId)) {
+    return;
+  }
+
+  const hadDebounceTimer = jobTimers.has(jobId);
+  noteDirty(jobId);
+  if (flushIfMaxWaitElapsed(jobId, trigger)) {
+    return;
+  }
+
+  pushSchedulerStats.schedules += 1;
+  bumpStat(pushSchedulerStats.schedulesByKey, jobId);
+
+  if (!hadDebounceTimer) {
+    logTursoSchedule(jobId, trigger, `debounce ${debounceMs(priority)}ms`);
+  }
+
+  clearDebounceTimer(jobId);
 
   const timer = setTimeout(() => {
     jobTimers.delete(jobId);
+    logTursoSchedule(jobId, trigger, "debounce elapsed");
     enqueueTursoPush(jobId);
   }, debounceMs(priority));
 
   jobTimers.set(jobId, timer);
 }
 
-export function scheduleTursoPushAllLinked(): void {
-  const bridge = getTursoSyncBridge();
-  if (!bridge) {
+export function scheduleTursoPushAllLinked(
+  trigger: TursoPushTrigger = "post_git",
+): void {
+  const bridge = ensureTursoSyncBridge();
+  if (!bridge.enabled) {
     return;
   }
 
-  if (allLinkedTimer) {
-    clearTimeout(allLinkedTimer);
-  }
+  void import("../utils/tursoReplicaEnabled.js").then(
+    ({ isTursoReplicaSyncFeatureEnabled }) => {
+      if (isTursoReplicaSyncFeatureEnabled()) {
+        void import("./tursoReplica/tursoReplicaPushScheduler.js").then(
+          ({ scheduleTursoReplicaPushAllLinked }) => {
+            scheduleTursoReplicaPushAllLinked(trigger);
+          },
+        );
+      }
+      if (!isLegacyWorkspaceRowSyncEnabled()) {
+        return;
+      }
+      if (allLinkedTimer) {
+        clearTimeout(allLinkedTimer);
+      }
 
-  allLinkedTimer = setTimeout(() => {
-    allLinkedTimer = null;
-    void enqueueDirtyLinkedJobs(bridge.getAppsRootDir() ?? defaultAppsRoot());
-  }, debounceMs("normal"));
+      logTursoSchedule("*", trigger, `all linked debounce ${debounceMs("normal")}ms`);
+
+      allLinkedTimer = setTimeout(() => {
+        allLinkedTimer = null;
+        void enqueueDirtyLinkedJobs(
+          bridge.getAppsRootDir() ?? defaultAppsRoot(),
+          trigger,
+        );
+      }, debounceMs("normal"));
+    },
+  );
 }
 
-async function enqueueDirtyLinkedJobs(appsRootDir: string): Promise<void> {
-  const bridge = getTursoSyncBridge();
-  if (!bridge) {
+async function enqueueDirtyLinkedJobs(
+  appsRootDir: string,
+  trigger: TursoPushTrigger = "startup",
+): Promise<void> {
+  const bridge = ensureTursoSyncBridge();
+  if (!bridge.enabled) {
     return;
   }
 
-  const sources = await discoverTursoLinkedSources(appsRootDir);
+  const sources = dedupeLinkedSourcesBySyncKey(
+    await discoverTursoLinkedSources(appsRootDir),
+  );
   let enqueued = 0;
   for (const source of sources) {
+    if (trigger !== "manual" && !shouldAutoUploadTursoForApp(source.appId)) {
+      continue;
+    }
     const syncKey = linkedSourceSyncKey(source);
     if (!(await bridge.linkedSourceNeedsPush(source))) {
       continue;
     }
-    enqueueTursoPush(syncKey);
+    // A source that keeps reporting dirty is exactly the one a backoff exists
+    // to hold off, so honour it here directly rather than relying on max-wait
+    // having elapsed for flushIfMaxWaitElapsed to reach its own check.
+    if (trigger !== "manual" && isInPushFailureBackoff(syncKey)) {
+      continue;
+    }
+    logTursoSchedule(syncKey, trigger, "dirty linked source");
+    noteDirty(syncKey);
+    if (!flushIfMaxWaitElapsed(syncKey, trigger)) {
+      enqueueTursoPush(syncKey);
+    }
     enqueued += 1;
   }
   if (enqueued > 0) {
@@ -295,33 +773,161 @@ async function enqueueDirtyLinkedJobs(appsRootDir: string): Promise<void> {
 export async function pushDirtyLinkedJobsOnStartup(
   appsRootDir?: string,
 ): Promise<void> {
-  const bridge = getTursoSyncBridge();
-  if (!bridge) {
+  const bridge = ensureTursoSyncBridge();
+  if (!bridge.enabled) {
     return;
   }
 
+  const { isTursoReplicaSyncFeatureEnabled } = await import(
+    "../utils/tursoReplicaEnabled.js"
+  );
+  if (isTursoReplicaSyncFeatureEnabled()) {
+    const { pushPendingReplicaDbsOnStartup } = await import(
+      "./tursoReplica/tursoReplicaPushScheduler.js"
+    );
+    await pushPendingReplicaDbsOnStartup(appsRootDir);
+    if (!isLegacyWorkspaceRowSyncEnabled()) {
+      return;
+    }
+  }
+
+  const { getPaprRoot } = await import("../../core/utils/paprRoot.js");
+  const { pruneTursoSyncStateForWorkspace } = await import("./tursoSyncState.js");
+  const pruned = pruneTursoSyncStateForWorkspace(getPaprRoot());
+  if (pruned > 0) {
+    console.log(
+      `[TursoPushScheduler] Pruned ${pruned} stale sync-state row(s) for active workspace`,
+    );
+  }
+
   const root = appsRootDir ?? bridge.getAppsRootDir() ?? defaultAppsRoot();
-  await enqueueDirtyLinkedJobs(root);
+  await enqueueDirtyLinkedJobs(root, "startup");
 }
 
-/** Debounced push after job completion or local DB mutation. */
-export async function pushJobTursoIfEnabled(jobId: string): Promise<void> {
-  scheduleTursoPushForJob(jobId, "completion");
+function removeFromPushQueue(syncKey: string): void {
+  for (let index = pushQueue.length - 1; index >= 0; index -= 1) {
+    if (pushQueue[index] === syncKey) {
+      pushQueue.splice(index, 1);
+    }
+  }
+  queuedJobIds.delete(syncKey);
 }
 
-/** Test hook — flush queue state between tests. */
-export function resetTursoPushQueueForTests(): void {
+/** Cancel debounced/queued scheduler pushes before an ordered app flush. */
+export function cancelScheduledTursoPushForSyncKeys(
+  syncKeys: readonly string[],
+): void {
+  void import("./tursoReplica/tursoReplicaPushScheduler.js").then(
+    ({ cancelScheduledTursoReplicaPushes }) => {
+      cancelScheduledTursoReplicaPushes(syncKeys);
+    },
+  );
+  for (const syncKey of syncKeys) {
+    if (!syncKey) {
+      continue;
+    }
+    clearDebounceTimer(syncKey);
+    clearMaxWaitTimer(syncKey);
+    removeFromPushQueue(syncKey);
+  }
+}
+
+/** Wait for in-flight scheduler pushes so ordered flush owns the SQLite file. */
+export async function awaitTursoPushInFlightForSyncKeys(
+  syncKeys: readonly string[],
+  timeoutMs = 60_000,
+): Promise<void> {
+  const keys = [...new Set(syncKeys.filter(Boolean))];
+  if (keys.length === 0) {
+    return;
+  }
+
+  const deadline = Date.now() + timeoutMs;
+  while (Date.now() < deadline) {
+    if (!keys.some((key) => pushInFlightSyncKeys.has(key))) {
+      return;
+    }
+    await sleep(50);
+  }
+
+  console.warn(
+    `[TursoPushScheduler] Timed out waiting for in-flight push (${keys.join(", ")})`,
+  );
+}
+
+/** Mark sync keys in-flight for manual Upload now (blocks scheduler overlap). */
+export async function withTursoPushInFlight<T>(
+  syncKeys: readonly string[],
+  operation: () => Promise<T>,
+): Promise<T> {
+  const keys = [...new Set(syncKeys.filter(Boolean))];
+  for (const key of keys) {
+    pushInFlightSyncKeys.add(key);
+  }
+  try {
+    return await operation();
+  } finally {
+    for (const key of keys) {
+      pushInFlightSyncKeys.delete(key);
+    }
+  }
+}
+
+/** Test hook — wait until the push queue is idle. */
+export async function awaitTursoPushQueueForTests(): Promise<void> {
+  for (let attempt = 0; attempt < 200; attempt += 1) {
+    if (!queueProcessing && pushQueue.length === 0 && pushInFlightSyncKeys.size === 0) {
+      return;
+    }
+    await sleep(0);
+  }
+  throw new Error("Turso push queue did not drain in time");
+}
+
+/** Drop debounced/queued pushes (e.g. before org/namespace workspace switch). */
+export function cancelAllScheduledTursoPushes(reason = "workspace switch"): void {
+  void import("./tursoReplica/tursoReplicaPushScheduler.js").then(
+    ({ cancelAllScheduledTursoReplicaPushes }) => {
+      cancelAllScheduledTursoReplicaPushes(reason);
+    },
+  );
   for (const timer of jobTimers.values()) {
     clearTimeout(timer);
   }
   jobTimers.clear();
+  for (const timer of maxWaitTimers.values()) {
+    clearTimeout(timer);
+  }
+  maxWaitTimers.clear();
+  firstDirtyAtMs.clear();
   if (allLinkedTimer) {
     clearTimeout(allLinkedTimer);
     allLinkedTimer = null;
   }
   pushQueue.length = 0;
   queuedJobIds.clear();
+  pushFailureBackoffUntilMs.clear();
+  lastMaxWaitLogAtMs.clear();
   queueProcessing = false;
   rateLimitUntilMs = 0;
   rateLimitBackoffMs = DEFAULT_RATE_LIMIT_BACKOFF_MS;
+  console.log(`[TursoPushScheduler] Cancelled scheduled Turso pushes (${reason})`);
+}
+
+/** Test hook — flush queue state between tests. */
+export function resetTursoPushQueueForTests(): void {
+  resetTursoPushSchedulerStatsForTests();
+  cancelAllScheduledTursoPushes("test reset");
+  pushInFlightSyncKeys.clear();
+}
+
+/** Test hook — inspect max-wait state. */
+export function getFirstDirtyAtMsForTests(syncKey: string): number | undefined {
+  return firstDirtyAtMs.get(syncKey);
+}
+
+/** Reset push scheduler + pull session counters between E2E scenarios. */
+export function resetTursoSyncTestHooks(): void {
+  resetTursoPushQueueForTests();
+  resetTursoSyncSessionStatsForTests();
 }

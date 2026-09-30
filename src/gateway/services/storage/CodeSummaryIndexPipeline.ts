@@ -8,7 +8,7 @@ import { Papr } from '@papr/memory';
 import { CodeIndexTracker } from './CodeIndexTracker.js';
 import { CodeSummaryGenerator } from './CodeSummaryGenerator.js';
 import { CodeSummaryMemoryStore } from './CodeSummaryMemoryStore.js';
-import { getProjectPathInfo, type ProjectPathInfo } from './codeIndexPaths.js';
+import { getProjectPathInfo, normalizeIndexPath, type ProjectPathInfo } from './codeIndexPaths.js';
 
 interface ProjectDisplayInfo {
   projectId: string;
@@ -31,23 +31,34 @@ export class CodeSummaryIndexPipeline {
     this.memoryStore = new CodeSummaryMemoryStore(client, schemaId);
   }
 
-  async processChangedFile(filePath: string): Promise<void> {
-    if (!fs.existsSync(filePath)) {
+  async processChangedFile(
+    rawFilePath: string,
+    snapshot?: { content: string; hash: string },
+  ): Promise<void> {
+    if (!fs.existsSync(rawFilePath)) {
       return;
     }
+
+    // Canonicalize ONCE at the entry point so the file_path written into
+    // memory metadata and every tracker lookup below agree. Without this the
+    // same file reached via ~/PAPR/... and ~/Papr/... misses the
+    // getFileSummaryMemoryId lookup, falls through to add(), and produces a
+    // second separately-enriched memory for one file.
+    const filePath = normalizeIndexPath(rawFilePath);
 
     const projectInfo = getProjectPathInfo(filePath, this.paprDir);
     if (!projectInfo) {
       return;
     }
 
-    const hash = this.tracker.calculateFileHash(filePath);
+    const hash =
+      snapshot?.hash ?? this.tracker.calculateFileHash(filePath);
     if (!this.tracker.needsSummaryUpdate(filePath, hash)) {
       return;
     }
 
     const display = this.loadProjectDisplayInfo(projectInfo);
-    const content = fs.readFileSync(filePath, 'utf-8');
+    const content = snapshot?.content ?? fs.readFileSync(filePath, "utf-8");
     const fileName = path.basename(filePath);
     const language = this.generator.detectLanguage(path.extname(filePath));
 

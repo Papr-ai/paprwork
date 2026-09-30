@@ -20,7 +20,22 @@ export interface AIModel {
 }
 
 export const CHAT_MODELS: AIModel[] = [
-  // Anthropic — weakest to strongest (Haiku → Sonnet → Opus → Fable 5)
+  // Auto — Jev picks the model + effort per turn from the ladder for whichever
+  // provider the chat is authenticated with (see agent/jevTurnRouter.ts).
+  // Two axes: capability (Haiku / Sonnet / Opus) and effort (low / medium /
+  // high), chosen independently per message.
+  {
+    id: "auto",
+    name: "Auto",
+    provider: "anthropic",
+    description: "Picks the best model and effort for each message",
+    group: "Anthropic",
+    supportsThinking: false,
+    defaultThinkingBudget: 0,
+    maxTokens: 128000,
+    requiresApiKey: "ANTHROPIC_API_KEY",
+  },
+  // Anthropic — weakest to strongest (Haiku → Sonnet → Opus → Fable 5.1)
   {
     id: "claude-haiku-4-5",
     name: "Claude Haiku 4.5",
@@ -44,11 +59,22 @@ export const CHAT_MODELS: AIModel[] = [
     requiresApiKey: "ANTHROPIC_API_KEY",
   },
   {
-    id: "claude-sonnet-5",
-    name: "Claude Sonnet 5",
+    id: "claude-sonnet-5-5",
+    name: "Claude Sonnet 5.5",
     provider: "anthropic",
     description:
       "Latest Sonnet — agentic coding, tool use, browser/terminal work (recommended)",
+    group: "Anthropic",
+    supportsThinking: true,
+    defaultThinkingBudget: 0,
+    maxTokens: 128000,
+    requiresApiKey: "ANTHROPIC_API_KEY",
+  },
+  {
+    id: "claude-sonnet-5",
+    name: "Claude Sonnet 5",
+    provider: "anthropic",
+    description: "Previous Sonnet generation — still available for pinned chats",
     group: "Anthropic",
     supportsThinking: true,
     defaultThinkingBudget: 0,
@@ -93,8 +119,7 @@ export const CHAT_MODELS: AIModel[] = [
     id: "claude-opus-5",
     name: "Claude Opus 5",
     provider: "anthropic",
-    description:
-      "Latest Opus frontier — adaptive thinking, 1M context, agentic coding",
+    description: "Previous Opus generation — still available for pinned chats",
     group: "Anthropic",
     supportsThinking: true,
     defaultThinkingBudget: 0,
@@ -102,11 +127,26 @@ export const CHAT_MODELS: AIModel[] = [
     requiresApiKey: "ANTHROPIC_API_KEY",
   },
   {
-    id: "claude-fable-5",
-    name: "Claude Fable 5",
+    id: "claude-opus-5-5",
+    name: "Claude Opus 5.5",
     provider: "anthropic",
     description:
-      "Most capable Claude — adaptive thinking, 1M context, long-horizon agentic work",
+      "Latest Opus frontier — adaptive thinking (always on), 1M context, agentic coding",
+    group: "Anthropic",
+    supportsThinking: true,
+    // Adaptive, and on this model it cannot be switched off — see
+    // `anthropicModelRequiresAlwaysOnThinking`. The 0 is the same "let the
+    // model decide" value Opus 5 and Fable 5.1 carry, not a request for none.
+    defaultThinkingBudget: 0,
+    maxTokens: 128000,
+    requiresApiKey: "ANTHROPIC_API_KEY",
+  },
+  {
+    id: "claude-fable-5-1",
+    name: "Claude Fable 5.1",
+    provider: "anthropic",
+    description:
+      "Most capable Claude — adaptive thinking, 1M context, long-horizon agentic coding and research",
     group: "Anthropic",
     supportsThinking: true,
     defaultThinkingBudget: 0,
@@ -250,6 +290,18 @@ export const CHAT_MODELS: AIModel[] = [
     requiresApiKey: "OPENAI_API_KEY",
   },
   {
+    id: "gpt-6-astra",
+    name: "GPT-6 Astra",
+    provider: "openai",
+    description:
+      "Most capable OpenAI model — end-to-end reasoning, coding, computer use, research",
+    group: "OpenAI",
+    supportsThinking: true,
+    reasoning: { effort: "medium" },
+    maxTokens: 128000,
+    requiresApiKey: "OPENAI_API_KEY",
+  },
+  {
     id: "gpt-5.5-low",
     name: "GPT-5.5 (Low Reasoning)",
     provider: "openai",
@@ -311,11 +363,23 @@ export const CHAT_MODELS: AIModel[] = [
     id: "gemini-3.1-flash-lite",
     name: "Gemini 3.1 Flash-Lite",
     description:
-      "Most cost-efficient Gemini 3 — high-volume tasks, translation, moderation",
+      "Cost-efficient Gemini 3 — consider Gemini 3.5 Flash-Lite for new projects",
     provider: "google",
     group: "Google",
     supportsThinking: true,
     defaultThinkingBudget: 3000,
+    maxTokens: 65536,
+    requiresApiKey: "GOOGLE_GENERATIVE_AI_API_KEY",
+  },
+  {
+    id: "gemini-3.5-flash-lite",
+    name: "Gemini 3.5 Flash-Lite",
+    description:
+      "Fastest, lowest-cost 3.5 tier — high-volume automation and subagents",
+    provider: "google",
+    group: "Google",
+    supportsThinking: true,
+    defaultThinkingBudget: 2000,
     maxTokens: 65536,
     requiresApiKey: "GOOGLE_GENERATIVE_AI_API_KEY",
   },
@@ -335,7 +399,55 @@ export const CHAT_MODELS: AIModel[] = [
     id: "gemini-3.5-flash",
     name: "Gemini 3.5 Flash",
     description:
-      "GA flagship flash — agentic loops, coding, long-horizon tool use (recommended)",
+      "Previous-gen flagship flash — consider Gemini 3.6 Flash for agentic work",
+    provider: "google",
+    group: "Google",
+    supportsThinking: true,
+    defaultThinkingBudget: 10000,
+    maxTokens: 65536,
+    requiresApiKey: "GOOGLE_GENERATIVE_AI_API_KEY",
+  },
+  {
+    id: "gemini-3-flash-preview",
+    name: "Gemini 3 Flash (Preview)",
+    description:
+      "Preview flash — fast frontier intelligence at lower cost than 3.5 Flash",
+    provider: "google",
+    group: "Google",
+    supportsThinking: true,
+    defaultThinkingBudget: 8000,
+    maxTokens: 65536,
+    requiresApiKey: "GOOGLE_GENERATIVE_AI_API_KEY",
+  },
+  {
+    id: "gemini-3.6-flash",
+    name: "Gemini 3.6 Flash",
+    description:
+      "Previous-gen flash — consider Gemini 3.8 Flash for latest agentic coding",
+    provider: "google",
+    group: "Google",
+    supportsThinking: true,
+    defaultThinkingBudget: 10000,
+    maxTokens: 65536,
+    requiresApiKey: "GOOGLE_GENERATIVE_AI_API_KEY",
+  },
+  {
+    id: "gemini-3.7-flash",
+    name: "Gemini 3.7 Flash",
+    description:
+      "Previous-gen flash — consider Gemini 3.8 Flash for best reasoning and coding",
+    provider: "google",
+    group: "Google",
+    supportsThinking: true,
+    defaultThinkingBudget: 10000,
+    maxTokens: 65536,
+    requiresApiKey: "GOOGLE_GENERATIVE_AI_API_KEY",
+  },
+  {
+    id: "gemini-3.8-flash",
+    name: "Gemini 3.8 Flash",
+    description:
+      "Latest GA flash — best reasoning, software engineering, and agentic work (recommended)",
     provider: "google",
     group: "Google",
     supportsThinking: true,
@@ -554,21 +666,23 @@ export const getModelById = (id: string): AIModel | undefined => {
 
 /** Mid-tier model IDs per provider, in preference order for default selection */
 export const MID_TIER_MODEL_IDS = [
-  "claude-sonnet-5", // Anthropic mid (latest)
+  "claude-sonnet-5-5", // Anthropic mid (latest)
+  "claude-sonnet-5", // Anthropic mid (previous)
   "claude-sonnet-4-6", // Anthropic mid (legacy)
   "gpt-5-6-sol", // OpenAI flagship
   "gpt-5-6-terra", // OpenAI balanced
   "gpt-5.4-mini", // OpenAI mini
   "gpt-5.3-codex", // OpenAI Codex (API key only)
-  "gemini-3.5-flash", // Google mid
+  "gemini-3.8-flash", // Google mid
 ];
 
 /** Default model IDs when no saved preference - first available wins */
 export const DEFAULT_MODEL_IDS = [
-  "claude-sonnet-5", // Anthropic
+  "claude-sonnet-5-5", // Anthropic
+  "claude-sonnet-5", // Anthropic legacy
   "claude-sonnet-4-6", // Anthropic legacy
   "gpt-5-6-sol", // OpenAI latest
-  "gemini-3.5-flash", // Google
+  "gemini-3.8-flash", // Google
 ];
 
 export {

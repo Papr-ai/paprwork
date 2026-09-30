@@ -1,0 +1,28 @@
+{
+  "formatVersion": 1,
+  "schemaVersion": 2,
+  "migrations": [
+    {
+      "id": "0001_baseline.sql",
+      "description": "Initial tables (also seeded in schema_migrations on first job run)"
+    },
+    {
+      "id": "0002_add_audits_contact_fields.sql",
+      "description": "Add contact fields to audits",
+      "ops": [
+        {
+          "kind": "add_column",
+          "table": "audits",
+          "column": "contact_name",
+          "type": "TEXT"
+        },
+        {
+          "kind": "add_column",
+          "table": "audits",
+          "column": "contact_email",
+          "type": "TEXT"
+        }
+      ]
+    }
+  ]
+}

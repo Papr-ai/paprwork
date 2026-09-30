@@ -1,15 +1,18 @@
 /**
- * APP_DB vs JOB_DB vs registry guidance for agents debugging app-linked jobs.
+ * APP_DB / PAPR_DB_* / JOB_DB guidance for agents debugging app-linked jobs.
  */
 
 export const APP_DB_QUICK_REFERENCE =
-  "APP DB quick reference:\n" +
-  "- $APP_DB = mini-app primary linked SQLite (UI tables the iframe reads via /api/db/*)\n" +
-  "- $JOB_DB = job-local scratch only (run logs, checkpoints) — NOT the mini-app database\n" +
-  "- ~/Papr/data/jobs.json = job INDEX (metadata JSON), not SQL — use list_jobs/update_job\n" +
-  "- Job files: ~/Papr/orgs/{org}/namespaces/{ns}/Jobs/{jobId}/code/*.py\n" +
-  "- Job SQL file: .../Jobs/{jobId}/data/data.db (often same path as $APP_DB when linked)\n" +
-  "- Mini-app reads: GET /api/db/query?appId=... (read-only) or POST /api/db/write\n" +
+  "Database quick reference:\n" +
+  "- create_database → attach_database({ appId, dbId, alias }) → app uses sourceId on /api/db/*\n" +
+  "- Mini-app reads: POST /api/db/query with { appId, sourceId, sql, params }\n" +
+  "- Mini-app writes: POST /api/db/write with { appId, sourceId, sql, params } — all linked DBs are writable\n" +
+  "- Mini-app identity: GET /api/access → { isOwner, mode, canRead, canWrite, userId?, email? } — gate admin UI; map userId to roles\n" +
+  "- Anonymous apps: owner_session column + localStorage UUID; multi-user: sign-in + papr_user_id or isolation: per-user\n" +
+  "- App backend: sourceId on manifest → papr_db.connect(\"alias\") — never sqlite3.connect (cloud = Turso)\n" +
+  "- Jobs: create_job({ writeDbIds: [dbId] }) → PAPR_DB_{ALIAS} env vars for job scripts\n" +
+  "- APP_DB = active source (backend) or first write target (jobs, legacy)\n" +
+  "- $JOB_DB = job-local scratch only (run logs, checkpoints) — NOT mini-app data\n" +
   "- Prefer read_job_logs over bash tail; prefer validate_job + list_job_files over bash find";
 
 const PAPR_JOBS_DB_RE = /\bpapr_jobs\.db\b/i;
@@ -17,24 +20,79 @@ const CHATS_DB_RE = /(?:~\/\.paprwork(?:-v2)?\/|\.paprwork(?:-v2)?\/).*chats\.db
 const LEGACY_JOBS_DIR_RE = /\/Papr\/jobs\//i;
 const JOBS_JSON_SQLITE_RE = /jobs\.json/i;
 
+const REGISTRY_DB_ID_RE = /\bdb-[0-9a-f]{8}\b/gi;
+
+export function findRegistryDbIdsInText(text: string): string[] {
+  const matches = text.match(REGISTRY_DB_ID_RE);
+  if (!matches) {
+    return [];
+  }
+  return [...new Set(matches.map((id) => id.toLowerCase()))];
+}
+
+/**
+ * Warn when agent commands embed raw db- IDs instead of writeDbIds / PAPR_DB_* / aliases.
+ */
+export function buildHardcodedRegistryDbIdReminder(
+  command: string | undefined,
+  writeDbIds: readonly string[],
+): string | undefined {
+  if (!command?.trim()) {
+    return undefined;
+  }
+  const embedded = findRegistryDbIdsInText(command);
+  if (embedded.length === 0) {
+    return undefined;
+  }
+  const declared = new Set(
+    writeDbIds.map((id) => id.trim().toLowerCase()).filter(Boolean),
+  );
+  const undeclared = embedded.filter((id) => !declared.has(id));
+  const mentionsPortableEnv =
+    /\$APP_DB\b|\bAPP_DB\b|\bPAPR_DB_/i.test(command) ||
+    /\bpapr_db(?:_exec|\.connect)\s*\(\s*["'][a-z]/i.test(command);
+
+  if (undeclared.length === 0 && mentionsPortableEnv) {
+    return undefined;
+  }
+
+  const lines: string[] = [
+    "⚠️ HARDCODED DB ID: Agent job commands must not rely on raw db-… strings in prompts.",
+  ];
+  if (undeclared.length > 0) {
+    lines.push(
+      `Found ${undeclared.join(", ")} in command but not in writeDbIds — set writeDbIds on create_job/update_job and refer to PAPR_DB_* / APP_DB / source alias instead of pasting dbIds.`,
+    );
+  } else if (!mentionsPortableEnv) {
+    lines.push(
+      `Command mentions ${embedded.join(", ")} literally. Prefer writeDbIds + runtime env (PAPR_DB_* / APP_DB) or papr_db.connect("alias") — dbIds change after fork/install.`,
+    );
+  }
+  lines.push(APP_DB_QUICK_REFERENCE);
+  return lines.join(" ");
+}
+
+const PERSIST_INTENT_RE =
+  /\b(save|store|persist|write|insert|update|database|table|rows|results|insights|sync|record)\b/i;
+
 export function buildAppDbBashGuidance(command: string): string | undefined {
   const hints: string[] = [];
 
   if (PAPR_JOBS_DB_RE.test(command)) {
     hints.push(
-      'papr_jobs.db does not exist. Use $APP_DB for app tables or list_jobs + read_job_file.',
+      'papr_jobs.db does not exist. Use PAPR_DB_* / APP_DB or list_jobs + read_job_file.',
     );
   }
 
   if (CHATS_DB_RE.test(command) && /sqlite3/i.test(command)) {
     hints.push(
-      "chats.db stores chat messages, not job/app business data. Use $APP_DB or /api/db/query.",
+      "chats.db stores chat messages, not job/app business data. Use PAPR_DB_* or /api/db/query.",
     );
   }
 
   if (LEGACY_JOBS_DIR_RE.test(command) && /sqlite3/i.test(command)) {
     hints.push(
-      "Legacy ~/Papr/jobs/ path — active workspace uses ~/Papr/orgs/{org}/namespaces/{ns}/Jobs/{jobId}/.",
+      "Legacy flat Papr jobs path — active workspace uses $PAPR_HOME/Jobs/{jobId}/.",
     );
   }
 
@@ -55,31 +113,65 @@ export function buildAppDbJobReminder(
   jobType: string,
   command: string | undefined,
   linkedAppIds: readonly string[],
+  writeDbIds: readonly string[] = [],
 ): string | undefined {
-  if (linkedAppIds.length === 0 || !command) {
+  if (linkedAppIds.length === 0 && writeDbIds.length === 0) {
+    return undefined;
+  }
+  if (!command) {
     return undefined;
   }
 
   const cmd = command.toUpperCase();
   const mentionsJobDb = cmd.includes("$JOB_DB") || cmd.includes("JOB_DB");
-  const mentionsAppDb = cmd.includes("$APP_DB") || cmd.includes("APP_DB");
+  const mentionsWriteDb =
+    cmd.includes("$APP_DB") ||
+    cmd.includes("APP_DB") ||
+    cmd.includes("PAPR_DB_");
 
-  if (mentionsJobDb && !mentionsAppDb) {
+  const isAgentJob = jobType === "agent" || jobType === "subagent";
+
+  if (mentionsJobDb && !mentionsWriteDb && writeDbIds.length > 0) {
     return (
-      `⚠️ APP DB REMINDER: Job is linked to mini-app(s) but command references JOB_DB without APP_DB. ` +
-      `UI-facing tables must use $APP_DB (same file as the app's primary linked DB). ` +
-      `JOB_DB is scratch only. ${APP_DB_QUICK_REFERENCE}`
+      `⚠️ APP DB REMINDER: Job has writeDbIds but command references JOB_DB without PAPR_DB_* / APP_DB. ` +
+      `UI-facing tables must use PAPR_DB_* env vars from writeDbIds. JOB_DB is scratch only. ${APP_DB_QUICK_REFERENCE}`
     );
   }
 
   if (
-    (jobType === "agent" || jobType === "subagent") &&
-    !mentionsAppDb &&
+    isAgentJob &&
+    writeDbIds.length > 0 &&
+    PERSIST_INTENT_RE.test(command) &&
+    !mentionsWriteDb
+  ) {
+    return (
+      `⚠️ APP DB REMINDER: Agent job will persist data — use PAPR_DB_* / APP_DB at runtime (papr_db_exec or sqlite3), NOT $JOB_DB. ` +
+      `writeDbIds: ${writeDbIds.join(", ")}. $JOB_DB is scratch only and invisible to mini-apps. ${APP_DB_QUICK_REFERENCE}`
+    );
+  }
+
+  if (
+    isAgentJob &&
+    linkedAppIds.length > 0 &&
+    writeDbIds.length === 0 &&
+    PERSIST_INTENT_RE.test(command)
+  ) {
+    return (
+      `⚠️ APP DB REMINDER: App-linked agent job implies persisting data but has no writeDbIds. ` +
+      `create_database → attach_database → create_job({ writeDbIds: [dbId] }). ` +
+      `Without writeDbIds the agent may write to $JOB_DB scratch, which the mini-app cannot read. ${APP_DB_QUICK_REFERENCE}`
+    );
+  }
+
+  if (
+    writeDbIds.length === 0 &&
+    isAgentJob &&
+    !mentionsWriteDb &&
     /\b(INSERT|UPDATE|DELETE|CREATE TABLE|sqlite3)\b/i.test(command)
   ) {
     return (
-      `⚠️ APP DB REMINDER: App-linked job writes SQL but does not mention $APP_DB. ` +
-      `Use sqlite3 "$APP_DB" ".tables" or GET /api/db/schema?appId=... before writing UI tables.`
+      `⚠️ APP DB REMINDER: Job writes SQL but has no writeDbIds. ` +
+      `Set writeDbIds on create_job/update_job after create_database + attach_database. ${APP_DB_QUICK_REFERENCE}`
     );
   }
 
@@ -110,8 +202,9 @@ export function buildAppDbRunJobFailureReminder(
     `⚠️ Job failed with database errors. Before more bash/sqlite debugging:\n` +
     `1. read_job_logs({ jobId }) — you are here\n` +
     `2. validate_job({ jobId })\n` +
-    `3. Confirm UI data is in $APP_DB, not $JOB_DB or chats.db\n` +
-    `4. Mini-app: GET /api/db/query?appId=... or POST /api/db/exec\n\n` +
+    `3. Confirm writes use PAPR_DB_* / writeDbIds, not $JOB_DB alone\n` +
+    `4. Mini-app: POST /api/db/query or /api/db/write with sourceId\n` +
+    `5. App backend: manifest sourceId or params.sourceId → papr_db.connect("alias")\n\n` +
     APP_DB_QUICK_REFERENCE
   );
 }

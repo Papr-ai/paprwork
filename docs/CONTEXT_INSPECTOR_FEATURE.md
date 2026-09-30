@@ -51,7 +51,7 @@ The Context Inspector is a powerful debugging and transparency feature that lets
 
 ### 5. Workspace Files (Reference Only)
 - **Tokens:** 0 (already counted in system prompt)
-- **Content:** Markdown files from `~/Papr/workspace/`:
+- **Content:** Markdown files from `$PAPR_HOME/workspace/`:
   - `MEMORY.md` - Long-term curated memory
   - `IDENTITY.md` - User profile
   - `AGENTS.md` - Operating contract

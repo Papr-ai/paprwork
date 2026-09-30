@@ -3,7 +3,7 @@
  * Deploy Cloud Agent Gateway to GCP Cloud Run
  *
  * Usage:
- *   node scripts/deploy-cloud-agent-gateway.mjs --project=papr-apps-prod --region=us-west1
+ *   node scripts/deploy-cloud-agent-gateway.mjs --project=gen-lang-client-0873281406 --region=us-west1
  *
  * Options:
  *   --project=ID          GCP project (required)
@@ -14,6 +14,8 @@
  *   --memory-url=URL      Memory server URL (default: https://memory.papr.ai)
  *   --memory-service=NAME Cloud Run service to wire CLOUD_AGENT_GATEWAY_URL (default: memoryserver-staging)
  *   --skip-memory-wire    Skip updating memory Cloud Run env after deploy
+ *   --cloud-build         Build on GCP (faster on Apple Silicon vs local linux/amd64)
+ *   --fast                Shorthand: --cloud-build --skip-memory-wire (repeat deploys)
  *   --dry-run             Print commands without executing
  */
 
@@ -44,15 +46,20 @@ const getArg = (name, fallback) => {
   return hit ? hit.split("=").slice(1).join("=") : fallback;
 };
 const dryRun = args.includes("--dry-run");
+const fastDeploy = args.includes("--fast");
 
-const project = getArg("project", process.env.GCP_APPS_PROJECT_ID);
+const DEFAULT_APPS_GCP_PROJECT = "gen-lang-client-0873281406";
+const project = getArg(
+  "project",
+  process.env.GCP_APPS_PROJECT_ID ?? DEFAULT_APPS_GCP_PROJECT,
+);
 const region = getArg("region", process.env.GCP_APPS_REGION ?? "us-west1");
 const service = getArg("service", "papr-cloud-agent-gateway");
 const repo = getArg("repo", "papr-apps");
 const imageName = getArg("image", "cloud-agent-gateway");
 const memoryUrl = getArg("memory-url", "https://memory.papr.ai");
 const memoryService = getArg("memory-service", "memoryserver-staging");
-const skipMemoryWire = args.includes("--skip-memory-wire");
+const skipMemoryWire = args.includes("--skip-memory-wire") || fastDeploy;
 
 function gitShortSha() {
   try {
@@ -83,7 +90,9 @@ function fail(msg) {
 }
 
 if (!project) {
-  fail("Missing --project=YOUR_GCP_PROJECT (or GCP_APPS_PROJECT_ID env var)");
+  fail(
+    "Missing --project=gen-lang-client-0873281406 (or GCP_APPS_PROJECT_ID in .env.local)",
+  );
 }
 
 console.log("Cloud Agent Gateway — production deploy");
@@ -93,6 +102,7 @@ console.log(`Region:      ${region}`);
 console.log(`Service:     ${service}`);
 console.log(`Image:       ${fullImage}`);
 console.log(`Memory URL:  ${memoryUrl}`);
+if (fastDeploy) console.log("Mode:        FAST (cloud-build + skip memory wire)");
 if (dryRun) console.log("Mode:        DRY RUN");
 
 console.log("\n--- Pre-flight checklist ---");
@@ -123,6 +133,7 @@ if (repoCheck.status !== 0) {
 run(`gcloud auth configure-docker ${registry} --quiet`);
 
 const secretName = "papr-cloud-agent-gateway-key";
+const appHostSecretName = "papr-cloud-app-host-key";
 
 console.log("\n--- Step 3: Gateway key secret ---");
 const secretCheck = spawnSync(
@@ -162,11 +173,37 @@ run(
   `gcloud secrets add-iam-policy-binding ${secretName} --project=${project} --member=serviceAccount:${memorySa} --role=roles/secretmanager.secretAccessor --quiet`,
 );
 
+const appHostSecretCheck = spawnSync(
+  "gcloud",
+  ["secrets", "describe", appHostSecretName, `--project=${project}`],
+  { encoding: "utf8" },
+);
+if (appHostSecretCheck.status !== 0) {
+  console.log(
+    `⚠️  Secret ${appHostSecretName} missing — db-changed notify to apps.papr.ai will be skipped until deployed`,
+  );
+} else {
+  run(
+    `gcloud secrets add-iam-policy-binding ${appHostSecretName} --project=${project} --member=serviceAccount:${computeSa} --role=roles/secretmanager.secretAccessor --quiet`,
+  );
+}
+
 console.log("\n--- Step 4: Build & push Docker image ---");
-run(`docker build --platform linux/amd64 -f Dockerfile.cloud-agent-gateway -t ${fullImage} .`, {
-  cwd: resolve(process.cwd()),
-});
-run(`docker push ${fullImage}`);
+const useCloudBuild =
+  fastDeploy ||
+  args.includes("--cloud-build") ||
+  process.env.CLOUD_AGENT_GATEWAY_CLOUD_BUILD === "1";
+if (useCloudBuild) {
+  run(
+    `gcloud builds submit --project=${project} --region=${region} --config=cloudbuild-cloud-agent-gateway.yaml --substitutions=_IMAGE=${fullImage} .`,
+    { cwd: resolve(process.cwd()) },
+  );
+} else {
+  run(`docker build --platform linux/amd64 -f Dockerfile.cloud-agent-gateway -t ${fullImage} .`, {
+    cwd: resolve(process.cwd()),
+  });
+  run(`docker push ${fullImage}`);
+}
 
 console.log("\n--- Step 5: Deploy Cloud Run ---");
 const deployCmd = [
@@ -178,14 +215,14 @@ const deployCmd = [
   "--platform=managed",
   "--no-allow-unauthenticated",
   "--port=8080",
-  "--memory=4Gi",
-  "--cpu=2",
+  "--memory=8Gi",
+  "--cpu=4",
   "--min-instances=0",
   "--max-instances=10",
   "--timeout=1800",
   "--concurrency=1",
-  `--set-secrets=PAPR_CLOUD_AGENT_GATEWAY_KEY=${secretName}:latest`,
-  `--set-env-vars=GATEWAY_MODE=cloud_agent,CLOUD_SYNC_ENABLED=false,PAPR_MEMORY_SERVER_URL=${memoryUrl},TURSO_SYNC_ENABLED=false,NODE_ENV=production,CLOUD_AGENT_GATEWAY_TIMEOUT_SEC=1800`,
+  `--set-secrets=PAPR_CLOUD_AGENT_GATEWAY_KEY=${secretName}:latest${appHostSecretCheck.status === 0 ? `,PAPR_CLOUD_APP_HOST_KEY=${appHostSecretName}:latest` : ""}`,
+  `--set-env-vars=GATEWAY_MODE=cloud_agent,CLOUD_SYNC_ENABLED=false,PAPR_MEMORY_SERVER_URL=${memoryUrl},TURSO_SYNC_ENABLED=false,PAPR_CLOUD_SANDBOX_TURSO_DIRECT=1,NODE_ENV=production,CLOUD_AGENT_GATEWAY_TIMEOUT_SEC=1800,PAPR_CLOUD_APPS_HOST=${getArg("apps-host", process.env.PAPR_CLOUD_APPS_HOST ?? "https://apps.papr.ai")}`,
 ].join(" ");
 
 run(deployCmd);

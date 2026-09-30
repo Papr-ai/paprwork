@@ -1,5 +1,7 @@
 # LinkedIn Authentication Fix Summary
 
+> **DEPRECATED (2026-09):** Describes the legacy Auth + Chrome Manager pattern. Current flow: **Platform Connections** + `linkedin-api` CDP. See `src/resources/skills/social-media-auth.md`.
+
 **Date:** 2026-04-08  
 **Issue:** Users trying to authenticate LinkedIn via social skill were failing  
 **Root Cause:** Social skill lacked critical production patterns from working LinkedIn Autopilot
@@ -167,7 +169,7 @@ Chrome Manager detects expired session:
 ## Storage Locations (3-Location Strategy)
 
 ### 1. Job Data Directory
-**Path:** `~/Papr/Jobs/{authJobId}/data/linkedin_auth.json`  
+**Path:** `$PAPR_HOME/Jobs/{authJobId}/data/linkedin_auth.json`  
 **Purpose:** Job-specific backup, original capture location
 
 ### 2. Shared Location

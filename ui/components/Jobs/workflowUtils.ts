@@ -1,4 +1,11 @@
 import type { JobGraph, JobRecord } from "../../hooks/useJobs";
+import {
+  jobTriggerKind,
+  scheduleSortMinutes,
+  type JobTriggerKind,
+} from "../../utils/jobTriggerLabel";
+
+export type { JobTriggerKind };
 
 export const NODE_W = 220;
 export const NODE_H = 76;
@@ -13,6 +20,11 @@ export interface NodePosition {
   x: number;
   y: number;
   kind: "job" | "app";
+  triggerKind?: JobTriggerKind;
+}
+
+export interface WorkflowLayout {
+  positions: NodePosition[];
 }
 
 export interface WorkflowEdge {
@@ -32,6 +44,12 @@ const TYPE_COLORS: Record<string, string> = {
   swift: "#f05138",
   agent: "#8b5cf6",
   subagent: "#a855f7",
+};
+
+const TRIGGER_KIND_ORDER: Record<JobTriggerKind, number> = {
+  scheduled: 0,
+  dependency: 1,
+  manual: 2,
 };
 
 export function jobTypeColor(type: string): string {
@@ -137,23 +155,39 @@ export function buildStandaloneEdges(
   return edges;
 }
 
+function compareJobsInColumn(a: JobRecord, b: JobRecord): number {
+  const kindA = jobTriggerKind(a);
+  const kindB = jobTriggerKind(b);
+  const kindDiff = TRIGGER_KIND_ORDER[kindA] - TRIGGER_KIND_ORDER[kindB];
+  if (kindDiff !== 0) return kindDiff;
+
+  if (kindA === "scheduled") {
+    const timeDiff = scheduleSortMinutes(a) - scheduleSortMinutes(b);
+    if (timeDiff !== 0) return timeDiff;
+  }
+
+  return a.name.localeCompare(b.name);
+}
+
 export function computeWorkflowLayout(
   jobs: JobRecord[],
   edges: WorkflowEdge[],
   appId?: string,
-): NodePosition[] {
+): WorkflowLayout {
   if (jobs.length === 0) {
     if (appId) {
-      return [
-        {
-          id: `app:${appId}`,
-          x: CANVAS_PAD,
-          y: CANVAS_PAD,
-          kind: "app",
-        },
-      ];
+      return {
+        positions: [
+          {
+            id: `app:${appId}`,
+            x: CANVAS_PAD,
+            y: CANVAS_PAD,
+            kind: "app",
+          },
+        ],
+      };
     }
-    return [];
+    return { positions: [] };
   }
 
   const jobIds = new Set(jobs.map((j) => j.id));
@@ -211,7 +245,7 @@ export function computeWorkflowLayout(
   }
 
   for (const group of byLevel.values()) {
-    group.sort((a, b) => a.name.localeCompare(b.name));
+    group.sort(compareJobsInColumn);
   }
 
   const positions: NodePosition[] = [];
@@ -226,6 +260,7 @@ export function computeWorkflowLayout(
         x: CANVAS_PAD + level * (NODE_W + COL_GAP),
         y: CANVAS_PAD + rowIndex * (NODE_H + ROW_GAP),
         kind: "job",
+        triggerKind: jobTriggerKind(job),
       });
     });
   }
@@ -242,7 +277,7 @@ export function computeWorkflowLayout(
     });
   }
 
-  return positions;
+  return { positions };
 }
 
 export function getCanvasSize(

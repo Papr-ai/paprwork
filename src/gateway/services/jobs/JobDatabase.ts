@@ -1,6 +1,16 @@
+import { openDiagnosticDatabase } from "../databaseDiagnostics/sqlite.js";
 import Database from "better-sqlite3";
 import { promises as fs } from "fs";
 import path from "path";
+import {
+  applyDatabaseMigrations,
+  applySqlitePerformancePragmas,
+} from "./databaseMigrations.js";
+import {
+  recoverCorruptJobScratchDatabase,
+  shouldRecoverJobScratchAfterMigrationError,
+} from "./jobScratchRecovery.js";
+import { shouldSkipLegacyJobScratchWrite } from "./legacyJobScratchWriteGuard.js";
 
 export class JobDatabase {
   private getDbPath(jobDir: string): string {
@@ -12,9 +22,16 @@ export class JobDatabase {
     action: (db: Database.Database) => T,
   ): Promise<T | null> {
     const dbPath = this.getDbPath(jobDir);
+    // Decline rather than throw: `recordRunStart` is awaited unguarded at launch
+    // (JobsService), so a throw here would abort the run before the executor starts.
+    // Null is this method's existing "could not do it" value and every caller
+    // discards the result, so standing down costs telemetry and nothing else.
+    if (shouldSkipLegacyJobScratchWrite(dbPath, "withDatabase")) {
+      return null;
+    }
     let db: Database.Database | null = null;
     try {
-      db = new Database(dbPath);
+      db = openDiagnosticDatabase(Database, "services/jobs/JobDatabase", dbPath);
       return action(db);
     } catch {
       return null;
@@ -25,22 +42,34 @@ export class JobDatabase {
     }
   }
 
+  /**
+   * Ensure standard job folder layout exists before run/migrations.
+   * Jobs indexed via synced jobs.json may have job.json only (no data/ yet).
+   */
+  async ensureJobDirScaffold(jobDir: string): Promise<string> {
+    await fs.mkdir(path.join(jobDir, "code"), { recursive: true });
+    await fs.mkdir(path.join(jobDir, "logs"), { recursive: true });
+    return this.ensureDatabase(jobDir);
+  }
+
   async ensureDatabase(jobDir: string): Promise<string> {
     const dataDir = path.join(jobDir, "data");
     await fs.mkdir(dataDir, { recursive: true });
     await fs.mkdir(path.join(jobDir, "migrations"), { recursive: true });
     const dbPath = this.getDbPath(jobDir);
 
+    // Before the try, never inside it: the catch below swallows every error and
+    // then writes the file itself, so a guard placed in the try would be caught
+    // and stepped over. The folder scaffold above is still wanted; the tables are
+    // not — a replica already has them, from the engine.
+    if (shouldSkipLegacyJobScratchWrite(dbPath, "ensureDatabase")) {
+      return dbPath;
+    }
+
     let db: Database.Database | null = null;
     try {
-      db = new Database(dbPath);
-      
-      // Performance optimizations
-      db.pragma("journal_mode = WAL");
-      db.pragma("synchronous = NORMAL");
-      db.pragma("cache_size = -5000"); // 5MB cache per job
-      db.pragma("mmap_size = 15000000"); // 15MB mmap
-      db.pragma("temp_store = MEMORY");
+      db = openDiagnosticDatabase(Database, "services/jobs/JobDatabase", dbPath);
+      applySqlitePerformancePragmas(db, 5000);
       
       db.exec(`
         CREATE TABLE IF NOT EXISTS schema_migrations (
@@ -98,44 +127,17 @@ export class JobDatabase {
   }
 
   async applyMigrations(jobDir: string): Promise<string[]> {
-    const migrationsDir = path.join(jobDir, "migrations");
-    await fs.mkdir(migrationsDir, { recursive: true });
-    const files = (await fs.readdir(migrationsDir))
-      .filter((name) => name.endsWith(".sql"))
-      .sort();
-    const migrationSqlByFile = new Map<string, string>();
-    for (const fileName of files) {
-      const sqlPath = path.join(migrationsDir, fileName);
-      migrationSqlByFile.set(fileName, await fs.readFile(sqlPath, "utf8"));
-    }
-
-    const applied = await this.withDatabase(jobDir, (db) => {
-      const selectApplied = db.prepare("SELECT id FROM schema_migrations");
-      const rows = selectApplied.all() as Array<{ id: string }>;
-      const appliedIds = new Set(rows.map((row) => row.id));
-      const appliedNow: string[] = [];
-
-      for (const fileName of files) {
-        if (appliedIds.has(fileName)) {
-          continue;
-        }
-        const sql = migrationSqlByFile.get(fileName);
-        if (!sql) {
-          continue;
-        }
-        db.exec(sql);
-        db.prepare(
-          "INSERT INTO schema_migrations (id, applied_at) VALUES (?, ?)",
-        ).run(fileName, new Date().toISOString());
-        appliedNow.push(fileName);
+    const dbPath = this.getDbPath(jobDir);
+    try {
+      return await applyDatabaseMigrations(jobDir, dbPath);
+    } catch (error) {
+      if (!shouldRecoverJobScratchAfterMigrationError(dbPath, error)) {
+        throw error;
       }
-      return appliedNow;
-    });
-
-    if (applied === null) {
-      return files;
+      await recoverCorruptJobScratchDatabase(dbPath);
+      await this.ensureDatabase(jobDir);
+      return applyDatabaseMigrations(jobDir, dbPath);
     }
-    return applied;
   }
 
   async recordRunStart(

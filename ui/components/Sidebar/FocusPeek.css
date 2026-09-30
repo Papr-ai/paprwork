@@ -1,0 +1,152 @@
+/* Focus peek (rail logo hover): next step, your three, share of the week on them. */
+.focus-peek__next {
+  display: grid;
+  gap: 2px;
+  width: 100%;
+  margin: 0 0 6px;
+  padding: 9px 10px;
+  border: 1px solid var(--rail-card-line, #edf1f6);
+  border-radius: 11px;
+  background: rgba(0, 96, 224, 0.05);
+  text-align: left;
+  font: inherit;
+  cursor: pointer;
+}
+
+.focus-peek__next:hover {
+  background: rgba(0, 96, 224, 0.09);
+}
+
+.focus-peek__next small {
+  font-size: 10.5px;
+  font-weight: 600;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  color: var(--rail-blue);
+}
+
+.focus-peek__next span {
+  font-size: 13px;
+  line-height: 1.35;
+  color: var(--rail-ink);
+  display: -webkit-box;
+  -webkit-line-clamp: 2;
+  -webkit-box-orient: vertical;
+  overflow: hidden;
+}
+
+.focus-peek__three {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+}
+
+.focus-peek__three button {
+  display: grid;
+  grid-template-columns: 20px 1fr;
+  gap: 8px;
+  align-items: start;
+  width: 100%;
+  padding: 8px;
+  border: none;
+  border-radius: 9px;
+  background: transparent;
+  text-align: left;
+  font: inherit;
+  cursor: pointer;
+}
+
+.focus-peek__three button:hover {
+  background: var(--rail-row-hover);
+}
+
+.focus-peek__three i {
+  width: 20px;
+  height: 20px;
+  border-radius: 50%;
+  display: grid;
+  place-items: center;
+  font-style: normal;
+  font-size: 11px;
+  font-weight: 600;
+  color: var(--rail-blue);
+  background: rgba(0, 96, 224, 0.08);
+}
+
+.focus-peek__goal {
+  display: grid;
+  gap: 2px;
+  min-width: 0;
+}
+
+.focus-peek__goal b {
+  font-size: 13px;
+  font-weight: 600;
+  line-height: 1.3;
+  color: var(--rail-ink);
+  display: -webkit-box;
+  -webkit-line-clamp: 2;
+  -webkit-box-orient: vertical;
+  overflow: hidden;
+}
+
+.focus-peek__goal em {
+  font-style: normal;
+  font-size: 11.5px;
+  line-height: 1.35;
+  color: var(--rail-soft);
+  display: -webkit-box;
+  -webkit-line-clamp: 2;
+  -webkit-box-orient: vertical;
+  overflow: hidden;
+}
+
+.focus-peek__foot {
+  display: grid;
+  gap: 2px;
+}
+
+.focus-peek__aligned {
+  position: relative;
+  display: block;
+  margin: 6px 8px 2px;
+  padding-top: 8px;
+  font-size: 11.5px;
+  color: var(--rail-soft);
+}
+
+.focus-peek__aligned::before,
+.focus-peek__aligned i {
+  content: "";
+  position: absolute;
+  top: 0;
+  left: 0;
+  height: 3px;
+  border-radius: 3px;
+}
+
+.focus-peek__aligned::before {
+  right: 0;
+  background: rgba(10, 16, 32, 0.07);
+}
+
+.focus-peek__aligned i {
+  background: var(--rail-blue);
+}
+
+.focus-peek__aligned b {
+  font-weight: 600;
+  color: var(--rail-ink);
+}
+
+@media (prefers-color-scheme: dark) {
+  .focus-peek__next {
+    background: rgba(76, 157, 255, 0.08);
+  }
+  .focus-peek__three i {
+    background: rgba(76, 157, 255, 0.14);
+  }
+  .focus-peek__aligned::before {
+    background: rgba(255, 255, 255, 0.08);
+  }
+}

@@ -7,18 +7,31 @@
 import React, { useEffect } from "react";
 import type { ChatMessage } from "../../stores/chatStore";
 import { useChatStore } from "../../stores/chatStore";
+import { UserAvatar } from "../common/UserAvatar";
 import { useProfileStore } from "../../stores/profileStore";
 import { ThinkingCard } from "./ThinkingCard";
 import { ExploringCard } from "./ExploringCard";
 import { FileWritePreview, hasFilePreview } from "./FileWritePreview";
+import {
+  AppToolPreview,
+  collectWebviewSessionPreview,
+  hasAppToolPreview,
+  isWebviewSessionPreviewTool,
+  shouldShowWebviewSessionPreview,
+  WebviewSessionPreview,
+} from "./AppToolPreview";
+import { GeneratedMediaGallery } from "./GeneratedMediaGallery";
 import "./FileWritePreview.css";
+import "./AppToolPreview.css";
+import "./GeneratedMediaGallery.css";
 import { WorkingCard } from "./WorkingCard";
+import {
+  ToolCallResultFeedback,
+  ToolCallStatusIcon,
+} from "./ToolCallStatus";
 import { PlanCard, parsePlanFromToolResult } from "./PlanCard";
 import { JobStatusCard, parseJobStatusFromToolResult } from "./JobStatusCard";
-import {
-  DelegationCard,
-  parseDelegationFromToolResult,
-} from "./DelegationCard";
+import { DelegationCard } from "./DelegationCard";
 import {
   KeyRequestCard,
   parseKeyRequestFromToolResult,
@@ -29,8 +42,25 @@ import { MessageAttachments } from "./MessageAttachments";
 import "./MessageAttachments.css";
 import { resolveToolCallStatus } from "../../../src/core/utils/interruptedToolResult";
 import { getToolDisplayLabel } from "../../utils/toolDisplay";
+import {
+  delegateTaskArgsFromToolCall,
+  isDelegateTaskInvocation,
+  parseDelegationFromToolCall,
+} from "../../utils/delegationFromToolCall";
+import {
+  parseGeneratedMediaGalleryItem,
+  type GeneratedMediaGalleryItem,
+} from "../../utils/generatedMediaPreview";
 import { useJobLiveLogsStore } from "../../stores/jobLiveLogsStore";
 import { useSubagentJobStore, type SubagentJobInfo } from "../../stores/subagentJobStore";
+import { useSubAgentNameStore } from "../../stores/subAgentNameStore";
+import { MessageCopyButton } from "./MessageCopyButton";
+import { getAssistantCopyText } from "../../utils/getAssistantCopyText";
+import { assistantMessageHasVisibleContent } from "../../utils/assistantMessageVisibility";
+import { AgentLoadingDots } from "./AgentLoadingDots";
+import { AgentGlyph } from "../Agent/AgentGlyph";
+import { useAgentIdentity, useAgentName } from "../Agent/agentIdentityStore";
+import "./MessageItem.css";
 
 function resolveDelegationAgentDisplay(
   requestedAgentId: string | undefined,
@@ -46,14 +76,11 @@ function resolveDelegationAgentDisplay(
     "Sub-agent";
   return { agentId, agentName };
 }
-import { useSubAgentNameStore } from "../../stores/subAgentNameStore";
-import { MessageCopyButton } from "./MessageCopyButton";
-import { getAssistantCopyText } from "../../utils/getAssistantCopyText";
-import "./MessageItem.css";
 
 interface MessageItemProps {
   chatId: string;
   message: ChatMessage;
+  delegationFollowUps?: ChatMessage[];
 }
 
 /**
@@ -71,6 +98,8 @@ function renderSequence(
   getJobName: (jobId: string) => string | undefined,
   getAgentName: (agentId: string) => string,
   connectionPaused = false,
+  isFinishingWork = false,
+  delegationFollowUps: ChatMessage[] = [],
 ): React.ReactNode {
 
 
@@ -139,6 +168,12 @@ function renderSequence(
   if (hasTools) {
     // Build exploring card with interleaved text and tools
     const exploringItems: React.ReactNode[] = [];
+    const webviewSessionToolCalls: Array<{
+      toolName: string;
+      args?: Record<string, unknown>;
+      result?: unknown;
+      status?: string;
+    }> = [];
     // Map of planId → latest PlanData — ensures one card per plan per response
     const planCardMap = new Map<
       string,
@@ -159,6 +194,7 @@ function renderSequence(
       string,
       Parameters<typeof KeyRequestCard>[0]["data"]
     >();
+    const generatedMediaItems: GeneratedMediaGalleryItem[] = [];
     // Track which jobs/delegations we've already added to exploringItems (to prevent duplicates)
     const addedJobIds = new Set<string>();
     const addedDelegationIds = new Set<string>();
@@ -217,6 +253,15 @@ function renderSequence(
           result: toolStatus === "interrupted" ? undefined : toolData.output,
           error: toolData.error,
         };
+
+        if (isWebviewSessionPreviewTool(toolCall.toolName, toolCall.args)) {
+          webviewSessionToolCalls.push({
+            toolName: toolCall.toolName,
+            args: toolCall.args,
+            result: toolCall.result,
+            status: toolCall.status,
+          });
+        }
 
         // Check if this is a plan tool and extract plan data
         // Use a Map so multiple create_plan/update_plan calls for the same plan
@@ -284,23 +329,26 @@ function renderSequence(
           }
         }
 
-        // Parse delegate_task – show card when running (no result) OR when finished (with result)
+        // Parse delegate_task (or run_deferred_tool wrapping it) – MiniChat outside Working card
         let delegationData:
           | Parameters<typeof DelegationCard>[0]["data"]
           | null = null;
-        if (toolName === "delegate_task") {
+        if (isDelegateTaskInvocation(toolCall.toolName, toolCall.args)) {
+          const delegateArgs = delegateTaskArgsFromToolCall(
+            toolCall.toolName,
+            toolCall.args,
+          );
           if (toolCall.result) {
-            // Delegation finished – parse result
-            delegationData = parseDelegationFromToolResult(
-              toolName,
+            delegationData = parseDelegationFromToolCall(
+              toolCall.toolName,
               typeof toolCall.result === "string"
                 ? toolCall.result
                 : toolCall.result,
             );
           } else {
-            // Delegation is running – use MiniChatCard if we have jobId from subagent-job-started broadcast.
-            const task = (toolCall.args?.task as string) || "Delegated task";
-            const requestedAgentId = toolCall.args?.useAgentId as
+            const task =
+              (delegateArgs?.task as string) || "Delegated task";
+            const requestedAgentId = delegateArgs?.useAgentId as
               | string
               | undefined;
             const { agentId, agentName } = resolveDelegationAgentDisplay(
@@ -316,9 +364,9 @@ function renderSequence(
               agentId,
               agentName,
               task,
-              context: (toolCall.args?.context as string) || undefined,
+              context: (delegateArgs?.context as string) || undefined,
               status: "running",
-              reportChatId: chatId, // Always set - this is the chat where delegation was initiated
+              reportChatId: chatId,
             };
           }
         }
@@ -328,6 +376,23 @@ function renderSequence(
           toolCall.args,
           typeof toolCall.result === "string" ? toolCall.result : undefined,
         );
+        const _showAppPreview = hasAppToolPreview(
+          toolCall.toolName,
+          toolCall.args,
+          toolCall.result,
+          toolCall.status,
+        );
+        const mediaItem = parseGeneratedMediaGalleryItem({
+          toolName: toolCall.toolName,
+          result: toolCall.result,
+          status: toolCall.status,
+          args: toolCall.args,
+          fallbackId: `tool-${index}`,
+        });
+        if (mediaItem) {
+          generatedMediaItems.push(mediaItem);
+        }
+
         exploringItems.push(
           <div key={`tool-${index}`} className="exploring-tool-row">
             <div className="exploring-tool-item">
@@ -335,21 +400,13 @@ function renderSequence(
               <span className="exploring-tool-name">
                 {getToolDisplayLabel(toolCall)}
               </span>
-              {toolCall.status === "success" && (
-                <span className="exploring-tool-success">✓</span>
-              )}
-              {toolCall.status === "interrupted" && (
-                <span
-                  className="exploring-tool-interrupted"
-                  title="Interrupted before this tool finished"
-                >
-                  ⚠️
-                </span>
-              )}
-              {toolCall.status === "error" && (
-                <span className="exploring-tool-error">✗</span>
-              )}
+              <ToolCallStatusIcon status={toolCall.status} />
             </div>
+            <ToolCallResultFeedback
+              status={toolCall.status}
+              result={toolData.output}
+              toolError={toolCall.error}
+            />
             {_showFilePreview && (
               <FileWritePreview
                 toolName={toolCall.toolName}
@@ -359,6 +416,14 @@ function renderSequence(
                     ? toolCall.result
                     : undefined
                 }
+              />
+            )}
+            {_showAppPreview && (
+              <AppToolPreview
+                toolName={toolCall.toolName}
+                args={toolCall.args}
+                result={toolCall.result}
+                status={toolCall.status}
               />
             )}
           </div>,
@@ -440,11 +505,11 @@ function renderSequence(
 
     // Job status cards are rendered INLINE inside exploring card (after run_job tool)
 
-    // Delegation cards — inline on this message, collapsed by default (expand for full report)
+    const delegationCardElements: React.ReactNode[] = [];
     if (delegationCardMap.size > 0) {
       delegationCardMap.forEach((delegationData, delegationId) => {
         if ("delegationId" in delegationData) {
-          elements.push(
+          delegationCardElements.push(
             <MiniChatCard
               key={`delegation-${delegationId}`}
               delegationId={delegationData.delegationId}
@@ -459,7 +524,7 @@ function renderSequence(
             />,
           );
         } else {
-          elements.push(
+          delegationCardElements.push(
             <DelegationCard
               key={`delegation-${delegationId}`}
               data={delegationData}
@@ -469,6 +534,18 @@ function renderSequence(
       });
     }
 
+    const hasActiveDelegation = Array.from(delegationCardMap.values()).some(
+      (delegationData) => {
+        if ("delegationId" in delegationData) {
+          return delegationData.status === "active";
+        }
+        return (
+          delegationData.status === "running" ||
+          delegationData.status === "pending"
+        );
+      },
+    );
+
     // Extract last activity for header
     let lastActivity = "Working";
     // Find the last tool or text item in the sequence
@@ -477,7 +554,12 @@ function renderSequence(
       if (item.type === "tool") {
         const toolData = item.data as any;
         const toolName = toolData.name || "tool";
-        const isRunning = toolData.status === "calling";
+        const resolvedStatus = resolveToolCallStatus({
+          explicitStatus:
+            typeof toolData.status === "string" ? toolData.status : undefined,
+          result: toolData.output,
+        });
+        const isRunning = resolvedStatus === "calling";
         
         // Special handling for run_job to show job name
         if (toolName === "run_job") {
@@ -489,27 +571,51 @@ function renderSequence(
           lastActivity = getToolDisplayLabel({
             toolName,
             args: toolData.input || {},
-            status: toolData.status || "success",
+            status: resolvedStatus,
           });
         }
         break;
       } else if (item.type === "text" && typeof item.data === "string" && item.data.trim()) {
-        // Use first 50 chars of text as activity
+        // Text after the last tool is the user-facing reply (rendered below Working)
+        if (i > lastToolIndex) {
+          continue;
+        }
+        // Use first 50 chars of in-progress narration as activity
         const text = item.data.trim();
         lastActivity = text.length > 50 ? text.substring(0, 50) + "..." : text;
         break;
       }
     }
 
-    // Render exploring card with all interleaved items
-    if (exploringItems.length > 0) {
-      const hasCallingTool = sequence.some(
-        (item) =>
-          item.type === "tool" &&
-          (item.data as { status?: string }).status === "calling",
-      );
-      const isExploring = message.isStreaming || hasCallingTool;
-      
+    // Working card holds tool activity; delegation cards render below (always visible)
+    const webviewSessionPreviewState = collectWebviewSessionPreview(
+      webviewSessionToolCalls,
+      message.isStreaming,
+    );
+    const hasWorkingContent =
+      exploringItems.length > 0 ||
+      shouldShowWebviewSessionPreview(webviewSessionPreviewState);
+
+    if (hasWorkingContent || delegationCardElements.length > 0) {
+      const hasCallingTool = sequence.some((item) => {
+        if (item.type !== "tool") return false;
+        const data = item.data as {
+          status?: string;
+          output?: unknown;
+          result?: unknown;
+          input?: Record<string, unknown>;
+          name?: string;
+        };
+        const status = resolveToolCallStatus({
+          explicitStatus:
+            typeof data.status === "string" ? data.status : undefined,
+          result: data.output ?? data.result,
+        });
+        return status === "calling";
+      });
+      const isExploring =
+        message.isStreaming || hasCallingTool || hasActiveDelegation;
+
       // Detect if the message was stopped by checking for stopped tools
       const wasStopped = sequence.some(
         (item) =>
@@ -518,24 +624,67 @@ function renderSequence(
           (item.data as { error?: string }).error === "Stopped by user",
       );
 
+      if (hasWorkingContent) {
+        const workingChildren: React.ReactNode[] = [...exploringItems];
+        if (shouldShowWebviewSessionPreview(webviewSessionPreviewState)) {
+          workingChildren.push(
+            <WebviewSessionPreview
+              key="webview-session-preview"
+              state={webviewSessionPreviewState!}
+            />,
+          );
+        }
+
+        elements.push(
+          <WorkingCard
+            key="working"
+            isExploring={isExploring}
+            lastActivity={lastActivity}
+            wasStopped={wasStopped}
+            connectionPaused={connectionPaused}
+            wasInterrupted={!!message.interrupted}
+            isFinishingWork={isFinishingWork}
+            contentRevision={workingChildren.length}
+          >
+            {workingChildren}
+          </WorkingCard>,
+        );
+      }
+
+      if (delegationCardElements.length > 0) {
+        elements.push(...delegationCardElements);
+      }
+    }
+
+    if (generatedMediaItems.length > 0) {
       elements.push(
-        <WorkingCard 
-          key="working" 
-          isExploring={isExploring}
-          lastActivity={lastActivity}
-          wasStopped={wasStopped}
-          connectionPaused={connectionPaused}
-        >
-          {exploringItems}
-        </WorkingCard>,
+        <GeneratedMediaGallery
+          key="generated-media-gallery"
+          items={generatedMediaItems}
+          isStreaming={message.isStreaming}
+        />,
       );
     }
 
-    // Render final text outside exploring card
+    // User-facing response text stays below Working (not inside the collapsible)
     if (finalTextAfterAllTools) {
       elements.push(
         <div key="final-text" className="message-text">
           <Markdown>{finalTextAfterAllTools}</Markdown>
+        </div>,
+      );
+    }
+
+    for (const followUp of delegationFollowUps) {
+      const followUpText =
+        getAssistantCopyText(followUp) || followUp.content.trim();
+      if (!followUpText) continue;
+      elements.push(
+        <div
+          key={`delegation-followup-${followUp.id}`}
+          className="message-text"
+        >
+          <Markdown>{followUpText}</Markdown>
         </div>,
       );
     }
@@ -555,7 +704,11 @@ function renderSequence(
   return <>{elements}</>;
 }
 
-const MessageItemInner: React.FC<MessageItemProps> = ({ chatId, message }) => {
+const MessageItemInner: React.FC<MessageItemProps> = ({
+  chatId,
+  message,
+  delegationFollowUps = [],
+}) => {
   const isUser = message.role === "user";
   const content = message.isStreaming
     ? message.streamingContent || message.content
@@ -566,9 +719,26 @@ const MessageItemInner: React.FC<MessageItemProps> = ({ chatId, message }) => {
     ? message.streamingReasoning || message.reasoning
     : message.reasoning;
 
-  // Load user profile from settings
-  const { name: userName, email: userEmail, imageUrl: userImageUrl, loadProfile } = useProfileStore();
-  useEffect(() => { loadProfile(); }, [loadProfile]);
+  // Load user profile from settings.
+  //
+  // Selected field by field rather than `useProfileStore()` whole: this
+  // component is rendered once per message, so subscribing to the entire store
+  // meant a write to any field — `plan`, say, which the billing refresh
+  // re-asserts on every poll — re-rendered every message in the transcript.
+  // Per-field selectors let zustand compare the primitive and bail out.
+  const userName = useProfileStore((s) => s.name);
+  const userEmail = useProfileStore((s) => s.email);
+  const userImageUrl = useProfileStore((s) => s.imageUrl);
+  const agentName = useAgentName();
+  const agentLook = useAgentIdentity((s) => s.look);
+  const openAgentSheet = useAgentIdentity((s) => s.openSheet);
+  const loadProfile = useProfileStore((s) => s.loadProfile);
+  const profileLoaded = useProfileStore((s) => s.loaded);
+  useEffect(() => {
+    if (!profileLoaded) {
+      void loadProfile();
+    }
+  }, [loadProfile, profileLoaded]);
 
   // Get job name lookup from store
   const getJobName = useJobLiveLogsStore((state) => state.getJobName);
@@ -582,13 +752,18 @@ const MessageItemInner: React.FC<MessageItemProps> = ({ chatId, message }) => {
   const getAgentName = useSubAgentNameStore((s) => s.getAgentName);
   const connectionPaused =
     useChatStore((s) => s.chatStates.get(chatId)?.connectionPaused) ?? false;
+  const isFinishingWork =
+    useChatStore((s) => s.chatStates.get(chatId)?.isFinishingWork) ?? false;
 
   const copyText = !isUser && !message.isStreaming ? getAssistantCopyText(message) : "";
   const showCopyButton = copyText.length > 0;
 
   // Check if message has V1-style sequence
   const hasSequence = message.sequence && message.sequence.length > 0;
-
+  const showStreamingPlaceholder =
+    !isUser &&
+    !!message.isStreaming &&
+    !assistantMessageHasVisibleContent(message);
 
   return (
     <div
@@ -598,52 +773,25 @@ const MessageItemInner: React.FC<MessageItemProps> = ({ chatId, message }) => {
       {/* Avatar - matches v1 exactly */}
       <div className="message-avatar-container">
         {isUser ? (
-          // User avatar - profile photo or initials fallback
-          userImageUrl ? (
-            <img
-              src={userImageUrl}
-              alt={userName || "User"}
-              className="message-avatar-user"
-            />
-          ) : (
-            <div className="message-avatar-user message-avatar-user--initials">
-              {(userName || userEmail || "U").charAt(0).toUpperCase()}
-            </div>
-          )
+          <UserAvatar
+            imageUrl={userImageUrl}
+            displayName={userName}
+            email={userEmail}
+            alt={userName || "User"}
+            size={32}
+          />
         ) : (
-          // Assistant avatar - Papr logo (actual v1 logo)
-          <div className="message-avatar-assistant">
-            <svg
-              width="16"
-              height="16"
-              viewBox="0 0 105 124"
-              fill="none"
-              xmlns="http://www.w3.org/2000/svg"
-              className="message-avatar-icon"
-            >
-              <path
-                d="M27.9998 101.5C-11.5 158 6.99988 51 43.4008 60.5002C99.2884 75.0861 115.18 20.7781 83.6804 8.27816C40.2693 -8.94844 51.9998 65 27.9998 101.5Z"
-                stroke="url(#papr-gradient)"
-                strokeWidth="10"
-                strokeLinecap="round"
-                strokeLinejoin="round"
-              />
-              <defs>
-                <linearGradient
-                  id="papr-gradient"
-                  x1="17.2207"
-                  y1="89.4214"
-                  x2="68.8959"
-                  y2="35.8394"
-                  gradientUnits="userSpaceOnUse"
-                >
-                  <stop stopColor="#0060E0" />
-                  <stop offset="0.6" stopColor="#00ACFA" />
-                  <stop offset="1" stopColor="#0BCDFF" />
-                </linearGradient>
-              </defs>
-            </svg>
-          </div>
+          // Assistant avatar — your agent (Papr mark in Papr blue by default). Click to personalize.
+          <button
+            type="button"
+            className={`message-avatar-assistant message-avatar-assistant--agent${agentLook === "papr" ? "" : " message-avatar-assistant--face"}`}
+            onClick={openAgentSheet}
+            title="Personalize your agent"
+            aria-label={`Personalize ${agentName}`}
+            data-agent-hover
+          >
+            <AgentGlyph size={agentLook === "papr" ? 22 : 30} />
+          </button>
         )}
       </div>
 
@@ -653,12 +801,14 @@ const MessageItemInner: React.FC<MessageItemProps> = ({ chatId, message }) => {
       >
         {/* Name label */}
         <span className="message-sender-name">
-          {isUser ? (userName || "You") : "Pen"}
+          {isUser ? (userName || "You") : agentName}
         </span>
 
         {isUser && message.attachments && message.attachments.length > 0 && (
           <MessageAttachments attachments={message.attachments} />
         )}
+
+        {showStreamingPlaceholder ? <AgentLoadingDots /> : null}
 
         {/* V1-STYLE SEQUENCE RENDERING */}
         {hasSequence && !isUser ? (
@@ -670,6 +820,8 @@ const MessageItemInner: React.FC<MessageItemProps> = ({ chatId, message }) => {
             getJobName,
             getAgentName,
             connectionPaused && !!message.isStreaming,
+            isFinishingWork && !!message.isStreaming,
+            delegationFollowUps,
           )
         ) : (
           /* FALLBACK: OLD FORMAT (no sequence) */
@@ -761,116 +913,173 @@ const MessageItemInner: React.FC<MessageItemProps> = ({ chatId, message }) => {
                   isStreaming={message.isStreaming}
                   narration={content} // Show agent's explanation after tool calls
                 />
-                {/* JobStatusCard for run_job (fallback when no sequence) */}
-                {message.toolCalls.map((tc) => {
-                  if (tc.toolName !== "run_job") return null;
-                  if (tc.result && tc.status === "success") {
-                    const jobData = parseJobStatusFromToolResult(
-                      tc.toolName,
-                      tc.result,
-                    );
-                    return jobData ? (
-                      <JobStatusCard
-                        key={`job-fallback-${jobData.jobId}`}
-                        data={jobData}
-                      />
-                    ) : null;
-                  }
-                  if (tc.status === "calling" && tc.args?.jobId) {
-                    const jobId = tc.args.jobId as string;
-                    const jobName = getJobName(jobId) || jobId;
-                    return (
-                      <JobStatusCard
-                        key={`job-fallback-${jobId}`}
-                        data={{
-                          type: "job_status",
-                          jobId,
-                          jobName,
-                          runId: "running",
-                          status: "running",
-                          startedAt: new Date().toISOString(),
-                        }}
-                      />
-                    );
-                  }
-                  return null;
-                })}
-                {message.toolCalls.map((tc) => {
-                  if (tc.toolName !== "delegate_task") return null;
+                {(() => {
+                  const mediaItems: GeneratedMediaGalleryItem[] = [];
+                  message.toolCalls.forEach((tc, index) => {
+                    const item = parseGeneratedMediaGalleryItem({
+                      toolName: tc.toolName,
+                      result: tc.result,
+                      status: tc.status,
+                      args: tc.args,
+                      fallbackId: tc.id ?? `fallback-${index}`,
+                    });
+                    if (item) mediaItems.push(item);
+                  });
+                  if (mediaItems.length === 0) return null;
+                  return (
+                    <GeneratedMediaGallery
+                      key="generated-media-gallery-fallback"
+                      items={mediaItems}
+                      isStreaming={message.isStreaming}
+                    />
+                  );
+                })()}
+                {/* Job cards for run_job (fallback when no sequence) — one per
+                    jobId, latest state wins. A message can call run_job twice
+                    on the same job (a retry, or a finished run followed by an
+                    in-flight one); rendering both emitted two cards under one
+                    key, which React may drop, with contradictory status. The
+                    sequence path above already dedupes via addedJobIds. */}
+                {(() => {
+                  const jobMap = new Map<
+                    string,
+                    Parameters<typeof JobStatusCard>[0]["data"]
+                  >();
+                  message.toolCalls.forEach((tc) => {
+                    if (tc.toolName !== "run_job") return;
+                    if (tc.result && tc.status === "success") {
+                      const jobData = parseJobStatusFromToolResult(
+                        tc.toolName,
+                        tc.result,
+                      );
+                      if (jobData) jobMap.set(jobData.jobId, jobData);
+                      return;
+                    }
+                    if (tc.status === "calling" && tc.args?.jobId) {
+                      const jobId = tc.args.jobId as string;
+                      jobMap.set(jobId, {
+                        type: "job_status",
+                        jobId,
+                        jobName: getJobName(jobId) || jobId,
+                        runId: "running",
+                        status: "running",
+                        startedAt: new Date().toISOString(),
+                      });
+                    }
+                  });
+                  return Array.from(jobMap.entries()).map(([jobId, data]) => (
+                    <JobStatusCard key={`job-fallback-${jobId}`} data={data} />
+                  ));
+                })()}
+                {/* Delegation cards — one per delegationId, latest state wins.
+                    The in-flight branch identifies a card by the chat's
+                    subagent job, which is the same value for every concurrent
+                    delegate_task, so two would otherwise share one key. */}
+                {(() => {
+                  const delegationMap = new Map<
+                    string,
+                    React.ComponentProps<typeof MiniChatCard>
+                  >();
 
-                  if (tc.result) {
-                    const delegationData = parseDelegationFromToolResult(
-                      tc.toolName,
-                      tc.result,
-                    );
-                    if (!delegationData) return null;
-                    const miniStatus =
-                      delegationData.status === "pending" ||
-                      delegationData.status === "running"
-                        ? "active"
-                        : delegationData.status === "completed"
-                          ? "completed"
-                          : "failed";
-                    return (
+                  message.toolCalls.forEach((tc, index) => {
+                    if (!isDelegateTaskInvocation(tc.toolName, tc.args)) {
+                      return;
+                    }
+
+                    if (tc.result) {
+                      const delegationData = parseDelegationFromToolCall(
+                        tc.toolName,
+                        tc.result,
+                      );
+                      if (!delegationData) return;
+                      const miniStatus =
+                        delegationData.status === "pending" ||
+                        delegationData.status === "running"
+                          ? "active"
+                          : delegationData.status === "completed"
+                            ? "completed"
+                            : "failed";
+                      delegationMap.set(delegationData.id, {
+                        delegationId: delegationData.id,
+                        subAgentName:
+                          delegationData.agentName ?? delegationData.agentId,
+                        task: delegationData.task,
+                        status: miniStatus,
+                        context: delegationData.context,
+                        resultText: delegationData.resultText,
+                        error: delegationData.error,
+                        subAgentIcon: delegationData.agentIcon,
+                        defaultExpanded: false,
+                      });
+                      return;
+                    }
+
+                    if (tc.status === "calling") {
+                      const delegateArgs = delegateTaskArgsFromToolCall(
+                        tc.toolName,
+                        tc.args,
+                      );
+                      const task =
+                        (delegateArgs?.task as string) || "Delegated task";
+                      const requestedAgentId = delegateArgs?.useAgentId as
+                        | string
+                        | undefined;
+                      const { agentId, agentName } =
+                        resolveDelegationAgentDisplay(
+                          requestedAgentId,
+                          subagentJobForChat,
+                          getAgentName,
+                        );
+                      const jobIdFromStore = subagentJobForChat?.jobId;
+                      const placeholderId =
+                        jobIdFromStore || tc.id || `delegation-${index}`;
+                      if (!chatId && !jobIdFromStore) return;
+                      delegationMap.set(placeholderId, {
+                        delegationId: placeholderId,
+                        subAgentName: agentName ?? agentId,
+                        task,
+                        status: "active",
+                        context: (delegateArgs?.context as string) || undefined,
+                        defaultExpanded: false,
+                      });
+                    }
+                  });
+
+                  return Array.from(delegationMap.entries()).map(
+                    ([delegationId, props]) => (
                       <MiniChatCard
-                        key={`delegation-fallback-${delegationData.id}`}
-                        delegationId={delegationData.id}
-                        subAgentName={
-                          delegationData.agentName ?? delegationData.agentId
-                        }
-                        task={delegationData.task}
-                        status={miniStatus}
-                        context={delegationData.context}
-                        resultText={delegationData.resultText}
-                        error={delegationData.error}
-                        subAgentIcon={delegationData.agentIcon}
-                        defaultExpanded={false}
+                        key={`delegation-fallback-${delegationId}`}
+                        {...props}
                       />
-                    );
-                  }
-
-                  if (tc.status === "calling") {
-                    const task = (tc.args?.task as string) || "Delegated task";
-                    const requestedAgentId = tc.args?.useAgentId as
-                      | string
-                      | undefined;
-                    const { agentId, agentName } = resolveDelegationAgentDisplay(
-                      requestedAgentId,
-                      subagentJobForChat,
-                      getAgentName,
-                    );
-                    const jobIdFromStore = subagentJobForChat?.jobId;
-                    const placeholderId =
-                      jobIdFromStore || tc.id || `delegation-${Date.now()}`;
-                    if (!chatId && !jobIdFromStore) return null;
-                    return (
-                      <MiniChatCard
-                        key={`delegation-fallback-${placeholderId}`}
-                        delegationId={placeholderId}
-                        subAgentName={agentName ?? agentId}
-                        task={task}
-                        status="active"
-                        context={(tc.args?.context as string) || undefined}
-                        defaultExpanded={false}
-                      />
-                    );
-                  }
-
-                  return null;
-                })}
+                    ),
+                  );
+                })()}
               </>
             )}
 
             {/* Main message text */}
-            {content &&
-              (isUser || !message.toolCalls || message.toolCalls.length === 0) && (
-                <div className="message-text">
-                  <Markdown>{content}</Markdown>
-                  {message.isStreaming && !message.streamingReasoning && (
-                    <span className="streaming-cursor">▊</span>
-                  )}
+            {content && (
+              <div className="message-text">
+                <Markdown>{content}</Markdown>
+                {message.isStreaming && !message.streamingReasoning && (
+                  <span className="streaming-cursor">▊</span>
+                )}
+              </div>
+            )}
+
+            {delegationFollowUps.map((followUp) => {
+              const followUpText =
+                getAssistantCopyText(followUp) || followUp.content.trim();
+              if (!followUpText) return null;
+              return (
+                <div
+                  key={`delegation-followup-fallback-${followUp.id}`}
+                  className="message-text"
+                >
+                  <Markdown>{followUpText}</Markdown>
                 </div>
-              )}
+              );
+            })}
           </>
         )}
 
@@ -891,6 +1100,8 @@ export const MessageItem = React.memo(MessageItemInner, (prev, next) => {
   if (prev.message.isStreaming !== next.message.isStreaming) return false;
   if (prev.message.attachments !== next.message.attachments) return false;
   if (prev.message.sequence !== next.message.sequence) return false;
+  if (prev.message.toolCalls !== next.message.toolCalls) return false;
   if (prev.chatId !== next.chatId) return false;
+  if (prev.delegationFollowUps !== next.delegationFollowUps) return false;
   return true;
 });

@@ -3,25 +3,35 @@
  *
  * Watches each linked job's `data/` directory so writes are detected whether they
  * land on `data.db`, `data.db-wal`, or `data.db-shm` (WAL mode, long-lived jobs,
- * mini-app /api/db/write, bash sqlite, etc.). Debounced push + fingerprints still
- * decide whether Turso actually needs an upload at flush time.
+ * mini-app /api/db/write, bash sqlite, etc.). Debounced ship via workspace log
+ * decides whether remote Turso needs an update at flush time.
  */
 
 import { getPaprAppsRoot } from "../../core/utils/paprRoot.js";
+import { shouldAutoUploadReplicaSyncKey } from "./cloudUploadMode.js";
 import * as path from "path";
-import chokidar, { type FSWatcher } from "chokidar";
+import { TreeWatcher } from "./TreeWatcher.js";
 import { discoverTursoLinkedSources, linkedSourceSyncKey } from "./tursoLinkedSources.js";
 import { getTursoSyncBridge } from "./TursoSyncBridge.js";
 import {
   ensureLocalDbChangeLogReady,
   isSqliteBusyError,
   isTursoLocalDatabaseCorruptError,
+  localDbHasSyncableUserTables,
 } from "./tursoSyncBridgeCore.js";
-import { scheduleTursoPushForJob } from "./tursoPushScheduler.js";
 import { publishDbChanged } from "../utils/publishJobRunEvents.js";
-import { recordTursoPushQuarantine } from "./tursoSyncState.js";
+import {
+  clearStaleDirtyFlagIfClean,
+  hasUnpushedLocalDbChanges,
+  isJobDbQuarantined,
+  isTursoStateDbPathInWorkspace,
+  loadTursoSyncState,
+  recordTursoPushQuarantine,
+} from "./tursoSyncState.js";
+import { getSyncCoordinator } from "./cloudSync/SyncCoordinator.js";
+import { isReplicaLinkedDbDirtyForWatcher } from "./tursoReplica/tursoReplicaRouting.js";
 
-let watcher: FSWatcher | null = null;
+let watcher: TreeWatcher | null = null;
 
 interface WatchedDbDir {
   syncKey: string;
@@ -74,32 +84,171 @@ async function rebuildWatchDirs(appsRootDir: string): Promise<string[]> {
   return dataDirs;
 }
 
+/**
+ * Coalesce bursts of data.db / -wal / -shm writes into one evaluation.
+ *
+ * Each evaluation checks the local `_papr_sync_log` for unpushed row ops,
+ * so a busy job writing in a loop could otherwise pin the gateway event loop
+ * and starve /health and the WebSocket heartbeat.
+ */
+const CHANGE_DEBOUNCE_MS = 750;
+
+const pendingChangeTimers = new Map<string, NodeJS.Timeout>();
+
 function handleDbChange(changedPath: string): void {
   const watched = resolveJobIdForDbFileChange(changedPath, dbDirToSource);
   if (!watched) {
     return;
   }
 
-  try {
-    ensureLocalDbChangeLogReady(watched.dbPath);
-  } catch (error) {
-    const message = (error as Error).message;
-    if (isSqliteBusyError(error)) {
-      console.warn(
-        `[TursoLinkedDbWatcher] DB busy, deferring changelog setup for ${watched.syncKey}`,
-      );
-    } else if (isTursoLocalDatabaseCorruptError(message)) {
-      recordTursoPushQuarantine(watched.syncKey, watched.dbPath, message);
-    } else {
-      console.warn(
-        `[TursoLinkedDbWatcher] Changelog setup failed for ${watched.syncKey}:`,
-        message,
-      );
-    }
+  const pending = pendingChangeTimers.get(watched.syncKey);
+  if (pending) {
+    clearTimeout(pending);
+  }
+
+  const timer = setTimeout(() => {
+    pendingChangeTimers.delete(watched.syncKey);
+    evaluateDbChange(watched);
+  }, CHANGE_DEBOUNCE_MS);
+  timer.unref?.();
+  pendingChangeTimers.set(watched.syncKey, timer);
+}
+
+function handleLinkedDbEvaluationError(
+  watched: WatchedDbDir,
+  error: unknown,
+  context: string,
+): void {
+  const message = (error as Error).message;
+  if (isSqliteBusyError(error)) {
+    console.warn(
+      `[TursoLinkedDbWatcher] DB busy, deferring ${context} for ${watched.syncKey}`,
+    );
+    return;
+  }
+  if (isTursoLocalDatabaseCorruptError(message)) {
+    recordTursoPushQuarantine(watched.syncKey, watched.dbPath, message);
+    return;
+  }
+  console.warn(
+    `[TursoLinkedDbWatcher] ${context} failed for ${watched.syncKey}:`,
+    message,
+  );
+}
+
+function evaluateDbChange(watched: WatchedDbDir): void {
+  if (!isTursoStateDbPathInWorkspace(watched.dbPath)) {
     return;
   }
 
-  scheduleTursoPushForJob(watched.syncKey);
+  void import("./tursoReplica/tursoReplicaRouting.js").then(
+    ({ shouldSuppressLegacyTursoPush }) => {
+      if (
+        shouldSuppressLegacyTursoPush({
+          syncKey: watched.syncKey,
+          dbPath: watched.dbPath,
+          dbId: watched.dbId,
+        })
+      ) {
+        evaluateDbChangeReplica(watched);
+        return;
+      }
+      void import("../utils/tursoReplicaEnabled.js").then(
+        ({ isLegacyWorkspaceRowSyncEnabled }) => {
+          if (!isLegacyWorkspaceRowSyncEnabled()) {
+            return;
+          }
+          evaluateDbChangeLegacy(watched);
+        },
+      );
+    },
+  );
+}
+
+function scheduleReplicaPushFromWatcher(
+  watched: WatchedDbDir,
+  trigger: "watcher" | "completion" = "watcher",
+): void {
+  void import("./tursoReplica/tursoReplicaPushScheduler.js").then(
+    ({ scheduleTursoReplicaPushForSyncKey }) => {
+      scheduleTursoReplicaPushForSyncKey(watched.syncKey, "normal", trigger);
+    },
+  );
+}
+
+function watcherPaprDir(): string {
+  const bridge = getTursoSyncBridge();
+  const appsRoot = bridge?.getAppsRootDir() ?? getPaprAppsRoot();
+  return path.dirname(appsRoot);
+}
+
+function evaluateDbChangeReplica(watched: WatchedDbDir): void {
+  const syncState = loadTursoSyncState();
+  if (isJobDbQuarantined(watched.syncKey, syncState)) {
+    return;
+  }
+
+  if (!shouldAutoUploadReplicaSyncKey(watched.syncKey, watcherPaprDir())) {
+    return;
+  }
+
+  const coordinator = getSyncCoordinator();
+  if (coordinator) {
+    const status = coordinator.getStatus();
+    if (status.activeFlush || status.inFlightAppIds.length > 0) {
+      return;
+    }
+  }
+
+  if (
+    !isReplicaLinkedDbDirtyForWatcher({
+      dbPath: watched.dbPath,
+      ...(watched.dbId ? { dbId: watched.dbId } : {}),
+    })
+  ) {
+    return;
+  }
+  scheduleReplicaPushFromWatcher(watched);
+  publishDbChanged({
+    ...(watched.jobId ? { jobId: watched.jobId } : {}),
+    ...(watched.dbId ? { dbId: watched.dbId } : {}),
+  });
+}
+
+function evaluateDbChangeLegacy(watched: WatchedDbDir): void {
+  const syncState = loadTursoSyncState();
+  if (isJobDbQuarantined(watched.syncKey, syncState)) {
+    return;
+  }
+
+  if (!shouldAutoUploadReplicaSyncKey(watched.syncKey, watcherPaprDir())) {
+    return;
+  }
+
+  try {
+    ensureLocalDbChangeLogReady(watched.dbPath);
+
+    if (!localDbHasSyncableUserTables(watched.dbPath)) {
+      return;
+    }
+
+    if (!hasUnpushedLocalDbChanges(watched.syncKey, watched.dbPath, syncState)) {
+      clearStaleDirtyFlagIfClean(watched.syncKey, watched.dbPath);
+      return;
+    }
+  } catch (error) {
+    handleLinkedDbEvaluationError(watched, error, "db evaluation");
+    return;
+  }
+
+  const coordinator = getSyncCoordinator();
+  if (coordinator) {
+    coordinator.markDbDirty(watched.syncKey, watched.dbPath, "watcher");
+  } else {
+    void import("./tursoPushScheduler.js").then(({ scheduleTursoPushForJob }) => {
+      scheduleTursoPushForJob(watched.syncKey, "normal", "watcher");
+    });
+  }
   publishDbChanged({
     ...(watched.jobId ? { jobId: watched.jobId } : {}),
     ...(watched.dbId ? { dbId: watched.dbId } : {}),
@@ -109,6 +258,12 @@ function handleDbChange(changedPath: string): void {
 export async function startTursoLinkedDbWatcher(
   appsRootDir?: string,
 ): Promise<void> {
+  const { isLegacyWorkspaceRowSyncEnabled, isTursoReplicaSyncFeatureEnabled } =
+    await import("../utils/tursoReplicaEnabled.js");
+  if (!isLegacyWorkspaceRowSyncEnabled() && !isTursoReplicaSyncFeatureEnabled()) {
+    return;
+  }
+
   const bridge = getTursoSyncBridge();
   if (!bridge) {
     return;
@@ -122,20 +277,15 @@ export async function startTursoLinkedDbWatcher(
     return;
   }
 
-  watcher = chokidar.watch(watchDirs, {
-    depth: 0,
-    ignoreInitial: true,
-    awaitWriteFinish: { stabilityThreshold: 2_000, pollInterval: 250 },
-  });
-
-  watcher
-    .on("add", handleDbChange)
-    .on("change", handleDbChange)
-    .on("unlink", handleDbChange);
-
-  await new Promise<void>((resolve, reject) => {
-    watcher!.once("ready", () => resolve());
-    watcher!.once("error", (err) => reject(err));
+  // One non-recursive OS watch per linked data dir (was chokidar depth:0 —
+  // which still opened one kqueue fd per file in each dir).
+  watcher = new TreeWatcher({
+    roots: watchDirs,
+    recursive: false,
+    settleMs: 2_000, // was awaitWriteFinish.stabilityThreshold
+    onEvent: (event) => handleDbChange(event.path),
+    onError: (err, root) =>
+      console.warn(`[TursoLinkedDbWatcher] Watch error for ${root}:`, err?.message ?? String(err)),
   });
 
   console.log(
@@ -154,7 +304,15 @@ export async function refreshTursoLinkedDbWatcher(
   await startTursoLinkedDbWatcher(appsRootDir);
 }
 
+export function isTursoLinkedDbWatcherActive(): boolean {
+  return watcher !== null;
+}
+
 export async function stopTursoLinkedDbWatcher(): Promise<void> {
+  for (const timer of pendingChangeTimers.values()) {
+    clearTimeout(timer);
+  }
+  pendingChangeTimers.clear();
   if (watcher) {
     await watcher.close();
     watcher = null;
@@ -173,6 +331,11 @@ export function resolveWatchedDbPathForTests(changedPath: string): string | null
     return null;
   }
   return normalizePath(changedPath);
+}
+
+/** @internal test helper */
+export function evaluateDbChangeForTests(watched: WatchedDbDir): void {
+  evaluateDbChange(watched);
 }
 
 /** @internal test helper */

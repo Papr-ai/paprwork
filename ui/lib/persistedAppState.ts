@@ -4,8 +4,13 @@
 
 import { useTabStore } from "../stores/tabStore";
 import type { TabType } from "../types/tabs";
+import { isCatalogPreviewEntityId } from "../types/cloudCatalogPreviewTab";
 import { gateway } from "../src/lib/gateway";
 import { ensureDefaultChatTab } from "./ensureDefaultChatTab";
+import { ensureWorkspaceLandingTab } from "./ensureWorkspaceLandingTab";
+import { ensureSettingsTab } from "./ensureSettingsTab";
+import { serializeTabForGatewayPersistence } from "./tabPersistenceMetadata";
+import { isTabPersistenceBlocked } from "./tabPersistenceGuard";
 
 interface TabRow {
   id: string;
@@ -16,12 +21,23 @@ interface TabRow {
   parentTabId: string | null;
   position: number;
   isFavorite: boolean;
+  metadata?: Record<string, unknown>;
 }
 
 /** Save open tabs + navigation state to the current workspace before switching away. */
 export async function flushWorkspaceStateToGateway(): Promise<void> {
+  // The outgoing workspace's saved tab bar was never read, so the store holds
+  // scaffolding rather than that workspace's tabs. Flushing it here would make
+  // the loss permanent at exactly the moment the user leaves.
+  if (isTabPersistenceBlocked()) {
+    console.warn(
+      "[Persistence] Skipping workspace flush — saved tab bar was never read back",
+    );
+    return;
+  }
+
   const {
-    tabs,
+    tabs: rawTabs,
     activeTabId,
     splitRatio,
     splitRatios,
@@ -29,20 +45,11 @@ export async function flushWorkspaceStateToGateway(): Promise<void> {
     historyIndex,
   } = useTabStore.getState();
 
-  const tabsToSave = tabs.map((tab, index) => ({
-    id: tab.id,
-    type: tab.type,
-    entityId: tab.entityId,
-    title: tab.title,
-    displayMode: tab.displayMode,
-    parentTabId: tab.parentTabId,
-    position: index,
-    isFavorite: tab.isFavorite || false,
-    createdAt: new Date().toISOString(),
-    lastAccessedAt: new Date().toISOString(),
-  }));
+  const tabs = normalizeTabHierarchy(rawTabs);
 
-  await gateway.send("app:save_tabs", tabsToSave);
+  const tabsToSave = tabs.map((tab, index) => serializeTabForGatewayPersistence(tab, index));
+
+  await gateway.send("app:save_tabs", { tabs: tabsToSave, sync: true });
 
   const onboardingStep1 = localStorage.getItem("papr-onboarding-step1") === "true";
   const onboardingStep2 = localStorage.getItem("papr-onboarding-step2") === "true";
@@ -63,16 +70,43 @@ export async function flushWorkspaceStateToGateway(): Promise<void> {
   });
 }
 
-/** Load tabs + navigation state for the active workspace from gateway SQLite. */
-export async function loadPersistedAppStateFromGateway(options?: {
+export interface WorkspaceEntityIdSets {
   validChatIds?: Set<string>;
-}): Promise<void> {
+  validAppIds?: Set<string>;
+  validDocumentIds?: Set<string>;
+}
+
+export interface ApplyPersistedAppStateOptions extends WorkspaceEntityIdSets {
+  /** When restored workspace has no valid active tab. Default: open Home. */
+  emptyActiveTabFallback?: "chat" | "home" | "settings" | "landing" | "none";
+}
+
+export interface PersistedAppStateSnapshot {
+  tabs: ReturnType<typeof mapTabRow>[];
+  activeTabId: string | null;
+  splitRatio: number;
+  splitRatios: Record<string, number>;
+  history: string[];
+  historyIndex: number;
+  /**
+   * Whether the saved tab bar was actually read.
+   *
+   * `false` with `tabs: []` means the gateway declined the read; `true` with
+   * `tabs: []` means the workspace genuinely has none. The two produce an
+   * identical store, and only the first must not be written back over SQLite.
+   */
+  tabsReadOk: boolean;
+}
+
+/** Fetch tab metadata + navigation state from workspace SQLite (no store writes). */
+export async function fetchPersistedAppStateFromGateway(): Promise<PersistedAppStateSnapshot | null> {
   const tabsResponse = (await gateway.send("app:load_tabs", {})) as {
     success?: boolean;
     data?: TabRow[];
   };
 
   let restoredTabs: ReturnType<typeof mapTabRow>[] = [];
+  const tabsReadOk = tabsResponse.success === true && Array.isArray(tabsResponse.data);
 
   if (
     tabsResponse.success &&
@@ -93,10 +127,6 @@ export async function loadPersistedAppStateFromGateway(options?: {
           parent.childTabIds.push(tab.id);
         }
       }
-    }
-
-    if (options?.validChatIds) {
-      restoredTabs = pruneStaleEntityTabs(restoredTabs, options.validChatIds);
     }
   }
 
@@ -159,11 +189,128 @@ export async function loadPersistedAppStateFromGateway(options?: {
     activeTabId = restoredTabs[0]?.id ?? null;
   }
 
-  useTabStore.setState({
+  return {
     tabs: restoredTabs,
     activeTabId,
     splitRatio,
     splitRatios,
+    history,
+    historyIndex,
+    tabsReadOk,
+  };
+}
+
+type TabHierarchyFields = {
+  id: string;
+  displayMode: "standalone" | "parent" | "child";
+  parentTabId: string | null;
+  childTabIds: string[];
+  position?: "left" | "right";
+};
+
+/**
+ * Fix tabs left in an invalid hierarchy (e.g. displayMode "child" with no parent).
+ * Orphan children are hidden from the tab bar but still render full-screen — promote them.
+ */
+export function normalizeTabHierarchy<T extends TabHierarchyFields>(tabs: T[]): T[] {
+  const tabIds = new Set(tabs.map((tab) => tab.id));
+
+  let normalized = tabs.map((tab) => {
+    const parentMissing = tab.parentTabId !== null && !tabIds.has(tab.parentTabId);
+    const orphanChild =
+      tab.displayMode === "child" && (tab.parentTabId === null || parentMissing);
+
+    if (orphanChild) {
+      return {
+        ...tab,
+        parentTabId: null,
+        displayMode: "standalone" as const,
+        position: undefined,
+      };
+    }
+
+    if (parentMissing) {
+      return {
+        ...tab,
+        parentTabId: null,
+        displayMode: tab.displayMode === "child" ? ("standalone" as const) : tab.displayMode,
+        position: undefined,
+      };
+    }
+
+    return tab;
+  });
+
+  normalized = normalized.map((tab) => {
+    const validChildIds = tab.childTabIds.filter((childId) => tabIds.has(childId));
+    if (tab.displayMode === "parent" && validChildIds.length === 0) {
+      return {
+        ...tab,
+        childTabIds: [],
+        displayMode: "standalone" as const,
+      };
+    }
+    if (validChildIds.length !== tab.childTabIds.length) {
+      return { ...tab, childTabIds: validChildIds };
+    }
+    return tab;
+  });
+
+  return normalized;
+}
+
+/** Preserve in-memory tabs not yet written to SQLite (debounced save). */
+export function mergeLocalTabsIntoSnapshot(
+  snapshot: PersistedAppStateSnapshot,
+  localTabs: PersistedAppStateSnapshot["tabs"],
+  localActiveTabId: string | null,
+): PersistedAppStateSnapshot {
+  const persistedIds = new Set(snapshot.tabs.map((tab) => tab.id));
+  const localOnly = localTabs.filter((tab) => !persistedIds.has(tab.id));
+  if (localOnly.length === 0) {
+    return snapshot;
+  }
+  return {
+    ...snapshot,
+    tabs: [...snapshot.tabs, ...localOnly],
+    activeTabId: localActiveTabId ?? snapshot.activeTabId,
+  };
+}
+
+/** Apply fetched tab snapshot to tabStore, optionally pruning stale entity tabs. */
+export function applyPersistedAppStateToTabStore(
+  snapshot: PersistedAppStateSnapshot,
+  options?: ApplyPersistedAppStateOptions,
+): void {
+  let restoredTabs = snapshot.tabs;
+
+  if (
+    options?.validChatIds ||
+    options?.validAppIds ||
+    options?.validDocumentIds
+  ) {
+    restoredTabs = pruneStaleEntityTabs(restoredTabs, options);
+  }
+
+  restoredTabs = normalizeTabHierarchy(restoredTabs);
+
+  const restoredIds = new Set(restoredTabs.map((t) => t.id));
+  let activeTabId = snapshot.activeTabId;
+  if (activeTabId && !restoredIds.has(activeTabId)) {
+    activeTabId = restoredTabs[0]?.id ?? null;
+  }
+
+  const history = snapshot.history.filter((id) => restoredIds.has(id));
+  let historyIndex = snapshot.historyIndex;
+  if (historyIndex >= history.length) {
+    historyIndex = history.length - 1;
+  }
+
+  useTabStore.setState({
+    tabs: restoredTabs,
+    activeTabId,
+    splitRatio: snapshot.splitRatio,
+    splitRatios: snapshot.splitRatios,
     history,
     historyIndex,
   });
@@ -176,42 +323,116 @@ export async function loadPersistedAppStateFromGateway(options?: {
   }
 
   if (!useTabStore.getState().activeTabId) {
-    ensureDefaultChatTab();
+    const fallback = options?.emptyActiveTabFallback ?? "landing";
+    if (fallback === "landing" || fallback === "home") {
+      ensureWorkspaceLandingTab();
+    } else if (fallback === "chat") {
+      ensureDefaultChatTab();
+    } else if (fallback === "settings") {
+      ensureSettingsTab({ section: "profile" });
+    }
   }
 }
 
+/** Drop entity tabs whose entityId is not in the active workspace lists. */
+export function reconcileEntityTabsInStore(valid: WorkspaceEntityIdSets): void {
+  const { activeTabId, tabs, splitRatio, splitRatios, history, historyIndex } =
+    useTabStore.getState();
+  const activeTab = activeTabId
+    ? tabs.find((tab) => tab.id === activeTabId)
+    : undefined;
+  const stayOnSettings = activeTab?.type === "settings";
+
+  const snapshot: PersistedAppStateSnapshot = {
+    tabs,
+    activeTabId,
+    splitRatio,
+    splitRatios,
+    history,
+    historyIndex,
+    // Built from the live store, not a read, so there is no read to have failed.
+    tabsReadOk: true,
+  };
+  applyPersistedAppStateToTabStore(snapshot, {
+    ...valid,
+    emptyActiveTabFallback: "none",
+  });
+
+  if (stayOnSettings) {
+    ensureSettingsTab({ section: "profile" });
+  }
+}
+
+/** Drop chat tabs whose entityId is not in the workspace chat list. */
+export function reconcileChatTabsInStore(validChatIds: Set<string>): void {
+  reconcileEntityTabsInStore({ validChatIds });
+}
+
+/** Load tabs + navigation state for the active workspace from gateway SQLite. */
+export async function loadPersistedAppStateFromGateway(
+  options?: WorkspaceEntityIdSets,
+): Promise<void> {
+  const snapshot = await fetchPersistedAppStateFromGateway();
+  if (!snapshot || !snapshot.tabsReadOk) {
+    return;
+  }
+  applyPersistedAppStateToTabStore(snapshot, options);
+}
+
+/** Before Focus had its own tab type, it was a "memory" tab titled "Home". */
+export function isLegacyFocusRow(tab: Pick<TabRow, "type" | "title">): boolean {
+  return tab.type === "memory" && tab.title === "Home";
+}
+
 function mapTabRow(tab: TabRow) {
+  const legacyFocus = isLegacyFocusRow(tab);
   return {
     id: tab.id,
-    type: tab.type as TabType,
+    type: (legacyFocus ? "focus" : tab.type) as TabType,
     entityId: tab.entityId,
-    title: tab.title,
+    title: legacyFocus ? "Focus" : tab.title,
     displayMode: tab.displayMode as "standalone" | "parent" | "child",
     parentTabId: tab.parentTabId,
     childTabIds: [] as string[],
     isFavorite: tab.isFavorite,
     hasUnread: false,
     isStreaming: false,
+    ...(tab.metadata ? { metadata: tab.metadata } : {}),
   };
 }
 
-function pruneStaleEntityTabs<T extends { id: string; type: string; entityId: string; parentTabId: string | null; childTabIds: string[] }>(
-  tabs: T[],
-  validChatIds: Set<string>,
-): T[] {
+export function pruneStaleEntityTabs<
+  T extends {
+    id: string;
+    type: string;
+    entityId: string;
+    displayMode: "standalone" | "parent" | "child";
+    parentTabId: string | null;
+    childTabIds: string[];
+  },
+>(tabs: T[], valid: WorkspaceEntityIdSets): T[] {
   const kept = tabs.filter((tab) => {
     if (tab.type === "chat") {
-      return validChatIds.has(tab.entityId);
+      return valid.validChatIds?.has(tab.entityId) ?? true;
+    }
+    if (tab.type === "app") {
+      if (isCatalogPreviewEntityId(tab.entityId)) {
+        return true;
+      }
+      return valid.validAppIds?.has(tab.entityId) ?? true;
+    }
+    if (tab.type === "document") {
+      return valid.validDocumentIds?.has(tab.entityId) ?? true;
     }
     return true;
   });
   const keptIds = new Set(kept.map((t) => t.id));
-  return kept
-    .map((tab) => ({
+  return normalizeTabHierarchy(
+    kept.map((tab) => ({
       ...tab,
       parentTabId:
         tab.parentTabId && keptIds.has(tab.parentTabId) ? tab.parentTabId : null,
       childTabIds: tab.childTabIds.filter((id) => keptIds.has(id)),
-    }))
-    .filter((tab) => tab.type !== "child" || tab.parentTabId);
+    })),
+  );
 }

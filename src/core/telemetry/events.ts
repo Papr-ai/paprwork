@@ -3,11 +3,16 @@
  * Central registry of all tracked events with their properties
  */
 
+import type {
+  JobAgentKind,
+  JobRunTelemetryDimensions,
+} from "./jobRunTelemetry.js";
+
 // ============================================
 // Event Names (Centralized)
 // ============================================
 
-export const AmplitudeEvents = {
+export const TelemetryEvents = {
   // Lifecycle Events
   APP_STARTED: "paprwork_app_started",
   APP_QUIT: "paprwork_app_quit",
@@ -32,8 +37,16 @@ export const AmplitudeEvents = {
   ACTIVATION_RESULT_INSPECTED: "paprwork_activation_result_inspected",
   ACTIVATION_REPEAT_VALUE: "paprwork_activation_repeat_value",
   PAPR_LOGIN_STARTED: "paprwork_papr_login_started",
+  PAPR_LOGIN_STEP: "paprwork_papr_login_step",
   PAPR_LOGIN_COMPLETED: "paprwork_papr_login_completed",
   PAPR_LOGIN_FAILED: "paprwork_papr_login_failed",
+
+  OPENAI_OAUTH_STEP: "paprwork_openai_oauth_step",
+  OPENAI_OAUTH_COMPLETED: "paprwork_openai_oauth_completed",
+  OPENAI_OAUTH_FAILED: "paprwork_openai_oauth_failed",
+  CLAUDE_OAUTH_STEP: "paprwork_claude_oauth_step",
+  CLAUDE_OAUTH_COMPLETED: "paprwork_claude_oauth_completed",
+  CLAUDE_OAUTH_FAILED: "paprwork_claude_oauth_failed",
 
   // Chat Events
   CHAT_CREATED: "paprwork_chat_created",
@@ -42,6 +55,9 @@ export const AmplitudeEvents = {
   CHAT_DELETED: "paprwork_chat_deleted",
   CHAT_RENAMED: "paprwork_chat_renamed",
   MODEL_CHANGED: "paprwork_model_changed",
+
+  /** One rollup per assistant turn — numeric only, no content. */
+  AGENT_TURN_COMPLETED: "paprwork_agent_turn_completed",
 
   // Tool Usage Events
   TOOL_CALLED: "paprwork_tool_called",
@@ -63,6 +79,7 @@ export const AmplitudeEvents = {
   APP_CREATED: "paprwork_app_created",
   APP_OPENED: "paprwork_app_opened",
   APP_CLOSED: "paprwork_app_closed",
+  APP_PUBLISHED: "paprwork_app_published",
   APP_EDITED: "paprwork_app_edited",
   APP_DELETED: "paprwork_app_deleted",
   HOME_APP_SET: "paprwork_home_app_set",
@@ -72,6 +89,12 @@ export const AmplitudeEvents = {
   PLAN_STEP_COMPLETED: "paprwork_plan_step_completed",
   PLAN_COMPLETED: "paprwork_plan_completed",
   PLAN_DELETED: "paprwork_plan_deleted",
+
+  // Daily Do Execution Events (A/B: with-memory vs without-memory)
+  DAILY_DO_EXECUTION_STARTED: "daily_do_execution_started",
+  DAILY_DO_EXECUTION_COMPLETED: "daily_do_execution_completed",
+  DAILY_DO_CONTEXT_ASSEMBLED: "daily_do_context_assembled",
+  DAILY_DO_QUALITY_SCORED: "daily_do_quality_scored",
 
   // Settings Events
   SETTINGS_OPENED: "paprwork_settings_opened",
@@ -93,6 +116,12 @@ export const AmplitudeEvents = {
   SLOW_OPERATION: "paprwork_slow_operation",
   DATABASE_QUERY_SLOW: "paprwork_database_query_slow",
   WEBSOCKET_LATENCY: "paprwork_websocket_latency",
+
+  // Sync V3 cutover metrics (Phase 0 — auto-rollback triggers)
+  SYNC_V3_METRIC: "paprwork_sync_v3_metric",
+
+  // Plan A: the @tursodatabase/sync worker child died (native panic). Gateway survived.
+  TURSO_SYNC_WORKER_CRASH: "paprwork_turso_sync_worker_crash",
 } as const;
 
 // ============================================
@@ -140,6 +169,47 @@ export interface PaprLoginFailedProperties extends BaseEventProperties {
   stage?: "start" | "callback";
 }
 
+export interface PaprLoginStepEventProperties extends BaseEventProperties {
+  step: string;
+  mode?: "login" | "signup";
+  source?: "auth_wall" | "settings" | "unknown";
+  error?: string;
+  duration_ms?: number;
+  deep_link_ready?: boolean;
+  pending_count?: number;
+  has_code?: boolean;
+  has_state?: boolean;
+  gateway_switch_success?: boolean;
+  needs_org?: boolean;
+  needs_namespace?: boolean;
+  stage?: "form" | "provisioning";
+}
+
+export interface OAuthProviderStepEventProperties extends BaseEventProperties {
+  step: string;
+  source?: "settings" | "onboarding" | "unknown";
+  error?: string;
+  duration_ms?: number;
+  stage?: "start" | "callback" | "paste" | "provisioning";
+  flow_source?: "keychain" | "browser" | "terminal" | "paste";
+  terminal_opened?: boolean;
+  has_code?: boolean;
+  has_state?: boolean;
+}
+
+export interface OAuthProviderCompletedProperties extends BaseEventProperties {
+  source?: "settings" | "onboarding" | "unknown";
+  flow_source?: "keychain" | "browser" | "terminal" | "paste";
+  duration_ms?: number;
+}
+
+export interface OAuthProviderFailedProperties extends BaseEventProperties {
+  error: string;
+  source?: "settings" | "onboarding" | "unknown";
+  stage?: "start" | "callback" | "paste" | "provisioning";
+  duration_ms?: number;
+}
+
 export interface MessageSentProperties extends BaseEventProperties {
   message_length: number;
   has_attachments: boolean;
@@ -168,6 +238,82 @@ export interface ToolCalledProperties extends BaseEventProperties {
   error_message?: string;
 }
 
+/**
+ * A finished assistant turn, as counts and ratios.
+ *
+ * A turn is the unit that costs money — every step within it re-sends the whole
+ * context — so this is the grain at which efficiency is comparable across
+ * users. `paprwork_tool_called` already covers individual calls, and at
+ * thousands of calls per chat it is the wrong grain for that question.
+ *
+ * Deliberately carries no message content, tool arguments, file paths, or tool
+ * names. Everything here is a number.
+ */
+export interface AgentTurnCompletedProperties extends BaseEventProperties {
+  chat_id: string;
+  model: string;
+  provider: string;
+  auth_type: string;
+
+  steps: number;
+  tool_calls: number;
+  /**
+   * Tool calls per step — how wide each round-trip was. Steps are the billed
+   * unit (each re-sends the whole context), so this separates a turn that did a
+   * lot of work from one that merely took a lot of trips, and it is the metric
+   * the batching guidance moves.
+   */
+  tool_calls_per_step: number | null;
+  /**
+   * The interventions on the two numbers above, so a change in either can be
+   * attributed. A turn whose width rose on its own and one that was nudged four
+   * times are otherwise indistinguishable, and a deferral that turns out to
+   * cost discovery round-trips would look like a width regression.
+   */
+  width_nudges_issued: number;
+  deferred_tool_count: number;
+  deferred_tool_tokens: number;
+  duration_ms: number;
+
+  prompt_tokens: number;
+  completion_tokens: number;
+  cache_read_tokens?: number;
+  cache_write_tokens?: number;
+
+  /** Truncation behaviour, so a policy change is measurable. */
+  compaction_runs: number;
+  compaction_skips: number;
+  stale_truncated: number;
+  stale_inline: number;
+
+  /** The recovery loop, directly. */
+  recovery_fetches: number;
+  redundant_recoveries: number;
+  redundant_recovery_rate: number | null;
+
+  peak_context_tokens: number;
+  /** The chars/4 estimate on its own, so estimator drift is measurable. */
+  estimated_context_tokens: number;
+  context_budget_tokens: number;
+  context_fill_ratio: number | null;
+  /** Billed prompt over estimate. Above 1 means the gate fires late. */
+  estimator_error_ratio: number | null;
+
+  /** Quality proxy: did the plan this turn was working on finish? */
+  plan_count: number;
+  plan_total_steps: number;
+  plan_completed_steps: number;
+  plan_completed: boolean | null;
+
+  /**
+   * The turn was stopped rather than finished. Interrupted turns are now
+   * measured too, and they are the longest ones — so dropping them would bias
+   * every aggregate built here downward, while folding them in silently would
+   * count an abandoned turn as a completed one. Filter on this instead.
+   */
+  interrupted: boolean;
+}
+
 export interface BashCommandProperties extends BaseEventProperties {
   success: boolean;
   duration_ms: number;
@@ -182,45 +328,83 @@ export interface BrowserActionProperties extends BaseEventProperties {
 
 export interface JobCreatedProperties extends BaseEventProperties {
   job_id: string;
-  job_type: "python" | "node" | "bash" | "shell" | "agent" | "subagent" | "swift";
+  job_type:
+    | "python"
+    | "node"
+    | "bash"
+    | "shell"
+    | "agent"
+    | "subagent"
+    | "swift";
   has_schedule: boolean;
   has_dependencies: boolean;
   schedule_type?: "interval" | "cron" | "at_time";
+  /**
+   * Owning mini-app. Without this, "agents per app" — the shape of a Paprwork
+   * app like My Papr Books — cannot be computed from create events.
+   */
+  app_id?: string;
+  app_count?: number;
+  is_standalone?: boolean;
+  agent_kind?: JobAgentKind;
+  is_agent?: boolean;
 }
 
-export interface JobCompletedProperties extends BaseEventProperties {
-  job_id: string;
-  job_type: string;
-  duration_ms: number;
+export interface JobCompletedProperties
+  extends BaseEventProperties,
+    JobRunTelemetryDimensions {
   exit_code?: number;
-  had_retry: boolean;
+  had_retry?: boolean;
   output_size_bytes?: number;
-  scheduled: boolean;
+  attempts?: number;
 }
 
-export interface JobFailedProperties extends BaseEventProperties {
-  job_id: string;
-  job_type: string;
+export interface JobFailedProperties
+  extends BaseEventProperties,
+    JobRunTelemetryDimensions {
   error_type: string;
   error_message?: string;
-  attempt_number: number;
-  max_attempts: number;
+  exit_code?: number;
+  attempts?: number;
+  retry_class?: string;
+  failure_hint?: string;
 }
+
+/**
+ * How a mini-app came into existence. Without this an automation loop that
+ * creates hundreds of apps is indistinguishable from real builder activity —
+ * one such loop produced 1,309 "apps created" in a single week.
+ */
+export type AppCreationSource = "agent" | "user" | "community_install";
+
+/** Local preview inside Paprwork vs the published cloud app. */
+export type AppSurface = "local" | "cloud";
 
 export interface AppCreatedProperties extends BaseEventProperties {
   app_id: string;
   has_icon: boolean;
   has_data_sources: boolean;
+  creation_source: AppCreationSource;
 }
 
 export interface AppOpenedProperties extends BaseEventProperties {
   app_id: string;
   open_source: "tab" | "home_button";
+  surface: AppSurface;
 }
 
 export interface AppClosedProperties extends BaseEventProperties {
   app_id: string;
   time_open_ms: number;
+  surface: AppSurface;
+}
+
+export interface AppPublishedProperties extends BaseEventProperties {
+  app_id: string;
+  /** Published slug, so desktop builds join to cloud visitor events. */
+  slug: string;
+  visibility: string;
+  is_first_publish: boolean;
 }
 
 export interface PlanCreatedProperties extends BaseEventProperties {
@@ -295,12 +479,20 @@ export interface WebsocketLatencyProperties extends BaseEventProperties {
   event_type: string;
 }
 
+export interface SyncV3MetricProperties extends BaseEventProperties {
+  metric_name: string;
+  metric_value: number;
+  sync_protocol?: "v2" | "v3";
+}
+
 // ============================================
 // Type Guards
 // ============================================
 
-export function isValidEventName(name: string): name is keyof typeof AmplitudeEvents {
-  return Object.values(AmplitudeEvents).includes(name as any);
+export function isValidEventName(
+  name: string,
+): name is keyof typeof TelemetryEvents {
+  return Object.values(TelemetryEvents).includes(name as any);
 }
 
 // ============================================

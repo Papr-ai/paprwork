@@ -50,7 +50,7 @@ Enhanced `rebuildGraph()` method in `JobsService.ts` to build `appLinks` from **
 
 1. **Explicit data source links** (existing behavior)
    - Jobs linked via `addAppDataSource()` 
-   - Stored in `~/Papr/apps/{appId}/data-sources.json`
+   - Stored in `$PAPR_HOME/apps/{appId}/data-sources.json`
 
 2. **Folder name matching** (new behavior)
    - Jobs whose `folder` field matches an app's `title` (case-insensitive)

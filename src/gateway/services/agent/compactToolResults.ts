@@ -1,9 +1,29 @@
 import {
   ABSOLUTE_TOOL_RESULT_MAX_CHARS,
+  HISTORY_TOOL_RESULT_MAX_CHARS,
   resolveMidTurnToolResultCharLimit,
   truncateToCharLimit,
 } from "./toolResultTruncation.js";
 import { getToolResultTruncationSettings } from "./toolResultTruncationSettings.js";
+import {
+  assembleJevTrim,
+  settledJevTrim,
+  trimBudgetFor,
+  JEV_TRIM_LOOKBACK_THRESHOLD,
+  type JevTrimRegistry,
+} from "./jevToolResultTrim.js";
+import {
+  recordToolTrimApplied,
+  recordToolTrimFallback,
+  type TurnMetrics,
+} from "./turnMetrics.js";
+import { buildTruncationSuffix } from "./toolResultTruncation.js";
+import {
+  COMPACTION_PRESSURE_RATIO,
+  MID_TURN_INLINE_FLOOR_CHARS,
+  resolveStaleLengthAllowance,
+  shouldCompactMidTurn,
+} from "./compactionPressure.js";
 
 /**
  * Compact Stale Tool Results
@@ -36,10 +56,34 @@ export interface CompactOpts {
   maxStaleLength?: number;
   /** Hard cap per fresh result (~10K tokens). Default: ABSOLUTE_TOOL_RESULT_MAX_CHARS */
   maxFreshLength?: number;
+  /**
+   * When set, stale tool results use this exact char limit for every tool
+   * (including file reads). Used under stream memory pressure.
+   */
+  forceStaleMaxLen?: number;
+  /**
+   * History token budget for this model call. Compaction is skipped while the
+   * context sits comfortably inside it — see {@link shouldCompactMidTurn}.
+   * Omit only when the caller genuinely cannot know it; omitting compacts
+   * unconditionally, as this function always used to.
+   */
+  historyTokenBudget?: number;
+  /**
+   * JEV_TOOL_TRIM experiment: when a stale bash result has a resolved Jev
+   * plan, replace head+tail with the Jev-selected excerpt. Unresolved / null
+   * plans fall through to head+tail.
+   */
+  jevTrim?: JevTrimRegistry;
+  turnMetrics?: TurnMetrics;
 }
 
-const DEFAULTS: Required<CompactOpts> = {
-  keepLastBatches: 1,
+/** Stale batches beyond this many recent tool steps stay full before mid-turn cuts. */
+export const DEFAULT_KEEP_LAST_BATCHES = 3;
+
+const DEFAULTS: Required<
+  Pick<CompactOpts, "keepLastBatches" | "maxStaleLength" | "maxFreshLength">
+> = {
+  keepLastBatches: DEFAULT_KEEP_LAST_BATCHES,
   maxStaleLength: 2000,
   maxFreshLength: ABSOLUTE_TOOL_RESULT_MAX_CHARS,
 };
@@ -84,8 +128,10 @@ function truncateStr(
   maxLen: number,
   toolCallId?: string,
   toolName?: string,
+  inlineFloor = 0,
 ): string {
-  if (s.length <= maxLen) return s;
+  const allowance = resolveStaleLengthAllowance(s.length, maxLen, inlineFloor);
+  if (s.length <= allowance) return s;
   if (toolCallId && toolName) {
     return truncateToCharLimit(s, maxLen, toolCallId, toolName);
   }
@@ -127,27 +173,48 @@ function resolveEffectiveMaxLen(toolName: string | undefined, maxLen: number): n
 /**
  * Apply a character limit to a single tool result message (in-place).
  * Handles both pi-ai and AI SDK message formats.
+ *
+ * @returns true when something was actually shortened. Visiting a message is
+ * not the same as cutting it — most visits are no-ops now that short results
+ * stay inline, and a counter that conflated the two would misreport the effect.
  */
-function truncateToolMessage(msg: any, maxLen: number): void {
+function truncateToolMessage(
+  msg: any,
+  maxLen: number,
+  useExactMaxLen = false,
+): boolean {
   const toolCallId =
     typeof msg.toolCallId === "string" ? msg.toolCallId : undefined;
   const messageToolName =
     typeof msg.toolName === "string" ? msg.toolName : undefined;
 
+  // Under memory pressure the caller wants maximum reduction, so the floor that
+  // protects short results from a pointer round-trip does not apply.
+  const inlineFloor = useExactMaxLen ? 0 : MID_TURN_INLINE_FLOOR_CHARS;
+
+  let shortened = false;
+
   // Pi-ai format: { role: "toolResult", content: [{ type: "text", text }] }
   if (msg.role === "toolResult" && Array.isArray(msg.content)) {
-    const effectiveMaxLen = resolveEffectiveMaxLen(messageToolName, maxLen);
+    const effectiveMaxLen = useExactMaxLen
+      ? maxLen
+      : resolveEffectiveMaxLen(messageToolName, maxLen);
     for (const part of msg.content) {
       if (part.type === "text" && typeof part.text === "string") {
-        part.text = truncateStr(
+        const next = truncateStr(
           part.text,
           effectiveMaxLen,
           toolCallId ?? msg.tool_call_id,
           messageToolName ?? msg.toolName,
+          inlineFloor,
         );
+        if (next !== part.text) {
+          shortened = true;
+          part.text = next;
+        }
       }
     }
-    return;
+    return shortened;
   }
 
   // AI SDK format: { role: "tool", content: [{ type: "tool-result", output | result }] }
@@ -160,29 +227,45 @@ function truncateToolMessage(msg: any, maxLen: number): void {
         };
         const partToolCallId = toolPart.toolCallId ?? toolCallId;
         const partToolName = toolPart.toolName ?? messageToolName ?? "unknown";
-        const effectiveMaxLen = resolveEffectiveMaxLen(partToolName, maxLen);
+        const effectiveMaxLen = useExactMaxLen
+          ? maxLen
+          : resolveEffectiveMaxLen(partToolName, maxLen);
         const current = readToolResultString(toolPart);
         if (current !== undefined) {
-          writeToolResultString(
-            toolPart,
-            truncateStr(current, effectiveMaxLen, partToolCallId, partToolName),
+          const next = truncateStr(
+            current,
+            effectiveMaxLen,
+            partToolCallId,
+            partToolName,
+            inlineFloor,
           );
+          if (next !== current) {
+            shortened = true;
+          }
+          writeToolResultString(toolPart, next);
         } else if (
           toolPart.result &&
           typeof toolPart.result === "object" &&
           !Array.isArray(toolPart.result)
         ) {
-          truncateObjectStrings(
+          const changedFields = truncateObjectStrings(
             toolPart.result as Record<string, unknown>,
             effectiveMaxLen,
             partToolCallId,
             partToolName,
+            0,
+            inlineFloor,
           );
+          if (changedFields > 0) {
+            shortened = true;
+          }
         }
       }
     }
-    return;
+    return shortened;
   }
+
+  return shortened;
 }
 
 /**
@@ -195,27 +278,72 @@ function truncateObjectStrings(
   toolCallId?: string,
   toolName?: string,
   depth = 0,
-): void {
-  if (depth > 2 || !obj || typeof obj !== "object") return;
+  inlineFloor = 0,
+): number {
+  if (depth > 2 || !obj || typeof obj !== "object") return 0;
+  let changed = 0;
   for (const key of Object.keys(obj)) {
     const val = obj[key];
     if (typeof val === "string") {
-      obj[key] = truncateStr(val, maxLen, toolCallId, toolName);
+      const next = truncateStr(val, maxLen, toolCallId, toolName, inlineFloor);
+      if (next !== val) changed += 1;
+      obj[key] = next;
     } else if (val && typeof val === "object" && !Array.isArray(val)) {
-      truncateObjectStrings(
+      changed += truncateObjectStrings(
         val as Record<string, unknown>,
         maxLen,
         toolCallId,
         toolName,
         depth + 1,
+        inlineFloor,
       );
     }
   }
+  return changed;
 }
 
 /**
  * Check if a message is a tool result (either format).
  */
+/**
+ * Replace a stale pi-ai bash result with its Jev-selected excerpt. Returns
+ * false (and records a fallback when the plan failed) when head+tail should
+ * run instead. Idempotent: a message already trimmed is left alone.
+ */
+function applyJevTrim(msg: any, reg: JevTrimRegistry, metrics?: TurnMetrics): boolean {
+  if (msg.role !== "toolResult" || !Array.isArray(msg.content)) return false;
+  if (msg.__jevTrimmed) return true;
+  const toolCallId = typeof msg.toolCallId === "string" ? msg.toolCallId : undefined;
+  const toolName = typeof msg.toolName === "string" ? msg.toolName : "bash";
+  const plan = settledJevTrim(reg, toolCallId);
+  if (plan === undefined) return false;
+  if (plan === null) {
+    recordToolTrimFallback(metrics);
+    return false;
+  }
+  const part = msg.content.find((p: any) => p.type === "text" && typeof p.text === "string");
+  if (!part) return false;
+  const before: string = part.text;
+  const budget = trimBudgetFor(plan);
+  // Same inline floor as head+tail: short results stay whole either way.
+  if (before.length <= resolveStaleLengthAllowance(before.length, budget)) return false;
+  const suffix = buildTruncationSuffix(before.length, toolCallId ?? "", toolName);
+  const next = assembleJevTrim(plan, budget, suffix);
+  if (!next) {
+    recordToolTrimFallback(metrics);
+    return false;
+  }
+  part.text = next;
+  msg.__jevTrimmed = true;
+  recordToolTrimApplied(metrics, {
+    charsBefore: before.length,
+    charsAfter: next.length,
+    jevMs: plan.jevMs,
+    lookback: plan.lookback >= JEV_TRIM_LOOKBACK_THRESHOLD,
+  });
+  return true;
+}
+
 function isToolResultMessage(msg: any): boolean {
   return msg.role === "toolResult" || msg.role === "tool";
 }
@@ -230,15 +358,29 @@ function isToolResultMessage(msg: any): boolean {
  * @param opts - Compaction options
  */
 export interface CompactStats {
+  /** True when the pressure gate declined to run — distinct from running and cutting nothing. */
+  skipped: boolean;
   totalBatches: number;
   freshBatches: number;
   staleBatches: number;
+  /** Stale results actually shortened — not stale results visited. */
   staleResultsTruncated: number;
+  /** Stale results left whole because they were under the inline floor. */
+  staleResultsLeftInline: number;
   freshResultsCapped: number;
   bytesBefore: number;
   bytesAfter: number;
 }
 
+/**
+ * Characters the model will be charged for, as far as we can see them.
+ *
+ * Tool *call* arguments are counted as well as tool *results*: a `write_file`
+ * call carries the whole file body in its arguments, and counting only what
+ * came back made everything the agent sent free. On real chat data those
+ * arguments are around a quarter of the result volume, so omitting them was a
+ * standing 1.25× underestimate on top of the `chars/4` ratio itself.
+ */
 function approxBytes(messages: any[]): number {
   let n = 0;
   for (const m of messages) {
@@ -254,11 +396,33 @@ function approxBytes(messages: any[]): number {
               ? readToolResultString(toolPart)
               : undefined;
           if (resultStr !== undefined) n += resultStr.length;
+          else n += approxToolCallBytes(p);
         }
       }
     }
   }
   return n;
+}
+
+/**
+ * Argument size of a tool call, across both message formats.
+ *
+ * AI SDK v6 puts them on `input`, pi-ai on `arguments` or `args`. A string is
+ * measured directly rather than re-serialised, since it is already the wire
+ * form and `JSON.stringify` would add escaping the provider does not bill.
+ */
+function approxToolCallBytes(part: unknown): number {
+  if (!part || typeof part !== "object") return 0;
+  const candidate = part as { type?: unknown; [key: string]: unknown };
+  if (candidate.type !== "tool-call" && candidate.type !== "tool_use") return 0;
+  const args = candidate.input ?? candidate.arguments ?? candidate.args;
+  if (args === undefined || args === null) return 0;
+  if (typeof args === "string") return args.length;
+  try {
+    return JSON.stringify(args).length;
+  } catch {
+    return 0;
+  }
 }
 
 export function estimateMessagesTokens(messages: any[]): number {
@@ -280,6 +444,85 @@ function isAssistantMessage(msg: unknown): msg is Record<string, unknown> {
     msg !== null &&
     (msg as { role?: unknown }).role === "assistant"
   );
+}
+
+function stripReasoningFromAssistantMessage(msg: Record<string, unknown>): number {
+  let removedParts = 0;
+
+  if (typeof msg.thinking === "string" && msg.thinking.length > 0) {
+    msg.thinking = STALE_REASONING_OMITTED;
+    removedParts += 1;
+  }
+
+  if (Array.isArray(msg.content)) {
+    const nextContent: PiAssistantContentPart[] = [];
+    let contentChanged = false;
+    for (const part of msg.content as PiAssistantContentPart[]) {
+      const partType = part?.type;
+      if (
+        partType === "thinking" ||
+        partType === "reasoning" ||
+        partType === "thinking_delta"
+      ) {
+        contentChanged = true;
+        removedParts += 1;
+        continue;
+      }
+      nextContent.push(part);
+    }
+    if (contentChanged) {
+      msg.content = nextContent;
+    }
+  }
+
+  return removedParts;
+}
+
+/**
+ * Strip reasoning/thinking from every assistant message (including the latest).
+ * Call after each tool step — the model no longer needs prior reasoning blocks.
+ */
+export function stripAllAssistantReasoning(
+  messages: unknown[],
+): { strippedMessages: number; removedParts: number } {
+  let strippedMessages = 0;
+  let removedParts = 0;
+
+  for (const msg of messages) {
+    if (!isAssistantMessage(msg)) {
+      continue;
+    }
+    const removed = stripReasoningFromAssistantMessage(msg);
+    if (removed > 0) {
+      strippedMessages += 1;
+      removedParts += removed;
+    }
+  }
+
+  if (strippedMessages > 0) {
+    console.log(
+      `[stripAllAssistantReasoning] Stripped reasoning from ${strippedMessages} assistant message(s) ` +
+        `(${removedParts} part(s) removed)`,
+    );
+  }
+
+  return { strippedMessages, removedParts };
+}
+
+/**
+ * Aggressive mid-turn compaction when stream memory is high (~300MB+ delta).
+ * Strips all reasoning and truncates stale tool results (including file reads).
+ */
+export function compactMidTurnContextForMemoryPressure(
+  messages: unknown[],
+  opts: CompactOpts = {},
+): CompactStats {
+  stripAllAssistantReasoning(messages);
+  return compactStaleToolResults(messages, {
+    ...opts,
+    keepLastBatches: opts.keepLastBatches ?? 1,
+    forceStaleMaxLen: opts.forceStaleMaxLen ?? HISTORY_TOOL_RESULT_MAX_CHARS,
+  });
 }
 
 /**
@@ -314,36 +557,10 @@ export function compactStaleAssistantReasoning(
       continue;
     }
 
-    let messageChanged = false;
-
-    if (typeof msg.thinking === "string" && msg.thinking.length > 0) {
-      msg.thinking = STALE_REASONING_OMITTED;
-      messageChanged = true;
-      removedParts += 1;
-    }
-
-    if (Array.isArray(msg.content)) {
-      const nextContent: PiAssistantContentPart[] = [];
-      for (const part of msg.content as PiAssistantContentPart[]) {
-        const partType = part?.type;
-        if (
-          partType === "thinking" ||
-          partType === "reasoning" ||
-          partType === "thinking_delta"
-        ) {
-          messageChanged = true;
-          removedParts += 1;
-          continue;
-        }
-        nextContent.push(part);
-      }
-      if (messageChanged) {
-        msg.content = nextContent;
-      }
-    }
-
-    if (messageChanged) {
+    const removed = stripReasoningFromAssistantMessage(msg);
+    if (removed > 0) {
       strippedMessages += 1;
+      removedParts += removed;
     }
   }
 
@@ -365,10 +582,12 @@ export function compactStaleToolResults(
   const bytesBefore = approxBytes(messages);
   const batchStarts = findToolBatchBoundaries(messages);
   const stats: CompactStats = {
+    skipped: false,
     totalBatches: batchStarts.length,
     freshBatches: 0,
     staleBatches: 0,
     staleResultsTruncated: 0,
+    staleResultsLeftInline: 0,
     freshResultsCapped: 0,
     bytesBefore,
     bytesAfter: bytesBefore,
@@ -376,7 +595,27 @@ export function compactStaleToolResults(
 
   if (!truncationSettings.midTurnCompactionEnabled) {
     console.log(`[compactToolResults] skipped (mid-turn compaction off)`);
-    return stats;
+    return { ...stats, skipped: true };
+  }
+
+  // Nothing to save while the context still fits the budget comfortably, and
+  // every cut risks a recovery fetch that costs a whole extra step.
+  if (opts.historyTokenBudget !== undefined) {
+    const estimatedTokens = estimateMessagesTokens(messages);
+    if (
+      !shouldCompactMidTurn({
+        estimatedTokens,
+        historyTokenBudget: opts.historyTokenBudget,
+      })
+    ) {
+      console.log(
+        `[compactToolResults] skipped — ~${Math.round(estimatedTokens / 1000)}K of ` +
+          `~${Math.round(opts.historyTokenBudget / 1000)}K budget ` +
+          `(${Math.round((estimatedTokens / opts.historyTokenBudget) * 100)}% full, ` +
+          `compaction starts at ${Math.round(COMPACTION_PRESSURE_RATIO * 100)}%)`,
+      );
+      return { ...stats, skipped: true };
+    }
   }
 
   const o = { ...DEFAULTS, ...opts };
@@ -390,7 +629,7 @@ export function compactStaleToolResults(
   }
 
   // The "stale boundary": everything before the Nth-from-last batch start is stale.
-  // keepLastBatches=1 means: the last batch's results are fresh, everything else is stale.
+  // keepLastBatches=3 keeps the last three tool steps full (reduces get_full_tool_result loops).
   const freshCutoffIdx =
     batchStarts.length > o.keepLastBatches
       ? batchStarts[batchStarts.length - o.keepLastBatches]
@@ -424,9 +663,22 @@ export function compactStaleToolResults(
     // they're noise once the model has moved past them.
 
     if (i < freshCutoffIdx) {
-      // Stale: aggressive truncation
-      truncateToolMessage(msg, o.maxStaleLength);
-      stats.staleResultsTruncated++;
+      if (o.jevTrim && o.forceStaleMaxLen === undefined && applyJevTrim(msg, o.jevTrim, o.turnMetrics)) {
+        stats.staleResultsTruncated++;
+        continue;
+      }
+      // Stale: aggressive truncation (forceStaleMaxLen overrides per-tool limits)
+      const staleMaxLen = o.forceStaleMaxLen ?? o.maxStaleLength;
+      const shortened = truncateToolMessage(
+        msg,
+        staleMaxLen,
+        o.forceStaleMaxLen !== undefined,
+      );
+      if (shortened) {
+        stats.staleResultsTruncated++;
+      } else {
+        stats.staleResultsLeftInline++;
+      }
     } else {
       // Fresh: only cap pathological results
       truncateToolMessage(msg, o.maxFreshLength);
@@ -444,6 +696,7 @@ export function compactStaleToolResults(
     `[compactToolResults] kept ${stats.freshBatches} fresh batches, ` +
     `compacted ${stats.staleBatches} stale ` +
     `(truncated ${stats.staleResultsTruncated} stale results, ` +
+    `${stats.staleResultsLeftInline} left inline under the ${MID_TURN_INLINE_FLOOR_CHARS}-char floor, ` +
     `capped ${stats.freshResultsCapped} fresh) — ` +
     `saved ~${savedKB}KB`
   );

@@ -3,32 +3,225 @@
  * Reference: Paprwork v1 settings modal
  */
 
-import React, { useState, useEffect, useRef } from "react";
+import React, { useState, useEffect, useRef, useCallback } from "react";
+import { useCloudMemoryStatusStore } from "../../stores/cloudMemoryStatusStore";
+import {
+  paprCloudStatusDotVariant,
+} from "../../utils/cloudMemoryStatus";
+import { useSettingsNavigationStore } from "../../stores/settingsNavigationStore";
 import { useProfileStore } from "../../stores/profileStore";
 import { useAppUpdater } from "../../hooks/useAppUpdater";
 import { gateway } from "../../src/lib/gateway";
 import { trackEvent } from "../../lib/telemetry";
+import { copyTextToClipboard } from "../../utils/copyToClipboard";
+import {
+  diagnosticsBundleHasUsableData,
+  fetchGatewayDiagnosticsBundle,
+} from "../../utils/gatewayDiagnostics";
 import type { SettingsTab } from "../../types/settings";
+import { DevTab } from "./DevTab";
 import { AIModelsTab } from "./AIModelsTab";
 import { IntegrationKeysTab } from "./IntegrationKeysTab";
 import { CloudSyncTab } from "./CloudSyncTab";
 import { DatabasesTab } from "./DatabasesTab";
+import { ConnectedPlatformsTab } from "./ConnectedPlatformsTab";
+import { BillingTab } from "./BillingTab";
+import { PaprLoginSection } from "./PaprLoginSection";
+import { resizeProfilePhoto } from "../../utils/profilePhoto";
+import {
+  persistProfileFields,
+  resolveDisplayProfileImage,
+  syncProfileImageToCloud,
+} from "../../utils/profileImageSync";
+import { useChat } from "../../hooks/useChat";
+import { useTabs } from "../../hooks/useTabs";
+import { startPlatformFeedbackChat } from "../../utils/startPlatformFeedbackChat";
+import {
+  readSettingsViewTab,
+  writeSettingsViewTab,
+} from "../../utils/settingsViewTabPersistence";
+import { ExperimentRows } from "./ExperimentsSection";
+import { SettingRow } from "./SettingRow";
+import { Toggle } from "./Toggle";
 import "./SettingsView.css";
 
+type SettingsNavItem = {
+  id: SettingsTab;
+  label: string;
+  icon: React.ReactNode;
+};
+
+const SETTINGS_NAV: SettingsNavItem[] = [
+  {
+    id: "profile",
+    label: "Profile",
+    icon: (
+      <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
+        <path d="M20 21v-2a4 4 0 0 0-4-4H8a4 4 0 0 0-4 4v2" />
+        <circle cx="12" cy="7" r="4" />
+      </svg>
+    ),
+  },
+  {
+    id: "models",
+    label: "AI Models",
+    icon: (
+      <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
+        <circle cx="12" cy="12" r="3" />
+        <path d="M12 1v6m0 6v6M5.64 5.64l4.24 4.24m4.24 4.24l4.24 4.24M1 12h6m6 0h6M5.64 18.36l4.24-4.24m4.24-4.24l4.24-4.24" />
+      </svg>
+    ),
+  },
+  {
+    id: "keys",
+    label: "Key Vault",
+    icon: (
+      <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
+        <path d="M21 2l-2 2m-7.61 7.61a5.5 5.5 0 1 1-7.778 7.778 5.5 5.5 0 0 1 7.777-7.777zm0 0L15.5 7.5m0 0l3 3L22 7l-3-3m-3.5 3.5L19 4" />
+      </svg>
+    ),
+  },
+  {
+    id: "platforms",
+    label: "Platform Connections",
+    icon: (
+      <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
+        <circle cx="18" cy="5" r="3" />
+        <circle cx="6" cy="12" r="3" />
+        <circle cx="18" cy="19" r="3" />
+        <line x1="8.59" y1="13.51" x2="15.42" y2="17.49" />
+        <line x1="15.41" y1="6.51" x2="8.59" y2="10.49" />
+      </svg>
+    ),
+  },
+  {
+    id: "billing",
+    label: "Billing",
+    icon: (
+      <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
+        <rect x="2" y="5" width="20" height="14" rx="2" />
+        <line x1="2" y1="10" x2="22" y2="10" />
+      </svg>
+    ),
+  },
+  {
+    id: "cloud",
+    label: "Cloud Sync",
+    icon: (
+      <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
+        <path d="M18 10h-1.26A8 8 0 1 0 9 20h9a5 5 0 0 0 0-10z" />
+      </svg>
+    ),
+  },
+  {
+    id: "databases",
+    label: "Databases",
+    icon: (
+      <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
+        <ellipse cx="12" cy="5" rx="9" ry="3" />
+        <path d="M3 5v6c0 1.66 4 3 9 3s9-1.34 9-3V5" />
+        <path d="M3 11v6c0 1.66 4 3 9 3s9-1.34 9-3v-6" />
+      </svg>
+    ),
+  },
+  {
+    id: "permissions",
+    label: "Permissions",
+    icon: (
+      <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
+        <rect x="3" y="11" width="18" height="11" rx="2" ry="2" />
+        <path d="M7 11V7a5 5 0 0 1 10 0v4" />
+      </svg>
+    ),
+  },
+  {
+    id: "privacy",
+    label: "Privacy",
+    icon: (
+      <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
+        <path d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10z" />
+        <path d="M12 8v4" />
+        <path d="M12 16h.01" />
+      </svg>
+    ),
+  },
+  {
+    id: "about",
+    label: "About",
+    icon: (
+      <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
+        <circle cx="12" cy="12" r="10" />
+        <line x1="12" y1="16" x2="12" y2="12" />
+        <line x1="12" y1="8" x2="12.01" y2="8" />
+      </svg>
+    ),
+  },
+  // Dev-only. import.meta.env.DEV is a literal false in any build, so this
+  // entry and the DevTab import are removed by dead-code elimination.
+  ...(import.meta.env.DEV
+    ? [
+        {
+          id: "dev" as const,
+          label: "Dev",
+          icon: (
+            <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
+              <polyline points="16 18 22 12 16 6" />
+              <polyline points="8 6 2 12 8 18" />
+            </svg>
+          ),
+        },
+      ]
+    : []),
+];
+
 export function SettingsView() {
-  const [activeTab, setActiveTab] = useState<SettingsTab>("models");
+  const planAttention = useCloudMemoryStatusStore((state) => state.planAttention);
+  const planStatus = useCloudMemoryStatusStore((state) => state.status);
+  const planAttentionHint = planStatus
+    ? `${planStatus.label} — review Plan & usage`
+    : "Billing needs attention — review Plan & usage";
+  const navigationToken = useSettingsNavigationStore((state) => state.token);
+  const pendingSettingsTab = useSettingsNavigationStore((state) => state.pendingTab);
+  const [activeTab, setActiveTabState] = useState<SettingsTab>(() => {
+    const pendingTab = useSettingsNavigationStore.getState().pendingTab;
+    if (pendingTab) {
+      useSettingsNavigationStore.getState().acknowledgeTab();
+      writeSettingsViewTab(pendingTab);
+      return pendingTab;
+    }
+    return readSettingsViewTab() ?? "profile";
+  });
   const [scrollToPickerModels, setScrollToPickerModels] = useState(false);
 
+  const setActiveTab = useCallback((tab: SettingsTab) => {
+    setActiveTabState(tab);
+    writeSettingsViewTab(tab);
+  }, []);
+
+  const openedSectionRef = useRef(activeTab);
   useEffect(() => {
-    trackEvent("paprwork_settings_opened", { section: "models" } as Record<string, unknown>);
+    trackEvent("paprwork_settings_opened", {
+      section: openedSectionRef.current,
+    } as Record<string, unknown>);
   }, []);
 
   useEffect(() => {
     const handler = (event: Event) => {
-      const detail = (event as CustomEvent<{ tab?: SettingsTab; section?: string }>)
-        .detail;
+      const detail = (
+        event as CustomEvent<{
+          tab?: SettingsTab;
+          section?: string;
+          focusPlan?: boolean;
+        }>
+      ).detail;
       if (detail?.tab) {
         setActiveTab(detail.tab);
+      }
+      if (detail?.focusPlan) {
+        useSettingsNavigationStore.getState().navigate({
+          tab: detail.tab ?? "billing",
+          focusPlan: true,
+        });
       }
       if (detail?.section === "picker-models") {
         setScrollToPickerModels(true);
@@ -36,170 +229,72 @@ export function SettingsView() {
     };
     window.addEventListener("papr:open-settings", handler);
     return () => window.removeEventListener("papr:open-settings", handler);
-  }, []);
+  }, [setActiveTab]);
+
+  useEffect(() => {
+    if (!pendingSettingsTab) return;
+    setActiveTab(pendingSettingsTab);
+    useSettingsNavigationStore.getState().acknowledgeTab();
+  }, [navigationToken, pendingSettingsTab, setActiveTab]);
+
+  useEffect(() => {
+    useSettingsNavigationStore.getState().setCurrentTab(activeTab);
+    return () => {
+      useSettingsNavigationStore.getState().setCurrentTab(null);
+    };
+  }, [activeTab]);
+
+  const handleNavClick = (tab: SettingsTab) => {
+    setActiveTab(tab);
+    if (tab !== "models") {
+      setScrollToPickerModels(false);
+    }
+  };
 
   return (
     <div className="settings-view">
-      <div className="settings-view__header">
-        <h1 className="settings-view__title">Settings</h1>
-      </div>
+      <aside className="settings-view__sidebar">
+        <div className="settings-view__sidebar-header">
+          <h1 className="settings-view__title">Settings</h1>
+        </div>
+        <nav className="settings-view__nav" aria-label="Settings sections">
+          {SETTINGS_NAV.map((item) => (
+            <button
+              key={item.id}
+              type="button"
+              className={`settings-tab ${activeTab === item.id ? "settings-tab--active" : ""}`}
+              onClick={() => handleNavClick(item.id)}
+            >
+              {item.icon}
+              <span className="settings-tab__label">{item.label}</span>
+              {item.id === "billing" && planAttention && planStatus ? (
+                <span
+                  className={`settings-tab__attention settings-tab__attention--${paprCloudStatusDotVariant(planStatus)}`}
+                  aria-label={planAttentionHint}
+                  title={planAttentionHint}
+                />
+              ) : null}
+            </button>
+          ))}
+        </nav>
+      </aside>
 
-      {/* Tabs */}
-      <div className="settings-view__tabs">
-        <button
-          className={`settings-tab ${activeTab === "models" ? "settings-tab--active" : ""}`}
-          onClick={() => {
-            setActiveTab("models");
-            setScrollToPickerModels(false);
-          }}
-        >
-          <svg
-            width="16"
-            height="16"
-            viewBox="0 0 24 24"
-            fill="none"
-            stroke="currentColor"
-            strokeWidth="2"
-          >
-            <circle cx="12" cy="12" r="3" />
-            <path d="M12 1v6m0 6v6M5.64 5.64l4.24 4.24m4.24 4.24l4.24 4.24M1 12h6m6 0h6M5.64 18.36l4.24-4.24m4.24-4.24l4.24-4.24" />
-          </svg>
-          AI Models
-        </button>
-        <button
-          className={`settings-tab ${activeTab === "keys" ? "settings-tab--active" : ""}`}
-          onClick={() => setActiveTab("keys")}
-        >
-          <svg
-            width="16"
-            height="16"
-            viewBox="0 0 24 24"
-            fill="none"
-            stroke="currentColor"
-            strokeWidth="2"
-          >
-            <path d="M21 2l-2 2m-7.61 7.61a5.5 5.5 0 1 1-7.778 7.778 5.5 5.5 0 0 1 7.777-7.777zm0 0L15.5 7.5m0 0l3 3L22 7l-3-3m-3.5 3.5L19 4" />
-          </svg>
-          Integration Keys
-        </button>
-        <button
-          className={`settings-tab ${activeTab === "cloud" ? "settings-tab--active" : ""}`}
-          onClick={() => setActiveTab("cloud")}
-        >
-          <svg
-            width="16"
-            height="16"
-            viewBox="0 0 24 24"
-            fill="none"
-            stroke="currentColor"
-            strokeWidth="2"
-          >
-            <path d="M18 10h-1.26A8 8 0 1 0 9 20h9a5 5 0 0 0 0-10z" />
-          </svg>
-          Cloud Sync
-        </button>
-        <button
-          className={`settings-tab ${activeTab === "databases" ? "settings-tab--active" : ""}`}
-          onClick={() => setActiveTab("databases")}
-        >
-          <svg
-            width="16"
-            height="16"
-            viewBox="0 0 24 24"
-            fill="none"
-            stroke="currentColor"
-            strokeWidth="2"
-          >
-            <ellipse cx="12" cy="5" rx="9" ry="3" />
-            <path d="M3 5v6c0 1.66 4 3 9 3s9-1.34 9-3V5" />
-            <path d="M3 11v6c0 1.66 4 3 9 3s9-1.34 9-3v-6" />
-          </svg>
-          Databases
-        </button>
-        <button
-          className={`settings-tab ${activeTab === "profile" ? "settings-tab--active" : ""}`}
-          onClick={() => setActiveTab("profile")}
-        >
-          <svg
-            width="16"
-            height="16"
-            viewBox="0 0 24 24"
-            fill="none"
-            stroke="currentColor"
-            strokeWidth="2"
-          >
-            <path d="M20 21v-2a4 4 0 0 0-4-4H8a4 4 0 0 0-4 4v2" />
-            <circle cx="12" cy="7" r="4" />
-          </svg>
-          Profile
-        </button>
-        <button
-          className={`settings-tab ${activeTab === "permissions" ? "settings-tab--active" : ""}`}
-          onClick={() => setActiveTab("permissions")}
-        >
-          <svg
-            width="16"
-            height="16"
-            viewBox="0 0 24 24"
-            fill="none"
-            stroke="currentColor"
-            strokeWidth="2"
-          >
-            <rect x="3" y="11" width="18" height="11" rx="2" ry="2" />
-            <path d="M7 11V7a5 5 0 0 1 10 0v4" />
-          </svg>
-          Permissions
-        </button>
-        <button
-          className={`settings-tab ${activeTab === "privacy" ? "settings-tab--active" : ""}`}
-          onClick={() => setActiveTab("privacy")}
-        >
-          <svg
-            width="16"
-            height="16"
-            viewBox="0 0 24 24"
-            fill="none"
-            stroke="currentColor"
-            strokeWidth="2"
-          >
-            <path d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10z" />
-            <path d="M12 8v4" />
-            <path d="M12 16h.01" />
-          </svg>
-          Privacy
-        </button>
-        <button
-          className={`settings-tab ${activeTab === "about" ? "settings-tab--active" : ""}`}
-          onClick={() => setActiveTab("about")}
-        >
-          <svg
-            width="16"
-            height="16"
-            viewBox="0 0 24 24"
-            fill="none"
-            stroke="currentColor"
-            strokeWidth="2"
-          >
-            <circle cx="12" cy="12" r="10" />
-            <line x1="12" y1="16" x2="12" y2="12" />
-            <line x1="12" y1="8" x2="12.01" y2="8" />
-          </svg>
-          About
-        </button>
-      </div>
-
-      {/* Content */}
-      <div className="settings-view__content">
-        {activeTab === "models" && (
-          <AIModelsTab scrollToPickerModels={scrollToPickerModels} />
-        )}
-        {activeTab === "keys" && <IntegrationKeysTab />}
-        {activeTab === "cloud" && <CloudSyncTab />}
-        {activeTab === "databases" && <DatabasesTab />}
-        {activeTab === "profile" && <ProfileTab />}
-        {activeTab === "permissions" && <PermissionsTab />}
-        {activeTab === "privacy" && <PrivacyTab />}
-        {activeTab === "about" && <AboutTab />}
+      <div className="settings-view__main">
+        <div className="settings-view__content">
+          {activeTab === "models" && (
+            <AIModelsTab scrollToPickerModels={scrollToPickerModels} />
+          )}
+          {activeTab === "keys" && <IntegrationKeysTab />}
+          {activeTab === "cloud" && <CloudSyncTab />}
+          {activeTab === "databases" && <DatabasesTab />}
+          {activeTab === "platforms" && <ConnectedPlatformsTab />}
+          {activeTab === "profile" && <ProfileTab />}
+          {activeTab === "billing" && <BillingTab />}
+          {activeTab === "permissions" && <PermissionsTab />}
+          {activeTab === "privacy" && <PrivacyTab />}
+          {activeTab === "about" && <AboutTab />}
+          {import.meta.env.DEV && activeTab === "dev" && <DevTab />}
+        </div>
       </div>
     </div>
   );
@@ -221,39 +316,88 @@ function ProfileTab() {
   const fileInputRef = useRef<HTMLInputElement>(null);
   const profileStore = useProfileStore();
 
+  const applyProfileState = (
+    data: {
+      profile?: {
+        name?: string;
+        email?: string;
+        imageUrl?: string;
+        profileImageSyncPending?: boolean;
+      };
+    } | undefined,
+    paprResponse: {
+      success: boolean;
+      profile?: {
+        userId: string;
+        email: string;
+        displayName?: string;
+        profileImage?: string;
+        authenticatedAt: string;
+      };
+    },
+  ) => {
+    const localImageUrl = data?.profile?.imageUrl ?? "";
+    const profileImageSyncPending =
+      data?.profile?.profileImageSyncPending === true;
+
+    if (paprResponse.success && paprResponse.profile) {
+      setPaprProfile(paprResponse.profile);
+
+      const resolvedImage = resolveDisplayProfileImage(
+        localImageUrl,
+        paprResponse.profile.profileImage ?? "",
+        profileImageSyncPending,
+      );
+
+      if (data?.profile) {
+        setName(data.profile.name ?? paprResponse.profile.displayName ?? "");
+        setEmail(data.profile.email ?? paprResponse.profile.email ?? "");
+        setImageUrl(resolvedImage);
+      } else {
+        setName(paprResponse.profile.displayName ?? "");
+        setEmail(paprResponse.profile.email ?? "");
+        setImageUrl(resolvedImage);
+      }
+      return;
+    }
+
+    if (data?.profile) {
+      setName(data.profile.name ?? "");
+      setEmail(data.profile.email ?? "");
+      setImageUrl(data.profile.imageUrl ?? "");
+    }
+  };
+
   // Load profile on mount
   useEffect(() => {
     (async () => {
       try {
         const response = await gateway.send("settings:get");
         const data = response.data as {
-          profile?: { name?: string; email?: string; imageUrl?: string };
+          profile?: {
+            name?: string;
+            email?: string;
+            imageUrl?: string;
+            profileImageSyncPending?: boolean;
+          };
         };
 
-        // Load Papr profile first
         const paprResponse = await window.electronAPI.papr.getProfile();
-        if (paprResponse.success && paprResponse.profile) {
-          setPaprProfile(paprResponse.profile);
-          
-          // Pre-fill manual profile fields if empty
-          if (data?.profile) {
-            setName(data.profile.name ?? paprResponse.profile.displayName ?? "");
-            setEmail(data.profile.email ?? paprResponse.profile.email ?? "");
-            setImageUrl(data.profile.imageUrl ?? paprResponse.profile.profileImage ?? "");
-          } else {
-            // No manual profile yet - use Papr profile as defaults
-            setName(paprResponse.profile.displayName ?? "");
-            setEmail(paprResponse.profile.email ?? "");
-            setImageUrl(paprResponse.profile.profileImage ?? "");
-          }
-        } else if (data?.profile) {
-          // No Papr profile - use manual profile only
-          setName(data.profile.name ?? "");
-          setEmail(data.profile.email ?? "");
-          setImageUrl(data.profile.imageUrl ?? "");
+        applyProfileState(data, paprResponse);
+        setLoaded(true);
+
+        // Refresh from Parse in background — do not block Settings UI on cloud latency.
+        const loginStatus = await window.electronAPI.papr.checkLoginStatus();
+        if (!loginStatus.success || !loginStatus.isLoggedIn) {
+          return;
         }
 
-        setLoaded(true);
+        void window.electronAPI.papr.refreshProfile().then((refreshResult) => {
+          if (!refreshResult.success || !refreshResult.profile) {
+            return;
+          }
+          applyProfileState(data, refreshResult);
+        });
       } catch (err) {
         console.error("[ProfileTab] Load error:", err);
         setLoaded(true);
@@ -262,53 +406,140 @@ function ProfileTab() {
 
     // Listen for auth success to reload profile
     const handleAuthSuccess = () => {
-      console.log('[ProfileTab] Auth success - reloading profile');
-      window.electronAPI.papr.getProfile().then((response) => {
-        if (response.success && response.profile) {
-          setPaprProfile(response.profile);
-          // Auto-populate if manual fields are empty
-          if (!name) setName(response.profile.displayName ?? "");
-          if (!email) setEmail(response.profile.email ?? "");
-          if (!imageUrl) setImageUrl(response.profile.profileImage ?? "");
+      console.log("[ProfileTab] Auth success - reloading profile");
+      void (async () => {
+        const settingsResponse = await gateway.send("settings:get");
+        const settingsData = settingsResponse.data as {
+          profile?: {
+            name?: string;
+            email?: string;
+            imageUrl?: string;
+            profileImageSyncPending?: boolean;
+          };
+        };
+
+        const cachedResponse = await window.electronAPI.papr.getProfile();
+        if (cachedResponse.success && cachedResponse.profile) {
+          applyProfileState(settingsData, cachedResponse);
         }
-      });
+
+        void window.electronAPI.papr.refreshProfile().then((refreshResult) => {
+          const response =
+            refreshResult.success && refreshResult.profile
+              ? refreshResult
+              : cachedResponse;
+          if (response.success && response.profile) {
+            applyProfileState(settingsData, response);
+            void profileStore.loadProfile({ force: true });
+          }
+        });
+      })();
     };
 
-    window.addEventListener('papr-auth-success', handleAuthSuccess);
-    return () => window.removeEventListener('papr-auth-success', handleAuthSuccess);
+    const handleLogoutSuccess = () => {
+      setPaprProfile(null);
+    };
+
+    window.addEventListener("papr-auth-success", handleAuthSuccess);
+    window.addEventListener("papr-logout-success", handleLogoutSuccess);
+    return () => {
+      window.removeEventListener("papr-auth-success", handleAuthSuccess);
+      window.removeEventListener("papr-logout-success", handleLogoutSuccess);
+    };
   }, []);
 
-  const handlePhotoUpload = (e: React.ChangeEvent<HTMLInputElement>) => {
+  const saveProfileFields = async (fields: {
+    name: string;
+    email: string;
+    imageUrl: string;
+  }) => {
+    const hasImage = Boolean(fields.imageUrl.trim());
+    await persistProfileFields({
+      ...fields,
+      profileImageSyncPending: hasImage,
+    });
+    profileStore.setProfile(fields);
+
+    const loginStatus = await window.electronAPI.papr.checkLoginStatus();
+    if (!loginStatus.success || !loginStatus.isLoggedIn) {
+      return;
+    }
+
+    const syncResult = await syncProfileImageToCloud(fields);
+
+    if (!syncResult.success) {
+      console.warn("[ProfileTab] Cloud profile sync failed:", syncResult.error);
+      await persistProfileFields({
+        ...fields,
+        profileImageSyncPending: hasImage,
+      });
+      return;
+    }
+
+    if (syncResult.cloudUrl) {
+      const cloudUrl = syncResult.cloudUrl;
+      await persistProfileFields({
+        ...fields,
+        imageUrl: cloudUrl,
+        profileImageSyncPending: false,
+      });
+      profileStore.setProfile({ imageUrl: cloudUrl });
+      setImageUrl(cloudUrl);
+      setPaprProfile((current) =>
+        current ? { ...current, profileImage: cloudUrl } : current,
+      );
+      return;
+    }
+
+    await persistProfileFields({
+      ...fields,
+      profileImageSyncPending: false,
+    });
+  };
+
+  const handlePhotoUpload = async (e: React.ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0];
     if (!file) return;
 
-    // Validate file type and size
     if (!file.type.startsWith("image/")) return;
     if (file.size > 5 * 1024 * 1024) {
       alert("Image must be under 5MB");
       return;
     }
 
-    // Convert to base64 data URL for storage
-    const reader = new FileReader();
-    reader.onload = () => {
-      const dataUrl = reader.result as string;
+    setSaving(true);
+    try {
+      const dataUrl = await resizeProfilePhoto(file);
       setImageUrl(dataUrl);
-    };
-    reader.readAsDataURL(file);
+      await saveProfileFields({ name, email, imageUrl: dataUrl });
+    } catch (err) {
+      console.error("[ProfileTab] Photo publish error:", err);
+      alert("Could not save profile photo. Please try again.");
+    } finally {
+      setSaving(false);
+      if (fileInputRef.current) fileInputRef.current.value = "";
+    }
   };
 
-  const handleRemovePhoto = () => {
+  const handleRemovePhoto = async () => {
     setImageUrl("");
     if (fileInputRef.current) fileInputRef.current.value = "";
+
+    setSaving(true);
+    try {
+      await saveProfileFields({ name, email, imageUrl: "" });
+    } catch (err) {
+      console.error("[ProfileTab] Photo remove error:", err);
+      alert("Could not remove profile photo. Please try again.");
+    } finally {
+      setSaving(false);
+    }
   };
 
   const handleSave = async () => {
     setSaving(true);
     try {
-      await gateway.send("settings:save-profile", { name, email, imageUrl });
-      // Update the global profile store so chat reflects changes immediately
-      profileStore.setProfile({ name, email, imageUrl });
+      await saveProfileFields({ name, email, imageUrl });
     } catch (err) {
       console.error("[ProfileTab] Save error:", err);
     } finally {
@@ -326,192 +557,109 @@ function ProfileTab() {
 
   return (
     <div className="settings-content">
-      {/* Papr Profile Section - Shows info fetched from dashboard */}
-      {paprProfile && (
-        <div className="settings-section" style={{ marginBottom: '24px' }}>
-          <h2 className="settings-section__title">Papr Account</h2>
-          <p className="settings-section__description">
-            Profile synced from your Papr account
-          </p>
-
-          <div className="form-group">
-            <div style={{ 
-              display: 'flex', 
-              alignItems: 'center', 
-              gap: '16px',
-              padding: '16px',
-              background: 'rgba(255, 255, 255, 0.02)',
-              border: '1px solid rgba(255, 255, 255, 0.05)',
-              borderRadius: '12px',
-            }}>
-              {paprProfile.profileImage ? (
-                <img 
-                  src={paprProfile.profileImage} 
-                  alt={paprProfile.displayName || paprProfile.email}
-                  style={{
-                    width: '48px',
-                    height: '48px',
-                    borderRadius: '50%',
-                    objectFit: 'cover',
-                  }}
-                />
-              ) : (
-                <div style={{
-                  width: '48px',
-                  height: '48px',
-                  borderRadius: '50%',
-                  background: 'rgba(255, 255, 255, 0.1)',
-                  display: 'flex',
-                  alignItems: 'center',
-                  justifyContent: 'center',
-                }}>
-                  <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.5">
-                    <path d="M20 21v-2a4 4 0 0 0-4-4H8a4 4 0 0 0-4 4v2" />
-                    <circle cx="12" cy="7" r="4" />
-                  </svg>
-                </div>
-              )}
-              <div style={{ flex: 1 }}>
-                <div style={{ 
-                  fontSize: '15px', 
-                  fontWeight: 500, 
-                  color: 'var(--text-primary)',
-                  marginBottom: '4px',
-                }}>
-                  {paprProfile.displayName || paprProfile.email}
-                </div>
-                <div style={{ 
-                  fontSize: '13px', 
-                  color: 'var(--text-secondary)',
-                }}>
-                  {paprProfile.email}
-                </div>
-                <div style={{ 
-                  fontSize: '12px', 
-                  color: 'var(--text-tertiary)',
-                  marginTop: '4px',
-                }}>
-                  Connected {new Date(paprProfile.authenticatedAt).toLocaleDateString()}
-                </div>
-              </div>
-            </div>
-          </div>
-        </div>
-      )}
-
-      <div className="settings-section">
-        <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '12px' }}>
-          <div>
-            <h2 className="settings-section__title">Your Profile</h2>
-            <p className="settings-section__description">
-              {paprProfile 
-                ? "Override your Papr account info or keep it synced" 
-                : "This information helps personalize your experience and chat messages"}
-            </p>
-          </div>
-          {paprProfile && (
-            <button
-              className="settings-btn settings-btn--secondary"
-              onClick={() => {
+      <PaprLoginSection
+        onApiKeyReceived={() => undefined}
+        profileFields={{
+          name,
+          email,
+          imageUrl,
+          saving,
+          connectedSince: paprProfile?.authenticatedAt,
+          onNameChange: setName,
+          onEmailChange: setEmail,
+          onPhotoUpload: handlePhotoUpload,
+          onRemovePhoto: () => void handleRemovePhoto(),
+          onSave: handleSave,
+          onSyncFromPapr: paprProfile
+            ? () => {
                 setName(paprProfile.displayName ?? "");
                 setEmail(paprProfile.email ?? "");
                 setImageUrl(paprProfile.profileImage ?? "");
-              }}
-              style={{ marginTop: '-8px' }}
-            >
-              <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
-                <path d="M21.5 2v6h-6M2.5 22v-6h6M2 11.5a10 10 0 0 1 18.8-4.3M22 12.5a10 10 0 0 1-18.8 4.2"/>
-              </svg>
-              Sync from Papr
-            </button>
-          )}
-        </div>
+              }
+            : undefined,
+          fileInputRef,
+        }}
+      />
+    </div>
+  );
+}
 
-        {/* Profile Photo Upload */}
-        <div className="form-group">
-          <label className="form-label">Profile Photo</label>
-          <div className="profile-photo-upload">
-            <div
-              className="profile-photo-preview"
-              onClick={() => fileInputRef.current?.click()}
-            >
-              {imageUrl ? (
-                <img src={imageUrl} alt="Profile" className="profile-photo-img" />
-              ) : (
-                <div className="profile-photo-placeholder">
-                  <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.5">
-                    <path d="M20 21v-2a4 4 0 0 0-4-4H8a4 4 0 0 0-4 4v2" />
-                    <circle cx="12" cy="7" r="4" />
-                  </svg>
-                </div>
-              )}
-              <div className="profile-photo-overlay">
-                <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
-                  <path d="M23 19a2 2 0 0 1-2 2H3a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h4l2-3h6l2 3h4a2 2 0 0 1 2 2z" />
-                  <circle cx="12" cy="13" r="4" />
-                </svg>
-              </div>
-            </div>
-            <div className="profile-photo-actions">
-              <button
-                className="settings-btn settings-btn--secondary"
-                onClick={() => fileInputRef.current?.click()}
-              >
-                {imageUrl ? "Change Photo" : "Upload Photo"}
-              </button>
-              {imageUrl && (
-                <button
-                  className="settings-btn settings-btn--ghost"
-                  onClick={handleRemovePhoto}
-                >
-                  Remove
-                </button>
-              )}
-            </div>
-            <input
-              ref={fileInputRef}
-              type="file"
-              accept="image/*"
-              onChange={handlePhotoUpload}
-              style={{ display: "none" }}
-            />
-          </div>
-        </div>
+function GatewayDiagnosticsCopySection() {
+  const [copyState, setCopyState] = useState<
+    "idle" | "loading" | "copied" | "error"
+  >("idle");
+  const [errorDetail, setErrorDetail] = useState<string | null>(null);
 
-        <div className="form-group">
-          <label className="form-label">Name</label>
-          <input
-            type="text"
-            className="form-input"
-            placeholder="Your name"
-            value={name}
-            onChange={(e) => setName(e.target.value)}
-          />
-        </div>
+  const handleCopy = async () => {
+    setCopyState("loading");
+    setErrorDetail(null);
+    const bundle = await fetchGatewayDiagnosticsBundle();
+    const text = JSON.stringify(bundle, null, 2);
+    const copied = await copyTextToClipboard(text);
+    if (copied) {
+      setCopyState("copied");
+      if (!diagnosticsBundleHasUsableData(bundle)) {
+        setErrorDetail(
+          "Copied partial bundle — gateway did not respond (timeout or not running). Paste anyway for support.",
+        );
+      }
+      window.setTimeout(() => {
+        setCopyState("idle");
+        setErrorDetail(null);
+      }, 2500);
+      return;
+    }
+    setCopyState("error");
+    setErrorDetail(
+      diagnosticsBundleHasUsableData(bundle)
+        ? "Collected diagnostics but clipboard access failed. Try again or copy from the gateway log."
+        : "Gateway unreachable and clipboard failed. Is Paprwork running?",
+    );
+    window.setTimeout(() => {
+      setCopyState("idle");
+      setErrorDetail(null);
+    }, 6000);
+  };
 
-        <div className="form-group">
-          <label className="form-label">
-            Email <span className="form-label__optional">(optional)</span>
-          </label>
-          <input
-            type="email"
-            className="form-input"
-            placeholder="your@email.com"
-            value={email}
-            onChange={(e) => setEmail(e.target.value)}
-          />
-        </div>
-      </div>
+  const buttonLabel =
+    copyState === "loading"
+      ? "Collecting…"
+      : copyState === "copied"
+        ? "Copied to clipboard"
+        : copyState === "error"
+          ? "Could not copy diagnostics"
+          : "Copy gateway diagnostics";
 
-      <div className="settings-actions">
-        <button
-          className="settings-btn settings-btn--primary"
-          onClick={handleSave}
-          disabled={saving}
+  return (
+    <div
+      className="settings-section"
+      style={{ marginTop: "1.75rem", borderTop: "1px solid var(--border-subtle, #e5e5ea)", paddingTop: "1.25rem" }}
+    >
+      <h3 className="settings-section__title" style={{ fontSize: "1rem" }}>
+        Support diagnostics
+      </h3>
+      <p className="settings-section__description">
+        Copies recent gateway performance snapshots (background task timings,
+        replica worker stats). Home folder paths in errors are redacted. Nothing
+        is uploaded unless you paste it to support yourself.
+      </p>
+      <button
+        type="button"
+        className="settings-btn"
+        disabled={copyState === "loading"}
+        onClick={() => void handleCopy()}
+        style={{ marginTop: "0.75rem" }}
+      >
+        {buttonLabel}
+      </button>
+      {errorDetail ? (
+        <p
+          className="settings-section__description"
+          style={{ marginTop: "0.5rem", color: "var(--text-secondary, #666)" }}
         >
-          {saving ? "Saving..." : "Save Profile"}
-        </button>
-      </div>
+          {errorDetail}
+        </p>
+      ) : null}
     </div>
   );
 }
@@ -569,6 +717,7 @@ function PrivacyTab() {
             Anonymous usage statistics can be configured in the desktop app
             (Electron). This build does not expose telemetry controls.
           </p>
+          <GatewayDiagnosticsCopySection />
         </div>
       </div>
     );
@@ -577,41 +726,24 @@ function PrivacyTab() {
   return (
     <div className="settings-content">
       <div className="settings-section">
-        <h2 className="settings-section__title">Privacy &amp; Analytics</h2>
-        <p className="settings-section__description">
-          Help us improve Paprwork by sharing anonymous usage data. This data is
-          used to identify bugs, fix crashes, improve performance, and
-          understand which features are most valuable — so we can build a better
-          product for you.
-        </p>
+        <h2 className="settings-section__title">Privacy &amp; experiments</h2>
 
-        <label className="permission-option" style={{ marginTop: "1rem" }}>
-          <input
-            type="checkbox"
+        <SettingRow
+          label="Send anonymous usage data"
+          hint="Feature usage, error reports, performance. Never your messages, files, prompts, or keys."
+          tooltip="Events are anonymous unless you are signed in with Papr. You can turn this off at any time."
+        >
+          <Toggle
             checked={telemetryEnabled}
             disabled={saving}
-            onChange={(e) => void handleTelemetryChange(e.target.checked)}
+            onChange={(v) => void handleTelemetryChange(v)}
+            ariaLabel="Send anonymous usage data"
           />
-          <div className="permission-card">
-            <div className="permission-header">
-              <h4>Help improve Paprwork</h4>
-            </div>
-            <p>
-              Share anonymous usage statistics, crash reports, and performance
-              data to help us fix issues and build better features. You can
-              turn this off at any time.
-            </p>
-          </div>
-        </label>
+        </SettingRow>
 
-        <div style={{ marginTop: "1.25rem", padding: "0.75rem 1rem", background: "var(--bg-secondary, #f5f5f7)", borderRadius: "8px", fontSize: "0.8rem", color: "var(--text-secondary, #666)" }}>
-          <strong style={{ display: "block", marginBottom: "0.35rem" }}>What we collect</strong>
-          <span>Feature usage (e.g. chat started, app created), error reports, and performance metrics.</span>
-          <br /><br />
-          <strong style={{ display: "block", marginBottom: "0.35rem" }}>What we never collect</strong>
-          <span>Your messages, file contents, API keys, prompts, or any personal data. All events are
-          anonymous unless you&apos;re signed in with Papr.</span>
-        </div>
+        <ExperimentRows />
+
+        <GatewayDiagnosticsCopySection />
       </div>
     </div>
   );
@@ -797,6 +929,8 @@ function PermissionsTab() {
 // ===== About Tab =====
 
 function AboutTab() {
+  const { createChat } = useChat();
+  const { createTab, switchToTab } = useTabs();
   const {
     currentVersion,
     updateStatus,
@@ -807,6 +941,10 @@ function AboutTab() {
     isUpdateReady,
     hasUpdate,
   } = useAppUpdater();
+
+  const handleFeedbackChat = (kind: "bug" | "feature") => {
+    void startPlatformFeedbackChat(kind, createChat, createTab, switchToTab);
+  };
 
 
   const getStatusDisplay = () => {
@@ -849,40 +987,110 @@ function AboutTab() {
   return (
     <div className="settings-content">
       <div className="settings-section">
-        <h2 className="settings-section__title">About Paprwork</h2>
+        <h2 className="settings-section__title">About Papr Work</h2>
 
         {/* App Info Card */}
         <div className="about-card">
-          <div className="about-header">
-            <div className="about-logo">
-              <svg
-                width="48"
-                height="48"
-                viewBox="0 0 24 24"
-                fill="none"
-                stroke="currentColor"
-                strokeWidth="1.5"
-              >
-                <path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z" />
-                <polyline points="14 2 14 8 20 8" />
-                <line x1="16" y1="13" x2="8" y2="13" />
-                <line x1="16" y1="17" x2="8" y2="17" />
-                <polyline points="10 9 9 9 8 9" />
-              </svg>
+          <div className="about-header about-header--with-action">
+            <div className="about-header__main">
+              <div className="about-logo">
+                <img
+                  src="/images/papr-logo.svg"
+                  alt="Papr Work"
+                  className="about-logo__image"
+                />
+              </div>
+              <div className="about-info">
+                <h3>Papr Work</h3>
+                <p className="about-version">Version {currentVersion}</p>
+                <span
+                  className={`about-update-status about-update-status--${statusDisplay.color}`}
+                >
+                  {statusDisplay.text}
+                </span>
+              </div>
             </div>
-            <div className="about-info">
-              <h3>Paprwork V2</h3>
-              <p className="about-version">Version {currentVersion}</p>
+            <div className="about-header__action">
+              {isUpdateReady ? (
+                <button
+                  className="settings-btn settings-btn--primary about-update-btn"
+                  onClick={installUpdate}
+                >
+                  Install & Restart
+                </button>
+              ) : isDownloading ? (
+                <button
+                  className="settings-btn settings-btn--secondary about-update-btn"
+                  disabled
+                >
+                  <div className="spinner" />
+                  {updateStatus?.percent || 0}%
+                </button>
+              ) : (
+                <button
+                  className="settings-btn settings-btn--primary about-update-btn"
+                  onClick={checkForUpdates}
+                  disabled={isChecking}
+                >
+                  {isChecking ? (
+                    <>
+                      <div className="spinner" />
+                      Checking...
+                    </>
+                  ) : (
+                    "Check for Updates"
+                  )}
+                </button>
+              )}
             </div>
           </div>
 
+          {hasUpdate && updateStatus?.releaseNotes && (
+            <div className="release-notes">
+              <h4>Update notes</h4>
+              <div className="release-notes-content">
+                {updateStatus.releaseNotes}
+              </div>
+            </div>
+          )}
+
+          {updateStatus?.status === "error" && updateStatus.error && (
+            <div className="update-error-notice">
+              <svg
+                width="16"
+                height="16"
+                viewBox="0 0 24 24"
+                fill="none"
+                stroke="currentColor"
+                strokeWidth="2"
+              >
+                <circle cx="12" cy="12" r="10" />
+                <line x1="12" y1="8" x2="12" y2="12" />
+                <line x1="12" y1="16" x2="12.01" y2="16" />
+              </svg>
+              <div>
+                <strong>Update check failed</strong>
+                <p>{updateStatus.error}</p>
+                {updateStatus.recoveryHint && (
+                  <p className="update-recovery-hint">{updateStatus.recoveryHint}</p>
+                )}
+                {updateStatus.error.includes("not packaged") && (
+                  <p className="dev-mode-hint">
+                    Auto-updates only work in production builds. Run{" "}
+                    <code>npm run dist:mac</code> to test in a packaged app.
+                  </p>
+                )}
+              </div>
+            </div>
+          )}
+
           <p className="about-description">
-            AI-powered desktop assistant built with TypeScript and Mastra
+            AI workspace that automatically builds your company brain and runs your work
           </p>
 
           <div className="about-links">
             <a
-              href="https://github.com/amirkabbara/paprwork-v2"
+              href="https://github.com/Papr-ai/paprwork"
               target="_blank"
               rel="noopener noreferrer"
               className="about-link"
@@ -917,11 +1125,10 @@ function AboutTab() {
               </svg>
               Website
             </a>
-            <a
-              href="https://github.com/amirkabbara/paprwork-v2/issues"
-              target="_blank"
-              rel="noopener noreferrer"
+            <button
+              type="button"
               className="about-link"
+              onClick={() => handleFeedbackChat("bug")}
             >
               <svg
                 width="16"
@@ -936,30 +1143,12 @@ function AboutTab() {
                 <line x1="12" y1="8" x2="12.01" y2="8" />
               </svg>
               Report Issue
-            </a>
-          </div>
-        </div>
-
-        {/* Update Section */}
-        <div className="about-card">
-          <div className="about-update-header">
-            <h3>Software Updates</h3>
-            <span className={`update-status-badge update-status-badge--${statusDisplay.color}`}>
-              {statusDisplay.text}
-            </span>
-          </div>
-
-          {hasUpdate && updateStatus?.releaseNotes && (
-            <div className="release-notes">
-              <h4>What's New</h4>
-              <div className="release-notes-content">
-                {updateStatus.releaseNotes}
-              </div>
-            </div>
-          )}
-
-          {updateStatus?.status === "error" && updateStatus.error && (
-            <div className="update-error-notice">
+            </button>
+            <button
+              type="button"
+              className="about-link"
+              onClick={() => handleFeedbackChat("feature")}
+            >
               <svg
                 width="16"
                 height="16"
@@ -968,68 +1157,1975 @@ function AboutTab() {
                 stroke="currentColor"
                 strokeWidth="2"
               >
-                <circle cx="12" cy="12" r="10" />
-                <line x1="12" y1="8" x2="12" y2="12" />
-                <line x1="12" y1="16" x2="12.01" y2="16" />
+                <path d="M12 2l3.09 6.26L22 9.27l-5 4.87 1.18 6.88L12 17.77l-6.18 3.25L7 14.14 2 9.27l6.91-1.01L12 2z" />
               </svg>
-              <div>
-                <strong>Update Check Failed</strong>
-                <p>{updateStatus.error}</p>
-                {updateStatus.recoveryHint && (
-                  <p className="update-recovery-hint">{updateStatus.recoveryHint}</p>
-                )}
-                {updateStatus.error.includes("not packaged") && (
-                  <p className="dev-mode-hint">
-                    💡 Tip: Auto-updates only work in production builds. To test updates, 
-                    run <code>npm run dist:mac</code> to create a packaged app.
-                  </p>
-                )}
-              </div>
-            </div>
-          )}
-
-          <div className="about-update-actions">
-            {isUpdateReady ? (
-              <button
-                className="settings-btn settings-btn--primary"
-                onClick={installUpdate}
-              >
-                Install Update & Restart
-              </button>
-            ) : isDownloading ? (
-              <button className="settings-btn settings-btn--secondary" disabled>
-                <div className="spinner" />
-                Downloading... {updateStatus?.percent || 0}%
-              </button>
-            ) : (
-              <button
-                className="settings-btn settings-btn--secondary"
-                onClick={checkForUpdates}
-                disabled={isChecking}
-              >
-                {isChecking ? (
-                  <>
-                    <div className="spinner" />
-                    Checking...
-                  </>
-                ) : (
-                  "Check for Updates"
-                )}
-              </button>
-            )}
+              Feature Request
+            </button>
           </div>
-
-          <p className="about-update-note">
-            Paprwork automatically checks for updates on startup and every 4
-            hours. Updates install only when you click Restart to update.
-          </p>
         </div>
+
+        {currentVersion === "2.6.22" && (
+          <div className="about-card">
+            <h3>What's New in v2.6.22</h3>
+            <ul className="whats-new-list">
+              <li className="whats-new-list__item">
+                <strong>Focus & habits</strong>
+                <p>
+                  Daily and weekly goals with a real date picker in Edit Focus,
+                  plus gentle rail nudges (at most one per day).
+                </p>
+              </li>
+              <li className="whats-new-list__item">
+                <strong>Cloud sync</strong>
+                <p>
+                  Publish reconciliation fails closed so a bad reconcile cannot
+                  wipe your app data-sources.json.
+                </p>
+              </li>
+              <li className="whats-new-list__item">
+                <strong>Onboarding & dev tools</strong>
+                <p>
+                  Refreshed onboarding flow and a Nudges panel under Settings →
+                  Dev to preview habit tips.
+                </p>
+              </li>
+            </ul>
+            <a
+              href="https://github.com/Papr-ai/paprwork/releases/tag/v2.6.22"
+              target="_blank"
+              rel="noopener noreferrer"
+              className="about-card__link"
+            >
+              View release notes on GitHub
+            </a>
+          </div>
+        )}
+
+        {currentVersion === "2.6.21" && (
+          <div className="about-card">
+            <h3>What's New in v2.6.21</h3>
+            <ul className="whats-new-list">
+              <li className="whats-new-list__item">
+                <strong>Claude sign-in</strong>
+                <p>
+                  Smoother onboarding stepper, auth flow persistence, and
+                  clearer setup-token guidance in Settings.
+                </p>
+              </li>
+              <li className="whats-new-list__item">
+                <strong>Agent tooling</strong>
+                <p>
+                  Architect triage for complex builds, stronger design and
+                  multi-user ACL guidance, and cloud install schema snapshots.
+                </p>
+              </li>
+              <li className="whats-new-list__item">
+                <strong>macOS installer</strong>
+                <p>
+                  PKG installs show a short conclusion screen when setup
+                  finishes.
+                </p>
+              </li>
+            </ul>
+            <a
+              href="https://github.com/Papr-ai/paprwork/releases/tag/v2.6.21"
+              target="_blank"
+              rel="noopener noreferrer"
+              className="about-card__link"
+            >
+              View release notes on GitHub
+            </a>
+          </div>
+        )}
+
+        {currentVersion === "2.6.20" && (
+          <div className="about-card">
+            <h3>What's New in v2.6.20</h3>
+            <ul className="whats-new-list">
+              <li className="whats-new-list__item">
+                <strong>Claude subscription sign-in</strong>
+                <p>
+                  Connect Claude Pro or Max with an on-demand Claude Code CLI
+                  install—no npm required—and clearer OAuth setup in Settings.
+                </p>
+              </li>
+              <li className="whats-new-list__item">
+                <strong>Cloud sync and installs</strong>
+                <p>
+                  Improved incoming change requests, catalog install agent
+                  setup, and safer handling when deleting apps and linked
+                  databases.
+                </p>
+              </li>
+              <li className="whats-new-list__item">
+                <strong>Installers and updates</strong>
+                <p>
+                  macOS and Windows installers can open Papr Work when setup
+                  finishes; GitHub releases include a clearer download guide.
+                </p>
+              </li>
+            </ul>
+            <a
+              href="https://github.com/Papr-ai/paprwork/releases/tag/v2.6.20"
+              target="_blank"
+              rel="noopener noreferrer"
+              className="about-card__link"
+            >
+              View release notes on GitHub
+            </a>
+          </div>
+        )}
+
+        {currentVersion === "2.6.19" && (
+          <div className="about-card">
+            <h3>What's New in v2.6.19</h3>
+            <ul className="whats-new-list">
+              <li className="whats-new-list__item">
+                <strong>Apps library</strong>
+                <p>
+                  One Library and Discover experience with categories, clearer
+                  cards, install counts, and safer cloud database setup when
+                  you fork or copy apps.
+                </p>
+              </li>
+              <li className="whats-new-list__item">
+                <strong>Navigation and identity</strong>
+                <p>
+                  Wider sidebar rail, per-org colors on your avatar, and a
+                  refreshed home composer with Replay while the agent works.
+                </p>
+              </li>
+              <li className="whats-new-list__item">
+                <strong>Browser and agent tools</strong>
+                <p>
+                  Stronger in-app browser tools for previews, plus optional
+                  Jev experiments in Settings for smarter tool results.
+                </p>
+              </li>
+            </ul>
+            <a
+              href="https://github.com/Papr-ai/paprwork/releases/tag/v2.6.19"
+              target="_blank"
+              rel="noopener noreferrer"
+              className="about-card__link"
+            >
+              View release notes on GitHub
+            </a>
+          </div>
+        )}
+
+        {currentVersion === "2.6.18" && (
+          <div className="about-card">
+            <h3>What's New in v2.6.18</h3>
+            <ul className="whats-new-list">
+              <li className="whats-new-list__item">
+                <strong>Onboarding and sign-in</strong>
+                <p>
+                  Refreshed Connect AI flow with API key step, provider logos,
+                  and smoother recommended-app install after onboarding.
+                </p>
+              </li>
+              <li className="whats-new-list__item">
+                <strong>Share allowlist on publish</strong>
+                <p>
+                  People you share with sync to the cloud app host when you
+                  publish, so link and team access stay aligned with desktop
+                  settings.
+                </p>
+              </li>
+            </ul>
+            <a
+              href="https://github.com/Papr-ai/paprwork/releases/tag/v2.6.18"
+              target="_blank"
+              rel="noopener noreferrer"
+              className="about-card__link"
+            >
+              View release notes on GitHub
+            </a>
+          </div>
+        )}
+
+        {currentVersion === "2.6.17" && (
+          <div className="about-card">
+            <h3>What's New in v2.6.17</h3>
+            <ul className="whats-new-list">
+              <li className="whats-new-list__item">
+                <strong>Safer app delete</strong>
+                <p>
+                  Deleting an app respects cloud lineage and sharing — linked
+                  publisher databases and team share settings are handled
+                  explicitly instead of leaving orphaned cloud state.
+                </p>
+              </li>
+              <li className="whats-new-list__item">
+                <strong>Community install and sync</strong>
+                <p>
+                  Catalog install, track sync, and publish flows preserve sharing
+                  and upstream revision checks; share audience is clearer in the
+                  publish bar and sync popover.
+                </p>
+              </li>
+            </ul>
+            <a
+              href="https://github.com/Papr-ai/paprwork/releases/tag/v2.6.17"
+              target="_blank"
+              rel="noopener noreferrer"
+              className="about-card__link"
+            >
+              View release notes on GitHub
+            </a>
+          </div>
+        )}
+
+        {currentVersion === "2.6.16" && (
+          <div className="about-card">
+            <h3>What's New in v2.6.16</h3>
+            <ul className="whats-new-list">
+              <li className="whats-new-list__item">
+                <strong>Windows build fix</strong>
+                <p>
+                  Regenerating the Papr API catalog during build now works on
+                  Windows CI (file URL import for TypeScript modules).
+                </p>
+              </li>
+              <li className="whats-new-list__item">
+                <strong>Jev decisions (TypeSafe System One)</strong>
+                <p>
+                  The jev_decide tool uses Papr login when available (memory
+                  server proxy) or your own TypeSafe API key, with guardrails on
+                  state size and question count.
+                </p>
+              </li>
+              <li className="whats-new-list__item">
+                <strong>Safer code search</strong>
+                <p>
+                  search_files and search_app_files share bounded limits (depth,
+                  timeout, file size) and skip heavy folders like node_modules and
+                  venvs.
+                </p>
+              </li>
+            </ul>
+            <a
+              href="https://github.com/Papr-ai/paprwork/releases/tag/v2.6.16"
+              target="_blank"
+              rel="noopener noreferrer"
+              className="about-card__link"
+            >
+              View release notes on GitHub
+            </a>
+          </div>
+        )}
+
+        {currentVersion === "2.6.15" && (
+          <div className="about-card">
+            <h3>What's New in v2.6.15</h3>
+            <ul className="whats-new-list">
+              <li className="whats-new-list__item">
+                <strong>Jev decisions (TypeSafe System One)</strong>
+                <p>
+                  The jev_decide tool uses Papr login when available (memory
+                  server proxy) or your own TypeSafe API key, with guardrails on
+                  state size and question count.
+                </p>
+              </li>
+              <li className="whats-new-list__item">
+                <strong>Safer code search</strong>
+                <p>
+                  search_files and search_app_files share bounded limits (depth,
+                  timeout, file size) and skip heavy folders like node_modules and
+                  venvs.
+                </p>
+              </li>
+            </ul>
+            <a
+              href="https://github.com/Papr-ai/paprwork/releases/tag/v2.6.15"
+              target="_blank"
+              rel="noopener noreferrer"
+              className="about-card__link"
+            >
+              View release notes on GitHub
+            </a>
+          </div>
+        )}
+
+        {currentVersion === "2.6.14" && (
+          <div className="about-card">
+            <h3>What's New in v2.6.14</h3>
+            <ul className="whats-new-list">
+              <li className="whats-new-list__item">
+                <strong>Platform Browser Jobs in Packaged Apps</strong>
+                <p>
+                  Python jobs that use LinkedIn, X, or other platform browsers
+                  now work in downloaded builds — job-sdk is unpacked from the
+                  app archive so Run now finds papr_platform_browser.
+                </p>
+              </li>
+            </ul>
+            <a
+              href="https://github.com/Papr-ai/paprwork/releases/tag/v2.6.14"
+              target="_blank"
+              rel="noopener noreferrer"
+              className="about-card__link"
+            >
+              View release notes on GitHub
+            </a>
+          </div>
+        )}
+
+        {currentVersion === "2.6.13" && (
+          <div className="about-card">
+            <h3>What's New in v2.6.13</h3>
+            <ul className="whats-new-list">
+              <li className="whats-new-list__item">
+                <strong>Claude Manual Connection Help</strong>
+                <p>
+                  Connect Claude Pro/Max with step-by-step CLI instructions for
+                  Mac, Windows, and Linux — or ask the agent to walk you through
+                  setup in a new chat.
+                </p>
+              </li>
+              <li className="whats-new-list__item">
+                <strong>Smarter OAuth Fallbacks</strong>
+                <p>
+                  When automatic Claude CLI install fails, Settings keeps the
+                  manual options visible instead of jumping straight to token
+                  paste. Disconnecting OAuth now clears stale gateway auth cache.
+                </p>
+              </li>
+              <li className="whats-new-list__item">
+                <strong>Papr Proxy Auth Detection</strong>
+                <p>
+                  Settings recognizes Papr login immediately for cloud model
+                  routing, even before the API key appears in the keys list.
+                </p>
+              </li>
+            </ul>
+            <a
+              href="https://github.com/Papr-ai/paprwork/releases/tag/v2.6.13"
+              target="_blank"
+              rel="noopener noreferrer"
+              className="about-card__link"
+            >
+              View release notes on GitHub
+            </a>
+          </div>
+        )}
+
+        {currentVersion === "2.6.12" && (
+          <div className="about-card">
+            <h3>What's New in v2.6.12</h3>
+            <ul className="whats-new-list">
+              <li className="whats-new-list__item">
+                <strong>Portable Replica Databases</strong>
+                <p>
+                  Apps copied or installed across workspaces re-bind Turso
+                  replicas automatically — local data is not wiped by a false
+                  sync when cloud is still empty.
+                </p>
+              </li>
+              <li className="whats-new-list__item">
+                <strong>Home Daily Brief Setup</strong>
+                <p>
+                  Fresh installs show sample brief data with one-click setup to
+                  create the Daily Brief job and link databases — no chat
+                  handoff required.
+                </p>
+              </li>
+              <li className="whats-new-list__item">
+                <strong>Workspace Landing Tabs</strong>
+                <p>
+                  After switching org or namespace, empty workspaces open
+                  Getting Started or Profile instead of a blank screen.
+                </p>
+              </li>
+              <li className="whats-new-list__item">
+                <strong>Clearer Empty Model Errors</strong>
+                <p>
+                  When a model returns no output, chat explains how to sign in
+                  with Papr or try another model instead of a generic error.
+                </p>
+              </li>
+            </ul>
+            <a
+              href="https://github.com/Papr-ai/paprwork/releases/tag/v2.6.12"
+              target="_blank"
+              rel="noopener noreferrer"
+              className="about-card__link"
+            >
+              View release notes on GitHub
+            </a>
+          </div>
+        )}
+
+        {currentVersion === "2.6.11" && (
+          <div className="about-card">
+            <h3>What's New in v2.6.11</h3>
+            <ul className="whats-new-list">
+              <li className="whats-new-list__item">
+                <strong>Stream Continue &amp; Reconnect</strong>
+                <p>
+                  Agent turns keep one assistant message card when continuing
+                  after interruption, compression, or reconnect — no duplicate
+                  cards or lost tool context.
+                </p>
+              </li>
+              <li className="whats-new-list__item">
+                <strong>System Browser Sign-In</strong>
+                <p>
+                  Papr login opens in your default browser so Google, passkeys,
+                  and email auth work reliably.
+                </p>
+              </li>
+              <li className="whats-new-list__item">
+                <strong>Intel Mac Gateway Fix</strong>
+                <p>
+                  Intel Mac builds ship correct x64 native libraries so the
+                  gateway starts reliably on launch.
+                </p>
+              </li>
+              <li className="whats-new-list__item">
+                <strong>Faster Mac Releases</strong>
+                <p>
+                  Apple Silicon and Intel packages build in parallel with
+                  pre-upload native-arch verification.
+                </p>
+              </li>
+            </ul>
+            <a
+              href="https://github.com/Papr-ai/paprwork/releases/tag/v2.6.11"
+              target="_blank"
+              rel="noopener noreferrer"
+              className="about-card__link"
+            >
+              View release notes on GitHub
+            </a>
+          </div>
+        )}
+
+        {currentVersion === "2.6.10" && (
+          <div className="about-card">
+            <h3>What's New in v2.6.10</h3>
+            <ul className="whats-new-list">
+              <li className="whats-new-list__item">
+                <strong>System Browser Sign-In</strong>
+                <p>
+                  Papr login now opens in your default browser so Google, passkeys,
+                  and email auth work reliably — no embedded login panel.
+                </p>
+              </li>
+              <li className="whats-new-list__item">
+                <strong>Intel Mac Gateway Fix</strong>
+                <p>
+                  Intel Mac builds ship correct x64 native libraries so the gateway
+                  starts reliably on launch.
+                </p>
+              </li>
+              <li className="whats-new-list__item">
+                <strong>Faster, Safer Mac Releases</strong>
+                <p>
+                  Apple Silicon and Intel Mac packages now build in parallel with
+                  isolated native dependencies and pre-upload verification.
+                </p>
+              </li>
+            </ul>
+            <a
+              href="https://github.com/Papr-ai/paprwork/releases/tag/v2.6.10"
+              target="_blank"
+              rel="noopener noreferrer"
+              className="about-card__link"
+            >
+              View release notes on GitHub
+            </a>
+          </div>
+        )}
+
+        {currentVersion === "2.6.9" && (
+          <div className="about-card">
+            <h3>What's New in v2.6.9</h3>
+            <ul className="whats-new-list">
+              <li className="whats-new-list__item">
+                <strong>System Browser Sign-In</strong>
+                <p>
+                  Papr login now opens in your default browser so Google, passkeys,
+                  and email auth work reliably — no embedded login panel.
+                </p>
+              </li>
+              <li className="whats-new-list__item">
+                <strong>Intel Mac Gateway Fix</strong>
+                <p>
+                  Intel Mac builds ship correct x64 native libraries so the gateway
+                  starts reliably on launch.
+                </p>
+              </li>
+              <li className="whats-new-list__item">
+                <strong>Release SDK Verification</strong>
+                <p>
+                  CI verifies mini-app SDK bundles on Mac (arm64 + Intel), Windows,
+                  and Linux before every release upload.
+                </p>
+              </li>
+            </ul>
+            <a
+              href="https://github.com/Papr-ai/paprwork/releases/tag/v2.6.9"
+              target="_blank"
+              rel="noopener noreferrer"
+              className="about-card__link"
+            >
+              View release notes on GitHub
+            </a>
+          </div>
+        )}
+
+        {currentVersion === "2.6.5" && (
+          <div className="about-card">
+            <h3>What's New in v2.6.5</h3>
+            <ul className="whats-new-list">
+              <li className="whats-new-list__item">
+                <strong>Intel Mac Gateway Fix</strong>
+                <p>
+                  Intel Mac builds now ship the correct x64 native libraries
+                  (libsql, esbuild, sharp) so the gateway starts reliably instead
+                  of crashing on launch.
+                </p>
+              </li>
+              <li className="whats-new-list__item">
+                <strong>Release Verification</strong>
+                <p>
+                  CI verifies native CPU architecture and mini-app SDK bundles in
+                  both Apple Silicon and Intel packages before upload.
+                </p>
+              </li>
+              <li className="whats-new-list__item">
+                <strong>Intel Turso Sync</strong>
+                <p>
+                  Plan A replica sync stays disabled on Intel Mac until Turso ships
+                  a darwin-x64 binding; legacy HTTP sync continues to work.
+                </p>
+              </li>
+            </ul>
+            <a
+              href="https://github.com/Papr-ai/paprwork/releases/tag/v2.6.5"
+              target="_blank"
+              rel="noopener noreferrer"
+              className="about-card__link"
+            >
+              View release notes on GitHub
+            </a>
+          </div>
+        )}
+
+        {currentVersion === "2.6.4" && (
+          <div className="about-card">
+            <h3>What's New in v2.6.4</h3>
+            <ul className="whats-new-list">
+              <li className="whats-new-list__item">
+                <strong>SDK Bundle Verification</strong>
+                <p>
+                  Desktop and cloud builds now verify every prebuilt mini-app SDK
+                  bundle after compile — catches missing /__papr__/ assets before
+                  release.
+                </p>
+              </li>
+              <li className="whats-new-list__item">
+                <strong>Cloud Runtime Vault Scopes</strong>
+                <p>
+                  Tighter credential scoping for cloud-hosted apps with safer
+                  memory and database runtime access.
+                </p>
+              </li>
+              <li className="whats-new-list__item">
+                <strong>Chat &amp; Stream Reliability</strong>
+                <p>
+                  Improved message queue handling, stream recovery, and stop/cancel
+                  behavior during long agent turns.
+                </p>
+              </li>
+              <li className="whats-new-list__item">
+                <strong>Skills &amp; Publish UX</strong>
+                <p>
+                  Skills tab navigation polish, cloud preview chat bridge, and clearer
+                  publish dependency panels.
+                </p>
+              </li>
+            </ul>
+            <a
+              href="https://github.com/Papr-ai/paprwork/releases/tag/v2.6.4"
+              target="_blank"
+              rel="noopener noreferrer"
+              className="about-card__link"
+            >
+              View release notes on GitHub
+            </a>
+          </div>
+        )}
+
+        {currentVersion === "2.6.3" && (
+          <div className="about-card">
+            <h3>What's New in v2.6.3</h3>
+            <ul className="whats-new-list">
+              <li className="whats-new-list__item">
+                <strong>Cloud Publish Dependencies</strong>
+                <p>
+                  Publish panel now surfaces linked jobs, databases, and skills
+                  before you ship — with clearer errors when something is missing
+                  or out of sync.
+                </p>
+              </li>
+              <li className="whats-new-list__item">
+                <strong>Skills Catalog Refresh</strong>
+                <p>
+                  Expanded skills library with improved browsing, install flow,
+                  and one-click “start skill chat” from the Skills tab.
+                </p>
+              </li>
+              <li className="whats-new-list__item">
+                <strong>Mini-App Preview Performance</strong>
+                <p>
+                  Faster local preview loads with dist caching and a non-blocking
+                  gateway gate — builds on the v2.6.2 SDK packaging fix.
+                </p>
+              </li>
+              <li className="whats-new-list__item">
+                <strong>Turso Replica Healing</strong>
+                <p>
+                  Automatic schema drift detection and repair for linked app
+                  databases, with safer job scripts around replica paths.
+                </p>
+              </li>
+            </ul>
+            <a
+              href="https://github.com/Papr-ai/paprwork/releases/tag/v2.6.3"
+              target="_blank"
+              rel="noopener noreferrer"
+              className="about-card__link"
+            >
+              View release notes on GitHub
+            </a>
+          </div>
+        )}
+
+        {currentVersion === "2.6.2" && (
+          <div className="about-card">
+            <h3>What's New in v2.6.2</h3>
+            <ul className="whats-new-list">
+              <li className="whats-new-list__item">
+                <strong>Mini-App SDK Packaging Fix</strong>
+                <p>
+                  Pre-built SDK bundles ship in every release so mini-apps load
+                  instantly — no more 11-second stalls or HTTP 500 on
+                  /__papr__/ routes when .ts sources are missing from updates.
+                </p>
+              </li>
+              <li className="whats-new-list__item">
+                <strong>Non-Blocking Preview Scripts</strong>
+                <p>
+                  Preview fetch gate and native dialog shim load async so a
+                  missing SDK module cannot block the entire mini-app from
+                  rendering.
+                </p>
+              </li>
+            </ul>
+            <a
+              href="https://github.com/Papr-ai/paprwork/releases/tag/v2.6.2"
+              target="_blank"
+              rel="noopener noreferrer"
+              className="about-card__link"
+            >
+              View release notes on GitHub
+            </a>
+          </div>
+        )}
+
+        {currentVersion === "2.6.1" && (
+          <div className="about-card">
+            <h3>What's New in v2.6.1</h3>
+            <ul className="whats-new-list">
+              <li className="whats-new-list__item">
+                <strong>AI Media Generation</strong>
+                <p>
+                  New generate_media tool for images and video (OpenAI Codex,
+                  Veo). Generated media appears inline in chat with a gallery
+                  preview and persistent storage.
+                </p>
+              </li>
+              <li className="whats-new-list__item">
+                <strong>Turso Replica Bootstrap &amp; Publish Quiesce</strong>
+                <p>
+                  Safer replica bootstrap replay, publish quiesce before cutover,
+                  pending-push tracking, and improved background recovery for
+                  linked databases.
+                </p>
+              </li>
+              <li className="whats-new-list__item">
+                <strong>Cloud Sync Writer Improvements</strong>
+                <p>
+                  Reset writer baseline after pulls, schema-owner migration sync,
+                  app repo clone cache, and clearer publish/sync status when
+                  remote code or databases drift.
+                </p>
+              </li>
+              <li className="whats-new-list__item">
+                <strong>Agent &amp; Chat Polish</strong>
+                <p>
+                  Tool repetition detection to reduce duplicate calls, preview
+                  fetch abort for mini-apps, and improved wrap-up continuation
+                  during long tool-heavy turns.
+                </p>
+              </li>
+            </ul>
+            <a
+              href="https://github.com/Papr-ai/paprwork/releases/tag/v2.6.1"
+              target="_blank"
+              rel="noopener noreferrer"
+              className="about-card__link"
+            >
+              View release notes on GitHub
+            </a>
+          </div>
+        )}
+
+        {currentVersion === "2.6.0" && (
+          <div className="about-card">
+            <h3>What's New in v2.6.0</h3>
+            <ul className="whats-new-list">
+              <li className="whats-new-list__item">
+                <strong>Smarter Cloud &amp; Web Sync Status</strong>
+                <p>
+                  Publish bar and Web Sync popover now show honest remote-code
+                  vs database sync state, merge Git and Turso signals, and
+                  surface actionable next steps when drift is detected.
+                </p>
+              </li>
+              <li className="whats-new-list__item">
+                <strong>Default Home App Repair</strong>
+                <p>
+                  Automatically repairs missing or stale bundled Home dashboard
+                  installs on startup, keeping goals, reviews, and brief data
+                  in sync with the latest default app bundle.
+                </p>
+              </li>
+              <li className="whats-new-list__item">
+                <strong>Turso Replica &amp; Schema Drift Healing</strong>
+                <p>
+                  Schema ledger tracking, drift heal for replica migrations,
+                  startup grace for pull scheduler, and safer sync session
+                  lifecycle for linked databases.
+                </p>
+              </li>
+              <li className="whats-new-list__item">
+                <strong>Tab &amp; App State Performance</strong>
+                <p>
+                  Deferred tab saves, tab structure fingerprinting, preview
+                  fetch gate for mini-apps, and Zustand stores for jobs and
+                  custom keys reduce UI jank and gateway load.
+                </p>
+              </li>
+            </ul>
+            <a
+              href="https://github.com/Papr-ai/paprwork/releases/tag/v2.6.0"
+              target="_blank"
+              rel="noopener noreferrer"
+              className="about-card__link"
+            >
+              View release notes on GitHub
+            </a>
+          </div>
+        )}
+
+        {currentVersion === "2.5.9" && (
+          <div className="about-card">
+            <h3>What's New in v2.5.9</h3>
+            <ul className="whats-new-list">
+              <li className="whats-new-list__item">
+                <strong>Gemini 3.8 Flash &amp; Flash Line Updates</strong>
+                <p>
+                  Added Gemini 3.5 Flash-Lite through 3.8 Flash to the model
+                  picker. Gemini 3.8 Flash is the new recommended Google default
+                  with intro pricing through end of 2026.
+                </p>
+              </li>
+              <li className="whats-new-list__item">
+                <strong>Goals, Tasks &amp; Home Dashboard</strong>
+                <p>
+                  Workspace goals and tasks now project into the Home dashboard
+                  with brief reviews, goal entities, and improved chief-of-staff
+                  daily brief flow.
+                </p>
+              </li>
+              <li className="whats-new-list__item">
+                <strong>Chat &amp; Streaming Reliability</strong>
+                <p>
+                  Fixed paginated history merge order, assistant message
+                  visibility during streaming, and chat recovery after store
+                  wipes. Cleaner loading indicators while the agent works.
+                </p>
+              </li>
+              <li className="whats-new-list__item">
+                <strong>Turso &amp; Gateway Performance</strong>
+                <p>
+                  Local DB read cache, replica background recovery, sync items
+                  cache, and faster gateway startup for large workspaces.
+                </p>
+              </li>
+            </ul>
+            <a
+              href="https://github.com/Papr-ai/paprwork/releases/tag/v2.5.9"
+              target="_blank"
+              rel="noopener noreferrer"
+              className="about-card__link"
+            >
+              View release notes on GitHub
+            </a>
+          </div>
+        )}
+
+        {currentVersion === "2.5.8" && (
+          <div className="about-card">
+            <h3>What's New in v2.5.8</h3>
+            <ul className="whats-new-list">
+              <li className="whats-new-list__item">
+                <strong>Turso Scratch Tables &amp; Sync Hardening</strong>
+                <p>
+                  Tables prefixed with _ are treated as local-only scratch
+                  (backups, temp data). No-PK warnings now include a clear
+                  rebuild recipe instead of misleading drift-heal advice.
+                </p>
+              </li>
+              <li className="whats-new-list__item">
+                <strong>Workspace Goals &amp; Home Brief</strong>
+                <p>
+                  Goals in IDENTITY.md now drive the Home brief, Sleep job,
+                  and Wiki Writer for personalized daily updates.
+                </p>
+              </li>
+              <li className="whats-new-list__item">
+                <strong>Agent &amp; Chat Improvements</strong>
+                <p>
+                  Separate chat and job concurrency pools with waiting-for-slot
+                  UI, per-chat model selection, and improved chat history
+                  dropdown.
+                </p>
+              </li>
+              <li className="whats-new-list__item">
+                <strong>Database Validation &amp; Stability</strong>
+                <p>
+                  Replica-safe registry schema reads, data contract enforcement,
+                  honest job run status, FSEvents tree watchers, and Claude
+                  Opus/Fable 5.1 API-key fixes.
+                </p>
+              </li>
+            </ul>
+            <a
+              href="https://github.com/Papr-ai/paprwork/releases/tag/v2.5.8"
+              target="_blank"
+              rel="noopener noreferrer"
+              className="about-card__link"
+            >
+              View release notes on GitHub
+            </a>
+          </div>
+        )}
+
+        {currentVersion === "2.5.7" && (
+          <div className="about-card">
+            <h3>What's New in v2.5.7</h3>
+            <ul className="whats-new-list">
+              <li className="whats-new-list__item">
+                <strong>Mini-App SDK Packaged Fix</strong>
+                <p>
+                  SDK discovery now works when auto-update deltas omit .ts
+                  sources — falls back to compiled papr-*.js or a static
+                  catalog so /__papr__/ routes keep working.
+                </p>
+              </li>
+              <li className="whats-new-list__item">
+                <strong>Release Packaging Guard</strong>
+                <p>
+                  Package build test now verifies papr-sdk.ts is included in
+                  the ASAR bundle so this regression is caught before ship.
+                </p>
+              </li>
+            </ul>
+            <a
+              href="https://github.com/Papr-ai/paprwork/releases/tag/v2.5.7"
+              target="_blank"
+              rel="noopener noreferrer"
+              className="about-card__link"
+            >
+              View release notes on GitHub
+            </a>
+          </div>
+        )}
+
+        {currentVersion === "2.5.6" && (
+          <div className="about-card">
+            <h3>What's New in v2.5.6</h3>
+            <ul className="whats-new-list">
+              <li className="whats-new-list__item">
+                <strong>Turso Replica Worker Isolation</strong>
+                <p>
+                  Replica sync runs in a separate worker so a panic cannot
+                  take down the gateway, with WAL watermark repair before
+                  engine abort.
+                </p>
+              </li>
+              <li className="whats-new-list__item">
+                <strong>FD &amp; Process Stability</strong>
+                <p>
+                  Child-process stream cleanup and EBADF recovery prevent
+                  file-descriptor leaks from bash, git, and job spawns.
+                </p>
+              </li>
+              <li className="whats-new-list__item">
+                <strong>Agent &amp; Memory Reliability</strong>
+                <p>
+                  Recover pending tool calls on length truncation, dual-send
+                  Papr Memory user identity, and scheduler retry-storm fixes.
+                </p>
+              </li>
+              <li className="whats-new-list__item">
+                <strong>Sync &amp; Startup Hardening</strong>
+                <p>
+                  Metadata outbox dedupe, auth wall IPC fixes, job secret
+                  leak prevention, and per-app agent work telemetry.
+                </p>
+              </li>
+            </ul>
+            <a
+              href="https://github.com/Papr-ai/paprwork/releases/tag/v2.5.6"
+              target="_blank"
+              rel="noopener noreferrer"
+              className="about-card__link"
+            >
+              View release notes on GitHub
+            </a>
+          </div>
+        )}
+
+        {currentVersion === "2.5.5" && (
+          <div className="about-card">
+            <h3>What's New in v2.5.5</h3>
+            <ul className="whats-new-list">
+              <li className="whats-new-list__item">
+                <strong>LinkedIn &amp; Platform Browser Auth</strong>
+                <p>
+                  Real Chrome profile login for connected platforms with
+                  embedded browser tabs, CDP bridge, and improved LinkedIn
+                  session validation.
+                </p>
+              </li>
+              <li className="whats-new-list__item">
+                <strong>Replica Migration Dual-Apply</strong>
+                <p>
+                  Safer schema migrations with pairing, verification, and
+                  reconcile sync so replica and primary stay aligned.
+                </p>
+              </li>
+              <li className="whats-new-list__item">
+                <strong>Daily Brief Write Guard</strong>
+                <p>
+                  Protected daily brief payloads with deduplication and safer
+                  home dashboard brief persistence.
+                </p>
+              </li>
+              <li className="whats-new-list__item">
+                <strong>Workspace Switch &amp; Auth UI</strong>
+                <p>
+                  Papr auth browser tab, improved workspace switch reload, and
+                  custom platform connection support.
+                </p>
+              </li>
+            </ul>
+            <a
+              href="https://github.com/Papr-ai/paprwork/releases/tag/v2.5.5"
+              target="_blank"
+              rel="noopener noreferrer"
+              className="about-link whats-new-list__link"
+            >
+              View full release notes
+            </a>
+          </div>
+        )}
+
+        {currentVersion === "2.5.4" && (
+          <div className="about-card">
+            <h3>What's New in v2.5.4</h3>
+            <ul className="whats-new-list">
+              <li className="whats-new-list__item">
+                <strong>Home Dashboard Registry DB</strong>
+                <p>
+                  Bundled home dashboard now ships with its own registry
+                  database migration and <code>save_brief.py</code> job asset
+                  for reliable daily brief persistence.
+                </p>
+              </li>
+              <li className="whats-new-list__item">
+                <strong>FD Watchdog &amp; Pressure Recovery</strong>
+                <p>
+                  Gateway monitors file descriptor pressure and recovers from
+                  watcher leaks to prevent silent resource exhaustion.
+                </p>
+              </li>
+              <li className="whats-new-list__item">
+                <strong>Wiki &amp; Workspace Switch Hardening</strong>
+                <p>
+                  Improved wiki library sections, safer workspace switching,
+                  and shared shell exec utilities for more reliable bash tools.
+                </p>
+              </li>
+            </ul>
+            <a
+              href="https://github.com/Papr-ai/paprwork/releases/tag/v2.5.4"
+              target="_blank"
+              rel="noopener noreferrer"
+              className="about-link whats-new-list__link"
+            >
+              View full release notes
+            </a>
+          </div>
+        )}
+
+        {currentVersion === "2.5.3" && (
+          <div className="about-card">
+            <h3>What's New in v2.5.3</h3>
+            <ul className="whats-new-list">
+              <li className="whats-new-list__item">
+                <strong>Job Replica DB Routing</strong>
+                <p>
+                  Jobs now route replica database reads and writes through the
+                  gateway instead of opening SQLite directly — fixing stale
+                  reads and WAL wedge issues after job runs.
+                </p>
+              </li>
+              <li className="whats-new-list__item">
+                <strong>Replica Job Quiesce</strong>
+                <p>
+                  Database jobs quiesce replica push/pull while running so
+                  concurrent sync does not corrupt sidecar state.
+                </p>
+              </li>
+              <li className="whats-new-list__item">
+                <strong>Gateway Connection Indicator</strong>
+                <p>
+                  Clearer connection status in the sidebar with reconnect
+                  feedback and improved update banner behavior.
+                </p>
+              </li>
+              <li className="whats-new-list__item">
+                <strong>Platform Agent Browser</strong>
+                <p>
+                  Social platform login flows use a dedicated agent browser
+                  with proper Chrome environment for reliable session capture.
+                </p>
+              </li>
+            </ul>
+            <a
+              href="https://github.com/Papr-ai/paprwork/releases/tag/v2.5.3"
+              target="_blank"
+              rel="noopener noreferrer"
+              className="about-link whats-new-list__link"
+            >
+              View full release notes
+            </a>
+          </div>
+        )}
+
+        {currentVersion === "2.5.2" && (
+          <div className="about-card">
+            <h3>What's New in v2.5.2</h3>
+            <ul className="whats-new-list">
+              <li className="whats-new-list__item">
+                <strong>Community Catalog Dedupe</strong>
+                <p>
+                  Smarter catalog merging prefers real app names over slug-only
+                  entries and deprioritizes throwaway <code>e2e-*</code> test
+                  slugs when workspace and remote catalogs overlap.
+                </p>
+              </li>
+            </ul>
+            <a
+              href="https://github.com/Papr-ai/paprwork/releases/tag/v2.5.2"
+              target="_blank"
+              rel="noopener noreferrer"
+              className="about-link whats-new-list__link"
+            >
+              View full release notes
+            </a>
+          </div>
+        )}
+
+        {currentVersion === "2.5.1" && (
+          <div className="about-card">
+            <h3>What's New in v2.5.1</h3>
+            <ul className="whats-new-list">
+              <li className="whats-new-list__item">
+                <strong>Replica Sidecar &amp; Checkpoint Recovery</strong>
+                <p>
+                  Hardened sidecar wedge repair, checkpoint recovery, and
+                  offline Turso credential caching for more reliable replica
+                  reconnect after sleep or network blips.
+                </p>
+              </li>
+              <li className="whats-new-list__item">
+                <strong>Cutover Migration Authority</strong>
+                <p>
+                  Safer legacy-to-replica cutover with explicit migration
+                  ledger authority checks before applying schema changes.
+                </p>
+              </li>
+              <li className="whats-new-list__item">
+                <strong>Chat &amp; Home Dashboard Polish</strong>
+                <p>
+                  Follow-scroll in agent chat, turn-end diagnostics, and
+                  refreshed home dashboard styling.
+                </p>
+              </li>
+            </ul>
+            <a
+              href="https://github.com/Papr-ai/paprwork/releases/tag/v2.5.1"
+              target="_blank"
+              rel="noopener noreferrer"
+              className="about-link whats-new-list__link"
+            >
+              View full release notes
+            </a>
+          </div>
+        )}
+
+        {currentVersion === "2.5.0" && (
+          <div className="about-card">
+            <h3>What's New in v2.5.0</h3>
+            <ul className="whats-new-list">
+              <li className="whats-new-list__item">
+                <strong>Turso Replica Sync in Packaged Builds</strong>
+                <p>
+                  Desktop releases now ship with Plan A replica sync enabled
+                  (<code>replica-records</code>) and production cutover allowed —
+                  matching dev behavior without a local <code>.env.local</code>.
+                </p>
+              </li>
+              <li className="whats-new-list__item">
+                <strong>Sync Metadata on Upload</strong>
+                <p>
+                  Publish changes flushes registry metadata alongside app code so
+                  cloud databases stay aligned after publish.
+                </p>
+              </li>
+              <li className="whats-new-list__item">
+                <strong>Home Dashboard &amp; Daily Brief</strong>
+                <p>
+                  Updated home dashboard data contract, brief date handling,
+                  and Home Today wiki improvements.
+                </p>
+              </li>
+            </ul>
+            <a
+              href="https://github.com/Papr-ai/paprwork/releases/tag/v2.5.0"
+              target="_blank"
+              rel="noopener noreferrer"
+              className="about-link whats-new-list__link"
+            >
+              View full release notes
+            </a>
+          </div>
+        )}
+
+        {currentVersion === "2.4.9" && (
+          <div className="about-card">
+            <h3>What's New in v2.4.9</h3>
+            <ul className="whats-new-list">
+              <li className="whats-new-list__item">
+                <strong>Replica Sync Duplicate Row Fix</strong>
+                <p>
+                  After replica cutover, cloud db-changed events now pull remote
+                  first instead of pushing stale local fingerprints — preventing
+                  duplicate rows in linked databases.
+                </p>
+              </li>
+              <li className="whats-new-list__item">
+                <strong>Home &amp; Wiki Today View</strong>
+                <p>
+                  New Home Today dashboard in Memory with entity sections,
+                  related memories, and tasks — plus improved wiki editing and
+                  navigation.
+                </p>
+              </li>
+            </ul>
+            <a
+              href="https://github.com/Papr-ai/paprwork/releases/tag/v2.4.9"
+              target="_blank"
+              rel="noopener noreferrer"
+              className="about-link whats-new-list__link"
+            >
+              View full release notes
+            </a>
+          </div>
+        )}
+
+        {currentVersion === "2.4.8" && (
+          <div className="about-card">
+            <h3>What's New in v2.4.8</h3>
+            <ul className="whats-new-list">
+              <li className="whats-new-list__item">
+                <strong>Cloud App Agent Chat</strong>
+                <p>
+                  Richer in-app agent chat with activity cards, tool display
+                  labels, and improved cloud streaming for published mini-apps.
+                </p>
+              </li>
+              <li className="whats-new-list__item">
+                <strong>Faster Cloud App Host</strong>
+                <p>
+                  Direct GitHub repo access, deploy snapshots, backend DB proxy,
+                  and warm-cache loading cut cold-start latency for cloud apps.
+                </p>
+              </li>
+              <li className="whats-new-list__item">
+                <strong>Replica Recovery &amp; Cutover</strong>
+                <p>
+                  Checkpoint recovery, sidecar wedge repair, legacy CDC purge,
+                  and post-cutover verification for Turso embedded replicas.
+                </p>
+              </li>
+              <li className="whats-new-list__item">
+                <strong>Sub-Agent Cloud Integrity</strong>
+                <p>
+                  Cloud runs now hydrate sub-agent metadata from the registry
+                  with integrity checks before delegation.
+                </p>
+              </li>
+            </ul>
+            <a
+              href="https://github.com/Papr-ai/paprwork/releases/tag/v2.4.8"
+              target="_blank"
+              rel="noopener noreferrer"
+              className="about-link whats-new-list__link"
+            >
+              View full release notes
+            </a>
+          </div>
+        )}
+
+        {currentVersion === "2.4.7" && (
+          <div className="about-card">
+            <h3>What's New in v2.4.7</h3>
+            <ul className="whats-new-list">
+              <li className="whats-new-list__item">
+                <strong>Turso Embedded Replica (Plan A)</strong>
+                <p>
+                  Desktop databases now sync through Turso embedded replicas with
+                  primary-authority writes, offline outbox draining, and
+                  cutover tooling for legacy workspaces.
+                </p>
+              </li>
+              <li className="whats-new-list__item">
+                <strong>paprDb Agent Tools</strong>
+                <p>
+                  New agent-facing database API for exec, migrations, sync
+                  status, push, and pull — with guards against direct SQLite
+                  access when replica mode is active.
+                </p>
+              </li>
+              <li className="whats-new-list__item">
+                <strong>App Tool Previews in Chat</strong>
+                <p>
+                  Mini-app tool calls now render inline previews in the chat
+                  stream so you can see app output without switching tabs.
+                </p>
+              </li>
+              <li className="whats-new-list__item">
+                <strong>Workspace Readiness &amp; Job Cleanup</strong>
+                <p>
+                  Safer workspace switching with readiness guards, job
+                  tombstones, cloud cleanup, and improved sync status in the
+                  Cloud Sync tab.
+                </p>
+              </li>
+            </ul>
+            <a
+              href="https://github.com/Papr-ai/paprwork/releases/tag/v2.4.7"
+              target="_blank"
+              rel="noopener noreferrer"
+              className="about-link whats-new-list__link"
+            >
+              View full release notes
+            </a>
+          </div>
+        )}
+
+        {currentVersion === "2.4.6" && (
+          <div className="about-card">
+            <h3>What's New in v2.4.6</h3>
+            <ul className="whats-new-list">
+              <li className="whats-new-list__item">
+                <strong>Sync Replica Genesis &amp; Schema Healing</strong>
+                <p>
+                  Smarter schema drift detection, batched migration shipping,
+                  and workspace log replay so linked databases sync reliably
+                  after schema changes.
+                </p>
+              </li>
+              <li className="whats-new-list__item">
+                <strong>Mini-App SDK Bundle</strong>
+                <p>
+                  Official SDK now includes <code>papr-sdk</code>, native
+                  dialog shim, and version-check helpers — agents can build
+                  richer mini-apps with less boilerplate.
+                </p>
+              </li>
+              <li className="whats-new-list__item">
+                <strong>Safer App Deletion</strong>
+                <p>
+                  Deleting an app now cleans up linked Turso databases and
+                  sync artifacts, with a clearer confirmation modal.
+                </p>
+              </li>
+              <li className="whats-new-list__item">
+                <strong>Turso Sync Improvements</strong>
+                <p>
+                  Faster push scheduling, platform schema support, and better
+                  sync status reporting in the Cloud Sync tab.
+                </p>
+              </li>
+            </ul>
+            <a
+              href="https://github.com/Papr-ai/paprwork/releases/tag/v2.4.6"
+              target="_blank"
+              rel="noopener noreferrer"
+              className="about-link whats-new-list__link"
+            >
+              View full release notes
+            </a>
+          </div>
+        )}
+
+        {currentVersion === "2.4.5" && (
+          <div className="about-card">
+            <h3>What's New in v2.4.5</h3>
+            <ul className="whats-new-list">
+              <li className="whats-new-list__item">
+                <strong>Cloud Services Built In</strong>
+                <p>
+                  Packaged releases now ship with Papr Memory, app-repo writer,
+                  and cloud app host URLs preconfigured — cloud sync works out
+                  of the box after login.
+                </p>
+              </li>
+              <li className="whats-new-list__item">
+                <strong>Release Build Validation</strong>
+                <p>
+                  CI verifies all gateway service keys are present before
+                  publishing installers, preventing broken cloud sync in
+                  production builds.
+                </p>
+              </li>
+            </ul>
+            <a
+              href="https://github.com/Papr-ai/paprwork/releases/tag/v2.4.5"
+              target="_blank"
+              rel="noopener noreferrer"
+              className="about-link whats-new-list__link"
+            >
+              View full release notes
+            </a>
+          </div>
+        )}
+
+        {currentVersion === "2.4.4" && (
+          <div className="about-card">
+            <h3>What's New in v2.4.4</h3>
+            <ul className="whats-new-list">
+              <li className="whats-new-list__item">
+                <strong>Faster Cloud Database Queries</strong>
+                <p>
+                  Mini-app database reads and writes are batched and pooled for
+                  noticeably snappier cloud app performance.
+                </p>
+              </li>
+              <li className="whats-new-list__item">
+                <strong>Desktop Session Bridge</strong>
+                <p>
+                  Cloud catalog previews share your Papr login session with the
+                  gateway so signed-in apps load without extra setup.
+                </p>
+              </li>
+              <li className="whats-new-list__item">
+                <strong>App Tab Keep-Alive</strong>
+                <p>
+                  Switching tabs no longer reloads mini-apps — your app state
+                  stays warm while you work across chats and settings.
+                </p>
+              </li>
+              <li className="whats-new-list__item">
+                <strong>Jobs &amp; Catalog Filters</strong>
+                <p>
+                  Filter jobs by app or delegation group, and browse the
+                  community catalog with search and category filters.
+                </p>
+              </li>
+            </ul>
+            <a
+              href="https://github.com/Papr-ai/paprwork/releases/tag/v2.4.4"
+              target="_blank"
+              rel="noopener noreferrer"
+              className="about-link whats-new-list__link"
+            >
+              View full release notes
+            </a>
+          </div>
+        )}
+
+        {currentVersion === "2.4.3" && (
+          <div className="about-card">
+            <h3>What's New in v2.4.3</h3>
+            <ul className="whats-new-list">
+              <li className="whats-new-list__item">
+                <strong>Install from Community Catalog</strong>
+                <p>
+                  Fork or track cloud apps directly from the community catalog
+                  with a guided install flow and requirement checks.
+                </p>
+              </li>
+              <li className="whats-new-list__item">
+                <strong>Richer Catalog Preview</strong>
+                <p>
+                  Preview cloud apps in dedicated tabs with URL bar navigation,
+                  persistent tab state, and session-based access validation.
+                </p>
+              </li>
+              <li className="whats-new-list__item">
+                <strong>Job–App Linkage</strong>
+                <p>
+                  Jobs now track which apps they belong to for clearer cloud
+                  scheduling and execution capability routing.
+                </p>
+              </li>
+            </ul>
+            <a
+              href="https://github.com/Papr-ai/paprwork/releases/tag/v2.4.3"
+              target="_blank"
+              rel="noopener noreferrer"
+              className="about-link whats-new-list__link"
+            >
+              View full release notes
+            </a>
+          </div>
+        )}
+
+        {currentVersion === "2.4.2" && (
+          <div className="about-card">
+            <h3>What's New in v2.4.2</h3>
+            <ul className="whats-new-list">
+              <li className="whats-new-list__item">
+                <strong>Job Cloud Status</strong>
+                <p>
+                  The Jobs view now shows whether each job last ran on desktop
+                  or in the cloud, with live status from the cloud scheduler.
+                </p>
+              </li>
+              <li className="whats-new-list__item">
+                <strong>Build Fix</strong>
+                <p>
+                  Fixed a gateway compile error that blocked v2.4.1 from
+                  building locally.
+                </p>
+              </li>
+            </ul>
+            <a
+              href="https://github.com/Papr-ai/paprwork/releases/tag/v2.4.2"
+              target="_blank"
+              rel="noopener noreferrer"
+              className="about-link whats-new-list__link"
+            >
+              View full release notes
+            </a>
+          </div>
+        )}
+
+        {currentVersion === "2.4.1" && (
+          <div className="about-card">
+            <h3>What's New in v2.4.1</h3>
+            <ul className="whats-new-list">
+              <li className="whats-new-list__item">
+                <strong>Per-User Database Isolation</strong>
+                <p>
+                  Apps with per-user Turso sources now require Papr sign-in and
+                  route each visitor to their own database replica.
+                </p>
+              </li>
+              <li className="whats-new-list__item">
+                <strong>Community Catalog Preview</strong>
+                <p>
+                  Browse and preview published apps from the community catalog
+                  directly inside Paprwork without leaving the app.
+                </p>
+              </li>
+              <li className="whats-new-list__item">
+                <strong>Smarter Mini-App Access</strong>
+                <p>
+                  Team and shared published apps now correctly identify owners
+                  and enforce read/write permissions for signed-in visitors.
+                </p>
+              </li>
+            </ul>
+            <a
+              href="https://github.com/Papr-ai/paprwork/releases/tag/v2.4.1"
+              target="_blank"
+              rel="noopener noreferrer"
+              className="about-link whats-new-list__link"
+            >
+              View full release notes
+            </a>
+          </div>
+        )}
+
+        {currentVersion === "2.4.0" && (
+          <div className="about-card">
+            <h3>What's New in v2.4.0</h3>
+            <ul className="whats-new-list">
+              <li className="whats-new-list__item">
+                <strong>Sync V3 Architecture</strong>
+                <p>
+                  Cloud sync is rebuilt around per-app repos and a workspace log —
+                  faster pushes, cleaner conflict handling, and no more stale
+                  &quot;merge required&quot; noise on apps.
+                </p>
+              </li>
+              <li className="whats-new-list__item">
+                <strong>Smarter Cloud Publish</strong>
+                <p>
+                  Publishing and syncing mini-apps routes through the new app-repo
+                  writer with clearer status in the Cloud Sync tab.
+                </p>
+              </li>
+              <li className="whats-new-list__item">
+                <strong>Auto-Update Reliability</strong>
+                <p>
+                  Restart-to-update on macOS no longer closes the window without
+                  finishing the install — you should see the password prompt when
+                  needed.
+                </p>
+              </li>
+              <li className="whats-new-list__item">
+                <strong>Scheduler &amp; Job Improvements</strong>
+                <p>
+                  Cloud-capable jobs defer correctly when dispatch is enabled, with
+                  better migration ledger sync and execution capability detection.
+                </p>
+              </li>
+            </ul>
+            <a
+              href="https://github.com/Papr-ai/paprwork/releases/tag/v2.4.0"
+              target="_blank"
+              rel="noopener noreferrer"
+              className="about-link whats-new-list__link"
+            >
+              View full release notes
+            </a>
+          </div>
+        )}
+
+        {currentVersion === "2.3.6" && (
+          <div className="about-card">
+            <h3>What's New in v2.3.6</h3>
+            <ul className="whats-new-list">
+              <li className="whats-new-list__item">
+                <strong>Silent Papr Web Sync</strong>
+                <p>
+                  Cloud workspace-chat infrastructure merges in the background —
+                  no more confusing &quot;Merge remote changes&quot; on your apps.
+                </p>
+              </li>
+              <li className="whats-new-list__item">
+                <strong>Hidden Infrastructure Job</strong>
+                <p>
+                  The Papr Web Main Agent job no longer appears in Jobs or Cloud
+                  Sync — it&apos;s managed automatically by the platform.
+                </p>
+              </li>
+              <li className="whats-new-list__item">
+                <strong>Papr Web Chat Routing</strong>
+                <p>
+                  Cloud agent sessions correctly route workspace-chat turns to the
+                  main Pen instead of mini-app agent handlers.
+                </p>
+              </li>
+            </ul>
+            <a
+              href="https://github.com/Papr-ai/paprwork/releases/tag/v2.3.6"
+              target="_blank"
+              rel="noopener noreferrer"
+              className="about-link whats-new-list__link"
+            >
+              View full release notes
+            </a>
+          </div>
+        )}
+
+        {currentVersion === "2.3.5" && (
+          <div className="about-card">
+            <h3>What's New in v2.3.5</h3>
+            <ul className="whats-new-list">
+              <li className="whats-new-list__item">
+                <strong>Workspace Switch Overlay</strong>
+                <p>
+                  Switching org or namespace shows a phased progress overlay so
+                  you know tabs, apps, and sync are reloading safely.
+                </p>
+              </li>
+              <li className="whats-new-list__item">
+                <strong>Write Guard During Switch</strong>
+                <p>
+                  Cloud, Turso, and job writes are blocked mid-switch so data
+                  from the old workspace cannot leak into the new one.
+                </p>
+              </li>
+              <li className="whats-new-list__item">
+                <strong>Per-Workspace Home Bundle</strong>
+                <p>
+                  Each workspace gets its own Daily Brief job and Home dashboard
+                  data sources instead of sharing one fixed job ID.
+                </p>
+              </li>
+              <li className="whats-new-list__item">
+                <strong>Migration Verifier Fix</strong>
+                <p>
+                  SQL migration parsing accepts drop-and-recreate patterns and
+                  stops failing on unverifiable statements.
+                </p>
+              </li>
+              <li className="whats-new-list__item">
+                <strong>Turso Sync Scoping</strong>
+                <p>
+                  Turso push state and linked DB watchers are scoped per workspace
+                  for cleaner multi-team switching.
+                </p>
+              </li>
+            </ul>
+            <a
+              href="https://github.com/Papr-ai/paprwork/releases/tag/v2.3.5"
+              target="_blank"
+              rel="noopener noreferrer"
+              className="about-link whats-new-list__link"
+            >
+              View full release notes
+            </a>
+          </div>
+        )}
+
+        {currentVersion === "2.3.4" && (
+          <div className="about-card">
+            <h3>What's New in v2.3.4</h3>
+            <ul className="whats-new-list">
+              <li className="whats-new-list__item">
+                <strong>Workspace Switch Reload</strong>
+                <p>
+                  Switching org or namespace now restores tabs, chats, apps, and
+                  Memory focus per workspace instead of mixing state across teams.
+                </p>
+              </li>
+              <li className="whats-new-list__item">
+                <strong>Social Login Cookie Fix</strong>
+                <p>
+                  Improved Playwright cookie injection from Chrome and keychain —
+                  prepare_browser sessions stay logged in reliably.
+                </p>
+              </li>
+              <li className="whats-new-list__item">
+                <strong>Community Apps Scoping</strong>
+                <p>
+                  Community catalog respects workspace assignment so apps from
+                  other teams no longer appear in the wrong namespace.
+                </p>
+              </li>
+              <li className="whats-new-list__item">
+                <strong>Memory Wiki Per-Workspace</strong>
+                <p>
+                  Wiki library focus and setup state are cached per workspace for
+                  faster context switching.
+                </p>
+              </li>
+            </ul>
+            <a
+              href="https://github.com/Papr-ai/paprwork/releases/tag/v2.3.4"
+              target="_blank"
+              rel="noopener noreferrer"
+              className="about-link whats-new-list__link"
+            >
+              View full release notes
+            </a>
+          </div>
+        )}
+
+        {currentVersion === "2.3.3" && (
+          <div className="about-card">
+            <h3>What's New in v2.3.3</h3>
+            <ul className="whats-new-list">
+              <li className="whats-new-list__item">
+                <strong>Packaged Install Fix</strong>
+                <p>
+                  Default home dashboard and bundled jobs now install correctly
+                  in production builds — resources unpacked from ASAR so fresh
+                  installs get the full experience.
+                </p>
+              </li>
+              <li className="whats-new-list__item">
+                <strong>Social Login Automation</strong>
+                <p>
+                  New prepare_browser action injects your LinkedIn, Instagram,
+                  or X session into agent browser tools for feed and messaging
+                  automation.
+                </p>
+              </li>
+              <li className="whats-new-list__item">
+                <strong>Connected Platforms UI</strong>
+                <p>
+                  Improved Social Login tab with session status, refresh, and
+                  clearer connect flows when the agent needs a platform.
+                </p>
+              </li>
+              <li className="whats-new-list__item">
+                <strong>Wiki Entity Rails</strong>
+                <p>
+                  Memory wiki now surfaces meetings, decisions, ideas, and
+                  workflows alongside projects, people, and companies.
+                </p>
+              </li>
+            </ul>
+            <a
+              href="https://github.com/Papr-ai/paprwork/releases/tag/v2.3.3"
+              target="_blank"
+              rel="noopener noreferrer"
+              className="about-link whats-new-list__link"
+            >
+              View full release notes
+            </a>
+          </div>
+        )}
+
+        {currentVersion === "2.3.2" && (
+          <div className="about-card">
+            <h3>What's New in v2.3.2</h3>
+            <ul className="whats-new-list">
+              <li className="whats-new-list__item">
+                <strong>Playwright in Packaged App</strong>
+                <p>
+                  Browser tools and Social Login now include Playwright in
+                  production builds — fixes &quot;Cannot find package
+                  playwright&quot; errors.
+                </p>
+              </li>
+              <li className="whats-new-list__item">
+                <strong>Playwright Auto-Install</strong>
+                <p>
+                  If the package or Chromium binary is missing, the app
+                  auto-installs on first use instead of failing silently.
+                </p>
+              </li>
+              <li className="whats-new-list__item">
+                <strong>Mac Auto-Update Fix</strong>
+                <p>
+                  Release pipeline now verifies latest-mac.yml zip URLs match
+                  uploaded artifacts — no more 404 on update download.
+                </p>
+              </li>
+              <li className="whats-new-list__item">
+                <strong>Social Login Timeouts</strong>
+                <p>
+                  Longer navigation timeouts for platform connect and session
+                  refresh on slow networks.
+                </p>
+              </li>
+            </ul>
+            <a
+              href="https://github.com/Papr-ai/paprwork/releases/tag/v2.3.2"
+              target="_blank"
+              rel="noopener noreferrer"
+              className="about-link whats-new-list__link"
+            >
+              View full release notes
+            </a>
+          </div>
+        )}
+
+        {currentVersion === "2.3.1" && (
+          <div className="about-card">
+            <h3>What's New in v2.3.1</h3>
+            <ul className="whats-new-list">
+              <li className="whats-new-list__item">
+                <strong>Cloud Sync Safety</strong>
+                <p>
+                  Fixes a critical bug where switching namespace could wipe
+                  cloud data. Adds safety checks before git push.
+                </p>
+              </li>
+              <li className="whats-new-list__item">
+                <strong>Smarter App Delete</strong>
+                <p>
+                  New delete modal shows linked jobs, Turso databases, and
+                  publish status — type the app name to confirm.
+                </p>
+              </li>
+              <li className="whats-new-list__item">
+                <strong>Auth Reliability</strong>
+                <p>
+                  Dynamic localhost ports, manual 6-digit code fallback, and
+                  faster feedback when browser sign-in fails.
+                </p>
+              </li>
+              <li className="whats-new-list__item">
+                <strong>Job Delete + Turso Cleanup</strong>
+                <p>
+                  Delete jobs from the Jobs view with optional Turso cloud
+                  database removal.
+                </p>
+              </li>
+            </ul>
+            <a
+              href="https://github.com/Papr-ai/paprwork/releases/tag/v2.3.1"
+              target="_blank"
+              rel="noopener noreferrer"
+              className="about-link whats-new-list__link"
+            >
+              View full release notes
+            </a>
+          </div>
+        )}
+
+        {currentVersion === "2.3.0" && (
+          <div className="about-card">
+            <h3>What's New in v2.3.0</h3>
+            <ul className="whats-new-list">
+              <li className="whats-new-list__item">
+                <strong>Telegram Connected Platform</strong>
+                <p>
+                  Connect Telegram Web alongside LinkedIn, Instagram, Reddit,
+                  Facebook, TikTok, and X — sessions stay fresh for job
+                  automation.
+                </p>
+              </li>
+              <li className="whats-new-list__item">
+                <strong>Playwright Auto-Install</strong>
+                <p>
+                  Browser tools and Social Login now auto-download Chromium on
+                  first use — no manual setup step required.
+                </p>
+              </li>
+              <li className="whats-new-list__item">
+                <strong>Published App Delete Fix</strong>
+                <p>
+                  Deleting a published mini-app now unpublishes from cloud first
+                  with clear progress and reliable timeouts.
+                </p>
+              </li>
+              <li className="whats-new-list__item">
+                <strong>Cloud Sync Reliability</strong>
+                <p>
+                  Job ownership cache invalidates immediately when apps or jobs
+                  are linked or unlinked — upload mode stays accurate.
+                </p>
+              </li>
+            </ul>
+            <a
+              href="https://github.com/Papr-ai/paprwork/releases/tag/v2.3.0"
+              target="_blank"
+              rel="noopener noreferrer"
+              className="about-link whats-new-list__link"
+            >
+              View full release notes
+            </a>
+          </div>
+        )}
+
+        {currentVersion === "2.2.9" && (
+          <div className="about-card">
+            <h3>What's New in v2.2.9</h3>
+            <ul className="whats-new-list">
+              <li className="whats-new-list__item">
+                <strong>Connected Platforms</strong>
+                <p>
+                  New Social Login settings tab — connect LinkedIn, Instagram,
+                  Reddit, Facebook, TikTok, and X with one click. Sessions stay
+                  fresh in the background for job automation.
+                </p>
+              </li>
+              <li className="whats-new-list__item">
+                <strong>Cloud Job Status</strong>
+                <p>
+                  Faster job polling on cloud mini-apps — single-job status
+                  lookup instead of loading the full jobs list.
+                </p>
+              </li>
+              <li className="whats-new-list__item">
+                <strong>Sync Performance</strong>
+                <p>
+                  Auto-upload checks no longer block the gateway during cloud
+                  sync, keeping chat and tools responsive.
+                </p>
+              </li>
+            </ul>
+            <a
+              href="https://github.com/Papr-ai/paprwork/releases/tag/v2.2.9"
+              target="_blank"
+              rel="noopener noreferrer"
+              className="about-link whats-new-list__link"
+            >
+              View full release notes
+            </a>
+          </div>
+        )}
+
+        {currentVersion === "2.2.8" && (
+          <div className="about-card">
+            <h3>What's New in v2.2.8</h3>
+            <ul className="whats-new-list">
+              <li className="whats-new-list__item">
+                <strong>Sync Architecture V2</strong>
+                <p>
+                  Unified sync coordinator with per-layer status for Git, Turso,
+                  publish catalog, and edge cache — no more misleading single
+                  &quot;synced&quot; chip.
+                </p>
+              </li>
+              <li className="whats-new-list__item">
+                <strong>Manual Upload Mode</strong>
+                <p>
+                  Per-app auto vs manual upload — test locally and push to cloud
+                  only when ready with Publish changes.
+                </p>
+              </li>
+              <li className="whats-new-list__item">
+                <strong>Turso Oplog Sync</strong>
+                <p>
+                  Event-driven delta push/pull with sync sessions, max-wait
+                  debounce, and safer bidirectional row sync.
+                </p>
+              </li>
+              <li className="whats-new-list__item">
+                <strong>Cloud Apps & Sharing</strong>
+                <p>
+                  Embedded app agent chat on cloud, require-sign-in and per-user
+                  database isolation, profile photo cloud sync, and friendlier
+                  subscription error banners.
+                </p>
+              </li>
+            </ul>
+            <a
+              href="https://github.com/Papr-ai/paprwork/releases/tag/v2.2.8"
+              target="_blank"
+              rel="noopener noreferrer"
+              className="about-link whats-new-list__link"
+            >
+              View full release notes
+            </a>
+          </div>
+        )}
 
         {/* License & Credits */}
         <div className="about-card">
           <h3>License & Credits</h3>
           <p className="about-license-text">
-            Paprwork V2 is open source software licensed under AGPL-3.0
+            Papr Work is open source software licensed under AGPL-3.0
           </p>
 
           <p className="about-license-text">

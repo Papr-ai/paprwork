@@ -2,24 +2,42 @@
  * Per-source Turso sync status for Settings UI.
  */
 
+import { openDiagnosticDatabase } from "./databaseDiagnostics/sqlite.js";
+
 import * as fs from "fs";
 import { createClient } from "@libsql/client";
 import Database from "better-sqlite3";
 import {
   filterSyncableTables,
   listUserTables,
+  openWritableLocalJobDb,
 } from "./tursoSyncBridgeCore.js";
 import { jobTursoDatabaseName } from "./tursoDatabaseNaming.js";
 import {
   discoverTursoLinkedSources,
+  linkedSourceAsAppDataSource,
   linkedSourceSyncKey,
+  listAppsLinkingDbPath,
   type TursoLinkedSource,
 } from "./tursoLinkedSources.js";
-import { getTursoSyncBridge } from "./TursoSyncBridge.js";
+import { ensureTursoSyncBridge } from "./TursoSyncBridge.js";
 import { isJobDbDirty, loadTursoSyncState } from "./tursoSyncState.js";
-import {
-  getDatabaseRegistryService,
+import { localRemoteUserSchemaDriftTables } from "./tursoDeltaSync.js";
+import { getDatabaseRegistryService,
 } from "./DatabaseRegistryService.js";
+import { shouldAutoUploadTursoForApp } from "./cloudUploadMode.js";
+import { listLegacyCdcArtifactTablesForPath } from "./legacyCdcArtifacts.js";
+import type { TursoReplicaSyncStatus } from "./tursoReplica/tursoReplicaTypes.js";
+import {
+  shouldUseTursoReplicaForSource,
+  syncStatusForLinkedDb,
+} from "./tursoReplica/tursoReplicaRouting.js";
+import { detectReplicaSidecarWedge } from "./tursoReplica/tursoReplicaSidecarWedge.js";
+import { readBootstrapPendingMarker } from "./tursoReplica/tursoReplicaBootstrapMarker.js";
+import { computeReplicaPendingPush } from "./tursoReplica/replicaPendingPush.js";
+import { MIGRATION_CONFLICT_CODE } from "./tursoReplica/tursoReplicaMigrationConflict.js";
+import { isTursoReplicaOnline } from "../utils/tursoReplicaEnabled.js";
+import type { DatabaseRecord } from "./DatabaseRegistryService.js";
 
 export type TursoSourceSyncState =
   | "synced"
@@ -38,8 +56,27 @@ export interface TursoSourceSyncItem {
   status: TursoSourceSyncState;
   localTableCount: number;
   remoteTableCount: number;
+  schemaDrift?: boolean;
+  /** Local-only legacy CDC tables excluded from drift (diagnostic). */
+  legacyArtifactTables?: string[];
+  legacyArtifactCheck?: "not-applicable" | "checked" | "unavailable";
+  /** Other mini-apps linking the same on-disk SQLite file (shared registry DB). */
+  linkingAppIds?: string[];
+  /** Turso token/query failed — remoteTableCount may be misleading. */
+  remoteCheckFailed?: boolean;
   quarantinedAt?: string | null;
   quarantineReason?: string | null;
+  /** Dirty but auto-upload off — use Publish changes. */
+  manualUploadHold?: boolean;
+  /** Plan A replica path — when set, row sync uses Turso Sync push/pull. */
+  syncMode?: "legacy" | "replica";
+  online?: boolean;
+  pendingPush?: boolean;
+  pendingOps?: number;
+  migrationConflict?: boolean;
+  lastReplicaPushError?: string | null;
+  cutoverBlocked?: boolean;
+  cutoverBlockReason?: string | null;
 }
 
 export interface TursoSyncItemsReport {
@@ -67,7 +104,9 @@ function countLocalSyncableTables(dbPath: string): number {
     if (stats.size === 0) {
       return 0;
     }
-    const db = new Database(dbPath, { readonly: true });
+    // Short busy timeout: better-sqlite3 sleeps synchronously on the main thread
+    // (default 5000ms) when another engine holds the file.
+    const db = openDiagnosticDatabase(Database, "services/tursoSyncStatus", dbPath, { readonly: true, timeout: 100 });
     try {
       return filterSyncableTables(listUserTables(db)).length;
     } finally {
@@ -78,12 +117,126 @@ function countLocalSyncableTables(dbPath: string): number {
   }
 }
 
+async function countLocalSyncableTablesForSource(
+  source: TursoLinkedSource,
+): Promise<number> {
+  const appSource = linkedSourceAsAppDataSource(source);
+  if (shouldUseTursoReplicaForSource(appSource)) {
+    try {
+      const { queryLinkedDbViaTursoReplica } = await import(
+        "./tursoReplica/tursoReplicaRouting.js"
+      );
+      const result = await queryLinkedDbViaTursoReplica(
+        appSource,
+        "SELECT name FROM sqlite_master WHERE type='table' AND name NOT LIKE 'sqlite_%'",
+        [],
+        { pullBeforeRead: false },
+      );
+      return filterSyncableTables(
+        result.rows.map((row) => String(row.name ?? row[0] ?? "")),
+      ).length;
+    } catch {
+      return 0;
+    }
+  }
+  return countLocalSyncableTables(source.dbPath);
+}
+
+/** Cheap local table estimate — avoids opening the replica worker for status polls. */
+export function estimateReplicaLocalTableCount(dbPath: string): number {
+  if (!fs.existsSync(dbPath)) {
+    return 0;
+  }
+  try {
+    return fs.statSync(dbPath).size > 0 ? 1 : 0;
+  } catch {
+    return 0;
+  }
+}
+
+/** Registry-backed replica status for cached /api/sync/items (no worker stats probe). */
+export function buildReplicaTursoSyncStatusFromRegistry(
+  record: DatabaseRecord | undefined,
+  localPath: string,
+): TursoReplicaSyncStatus {
+  const lastPushError = record?.lastReplicaPushError ?? null;
+  const migrationConflict =
+    lastPushError?.startsWith(`${MIGRATION_CONFLICT_CODE}:`) ?? false;
+  const pendingPush = computeReplicaPendingPush({
+    pendingOps: 0,
+    lastPushError,
+    migrationConflict,
+    lastReplicaPushAt: record?.lastReplicaPushAt,
+    lastReplicaLocalMutationAt: record?.lastReplicaLocalMutationAt,
+  });
+  const bootstrapMarker = readBootstrapPendingMarker(localPath);
+  return {
+    online: isTursoReplicaOnline(),
+    syncMode: "replica",
+    pendingPush,
+    pendingOps: 0,
+    lastPushError,
+    migrationConflict,
+    cutoverBlocked: record?.cutoverBlocked ?? false,
+    cutoverBlockReason: record?.cutoverBlockReason ?? null,
+    sidecarWedge: detectReplicaSidecarWedge(localPath),
+    bootstrapPending: bootstrapMarker !== null,
+    bootstrapAttempts: bootstrapMarker?.attempts ?? 0,
+    lastBootstrapError: bootstrapMarker?.lastError ?? null,
+    stats: null,
+  };
+}
+
+export interface BuildTursoSyncItemsReportOptions {
+  /** When false, skip live replica worker probes (fast path for polling). */
+  liveReplicaProbe?: boolean;
+}
+
 /** Exported for unit tests — fingerprint-aware Turso source status. */
 export function resolveTursoSourceStatus(
   localTableCount: number,
   remoteTableCount: number,
   dbExists: boolean,
   dirty: boolean,
+  quarantined = false,
+  schemaDrift = false,
+  remoteCheckFailed = false,
+): TursoSourceSyncState {
+  if (quarantined) {
+    return "quarantined";
+  }
+  if (!dbExists) {
+    return "unavailable";
+  }
+  if (remoteCheckFailed && localTableCount > 0) {
+    return "unavailable";
+  }
+  if (schemaDrift && localTableCount > 0 && remoteTableCount > 0) {
+    return "pending";
+  }
+  if (dirty && localTableCount > 0) {
+    return "pending";
+  }
+  if (localTableCount > 0 && remoteTableCount > 0 && localTableCount > remoteTableCount) {
+    return "pending";
+  }
+  if (remoteTableCount > 0 && !schemaDrift) {
+    return "synced";
+  }
+  if (localTableCount > 0) {
+    return "pending";
+  }
+  return "empty";
+}
+
+/** Exported for unit tests — replica-aware Turso source status. */
+export function resolveReplicaTursoSourceStatus(
+  localTableCount: number,
+  dbExists: boolean,
+  replica: Pick<
+    TursoReplicaSyncStatus,
+    "pendingPush" | "migrationConflict" | "cutoverBlocked"
+  >,
   quarantined = false,
 ): TursoSourceSyncState {
   if (quarantined) {
@@ -92,14 +245,11 @@ export function resolveTursoSourceStatus(
   if (!dbExists) {
     return "unavailable";
   }
-  if (dirty && localTableCount > 0) {
+  if (replica.cutoverBlocked || replica.migrationConflict || replica.pendingPush) {
     return "pending";
-  }
-  if (remoteTableCount > 0) {
-    return "synced";
   }
   if (localTableCount > 0) {
-    return "pending";
+    return "synced";
   }
   return "empty";
 }
@@ -143,12 +293,38 @@ function sourceItem(
   localTableCount: number,
   remoteTableCount: number,
   dirty: boolean,
+  schemaDrift: boolean,
   pushState: ReturnType<typeof loadTursoSyncState>,
+  remoteCheckFailed = false,
+  linkingAppIds?: string[],
+  replica?: TursoReplicaSyncStatus,
+  legacyArtifactTables?: string[],
 ): TursoSourceSyncItem {
   const dbExists = fs.existsSync(source.dbPath);
   const syncKey = linkedSourceSyncKey(source);
   const jobState = pushState.jobs[syncKey];
   const quarantined = Boolean(jobState?.quarantinedAt);
+  const status =
+    replica?.syncMode === "replica"
+      ? resolveReplicaTursoSourceStatus(
+          localTableCount,
+          dbExists,
+          replica,
+          quarantined,
+        )
+      : resolveTursoSourceStatus(
+          localTableCount,
+          remoteTableCount,
+          dbExists,
+          dirty,
+          quarantined,
+          schemaDrift,
+          remoteCheckFailed,
+        );
+  const manualUploadHold =
+    !shouldAutoUploadTursoForApp(source.appId) &&
+    status === "pending" &&
+    (replica?.syncMode === "replica" ? replica.pendingPush : dirty);
   return {
     appId: source.appId,
     jobId: syncKey,
@@ -156,49 +332,151 @@ function sourceItem(
     role: source.role ?? "linked",
     dbPath: source.dbPath,
     tursoDatabase: resolveTursoDatabaseLabel(source),
-    status: resolveTursoSourceStatus(
-      localTableCount,
-      remoteTableCount,
-      dbExists,
-      dirty,
-      quarantined,
-    ),
+    status,
     localTableCount,
     remoteTableCount,
+    schemaDrift: replica?.syncMode === "replica" ? undefined : schemaDrift,
+    legacyArtifactTables:
+      legacyArtifactTables && legacyArtifactTables.length > 0
+        ? legacyArtifactTables
+        : undefined,
     quarantinedAt: jobState?.quarantinedAt ?? null,
     quarantineReason: jobState?.quarantineReason ?? null,
+    manualUploadHold: manualUploadHold || undefined,
+    remoteCheckFailed: remoteCheckFailed || undefined,
+    linkingAppIds:
+      linkingAppIds && linkingAppIds.length > 1 ? linkingAppIds : undefined,
+    ...(replica?.syncMode === "replica"
+      ? {
+          syncMode: "replica" as const,
+          online: replica.online,
+          pendingPush: replica.pendingPush,
+          pendingOps: replica.pendingOps,
+          migrationConflict: replica.migrationConflict || undefined,
+          lastReplicaPushError: replica.lastPushError,
+          cutoverBlocked: replica.cutoverBlocked || undefined,
+          cutoverBlockReason: replica.cutoverBlockReason,
+        }
+      : {}),
   };
+}
+
+async function detectRemoteSchemaDrift(
+  dbPath: string,
+  tursoDatabase: string,
+): Promise<boolean> {
+  const { isReplicaManagedDbPath } = await import(
+    "./tursoReplica/tursoReplicaFileGuard.js"
+  );
+  if (isReplicaManagedDbPath(dbPath)) {
+    return false;
+  }
+  if (!fs.existsSync(dbPath)) {
+    return false;
+  }
+  const bridge = ensureTursoSyncBridge();
+  if (!bridge.enabled) {
+    return false;
+  }
+  return bridge.runExclusiveForDbPath(dbPath, async () => {
+    let credentials;
+    try {
+      credentials = await bridge.fetchCredentials(tursoDatabase);
+    } catch {
+      return false;
+    }
+    const remote = createClient({
+      url: credentials.tursoUrl,
+      authToken: credentials.authToken,
+    });
+    const localDb = openWritableLocalJobDb(dbPath);
+    try {
+      const tableNames = filterSyncableTables(listUserTables(localDb));
+      if (tableNames.length === 0) {
+        return false;
+      }
+      const drifted = await localRemoteUserSchemaDriftTables(remote, localDb, tableNames);
+      return drifted.length > 0;
+    } finally {
+      localDb.close();
+      remote.close();
+    }
+  });
 }
 
 async function countRemoteSyncableTables(
   tursoDatabase: string,
+  dbPath: string,
 ): Promise<number> {
-  const bridge = getTursoSyncBridge();
-  if (!bridge) {
+  const bridge = ensureTursoSyncBridge();
+  if (!bridge.enabled) {
     return 0;
   }
-  const databaseName = tursoDatabase;
-  const credentials = await bridge.fetchCredentials(databaseName);
-  const remote = createClient({
-    url: credentials.tursoUrl,
-    authToken: credentials.authToken,
+  return bridge.runExclusiveForDbPath(dbPath, async () => {
+    const credentials = await bridge.fetchCredentials(tursoDatabase);
+    const remote = createClient({
+      url: credentials.tursoUrl,
+      authToken: credentials.authToken,
+    });
+    try {
+      const result = await remote.execute(
+        `SELECT name FROM sqlite_master WHERE type='table' AND name NOT LIKE 'sqlite_%'`,
+      );
+      return filterSyncableTables(
+        result.rows.map((row) => String(row.name ?? "")),
+      ).length;
+    } finally {
+      remote.close();
+    }
   });
+}
+
+interface DbRemoteCheckSnapshot {
+  remoteTableCount: number;
+  schemaDrift: boolean;
+  remoteCheckFailed: boolean;
+}
+
+async function snapshotDbRemoteCheck(
+  dbPath: string,
+  tursoDatabase: string,
+  localTableCount: number,
+  replicaManaged = false,
+): Promise<DbRemoteCheckSnapshot> {
+  let remoteTableCount = 0;
+  let schemaDrift = false;
+  let remoteCheckFailed = false;
   try {
-    const result = await remote.execute(
-      `SELECT name FROM sqlite_master WHERE type='table' AND name NOT LIKE 'sqlite_%'`,
-    );
-    return filterSyncableTables(
-      result.rows.map((row) => String(row.name ?? "")),
-    ).length;
-  } finally {
-    remote.close();
+    remoteTableCount = await countRemoteSyncableTables(tursoDatabase, dbPath);
+    if (
+      !replicaManaged &&
+      remoteTableCount > 0 &&
+      localTableCount > 0
+    ) {
+      schemaDrift = await detectRemoteSchemaDrift(dbPath, tursoDatabase);
+    }
+  } catch {
+    remoteCheckFailed = true;
   }
+  return { remoteTableCount, schemaDrift, remoteCheckFailed };
+}
+
+/** Status reporting must never open a live replica through a second database engine. */
+export function inspectLegacyArtifactsForStatus(
+  dbPath: string, replicaManaged: boolean,
+  inspect = listLegacyCdcArtifactTablesForPath,
+): { tables: string[]; status: "not-applicable" | "checked" | "unavailable" } {
+  if (replicaManaged) return { tables: [], status: "not-applicable" };
+  try { return { tables: inspect(dbPath), status: "checked" }; }
+  catch { return { tables: [], status: "unavailable" }; }
 }
 
 export async function buildTursoSyncItemsReport(
   appsRootDir: string,
   filterAppId?: string,
+  options?: BuildTursoSyncItemsReportOptions,
 ): Promise<TursoSyncItemsReport> {
+  const liveReplicaProbe = options?.liveReplicaProbe === true;
   const emptyReport = (error: string | null): TursoSyncItemsReport => ({
     enabled: false,
     databaseMode: "per-job",
@@ -208,14 +486,15 @@ export async function buildTursoSyncItemsReport(
     summary: { synced: 0, pending: 0, empty: 0, unavailable: 0, quarantined: 0, total: 0 },
   });
 
-  const bridge = getTursoSyncBridge();
-  if (!bridge) {
-    return emptyReport("Turso sync not initialized");
+  const bridge = ensureTursoSyncBridge();
+  if (!bridge.enabled) {
+    return emptyReport("Turso sync is disabled");
   }
 
-  const sources = (await discoverTursoLinkedSources(appsRootDir)).filter(
-    (source) => !filterAppId || source.appId === filterAppId,
-  );
+  const allSources = await discoverTursoLinkedSources(appsRootDir);
+  const sources = filterAppId
+    ? allSources.filter((source) => source.appId === filterAppId)
+    : allSources;
   if (sources.length === 0) {
     return {
       enabled: true,
@@ -230,21 +509,94 @@ export async function buildTursoSyncItemsReport(
   const items: TursoSourceSyncItem[] = [];
   let reportError: string | null = null;
   const pushState = loadTursoSyncState();
+  const remoteByDbPath = new Map<string, DbRemoteCheckSnapshot>();
+  const artifactsByDbPath = new Map<string, string[]>();
+  const registry = getDatabaseRegistryService();
 
   for (const source of sources) {
     const syncKey = linkedSourceSyncKey(source);
-    const localTableCount = countLocalSyncableTables(source.dbPath);
+    const appSource = linkedSourceAsAppDataSource(source);
+    const replicaManaged = shouldUseTursoReplicaForSource(appSource);
+    const localTableCount = replicaManaged && !liveReplicaProbe
+      ? estimateReplicaLocalTableCount(source.dbPath)
+      : await countLocalSyncableTablesForSource(source);
     const alternateKeys = source.jobId && source.jobId !== syncKey ? [source.jobId] : [];
-    const dirty = isJobDbDirty(syncKey, source.dbPath, pushState, alternateKeys);
-    let remoteTableCount = 0;
-    try {
-      remoteTableCount = await countRemoteSyncableTables(
-        resolveTursoDatabaseLabel(source),
-      );
-    } catch (err) {
-      reportError = (err as Error).message.slice(0, 200);
+    const dirty = replicaManaged
+      ? false
+      : isJobDbDirty(syncKey, source.dbPath, pushState, alternateKeys);
+    const tursoDatabase = resolveTursoDatabaseLabel(source);
+    const dbPathKey = source.dbPath;
+    let remoteSnapshot = remoteByDbPath.get(dbPathKey);
+    if (!remoteSnapshot) {
+      try {
+        if (replicaManaged && !liveReplicaProbe) {
+          remoteSnapshot = {
+            remoteTableCount: localTableCount > 0 ? localTableCount : 0,
+            schemaDrift: false,
+            remoteCheckFailed: false,
+          };
+        } else {
+          remoteSnapshot = await snapshotDbRemoteCheck(
+            source.dbPath,
+            tursoDatabase,
+            localTableCount,
+            replicaManaged,
+          );
+        }
+      } catch (err) {
+        remoteSnapshot = {
+          remoteTableCount: 0,
+          schemaDrift: false,
+          remoteCheckFailed: true,
+        };
+        reportError = (err as Error).message.slice(0, 200);
+      }
+      remoteByDbPath.set(dbPathKey, remoteSnapshot);
     }
-    items.push(sourceItem(source, localTableCount, remoteTableCount, dirty, pushState));
+    let legacyArtifactCheck: "not-applicable" | "checked" | "unavailable" = replicaManaged ? "not-applicable" : "checked";
+    let legacyArtifactTables = artifactsByDbPath.get(dbPathKey);
+    if (!legacyArtifactTables) {
+      // Replica engine tables are current bookkeeping, not legacy contamination.
+      // Never open an engine-owned file through better-sqlite3 just to render status.
+      const inspected = inspectLegacyArtifactsForStatus(source.dbPath, replicaManaged);
+      legacyArtifactTables = inspected.tables;
+      legacyArtifactCheck = inspected.status;
+      if (legacyArtifactCheck !== "unavailable") artifactsByDbPath.set(dbPathKey, legacyArtifactTables);
+    }
+    const linkingAppIds = listAppsLinkingDbPath(allSources, source.dbPath);
+    let replicaStatus: TursoReplicaSyncStatus | undefined;
+    if (replicaManaged) {
+      if (liveReplicaProbe) {
+        try {
+          replicaStatus = await syncStatusForLinkedDb(appSource);
+        } catch {
+          /* best-effort — fall back to registry snapshot */
+        }
+      }
+      if (!replicaStatus) {
+        const record = source.dbId
+          ? registry.getById(source.dbId)
+          : registry.getByPath(source.dbPath);
+        replicaStatus = buildReplicaTursoSyncStatusFromRegistry(
+          record ?? undefined,
+          source.dbPath,
+        );
+      }
+    }
+    items.push(
+      { ...sourceItem(
+        source,
+        localTableCount,
+        remoteSnapshot.remoteTableCount,
+        dirty,
+        remoteSnapshot.schemaDrift,
+        pushState,
+        remoteSnapshot.remoteCheckFailed,
+        linkingAppIds,
+        replicaStatus,
+        legacyArtifactTables,
+      ), legacyArtifactCheck },
+    );
   }
 
   items.sort((a, b) => a.alias.localeCompare(b.alias));

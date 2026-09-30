@@ -12,6 +12,22 @@ import { getJobsService, STANDALONE_APP_ID } from "./JobsService.js";
 import type { JobRecord, JobStatus } from "./jobs/types.js";
 import type { StoredMessage } from "./storage/IStorageProvider.js";
 import { DEFAULT_AGENT_MAX_TURNS } from "../../core/constants/agentLimits.js";
+import { PRODUCT_ARCHITECT_IMPLEMENTATION_CONTRACTS_SECTION } from "../../core/utils/productArchitectGate.js";
+import { DESIGN_DIRECTIVE_BLOCK } from "../../core/constants/designDirective.js";
+import { MULTI_USER_ACL_SECTION } from "../../core/constants/multiUserAclDirective.js";
+import {
+  collectSubAgentReferences,
+  formatOrphanedSubAgentWarning,
+  findOrphanedSubAgentReferences,
+  reconcileSubAgentProfilesOnDisk,
+} from "./subagents/subAgentIntegrity.js";
+import { listCustomSubAgentConfigEntries } from "./subagents/subAgentMetadataSlice.js";
+import { getPaprRoot } from "../../core/utils/paprRoot.js";
+import {
+  buildCodebaseExplorerSystemPrompt,
+  CODEBASE_EXPLORER_SUB_AGENT_ID,
+  CODEBASE_EXPLORER_TOOL_IDS,
+} from "../../core/subagents/codebaseExplorer.js";
 
 /** Chat ID prefix for delegation sub-agent ↔ main-agent conversations */
 export const DELEGATION_CHAT_PREFIX = "delegation:";
@@ -157,6 +173,20 @@ const DEFAULT_SUB_AGENTS: Array<
     lastRunAt: undefined,
   },
   {
+    id: CODEBASE_EXPLORER_SUB_AGENT_ID,
+    name: "Codebase Explorer",
+    description:
+      "Read-only repo/job/DB investigation — hands structured evidence to the main agent (cheap model)",
+    systemPrompt: buildCodebaseExplorerSystemPrompt(DEFAULT_AGENT_MAX_TURNS),
+    allowedToolIds: [...CODEBASE_EXPLORER_TOOL_IDS],
+    assignedSkills: [],
+    outputMode: "natural",
+    maxTurns: DEFAULT_AGENT_MAX_TURNS,
+    memoryPolicy: "none",
+    icon: "search",
+    lastRunAt: undefined,
+  },
+  {
     id: "implementation-specialist",
     name: "Implementation Specialist",
     description: "Implements and validates code changes",
@@ -193,26 +223,44 @@ REQUIRED FIRST STEPS:
 3. list_apps() and list_jobs() when relevant
 4. read_file({ path: "src/resources/agent-docs/PRODUCT_ARCHITECT_GUIDE.md" })
 5. read_file({ path: "src/resources/agent-docs/EXAMPLE_APP_ARCHITECTURE_PLAN.md" }) for a full worked example to mirror
+6. If social/login platform scraping (LinkedIn, X, Reddit, …): read_skill({ skillId: "preloaded-social-media-auth" })
+7. If cloud sync, apps.papr.ai, or jobs while desktop asleep: read_file({ path: "src/resources/agent-docs/CLOUD_VS_DESKTOP_GUIDE.md" })
 
 OUTPUT (use all sections):
 ## Product Brief — job-to-be-done, scope, success criteria
-## Paprwork Architecture — mini-apps (modes), backend handlers, jobs (types, schedules, appIds, dependsOn), shared SQLite schema, data flow
+## Page map — one user task per page; multiple pages per app OK; split apps when workflows/audiences differ (see PRODUCT_ARCHITECT_GUIDE § Apps vs pages)
+## Paprwork Architecture — mini-apps (modes), backend handlers, jobs (types, schedules, appIds, dependsOn), shared SQLite schema + table design (entities, facts, aggregates), data flow
 ### Backend Handlers (REQUIRED subsection)
 List each POST /api/app/backend/:action or explicitly justify skipping ("read-only dashboard with 1-2 SELECTs, no secrets, no external APIs").
 Backend handlers are needed for: 3+ DB operations (CRUD), vault/API keys, external API calls, server-side validation, file operations, multi-table transactions — NOT just SQL.
 If the app calls ANY external API with secrets, those calls MUST go through backend handlers (never fetch() with API keys from the browser).
-## Design System — screens (2-3 sections max), ONE primary action per screen, Liquid Glass + brand
+## Implementation Contracts (REQUIRED — copy checklist for builder)
+${PRODUCT_ARCHITECT_IMPLEMENTATION_CONTRACTS_SECTION}
+## Cloud Read Budget — estimated rows read per page; aggregate tables (app_stats) for KPIs, not runtime COUNT(*) from frontend
+## Plan A Cloud DB (when linked DBs + cloud sync) — three lanes: Git (Sync V3 per-app repo), Turso (attach_database / data-sources.json), Vault (Integration Keys + platform cookies — cloud jobs read vault, not keychain). Schema: migrations/{id}.sql → papr_db_apply_migration; rows via DML; Publish changes / push_cloud_sync({ appId }) = git + Turso ordered flush
+${MULTI_USER_ACL_SECTION}
+## Platform Connections (when social/login scraping) — LinkedIn jobs ONLY: linkedin-api + papr_platform_browser (CDP :9222, desktop). X/Reddit/Instagram: \${PLATFORM_*} keys + headless Playwright — NO reddit-api/x-api CDP. Cloud non-LinkedIn: vault-synced keys + headless; no Papr Chrome
+## Design System — one task per page, 2-3 sections per page, ONE primary action per page, Liquid Glass + brand
+Brand: the delegation context includes a "## User Brand" block. When set, name the exact brand colors/fonts/logo per page and how they adapt to dark mode (instead of Papr defaults). When UNSET, do NOT invent a palette — add "Brand: ask user for colors/fonts/logo, or confirm Papr default" as the first Open Question for the main agent.
+For EACH page specify: the one job, the primary action, EMPTY state (value sentence + first-success CTA), FILLED state (hierarchy, key number first), dark/light notes, small (390px) vs large (1440px) layout.
+Design Directive:
+${DESIGN_DIRECTIVE_BLOCK}
 ## Phased Plan — Phase 1 MVP, later phases
 ## Risks & Open Questions
 ## Recommendation — proceed / simplify / defer
 
 RULES:
-- Prefer 2-3 focused apps over one monolith
+- One user task per page; one related workflow per app; 2-3 apps when jobs/audiences are totally different (not "one more tab")
+- Entity + fact + aggregate tables in one DB — job writes aggregates, app reads rows (see PRODUCT_ARCHITECT_GUIDE § Table design)
 - Agent jobs for LLM work; python/node for fixed pipelines only
 - Every job needs appIds; custom keys via \${KEY_NAME} in command strings only
 - Mini-apps use window.paprAPI (browser context, not Node fs)
 - Never recommend spaghetti (50+ files in one app)
 - Backend handlers for ANY server-side logic: DB CRUD, external APIs, vault secrets, auth, file ops — not just SQL
+- Multi-user + shared DB: design row ACL (owner_user_id, visibility, app_roles, row_acl) up front — retrofitting ACL onto shared Turso tables later means migrations + data backfill
+- Plan A (cloud sync on): schema changes = migration files + papr_db_apply_migration only — never papr_db_exec DDL or bash/sqlite3 on registry DB paths
+- Platform scraping jobs: LinkedIn → linkedin-api + CDP (desktop Papr Chrome); all other platforms → \${KEY} + headless Playwright in job command — never reddit-api/x-api for scrapers; cloud uses vault-synced cookies (desktop must sync while awake)
+- Scheduled jobs while Mac asleep: cloud runs automatically when heartbeat stale — job code must be pushed to git + vault keys synced while desktop was awake (see CLOUD_VS_DESKTOP_GUIDE)
 
 TURN BUDGET: Up to ${DEFAULT_AGENT_MAX_TURNS} tool steps (same as main agent). After investigation, STOP calling tools and deliver the FULL document as your final assistant message — not "let me check..." planning text.
 
@@ -303,7 +351,64 @@ export class SubAgentService {
     await Promise.all([this.loadProfiles(), this.loadLegacyRuns()]);
     await this.migrateLegacyRunsIfNeeded();
     await this.ensureDefaultProfiles();
+    await this.reconcileIntegrityAfterLoad();
+    void this.uploadCustomProfilesToCloud();
     this.initialized = true;
+  }
+
+  /** Dual-write custom profiles to Mongo (Phase 4.6) — backfill on init + after saves. */
+  private uploadCustomProfilesToCloud(updatedAt?: string): void {
+    const list = listCustomSubAgentConfigEntries(
+      Array.from(this.profiles.values()),
+    );
+    if (list.length === 0) {
+      return;
+    }
+    const resolvedUpdatedAt =
+      updatedAt ??
+      (list.reduce((latest, profile) => {
+        const candidate = profile.updatedAt ?? profile.createdAt ?? "";
+        return candidate > latest ? candidate : latest;
+      }, "") || new Date().toISOString());
+    void import("./syncV3/MetadataRegistryClient.js")
+      .then(({ uploadSubAgentsIndexToCloud }) =>
+        uploadSubAgentsIndexToCloud(list, resolvedUpdatedAt),
+      )
+      .catch((err: Error) => {
+        console.warn(
+          "[SubAgentService] subagents index cloud upload failed:",
+          err.message.slice(0, 120),
+        );
+      });
+  }
+
+  /** Reload profiles from disk (after git pull merge / sidecar recovery). */
+  async reloadProfilesFromDisk(): Promise<void> {
+    await this.loadProfiles();
+    await this.ensureDefaultProfiles();
+    await this.reconcileIntegrityAfterLoad();
+  }
+
+  private async reconcileIntegrityAfterLoad(): Promise<void> {
+    try {
+      const paprDir = getPaprRoot();
+      const result = await reconcileSubAgentProfilesOnDisk(paprDir);
+      if (result.recoveredFromSidecar.length > 0) {
+        console.warn(
+          `[SubAgentService] Recovered sub-agent profile(s) from agent-chat sidecar: ${result.recoveredFromSidecar.join(", ")}`,
+        );
+        await this.loadProfiles();
+      }
+      const warning = formatOrphanedSubAgentWarning(result.stillOrphaned);
+      if (warning) {
+        console.warn(warning);
+      }
+    } catch (error) {
+      console.warn(
+        "[SubAgentService] Sub-agent integrity reconcile skipped:",
+        (error as Error).message.slice(0, 160),
+      );
+    }
   }
 
   private async migrateLegacyRunsIfNeeded(): Promise<void> {
@@ -383,6 +488,7 @@ export class SubAgentService {
       a.name.localeCompare(b.name),
     );
     await fs.writeFile(this.profilePath, JSON.stringify(list, null, 2), "utf8");
+    this.uploadCustomProfilesToCloud(new Date().toISOString());
   }
 
   private async ensureDefaultProfiles(): Promise<void> {
@@ -482,13 +588,34 @@ export class SubAgentService {
     return profile;
   }
 
-  async deleteAgent(agentId: string): Promise<boolean> {
+  async deleteAgent(agentId: string, options?: { force?: boolean }): Promise<boolean> {
     await this.initialize();
+    if (BUILTIN_SUB_AGENT_ID_SET.has(agentId)) {
+      throw new Error(`Cannot delete built-in sub-agent: ${agentId}`);
+    }
+    const refs = collectSubAgentReferences(getPaprRoot(), agentId);
+    if (refs.length > 0 && !options?.force) {
+      const summary = refs.map((r) => `${r.kind} "${r.label}" (${r.id})`).join("; ");
+      throw new Error(
+        `Cannot delete sub-agent ${agentId} — still referenced by ${summary}. ` +
+          "Disable app agent chat or update jobs first, or pass force: true.",
+      );
+    }
     const deleted = this.profiles.delete(agentId);
     if (deleted) {
       await this.saveProfiles();
     }
     return deleted;
+  }
+
+  async listOrphanedReferences(): Promise<
+    ReturnType<typeof findOrphanedSubAgentReferences>
+  > {
+    await this.initialize();
+    return findOrphanedSubAgentReferences(
+      getPaprRoot(),
+      Array.from(this.profiles.values()),
+    );
   }
 
   async listRuns(limit = 50): Promise<DelegationRunRecord[]> {

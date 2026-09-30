@@ -1,3 +1,5 @@
+> **Paths:** `$PAPR_HOME` = active org/namespace workspace (`~/Papr/orgs/{orgId}/namespaces/{nsId}/`). See `docs/PAPR_WORKSPACE_PATHS.md`. Prefer app/job tools over raw paths.
+
 # App & Jobs Guide (V2)
 
 Complete guide for building mini-apps, jobs, and app+job pipelines in Paprwork V2.
@@ -13,9 +15,10 @@ Complete guide for building mini-apps, jobs, and app+job pipelines in Paprwork V
 2. **Validate upstream data** — Run small API/data probes with `bash` before committing schema. Inspect actual field names, pagination, auth constraints.
 3. **Define contracts** — Lock SQLite write model (what jobs produce) and read model (what the app queries). Add indexes for app query paths.
 4. **Implement jobs** — Create with `create_job`, execute with `run_job`, inspect with `read_job_logs`. Adjust schema based on observed outputs.
-5. **Wire app to data** — `create_job` with `appIds` auto-links, or `attach_database` / `link_app_data_source({ dbId })` for standalone DBs. Validate end-to-end with realistic records across all UX states.
+5. **Wire app to data** — `create_database` → `attach_database` → mini-app calls `/api/db/query` and `/api/db/write` with `sourceId`. Jobs use `writeDbIds` to populate DBs. Validate end-to-end with realistic records across all UX states.
+6. **Write the App Card** — `apps/{appId}/docs/APP_CARD.md` with the five fixed sections, then index each section into memory. See `APP_CARD_GUIDE.md`. This is what makes the app's storage, schema, and footguns findable later; source code alone does not answer those questions.
 
-If the task is tiny and explicit, merge steps. Always explain tradeoffs when skipping discovery.
+If the task is tiny and explicit, merge steps. Always explain tradeoffs when skipping discovery. **Step 6 is not optional for apps that will be used again** — and it is the step to repeat whenever you modify an existing app.
 
 ---
 
@@ -28,7 +31,7 @@ If the task is tiny and explicit, merge steps. Always explain tradeoffs when ski
 | One-time API probe (`curl`, test auth, inspect response) | Mini-app button triggers it (`/api/jobs/run`) |
 | Peek at sqlite / file structure before designing schema | Scheduled (cron / interval) |
 | Install a package, git op, quick transform (<60s) | User will rerun by name ("run the sync job") |
-| "Try this now" during the current chat | Writes to `$APP_DB` for a linked app |
+| "Try this now" during the current chat | Writes to registry DBs via `writeDbIds` for a linked app |
 | | Multi-step pipeline with `dependsOn` |
 | | Needs run history, retries, or delivery |
 
@@ -45,65 +48,132 @@ create_job({ name: "Reddit Sync", type: "python", appIds: [appId], command: "pyt
 
 ---
 
-## Database linking (job-owned vs standalone)
+## Database linking
 
 **Not every mini-app needs a database.** Content-only apps (no `/api/db/*`) skip linking entirely.
 
-### Path A — Job owns the DB (default)
+### Standard flow (create → attach → query/write)
+
+Like any app with a database: create the DB, attach it, name it in every SQL call.
 
 ```javascript
-create_job({ name: "Sync", appIds: [appId], type: "python", command: "python3 code/main.py" })
-// Auto-links ~/Papr/Jobs/{jobId}/data/data.db → app's data-sources.json (primary if first source)
+// 1. Create registry DB
+const { dbId } = await create_database({ name: "Billing" })
+
+// 2. Attach to mini-app (many DBs per app; same DB on many apps)
+await attach_database({ appId, dbId, alias: "billing" })
+
+// 3. Mini-app — read
+await fetch('/api/db/query', {
+  method: 'POST',
+  body: JSON.stringify({
+    appId,
+    sourceId: 'billing',  // alias — required when 2+ linked DBs
+    sql: 'SELECT * FROM invoices WHERE status = ?',
+    params: ['open'],
+  }),
+})
+
+// 4. Mini-app — write (all linked DBs are writable)
+await fetch('/api/db/write', {
+  method: 'POST',
+  body: JSON.stringify({
+    appId,
+    sourceId: 'billing',
+    sql: 'INSERT INTO invoices (amount) VALUES (?)',
+    params: [100],
+  }),
+})
+
+// 5. Optional — job that syncs/fills the DB
+create_job({
+  name: "Sync billing",
+  appIds: [appId],
+  writeDbIds: [dbId],
+  type: "python",
+  command: 'python3 sync.py --db "$PAPR_DB_BILLING"',
+})
 ```
 
-- Job writes UI-facing tables to **`$APP_DB`** (same file as primary linked source)
-- Job scratch (`job_runs`, temp) uses **`$JOB_DB`** (always the job's own `data.db`)
+- **`sourceId`** = alias from `attach_database` — name which DB on every `/api/db/*` call
+- **Single linked DB:** `sourceId` may be omitted
+- **Multiple linked DBs:** `sourceId` required (400 if missing)
+- **No primary/default DB** — explicit naming only
+- **`$JOB_DB`** — job scratch only; never auto-linked to apps
 
-### Path B — Standalone shared DB (no job owner)
+### Manual link (job-owned or re-link)
 
 ```javascript
-const { dbId } = await create_database({ name: "CRM" })
-await attach_database({ appId, dbId, setPrimary: true })
+link_app_data_source({ appId, dbId, alias: "billing" })   // registry DB
+link_app_data_source({ appId, jobId, alias: "sync" })     // promote job data.db to registry
 ```
 
-### Legacy / manual link (fallback only)
-
-Use only when auto-link did not run (orphan job, app created before job, or re-linking after edits):
-
-```javascript
-link_app_data_source({ appId, jobId, setPrimary: true })   // job-owned
-link_app_data_source({ appId, dbId, setPrimary: true })    // registry DB
-```
+Prefer `attach_database` for registry DBs. Use `link_app_data_source` when attaching a job's existing SQLite file.
 
 ### Typical mini-app + job build flow
 
 ```javascript
-// 1. UI mock (optional)
 create_app({ title: "Dashboard", ... })
-
-// 2. Job with appIds — auto-links data.db (no separate link step)
-create_job({ name: "Sync", appIds: [appId], type: "python", command: "python3 code/main.py" })
-
-// 3. Run job, then wire app to /api/db/*
-// Job writes UI tables to $APP_DB; scratch to $JOB_DB (same file when job DB is primary)
+const { dbId } = await create_database({ name: "Dashboard data" })
+await attach_database({ appId, dbId, alias: "main" })
+create_job({
+  name: "Sync",
+  appIds: [appId],
+  writeDbIds: [dbId],
+  type: "python",
+  command: 'python3 code/main.py --db "$PAPR_DB_MAIN"',
+})
+// App reads/writes via /api/db/* with sourceId: 'main'
 ```
 
-For **standalone shared data** (CRM, team inbox without a job owner):
+For **per-user isolation**: `create_database({ isolation: "per-user" })` + `attach_database`.
+
+### Schema migrations (registry DBs)
+
+Registry DBs sync to Turso. Schema changes **must** use migration files — bash blocks raw `ALTER TABLE` on synced paths.
+
+**Create migrations with `papr_db_create_migration({ dbId, name, sql })`.** The system names the file `NNNN_YYYYMMDDHHMMSS_name.sql` (next number + UTC timestamp) and applies it, so collaborators can't collide on a filename. Don't hand-write migration files or pick numbers; never rename existing ones. **Never hard-code a user id in migration or seed SQL** — write `'{{papr.owner_user_id}}'`; it's filled with the database owner at apply time (publisher on a team shared DB, the installer on a fork or copy). Your own literal id is converted automatically by `papr_db_create_migration`. (The `write_file` example below shows the resulting layout.)
 
 ```javascript
-const { dbId } = await create_database({ name: "CRM", isolation: "shared" })
-await attach_database({ appId, dbId, setPrimary: true })
+write_file({
+  path: "$PAPR_HOME/data/databases/billing/migrations/0001_init.sql",
+  content: `
+CREATE TABLE invoices (
+  id INTEGER PRIMARY KEY,
+  amount REAL NOT NULL,
+  status TEXT NOT NULL DEFAULT 'open'
+);`.trim(),
+})
+// Apply: run_job({ writeDbIds: [dbId] }) or app Publish changes / sync
 ```
+
+**Required:** Every synced table needs a **PRIMARY KEY** (`INTEGER PRIMARY KEY`, `TEXT PRIMARY KEY`, or composite PK). Without it, delta sync and row versioning are disabled.
+
+**Plan A (Turso Sync replica — rolling out):** When cloud sync is on, registry DB rows/schema authority moves to **Turso primary** via `@tursodatabase/sync` (`push()` / `pull()`). Agents apply migrations immediately — git Upload ships migration **files** for collaboration only; it does **not** execute schema on Turso.
+
+| Task | Tool / API |
+|------|------------|
+| New schema change | `papr_db_create_migration({ dbId, name, sql })` — names + applies |
+| Re-apply existing `migrations/*.sql` | `papr_db_apply_migration({ dbId, migrationId })` — Turso primary when online |
+| Row DML | `papr_db_exec({ dbId, sql })` or mini-app `/api/db/write` — **no DDL** under Plan A |
+| Sync status / recovery | `papr_db_sync_status`, `repair_cloud_sync` |
+| Local rows, empty Turso (copy/migration) | Restore backup if needed → strip sidecars → `papr_db_apply_migration_cloud` + `papr_db_push` — **not** `bootstrap_remote` |
+| Push / pull (recovery only) | `papr_db_push` / `papr_db_pull` — hidden from main agent when Plan A is on |
+| Code + publish | `push_cloud_sync({ appId })` or Publish / Publish changes in the app tab — git + replica push |
+
+DML auto-pushes when online. After offline row work, use **Publish changes** or `repair_cloud_sync({ strategy: 'pull' })` before editing again. Job scratch DBs (`$JOB_DB`) stay legacy until cutover.
+
+**Platform-managed (auto-added, do not create):** `_papr_created_at`, `_papr_updated_at`, `_papr_row_version` — used for conflict resolution across devices.
 
 ### Cloud Turso naming (paprwork-v2 ↔ memory server)
 
 | Linked source | Turso short name | With `isolation: "per-user"` |
 |---------------|------------------|--------------------------------|
-| Job `~/Papr/Jobs/{jobId}/data/data.db` | `j-{jobId8}` | `j-{jobId8}-u-{userId8}` |
-| Registry `~/Papr/data/databases/.../data.db` | `d-{dbId8}` | `d-{dbId8}-u-{userId8}` |
+| Job `$PAPR_HOME/Jobs/{jobId}/data/data.db` | `j-{jobId8}` | `j-{jobId8}-u-{userId8}` |
+| Registry `$PAPR_HOME/data/databases/.../data.db` | `d-{dbId8}` | `d-{dbId8}-u-{userId8}` |
 
 - `data-sources.json` is the contract — cloud app host and cloud agent runs only see linked sources.
-- `create_job({ appIds })` writes `data-sources.json` automatically; Turso sync follows on cloud sync.
+- `attach_database` / `link_app_data_source` writes `data-sources.json`; Turso sync follows on cloud sync.
 - Cloud agent prepare (`memory` server) returns `tursoSources[]` for each linked source; gateway bookends pull/push by `syncKey` (jobId or dbId).
 
 ### Multi-user data models (do not confuse with publish settings)
@@ -129,20 +199,26 @@ Publish access and per-user DB isolation are **independent**. A team-visible app
 | `edit_app_file_lines` | Mini-app line-range edits (multi-line HTML/JS blocks) |
 | `list_app_files` | List all files in an app |
 | `list_jobs` | List all jobs with status, deps, dir path (call before create!) |
+| `get_cloud_sync_status` | **Cloud debug** — GitHub/Turso sync (incl. replica pendingPush/migrationConflict), publish, jobs, heartbeat |
+| `push_cloud_sync` | Force git + Turso push (replica-aware); row-only fixes → `papr_db_push` |
+| `query_cloud_turso` | Read-only SQL on Turso cloud replica |
+| `inspect_cloud_repo` | Read/list files in cloud GitHub repo |
 | `create_job` | Create a job with retries, dependencies, delivery |
 | `update_job` | Patch job config (command, requirements, schedule, deps) |
 | `delete_job` | Remove a job from the index (optionally wipe files) |
 | `run_job` | Execute a job and inspect output |
 | `read_job_logs` | Read job execution logs |
-| `list_job_files` / `read_job_file` / `edit_file` | Browse and patch job scripts (use `~/Papr/Jobs/{jobId}/…` path) |
+| `list_job_files` / `read_job_file` / `edit_file` | Browse and patch job scripts (use `$PAPR_HOME/Jobs/{jobId}/…` path) |
 | `link_app_data_source` | Wire app to job's SQLite database **or** registry `dbId` |
 | `create_database` | Create standalone DB in registry (no job required) |
-| `attach_database` | Link registry `dbId` to mini-app (`setPrimary: true`) |
+| `attach_database` | Link registry `dbId` to mini-app with optional `alias` |
 | `delete_database` | Tombstone registry DB (safe when apps still linked) |
 | `read_app_data_sources` | List linked data sources for an app |
 | `export_app_bundle` | Package app + jobs + schemas as portable app bundle |
 | `import_app_bundle` | Install app bundle from local path or GitHub URL |
-| `list_app_bundles` | List all installed app bundles |
+| `list_community_apps` | Browse forkable Papr Cloud apps (Community / Team Apps tabs) |
+| `install_cloud_app` | Fork or track a published cloud app into the workspace |
+| `list_app_bundles` | List **local** bundles in `$PAPR_HOME/bundles/` (from `export_app_bundle`, not Community discovery) |
 | `get_app_bundle_info` | Preview app bundle contents without importing |
 
 **Mini-App REST APIs** (called with `fetch()` from within the app — no auth, same-origin):
@@ -150,8 +226,12 @@ Publish access and per-user DB isolation are **independent**. A team-visible app
 | Endpoint | Method | Purpose |
 |----------|--------|---------|
 | `/api/db/schema?appId=ID` | GET | List linked SQLite tables & columns |
+| `/api/access?appId=ID` | GET | **Caller identity** — `{ mode, isOwner, canRead, canWrite, loggedIn, userId?, email?, appId }` — server-resolved when signed in; map `userId` to roles |
+| `/api/members?appId=ID` | GET | **Workspace roster** — `{ workspaceId, namespaceId?, members: [{ userId, email, displayName, role }] }` — requires Papr sign-in + app read access; use for role pickers (same `userId` as `/api/access`) |
 | `/api/db/query` | POST | **Read only** — `SELECT` / `WITH ... SELECT` on linked SQLite (INSERT/UPDATE/DELETE → **403**) |
-| `/api/db/write` | POST | **Writes** — `INSERT`, `UPDATE`, `DELETE`, `REPLACE`, `UPSERT` on linked SQLite (`?` + `params` required for values) |
+| `/api/db/batch` | POST | **Batch reads** — up to 25 `SELECT`/`WITH` statements in one HTTP round trip. Aliases: `/api/db/query-batch`, `/api/db/read-batch`. Response: `{ results: [{ ok, rows?, error? }, ...] }`. **Never mix writes here.** |
+| `/api/db/write` | POST | **Single write** — `INSERT`, `UPDATE`, `DELETE`, `REPLACE`, `UPSERT` on linked SQLite (`?` + `params` required for values) |
+| `/api/db/write-batch` | POST | **Batch writes** — up to 25 write statements in one HTTP round trip. Response: `{ atomic: false, results: [{ ok, changes?, lastInsertRowid?, error? }, ...] }`. See **Batch semantics** below. |
 | `/api/db/exec` | POST | **DDL** — only `CREATE TABLE IF NOT EXISTS ...` (safe schema bootstrap) |
 | `/api/jobs/list` | GET | List all jobs (id, name, type, status) |
 | `/api/jobs/status/:jobId` | GET | Poll job status |
@@ -172,23 +252,84 @@ Publish access and per-user DB isolation are **independent**. A team-visible app
 
 > **NEW: Mini-apps can CREATE jobs dynamically via `/api/jobs/create` (desktop only)**. Rate limited to 10 jobs/min per app. See "Mini-App Job Creation" section below.
 
-> **CRITICAL:** If a mini-app needs to **INSERT/UPDATE/DELETE**, use **`POST /api/db/write`**, not `/api/db/query`. A 403 on `/api/db/query` means you used the read endpoint for a write — switch endpoints; **writes from apps are supported.**
+> **CRITICAL:** If a mini-app needs to **INSERT/UPDATE/DELETE**, use **`POST /api/db/write`** or **`POST /api/db/write-batch`**, not `/api/db/query` or `/api/db/batch`. A 403 on `/api/db/query` means you used the read endpoint for a write — switch endpoints; **writes from apps are supported.**
+
+### Batch read/write endpoints (two separate lanes)
+
+**Reads and writes are never mixed in one batch call.** Use the read lane for page-load SELECTs; use the write lane for multiple mutations — but understand transaction limits.
+
+| Lane | Endpoint | SQL allowed | Response |
+|------|----------|-------------|----------|
+| **Read batch** | `POST /api/db/batch` (aliases: `query-batch`, `read-batch`) | `SELECT`, `WITH ... SELECT` only | `{ results: [{ ok, rows?, count?, error? }, ...] }` |
+| **Write batch** | `POST /api/db/write-batch` | `INSERT`, `UPDATE`, `DELETE`, `REPLACE`, `UPSERT` only | `{ atomic: false, results: [{ ok, changes?, lastInsertRowid?, error? }, ...] }` |
+
+**When to use batch:** App mount fires 2+ reads → one `/api/db/batch`. App saves 2+ rows in one user action → `/api/db/write-batch` (or a single `/api/db/write` if only one statement).
+
+**`atomic: false` vs `atomic: true` (write-batch only):**
+
+| Value | Meaning | Supported today? |
+|-------|---------|------------------|
+| **`atomic: false`** | Each statement commits **independently**. If statement 2 fails, statement 1 may **already be persisted**. Always check **every** `results[i].ok`. | ✅ **Always** — this is the only mode |
+| **`atomic: true`** | All statements in one **transaction** on the **same linked database** — all succeed or all roll back. | ✅ Pass `atomic: true` in the request body (same `sourceId` for every statement) |
+
+**Read batch example (page load):**
+```typescript
+const { results } = await fetch('/api/db/batch', {
+  method: 'POST',
+  headers: { 'Content-Type': 'application/json' },
+  body: JSON.stringify({
+    appId: APP_ID,
+    statements: [
+      { sourceId: 'main', sql: 'SELECT COUNT(*) AS n FROM people WHERE active = 1', params: [] },
+      { sourceId: 'main', sql: 'SELECT * FROM cycles ORDER BY started_at DESC LIMIT 1', params: [] },
+    ],
+  }),
+}).then(r => r.json());
+// results[0].ok, results[0].rows — per-statement; one may fail without aborting the HTTP call
+```
+
+**Write batch example (non-transactional — check each ok):**
+```typescript
+const { atomic, results } = await fetch('/api/db/write-batch', {
+  method: 'POST',
+  headers: { 'Content-Type': 'application/json' },
+  body: JSON.stringify({
+    appId,
+    atomic: true, // all-or-nothing on one linked database
+    statements: [
+  method: 'POST',
+  headers: { 'Content-Type': 'application/json' },
+  body: JSON.stringify({
+    appId: APP_ID,
+    statements: [
+      { sourceId: 'main', sql: 'INSERT INTO log (msg) VALUES (?)', params: ['step 1'] },
+      { sourceId: 'main', sql: 'UPDATE counters SET n = n + 1 WHERE id = ?', params: [1] },
+    ],
+  }),
+}).then(r => r.json());
+// atomic === false always today
+if (!results.every((r: { ok: boolean }) => r.ok)) {
+  // Partial commit possible — handle rollback in app logic or use backend action instead
+}
+```
+
+**Wrong paths trap (desktop):** Typo'd URLs like `/api/user/me` or non-existent `/api/db/query-batch` on an **old gateway** may return the SPA HTML shell (200 + `<!DOCTYPE html>`). Valid routes: `/api/db/batch`, `/api/db/query-batch`, `/api/db/read-batch`, `/api/db/write-batch`. Parse responses with `Content-Type: application/json` or check `r.ok` before `.json()`.
 
 ---
 
 ## Cloud hosting (automatic — ready)
 
-When **Cloud Sync** is enabled (default), Paprwork syncs mini-apps to a private GitHub repo and linked job SQLite databases to Turso (one database per job). **Cloud publishing is also on by default**: after sync, each mini-app is automatically published to **`https://apps.papr.ai`** with **private** access (Papr account required). This pipeline is **production-ready** — agents do not run a separate deploy.
+When **Cloud Sync** is enabled (default), Paprwork syncs mini-app source to **per-app GitHub repos** (Sync V3) and **registry linked databases** to Turso via Plan A replica sync (`attach_database` / `data-sources.json`). **Cloud publishing is also on by default**: after sync, each mini-app is automatically published to **`https://apps.papr.ai`** with **private** access (Papr account required). This pipeline is **production-ready** — agents do not run a separate deploy.
 
 ### What happens automatically
 
 | Step | Agent action |
 |------|--------------|
-| App source → private GitHub repo | None — edit files under `~/Papr/apps/{appId}/` as usual |
-| `data-sources.json` → Turso replicas | **`create_job({ appIds })` auto-links** (writes `data-sources.json`). For standalone DBs: `attach_database` / `link_app_data_source({ dbId })`. Manual `link_app_data_source({ jobId })` only if auto-link failed. |
+| App source → private GitHub repo | None — edit files under `$PAPR_HOME/apps/{appId}/` as usual |
+| `data-sources.json` → Turso replicas | **`attach_database`** / `link_app_data_source({ dbId })` before `/api/db/*` |
 | Publish URL on `apps.papr.ai` | None — runs after GitHub + Turso sync succeed |
 
-**Without a linked source in `data-sources.json`**, cloud `/api/db/*` fails — the Cloud App Host only serves registered databases. Auto-link via `create_job({ appIds })` satisfies this for the common job-owned path.
+**Without a linked source in `data-sources.json`**, cloud `/api/db/*` fails — the Cloud App Host only serves registered databases. Use `attach_database` before the app calls `/api/db/*`.
 
 ### Desktop vs cloud capabilities
 
@@ -196,11 +337,12 @@ Build with relative `/api/...` paths — never hardcode `localhost:18789`.
 
 | Capability | Desktop gateway | Cloud (`apps.papr.ai`) |
 |------------|-----------------|------------------------|
-| `/api/db/schema`, `/api/db/query`, `/api/db/write`, `/api/db/exec` | ✅ Local SQLite | ✅ Turso — **same contract, same app code** |
+| `/api/db/schema`, `/api/db/query`, `/api/db/batch`, `/api/db/write`, `/api/db/write-batch`, `/api/db/exec` | ✅ Local SQLite | ✅ Turso — **same contract, same app code** |
 | `/api/db/*` | ✅ | ✅ on `apps.papr.ai` |
 | `/api/app/backend/:action` | ✅ local subprocess | ✅ Cloud App Host edge subprocess (handlers in `apps/{appId}/backend/`) |
 | `/api/jobs/list`, `/api/jobs/status`, `/api/jobs/run`, `/api/jobs/events` | ✅ | ✅ on `apps.papr.ai` — **including share links** (requires `canRead`) |
 | `/api/bash/run` | ❌ **Disabled for mini-apps** | ❌ **Disabled for mini-apps** |
+| `/api/access` | ✅ always `isOwner: true` | ✅ `isOwner` when publisher signed in |
 | `/api/jobs/create` | ✅ | ❌ **Desktop-only** — create jobs locally; they sync via git |
 | `window.paprAPI` (`chat.open`, `shell`, etc.) | ✅ Electron iframe | ❌ **Desktop-only** — not injected on cloud URLs |
 
@@ -247,10 +389,42 @@ apps/{appId}/backend/
       "runtime": "python",
       "keys": ["RR_ATTENTION_API_KEY"],
       "timeoutMs": 120000
+    },
+    "save-invoice": {
+      "handler": "save_invoice.py",
+      "runtime": "python",
+      "sourceId": "billing",
+      "timeoutMs": 30000
     }
   }
 }
 ```
+
+**Linked databases (multi-DB):** Same model as frontend `/api/db/*` — name the DB explicitly.
+
+1. `create_database` → `attach_database({ appId, dbId, alias: "billing" })` (repeat for each DB)
+2. Set `"sourceId": "billing"` on the action in `manifest.json`, **or** pass `params: { sourceId: "billing", ... }` from the frontend (overrides manifest)
+3. Gateway injects **every** linked source as `PAPR_DB_{KEY}*` env vars; `APP_DB` / `PAPR_DB_URL` point at the **active** source
+
+**Python handler (`backend/papr_db.py` scaffolded on app create):**
+```python
+from papr_db import connect, execute
+
+con = connect("billing")   # explicit alias — required when 2+ linked DBs
+# con = connect()          # active source (manifest sourceId / params.sourceId)
+rows = execute(
+    con,
+    "INSERT INTO invoices (amount) VALUES (?) RETURNING id, amount",
+    [100],
+)  # list[dict] on desktop (local SQLite) and cloud (Turso)
+con.close()
+```
+
+Use **`papr_db.connect()` only** — never `sqlite3.connect(APP_DB)` (cloud has no local file). After plain `INSERT`, `con.lastrowid` / `cursor().lastrowid` work in both modes. Each `execute()` is one statement; no multi-call transactions on cloud.
+
+**Node/TS handler:** No `papr_db` equivalent — use **Python** for SQL backend actions, or keep DB access in the frontend via `/api/db/query` and `/api/db/write`.
+
+**❌ NEVER:** parse `data-sources.json` manually or grep keychain for DB paths — use injected env vars only.
 
 **Frontend:**
 ```javascript
@@ -262,15 +436,28 @@ const res = await fetch('/api/app/backend/fetch-attention-calls', {
 const { stdout, stderr, exitCode } = await res.json();
 ```
 
-Handlers receive `PAPR_ACTION_PARAMS` (JSON) and vault keys as env vars. Print JSON to stdout (Python: `json.dump`, Node/TS: `console.log(JSON.stringify(...))`).
+Handlers receive **`PAPR_ACTION_PARAMS`** (JSON string of all merged params), **`PAPR_PARAM_{key}`** (one env var per param — e.g. `passcode` → `PAPR_PARAM_passcode`), vault keys as env vars, and when signed in **`PAPR_CALLER_USER_ID`** / **`PAPR_CALLER_EMAIL`** (top-level env). **There is no `PAPR_PARAMS_JSON`.** Gateway **overwrites** spoofed identity in merged params too — `PAPR_PARAM_PAPR_CALLER_USER_ID` equals the session id (fail-safe). Prefer top-level `PAPR_CALLER_USER_ID` for ACL; never trust client `userId` / `role` params. Print JSON to stdout (Python: `json.dump`, Node/TS: `console.log(JSON.stringify(...))`).
+
+**Older apps:** may lack `backend/` entirely — `POST /api/app/backend/:action` returns ENOENT on manifest (route exists). Scaffold `manifest.json` + handler before first use. New apps get this from `create_app`.
+
+**Three different “requirements” (do not conflate):**
+
+| Artifact | Purpose |
+|----------|---------|
+| `job.json` → `requirements: []` | Python/Node **packages** for the job venv |
+| `job.json` → `requiredKeys: []` | **Runtime** env injection when the job runs (desktop + cloud sandbox) |
+| `apps/{appId}/requirements.json` | **Publish vault catalog** for `apps.papr.ai` (who may receive which integration keys) |
+| `apps/{appId}/papr-cloud-dependencies.json` | **Cross-app / database** install deps for community publish — **not** API keys |
 
 **Vault key injection (do not reverse-engineer):**
 1. User stores keys in **Settings → Integration Keys** (syncs to cloud vault on publish).
-2. List exact key names in **backend/manifest.json** `"keys": ["RR_ATTENTION_API_KEY"]` (per-action allowlist).
-3. **Cloud only:** same keys must be in **requirements.json** (published catalog). `publish_cloud_app` **auto-syncs** manifest keys into requirements.json — republish after adding backend keys.
-4. Gateway injects as env vars — handler uses `os.environ["RR_ATTENTION_API_KEY"]` or `process.env.RR_ATTENTION_API_KEY`.
-5. **Never** grep keychain, read `custom-keys.json`, or call `get_key` / `/api/keys` — those are agent-only.
-6. Cloud error "No matching catalog requirements" → republish the app (catalog out of date), not more keychain debugging.
+2. **Backend handlers:** list exact key names in **backend/manifest.json** `"keys": ["RR_ATTENTION_API_KEY"]` (per-action allowlist).
+3. **Linked jobs (buttons → `/api/jobs/run`):** declare `requiredKeys: ["RR_ATTENTION_API_KEY"]` in **job.json** and read `os.environ["RR_ATTENTION_API_KEY"]` (or add `${RR_ATTENTION_API_KEY}` in the job **command** so publish auto-detection sees it).
+4. **Cloud catalog:** the same key names must appear in **apps/{appId}/requirements.json**. **Sync now** / publish **auto-syncs** manifest keys, `${KEY}` in linked job commands, and **linked job `requiredKeys`** into requirements.json — or add manually in the publish credentials panel.
+5. Gateway injects as env vars — handler/job uses `os.environ[...]` or `process.env`.
+6. **Never** grep keychain, read `custom-keys.json`, or call `get_key` / `/api/keys` — those are agent-only.
+7. Cloud error "No matching catalog requirements" → **Sync now** / republish (catalog out of date), not more keychain debugging.
+8. **`validate_app`** warns when a linked job declares keys missing from requirements.json.
 
 **Frontend body shape:** `{ appId, params: { limit: "50" } }` — nested `params` required (`PAPR_ACTION_PARAMS`).
 
@@ -341,18 +528,60 @@ await fetch('/api/bash/run', { body: JSON.stringify({ command: 'cat /tmp/result.
 | Need | Pattern |
 |------|---------|
 | Pass mode/params to job | `/api/jobs/run` with `params: { KEY: 'value' }` → job reads `os.environ['KEY']` |
-| Job output → mini-app UI | Job writes to **`$APP_DB`**; app reads via **`/api/db/query`** |
+| Job output → mini-app UI | Job writes via **`writeDbIds`** → **`PAPR_DB_*`**; app reads/writes via **`/api/db/query`** / **`/api/db/write`** with **`sourceId`** |
 | Live progress | `subscribeJobEvents({ onStatusChanged, onProgress })` — not SQL polling |
 | One-shot API / small server script | **`/api/app/backend/:action`** — handler in `backend/` |
 | Heavy ETL, agent work, schedules | **`/api/jobs/run`** |
 
-Jobs linked via `appIds` receive `APP_DB` pointing at the mini-app's primary linked database. Create cache tables there (e.g. `attention_calls_cache`) — both desktop and cloud see the same data through `/api/db/*`.
+Jobs with **`writeDbIds`** receive **`PAPR_DB_{ALIAS}`** pointing at registry databases. Create app-facing tables there — both desktop and cloud see the same data through `/api/db/*` with matching **`sourceId`**.
 
 ### Do NOT manually deploy to Vercel/Netlify/custom domains
 
 Papr auto-publish is the supported cloud path (source from git + Cloud App Host API). Manual static deploys often ship an incomplete API (e.g. only `/api/query`, no `/api/db/write`). If writes 404 on a custom URL, the deployment is wrong — **do not** shim INSERTs through `/api/db/query`. On `apps.papr.ai`, `/api/db/write` is available and returns `{ changes, lastInsertRowid }`.
 
 Users can opt out globally in **Settings → Privacy → Cloud Sync**, or per-app under **Sync Status → Cloud links** (disable **Auto** or turn the link **Off**). Do not add Turso credentials, cloud URLs, or publish steps to agent plans.
+
+### Cloud debugging (agent tools)
+
+When a published app misbehaves on `apps.papr.ai` — stale data, missing job runs, sync drift — use **cloud observability tools** (NOT Memory API; Memory stores content snapshots, not sync/job infra).
+
+| Tool | Purpose |
+|------|---------|
+| `get_cloud_sync_status({ appId?, jobId?, includeJobLogs? })` | **Start here** — GitHub folder sync, Turso status (legacy + replica fields: `pendingPush`, `migrationConflict`, `online`), publish links, `desktopAwake`, `pendingCloudRuns`, local job status/logs |
+| `papr_db_sync_status` / `papr_db_push` / `papr_db_pull` / `repair_cloud_sync` | Plan A registry DB row sync — use when `turso.sources[].syncMode === "replica"` |
+| `query_cloud_turso({ sql, jobId \| tursoDatabase \| appId+alias })` | Read-only SQL on Turso replica — verify cloud rows match local |
+| `inspect_cloud_repo({ action: "read"\|"list", relativePath?, prefix? })` | Read/list files on GitHub (e.g. `apps/{id}/dist/app.js`, `Jobs/{id}/job.json`) |
+| `push_cloud_sync({ appId? })` | Force git + Turso push (Publish / Publish changes equivalent); replica DBs pushed via replica path |
+
+**Diagnose → fix → verify:**
+
+```
+1. get_cloud_sync_status({ appId, jobId })     # what's wrong?
+2. push_cloud_sync({ appId })                # if github/turso pending
+3. update_job / edit_file                    # if job/code wrong
+4. run_job({ jobId })                        # re-run locally
+5. get_cloud_sync_status({ appId, jobId })   # confirm fixed
+```
+
+**Job stuck on cloud — two paths (do not conflate):**
+
+**A. Published app `POST /api/jobs/run` (Run now, share-link visitors)** — runs in **Cloud App Host sandbox** on `apps.papr.ai`. Desktop can be asleep. If stuck:
+1. `inspect_cloud_repo({ appId, action: "list", prefix: "jobs/" })` — job code reached GitHub app repo?
+2. Vault keys synced while desktop was awake? Cloud cannot read desktop keychain.
+3. Job type not `local-only` / LinkedIn CDP?
+4. Check Turso/DB via `query_cloud_turso` if job writes to linked DB.
+
+**B. Scheduled jobs / memory scheduler when desktop heartbeat is stale** — may defer to desktop or queue in `pendingCloudRuns`:
+1. Call `get_cloud_sync_status({ appId, jobId, includeJobLogs: true })`
+2. Check `desktopHeartbeat.desktopAwake` — if `false` and job is in `pendingCloudRuns`, user must open Paprwork
+3. Check `jobs.githubRecords` — confirms job definition reached GitHub
+4. Check `turso.sources` — read **`syncMode` first**. `syncMode: "replica"` + `pendingPush` / `pendingOps` > 0 = normal Plan A unpushed local DML (including new post-replica apps) — run Publish changes or `papr_db_push`; **not** legacy CDC. `syncMode: "legacy"` = old workspace-log CDC until cutover. `migrationConflict` → `papr_db_migration_parity` + `papr_db_reconcile_sync` (not `merge_lww`).
+
+**Migration ledger duplicates:** Legacy rows may show both `0001_init` and `0001_init.sql`. Harmless for schema (same migration) but can false-flag `ledgerPaired: false`. Fix: `papr_db_reconcile_sync({ dbId, action: "dedupe_migration_ledger" })` then re-check parity.
+
+**Turso vs local mismatch:** `query_cloud_turso({ appId, alias, sql: "SELECT COUNT(*) FROM your_table" })` and compare to `read_app_data_health` or `papr_db_sync_status` — **never** bash `sqlite3` on registry replica DB files (bash blocks this; WAL wedge risk).
+
+**Do NOT use** `turso` CLI, `apps.papr.ai/api/db/query` from bash, or Memory API for cloud ops debugging — use the tools above (they use Papr credentials correctly).
 
 ---
 
@@ -450,9 +679,11 @@ fetch('http://localhost:18789/api/jobs/list')
 
 ---
 
-## Editing App Files: Which Tool to Use?
+## Editing App Source Files: Which Tool to Use?
 
-**One patch tool for all paths:** `edit_file({ path, oldString, newString })`. When `path` is under `~/Papr/apps/{appId}/…`, Paprwork automatically runs the same mini-app pipeline as before (esbuild + `validate_app` + `_verifyReminder`). You do not call `edit_app_file` — that name is legacy-only for old sub-agent profiles.
+> **Note:** This section is about **source code** in `apps/{id}/`. For **large binaries** (video, PDF >10MB), use **App Files** — see `APP_FILES_GUIDE.md`.
+
+**One patch tool for all paths:** `edit_file({ path, oldString, newString })`. When `path` is under `$PAPR_HOME/apps/{appId}/…`, Paprwork automatically runs the same mini-app pipeline as before (esbuild + `validate_app` + `_verifyReminder`). You do not call `edit_app_file` — that name is legacy-only for old sub-agent profiles.
 
 ### Use `edit_app_file_lines` (RECOMMENDED for multi-line blocks)
 
@@ -497,7 +728,7 @@ edit_app_file_lines({
 ```javascript
 // Quick replacement - no line numbers needed
 edit_file({
-  path: "~/Papr/apps/abc-123/app.js",
+  path: "$PAPR_HOME/apps/abc-123/app.js",
   oldString: "const API_URL = 'http://localhost:3000'",
   newString: "const API_URL = 'http://localhost:18789'"
 })
@@ -517,7 +748,7 @@ Need to edit app file?
 ├─ Changing HTML structure / JS function / CSS block?
 │  └─ Use edit_app_file_lines (read file first for line numbers)
 ├─ Replacing simple text that appears once?
-│  └─ Use edit_file with path ~/Papr/apps/{appId}/{filename}
+│  └─ Use edit_file with path $PAPR_HOME/apps/{appId}/{filename}
 └─ Complex multi-step refactor?
    └─ Use bash with sed/awk OR multiple edit_app_file_lines calls
 ```
@@ -572,6 +803,122 @@ async function loadData() {
 - **`/api/db/write`**: only `INSERT`, `UPDATE`, `DELETE`, `REPLACE`, `UPSERT`; bound parameters required for user-supplied values.
 - **Scoped**: only databases registered via `link_app_data_source` for that specific `appId` are accessible.
 - **No path traversal**: the db path is taken from the stored data-source record, not from the request.
+- **No row-level security**: the gateway runs whatever SQL the app sends. **You** must filter rows (see below).
+
+### Backend caller identity — NOT row-level SQL (common mistake)
+
+**This is not** SQL injection of \`papr_current_user()\` and **not** restricted \`/api/db/query\`. Probing \`SELECT papr_current_user()\` or \`/api/db/action\` will fail — those do not exist.
+
+**This is:** \`POST /api/app/backend/{actionName}\` runs your handler in \`apps/{appId}/backend/\` with env \`PAPR_CALLER_USER_ID\` set from the Papr session (desktop + cloud). Your Python/Node handler enforces ACL; generic \`/api/db/*\` stays unchanged.
+
+| Question | Answer |
+|----------|--------|
+| Endpoint? | \`POST /api/app/backend/claim-passcode\` (action must be in \`manifest.json\`) |
+| Where is user id? | \`os.environ["PAPR_CALLER_USER_ID"]\` in handler — **not** \`params.userId\` |
+| Does \`/api/db/query\` filter rows? | **No** — still runs any SELECT the client sends |
+| Desktop owner exempt? | Owner still has full \`/api/db/*\`; ACL lives in backend handlers for visitors |
+| How to verify? | Scaffold \`backend/manifest.json\` + \`ping.py\` if missing (ENOENT ≠ 404). \`curl POST .../api/app/backend/ping\` with spoofed \`PAPR_CALLER_USER_ID\` in params → \`stdout.callerUserId\` = real session id; \`PAPR_PARAM_PAPR_CALLER_USER_ID\` also overwritten |
+
+**Minimal manifest (required before verify — \`version\` is numeric \`1\`, field is \`handler\` not \`entry\`):**
+\`\`\`json
+{
+  "version": 1,
+  "actions": {
+    "ping": {
+      "handler": "ping.py",
+      "runtime": "python",
+      "timeoutMs": 10000
+    }
+  }
+}
+\`\`\`
+
+**Handler params:** \`PAPR_ACTION_PARAMS\` (JSON) + \`PAPR_PARAM_{key}\` per param. **No** \`PAPR_PARAMS_JSON\`. Identity keys in params are overwritten (fail-safe — \`PAPR_PARAM_PAPR_CALLER_USER_ID\` = session id).
+
+\`\`\`bash
+curl -s -X POST http://localhost:18789/api/app/backend/ping \\
+  -H "Content-Type: application/json" \\
+  -d '{"appId":"YOUR_APP_ID","params":{"PAPR_CALLER_USER_ID":"fake"}}'
+\`\`\`
+
+### Data isolation & owner admin (`GET /api/access`)
+
+**Publish access ≠ data isolation.** `public_read` controls who can open the app — not which rows they see. The platform does not inject `WHERE` clauses.
+
+**Check caller identity at app startup:**
+
+```javascript
+const access = await fetch('/api/access').then(r => r.json());
+// { mode, isOwner, canRead, canWrite, loggedIn, userId?, email?, appId }
+// userId + email are server-resolved when loggedIn — use userId for per-user roles
+```
+
+| Runtime | Typical result |
+|---------|----------------|
+| Desktop Paprwork iframe | `isOwner: true`, `mode: "owner"` — may include `userId` when Papr is signed in |
+| Cloud — publisher signed in | `isOwner: true`, `mode: "owner"`, `userId` set |
+| Cloud — team member signed in | `isOwner: false`, `mode: "team"`, `userId` set — **distinct per teammate** |
+| Cloud — anonymous visitor | `isOwner: false`, `loggedIn: false` — no `userId` / `email` |
+
+**Per-user roles (multi-user team apps):** Store a `roles` table keyed by Papr `userId` (from `/api/access`, not client input). At startup:
+
+```javascript
+const access = await fetch('/api/access').then(r => r.json());
+const role = access.loggedIn && access.userId
+  ? await lookupRole(access.userId)  // your app table: user_id → role
+  : null;
+```
+
+**Role assignment UI:** Call `GET /api/members` for a dropdown of real workspace members (`userId`, `email`, `displayName`, `role`). Requires Papr sign-in — do not free-type emails that may not exist in the workspace.
+
+```javascript
+const { members } = await fetch('/api/members').then(r => r.json());
+// members[].userId matches access.userId from /api/access
+```
+
+**Verified identity in jobs:** `POST /api/jobs/run` injects server env vars that override any client params:
+
+- `PAPR_CALLER_USER_ID` — Papr user id (when caller is signed in)
+- `PAPR_CALLER_EMAIL` — when email is known
+
+Jobs should use these for authorization — never trust a user id passed in the request body.
+
+**Verified identity in backend actions:** `POST /api/app/backend/:action` injects the same env vars when signed in (desktop + cloud). Handlers use `os.environ["PAPR_CALLER_USER_ID"]` (Python) or `process.env.PAPR_CALLER_USER_ID` (Node/TS) for ACL — ignore client `params.userId`. Optional for public/ping handlers that do not need caller context.
+
+**Pick an isolation pattern when designing schema:**
+
+| Pattern | Use when | Schema | Visitor data | Owner admin |
+|---------|----------|--------|--------------|-------------|
+| **Anonymous / shared funnel** | Public tools, no sign-in (e.g. lead-gen audit) | `owner_session TEXT` — UUID in `localStorage` | `WHERE owner_session = ?` | `access.isOwner` → query all rows; **hide admin tab** when `!isOwner` |
+| **Multi-user (sign-in)** | Per-user private data or scoped team roles | `papr_user_id TEXT` or `create_database({ isolation: "per-user" })` | Use `access.userId` from `/api/access` or backend action — not client-supplied id | `access.isOwner` → support / all-rows view |
+
+**Security notes for agents:**
+
+- `owner_session` in `localStorage` is **UX isolation** — not strong security. On `public_read`, a user can run unfiltered `SELECT *` from DevTools. UUID tampering only works if they know another session id (unlikely to guess).
+- For sensitive data: use **`link_read_write` / `team` publish** (sign-in required) and/or **`POST /api/app/backend/:action`** that ignores client-supplied user ids.
+- **Never** show an empty admin panel to visitors — gate UI on `access.isOwner`.
+- Set `owner_session` (and optionally `owner_user_id`) on INSERT in jobs and `/api/db/write` paths.
+
+**Example — anonymous app with owner admin tab:**
+
+```javascript
+const access = await fetch('/api/access').then(r => r.json());
+const sessionId = localStorage.getItem('app_session') ?? crypto.randomUUID();
+
+async function listAudits() {
+  const sql = access.isOwner
+    ? 'SELECT * FROM audits ORDER BY created_at DESC'
+    : 'SELECT * FROM audits WHERE owner_session = ? ORDER BY created_at DESC';
+  const params = access.isOwner ? [] : [sessionId];
+  return fetch('/api/db/query', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ appId: APP_ID, sourceId: 'primary', sql, params }),
+  }).then(r => r.json());
+}
+
+if (access.isOwner) renderAdminTab();
+```
 
 ### Full working pattern
 
@@ -623,7 +970,7 @@ Mini-apps can trigger backend jobs directly — the same capability the agent ha
 | **Runtime params** | `THREAD_ID=abc123`, `ACTION=regen` | `params` field in `/api/jobs/run` | This invocation only — not persisted |
 
 **Job path variables (ALWAYS use these instead of hardcoded paths):**
-- `$JOB_DIR` — the job's own directory (e.g. `~/Papr/jobs/{jobId}`). Use for accessing job files: `$JOB_DIR/data/data.db`, `$JOB_DIR/code/script.py`, etc.
+- `$JOB_DIR` — the job's own directory (e.g. `$PAPR_HOME/Jobs/{jobId}`). Use for accessing job files: `$JOB_DIR/data/data.db`, `$JOB_DIR/code/script.py`, etc.
 - `$JOB_DB` — shortcut to the job's SQLite database (`$JOB_DIR/data/data.db`)
 - These are set as real env vars for command jobs (bash/python/node/swift) and injected into the prompt for agent/subagent jobs
 - **NEVER hardcode absolute paths** like `/Users/john/PAPR/jobs/...` in job commands — always use `$JOB_DIR` or `$JOB_DB`
@@ -688,9 +1035,11 @@ const SCORER_JOB = 'your-job-id';
 
 let unsub = subscribeJobEvents({
   jobIds: [SCORER_JOB],
+  debounceMs: 300,  // coalesce db-changed bursts during job writes (gateway ~400ms coalesce)
+  onDbChanged: () => void reloadFromDb(),  // preferred when job writes $APP_DB
   onStatusChanged: (data) => {
     if (data.status === 'completed' || data.status === 'failed') {
-      void reloadFromDb();  // ONE /api/db/query after job finishes
+      updateStatusBadge(data);  // lifecycle only — use onDbChanged for table refresh
     }
   },
   onProgress: (data) => {
@@ -728,6 +1077,17 @@ await fetch('/api/jobs/run', {
 ```
 
 `validate_app` **errors** if it finds `setInterval` + `/api/db/query` polling. Fix before shipping.
+
+**Load efficiency (run `validate_app` after edits — not only when opening the app tab):**
+
+| Check | Severity | Rule | Fix |
+|-------|----------|------|-----|
+| 3+ `POST /api/db/query` inside one `loadData()` / `loadAll()` with no `/api/db/batch` in the app | warning | `mount-multi-db-query` | One `POST /api/db/batch` with up to 25 SELECTs on mount |
+| `onDbChanged: () => loadData()` without `debounceMs` or in-handler debounce/AbortController | warning | `on-db-changed-no-debounce` | `subscribeJobEvents({ debounceMs: 300, onDbChanged: () => loadData() })` |
+| Hidden preview sees ≥4 `/api/db/query` and 0 batch in ~2s | warning | `preview-load-efficiency` | Same as batch reads; check double `loadData()` on init |
+| Polling / missing job-events import | error | `no-db-polling`, etc. | Use SDK snippet from tool output |
+
+Server already coalesces `jobs:db-changed` (~400ms per db). **`debounceMs` on the SDK** (200–500ms) collapses UI refresh when a job writes many rows — optional but recommended for heavy `loadData()`.
 
 ### Anti-pattern: polling SQL (NEVER on cloud)
 
@@ -1180,7 +1540,7 @@ try {
 ## V2 Storage Layout
 
 ```
-~/Papr/apps/{appId}/
+$PAPR_HOME/apps/{appId}/
   index.html            # Entry point (no inline JS)
   style.css             # Liquid Glass styles
   app.ts                # Main entry (TypeScript — auto-transpiled)
@@ -1189,7 +1549,7 @@ try {
   utils/                # Helpers, formatters, API calls
   data-sources.json     # Created by link_app_data_source
 
-~/Papr/jobs/{jobId}/
+$PAPR_HOME/Jobs/{jobId}/
   job.json              # Job configuration
   code/                 # Scripts (main.py, main.js, etc.)
   logs/                 # Execution logs
@@ -1219,7 +1579,7 @@ try {
 
 **IMPORTANT: For Python scripts with API keys:**
 - Type: `python` (NOT `bash`)
-- Command: `python3 code/main.py --token ${KEY_NAME}`
+- Command: `python3 code/main.py` with `requiredKeys: ["KEY_NAME"]`.
 - The script uses argparse to receive the key
 
 ### Python Job: Auto Venv + Requirements
@@ -1530,7 +1890,7 @@ list_apps()
 
 // 2. If similar app exists, UPDATE it instead of creating new one
 edit_file({
-  path: "~/Papr/apps/abc-123/app.js",
+  path: "$PAPR_HOME/apps/abc-123/app.js",
   oldString: "const metrics = [...old data...]",
   newString: "const metrics = [...new data...]"
 })
@@ -1604,7 +1964,7 @@ Mini-apps use **TypeScript** + **esbuild bundling**. The build pipeline resolves
 #### Required File Structure
 
 ```
-~/Papr/apps/{appId}/
+$PAPR_HOME/apps/{appId}/
   index.html          # Entry point — references dist/app.js + dist/app.css
   base.css            # Design tokens (Liquid Glass — auto-provided)
   app.ts              # Main entry — imports base.css + components
@@ -2096,7 +2456,7 @@ This creates `data-sources.json` in the app folder:
   "type": "sqlite",
   "jobId": "amplitude-sync",
   "alias": "funnel",
-  "dbPath": "~/Papr/jobs/amplitude-sync/data.db",
+  "dbPath": "$PAPR_HOME/Jobs/amplitude-sync/data.db",
   "tables": ["funnel_runs"],
   "linkedAt": "2026-02-13T..."
 }]
@@ -2382,7 +2742,7 @@ create_job({
 })
 
 // Step 2: Write checkpointing script
-bash({ command: `cat > ~/Papr/jobs/<jobId>/code/ingest.py << 'EOF'
+bash({ command: `cat > $PAPR_HOME/Jobs/<jobId>/code/ingest.py << 'EOF'
 import sqlite3
 import requests
 from pathlib import Path
@@ -2516,9 +2876,11 @@ App bundles are Paprwork's sharing format - portable packages containing a mini-
 
 | Tool | Purpose |
 |------|---------|
+| `list_community_apps` | Browse forkable Papr Cloud apps (Community / Team Apps tabs; requires Papr login) |
+| `install_cloud_app` | Fork or track a published cloud app into the workspace |
 | `export_app_bundle` | Package an app with its jobs and schemas into a portable app bundle |
 | `import_app_bundle` | Install an app bundle from a local path or GitHub URL |
-| `list_app_bundles` | List all installed app bundles |
+| `list_app_bundles` | List **local** bundles in `$PAPR_HOME/bundles/` (exports you created — not the Community catalog) |
 | `get_app_bundle_info` | Preview app bundle contents without importing |
 
 ### Exporting an App Bundle
@@ -2545,7 +2907,7 @@ For example, if the app has a data-source link to a "Summarizer" job plus `const
 
 **What gets created:**
 ```
-~/Papr/bundles/{bundle-id}/
+$PAPR_HOME/bundles/{bundle-id}/
 ├── manifest.json      # App + job metadata, schemas, versions
 ├── README.md          # Auto-generated installation guide
 ├── .gitignore         # Excludes large data files
@@ -2587,6 +2949,19 @@ import_app_bundle({
 - Set `renameConflicts: false` to block import on conflicts
 - Manual rename via `update_job` if needed after import
 
+### Discover Community Apps (install, not publish)
+
+Browse forkable apps — same catalog as the **Community Apps** and **Team Apps** tabs (requires Papr login):
+
+```javascript
+list_community_apps()
+list_community_apps({ scope: "team", query: "dashboard" })
+```
+
+Each result includes `namespaceId`, `slug`, and an `installCommand`. Run `install_cloud_app({ namespaceId, slug, mode: "fork" })` to customize locally.
+
+**Do NOT** use `list_app_bundles()`, `paprwork-community-apps/registry.json`, or curl to `apps.papr.ai` for discovery.
+
 ### Sharing Workflow — Publish to the Community
 
 **Prefer Papr Cloud** when Cloud Sync and Papr login are enabled (recommended):
@@ -2602,13 +2977,38 @@ publish_cloud_app({
 
 Others discover it in **Community Apps** and install with `install_cloud_app`. Source stays on your private papr-work repo — not exposed in git.
 
+**Contribute-back (fork → owner PR):**
+
+When someone installs your app with `codeAccess=install`, they get a local fork. If they improve it, they propose changes back:
+
+```javascript
+// Contributor (has a fork from install_cloud_app)
+submit_cloud_app_pr({
+  sourceNamespaceId: "upstream-namespace-id",
+  sourceSlug: "your-app-slug",
+  installedAppId: "local-fork-app-uuid",
+  title: "Add export button",
+  description: "Adds CSV export to the dashboard",
+})
+// Returns prUrl — a real GitHub PR on the owner's papr-work repo (app + Jobs + migrations)
+```
+
+```javascript
+// Owner (published the upstream app)
+list_cloud_app_prs({ status: "pending" })
+get_cloud_app_pr_review({ requestId: "..." })
+resolve_cloud_app_pr({ requestId: "...", action: "approve" })  // merges PR, then Get updates (pullAppFromCloud) for sourceAppId
+```
+
+There is **no local folder merge** on the owner's machine — approve merges the PR on GitHub, then sync pulls. See `docs/SYNC_CONTRACT.md` §6.
+
 If `publish_cloud_app` returns an error (`Cloud Sync is disabled` or `Papr login required`), **recommend enabling Cloud Sync** (Settings → Cloud Sync + Papr sign-in). If the user declines, use the **export fallback** below.
 
 ---
 
 **Fallback — open-source export** (works without Cloud Sync):
 
-**IMPORTANT:** When cloud is unavailable or the user wants OSS distribution, publish to the official **paprwork-community-apps** repo so it appears in the Community Apps tab for all Paprwork users.
+**IMPORTANT:** When cloud is unavailable or the user wants OSS distribution, publish to **paprwork-community-apps** via GitHub PR. This is a **legacy fallback** — it does **not** populate the in-app Community Apps tab (use `publish_cloud_app` with `codeAccess: "install"` for that).
 
 **1. Call the `export_app_bundle` tool (REQUIRED — do NOT manually create bundles):**
 ```javascript
@@ -2640,7 +3040,7 @@ Common replacements:
 - `/Users/john/PAPR/...` → `$HOME/PAPR/...` or relative paths
 
 **Paprwork runtime environment variables** (set automatically for every job run):
-- `$JOB_DIR` — absolute path to the job's own directory (e.g. `~/Papr/jobs/{jobId}`)
+- `$JOB_DIR` — absolute path to the job's own directory (e.g. `$PAPR_HOME/Jobs/{jobId}`)
 - `$JOB_DB` — absolute path to the job's SQLite database (`$JOB_DIR/data/data.db`)
 - These work for ALL job types: bash, python, node, swift, agent, and subagent
 - **Always use `$JOB_DIR` and `$JOB_DB` instead of hardcoded paths** — this makes jobs portable across machines
@@ -2660,7 +3060,7 @@ After export, always:
 # Fork to user's GitHub account and clone the fork — this ensures they
 # can only push to their own fork, never to the main repo.
 gh repo fork Papr-ai/paprwork-community-apps --clone --remote -- /tmp/paprwork-community-apps
-cp -r ~/Papr/bundles/{bundleId} /tmp/paprwork-community-apps/bundles/{bundleId}
+cp -r $PAPR_HOME/bundles/{bundleId} /tmp/paprwork-community-apps/bundles/{bundleId}
 ```
 **SECURITY: Always use `gh repo fork`, never `git clone` on the main repo.** This prevents any possibility of pushing changes directly to the main repo (deleting other apps, modifying other entries, etc.). The PR review process on the upstream repo is the only way changes get merged.
 
@@ -2737,7 +3137,7 @@ gh pr create --repo Papr-ai/paprwork-community-apps --title "Add {App Name}" --b
 If the user wants to share privately (not to the community), create a standalone repo:
 
 ```bash
-cd ~/Papr/bundles/{bundleId}
+cd $PAPR_HOME/bundles/{bundleId}
 git init
 git add .
 git commit -m "Initial release v1.0.0"
@@ -2763,16 +3163,13 @@ Returns:
 - Database schemas (tables, columns)
 - Version requirements
 
-### List Installed App Bundles
+### List Local App Bundles (exports only)
 
 ```javascript
 list_app_bundles()
 ```
 
-Shows all app bundles in `~/Papr/bundles/` with:
-- Bundle ID, name, version
-- Creation date
-- Full path
+Lists bundles **you exported** to `$PAPR_HOME/bundles/` via `export_app_bundle` — not the Papr Cloud Community catalog. To browse forkable community apps, use `list_community_apps()` instead.
 
 ### Best Practices
 
@@ -2827,7 +3224,7 @@ export_app_bundle({
 import_app_bundle({ source: "github.com/user/original" })
 
 // 2. Modify
-edit_file({ path: "~/Papr/apps/{appId}/style.css", oldString: "...", newString: "..." })
+edit_file({ path: "$PAPR_HOME/apps/{appId}/style.css", oldString: "...", newString: "..." })
 update_job({ jobId: "...", ... })
 
 // 3. Export as new app bundle
@@ -2886,7 +3283,7 @@ Avoid naming folders after apps (`sales-dashboard`) — those are linkages, not 
 
 ### How the Graph Works
 
-`~/Papr/data/job-graph.json` is automatically rebuilt after every job create/update/delete. It contains:
+`$PAPR_HOME/data/job-graph.json` is automatically rebuilt after every job create/update/delete. It contains:
 
 ```json
 {
@@ -3178,3 +3575,34 @@ For every app-linked job:
 - See `API_KEY_TESTING_PROTOCOL.md` for external API integration protocol
 - See `DECISION_TREE_AGENT_CAPABILITIES.md` for choosing the right execution pattern
 - See `DELEGATION_STRATEGY.md` for when to use sub-agents vs jobs
+
+---
+
+## Phase 6: Write the App Card (REQUIRED for reusable apps)
+
+The last thing you do on any app build — and the thing you repeat on any app modification.
+
+```
+apps/{appId}/docs/APP_CARD.md
+```
+
+Five fixed `##` sections, each indexed into memory as its own item: `Overview`, `Storage`, `Schema`, `Jobs`, `Gotchas`. Full convention, metadata contract, and template: **`APP_CARD_GUIDE.md`**.
+
+**Why it is a phase and not a nicety.** Mini-app source code is indexed, but code chunks retrieve on syntax, not meaning. "Which database does this app write to" is an inference across `data-sources.json`, a job script, and a migration — an inference nobody stored. The card stores it.
+
+**It complements the wiki entity page, it does not replace it.** `workspace/entities/apps/{slug}.md` owns narrative, timeline, and goal traceability. The App Card owns operational fact: dbId, alias, tables, job order, footguns. Never copy between them — two docs stating the same fact will drift.
+
+**Minimum bar when modifying an existing app:**
+
+| You changed | Update |
+|---|---|
+| Database, alias, isolation | `## Storage` |
+| Migration, new column | `## Schema` |
+| Job added/renamed/rescheduled/chained | `## Jobs`, `## Overview` |
+| Debugged something non-obvious | `## Gotchas` — **always** |
+
+`## Gotchas` is the one section that cannot be generated from source. If you fixed a surprising bug and did not add a line there, the only durable artifact of that debugging session is gone.
+
+**Index it — the file alone is not enough.** Either run the `app-card-indexer` job, or call `add_agent_memory` per changed section with `customMetadata: { content_type: "app_card", app_id, section, section_sha }`. For an existing section whose text changed, use `update_memory` rather than adding a duplicate.
+
+**Skip the card** for one-off, experimental, and demo apps. A stale card is worse than none, because it gets retrieved and believed.

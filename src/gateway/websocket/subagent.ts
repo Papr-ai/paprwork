@@ -87,13 +87,19 @@ export async function setupSubAgentHandlers(
         break;
       }
       case "subagent:delete": {
-        const payload = message.payload as DeleteSubAgentPayload;
-        const deleted = await service.deleteAgent(payload.agentId);
-        sendResponse(ws, {
-          id: message.id,
-          success: true,
-          data: { deleted, agentId: payload.agentId },
-        });
+        const payload = message.payload as DeleteSubAgentPayload & { force?: boolean };
+        try {
+          const deleted = await service.deleteAgent(payload.agentId, {
+            force: payload.force === true,
+          });
+          sendResponse(ws, {
+            id: message.id,
+            success: true,
+            data: { deleted, agentId: payload.agentId },
+          });
+        } catch (error) {
+          sendError(ws, message.id, (error as Error).message);
+        }
         break;
       }
       case "subagent:delegate": {

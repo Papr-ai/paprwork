@@ -3,10 +3,32 @@
  * Much faster than localStorage for large datasets
  */
 
-import { useEffect, useCallback } from 'react';
+import { useEffect, useCallback, useRef } from 'react';
 import { useTabStore } from '../stores/tabStore';
 import { gateway } from '../src/lib/gateway';
-import { loadPersistedAppStateFromGateway } from '../lib/persistedAppState';
+import {
+  applyPersistedAppStateToTabStore,
+  fetchPersistedAppStateFromGateway,
+  mergeLocalTabsIntoSnapshot,
+  normalizeTabHierarchy,
+} from '../lib/persistedAppState';
+import { ensureWorkspaceLandingTab } from '../lib/ensureWorkspaceLandingTab';
+import { serializeTabForGatewayPersistence } from '../lib/tabPersistenceMetadata';
+import { isWorkspaceSwitchReloading } from '../lib/workspaceSwitchReload';
+import {
+  allowTabPersistence,
+  blockTabPersistence,
+  isTabPersistenceBlocked,
+} from '../lib/tabPersistenceGuard';
+import {
+  buildWorkspaceUiCacheKey,
+  getActiveWorkspaceUiCacheKey,
+  setActiveWorkspaceUiCacheKey,
+  writeWorkspaceUiCache,
+} from '../lib/workspaceUiCache';
+import { useArtifactsStore } from '../stores/artifactsStore';
+import { scheduleTabStructureSave } from '../lib/tabPersistenceScheduler';
+import { buildTabStructureFingerprint } from '../lib/tabStructureFingerprint';
 
 export function useAppStatePersistence() {
   const tabs = useTabStore((state) => state.tabs);
@@ -15,6 +37,7 @@ export function useAppStatePersistence() {
   const splitRatios = useTabStore((state) => state.splitRatios);
   const history = useTabStore((state) => state.history);
   const historyIndex = useTabStore((state) => state.historyIndex);
+  const lastTabStructureFingerprintRef = useRef<string | null>(null);
 
   // Load tabs from SQLite on mount
   useEffect(() => {
@@ -27,14 +50,78 @@ export function useAppStatePersistence() {
       /* legacy global tab cache */
     }
 
-    void loadPersistedAppStateFromGateway()
-      .then(() => {
+    void fetchPersistedAppStateFromGateway()
+      .then((snapshot) => {
+        if (!snapshot) {
+          ensureWorkspaceLandingTab();
+          return;
+        }
+
+        // An empty tab bar is a real answer; a declined read is not, and saving
+        // over it would replace the saved rows with whatever scaffolding the
+        // store picked up while the read was failing.
+        if (snapshot.tabsReadOk) {
+          allowTabPersistence();
+        } else {
+          blockTabPersistence("saved tab bar read was declined by the gateway");
+        }
+
+        const { tabs: currentTabs, activeTabId: currentActiveTabId } =
+          useTabStore.getState();
+
+        const mergedSnapshot = mergeLocalTabsIntoSnapshot(
+          snapshot,
+          currentTabs,
+          currentActiveTabId,
+        );
+        if (mergedSnapshot.tabs.length > snapshot.tabs.length) {
+          console.log(
+            `[Persistence] Merged ${mergedSnapshot.tabs.length - snapshot.tabs.length} local tab(s) created during load`,
+          );
+        }
+
+        applyPersistedAppStateToTabStore(mergedSnapshot);
+
+        void window.electronAPI.papr
+          ?.getActiveWorkspace?.()
+          .then((workspace) => {
+            const pointer = workspace?.pointer;
+            if (pointer?.organizationId && pointer.namespaceId) {
+              const key = buildWorkspaceUiCacheKey(
+                pointer.organizationId,
+                pointer.namespaceId,
+              );
+              setActiveWorkspaceUiCacheKey(key);
+              const {
+                tabs,
+                activeTabId,
+                splitRatio,
+                splitRatios,
+                history,
+                historyIndex,
+              } = useTabStore.getState();
+              writeWorkspaceUiCache(key, {
+                tabs: normalizeTabHierarchy(tabs),
+                activeTabId,
+                splitRatio,
+                splitRatios,
+                history,
+                historyIndex,
+                artifacts: useArtifactsStore.getState().artifacts,
+              });
+            }
+          })
+          .catch(() => {
+            /* optional — offline / demo mode */
+          });
+
         console.log(
           `[Persistence] Loaded workspace tabs in ${(performance.now() - loadStartTime).toFixed(2)}ms`,
         );
       })
       .catch((error: Error) => {
         console.error('[Persistence] Failed to load tabs/state:', error);
+        blockTabPersistence('saved tab bar could not be loaded at startup');
       })
       .finally(() => {
         (window as any).__paprSqliteLoaded = true;
@@ -42,40 +129,66 @@ export function useAppStatePersistence() {
       });
   }, []); // Only run once on mount
 
-  // Save tabs to SQLite (debounced)
+  // Save tabs to SQLite (debounced + coalesced on rapid switches)
   useEffect(() => {
-    if (tabs.length === 0) return;
+    if (tabs.length === 0 || isWorkspaceSwitchReloading()) return;
 
-    const saveTimeout = setTimeout(() => {
-      console.log('[Persistence] Saving tabs to SQLite...');
-      const saveStartTime = performance.now();
-      
-      // Convert tabs to SQLite format
-      const tabsToSave = tabs.map((tab, index) => ({
-        id: tab.id,
-        type: tab.type,
-        entityId: tab.entityId,
-        title: tab.title,
-        displayMode: tab.displayMode,
-        parentTabId: tab.parentTabId,
-        position: index,
-        isFavorite: tab.isFavorite || false,
-        createdAt: new Date().toISOString(),
-        lastAccessedAt: new Date().toISOString(),
-      }));
+    // `app:save_tabs` is DELETE-then-insert, so saving a tab bar assembled
+    // without the saved rows destroys them. Checked here and again inside the
+    // debounced callback, because the block can land during the wait.
+    if (isTabPersistenceBlocked()) return;
 
-      gateway.send('app:save_tabs', tabsToSave).then(() => {
-        console.log(`[Persistence] Saved ${tabs.length} tabs in ${(performance.now() - saveStartTime).toFixed(2)}ms`);
-      }).catch((error: Error) => {
-        console.error('[Persistence] Failed to save tabs:', error);
+    const fingerprint = buildTabStructureFingerprint(tabs);
+    if (fingerprint === lastTabStructureFingerprintRef.current) {
+      return;
+    }
+    lastTabStructureFingerprintRef.current = fingerprint;
+
+    scheduleTabStructureSave(async () => {
+      if (isTabPersistenceBlocked()) {
+        // Clear the fingerprint so this tab set is reconsidered once the block
+        // lifts, rather than being treated as already saved.
+        lastTabStructureFingerprintRef.current = null;
+        return;
+      }
+
+      const tabsToSave = tabs.map((tab, index) =>
+        serializeTabForGatewayPersistence(tab, index),
+      );
+
+      // Do not block tab switches on gateway queue depth — ACK is immediate server-side.
+      void gateway.send("app:save_tabs", tabsToSave).catch((error: Error) => {
+        console.error("[Persistence] Tab save failed:", error);
       });
-    }, 2000); // Increased debounce to 2 seconds to reduce save frequency
 
-    return () => clearTimeout(saveTimeout);
+      const key = getActiveWorkspaceUiCacheKey();
+      if (key) {
+        const {
+          activeTabId: savedActiveTabId,
+          splitRatio,
+          splitRatios,
+          history,
+          historyIndex,
+        } = useTabStore.getState();
+        writeWorkspaceUiCache(key, {
+          tabs: normalizeTabHierarchy(tabs),
+          activeTabId: savedActiveTabId,
+          splitRatio,
+          splitRatios,
+          history,
+          historyIndex,
+          artifacts: useArtifactsStore.getState().artifacts,
+        });
+      }
+    }, "tabs-changed");
+
+    return undefined;
   }, [tabs]);
 
   // Save app state (debounced) - includes split ratios, navigation history, and onboarding
   useEffect(() => {
+    if (isWorkspaceSwitchReloading()) return;
+
     const saveTimeout = setTimeout(() => {
       // Read onboarding state from localStorage
       const onboardingStep1 = localStorage.getItem('papr-onboarding-step1') === 'true';
@@ -96,7 +209,7 @@ export function useAppStatePersistence() {
       }).catch((error: Error) => {
         console.error('[Persistence] Failed to save app state:', error);
       });
-    }, 1000); // Increased debounce to 1 second to reduce save frequency
+    }, 2000);
 
     return () => clearTimeout(saveTimeout);
   }, [activeTabId, splitRatio, splitRatios, history, historyIndex]);

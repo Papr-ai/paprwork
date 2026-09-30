@@ -1,16 +1,37 @@
 # Cloud sync → web ready pipeline
 
+> Sync guarantees and writer authority: [`SYNC_CONTRACT.md`](./SYNC_CONTRACT.md).
+> Implementation phases: [`SYNC_ARCHITECTURE_V2.md`](./SYNC_ARCHITECTURE_V2.md).
+
 Published mini-apps on `apps.papr.ai` depend on three layers staying aligned. Users and agents should only need **Sync now** plus a normal browser refresh — not manual republish, cache tricks, or knowledge of internal artifacts.
+
+**Upload mode:** Apps in **manual** mode (`uploadMode: manual` or global auto-upload off) do not push to git/Turso until **Upload now** — see [`SYNC_CONTRACT.md` §2](./SYNC_CONTRACT.md#upload-mode-auto-vs-manual). Local-only apps (`cloudEnabled: false`) skip cloud layers entirely.
 
 ## Mental model
 
 | Layer | What it carries | Updated by |
 |-------|-----------------|------------|
-| **Git repo** | `dist/app.js`, `backend/bundle.json`, `requirements.json`, `data/cloud-repo-head.txt` | Sync now (before commit) |
+| **Git repo** | `dist/app.js`, `backend/bundle.json`, `requirements.json`, `apps/{id}/.papr-cloud-revision`, `data/cloud-repo-head.txt` (legacy fallback) | Sync now (before commit) |
 | **Publish catalog** | Vault allowlist, share URL, visibility | Auto-republish after push (drift detection) |
-| **Edge cache** | Cached repo files on cloud app host | Repo head marker + dist `?v=` query (host) |
+| **Edge cache** | Cached repo files on cloud app host | Per-app `.papr-cloud-revision` (dist hash) + dist `?v=` query |
 
 If any layer is stale, the web app breaks in confusing ways (old UI, vault 400, backend hash mismatch). The pipeline below keeps all three in step.
+
+## Always-on requirement (no desktop)
+
+Published apps on `apps.papr.ai` **must stay live with Paprwork closed**. Desktop is only the **publisher** (git push + one-time catalog registration), not a runtime dependency.
+
+| Component | Always on? | Role |
+|-----------|------------|------|
+| Cloud App Host | Yes | Serves HTML/JS/API |
+| Memory server | Yes | Publish catalog (MongoDB), repo-file via **GitHub App** (auto-refreshed tokens), Turso tokens |
+| GitHub repos | Yes | Stores synced app code |
+| Turso | Yes | Database rows |
+| Paprwork desktop | **No** | Push updates; not required for visitors |
+
+If an app shows "Not found" while desktop is closed, that is a **bug** — usually missing git artifacts (`dist/app.js`, `linked-databases.json`), publish catalog drift, or (fixed) Cloud App Host **negative caching** of 404 repo-file responses.
+
+Heartbeat from desktop is **only** for cloud job scheduler deferral when the Mac is awake — not for keeping web apps alive.
 
 ## Single user action: Sync now
 
@@ -23,8 +44,9 @@ File: `src/gateway/services/cloudSync/prepareAppsForCloud.ts`
 1. Merge `backend/manifest.json` keys into `requirements.json`
 2. Rebuild `dist/app.js` (bundled apps)
 3. Rebuild `backend/bundle.json` (handler SHA256 fingerprints)
-4. Stage the full app folder and commit + push
-5. Amend `data/cloud-repo-head.txt` with current git HEAD (cache bust)
+4. Write `apps/{id}/.papr-cloud-revision` (dist bundle hash — busts cache for **this app only**)
+5. Stage the full app folder and commit + push
+6. Amend `data/cloud-repo-head.txt` with current git HEAD (legacy fallback for apps not yet re-synced)
 
 ### After git push — `runPostSyncHooks`
 
@@ -36,7 +58,9 @@ File: `src/gateway/services/cloudSync/prepareAppsForCloud.ts`
 
 User refreshes the browser tab (normal F5). Cloud app host serves fresh repo content and versioned `dist/app.js`.
 
-**Open tabs without refresh:** After Sync now, desktop gateway notifies `apps.papr.ai`, which invalidates server caches and pushes a revision event over SSE. Injected `papr-app-refresh.js` reloads the tab when the revision changes — no polling, no Cmd+Shift+R. Tab focus also re-checks once as a fallback.
+**Open tabs:** Stay on the previous bundle until the user refreshes (standard static hosting, same as Vercel). After Sync now, desktop gateway notifies `apps.papr.ai` to invalidate server-side caches so the **next** load gets the new bundle.
+
+**Optional version nudge (no SSE):** Injected `papr-version-check.js` compares `<meta name="papr-app-revision">` to `__papr__/app-revision.json` **once on first tab focus** and shows “New version available — refresh?” if sync happened while the tab was open. Paprwork’s publish-bar **Refresh** runs the same check before reloading web preview.
 
 ## Agent guidance
 
@@ -51,10 +75,9 @@ User refreshes the browser tab (normal F5). Cloud app host serves fresh repo con
 - `CloudAppPublishService.ts` — `tryAutoPublishSyncedApps({ syncedAppIds })`
 - `cloudPublishDrift.ts` — catalog + sharing drift
 - `cloudRepoHeadMarker.ts` — cache invalidation marker
-- `notifyCloudAppRevision.ts` / `notifySyncedAppRevisions.ts` — desktop → cloud push on sync
-- `publishedAppRevision.ts` — revision meta + `__papr__/app-revision.json` endpoint
-- `AppRevisionHub.ts` / `registerAppRevisionSse.ts` — SSE push to open tabs
-- `papr-app-refresh.ts` — client SSE listener + tab-focus fallback
+- `notifyCloudAppRevision.ts` / `notifySyncedAppRevisions.ts` — desktop → cloud cache invalidation on sync
+- `publishedAppRevision.ts` — revision meta + `__papr__/app-revision.json` (cache busting on reload)
+- `papr-version-check.ts` — one-shot focus check + refresh prompt (no SSE)
 - `cloudAppHostCache.ts` / `cloudAppHostRequestCache.ts` — host-side cache (deploy separately)
 
 ## Deploy notes

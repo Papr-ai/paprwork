@@ -16,12 +16,13 @@
 }
 
 .input-bar__wrapper {
-  background: var(--background-color);
-  border: 1px solid var(--border-color);
-  border-radius: 24px;
-  padding: 14px 16px;
-  box-shadow: var(--shadow-sm);
-  transition: box-shadow 0.15s var(--ease);
+  /* Composer — quiet card: hairline border, soft lift, Papr blue only on actions. */
+  background: #fff;
+  border: 1px solid #e3e8f0;
+  border-radius: 18px;
+  padding: 12px 12px 10px 14px;
+  box-shadow: 0 2px 10px rgba(10, 16, 32, 0.04);
+  transition: box-shadow 0.15s var(--ease), border-color 0.15s var(--ease);
   display: flex;
   flex-direction: column;
   gap: 8px;
@@ -35,14 +36,21 @@
 }
 
 .input-bar__wrapper:focus-within {
-  box-shadow: var(--shadow-md);
+  border-color: #d6deea;
+  box-shadow: 0 6px 22px rgba(10, 16, 32, 0.07);
 }
 
 /* Context section - above textarea */
 .input-context-section {
   display: flex;
+  flex-direction: column;
   gap: 6px;
-  flex-wrap: wrap;
+}
+
+.input-context-section__error {
+  font-size: 12px;
+  color: var(--danger, #ff6b6b);
+  padding: 0 4px;
 }
 
 .add-context-pill {
@@ -163,23 +171,50 @@
   color: var(--text-primary);
 }
 
-.chat-history-btn {
-  width: 20px;
-  height: 20px;
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  background: transparent;
-  border: none;
-  border-radius: 4px;
-  color: var(--text-tertiary);
-  cursor: pointer;
-  transition: all 0.15s var(--ease);
+.model-selector-pill--unavailable {
+  border-color: color-mix(in srgb, var(--warning-color, #f59e0b) 45%, var(--border-color));
+  color: var(--text-secondary);
 }
 
-.chat-history-btn:hover {
-  background: var(--hover-bg);
-  color: var(--text-primary);
+.model-selector-pill--unavailable:hover {
+  border-color: color-mix(in srgb, var(--warning-color, #f59e0b) 65%, var(--border-color));
+}
+
+.model-selector-pill-lock {
+  flex-shrink: 0;
+  opacity: 0.75;
+}
+
+.model-picker-anchor {
+  position: absolute;
+  bottom: calc(100% + 6px);
+  left: 0;
+  z-index: 1000;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.model-picker-anchor .model-picker-dropdown {
+  position: static;
+  bottom: auto;
+  left: auto;
+}
+
+.model-unavailable-notice {
+  margin: 0;
+  padding: 8px 10px;
+  max-width: 260px;
+  font-size: 12px;
+  line-height: 1.4;
+  color: var(--text-secondary);
+  background: var(--background-secondary);
+  border: 1px solid var(--border-color);
+  border-radius: 10px;
+}
+
+.model-controls .model-unavailable-notice {
+  box-shadow: none;
 }
 
 .send-button {
@@ -231,21 +266,15 @@
   background: var(--error-hover, #c0392b);
 }
 
-/* Model Picker Dropdown — Apple Liquid Glass "popover" variant:
-   Popovers use stronger glass (higher opacity + blur) since they overlay content */
+/* Model Picker Dropdown — opaque popover surface (matches other chat dropdowns) */
 .model-picker-dropdown {
   position: absolute;
   bottom: calc(100% + 8px); /* Position above the button with gap */
   left: 0;
-  background: rgba(255, 255, 255, 0.88);
-  backdrop-filter: blur(40px) saturate(180%);
-  -webkit-backdrop-filter: blur(40px) saturate(180%);
-  border: 1px solid rgba(255, 255, 255, 0.30);
+  background: var(--popover-bg);
+  border: 1px solid var(--border-color);
   border-radius: 14px;
-  box-shadow:
-    0 8px 30px rgba(0, 0, 0, 0.18),
-    0 0 0 0.5px rgba(0, 0, 0, 0.06),
-    inset 0 0.5px 0 rgba(255, 255, 255, 0.50);
+  box-shadow: var(--popover-shadow);
   min-width: 260px;
   max-width: 320px;
   max-height: 420px;
@@ -436,18 +465,6 @@
   color: rgba(255, 255, 255, 0.75);
 }
 
-/* Dark mode */
-@media (prefers-color-scheme: dark) {
-  .model-picker-dropdown {
-    background: rgba(28, 28, 30, 0.88);
-    border-color: rgba(255, 255, 255, 0.10);
-    box-shadow:
-      0 8px 30px rgba(0, 0, 0, 0.50),
-      0 0 0 0.5px rgba(255, 255, 255, 0.06),
-      inset 0 0.5px 0 rgba(255, 255, 255, 0.10);
-  }
-}
-
 /* Simplified flat picker */
 .model-picker-dropdown--simple {
   min-width: 220px;
@@ -463,6 +480,13 @@
   height: 1px;
   margin: 4px 8px;
   background: var(--border-color, rgba(0, 0, 0, 0.08));
+}
+
+.model-picker-empty {
+  padding: 8px 10px;
+  font-size: 12px;
+  line-height: 1.4;
+  color: var(--text-secondary);
 }
 
 .model-picker-action {
@@ -500,3 +524,85 @@
   padding-bottom: 2px;
 }
 
+
+/* ---------- Composer controls (rail redesign) — visual only, same components ---------- */
+.input-bar__wrapper .context-pill--add {
+  padding: 5px 11px;
+  border: 1px solid var(--papr-blue-deep, #0060e0);
+  border-radius: 10px;
+  background: transparent;
+  color: var(--papr-blue-deep, #0060e0);
+  font-size: 12.5px;
+  font-weight: 500;
+}
+
+.input-bar__wrapper .context-pill--add:hover {
+  background: rgba(0, 96, 224, 0.06);
+  color: var(--papr-blue-deep, #0060e0);
+}
+
+.input-bar__wrapper .model-selector-pill,
+.input-bar__wrapper .chat-memory-scope__trigger {
+  padding: 4px 8px;
+  border: 1px solid #edf0f4;
+  border-radius: 8px;
+  font-size: 12px;
+  color: var(--text-secondary);
+}
+
+.input-bar__wrapper .model-selector-pill:hover,
+.input-bar__wrapper .chat-memory-scope__trigger:hover {
+  border-color: #d6deea;
+  background: rgba(10, 16, 32, 0.03);
+  color: var(--text-primary);
+}
+
+.input-bar__wrapper .chat-memory-scope__trigger-value {
+  color: var(--text-primary);
+}
+
+.input-bar__wrapper .send-button {
+  width: 30px;
+  height: 30px;
+}
+
+.input-bar__wrapper .send-button-active {
+  background: var(--papr-blue-deep, #0060e0);
+  box-shadow: 0 3px 10px rgba(0, 96, 224, 0.25);
+}
+
+.input-bar__wrapper .send-button-active:hover:not(:disabled),
+.input-bar__wrapper .send-button:hover:not(:disabled):not(.send-button-stop) {
+  background: var(--papr-blue-deep, #0060e0);
+  filter: brightness(1.08);
+}
+
+.input-bar__wrapper .send-button-stop,
+.input-bar__wrapper .send-button-stop:hover:not(:disabled) {
+  background: var(--error-color, #e74c3c);
+  box-shadow: none;
+}
+
+@media (prefers-color-scheme: dark) {
+  .input-bar__wrapper {
+    background: #161a22;
+    border-color: #2a3240;
+    box-shadow: none;
+  }
+  .input-bar__wrapper:focus-within {
+    border-color: #36405a;
+    box-shadow: 0 6px 22px rgba(0, 0, 0, 0.3);
+  }
+  .input-bar__wrapper .model-selector-pill,
+  .input-bar__wrapper .chat-memory-scope__trigger {
+    border-color: #2a3240;
+  }
+  .input-bar__wrapper .context-pill--add {
+    border-color: #4c9dff;
+    color: #4c9dff;
+  }
+  .input-bar__wrapper .send-button-active,
+  .input-bar__wrapper .send-button-active:hover:not(:disabled) {
+    background: #2f7fed;
+  }
+}

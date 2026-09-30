@@ -6,11 +6,14 @@
 import React, { useState } from "react";
 import "./QueuedMessages.css";
 
+import type { Artifact } from "../../stores/artifactsStore";
+
 export interface QueuedMessage {
   id: string;
   text: string;
   timestamp: number;
   chatId: string;
+  contextArtifacts?: Artifact[];
 }
 
 interface QueuedMessagesProps {

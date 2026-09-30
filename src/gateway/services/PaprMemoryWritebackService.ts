@@ -3,8 +3,9 @@
  * Structured job output in data.db is synced separately via JobDatabaseMemorySync.
  */
 import Papr from "@papr/memory";
+import { handlePaprToolError } from "../../core/tools/paprClient.js";
 import { getApiKey } from "../utils/keyResolver.js";
-import { paprMemoryScopeSpread } from "../utils/memoryScopeResolver.js";
+import { paprMemoryScopeSpread, withMemoryScopeMetadata } from "../utils/memoryScopeResolver.js";
 import type { JobMemoryPolicy } from "./jobs/types.js";
 
 export interface MemoryWritebackInput {
@@ -47,35 +48,27 @@ export async function writeRunMemory(
     });
     await client.memory.add({
       content: compactContent(input),
-      ...(input.userId && !memoryScope.external_user_id
-        ? { external_user_id: input.userId }
-        : memoryScope),
-      metadata: {
-        category: "learning",
-        role: "assistant",
-        customMetadata: {
-          sourceAgentId: input.sourceAgentId,
-          sourceAgentName: input.sourceAgentName,
-          runId: input.runId,
-          jobId: input.jobId,
-          ...(input.chatId ? { chatId: input.chatId } : {}),
-          writebackPolicy: input.policy,
+      ...memoryScope,
+      metadata: withMemoryScopeMetadata(
+        {
+          category: "learning",
+          role: "assistant",
+          customMetadata: {
+            sourceAgentId: input.sourceAgentId,
+            sourceAgentName: input.sourceAgentName,
+            runId: input.runId,
+            jobId: input.jobId,
+            ...(input.chatId ? { chatId: input.chatId } : {}),
+            writebackPolicy: input.policy,
+          },
         },
-      },
+        memoryScope,
+      ),
     });
   } catch (error) {
-    if (error instanceof Papr.RateLimitError || error instanceof Papr.PermissionDeniedError) {
-      console.error(`[PaprMemoryWritebackService] Memory quota exceeded for job ${input.jobId}`);
-      console.error(`[PaprMemoryWritebackService] Please upgrade your PAPR Memory account at: https://platform.papr.ai/settings`);
-      throw new Error(
-        "PAPR Memory quota exceeded. Please upgrade your account at https://platform.papr.ai/settings to continue using memory features."
-      );
-    } else if (error instanceof Papr.AuthenticationError) {
+    if (error instanceof Papr.AuthenticationError) {
       console.error(`[PaprMemoryWritebackService] Invalid PAPR API key`);
-      throw new Error(
-        "Invalid PAPR API key. Please check your Settings and ensure your API key is correct."
-      );
     }
-    throw error;
+    handlePaprToolError(error, "job-memory-writeback");
   }
 }

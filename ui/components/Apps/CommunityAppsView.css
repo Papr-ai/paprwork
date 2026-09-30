@@ -3,6 +3,12 @@
  */
 
 .community-apps {
+  --community-primary-gradient: var(
+    --papr-blue-gradient,
+    linear-gradient(135deg, #0060e0, #00acfa)
+  );
+  --community-primary-deep: var(--papr-blue-deep, #0060e0);
+  --community-primary-glow: var(--papr-blue-glow, rgba(0, 96, 224, 0.28));
   display: flex;
   flex-direction: column;
   gap: 16px;
@@ -35,13 +41,47 @@
   color: var(--text-tertiary);
 }
 
+.community-apps__install-error {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 10px 12px;
+  border-radius: 10px;
+  border: 1px solid color-mix(in srgb, var(--error, #ef4444) 35%, transparent);
+  background: color-mix(in srgb, var(--error, #ef4444) 8%, transparent);
+}
+
+.community-apps__install-error-text {
+  margin: 0;
+  flex: 1;
+  font-size: 13px;
+  line-height: 1.45;
+  color: var(--error, #ef4444);
+}
+
+.community-apps__install-error-dismiss {
+  flex-shrink: 0;
+  padding: 4px 10px;
+  border: none;
+  border-radius: 8px;
+  background: transparent;
+  color: var(--text-secondary);
+  font-size: 12px;
+  font-weight: 500;
+  cursor: pointer;
+}
+
+.community-apps__install-error-dismiss:hover {
+  background: var(--hover);
+  color: var(--text-primary);
+}
+
 .community-apps__search {
   flex: 1;
   max-width: 320px;
   padding: 8px 14px;
   background: var(--glass-bg);
-  backdrop-filter: blur(14px);
-  -webkit-backdrop-filter: blur(14px);
   border: 1px solid var(--glass-border, var(--border));
   border-radius: 10px;
   color: var(--text-primary);
@@ -67,8 +107,6 @@
   align-items: center;
   justify-content: center;
   background: var(--glass-bg);
-  backdrop-filter: blur(14px);
-  -webkit-backdrop-filter: blur(14px);
   border: 1px solid var(--glass-border, var(--border));
   border-radius: 10px;
   color: var(--text-secondary);
@@ -99,7 +137,7 @@
 
 .community-apps__retry-btn {
   padding: 8px 20px;
-  background: linear-gradient(135deg, var(--accent, #0071E3), #4f46e5);
+  background: var(--community-primary-gradient);
   color: white;
   border: none;
   border-radius: 10px;
@@ -133,6 +171,25 @@
   background: var(--hover, rgba(0, 0, 0, 0.03));
 }
 
+.community-apps__browse-filter-toggle {
+  padding: 4px 12px;
+  background: none;
+  border: 1px solid var(--glass-border, rgba(0, 0, 0, 0.08));
+  border-radius: 8px;
+  font-size: 12px;
+  font-weight: 500;
+  color: var(--text-secondary);
+  cursor: pointer;
+  transition: all 140ms ease;
+  white-space: nowrap;
+}
+
+.community-apps__browse-filter-toggle:hover {
+  color: var(--text-primary);
+  border-color: var(--accent, #0071E3);
+  background: var(--hover, rgba(0, 0, 0, 0.03));
+}
+
 .community-apps__empty-text {
   color: var(--text-tertiary);
 }
@@ -150,10 +207,10 @@
   to { transform: rotate(360deg); }
 }
 
-/* Grid */
+/* Grid — match My Apps (.apps-view__grid) */
 .community-apps__grid {
   display: grid;
-  grid-template-columns: repeat(auto-fill, minmax(280px, 1fr));
+  grid-template-columns: repeat(auto-fill, minmax(240px, 1fr));
   gap: 20px;
 }
 
@@ -161,9 +218,7 @@
 .community-card {
   display: flex;
   flex-direction: column;
-  background: rgba(255, 255, 255, 0.35);
-  backdrop-filter: blur(20px) saturate(150%);
-  -webkit-backdrop-filter: blur(20px) saturate(150%);
+  background: rgba(255, 255, 255, 0.55);
   border: 1px solid rgba(255, 255, 255, 0.30);
   border-radius: 18px;
   overflow: hidden;
@@ -181,12 +236,22 @@
     inset 0 1px 0 rgba(255, 255, 255, 0.30);
 }
 
-/* Orb with droplet PNG background */
+/* Preview area — match AppCard (.app-card__preview) */
+.community-card__preview {
+  width: 100%;
+  height: 200px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: transparent;
+}
+
+/* Orb with droplet PNG background — match AppCard (.app-card__orb) */
 .community-card__orb {
   position: relative;
   isolation: isolate;
-  width: 72px;
-  height: 72px;
+  width: 110px;
+  height: 110px;
   border-radius: 50%;
   display: flex;
   align-items: center;
@@ -196,7 +261,6 @@
   background-size: cover;
   background-position: center;
   background-repeat: no-repeat;
-  margin: 24px auto 0;
   transition: transform 220ms var(--ease, cubic-bezier(.2,.8,.2,1));
 }
 
@@ -204,19 +268,19 @@
 .community-card__orb::after {
   content: "";
   position: absolute;
-  bottom: -6px;
+  bottom: -8px;
   left: 50%;
   transform: translateX(-50%);
   width: 70%;
-  height: 10px;
+  height: 12px;
   border-radius: 50%;
   background: radial-gradient(
     ellipse,
-    rgba(100, 180, 255, 0.18) 0%,
-    rgba(100, 180, 255, 0.09) 40%,
+    rgba(100, 180, 255, 0.2) 0%,
+    rgba(100, 180, 255, 0.1) 40%,
     transparent 70%
   );
-  filter: blur(5px);
+  filter: blur(6px);
   pointer-events: none;
   z-index: -1;
 }
@@ -231,11 +295,13 @@
 }
 
 .community-card__orb-inner {
-  display: none;
-}
-
-.community-card__orb-highlight {
-  display: none;
+  position: absolute;
+  inset: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  color: rgba(55, 65, 88, 0.78);
+  z-index: 1;
 }
 
 /* Content */
@@ -248,7 +314,7 @@
 }
 
 .community-card__title {
-  font-size: 16px;
+  font-size: 15px;
   font-weight: 600;
   color: var(--text-primary);
   margin: 0;
@@ -266,12 +332,29 @@
   overflow: hidden;
 }
 
+.community-card__automation {
+  margin: 6px 0 0;
+  font-size: 13px;
+  line-height: 1.45;
+  font-weight: 500;
+  color: var(--accent, #2563eb);
+}
+
 .community-card__meta {
   display: flex;
   align-items: center;
   gap: 8px;
   font-size: 12px;
   color: var(--text-tertiary);
+  margin-top: 2px;
+}
+
+.community-card__byline {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
 .community-card__version {
@@ -307,22 +390,26 @@
   text-transform: uppercase;
 }
 
-/* Orb icon (custom SVG/emoji from registry) */
+/* Orb icon (custom SVG/emoji from registry) — match AppCard (.app-card__orb-icon) */
 .community-card__orb-icon {
-  width: 36px;
-  height: 36px;
+  width: 56px;
+  height: 56px;
   display: flex;
   align-items: center;
   justify-content: center;
+  overflow: hidden;
   font-size: 28px;
   line-height: 1;
+  white-space: nowrap;
+  text-overflow: clip;
   position: relative;
   z-index: 1;
 }
 
 .community-card__orb-icon svg {
-  width: 36px;
-  height: 36px;
+  width: 44px;
+  height: 44px;
+  flex-shrink: 0;
 }
 
 /* Pre-rendered droplet PNG / data-URI icons */
@@ -337,8 +424,6 @@
 .community-card__orb:has(.community-card__orb-icon--image) {
   background: transparent;
   background-color: transparent;
-  backdrop-filter: none;
-  -webkit-backdrop-filter: none;
   border-color: transparent;
   box-shadow:
     0 12px 40px rgba(0, 0, 0, 0.08),
@@ -410,7 +495,7 @@
 .community-card__import-btn {
   margin: 12px 20px 20px;
   padding: 10px 0;
-  background: linear-gradient(135deg, var(--accent, #0071E3), #4f46e5);
+  background: var(--community-primary-gradient);
   color: white;
   border: none;
   border-radius: 12px;
@@ -424,9 +509,15 @@
   transition: transform 160ms ease, box-shadow 160ms ease, opacity 160ms ease;
 }
 
-.community-card__import-btn:hover:not(:disabled) {
+.community-card__import-btn:hover:not(:disabled):not(.community-card__import-btn--installing) {
   transform: translateY(-1px);
-  box-shadow: 0 4px 16px rgba(0, 113, 227, 0.25);
+  box-shadow: 0 4px 16px var(--community-primary-glow);
+}
+
+.community-card__import-btn--installing {
+  opacity: 1;
+  cursor: wait;
+  animation: community-install-pulse 1.25s ease-in-out infinite;
 }
 
 .community-card__import-btn--disabled {
@@ -475,9 +566,34 @@
 }
 
 .community-card__action-btn--primary {
-  background: linear-gradient(135deg, var(--accent, #0071E3), #4f46e5);
+  background: var(--community-primary-gradient);
   color: white;
   border: none;
+  box-shadow: 0 2px 10px var(--community-primary-glow);
+}
+
+.community-card__action-btn--primary:hover:not(:disabled):not(.community-card__action-btn--installing) {
+  box-shadow: 0 4px 16px var(--community-primary-glow);
+}
+
+.community-card__action-btn--installing {
+  opacity: 1;
+  cursor: wait;
+  transform: none;
+}
+
+.community-card__action-btn--primary.community-card__action-btn--installing {
+  animation: community-install-pulse 1.25s ease-in-out infinite;
+}
+
+@keyframes community-install-pulse {
+  0%,
+  100% {
+    box-shadow: 0 2px 10px var(--community-primary-glow);
+  }
+  50% {
+    box-shadow: 0 4px 18px color-mix(in srgb, var(--community-primary-deep) 35%, transparent);
+  }
 }
 
 .community-card__source-badge {
@@ -508,10 +624,16 @@
 .community-card__import-spinner {
   width: 14px;
   height: 14px;
-  border: 2px solid rgba(255, 255, 255, 0.3);
+  border: 2px solid rgba(255, 255, 255, 0.35);
   border-top-color: white;
   border-radius: 50%;
   animation: community-spin 0.7s linear infinite;
+  flex-shrink: 0;
+}
+
+.community-card__import-spinner--on-surface {
+  border-color: rgba(0, 96, 224, 0.2);
+  border-top-color: var(--community-primary-deep);
 }
 
 /* Dark mode */
@@ -545,8 +667,16 @@
   }
 
   /* White icons in dark mode */
+  .community-card__orb-icon svg {
+    color: white;
+  }
+
   .community-card__orb-icon svg rect {
     stroke: white !important;
+  }
+
+  .community-card__orb-inner {
+    color: rgba(210, 218, 232, 0.88);
   }
 
   .community-card__orb:has(.community-card__orb-icon--image) {
@@ -592,6 +722,29 @@
   background: color-mix(in srgb, #7c3aed 12%, transparent);
 }
 
+.community-card__badge--share {
+  font-weight: 600;
+}
+
+.community-card__badge--share-team {
+  color: var(--community-primary-deep, var(--papr-blue-deep, #0060e0));
+  background: color-mix(
+    in srgb,
+    var(--community-primary-deep, var(--papr-blue-deep, #0060e0)) 12%,
+    transparent
+  );
+}
+
+.community-card__badge--share-public {
+  color: #059669;
+  background: color-mix(in srgb, #059669 12%, transparent);
+}
+
+.community-card__badge--share-oss {
+  color: #059669;
+  background: color-mix(in srgb, #059669 12%, transparent);
+}
+
 .community-install-modal__backdrop {
   position: fixed;
   inset: 0;
@@ -601,21 +754,37 @@
   justify-content: center;
   padding: 24px;
   background: rgba(0, 0, 0, 0.45);
-  backdrop-filter: blur(4px);
 }
 
 .community-install-modal {
+  --community-primary-gradient: var(
+    --papr-blue-gradient,
+    linear-gradient(135deg, #0060e0, #00acfa)
+  );
+  --community-primary-deep: var(--papr-blue-deep, #0060e0);
+  --community-primary-glow: var(--papr-blue-glow, rgba(0, 96, 224, 0.28));
   width: min(420px, 100%);
   padding: 20px;
   border-radius: 16px;
-  background: var(--bg-primary);
+  background: #ffffff;
   border: 1px solid var(--border-color);
   box-shadow: 0 20px 60px rgba(0, 0, 0, 0.2);
+}
+
+@media (prefers-color-scheme: dark) {
+  .community-install-modal {
+    background: #1c1c1e;
+    box-shadow:
+      0 20px 60px rgba(0, 0, 0, 0.5),
+      0 0 0 1px rgba(255, 255, 255, 0.08);
+  }
 }
 
 .community-install-modal__title {
   margin: 0 0 8px;
   font-size: 18px;
+  font-weight: 600;
+  color: var(--text-primary);
 }
 
 .community-install-modal__desc {
@@ -635,9 +804,15 @@
   padding: 12px 14px;
   border-radius: 12px;
   border: 1px solid var(--border-color);
-  background: var(--bg-secondary);
+  background: #f5f5f7;
   text-align: left;
   cursor: pointer;
+}
+
+@media (prefers-color-scheme: dark) {
+  .community-install-modal__option {
+    background: #2c2c2e;
+  }
 }
 
 .community-install-modal__option strong {
@@ -663,4 +838,267 @@
   background: none;
   color: var(--text-tertiary);
   cursor: pointer;
+}
+
+.community-install-modal--wide {
+  width: min(480px, 100%);
+}
+
+.community-install-modal__dep-list {
+  margin: 0 0 16px;
+  padding-left: 1.25rem;
+  font-size: 13px;
+  line-height: 1.45;
+  color: var(--text-secondary);
+}
+
+.community-install-modal__dep-list strong {
+  color: var(--text-primary);
+}
+
+.community-install-modal__primary {
+  width: 100%;
+  margin-bottom: 8px;
+  padding: 10px 14px;
+  border: 0;
+  border-radius: 12px;
+  background: var(--community-primary-gradient);
+  color: #fff;
+  font-size: 14px;
+  font-weight: 600;
+  cursor: pointer;
+  box-shadow: 0 2px 10px var(--community-primary-glow);
+}
+
+.community-install-modal__installing {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
+  margin: 0 0 12px;
+  padding: 10px 12px;
+  border-radius: 10px;
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--community-primary-deep);
+  background: color-mix(in srgb, var(--community-primary-deep) 8%, transparent);
+}
+
+.community-install-modal__primary:hover:not(:disabled) {
+  filter: brightness(1.05);
+}
+
+/* Share audience glyph — right of the title, same as library cards. */
+.community-card__title-row .community-card__title {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.community-card__share {
+  display: inline-flex;
+  flex-shrink: 0;
+  color: var(--text-tertiary);
+}
+
+/* Redesign: small icon with the name beside it (not a big orb above). */
+.community-card {
+  display: grid;
+  grid-template-columns: 40px minmax(0, 1fr);
+  column-gap: 12px;
+  align-content: start;
+}
+.community-card .community-card__preview {
+  grid-column: 1;
+  grid-row: 1;
+  width: 40px;
+  height: 40px;
+  min-height: 0;
+  padding: 0;
+  margin: 0;
+  display: grid;
+  place-items: center;
+  overflow: visible;
+}
+.community-card .community-card__orb,
+.community-card .community-card__screenshot {
+  width: 40px;
+  height: 40px;
+  border-radius: 12px;
+  object-fit: cover;
+}
+.community-card .community-card__orb::after { display: none; }
+.community-card .community-card__orb-inner { width: 100%; height: 100%; display: grid; place-items: center; }
+.community-card .community-card__orb-icon,
+.community-card .community-card__orb-icon svg { width: 20px; height: 20px; font-size: 18px !important; }
+.community-card .community-card__orb-icon--image { width: 40px; height: 40px; }
+.community-card .community-card__content { display: contents; }
+.community-card .community-card__content > * { grid-column: 1 / -1; }
+.community-card .community-card__content > .community-card__title-row,
+.community-card .community-card__content > .community-card__title-input {
+  grid-column: 2;
+  grid-row: 1;
+  align-self: center;
+  padding-right: 36px; 
+  min-width: 0;
+}
+.community-card .community-card__description { margin-top: 10px; }
+/* Content wrapper is display:contents in the compact layout, so its padding
+   and gap live on the card grid instead. */
+.community-card {
+  padding: 16px 18px 14px;
+  row-gap: 6px;
+}
+.community-card .community-card__description { margin-top: 8px; }
+.community-card .community-card__actions { margin: 8px 0 0; }
+/* Actions (and anything else outside __content) are direct grid children —
+   without this they land in the 40px icon column and the buttons wrap. */
+.community-card > :not(.community-card__preview):not(.community-card__content) {
+  grid-column: 1 / -1;
+  min-width: 0;
+}
+.community-card .community-card__actions { align-self: end; }
+.community-card .community-card__actions button { white-space: nowrap; }
+/* Share glyph pinned top-right so it never eats into the title. */
+.community-card { position: relative; }
+.community-card .community-card__share {
+  position: absolute;
+  top: 22px;
+  right: 20px;
+}
+.community-card .community-card__content > .community-card__title-row { padding-right: 30px; }
+
+/* ── Compact card v2: flex column, small icon pinned top-left, one footer
+   row pinned to the bottom so actions line up across every card. ── */
+.community-card {
+  display: flex;
+  flex-direction: column;
+  padding: 16px 18px 14px;
+}
+.community-card .community-card__preview {
+  position: absolute;
+  top: 16px;
+  left: 18px;
+}
+.community-card .community-card__content {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  flex: 1;
+  padding: 0;
+}
+.community-card .community-card__content > .community-card__title-row {
+  min-height: 40px;
+  padding-left: 52px;
+  padding-right: 30px;
+  align-self: stretch;
+}
+.community-card .community-card__description { margin-top: 6px; }
+.community-card__foot {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  margin-top: auto;
+  padding-top: 12px;
+}
+.community-card__foot .community-card__meta--foot {
+  flex: 1;
+  min-width: 0;
+  margin: 0;
+}
+.community-card__foot .community-card__actions { margin: 0; flex: none; }
+.community-card__foot .community-card__actions-row { gap: 6px; }
+.community-card__foot .community-card__action-btn,
+.community-card__foot .community-card__import-btn {
+  flex: none;
+  margin: 0;
+  padding: 5px 14px;
+  font-size: 12.5px;
+  border-radius: 999px;
+  white-space: nowrap;
+}
+
+/* API keys the app needs, shown on the card only when there are any. */
+.community-card__needs {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  margin-top: 6px;
+  font-size: 12.5px;
+  color: var(--text-secondary);
+  min-width: 0;
+}
+.community-card__needs span {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.community-card__needs svg { flex: none; color: var(--text-tertiary); }
+
+/* Footer tray, same as Library cards: byline left, action right, edge to edge. */
+.community-card .community-card__foot {
+  margin: auto -18px -14px;
+  padding: 10px 14px 10px 18px;
+  min-height: 48px;
+  box-sizing: border-box;
+  border-top: 1px solid color-mix(in srgb, var(--text-primary) 7%, transparent);
+  background: color-mix(in srgb, var(--text-primary) 3%, transparent);
+}
+.community-card .community-card__content { padding-bottom: 12px; }
+
+/* Footer strip stays the card colour; a hairline divider does the separating. */
+.community-card .community-card__foot { background: transparent; }
+
+/* Wider cards (match the prototype and Library). */
+.community-apps__grid {
+  grid-template-columns: repeat(auto-fill, minmax(300px, 1fr));
+  gap: 16px;
+}
+
+/* Small "Yours" / "In library" marker in the footer instead of a title pill. */
+.community-card__meta--foot {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  min-width: 0;
+}
+.community-card__meta--foot .community-card__byline {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  min-width: 0;
+}
+.community-card__mine {
+  display: inline-flex;
+  align-items: center;
+  gap: 3px;
+  flex: none;
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--success, #1f9d55);
+}
+
+/* Facts list: schedule / keys / platform in one consistent muted style. */
+.community-card__facts {
+  list-style: none;
+  margin: 8px 0 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+.community-card__fact {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  min-width: 0;
+  font-size: 12.5px;
+  color: var(--text-secondary);
+}
+.community-card__fact svg { flex: none; color: var(--text-tertiary); }
+.community-card__fact span {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }

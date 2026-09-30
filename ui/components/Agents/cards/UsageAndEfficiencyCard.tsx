@@ -79,14 +79,18 @@ export function UsageAndEfficiencyCard({
     .slice(0, 5);
 
   const pendingTurns = efficiency?.pendingFootprintTurns ?? 0;
+  const monthPeriod = efficiency?.periods?.thisMonth;
   const showEfficiency =
     efficiency !== null &&
     (efficiency.breakdown.chatsAnalyzed > 0 || pendingTurns > 0) &&
     !efficiencyLoading;
 
+  const monthSavings = monthPeriod?.tokensSaved ?? 0;
+  const monthActual = monthPeriod?.actualTokens ?? 0;
+
   const efficiencyBadge =
-    showEfficiency && efficiency.lifetimeTokensSaved > 0
-      ? `${efficiency.efficiencyScore}% saved`
+    showEfficiency && monthSavings > 0 && monthPeriod
+      ? `${monthPeriod.efficiencyScore}% saved this month`
       : null;
 
   return (
@@ -116,9 +120,9 @@ export function UsageAndEfficiencyCard({
 
       <div className="card-content">
         <MetricPeriodSummary
-          label="Total tokens"
+          label="All-time tokens"
           total={tokenStats.totalTokens}
-          sublabel={`${avgTokensPerMessage.toFixed(0)} avg per message`}
+          sublabel={`${avgTokensPerMessage.toFixed(0)} avg per message · billable`}
           periods={{
             today: tokenStats.todayTokens,
             thisWeek: tokenStats.thisWeekTokens,
@@ -127,13 +131,14 @@ export function UsageAndEfficiencyCard({
           format="tokens"
         />
 
-        {showEfficiency ? (
+        {showEfficiency && monthPeriod && monthActual > 0 ? (
           <SavingsCompare
-            actual={efficiency.totalTokensConsumed}
-            hypothetical={efficiency.hypotheticalTokensWithoutOptimizations}
-            saved={efficiency.lifetimeTokensSaved}
+            actual={monthPeriod.actualTokens}
+            hypothetical={monthPeriod.hypotheticalTokensWithoutOptimizations}
+            saved={monthPeriod.tokensSaved}
             format="tokens"
             compact
+            periodLabel="This month · billable tokens"
           />
         ) : efficiencyLoading ? (
           <div className="usage-efficiency-loading">

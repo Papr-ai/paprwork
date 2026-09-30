@@ -19,6 +19,12 @@ import {
 import { getAppAgentChatWarmCoordinator } from "./AppAgentChatWarmCoordinator.js";
 import { warmRuntimeAppAgentChat } from "../appRuntime/memoryRuntimeClient.js";
 import type { AppAgentWarmResponse } from "../../../core/types/appAgentChat.js";
+import {
+  APP_AGENT_SIGN_IN_MESSAGE,
+  APP_AGENT_CLOUD_JOB_MISSING_MESSAGE,
+  enrichRuntimeAuthWithPaprApiKey,
+  runtimeAuthRequiresPaprApiKey,
+} from "../appRuntime/resolveCloudSessionPaprApiKey.js";
 
 export type AppAgentChatRouteMode = "desktop" | "cloud";
 
@@ -94,6 +100,22 @@ export function registerAppAgentChatRoutes(
     };
   }
 
+  async function resolveCloudRuntimeAuth(req: Request) {
+    const base = deps.buildRuntimeAuth?.(req) ?? null;
+    if (!base || deps.mode !== "cloud") {
+      return base;
+    }
+    return enrichRuntimeAuthWithPaprApiKey(base);
+  }
+
+  function respondAppAgentAuthRequired(req: Request, res: Response): void {
+    if (deps.respondJobRunSignInRequired) {
+      deps.respondJobRunSignInRequired(req, res);
+      return;
+    }
+    res.status(401).json({ error: APP_AGENT_SIGN_IN_MESSAGE });
+  }
+
   app.post("/api/app-agent/sessions/:sessionId/warm", async (req, res) => {
     try {
       const sessionId = req.params.sessionId;
@@ -114,13 +136,17 @@ export function registerAppAgentChatRoutes(
         return;
       }
 
-      const runtimeAuth = deps.buildRuntimeAuth(req);
+      const runtimeAuth = await resolveCloudRuntimeAuth(req);
       if (!runtimeAuth) {
         res.status(403).json({ error: "Forbidden — open the app in this browser tab first" });
         return;
       }
       if (deps.jobRunRequiresSignIn?.(runtimeAuth)) {
-        deps.respondJobRunSignInRequired?.(req, res);
+        respondAppAgentAuthRequired(req, res);
+        return;
+      }
+      if (runtimeAuthRequiresPaprApiKey(runtimeAuth)) {
+        respondAppAgentAuthRequired(req, res);
         return;
       }
 
@@ -194,7 +220,7 @@ export function registerAppAgentChatRoutes(
         }
         subAgentId = miniApp.agentChat.subAgentId;
       } else if (deps.mode === "cloud" && deps.buildRuntimeAuth) {
-        const runtimeAuth = deps.buildRuntimeAuth(req);
+        const runtimeAuth = await resolveCloudRuntimeAuth(req);
         if (!runtimeAuth) {
           res.status(403).json({ error: "Forbidden — open the app in this browser tab first" });
           return;
@@ -256,19 +282,33 @@ export function registerAppAgentChatRoutes(
       }
 
       if (deps.mode === "cloud" && deps.buildRuntimeAuth) {
-        const runtimeAuth = deps.buildRuntimeAuth(req);
+        const runtimeAuth = await resolveCloudRuntimeAuth(req);
         if (!runtimeAuth) {
           res.status(403).json({ error: "Forbidden — open the app in this browser tab first" });
           return;
         }
         if (deps.jobRunRequiresSignIn?.(runtimeAuth)) {
-          deps.respondJobRunSignInRequired?.(req, res);
+          respondAppAgentAuthRequired(req, res);
+          return;
+        }
+        if (runtimeAuthRequiresPaprApiKey(runtimeAuth)) {
+          respondAppAgentAuthRequired(req, res);
           return;
         }
       }
 
       const turnId = uuidv4();
       turnHub.createTurn(turnId);
+
+      const cloudAbort = new AbortController();
+      turnHub.registerCancel(turnId, () => {
+        cloudAbort.abort();
+        if (deps.mode === "desktop") {
+          void import("../AgentService.js").then(({ getAgentService }) =>
+            getAgentService().stopStreaming(`app-agent:${sessionId}`),
+          );
+        }
+      });
 
       void (async () => {
         const onEvent = (event: import("../../../core/types/appAgentChat.js").AppAgentChatSseEvent) => {
@@ -291,11 +331,21 @@ export function registerAppAgentChatRoutes(
               onEvent,
             });
           } else if (deps.mode === "cloud" && deps.buildRuntimeAuth) {
-            const runtimeAuth = deps.buildRuntimeAuth(req);
+            const runtimeAuth = await resolveCloudRuntimeAuth(req);
             if (!runtimeAuth) {
               onEvent({
                 type: "app-agent:error",
                 data: { turnId, error: "Forbidden — open the app in this browser tab first" },
+              });
+              return;
+            }
+            if (
+              deps.jobRunRequiresSignIn?.(runtimeAuth) ||
+              runtimeAuthRequiresPaprApiKey(runtimeAuth)
+            ) {
+              onEvent({
+                type: "app-agent:error",
+                data: { turnId, error: APP_AGENT_SIGN_IN_MESSAGE },
               });
               return;
             }
@@ -324,12 +374,17 @@ export function registerAppAgentChatRoutes(
               userMessage: message,
               cloudJobId: cloudConfig.cloudJobId,
               onEvent,
+              signal: cloudAbort.signal,
             });
           }
         } catch (err) {
+          const raw = (err as Error).message;
+          const error = raw.includes("Job not found")
+            ? APP_AGENT_CLOUD_JOB_MISSING_MESSAGE
+            : raw;
           onEvent({
             type: "app-agent:error",
-            data: { turnId, error: (err as Error).message },
+            data: { turnId, error },
           });
         }
       })();
@@ -351,6 +406,16 @@ export function registerAppAgentChatRoutes(
     req.on("close", cleanup);
   });
 
+  app.post("/api/app-agent/sessions/:sessionId/turns/:turnId/cancel", (req, res) => {
+    const { turnId } = req.params;
+    const cancelled = turnHub.cancelTurn(turnId);
+    if (!cancelled) {
+      res.status(404).json({ error: "Turn not found or already finished" });
+      return;
+    }
+    res.json({ success: true, turnId });
+  });
+
   if (deps.mode === "cloud") {
     app.get("/api/apps/:appId/agent-chat", async (req, res) => {
       try {
@@ -359,7 +424,7 @@ export function registerAppAgentChatRoutes(
           res.status(400).json({ error: "appId required" });
           return;
         }
-        const runtimeAuth = deps.buildRuntimeAuth(req);
+        const runtimeAuth = await resolveCloudRuntimeAuth(req);
         if (!runtimeAuth) {
           res.status(403).json({ error: "Forbidden" });
           return;

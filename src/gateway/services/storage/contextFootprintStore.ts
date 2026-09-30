@@ -13,6 +13,7 @@ import {
   scheduleContextStatsRebuild,
   type CachedLifetimeProjection,
 } from "./contextStatsCache.js";
+import { boundedPayloadSql } from "./messagePayloadStore.js";
 
 export type { CachedLifetimeProjection };
 
@@ -103,8 +104,8 @@ export function backfillChatFootprints(
 
   const messages = db
     .prepare(
-      `SELECT id, role, content, thinking, tool_calls, prompt_tokens,
-              hypothetical_prompt_tokens, timestamp
+      `SELECT id, role, content, thinking, ${boundedPayloadSql("tool_calls")},
+              prompt_tokens, hypothetical_prompt_tokens, timestamp
        FROM messages
        WHERE chat_id = ?
        ORDER BY timestamp ASC`,
@@ -172,7 +173,7 @@ export function storeFootprintForNewMessage(
 
   const history = db
     .prepare(
-      `SELECT role, content, thinking, tool_calls
+      `SELECT role, content, thinking, ${boundedPayloadSql("tool_calls")}
        FROM messages
        WHERE chat_id = ? AND timestamp < ?
        ORDER BY timestamp ASC`,

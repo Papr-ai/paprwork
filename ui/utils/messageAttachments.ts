@@ -36,5 +36,34 @@ export function isImageAttachment(attachment: MessageAttachment): boolean {
 
 export function attachmentFileSrc(filePath: string): string {
   if (filePath.startsWith("file://")) return filePath;
-  return `file://${filePath}`;
+  if (filePath.startsWith("data:")) return filePath;
+  const normalized = filePath.replace(/\\/g, "/");
+  if (/^[a-zA-Z]:\//.test(normalized)) {
+    return `file:///${encodeURI(normalized).replace(/#/g, "%23")}`;
+  }
+  return `file://${encodeURI(normalized).replace(/#/g, "%23")}`;
+}
+
+export function buildAttachmentPreviewDataUrl(
+  mimeType: string,
+  dataBase64: string,
+): string {
+  return `data:${mimeType};base64,${dataBase64}`;
+}
+
+export async function loadAttachmentPreviewSrc(
+  filePath: string,
+  mimeType?: string,
+): Promise<string | null> {
+  const readPreview = window.electronAPI?.chatAttachments?.readPreview;
+  if (readPreview) {
+    const result = await readPreview({ filePath, mimeType });
+    if (result.success && result.dataUrl) {
+      return result.dataUrl;
+    }
+    return null;
+  }
+
+  // Non-Electron fallback (e.g. dev in browser) — may be blocked by web security.
+  return attachmentFileSrc(filePath);
 }

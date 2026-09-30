@@ -17,4 +17,14 @@ describe("rewritePaprPathForCloudRun", () => {
       path.join(paprHome, "Jobs/job-1/data/data.db"),
     );
   });
+
+  it("avoids double org/namespace prefix when paprHome is namespace root", () => {
+    const paprHome =
+      "/tmp/papr-cloud-run/abc/Papr/orgs/org1/namespaces/ns1";
+    const input =
+      "/Users/me/Papr/orgs/org1/namespaces/ns1/data/databases/gtm-audit/data.db";
+    expect(rewritePaprPathForCloudRun(input, paprHome)).toBe(
+      path.join(paprHome, "data/databases/gtm-audit/data.db"),
+    );
+  });
 });

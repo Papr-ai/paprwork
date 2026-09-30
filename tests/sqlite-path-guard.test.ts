@@ -2,6 +2,7 @@ import { describe, expect, test } from "vitest";
 import {
   buildSqlitePathWarnings,
   commandHasSqliteWrite,
+  detectScratchDbWriteWhenRegistryExpected,
   extractSqliteDbPaths,
 } from "../src/core/utils/sqlitePathGuard.js";
 
@@ -24,6 +25,22 @@ describe("sqlitePathGuard", () => {
     expect(paths).toContain("~/Papr/apps/app-id/database.sqlite");
   });
 
+  test("allows writes to PAPR_DB paths from env", () => {
+    const db = "/Users/test/Papr/data/databases/billing/data.db";
+    const prev = process.env.PAPR_DB_BILLING;
+    process.env.PAPR_DB_BILLING = db;
+    try {
+      const warnings = buildSqlitePathWarnings(
+        `sqlite3 "${db}" "INSERT INTO invoices VALUES (1)"`,
+        {},
+      );
+      expect(warnings).toEqual([]);
+    } finally {
+      if (prev === undefined) delete process.env.PAPR_DB_BILLING;
+      else process.env.PAPR_DB_BILLING = prev;
+    }
+  });
+
   test("warns on app-folder sqlite writes outside APP_DB", () => {
     const home = process.env.HOME ?? "/Users/test";
     const warnings = buildSqlitePathWarnings(
@@ -43,6 +60,18 @@ describe("sqlitePathGuard", () => {
     expect(warnings).toEqual([]);
   });
 
+  test("warns on non-canonical job root db writes with capital Jobs path", () => {
+    const home = process.env.HOME ?? "/Users/test";
+    const warnings = buildSqlitePathWarnings(
+      `sqlite3 "${home}/Papr/Jobs/job-1/audit.db" "UPDATE t SET x=1"`,
+      {
+        appDb: `${home}/Papr/Jobs/job-1/data/data.db`,
+        jobDb: `${home}/Papr/Jobs/job-1/data/data.db`,
+      },
+    );
+    expect(warnings.length).toBeGreaterThan(0);
+  });
+
   test("warns on non-canonical job root db writes", () => {
     const home = process.env.HOME ?? "/Users/test";
     const warnings = buildSqlitePathWarnings(
@@ -54,5 +83,34 @@ describe("sqlitePathGuard", () => {
     );
     expect(warnings.length).toBeGreaterThan(0);
     expect(warnings[0]).toContain("non-canonical");
+  });
+
+  test("blocks scratch JOB_DB writes when registry write targets exist", () => {
+    const jobDb = "/Users/test/Papr/Jobs/job-1/data/data.db";
+    const registryDb = "/Users/test/Papr/data/databases/metrics/data.db";
+    const block = detectScratchDbWriteWhenRegistryExpected(
+      `sqlite3 "$JOB_DB" "INSERT INTO leads VALUES (1, 'x')"`,
+      {
+        appDb: registryDb,
+        jobDb,
+        env: { APP_DB: registryDb, JOB_DB: jobDb },
+      },
+    );
+    expect(block?.message).toContain("Blocked");
+    expect(block?.message).toContain("registry");
+  });
+
+  test("allows registry writes when PAPR_DB path is used", () => {
+    const jobDb = "/Users/test/Papr/Jobs/job-1/data/data.db";
+    const registryDb = "/Users/test/Papr/data/databases/metrics/data.db";
+    const block = detectScratchDbWriteWhenRegistryExpected(
+      `sqlite3 "${registryDb}" "INSERT INTO leads VALUES (1, 'x')"`,
+      {
+        appDb: registryDb,
+        jobDb,
+        env: { APP_DB: registryDb, JOB_DB: jobDb },
+      },
+    );
+    expect(block).toBeNull();
   });
 });

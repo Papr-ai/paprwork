@@ -13,3 +13,8 @@ export {
   type WorkspaceInviteInput,
   type WorkspaceInviteResult,
 } from "./paprWorkspaceTeamInvites.js";
+
+export {
+  updateWorkspaceMemberRole,
+  type UpdateWorkspaceMemberRoleInput,
+} from "../../core/utils/paprWorkspaceMemberRole.js";

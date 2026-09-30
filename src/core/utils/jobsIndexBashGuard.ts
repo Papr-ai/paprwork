@@ -6,7 +6,7 @@ const JOBS_INDEX_PATH_RE =
 
 export const JOBS_INDEX_BASH_BLOCK_MESSAGE =
   "⛔ Do not create or edit jobs via bash/jq on jobs.json. " +
-  "Use create_job({ name, type, appIds, command, ... }) to create jobs (auto-creates ~/Papr/Jobs/{id}/ + index entry). " +
+  "Use create_job({ name, type, appIds, command, ... }) to create jobs (auto-creates $PAPR_HOME/Jobs/{id}/ + index entry). " +
   "Use update_job({ jobId, ... }) to change job config or status. " +
   "Use reload_jobs() after external status fixes. " +
   "Manual jobs.json edits race with JobsService and orphan job directories.";

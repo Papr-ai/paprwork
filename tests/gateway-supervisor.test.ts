@@ -19,7 +19,11 @@ const {
   getNotificationType,
   shouldKillProcess,
   parseHealthResponse,
+  getHealthObservation,
   shouldKillUnhealthyGateway,
+  parseGatewaySyncBusyState,
+  isGatewaySyncBusyGraceActive,
+  selectOrphanPidsToKill,
   isValidTransition,
   VALID_STATE_TRANSITIONS,
 } = require("../src/electron/supervisor-logic.cjs");
@@ -295,11 +299,89 @@ describe("parseHealthResponse", () => {
     expect(health).toEqual({ alive: true, ready: false });
   });
 
+  test('status "switching" is alive but not ready', () => {
+    const health = parseHealthResponse(JSON.stringify({ status: "switching" }));
+    expect(health).toEqual({ alive: true, ready: false });
+  });
+
+  test('syncBusy with status "ok" is ready (grace flag only)', () => {
+    const health = parseHealthResponse(
+      JSON.stringify({ status: "ok", syncBusy: true }),
+    );
+    expect(health).toEqual({ alive: true, ready: true, syncBusy: true });
+  });
+
+  test("syncBusy while still starting is not ready", () => {
+    const health = parseHealthResponse(
+      JSON.stringify({ status: "starting", syncBusy: true }),
+    );
+    expect(health).toEqual({ alive: true, ready: false, syncBusy: true });
+  });
+
   test("invalid JSON is not alive", () => {
     expect(parseHealthResponse("not-json")).toEqual({
       alive: false,
       ready: false,
     });
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Orphan PID selection
+//
+// A Turso SIGABRT leaves the gateway orphaned on port 18789 still answering
+// /health. On the next launch the Electron main process POSTs to that port, the
+// socket connects, and unfiltered `lsof -ti:PORT` reports main's own PID beside
+// the orphan's. The supervisor then SIGKILLed itself ~0.6s into startup and the
+// app never loaded — reproduced with a detached squatter, which yielded exactly
+// "Found 2 orphaned process(es) on port 18789: 25799, 26221" (25799 = orphan,
+// 26221 = the app) followed by silence.
+// ---------------------------------------------------------------------------
+describe("selectOrphanPidsToKill", () => {
+  test("regression: never returns our own PID alongside a real orphan", () => {
+    const lsofOutput = "25799\n26221\n";
+    expect(selectOrphanPidsToKill(lsofOutput, [26221])).toEqual([25799]);
+  });
+
+  test("protects the parent PID too", () => {
+    expect(selectOrphanPidsToKill("111\n222\n333\n", [222, 333])).toEqual([111]);
+  });
+
+  test("returns a lone orphan", () => {
+    expect(selectOrphanPidsToKill("6036\n", [999])).toEqual([6036]);
+  });
+
+  test("no listeners yields nothing to kill", () => {
+    expect(selectOrphanPidsToKill("", [123])).toEqual([]);
+    expect(selectOrphanPidsToKill("   \n\n", [123])).toEqual([]);
+  });
+
+  test("everything protected yields nothing to kill", () => {
+    // Must be empty, not "kill them anyway" — that is the self-kill path.
+    expect(selectOrphanPidsToKill("26221\n", [26221])).toEqual([]);
+  });
+
+  test("drops non-numeric noise and pid 0", () => {
+    // pid 0 would signal the whole process group.
+    expect(selectOrphanPidsToKill("abc\n0\n-5\n404\n", [])).toEqual([404]);
+  });
+
+  test("deduplicates repeated PIDs", () => {
+    expect(selectOrphanPidsToKill("500\n500\n501\n", [])).toEqual([500, 501]);
+  });
+
+  test("handles CRLF from Windows netstat", () => {
+    expect(selectOrphanPidsToKill("700\r\n701\r\n", [701])).toEqual([700]);
+  });
+
+  test("non-string input is not trusted", () => {
+    expect(selectOrphanPidsToKill(undefined, [])).toEqual([]);
+    expect(selectOrphanPidsToKill(null, [])).toEqual([]);
+  });
+
+  test("tolerates protected PIDs given as strings", () => {
+    // process.ppid can arrive stringified through env plumbing.
+    expect(selectOrphanPidsToKill("800\n801\n", ["801"])).toEqual([800]);
   });
 });
 
@@ -314,6 +396,16 @@ describe("shouldKillUnhealthyGateway", () => {
     ).toBe(false);
   });
 
+  test("switching status never triggers kill while gateway was healthy", () => {
+    const health = { alive: true, ready: false };
+    expect(
+      shouldKillUnhealthyGateway(4, health, true, 5).shouldKill,
+    ).toBe(false);
+    expect(
+      shouldKillUnhealthyGateway(4, health, true, 5).newCount,
+    ).toBe(0);
+  });
+
   test("ok status resets failures", () => {
     const health = { alive: true, ready: true };
     expect(
@@ -321,6 +413,16 @@ describe("shouldKillUnhealthyGateway", () => {
     ).toBe(false);
     expect(
       shouldKillUnhealthyGateway(4, health, true, 5).newCount,
+    ).toBe(0);
+  });
+
+  test("syncBusy never triggers kill while gateway was healthy", () => {
+    const health = { alive: true, ready: false, syncBusy: true };
+    expect(
+      shouldKillUnhealthyGateway(10, health, true, 5).shouldKill,
+    ).toBe(false);
+    expect(
+      shouldKillUnhealthyGateway(10, health, true, 5).newCount,
     ).toBe(0);
   });
 
@@ -367,5 +469,34 @@ describe("getNotificationType", () => {
     expect(getNotificationType(1, 1, 3)).toBe("silent");
     expect(getNotificationType(2, 1, 3)).toBe("banner");
     expect(getNotificationType(4, 1, 3)).toBe("dialog");
+  });
+});
+
+
+describe("health diagnostic observations", () => {
+  test.each(["ok", "starting", "switching"])("successful %s response during sync is not a failure", (status) => {
+    const health = parseHealthResponse(JSON.stringify({ status, syncBusy: true }));
+    expect(getHealthObservation(health, "response", false)).toBeNull();
+    expect(shouldKillUnhealthyGateway(2, health, true)).toEqual({ newCount: 0, shouldKill: false });
+  });
+
+  test.each(["error", "timeout"])("real %s remains visible during sync grace without triggering a restart", (outcome) => {
+    const graceHealth = { alive: true, ready: false, syncBusy: true };
+    expect(getHealthObservation(graceHealth, outcome, false)).toEqual({
+      status: "failed",
+      reason: `Health request ${outcome === "timeout" ? "timed out" : "failed"} during sync grace`,
+    });
+    expect(shouldKillUnhealthyGateway(2, graceHealth, true)).toEqual({ newCount: 0, shouldKill: false });
+  });
+
+  test("successful response recovers even while sync is still busy", () => {
+    const health = parseHealthResponse('{"status":"ok","syncBusy":true}');
+    expect(getHealthObservation(health, "response", true)).toEqual({ status: "recovered", reason: "Health request responded again" });
+    expect(getHealthObservation(health, "response", false)).toBeNull();
+  });
+
+  test("invalid responses and failures outside grace remain failures", () => {
+    expect(getHealthObservation(parseHealthResponse("not-json"))).toEqual({ status: "failed", reason: "Health response was invalid or unhealthy" });
+    expect(getHealthObservation({ alive: false, ready: false }, "timeout")).toEqual({ status: "failed", reason: "Health request timed out" });
   });
 });

@@ -130,7 +130,10 @@ export class MastraAgent {
             "../../gateway/utils/modelNormalizer.js"
           );
           providerOptions.openai = {
-            reasoningEffort: toOpenAIReasoningEffort(config.reasoning.effort),
+            reasoningEffort: toOpenAIReasoningEffort(
+              config.reasoning.effort,
+              config.model,
+            ),
           };
         }
 

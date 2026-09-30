@@ -19,8 +19,6 @@
   border-radius: 12px;
   padding: 10px;
   background: var(--glass-bg);
-  backdrop-filter: blur(14px);
-  -webkit-backdrop-filter: blur(14px);
 }
 
 .agents-view__create textarea {
@@ -57,8 +55,6 @@
   border-radius: 12px;
   padding: 12px;
   background: var(--glass-bg);
-  backdrop-filter: blur(14px);
-  -webkit-backdrop-filter: blur(14px);
 }
 
 .agents-view__stat-card strong {
@@ -85,8 +81,6 @@
   border-radius: 12px;
   padding: 8px;
   background: var(--glass-bg);
-  backdrop-filter: blur(14px);
-  -webkit-backdrop-filter: blur(14px);
   max-height: 420px;
   overflow: auto;
 }

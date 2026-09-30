@@ -22,32 +22,44 @@
     "src/electron/index.cjs",
     "src/electron/supervisor-logic.cjs",
     "src/electron/preload.cjs",
+    "src/electron/geolocationPermission.cjs",
     "src/electron/ipc/**/*.cjs",
     "src/resources/**/*",
+    "node_modules/playwright/**/*",
+    "node_modules/playwright-core/**/*",
     "package.json"
   ],
   "asarUnpack": [
     "node_modules/esbuild/**",
     "node_modules/@esbuild/**",
     "node_modules/playwright/**",
-    "node_modules/playwright-core/**"
+    "node_modules/playwright-core/**",
+    "dist/resources/default-apps/**",
+    "dist/resources/default-jobs/**",
+    "dist/resources/job-sdk/**",
+    "dist/resources/mini-app-sdk/**",
+    "src/resources/job-sdk/**",
+    "src/resources/mini-app-sdk/**"
   ],
+  "extraResources": [
+    {
+      "from": "build/packaged-gateway-env.json",
+      "to": "packaged-gateway-env.json"
+    },
+    {
+      "from": "src/resources/packaged-gateway-env.defaults.json",
+      "to": "packaged-gateway-env.defaults.json"
+    }
+  ],
+  "npmRebuild": false,
   "mac": {
     "category": "public.app-category.productivity",
     "target": [
       {
-        "target": "pkg",
-        "arch": [
-          "arm64",
-          "x64"
-        ]
+        "target": "pkg"
       },
       {
-        "target": "zip",
-        "arch": [
-          "arm64",
-          "x64"
-        ]
+        "target": "zip"
       }
     ],
     "icon": "build/icon.icns",
@@ -59,7 +71,8 @@
     "extendInfo": {
       "NSMicrophoneUsageDescription": "Paprwork needs access to your microphone for meeting recording.",
       "NSCameraUsageDescription": "Paprwork needs access to your camera for meeting recording.",
-      "NSCalendarsUsageDescription": "Paprwork needs access to your calendar to show upcoming meetings."
+      "NSCalendarsUsageDescription": "Paprwork needs access to your calendar to show upcoming meetings.",
+      "NSLocationWhenInUseUsageDescription": "Papr Work uses your location to show local weather in the sidebar."
     }
   },
   "win": {
@@ -106,6 +119,7 @@
     "allowRootDirectory": false,
     "isRelocatable": false,
     "overwriteAction": "upgrade",
-    "scripts": "build/pkg-scripts"
+    "scripts": "build/pkg-scripts",
+    "conclusion": "build/pkg-conclusion.html"
   }
 }

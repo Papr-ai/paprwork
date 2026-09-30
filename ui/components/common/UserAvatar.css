@@ -1,0 +1,87 @@
+/**
+ * UserAvatar — the single circular identity frame.
+ *
+ * The frame lives here and nowhere else. Before this file, every call site
+ * re-declared the circle, and they drifted: the sidebar used 34px with
+ * `overflow: visible` over a periwinkle gradient, so the photo was never
+ * clipped and the gradient read as a blue ring; Settings used 32px with
+ * `overflow: hidden` and looked correct. Same component, two shapes.
+ *
+ * Callers pass a size. They do not pass shape.
+ */
+
+.papr-avatar {
+  /* Logical properties so the box cannot be collapsed by a flex parent. */
+  inline-size: var(--papr-avatar-size, 32px);
+  block-size: var(--papr-avatar-size, 32px);
+  /* flex-shrink was the other half of the "not a correct circle" bug: in a
+     tight flex row the box compressed on one axis only, producing an oval. */
+  flex: 0 0 auto;
+  aspect-ratio: 1 / 1;
+
+  border-radius: 50%;
+  /* Non-negotiable: this is what clips the photo to the circle. */
+  overflow: hidden;
+
+  display: grid;
+  place-items: center;
+
+  /* Neutral by default. A tinted background behind a photo only ever shows up
+     as an unwanted halo, which is exactly what the blue ring was. */
+  background: var(--papr-avatar-bg, var(--bg-secondary, rgba(120, 120, 128, 0.12)));
+  color: var(--papr-avatar-fg, var(--text-secondary, #6b7280));
+
+  /* No border by default — opt in via .papr-avatar--ring. */
+  border: 0;
+
+  user-select: none;
+  -webkit-user-select: none;
+}
+
+/* Every child fills the frame and inherits the clip. */
+.papr-avatar__img {
+  inline-size: 100%;
+  block-size: 100%;
+  object-fit: cover;
+  display: block;
+  border-radius: inherit;
+}
+
+.papr-avatar__initials {
+  font-size: calc(var(--papr-avatar-size, 32px) * 0.38);
+  font-weight: 600;
+  letter-spacing: 0.02em;
+  line-height: 1;
+  text-transform: uppercase;
+}
+
+.papr-avatar__glyph {
+  inline-size: 58%;
+  block-size: 58%;
+  opacity: 0.75;
+}
+
+/* Opt-in hairline, for avatars that sit directly on a photo or coloured fill. */
+.papr-avatar--ring {
+  box-shadow: inset 0 0 0 1px var(--border-color, rgba(0, 0, 0, 0.1));
+}
+
+/* Opt-in affordance for avatars that are themselves the click target. */
+.papr-avatar--interactive {
+  cursor: pointer;
+  transition: transform 0.15s var(--ease, ease), box-shadow 0.15s var(--ease, ease);
+}
+
+.papr-avatar--interactive:hover {
+  transform: scale(1.05);
+  box-shadow: 0 2px 8px rgba(0, 0, 0, 0.18);
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .papr-avatar--interactive {
+    transition: none;
+  }
+  .papr-avatar--interactive:hover {
+    transform: none;
+  }
+}

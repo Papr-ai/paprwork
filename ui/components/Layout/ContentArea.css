@@ -4,16 +4,29 @@
  */
 
 .content-area {
+  position: relative;
   flex: 1;
   overflow: hidden;
   display: flex;
-  position: relative;
 }
 
 .content-area--split {
   display: grid;
   grid-template-columns: calc(var(--split-ratio) * 100%) 5px 1fr;
   gap: 0;
+}
+
+/* Split view: skip frosted-glass blur — it repaints both panes on every chat
+   input reflow and makes typing feel laggy next to TipTap. */
+.content-area--split .content-pane {
+  background: var(--background-color, rgba(255, 255, 255, 0.98));
+  isolation: isolate;
+}
+
+@media (prefers-color-scheme: dark) {
+  .content-area--split .content-pane {
+    background: var(--background-color, rgba(28, 28, 30, 0.98));
+  }
 }
 
 /* Panes — min-height: 0 lets nested flex children scroll (Jobs, Agents, Chat). */
@@ -24,8 +37,6 @@
   flex-direction: column;
   /* Subtle frosted glass — shows app-layout background with soft tint */
   background: rgba(255, 255, 255, 0.10);
-  backdrop-filter: blur(8px);
-  -webkit-backdrop-filter: blur(8px);
 }
 
 .content-pane--full {
@@ -50,6 +61,61 @@
 
 .content-pane__keep-alive--visible {
   display: flex;
+}
+
+.content-pane__keep-alive--app {
+  flex: 1;
+  min-height: 0;
+}
+
+/* Single layer — one host per tab; placement toggles visibility without remount */
+.content-area__app-tab-layer {
+  position: absolute;
+  inset: 0;
+  z-index: 2;
+  pointer-events: none;
+}
+
+.content-area__app-tab-layer .content-pane__keep-alive--app {
+  position: absolute;
+  inset: 0;
+  display: none;
+  flex-direction: column;
+  min-height: 0;
+  overflow: hidden;
+  pointer-events: none;
+}
+
+.content-area__app-tab-layer
+  .content-pane__keep-alive--app.content-pane__keep-alive--placement-full,
+.content-area__app-tab-layer
+  .content-pane__keep-alive--app.content-pane__keep-alive--placement-left,
+.content-area__app-tab-layer
+  .content-pane__keep-alive--app.content-pane__keep-alive--placement-right {
+  display: flex;
+  pointer-events: auto;
+}
+
+.content-area--split
+  .content-area__app-tab-layer
+  .content-pane__keep-alive--placement-left {
+  right: calc((1 - var(--split-ratio)) * 100% + 5px);
+}
+
+.content-area--split
+  .content-area__app-tab-layer
+  .content-pane__keep-alive--placement-right {
+  left: calc(var(--split-ratio) * 100% + 5px);
+}
+
+/* Off-screen cache for app preview tabs (iframes stay loaded) */
+.content-area__app-tab-cache {
+  position: absolute;
+  width: 0;
+  height: 0;
+  overflow: hidden;
+  pointer-events: none;
+  visibility: hidden;
 }
 
 /* Add border to left pane in split view for better visual separation */
@@ -167,8 +233,42 @@ body.resizing .content-area__resize-line {
   font-size: 16px;
   font-weight: 500;
   background: var(--glass-bg);
-  backdrop-filter: blur(14px);
   border: 1px solid var(--border);
   border-radius: var(--r-lg);
   margin: var(--space-4);
+}
+
+.content-area__workspace-switch {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 12px;
+  width: 100%;
+  height: 100%;
+  min-height: 200px;
+  color: var(--text-secondary);
+  font-size: 14px;
+}
+
+.content-area__workspace-switch--overlay {
+  position: absolute;
+  inset: 0;
+  z-index: 20;
+  background: color-mix(in srgb, var(--bg-secondary) 88%, transparent);
+}
+
+.content-area__workspace-switch-spinner {
+  width: 28px;
+  height: 28px;
+  border: 2px solid var(--border-color);
+  border-top-color: var(--accent-color, #007aff);
+  border-radius: 50%;
+  animation: content-area-spin 0.8s linear infinite;
+}
+
+@keyframes content-area-spin {
+  to {
+    transform: rotate(360deg);
+  }
 }

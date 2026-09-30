@@ -1,42 +1,112 @@
+import { traceDiagnosticPhase } from "../../core/utils/performanceDiagnostics.js";
 /**
  * Vault Sync Service — syncs local custom keys (macOS Keychain) to cloud vault
  * (GCP Secret Manager) via the memory server.
  *
  * Flow:
- *   1. On init: push all local keys → cloud vault (idempotent)
- *   2. On init: pull vault key names → add any missing to local keychain
+ *   1. On init: push local keys that changed since last successful sync
+ *   2. On init: pull user-scoped vault key names for cross-device awareness (names only)
  *   3. On key change: push updated keys → cloud vault
+ *
+ * Pull uses scope=user only (acting user via external_user_id). Cloud app host
+ * uses scope=context for ACL union. Canonical vault: one secret per key name.
  *
  * The cloud proxy at /api/cloud/vault/* forwards to /v1/cloud/vault/*
  * on the memory server, attaching the user's PAPR_API_KEY automatically.
  */
 
-import { buildCloudVaultRequestBody } from "../../core/utils/cloudReposScope.js";
-import type { CloudRepoScope } from "../../core/utils/cloudReposScope.js";
-import { readActiveWorkspacePointer } from "../../core/utils/paprWorkspace.js";
-import { normalizeIntegrationKeyVaultAudience } from "../../core/storage/customKeysVault.js";
+import {
+  buildCloudVaultRequestBody,
+  mapCustomKeyMetadataToVaultEntry,
+  resolveActiveNamespaceId,
+} from "../../core/utils/cloudReposScope.js";
+import {
+  mapCloudVaultPermission,
+  shouldPushKeyToCloud,
+  type SharedVaultKeyInput,
+} from "../../core/storage/sharedVaultMirror.js";
+import type { CloudRepoScope, CloudVaultKeyEntry } from "../../core/utils/cloudReposScope.js";
+import type { IntegrationKeyVaultAudience } from "../../core/storage/customKeysVault.js";
 import { getCustomKeysService } from "./CustomKeysService.js";
 import { resolveVaultKeySource } from "./cloudAgentGateway/resolveCloudProviderAuth.js";
+import {
+  isPaprCloudPaused,
+  isPaprSubscriptionBlockedMessage,
+  reportPaprQuotaError,
+} from "../../core/utils/paprQuota.js";
 import { getPaprApiKey } from "../utils/keyResolver.js";
+import { waitForGatewayRoutesReady } from "./gatewayReadiness.js";
+import { mapWithConcurrency } from "../utils/mapWithConcurrency.js";
+import { VAULT_KEY_READ_CONCURRENCY } from "./vaultKeyReadConcurrency.js";
+
+interface VaultSyncRouteOpts {
+  /** Caller already waited on gateway routes (full sync). */
+  skipRoutesReady?: boolean;
+}
 
 const GATEWAY_PORT = parseInt(process.env.GATEWAY_PORT ?? "18789", 10);
+const GATEWAY_ROUTES_WAIT_MS = 120_000;
 const PUSH_TIMEOUT_MS = 120_000; // 52 keys × ~2s each on GCP Secret Manager
 const PULL_TIMEOUT_MS = 15_000;
+const PULL_SHARED_TIMEOUT_MS = 60_000; // returns values — can be slow with many org keys
 
 interface VaultKeyInfo {
   name: string;
   syncedAt: string;
 }
 
+interface VaultShareConflict {
+  name: string;
+  reason?: string;
+  ownerUserId?: string;
+  shareScope?: string;
+}
+
 interface VaultSyncResponse {
   synced: number;
   created: string[];
   updated: string[];
+  unchanged?: string[];
   deleted: string[];
+  conflicts?: VaultShareConflict[];
 }
 
 interface VaultListKeysResponse {
   keys: VaultKeyInfo[];
+}
+
+interface VaultPullSharedKeyResponse {
+  name: string;
+  value: string;
+  shareScope: "namespace" | "org";
+  syncedAt?: string;
+  permission?: string;
+  clientAccess?: "server" | "client";
+  source?: string;
+  ownerUserId?: string;
+}
+
+interface VaultPullSharedResponse {
+  keys: VaultPullSharedKeyResponse[];
+}
+
+interface VaultDeleteResponse {
+  deleted: string[];
+  not_found: string[];
+}
+
+export interface SyncKeyVaultChangeInput {
+  name: string;
+  previousAudience?: IntegrationKeyVaultAudience | null;
+  nextAudience?: IntegrationKeyVaultAudience | null;
+  targetOrgId?: string;
+  mode: "delete" | "update";
+}
+
+export interface SyncKeyVaultChangeResult {
+  deleted: string[];
+  notFound: string[];
+  push: VaultSyncResponse | null;
 }
 
 type VaultSyncStatus = "idle" | "syncing" | "error" | "disabled";
@@ -48,6 +118,8 @@ interface VaultState {
   keyCount: number;
 }
 
+const VAULT_PUSH_DEBOUNCE_MS = 2_000;
+
 export class VaultSyncService {
   private state: VaultState = {
     status: "idle",
@@ -55,6 +127,41 @@ export class VaultSyncService {
     lastError: null,
     keyCount: 0,
   };
+
+  private pushDebounceTimer: ReturnType<typeof setTimeout> | null = null;
+  private pushInFlight: Promise<VaultSyncResponse | null> | null = null;
+  private pushPendingAfterInflight = false;
+  private fullSyncInFlight: Promise<VaultSyncResponse | null> | null = null;
+  private workspaceController = new AbortController();
+  private workspacePaused = false;
+  private readonly localWrites = new Set<Promise<unknown>>();
+
+  /** Fence outgoing work before workspace paths or credentials change. */
+  async beginWorkspaceSwitch(): Promise<void> {
+    this.workspacePaused = true;
+    this.workspaceController.abort();
+    this.workspaceController = new AbortController();
+    if (this.pushDebounceTimer) clearTimeout(this.pushDebounceTimer);
+    this.pushDebounceTimer = null;
+    this.pushPendingAfterInflight = false;
+    this.pushInFlight = null;
+    this.fullSyncInFlight = null;
+    this.state = { status: "idle", lastSyncAt: null, lastError: null, keyCount: 0 };
+    // Finish already-dispatched keychain writes before the caller changes workspace.
+    await Promise.allSettled([...this.localWrites]);
+  }
+
+  private async applyForWorkspace<T>(signal: AbortSignal, apply: () => Promise<T>): Promise<T> {
+    signal.throwIfAborted();
+    const task = apply();
+    this.localWrites.add(task);
+    try { return await task; } finally { this.localWrites.delete(task); }
+  }
+
+  private isCurrent(signal: AbortSignal): boolean {
+    return !this.workspacePaused && !signal.aborted;
+  }
+  private initializeInFlight: Promise<void> | null = null;
 
   private readonly gatewayPort: number;
 
@@ -66,10 +173,34 @@ export class VaultSyncService {
     return { ...this.state };
   }
 
+  /** True while startup init or a coalesced full sync / push is in flight. */
+  isSyncBusy(): boolean {
+    return (
+      this.initializeInFlight !== null ||
+      this.fullSyncInFlight !== null ||
+      this.pushInFlight !== null
+    );
+  }
+
   /**
    * Initialize: push local keys to cloud, then pull to discover cross-device keys.
    */
   async initialize(): Promise<void> {
+    if (this.initializeInFlight) {
+      await this.initializeInFlight;
+      return;
+    }
+
+    this.initializeInFlight = this.initializeOnce();
+    try {
+      await this.initializeInFlight;
+    } finally {
+      this.initializeInFlight = null;
+    }
+  }
+
+  private async initializeOnce(): Promise<void> {
+    const signal = this.workspaceController.signal;
     console.log("[VaultSync] Initializing...");
 
     const paprKey = await getPaprApiKey();
@@ -80,12 +211,13 @@ export class VaultSyncService {
     }
 
     try {
-      const pushed = await this.pushAllKeys();
-      await this.pullKeys();
+      const pushed = await this.runFullSync();
+      if (!this.isCurrent(signal)) return;
       if (!pushed) {
         // Gateway may start before Electron IPC is ready; retry once keys are readable.
         setTimeout(() => {
-          void this.pushAllKeys().then((retry) => {
+          if (!this.isCurrent(signal)) return;
+          void this.enqueuePush().then((retry) => {
             if (retry) {
               console.log(
                 `[VaultSync] Delayed push synced ${retry.synced} keys`,
@@ -106,159 +238,276 @@ export class VaultSyncService {
   }
 
   /**
-   * Push all local custom keys to the cloud vault.
-   * Called on init and after any key add/update/delete.
+   * Push → pull user key names → pull shared mirrors (coalesced).
+   * Use on init and workspace switch so overlapping callers share one run.
+   */
+  async runFullSync(): Promise<VaultSyncResponse | null> {
+    if (this.workspacePaused) return null;
+    if (this.fullSyncInFlight) return this.fullSyncInFlight;
+    const task = traceDiagnosticPhase("vault:full-sync", () => this.runFullSyncOnce());
+    this.fullSyncInFlight = task;
+    try {
+      return await task;
+    } finally {
+      if (this.fullSyncInFlight === task) this.fullSyncInFlight = null;
+    }
+  }
+
+  private async runFullSyncOnce(): Promise<VaultSyncResponse | null> {
+    const signal = this.workspaceController.signal;
+    const { yieldToInteractiveHotPath } = await import(
+      "./gatewayBackgroundWork.js"
+    );
+    await yieldToInteractiveHotPath("VaultSync.runFullSync");
+    await this.ensureGatewayRoutesReady();
+    if (!this.isCurrent(signal)) return null;
+    this.state.lastError = null;
+    this.state.status = "syncing";
+    const routeOpts: VaultSyncRouteOpts = { skipRoutesReady: true };
+    const pushed = await traceDiagnosticPhase("vault:push", () =>
+      this.enqueuePush(routeOpts),
+    );
+    if (!this.isCurrent(signal)) return null;
+    await Promise.all([
+      traceDiagnosticPhase("vault:pull-key-names", () =>
+        this.pullKeys(routeOpts),
+      ),
+      traceDiagnosticPhase("vault:pull-shared-keys", () =>
+        this.pullSharedKeys(routeOpts),
+      ),
+    ]);
+    if (this.isCurrent(signal) && this.state.lastError) {
+      throw new Error(`Vault sync incomplete: ${this.state.lastError}`);
+    }
+    if (this.isCurrent(signal)) this.state.status = "idle";
+    return pushed;
+  }
+
+  private async ensureGatewayRoutesReady(): Promise<void> {
+    await traceDiagnosticPhase("vault:wait-for-routes", async () => {
+      const ready = await waitForGatewayRoutesReady(GATEWAY_ROUTES_WAIT_MS);
+      if (!ready) throw Object.assign(new Error("Gateway routes not ready"), { name: "TimeoutError" });
+    }, true);
+  }
+
+  /**
+   * Push all local custom keys to the cloud vault (coalesced — concurrent calls share one push).
    */
   async pushAllKeys(): Promise<VaultSyncResponse | null> {
-    const customKeys = getCustomKeysService();
+    return this.enqueuePush();
+  }
 
+  private async enqueuePush(
+    opts?: VaultSyncRouteOpts,
+  ): Promise<VaultSyncResponse | null> {
+    if (this.workspacePaused) return null;
+    if (this.pushInFlight) return this.pushInFlight;
+    const signal = this.workspaceController.signal;
+    const task = this.pushAllKeysUncoalesced(opts);
+    this.pushInFlight = task;
+    try {
+      return await task;
+    } finally {
+      if (this.pushInFlight === task) {
+        this.pushInFlight = null;
+        const rerun = this.pushPendingAfterInflight;
+        this.pushPendingAfterInflight = false;
+        if (rerun && this.isCurrent(signal)) this.scheduleDebouncedPushAll();
+      }
+    }
+  }
+
+  /**
+   * Debounced full push after list-wide cache invalidation (IPC / workspace switch).
+   */
+  scheduleDebouncedPushAll(): void {
+    this.schedulePushAfterKeyChange("(all keys)", "changed");
+  }
+
+  /** Build vault push payload on gateway (keychain IPC stays in parent). */
+  async buildVaultPushEntriesForBackground(): Promise<CloudVaultKeyEntry[]> {
+    if (isPaprCloudPaused()) {
+      return [];
+    }
+
+    const customKeys = getCustomKeysService();
     const keyList = await customKeys.listKeys();
     if (keyList.length === 0) {
-      console.log("[VaultSync] No local keys to push");
       this.state.keyCount = 0;
+      return [];
+    }
+
+    const eligible = keyList.filter(
+      (meta) => meta.scope !== "global" && shouldPushKeyToCloud(meta),
+    );
+
+    const mapped = await mapWithConcurrency(
+      eligible,
+      VAULT_KEY_READ_CONCURRENCY,
+      async (meta) => this.readVaultPushEntry(customKeys, meta),
+    );
+
+    return mapped.filter((entry): entry is CloudVaultKeyEntry => entry !== null);
+  }
+
+  private async readVaultPushEntry(
+    customKeys: ReturnType<typeof getCustomKeysService>,
+    meta: Awaited<ReturnType<typeof customKeys.listKeys>>[number],
+  ): Promise<CloudVaultKeyEntry | null> {
+    try {
+      const value = await customKeys.getKeyByName(meta.name);
+      if (!value) {
+        return null;
+      }
+      return mapCustomKeyMetadataToVaultEntry({
+        meta: {
+          name: meta.name,
+          permission: meta.permission,
+          clientAccess: meta.clientAccess,
+          vaultAudience: meta.vaultAudience,
+          vaultAudienceMemberIds: meta.vaultAudienceMemberIds,
+          orgScope: meta.orgScope,
+          organizationId: meta.organizationId,
+          source: meta.source,
+          managedBy: meta.managedBy,
+          oauthProvider: meta.oauthProvider,
+          description: meta.description,
+        },
+        value,
+        source: resolveVaultKeySource(
+          {
+            name: meta.name,
+            source: meta.source,
+            managedBy: meta.managedBy,
+            oauthProvider: meta.oauthProvider,
+            description: meta.description,
+          },
+          value,
+        ),
+      });
+    } catch (err) {
+      console.warn(
+        `[VaultSync] Could not read key "${meta.name}":`,
+        (err as Error).message,
+      );
+      return null;
+    }
+  }
+
+  async applyVaultPushResultFromBackground(
+    result: VaultSyncResponse,
+  ): Promise<void> {
+    this.state.status = "idle";
+    this.state.lastSyncAt = new Date().toISOString();
+    this.state.lastError = null;
+    this.state.keyCount = result.synced;
+
+    const customKeys = getCustomKeysService();
+    await customKeys.reconcileShareSyncResult({
+      conflicts: result.conflicts ?? [],
+      syncedNames: [...result.created, ...result.updated],
+    });
+
+    if (result.conflicts && result.conflicts.length > 0) {
+      console.warn(
+        `[VaultSync] ${result.conflicts.length} key(s) not shared — name already taken in cloud vault`,
+      );
+    }
+
+    console.log(
+      `[VaultSync] Pushed ${result.synced} keys (${result.created.length} created, ${result.updated.length} updated${result.unchanged?.length ? `, ${result.unchanged.length} unchanged on server` : ""})`,
+    );
+  }
+
+  private async pushAllKeysUncoalesced(
+    opts?: VaultSyncRouteOpts,
+  ): Promise<VaultSyncResponse | null> {
+    const signal = this.workspaceController.signal;
+    const { yieldToInteractiveHotPath } = await import(
+      "./gatewayBackgroundWork.js"
+    );
+    await yieldToInteractiveHotPath("VaultSync.pushAll");
+    if (!this.isCurrent(signal)) return null;
+    if (isPaprCloudPaused()) {
+      console.log(
+        "[VaultSync] Skipping push — Papr Cloud paused (no active subscription)",
+      );
       return null;
     }
 
-    const keyPairsByScope = new Map<
-      CloudRepoScope,
-      Array<{
-        name: string;
-        value: string;
-        clientAccess: "server" | "client";
-        source: string;
-      }>
-    >();
-
-    for (const meta of keyList) {
-      if (meta.scope === "global") {
-        continue;
-      }
-      try {
-        const value = await customKeys.getKeyByName(meta.name);
-        if (!value) {
-          continue;
-        }
-        const cloudScope = normalizeIntegrationKeyVaultAudience(meta.vaultAudience);
-        const pair = {
-          name: meta.name,
-          value,
-          clientAccess: meta.clientAccess ?? "server",
-          source: resolveVaultKeySource(
-            {
-              name: meta.name,
-              source: meta.source,
-              managedBy: meta.managedBy,
-              oauthProvider: meta.oauthProvider,
-              description: meta.description,
-            },
-            value,
-          ),
-        };
-        const bucket = keyPairsByScope.get(cloudScope) ?? [];
-        bucket.push(pair);
-        keyPairsByScope.set(cloudScope, bucket);
-      } catch (err) {
-        console.warn(
-          `[VaultSync] Could not read key "${meta.name}":`,
-          (err as Error).message,
-        );
-      }
-    }
-
-    const totalKeys = [...keyPairsByScope.values()].reduce(
-      (sum, bucket) => sum + bucket.length,
-      0,
-    );
-
-    if (totalKeys === 0) {
+    const vaultEntries = await traceDiagnosticPhase("vault:prepare-keys", () => this.buildVaultPushEntriesForBackground());
+    if (!this.isCurrent(signal)) return null;
+    if (vaultEntries.length === 0) {
       console.log("[VaultSync] No readable key values to push");
       return null;
     }
 
+    const { filterVaultEntriesNeedingPush, markVaultPushFingerprints } =
+      await import("../utils/vaultPushStateStore.js");
+    if (!this.isCurrent(signal)) return null;
+    const { toPush, skippedNames } = filterVaultEntriesNeedingPush(vaultEntries);
+    if (skippedNames.length > 0) {
+      console.log(
+        `[VaultSync] Skipping ${skippedNames.length} unchanged key(s) locally (fingerprint match)`,
+      );
+    }
+    if (toPush.length === 0) {
+      console.log("[VaultSync] All keys match last push — skipping cloud sync");
+      this.state.status = "idle";
+      this.state.lastSyncAt = new Date().toISOString();
+      this.state.keyCount = vaultEntries.length;
+      return {
+        synced: 0,
+        created: [],
+        updated: [],
+        unchanged: skippedNames,
+        deleted: [],
+        conflicts: [],
+      };
+    }
+
     this.state.status = "syncing";
+    this.state.keyCount = vaultEntries.length;
     console.log(
-      `[VaultSync] Pushing ${totalKeys} keys to vault (${keyPairsByScope.size} scope bucket(s))...`,
+      `[VaultSync] Pushing ${toPush.length}/${vaultEntries.length} keys to vault (per-key shareScope)...`,
     );
 
     try {
-      const controller = new AbortController();
-      const timer = setTimeout(() => controller.abort(), PUSH_TIMEOUT_MS);
-      let syncedTotal = 0;
-      const created: string[] = [];
-      const updated: string[] = [];
-      const deleted: string[] = [];
-
-      for (const [cloudScope, keyPairs] of keyPairsByScope) {
-        const resp = await fetch(
-          `http://localhost:${this.gatewayPort}/api/cloud/vault/sync`,
-          {
-            method: "POST",
-            headers: { "Content-Type": "application/json" },
-            body: JSON.stringify(
-              buildCloudVaultRequestBody(
-                keyPairs.map(({ name, value, clientAccess, source }) => ({
-                  name,
-                  value,
-                  source,
-                  clientAccess,
-                })),
-                cloudScope,
-              ),
-            ),
-            signal: controller.signal,
-          },
-        );
-
-        if (!resp.ok) {
-          const text = await resp.text();
-          throw new Error(
-            `Vault sync failed for scope ${cloudScope} (${resp.status}): ${text}`,
-          );
-        }
-
-        const result = (await resp.json()) as VaultSyncResponse;
-        syncedTotal += result.synced;
-        created.push(...result.created);
-        updated.push(...result.updated);
-        deleted.push(...result.deleted);
+      if (!opts?.skipRoutesReady) {
+        await this.ensureGatewayRoutesReady();
       }
-
-      clearTimeout(timer);
-
-      const result: VaultSyncResponse = {
-        synced: syncedTotal,
-        created,
-        updated,
-        deleted,
-      };
-      this.state.status = "idle";
-      this.state.lastSyncAt = new Date().toISOString();
-      this.state.lastError = null;
-      this.state.keyCount = totalKeys;
-
-      console.log(
-        `[VaultSync] Pushed ${result.synced} keys (${result.created.length} created, ${result.updated.length} updated)`,
+      const { pushVaultEntriesViaGatewayHttp } = await import(
+        "./vaultSyncBackgroundPush.js"
       );
+      if (!this.isCurrent(signal)) return null;
+      const result = await traceDiagnosticPhase("vault:push-http", () => pushVaultEntriesViaGatewayHttp(
+        this.gatewayPort,
+        toPush,
+        signal,
+      ));
+      if (!this.isCurrent(signal)) return null;
+      if (!result) {
+        this.state.status = "idle";
+        return null;
+      }
+      markVaultPushFingerprints(toPush);
+      await traceDiagnosticPhase("vault:apply-push-result", () => this.applyForWorkspace(signal, () => this.applyVaultPushResultFromBackground(result)));
       return result;
     } catch (err) {
       const msg = (err as Error).message;
+      if (isPaprSubscriptionBlockedMessage(msg)) {
+        reportPaprQuotaError(err, "vault-sync");
+        console.warn(
+          "[VaultSync] Push paused — Papr Cloud subscription inactive",
+        );
+        return null;
+      }
+      if (!this.isCurrent(signal)) return null;
       this.state.status = "error";
       this.state.lastError = msg;
       console.error("[VaultSync] Push failed:", msg);
       return null;
     }
-  }
-
-  private vaultPullScopes(): CloudRepoScope[] {
-    const pointer = readActiveWorkspacePointer();
-    const scopes: CloudRepoScope[] = ["user"];
-    if (pointer?.namespaceId || process.env.PAPR_NAMESPACE_ID?.trim()) {
-      scopes.push("namespace");
-    }
-    if (pointer?.organizationId) {
-      scopes.push("org");
-    }
-    return scopes;
   }
 
   private async fetchVaultKeyNamesForScope(
@@ -272,90 +521,293 @@ export class VaultSyncService {
       params.set("namespace_id", namespaceId);
     }
 
-    const resp = await fetch(
-      `http://localhost:${this.gatewayPort}/api/cloud/vault/keys?${params}`,
-      { signal },
-    );
+    const data = await traceDiagnosticPhase("vault:pull-names-http", async () => {
+      const resp = await fetch(`http://localhost:${this.gatewayPort}/api/cloud/vault/keys?${params}`, { signal });
+      if (!resp.ok) throw Object.assign(new Error(`Vault names request failed (${resp.status})`), { status: resp.status });
+      return await resp.json() as VaultListKeysResponse;
+    });
 
-    if (!resp.ok) {
-      const text = await resp.text();
-      console.warn(
-        `[VaultSync] Pull failed for scope ${resolvedScope} (${resp.status}): ${text.slice(0, 120)}`,
-      );
-      return [];
-    }
-
-    const data = (await resp.json()) as VaultListKeysResponse;
     return data.keys.map((k) => k.name);
   }
 
   /**
-   * Pull vault key names and add any missing keys to local keychain.
-   * Values are NOT pulled (would require a resolve endpoint). Only names
-   * are checked so the user knows which keys exist across devices.
+   * Pull user-scoped vault key names for cross-device awareness.
+   * Values are NOT pulled (list endpoint has no values). Names are never
+   * written to the local keychain from this path.
    */
-  async pullKeys(): Promise<string[]> {
+  async pullKeys(opts?: VaultSyncRouteOpts): Promise<string[]> {
+    const signal = this.workspaceController.signal;
+    if (!this.isCurrent(signal)) return [];
+    if (isPaprCloudPaused()) {
+      return [];
+    }
+
     try {
+      if (!opts?.skipRoutesReady) {
+        await this.ensureGatewayRoutesReady();
+      }
+
       const controller = new AbortController();
       const timer = setTimeout(() => controller.abort(), PULL_TIMEOUT_MS);
 
-      const vaultKeyNames = new Set<string>();
-      for (const scope of this.vaultPullScopes()) {
-        const names = await this.fetchVaultKeyNamesForScope(
-          scope,
-          controller.signal,
-        );
-        for (const name of names) {
-          vaultKeyNames.add(name);
-        }
-      }
+      if (!this.isCurrent(signal)) { clearTimeout(timer); return []; }
+      const userScopedNames = await this.fetchVaultKeyNamesForScope(
+        "user", AbortSignal.any([controller.signal, signal]),
+      ).finally(() => clearTimeout(timer));
 
-      clearTimeout(timer);
-
-      const allNames = [...vaultKeyNames];
+      if (!this.isCurrent(signal)) return [];
       const customKeys = getCustomKeysService();
       const localKeys = await customKeys.listKeys();
       const localNames = new Set(localKeys.map((k) => k.name));
 
-      const missingLocally = allNames.filter((n) => !localNames.has(n));
+      const missingLocally = userScopedNames.filter((n) => !localNames.has(n));
 
       if (missingLocally.length > 0) {
         console.log(
-          `[VaultSync] Found ${missingLocally.length} vault keys not in local keychain: ${missingLocally.join(", ")}`,
+          `[VaultSync] ${missingLocally.length} user-scoped vault key(s) exist in cloud but not locally (names omitted from logs)`,
         );
         // We log but don't auto-add — values aren't available from list endpoint.
-        // The user would need to re-add them or we'd need a resolve endpoint for pull.
       }
 
-      return allNames;
+      return userScopedNames;
     } catch (err) {
+      if (!this.isCurrent(signal)) return [];
+      this.state.status = "error";
+      this.state.lastError = (err as Error).message;
       console.warn("[VaultSync] Pull failed:", (err as Error).message);
       return [];
     }
   }
 
-  /** Push + pull after org/namespace workspace switch. */
-  async syncForWorkspaceSwitch(): Promise<void> {
-    console.log("[VaultSync] Re-syncing vault for workspace switch...");
-    await this.pushAllKeys();
-    await this.pullKeys();
+  /**
+   * Pull team/org shared keys into the local keychain (read-only mirrors).
+   */
+  async pullSharedKeys(opts?: VaultSyncRouteOpts): Promise<number> {
+    const signal = this.workspaceController.signal;
+    if (!this.isCurrent(signal)) return 0;
+    if (isPaprCloudPaused()) {
+      return 0;
+    }
+
+    const namespaceId = resolveActiveNamespaceId();
+    if (!namespaceId) {
+      console.log("[VaultSync] No active namespace — skipping shared vault pull");
+      return 0;
+    }
+
+    try {
+      if (!opts?.skipRoutesReady) {
+        await this.ensureGatewayRoutesReady();
+      }
+
+      const controller = new AbortController();
+      const timer = setTimeout(() => controller.abort(), PULL_SHARED_TIMEOUT_MS);
+
+      const { mergeCloudActingUserBody } = await import(
+        "../utils/cloudActingUser.js"
+      );
+
+      if (!this.isCurrent(signal)) { clearTimeout(timer); return 0; }
+      const data = await traceDiagnosticPhase("vault:pull-shared-http", async () => {
+        try {
+          const resp = await fetch(
+            `http://localhost:${this.gatewayPort}/api/cloud/vault/pull-shared`,
+            {
+              method: "POST",
+              headers: { "Content-Type": "application/json" },
+              body: JSON.stringify(
+                mergeCloudActingUserBody({ namespace_id: namespaceId }),
+              ),
+              signal: AbortSignal.any([controller.signal, signal]),
+            },
+          );
+          if (!resp.ok) throw Object.assign(new Error(`Vault shared request failed (${resp.status})`), { status: resp.status });
+          return await resp.json() as VaultPullSharedResponse;
+        } finally { clearTimeout(timer); }
+      });
+
+      if (!this.isCurrent(signal)) return 0;
+      const mirrors: SharedVaultKeyInput[] = (data.keys ?? []).map((key) => ({
+        name: key.name,
+        value: key.value,
+        permission: mapCloudVaultPermission(key.permission),
+        clientAccess: key.clientAccess ?? "server",
+        vaultAudience: key.shareScope,
+        sharedOwnerUserId: key.ownerUserId,
+        sharedSyncedAt: key.syncedAt,
+        source: key.source === "oauth" ? "oauth" : "manual",
+      }));
+
+      const customKeys = getCustomKeysService();
+      const result = await traceDiagnosticPhase("vault:apply-shared-mirrors", () => this.applyForWorkspace(signal, () => customKeys.syncSharedMirrors(mirrors)));
+      if (result.upserted > 0 || result.pruned > 0) {
+        console.log(
+          `[VaultSync] Shared mirrors updated (upserted=${result.upserted}, pruned=${result.pruned})`,
+        );
+      }
+      return result.upserted;
+    } catch (err) {
+      if (!this.isCurrent(signal)) return 0;
+      this.state.status = "error";
+      this.state.lastError = (err as Error).message;
+      console.warn("[VaultSync] Shared pull failed:", (err as Error).message);
+      return 0;
+    }
   }
 
   /**
-   * Notify that a key was added or updated. Triggers a full push.
+   * Delete one canonical vault secret (and any legacy path copies) by key name.
+   */
+  async deleteKeyByName(
+    name: string,
+    targetOrgId?: string,
+  ): Promise<VaultDeleteResponse> {
+    const trimmedName = name.trim();
+    if (!trimmedName) {
+      return { deleted: [], not_found: [] };
+    }
+
+    const namespaceId = resolveActiveNamespaceId();
+    const { mergeCloudActingUserBody } = await import(
+      "../utils/cloudActingUser.js"
+    );
+
+    const controller = new AbortController();
+    const timer = setTimeout(() => controller.abort(), PUSH_TIMEOUT_MS);
+
+    try {
+      await this.ensureGatewayRoutesReady();
+
+      const resp = await fetch(
+        `http://localhost:${this.gatewayPort}/api/cloud/vault/delete`,
+        {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify(
+            mergeCloudActingUserBody({
+              ...(namespaceId ? { namespace_id: namespaceId } : {}),
+              keys: [
+                {
+                  name: trimmedName,
+                  ...(targetOrgId?.trim()
+                    ? { targetOrgId: targetOrgId.trim() }
+                    : {}),
+                },
+              ],
+            }),
+          ),
+          signal: controller.signal,
+        },
+      );
+
+      if (!resp.ok) {
+        const text = await resp.text();
+        throw new Error(`Vault delete failed (${resp.status}): ${text.slice(0, 200)}`);
+      }
+
+      const result = (await resp.json()) as VaultDeleteResponse;
+      if (result.deleted.length > 0) {
+        const { forgetVaultPushFingerprint } = await import(
+          "../utils/vaultPushStateStore.js"
+        );
+        forgetVaultPushFingerprint(trimmedName);
+        console.log(
+          `[VaultSync] Deleted cloud vault key "${trimmedName}" (canonical + legacy cleanup)`,
+        );
+      }
+      return result;
+    } finally {
+      clearTimeout(timer);
+    }
+  }
+
+  /**
+   * Owner delete or audience change: delete canonical secret or re-push labels/value.
+   */
+  async syncKeyVaultChange(
+    input: SyncKeyVaultChangeInput,
+  ): Promise<SyncKeyVaultChangeResult> {
+    const trimmedName = input.name.trim();
+    if (!trimmedName) {
+      return { deleted: [], notFound: [], push: null };
+    }
+
+    let deleteResult: VaultDeleteResponse = { deleted: [], not_found: [] };
+    if (input.mode === "delete") {
+      deleteResult = await this.deleteKeyByName(trimmedName, input.targetOrgId);
+    }
+
+    let push: VaultSyncResponse | null = null;
+    if (input.mode === "update") {
+      push = await this.enqueuePush();
+    }
+
+    return {
+      deleted: deleteResult.deleted,
+      notFound: deleteResult.not_found,
+      push,
+    };
+  }
+
+  /** Push + pull after org/namespace workspace switch (non-blocking). */
+  syncForWorkspaceSwitch(): void {
+    this.workspacePaused = false;
+    const signal = this.workspaceController.signal;
+    console.log("[VaultSync] Re-syncing vault for workspace switch (background)...");
+    void import("./gatewayBackgroundWork.js").then(({ scheduleCoalescedBackgroundWork }) => {
+      if (!this.isCurrent(signal)) return;
+      scheduleCoalescedBackgroundWork("vault:workspace-switch", async () => {
+        if (!this.isCurrent(signal)) return;
+        await this.runFullSync();
+      });
+    });
+  }
+
+  /**
+   * Coalesce rapid key changes (e.g. LinkedIn cookie refresh delete+add pairs)
+   * into one vault push after a short debounce window.
+   */
+  schedulePushAfterKeyChange(keyName: string, kind: "changed" | "deleted"): void {
+    if (this.workspacePaused) return;
+    if (this.pushInFlight) {
+      this.pushPendingAfterInflight = true;
+      return;
+    }
+    console.log(
+      `[VaultSync] Key ${kind}: ${keyName} — scheduling vault sync (${VAULT_PUSH_DEBOUNCE_MS}ms debounce)`,
+    );
+    if (this.pushDebounceTimer) {
+      clearTimeout(this.pushDebounceTimer);
+    }
+    this.pushDebounceTimer = setTimeout(() => {
+      this.pushDebounceTimer = null;
+      void this.flushScheduledPush();
+    }, VAULT_PUSH_DEBOUNCE_MS);
+  }
+
+  private async flushScheduledPush(): Promise<void> {
+    await this.enqueuePush();
+  }
+
+  /**
+   * Notify that a key was added or updated. Triggers a debounced full push.
    */
   async onKeyChanged(keyName: string): Promise<void> {
-    console.log(`[VaultSync] Key changed: ${keyName} — syncing to vault`);
-    await this.pushAllKeys();
+    this.schedulePushAfterKeyChange(keyName, "changed");
   }
 
   /**
-   * Notify that a key was deleted. Triggers a full push (vault sync is
-   * idempotent — server will detect removed keys and delete them).
+   * Notify that a key was deleted locally — remove the canonical cloud secret.
    */
-  async onKeyDeleted(keyName: string): Promise<void> {
-    console.log(`[VaultSync] Key deleted: ${keyName} — syncing to vault`);
-    await this.pushAllKeys();
+  async onKeyDeleted(
+    keyName: string,
+    opts?: { targetOrgId?: string },
+  ): Promise<void> {
+    await this.syncKeyVaultChange({
+      name: keyName,
+      mode: "delete",
+      targetOrgId: opts?.targetOrgId,
+    });
   }
 }
 

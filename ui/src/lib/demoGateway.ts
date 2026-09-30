@@ -16,8 +16,12 @@ import {
 } from "./demoMemory";
 import { MEETINGS_ICON, MEETINGS_DESC } from "./demoMeetingIcon";
 import { X_ACTION_ICON, X_ACTION_DESC } from "./demoXIcon";
+// Snapshot of the live Papr Cloud Community catalog (public_read apps).
+import demoCommunityCatalog from "./demoCommunityCatalog.json";
 
 /** Real community apps embedded in the demo (served from /apps/{id}/). */
+import { DEFAULT_HOME_APP_ID } from "../../constants/defaultHomeApp";
+
 const MEETINGS_APP_ID = "6e432b37-6cf2-45f1-9ad8-ec70a56d4a3c";
 const X_ACTION_APP_ID = "3e08bfb2-23f1-4173-b76f-f1910bdc31fd";
 
@@ -55,8 +59,27 @@ const X_ACTION_APP = {
   updatedAt: now(),
 };
 
+/** Bundled Home app — powers the Focus tab (fixtures: public/apps/<id>/demo-focus.json). */
+const HOME_APP = {
+  id: DEFAULT_HOME_APP_ID,
+  type: "app",
+  title: "Home",
+  name: "Home",
+  description: "Your daily command center — priorities, your three goals and tasks.",
+  status: "active",
+  createdAt: now(),
+  updatedAt: now(),
+};
+
 /** Only real, fully-working embedded apps ship in the demo. */
-const DEMO_APPS = [X_ACTION_APP, MEETINGS_APP];
+const DEMO_APPS = [X_ACTION_APP, MEETINGS_APP, HOME_APP];
+
+/** Demo persona shown on the rail avatar + profile. */
+const DEMO_PROFILE = {
+  name: "Maya Chen",
+  email: "maya@papr.ai",
+  imageUrl: "/demo-media/me.jpg",
+};
 
 const DEMO_REPLY =
   "Here's what I'd focus on today. Northwind and Acme Logistics both opened " +
@@ -68,7 +91,7 @@ const DEMO_REPLY =
 /* ---------------- keyed handlers ---------------- */
 
 const handlers: Record<string, (payload: any) => unknown> = {
-  "settings:get": () => ({}),
+  "settings:get": () => ({ profile: DEMO_PROFILE, preferences: {} }),
   "settings:save-ui-preferences": () => ({}),
   "app:list": () => DEMO_APPS,
   "app:get": (p) =>
@@ -86,6 +109,11 @@ const handlers: Record<string, (payload: any) => unknown> = {
   "agent:get-agent-stats": () => ({ totalRuns: 0, totalTokens: 0 }),
   "agent:get-cost-stats": () => ({ totalCostUsd: 0 }),
   "agent:stop": () => ({}),
+  // Apps → Community: real public catalog snapshot (cards open the live apps.papr.ai build)
+  "bundle:fetch-community-catalog": (p) =>
+    p?.scope === "namespace"
+      ? { ...demoCommunityCatalog, scope: "namespace", entries: [], sources: { opensource: 0, cloud: 0 } }
+      : demoCommunityCatalog,
   // Memory (Wiki Library) — fixture knowledge graph
   "memory:wiki-home": () => wikiHome(),
   "memory:wiki-entity": (p) => wikiEntity(p ?? {}),

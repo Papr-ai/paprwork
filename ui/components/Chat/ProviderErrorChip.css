@@ -1,0 +1,222 @@
+/**
+ * Provider notice — chip + panel.
+ *
+ * Tone is carried by a 6px dot and nothing else. The old banner tinted a full
+ * bleed of the window red, which made a five-second rate limit look like data
+ * loss; here the colour budget is one dot, and the words do the rest.
+ */
+
+.provider-notice {
+  position: relative;
+  display: flex;
+  align-items: center;
+  flex-shrink: 0;
+}
+
+/* ── the chip ─────────────────────────────────────────────── */
+
+.provider-notice__chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  max-width: 190px;
+  padding: 4px 9px 4px 8px;
+  border: 1px solid transparent;
+  border-radius: 999px;
+  background: transparent;
+  color: var(--text-primary);
+  font-size: 11px;
+  font-weight: 600;
+  letter-spacing: -0.01em;
+  cursor: pointer;
+  transition:
+    background var(--dur-2) var(--ease),
+    border-color var(--dur-2) var(--ease),
+    color var(--dur-2) var(--ease);
+  animation: providerNoticeIn var(--dur-3) var(--ease);
+}
+
+.provider-notice__chip:hover {
+  background: var(--hover-bg);
+}
+
+/*
+ * Tone rides on the dot, never on the words. Amber text at 11px fails contrast
+ * against this glass, and the one thing a failure notice cannot afford is to
+ * be the least readable text on screen.
+ */
+.provider-notice__chip--warning .provider-notice__dot {
+  background: var(--warning-color);
+}
+
+.provider-notice__chip--error .provider-notice__dot {
+  background: var(--error-color);
+}
+
+/*
+ * Only the red tier gets a resting tint. A rate limit clears itself in
+ * seconds; a refused key or a spent card stays broken until someone opens
+ * Settings, so it is allowed to hold slightly more of the eye.
+ */
+.provider-notice__chip--error {
+  background: color-mix(in srgb, var(--error-color) 8%, transparent);
+}
+
+.provider-notice__chip:focus-visible {
+  outline: none;
+  border-color: currentColor;
+}
+
+.provider-notice__headline {
+  overflow: hidden;
+  white-space: nowrap;
+  text-overflow: ellipsis;
+}
+
+.provider-notice__dot {
+  flex-shrink: 0;
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  background: var(--text-tertiary);
+}
+
+/* In the panel the heading text is neutral, so the dot names its own tone. */
+.provider-notice__dot--warning {
+  background: var(--warning-color);
+}
+
+.provider-notice__dot--error {
+  background: var(--error-color);
+}
+
+/* ── the panel ────────────────────────────────────────────── */
+
+.provider-notice__panel {
+  position: absolute;
+  bottom: calc(100% + 10px);
+  right: 0;
+  z-index: 10000;
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  width: 296px;
+  padding: 14px 16px 12px;
+  background: var(--popover-bg);
+  border: 1px solid var(--border-color);
+  border-radius: 16px;
+  box-shadow: var(--popover-shadow);
+  animation: providerNoticeIn 0.18s var(--ease);
+}
+
+.provider-notice__panel-head {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.provider-notice__title {
+  flex: 1;
+  margin: 0;
+  color: var(--text-primary);
+  font-size: 14px;
+  font-weight: 600;
+  letter-spacing: -0.01em;
+}
+
+.provider-notice__close {
+  flex-shrink: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 22px;
+  height: 22px;
+  padding: 0;
+  border: none;
+  border-radius: 50%;
+  background: transparent;
+  color: var(--text-tertiary);
+  font-size: 11px;
+  cursor: pointer;
+  transition: background var(--dur-2) var(--ease);
+}
+
+.provider-notice__close:hover {
+  background: var(--hover-bg);
+  color: var(--text-secondary);
+}
+
+.provider-notice__guidance {
+  margin: 0;
+  color: var(--text-secondary);
+  font-size: 13px;
+  line-height: 1.5;
+}
+
+.provider-notice__action {
+  align-self: flex-start;
+  padding: 6px 14px;
+  border: 1px solid var(--border-color);
+  border-radius: 999px;
+  background: var(--hover-bg);
+  color: var(--text-primary);
+  font-size: 12px;
+  font-weight: 600;
+  cursor: pointer;
+  transition:
+    background var(--dur-2) var(--ease),
+    opacity var(--dur-2) var(--ease);
+}
+
+.provider-notice__action:hover:not(:disabled) {
+  background: var(--glass-bg-active, var(--hover-bg));
+}
+
+.provider-notice__action:disabled {
+  opacity: 0.5;
+  cursor: default;
+}
+
+/* ── details, for the one person in a hundred who wants them ─ */
+
+.provider-notice__disclosure {
+  align-self: flex-start;
+  padding: 0;
+  border: none;
+  background: transparent;
+  color: var(--text-tertiary);
+  font-size: 11px;
+  font-weight: 500;
+  cursor: pointer;
+  transition: color var(--dur-2) var(--ease);
+}
+
+.provider-notice__disclosure:hover {
+  color: var(--text-secondary);
+}
+
+.provider-notice__detail {
+  max-height: 132px;
+  margin: 0;
+  padding: 8px 10px;
+  overflow-y: auto;
+  background: var(--hover-bg);
+  border-radius: 10px;
+  color: var(--text-secondary);
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+  font-size: 10.5px;
+  line-height: 1.45;
+  white-space: pre-wrap;
+  word-break: break-word;
+}
+
+@keyframes providerNoticeIn {
+  from {
+    opacity: 0;
+    transform: translateY(4px) scale(0.98);
+  }
+  to {
+    opacity: 1;
+    transform: none;
+  }
+}

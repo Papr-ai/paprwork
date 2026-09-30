@@ -1,5 +1,9 @@
-import Database from "better-sqlite3";
 import type { JobArchitectureIssue } from "./jobArchitectureValidation.js";
+import type { DatabaseSyncMode } from "../tursoReplica/tursoReplicaTypes.js";
+import {
+  readRegistryDatabaseSchema,
+  type RegistryDbSchemaReadErrorCode,
+} from "./registryDbSchemaReader.js";
 
 export interface DataContractTable {
   requiredColumns?: string[];
@@ -15,7 +19,40 @@ export interface AppDataContract {
 export interface JobDatabaseValidationInput {
   command?: string;
   databasePath: string;
+  dbId?: string;
+  alias?: string;
+  syncMode?: DatabaseSyncMode;
   contract?: AppDataContract | null;
+  /** agent/subagent commands are natural-language prompts, not SQL */
+  jobType?: string;
+}
+
+const AGENT_LIKE_JOB_TYPES = new Set(["agent", "subagent"]);
+
+/** Pull SQL out of sqlite3 invocations / explicit DDL — not from prose instructions. */
+export function extractSqlSnippetsFromJobCommand(command: string): string {
+  const snippets: string[] = [];
+
+  for (const match of command.matchAll(
+    /sqlite3\s+(?:\$APP_DB|\$PAPR_DB_\w+|\$\{[^}]+\}|"[^"]+"|'[^']+')\s+(['"])([\s\S]*?)\1/gi,
+  )) {
+    snippets.push(match[2]);
+  }
+
+  for (const match of command.matchAll(
+    /(?:^|[;\n])\s*(CREATE\s+TABLE[\s\S]*?;|ALTER\s+TABLE[\s\S]*?;|INSERT\s+INTO[\s\S]*?;|UPDATE[\s\S]*?;|DELETE\s+FROM[\s\S]*?;)/gi,
+  )) {
+    snippets.push(match[1].trim());
+  }
+
+  return snippets.join("\n");
+}
+
+function shouldScanCommandForSql(input: JobDatabaseValidationInput): boolean {
+  if (input.jobType && AGENT_LIKE_JOB_TYPES.has(input.jobType)) {
+    return false;
+  }
+  return true;
 }
 
 const TABLE_REFERENCE =
@@ -55,48 +92,125 @@ function referencedColumns(text: string): Map<string, Set<string>> {
   return result;
 }
 
-export function validateJobAgainstAppDatabase(
-  input: JobDatabaseValidationInput,
+function schemaReadIssue(
+  databasePath: string,
+  code: RegistryDbSchemaReadErrorCode,
+  message: string,
 ): JobArchitectureIssue[] {
-  const text = input.command ?? "";
+  if (code === "missing") {
+    return [
+      {
+        rule: "primary-database-missing",
+        severity: "error",
+        message: `Primary app database not found at ${databasePath}.`,
+        remediation:
+          "Restart Paprwork to auto-repair data-sources.json paths after workspace migration, or re-link the job with link_app_data_source({ appId, jobId }).",
+      },
+    ];
+  }
+
+  if (code === "locked") {
+    return [
+      {
+        rule: "primary-database-busy",
+        severity: "warning",
+        message: `Primary app database at ${databasePath} is temporarily locked (${message}). Skipping schema validation this run.`,
+        remediation:
+          "This is usually transient while Turso replica sync is active. The job will retry on the next schedule tick.",
+      },
+    ];
+  }
+
+  if (code === "parked") {
+    // The link is fine — the replica file itself is parked by the sync layer.
+    // Suggesting a restart or re-link sends users (and agents) the wrong way:
+    // neither changes data.db, so the park survives both.
+    return [
+      {
+        rule: "primary-database-parked",
+        severity: "error",
+        message: `Primary app database at ${databasePath} is a parked Turso replica: ${message}`,
+        remediation:
+          "The data-source link is correct — do not re-link. Re-seed the replica from cloud with repair_cloud_sync({ dbId, strategy: \"accept_cloud\" }) (check papr_db_sync_status first for unpushed local ops), then re-run the job.",
+      },
+    ];
+  }
+
+  if (code === "unreadable") {
+    return [
+      {
+        rule: "primary-database-unopenable",
+        severity: "error",
+        message: `Cannot read primary app database at ${databasePath}: ${message}`,
+        remediation:
+          "The linked file is not a valid SQLite database. Re-link the job with link_app_data_source({ appId, jobId }), or recreate the database with create_database.",
+      },
+    ];
+  }
+
+  return [
+    {
+      rule: "primary-database-unopenable",
+      severity: "error",
+      message: `Cannot open primary app database at ${databasePath}: ${message}`,
+      remediation:
+        "Restart Paprwork to auto-repair data-sources.json paths after workspace migration, or re-link the job with link_app_data_source({ appId, jobId }).",
+    },
+  ];
+}
+
+export async function validateJobAgainstAppDatabase(
+  input: JobDatabaseValidationInput,
+): Promise<JobArchitectureIssue[]> {
+  const scanCommand = shouldScanCommandForSql(input);
+  const text = scanCommand
+    ? extractSqlSnippetsFromJobCommand(input.command ?? "")
+    : "";
   const issues: JobArchitectureIssue[] = [];
-  const db = new Database(input.databasePath, { readonly: true, fileMustExist: true });
-  try {
-    const tables = new Set(
-      (db.prepare("SELECT name FROM sqlite_master WHERE type IN ('table','view')").all() as Array<{ name: string }>).map(
-        (row) => row.name.toLowerCase(),
-      ),
-    );
-    const created = names(CREATED_TABLE, text);
-    const referenced = names(TABLE_REFERENCE, text);
-    const columnsByTable = referencedColumns(text);
-    const addedColumns = new Map<string, Set<string>>();
-    for (const match of text.matchAll(ADDED_COLUMN)) {
-      const table = match[1].toLowerCase();
-      const columns = addedColumns.get(table) ?? new Set<string>();
-      columns.add(match[2].toLowerCase());
-      addedColumns.set(table, columns);
-    }
 
-    for (const table of referenced) {
-      if (!tables.has(table) && !created.has(table)) {
-        issues.push({
-          rule: "job-table-missing-on-primary",
-          severity: "error",
-          message: `Job references table "${table}" but it is missing from the primary app database.`,
-          remediation: "Add and run a registered migration before creating or updating this job.",
-        });
-      }
-    }
+  const schemaRead = await readRegistryDatabaseSchema({
+    dbPath: input.databasePath,
+    dbId: input.dbId,
+    alias: input.alias,
+    syncMode: input.syncMode,
+  });
 
-    const checkedTables = new Set([...columnsByTable.keys(), ...Object.keys(input.contract?.tables ?? {}).map((name) => name.toLowerCase())]);
-    for (const table of checkedTables) {
-      if (!tables.has(table)) continue;
-      const existingColumns = new Set(
-        (db.prepare(`PRAGMA table_info("${table.replace(/"/g, '""')}")`).all() as Array<{ name: string }>).map(
-          (row) => row.name.toLowerCase(),
-        ),
-      );
+  if (!schemaRead.ok) {
+    return schemaReadIssue(input.databasePath, schemaRead.code, schemaRead.message);
+  }
+
+  const { tables, columnsByTable: existingColumnsByTable } = schemaRead.schema;
+  const created = names(CREATED_TABLE, text);
+  const referenced = names(TABLE_REFERENCE, text);
+  const columnsByTable = referencedColumns(text);
+  const addedColumns = new Map<string, Set<string>>();
+  for (const match of text.matchAll(ADDED_COLUMN)) {
+    const table = match[1].toLowerCase();
+    const columns = addedColumns.get(table) ?? new Set<string>();
+    columns.add(match[2].toLowerCase());
+    addedColumns.set(table, columns);
+  }
+
+  for (const table of referenced) {
+    if (!scanCommand || !text.trim()) continue;
+    if (!tables.has(table) && !created.has(table)) {
+      issues.push({
+        rule: "job-table-missing-on-primary",
+        severity: "error",
+        message: `Job references table "${table}" but it is missing from the primary app database.`,
+        remediation: "Add and run a registered migration before creating or updating this job.",
+      });
+    }
+  }
+
+  const checkedTables = new Set([
+    ...columnsByTable.keys(),
+    ...Object.keys(input.contract?.tables ?? {}).map((name) => name.toLowerCase()),
+  ]);
+  for (const table of checkedTables) {
+    if (!tables.has(table)) continue;
+    const existingColumns = existingColumnsByTable.get(table) ?? new Set<string>();
+    if (scanCommand && text.trim()) {
       const referencedColumnsForTable = columnsByTable.get(table) ?? new Set<string>();
       for (const column of referencedColumnsForTable) {
         if (!existingColumns.has(column) && !addedColumns.get(table)?.has(column)) {
@@ -104,40 +218,40 @@ export function validateJobAgainstAppDatabase(
             rule: "job-column-missing-on-primary",
             severity: "error",
             message: `Job writes column "${table}.${column}" but it is missing from the primary app database.`,
-            remediation: "Use the canonical column name or add and run a migration before updating the job.",
-          });
-        }
-      }
-      const contractTable = Object.entries(input.contract?.tables ?? {}).find(
-        ([name]) => name.toLowerCase() === table,
-      )?.[1];
-      for (const column of contractTable?.requiredColumns ?? []) {
-        if (
-          !existingColumns.has(column.toLowerCase()) &&
-          !addedColumns.get(table)?.has(column.toLowerCase())
-        ) {
-          issues.push({
-            rule: "data-contract-column-missing",
-            severity: "error",
-            message: `Data contract requires "${table}.${column}" but the primary database does not contain it.`,
-            remediation: "Run the app migration or update data-contract.json to match the intended schema.",
+            remediation:
+              "Use the canonical column name or add and run a migration before updating the job.",
           });
         }
       }
     }
-
-    for (const table of Object.keys(input.contract?.tables ?? {})) {
-      if (!tables.has(table.toLowerCase()) && !created.has(table.toLowerCase())) {
+    const contractTable = Object.entries(input.contract?.tables ?? {}).find(
+      ([name]) => name.toLowerCase() === table,
+    )?.[1];
+    for (const column of contractTable?.requiredColumns ?? []) {
+      if (
+        !existingColumns.has(column.toLowerCase()) &&
+        !addedColumns.get(table)?.has(column.toLowerCase())
+      ) {
         issues.push({
-          rule: "data-contract-table-missing",
+          rule: "data-contract-column-missing",
           severity: "error",
-          message: `Data contract requires table "${table}" but the primary database does not contain it.`,
-          remediation: "Run the registered migration before running app-linked jobs.",
+          message: `Data contract requires "${table}.${column}" but the primary database does not contain it.`,
+          remediation: "Run the app migration or update data-contract.json to match the intended schema.",
         });
       }
     }
-  } finally {
-    db.close();
   }
+
+  for (const table of Object.keys(input.contract?.tables ?? {})) {
+    if (!tables.has(table.toLowerCase()) && !created.has(table.toLowerCase())) {
+      issues.push({
+        rule: "data-contract-table-missing",
+        severity: "error",
+        message: `Data contract requires table "${table}" but the primary database does not contain it.`,
+        remediation: "Run the registered migration before running app-linked jobs.",
+      });
+    }
+  }
+
   return issues;
 }

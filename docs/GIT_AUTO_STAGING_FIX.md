@@ -123,8 +123,8 @@ write_file({
 - Paprwork's own codebase
 
 ✅ **Any file location:**
-- `~/Papr/apps/` (mini-apps)
-- `~/Papr/jobs/` (job code)
+- `$PAPR_HOME/apps/` (mini-apps)
+- `$PAPR_HOME/Jobs/` (job code)
 - `~/Documents/GitHub/my-project/` (external repos)
 - Any directory with a `.git` folder
 

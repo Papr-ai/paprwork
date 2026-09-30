@@ -6,7 +6,7 @@
  *
  * 1. Git repo — dist/app.js, backend/bundle.json, requirements.json, repo head marker
  * 2. Publish catalog — memory server allowlist for vault-resolve (auto-republish on drift)
- * 3. Edge cache — repo head marker + dist query versioning (cloud app host)
+ * 3. Edge cache — per-app `.papr-cloud-revision` + dist query versioning (cloud app host)
  *
  * This module handles layer 1 before commit. Layers 2–3 run in runPostSyncHooks().
  */
@@ -34,6 +34,52 @@ export async function prepareAppForCloudGitSync(
 ): Promise<void> {
   const appDir = path.join(paprDir, "apps", appId);
   try {
+    const {
+      reconcileAppDataSourcesForPublish,
+      detectCrossAppDependencies,
+      writeCloudAppDependenciesFile,
+    } = await import("../cloudAppResourceIntegrity.js");
+
+    const reconcile = await reconcileAppDataSourcesForPublish(paprDir, appId);
+    if (reconcile.changed) {
+      console.log(
+        `[CloudSync] Reconciled data-sources for ${appId}: +${reconcile.addedJobIds.length} jobs, -${reconcile.removedJobIds.length} stale job refs`,
+      );
+    }
+
+    const dependencies = await detectCrossAppDependencies(paprDir, appId);
+    await writeCloudAppDependenciesFile(paprDir, appId, dependencies);
+    if (dependencies.apps.length > 0 || dependencies.databases.length > 0) {
+      console.log(
+        `[CloudSync] Declared ${dependencies.apps.length} cross-app and ${dependencies.databases.length} cross-db dependencies for ${appId}`,
+      );
+    }
+
+    const { scrubAppDataSourcesForGitSync } = await import(
+      "../portableDataSources.js"
+    );
+    await scrubAppDataSourcesForGitSync(appDir);
+
+    const { writeLinkedDatabasesForApp } = await import(
+      "./linkedDatabasesForCloud.js"
+    );
+    await writeLinkedDatabasesForApp(paprDir, appId);
+
+    // Publisher's exact schema → migrations/snapshot.json (installers build
+    // from it instead of replaying every migration). Isolated: a failure here
+    // must not block the rest of publish prep.
+    try {
+      const { writeSchemaSnapshotsForApp } = await import(
+        "./publishSchemaSnapshots.js"
+      );
+      await writeSchemaSnapshotsForApp(paprDir, appId);
+    } catch (error) {
+      console.warn(
+        `[CloudSync] schema snapshot skipped for ${appId}:`,
+        (error as Error).message.slice(0, 120),
+      );
+    }
+
     await ensureAppRequirementsSyncedWithBackend(paprDir, appId);
 
     const { buildMiniApp } = await import("../../utils/miniAppBuild.js");
@@ -55,6 +101,19 @@ export async function prepareAppForCloudGitSync(
         backend.errors.join("; "),
       );
     }
+
+    const { writeAppCloudRevisionMarker } = await import(
+      "./cloudAppRevisionMarker.js"
+    );
+    writeAppCloudRevisionMarker(appDir);
+
+    const { writeCloudAppMeta } = await import("./cloudAppMeta.js");
+    await writeCloudAppMeta(paprDir, appId);
+
+    const { uploadAppDbConfigToCloud } = await import(
+      "../syncV3/appDbConfigUpload.js"
+    );
+    void uploadAppDbConfigToCloud(paprDir, appId).catch(() => {});
   } catch (error) {
     console.warn(
       `[CloudSync] cloud prep skipped for ${appId}:`,

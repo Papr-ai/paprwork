@@ -53,14 +53,48 @@ export function writeCachedCloudPublishState(
   appId: string,
   state: CloudPublishState | null,
 ): void {
+  if (state && state.appId && state.appId !== appId) {
+    return;
+  }
   const snapshot = readSnapshot();
   const byAppId = { ...(snapshot?.byAppId ?? {}) };
   if (state) {
-    byAppId[appId] = state;
+    byAppId[appId] = { ...state, appId };
   } else {
     delete byAppId[appId];
   }
   writeSnapshot(byAppId);
+  // Apps grid listens so share icons update without reopening the app.
+  if (typeof window !== "undefined") {
+    window.dispatchEvent(
+      new CustomEvent("papr-publish-state-changed", { detail: { appId } }),
+    );
+  }
+}
+
+const DEFAULT_PUBLISH_REVALIDATION_LIMIT = 24;
+
+/**
+ * Which app ids to background-fetch for Live/Draft badges.
+ * After workspace switch the snapshot is empty; without a bootstrap pass the
+ * Apps grid never refetches and every app looks unpublished until opened.
+ */
+export function selectAppIdsForPublishRevalidation(
+  allAppIds: string[],
+  cached: Record<string, CloudPublishState>,
+  limit = DEFAULT_PUBLISH_REVALIDATION_LIMIT,
+): string[] {
+  const known = allAppIds.filter((id) => cached[id]);
+  if (known.length > 0) {
+    return known
+      .sort(
+        (a, b) =>
+          Number(Boolean(cached[b]?.shareUrl)) -
+          Number(Boolean(cached[a]?.shareUrl)),
+      )
+      .slice(0, limit);
+  }
+  return allAppIds.slice(0, limit);
 }
 
 /** Clear all cached publish state (e.g. after org/namespace switch). */

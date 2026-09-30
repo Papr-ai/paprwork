@@ -133,6 +133,19 @@
   --glass: rgba(255, 255, 255, 0.65);
   --glass-2: rgba(255, 255, 255, 0.45);
   --glass-border: rgba(15, 23, 42, 0.12);
+
+  /* Papr brand blues — matches ui/public/images/papr-logo.svg */
+  --papr-blue-deep: #0060e0;
+  --papr-blue-mid: #00acfa;
+  --papr-blue-light: #0bcdff;
+  --papr-blue-gradient: linear-gradient(
+    135deg,
+    var(--papr-blue-deep) 0%,
+    var(--papr-blue-mid) 60%,
+    var(--papr-blue-light) 100%
+  );
+  --papr-blue-glow: rgba(0, 172, 250, 0.28);
+  --papr-blue-border: rgba(0, 96, 224, 0.2);
 }
 
 /* Dark Mode - Liquid Glass */
@@ -198,6 +211,9 @@
 
     --popover-bg: #1c1c1e;
     --popover-bg-hover: #2c2c2e;
+
+    --papr-blue-glow: rgba(11, 205, 255, 0.34);
+    --papr-blue-border: rgba(0, 172, 250, 0.26);
   }
 }
 
@@ -206,23 +222,17 @@
   background: var(--glass-bg);
   border: 1px solid var(--glass-border, var(--border-color));
   box-shadow: var(--shadow-1);
-  backdrop-filter: blur(14px);
-  -webkit-backdrop-filter: blur(14px);
 }
 
 .glass-strong {
   background: var(--glass-bg-active);
   border: 1px solid var(--glass-border, var(--border-color));
   box-shadow: var(--shadow-2);
-  backdrop-filter: blur(14px);
-  -webkit-backdrop-filter: blur(14px);
 }
 
 .glass-subtle {
   background: var(--glass-bg-hover);
   border: 1px solid var(--glass-border, var(--border-color));
-  backdrop-filter: blur(10px);
-  -webkit-backdrop-filter: blur(10px);
 }
 
 /* Global resets */

@@ -75,7 +75,7 @@ npm run fix-app-icons
 ```
 
 **What it does:**
-- Scans all apps in `~/Papr/data/apps.json`
+- Scans all apps in `$PAPR_HOME/data/apps.json`
 - Identifies invalid icons (plain text that's not emoji)
 - Replaces common text with proper SVG equivalents:
   - `"chart"` → Chart/analytics SVG icon

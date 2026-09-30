@@ -6,6 +6,7 @@
  */
 
 import type { MemoryAddPolicy } from "@papr/memory/resources/shared.js";
+import { buildPaprMemoryUserIdentity } from "./paprMemoryUserIdentity.js";
 
 export type MemoryAudience = "user" | "namespace" | "org";
 
@@ -16,12 +17,14 @@ export interface MemoryScopeContext {
 }
 
 export interface MemoryScopeFields {
+  user_id?: string;
   external_user_id?: string;
   namespace_id?: string;
   policy?: MemoryAddPolicy;
 }
 
 export interface MemorySearchScopeFields {
+  user_id?: string;
   external_user_id?: string;
   search_acl?: { read: string[]; write?: string[] };
 }
@@ -35,7 +38,14 @@ export function resolveMemoryAudience(input: {
 }
 
 function userWriteAcl(userId: string): string[] {
-  return [`external_user:${userId}`];
+  return [`user:${userId}`];
+}
+
+function withUserIdentity(userId: string): Pick<
+  MemoryScopeFields,
+  "user_id" | "external_user_id"
+> {
+  return buildPaprMemoryUserIdentity(userId);
 }
 
 export function buildMemoryScopeFields(
@@ -52,12 +62,12 @@ export function buildMemoryScopeFields(
 
   if (audience === "namespace" && namespaceId) {
     return {
-      external_user_id: userId,
+      ...withUserIdentity(userId),
       namespace_id: namespaceId,
       policy: {
         acl: {
           read: [`namespace:${namespaceId}`],
-          write: userWriteAcl(userId),
+          write: [...userWriteAcl(userId), `namespace:${namespaceId}`],
         },
       },
     };
@@ -65,18 +75,18 @@ export function buildMemoryScopeFields(
 
   if (audience === "org" && organizationId) {
     return {
-      external_user_id: userId,
+      ...withUserIdentity(userId),
       namespace_id: namespaceId,
       policy: {
         acl: {
           read: [`organization:${organizationId}`],
-          write: userWriteAcl(userId),
+          write: [...userWriteAcl(userId), `organization:${organizationId}`],
         },
       },
     };
   }
 
-  return { external_user_id: userId };
+  return withUserIdentity(userId);
 }
 
 export function buildMemorySearchScopeFields(
@@ -89,19 +99,19 @@ export function buildMemorySearchScopeFields(
 
   if (audience === "namespace" && namespaceId) {
     return {
-      ...(userId ? { external_user_id: userId } : {}),
+      ...(userId ? withUserIdentity(userId) : {}),
       search_acl: { read: [`namespace:${namespaceId}`] },
     };
   }
 
   if (audience === "org" && organizationId) {
     return {
-      ...(userId ? { external_user_id: userId } : {}),
+      ...(userId ? withUserIdentity(userId) : {}),
       search_acl: { read: [`organization:${organizationId}`] },
     };
   }
 
-  return userId ? { external_user_id: userId } : {};
+  return userId ? withUserIdentity(userId) : {};
 }
 
 export function mergeMemoryAddPolicy(

@@ -1,33 +1,22 @@
-import { afterEach, beforeEach, describe, expect, test } from "vitest";
+import { beforeEach, describe, expect, test } from "vitest";
 import path from "path";
-import os from "os";
 import { promises as fs } from "fs";
 import { DocumentService } from "../src/gateway/services/DocumentService.js";
+import { useIsolatedPaprWorkspace } from "./setup/isolatedWorkspace.js";
 
 describe("DocumentService", () => {
-  let originalHome: string | undefined;
+  // Owns HOME, os.homedir and the workspace pointer, so fixtures never land in
+  // the developer's real ~/Papr. Setting process.env.HOME alone was not enough
+  // — DocumentService resolves its paths via os.homedir().
+  const workspace = useIsolatedPaprWorkspace("document-service");
+
   let testHomeDir: string;
   let documentService: DocumentService;
 
   beforeEach(async () => {
-    originalHome = process.env.HOME;
-    testHomeDir = path.join(
-      os.tmpdir(),
-      `paprwork-v2-document-service-${Date.now()}`,
-    );
-    process.env.HOME = testHomeDir;
-    await fs.mkdir(testHomeDir, { recursive: true });
+    testHomeDir = workspace.homeDir;
     documentService = new DocumentService();
     await documentService.initialize();
-  });
-
-  afterEach(async () => {
-    if (originalHome === undefined) {
-      delete process.env.HOME;
-    } else {
-      process.env.HOME = originalHome;
-    }
-    await fs.rm(testHomeDir, { recursive: true, force: true });
   });
 
   test("creates and retrieves documents", async () => {
@@ -132,5 +121,106 @@ describe("DocumentService", () => {
     const created = await documentService.createDocument("!!!", "");
     // All non-word chars stripped, fallback to "untitled"
     expect(created.id).toBe("untitled");
+  });
+
+  test("repairs documents with content.md but missing meta.json", async () => {
+    const docId = "agent-written-doc";
+    const docDir = path.join(testHomeDir, "Papr", "documents", docId);
+    await fs.mkdir(docDir, { recursive: true });
+    await fs.writeFile(
+      path.join(docDir, "content.md"),
+      "# Agent Draft\n\nBody text for preview.",
+      "utf-8",
+    );
+
+    const listed = await documentService.listDocuments();
+    expect(listed).toHaveLength(1);
+    expect(listed[0]?.id).toBe(docId);
+    expect(listed[0]?.title).toBe("Agent Draft");
+    expect(listed[0]?.preview).toContain("Body text");
+
+    const metaRaw = await fs.readFile(path.join(docDir, "meta.json"), "utf-8");
+    expect(JSON.parse(metaRaw).title).toBe("Agent Draft");
+  });
+
+  /**
+   * Archive is the reversible half of the archive/delete pair, so the flag has
+   * to survive a reload — it is written to meta.json and read back through
+   * normalizeDocumentMeta, which rebuilds the record field by field and drops
+   * anything it does not explicitly name.
+   *
+   * No session token exists under test, so the Post hop short-circuits before
+   * any network call and only the local half is exercised here.
+   */
+  test("archives a document and the flag survives a reload", async () => {
+    const created = await documentService.createDocument(
+      "Archivable",
+      "Long enough to be a real document with content worth keeping.",
+    );
+
+    const archived = await documentService.archiveDocument(created.id);
+    expect(archived?.archived).toBe(true);
+
+    const reloaded = await documentService.getDocument(created.id);
+    expect(reloaded?.archived).toBe(true);
+  });
+
+  test("restores an archived document", async () => {
+    const created = await documentService.createDocument(
+      "Restorable",
+      "Long enough to be a real document with content worth keeping.",
+    );
+    await documentService.archiveDocument(created.id);
+
+    const restored = await documentService.archiveDocument(created.id, false);
+    expect(restored?.archived).toBe(false);
+
+    // Absent and false are the same state on disk: normalization only carries
+    // `archived` through when true, so a restored document reads back as
+    // undefined rather than false. Either one means "not archived".
+    const reloaded = await documentService.getDocument(created.id);
+    expect(reloaded?.archived ?? false).toBe(false);
+  });
+
+  test("archiving does not bump updatedAt", async () => {
+    // Archiving is a lifecycle change, not an edit. Bumping updatedAt would
+    // make a restored document claim it was edited today and jump to the top
+    // of the "Recent" sort.
+    const created = await documentService.createDocument(
+      "Timestamped",
+      "Long enough to be a real document with content worth keeping.",
+    );
+
+    const archived = await documentService.archiveDocument(created.id);
+    expect(archived?.updatedAt).toBe(created.updatedAt);
+  });
+
+  test("keeps archived documents in listDocuments", async () => {
+    // The gateway does not hide them — the view decides. Filtering here would
+    // make archived documents unreachable from every surface at once.
+    const created = await documentService.createDocument(
+      "Listed",
+      "Long enough to be a real document with content worth keeping.",
+    );
+    await documentService.archiveDocument(created.id);
+
+    const listed = await documentService.listDocuments();
+    expect(listed.find((doc) => doc.id === created.id)?.archived).toBe(true);
+  });
+
+  test("archiving an unknown document resolves null rather than throwing", async () => {
+    await expect(
+      documentService.archiveDocument("no-such-document"),
+    ).resolves.toBeNull();
+  });
+
+  test("deletes a document that never synced to a Post", async () => {
+    // deleteDocument now calls deleteDocumentPost first. With no index entry
+    // that must short-circuit to success and still remove the local files —
+    // the Post hop must never become a precondition for local deletion.
+    const created = await documentService.createDocument("Doomed", "Bye");
+
+    await expect(documentService.deleteDocument(created.id)).resolves.toBe(true);
+    await expect(documentService.getDocument(created.id)).resolves.toBeNull();
   });
 });

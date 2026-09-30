@@ -108,11 +108,16 @@ export function recordMessageTokensInCache(
   completionTokens: number,
   totalTokens: number,
 ): void {
+  const billableTotal =
+    role === "assistant" && promptTokens > 0
+      ? promptTokens + completionTokens
+      : totalTokens;
+
   db.prepare(
     `UPDATE context_stats
      SET total_tokens_consumed = total_tokens_consumed + ?
      WHERE id = ?`,
-  ).run(totalTokens, STATS_ROW_ID);
+  ).run(billableTotal, STATS_ROW_ID);
 
   if (role !== "assistant" || promptTokens <= 0) {
     return;
@@ -213,7 +218,15 @@ function rebuildContextStatsFromMessages(db: Database.Database): void {
            AS measured_prompt,
          COALESCE(SUM(CASE WHEN role = 'assistant' THEN completion_tokens ELSE 0 END), 0)
            AS completion,
-         COALESCE(SUM(total_tokens), 0) AS total,
+         COALESCE(
+           SUM(
+             CASE
+               WHEN role = 'assistant' THEN prompt_tokens + completion_tokens
+               ELSE 0
+             END
+           ),
+           0
+         ) AS total,
          COALESCE(SUM(hypothetical_prompt_tokens), 0) AS projected,
          COALESCE(SUM(
            CASE
@@ -347,4 +360,47 @@ export function hasPendingFootprintWork(db: Database.Database): boolean {
 
 export function isContextStatsCacheReady(db: Database.Database): boolean {
   return !readContextStatsCache(db).needsRebuild;
+}
+
+/** Rebuild when incremental cache drifts from message billing totals. */
+export function isContextStatsCacheStale(db: Database.Database): boolean {
+  const cached = readContextStatsCache(db);
+  if (cached.needsRebuild) return true;
+
+  const row = db
+    .prepare(
+      `SELECT
+         COALESCE(SUM(CASE WHEN role = 'assistant' THEN prompt_tokens ELSE 0 END), 0)
+           AS prompt_tokens,
+         COALESCE(SUM(CASE WHEN role = 'assistant' THEN completion_tokens ELSE 0 END), 0)
+           AS completion_tokens
+       FROM messages`,
+    )
+    .get() as { prompt_tokens: number; completion_tokens: number };
+
+  const promptTokens = row.prompt_tokens ?? 0;
+  const completionTokens = row.completion_tokens ?? 0;
+  const billableTokens = promptTokens + completionTokens;
+
+  if (promptTokens > 0 && cached.measuredPromptTokens !== promptTokens) {
+    return true;
+  }
+  if (completionTokens > 0 && cached.completionTokens !== completionTokens) {
+    return true;
+  }
+  if (
+    billableTokens > 0 &&
+    cached.totalTokensConsumed !== billableTokens &&
+    cached.totalTokensConsumed > billableTokens
+  ) {
+    return true;
+  }
+
+  return false;
+}
+
+export function ensureContextStatsCacheFresh(db: Database.Database): void {
+  if (isContextStatsCacheStale(db)) {
+    scheduleContextStatsRebuild(db);
+  }
 }

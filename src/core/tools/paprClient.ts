@@ -1,8 +1,13 @@
 import Papr from "@papr/memory";
+import {
+  formatPaprQuotaMessage,
+  reportPaprQuotaError,
+} from "../utils/paprQuota.js";
+import { PAPR_DEFAULT_HEADERS } from "./paprSurface.js";
 
 export async function getPaprClient(): Promise<Papr> {
-  const { getApiKey } = await import("../../gateway/utils/keyResolver.js");
-  const apiKey = await getApiKey("PAPR_API_KEY");
+  const { getPaprApiKey } = await import("../../gateway/utils/keyResolver.js");
+  const apiKey = await getPaprApiKey();
   if (!apiKey) {
     throw new Error("PAPR_API_KEY is not configured");
   }
@@ -13,6 +18,9 @@ export async function getPaprClient(): Promise<Papr> {
     xAPIKey: apiKey,
     maxRetries: 2,
     timeout: 120000,
+    // Surface attribution — see paprSurface.ts. Without this, Paprwork writes
+    // would be misattributed to ts_sdk via X-Stainless-Lang.
+    defaultHeaders: PAPR_DEFAULT_HEADERS,
   });
 }
 
@@ -20,11 +28,10 @@ export function isPaprNotFoundError(error: unknown): boolean {
   return error instanceof Papr.NotFoundError;
 }
 
-export function handlePaprToolError(error: unknown): never {
-  if (error instanceof Papr.RateLimitError || error instanceof Papr.PermissionDeniedError) {
-    throw new Error(
-      "Papr Memory quota exceeded. Please upgrade your account at https://platform.papr.ai/settings to continue using memory features.",
-    );
+export function handlePaprToolError(error: unknown, source = "papr-tool"): never {
+  const quotaStatus = reportPaprQuotaError(error, source);
+  if (quotaStatus) {
+    throw new Error(formatPaprQuotaMessage(quotaStatus));
   }
   if (error instanceof Papr.AuthenticationError) {
     throw new Error(

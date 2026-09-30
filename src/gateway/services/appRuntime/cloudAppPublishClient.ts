@@ -19,6 +19,12 @@ export interface PublishedAppResolveResult {
   slug: string;
   visibility: PublishedAppVisibility;
   linkPermission: "read" | "read_write";
+  /** Public Community apps may require Papr sign-in while staying listed. */
+  requireSignIn?: boolean;
+  /** Publish catalog branding — available without repo-file access. */
+  catalogTitle?: string;
+  catalogDescription?: string;
+  catalogIcon?: string;
 }
 
 function memoryHeaders(sessionToken?: string): Record<string, string> {
@@ -45,8 +51,17 @@ export async function resolvePublishedApp(
   return res.json() as Promise<PublishedAppResolveResult>;
 }
 
-export function visibilityRequiresPaprLogin(visibility: PublishedAppVisibility): boolean {
-  return visibility === "private" || visibility === "team";
+export function visibilityRequiresPaprLogin(
+  visibility: PublishedAppVisibility,
+  requireSignIn?: boolean,
+): boolean {
+  if (visibility === "private" || visibility === "team") {
+    return true;
+  }
+  if (requireSignIn === true) {
+    return true;
+  }
+  return false;
 }
 
 export function visibilityRequiresShareToken(visibility: PublishedAppVisibility): boolean {

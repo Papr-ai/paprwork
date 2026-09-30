@@ -10,12 +10,21 @@ import { sendResponse, sendError } from "./index.js";
 import { getAgentService } from "../services/AgentService.js";
 import type { AgentConfig } from "../../core/types/agents.js";
 import type { UiAgentFocusContext } from "../../core/types/agentFocus.js";
+import type { StoredMessageAttachment } from "../services/storage/IStorageProvider.js";
+import {
+  getStreamProfiler,
+  isStreamProfilingEnabled,
+  startStreamProfiler,
+} from "../../core/utils/streamProfiler.js";
 
 interface StreamPayload {
   chatId: string;
   message: string;
   config: AgentConfig;
   focusContext?: UiAgentFocusContext;
+  attachments?: StoredMessageAttachment[];
+  /** Continue the same assistant row instead of minting a new message id. */
+  reuseAssistantMessageId?: string;
 }
 
 interface StopStreamingPayload {
@@ -54,12 +63,28 @@ export async function setupAgentHandlers(
     switch (message.type) {
       case "agent:stream": {
         const payload = message.payload as StreamPayload;
-        const { chatId, message: userMessage, config, focusContext } = payload;
+        const {
+          chatId,
+          message: userMessage,
+          config,
+          focusContext,
+          attachments,
+          reuseAssistantMessageId,
+        } = payload;
 
         if (!chatId || !userMessage) {
           sendError(ws, message.id, "Missing chatId or message");
           return;
         }
+
+        const wsStreamProfiler =
+          getStreamProfiler(chatId) ??
+          (isStreamProfilingEnabled()
+            ? startStreamProfiler(chatId, "gateway")
+            : undefined);
+        wsStreamProfiler?.mark("ws.agentStream.received");
+        wsStreamProfiler?.setMeta("provider", config.provider);
+        wsStreamProfiler?.setMeta("model", config.model);
 
         // ✅ OPTIMIZATION: Check if session exists first (reuse cached API key)
         const sessionManager = agentService.getSessionManager();
@@ -71,9 +96,16 @@ export async function setupAgentHandlers(
         let authType: "oauth" | "apiKey" | undefined;
         let usePaprProxy = false;
 
+        const { getAuthEpoch } = await import("../utils/keyResolver.js");
+        const authEpoch = getAuthEpoch();
+
         if (
           existingSession &&
-          agentService.isSameProvider(existingSession.config, config)
+          agentService.isSameProvider(existingSession.config, config) &&
+          // A session holds its credential for its whole lifetime, so reusing it
+          // blindly would keep sending the old one after the user switched auth
+          // mode or updated a key. Only reuse while the epoch still matches.
+          existingSession.config.authEpoch === authEpoch
         ) {
           // Reuse API key and auth type from existing session (ZERO keychain access!)
           apiKey = existingSession.config.apiKey;
@@ -83,6 +115,11 @@ export async function setupAgentHandlers(
             `[Agent WS] Reusing cached API key for chat ${chatId} (${config.provider})`,
           );
         } else {
+          if (existingSession && existingSession.config.authEpoch !== authEpoch) {
+            console.log(
+              `[Agent WS] Credentials changed since session was created — re-resolving auth for chat ${chatId}`,
+            );
+          }
           // Fetch API key via IPC (secure method - never sent over WebSocket)
           // Only happens on first message or when switching providers
           const t2 = performance.now();
@@ -94,9 +131,9 @@ export async function setupAgentHandlers(
             }
             // Composer routes through Papr Cursor delegation (PAPR_API_KEY only)
             else if (config.provider === "cursor") {
-              const { getApiKeys } = await import("../utils/keyResolver.js");
-              const paprKeys = await getApiKeys(["PAPR_API_KEY"]);
-              if (!paprKeys.PAPR_API_KEY) {
+              const { getPaprApiKey } = await import("../utils/keyResolver.js");
+              const paprApiKey = await getPaprApiKey();
+              if (!paprApiKey) {
                 sendError(
                   ws,
                   message.id,
@@ -104,7 +141,7 @@ export async function setupAgentHandlers(
                 );
                 return;
               }
-              apiKey = paprKeys.PAPR_API_KEY;
+              apiKey = paprApiKey;
               authType = "apiKey";
             }
             // For openai, openai-codex, and anthropic, use getProviderAuth which handles OAuth
@@ -124,15 +161,16 @@ export async function setupAgentHandlers(
 
               if (!auth) {
                 // No direct provider auth — try Papr API key as proxy fallback
-                const { getApiKeys } = await import("../utils/keyResolver.js");
-                const paprKeys = await getApiKeys(["PAPR_API_KEY"]);
-                if (paprKeys.PAPR_API_KEY) {
+                const { resolvePaprProxyAuth, PAPR_PROXY_SIGN_IN_MESSAGE } =
+                  await import("../utils/keyResolver.js");
+                const paprProxy = await resolvePaprProxyAuth();
+                if (paprProxy) {
                   console.log(
                     `[Agent WS] No direct ${config.provider} auth — falling back to Papr AI proxy`,
                   );
-                  apiKey = paprKeys.PAPR_API_KEY;
+                  apiKey = paprProxy.apiKey;
                   authType = "apiKey";
-                  usePaprProxy = true;
+                  usePaprProxy = paprProxy.usePaprProxy;
                 } else {
                   const { requiresOpenAIPlatformApiKey } =
                     await import("../utils/modelNormalizer.js");
@@ -144,7 +182,7 @@ export async function setupAgentHandlers(
                     message.id,
                     needsPlatformKey
                       ? `${config.model} requires an OpenAI API key. It is no longer available via ChatGPT OAuth.`
-                      : `No authentication found for provider: ${config.provider}`,
+                      : PAPR_PROXY_SIGN_IN_MESSAGE,
                   );
                   return;
                 }
@@ -166,15 +204,18 @@ export async function setupAgentHandlers(
 
               if (!apiKey) {
                 // No direct key — try Papr API key as proxy fallback
-                const paprKeys = await getApiKeys(["PAPR_API_KEY"]);
-                if (paprKeys.PAPR_API_KEY) {
+                const { resolvePaprProxyAuth, PAPR_PROXY_SIGN_IN_MESSAGE } =
+                  await import("../utils/keyResolver.js");
+                const paprProxy = await resolvePaprProxyAuth();
+                if (paprProxy) {
                   console.log(
                     `[Agent WS] No ${keyName} found — falling back to Papr AI proxy`,
                   );
-                  apiKey = paprKeys.PAPR_API_KEY;
-                  usePaprProxy = true;
+                  apiKey = paprProxy.apiKey;
+                  authType = "apiKey";
+                  usePaprProxy = paprProxy.usePaprProxy;
                 } else {
-                  sendError(ws, message.id, `API key not found: ${keyName}`);
+                  sendError(ws, message.id, PAPR_PROXY_SIGN_IN_MESSAGE);
                   return;
                 }
               }
@@ -191,7 +232,13 @@ export async function setupAgentHandlers(
         }
 
         // Create internal config with API key and auth type (for OAuth vs API key routing)
-        const configInternal = { ...config, apiKey, authType, usePaprProxy };
+        const configInternal = {
+          ...config,
+          apiKey,
+          authType,
+          usePaprProxy,
+          authEpoch,
+        };
 
         // Log which authentication method is being used
         if (usePaprProxy) {
@@ -219,16 +266,21 @@ export async function setupAgentHandlers(
           uses_papr_proxy: usePaprProxy,
         });
 
+        wsStreamProfiler?.mark("ws.authResolved");
+
         const { getAgentStreamRegistry } = await import(
           "../services/AgentStreamRegistry.js"
         );
 
+        wsStreamProfiler?.mark("ws.startStream");
         getAgentStreamRegistry().startStream({
           chatId,
           requestId: message.id,
           userMessage,
           config: configInternal,
           focusContext,
+          attachments,
+          reuseAssistantMessageId,
           ws,
         });
         break;

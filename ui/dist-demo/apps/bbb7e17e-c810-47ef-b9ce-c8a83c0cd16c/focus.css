@@ -1,0 +1,94 @@
+/* Home — one job: know what to do next. Calm list layout, one liquid-glass focus card, no folds. */
+:root { --ink: #0a1020; --mid: #5b6475; --soft: #8a93a3; --line: #eceff3; --blue: #0060e0; --body-bg: #fff; }
+@media (prefers-color-scheme: dark) {
+  :root { --ink: #e8edf5; --mid: #a9b3c2; --soft: #7b8698; --line: #242b36; --blue: #4c9dff; --body-bg: #11151c; }
+}
+body { background: var(--body-bg); color: var(--ink); }
+main.home { max-width: 600px; padding: 26px 28px 60px; }
+
+/* top bar: quiet day stepper + Today | All tasks */
+.htop { display: flex; align-items: center; justify-content: space-between; gap: 12px; margin-bottom: 18px; }
+.hday { display: inline-flex; align-items: center; gap: 2px; }
+.hday.is-hidden { visibility: hidden; }
+.hday-btn { position: relative; width: 26px; height: 26px; border: none; border-radius: 8px; background: transparent; color: var(--mid); cursor: pointer; display: grid; place-items: center; }
+.hday-btn svg { width: 14px; height: 14px; }
+.hday-btn:hover { background: rgba(10,16,32,.05); color: var(--ink); }
+.hday-btn.disabled { opacity: .3; pointer-events: none; }
+.hday-btn .fold-peek { display: none; }
+.hday-label { font-size: 12.5px; font-weight: 500; color: var(--mid); padding: 0 4px; min-width: 44px; text-align: center; }
+.hseg { display: inline-flex; padding: 3px; border-radius: 10px; background: #f1f3f7; }
+.hseg button { display: inline-flex; gap: 5px; align-items: center; border: none; background: transparent; cursor: pointer; font: 500 12px var(--font); color: var(--mid); padding: 5px 10px; border-radius: 8px; }
+.hseg button.on { background: #fff; color: var(--ink); box-shadow: 0 1px 2px rgba(10,16,32,.08); }
+.hseg em { font-style: normal; font-size: 11px; color: var(--soft); }
+
+/* hero: date, greeting, inline stats */
+.hero { text-align: left; padding: 0 0 18px; }
+.hero-date { font-size: 12.5px; letter-spacing: 0; text-transform: none; color: var(--soft); margin-bottom: 4px; font-weight: 400; }
+.hero-title, #view-tasks .hero-title { font-size: 26px; font-weight: 600; letter-spacing: -.025em; background: none; -webkit-text-fill-color: currentColor; color: var(--ink); line-height: 1.2; }
+.hero-stats { display: flex; flex-wrap: wrap; justify-content: flex-start; gap: 14px; margin-top: 8px; font-size: 13px; color: var(--mid); }
+.stat-num { font-size: 13px; font-weight: 600; color: var(--ink); letter-spacing: 0; }
+.stat-label { font-size: 13px; text-transform: none; letter-spacing: 0; margin: 0; color: var(--mid); }
+
+/* focus card: the single next action */
+.hfocus { display: grid; gap: 10px; padding: 20px 22px; margin-bottom: 26px; border-radius: 20px;
+  background: linear-gradient(160deg, rgba(0,96,224,.075), rgba(0,172,250,.035) 60%, rgba(255,255,255,.7));
+  border: 1px solid rgba(0,96,224,.16); box-shadow: inset 0 1px 0 rgba(255,255,255,.85), 0 12px 32px rgba(0,96,224,.08); }
+.hfocus small { font-size: 11.5px; font-weight: 600; letter-spacing: .06em; text-transform: uppercase; color: var(--blue); }
+.hfocus h3 { font-size: 19px; line-height: 1.3; letter-spacing: -.015em; font-weight: 600; }
+.hfocus p { font-size: 13.5px; line-height: 1.5; color: var(--mid); }
+.hfocus-acts { display: flex; gap: 6px; margin-top: 4px; }
+.hfocus-primary, .hfocus-ghost { display: inline-flex; align-items: center; gap: 6px; padding: 9px 14px; border: none; border-radius: 11px; font: 600 13.5px var(--font); cursor: pointer; }
+.hfocus-primary { background: var(--blue); color: #fff; box-shadow: 0 4px 14px rgba(0,96,224,.25); }
+.hfocus-primary:hover { filter: brightness(1.06); }
+.hfocus-ghost { background: transparent; color: var(--mid); font-weight: 500; }
+.hfocus-ghost:hover { background: rgba(10,16,32,.05); color: var(--ink); }
+.hfocus svg { width: 14px; height: 14px; }
+
+/* sections: flat rows instead of glass cards; same hover actions */
+.section { margin-bottom: 24px; }
+.section-title, .hsec h4 { display: flex; gap: 6px; align-items: center; font-size: 13px; font-weight: 600; letter-spacing: 0; text-transform: none; color: var(--ink); margin: 0 0 6px; padding-left: 8px; }
+.card { background: transparent; border: none; box-shadow: none; backdrop-filter: none; border-radius: 12px; padding: 10px 8px; margin-bottom: 2px; }
+.card:hover { background: rgba(10,16,32,.035); border: none; box-shadow: none; }
+.card-ext, .sev-high, .sev-med, .reviewed-card { border: none; box-shadow: none; }
+.tl-title, .pri-title, .intel-subject, .reviewed-title { font-size: 13.5px; font-weight: 500; }
+.tl-time { color: var(--blue); font-size: 12.5px; }
+.pri-rank { font-size: 13px; font-weight: 600; color: var(--soft); min-width: 18px; }
+.card-hi { top: 8px; bottom: auto; }
+.tracker-bar-bg { height: 4px; }
+.tracker-bar-fill { background: linear-gradient(90deg, #0060e0, #00acfa); }
+
+/* goals: quiet, never competes with the focus card */
+.goal { background: transparent; backdrop-filter: none; border: 1px solid var(--line); border-left-width: 3px; }
+.goals-empty { background: transparent; border: 1px dashed #d9e0ea; }
+.goals-btn { background: var(--blue); border-radius: 10px; }
+
+/* all tasks */
+.hsec { display: grid; gap: 2px; margin: 18px 0; }
+.hsec h4 em { font-style: normal; font-weight: 500; color: var(--soft); }
+.hrow { display: flex; align-items: flex-start; gap: 12px; padding: 10px 8px; border-radius: 12px; }
+.hrow:hover { background: rgba(10,16,32,.035); }
+.hchk { width: 20px; height: 20px; margin-top: 1px; border-radius: 50%; border: 1.5px solid #c9d1dd; background: transparent; color: transparent; display: grid; place-items: center; flex: none; cursor: pointer; transition: .15s; }
+.hchk svg { width: 12px; height: 12px; }
+.hchk:hover { border-color: var(--blue); color: var(--blue); }
+.hrow.done .hchk { background: var(--blue); border-color: var(--blue); color: #fff; }
+.hrow.done b { color: var(--soft); text-decoration: line-through; }
+.hrt { flex: 1; min-width: 0; display: grid; gap: 2px; }
+.hrt b { font-size: 13.5px; font-weight: 500; line-height: 1.4; }
+.hrt span { font-size: 12.5px; color: var(--soft); }
+.hk, .hg { font-style: normal; font-size: 11px; font-weight: 600; padding: 2px 7px; border-radius: 6px; margin-top: 2px; flex: none; }
+.hk { color: #b7791f; background: rgba(245,158,11,.1); }
+.hg { color: var(--soft); background: rgba(10,16,32,.05); }
+.hempty { padding: 18px 20px; border-radius: 14px; border: 1px dashed #d9e0ea; }
+.hempty p { margin-top: 4px; font-size: 13px; line-height: 1.5; color: var(--mid); }
+
+@media (prefers-color-scheme: dark) {
+  .hseg { background: #1a1f29; }
+  .hseg button.on { background: #2a3140; box-shadow: none; }
+  .hfocus { background: linear-gradient(160deg, rgba(76,157,255,.13), rgba(0,172,250,.05) 60%, rgba(255,255,255,.02));
+    border-color: rgba(76,157,255,.22); box-shadow: inset 0 1px 0 rgba(255,255,255,.05), 0 12px 32px rgba(0,0,0,.3); }
+  .hfocus-primary { background: #2f7fed; }
+  .card:hover, .hrow:hover, .hfocus-ghost:hover, .hday-btn:hover { background: rgba(255,255,255,.04); }
+  .hchk { border-color: #3a4352; }
+  .goals-empty, .hempty { border-color: #2c3442; }
+  .hg { background: rgba(255,255,255,.06); }
+}

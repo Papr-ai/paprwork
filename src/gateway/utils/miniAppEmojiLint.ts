@@ -7,6 +7,14 @@ import type { ValidationIssue } from "../services/AppService.js";
 
 const EMOJI_PATTERN = /\p{Extended_Pictographic}/u;
 
+/** Unicode classifies some typography symbols as Extended_Pictographic — not UI emoji. */
+const TYPOGRAPHY_NOT_EMOJI = /[\u2194\u2195\u21C4]/gu;
+
+function lineHasDisallowedEmoji(line: string): boolean {
+  const withoutTypography = line.replace(TYPOGRAPHY_NOT_EMOJI, "");
+  return EMOJI_PATTERN.test(withoutTypography);
+}
+
 const SOURCE_FILE = /\.(html|css|tsx?|jsx?)$/i;
 
 function stripCommentsForLint(line: string, ext: string): string {
@@ -65,7 +73,7 @@ export function checkMiniAppEmojiPatterns(
     for (let index = 0; index < lines.length; index++) {
       const line = lines[index];
       const checkLine = stripCommentsForLint(line, ext);
-      if (!EMOJI_PATTERN.test(checkLine)) {
+      if (!lineHasDisallowedEmoji(checkLine)) {
         continue;
       }
 

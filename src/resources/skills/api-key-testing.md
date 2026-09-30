@@ -139,7 +139,7 @@ Only after confirmation, create the job with `create_job` and the verified field
 create_job({
   name: "Amplitude Sync",
   type: "python",
-  command: "python3 code/main.py --amplitude-key ${AMPLITUDE_API_KEY}",
+  command: "python3 code/main.py", requiredKeys: ["AMPLITUDE_API_KEY"],
   requirements: ["requests"]
 })
 
@@ -180,7 +180,7 @@ Is there another field I should use?
 
 1. `list_keys` to check what keys exist; `request_key` if missing
 2. `bash` with `curl` for small probe calls (`${KEY_NAME}` substitution works automatically)
-3. `create_job` only after data shape is validated — use `type: "python"` for scripts with API keys, pass keys as CLI args
+3. `create_job` only after data shape is validated — use `type: "python"` for scripts with API keys, declare API keys in requiredKeys and read them from env
 4. `run_job` to verify output and logs
 5. `link_app_data_source` only after verified outputs
 
@@ -193,7 +193,7 @@ Is there another field I should use?
 - [ ] Pagination/rate-limit assumptions documented
 - [ ] User intent and metric definitions confirmed
 - [ ] Job created with correct type: `python` for scripts, `bash` for one-liners
-- [ ] Python jobs: keys passed as CLI args in command, NOT in source code
+- [ ] Python jobs: keys declared in requiredKeys and read from env, NOT passed as CLI args
 - [ ] Only then: write the job code
 
 ---

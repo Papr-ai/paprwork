@@ -12,7 +12,43 @@ describe("shouldExcludePathFromContentHash", () => {
     expect(shouldExcludePathFromContentHash("apps/x/backend/bundle.json")).toBe(true);
     expect(shouldExcludePathFromContentHash("apps/x/requirements.json")).toBe(true);
     expect(shouldExcludePathFromContentHash("data/cloud-repo-head.txt")).toBe(true);
+    expect(shouldExcludePathFromContentHash("apps/x/linked-databases.json")).toBe(true);
+    expect(shouldExcludePathFromContentHash("apps/x/__papr__/app-meta.json")).toBe(true);
+    expect(shouldExcludePathFromContentHash("apps/x/__papr__/platform-catalog.json")).toBe(
+      true,
+    );
     expect(shouldExcludePathFromContentHash("apps/x/src/App.tsx")).toBe(false);
+    expect(shouldExcludePathFromContentHash("Jobs/job-1/job.runtime.json")).toBe(
+      true,
+    );
+    expect(shouldExcludePathFromContentHash("data/job-runs.jsonl")).toBe(true);
+  });
+
+  it("excludes local-only backup artifacts", () => {
+    expect(
+      shouldExcludePathFromContentHash(
+        "data/databases/gtm-foundations/data.db.corrupt-1785826750.bak",
+      ),
+    ).toBe(true);
+    expect(
+      shouldExcludePathFromContentHash(
+        "Jobs/job-1/data/data.db.corrupt-backup-2026-04-01T12-00-00",
+      ),
+    ).toBe(true);
+    expect(
+      shouldExcludePathFromContentHash(
+        "data/databases/joe-coffee-intelligence/data.db.sync-backup-1786575688502",
+      ),
+    ).toBe(true);
+    expect(shouldExcludePathFromContentHash("data/apps.json.corrupt-1234567890")).toBe(
+      true,
+    );
+    expect(shouldExcludePathFromContentHash("data/settings.json")).toBe(false);
+    expect(
+      shouldExcludePathFromContentHash(
+        "data/brand/revenue-reimagined/source/RR-Brand-Guidelines.pdf",
+      ),
+    ).toBe(false);
   });
 });
 

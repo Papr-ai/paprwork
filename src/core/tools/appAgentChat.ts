@@ -91,9 +91,10 @@ async function injectAgentChatSdk(appId: string): Promise<{
 export const enableAppAgentChatTool = createTool({
   id: "enable_app_agent_chat",
   description:
-    "Enable embedded sub-agent chat for any mini-app. Users get a floating chat bubble (published web) or Paprwork opens the bound sub-agent panel (desktop). " +
-    "REQUIRES create_sub_agent first with tools appropriate to that app (read_app_file, edit_app_file, read_app_data_sources, etc.). " +
-    "Use whenever end users should converse with an AI that can read/update app files, linked databases, or content — works for any app type.",
+    "Enable embedded sub-agent chat for any mini-app (path 3 — end-user in-app assistant). " +
+    "Users get a floating bubble; desktop opens a multi-turn session via /api/app-agent/sessions (NOT delegate_task). " +
+    "REQUIRES create_sub_agent first with app-appropriate tools (read_app_file, edit_app_file, read_app_data_sources; add bash for sqlite/API if needed). " +
+    "Do NOT test this feature with delegate_task in Pen chat — open the app bubble instead.",
   inputSchema: enableAppAgentChatSchema,
   execute: async (input) => {
     const startTime = performance.now();
@@ -142,31 +143,38 @@ export const enableAppAgentChatTool = createTool({
       const jobsService = getJobsService();
       await jobsService.initialize();
       const jobName = `App Agent Chat: ${app.title}`;
+      const jobUpdate = {
+        appIds: [args.appId],
+        command:
+          "Embedded app assistant turn. Pass the user's message via runtimeParams.prompt; conversation history is loaded from the warm sandbox chats.db.",
+        ...(subAgent.provider ? { provider: subAgent.provider } : {}),
+        ...(subAgent.model ? { model: subAgent.model } : {}),
+      };
       const existing = (await jobsService.listJobs()).find(
         (job) => job.name === jobName && job.type === "subagent",
       );
       if (existing) {
         agentChat.cloudJobId = existing.id;
-        await jobsService.updateJob(existing.id, {
-          appIds: [args.appId],
-          command:
-            "Embedded app assistant turn. Full conversation prompt is passed via runtime params.prompt.",
-        });
+        await jobsService.updateJob(existing.id, jobUpdate);
       } else {
         const cloudJob = await jobsService.createJob({
           name: jobName,
           type: "subagent",
           subAgentId: args.subAgentId,
-          appIds: [args.appId],
-          command:
-            "Embedded app assistant turn. Full conversation prompt is passed via runtime params.prompt.",
           maxTurns: 20,
+          ...jobUpdate,
         });
         agentChat.cloudJobId = cloudJob.id;
       }
+
+      const { getPaprRoot } = await import("../../core/utils/paprRoot.js");
+      const { ensureAppRequirementsSyncedWithBackend } = await import(
+        "../../gateway/services/cloudAppRequirements.js"
+      );
+      await ensureAppRequirementsSyncedWithBackend(getPaprRoot(), args.appId);
     }
 
-    const updated = await appService.updateApp(args.appId, { agentChat });
+    const updated = await appService.setAppAgentChat(args.appId, agentChat);
     if (!updated) {
       throw new Error(JSON.stringify({ success: false, error: "Failed to update app" }));
     }

@@ -1,9 +1,9 @@
+import { parseMiniAppIdFromAgentPath } from "../../src/core/utils/parseMiniAppIdFromPath.js";
+
 /**
- * Extract mini-app id from an edit_file path (~/Papr/apps/{appId}/...).
+ * Extract mini-app id from an edit_file path (legacy or org/namespace layout).
  */
 export function parseAppIdFromEditFilePath(rawPath: unknown): string | undefined {
   if (typeof rawPath !== "string" || rawPath.length === 0) return undefined;
-  const normalized = rawPath.replace(/^~(?=$|[/\\])/, "").replace(/\\/g, "/");
-  const match = normalized.match(/(?:^|\/)Papr\/apps\/([^/]+)/i);
-  return match?.[1];
+  return parseMiniAppIdFromAgentPath(rawPath);
 }

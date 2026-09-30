@@ -11,7 +11,10 @@ import type { StoredMessage } from "../src/gateway/services/storage/IStorageProv
 vi.mock("../src/gateway/utils/paprUserId.js", () => ({
   getPaprUserId: vi.fn(() => "WkPutXGdqg"),
   invalidatePaprUserIdCache: vi.fn(),
-  paprUserScope: vi.fn(() => ({ external_user_id: "WkPutXGdqg" })),
+  paprUserScope: vi.fn(() => ({
+    user_id: "WkPutXGdqg",
+    external_user_id: "WkPutXGdqg",
+  })),
 }));
 
 type MessageStoreCall = {
@@ -29,32 +32,54 @@ type MessageStoreCall = {
   };
 };
 
-// Mock @papr/memory SDK
+vi.mock("../src/gateway/utils/memoryScopeResolver.js", () => ({
+  buildPaprMemoryWriteScope: vi.fn().mockResolvedValue({
+    user_id: "WkPutXGdqg",
+    external_user_id: "WkPutXGdqg",
+    namespace_id: undefined,
+    policy: undefined,
+  }),
+}));
+
+// Mock @papr/memory SDK — attach error classes on default export (matches real SDK)
 vi.mock("@papr/memory", () => {
-  return {
-    default: vi.fn().mockImplementation(() => ({
-      messages: {
-        store: vi.fn().mockResolvedValue({ objectId: "test-obj-123" }),
-        sessions: {
-          retrieveHistory: vi.fn().mockResolvedValue({
-            messages: [],
-            total_count: 0,
-          }),
-          compress: vi.fn().mockResolvedValue({
-            summaries: {
-              short_term: "Short summary",
-              medium_term: "Medium summary",
-              long_term: "Long summary",
-              topics: ["topic1", "topic2"],
-              last_updated: new Date().toISOString(),
-            },
-          }),
-        },
+  class AuthenticationError extends Error {}
+  class RateLimitError extends Error {}
+  class PermissionDeniedError extends Error {}
+  class NotFoundError extends Error {}
+
+  const MockPapr = vi.fn().mockImplementation(() => ({
+    messages: {
+      store: vi.fn().mockResolvedValue({ objectId: "test-obj-123" }),
+      sessions: {
+        retrieveHistory: vi.fn().mockResolvedValue({
+          messages: [],
+          total_count: 0,
+        }),
+        compress: vi.fn().mockResolvedValue({
+          summaries: {
+            short_term: "Short summary",
+            medium_term: "Medium summary",
+            long_term: "Long summary",
+            topics: ["topic1", "topic2"],
+            last_updated: new Date().toISOString(),
+          },
+        }),
       },
-    })),
-    AuthenticationError: class AuthenticationError extends Error {},
-    RateLimitError: class RateLimitError extends Error {},
-    PermissionDeniedError: class PermissionDeniedError extends Error {},
+    },
+  }));
+
+  MockPapr.AuthenticationError = AuthenticationError;
+  MockPapr.RateLimitError = RateLimitError;
+  MockPapr.PermissionDeniedError = PermissionDeniedError;
+  MockPapr.NotFoundError = NotFoundError;
+
+  return {
+    default: MockPapr,
+    AuthenticationError,
+    RateLimitError,
+    PermissionDeniedError,
+    NotFoundError,
   };
 });
 
@@ -77,7 +102,7 @@ describe("PAPR Memory Metadata Enhancement", () => {
     mockStore.mockClear();
   });
 
-  it("should send top-level external_user_id when papr user is available", async () => {
+  it("should send dual user identity when papr user is available", async () => {
     const message: StoredMessage = {
       id: "msg-user-id",
       chat_id: "chat-123",
@@ -91,7 +116,12 @@ describe("PAPR Memory Metadata Enhancement", () => {
 
     expect(mockStore).toHaveBeenCalledWith(
       expect.objectContaining({
+        user_id: "WkPutXGdqg",
         external_user_id: "WkPutXGdqg",
+        metadata: expect.objectContaining({
+          user_id: "WkPutXGdqg",
+          external_user_id: "WkPutXGdqg",
+        }),
       }),
     );
   });

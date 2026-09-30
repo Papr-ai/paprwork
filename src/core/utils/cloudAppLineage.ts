@@ -10,7 +10,9 @@ export function parseCloudAppLineageFile(raw: string): CloudAppLineageFile | nul
   try {
     const parsed = JSON.parse(raw) as CloudAppLineageFile;
     if (
-      (parsed.schemaVersion !== "1.0.0" && parsed.schemaVersion !== "1.1.0") ||
+      (parsed.schemaVersion !== "1.0.0" &&
+        parsed.schemaVersion !== "1.1.0" &&
+        parsed.schemaVersion !== "1.2.0") ||
       !parsed.lineageId ||
       !parsed.source
     ) {

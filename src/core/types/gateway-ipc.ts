@@ -71,6 +71,7 @@ export interface WebviewTestResponseMessage {
 export interface InvalidateKeyCacheMessage {
   type: "INVALIDATE_KEY_CACHE";
   keyName?: string; // Specific key to invalidate, or undefined for all keys
+  keysChanged?: boolean; // A local edit, rather than a cache/context refresh
 }
 
 export type GatewayToElectronIpcMessage =
@@ -142,6 +143,7 @@ export function isInvalidateKeyCacheMessage(
   const candidate = message as Record<string, unknown>;
   return (
     candidate.type === "INVALIDATE_KEY_CACHE" &&
-    (candidate.keyName === undefined || typeof candidate.keyName === "string")
+    (candidate.keyName === undefined || typeof candidate.keyName === "string") &&
+    (candidate.keysChanged === undefined || typeof candidate.keysChanged === "boolean")
   );
 }

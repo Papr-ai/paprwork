@@ -74,7 +74,6 @@
 .filter-pill {
   padding: var(--space-2) var(--space-3);
   background: var(--glass-bg);
-  backdrop-filter: blur(14px);
   border: 1px solid var(--border);
   border-radius: 20px;
   color: var(--text-secondary);
@@ -100,7 +99,6 @@
   max-width: 300px;
   padding: var(--space-2) var(--space-3);
   background: var(--glass-bg);
-  backdrop-filter: blur(14px);
   border: 1px solid var(--border);
   border-radius: var(--r-md);
   color: var(--text-primary);

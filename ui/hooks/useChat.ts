@@ -8,8 +8,17 @@ import { useChatStore, defaultChatState } from "../stores/chatStore";
 import { useTabStore } from "../stores/tabStore";
 import { gateway } from "../src/lib/gateway";
 import { mapHistoryMessages } from "../utils/historyMapper";
-import { fetchChatHistory } from "../utils/chatHistoryApi";
-import { chatHasActiveStreamUi, mergeHistoryWithLocal } from "../lib/agentStreamRecovery";
+import {
+  fetchChatHistory,
+  getRemainingHistoryBatchSize,
+} from "../utils/chatHistoryApi";
+import { forgetChatModel } from "../utils/chatModelMemory";
+import { forgetChatSettings } from "../utils/chatModelSettings";
+import { forgetDraft } from "../utils/chatDraftStore";
+import {
+  chatHasLiveStreamBlockingHistory,
+  mergeHistoryWithLocal,
+} from "../lib/agentStreamRecovery";
 
 let hasLoadedChatsOnce = false;
 let loadChatsPromise: Promise<void> | null = null;
@@ -102,10 +111,17 @@ export function useChat() {
 
   // Load messages for a chat (loads only recent messages)
   const loadMessages = useCallback(
-    async (chatId: string, limit: number = 30) => {
-      if (chatHasActiveStreamUi(chatId)) {
+    async (
+      chatId: string,
+      limit: number = 30,
+      options?: { force?: boolean },
+    ) => {
+      if (
+        !options?.force &&
+        chatHasLiveStreamBlockingHistory(chatId)
+      ) {
         console.log(
-          `[useChat] Skipping loadMessages for ${chatId} — active or recovering stream`,
+          `[useChat] Skipping loadMessages for ${chatId} — live stream in progress`,
         );
         return;
       }
@@ -136,10 +152,11 @@ export function useChat() {
 
           // A stream may have started while history was loading — never wipe live UI.
           if (
-            existingState.isSending ||
-            existingState.isStreaming ||
-            existingState.messages.some((m) => m.isStreaming) ||
-            chatHasActiveStreamUi(chatId)
+            !options?.force &&
+            (existingState.isSending ||
+              existingState.isStreaming ||
+              existingState.messages.some((m) => m.isStreaming) ||
+              chatHasLiveStreamBlockingHistory(chatId))
           ) {
             const newChatStates = new Map(state.chatStates);
             newChatStates.set(chatId, {
@@ -149,9 +166,18 @@ export function useChat() {
             return { chatStates: newChatStates };
           }
 
+          const streamingMessageId =
+            existingState.messages.find((m) => m.isStreaming)?.id ??
+            [...existingState.messages]
+              .reverse()
+              .find((m) => m.role === "assistant" && m.interrupted)?.id;
           const messages =
             existingState.messages.length > 0
-              ? mergeHistoryWithLocal(existingState.messages, serverMessages)
+              ? mergeHistoryWithLocal(
+                  existingState.messages,
+                  serverMessages,
+                  streamingMessageId,
+                )
               : serverMessages;
 
           const newChatStates = new Map(state.chatStates);
@@ -160,11 +186,26 @@ export function useChat() {
             messages,
             isLoading: false,
             hasMoreMessages: serverMessages.length === limit,
+            historyLoadFailed: false,
           });
           return { chatStates: newChatStates };
         });
       } catch (error) {
         console.error("Failed to load messages:", error);
+        // Record that we failed rather than leaving `messages` empty and
+        // indistinguishable from a chat that has none — otherwise the pane
+        // greets the user as if their conversation never existed.
+        useChatStore.setState((state) => {
+          const existingState = state.chatStates.get(chatId) || {
+            ...defaultChatState,
+          };
+          const newChatStates = new Map(state.chatStates);
+          newChatStates.set(chatId, {
+            ...existingState,
+            historyLoadFailed: true,
+          });
+          return { chatStates: newChatStates };
+        });
       } finally {
         useChatStore.setState((state) => {
           const existingState = state.chatStates.get(chatId) || {
@@ -185,18 +226,32 @@ export function useChat() {
 
   // Load older messages for pagination
   const loadOlderMessages = useCallback(
-    async (chatId: string, batchSize: number = 20) => {
-      const chatState = useChatStore.getState().chatStates.get(chatId);
+    async (chatId: string, batchSize?: number) => {
+      const store = useChatStore.getState();
+      const chatState = store.chatStates.get(chatId);
       if (!chatState || !chatState.hasMoreMessages || chatState.isLoadingMore) {
         return;
       }
 
       try {
-        useChatStore.getState().setLoadingMore(chatId, true);
+        store.setLoadingMore(chatId, true);
 
         const currentMessageCount = chatState.messages.length;
+        // Opening a long chat intentionally hydrates only the newest page. When
+        // the user asks for earlier history, fetch every known remaining row in
+        // one request instead of making hundreds of messages discoverable only
+        // through repeated, invisible scroll-to-top gestures.
+        const knownMessageCount = store.chats.find(
+          (chat) => chat.id === chatId,
+        )?.messageCount;
+        const effectiveBatchSize =
+          batchSize ??
+          getRemainingHistoryBatchSize({
+            loadedMessageCount: currentMessageCount,
+            knownMessageCount,
+          });
         const history = await fetchChatHistory(chatId, {
-          limit: batchSize,
+          limit: effectiveBatchSize,
           skip: currentMessageCount,
         });
 
@@ -210,7 +265,11 @@ export function useChat() {
           useChatStore.getState().prependMessages(olderMessages, chatId);
           
           // If we got fewer messages than requested, we've reached the beginning
-          if (olderMessages.length < batchSize) {
+          if (
+            olderMessages.length < effectiveBatchSize ||
+            (knownMessageCount !== undefined &&
+              currentMessageCount + olderMessages.length >= knownMessageCount)
+          ) {
             useChatStore.getState().setHasMoreMessages(chatId, false);
           }
         }
@@ -294,6 +353,9 @@ export function useChat() {
     async (chatId: string) => {
       try {
         await gateway.send("chat:delete", { chatId });
+        forgetChatModel(chatId);
+        forgetChatSettings(chatId);
+        forgetDraft(chatId);
         await loadChats(true);
         // Note: Tab management handled by tabStore (closeTab)
       } catch (error) {

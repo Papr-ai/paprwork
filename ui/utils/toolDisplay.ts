@@ -10,13 +10,22 @@ export function getDisplayFilename(path: string): string {
   const parts = cleanPath.split("/");
   let filename = parts[parts.length - 1];
 
-  // UUID-like IDs → generic label
+  // UUID-like IDs → context-aware label (avoid "document" for jobs/apps paths)
   if (
     filename.match(
       /^[a-f0-9]{8}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{12}/,
     )
   ) {
-    return "document";
+    if (/\/Jobs\//i.test(cleanPath)) {
+      return "job folder";
+    }
+    if (/\/apps\//i.test(cleanPath)) {
+      return "app folder";
+    }
+    if (/\/documents\//i.test(cleanPath)) {
+      return "document";
+    }
+    return "folder";
   }
 
   filename = filename.replace(/-content\.md$/, "").replace(/\.md$/, "");
@@ -124,11 +133,18 @@ export function getBashCommandDescription(
     if (/>/.test(cmd)) {
       const redirectMatch = cmd.match(/>\s*([^\s|;&]+)/);
       if (redirectMatch) {
-        const outfile = getDisplayFilename(redirectMatch[1]);
-        if (outfile) {
-          return isRunning
-            ? `Saving listing to ${outfile}`
-            : `Saved listing to ${outfile}`;
+        const rawTarget = redirectMatch[1].replace(/^["']|["']$/g, "").trim();
+        const discardTarget =
+          rawTarget === "null" ||
+          rawTarget === "/dev/null" ||
+          rawTarget.endsWith("/dev/null");
+        if (!discardTarget) {
+          const outfile = getDisplayFilename(rawTarget);
+          if (outfile) {
+            return isRunning
+              ? `Saving listing to ${outfile}`
+              : `Saved listing to ${outfile}`;
+          }
         }
       }
       return isRunning ? "Saving directory listing" : "Saved directory listing";
@@ -295,6 +311,7 @@ export const TOOL_DESCRIPTIONS: Record<
     complete: "Directory listed",
   },
   search_files: { running: "Searching files", complete: "Files searched" },
+  search_app_files: { running: "Searching app files", complete: "App files searched" },
   // Documents
   create_document: {
     running: "Creating document",
@@ -329,6 +346,51 @@ export const TOOL_DESCRIPTIONS: Record<
   read_app_data_sources: {
     running: "Reading data sources",
     complete: "Data sources read",
+  },
+  // Cloud observability
+  get_cloud_sync_status: {
+    running: "Checking cloud sync",
+    complete: "Cloud sync checked",
+  },
+  push_cloud_sync: {
+    running: "Pushing cloud sync",
+    complete: "Cloud sync pushed",
+  },
+  reset_writer_baseline_and_publish: {
+    running: "Resetting publish baseline",
+    complete: "Publish baseline reset",
+  },
+  query_cloud_turso: {
+    running: "Querying cloud database",
+    complete: "Cloud database queried",
+  },
+  papr_db_sync_status: {
+    running: "Checking replica DB sync",
+    complete: "Replica DB sync checked",
+  },
+  papr_db_push: {
+    running: "Pushing replica DB to Turso",
+    complete: "Replica DB pushed",
+  },
+  papr_db_pull: {
+    running: "Pulling replica DB from Turso",
+    complete: "Replica DB pulled",
+  },
+  papr_db_exec: {
+    running: "Running replica DB query",
+    complete: "Replica DB query done",
+  },
+  papr_db_apply_migration: {
+    running: "Applying replica DB migration",
+    complete: "Replica DB migration applied",
+  },
+  repair_cloud_sync: {
+    running: "Repairing cloud sync",
+    complete: "Cloud sync repaired",
+  },
+  inspect_cloud_repo: {
+    running: "Inspecting cloud repo",
+    complete: "Cloud repo inspected",
   },
   // Jobs
   create_job: { running: "Creating job", complete: "Job created" },
@@ -381,6 +443,18 @@ export const TOOL_DESCRIPTIONS: Record<
   // Skills
   create_skill: { running: "Creating skill", complete: "Skill created" },
   read_skill: { running: "Reading skill", complete: "Skill loaded" },
+  get_papr_api_reference: {
+    running: "Looking up Papr APIs",
+    complete: "API reference loaded",
+  },
+  list_media_models: {
+    running: "Listing media models",
+    complete: "Media models listed",
+  },
+  generate_media: {
+    running: "Generating media",
+    complete: "Media generated",
+  },
   // Browser
   browser_navigate: {
     running: "Navigating browser",
@@ -427,6 +501,14 @@ export const TOOL_DESCRIPTIONS: Record<
     running: "Running preview script",
     complete: "Preview script done",
   },
+  webview_fill_form: {
+    running: "Filling preview form",
+    complete: "Preview form filled",
+  },
+  webview_click: {
+    running: "Clicking in preview",
+    complete: "Preview click done",
+  },
   webview_get_console: {
     running: "Reading preview console",
     complete: "Preview console read",
@@ -445,6 +527,7 @@ export const TOOL_DESCRIPTIONS: Record<
 export function getToolDisplayLabel(toolCall: ToolCallLike): string {
   const toolName = toolCall.toolName ?? "tool";
   const isRunning = toolCall.status === "calling";
+  const isError = toolCall.status === "error";
 
   if (toolName === "bash" && typeof toolCall.args?.command === "string") {
     return getBashCommandDescription(toolCall.args.command, isRunning);
@@ -463,6 +546,14 @@ export function getToolDisplayLabel(toolCall: ToolCallLike): string {
 
   if (toolName === "browser_snapshot") {
     return isRunning ? "Reading page" : "Page read";
+  }
+
+  if (toolName === "webview_launch_app") {
+    const mode =
+      toolCall.args?.previewTarget === "published" ? "Web" : "Local";
+    return isRunning
+      ? `Launching ${mode} app preview`
+      : `${mode} app preview ready`;
   }
 
   if (toolName === "browser_click" && typeof toolCall.args?.ref === "string") {
@@ -501,13 +592,49 @@ export function getToolDisplayLabel(toolCall: ToolCallLike): string {
     }
   }
 
+  if (toolName === "generate_media") {
+    const modelId =
+      typeof toolCall.args?.modelId === "string" ? toolCall.args.modelId : "";
+    const kindHint = modelId.includes("veo") ? "video" : "image";
+    const noun = kindHint === "video" ? "video" : "image";
+    return isRunning ? `Generating ${noun}` : `Generated ${noun}`;
+  }
+
   if (toolName === "list_directory" && typeof toolCall.args?.path === "string") {
     const dirname = getDisplayFilename(toolCall.args.path as string) || "directory";
     return isRunning ? `Listing ${dirname}` : `Listed ${dirname}`;
   }
 
+  if (toolName === "push_cloud_sync") {
+    const args = toolCall.args ?? {};
+    const parts: string[] = [];
+    const targets = Array.isArray(args.targets) ? args.targets as string[] : ["github", "turso"];
+    if (targets.length === 1) {
+      parts.push(targets[0] === "turso" ? "Turso" : "GitHub");
+    }
+    if (typeof args.alias === "string" && args.alias.length > 0) {
+      parts.push(`db ${args.alias}`);
+    } else if (typeof args.tursoDatabase === "string" && args.tursoDatabase.length > 0) {
+      parts.push(`Turso ${args.tursoDatabase}`);
+    }
+    if (Array.isArray(args.tables) && args.tables.length > 0) {
+      parts.push(`tables ${(args.tables as string[]).join(", ")}`);
+    } else if (typeof args.jobId === "string" && args.jobId.length > 0) {
+      parts.push(`job ${args.jobId.slice(0, 8)}…`);
+    } else if (typeof args.appId === "string" && args.appId.length > 0) {
+      parts.push(`app ${args.appId.slice(0, 8)}…`);
+    }
+    const scope = parts.length > 0 ? parts.join(" · ") : "scoped push";
+    return isRunning ? `Pushing cloud sync (${scope})` : `Cloud sync pushed (${scope})`;
+  }
+
   const desc = TOOL_DESCRIPTIONS[toolName];
-  if (desc) return isRunning ? desc.running : desc.complete;
+  if (desc) {
+    if (isError) {
+      return `${desc.running} failed`;
+    }
+    return isRunning ? desc.running : desc.complete;
+  }
 
   // Fallback: snake_case → Title Case words
   const friendly = toolName.replace(/_/g, " ");

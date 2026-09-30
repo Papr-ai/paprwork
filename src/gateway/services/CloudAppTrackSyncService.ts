@@ -4,7 +4,6 @@
 
 import { promises as fs } from "node:fs";
 import { getPaprAppsRoot } from "../../core/utils/paprRoot.js";
-import * as os from "node:os";
 import * as path from "node:path";
 
 import type { CloudAppLineageFile } from "../../core/types/cloudAppLineage.js";
@@ -12,7 +11,9 @@ import {
   parseCloudAppLineageFile,
   serializeCloudAppLineageFile,
 } from "../../core/utils/cloudAppLineage.js";
-import { fileContentHash } from "./CloudAppChangeMergeService.js";
+import { fileContentHash } from "../utils/fileContentHash.js";
+import { ephemeralGitEnv } from "../utils/ephemeralGitEnv.js";
+import { cloneCloudAppSource } from "./cloudSync/cloudGitClone.js";
 import {
   CLOUD_LINEAGE_FILENAME,
   getCloudAppLineageService,
@@ -22,11 +23,8 @@ import {
   type CloudAppInstallInput,
 } from "./CloudAppInstallService.js";
 import { getAppService } from "./AppService.js";
-
-function authCloneUrl(cloneUrl: string, token: string): string {
-  const normalized = cloneUrl.replace(/^https:\/\//, "");
-  return `https://x-access-token:${token}@${normalized}`;
-}
+import { decideTrackPullAction } from "./cloudSync/trackPullOnPublishLogic.js";
+import { fetchPublishedAppRevision } from "./cloudSync/trackUpstreamRevision.js";
 
 export interface TrackSyncResult {
   appId: string;
@@ -34,6 +32,17 @@ export interface TrackSyncResult {
   conflictFiles: string[];
   skippedFiles: string[];
   lastSyncedAt: string;
+  upstreamRevision?: string | null;
+}
+
+export interface TrackPullOnPublishResult {
+  appId: string;
+  action: "synced" | "skipped" | "error";
+  upstreamRevision?: string | null;
+  liveRevision?: string | null;
+  updatedFiles?: string[];
+  conflictFiles?: string[];
+  error?: string;
 }
 
 function hashContent(content: string): string {
@@ -84,6 +93,46 @@ async function writeLineageFile(
   );
 }
 
+/**
+ * Files the platform writes on build, link or install. They always differ from
+ * the publisher's copy (different app/db ids, rebuilt bundle), so they are not
+ * edits a collaborator made or could propose.
+ */
+const PLATFORM_MANAGED_FILES = new Set([
+  "backend/bundle.json",
+  "papr-cloud-dependencies.json",
+  "linked-databases.json",
+  "metadata.json",
+  "data-sources.json",
+]);
+
+export function isCollaboratorEditablePath(rel: string): boolean {
+  return (
+    !rel.startsWith("dist/") &&
+    !rel.startsWith("__papr__/") &&
+    !PLATFORM_MANAGED_FILES.has(rel)
+  );
+}
+
+/**
+ * Files whose local content differs from the last synced upstream snapshot.
+ * Pure so the "nothing to propose" rule can be tested without git.
+ */
+export function listLocalEditsAgainstSnapshot(
+  localHashes: Map<string, string>,
+  snapshot: Record<string, string>,
+): string[] {
+  const edited: string[] = [];
+  for (const [rel, hash] of localHashes) {
+    const base = snapshot[rel];
+    if (base === undefined || base !== hash) edited.push(rel);
+  }
+  for (const rel of Object.keys(snapshot)) {
+    if (!localHashes.has(rel)) edited.push(rel);
+  }
+  return edited.sort();
+}
+
 export class CloudAppTrackSyncService {
   private readonly appsDir: string;
 
@@ -91,7 +140,65 @@ export class CloudAppTrackSyncService {
     this.appsDir = appsDir ?? getPaprAppsRoot();
   }
 
-  async syncTrackApp(appId: string): Promise<TrackSyncResult> {
+  /**
+   * Local-only: which files a collaborator changed since the last upstream
+   * sync. Drives Propose greying out when there is nothing to send. No
+   * snapshot (older installs) means unknown, so callers keep Propose enabled.
+   */
+  async localEdits(
+    appId: string,
+  ): Promise<{ known: boolean; files: string[]; unproposed: string[] }> {
+    const lineage = await readLineageFile(appId, this.appsDir);
+    if (!lineage || lineage.mode !== "track" || !lineage.syncSnapshot) {
+      return { known: false, files: [], unproposed: [] };
+    }
+    const local = await collectLocalFiles(path.join(this.appsDir, appId));
+    const hashes = new Map<string, string>();
+    for (const [rel, content] of local) hashes.set(rel, hashContent(content));
+    // Only compare paths the publisher ships; local-only build output (dist/)
+    // and job scratch are not edits the publisher could review.
+    const tracked = new Map([...hashes].filter(([rel]) => isCollaboratorEditablePath(rel)));
+    const snapshot = Object.fromEntries(
+      Object.entries(lineage.syncSnapshot).filter(([rel]) => isCollaboratorEditablePath(rel)),
+    );
+    const files = listLocalEditsAgainstSnapshot(tracked, snapshot);
+    // Edits already sent in a proposal (same content as when proposed) are
+    // waiting on the owner, not "unproposed".
+    const proposed = lineage.proposedSnapshot ?? {};
+    const unproposed = files.filter((rel) => {
+      const sent = proposed[rel];
+      if (sent === undefined) return true;
+      const now = tracked.get(rel);
+      return now === undefined ? sent !== "" : now !== sent;
+    });
+    return { known: true, files, unproposed };
+  }
+
+  /** After a proposal is sent: remember the content that went out. */
+  async recordProposed(appId: string): Promise<void> {
+    const lineage = await readLineageFile(appId, this.appsDir);
+    if (!lineage || lineage.mode !== "track") return;
+    const local = await collectLocalFiles(path.join(this.appsDir, appId));
+    const proposedSnapshot: Record<string, string> = {};
+    for (const [rel, content] of local) {
+      if (isCollaboratorEditablePath(rel)) proposedSnapshot[rel] = hashContent(content);
+    }
+    // Deleted files: "" marks "sent as deleted".
+    for (const rel of Object.keys(lineage.syncSnapshot ?? {})) {
+      if (isCollaboratorEditablePath(rel) && !(rel in proposedSnapshot)) proposedSnapshot[rel] = "";
+    }
+    await writeLineageFile(appId, this.appsDir, { ...lineage, proposedSnapshot });
+  }
+
+  /**
+   * Pull the publisher's code. With `discardLocal`, files the collaborator
+   * edited are overwritten with upstream instead of kept as conflicts
+   * (the ⋯ menu's Discard my edits). Local-only files are left alone.
+   */
+  async syncTrackApp(
+    appId: string,
+    options: { discardLocal?: boolean } = {},
+  ): Promise<TrackSyncResult> {
     const lineage = await readLineageFile(appId, this.appsDir);
     if (!lineage) {
       throw new Error(`No cloud lineage for app ${appId}`);
@@ -108,26 +215,18 @@ export class CloudAppTrackSyncService {
 
     const installService = getCloudAppInstallService();
     const prepare = await installService.prepareInstall(installInput);
-    const tempRoot = await fs.mkdtemp(path.join(os.tmpdir(), "papr-track-sync-"));
-    const repoDir = path.join(tempRoot, "repo");
+    const env = ephemeralGitEnv();
+
+    const { sourceDir: upstreamDir, repoDir, cleanup } = await cloneCloudAppSource(
+      {
+        cloneUrl: prepare.cloneUrl,
+        token: prepare.token,
+        repoPath: prepare.repoPath,
+      },
+      "papr-track-sync-",
+    );
 
     try {
-      const cloneUrl = authCloneUrl(prepare.cloneUrl, prepare.token);
-      const env = { ...process.env, GIT_TERMINAL_PROMPT: "0" };
-
-      await runGit(
-        ["clone", "--filter=blob:none", "--sparse", cloneUrl, repoDir],
-        env,
-        180_000,
-      );
-      await runGit(
-        ["sparse-checkout", "set", prepare.repoPath.replace(/\\/g, "/")],
-        env,
-        60_000,
-        repoDir,
-      );
-
-      const upstreamDir = path.join(repoDir, prepare.repoPath);
       const upstreamFiles = await collectLocalFiles(upstreamDir);
       const localFiles = await collectLocalFiles(path.join(this.appsDir, appId));
       const snapshot = lineage.syncSnapshot ?? {};
@@ -153,7 +252,7 @@ export class CloudAppTrackSyncService {
           localHash === snapshotHash ||
           snapshotHash === undefined;
 
-        if (!localUnchanged && localHash !== upstreamHash) {
+        if (!localUnchanged && localHash !== upstreamHash && !options.discardLocal) {
           conflictFiles.push(filename);
           continue;
         }
@@ -172,12 +271,69 @@ export class CloudAppTrackSyncService {
       }
 
       const lastSyncedAt = new Date().toISOString();
+      const upstreamRevision = await fetchPublishedAppRevision(
+        lineage.source.namespaceId,
+        lineage.source.slug,
+      );
       await writeLineageFile(appId, this.appsDir, {
         ...lineage,
-        schemaVersion: "1.1.0",
+        schemaVersion: lineage.schemaVersion ?? "1.2.0",
         lastSyncedAt,
         syncSnapshot: nextSnapshot,
+        ...(upstreamRevision ? { upstreamRevision } : {}),
       });
+
+      const sharedDatabase =
+        lineage.databasePolicy === "shared" ||
+        (lineage.databasePolicy === undefined && lineage.mode === "track");
+
+      try {
+        const {
+          installCloudAppLinkedResources,
+          finalizePortableCloudAppResources,
+        } = await import("./cloudAppLinkedResourcesInstall.js");
+        const linked = await installCloudAppLinkedResources({
+          repoDir,
+          repoAppDir: upstreamDir,
+          publisherAppId: lineage.source.appId,
+          localAppId: appId,
+          env,
+          ...(sharedDatabase
+            ? {
+                syncScope: "jobs_and_code" as const,
+                skipReplicaPrep: true,
+                installDbPolicy: "shared_primary" as const,
+              }
+            : {}),
+        });
+        if (linked.copiedJobIds.length > 0) {
+          console.log(
+            `[CloudTrackSync] Updated ${linked.copiedJobIds.length} linked job(s) for ${appId}`,
+          );
+        }
+        await finalizePortableCloudAppResources();
+        const { bootstrapInstalledAppDatabases, pullTrackSharedAppDatabase } =
+          await import("./cloudAppInstallBootstrap.js");
+        const bootstrap = sharedDatabase
+          ? await pullTrackSharedAppDatabase(appId)
+          : await bootstrapInstalledAppDatabases(appId);
+        if (bootstrap.errors.length > 0) {
+          console.warn(
+            `[CloudTrackSync] Database bootstrap errors for ${appId}:`,
+            bootstrap.errors.slice(0, 2).join("; "),
+          );
+        } else if (bootstrap.warnings.length > 0) {
+          console.warn(
+            `[CloudTrackSync] Database bootstrap warnings for ${appId}:`,
+            bootstrap.warnings.slice(0, 2).join(" | "),
+          );
+        }
+      } catch (linkedErr) {
+        console.warn(
+          `[CloudTrackSync] Linked resource sync failed for ${appId}:`,
+          (linkedErr as Error).message.slice(0, 160),
+        );
+      }
 
       return {
         appId,
@@ -185,10 +341,80 @@ export class CloudAppTrackSyncService {
         conflictFiles,
         skippedFiles,
         lastSyncedAt,
+        upstreamRevision,
       };
     } finally {
-      await fs.rm(tempRoot, { recursive: true, force: true }).catch(() => {});
+      await cleanup();
     }
+  }
+
+  /**
+   * Poll published revisions and auto-pull track installs when the owner ships.
+   */
+  async pullTrackAppsOnPublish(): Promise<TrackPullOnPublishResult[]> {
+    const index = await getCloudAppLineageService(this.appsDir).buildIndex();
+    const results: TrackPullOnPublishResult[] = [];
+
+    for (const [appId, entry] of Object.entries(index.byAppId)) {
+      if (entry.mode !== "track") {
+        continue;
+      }
+
+      const lineage = await readLineageFile(appId, this.appsDir);
+      if (!lineage) {
+        continue;
+      }
+
+      const liveRevision = await fetchPublishedAppRevision(
+        lineage.source.namespaceId,
+        lineage.source.slug,
+      );
+
+      const decision = decideTrackPullAction({
+        mode: entry.mode,
+        lineage,
+        liveRevision,
+      });
+
+      if (decision.action === "skip") {
+        results.push({
+          appId,
+          action: "skipped",
+          upstreamRevision: lineage.upstreamRevision ?? null,
+          liveRevision,
+        });
+        continue;
+      }
+
+      try {
+        const syncResult = await this.syncTrackApp(appId);
+        results.push({
+          appId,
+          action: "synced",
+          upstreamRevision: syncResult.upstreamRevision ?? liveRevision,
+          liveRevision,
+          updatedFiles: syncResult.updatedFiles,
+          conflictFiles: syncResult.conflictFiles,
+        });
+        if (syncResult.updatedFiles.length > 0 && liveRevision) {
+          console.log(
+            `[CloudTrackSync] Auto-pulled ${appId} after publisher revision ${liveRevision.slice(0, 12)}`,
+          );
+        }
+      } catch (err) {
+        const message = (err as Error).message.slice(0, 160);
+        results.push({
+          appId,
+          action: "error",
+          upstreamRevision: lineage.upstreamRevision ?? null,
+          liveRevision,
+          error: message,
+        });
+        console.warn(`[CloudTrackSync] Auto-pull failed for ${appId}:`, message);
+      }
+    }
+
+    return results;
   }
 
   async syncAllTrackApps(): Promise<TrackSyncResult[]> {
@@ -209,38 +435,6 @@ export class CloudAppTrackSyncService {
 
     return results;
   }
-}
-
-async function runGit(
-  args: string[],
-  env: NodeJS.ProcessEnv,
-  timeoutMs: number,
-  cwd?: string,
-): Promise<void> {
-  const { spawn } = await import("node:child_process");
-  await new Promise<void>((resolve, reject) => {
-    const child = spawn("git", args, { cwd, env, stdio: ["ignore", "pipe", "pipe"] });
-    let stderr = "";
-    child.stderr?.on("data", (chunk: Buffer) => {
-      stderr += chunk.toString();
-    });
-    const timer = setTimeout(() => {
-      child.kill("SIGTERM");
-      reject(new Error(`git timed out after ${timeoutMs}ms`));
-    }, timeoutMs);
-    child.on("error", (err) => {
-      clearTimeout(timer);
-      reject(err);
-    });
-    child.on("close", (code) => {
-      clearTimeout(timer);
-      if (code === 0) {
-        resolve();
-        return;
-      }
-      reject(new Error(`git ${args.join(" ")} failed: ${stderr.trim()}`));
-    });
-  });
 }
 
 let instance: CloudAppTrackSyncService | null = null;

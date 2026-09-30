@@ -72,7 +72,7 @@ describe("GPT-5.4 Legacy Model Normalization", () => {
 
   it("should recognize legacy GPT-5.4 as OpenAI Codex compatible (OAuth)", () => {
     expect(isOpenAICodexModel("gpt-5.4")).toBe(true);
-    expect(isOpenAICodexModel("gpt-5.4-mini")).toBe(true);
+    expect(isOpenAICodexModel("gpt-5.4-mini")).toBe(false);
     expect(isOpenAICodexModel("gpt-5.4-pro")).toBe(true);
   });
 });

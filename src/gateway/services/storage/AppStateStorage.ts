@@ -7,6 +7,8 @@
  * 3. Can be loaded incrementally (only load what's needed)
  */
 
+import { openDiagnosticDatabase } from "../databaseDiagnostics/sqlite.js";
+
 import Database from 'better-sqlite3';
 import * as path from 'path';
 import * as fs from 'fs';
@@ -27,6 +29,7 @@ export interface TabMetadata {
   isFavorite: boolean;
   createdAt: string;
   lastAccessedAt: string;
+  metadata?: Record<string, unknown>;
 }
 
 export interface AppState {
@@ -54,7 +57,7 @@ export class AppStateStorage {
       fs.mkdirSync(appStateDir, { recursive: true });
     }
 
-    this.db = new Database(this.dbPath);
+    this.db = openDiagnosticDatabase(Database, "services/storage/AppStateStorage", this.dbPath);
     
     // Performance optimizations
     this.db.pragma('journal_mode = WAL');
@@ -91,46 +94,56 @@ export class AppStateStorage {
       CREATE INDEX IF NOT EXISTS idx_tabs_position ON tabs(position);
       CREATE INDEX IF NOT EXISTS idx_tabs_favorite ON tabs(is_favorite);
     `);
+
+    try {
+      this.db.exec(`ALTER TABLE tabs ADD COLUMN metadata_json TEXT`);
+    } catch {
+      // Column already exists
+    }
   }
 
   /**
-   * Save tabs (replaces all tabs)
-   * Non-blocking: uses setImmediate to avoid blocking the event loop
+   * Save tabs (replaces all tabs).
+   * Must complete synchronously — workspace switch closes this DB immediately after flush.
    */
   saveTabs(tabs: TabMetadata[]): void {
-    // Run on next event loop tick to avoid blocking
-    setImmediate(() => {
-      if (this.closed) return;
-      const transaction = this.db.transaction((tabsToSave: TabMetadata[]) => {
-        // Clear existing tabs
-        this.db.prepare('DELETE FROM tabs').run();
-        
-        // Insert new tabs
-        const stmt = this.db.prepare(`
-          INSERT INTO tabs (
-            id, type, entity_id, title, display_mode, parent_tab_id,
-            position, is_favorite, created_at, last_accessed_at
-          ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-        `);
+    if (this.closed) return;
 
-        for (const tab of tabsToSave) {
-          stmt.run(
-            tab.id,
-            tab.type,
-            tab.entityId,
-            tab.title,
-            tab.displayMode,
-            tab.parentTabId,
-            tab.position,
-            tab.isFavorite ? 1 : 0,
-            tab.createdAt,
-            tab.lastAccessedAt
-          );
-        }
-      });
+    const started = performance.now();
+    const transaction = this.db.transaction((tabsToSave: TabMetadata[]) => {
+      this.db.prepare('DELETE FROM tabs').run();
 
-      transaction(tabs);
+      const stmt = this.db.prepare(`
+        INSERT INTO tabs (
+          id, type, entity_id, title, display_mode, parent_tab_id,
+          position, is_favorite, created_at, last_accessed_at, metadata_json
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+      `);
+
+      for (const tab of tabsToSave) {
+        stmt.run(
+          tab.id,
+          tab.type,
+          tab.entityId,
+          tab.title,
+          tab.displayMode,
+          tab.parentTabId,
+          tab.position,
+          tab.isFavorite ? 1 : 0,
+          tab.createdAt,
+          tab.lastAccessedAt,
+          tab.metadata ? JSON.stringify(tab.metadata) : null,
+        );
+      }
     });
+
+    transaction(tabs);
+    const elapsedMs = Math.round(performance.now() - started);
+    if (elapsedMs >= 50) {
+      console.log(
+        `[AppStateStorage] saveTabs ${tabs.length} tab(s) in ${elapsedMs}ms`,
+      );
+    }
   }
 
   /**
@@ -153,52 +166,51 @@ export class AppStateStorage {
       isFavorite: row.is_favorite === 1,
       createdAt: row.created_at,
       lastAccessedAt: row.last_accessed_at,
+      metadata: parsePersistedTabMetadata(row.metadata_json),
     }));
   }
 
   /**
-   * Save app state (active tab, split ratio, onboarding, etc.)
-   * Non-blocking: uses setImmediate to avoid blocking the event loop
+   * Save app state (active tab, split ratio, onboarding, etc.).
+   * Must complete synchronously — workspace switch closes this DB immediately after flush.
    */
   saveAppState(state: Partial<AppState>): void {
-    // Run on next event loop tick to avoid blocking
-    setImmediate(() => {
-      if (this.closed) return;
-      const stmt = this.db.prepare(`
-        INSERT OR REPLACE INTO app_state (key, value, updated_at)
-        VALUES (?, ?, ?)
-      `);
+    if (this.closed) return;
 
-      const now = new Date().toISOString();
-      const splitRatio = state.splitRatio ?? 0.5;
-      const historyIndex = state.historyIndex ?? -1;
-      stmt.run('activeTabId', state.activeTabId ?? '', now);
-      stmt.run('splitRatio', splitRatio.toString(), now);
-      stmt.run('splitRatios', JSON.stringify(state.splitRatios ?? {}), now);
-      stmt.run('history', JSON.stringify(state.history ?? []), now);
-      stmt.run('historyIndex', historyIndex.toString(), now);
-      stmt.run(
-        'onboardingStep1Completed',
-        (state.onboardingStep1Completed ?? false).toString(),
-        now,
-      );
-      stmt.run(
-        'onboardingStep2Completed',
-        (state.onboardingStep2Completed ?? false).toString(),
-        now,
-      );
-      stmt.run(
-        'onboardingStep3Completed',
-        (state.onboardingStep3Completed ?? false).toString(),
-        now,
-      );
-      stmt.run(
-        'onboardingDismissed',
-        (state.onboardingDismissed ?? false).toString(),
-        now,
-      );
-      stmt.run('lastSavedAt', state.lastSavedAt ?? now, now);
-    });
+    const stmt = this.db.prepare(`
+      INSERT OR REPLACE INTO app_state (key, value, updated_at)
+      VALUES (?, ?, ?)
+    `);
+
+    const now = new Date().toISOString();
+    const splitRatio = state.splitRatio ?? 0.5;
+    const historyIndex = state.historyIndex ?? -1;
+    stmt.run('activeTabId', state.activeTabId ?? '', now);
+    stmt.run('splitRatio', splitRatio.toString(), now);
+    stmt.run('splitRatios', JSON.stringify(state.splitRatios ?? {}), now);
+    stmt.run('history', JSON.stringify(state.history ?? []), now);
+    stmt.run('historyIndex', historyIndex.toString(), now);
+    stmt.run(
+      'onboardingStep1Completed',
+      (state.onboardingStep1Completed ?? false).toString(),
+      now,
+    );
+    stmt.run(
+      'onboardingStep2Completed',
+      (state.onboardingStep2Completed ?? false).toString(),
+      now,
+    );
+    stmt.run(
+      'onboardingStep3Completed',
+      (state.onboardingStep3Completed ?? false).toString(),
+      now,
+    );
+    stmt.run(
+      'onboardingDismissed',
+      (state.onboardingDismissed ?? false).toString(),
+      now,
+    );
+    stmt.run('lastSavedAt', state.lastSavedAt ?? now, now);
   }
 
   /**
@@ -273,6 +285,7 @@ export class AppStateStorage {
       isFavorite: true,
       createdAt: row.created_at,
       lastAccessedAt: row.last_accessed_at,
+      metadata: parsePersistedTabMetadata(row.metadata_json),
     }));
   }
 
@@ -284,6 +297,23 @@ export class AppStateStorage {
     this.closed = true;
     this.db.close();
   }
+}
+
+function parsePersistedTabMetadata(
+  raw: unknown,
+): Record<string, unknown> | undefined {
+  if (typeof raw !== "string" || !raw.trim()) {
+    return undefined;
+  }
+  try {
+    const parsed = JSON.parse(raw) as unknown;
+    if (parsed && typeof parsed === "object" && !Array.isArray(parsed)) {
+      return parsed as Record<string, unknown>;
+    }
+  } catch {
+    return undefined;
+  }
+  return undefined;
 }
 
 // Singleton instance

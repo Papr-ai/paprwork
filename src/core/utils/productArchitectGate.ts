@@ -1,20 +1,50 @@
+import { MULTI_USER_ACL_CONTRACT } from "../constants/multiUserAclDirective.js";
+import { readTriageTierFromToolCall } from "./architectTriage.js";
+
 /** Stable id for the built-in Product Architect sub-agent profile */
 export const PRODUCT_ARCHITECT_ID = "product-architect";
 
 export const PRODUCT_ARCHITECT_REMINDER =
-  "For app+job automation, delegate_task({ useAgentId: \"product-architect\", ... }) runs BEFORE create_app/create_job (enforced).";
+  "Every create_app requires architect_triage (lite) or a completed product-architect delegation first (tool-enforced). " +
+  'delegate_task({ useAgentId: "product-architect", task: "...", context: "..." }) — useAgentId only.';
 
 export const PRODUCT_ARCHITECT_PLAN_REMINDER =
   "After product-architect completes, align create_plan with the approved brief, then build.";
 
 export const PRODUCT_ARCHITECT_BLOCK_MESSAGE =
   "⛔ Product Architect required before this step.\n\n" +
-  "Complex app+job work must start with a completed product-architect delegation in this chat:\n" +
-  '1. delegate_task({ useAgentId: "product-architect", task: "...", context: "..." })\n' +
-  "2. Wait for completion (get_delegation_run or delegation card)\n" +
-  "3. create_plan aligned with the approved brief\n" +
-  "4. Then create_app / create_job\n\n" +
+  "Every new mini-app (create_app) requires either a lite architect triage or a completed product-architect delegation in this chat.\n\n" +
+  "0. architect_triage({ request, context }) — Jev decides: tier \"lite\" (simple frontend/report) unlocks create_app directly with design rules; tier \"full\" → continue below\n" +
+  "1. list_sub_agents() — or run_deferred_tool({ tool_name: \"list_sub_agents\", arguments: {} }) if deferred\n" +
+  '2. delegate_task({ useAgentId: "product-architect", ... }) — or run_deferred_tool({ tool_name: "delegate_task", arguments: { ... } })\n' +
+  "3. Wait for delegation (MiniChat card); poll get_delegation_run via run_deferred_tool when deferred\n" +
+  "4. create_plan aligned with the approved brief\n" +
+  "5. create_app / create_job\n\n" +
+  "Use exact field useAgentId — not agentId or subAgentId.\n\n" +
   "Reference: src/resources/agent-docs/PRODUCT_ARCHITECT_GUIDE.md";
+
+/** Required Product Architect brief section — platform wiring the builder must follow. */
+export const PRODUCT_ARCHITECT_IMPLEMENTATION_CONTRACTS_SECTION =
+  "## Implementation Contracts\n" +
+  "- Builder MUST read_skill({ skillId: \"preloaded-app-and-jobs-guide\" }) before first backend/DB code edit\n" +
+  "- Backend handlers: read params from PAPR_ACTION_PARAMS env (Python: json.loads(os.environ.get(\"PAPR_ACTION_PARAMS\", \"{}\"))) — NEVER sys.stdin\n" +
+  "- Backend DB: from papr_db import connect (alias or active source) — NEVER sqlite3.connect, APP_DB_PATH, or raw os.environ DB paths\n" +
+  "- Frontend → backend: body JSON.stringify({ params: { ... } }) — params must be nested\n" +
+  "- Frontend ← backend: const { stdout, exitCode, stderr } = await res.json(); if (exitCode !== 0) throw; JSON.parse(stdout)\n" +
+  "- Frontend DB reads: POST /api/db/query with { sourceId, sql, params } — field name is sql, not query\n" +
+  "- Frontend DB writes: POST /api/db/write (not /api/db/query for INSERT/UPDATE/DELETE)\n" +
+  "- Plan A schema (cloud sync on): write_file migrations/{id}.sql → papr_db_apply_migration({ dbId, migrationId }) — Turso primary when online; never papr_db_exec DDL or bash/sqlite3 on registry DB files\n" +
+  "- Plan A rows: papr_db_exec DML or /api/db/write; Publish changes / push_cloud_sync({ appId }) ships git + Turso ordered flush — not legacy CDC (syncMode=legacy). Replica pendingOps/cdcOperations on syncMode=replica is normal pending push\n" +
+  "- Platform scrape jobs: LinkedIn only → linkedin-api + CDP (desktop); X/Reddit/Instagram → \\${KEY} + headless Playwright — never reddit-api/x-api CDP; cloud uses vault-synced cookies\n" +
+  MULTI_USER_ACL_CONTRACT +
+  "- Extend backend/ping.py scaffold pattern — do not replace with stdin-based handlers";
+
+/** Returned on create_app after product-architect gate passes — reminds builder of platform contracts. */
+export const CREATE_APP_IMPLEMENTATION_REMINDER =
+  "⚠️ IMPLEMENTATION CONTRACTS: Before backend/DB code, read_skill({ skillId: \"preloaded-app-and-jobs-guide\" }). " +
+  "Backend: PAPR_ACTION_PARAMS (not sys.stdin), papr_db.connect() (not sqlite3.connect / APP_DB_PATH). " +
+  "Frontend backend calls: JSON.stringify({ params: {...} }); parse stdout + check exitCode. " +
+  "/api/db/query uses sql (not query). Mirror backend/ping.py from the app scaffold.";
 
 export interface ProductArchitectGateInput {
   tool: "create_app" | "create_job";
@@ -110,6 +140,48 @@ function isCompletedProductArchitectDelegation(
   return false;
 }
 
+function isCompletedProductArchitectFromGetRun(
+  toolCall: DelegateToolCallRow,
+): boolean {
+  const toolName = toolCall.name ?? toolCall.toolName;
+  if (toolName !== "get_delegation_run") {
+    return false;
+  }
+
+  const parsed = parseDelegateResult(toolCall.result);
+  if (!parsed) {
+    return false;
+  }
+
+  const data = (parsed.data as Record<string, unknown> | undefined) ?? parsed;
+  const agentId = String(data.agentId ?? "").trim();
+  if (agentId !== PRODUCT_ARCHITECT_ID) {
+    return false;
+  }
+
+  const status = String(data.status ?? parsed.status ?? "").toLowerCase();
+  return status === "completed" || status === "success";
+}
+
+async function hasCompletedProductArchitectJob(
+  chatId: string,
+): Promise<boolean> {
+  const { getJobsService } = await import(
+    "../../gateway/services/JobsService.js"
+  );
+  const jobsService = getJobsService();
+  await jobsService.initialize();
+  const jobs = await jobsService.listJobs();
+
+  return jobs.some(
+    (job) =>
+      job.type === "subagent" &&
+      job.subAgentId === PRODUCT_ARCHITECT_ID &&
+      job.reportChatId === chatId &&
+      job.status === "completed",
+  );
+}
+
 export async function hasCompletedProductArchitectInChat(
   chatId: string,
 ): Promise<boolean> {
@@ -125,13 +197,35 @@ export async function hasCompletedProductArchitectInChat(
       continue;
     }
     for (const toolCall of message.toolCalls as DelegateToolCallRow[]) {
-      if (isCompletedProductArchitectDelegation(toolCall)) {
+      if (
+        isCompletedProductArchitectDelegation(toolCall) ||
+        isCompletedProductArchitectFromGetRun(toolCall)
+      ) {
         return true;
       }
     }
   }
 
-  return false;
+  return hasCompletedProductArchitectJob(chatId);
+}
+
+/** True when architect_triage returned tier "lite" in this chat (latest triage wins). */
+export async function hasLiteArchitectTriageInChat(chatId: string): Promise<boolean> {
+  const { getAgentService } = await import(
+    "../../gateway/services/AgentService.js"
+  );
+  const messages = await getAgentService()
+    .getStorageManager()
+    .loadMessages(chatId);
+  let latest: "lite" | "full" | null = null;
+  for (const message of messages) {
+    if (message.role !== "assistant" || !message.toolCalls?.length) continue;
+    for (const toolCall of message.toolCalls as DelegateToolCallRow[]) {
+      const tier = readTriageTierFromToolCall(toolCall);
+      if (tier) latest = tier;
+    }
+  }
+  return latest === "lite";
 }
 
 export async function assertProductArchitectGate(
@@ -151,6 +245,10 @@ export async function assertProductArchitectGate(
 
   const completed = await hasCompletedProductArchitectInChat(chatId);
   if (completed) {
+    return { allowed: true };
+  }
+  // Lite triage (Jev-routed simple frontend/report) unlocks create_app only.
+  if (input.tool === "create_app" && (await hasLiteArchitectTriageInChat(chatId))) {
     return { allowed: true };
   }
 

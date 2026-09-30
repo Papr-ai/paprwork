@@ -3,6 +3,9 @@ import {
   formatSummaryForLLM,
 } from "./summaryFormatting.js";
 import { computeRecentMessageLimit } from "./recentMessageWindow.js";
+import { formatPaprPathForAgent } from "../../../core/utils/paprAgentPaths.js";
+import { getPaprRoot } from "../../../core/utils/paprRoot.js";
+import * as path from "path";
 
 import {
   ACTIVE_FILE_READ_MAX_CHARS,
@@ -52,6 +55,8 @@ interface ToolCallRecord {
   name?: string;
   args?: unknown;
   result?: unknown;
+  /** Present when `result` is only a preview of a payload kept outside the row. */
+  resultOffload?: { totalChars?: number };
 }
 
 export interface ChatTurnFootprint {
@@ -111,8 +116,15 @@ function estimateToolCallsChars(
     if (call.args !== undefined) {
       chars += stringifyResult(call.args).length;
     }
-    const fullResult = stringifyResult(call.result);
-    chars += truncateToolResult(fullResult, truncateResultsAt).length;
+    const storedResult = stringifyResult(call.result);
+    if (truncateResultsAt === null) {
+      // Untruncated baseline: an offloaded result only keeps a preview in the
+      // row, so its real size comes from the offload pointer.
+      chars += call.resultOffload?.totalChars ?? storedResult.length;
+    } else {
+      // What the model actually receives, which is the stored value.
+      chars += truncateToolResult(storedResult, truncateResultsAt).length;
+    }
     if (typeof call.name === "string") {
       chars += call.name.length;
     }
@@ -172,7 +184,9 @@ function buildSummaryText(chat: ChatContextRow): string | null {
       last_updated: chat.summary_last_updated ?? new Date().toISOString(),
     },
     enhanced: deserializeEnhancedFields(chat.summary_enhanced),
-    chatFilePath: `~/Papr/Chats/${chat.id}.txt`,
+    chatFilePath: formatPaprPathForAgent(
+      path.join(getPaprRoot(), "Chats", `${chat.id}.txt`),
+    ),
   });
 }
 

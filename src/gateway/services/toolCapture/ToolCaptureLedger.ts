@@ -1,3 +1,4 @@
+import { openDiagnosticDatabase } from "../databaseDiagnostics/sqlite.js";
 import Database from "better-sqlite3";
 import { randomUUID } from "node:crypto";
 import * as fs from "node:fs";
@@ -53,7 +54,7 @@ export class ToolCaptureLedger {
     }
 
     const dbPath = path.join(baseDir, "tool-captures.db");
-    this.db = new Database(dbPath);
+    this.db = openDiagnosticDatabase(Database, "services/toolCapture/ToolCaptureLedger", dbPath);
     this.db.pragma("journal_mode = WAL");
     this.db.pragma("synchronous = NORMAL");
     this.db.pragma("cache_size = -5000");

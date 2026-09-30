@@ -20,6 +20,19 @@ interface ModelCapabilities {
  */
 const MODEL_CAPABILITIES: Record<string, ModelCapabilities> = {
   // OpenAI
+  "gpt-6-astra": {
+    reasoningLevel: "advanced",
+    contextWindow: 1050000,
+    speed: "slow",
+    cost: "expensive",
+    specialties: [
+      "reasoning",
+      "computer-use",
+      "complex-tasks",
+      "agentic-coding",
+      "research",
+    ],
+  },
   "gpt-5-6-sol": {
     reasoningLevel: "advanced",
     contextWindow: 1050000,
@@ -99,6 +112,13 @@ const MODEL_CAPABILITIES: Record<string, ModelCapabilities> = {
     cost: "medium",
     specialties: ["reasoning", "writing", "analysis"],
   },
+  "claude-sonnet-5-5": {
+    reasoningLevel: "advanced",
+    contextWindow: 1000000,
+    speed: "medium",
+    cost: "medium",
+    specialties: ["reasoning", "agentic", "coding", "tool-use"],
+  },
   "claude-sonnet-5": {
     reasoningLevel: "advanced",
     contextWindow: 1000000,
@@ -106,7 +126,17 @@ const MODEL_CAPABILITIES: Record<string, ModelCapabilities> = {
     cost: "medium",
     specialties: ["reasoning", "agentic", "coding", "tool-use"],
   },
-  "claude-fable-5": {
+  "claude-opus-5-5": {
+    reasoningLevel: "advanced",
+    contextWindow: 1000000,
+    speed: "slow",
+    // $4/$20 undercuts Opus 5's $5/$25, but it is still an Opus-class frontier
+    // model and output is well above the Sonnet tier this scale calls "medium".
+    // Rating it cheaper would have fallback reach for it on routine work.
+    cost: "expensive",
+    specialties: ["reasoning", "agentic", "coding", "long-horizon"],
+  },
+  "claude-fable-5-1": {
     reasoningLevel: "advanced",
     contextWindow: 1000000,
     speed: "slow",
@@ -142,6 +172,34 @@ const MODEL_CAPABILITIES: Record<string, ModelCapabilities> = {
     speed: "fast",
     cost: "cheap",
     specialties: ["speed", "cost-effective", "high-volume"],
+  },
+  "gemini-3.5-flash-lite": {
+    reasoningLevel: "basic",
+    contextWindow: 1048576,
+    speed: "fast",
+    cost: "cheap",
+    specialties: ["speed", "cost-effective", "high-volume", "subagents"],
+  },
+  "gemini-3.6-flash": {
+    reasoningLevel: "advanced",
+    contextWindow: 1048576,
+    speed: "fast",
+    cost: "medium",
+    specialties: ["agentic", "coding", "tool-use", "multimodal"],
+  },
+  "gemini-3.8-flash": {
+    reasoningLevel: "advanced",
+    contextWindow: 1048576,
+    speed: "fast",
+    cost: "medium",
+    specialties: ["agentic", "coding", "software-engineering", "frontier-flash"],
+  },
+  "gemini-3.7-flash": {
+    reasoningLevel: "advanced",
+    contextWindow: 1048576,
+    speed: "fast",
+    cost: "medium",
+    specialties: ["agentic", "coding", "multimodal", "frontier-flash"],
   },
   "gemini-3.5-flash": {
     reasoningLevel: "advanced",
@@ -218,8 +276,8 @@ export async function getBestFallbackModel(
   const defaultModelByProvider: Record<Provider, string> = {
     openai: "gpt-5-6-sol",
     "openai-codex": "gpt-5.3-codex",
-    anthropic: "claude-sonnet-5",
-    google: "gemini-3.5-flash",
+    anthropic: "claude-sonnet-5-5",
+    google: "gemini-3.8-flash",
     ollama: "qwen3.5:latest",
     cursor: "composer-2.5",
     zai: "glm-5.2",
@@ -328,16 +386,16 @@ export function getUpgradeModelForTask(
       general: "gpt-5.3-codex",
     },
     anthropic: {
-      reasoning: "claude-fable-5",
-      coding: "claude-fable-5",
-      writing: "claude-sonnet-5",
-      general: "claude-sonnet-5",
+      reasoning: "claude-fable-5-1",
+      coding: "claude-fable-5-1",
+      writing: "claude-sonnet-5-5",
+      general: "claude-sonnet-5-5",
     },
     google: {
       reasoning: "gemini-3.1-pro-preview",
-      coding: "gemini-3.5-flash",
+      coding: "gemini-3.8-flash",
       writing: "gemini-3.1-pro-preview",
-      general: "gemini-3.5-flash",
+      general: "gemini-3.8-flash",
     },
     ollama: {
       reasoning: "qwen3.5:latest",

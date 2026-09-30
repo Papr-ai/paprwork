@@ -7,7 +7,6 @@ import type { Express, Request, Response } from "express";
 import type { RequiredKeySpec } from "../../../core/types/bundles.js";
 import {
   appRequiresUserSignIn,
-  getMissingUserKeyNames,
   getUserCredentialKeys,
 } from "../../../core/utils/credentialScope.js";
 import {
@@ -17,11 +16,16 @@ import {
 import type { AppRuntimeRouteAuth } from "./types.js";
 import {
   fetchRuntimeVaultKeyNames,
+  resolveMissingRuntimeVaultKeyNames,
   resolveRuntimeVaultClientKeys,
   syncRuntimeVaultKeys,
 } from "./memoryRuntimeClient.js";
 import { fetchCachedRuntimeRepoFile } from "./cloudAppHostCache.js";
-import { sanitizeReturnToPath } from "./cloudAppHostCookies.js";
+import {
+  resolveCloudAuthReturnToPath,
+  resolveCloudAuthReturnToFromRequest,
+  cloudAppRootPath,
+} from "./cloudAppHostCookies.js";
 
 function escapeHtml(value: string): string {
   return value
@@ -45,11 +49,30 @@ export async function loadPublishedAppRequirements(
 }
 
 function appRootPath(namespaceId: string, slug: string): string {
-  return `/${namespaceId}/${slug}/`;
+  return cloudAppRootPath(namespaceId, slug);
 }
 
 function setupPath(namespaceId: string, slug: string): string {
   return `${appRootPath(namespaceId, slug)}credentials/setup`;
+}
+
+async function missingUserCredentialNames(
+  runtimeAuth: AppRuntimeRouteAuth,
+  requirements: RequiredKeySpec[],
+): Promise<string[]> {
+  const userKeys = getUserCredentialKeys(requirements);
+  return resolveMissingRuntimeVaultKeyNames(
+    runtimeAuth,
+    userKeys.map((spec) => spec.name),
+  );
+}
+
+function buildCredentialHelpMessage(missing: RequiredKeySpec[]): string {
+  if (missing.length === 0) {
+    return "Help me connect my accounts and set up credentials in my Papr vault.";
+  }
+  const names = missing.map((spec) => spec.name).join(", ");
+  return `Help me set up these credentials in my Papr vault: ${names}`;
 }
 
 function renderCredentialSetupPage(params: {
@@ -95,6 +118,9 @@ function renderCredentialSetupPage(params: {
     ? `<p class="error">${escapeHtml(params.error)}</p>`
     : "";
 
+  const helpMessage = buildCredentialHelpMessage(params.missing);
+  const helpMessageJson = JSON.stringify(helpMessage);
+
   return `<!DOCTYPE html>
 <html lang="en">
 <head>
@@ -120,6 +146,10 @@ function renderCredentialSetupPage(params: {
     .btn { margin-top:8px; width:100%; padding:14px 16px; border:none; border-radius:10px;
       background:#2563eb; color:white; font-size:15px; font-weight:600; cursor:pointer; }
     .error { color:#b42318; font-size:14px; margin:0 0 12px; }
+    .help { margin:0 0 20px; padding:14px 16px; border-radius:10px;
+      background:#f0f4ff; border:1px solid #dbeafe; font-size:14px; line-height:1.5; color:#344054; }
+    .help-btn { display:inline; padding:0; border:none; background:none; color:#2563eb;
+      font:inherit; font-weight:600; cursor:pointer; text-decoration:underline; }
     .footnote { margin:16px 0 0; font-size:12px; color:#98a2b3; line-height:1.4; }
   </style>
 </head>
@@ -127,6 +157,9 @@ function renderCredentialSetupPage(params: {
   <div class="card">
     <h1>Set up your credentials</h1>
     <p class="lead">This app needs API keys from <strong>you</strong> before it can run. Keys are stored in your Papr vault — not shared with the app owner.</p>
+    <p class="help">Don't have these credentials?
+      <button type="button" class="help-btn" id="paprwork-help">Get help in Paprwork</button>
+      — opens chat if Paprwork is installed, otherwise downloads from papr.ai.</p>
     ${errorBlock}
     <form method="POST" action="${escapeHtml(action)}">
       <input type="hidden" name="returnTo" value="${escapeHtml(params.returnTo)}" />
@@ -135,6 +168,45 @@ function renderCredentialSetupPage(params: {
     </form>
     <p class="footnote">Owner-provided keys (if any) are injected server-side when sandbox jobs run — you only configure keys marked as yours.</p>
   </div>
+  <script>
+    (function () {
+      var helpMessage = ${helpMessageJson};
+      var downloadUrl = "https://papr.ai";
+      var btn = document.getElementById("paprwork-help");
+      if (!btn) return;
+
+      btn.addEventListener("click", function () {
+        // Paprwork desktop preview: papr:// does not work inside nested iframes.
+        if (window.parent !== window) {
+          window.parent.postMessage(
+            { type: "papr-open-chat", message: helpMessage },
+            "*",
+          );
+          return;
+        }
+
+        var deepLink =
+          "papr://chat/open?message=" + encodeURIComponent(helpMessage);
+        var fallbackTimer = window.setTimeout(function () {
+          window.location.href = downloadUrl;
+        }, 1800);
+
+        function cancelFallback() {
+          window.clearTimeout(fallbackTimer);
+          window.removeEventListener("blur", cancelFallback);
+          document.removeEventListener("visibilitychange", onHide);
+        }
+
+        function onHide() {
+          if (document.hidden) cancelFallback();
+        }
+
+        window.addEventListener("blur", cancelFallback);
+        document.addEventListener("visibilitychange", onHide);
+        window.location.href = deepLink;
+      });
+    })();
+  </script>
 </body>
 </html>`;
 }
@@ -181,10 +253,11 @@ export class CloudAppHostCredentialService {
       return true;
     }
 
-    const returnTo = sanitizeReturnToPath(
-      req.originalUrl.split("?")[0] ?? req.originalUrl,
-    );
-    const loginUrl = `/auth/login?returnTo=${encodeURIComponent(returnTo)}&start=1`;
+    const returnTo = resolveCloudAuthReturnToFromRequest(req, {
+      namespaceId: runtimeAuth.namespaceId,
+      slug: runtimeAuth.slug,
+    });
+    const loginUrl = `/auth/login?returnTo=${encodeURIComponent(returnTo)}`;
 
     if (!runtimeAuth.sessionToken) {
       if (
@@ -205,8 +278,10 @@ export class CloudAppHostCredentialService {
       return true;
     }
 
-    const vaultKeys = await fetchRuntimeVaultKeyNames(runtimeAuth);
-    const missingNames = getMissingUserKeyNames(requirements, vaultKeys);
+    const missingNames = await missingUserCredentialNames(
+      runtimeAuth,
+      requirements,
+    );
     if (missingNames.length === 0) {
       return true;
     }
@@ -227,11 +302,11 @@ export class CloudAppHostCredentialService {
       return true;
     }
 
-    const returnTo = sanitizeReturnToPath(
-      req.headers.referer?.split("?")[0] ??
-        appRootPath(runtimeAuth.namespaceId, runtimeAuth.slug),
-    );
-    const loginUrl = `/auth/login?returnTo=${encodeURIComponent(returnTo)}&start=1`;
+    const returnTo = resolveCloudAuthReturnToFromRequest(req, {
+      namespaceId: runtimeAuth.namespaceId,
+      slug: runtimeAuth.slug,
+    });
+    const loginUrl = `/auth/login?returnTo=${encodeURIComponent(returnTo)}`;
 
     if (!runtimeAuth.sessionToken) {
       res.status(401).json({
@@ -241,8 +316,10 @@ export class CloudAppHostCredentialService {
       return false;
     }
 
-    const vaultKeys = await fetchRuntimeVaultKeyNames(runtimeAuth);
-    const missingNames = getMissingUserKeyNames(requirements, vaultKeys);
+    const missingNames = await missingUserCredentialNames(
+      runtimeAuth,
+      requirements,
+    );
     if (missingNames.length === 0) {
       return true;
     }
@@ -263,14 +340,17 @@ export class CloudAppHostCredentialService {
   ): Promise<void> {
     const requirements = await loadPublishedAppRequirements(runtimeAuth);
     const userKeys = getUserCredentialKeys(requirements);
-    const vaultKeys = await fetchRuntimeVaultKeyNames(runtimeAuth);
-    const missingNames = getMissingUserKeyNames(requirements, vaultKeys);
+    const missingNames = await missingUserCredentialNames(
+      runtimeAuth,
+      requirements,
+    );
     const missing = userKeys.filter((spec) => missingNames.includes(spec.name));
 
-    const returnTo = sanitizeReturnToPath(
+    const returnTo = resolveCloudAuthReturnToPath(
       typeof req.query.returnTo === "string"
         ? req.query.returnTo
         : appRootPath(runtimeAuth.namespaceId, runtimeAuth.slug),
+      { namespaceId: runtimeAuth.namespaceId, slug: runtimeAuth.slug },
     );
 
     if (missing.length === 0) {
@@ -322,13 +402,14 @@ export class CloudAppHostCredentialService {
     }
 
     const requirements = await loadPublishedAppRequirements(runtimeAuth);
+    const missing = await missingUserCredentialNames(runtimeAuth, requirements);
     const vaultKeys = await fetchRuntimeVaultKeyNames(runtimeAuth);
-    const missing = getMissingUserKeyNames(requirements, vaultKeys);
 
     res.json({
       requiresSignIn: appRequiresUserSignIn(requirements),
       ready: missing.length === 0,
       missing,
+      vaultKeyNames: vaultKeys,
       userKeyCount: getUserCredentialKeys(requirements).length,
     });
   }
@@ -358,16 +439,23 @@ export class CloudAppHostCredentialService {
   private async handleSetupForm(req: Request, res: Response): Promise<void> {
     const runtimeAuth = this.resolveRuntimeAuth(req);
     if (!runtimeAuth?.sessionToken) {
-      res.redirect(302, `/auth/login?returnTo=${encodeURIComponent(req.originalUrl)}&start=1`);
+      const returnTo = resolveCloudAuthReturnToFromRequest(req, runtimeAuth
+        ? { namespaceId: runtimeAuth.namespaceId, slug: runtimeAuth.slug }
+        : undefined);
+      res.redirect(
+        302,
+        `/auth/login?returnTo=${encodeURIComponent(returnTo)}`,
+      );
       return;
     }
 
     const requirements = await loadPublishedAppRequirements(runtimeAuth);
     const userKeys = getUserCredentialKeys(requirements);
-    const returnTo = sanitizeReturnToPath(
+    const returnTo = resolveCloudAuthReturnToPath(
       typeof req.body?.returnTo === "string"
         ? req.body.returnTo
         : appRootPath(runtimeAuth.namespaceId, runtimeAuth.slug),
+      { namespaceId: runtimeAuth.namespaceId, slug: runtimeAuth.slug },
     );
 
     const keys: Array<{ name: string; value: string }> = [];
@@ -386,8 +474,10 @@ export class CloudAppHostCredentialService {
 
     try {
       await syncRuntimeVaultKeys(runtimeAuth, keys);
-      const vaultKeys = await fetchRuntimeVaultKeyNames(runtimeAuth);
-      const stillMissing = getMissingUserKeyNames(requirements, vaultKeys);
+      const stillMissing = await missingUserCredentialNames(
+        runtimeAuth,
+        requirements,
+      );
       if (stillMissing.length > 0) {
         const setupUrl = `${setupPath(runtimeAuth.namespaceId, runtimeAuth.slug)}?returnTo=${encodeURIComponent(returnTo)}&error=${encodeURIComponent(`Still missing: ${stillMissing.join(", ")}`)}`;
         res.redirect(302, setupUrl);

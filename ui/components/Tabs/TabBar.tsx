@@ -7,22 +7,16 @@ import React, { useEffect, useState, useRef } from "react";
 import { useTabs } from "../../hooks/useTabs";
 import { useChat } from "../../hooks/useChat";
 import { useChatStore } from "../../stores/chatStore";
+import { useDismissOnOutsideClick } from "../../hooks/useDismissOnOutsideClick";
 import { Tab } from "./Tab";
-import { SidebarToggleButton } from "../Sidebar/SidebarToggleButton";
-import { gateway } from "../../src/lib/gateway";
+import { ChatHistoryDropdown } from "../Chat/ChatHistoryDropdown";
 import "./TabBar.css";
 
 // Platform-aware modifier key
 const isMac = navigator.platform.toUpperCase().includes("MAC");
 const modKey = isMac ? "⌘" : "Ctrl+";
 
-export function TabBar({
-  sidebarCollapsed = false,
-  onToggleSidebar,
-}: {
-  sidebarCollapsed?: boolean;
-  onToggleSidebar?: () => void;
-}) {
+export function TabBar() {
   const {
     tabs,
     getVisibleTabs,
@@ -37,7 +31,24 @@ export function TabBar({
   const [dropIndicatorStyle, setDropIndicatorStyle] =
     useState<React.CSSProperties>({ display: "none" });
   const [dropIndicatorOnTop, setDropIndicatorOnTop] = useState(false);
+  const [showHistory, setShowHistory] = useState(false);
+
+  // Rail "All chats" opens this same history dropdown.
+  useEffect(() => {
+    const open = () => setShowHistory(true);
+    window.addEventListener("papr-open-chat-history", open);
+    return () => window.removeEventListener("papr-open-chat-history", open);
+  }, []);
   const tabBarRef = useRef<HTMLDivElement>(null);
+  const historyBtnRef = useRef<HTMLButtonElement>(null);
+  const historyDropdownRef = useRef<HTMLDivElement>(null);
+
+  useDismissOnOutsideClick(
+    showHistory,
+    () => setShowHistory(false),
+    historyBtnRef,
+    historyDropdownRef,
+  );
 
   // Scroll active tab into view when it changes
   useEffect(() => {
@@ -60,11 +71,11 @@ export function TabBar({
 
   // Define handleNewTab before useEffect so it can be in the dependency array
   const handleNewTab = async () => {
-    // Create new chat - createTab will handle empty chat detection automatically
     const chatId = await createChat();
     if (chatId) {
-      // createTab will check for empty chats and reuse if found
-      const tabId = createTab("chat", chatId, "New Chat");
+      // Explicit user action (+ button / Cmd+T) — forceNew skips blank-chat
+      // reuse so the click always produces a visible new tab.
+      const tabId = createTab("chat", chatId, "New Chat", {}, { forceNew: true });
       switchToTab(tabId);
     }
   };
@@ -142,51 +153,6 @@ export function TabBar({
     goForward();
   };
 
-  const handleHome = async () => {
-    console.log('[TabBar] Home button clicked');
-    
-    // Check if there's a default home app configured
-    try {
-      console.log('[TabBar] Fetching settings...');
-      const response = await gateway.send('settings:get', {});
-      console.log('[TabBar] Settings response:', response);
-      
-      const defaultHomeAppId = response?.data?.preferences?.defaultHomeAppId;
-      console.log('[TabBar] defaultHomeAppId:', defaultHomeAppId);
-      
-      if (defaultHomeAppId) {
-        // Get app details (just to verify it exists)
-        console.log('[TabBar] Fetching app list...');
-        const appsResponse = await gateway.send('app:list', {});
-        console.log('[TabBar] Apps response:', appsResponse);
-        console.log('[TabBar] Apps array:', appsResponse?.data);
-        console.log('[TabBar] Apps length:', appsResponse?.data?.length);
-        console.log('[TabBar] First app:', appsResponse?.data?.[0]);
-        
-        const app = appsResponse?.data?.find((a: any) => a.id === defaultHomeAppId);
-        console.log('[TabBar] Found app:', app);
-        
-        if (app) {
-          // Open the configured home app with "Home" as the title and home icon
-          console.log('[TabBar] Creating app tab:', defaultHomeAppId, 'Home');
-          const homeIcon = `<svg width="14" height="14" viewBox="0 0 24 24" fill="none"><path d="M3 9l9-7 9 7v11a2 2 0 01-2 2H5a2 2 0 01-2-2z" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/></svg>`;
-          createTab("app", defaultHomeAppId, "Home", { icon: homeIcon });
-          return;
-        } else {
-          console.warn('[TabBar] App not found in list, falling back to home tab');
-        }
-      } else {
-        console.log('[TabBar] No defaultHomeAppId configured, creating home tab');
-      }
-    } catch (error) {
-      console.error('[TabBar] Failed to check default home app:', error);
-    }
-    
-    // Fallback: Create regular home tab
-    console.log('[TabBar] Creating fallback home tab');
-    createTab("home", "home", "Home");
-  };
-
   const handleDragPositionChange = (
     position: "before" | "after" | "on-top" | null,
     targetElement: HTMLElement | null,
@@ -236,13 +202,6 @@ export function TabBar({
     <div className="tab-bar">
       {/* Navigation controls */}
       <div className="tab-bar__nav">
-        {sidebarCollapsed && onToggleSidebar && (
-          <SidebarToggleButton
-            onClick={onToggleSidebar}
-            ariaLabel="Show sidebar"
-            className="tab-bar__sidebar-toggle"
-          />
-        )}
         <button
           className="tab-bar__nav-btn"
           onClick={handleBack}
@@ -268,17 +227,6 @@ export function TabBar({
           <svg width="14" height="14" viewBox="0 0 24 24" fill="none">
             <path
               d="M5 12h14M12 5l7 7-7 7"
-              stroke="currentColor"
-              strokeWidth="2"
-              strokeLinecap="round"
-              strokeLinejoin="round"
-            />
-          </svg>
-        </button>
-        <button className="tab-bar__nav-btn" onClick={handleHome} title="Home">
-          <svg width="14" height="14" viewBox="0 0 24 24" fill="none">
-            <path
-              d="M3 9l9-7 9 7v11a2 2 0 01-2 2H5a2 2 0 01-2-2z"
               stroke="currentColor"
               strokeWidth="2"
               strokeLinecap="round"
@@ -339,9 +287,11 @@ export function TabBar({
           className={`tab-drop-indicator ${dropIndicatorOnTop ? "tab-drop-indicator--on-top" : ""}`}
           style={dropIndicatorStyle}
         />
+      </div>
 
+      <div className="tab-bar__actions">
         <button
-          className="tab-bar__new-btn"
+          className="tab-bar__action-btn"
           onClick={handleNewTab}
           aria-label="New tab"
           title={`New tab (${modKey}T)`}
@@ -355,6 +305,35 @@ export function TabBar({
             />
           </svg>
         </button>
+        <button
+          ref={historyBtnRef}
+          className="tab-bar__action-btn"
+          onClick={() => setShowHistory((open) => !open)}
+          aria-label="Recent history"
+          title="Recent chats and apps"
+        >
+          <svg width="14" height="14" viewBox="0 0 24 24" fill="none">
+            <circle
+              cx="12"
+              cy="12"
+              r="10"
+              stroke="currentColor"
+              strokeWidth="1.5"
+            />
+            <path
+              d="M12 6v6l4 2"
+              stroke="currentColor"
+              strokeWidth="1.5"
+              strokeLinecap="round"
+            />
+          </svg>
+        </button>
+        {showHistory && (
+          <ChatHistoryDropdown
+            onClose={() => setShowHistory(false)}
+            dropdownRef={historyDropdownRef}
+          />
+        )}
       </div>
     </div>
   );

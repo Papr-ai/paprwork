@@ -234,7 +234,7 @@ console.log('Returns existing plan:', parsed.data.title === 'Plan 1'); // true
 
 ```bash
 # Before fix: Shows duplicate active plans
-sqlite3 ~/Papr/data/plans.db "
+sqlite3 $PAPR_HOME/data/plans.db "
   SELECT chat_id, COUNT(*) as plan_count
   FROM plans 
   WHERE status = 'active'
@@ -244,7 +244,7 @@ sqlite3 ~/Papr/data/plans.db "
 # Result: Multiple rows (duplicates exist)
 
 # After fix: No duplicates possible
-sqlite3 ~/Papr/data/plans.db "
+sqlite3 $PAPR_HOME/data/plans.db "
   SELECT chat_id, COUNT(*) as plan_count
   FROM plans 
   WHERE status = 'active'
@@ -442,7 +442,7 @@ Planning: ENABLED (**CALL create_plan EXACTLY ONCE per task** (check previous to
 
 ```bash
 # Check for duplicate plans in same chat
-sqlite3 ~/Papr/data/plans.db "
+sqlite3 $PAPR_HOME/data/plans.db "
   SELECT chat_id, COUNT(*) as plan_count, GROUP_CONCAT(title, ' | ') as titles
   FROM plans 
   WHERE status = 'active'

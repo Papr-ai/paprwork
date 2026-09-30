@@ -262,7 +262,7 @@ create_sub_agent({
 
 ### Where Sub-Agent Profiles Are Stored
 
-**File:** `~/Papr/data/subagents.json`
+**File:** `$PAPR_HOME/data/subagents.json`
 
 ```json
 [

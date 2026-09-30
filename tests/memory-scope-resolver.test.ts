@@ -55,6 +55,7 @@ describe("memoryScopeResolver chat scope", () => {
   it("falls back to settings default when chat has no scope", async () => {
     const { buildPaprMemoryWriteScope } = await loadResolver();
     const scope = await buildPaprMemoryWriteScope({ chatId: "chat-no-scope" });
+    expect(scope.user_id).toBe("user-1");
     expect(scope.external_user_id).toBe("user-1");
     expect(scope.policy?.acl?.read).toBeUndefined();
   });
@@ -68,8 +69,53 @@ describe("memoryScopeResolver chat scope", () => {
         shareWithUserIds: ["attendee-1"],
       },
     });
-    expect(scope.policy?.acl?.read).toEqual(["external_user:attendee-1"]);
-    expect(scope.policy?.acl?.write).toEqual(["external_user:user-1"]);
+    expect(scope.policy?.acl?.read).toEqual(["user:attendee-1"]);
+    expect(scope.policy?.acl?.write).toEqual(["user:user-1"]);
     expect(scope.policy?.acl?.read).not.toContain("namespace:ns-abc");
+  });
+});
+
+describe("resolveExplicitReadAclFromToolArgs", () => {
+  beforeEach(() => {
+    vi.resetModules();
+  });
+
+  afterEach(() => {
+    vi.restoreAllMocks();
+  });
+
+  it("returns undefined when no ACL fields are set", async () => {
+    const { resolveExplicitReadAclFromToolArgs } = await import(
+      "../src/gateway/utils/memoryScopeResolver.js"
+    );
+    expect(resolveExplicitReadAclFromToolArgs({})).toBeUndefined();
+  });
+
+  it("maps shareWithTeam and shareWithOrganization to namespace/org principals", async () => {
+    vi.doMock("../src/core/utils/paprWorkspace.js", () => ({
+      readActiveWorkspacePointer: () => ({
+        organizationId: "org-xyz",
+        namespaceId: "ns-abc",
+      }),
+    }));
+    vi.doMock("../src/gateway/utils/paprUserId.js", () => ({
+      getPaprUserId: () => "user-1",
+    }));
+
+    const { resolveExplicitReadAclFromToolArgs } = await import(
+      "../src/gateway/utils/memoryScopeResolver.js"
+    );
+
+    expect(
+      resolveExplicitReadAclFromToolArgs({
+        shareWithTeam: true,
+        shareWithOrganization: true,
+      }),
+    ).toEqual({
+      readAcl: undefined,
+      shareWithUserIds: undefined,
+      shareWithNamespaceId: "ns-abc",
+      shareWithOrganizationId: "org-xyz",
+    });
   });
 });

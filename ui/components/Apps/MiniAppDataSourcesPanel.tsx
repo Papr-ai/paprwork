@@ -12,7 +12,6 @@ interface LinkedSource {
   dbId?: string;
   jobId?: string;
   dbPath: string;
-  role?: string;
 }
 
 interface RegistryDatabase {
@@ -28,7 +27,6 @@ interface MiniAppDataSourcesPanelProps {
 
 export function MiniAppDataSourcesPanel({ appId }: MiniAppDataSourcesPanelProps) {
   const [linked, setLinked] = useState<LinkedSource[]>([]);
-  const [primaryAlias, setPrimaryAlias] = useState<string | null>(null);
   const [registry, setRegistry] = useState<RegistryDatabase[]>([]);
   const [selectedDbId, setSelectedDbId] = useState("");
   const [loading, setLoading] = useState(true);
@@ -47,11 +45,9 @@ export function MiniAppDataSourcesPanel({ appId }: MiniAppDataSourcesPanelProps)
         throw new Error(`data-health HTTP ${healthRes.status}`);
       }
       const health = (await healthRes.json()) as {
-        primary?: { alias: string | null };
         linkedSources?: LinkedSource[];
       };
       setLinked(health.linkedSources ?? []);
-      setPrimaryAlias(health.primary?.alias ?? null);
 
       if (dbRes.ok) {
         const dbData = (await dbRes.json()) as { databases?: RegistryDatabase[] };
@@ -80,8 +76,6 @@ export function MiniAppDataSourcesPanel({ appId }: MiniAppDataSourcesPanelProps)
         body: JSON.stringify({
           dbId: selectedDbId,
           alias: record?.label ?? selectedDbId,
-          setPrimary: linked.length === 0,
-          role: linked.length === 0 ? "primary" : undefined,
         }),
       });
       if (!res.ok) {
@@ -100,6 +94,20 @@ export function MiniAppDataSourcesPanel({ appId }: MiniAppDataSourcesPanelProps)
   const availableToLink = registry.filter(
     (db) => !linked.some((source) => source.dbId === db.dbId),
   );
+
+  const registryLabelFor = (dbId?: string): string | undefined =>
+    dbId ? registry.find((db) => db.dbId === dbId)?.label : undefined;
+
+  const displayTitle = (source: LinkedSource): string => {
+    const label = registryLabelFor(source.dbId);
+    if (label?.trim()) {
+      return label.trim();
+    }
+    if (source.alias === "primary") {
+      return "Linked database";
+    }
+    return source.alias;
+  };
 
   return (
     <section className="mini-app-data-sources">
@@ -120,14 +128,21 @@ export function MiniAppDataSourcesPanel({ appId }: MiniAppDataSourcesPanelProps)
         </p>
       ) : null}
 
+      {linked.length > 1 ? (
+        <p className="mini-app-data-sources__hint">
+          Pass <code>sourceId</code> (alias) on every <code>/api/db/query</code> and{" "}
+          <code>/api/db/write</code> call.
+        </p>
+      ) : null}
+
       {linked.length > 0 ? (
         <ul className="mini-app-data-sources__list">
           {linked.map((source) => (
             <li key={`${source.alias}-${source.dbPath}`}>
-              <strong>{source.alias}</strong>
-              {primaryAlias === source.alias ? (
-                <span className="mini-app-data-sources__primary">primary</span>
-              ) : null}
+              <strong>{displayTitle(source)}</strong>
+              <code className="mini-app-data-sources__source-id">
+                sourceId: {source.alias}
+              </code>
               <span className="mini-app-data-sources__path">{source.dbPath}</span>
               {source.dbId ? (
                 <code className="mini-app-data-sources__id">{source.dbId}</code>

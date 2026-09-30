@@ -8,6 +8,7 @@
  */
 
 import Papr from "@papr/memory";
+import { handlePaprToolError } from "../../../core/tools/paprClient.js";
 import type {
   IStorageProvider,
   StoredMessage,
@@ -19,11 +20,15 @@ import {
   formatSummaryForLLM,
 } from "./summaryFormatting.js";
 import { RECENT_MESSAGES_MAX } from "./recentMessageWindow.js";
+import path from "path";
+import { getPaprRoot } from "../../../core/utils/paprRoot.js";
+import { formatPaprPathForAgent } from "../../../core/utils/paprAgentPaths.js";
 import {
   buildPaprSyncStoreBody,
   type PaprMessageStoreBody,
 } from "./paprSyncPayload.js";
 import { buildPaprMemoryWriteScope } from "../../utils/memoryScopeResolver.js";
+import { PAPR_DEFAULT_HEADERS } from "../../../core/tools/paprSurface.js";
 
 export interface PaprConfig {
   apiKey: string; // X-API-Key from macOS Keychain
@@ -61,6 +66,7 @@ export class PaprMemoryProvider implements IStorageProvider {
       xAPIKey: config.apiKey, // X-API-Key header from macOS Keychain
       maxRetries: 3,
       timeout: 30000, // 30 seconds
+      defaultHeaders: PAPR_DEFAULT_HEADERS,
     });
   }
 
@@ -85,7 +91,7 @@ export class PaprMemoryProvider implements IStorageProvider {
       const storeBody: PaprMessageStoreBody = buildPaprSyncStoreBody({
         chatId,
         message,
-        externalUserId: memoryScope.external_user_id,
+        userId: memoryScope.user_id ?? memoryScope.external_user_id,
         namespaceId: memoryScope.namespace_id,
         policy: memoryScope.policy,
       });
@@ -100,19 +106,8 @@ export class PaprMemoryProvider implements IStorageProvider {
     } catch (error) {
       if (error instanceof Papr.AuthenticationError) {
         console.error("Invalid PAPR_API_KEY - check Settings");
-        throw new Error("Invalid PAPR API key. Please check your Settings.");
-      } else if (error instanceof Papr.RateLimitError) {
-        console.error("PAPR Memory quota exceeded. Please upgrade your account.");
-        throw new Error(
-          "PAPR Memory quota exceeded. Please upgrade your account at https://platform.papr.ai/settings"
-        );
-      } else if (error instanceof Papr.PermissionDeniedError) {
-        console.error("PAPR Memory access denied - quota may be exceeded.");
-        throw new Error(
-          "PAPR Memory access denied. Your account may have exceeded its quota. Please upgrade at https://platform.papr.ai/settings"
-        );
       }
-      throw error;
+      handlePaprToolError(error, "papr-memory-save");
     }
   }
 
@@ -247,7 +242,9 @@ export class PaprMemoryProvider implements IStorageProvider {
                 summary.last_updated ?? new Date().toISOString(),
             },
             enhanced,
-            chatFilePath: `~/Papr/Chats/${chatId}.txt`,
+            chatFilePath: formatPaprPathForAgent(
+              path.join(getPaprRoot(), "Chats", `${chatId}.txt`),
+            ),
           });
 
           // Inject summary as special __summary property for AgentService to extract
@@ -305,6 +302,16 @@ export class PaprMemoryProvider implements IStorageProvider {
           fetched_from_papr: true,
           last_fetched_at: new Date().toISOString(),
         };
+      }
+
+      // Papr returns 404 on /compress when the session has no stored messages.
+      // Job sessions often hit this when local SQLite has messages but cloud sync
+      // drifted (marked synced locally while Papr session is still empty).
+      if ((history.total_count ?? 0) === 0) {
+        console.log(
+          `[PaprMemory] Session ${chatId} has no messages on Papr — skipping /compress (local fallback will run)`,
+        );
+        return null;
       }
 
       // On-demand compress when no cached summary exists
@@ -452,6 +459,21 @@ export class PaprMemoryProvider implements IStorageProvider {
     }
   }
 
+  /** Turn metrics are local-only columns, so the cloud-only path has none. */
+  async getTurnUsage(_chatId: string) {
+    return {
+      lastTurn: null,
+      recentTurns: [],
+      totals: {
+        turns: 0,
+        cost: 0,
+        promptTokens: 0,
+        completionTokens: 0,
+        cacheReadTokens: 0,
+      },
+    };
+  }
+
   async getChatCost(_chatId: string): Promise<{
     total: number;
     byModel: Record<string, number>;
@@ -595,6 +617,26 @@ export class PaprMemoryProvider implements IStorageProvider {
       costEfficiencyScore: 0,
       dataSource: "live" as const,
       pendingFootprintTurns: 0,
+      periods: {
+        today: {
+          actualTokens: 0,
+          hypotheticalTokensWithoutOptimizations: 0,
+          tokensSaved: 0,
+          efficiencyScore: 0,
+        },
+        thisWeek: {
+          actualTokens: 0,
+          hypotheticalTokensWithoutOptimizations: 0,
+          tokensSaved: 0,
+          efficiencyScore: 0,
+        },
+        thisMonth: {
+          actualTokens: 0,
+          hypotheticalTokensWithoutOptimizations: 0,
+          tokensSaved: 0,
+          efficiencyScore: 0,
+        },
+      },
       breakdown: {
         chatsAnalyzed: 0,
         chatsWithSummaries: 0,

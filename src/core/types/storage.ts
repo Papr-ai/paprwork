@@ -78,10 +78,29 @@ export interface AppSettings {
      */
     cloudAutoPublishEnabled: boolean;
     /**
+     * When cloud sync is on, automatically push git/Turso changes to the cloud.
+     * Enabled by default. When false, only Publish changes / agent push_cloud_sync publish.
+     */
+    cloudAutoUploadEnabled: boolean;
+    /**
      * Default Papr Memory sharing for new chats and agent writes.
      * "user" = private, "namespace" = workspace team, "org" = organization.
      */
     defaultMemoryScope?: "user" | "namespace" | "org";
+    /**
+     * Which credential to use when a provider has both OAuth and an API key.
+     * Key resolution prefers OAuth by default, so this is the only way to reach
+     * a Platform API key (and its separate rate limits) without disconnecting
+     * the subscription. Unset means OAuth, matching the historical default.
+     */
+    providerAuthPreference?: Partial<
+      Record<"openai" | "anthropic", "oauth" | "apiKey">
+    >;
+    /**
+     * Sidebar weather location source. Unset until the user chooses in the
+     * first-run location prompt.
+     */
+    weatherLocationMode?: "precise" | "approximate";
   };
   /** Anonymous install id for telemetry correlation only; not derived from user data. */
   telemetry: {
@@ -104,6 +123,10 @@ export interface AppSettings {
     /** Papr workspace tied to the active namespace (for team access on cloud apps) */
     workspaceId?: string;
     workspaceName?: string;
+    /** Last known billing plan label (sidebar + settings; refreshed via getPlanSummary) */
+    planName?: string;
+    /** Stripe/Parse subscription lifecycle status (same source as Settings → Plan & usage) */
+    subscriptionStatus?: string;
   };
   compaction: CompactionConfig;
   permissions: PermissionSettings;

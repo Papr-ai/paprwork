@@ -10,9 +10,22 @@
 import { create } from "zustand";
 import type { Tab, TabType, DisplayMode } from "../types/tabs";
 import { gateway } from "../src/lib/gateway";
+import {
+  findReusableChatTab,
+  type ChatStoreProbe,
+} from "../lib/reusableChatTab";
 
 // Re-export for backward compatibility
 export type { Tab, TabType, DisplayMode };
+
+export interface CreateTabOptions {
+  /**
+   * Set by explicit user actions (New Chat button, tab-bar +, Cmd/Ctrl+T).
+   * Those clicks must always produce a visible new tab, even when a blank
+   * chat already exists somewhere in the bar.
+   */
+  forceNew?: boolean;
+}
 
 interface TabState {
   tabs: Tab[];
@@ -30,6 +43,7 @@ interface TabState {
     entityId: string,
     title: string,
     metadata?: Record<string, unknown>,
+    options?: CreateTabOptions,
   ) => string;
   switchToTab: (tabId: string, skipHistory?: boolean) => void;
   closeTab: (tabId: string) => void;
@@ -98,48 +112,64 @@ export const useTabStore = create<TabState>()((set, get) => ({
       activeLeftTab: null,
       activeRightTab: null,
 
-      createTab: (type, entityId, title, metadata = {}) => {
+      createTab: (type, entityId, title, metadata = {}, options = {}) => {
         const tabId = `${type}-${entityId}`;
 
-        // Special handling for chat tabs with temporary IDs
-        // If creating a chat with temp ID, check for existing empty chats first
+        // Special handling for chat tabs with temporary IDs.
+        // Background flows fold into an existing blank chat instead of stacking
+        // duplicates; explicit user actions (forceNew) always get a fresh tab,
+        // and a blank chat that is merged with an app, holds a draft, or is
+        // streaming is never treated as interchangeable — see reusableChatTab.
         if (
           type === "chat" &&
           entityId.startsWith("temp-") &&
           typeof window !== "undefined"
         ) {
-          const state = get();
+          const reusable = findReusableChatTab({
+            tabs: get().tabs,
+            chatStore: (window as unknown as {
+              __chatStore__?: ChatStoreProbe;
+            }).__chatStore__,
+            forceNew: options.forceNew,
+          });
 
-          // Check if any existing TEMP chat tab has no messages
-          for (const tab of state.tabs) {
-            if (tab.type === "chat" && tab.entityId.startsWith("temp-")) {
-              // Get chat store from global window object (set by chatStore)
-              const chatStore = (window as any).__chatStore__;
-              if (chatStore && typeof chatStore.getChatState === "function") {
-                const chatState = chatStore.getChatState(tab.entityId);
-                if (
-                  chatState &&
-                  chatState.messages &&
-                  chatState.messages.length === 0
-                ) {
-                  console.log(
-                    `[TabStore] Found empty temp chat tab: ${tab.id}, reusing it`,
-                  );
-                  get().switchToTab(tab.id);
-                  return tab.id;
-                }
-              }
-            }
+          if (reusable) {
+            console.log(
+              `[TabStore] Found empty temp chat tab: ${reusable.id}, reusing it`,
+            );
+            get().switchToTab(reusable.id);
+            return reusable.id;
           }
           console.log(
-            "[TabStore] No empty temp chat found, creating new chat tab",
+            "[TabStore] No reusable empty temp chat found, creating new chat tab",
           );
         }
 
         // Check if tab already exists
         const existingTab = get().tabs.find((t) => t.id === tabId);
         if (existingTab) {
-          // If it's a child, switch to its parent
+          const hasMetadata = Object.keys(metadata).length > 0;
+          if (hasMetadata || title !== existingTab.title) {
+            set((state) => ({
+              tabs: state.tabs.map((t) =>
+                t.id === tabId
+                  ? {
+                      ...t,
+                      title,
+                      icon: (metadata.icon as string | undefined) ?? t.icon,
+                      metadata: hasMetadata ? { ...t.metadata, ...metadata } : t.metadata,
+                    }
+                  : t,
+              ),
+            }));
+          }
+          // Orphan child (hidden from tab bar) — promote so explicit opens get a visible tab
+          if (existingTab.displayMode === "child" && !existingTab.parentTabId) {
+            get().promoteToStandalone(tabId);
+            get().switchToTab(tabId);
+            return tabId;
+          }
+          // Merged child — switch to parent split view
           if (existingTab.parentTabId) {
             get().switchToTab(existingTab.parentTabId);
           } else {
@@ -216,7 +246,7 @@ export const useTabStore = create<TabState>()((set, get) => ({
 
       switchToTab: (tabId, skipHistory = false) => {
         console.log(`[TabStore.switchToTab] Called with tabId: ${tabId}`);
-        const tab = get().getTab(tabId);
+        let tab = get().getTab(tabId);
         if (!tab) {
           console.error(`[TabStore.switchToTab] Tab not found: ${tabId}`);
           console.error(
@@ -229,6 +259,12 @@ export const useTabStore = create<TabState>()((set, get) => ({
         console.log(
           `[TabStore.switchToTab] Found tab, displayMode: ${tab.displayMode}`,
         );
+
+        // Orphan child: full-screen content but hidden from tab bar — fix before switching
+        if (tab.displayMode === "child" && !tab.parentTabId) {
+          get().promoteToStandalone(tabId);
+          tab = get().getTab(tabId)!;
+        }
 
         // If switching to a child, switch to its parent instead
         if (tab.parentTabId) {
@@ -485,9 +521,12 @@ export const useTabStore = create<TabState>()((set, get) => ({
           if (alreadyCorrectChild) {
             // Nothing to do — tab is already the child of this parent.
             if (autoSwitch) {
-              get().switchToTab(parentId);
+              const state = get();
+              // Don't steal focus when the user is interacting with the app pane.
+              if (state.activeRightTab !== childId) {
+                get().switchToTab(parentId);
+              }
             } else {
-              // Mark as pending refresh if not auto-switching
               get().setTabPendingRefresh(parentId, true);
             }
             return;
@@ -527,7 +566,6 @@ export const useTabStore = create<TabState>()((set, get) => ({
         if (autoSwitch) {
           get().switchToTab(parentId);
         } else {
-          // Mark as pending refresh if not auto-switching
           get().setTabPendingRefresh(parentId, true);
         }
       },
@@ -860,7 +898,14 @@ export const useTabStore = create<TabState>()((set, get) => ({
       setTabStreaming: (tabId, isStreaming) => {
         set((state) => ({
           tabs: state.tabs.map((t) =>
-            t.id === tabId ? { ...t, isStreaming, hasUnread: false } : t,
+            t.id === tabId
+              ? {
+                  ...t,
+                  isStreaming,
+                  hasUnread: false,
+                  ...(isStreaming ? { pendingRefresh: false } : {}),
+                }
+              : t,
           ),
         }));
       },
@@ -875,7 +920,14 @@ export const useTabStore = create<TabState>()((set, get) => ({
 
         set((state) => ({
           tabs: state.tabs.map((t) =>
-            t.id === tabId ? { ...t, hasUnread, isStreaming: false } : t,
+            t.id === tabId
+              ? {
+                  ...t,
+                  hasUnread,
+                  isStreaming: false,
+                  pendingRefresh: false,
+                }
+              : t,
           ),
         }));
       },
@@ -898,7 +950,13 @@ export const useTabStore = create<TabState>()((set, get) => ({
       markTabAsRead: (tabId) => {
         set((state) => ({
           tabs: state.tabs.map((t) =>
-            t.id === tabId ? { ...t, hasUnread: false, isStreaming: false, pendingRefresh: false } : t,
+            t.id === tabId
+              ? {
+                  ...t,
+                  hasUnread: false,
+                  pendingRefresh: false,
+                }
+              : t,
           ),
         }));
       },

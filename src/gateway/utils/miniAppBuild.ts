@@ -120,8 +120,6 @@ export async function buildMiniApp(appDir: string): Promise<MiniAppBuildResult> 
       await fs.mkdir(path.dirname(dest), { recursive: true });
       await fs.rename(stagedPath, dest);
     }
-    await fs.rm(stagingDir, { recursive: true, force: true });
-
     const outputFiles = stagedOutputs.map((p) => path.join(outdir, path.relative(stagingDir, p)));
 
     const warnings: MiniAppBuildError[] = result.warnings.map((w) =>
@@ -172,6 +170,11 @@ export async function buildMiniApp(appDir: string): Promise<MiniAppBuildResult> 
     }
 
     return { success: false, errors, outputFiles: [], legacy: false };
+  } finally {
+    // Always clear staging. Previously this ran only on the success path, so a
+    // failed build left .dist-staging/ behind in the app directory, where it is
+    // picked up by source-file scans and app sync.
+    await fs.rm(stagingDir, { recursive: true, force: true }).catch(() => {});
   }
 }
 
@@ -264,6 +267,17 @@ export function rewriteHtmlForBundledDist(
   }
 
   return result;
+}
+
+/** Append ?v= on legacy app.ts / main.ts entry scripts (no dist/ bundle). */
+export function appendLegacyTypeScriptCacheBusters(
+  html: string,
+  version: string,
+): string {
+  return html.replace(
+    /((?:src)=["'])((?:\.\/)?(?:app|main)(?:\.tsx?))(\?[^"']*)?(["'])/gi,
+    `$1$2?v=${version}$4`,
+  );
 }
 
 /** Append ?v= content hashes so browsers fetch new bundles after sync. */

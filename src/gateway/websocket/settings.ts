@@ -13,8 +13,12 @@ import {
   type ToolResultTruncationSettings,
 } from "../../core/types/toolResultTruncationSettings.js";
 import {
+  mergeExperimentSettings,
+  type ExperimentSettings,
+} from "../../core/types/experimentSettings.js";
+import {
   loadSettings,
-  saveSettings,
+  patchSettings,
   type CodeIndexingSettings,
   type PermissionData,
   type PreferencesData,
@@ -55,9 +59,7 @@ export async function setupSettingsHandlers(
 
       case "settings:save-profile": {
         const payload = message.payload as Partial<ProfileData>;
-        const settings = await loadSettings();
-        settings.profile = { ...settings.profile, ...payload };
-        await saveSettings(settings);
+        const settings = await patchSettings({ profile: payload });
         sendResponse(ws, {
           id: message.id,
           success: true,
@@ -68,9 +70,7 @@ export async function setupSettingsHandlers(
 
       case "settings:save-permissions": {
         const payload = message.payload as Partial<PermissionData>;
-        const settings = await loadSettings();
-        settings.permissions = { ...settings.permissions, ...payload };
-        await saveSettings(settings);
+        const settings = await patchSettings({ permissions: payload });
         sendResponse(ws, {
           id: message.id,
           success: true,
@@ -81,9 +81,7 @@ export async function setupSettingsHandlers(
 
       case "settings:save-code-indexing": {
         const payload = message.payload as Partial<CodeIndexingSettings>;
-        const settings = await loadSettings();
-        settings.codeIndexing = { ...settings.codeIndexing, ...payload };
-        await saveSettings(settings);
+        const settings = await patchSettings({ codeIndexing: payload });
 
         sendResponse(ws, {
           id: message.id,
@@ -95,9 +93,7 @@ export async function setupSettingsHandlers(
 
       case "settings:save-ui-preferences": {
         const payload = message.payload as Partial<UIPreferences>;
-        const settings = await loadSettings();
-        settings.uiPreferences = { ...settings.uiPreferences, ...payload };
-        await saveSettings(settings);
+        const settings = await patchSettings({ uiPreferences: payload });
 
         sendResponse(ws, {
           id: message.id,
@@ -109,9 +105,7 @@ export async function setupSettingsHandlers(
 
       case "settings:save-preferences": {
         const payload = message.payload as Partial<PreferencesData>;
-        const settings = await loadSettings();
-        settings.preferences = { ...settings.preferences, ...payload };
-        await saveSettings(settings);
+        const settings = await patchSettings({ preferences: payload });
         sendResponse(ws, {
           id: message.id,
           success: true,
@@ -122,18 +116,27 @@ export async function setupSettingsHandlers(
 
       case "settings:save-tool-truncation": {
         const payload = message.payload as Partial<ToolResultTruncationSettings>;
-        const settings = await loadSettings();
-        settings.toolResultTruncation = mergeToolResultTruncationSettings({
-          ...settings.toolResultTruncation,
-          ...payload,
+        const settings = await patchSettings({
+          toolResultTruncation: mergeToolResultTruncationSettings(payload),
         });
-        await saveSettings(settings);
         await syncToolResultTruncationCache(settings.toolResultTruncation);
         sendResponse(ws, {
           id: message.id,
           success: true,
           data: settings.toolResultTruncation,
         });
+        break;
+      }
+
+      case "settings:save-experiments": {
+        const payload = message.payload as Partial<ExperimentSettings>;
+        const settings = await patchSettings({ experiments: payload });
+        const merged = mergeExperimentSettings(settings.experiments);
+        const { setExperimentSettings } = await import(
+          "../services/experimentSettings.js"
+        );
+        setExperimentSettings(merged);
+        sendResponse(ws, { id: message.id, success: true, data: merged });
         break;
       }
 

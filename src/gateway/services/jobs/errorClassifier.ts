@@ -1,5 +1,16 @@
 export type ErrorType = "transient" | "permanent";
 
+function toErrorMessage(error: unknown): string {
+  if (error instanceof Error) {
+    return error.message ?? "";
+  }
+  if (typeof error === "string") {
+    return error;
+  }
+  const message = (error as { message?: unknown } | null | undefined)?.message;
+  return typeof message === "string" ? message : "";
+}
+
 /**
  * Classifies errors as transient (retryable) or permanent (should not retry).
  * 
@@ -16,8 +27,11 @@ export type ErrorType = "transient" | "permanent";
  * - Validation errors
  */
 export function classifyError(error: unknown): ErrorType {
-  const msg = (error as Error).message?.toLowerCase() ?? "";
-  const code = (error as any).code;
+  // `(error as Error).message` throws outright on null/undefined — the
+  // optional chain guards a missing property, not a missing object — and a
+  // rejection with no value is exactly the case a caller cannot anticipate.
+  const msg = toErrorMessage(error).toLowerCase();
+  const code = (error as { code?: unknown } | null | undefined)?.code;
 
   // Transient (retryable) errors
   if (msg.includes("rate limit") || msg.includes("429")) return "transient";
@@ -29,6 +43,18 @@ export function classifyError(error: unknown): ErrorType {
   if (msg.includes("econnrefused") || msg.includes("connection refused"))
     return "transient";
   if (msg.includes("network error") || msg.includes("fetch failed"))
+    return "transient";
+  // undici/Node fetch surfaces a dropped streaming socket as the bare word
+  // "terminated" (or "other side closed" / "socket hang up"). Long agent runs
+  // hit this when the provider or an intermediary drops the SSE connection
+  // mid-stream — nothing about the job is wrong; retry it.
+  if (
+    msg.includes("terminated") ||
+    msg.includes("other side closed") ||
+    msg.includes("socket hang up") ||
+    msg.includes("premature close") ||
+    msg.includes("aborted")
+  )
     return "transient";
   if (code === "ETIMEDOUT" || code === "ECONNRESET" || code === "ECONNREFUSED")
     return "transient";
@@ -52,6 +78,20 @@ export function classifyError(error: unknown): ErrorType {
   if (msg.includes("validation error") || msg.includes("invalid input"))
     return "permanent";
 
+  const codeStr = typeof code === "string" ? code : undefined;
+  if (codeStr === "EBADF" || codeStr === "EMFILE" || codeStr === "ENFILE") {
+    return "transient";
+  }
+  if (
+    msg.includes("ebadf") ||
+    msg.includes("emfile") ||
+    msg.includes("enfile") ||
+    msg.includes("could not open process pipes") ||
+    msg.includes("too many open files")
+  ) {
+    return "transient";
+  }
+
   // Default to transient (safer to retry than give up)
   return "transient";
 }
@@ -60,8 +100,8 @@ export function classifyError(error: unknown): ErrorType {
  * Returns a human-readable reason for the error classification.
  */
 export function getErrorClassificationReason(error: unknown): string {
-  const msg = (error as Error).message?.toLowerCase() ?? "";
-  const code = (error as any).code;
+  const msg = toErrorMessage(error).toLowerCase();
+  const code = (error as { code?: unknown } | null | undefined)?.code;
 
   if (msg.includes("rate limit") || msg.includes("429"))
     return "Rate limit exceeded (will retry with backoff)";
@@ -69,6 +109,13 @@ export function getErrorClassificationReason(error: unknown): string {
     return "Provider overloaded (will retry)";
   if (msg.includes("timeout") || msg.includes("timed out"))
     return "Request timed out (will retry)";
+  if (
+    msg.includes("terminated") ||
+    msg.includes("other side closed") ||
+    msg.includes("socket hang up") ||
+    msg.includes("premature close")
+  )
+    return "Model stream dropped mid-response (will retry)";
   if (code === "ETIMEDOUT" || code === "ECONNRESET" || code === "ECONNREFUSED")
     return "Network error (will retry)";
   if (/5\d{2}/.test(msg)) return "Server error (will retry)";
@@ -83,6 +130,18 @@ export function getErrorClassificationReason(error: unknown): string {
     return "Forbidden (permanent error, no retry)";
   if (msg.includes("validation error"))
     return "Validation error (permanent error, no retry)";
+
+  const codeStr = typeof code === "string" ? code : undefined;
+  if (
+    codeStr === "EBADF" ||
+    codeStr === "EMFILE" ||
+    codeStr === "ENFILE" ||
+    msg.includes("ebadf") ||
+    msg.includes("emfile") ||
+    msg.includes("could not open process pipes")
+  ) {
+    return "Process spawn resource error (will retry with backoff)";
+  }
 
   return "Unknown error (will retry)";
 }

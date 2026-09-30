@@ -4,44 +4,48 @@
  * Uses Turso HTTP API (no embedded replica sync — deprecated on Turso cloud).
  */
 
-import { createClient, type Client, type InArgs } from "@libsql/client";
+import { openDiagnosticDatabase } from "./databaseDiagnostics/sqlite.js";
+
+import { createClient, type Client } from "@libsql/client";
 import Database from "better-sqlite3";
 import * as fs from "fs";
 import * as path from "path";
 import { JOB_BASELINE_TABLES } from "./appDataSources.js";
 import {
-  computeSyncableTableFingerprints,
-  computeSyncableTableFingerprintsForPath,
-  schemasMatch,
-} from "./tursoTableFingerprint.js";
+  migrateRemoteTableSchemaFromColumns,
+} from "./tursoSchemaMigration.js";
 import {
   jobTursoDatabaseName,
   LEGACY_USER_TURSO_DATABASE,
 } from "./tursoDatabaseNaming.js";
+import { isLegacyCdcArtifactTable } from "./legacyCdcArtifacts.js";
 import { SYNC_INFRA_TABLES } from "./tursoSyncLog.js";
 import {
-  compactRemoteSyncLog,
   ensureLocalSyncInfrastructure,
   ensureLocalTableSyncTriggers,
-  ensureRemoteSyncInfrastructure,
-  ensureRemoteTableSyncTriggers,
-  maxSyncLogId,
+  isLocalCdcMarkerSet,
+  localInsertTriggerExists,
+  markLocalCdcReady,
   mirrorSyncLogToRemote,
-  pruneSyncLogThrough,
-  readRemoteCompactedThroughId,
-  readRemoteMaxSyncLogId,
   readRemoteSyncLogSince,
-  readSyncLogSince,
   remoteSyncLogExists,
-  tableHasPrimaryKey,
-  withSyncMuted,
-  withSyncMutedAsync,
 } from "./tursoSyncLog.js";
 import {
-  applyRemoteSyncLogToLocal,
-  pushDeltaToRemote,
-  remoteNeedsBootstrap,
-} from "./tursoDeltaSync.js";
+  batchInsertLocalTableRows,
+  deleteRemoteOrphanRowsByPk,
+  REMOTE_READ_CHUNK_ROWS,
+} from "./tursoBulkInsert.js";
+import { batchUpsertLocalRows } from "./tursoLocalBulkWrite.js";
+import { ensureRemoteRowSyncColumns } from "./rowSyncColumns.js";
+import { assertNotReplicaManagedWritablePath, isReplicaManagedDbPath } from "./tursoReplica/tursoReplicaFileGuard.js";
+
+function isReplicaManagedDbPathSync(dbPath: string): boolean {
+  try {
+    return isReplicaManagedDbPath(dbPath);
+  } catch {
+    return false;
+  }
+}
 
 export interface TursoCredentials {
   tursoUrl: string;
@@ -58,14 +62,22 @@ export interface LocalTable {
   name: string;
   columns: TableColumn[];
   rows: unknown[][];
+  /** Full CREATE TABLE from sqlite_master — preserves NOT NULL, DEFAULT, FK, etc. */
+  createSql?: string;
 }
 
-export type TursoSyncMode = "delta" | "bootstrap" | "snapshot_fallback" | "full";
+export type TursoSyncMode =
+  | "delta"
+  | "bootstrap"
+  | "snapshot_fallback"
+  | "full"
+  | "reconcile";
 
 export interface PushResult {
-  status: "pushed" | "skipped";
+  status: "pushed" | "skipped" | "failed";
   tables: string[];
   reason?: string;
+  error?: string;
   /** Fingerprints for all syncable local tables after push evaluation. */
   tableFingerprints?: Record<string, string>;
   skippedTables?: string[];
@@ -78,30 +90,36 @@ export interface PushResult {
   remoteLogMaxId?: number;
   /** Changelog entries applied (delta mode). */
   deltaEntries?: number;
-  syncMode?: TursoSyncMode;
+  syncMode?: TursoSyncMode | "replica" | "legacy-cdc";
 }
 
 export interface PullResult {
-  status: "pulled" | "skipped";
+  status: "pulled" | "skipped" | "failed";
   reason?: string;
+  error?: string;
+  tables?: string[];
   /** Remote _papr_sync_meta version observed during this pull. */
   remoteVersion?: number;
   /** Highest remote _papr_sync_log id applied locally. */
   lastPulledLogId?: number;
   deltaEntries?: number;
-  syncMode?: TursoSyncMode;
+  syncMode?: TursoSyncMode | "replica" | "legacy-cdc";
+  /** Tables snapshot-pulled during post-delta fingerprint reconcile. */
+  reconciledTables?: string[];
 }
 
 export interface LinkedSourceSyncOptions {
   jobId: string;
   /** Fingerprints from the last successful push — skip unchanged tables. */
   previousFingerprints?: Record<string, string>;
-  /** Force full push/pull even when fingerprints match. */
+  /** Explicit repair bootstrap (empty remote retry) — not used for routine Upload now. */
   force?: boolean;
   /** Last local _papr_sync_log id successfully pushed to Turso. */
   lastPushedLogId?: number;
   /** Last remote _papr_sync_log id successfully pulled to local. */
   lastPulledLogId?: number;
+  /** When set, only sync these tables (schema + row deltas). */
+  tableNames?: readonly string[];
 }
 
 export interface PullSourceSyncOptions extends LinkedSourceSyncOptions {
@@ -115,6 +133,13 @@ export interface PullSourceSyncOptions extends LinkedSourceSyncOptions {
   onlyIfLocalEmpty?: boolean;
   /** Skip pull when local data differs from last push (local wins). */
   skipIfLocalDirty?: boolean;
+  /**
+   * Bidirectional merge pull: apply remote changelog with LWW while local has
+   * unpushed edits. Skips bulk snapshot reconcile that would clobber local rows.
+   */
+  mergeWhileLocalDirty?: boolean;
+  /** Close and reopen the local replica connection before pull (Get updates). */
+  forceReconnect?: boolean;
 }
 
 /** @deprecated Legacy shared user DB — use jobTursoDatabaseName(jobId) instead. */
@@ -141,12 +166,23 @@ export const SYNC_REGISTRY_TABLE = "_papr_sync";
  */
 export const SYNC_META_TABLE = "_papr_sync_meta";
 
+/** SQLite FK recovery table — local-only artifact, never user sync data. */
+export const SQLITE_RECOVERY_TABLE = "lost_and_found";
+
 export function isScratchTable(tableName: string): boolean {
   return (
+    // Leading underscore = local scratch by convention (e.g. `_leads_backup`
+    // from an ad hoc CREATE TABLE … AS SELECT). Never synced, never warned
+    // about. Generalises the explicit `_papr_*` checks below, which stay for
+    // readability and as documentation of what the platform itself owns.
+    tableName.startsWith("_") ||
     JOB_BASELINE_TABLES.has(tableName) ||
     tableName === SYNC_REGISTRY_TABLE ||
     tableName === SYNC_META_TABLE ||
-    SYNC_INFRA_TABLES.has(tableName)
+    tableName === "_papr_schema_migrations" ||
+    tableName === SQLITE_RECOVERY_TABLE ||
+    SYNC_INFRA_TABLES.has(tableName) ||
+    isLegacyCdcArtifactTable(tableName)
   );
 }
 
@@ -200,7 +236,11 @@ export function isTursoLocalDatabaseCorruptError(message: string): boolean {
     lower.includes("database disk image is malformed") ||
     lower.includes("file is not a database") ||
     lower.includes("sqlite_corrupt") ||
-    lower.includes("database corruption")
+    lower.includes("database corruption") ||
+    lower.includes("malformed database schema") ||
+    lower.includes("invalid page type") ||
+    lower.includes("corrupt database") ||
+    lower.includes("database is corrupt")
   );
 }
 
@@ -224,6 +264,31 @@ export function listUserTables(db: Database.Database): string[] {
     )
     .all() as Array<{ name: string }>;
   return rows.map((row) => row.name);
+}
+
+export function readTableCreateSql(
+  db: Database.Database,
+  tableName: string,
+): string | undefined {
+  const row = db
+    .prepare(
+      `SELECT sql FROM sqlite_master WHERE type = 'table' AND name = ?`,
+    )
+    .get(tableName) as { sql: string | null } | undefined;
+  const sql = row?.sql?.trim();
+  return sql && sql.length > 0 ? sql : undefined;
+}
+
+export async function readRemoteTableCreateSql(
+  remote: Client,
+  tableName: string,
+): Promise<string | undefined> {
+  const result = await remote.execute({
+    sql: `SELECT sql FROM sqlite_master WHERE type = 'table' AND name = ?`,
+    args: [tableName],
+  });
+  const sql = String(result.rows[0]?.sql ?? "").trim();
+  return sql.length > 0 ? sql : undefined;
 }
 
 export function readTableSchema(
@@ -255,10 +320,18 @@ export function readLocalTable(
     .prepare(`SELECT ${colList} FROM ${quoteIdent(tableName)}`)
     .raw()
     .all() as unknown[][];
-  return { name: tableName, columns, rows };
+  return {
+    name: tableName,
+    columns,
+    rows,
+    createSql: readTableCreateSql(db, tableName),
+  };
 }
 
 export function buildCreateTableSql(table: LocalTable): string {
+  if (table.createSql) {
+    return table.createSql;
+  }
   const pkCols = table.columns.filter((col) => col.primaryKey);
   const colDefs = table.columns
     .map((col) => {
@@ -304,31 +377,120 @@ export function sortTablesForInsert(
   return sorted;
 }
 
-async function readRemoteForeignKeyRefs(
-  remote: Client,
-  remoteTableName: string,
-  jobId: string,
-  knownLocalNames: ReadonlySet<string>,
-): Promise<string[]> {
-  const result = await remote.execute(
-    `PRAGMA foreign_key_list(${quoteIdent(remoteTableName)})`,
-  );
-  return result.rows
-    .map((row) => {
-      const refTable = String(row.table ?? "");
-      const local =
-        toLocalTableName(refTable, jobId) ??
-        (knownLocalNames.has(refTable) ? refTable : null);
-      return local;
-    })
-    .filter((name): name is string => name !== null && knownLocalNames.has(name));
+/** FK parent tables referenced by columns in `tableNames`. */
+export function readLocalForeignKeyRefs(
+  db: Database.Database,
+  tableNames: readonly string[],
+): Map<string, string[]> {
+  const knownNames = new Set(tableNames);
+  const refs = new Map<string, string[]>();
+  for (const name of tableNames) {
+    const rows = db
+      .prepare(`PRAGMA foreign_key_list(${quoteIdent(name)})`)
+      .all() as Array<{ table: string }>;
+    refs.set(
+      name,
+      rows
+        .map((row) => row.table)
+        .filter((table) => knownNames.has(table)),
+    );
+  }
+  return refs;
 }
 
-function writeTablesToLocalDb(
+/** Parent tables before children (table names only). */
+export function sortTableNamesForInsert(
+  tableNames: readonly string[],
+  foreignKeyRefs: ReadonlyMap<string, readonly string[]>,
+): string[] {
+  const tables: LocalTable[] = tableNames.map((name) => ({
+    name,
+    columns: [{ name: "id", type: "INTEGER", primaryKey: true }],
+    rows: [],
+  }));
+  return sortTablesForInsert(tables, foreignKeyRefs).map((table) => table.name);
+}
+
+/** Child tables before parents — safe order for DELETE batches. */
+export function sortTableNamesForDelete(
+  tableNames: readonly string[],
+  foreignKeyRefs: ReadonlyMap<string, readonly string[]>,
+): string[] {
+  return [...sortTableNamesForInsert(tableNames, foreignKeyRefs)].reverse();
+}
+
+/**
+ * Keep the local PRIMARY KEY when the incoming remote schema has none.
+ *
+ * A pull rebuilds the local table from the remote definition, which is right
+ * for columns and rows but wrong for a constraint the remote has *lost*. Once
+ * a remote table is PK-less, every pull strips the local PK too, and the next
+ * push copies that back up — the degradation becomes self-sustaining, and no
+ * single run looks like the culprit.
+ *
+ * The visible damage is not a sync error. `INSERT ... ON CONFLICT(id)` needs a
+ * PRIMARY KEY or UNIQUE constraint, so a job that upserts fails outright with
+ * "ON CONFLICT clause does not match any PRIMARY KEY or UNIQUE constraint" —
+ * and, until it does, duplicate rows accumulate unchecked.
+ *
+ * Preferring the local PK is safe in the only direction that matters: adding
+ * back a constraint the table was declared with cannot lose data, while
+ * dropping one silently admits duplicates. A genuine intentional PK change
+ * still goes through planSchemaMigration, which rebuilds explicitly.
+ */
+function preserveLocalPrimaryKey(
+  localDb: Database.Database,
+  table: LocalTable,
+): LocalTable {
+  if (table.columns.some((col) => col.primaryKey)) {
+    return table;
+  }
+
+  let localColumns: TableColumn[];
+  try {
+    localColumns = readTableSchema(localDb, table.name);
+  } catch {
+    return table;
+  }
+
+  const localPk = localColumns.filter((col) => col.primaryKey);
+  if (localPk.length === 0) {
+    return table;
+  }
+
+  // Only reinstate a key whose columns all still exist remotely; a PK naming a
+  // dropped column would make the rebuilt table unopenable.
+  const incoming = new Set(table.columns.map((col) => col.name));
+  if (!localPk.every((col) => incoming.has(col.name))) {
+    return table;
+  }
+
+  const pkNames = new Set(localPk.map((col) => col.name));
+  console.warn(
+    `[TursoSync] Remote "${table.name}" has no PRIMARY KEY but local declares ` +
+      `(${[...pkNames].join(", ")}). Keeping the local key — a PK-less rebuild ` +
+      `breaks ON CONFLICT upserts and admits duplicate rows.`,
+  );
+
+  return {
+    ...table,
+    columns: table.columns.map((col) =>
+      pkNames.has(col.name) ? { ...col, primaryKey: true } : col,
+    ),
+    // Drop the remote CREATE TABLE text: it encodes the PK-less shape we are
+    // deliberately overriding, and buildCreateTableSql prefers it when present.
+    createSql: undefined,
+  };
+}
+
+export function writeTablesToLocalDb(
   localDb: Database.Database,
   tables: LocalTable[],
 ): void {
-  const writable = tables.filter((table) => table.columns.length > 0);
+  // Restored after d4cd77b0 (v2.4.0) dropped it: see preserveLocalPrimaryKey.
+  const writable = tables
+    .filter((table) => table.columns.length > 0)
+    .map((table) => preserveLocalPrimaryKey(localDb, table));
   if (writable.length === 0) {
     return;
   }
@@ -345,14 +507,7 @@ function writeTablesToLocalDb(
       if (table.rows.length === 0) {
         continue;
       }
-      const placeholders = table.columns.map(() => "?").join(", ");
-      const colNames = table.columns.map((col) => quoteIdent(col.name)).join(", ");
-      const insert = localDb.prepare(
-        `INSERT INTO ${quoteIdent(table.name)} (${colNames}) VALUES (${placeholders})`,
-      );
-      for (const row of table.rows) {
-        insert.run(...row);
-      }
+      batchUpsertLocalRows(localDb, table.name, table.columns, table.rows);
     }
   } finally {
     localDb.pragma("foreign_keys = ON");
@@ -378,7 +533,7 @@ async function listRemoteUserTables(remote: Client): Promise<string[]> {
     .filter((name): name is string => typeof name === "string");
 }
 
-async function readRemoteTableSchema(
+export async function readRemoteTableSchema(
   remote: Client,
   tableName: string,
 ): Promise<TableColumn[]> {
@@ -390,7 +545,7 @@ async function readRemoteTableSchema(
   }));
 }
 
-async function readRemoteTable(
+export async function readRemoteTable(
   remote: Client,
   tableName: string,
 ): Promise<LocalTable> {
@@ -399,13 +554,28 @@ async function readRemoteTable(
     return { name: tableName, columns: [], rows: [] };
   }
   const colList = columns.map((col) => quoteIdent(col.name)).join(", ");
-  const result = await remote.execute(
-    `SELECT ${colList} FROM ${quoteIdent(tableName)}`,
-  );
-  const rows = result.rows.map((row) =>
-    columns.map((col) => row[col.name] ?? null),
-  );
-  return { name: tableName, columns, rows };
+  const rows: unknown[][] = [];
+  let offset = 0;
+  while (true) {
+    const result = await remote.execute({
+      sql:
+        `SELECT ${colList} FROM ${quoteIdent(tableName)} ` +
+        `LIMIT ? OFFSET ?`,
+      args: [REMOTE_READ_CHUNK_ROWS, offset],
+    });
+    if (result.rows.length === 0) {
+      break;
+    }
+    for (const row of result.rows) {
+      rows.push(columns.map((col) => row[col.name] ?? null));
+    }
+    if (result.rows.length < REMOTE_READ_CHUNK_ROWS) {
+      break;
+    }
+    offset += REMOTE_READ_CHUNK_ROWS;
+  }
+  const createSql = await readRemoteTableCreateSql(remote, tableName);
+  return { name: tableName, columns, rows, createSql };
 }
 
 async function remoteTableExists(
@@ -425,35 +595,13 @@ export async function replaceRemoteTable(
 ): Promise<void> {
   await remote.execute(`DROP TABLE IF EXISTS ${quoteIdent(table.name)}`);
   await remote.execute(buildCreateTableSql(table));
-  if (table.rows.length === 0) {
-    return;
-  }
-  const placeholders = table.columns.map(() => "?").join(", ");
-  const colNames = table.columns.map((col) => quoteIdent(col.name)).join(", ");
-  const sql = `INSERT INTO ${quoteIdent(table.name)} (${colNames}) VALUES (${placeholders})`;
-  const statements = table.rows.map((row) => ({
-    sql,
-    args: row as (string | number | bigint | null | Uint8Array)[],
-  }));
-  await remote.batch(statements, "write");
-}
-
-async function deleteRemoteRowsNotInLocalPks(
-  remote: Client,
-  tableName: string,
-  pkColumn: string,
-  localPks: unknown[],
-): Promise<void> {
-  if (localPks.length === 0) {
-    await remote.execute(`DELETE FROM ${quoteIdent(tableName)}`);
-    return;
-  }
-
-  const placeholders = localPks.map(() => "?").join(", ");
-  await remote.execute({
-    sql: `DELETE FROM ${quoteIdent(tableName)} WHERE ${quoteIdent(pkColumn)} NOT IN (${placeholders})`,
-    args: localPks as InArgs,
-  });
+  await batchInsertLocalTableRows(
+    remote,
+    table.name,
+    table.columns,
+    table.rows,
+    "insert",
+  );
 }
 
 async function upsertRemoteTableIncremental(
@@ -465,58 +613,66 @@ async function upsertRemoteTableIncremental(
 
   if (!exists) {
     await remote.execute(buildCreateTableSql(table));
-    if (table.rows.length > 0) {
-      const placeholders = table.columns.map(() => "?").join(", ");
-      const colNames = table.columns.map((col) => quoteIdent(col.name)).join(", ");
-      const sql = `INSERT INTO ${quoteIdent(table.name)} (${colNames}) VALUES (${placeholders})`;
-      await remote.batch(
-        table.rows.map((row) => ({
-          sql,
-          args: row as (string | number | bigint | null | Uint8Array)[],
-        })),
-        "write",
-      );
-    }
+    await batchInsertLocalTableRows(
+      remote,
+      table.name,
+      table.columns,
+      table.rows,
+      "insert",
+    );
     return "incremental";
   }
 
-  const remoteSchema = await readRemoteTableSchema(remote, table.name);
-  if (!schemasMatch(table.columns, remoteSchema)) {
-    await replaceRemoteTable(remote, table);
+  const result = await migrateRemoteTableSchemaFromColumns(
+    remote,
+    table.name,
+    table.columns,
+    async () => {
+      await replaceRemoteTable(remote, table);
+    },
+  );
+  if (result === "rebuilt") {
     return "replaced";
   }
+
+  await ensureRemoteRowSyncColumns(remote, table.name);
 
   if (pkCols.length === 0) {
     await replaceRemoteTable(remote, table);
     return "replaced";
   }
 
-  const placeholders = table.columns.map(() => "?").join(", ");
-  const colNames = table.columns.map((col) => quoteIdent(col.name)).join(", ");
-  const upsertSql = `INSERT OR REPLACE INTO ${quoteIdent(table.name)} (${colNames}) VALUES (${placeholders})`;
-
   if (table.rows.length > 0) {
-    await remote.batch(
-      table.rows.map((row) => ({
-        sql: upsertSql,
-        args: row as (string | number | bigint | null | Uint8Array)[],
-      })),
-      "write",
+    await batchInsertLocalTableRows(
+      remote,
+      table.name,
+      table.columns,
+      table.rows,
+      "upsert",
     );
   }
 
   if (pkCols.length === 1) {
     const pkIndex = table.columns.findIndex((col) => col.name === pkCols[0]!.name);
     const localPks = table.rows.map((row) => row[pkIndex]);
-    if (localPks.length <= 2_000) {
-      await deleteRemoteRowsNotInLocalPks(
+    const deletedPks = await deleteRemoteOrphanRowsByPk(
+      remote,
+      table.name,
+      pkCols[0]!.name,
+      localPks,
+    );
+    if (deletedPks.length > 0) {
+      await mirrorSyncLogToRemote(
         remote,
-        table.name,
-        pkCols[0]!.name,
-        localPks,
+        deletedPks.map((pk) => ({
+          id: 0,
+          tableName: table.name,
+          op: "delete" as const,
+          rowPk: [pk],
+        })),
       );
-      return "incremental";
     }
+    return "incremental";
   }
 
   await replaceRemoteTable(remote, table);
@@ -568,12 +724,108 @@ export function applyPulledTablesToLocalDb(
   writeTablesToLocalDb(localDb, tables);
 }
 
+/**
+ * Fold the WAL back into the main DB file, then drop the sidecars.
+ *
+ * NEVER unlink a non-empty `-wal` directly: it contains committed pages that are
+ * not yet in the main file, so deleting it silently discards data AND leaves
+ * readers hitting SQLITE_IOERR ("disk I/O error") because `-shm` is gone. In a
+ * mini-app that surfaces as an empty list — indistinguishable from data loss.
+ *
+ * A TRUNCATE checkpoint writes every WAL page into the main file and removes the
+ * sidecars itself, which is the safe way to reach the same "no sidecars" state.
+ * If another process holds the DB we leave the sidecars alone rather than
+ * corrupting them — a live `-wal` is always safer than a deleted one.
+ */
 function cleanupSqliteSidecars(dbPath: string): void {
+  const walPath = dbPath + "-wal";
+  let walSize = 0;
+  try {
+    walSize = fs.statSync(walPath).size;
+  } catch {
+    walSize = 0;
+  }
+
+  if (walSize > 0) {
+    let db: Database.Database | null = null;
+    try {
+      db = openDiagnosticDatabase(Database, "services/tursoSyncBridgeCore", dbPath);
+      db.pragma("wal_checkpoint(TRUNCATE)");
+    } catch {
+      // DB locked or unreadable — keep sidecars intact; deleting them here is
+      // what previously destroyed committed rows.
+      return;
+    } finally {
+      try {
+        db?.close();
+      } catch {
+        /* already closed */
+      }
+    }
+
+    // Checkpoint failed to drain the WAL (concurrent reader) — leave it alone.
+    try {
+      if (fs.statSync(walPath).size > 0) return;
+    } catch {
+      /* wal already gone — checkpoint removed it */
+    }
+  }
+
   for (const suffix of ["-wal", "-shm"]) {
     try {
       fs.unlinkSync(dbPath + suffix);
     } catch {
       // ignore
+    }
+  }
+}
+
+/** Snapshot local job DB (+ WAL sidecars) before a mutating sync step. */
+export interface LocalJobDbBackup {
+  basePath: string;
+}
+
+export function backupLocalJobDb(dbPath: string): LocalJobDbBackup {
+  const normalized = path.normalize(dbPath);
+  const basePath = `${normalized}.sync-backup-${Date.now()}`;
+  fs.copyFileSync(normalized, basePath);
+  for (const suffix of ["-wal", "-shm"]) {
+    const sidecar = normalized + suffix;
+    if (fs.existsSync(sidecar)) {
+      fs.copyFileSync(sidecar, basePath + suffix);
+    }
+  }
+  return { basePath };
+}
+
+export function restoreLocalJobDb(dbPath: string, backup: LocalJobDbBackup): void {
+  const normalized = path.normalize(dbPath);
+  fs.copyFileSync(backup.basePath, normalized);
+  for (const suffix of ["-wal", "-shm"]) {
+    const backupSidecar = backup.basePath + suffix;
+    const targetSidecar = normalized + suffix;
+    if (fs.existsSync(backupSidecar)) {
+      fs.copyFileSync(backupSidecar, targetSidecar);
+    } else {
+      try {
+        fs.unlinkSync(targetSidecar);
+      } catch {
+        /* optional sidecar */
+      }
+    }
+  }
+}
+
+export function removeLocalJobDbBackup(backup: LocalJobDbBackup): void {
+  for (const filePath of [
+    backup.basePath,
+    backup.basePath + "-wal",
+    backup.basePath + "-shm",
+  ]) {
+    try {
+      fs.unlinkSync(filePath);
+    } catch {
+      /* already removed */
     }
   }
 }
@@ -587,25 +839,16 @@ function requireLinkedSourceOptions(
   return options;
 }
 
-function tablesToSync(
-  tableNames: string[],
-  currentFingerprints: Record<string, string>,
-  previousFingerprints: Record<string, string> | undefined,
-  force: boolean,
-): { changed: string[]; skipped: string[] } {
-  if (force || !previousFingerprints) {
-    return { changed: tableNames, skipped: [] };
-  }
-  const changed: string[] = [];
-  const skipped: string[] = [];
-  for (const name of tableNames) {
-    if (currentFingerprints[name] === previousFingerprints[name]) {
-      skipped.push(name);
-    } else {
-      changed.push(name);
-    }
-  }
-  return { changed, skipped };
+function buildLinkedSourceForSync(
+  localDbPath: string,
+  syncOptions: LinkedSourceSyncOptions,
+): import("./tursoLinkedSources.js").TursoLinkedSource {
+  return {
+    appId: "standalone",
+    jobId: syncOptions.jobId,
+    dbPath: localDbPath,
+    alias: syncOptions.jobId,
+  };
 }
 
 /** Read the remote sync version with a single-row query. Null when absent. */
@@ -675,6 +918,7 @@ export async function bumpRemoteSyncVersion(remote: Client): Promise<number | un
   }
 }
 
+/** Push local SQLite changes via workspace log (Sync V3 — fingerprint Turso CDC removed). */
 export async function pushLocalDbToTurso(
   localDbPath: string,
   credentials: TursoCredentials,
@@ -691,137 +935,15 @@ export async function pushLocalDbToTurso(
     return { status: "skipped", tables: [], reason: "local_db_empty" };
   }
 
-  const localDb = openWritableLocalJobDb(localDbPath);
-  const remote = createRemoteClient(credentials);
-  try {
-    localDb.pragma("wal_checkpoint(TRUNCATE)");
-    ensureLocalSyncInfrastructure(localDb);
-
-    const tableNames = filterSyncableTables(listUserTables(localDb));
-    if (tableNames.length === 0) {
-      return { status: "skipped", tables: [], reason: "no_syncable_tables" };
-    }
-
-    for (const tableName of tableNames) {
-      ensureLocalTableSyncTriggers(localDb, tableName);
-    }
-
-    const currentFingerprints = computeSyncableTableFingerprints(localDb);
-    const { changed, skipped } = tablesToSync(
-      tableNames,
-      currentFingerprints,
-      syncOptions.previousFingerprints,
-      syncOptions.force === true,
-    );
-
-    const lastPushedLogId = syncOptions.lastPushedLogId ?? 0;
-    const pendingEntries = readSyncLogSince(localDb, lastPushedLogId);
-    const bootstrap = syncOptions.force === true || (await remoteNeedsBootstrap(remote));
-
-    if (bootstrap) {
-      const syncedRemote = await syncTablesToRemote(
-        remote,
-        tableNames.map((name) => readLocalTable(localDb, name)),
-      );
-      await ensureRemoteSyncInfrastructure(remote);
-      for (const tableName of tableNames) {
-        const columns = readTableSchema(localDb, tableName);
-        await ensureRemoteTableSyncTriggers(remote, columns, tableName);
-      }
-      const maxId = maxSyncLogId(localDb);
-      pruneSyncLogThrough(localDb, maxId);
-      const remoteVersion = await bumpRemoteSyncVersion(remote);
-      // Bootstrap replaced remote tables wholesale — any pre-existing remote
-      // log entries are now redundant; mark them as pulled.
-      const remoteLogMaxId = await readRemoteMaxSyncLogId(remote);
-      // Full replace invalidates the old changelog for everyone: compact it
-      // immediately (no threshold/retention) and set compacted_through_id so
-      // stale consumers full-resync instead of delta-pulling a broken history.
-      if (remoteLogMaxId !== undefined && remoteLogMaxId > 0) {
-        await compactRemoteSyncLog(remote, remoteLogMaxId, {
-          minEntries: 1,
-          retentionDays: 0,
-        });
-      }
-      return {
-        status: "pushed",
-        tables: syncedRemote,
-        tableFingerprints: currentFingerprints,
-        skippedTables: skipped,
-        remoteVersion,
-        lastPushedLogId: maxId,
-        ...(remoteLogMaxId !== undefined ? { remoteLogMaxId } : {}),
-        syncMode: "bootstrap",
-      };
-    }
-
-    if (pendingEntries.length === 0 && changed.length === 0) {
-      return {
-        status: "skipped",
-        tables: [],
-        reason: "all_tables_unchanged",
-        tableFingerprints: currentFingerprints,
-        skippedTables: skipped,
-      };
-    }
-
-    if (pendingEntries.length > 0) {
-      await ensureRemoteSyncInfrastructure(remote);
-      const touched = await pushDeltaToRemote(localDb, remote, pendingEntries);
-      const remoteLogMaxId = await mirrorSyncLogToRemote(remote, pendingEntries);
-      const maxId = pendingEntries[pendingEntries.length - 1]!.id;
-      pruneSyncLogThrough(localDb, maxId);
-      const remoteVersion = await bumpRemoteSyncVersion(remote);
-      // Opportunistic remote log compaction. Watermark = remoteLogMaxId: this
-      // consumer has seen everything up to it (remote-ahead was merged before
-      // push and our own entries were just mirrored). Threshold + retention
-      // floor inside protect other/untracked consumers.
-      if (remoteLogMaxId !== undefined && remoteLogMaxId > 0) {
-        await compactRemoteSyncLog(remote, remoteLogMaxId);
-      }
-      return {
-        status: "pushed",
-        tables: touched,
-        tableFingerprints: currentFingerprints,
-        skippedTables: skipped,
-        remoteVersion,
-        lastPushedLogId: maxId,
-        ...(remoteLogMaxId !== undefined ? { remoteLogMaxId } : {}),
-        deltaEntries: pendingEntries.length,
-        syncMode: "delta",
-      };
-    }
-
-    const snapshotTables = changed.filter(
-      (name) => !tableHasPrimaryKey(localDb, name),
-    );
-    if (snapshotTables.length === 0) {
-      return {
-        status: "skipped",
-        tables: [],
-        reason: "all_tables_unchanged",
-        tableFingerprints: currentFingerprints,
-        skippedTables: skipped,
-      };
-    }
-
-    const syncedRemote = await syncTablesToRemote(
-      remote,
-      snapshotTables.map((name) => readLocalTable(localDb, name)),
-    );
-    const remoteVersion = await bumpRemoteSyncVersion(remote);
-    return {
-      status: "pushed",
-      tables: syncedRemote,
-      tableFingerprints: currentFingerprints,
-      skippedTables: skipped,
-      remoteVersion,
-      syncMode: "snapshot_fallback",
-    };
-  } finally {
-    localDb.close();
-    remote.close();
-  }
+  ensureLocalDbChangeLogReady(localDbPath);
+  const linked = buildLinkedSourceForSync(localDbPath, syncOptions);
+  const { pushLinkedSourceViaWorkspaceLog } = await import(
+    "./syncV3/workspaceLogSync.js"
+  );
+  return pushLinkedSourceViaWorkspaceLog(linked, credentials, {
+    force: syncOptions.force,
+    tableNames: syncOptions.tableNames ? [...syncOptions.tableNames] : undefined,
+  });
 }
 
 const LOCAL_DB_BUSY_TIMEOUT_MS = 5_000;
@@ -829,22 +951,19 @@ const LOCAL_DB_BUSY_TIMEOUT_MS = 5_000;
 /** Paths where changelog infrastructure was installed this session (avoids DDL on every watcher event). */
 const changeLogReadyPaths = new Set<string>();
 
-export function isSqliteBusyError(error: unknown): boolean {
-  return (
-    typeof error === "object" &&
-    error !== null &&
-    "code" in error &&
-    (error as { code: string }).code === "SQLITE_BUSY"
-  );
-}
+// Re-exported so existing importers keep working; defined in the classifier
+// module, which is native-import-free and reachable from the sync worker.
+export { isSqliteBusyError } from "./tursoReplica/tursoReplicaErrors.js";
 
 /** @internal test hook */
 export function resetChangeLogReadyCacheForTests(): void {
   changeLogReadyPaths.clear();
 }
 
-function openWritableLocalJobDb(localDbPath: string): Database.Database {
-  const db = new Database(localDbPath);
+export function openWritableLocalJobDb(localDbPath: string): Database.Database {
+  const normalized = path.normalize(localDbPath);
+  assertNotReplicaManagedWritablePath(normalized, "openWritableLocalJobDb");
+  const db = openDiagnosticDatabase(Database, "services/tursoSyncBridgeCore", normalized);
   db.pragma("journal_mode = WAL");
   db.pragma(`busy_timeout = ${LOCAL_DB_BUSY_TIMEOUT_MS}`);
   return db;
@@ -853,7 +972,7 @@ function openWritableLocalJobDb(localDbPath: string): Database.Database {
 /** Install changelog infrastructure + triggers on a linked job DB (idempotent). */
 export function ensureLocalDbChangeLogReady(localDbPath: string): void {
   const normalized = path.normalize(localDbPath);
-  if (changeLogReadyPaths.has(normalized)) {
+  if (isReplicaManagedDbPathSync(normalized)) {
     return;
   }
   if (!fs.existsSync(normalized)) {
@@ -863,43 +982,76 @@ export function ensureLocalDbChangeLogReady(localDbPath: string): void {
   if (stats.size === 0) {
     return;
   }
+
   const localDb = openWritableLocalJobDb(normalized);
   try {
+    const syncableTables = filterSyncableTables(listUserTables(localDb));
+    const fullyReady =
+      changeLogReadyPaths.has(normalized) &&
+      isLocalCdcMarkerSet(localDb) &&
+      syncableTables.every((tableName) =>
+        localInsertTriggerExists(localDb, tableName),
+      );
+    if (fullyReady) {
+      return;
+    }
+
     ensureLocalSyncInfrastructure(localDb);
-    for (const tableName of filterSyncableTables(listUserTables(localDb))) {
+    for (const tableName of syncableTables) {
       ensureLocalTableSyncTriggers(localDb, tableName);
     }
+    markLocalCdcReady(localDb);
     changeLogReadyPaths.add(normalized);
   } finally {
     localDb.close();
   }
 }
 
+/** True when the local sqlite file has at least one syncable user table. */
+export function localDbHasSyncableUserTables(localDbPath: string): boolean {
+  if (!fs.existsSync(localDbPath)) {
+    return false;
+  }
+  const stats = fs.statSync(localDbPath);
+  if (stats.size === 0) {
+    return false;
+  }
+  const normalized = path.normalize(localDbPath);
+  if (isReplicaManagedDbPathSync(normalized)) {
+    return true;
+  }
+  const openReadonly = isReplicaManagedDbPathSync(normalized);
+  const localDb = openReadonly
+    ? openDiagnosticDatabase(Database, "services/tursoSyncBridgeCore", normalized, { readonly: true, fileMustExist: true, timeout: 100 })
+    : openWritableLocalJobDb(normalized);
+  try {
+    return filterSyncableTables(listUserTables(localDb)).length > 0;
+  } finally {
+    localDb.close();
+  }
+}
+
+/** Pull remote SQLite changes via workspace log (Sync V3 — fingerprint Turso CDC removed). */
 export async function pullTursoToLocalDb(
   localDbPath: string,
-  credentials: TursoCredentials,
+  _credentials: TursoCredentials,
   options?: PullSourceSyncOptions,
 ): Promise<PullResult> {
   const syncOptions = requireLinkedSourceOptions(options);
 
-  const dataDir = path.dirname(localDbPath);
-  fs.mkdirSync(dataDir, { recursive: true });
+  fs.mkdirSync(path.dirname(localDbPath), { recursive: true });
 
-  if (options?.onlyIfLocalEmpty && fs.existsSync(localDbPath)) {
-    const stats = fs.statSync(localDbPath);
-    if (stats.size > 0) {
-      const fingerprints = computeSyncableTableFingerprintsForPath(localDbPath);
-      if (fingerprints && Object.keys(fingerprints).length > 0) {
-        return { status: "skipped", reason: "local_db_has_data" };
-      }
-    }
+  if (options?.onlyIfLocalEmpty && localDbHasSyncableUserTables(localDbPath)) {
+    return { status: "skipped", reason: "local_db_has_data" };
   }
 
   if (options?.skipIfLocalDirty && fs.existsSync(localDbPath)) {
-    const { isJobDbDirty, loadTursoSyncState } = await import("./tursoSyncState.js");
-    const state = loadTursoSyncState();
-    if (isJobDbDirty(syncOptions.jobId, localDbPath, state)) {
-      return { status: "skipped", reason: "local_db_dirty" };
+    const stats = fs.statSync(localDbPath);
+    if (stats.size > 0) {
+      const { isJobDbDirty, loadTursoSyncState } = await import("./tursoSyncState.js");
+      if (isJobDbDirty(syncOptions.jobId, localDbPath, loadTursoSyncState())) {
+        return { status: "skipped", reason: "local_db_dirty" };
+      }
     }
   }
 
@@ -907,116 +1059,11 @@ export async function pullTursoToLocalDb(
     fs.writeFileSync(localDbPath, "");
   }
   cleanupSqliteSidecars(localDbPath);
+  ensureLocalDbChangeLogReady(localDbPath);
 
-  const remote = createRemoteClient(credentials);
-  let localDb: Database.Database | null = null;
-  try {
-    const remoteVersion = (await readRemoteSyncVersion(remote)) ?? undefined;
-    const lastPulledLogId = syncOptions.lastPulledLogId ?? 0;
-    const hasRemoteLog = await remoteSyncLogExists(remote);
-
-    // Stale-consumer escape hatch: if compaction deleted entries we never
-    // pulled (lastPulledLogId < compacted_through_id), the delta history is
-    // incomplete for us — fall through to a full pull instead.
-    let staleConsumer = false;
-    if (hasRemoteLog && !syncOptions.force) {
-      const compactedThrough = await readRemoteCompactedThroughId(remote);
-      staleConsumer = lastPulledLogId < compactedThrough;
-    }
-
-    if (hasRemoteLog && !syncOptions.force && !staleConsumer) {
-      const remoteEntries = await readRemoteSyncLogSince(remote, lastPulledLogId);
-      if (remoteEntries.length > 0) {
-        localDb = openWritableLocalJobDb(localDbPath);
-        ensureLocalSyncInfrastructure(localDb);
-        for (const tableName of filterSyncableTables(listUserTables(localDb))) {
-          ensureLocalTableSyncTriggers(localDb, tableName);
-        }
-        await withSyncMutedAsync(localDb, async () => {
-          await applyRemoteSyncLogToLocal(localDb!, remote, remoteEntries);
-        });
-        localDb.pragma("wal_checkpoint(TRUNCATE)");
-        const maxId = remoteEntries[remoteEntries.length - 1]!.id;
-        return {
-          status: "pulled",
-          remoteVersion,
-          lastPulledLogId: maxId,
-          deltaEntries: remoteEntries.length,
-          syncMode: "delta",
-        };
-      }
-    }
-
-    // Version check: skip full-table read when remote version unchanged and no pending changelog.
-    if (
-      !syncOptions.force &&
-      !staleConsumer &&
-      remoteVersion !== undefined &&
-      options?.lastSeenRemoteVersion !== undefined &&
-      remoteVersion === options.lastSeenRemoteVersion &&
-      fs.existsSync(localDbPath) &&
-      fs.statSync(localDbPath).size > 0
-    ) {
-      return { status: "skipped", reason: "remote_unchanged", remoteVersion };
-    }
-
-    // Read the remote log watermark BEFORE reading tables: entries created
-    // after this point are either already in the tables we read or will be
-    // picked up by the next delta pull. Recording it as lastPulledLogId keeps
-    // the delta cursor valid after a full pull (previously it stayed stale).
-    const fullPullLogWatermark = hasRemoteLog
-      ? await readRemoteMaxSyncLogId(remote)
-      : undefined;
-
-    const tableNames = filterSyncableTables(await listRemoteUserTables(remote));
-    if (tableNames.length === 0) {
-      return { status: "skipped", reason: "no_remote_tables", remoteVersion };
-    }
-
-    const tables: LocalTable[] = [];
-    for (const tableName of tableNames) {
-      const remoteTable = await readRemoteTable(remote, tableName);
-      if (isScratchTable(tableName)) {
-        continue;
-      }
-      tables.push({ ...remoteTable, name: tableName });
-    }
-
-    if (tables.length === 0) {
-      return { status: "skipped", reason: "no_syncable_remote_tables", remoteVersion };
-    }
-
-    const knownLocalNames = new Set(tables.map((table) => table.name));
-    const foreignKeyRefs = new Map<string, string[]>();
-    for (const tableName of tableNames) {
-      if (isScratchTable(tableName) || !knownLocalNames.has(tableName)) {
-        continue;
-      }
-      const refs = await readRemoteForeignKeyRefs(
-        remote,
-        tableName,
-        syncOptions.jobId,
-        knownLocalNames,
-      );
-      foreignKeyRefs.set(tableName, refs);
-    }
-    const orderedTables = sortTablesForInsert(tables, foreignKeyRefs);
-
-    localDb = openWritableLocalJobDb(localDbPath);
-    withSyncMuted(localDb, () => {
-      writeTablesToLocalDb(localDb!, orderedTables);
-    });
-    localDb.pragma("wal_checkpoint(TRUNCATE)");
-    return {
-      status: "pulled",
-      remoteVersion,
-      ...(fullPullLogWatermark !== undefined
-        ? { lastPulledLogId: fullPullLogWatermark }
-        : {}),
-      syncMode: "full",
-    };
-  } finally {
-    localDb?.close();
-    remote.close();
-  }
+  const linked = buildLinkedSourceForSync(localDbPath, syncOptions);
+  const { pullLinkedSourceViaWorkspaceLog } = await import(
+    "./syncV3/workspaceLogSync.js"
+  );
+  return pullLinkedSourceViaWorkspaceLog(linked);
 }

@@ -4,7 +4,7 @@
 
 ## Overview
 
-The bash tool now **automatically** combines Papr Memory semantic search with traditional grep when searching code in `~/Papr/apps/` or `~/Papr/Jobs/`. This provides the best of both worlds:
+The bash tool now **automatically** combines Papr Memory semantic search with traditional grep when searching code in `$PAPR_HOME/apps/` or `$PAPR_HOME/Jobs/`. This provides the best of both worlds:
 
 - **Semantic search** - Finds related code by meaning (even if search term doesn't appear literally)
 - **Exact match** - Finds literal text matches (grep's traditional strength)
@@ -17,9 +17,9 @@ When the bash tool receives a command, it checks if it's a grep search in PAPR f
 
 ```bash
 # These commands trigger hybrid search:
-grep "authentication" ~/Papr/apps/
-grep -r "handleLogin" ~/Papr/Jobs/
-grep -rn "fetchData" ~/Papr/apps/my-app/
+grep "authentication" $PAPR_HOME/apps/
+grep -r "handleLogin" $PAPR_HOME/Jobs/
+grep -rn "fetchData" $PAPR_HOME/apps/my-app/
 rg "API_KEY" ~/Papr/
 ```
 
@@ -66,7 +66,7 @@ Found 3 relevant code files:
 ### Without Hybrid Search:
 ```bash
 # Agent searches for "authentication"
-grep -r "authentication" ~/Papr/apps/
+grep -r "authentication" $PAPR_HOME/apps/
 
 # Results: Only files with literal "authentication" text
 # MISSES: Files with login(), handleAuth(), verifyUser(), etc.
@@ -75,7 +75,7 @@ grep -r "authentication" ~/Papr/apps/
 ### With Hybrid Search:
 ```bash
 # Same command
-grep -r "authentication" ~/Papr/apps/
+grep -r "authentication" $PAPR_HOME/apps/
 
 # Memory finds (semantic):
 # - login-handler.ts (no "authentication" text, but semantically related)
@@ -154,10 +154,10 @@ Where path contains:
 
 **Examples that trigger hybrid search:**
 ```bash
-grep "fetchData" ~/Papr/apps/
-grep -r "TODO" ~/Papr/Jobs/my-job/
+grep "fetchData" $PAPR_HOME/apps/
+grep -r "TODO" $PAPR_HOME/Jobs/my-job/
 grep -rn "export" $HOME/PAPR/apps/
-rg "API_KEY" ~/Papr/  # ripgrep variant
+rg "API_KEY" "$PAPR_HOME/"  # ripgrep variant (active org/namespace workspace)
 ```
 
 **Examples that DON'T trigger (not in PAPR folders):**
@@ -173,7 +173,7 @@ find ~/Documents -name "*.txt"
 
 1. Create a test file with semantic content:
 ```bash
-cat > ~/Papr/apps/test-app/auth.ts << 'EOF'
+cat > $PAPR_HOME/apps/test-app/auth.ts << 'EOF'
 // User authentication and session management
 export function handleLogin(username: string, password: string) {
   // Verify credentials
@@ -190,7 +190,7 @@ EOF
 "Search for authentication code in my apps"
 
 # Agent will likely use:
-bash({ command: "grep -r 'auth' ~/Papr/apps/" })
+bash({ command: "grep -r 'auth' $PAPR_HOME/apps/" })
 
 # Results will show:
 # - Memory: auth.ts, login-handler.ts, session-manager.ts (semantic)
@@ -283,7 +283,7 @@ No exact matches found.
 
 **Command:**
 ```bash
-grep -r "login" ~/Papr/apps/
+grep -r "login" $PAPR_HOME/apps/
 ```
 
 **Results:**
@@ -291,17 +291,17 @@ grep -r "login" ~/Papr/apps/
 === Memory Search Results (Semantic) ===
 Found 4 relevant code files:
 
-📄 ~/Papr/apps/dashboard/auth-handler.ts
+📄 $PAPR_HOME/apps/dashboard/auth-handler.ts
    Project: app-dashboard
    Language: TypeScript
    Match: Authentication flow manager. Handles user login, session creation...
 
-📄 ~/Papr/apps/dashboard/session.ts
+📄 $PAPR_HOME/apps/dashboard/session.ts
    Project: app-dashboard
    Language: TypeScript
    Match: Session management with localStorage persistence. Validates tokens...
 
-📄 ~/Papr/Jobs/user-sync/sync.py
+📄 $PAPR_HOME/Jobs/user-sync/sync.py
    Project: user-sync-job
    Language: Python
    Match: Syncs user credentials from external API. Handles OAuth refresh...
@@ -321,7 +321,7 @@ apps/dashboard/types.ts:8:  login: (user: User) => void;
 
 **Command:**
 ```bash
-grep "transform" ~/Papr/Jobs/
+grep "transform" $PAPR_HOME/Jobs/
 ```
 
 **Results:**
@@ -329,12 +329,12 @@ grep "transform" ~/Papr/Jobs/
 === Memory Search Results (Semantic) ===
 Found 2 relevant code files:
 
-📄 ~/Papr/Jobs/reddit-scraper/processor.py
+📄 $PAPR_HOME/Jobs/reddit-scraper/processor.py
    Project: reddit-scraper
    Language: Python
    Match: Data processing pipeline. Extracts, cleans, and formats Reddit posts...
 
-📄 ~/Papr/Jobs/reddit-scraper/utils.py
+📄 $PAPR_HOME/Jobs/reddit-scraper/utils.py
    Project: reddit-scraper
    Language: Python
    Match: Helper functions for data normalization and schema mapping...

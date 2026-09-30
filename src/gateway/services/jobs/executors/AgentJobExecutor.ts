@@ -17,13 +17,23 @@ import {
   getWikiWriterService,
   isWikiWriterJobName,
 } from "../../WikiWriterService.js";
+import { isHomeDailyBriefJob } from "../dailyBriefVerification.js";
+import { todayBriefDateKey } from "../../../../core/utils/briefDateKey.js";
 import type { SubAgentIconName } from "../../../../core/types/subagents.js";
+import { CODEBASE_EXPLORER_SUB_AGENT_ID } from "../../../../core/subagents/codebaseExplorer.js";
+import { resolveCodebaseExplorerProviderModel } from "../../../utils/explorationSubAgentModel.js";
 import {
-  jobAppDatabasePromptLines,
-  requireJobAppDatabase,
+  jobWriteDatabaseEnv,
+  jobWriteDatabasePromptLines,
+  isReplicaManagedTarget,
+  resolveJobWriteTargets,
 } from "../../jobAppDatabase.js";
+import { STANDALONE_APP_ID } from "../appIds.js";
+import { jobSdkEnv } from "../jobSdkEnv.js";
+import { leaseJobDbProxyEnv } from "../jobDbProxyEnv.js";
+import { runtimeParamsForJobEnv } from "../../../utils/normalizeRuntimeParams.js";
+import type { IsolatedJobRunDiagnostics } from "../../AgentService.js";
 
-/** Shared agent job session inputs — used by desktop launch() and cloud gateway streaming. */
 export interface AgentJobSessionInput {
   jobId: string;
   runId: string;
@@ -40,6 +50,46 @@ export interface AgentJobSessionInput {
   sourceAgentName: string;
   subAgentName?: string;
   subAgentIcon?: SubAgentIconName;
+}
+
+function describeEmptyJobOutput(diag: IsolatedJobRunDiagnostics): string {
+  const modelLabel = `${diag.provider}/${diag.model}`;
+  const authNote =
+    diag.authType != null
+      ? ` Auth succeeded (${diag.authType}).`
+      : "";
+
+  if (diag.streamError) {
+    return (
+      `[WARN] Agent job produced no model output (${modelLabel}): ${diag.streamError}`
+    );
+  }
+
+  if (diag.orphanToolCount > 0) {
+    const maxTurnsNote =
+      diag.maxTurns != null
+        ? ` maxTurns=${diag.maxTurns}.`
+        : "";
+    return (
+      `[WARN] Agent job stream ended with ${diag.orphanToolCount} unfinished tool call(s) ` +
+      `before the model could respond (${modelLabel}).${authNote}` +
+      ` The run may have hit a step/context limit or been interrupted.${maxTurnsNote} ` +
+      `See job log for tool errors (e.g. missing $APP_DB, Reddit 403).`
+    );
+  }
+
+  if (diag.toolCallCount > 0) {
+    return (
+      `[WARN] Agent job ran ${diag.toolCallCount} tool call(s) but produced no final text (${modelLabel}).${authNote} ` +
+      `The model likely stopped after tool use without a summary. Check job log for failed tools; ` +
+      `increase maxTurns or add "print a final summary" to the job command.`
+    );
+  }
+
+  return (
+    `[WARN] Agent job produced no model output (${modelLabel}).${authNote} ` +
+    `The model returned an empty response — see Gateway logs for API details.`
+  );
 }
 
 export class AgentJobExecutor implements IJobExecutor {
@@ -101,6 +151,17 @@ export class AgentJobExecutor implements IJobExecutor {
       subAgentName = profile.name;
       subAgentSystemPrompt = profile.systemPrompt;
       subAgentIcon = profile.icon;
+
+      if (params.job.subAgentId === CODEBASE_EXPLORER_SUB_AGENT_ID) {
+        const exploration = await resolveCodebaseExplorerProviderModel();
+        provider = exploration.provider;
+        model = exploration.model;
+        fallbackProvider = undefined;
+        fallbackModel = undefined;
+        console.log(
+          `[AgentJobExecutor] codebase-explorer auth-aware model: ${provider}/${model}`,
+        );
+      }
     }
 
     const envBlock = await this.buildEnvironmentBlock(params);
@@ -168,22 +229,44 @@ export class AgentJobExecutor implements IJobExecutor {
     await params.appendLog(`Starting isolated agent run: ${params.runId}`);
     await params.appendLog(`Environment: ${envBlock}`);
 
-    // Set tool execution context so tools can access reportChatId and delegation job id
-    if (params.job.reportChatId || params.job.type === "subagent") {
-      const { setToolContext } = await import("../../../../core/tools/context.js");
-      const chatId =
-        params.job.reportChatId ??
-        params.job.deliver?.targetId ??
-        (params.job.type === "subagent"
-          ? `delegation:${params.job.id}`
-          : undefined);
-      if (chatId) {
-        setToolContext(chatId, {
-          delegationJobId:
-            params.job.type === "subagent" ? params.job.id : undefined,
-        });
-      }
-    }
+    const jobsService = getJobsService();
+    jobsService.registerAgentRun(params.job.id, params.runId);
+
+    const jobChatId = `job:${params.job.id}:${params.runId}`;
+    const writeTargets = await resolveJobWriteTargets(params.job);
+    const linkedAppId = (params.job.appIds ?? []).find(
+      (id) => id !== STANDALONE_APP_ID,
+    );
+    const jobDbPath = await getJobsService().getJobDatabasePath(params.job.id);
+    const { getPaprRoot } = await import("../../../../core/utils/paprRoot.js");
+    // Agent jobs write their own scripts at runtime, so a raw sqlite3 handle
+    // cannot be prevented by fixing job code — the agent regenerates it. Proxy
+    // credentials plus papr_db on PYTHONPATH give it a safe path by default.
+    const dbProxy = leaseJobDbProxyEnv(writeTargets, linkedAppId);
+
+    const jobEnv: Record<string, string> = {
+      PAPR_HOME: getPaprRoot(),
+      JOB_DIR: params.jobDir,
+      ...(jobDbPath ? { JOB_DB: jobDbPath } : {}),
+      ...(writeTargets.length > 0
+        ? jobWriteDatabaseEnv(writeTargets, linkedAppId)
+        : {}),
+      ...dbProxy.env,
+      ...jobSdkEnv(process.env.PYTHONPATH),
+      ...(isHomeDailyBriefJob(params.job)
+        ? {
+            BRIEF_DATE_KEY: todayBriefDateKey(params.job.schedule?.timezone),
+          }
+        : {}),
+      ...runtimeParamsForJobEnv(params.runtimeParams),
+    };
+
+    const { setToolContext } = await import("../../../../core/tools/context.js");
+    setToolContext(jobChatId, {
+      delegationJobId:
+        params.job.type === "subagent" ? params.job.id : undefined,
+      jobEnv,
+    });
 
     // Broadcast subagent-job-started so UI can show MiniChatCard during run (receives activity)
     if (params.job.type === "subagent") {
@@ -207,6 +290,7 @@ export class AgentJobExecutor implements IJobExecutor {
     // ── Choose execution path: structured (generateObject) vs free-form (streamText)
     let outputText: string;
     let executionError: Error | null = null;
+    let runDiagnostics: IsolatedJobRunDiagnostics | undefined;
 
     try {
       if (params.job.outputMode === "structured" && params.job.outputSchema) {
@@ -248,6 +332,7 @@ export class AgentJobExecutor implements IJobExecutor {
           delegationId: session.delegationId,
         });
         outputText = response.text;
+        runDiagnostics = response.diagnostics;
       }
     } catch (error) {
       executionError = error instanceof Error ? error : new Error(String(error));
@@ -255,10 +340,16 @@ export class AgentJobExecutor implements IJobExecutor {
       await params.appendLog(
         `Agent execution failed: ${executionError.message}`,
       );
+    } finally {
+      jobsService.clearAgentRun(params.job.id, params.runId);
+      // Revoke database access the moment the agent stops running, whether it
+      // succeeded or threw. Everything below this point is delivery/logging.
+      dbProxy.release();
     }
     // ─────────────────────────────────────────────────────────────────────────
 
-    if (params.job.deliver?.channel === "chat") {
+    if (params.job.deliver?.channel === "chat" && params.job.type !== "subagent") {
+      // Sub-agent delegations: SubAgentResponseTrigger posts the user-facing summary.
       const deliveryMessage = {
         id: `msg-${uuidv4()}`,
         chat_id: params.job.deliver.targetId,
@@ -298,16 +389,13 @@ export class AgentJobExecutor implements IJobExecutor {
       chatId: params.job.reportChatId ?? params.job.deliver?.targetId,
     });
 
-    const modelInfo =
-      session.provider && session.model
-        ? ` (${session.provider}/${session.model})`
-        : " (default openai/gpt-5-6-sol)";
+    const emptyOutputWarning =
+      runDiagnostics != null
+        ? describeEmptyJobOutput(runDiagnostics)
+        : `[WARN] Agent job produced no model output. See Gateway logs for details.`;
 
     if (outputText.length === 0) {
-      await params.appendLog(
-        `[WARN] Agent job produced no model output${modelInfo}. ` +
-          "Check: OAuth connected or API key set in Settings; see Gateway logs for API errors.",
-      );
+      await params.appendLog(emptyOutputWarning);
     }
 
     const output =
@@ -323,8 +411,7 @@ export class AgentJobExecutor implements IJobExecutor {
     const errorMessage = executionError
       ? executionError.message
       : outputText.length === 0
-        ? `[WARN] Agent job produced no model output${modelInfo}. ` +
-          "Check: OAuth connected or API key set in Settings; see Gateway logs for API errors."
+        ? emptyOutputWarning
         : undefined;
 
     return {
@@ -351,13 +438,24 @@ export class AgentJobExecutor implements IJobExecutor {
     const { getPaprRoot } = await import("../../../../core/utils/paprRoot.js");
     envLines.push(`PAPR_HOME="${getPaprRoot()}"`);
 
+    const writeTargets = await resolveJobWriteTargets(params.job);
+    if (writeTargets.length > 0) {
+      envLines.push(...jobWriteDatabasePromptLines(writeTargets));
+      // Never tell an agent "or sqlite3" when a target is a replica — the block
+      // above forbids it, and a contradictory prompt is how replicas get corrupted.
+      envLines.push(
+        writeTargets.some(isReplicaManagedTarget)
+          ? "AGENT JOB: Persist UI-facing rows via papr_db.connect() / papr_db_exec only (never sqlite3 on a [replica] path) — NOT $JOB_DB."
+          : "AGENT JOB: Persist UI-facing rows via papr_db.connect() / papr_db_exec or sqlite3 on PAPR_DB_* / APP_DB — NOT $JOB_DB.",
+      );
+    }
+
     const ownDbPath = await jobsService.getJobDatabasePath(params.job.id);
     envLines.push(`JOB_DIR="${params.jobDir}"`);
-    if (ownDbPath) envLines.push(`JOB_DB="${ownDbPath}"`);
-
-    const appDb = await requireJobAppDatabase(params.job.appIds);
-    if (appDb) {
-      envLines.push(...jobAppDatabasePromptLines(appDb));
+    if (ownDbPath) {
+      envLines.push(
+        `JOB_DB="${ownDbPath}"  (scratch only — run logs, temp tables; NOT mini-app registry data)`,
+      );
     }
 
     for (const dep of params.job.dependsOn ?? []) {
@@ -369,6 +467,12 @@ export class AgentJobExecutor implements IJobExecutor {
         envLines.push(`DEP_${key}_DIR="${depDir}"`);
         if (depDb) envLines.push(`DEP_${key}_DB="${depDb}"`);
       }
+    }
+
+    for (const [key, value] of Object.entries(
+      runtimeParamsForJobEnv(params.runtimeParams),
+    )) {
+      envLines.push(`${key}="${value}"`);
     }
 
     return envLines.length > 0

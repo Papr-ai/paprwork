@@ -1,4 +1,5 @@
 import React, { useCallback, useState } from "react";
+import { copyTextToClipboard } from "../../utils/copyToClipboard";
 
 interface MessageCopyButtonProps {
   text: string;
@@ -8,17 +9,13 @@ export const MessageCopyButton: React.FC<MessageCopyButtonProps> = ({ text }) =>
   const [copied, setCopied] = useState(false);
 
   const handleCopy = useCallback(async () => {
-    if (!text.trim()) {
+    const ok = await copyTextToClipboard(text);
+    if (!ok) {
       return;
     }
 
-    try {
-      await navigator.clipboard.writeText(text);
-      setCopied(true);
-      window.setTimeout(() => setCopied(false), 2000);
-    } catch {
-      // Clipboard access can fail in restricted contexts.
-    }
+    setCopied(true);
+    window.setTimeout(() => setCopied(false), 2000);
   }, [text]);
 
   return (

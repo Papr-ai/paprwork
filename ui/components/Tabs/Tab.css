@@ -11,8 +11,6 @@
   border-radius: 7px;
   /* Apple "Clear Variant": High transparency for small floating elements */
   background: rgba(236, 236, 236, 0.65);
-  backdrop-filter: blur(20px) saturate(150%);
-  -webkit-backdrop-filter: blur(20px) saturate(150%);
   border: none;
   /* Apple guideline: Add subtle shadow for depth */
   box-shadow: 0 1px 2px rgba(0, 0, 0, 0.08), 0 0 0 0.5px rgba(0, 0, 0, 0.04);
@@ -36,8 +34,6 @@
 .tab--active {
   /* Active tabs: Higher opacity for emphasis */
   background: rgba(255, 255, 255, 0.88);
-  backdrop-filter: blur(30px) saturate(180%);
-  -webkit-backdrop-filter: blur(30px) saturate(180%);
   box-shadow: 0 2px 6px rgba(0, 0, 0, 0.12), 0 0 0 0.5px rgba(0, 0, 0, 0.08);
   color: var(--text-primary);
 }
@@ -78,8 +74,6 @@
 @media (prefers-color-scheme: dark) {
   .tab {
     background: rgba(44, 44, 46, 0.65);
-    backdrop-filter: blur(20px) saturate(150%);
-    -webkit-backdrop-filter: blur(20px) saturate(150%);
     box-shadow: 0 1px 2px rgba(0, 0, 0, 0.3), 0 0 0 0.5px rgba(0, 0, 0, 0.2);
     color: #8E8E93;
   }
@@ -92,8 +86,6 @@
   
   .tab--active {
     background: rgba(28, 28, 30, 0.88);
-    backdrop-filter: blur(30px) saturate(180%);
-    -webkit-backdrop-filter: blur(30px) saturate(180%);
     box-shadow: 0 2px 6px rgba(0, 0, 0, 0.5), 0 0 0 0.5px rgba(0, 0, 0, 0.3);
     color: #F2F2F7;
   }
@@ -327,7 +319,7 @@
   animation: pulse-streaming 1.5s ease-in-out infinite;
 }
 
-/* Unread indicator (green static dot) */
+/* Unread indicator (green static dot — chat finished with new response) */
 .tab.tab--unread::before {
   content: '';
   position: absolute;
@@ -340,7 +332,7 @@
   background-color: #10B981; /* Green */
 }
 
-/* Pending refresh indicator (orange static dot) */
+/* Pending refresh (soft periwinkle — split-view updated, chat not fully final) */
 .tab.tab--pending-refresh::before {
   content: '';
   position: absolute;
@@ -350,7 +342,7 @@
   width: 6px;
   height: 6px;
   border-radius: 50%;
-  background-color: #F59E0B; /* Orange */
+  background-color: #8E9CC7; /* Muted periwinkle */
 }
 
 /* Shift icon to make room for dot */
@@ -382,7 +374,7 @@
   }
 
   .tab.tab--pending-refresh::before {
-    background-color: #FBBF24; /* Lighter orange for dark mode */
+    background-color: #A8B4D4; /* Soft lavender for dark mode */
   }
 }
 

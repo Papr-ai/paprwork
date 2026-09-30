@@ -12,6 +12,7 @@ import {
   type StoredMessageRow,
 } from "./contextFootprint.js";
 import { computeRecentMessageLimit } from "./recentMessageWindow.js";
+import { boundedPayloadSql } from "./messagePayloadStore.js";
 
 const messageCharExpr = `LENGTH(COALESCE(content, ''))
   + LENGTH(COALESCE(thinking, ''))
@@ -68,7 +69,7 @@ function computeChatFootprintSnapshot(
   );
 
   const recentMessagesStmt = db.prepare(
-    `SELECT role, content, thinking, tool_calls
+    `SELECT role, content, thinking, ${boundedPayloadSql("tool_calls")}
      FROM messages
      WHERE chat_id = ?
      ORDER BY timestamp DESC
@@ -76,7 +77,7 @@ function computeChatFootprintSnapshot(
   );
 
   const toolCallsStmt = db.prepare(
-    `SELECT tool_calls
+    `SELECT ${boundedPayloadSql("tool_calls")}
      FROM messages
      WHERE chat_id = ?
        AND role = 'assistant'
@@ -216,7 +217,7 @@ export function computeCumulativeContextProjection(
   const chats = fetchChatsWithBilling(db);
 
   const messagesStmt = db.prepare(
-    `SELECT role, content, thinking, tool_calls, prompt_tokens
+    `SELECT role, content, thinking, ${boundedPayloadSql("tool_calls")}, prompt_tokens
      FROM messages
      WHERE chat_id = ?
      ORDER BY timestamp ASC`,

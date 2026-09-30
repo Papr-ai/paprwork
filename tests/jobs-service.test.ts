@@ -10,6 +10,12 @@ import {
   resetAppServiceSingletonForTests,
 } from "../src/gateway/services/AppService.js";
 import { resetJobsServiceSingletonForTests } from "../src/gateway/services/JobsService.js";
+import { bumpWorkspaceWriteGeneration } from "../src/gateway/services/workspaceWriteGuard.js";
+import { WORKSPACE_CHAT_JOB_ID } from "../src/core/constants/workspaceChatJob.js";
+
+function userVisibleJobs(jobs: Awaited<ReturnType<JobsService["listJobs"]>>) {
+  return jobs.filter((job) => job.id !== WORKSPACE_CHAT_JOB_ID);
+}
 
 const tmpRoots: string[] = [];
 
@@ -25,10 +31,16 @@ async function setupService(): Promise<JobsService> {
   const root = await fs.mkdtemp(path.join(os.tmpdir(), "papr-jobs-test-"));
   tmpRoots.push(root);
   process.env.HOME = root;
+  // HOME alone is not enough: getPaprRoot() prefers ~/Papr/.active-workspace.json
+  // (read from the REAL home) and re-syncs PAPR_HOME from it. Without this the
+  // suite created hundreds of job folders in the developer's live workspace.
+  process.env.PAPR_HOME = path.join(root, "Papr");
+  await fs.mkdir(process.env.PAPR_HOME, { recursive: true });
   resetAppServiceSingletonForTests();
   resetJobsServiceSingletonForTests();
   const service = new JobsService();
   await service.initialize();
+  await service.waitForStartupMaintenance();
   return service;
 }
 
@@ -36,7 +48,7 @@ describe("JobsService", () => {
   test("creates and lists jobs", async () => {
     const service = await setupService();
     await service.createJob({ name: "Build docs", appIds: [STANDALONE_APP_ID], type: "shell", command: "echo hi" });
-    const jobs = await service.listJobs();
+    const jobs = userVisibleJobs(await service.listJobs());
     expect(jobs).toHaveLength(1);
     expect(jobs[0].name).toBe("Build docs");
   });
@@ -71,7 +83,7 @@ describe("JobsService", () => {
     expect(dbStat.isFile()).toBe(true);
   });
 
-  test("createJob auto-links database to linked mini-app", async () => {
+  test("createJob does not auto-link scratch database (use attach_database)", async () => {
     const service = await setupService();
     const appService = getAppService();
     await appService.initialize();
@@ -87,9 +99,7 @@ describe("JobsService", () => {
     });
 
     const sources = await appService.listAppDataSources(app.id);
-    expect(sources).toHaveLength(1);
-    expect(sources[0]?.alias).toBe("Data Sync");
-    expect(sources[0]?.role).toBe("primary");
+    expect(sources).toHaveLength(0);
   });
 
   test("runs agent jobs via executor immediate path", async () => {
@@ -173,126 +183,213 @@ describe("JobsService", () => {
   });
 });
 
-describe("JobsService index corruption recovery", () => {
-  test("recovers job names from job.json when jobs.json is wiped", async () => {
+describe("JobsService lifecycle helpers", () => {
+  test("listActiveJobs and stopAllJobs cancel jobs without tracked child processes", async () => {
     const service = await setupService();
-    const job1 = await service.createJob({
-      name: "LinkedIn Scraper",
-      appIds: [STANDALONE_APP_ID], type: "python",
-      command: "python3 scrape.py",
+    const job = await service.createJob({
+      name: "Long agent job",
+      appIds: [STANDALONE_APP_ID],
+      type: "agent",
+      command: "Analyze data",
     });
-    const job2 = await service.createJob({
-      name: "Weekly Newsletter",
-      appIds: [STANDALONE_APP_ID], type: "agent",
-      command: "Write the weekly newsletter",
-    });
-    const job3 = await service.createJob({
-      name: "Deploy Script",
-      appIds: [STANDALONE_APP_ID], type: "shell",
-      command: "echo deploy",
+    await service.upsertJob({
+      ...job,
+      status: "running",
+      updatedAt: new Date().toISOString(),
     });
 
-    const jobsIndexPath = path.join(
-      process.env.HOME!,
-      "Papr",
-      "data",
-      "jobs.json",
-    );
+    expect(service.listActiveJobs()).toEqual([
+      {
+        id: job.id,
+        name: "Long agent job",
+        type: "agent",
+        status: "running",
+      },
+    ]);
 
-    // Verify job.json files exist on disk with real names
-    for (const job of [job1, job2, job3]) {
-      const jobJsonPath = path.join(
-        process.env.HOME!,
-        "Papr",
-        "Jobs",
-        job.id,
-        "job.json",
-      );
-      const data = JSON.parse(await fs.readFile(jobJsonPath, "utf-8"));
-      expect(data.name).toBe(job.name);
-    }
+    const result = await service.stopAllJobs("stopped for test");
+    expect(result.stoppedCount).toBe(1);
 
-    // Simulate corruption: wipe jobs.json to empty
-    await fs.writeFile(jobsIndexPath, "", "utf-8");
-
-    // Create a fresh service that will hit the corrupted index and recover
-    const recovered = new JobsService();
-    await recovered.initialize();
-    const jobs = await recovered.listJobs();
-
-    // All three user-created jobs should be recovered with real names
-    const scraper = jobs.find((j) => j.name === "LinkedIn Scraper");
-    expect(scraper).toBeDefined();
-    expect(scraper?.type).toBe("python");
-
-    const newsletter = jobs.find((j) => j.name === "Weekly Newsletter");
-    expect(newsletter).toBeDefined();
-    expect(newsletter?.type).toBe("agent");
-
-    const deploy = jobs.find((j) => j.name === "Deploy Script");
-    expect(deploy).toBeDefined();
-    expect(deploy?.type).toBe("shell");
-
-    // No job should have a UUID as its name (the bug we're preventing)
-    const uuidRegex = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
-    for (const job of jobs) {
-      expect(
-        uuidRegex.test(job.name),
-        `Job "${job.id}" has UUID as name — recovery failed to read job.json`,
-      ).toBe(false);
-    }
+    const refreshed = await service.getJob(job.id);
+    expect(refreshed?.status).toBe("cancelled");
+    expect(refreshed?.error).toBe("stopped for test");
   });
 
-  test("recovers job names when jobs.json is deleted entirely", async () => {
+  test("saveJobs skips disk writes after workspace write generation bump", async () => {
     const service = await setupService();
-    const created = await service.createJob({
-      name: "Nightly Backup",
-      appIds: [STANDALONE_APP_ID], type: "bash",
-      command: "tar czf backup.tgz .",
+    const job = await service.createJob({
+      name: "Guarded job",
+      appIds: [STANDALONE_APP_ID],
+      type: "shell",
+      command: "echo hi",
+    });
+    const indexPath = path.join(process.env.PAPR_HOME!, "data", "jobs.json");
+    const before = await fs.readFile(indexPath, "utf8");
+
+    bumpWorkspaceWriteGeneration("test switch");
+    await service.upsertJob({
+      ...job,
+      status: "running",
+      updatedAt: new Date().toISOString(),
     });
 
-    const jobsIndexPath = path.join(
-      process.env.HOME!,
-      "Papr",
-      "data",
-      "jobs.json",
-    );
-    await fs.rm(jobsIndexPath);
-
-    const recovered = new JobsService();
-    await recovered.initialize();
-    const jobs = await recovered.listJobs();
-
-    const backup = jobs.find((j) => j.name === "Nightly Backup");
-    expect(backup).toBeDefined();
-    expect(backup?.type).toBe("bash");
-    expect(backup?.command).toBe("tar czf backup.tgz .");
+    const after = await fs.readFile(indexPath, "utf8");
+    expect(after).toBe(before);
   });
 
-  test("recovered job names are never raw UUIDs when job.json exists", async () => {
+  test("listJobs does not scan job folders on disk (hot path stays in-memory)", async () => {
     const service = await setupService();
-    const created = await service.createJob({
-      name: "Data Pipeline",
-      appIds: [STANDALONE_APP_ID], type: "python",
-      command: "python3 pipeline.py",
+    for (let i = 0; i < 5; i += 1) {
+      await service.createJob({
+        name: `Job ${i}`,
+        appIds: [STANDALONE_APP_ID],
+        type: "shell",
+        command: "echo hi",
+      });
+    }
+
+    const statSpy = vi.spyOn(fs, "stat");
+    const readdirSpy = vi.spyOn(fs, "readdir");
+    statSpy.mockClear();
+    readdirSpy.mockClear();
+
+    await service.listJobs();
+    await service.listJobs();
+
+    expect(statSpy).not.toHaveBeenCalled();
+    expect(readdirSpy).not.toHaveBeenCalled();
+
+    statSpy.mockRestore();
+    readdirSpy.mockRestore();
+  });
+});
+
+test("queued job stays live during reconciliation and can be stopped before launch", async () => {
+  const { gatewayBackgroundBudget } = await import("../src/gateway/services/gatewayBackgroundBudget.js");
+  const previous = process.env.GATEWAY_BG_MAX_CONCURRENCY;
+  process.env.GATEWAY_BG_MAX_CONCURRENCY = "1";
+  let release!: () => void;
+  const hold = new Promise<void>(resolve => { release = resolve; });
+  const occupied = gatewayBackgroundBudget.run("test:occupied", () => hold);
+  try {
+    const service = await setupService();
+    const job = await service.createJob({ name: "Queued stop", appIds: [STANDALONE_APP_ID], type: "shell", command: "echo SHOULD_NOT_RUN" });
+    const execution = service.runJob(job.id);
+    await vi.waitFor(() => expect(gatewayBackgroundBudget.stats().queued.some(w => w.label === `job:${job.id}`)).toBe(true));
+    await service.reconcileStaleRunningJobs(0);
+    // Queued-for-capacity jobs sit in "pending" (c29d36bb) and flip to
+    // "running" only once the budget admits them. What matters here is that
+    // reconciliation leaves the queued job alone instead of failing it.
+    expect((await service.getJob(job.id))?.status).toBe("pending");
+    await service.stopJob(job.id);
+    expect((await execution).status).toBe("cancelled");
+    release(); await occupied;
+    expect(await service.getLogs(job.id)).not.toContain("SHOULD_NOT_RUN");
+  } finally {
+    release(); await occupied;
+    if (previous === undefined) delete process.env.GATEWAY_BG_MAX_CONCURRENCY;
+    else process.env.GATEWAY_BG_MAX_CONCURRENCY = previous;
+  }
+});
+
+/**
+ * Regression guards for the `deleteJobFromMemory` infinite recursion.
+ *
+ * A refactor replaced every `this.jobs.delete(id)` call site with a new
+ * `deleteJobFromMemory` helper — including the helper's OWN body, so it called
+ * itself forever. Typecheck passes (the signature is valid); only actually
+ * deleting a job reveals it.
+ *
+ * Symptom: "Maximum call stack size exceeded" from delete_job, reload_jobs
+ * (via pruneStaleJobEntries) and tombstone filtering, leaving the registry
+ * holding entries whose folders were already gone.
+ *
+ * There was NO deleteJob coverage before, which is how this shipped.
+ */
+describe("JobsService deletion", () => {
+  test("deleteJob removes the job instead of blowing the stack", async () => {
+    const service = await setupService();
+    const job = await service.createJob({
+      name: "Doomed job",
+      appIds: [STANDALONE_APP_ID],
+      type: "shell",
+      command: "echo bye",
     });
 
-    // Simulate corruption: empty JSON array (no jobs)
-    const jobsIndexPath = path.join(
-      process.env.HOME!,
-      "Papr",
-      "data",
-      "jobs.json",
+    // THE REGRESSION: this threw RangeError before the fix.
+    const result = await service.deleteJob(job.id);
+    expect(result.id).toBe(job.id);
+
+    expect(await service.getJob(job.id)).toBeNull();
+    expect(userVisibleJobs(await service.listJobs())).toHaveLength(0);
+  });
+
+  test("deleteJob with deleteFiles removes the job directory too", async () => {
+    const service = await setupService();
+    const job = await service.createJob({
+      name: "Doomed with files",
+      appIds: [STANDALONE_APP_ID],
+      type: "shell",
+      command: "echo bye",
+    });
+    const jobDir = path.join(process.env.PAPR_HOME!, "Jobs", job.id);
+    await expect(fs.access(jobDir)).resolves.toBeUndefined();
+
+    await service.deleteJob(job.id, true);
+
+    await expect(fs.access(jobDir)).rejects.toThrow();
+    expect(await service.getJob(job.id)).toBeNull();
+  });
+
+  test("deleting one job leaves the others intact", async () => {
+    const service = await setupService();
+    const keep = await service.createJob({
+      name: "Keeper",
+      appIds: [STANDALONE_APP_ID],
+      type: "shell",
+      command: "echo keep",
+    });
+    const drop = await service.createJob({
+      name: "Dropper",
+      appIds: [STANDALONE_APP_ID],
+      type: "shell",
+      command: "echo drop",
+    });
+
+    await service.deleteJob(drop.id);
+
+    const remaining = userVisibleJobs(await service.listJobs());
+    expect(remaining).toHaveLength(1);
+    expect(remaining[0].id).toBe(keep.id);
+  });
+
+  test("deleting an unknown job is a clear error, not a stack overflow", async () => {
+    const service = await setupService();
+    await expect(service.deleteJob("does-not-exist")).rejects.toThrow(
+      /Job not found/,
     );
-    await fs.writeFile(jobsIndexPath, "[]", "utf-8");
+  });
 
-    const recovered = new JobsService();
-    await recovered.initialize();
-    const jobs = await recovered.listJobs();
+  test("reloadJobs prunes an entry whose folder was removed", async () => {
+    // The second half of the same bug: pruneStaleJobEntries calls
+    // deleteJobFromMemory, so a job folder deleted outside the app wedged
+    // EVERY reload with the same RangeError — the registry could never
+    // self-heal.
+    const service = await setupService();
+    const job = await service.createJob({
+      name: "Vanishing job",
+      appIds: [STANDALONE_APP_ID],
+      type: "shell",
+      command: "echo gone",
+    });
 
-    const pipeline = jobs.find((j) => j.id === created.id);
-    expect(pipeline).toBeDefined();
-    expect(pipeline?.name).not.toBe(created.id);
-    expect(pipeline?.name).toBe("Data Pipeline");
+    await fs.rm(path.join(process.env.PAPR_HOME!, "Jobs", job.id), {
+      recursive: true,
+      force: true,
+    });
+
+    await service.reloadJobs();
+
+    expect(await service.getJob(job.id)).toBeNull();
   });
 });

@@ -28,8 +28,8 @@ entity_types:
       - "people contacts I work with, met with, emailed, discussed"
       - "meeting with person, call with, discussion with, email from"
       - "stakeholder team member collaborator advisor investor mentor"
-    # Graph query — correct schema fields for the Papr Memory graph
-    graph_query: "{ people(sort: [{ updated_at: DESC }], first: 30) { id name title description worksAtCompany { id name } } }"
+    # Graph query — use limit (not first), role (not title), no updated_at sort
+    graph_query: "{ people(limit: 30) { id name } }"
     # Known job sources (optional — generic scan covers these too)
     job_sources:
       - job_name: "LinkedIn Autopilot"
@@ -49,8 +49,8 @@ entity_types:
     discovery_queries:
       - "companies organizations clients partners we work with"
       - "company mentioned discussed evaluated"
-    # Graph query — correct schema fields
-    graph_query: "{ companies(sort: [{ updated_at: DESC }], first: 30) { id name domain industry description employeesPerson { id name title } } }"
+    # Graph query — use limit (not first), role (not title) on nested people
+    graph_query: "{ companies(limit: 30) { id name domain description } }"
     # Known job sources (optional)
     job_sources:
       - job_name: "Pipeline Sync"
@@ -144,8 +144,7 @@ graph_schema:
   
   person_fields:
     - name          # string
-    - title         # string (job title)
-    - role          # string
+    - role          # string (job title / role — prefer over title)
     - description   # string
     - worksAtCompany  # → [Company] relationship
     - participatedInProject  # → [Project] relationship
@@ -160,8 +159,10 @@ graph_schema:
     - location      # string
     - employeesPerson  # → [Person] relationship (people who work here)
   
-  # Filter syntax: where: { name_CONTAINS: "..." }
-  # Sort syntax: sort: [{ updated_at: DESC }]
+  # Pagination: limit: N (NOT first: N)
+  # Lookup by id: where: { id: { eq: "..." } }
+  # Do NOT use name_CONTAINS on companies — use search_agent_memory for name lookup
+  # Do NOT sort on updated_at — often null on graph nodes
 
 # Quality gate — entity must meet these to be created
 quality_gate:

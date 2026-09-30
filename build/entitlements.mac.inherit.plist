@@ -10,5 +10,15 @@
     <true/>
     <key>com.apple.security.cs.disable-library-validation</key>
     <true/>
+    <!--
+      Media capture runs in the renderer helper, not the main process, so under
+      hardened runtime the helper needs these device entitlements too. Without
+      them getUserMedia fails in signed builds even though the main bundle
+      already declares audio-input and the user granted access in TCC.
+    -->
+    <key>com.apple.security.device.audio-input</key>
+    <true/>
+    <key>com.apple.security.device.camera</key>
+    <true/>
   </dict>
 </plist>

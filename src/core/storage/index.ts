@@ -23,6 +23,10 @@ export {
   isVaultClonedFromLocal,
   stripClonedOrgVault,
 } from "./customKeysOrgVaultMigration.js";
+export {
+  migrateIntegrationKeysToSharedDefault,
+  INTEGRATION_KEYS_SHARED_DEFAULT_MARKER,
+} from "./customKeysSharedDefaultMigration.js";
 export { KeyPermissionsStorage } from "./KeyPermissionsStorage.js";
 export { OAuthTokenStorage } from "./OAuthTokenStorage.js";
 export type { OAuthToken, OAuthTokenInput } from "./OAuthTokenStorage.js";

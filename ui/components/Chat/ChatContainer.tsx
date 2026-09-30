@@ -3,13 +3,14 @@
  * Brings together MessageList and InputBar with agent integration
  */
 
+import type { PlanProvider } from "../../utils/subscriptionPlanUsage";
 import React, { useState, useRef, useEffect, useCallback, useMemo } from "react";
+import { useShallow } from "zustand/react/shallow";
 import { MessageList } from "./MessageList";
 import { InputBar, InputBarRef } from "./InputBar";
 import { QueuedMessages, type QueuedMessage } from "./QueuedMessages";
 import { JobPermissionBanner } from "./JobPermissionBanner";
 import { useAgent } from "../../hooks/useAgent";
-import { resolveAgentFocusContext } from "../../utils/agentFocusContext";
 import { useAuthStatus } from "../../hooks/useAuthStatus";
 import { useOllama } from "../../hooks/useOllama";
 import { useChat } from "../../hooks/useChat";
@@ -19,15 +20,14 @@ import type { Tab } from "../../stores/tabStore";
 import {
   CHAT_MODELS,
   getModelById,
-  DEFAULT_MODEL_IDS,
 } from "../../constants/models";
+import { resolveAuthAwareDefaultModelIds } from "../../utils/authAwareModelDefaults";
 import type { AIModel } from "../../constants/models";
 import { migratePickerModelId } from "../../constants/modelPicker";
 import { useModelPickerSettings } from "../../hooks/useModelPickerSettings";
 import { gateway } from "../../src/lib/gateway";
 import {
   ContextInspectorModal,
-  isContextInfo,
   type ContextInfo,
 } from "./ContextInspectorModal";
 import {
@@ -36,11 +36,43 @@ import {
 } from "../../stores/artifactsStore";
 import { artifactsToMessageAttachments } from "../../utils/messageAttachments";
 import { mapHistoryMessages } from "../../utils/historyMapper";
-import { extractFilesFromDataTransfer } from "../../utils/chatAttachmentFiles";
+import {
+  findHistoryModelId,
+  resolveChatModelId,
+} from "../../utils/resolveChatModel";
+import { readIncomingFiles } from "../../utils/chatAttachmentFiles";
+import { shouldRehydrateAfterStoreWipe } from "../../utils/chatStateRecovery";
+import { getUnavailableModelMessage } from "../../utils/modelAvailabilityMessage";
+import {
+  connectionRecoveryNotice,
+  describeProviderNotice,
+  type ProviderNotice,
+} from "../../utils/providerErrorPresentation";
+import {
+  adoptEffortFromVariant,
+  readChatSettings,
+  readNewChatDefaultSettings,
+  sameSettings,
+  writeChatSettings,
+  writeNewChatDefaultSettings,
+  type ChatModelSettings,
+} from "../../utils/chatModelSettings";
+import {
+  buildAgentConfig,
+  resolveModelSettings,
+} from "../../utils/buildAgentConfig";
+import { resolveEffectiveAuthForModel } from "../../utils/effectiveProviderAuth";
 import "./ChatContainer.css";
 import { trackEvent } from "../../lib/telemetry";
-import { chatHasActiveStreamUi, lastUserTurnNeedsContinue } from "../../lib/agentStreamRecovery";
+import {
+  chatHasLiveStreamBlockingHistory,
+  getAutoContinueBlockReason,
+  shouldDrainMessageQueue,
+} from "../../lib/agentStreamRecovery";
+import { clearQueuedMessagesForChat } from "../../utils/messageQueue";
 import { useGatewaySupervisorStatus } from "../../hooks/useGatewaySupervisorStatus";
+import { useGatewayConnectionState } from "../../hooks/useGatewayConnectionState";
+import { useAgentName } from "../Agent/agentIdentityStore";
 
 const DEFAULT_SYSTEM_PROMPT = `You're Pen, an AI assistant running in Paprwork—a cross-platform AI workspace.
 
@@ -89,7 +121,7 @@ You're not in a web chat. You're in a native desktop app with Jobs, Skills, and 
 Each conversation is a fresh start. Make it count.`;
 
 interface ArtifactContext {
-  type: "document" | "app";
+  type: "document" | "app" | "platform";
   id: string;
   title: string;
 }
@@ -106,6 +138,8 @@ function findMergedArtifact(chatId: string): ArtifactContext | null {
       return { type: "document", id: tab.entityId, title: tab.title };
     if (tab.type === "app")
       return { type: "app", id: tab.entityId, title: tab.title };
+    if (tab.type === "platform")
+      return { type: "platform", id: tab.entityId, title: tab.title };
     return null;
   };
 
@@ -143,38 +177,161 @@ interface ChatContainerProps {
 }
 
 export const ChatContainer: React.FC<ChatContainerProps> = ({ chatId }): React.ReactElement => {
-  // Combined selector — single subscription instead of three, reduces re-render triggers
-  const chatState = useChatStore((state) => state.chatStates.get(chatId));
-  const messages = chatState?.messages ?? EMPTY_MESSAGES;
-  const chatIsLoading = chatState?.isLoading ?? false;
-  const isSending = chatState?.isSending ?? false;
-  const connectionPaused = chatState?.connectionPaused ?? false;
-  const needsStreamRecovery = chatState?.needsStreamRecovery ?? false;
+  const {
+    chatState,
+    messages,
+    chatIsLoading,
+    isSending,
+    isWaitingForAgentSlot,
+    connectionPaused,
+    needsStreamRecovery,
+    streamRecoveryReason,
+    streamRecoveryDetail,
+    lastTurnOutcome,
+  } = useChatStore(
+    useShallow((state) => {
+      const cs = state.chatStates.get(chatId);
+      return {
+        chatState: cs,
+        messages: cs?.messages ?? EMPTY_MESSAGES,
+        chatIsLoading: cs?.isLoading ?? false,
+        isSending: cs?.isSending ?? false,
+        isWaitingForAgentSlot: cs?.isWaitingForAgentSlot ?? false,
+        connectionPaused: cs?.connectionPaused ?? false,
+        needsStreamRecovery: cs?.needsStreamRecovery ?? false,
+        streamRecoveryReason: cs?.streamRecoveryReason ?? "connection",
+        streamRecoveryDetail: cs?.streamRecoveryDetail,
+        lastTurnOutcome: cs?.lastTurnOutcome,
+      };
+    }),
+  );
 
   const error = useChatStore((state) => state.error);
+  const setLastTurnOutcome = useChatStore((state) => state.setLastTurnOutcome);
 
-  const { sendMessage, interruptActiveStream, retryStreamRecovery } = useAgent();
+  const { sendMessage, interruptActiveStream, retryStreamRecovery, autoContinueInterruptedTurn } = useAgent();
   const { loadMessages, loadOlderMessages } = useChat();
   const inputBarRef = useRef<InputBarRef>(null);
   const { isModelAvailable, status: authStatus } = useAuthStatus();
-  const { ensureModel, progress, installing } = useOllama();
+  const setError = useChatStore((state) => state.setError);
+  const setNeedsStreamRecovery = useChatStore(
+    (state) => state.setNeedsStreamRecovery,
+  );
+  const { ensureModel, progress, installing } = useOllama({
+    subscribeDownloadProgress: true,
+  });
   const { pickerModels } = useModelPickerSettings();
   const fallbackModel =
-    CHAT_MODELS.find((m) => m.id === "claude-sonnet-5") || CHAT_MODELS[0];
+    CHAT_MODELS.find((m) => m.id === "gemini-3.8-flash") || CHAT_MODELS[0];
 
   const [selectedModel, setSelectedModel] = useState<AIModel>(fallbackModel);
   const [contextInfo, setContextInfo] = useState<ContextInfo | null>(null);
+  /** Section the inspector lands on when opened from a meter segment. */
+  const [contextSection, setContextSection] = useState<string | null>(null);
+  const [contextPanelSignal, setContextPanelSignal] = useState(0);
+
+  // Thinking / effort / context / fast for this chat. Stored sparsely, so a
+  // field the user never touched stays "unset" and follows the model.
+  const [modelSettings, setModelSettings] = useState<ChatModelSettings>({});
+
+  /** Effective dials for this chat, after dropping what the model can't honour. */
+  const resolvedModelSettings = useMemo(
+    () => resolveModelSettings(selectedModel, modelSettings),
+    [selectedModel, modelSettings],
+  );
+
+  /**
+   * Which credential this turn will actually run on.
+   *
+   * Every billing question below is downstream of this one, so it is resolved
+   * once. Asking `authStatus.anthropic.oauth` instead — "is a token stored" —
+   * was the defect: with a subscription connected and API key selected, main
+   * withholds the token and the turn bills to the key, while the panel went on
+   * reporting a plan it was not using.
+   */
+  const effectiveAuth = useMemo<"oauth" | "apiKey" | null>(() => {
+    const provider = selectedModel.provider;
+    if (provider === "anthropic") {
+      return resolveEffectiveAuthForModel(authStatus.anthropic, selectedModel);
+    }
+    if (provider === "openai" || provider === "openai-codex") {
+      return resolveEffectiveAuthForModel(authStatus.openai, selectedModel);
+    }
+    return null;
+  }, [selectedModel, authStatus]);
+
+  /**
+   * Only Anthropic needs it — Fast mode is an API-key-only parameter, and
+   * OAuth turns go through pi-ai, which has no `speed` field to carry it.
+   */
+  const authType = useMemo<"oauth" | "apiKey" | undefined>(() => {
+    if (selectedModel.provider !== "anthropic") return undefined;
+    return effectiveAuth ?? undefined;
+  }, [selectedModel.provider, effectiveAuth]);
+
+  /** A subscription bills the plan; anything else bills per token. */
+  const billingMode = useMemo<"metered" | "subscription">(
+    () => (effectiveAuth === "oauth" ? "subscription" : "metered"),
+    [effectiveAuth],
+  );
+
+  /**
+   * Both ChatGPT and Claude subscriptions report utilization, and the cost
+   * panel needs whichever one is paying for this chat. Reading only Claude's
+   * left the ChatGPT route with no signal at all, so it fell back to claiming
+   * every turn was included — wrong for anyone past their windows, which is
+   * precisely who the figure is for.
+   */
+  const planProvider = useMemo<PlanProvider | null>(() => {
+    if (effectiveAuth !== "oauth") return null;
+    if (selectedModel.provider === "anthropic") return "anthropic";
+    if (
+      selectedModel.provider === "openai" ||
+      selectedModel.provider === "openai-codex"
+    ) {
+      return "openai";
+    }
+    return null;
+  }, [selectedModel.provider, effectiveAuth]);
+
+  const handleChangeModelSettings = useCallback(
+    (patch: ChatModelSettings) => {
+      const next = writeChatSettings(chatId, patch);
+      setModelSettings(next);
+      // Seed the next new chat, the same way the model picker does.
+      writeNewChatDefaultSettings(next);
+    },
+    [chatId],
+  );
+
+  /** One config shape for send, auto-continue and stream recovery alike. */
+  const makeAgentConfig = useCallback(
+    (systemPrompt: string) =>
+      buildAgentConfig({
+        model: selectedModel,
+        settings: modelSettings,
+        systemPrompt,
+        authType,
+      }),
+    [selectedModel, modelSettings, authType],
+  );
   const {
     message: gatewaySupervisorMessage,
     isReady: gatewaySupervisorReady,
     isStarting: gatewaySupervisorStarting,
     isRestarting: gatewaySupervisorRestarting,
   } = useGatewaySupervisorStatus();
+  const gatewayConnectionState = useGatewayConnectionState();
+  const agentName = useAgentName();
   const prevGatewaySupervisorReadyRef = useRef(gatewaySupervisorReady);
+  const prevIsSendingRef = useRef(isSending);
+  const autoContinueInFlightRef = useRef(false);
+  const lastLoggedAutoContinueBlockRef = useRef<string | null>(null);
   const [isResumingStream, setIsResumingStream] = useState(false);
   const [isFileDragOver, setIsFileDragOver] = useState(false);
   const [messageQueue, setMessageQueue] = useState<QueuedMessage[]>([]);
   const isProcessingQueue = useRef(false);
+  const queueTransitionInFlightRef = useRef(false);
 
   // ✅ Filter queue to only show messages for THIS chat
   const currentChatQueue = useMemo(
@@ -182,7 +339,19 @@ export const ChatContainer: React.FC<ChatContainerProps> = ({ chatId }): React.R
     [messageQueue, chatId]
   );
 
-  // Reload history when Gateway becomes ready after a restart (user message with no reply).
+  const syncHistoryFromServer = useCallback(
+    (options?: { force?: boolean }) => {
+      if (chatHasLiveStreamBlockingHistory(chatId)) return;
+      void loadMessages(
+        chatId,
+        30,
+        options?.force ? { force: true } : undefined,
+      );
+    },
+    [chatId, loadMessages],
+  );
+
+  // Reload history when Gateway becomes ready after a restart.
   useEffect(() => {
     const wasReady = prevGatewaySupervisorReadyRef.current;
     prevGatewaySupervisorReadyRef.current = gatewaySupervisorReady;
@@ -191,51 +360,200 @@ export const ChatContainer: React.FC<ChatContainerProps> = ({ chatId }): React.R
       return;
     }
 
-    const chatMessages = useChatStore.getState().chatStates.get(chatId)?.messages ?? [];
-    if (
-      lastUserTurnNeedsContinue(chatMessages) &&
-      !chatHasActiveStreamUi(chatId) &&
-      !isSending
-    ) {
-      void loadMessages(chatId);
-    }
-  }, [gatewaySupervisorReady, chatId, loadMessages, isSending]);
+    syncHistoryFromServer({ force: true });
+  }, [gatewaySupervisorReady, syncHistoryFromServer]);
 
-  const gatewayBanner = gatewaySupervisorStarting
-    ? {
-        message:
-          gatewaySupervisorMessage ??
-          (gatewaySupervisorRestarting
-            ? "Reconnecting to Gateway..."
-            : "Gateway is starting..."),
+  // After rate-limit / recovery, in-memory state may be empty shells — force sync.
+  useEffect(() => {
+    if (!needsStreamRecovery) return;
+    syncHistoryFromServer({ force: true });
+  }, [needsStreamRecovery, syncHistoryFromServer]);
+
+  // Agent finished — refresh from DB, but respect streaming guards (no force).
+  // force:true bypasses those guards and reorders paginated history (Issue 76).
+  useEffect(() => {
+    const wasSending = prevIsSendingRef.current;
+    prevIsSendingRef.current = isSending;
+    if (wasSending && !isSending) {
+      queueMicrotask(() => {
+        syncHistoryFromServer();
+      });
+    }
+  }, [isSending, syncHistoryFromServer]);
+
+  // Auto-continue interrupted turns (provider drop, gateway abort, etc.) up to 3 times.
+  useEffect(() => {
+    if (autoContinueInFlightRef.current) return;
+    const autoContinueArgs = {
+      chatId,
+      messages,
+      isSending: isSending || isWaitingForAgentSlot,
+      connectionPaused,
+      needsStreamRecovery,
+      streamRecoveryReason,
+      lastTurnOutcome,
+      gatewayReady: gatewaySupervisorReady,
+    };
+    const autoContinueBlock = getAutoContinueBlockReason(autoContinueArgs);
+    if (autoContinueBlock) {
+      const lastAssistant = [...messages]
+        .reverse()
+        .find((m) => m.role === "assistant");
+      // Once per (chat, reason), not once per render: this effect depends on
+      // `messages`, which gets a fresh array identity on every store write, so
+      // logging unconditionally floods the console at render frequency — and
+      // with DevTools attached every line crosses the CDP channel.
+      if (
+        (lastAssistant?.interrupted ||
+          autoContinueBlock === "gatewayNotReady") &&
+        lastLoggedAutoContinueBlockRef.current !== autoContinueBlock
+      ) {
+        lastLoggedAutoContinueBlockRef.current = autoContinueBlock;
+        console.log(
+          `[AutoContinue] blocked for ${chatId}: ${autoContinueBlock}`,
+        );
       }
-    : null;
+      return;
+    }
+
+    // Unblocked — a later block is new information and should be logged again.
+    lastLoggedAutoContinueBlockRef.current = null;
+
+    const mergedArtifact = findMergedArtifact(chatId);
+    const idKey =
+      mergedArtifact?.type === "document"
+        ? "documentId"
+        : mergedArtifact?.type === "platform"
+          ? "platformId"
+          : "appId";
+    const mergedContext = mergedArtifact
+      ? `\n\n## Active Context\nThe user has merged this chat with a ${mergedArtifact.type} titled "${mergedArtifact.title}" (${idKey}: "${mergedArtifact.id}"). They are viewing and working on this ${mergedArtifact.type} alongside this conversation. Reference it directly when relevant.`
+      : "";
+
+    const config = makeAgentConfig(DEFAULT_SYSTEM_PROMPT + mergedContext);
+
+    autoContinueInFlightRef.current = true;
+    void autoContinueInterruptedTurn(chatId, config, messages).finally(() => {
+      autoContinueInFlightRef.current = false;
+    });
+  }, [
+    autoContinueInterruptedTurn,
+    chatId,
+    connectionPaused,
+    gatewaySupervisorReady,
+    isSending,
+    isWaitingForAgentSlot,
+    messages,
+    needsStreamRecovery,
+    streamRecoveryReason,
+    lastTurnOutcome,
+    makeAgentConfig,
+  ]);
+
+  const gatewayBanner =
+    gatewaySupervisorStarting &&
+    gatewayConnectionState !== "connected" &&
+    gatewayConnectionState !== "degraded"
+      ? {
+          message:
+            gatewaySupervisorMessage ??
+            (gatewaySupervisorRestarting
+              ? "Reconnecting to Gateway..."
+              : "Gateway is starting..."),
+        }
+      : null;
 
   const isWaitingForModel = selectedModel.provider === 'ollama' && installing === selectedModel.id;
 
+  /** Model that last answered in *this* chat — the durable per-chat record. */
+  const historyModelId = useMemo(() => findHistoryModelId(messages), [messages]);
+
+  /**
+   * Does this chat already hold a conversation? Answered from chat metadata so
+   * it is known before history finishes loading; an existing chat must never be
+   * seeded from the global "last model picked anywhere".
+   */
+  const chatHasHistory = useChatStore((state) => {
+    const known = state.chats.find((chat) => chat.id === chatId);
+    if (known) return known.messageCount > 0;
+    return (state.chatStates.get(chatId)?.messages.length ?? 0) > 0;
+  });
+
   // When chatId or auth status changes: pick best default
-  // Priority: last selected (persisted in localStorage) > default order (sonnet-5 → gpt-5-6-sol → gemini-3-flash) > first available
+  // Priority: per-chat pick > this chat's history > global (new chats only) >
+  // auth-aware order (sonnet → gpt → gemini; papr-only → gemini) > picker
   useEffect(() => {
+    const store = useChatStore.getState();
+    const resolvedId = resolveChatModelId({
+      perChatModelId: store.getLastSelectedModel(chatId),
+      historyModelId,
+      newChatDefaultModelId: store.getDefaultModelForNewChat(),
+      hasHistory: chatHasHistory,
+    });
+
+    // A chat pinned to a retired effort variant keeps the effort that variant
+    // meant, rather than silently dropping to the base model's default.
+    adoptEffortFromVariant(chatId, resolvedId);
+
+    const stored = readChatSettings(chatId);
+    const next =
+      Object.keys(stored).length > 0 || chatHasHistory
+        ? stored
+        : readNewChatDefaultSettings();
+    // Bail out when nothing actually changed. Each read builds a fresh object,
+    // so setting it unconditionally reports a state change on every run of this
+    // effect — and this effect re-runs whenever any dep gets a new identity,
+    // which is enough to loop.
+    setModelSettings((prev) => (sameSettings(prev, next) ? prev : next));
+
     setSelectedModel((prev) => {
-      const lastId = useChatStore.getState().getLastSelectedModel(chatId);
+
+      const store = useChatStore.getState();
+      // Explicit per-chat pick always wins — do not downgrade to Sonnet just
+      // because isModelAvailable flickered false (e.g. PAPR_API_KEY not in the
+      // keys list yet while Papr login is active).
+      const perChatModelId = store.getLastSelectedModel(chatId);
+      if (perChatModelId) {
+        const explicitModel = getModelById(migratePickerModelId(perChatModelId));
+        if (explicitModel && isModelAvailable(explicitModel)) {
+          return explicitModel;
+        }
+      }
+
+      const lastId = resolveChatModelId({
+        historyModelId,
+        newChatDefaultModelId: store.getDefaultModelForNewChat(),
+        hasHistory: chatHasHistory,
+      });
       if (lastId) {
         const migratedId = migratePickerModelId(lastId);
         const lastModel = getModelById(migratedId);
         if (lastModel && isModelAvailable(lastModel)) return lastModel;
       }
       const pickerIds = new Set(pickerModels.map((model) => model.id));
-      const defaultAvailable = DEFAULT_MODEL_IDS.map(getModelById).find(
-        (m) => m && isModelAvailable(m) && pickerIds.has(m.id),
+      const authAwareDefaults = resolveAuthAwareDefaultModelIds(authStatus);
+      const defaultAvailable = authAwareDefaults.map(getModelById).find(
+        (m) =>
+          m &&
+          isModelAvailable(m) &&
+          (pickerIds.has(m.id) || m.provider === "ollama"),
       );
       if (defaultAvailable) return defaultAvailable;
       const pickerAvailable = pickerModels.find((m) => isModelAvailable(m));
       if (pickerAvailable) return pickerAvailable;
       const firstAvailable = CHAT_MODELS.find((m) => isModelAvailable(m));
       if (firstAvailable) return firstAvailable;
-      if (!isModelAvailable(prev)) return fallbackModel;
+      if (!isModelAvailable(prev)) {
+        const anyAvailable = CHAT_MODELS.find((m) => isModelAvailable(m));
+        return anyAvailable ?? prev;
+      }
       return prev;
     });
-  }, [chatId, authStatus, pickerModels]);
+    // historyModelId is a dependency because history arrives after mount: a
+    // chat reopened before its messages load must correct itself once they do.
+    // Re-running is safe — an explicit per-chat pick outranks history, so this
+    // cannot walk back a selection the user just made.
+  }, [chatId, authStatus, pickerModels, historyModelId, chatHasHistory]);
 
   // Focus input when this chat's container mounts
   useEffect(() => {
@@ -246,19 +564,23 @@ export const ChatContainer: React.FC<ChatContainerProps> = ({ chatId }): React.R
     return () => clearTimeout(timer);
   }, [chatId]); // Re-focus when chatId changes (different chat loaded)
 
-  // Load messages with pagination when chat loads
-  // Uses pagination-aware loadMessages() that loads only recent 30 messages
+  // Always merge server history when this chat opens (unless a live stream is running).
   useEffect(() => {
-    const existingState = useChatStore.getState().chatStates.get(chatId);
-    // Only load if chat has no messages yet and no in-flight stream to preserve
-    if (
-      (existingState?.messages.length || 0) === 0 &&
-      !existingState?.isSending &&
-      !chatHasActiveStreamUi(chatId)
-    ) {
-      loadMessages(chatId);
+    syncHistoryFromServer();
+  }, [chatId, syncHistoryFromServer]);
+
+  // The effect above only re-runs when chatId changes, so a store wipe while
+  // this pane stays mounted leaves it on the welcome screen until the user
+  // switches tabs and forces a remount. See shouldRehydrateAfterStoreWipe.
+  const hasChatState = chatState !== undefined;
+  const prevHasChatStateRef = useRef(hasChatState);
+  useEffect(() => {
+    const hadEntry = prevHasChatStateRef.current;
+    prevHasChatStateRef.current = hasChatState;
+    if (shouldRehydrateAfterStoreWipe({ chatId, hadEntry, hasEntry: hasChatState })) {
+      syncHistoryFromServer();
     }
-  }, [chatId, loadMessages]);
+  }, [hasChatState, chatId, syncHistoryFromServer]);
 
   // Listen for new messages delivered from jobs/sub-agents
   useEffect(() => {
@@ -367,32 +689,9 @@ export const ChatContainer: React.FC<ChatContainerProps> = ({ chatId }): React.R
           break;
         }
         case "context": {
-          try {
-            const response = await gateway.send("chat:inspect-context", {
-              chatId,
-              model: selectedModel.id,
-              ...(() => {
-                const focusContext = resolveAgentFocusContext(chatId);
-                return focusContext ? { focusContext } : {};
-              })(),
-            });
-            if (isContextInfo(response.data)) {
-              setContextInfo(response.data);
-            } else {
-              console.error(
-                "[ChatContainer] Invalid context response:",
-                response.data,
-              );
-              alert(
-                "Received invalid context data from gateway. Check console for details.",
-              );
-            }
-          } catch (err) {
-            console.error("[ChatContainer] Context inspection error:", err);
-            const message =
-              err instanceof Error ? err.message : "Unknown error";
-            alert(`Failed to load context information: ${message}`);
-          }
+          // The dial owns this surface now: bump it open rather than dumping
+          // the full breakdown on the user.
+          setContextPanelSignal((n) => n + 1);
           break;
         }
         case "help": {
@@ -452,7 +751,11 @@ export const ChatContainer: React.FC<ChatContainerProps> = ({ chatId }): React.R
       const mergedArtifact = findMergedArtifact(chatId);
 
       const idKey =
-        mergedArtifact?.type === "document" ? "documentId" : "appId";
+        mergedArtifact?.type === "document"
+          ? "documentId"
+          : mergedArtifact?.type === "platform"
+            ? "platformId"
+            : "appId";
       const mergedContext = mergedArtifact
         ? `\n\n## Active Context\nThe user has merged this chat with a ${mergedArtifact.type} titled "${mergedArtifact.title}" (${idKey}: "${mergedArtifact.id}"). They are viewing and working on this ${mergedArtifact.type} alongside this conversation. Reference it directly when relevant.`
         : "";
@@ -482,12 +785,20 @@ export const ChatContainer: React.FC<ChatContainerProps> = ({ chatId }): React.R
 
             if (isPdfOrImage) {
               try {
-                const uploadResponse = await gateway.send("memory:upload-attachment", {
-                  filePath,
-                  chatId,
-                  fileName: artifact.title,
-                  mimeType: fileType,
-                });
+                console.log(
+                  "[ChatContainer] Uploading attachment to Papr Memory:",
+                  { filePath, fileName: artifact.title, mimeType: fileType },
+                );
+                const uploadResponse = await gateway.send(
+                  "memory:upload-attachment",
+                  {
+                    filePath,
+                    chatId,
+                    fileName: artifact.title,
+                    mimeType: fileType,
+                  },
+                  { timeoutMs: 120_000 },
+                );
                 const uploadData =
                   uploadResponse.success
                     ? (uploadResponse.data as {
@@ -499,6 +810,8 @@ export const ChatContainer: React.FC<ChatContainerProps> = ({ chatId }): React.R
                       } | null)
                     : null;
 
+                console.log("[ChatContainer] Attachment upload result:", uploadData);
+
                 if (uploadData && !uploadData.skipped && uploadData.uploadId) {
                   artifactsContext += `Upload ID: ${uploadData.uploadId}\n`;
                   if (uploadData.memoryIds?.length) {
@@ -507,6 +820,13 @@ export const ChatContainer: React.FC<ChatContainerProps> = ({ chatId }): React.R
                   artifactsContext += `Papr Memory Status: ${uploadData.status ?? "processing"} (${Math.round((uploadData.progress ?? 0) * 100)}%)\n`;
                   artifactsContext +=
                     "\nThis PDF/image was auto-uploaded to Papr Memory. Poll get_document_upload_status({ uploadId }) until completed, then search_agent_memory({ memoryId }) for extracted text. Use parse_pdf({ filePath }) if you need text before processing finishes.\n";
+                } else if (uploadData?.skipped) {
+                  console.warn(
+                    "[ChatContainer] Attachment upload skipped:",
+                    uploadData,
+                  );
+                  artifactsContext +=
+                    "\nPoll upload_document_to_memory({ filePath, chatId }) if PAPR_API_KEY is configured, or parse_pdf({ filePath }) for quick local extraction.\n";
                 } else {
                   artifactsContext +=
                     "\nPoll upload_document_to_memory({ filePath, chatId }) if PAPR_API_KEY is configured, or parse_pdf({ filePath }) for quick local extraction.\n";
@@ -526,6 +846,11 @@ export const ChatContainer: React.FC<ChatContainerProps> = ({ chatId }): React.R
         }
       }
 
+      if (!isModelAvailable(selectedModel)) {
+        setError(getUnavailableModelMessage(selectedModel));
+        return;
+      }
+
       // Ensure Ollama model is ready before sending message
       if (selectedModel.provider === 'ollama') {
         try {
@@ -543,14 +868,11 @@ export const ChatContainer: React.FC<ChatContainerProps> = ({ chatId }): React.R
 
       // Create config WITHOUT apiKey - Gateway will fetch it via IPC
       // This keeps keys secure and never sends them over WebSocket
-      const config = {
-        provider: selectedModel.provider,
-        model: selectedModel.id,
-        systemPrompt: DEFAULT_SYSTEM_PROMPT + mergedContext + artifactsContext,
-        reasoning: selectedModel.reasoning,
-        thinkingBudget: selectedModel.defaultThinkingBudget,
-        maxTokens: selectedModel.maxTokens, // Output token limit
-      };
+      const config = makeAgentConfig(
+        DEFAULT_SYSTEM_PROMPT + mergedContext + artifactsContext,
+      );
+
+      useChatStore.getState().setLastSelectedModel(chatId, selectedModel.id);
 
       // Track activation: first chat sent
       if (!localStorage.getItem("papr-activation-first-chat")) {
@@ -567,26 +889,40 @@ export const ChatContainer: React.FC<ChatContainerProps> = ({ chatId }): React.R
           : undefined,
       );
     },
-    [selectedModel, sendMessage, chatId, ensureModel],
+    [selectedModel, makeAgentConfig, sendMessage, chatId, ensureModel, isModelAvailable, setError],
   );
 
+  const stopAgentAndClearQueue = useCallback(async () => {
+    setMessageQueue((prev) => clearQueuedMessagesForChat(prev, chatId));
+    // Recorded before the teardown, not after: `interruptActiveStream` awaits
+    // the gateway, and the auto-continue effect can run during that wait. It
+    // also clears the recovery banner, so on a refused turn this is the only
+    // surviving record that the user asked us to stop.
+    setLastTurnOutcome(chatId, "userStopped");
+    await interruptActiveStream(chatId);
+  }, [chatId, interruptActiveStream, setLastTurnOutcome]);
+
   const handleStopAgent = useCallback(async () => {
+    // Block auto-drain — Stop means halt, not "stop then send whatever was queued".
+    isProcessingQueue.current = true;
     try {
-      await interruptActiveStream(chatId);
+      await stopAgentAndClearQueue();
       console.log(`[ChatContainer] Stopped agent for chat ${chatId}`);
     } catch (error) {
       console.error("[ChatContainer] Failed to stop agent:", error);
+    } finally {
+      isProcessingQueue.current = false;
     }
-  }, [chatId, interruptActiveStream]);
+  }, [chatId, stopAgentAndClearQueue]);
 
   // Queue management handlers
-  const handleQueueMessage = useCallback((message: string, _context?: Artifact[]) => {
-    // TODO: Store and handle artifacts in queued messages
+  const handleQueueMessage = useCallback((message: string, context?: Artifact[]) => {
     const queuedMessage: QueuedMessage = {
       id: `queued-${Date.now()}-${Math.random()}`,
       text: message,
       timestamp: Date.now(),
       chatId, // ✅ Scope message to this chat
+      ...(context && context.length > 0 ? { contextArtifacts: context } : {}),
     };
     setMessageQueue(prev => [...prev, queuedMessage]);
   }, [chatId]);
@@ -595,16 +931,44 @@ export const ChatContainer: React.FC<ChatContainerProps> = ({ chatId }): React.R
     const queued = messageQueue.find(q => q.id === messageId && q.chatId === chatId);
     if (!queued) return;
 
-    // Remove from queue — sendMessage handles interrupting any active stream
+    // Remove from queue — interrupt then send so the queued message replaces work in flight.
     setMessageQueue(prev => prev.filter(q => q.id !== messageId));
 
+    queueTransitionInFlightRef.current = true;
     isProcessingQueue.current = true;
     try {
-      await handleSendMessage(queued.text);
+      await interruptActiveStream(chatId);
+      await handleSendMessage(
+        queued.text,
+        queued.contextArtifacts,
+      );
     } finally {
       isProcessingQueue.current = false;
+      queueTransitionInFlightRef.current = false;
     }
-  }, [messageQueue, handleSendMessage, chatId]);
+  }, [messageQueue, handleSendMessage, interruptActiveStream, chatId]);
+
+  const handleSendFirstQueuedNow = useCallback(async () => {
+    const first = currentChatQueue[0];
+    if (!first) return;
+    await handleSendQueuedNow(first.id);
+  }, [currentChatQueue, handleSendQueuedNow]);
+
+  const handleInterruptAndSend = useCallback(
+    async (message: string, contextArtifacts?: Artifact[]) => {
+      queueTransitionInFlightRef.current = true;
+      isProcessingQueue.current = true;
+      try {
+        // Double-enter replaces in-flight work — discard any queued messages.
+        await stopAgentAndClearQueue();
+        await handleSendMessage(message, contextArtifacts);
+      } finally {
+        isProcessingQueue.current = false;
+        queueTransitionInFlightRef.current = false;
+      }
+    },
+    [handleSendMessage, stopAgentAndClearQueue],
+  );
 
   const handleRemoveQueued = useCallback((messageId: string) => {
     setMessageQueue(prev => prev.filter(q => q.id !== messageId));
@@ -622,7 +986,10 @@ export const ChatContainer: React.FC<ChatContainerProps> = ({ chatId }): React.R
     setMessageQueue(prev => prev.filter(q => q.id !== nextMessage.id));
 
     try {
-      await handleSendMessage(nextMessage.text);
+      await handleSendMessage(
+        nextMessage.text,
+        nextMessage.contextArtifacts,
+      );
     } catch (error) {
       console.error('[ChatContainer] Failed to send queued message:', error);
     } finally {
@@ -630,12 +997,34 @@ export const ChatContainer: React.FC<ChatContainerProps> = ({ chatId }): React.R
     }
   }, [currentChatQueue, handleSendMessage]);
 
-  // Auto-send next queued message when agent finishes responding
+  // Auto-send next queued message when the prior user turn is fully settled.
   useEffect(() => {
-    if (!isSending && currentChatQueue.length > 0 && !isProcessingQueue.current) {
-      processNextQueued();
+    if (
+      !shouldDrainMessageQueue({
+        chatId,
+        messages,
+        isSending: isSending || isWaitingForAgentSlot,
+        isWaitingForAgentSlot,
+        connectionPaused,
+        needsStreamRecovery,
+        queueTransitionInFlight: queueTransitionInFlightRef.current,
+      }) ||
+      currentChatQueue.length === 0 ||
+      isProcessingQueue.current
+    ) {
+      return;
     }
-  }, [isSending, currentChatQueue.length, processNextQueued]);
+    void processNextQueued();
+  }, [
+    chatId,
+    messages,
+    isSending,
+    isWaitingForAgentSlot,
+    connectionPaused,
+    needsStreamRecovery,
+    currentChatQueue.length,
+    processNextQueued,
+  ]);
 
   // Listen for onboarding messages dispatched from OnboardingCard via sidebar
   useEffect(() => {
@@ -682,32 +1071,91 @@ export const ChatContainer: React.FC<ChatContainerProps> = ({ chatId }): React.R
     try {
       const mergedArtifact = findMergedArtifact(chatId);
       const idKey =
-        mergedArtifact?.type === "document" ? "documentId" : "appId";
+        mergedArtifact?.type === "document"
+          ? "documentId"
+          : mergedArtifact?.type === "platform"
+            ? "platformId"
+            : "appId";
       const mergedContext = mergedArtifact
         ? `\n\n## Active Context\nThe user has merged this chat with a ${mergedArtifact.type} titled "${mergedArtifact.title}" (${idKey}: "${mergedArtifact.id}"). They are viewing and working on this ${mergedArtifact.type} alongside this conversation. Reference it directly when relevant.`
         : "";
 
-      const config = {
-        provider: selectedModel.provider,
-        model: selectedModel.id,
-        systemPrompt: DEFAULT_SYSTEM_PROMPT + mergedContext,
-        reasoning: selectedModel.reasoning,
-        thinkingBudget: selectedModel.defaultThinkingBudget,
-        maxTokens: selectedModel.maxTokens,
-      };
+      const config = makeAgentConfig(DEFAULT_SYSTEM_PROMPT + mergedContext);
 
       await retryStreamRecovery(chatId, config);
     } finally {
       setIsResumingStream(false);
     }
-  }, [chatId, isResumingStream, retryStreamRecovery, selectedModel]);
+  }, [chatId, isResumingStream, retryStreamRecovery, makeAgentConfig]);
+
+  /**
+   * The single provider notice for this chat, or nothing.
+   *
+   * Two sources used to draw two different banners at once — a red one from
+   * `error` and an amber one from the recovery state — which is how a single
+   * rate limit could appear twice in two voices. They are collapsed here, and
+   * the provider's own words win whenever there are any: only they name the
+   * credential that was refused, which is the difference a user needs to see
+   * after switching between an API key and a subscription login.
+   */
+  const providerNotice = useMemo<ProviderNotice | null>(() => {
+    const provider = selectedModel?.provider;
+    const modelName = selectedModel?.name;
+    const detail = streamRecoveryDetail?.trim();
+
+    if (error) {
+      return describeProviderNotice({
+        message: error,
+        canResume: needsStreamRecovery,
+        provider,
+        modelName,
+      });
+    }
+
+    if (!needsStreamRecovery) return null;
+
+    if (detail) {
+      return describeProviderNotice({
+        message: detail,
+        canResume: true,
+        provider,
+        modelName,
+      });
+    }
+
+    if (streamRecoveryReason === "rateLimit") {
+      // Phrased from the same branch the real message takes, then stripped of
+      // its detail: there is no provider text here, and a disclosure holding
+      // our own synthetic string would only pretend to be evidence.
+      const notice = describeProviderNotice({
+        message: "rate limit exceeded",
+        canResume: true,
+        provider,
+        modelName,
+      });
+      return { ...notice, detail: "" };
+    }
+
+    return connectionRecoveryNotice();
+  }, [
+    error,
+    needsStreamRecovery,
+    streamRecoveryDetail,
+    streamRecoveryReason,
+    selectedModel,
+  ]);
+
+  const handleDismissProviderNotice = useCallback(() => {
+    setError(null);
+    setNeedsStreamRecovery(chatId, false);
+  }, [chatId, setError, setNeedsStreamRecovery]);
 
   const handleChatDrop = useCallback(
     (e: React.DragEvent<HTMLDivElement>) => {
       e.preventDefault();
       e.stopPropagation();
       setIsFileDragOver(false);
-      const files = extractFilesFromDataTransfer(e.dataTransfer);
+      const files = readIncomingFiles(e.dataTransfer);
       if (files.length === 0) return;
       handleFilesDroppedToChat(files);
     },
@@ -723,13 +1171,6 @@ export const ChatContainer: React.FC<ChatContainerProps> = ({ chatId }): React.R
       onDragOver={handleChatDragOver}
       onDrop={handleChatDrop}
     >
-      {error && (
-        <div className="error-banner">
-          <span className="error-icon">⚠️</span>
-          <span className="error-message">{error}</span>
-        </div>
-      )}
-
       {gatewayBanner && (
         <div className="reconnecting-banner">
           <span className="reconnecting-icon">↻</span>
@@ -788,8 +1229,10 @@ export const ChatContainer: React.FC<ChatContainerProps> = ({ chatId }): React.R
         messages={messages}
         isLoading={chatIsLoading}
         isSending={isSending || isWaitingForModel}
+        isWaitingForAgentSlot={isWaitingForAgentSlot}
         onFilesDropped={handleFilesDroppedToChat}
         onLoadOlder={() => loadOlderMessages(chatId)}
+        onRetryHistory={() => syncHistoryFromServer({ force: true })}
       />
 
       <QueuedMessages
@@ -798,38 +1241,29 @@ export const ChatContainer: React.FC<ChatContainerProps> = ({ chatId }): React.R
         onRemove={handleRemoveQueued}
       />
 
-      {needsStreamRecovery && (
-        <div className="stream-recovery-banner">
-          <span className="stream-recovery-banner__message">
-            Connection restored, but the agent response may be incomplete.
-          </span>
-          <button
-            type="button"
-            className="stream-recovery-banner__btn"
-            disabled={isResumingStream}
-            onClick={() => void handleResumeStream()}
-          >
-            {isResumingStream ? "Resuming…" : "Resume"}
-          </button>
-        </div>
-      )}
-
       <InputBar
         ref={inputBarRef}
         chatId={chatId}
         onFileAttachmentsAdded={() => setIsFileDragOver(false)}
         onSend={handleSendMessage}
+        onInterruptAndSend={handleInterruptAndSend}
         onQueue={handleQueueMessage}
         queuedCount={currentChatQueue.length}
+        onSendFirstQueuedNow={handleSendFirstQueuedNow}
         onStop={handleStopAgent}
         onSlashCommand={handleSlashCommand}
+        contextPanelSignal={contextPanelSignal}
+        onOpenContextInspector={(info, sectionId) => {
+          setContextSection(sectionId ?? null);
+          setContextInfo(info);
+        }}
         isSending={isSending || isWaitingForModel}
         placeholder={
           (isWaitingForModel 
             ? `Preparing ${selectedModel.name}...` 
             : currentChatQueue.length > 0
               ? "Send follow-up..." 
-              : "Type a message...") as string
+              : `Message ${agentName}…`) as string
         }
         selectedModel={selectedModel}
         onModelChange={handleModelChange}
@@ -837,11 +1271,22 @@ export const ChatContainer: React.FC<ChatContainerProps> = ({ chatId }): React.R
         onOpenSettings={handleOpenSettings}
         onOpenSettingsModels={handleOpenSettingsModels}
         pickerModels={pickerModels}
+        modelSettings={resolvedModelSettings}
+        onChangeModelSettings={handleChangeModelSettings}
+        authType={authType}
+        billingMode={billingMode}
+        planProvider={planProvider}
+        providerNotice={providerNotice}
+        isResumingStream={isResumingStream}
+        onResumeStream={() => void handleResumeStream()}
+        onDismissProviderNotice={handleDismissProviderNotice}
       />
 
       {contextInfo !== null ? (
         <ContextInspectorModal
           contextInfo={contextInfo}
+          initialSection={contextSection}
+          anchored
           onClose={() => setContextInfo(null)}
         />
       ) : null}

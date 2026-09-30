@@ -19,7 +19,7 @@ I just added a new tool: `reload_jobs()`
 
 ```typescript
 // 1. Fix jobs.json on disk (agent already did this)
-bash({ command: "jq '...' ~/Papr/data/jobs.json > tmp && mv tmp jobs.json" })
+bash({ command: "jq '...' $PAPR_HOME/data/jobs.json > tmp && mv tmp jobs.json" })
 
 // 2. Reload from disk (NEW - replaces restart!)
 reload_jobs()

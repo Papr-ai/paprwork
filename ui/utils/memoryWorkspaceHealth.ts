@@ -10,12 +10,19 @@ const TEMPLATE_MARKERS = [
   "(Mistakes to avoid",
 ] as const;
 
+/** First-run blockers — MEMORY.md is curated by the sleep cycle, not onboarding. */
 const CORE_SETUP_FILES = new Set([
   "IDENTITY.md",
-  "MEMORY.md",
   "AGENTS.md",
   "TOOLS.md",
 ]);
+
+const IDENTITY_ABOUT_PLACEHOLDER = "(Name, role, industry, organization)";
+
+function extractIdentityAboutBody(content: string): string | null {
+  const match = content.match(/## About\n\n([\s\S]*?)(?=\n## |\n---|\Z)/);
+  return match?.[1]?.trim() ?? null;
+}
 
 /** True when a workspace markdown file still has template placeholder content. */
 export function isWorkspaceFilePlaceholder(content: string): boolean {
@@ -56,15 +63,34 @@ export function isOptionalContextFile(fileName: string): boolean {
   return fileName === "BRAND.md";
 }
 
-/** IDENTITY.md has real user profile content (not template). */
+/** IDENTITY.md About section has real user profile content (not template). */
 export function isIdentitySetupComplete(content: string | undefined): boolean {
   if (!content?.trim()) {
     return false;
   }
-  if (isWorkspaceFilePlaceholder(content)) {
+  const aboutBody = extractIdentityAboutBody(content);
+  if (!aboutBody || aboutBody.includes(IDENTITY_ABOUT_PLACEHOLDER)) {
     return false;
   }
-  return /\*\*Name:\*\*\s+\S/.test(content);
+  return /\*\*Name:\*\*\s+\S/.test(aboutBody);
+}
+
+/** Whether a context file card should show the "Setup needed" chip. */
+export function isContextFileSetupNeeded(
+  fileName: string,
+  content: string,
+): boolean {
+  if (isOptionalContextFile(fileName)) {
+    return false;
+  }
+  if (fileName === "IDENTITY.md") {
+    return !isIdentitySetupComplete(content);
+  }
+  // MEMORY.md is distilled nightly from daily logs — not a first-run blocker.
+  if (fileName === "MEMORY.md") {
+    return false;
+  }
+  return isWorkspaceFilePlaceholder(content);
 }
 
 export function countSetupBlockingPlaceholderFiles(

@@ -5,7 +5,22 @@ import {
   interruptedTurnNeedsContinue,
   lastUserTurnNeedsContinue,
   mergeHistoryWithLocal,
+  priorUserTurnSettledForQueue,
+  recordAutoContinueAttempt,
+  resetAutoContinueAttempts,
+  getAutoContinueBlockReason,
+  resetPostReconnectStreamRecoveryForTests,
+  shouldAutoContinueInterruptedTurn,
+  shouldAutoRetryStreamRecoveryAfterReconnect,
+  markPostReconnectStreamRecoveryAttempted,
+  shouldDrainMessageQueue,
+  shouldIgnoreDuplicateDoneChunk,
+  isStreamDoneChunkWithChatId,
+  resolveChatIdForStreamRequest,
+  trackActiveStream,
+  untrackActiveStream,
   serverHasCompletedAssistantForStreamingTurn,
+  shouldResumeWithFreshGatewayStream,
 } from "../../lib/agentStreamRecovery";
 
 describe("serverHasCompletedAssistantForStreamingTurn", () => {
@@ -76,6 +91,215 @@ describe("mergeHistoryWithLocal", () => {
     expect(merged.some((m) => m.id === "stream")).toBe(false);
     expect(merged.some((m) => m.id === "a2")).toBe(true);
   });
+
+  it("clears interrupted flag when server row for the same id is settled", () => {
+    const local: ChatMessage[] = [
+      { id: "u1", role: "user", content: "Run the job" },
+      {
+        id: "msg-server",
+        role: "assistant",
+        content: "Done running the job",
+        interrupted: true,
+        toolCalls: [
+          { id: "t1", toolName: "run_job", args: {}, status: "success" },
+          { id: "t2", toolName: "bash", args: {}, status: "success" },
+        ],
+      },
+    ];
+    const server: ChatMessage[] = [
+      { id: "u1", role: "user", content: "Run the job" },
+      {
+        id: "msg-server",
+        role: "assistant",
+        content: "Done running the job",
+        sequence: [{ type: "tool", data: { name: "run_job" } }],
+        toolCalls: [{ id: "t1", toolName: "run_job", args: {}, status: "success" }],
+      },
+    ];
+
+    const merged = mergeHistoryWithLocal(local, server);
+
+    expect(merged[1]?.id).toBe("msg-server");
+    expect(merged[1]?.interrupted).toBeUndefined();
+  });
+
+  it("upgrades local assistant shell when server has sequence and toolCalls", () => {
+    const local: ChatMessage[] = [
+      { id: "u1", role: "user", content: "Run the job" },
+      {
+        id: "stream-local",
+        role: "assistant",
+        content: "Done running the job",
+        toolCalls: [{ id: "t1", toolName: "run_job", args: {}, status: "success" }],
+      },
+    ];
+    const server: ChatMessage[] = [
+      { id: "u1", role: "user", content: "Run the job" },
+      {
+        id: "msg-server",
+        role: "assistant",
+        content: "Done running the job",
+        sequence: [{ type: "tool", data: { name: "run_job" } }],
+        toolCalls: [{ id: "t1", toolName: "run_job", args: {}, status: "success" }],
+      },
+    ];
+
+    const merged = mergeHistoryWithLocal(local, server);
+
+    expect(merged).toHaveLength(2);
+    expect(merged[1]?.id).toBe("msg-server");
+    expect(merged[1]?.sequence).toHaveLength(1);
+  });
+
+  it("inserts missing server assistant in chronological order, not at end", () => {
+    const local: ChatMessage[] = [
+      { id: "a1", role: "assistant", content: "First answer" },
+      { id: "u1", role: "user", content: "Question one" },
+      { id: "u2", role: "user", content: "Question two" },
+    ];
+    const server: ChatMessage[] = [
+      { id: "a1", role: "assistant", content: "First answer" },
+      { id: "u1", role: "user", content: "Question one" },
+      {
+        id: "a2",
+        role: "assistant",
+        content: "Second answer",
+        sequence: [{ type: "text", data: "Second answer" }],
+      },
+      { id: "u2", role: "user", content: "Question two" },
+    ];
+
+    const merged = mergeHistoryWithLocal(local, server);
+
+    expect(merged.map((m) => m.id)).toEqual(["a1", "u1", "a2", "u2"]);
+  });
+
+  it("merges persisted attachments from server onto optimistic duplicate user message", () => {
+    const local: ChatMessage[] = [
+      {
+        id: "msg-user-local",
+        role: "user",
+        content: "Review this PDF",
+      },
+    ];
+    const server: ChatMessage[] = [
+      {
+        id: "msg-server",
+        role: "user",
+        content: "Review this PDF",
+        attachments: [
+          {
+            id: "file-1",
+            name: "report.pdf",
+            kind: "file",
+            mimeType: "application/pdf",
+            filePath: "/tmp/report.pdf",
+          },
+        ],
+      },
+    ];
+
+    const merged = mergeHistoryWithLocal(local, server);
+
+    expect(merged).toHaveLength(1);
+    expect(merged[0]?.attachments).toHaveLength(1);
+    expect(merged[0]?.attachments?.[0]?.name).toBe("report.pdf");
+  });
+
+  it("does not reorder paginated history when duplicate assistant text appears twice", () => {
+    const shared = "OK";
+    const local: ChatMessage[] = [
+      { id: "m01", role: "user", content: "first" },
+      { id: "old-a", role: "assistant", content: shared },
+      ...Array.from({ length: 47 }, (_, i) => ({
+        id: `m${String(i + 2).padStart(2, "0")}`,
+        role: (i % 2 === 0 ? "user" : "assistant") as "user" | "assistant",
+        content: `body ${i + 2}`,
+      })),
+      { id: "m49", role: "assistant", content: shared },
+    ];
+    const serverWindow = local.slice(-30).map((m) => ({ ...m }));
+
+    expect(mergeHistoryWithLocal(local, serverWindow).map((m) => m.id)).toEqual(
+      local.map((m) => m.id),
+    );
+  });
+});
+
+describe("shouldIgnoreDuplicateDoneChunk", () => {
+  it("returns false when a new server message follows an older assistant", () => {
+    const messages: ChatMessage[] = [
+      { id: "a-old", role: "assistant", content: "Previous answer" },
+      { id: "u-new", role: "user", content: "Follow up" },
+    ];
+
+    expect(
+      shouldIgnoreDuplicateDoneChunk({
+        finalMessageId: "a-new",
+        messages,
+        hasActiveStreamingMessageId: false,
+        isSending: false,
+      }),
+    ).toBe(false);
+  });
+
+  it("returns true when the same server message is already finalized", () => {
+    const messages: ChatMessage[] = [
+      { id: "u1", role: "user", content: "Question" },
+      { id: "a1", role: "assistant", content: "Answer" },
+    ];
+
+    expect(
+      shouldIgnoreDuplicateDoneChunk({
+        finalMessageId: "a1",
+        messages,
+        hasActiveStreamingMessageId: false,
+        isSending: false,
+      }),
+    ).toBe(true);
+  });
+
+  it("returns false while a stream is still active", () => {
+    const messages: ChatMessage[] = [
+      { id: "u1", role: "user", content: "Question" },
+      { id: "a-old", role: "assistant", content: "Old" },
+    ];
+
+    expect(
+      shouldIgnoreDuplicateDoneChunk({
+        finalMessageId: "a-new",
+        messages,
+        hasActiveStreamingMessageId: true,
+        isSending: false,
+      }),
+    ).toBe(false);
+  });
+});
+
+describe("isStreamDoneChunkWithChatId", () => {
+  it("returns true when done chunk includes chatId", () => {
+    expect(
+      isStreamDoneChunkWithChatId({
+        type: "done",
+        chatId: "chat-1",
+        payload: {},
+      }),
+    ).toBe(true);
+  });
+
+  it("returns false when done chunk is missing chatId", () => {
+    expect(isStreamDoneChunkWithChatId({ type: "done", payload: {} })).toBe(
+      false,
+    );
+  });
+});
+
+describe("resolveChatIdForStreamRequest", () => {
+  it("maps requestId back to the active chat", () => {
+    trackActiveStream("chat-abc", "req-123");
+    expect(resolveChatIdForStreamRequest("req-123")).toBe("chat-abc");
+    untrackActiveStream("chat-abc");
+  });
 });
 
 describe("lastUserTurnNeedsContinue", () => {
@@ -100,6 +324,80 @@ describe("lastUserTurnNeedsContinue", () => {
       { id: "a1", role: "assistant", content: "" },
     ];
     expect(lastUserTurnNeedsContinue(messages)).toBe(true);
+  });
+});
+
+describe("priorUserTurnSettledForQueue", () => {
+  it("returns false when the last user turn has no assistant yet", () => {
+    const messages: ChatMessage[] = [
+      { id: "u1", role: "user", content: "First question" },
+    ];
+    expect(priorUserTurnSettledForQueue(messages)).toBe(false);
+  });
+
+  it("returns true when the last user turn has a completed assistant", () => {
+    const messages: ChatMessage[] = [
+      { id: "u1", role: "user", content: "First question" },
+      { id: "a1", role: "assistant", content: "Answer" },
+    ];
+    expect(priorUserTurnSettledForQueue(messages)).toBe(true);
+  });
+
+  it("returns true when the prior assistant was explicitly interrupted", () => {
+    const messages: ChatMessage[] = [
+      { id: "u1", role: "user", content: "First question" },
+      {
+        id: "a1",
+        role: "assistant",
+        content: "Partial",
+        interrupted: true,
+      },
+    ];
+    expect(priorUserTurnSettledForQueue(messages)).toBe(true);
+  });
+
+  it("returns false when another user message already sits after the last user turn", () => {
+    const messages: ChatMessage[] = [
+      { id: "u1", role: "user", content: "First question" },
+      { id: "u2", role: "user", content: "Second question" },
+    ];
+    expect(priorUserTurnSettledForQueue(messages)).toBe(false);
+  });
+});
+
+describe("shouldDrainMessageQueue", () => {
+  it("returns false while the agent is still sending", () => {
+    expect(
+      shouldDrainMessageQueue({
+        chatId: "chat-1",
+        messages: [
+          { id: "u1", role: "user", content: "Hi" },
+          { id: "a1", role: "assistant", content: "Hello" },
+        ],
+        isSending: true,
+        isWaitingForAgentSlot: false,
+        connectionPaused: false,
+        needsStreamRecovery: false,
+        queueTransitionInFlight: false,
+      }),
+    ).toBe(false);
+  });
+
+  it("returns true when the prior turn settled and nothing is in flight", () => {
+    expect(
+      shouldDrainMessageQueue({
+        chatId: "chat-1",
+        messages: [
+          { id: "u1", role: "user", content: "Hi" },
+          { id: "a1", role: "assistant", content: "Hello" },
+        ],
+        isSending: false,
+        isWaitingForAgentSlot: false,
+        connectionPaused: false,
+        needsStreamRecovery: false,
+        queueTransitionInFlight: false,
+      }),
+    ).toBe(true);
   });
 });
 
@@ -130,6 +428,44 @@ describe("interruptedTurnNeedsContinue", () => {
       interruptedTurnNeedsContinue(messages, "stream", true),
     ).toBe(false);
   });
+
+  it("returns true when history reload flagged the last assistant interrupted", () => {
+    const messages: ChatMessage[] = [
+      { id: "u1", role: "user", content: "Build the dashboard" },
+      {
+        id: "a1",
+        role: "assistant",
+        content: "Partial work saved to DB",
+        interrupted: true,
+      },
+    ];
+
+    expect(
+      interruptedTurnNeedsContinue(messages, undefined, false),
+    ).toBe(true);
+  });
+
+  it("returns false when the user stopped the interrupted turn", () => {
+    const messages: ChatMessage[] = [
+      { id: "u1", role: "user", content: "Build the dashboard" },
+      {
+        id: "a1",
+        role: "assistant",
+        content: "Partial",
+        interrupted: true,
+        sequence: [
+          {
+            type: "tool",
+            data: { toolName: "bash", status: "stopped", error: "Stopped by user" },
+          },
+        ],
+      },
+    ];
+
+    expect(
+      interruptedTurnNeedsContinue(messages, undefined, false),
+    ).toBe(false);
+  });
 });
 
 describe("finalizeStreamingMessages", () => {
@@ -146,5 +482,251 @@ describe("finalizeStreamingMessages", () => {
     const finalized = finalizeStreamingMessages(messages);
     expect(finalized[0]?.isStreaming).toBe(false);
     expect(finalized[0]?.content).toBe("Partial work");
+  });
+
+  it("flags the abandoned turn as interrupted so it is not shown as finished", () => {
+    const messages: ChatMessage[] = [
+      {
+        id: "stream",
+        role: "assistant",
+        content: "",
+        isStreaming: true,
+        streamingContent: "Partial work",
+      },
+    ];
+
+    expect(finalizeStreamingMessages(messages)[0]?.interrupted).toBe(true);
+  });
+
+  it("settles tool calls that never reported back", () => {
+    const messages: ChatMessage[] = [
+      {
+        id: "stream",
+        role: "assistant",
+        content: "",
+        isStreaming: true,
+        sequence: [
+          { type: "tool", data: { id: "t1", toolName: "bash", status: "calling" } },
+          { type: "tool", data: { id: "t2", toolName: "bash", status: "success" } },
+        ],
+      },
+    ];
+
+    const sequence = finalizeStreamingMessages(messages)[0]?.sequence ?? [];
+
+    expect((sequence[0]?.data as { status: string }).status).toBe("interrupted");
+    expect((sequence[1]?.data as { status: string }).status).toBe("success");
+  });
+
+  it("leaves completed messages untouched", () => {
+    const messages: ChatMessage[] = [
+      { id: "done", role: "assistant", content: "All finished" },
+    ];
+
+    expect(finalizeStreamingMessages(messages)[0]?.interrupted).toBeUndefined();
+  });
+});
+
+describe("autoContinueInterruptedTurn helpers", () => {
+  const interruptedAssistant: ChatMessage = {
+    id: "a1",
+    role: "assistant",
+    content: "Partial",
+    interrupted: true,
+    sequence: [
+      { type: "tool", data: { toolName: "bash", status: "success" } },
+    ],
+  };
+
+  beforeEach(() => {
+    resetAutoContinueAttempts("chat-1");
+  });
+
+  it("allows auto-continue when the last assistant turn was interrupted", () => {
+    const messages: ChatMessage[] = [
+      { id: "u1", role: "user", content: "Build it" },
+      interruptedAssistant,
+    ];
+
+    expect(
+      shouldAutoContinueInterruptedTurn({
+        chatId: "chat-1",
+        messages,
+        isSending: false,
+        connectionPaused: false,
+        needsStreamRecovery: false,
+        gatewayReady: true,
+      }),
+    ).toBe(true);
+  });
+
+  it("blocks auto-continue after three attempts for the same user turn", () => {
+    const messages: ChatMessage[] = [
+      { id: "u1", role: "user", content: "Build it" },
+      interruptedAssistant,
+    ];
+
+    recordAutoContinueAttempt("chat-1", messages);
+    recordAutoContinueAttempt("chat-1", messages);
+    recordAutoContinueAttempt("chat-1", messages);
+
+    expect(
+      shouldAutoContinueInterruptedTurn({
+        chatId: "chat-1",
+        messages,
+        isSending: false,
+        connectionPaused: false,
+        needsStreamRecovery: false,
+        gatewayReady: true,
+      }),
+    ).toBe(false);
+  });
+
+  it("does not auto-continue user-stopped turns", () => {
+    const messages: ChatMessage[] = [
+      { id: "u1", role: "user", content: "Build it" },
+      {
+        ...interruptedAssistant,
+        sequence: [
+          {
+            type: "tool",
+            data: { toolName: "bash", status: "stopped", error: "Stopped by user" },
+          },
+        ],
+      },
+    ];
+
+    expect(
+      shouldAutoContinueInterruptedTurn({
+        chatId: "chat-1",
+        messages,
+        isSending: false,
+        connectionPaused: false,
+        needsStreamRecovery: false,
+        gatewayReady: true,
+      }),
+    ).toBe(false);
+  });
+
+  it("allows auto-continue while needsStreamRecovery is set for interrupted turns", () => {
+    const messages: ChatMessage[] = [
+      { id: "u1", role: "user", content: "Build it" },
+      interruptedAssistant,
+    ];
+
+    expect(
+      shouldAutoContinueInterruptedTurn({
+        chatId: "chat-1",
+        messages,
+        isSending: false,
+        connectionPaused: false,
+        needsStreamRecovery: true,
+        gatewayReady: true,
+      }),
+    ).toBe(true);
+  });
+
+  it("allows auto-continue when provider dropped before any assistant row", () => {
+    const messages: ChatMessage[] = [
+      { id: "u1", role: "user", content: "Build it" },
+    ];
+
+    expect(
+      shouldAutoContinueInterruptedTurn({
+        chatId: "chat-1",
+        messages,
+        isSending: false,
+        connectionPaused: false,
+        needsStreamRecovery: false,
+        gatewayReady: true,
+      }),
+    ).toBe(true);
+  });
+
+  it("does not auto-continue when assistant exists but was not marked interrupted", () => {
+    const messages: ChatMessage[] = [
+      { id: "u1", role: "user", content: "Build it" },
+      {
+        id: "a1",
+        role: "assistant",
+        content: "Partial answer without interrupted flag",
+      },
+    ];
+
+    expect(
+      shouldAutoContinueInterruptedTurn({
+        chatId: "chat-1",
+        messages,
+        isSending: false,
+        connectionPaused: false,
+        needsStreamRecovery: false,
+        gatewayReady: true,
+      }),
+    ).toBe(false);
+    expect(
+      getAutoContinueBlockReason({
+        chatId: "chat-1",
+        messages,
+        isSending: false,
+        connectionPaused: false,
+        needsStreamRecovery: false,
+        gatewayReady: true,
+      }),
+    ).toBe("turnComplete");
+  });
+});
+
+describe("post-reconnect stream recovery", () => {
+  beforeEach(() => {
+    resetPostReconnectStreamRecoveryForTests();
+  });
+
+  it("allows one auto retry per chat when needsStreamRecovery is set", () => {
+    expect(
+      shouldAutoRetryStreamRecoveryAfterReconnect({
+        chatId: "c1",
+        needsStreamRecovery: true,
+        streamRecoveryReason: "connection",
+        isSending: false,
+      }),
+    ).toBe(true);
+
+    markPostReconnectStreamRecoveryAttempted("c1");
+
+    expect(
+      shouldAutoRetryStreamRecoveryAfterReconnect({
+        chatId: "c1",
+        needsStreamRecovery: true,
+        streamRecoveryReason: "connection",
+        isSending: false,
+      }),
+    ).toBe(false);
+  });
+
+  it("does not auto retry rate-limited recovery", () => {
+    expect(
+      shouldAutoRetryStreamRecoveryAfterReconnect({
+        chatId: "c1",
+        needsStreamRecovery: true,
+        streamRecoveryReason: "rateLimit",
+        isSending: false,
+      }),
+    ).toBe(false);
+  });
+});
+
+describe("shouldResumeWithFreshGatewayStream", () => {
+  it("requires a fresh stream after rate limit or provider refusal", () => {
+    expect(
+      shouldResumeWithFreshGatewayStream({ streamRecoveryReason: "rateLimit" }),
+    ).toBe(true);
+    expect(
+      shouldResumeWithFreshGatewayStream({ lastTurnOutcome: "providerRefused" }),
+    ).toBe(true);
+    expect(
+      shouldResumeWithFreshGatewayStream({
+        streamRecoveryReason: "connection",
+      }),
+    ).toBe(false);
   });
 });

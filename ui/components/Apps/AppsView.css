@@ -20,8 +20,6 @@
   height: 56px;
   border-bottom: 1px solid var(--border-color);
   background: color-mix(in srgb, var(--glass-bg) 72%, transparent);
-  backdrop-filter: blur(14px);
-  -webkit-backdrop-filter: blur(14px);
   flex-shrink: 0;
 }
 
@@ -39,28 +37,71 @@
   min-width: 8px;
 }
 
-.apps-view__topbar-search {
-  width: min(240px, 30vw);
-  min-width: 160px;
-  padding: 8px 12px;
-  border: 1px solid var(--border-color);
-  border-radius: 9px;
-  background: color-mix(in srgb, var(--background-secondary, #f5f5f7) 88%, transparent);
-  color: var(--text-primary);
-  font-size: 13px;
-  font-family: var(--font-body);
-  transition: border-color 160ms ease, box-shadow 160ms ease;
-}
-
-.apps-view__topbar-search::placeholder {
+/* One search box for library + team + community (prototype: .p-search). */
+.apps-view__search {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  height: 36px;
+  width: min(520px, 46vw);
+  min-width: 220px;
+  padding: 0 10px 0 12px;
+  border-radius: 11px;
+  border: 1px solid transparent;
+  background: color-mix(in srgb, var(--text-primary) 6%, transparent);
   color: var(--text-tertiary);
+  cursor: text;
+  transition: background 160ms ease, border-color 160ms ease, box-shadow 160ms ease;
 }
-
-.apps-view__topbar-search:focus {
-  outline: none;
+.apps-view__search:focus-within {
+  background: var(--popover-bg, #fff);
   border-color: color-mix(in srgb, var(--accent) 45%, var(--border-color));
   box-shadow: 0 0 0 3px color-mix(in srgb, var(--accent) 12%, transparent);
 }
+.apps-view__search-icon { flex-shrink: 0; }
+.apps-view__search input {
+  flex: 1;
+  min-width: 0;
+  border: 0;
+  outline: none;
+  background: none;
+  font: inherit;
+  font-family: var(--font-body);
+  font-size: 13.5px;
+  color: var(--text-primary);
+}
+.apps-view__search input::placeholder { color: var(--text-tertiary); }
+.apps-view__search input::-webkit-search-cancel-button { display: none; }
+.apps-view__search-clear {
+  border: 0;
+  background: none;
+  color: var(--text-tertiary);
+  font-size: 16px;
+  line-height: 1;
+  padding: 2px 4px;
+  cursor: pointer;
+  border-radius: 6px;
+}
+.apps-view__search-clear:hover { color: var(--text-primary); }
+
+/* Unified search results: one block per source. */
+.apps-view__results { margin-bottom: 28px; }
+.apps-view__results-title,
+.apps-view__results-pending {
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--text-secondary);
+  margin: 0 0 12px;
+}
+.apps-view__results-title em,
+.apps-view__results-pending span {
+  font-style: normal;
+  font-weight: 500;
+  color: var(--text-tertiary);
+  margin-left: 4px;
+}
+.apps-view__results-pending { margin-bottom: 20px; }
+
 
 /* Segmented control — inline in topbar */
 .apps-view__tabs {
@@ -171,6 +212,17 @@
   margin-bottom: 16px;
 }
 
+.apps-view__library-toolbar-leading {
+  display: flex;
+  align-items: baseline;
+  gap: 10px;
+  min-width: 0;
+}
+
+.apps-view__library-toolbar-leading .apps-view__section-label {
+  margin-bottom: 0;
+}
+
 .apps-view__library-toolbar-actions {
   display: flex;
   align-items: center;
@@ -181,6 +233,34 @@
   font-size: 12px;
   color: var(--text-tertiary);
   white-space: nowrap;
+}
+
+.apps-view__skills-link {
+  padding: 6px 12px;
+  border: 1px solid var(--border-color);
+  border-radius: 8px;
+  background: color-mix(in srgb, var(--background-secondary, #f5f5f7) 88%, transparent);
+  color: var(--text-secondary);
+  font: inherit;
+  font-size: 12px;
+  font-weight: 500;
+  cursor: pointer;
+  white-space: nowrap;
+  transition:
+    border-color 150ms ease,
+    color 150ms ease,
+    background 150ms ease;
+}
+
+.apps-view__skills-link:hover {
+  border-color: color-mix(in srgb, var(--accent) 35%, var(--border-color));
+  color: var(--text-primary);
+  background: color-mix(in srgb, var(--accent) 8%, transparent);
+}
+
+.apps-view__skills-link:focus-visible {
+  outline: 2px solid color-mix(in srgb, var(--accent) 45%, transparent);
+  outline-offset: 2px;
 }
 
 .apps-view__inline-select {
@@ -218,10 +298,17 @@
 }
 
 /* Scrollable content */
+.apps-view__body {
+  flex: 1;
+  display: flex;
+  min-height: 0;
+}
+
 .apps-view__content {
   flex: 1;
+  min-width: 0;
   overflow-y: auto;
-  padding: 16px 20px 24px;
+  padding: 22px 28px 40px;
 }
 
 /* Section labels */
@@ -369,3 +456,199 @@
 .apps-view__content::-webkit-scrollbar-thumb:hover {
   background: var(--text-secondary);
 }
+
+/* ── Apps redesign: sidebar, page heads, banners, cleanup ─────────────────── */
+.apps-sidebar {
+  width: 212px;
+  flex-shrink: 0;
+  padding: 14px 10px;
+  border-right: 1px solid var(--border-color);
+  background: var(--sidebar-bg);
+  overflow-y: auto;
+}
+.apps-sidebar__heading {
+  font-size: 11px;
+  font-weight: 650;
+  text-transform: uppercase;
+  letter-spacing: 0.07em;
+  color: var(--text-tertiary);
+  padding: 14px 10px 6px;
+}
+.apps-sidebar__heading:first-child { padding-top: 2px; }
+.apps-sidebar__item {
+  width: 100%;
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 7px 10px;
+  border: none;
+  border-radius: 8px;
+  background: transparent;
+  color: var(--text-secondary);
+  font-size: 13.5px;
+  text-align: left;
+  cursor: pointer;
+}
+.apps-sidebar__item:hover { background: var(--hover); color: var(--text-primary); }
+.apps-sidebar__item--active {
+  background: color-mix(in srgb, var(--accent) 12%, transparent);
+  color: var(--accent);
+  font-weight: 550;
+}
+.apps-sidebar__item:focus-visible {
+  outline: 2px solid color-mix(in srgb, var(--accent) 55%, transparent);
+  outline-offset: 1px;
+}
+.apps-sidebar__icon {
+  width: 16px;
+  height: 16px;
+  flex-shrink: 0;
+  fill: none;
+  stroke: currentColor;
+  stroke-width: 1.7;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+}
+.apps-sidebar__label { flex: 1; }
+.apps-sidebar__count { font-size: 11.5px; font-weight: 600; color: var(--text-tertiary); }
+.apps-sidebar__count--alert {
+  color: var(--error);
+  background: color-mix(in srgb, var(--error) 14%, transparent);
+  padding: 1px 7px;
+  border-radius: 9px;
+}
+
+.apps-view__page-head { margin-bottom: 16px; }
+.apps-view__page-title {
+  font-size: 22px;
+  font-weight: 650;
+  letter-spacing: -0.015em;
+  color: var(--text-primary);
+  margin: 0 0 4px;
+}
+.apps-view__page-subtitle {
+  font-size: 13.5px;
+  color: var(--text-secondary);
+  margin: 0;
+  max-width: 64ch;
+  line-height: 1.5;
+}
+.apps-view__none { color: var(--text-tertiary); font-size: 13.5px; margin-top: 16px; }
+
+.apps-view__banners { display: grid; gap: 8px; margin-bottom: 18px; }
+.apps-view__banner {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding: 10px 14px;
+  border-radius: 12px;
+  font-size: 13.5px;
+  color: var(--text-primary);
+  background: color-mix(in srgb, var(--accent) 8%, transparent);
+  border: 1px solid color-mix(in srgb, var(--accent) 22%, transparent);
+}
+.apps-view__banner span { flex: 1; }
+.apps-view__banner--warn {
+  background: color-mix(in srgb, var(--error) 8%, transparent);
+  border-color: color-mix(in srgb, var(--error) 24%, transparent);
+}
+.apps-view__banner button,
+.apps-view__secondary-btn {
+  padding: 6px 12px;
+  border-radius: 8px;
+  border: 1px solid var(--border-color);
+  background: var(--popover-bg);
+  color: var(--text-primary);
+  font-size: 13px;
+  font-weight: 600;
+  cursor: pointer;
+}
+.apps-view__empty-actions { display: flex; gap: 10px; justify-content: center; }
+
+.apps-cleanup { max-width: 760px; }
+.apps-cleanup__back {
+  border: none;
+  background: none;
+  color: var(--text-secondary);
+  font-size: 13px;
+  padding: 0;
+  margin-bottom: 10px;
+  cursor: pointer;
+}
+.apps-cleanup__groups { display: grid; gap: 14px; margin-top: 18px; }
+.apps-cleanup__group {
+  padding: 10px;
+  border-radius: 16px;
+  background: var(--glass-bg);
+  border: 1px solid var(--glass-border);
+}
+.apps-cleanup__group-head { display: flex; gap: 10px; align-items: baseline; padding: 4px 6px 8px; }
+.apps-cleanup__group-head span { font-size: 12.5px; color: var(--text-tertiary); }
+.apps-cleanup__row {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding: 9px 10px;
+  border-radius: 10px;
+  cursor: pointer;
+  font-size: 13.5px;
+}
+.apps-cleanup__row:hover { background: var(--hover); }
+.apps-cleanup__row--kept { background: color-mix(in srgb, var(--accent) 10%, transparent); }
+.apps-cleanup__row input { accent-color: var(--accent); }
+.apps-cleanup__title { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.apps-cleanup__when { font-size: 12px; color: var(--text-tertiary); }
+.apps-cleanup__tag { width: 56px; text-align: right; font-size: 11.5px; font-weight: 600; color: var(--text-tertiary); }
+.apps-cleanup__row--kept .apps-cleanup__tag { color: var(--accent); }
+.apps-cleanup__footer { display: flex; justify-content: flex-end; gap: 8px; margin-top: 16px; }
+
+/* Search: centered on top, with the ⌘K hint so people learn the shortcut. */
+.apps-view__topbar {
+  justify-content: center;
+  position: relative;
+}
+.apps-view__search {
+  width: min(560px, 100%);
+  flex: none;
+}
+.apps-view__search-kbd {
+  position: absolute;
+  right: 8px;
+  top: 50%;
+  transform: translateY(-50%);
+  font: 500 11px/1 ui-sans-serif, system-ui, -apple-system, sans-serif;
+  color: var(--text-tertiary);
+  background: var(--glass-bg-subtle, rgba(0, 0, 0, 0.04));
+  border: 1px solid var(--glass-border, rgba(0, 0, 0, 0.08));
+  border-radius: 6px;
+  padding: 4px 6px;
+  letter-spacing: 0.04em;
+  pointer-events: none;
+}
+.apps-view__search:focus-within .apps-view__search-kbd { opacity: 0; }
+
+.apps-view__topbar > .apps-view__brand {
+  position: absolute;
+  left: 20px;
+  top: 50%;
+  transform: translateY(-50%);
+}
+.apps-view__topbar > .apps-view__topbar-grow { display: none; }
+.apps-view__topbar > .apps-view__create-btn {
+  position: absolute;
+  right: 20px;
+  top: 50%;
+  transform: translateY(-50%);
+}
+
+/* Wider cards (match the prototype): fewer, roomier columns. */
+.apps-view__grid,
+.apps-view__recent-row {
+  grid-template-columns: repeat(auto-fill, minmax(300px, 1fr));
+  gap: 16px;
+}
+.apps-view__recent-row { overflow-x: visible; }
+
+/* Anchor the "/" hint inside the search box (it was positioning against the
+   top bar and landing under the New app button). */
+.apps-view__search { position: relative; }

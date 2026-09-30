@@ -4,10 +4,11 @@
 
 import {
   fetchWorkspaceMembers,
+  resolveWorkspaceIdForContext,
   type WorkspaceMember,
 } from "../../core/utils/paprWorkspaceTeam.js";
 import {
-  toExternalUserPrincipal,
+  toUserPrincipal,
   toNamespacePrincipal,
   toOrganizationPrincipal,
 } from "../../core/utils/memoryAcl.js";
@@ -48,7 +49,7 @@ function mapMemberForAgent(member: WorkspaceMember): NamespaceUserForAgent {
     email: member.user.email,
     displayName: member.user.displayName,
     role: member.user.role,
-    memoryReadPrincipal: toExternalUserPrincipal(externalUserId),
+    memoryReadPrincipal: toUserPrincipal(externalUserId),
   };
 }
 
@@ -60,13 +61,6 @@ export async function listNamespaceUsersForAgent(): Promise<ListNamespaceUsersRe
     );
   }
 
-  const workspaceId = getPaprWorkspaceId();
-  if (!workspaceId) {
-    throw new Error(
-      "No Papr workspace id is available. Sign out and sign in again to refresh workspace metadata.",
-    );
-  }
-
   const pointer = readActiveWorkspacePointer();
   const profile = getGatewayPaprProfile();
   const recorderExternalUserId = getPaprUserId();
@@ -74,6 +68,11 @@ export async function listNamespaceUsersForAgent(): Promise<ListNamespaceUsersRe
     process.env.PAPR_NAMESPACE_ID?.trim() || pointer?.namespaceId;
   const organizationId =
     process.env.PAPR_ORG_ID?.trim() || pointer?.organizationId;
+
+  const workspaceId = await resolveWorkspaceIdForContext(sessionToken, {
+    workspaceId: getPaprWorkspaceId(),
+    namespaceId,
+  });
 
   const members = await fetchWorkspaceMembers(sessionToken, workspaceId);
 

@@ -91,7 +91,9 @@ npm run build:ui
 
 # Create release on GitHub (triggers auto-updater)
 git tag v2.0.11
-git push --tags
+git push origin v2.0.11
+# Do NOT run `gh release create` first — CI creates the release and uploads
+# latest-mac.yml / latest.yml / latest-linux.yml. See docs/RELEASE_PROCEDURE.md
 ```
 
 **Test auto-updater:**

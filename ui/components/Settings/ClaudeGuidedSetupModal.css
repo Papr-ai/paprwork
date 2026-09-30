@@ -1,0 +1,48 @@
+.claude-guided-setup-modal {
+  width: min(560px, 92vw);
+}
+
+.claude-guided-setup-modal__header {
+  align-items: flex-start;
+  gap: 12px;
+  padding-bottom: 4px;
+}
+
+.claude-guided-setup-modal__lede {
+  margin: 6px 0 0;
+  font-size: 13px;
+  line-height: 1.45;
+  color: var(--color-text-secondary, #666);
+  font-weight: 400;
+}
+
+.claude-guided-setup-modal__body {
+  padding-top: 8px;
+  padding-bottom: 24px;
+}
+
+.claude-guided-setup-modal__body.onboarding-connect {
+  --onb-ink: #1a1a1a;
+  --onb-mid: #666;
+  --onb-line: #e5e7eb;
+  --onb-g2: #2563eb;
+  --onb-ok: #067647;
+}
+
+@media (prefers-color-scheme: dark) {
+  .claude-guided-setup-modal__body.onboarding-connect {
+    --onb-ink: #f5f5f7;
+    --onb-mid: #a1a1aa;
+    --onb-line: #3f3f46;
+    --onb-g2: #60a5fa;
+    --onb-ok: #6ee7b7;
+  }
+
+  .claude-guided-setup-modal__lede {
+    color: var(--color-text-secondary, #a1a1aa);
+  }
+}
+
+.claude-guided-setup-modal .claude-stepper__foot {
+  margin-top: 16px;
+}

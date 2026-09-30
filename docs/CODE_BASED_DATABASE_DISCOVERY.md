@@ -76,7 +76,7 @@ private async scanAppCodeForDatabasePaths(appDir: string): Promise<Set<string>> 
     // If app references a job ID, it likely queries that job's database
     const jobIdPattern = /['"]([a-f0-9-]{36})['"]/g;
     for (const [_, jobId] of content.matchAll(jobIdPattern)) {
-      const dbPath = `~/Papr/jobs/${jobId}/data/data.db`;
+      const dbPath = `$PAPR_HOME/Jobs/${jobId}/data/data.db`;
       if (await fileExists(dbPath)) {
         dbPaths.add(dbPath);
       }

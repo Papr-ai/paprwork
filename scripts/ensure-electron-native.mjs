@@ -9,6 +9,17 @@ import path from "node:path";
 import { fileURLToPath } from "node:url";
 
 const root = path.join(path.dirname(fileURLToPath(import.meta.url)), "..");
+
+if (process.platform === "darwin") {
+  const patchPlist = spawnSync("node", ["scripts/patch-electron-dev-plist.mjs"], {
+    cwd: root,
+    stdio: "inherit",
+  });
+  if (patchPlist.status !== 0) {
+    process.exit(patchPlist.status ?? 1);
+  }
+}
+
 const electronBin =
   process.platform === "win32"
     ? path.join(root, "node_modules/electron/dist/electron.exe")

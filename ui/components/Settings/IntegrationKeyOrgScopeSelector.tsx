@@ -158,7 +158,7 @@ export function IntegrationKeyOrgScopeSelector({
         >
           {organizations.map((org) => (
             <option key={org.organizationId} value={org.organizationId}>
-              {org.label}
+              {org.label} ({org.organizationId})
             </option>
           ))}
         </select>

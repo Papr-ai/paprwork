@@ -18,10 +18,24 @@ export type Provider =
   | "groq"
   | "moonshot";
 
-/** OpenAI AI SDK `providerOptions.openai.reasoningEffort` */
-export type OpenAIReasoningEffort = "low" | "medium" | "high" | "xhigh";
+/**
+ * OpenAI AI SDK `providerOptions.openai.reasoningEffort`.
+ *
+ * `max` is model-dependent rather than universal: GPT-6 Astra accepts it, the
+ * GPT-5 families do not. The type cannot express that, so it admits the whole
+ * set and `openAIModelAcceptsMaxEffort` is the authority — `toOpenAIReasoningEffort`
+ * is where it is enforced, folding `max` to `xhigh` for models that reject it.
+ * Narrowing this type back would force a cast at the one call site that is
+ * correct, which hides the distinction instead of enforcing it.
+ */
+export type OpenAIReasoningEffort =
+  | "low"
+  | "medium"
+  | "high"
+  | "xhigh"
+  | "max";
 
-/** Model picker reasoning levels (OpenAI + provider-specific e.g. Z.ai "max") */
+/** Model picker reasoning levels. */
 export type ReasoningEffort = OpenAIReasoningEffort | "max";
 
 export type ModelReasoning = {
@@ -63,6 +77,31 @@ export interface AgentConfig {
   maxTokens?: number; // Output token limit
   thinkingBudget?: number;
   reasoning?: ModelReasoning;
+  /**
+   * User-chosen cap on the context window, in tokens.
+   *
+   * Separate from `thinkingBudget: 0`, which cannot mean "no thinking" —
+   * Opus 5 and Fable 5.1 ship a default budget of 0 and still think adaptively.
+   * Absent means "use the model's advertised window".
+   */
+  contextLimit?: number;
+  /**
+   * Explicitly disable reasoning. Only ever `false`; absent means the provider
+   * default applies. Honoured where the request has a real off switch
+   * (Anthropic `thinking: disabled`, Google zero budget, Ollama `think`).
+   */
+  thinking?: false;
+  /**
+   * Anthropic fast mode. Billed at roughly 2× standard rates and available on
+   * the first-party API only, so it is never set on the pi-ai (OAuth) path.
+   */
+  speed?: "fast" | "standard";
+  /**
+   * When model is `auto` and the router cannot decide (Jev down / timeout),
+   * run this model instead — the next default the user can reach. Sent by
+   * the UI; the gateway falls back to the ladder's standard rung without it.
+   */
+  autoFallbackModelId?: string;
 }
 
 /**
@@ -75,6 +114,12 @@ export interface AgentConfigInternal extends AgentConfig {
   apiKey: string; // Fetched internally via IPC, never sent over network
   /** When OAuth is used for openai/anthropic; used to route to pi-ai vs AI SDK */
   authType?: "oauth" | "apiKey";
+  /**
+   * Credential generation `apiKey` was resolved under. Sessions reuse a resolved
+   * credential for their lifetime, so this lets them detect that the user changed
+   * auth mode or keys and re-resolve instead of using the old one.
+   */
+  authEpoch?: number;
 }
 
 /**

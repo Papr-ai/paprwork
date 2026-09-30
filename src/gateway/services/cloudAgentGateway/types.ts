@@ -25,6 +25,11 @@ export interface CloudAgentRunRequest {
   userId: string;
   jobId: string;
   runId: string;
+  /**
+   * Scheduler slot idempotency (`scheduleState.nextRunAt` ISO). Memory server should
+   * send this for cloud scheduled agent jobs so retries reuse the same runId/chatId.
+   */
+  scheduledDueAt?: string;
   provider: string;
   model?: string;
   /** Per-run parameters from memory / mini-app (merged into prompt via AgentJobExecutor). */
@@ -34,16 +39,27 @@ export interface CloudAgentRunRequest {
   paprApiKey: string;
   allowedToolIds?: string[];
   maxTurns?: number;
-  repoCloneUrl: string;
+  /** Full namespace workspace clone URL (workspaceScope=namespace). */
+  repoCloneUrl?: string;
   repoToken: string;
   repoBranch?: string;
+  /**
+   * namespace — full Papr workspace repo (Papr Web, desktop-parity).
+   * app — per-app Sync V3 repo only + Mongo scaffold (embedded app-agent chat).
+   */
+  workspaceScope?: "namespace" | "app";
+  appId?: string;
+  appRepoOwner?: string;
+  appRepoName?: string;
+  /** Repo-relative paths → UTF-8 contents (e.g. data/jobs.json) written after materialize. */
+  scaffoldFiles?: Record<string, string>;
   /** Linked mini-app sources from memory prepare (metadata). */
   linkedSources?: CloudLinkedSource[];
-  /** Primary Turso short name for APP_DB routing. */
+  /** @deprecated Prefer tursoSources from job writeDbIds + app linked sources. */
   primaryTursoShortName?: string;
-  /** All Turso replicas to pull/push at run bookends (job scratch + APP_DB). */
+  /** All Turso replicas to pull/push at run bookends (writeDbIds + linked registry DBs). */
   tursoSources?: CloudTursoSource[];
-  /** @deprecated Prefer tursoSources — primary source Turso creds. */
+  /** @deprecated Prefer tursoSources — legacy single-source creds. */
   turso?: {
     jobId: string;
     /** Turso short name (j-{jobId8}, d-{dbId8}, or per-user suffix). */

@@ -5,9 +5,23 @@
 
 import { useEffect, useState, useRef } from "react";
 import type { UpdateStatus } from "../../types/electron";
+import { gateway } from "../../src/lib/gateway";
 import "./UpdateBanner.css";
 
 type BannerState = "hidden" | "downloading" | "ready" | "error";
+
+function isTransientNetworkUpdateError(message: string): boolean {
+  const lower = message.toLowerCase();
+  return (
+    lower.includes("could not reach the update server") ||
+    lower.includes("net::") ||
+    lower.includes("enotfound") ||
+    lower.includes("econnrefused") ||
+    lower.includes("connection lost") ||
+    lower.includes("network") ||
+    lower.includes("timed out")
+  );
+}
 
 export function UpdateBanner() {
   const [state, setState] = useState<BannerState>("hidden");
@@ -17,6 +31,9 @@ export function UpdateBanner() {
   const [recoveryHint, setRecoveryHint] = useState<string>("");
   const [dismissed, setDismissed] = useState(false);
   const handlerRef = useRef<((data: UpdateStatus) => void) | undefined>(undefined);
+  const bannerSnapshotRef = useRef({ state: "hidden" as BannerState, errorMessage: "" });
+
+  bannerSnapshotRef.current = { state, errorMessage };
 
   // Keep handler ref in sync
   handlerRef.current = (data: UpdateStatus) => {
@@ -59,6 +76,24 @@ export function UpdateBanner() {
 
     api.onStatus(handler);
     return () => api.removeStatusListener(handler);
+  }, []);
+
+  // Auto-dismiss transient network update errors once Gateway reconnects.
+  useEffect(() => {
+    const unsubscribe = gateway.onConnectionChange((connected) => {
+      if (!connected) return;
+      const { state: currentState, errorMessage: currentError } =
+        bannerSnapshotRef.current;
+      if (
+        currentState === "error" &&
+        isTransientNetworkUpdateError(currentError)
+      ) {
+        setState("hidden");
+        setErrorMessage("");
+        setRecoveryHint("");
+      }
+    });
+    return unsubscribe;
   }, []);
 
   if (state === "hidden" || dismissed) return null;

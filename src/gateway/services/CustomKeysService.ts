@@ -4,13 +4,19 @@
  * Provides access to securely stored custom API keys.
  * In production, communicates with Electron main process via IPC.
  * In development, uses a local fallback (not secure, for testing only).
+ *
+ * Keys are stored in Apple Keychain (macOS) via Electron's safeStorage.
+ * This service NEVER falls back to process.env for stored keys —
+ * only the secure IPC path is used.
  */
 
 import { randomUUID } from "node:crypto";
 import type {
   CustomKeyInput,
   CustomKeyMetadata,
+  VaultShareConflictInput,
 } from "../../core/storage/CustomKeysStorage.js";
+import type { SharedVaultKeyInput } from "../../core/storage/sharedVaultMirror.js";
 import { loadCustomKeysMetadataFromFile } from "../utils/customKeysFile.js";
 
 interface CustomKeyWithValue extends CustomKeyMetadata {
@@ -25,11 +31,15 @@ interface PendingIpcRequest {
 
 interface CustomKeysIpcMessage {
   type?: string;
+  keyName?: string;
+  keysChanged?: boolean;
   requestId?: string;
   error?: string;
   keys?: CustomKeyMetadata[];
   value?: string | null;
   key?: CustomKeyWithValue;
+  result?: { upserted: number; pruned: number };
+  reconcileResult?: { blocked: number; cleared: number };
 }
 
 /**
@@ -44,6 +54,13 @@ export class CustomKeysService {
   private readonly MAX_IPC_WAIT_ATTEMPTS = 10; // Wait up to 1 second
   private readonly IPC_WAIT_INTERVAL_MS = 100;
   private readonly IPC_TIMEOUT_MS = 15_000;
+  // The REQUEST_KEYS fallback reaches main over the same channel as the primary, so
+  // when the primary has already timed out the peer is not answering and a second
+  // full-length wait buys nothing — it only doubles every miss to 30s. A responsive
+  // main replies in single-digit milliseconds, so a short budget keeps the case the
+  // fallback exists for (a broken CUSTOM_KEYS_GET_BY_NAME handler, working
+  // REQUEST_KEYS) without paying for the case it cannot fix.
+  private readonly FALLBACK_IPC_TIMEOUT_MS = 2_000;
   private readonly CACHE_TTL_MS = 30_000;
 
   private ipcDispatcherRegistered = false;
@@ -65,6 +82,11 @@ export class CustomKeysService {
     await this.waitForIpc();
     
     this.ipcAvailable = this.checkIpcAvailable();
+
+    // Register the IPC dispatcher EAGERLY so that INVALIDATE_KEY_CACHE
+    // messages are never missed, even if no key has been fetched yet.
+    this.ensureIpcDispatcher();
+
     console.log(
       `[CustomKeysService] Initialized (IPC: ${this.ipcAvailable ? "available" : "unavailable"})`
     );
@@ -74,6 +96,11 @@ export class CustomKeysService {
    * Wait for IPC channel to be ready (Gateway might start before IPC is established)
    */
   private async waitForIpc(): Promise<void> {
+    // No Electron main process under test — polling here would just burn the
+    // full timeout before every suite that touches key lookup.
+    if (process.env.VITEST || process.env.NODE_ENV === "test") {
+      return;
+    }
     while (this.ipcWaitAttempts < this.MAX_IPC_WAIT_ATTEMPTS) {
       if (typeof process.send === "function" && process.connected === true) {
         console.log(
@@ -97,15 +124,18 @@ export class CustomKeysService {
    * Check if IPC channel is available and connected
    */
   private checkIpcAvailable(): boolean {
-    // Check if process.send exists (means we were spawned with IPC)
+    // A live IPC channel does not mean the parent is the Electron main process.
+    // Vitest's forks pool also connects one, and it routes anything we post into
+    // its own RPC deserializer — which tries Buffer.from() on our plain object,
+    // throws, and takes down the whole test run with an error that names vitest
+    // internals rather than this call. Keys come from the environment under
+    // test, so there is nothing to ask the main process for.
+    if (process.env.VITEST || process.env.NODE_ENV === "test") {
+      return false;
+    }
+
     const hasSend = typeof process.send === "function";
-    // Check if IPC channel is connected (will be false if disconnected)
     const isConnected = process.connected === true;
-    
-    /*console.log(
-      `[CustomKeysService] IPC availability check:`,
-      `hasSend=${hasSend}, isConnected=${isConnected}, connected=${process.connected}`
-    );*/
     
     if (!hasSend) {
       console.warn("[CustomKeysService] No process.send - not spawned with IPC");
@@ -154,7 +184,11 @@ export class CustomKeysService {
       const msg = message as CustomKeysIpcMessage;
 
       if (msg.type === "INVALIDATE_KEY_CACHE") {
+        // Always clear ALL caches on invalidation. A key add/delete/update
+        // affects both the value cache AND the list cache (the list metadata
+        // includes the key's id, name, permission, timestamps).
         this.invalidateCache();
+        if (msg.keysChanged) this.notifyKeyChanged(msg.keyName);
         return;
       }
 
@@ -217,17 +251,24 @@ export class CustomKeysService {
     this.changeListeners.push(listener);
   }
 
+  /**
+   * Invalidate caches. When a specific keyName is provided, clears both
+   * the value cache for that key AND the list cache (since add/delete/update
+   * operations change the list metadata too).
+   */
   invalidateCache(keyName?: string): void {
     if (keyName) {
       this.valueCache.delete(keyName);
       this.valueInFlight.delete(keyName);
     } else {
-      this.listKeysCache = null;
-      this.listKeysCacheAt = 0;
-      this.listKeysInFlight = null;
       this.valueCache.clear();
       this.valueInFlight.clear();
     }
+
+    // Always clear the list cache — add/delete/update affects list metadata
+    this.listKeysCache = null;
+    this.listKeysCacheAt = 0;
+    this.listKeysInFlight = null;
 
     void import("../../core/tools/bash.js")
       .then(({ invalidateCustomKeysCache }) => {
@@ -237,6 +278,10 @@ export class CustomKeysService {
         /* bash tool may be unavailable in some test contexts */
       });
 
+  }
+
+  /** Only actual local edits should schedule cloud writes. */
+  notifyKeyChanged(keyName?: string): void {
     for (const listener of this.changeListeners) {
       try {
         listener(keyName);
@@ -322,7 +367,11 @@ export class CustomKeysService {
   }
 
   /**
-   * Get a custom key value by name
+   * Get a custom key value by name.
+   *
+   * SECURITY: Only reads from Apple Keychain via Electron IPC.
+   * Does NOT fall back to process.env — environment variables should
+   * never silently override securely stored keys.
    */
   async getKeyByName(name: string): Promise<string | null> {
     if (!this.initialized) {
@@ -339,15 +388,17 @@ export class CustomKeysService {
     }
 
     if (!this.ipcAvailable) {
-      console.warn(`[CustomKeysService] No IPC - checking env for ${name}`);
-      return process.env[name] || null;
+      console.warn(
+        `[CustomKeysService] No IPC available — cannot retrieve key "${name}" from secure storage`,
+      );
+      return null;
     }
 
     const request = (async () => {
       try {
         const response = await this.sendIpcRequest(
           { type: "CUSTOM_KEYS_GET_BY_NAME", name },
-          "Custom key get request timed out",
+          `Secure key retrieval timed out for "${name}"`,
         );
         const value = response.value ?? null;
         this.valueCache.set(name, { value, cachedAt: Date.now() });
@@ -355,38 +406,64 @@ export class CustomKeysService {
       } catch (error) {
         if (error instanceof Error && error.message === "IPC channel closed") {
           console.warn(
-            `[CustomKeysService] IPC channel closed - checking env for ${name}`,
+            `[CustomKeysService] IPC channel closed — cannot retrieve key "${name}" from secure storage`,
           );
-          return process.env[name] || null;
+          return null;
         }
 
-        // IPC timeout: reuse REQUEST_KEYS (works even when CUSTOM_KEYS_GET_BY_NAME stalls)
+        // IPC timeout: try the REQUEST_KEYS path as a fallback. It is a different
+        // message type with its own handler in main, so it can answer when the
+        // primary handler misbehaves — but it is the same channel to the same
+        // process, so it cannot answer when main itself is not answering. Bounded to
+        // FALLBACK_IPC_TIMEOUT_MS so an unresponsive main costs one wait, not two.
+        // The underlying request is left running rather than cancelled: if it lands
+        // late it still populates the resolver's own cache for the next caller.
         try {
           const { resolveKeysViaIpc } = await import("../utils/keyResolver.js");
-          const resolved = await resolveKeysViaIpc([name], process);
-          const value = resolved[name] ?? null;
+          let budgetTimer: NodeJS.Timeout | undefined;
+          const BUDGET_EXPIRED = Symbol("fallback-budget-expired");
+          // Promise.race attaches handlers to both inputs eagerly, so the resolver's
+          // own rejection at its full timeout is still observed and never surfaces
+          // as an unhandled rejection after the budget has already won.
+          const outcome = await Promise.race<string | null | typeof BUDGET_EXPIRED>([
+            resolveKeysViaIpc([name], process).then((r) => r[name] ?? null),
+            new Promise<typeof BUDGET_EXPIRED>((resolve) => {
+              budgetTimer = setTimeout(
+                () => resolve(BUDGET_EXPIRED),
+                this.FALLBACK_IPC_TIMEOUT_MS,
+              );
+            }),
+          ]).finally(() => {
+            if (budgetTimer) clearTimeout(budgetTimer);
+          });
+
+          if (outcome === BUDGET_EXPIRED) {
+            console.warn(
+              `[CustomKeysService] REQUEST_KEYS fallback for "${name}" abandoned after ${this.FALLBACK_IPC_TIMEOUT_MS}ms — main is not answering`,
+            );
+            return null;
+          }
+
+          const value = outcome;
           if (value) {
             console.warn(
-              `[CustomKeysService] IPC get timed out for "${name}" — resolved via REQUEST_KEYS`,
+              `[CustomKeysService] Primary IPC timed out for "${name}" — resolved via REQUEST_KEYS`,
             );
             this.valueCache.set(name, { value, cachedAt: Date.now() });
             return value;
           }
         } catch (fallbackError) {
           console.warn(
-            `[CustomKeysService] REQUEST_KEYS fallback failed for "${name}":`,
+            `[CustomKeysService] REQUEST_KEYS fallback also failed for "${name}":`,
             fallbackError,
           );
         }
 
-        const envValue = process.env[name] || null;
-        if (envValue) {
-          this.valueCache.set(name, { value: envValue, cachedAt: Date.now() });
-          return envValue;
-        }
-
-        console.error(`[CustomKeysService] Failed to get key "${name}":`, error);
-        throw error;
+        console.error(
+          `[CustomKeysService] Failed to retrieve key "${name}" from secure storage:`,
+          error,
+        );
+        return null;
       } finally {
         this.valueInFlight.delete(name);
       }
@@ -417,8 +494,54 @@ export class CustomKeysService {
       throw new Error("Custom key add response missing key payload");
     }
 
+    // Invalidate ALL caches (value + list) since the key list changed
     this.invalidateCache(input.name);
+    this.notifyKeyChanged(input.name);
     return response.key;
+  }
+
+  /**
+   * Upsert read-only shared vault mirrors and prune stale copies.
+   */
+  async syncSharedMirrors(
+    keys: SharedVaultKeyInput[],
+  ): Promise<{ upserted: number; pruned: number }> {
+    if (!this.initialized) {
+      await this.initialize();
+    }
+
+    if (!this.ipcAvailable) {
+      return { upserted: 0, pruned: 0 };
+    }
+
+    const response = await this.sendIpcRequest(
+      { type: "CUSTOM_KEYS_SYNC_SHARED", keys },
+      "Shared vault mirror sync timed out",
+    );
+
+    this.invalidateCache();
+    return response.result ?? { upserted: 0, pruned: 0 };
+  }
+
+  async reconcileShareSyncResult(input: {
+    conflicts: VaultShareConflictInput[];
+    syncedNames: string[];
+  }): Promise<{ blocked: number; cleared: number }> {
+    if (!this.initialized) {
+      await this.initialize();
+    }
+
+    if (!this.ipcAvailable) {
+      return { blocked: 0, cleared: 0 };
+    }
+
+    const response = await this.sendIpcRequest(
+      { type: "CUSTOM_KEYS_RECONCILE_SHARE", ...input },
+      "Share sync reconcile timed out",
+    );
+
+    this.invalidateCache();
+    return response.reconcileResult ?? { blocked: 0, cleared: 0 };
   }
 
   /**
@@ -444,7 +567,9 @@ export class CustomKeysService {
       "Custom key delete request timed out",
     );
 
+    // Invalidate ALL caches (value + list) since the key list changed
     this.invalidateCache(name);
+    this.notifyKeyChanged(name);
   }
 }
 

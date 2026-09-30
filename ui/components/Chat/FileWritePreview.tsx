@@ -116,7 +116,7 @@ export const FileWritePreview: React.FC<FileWritePreviewProps> = ({
   args,
   result,
 }) => {
-  const [expanded, setExpanded] = useState(false);
+  const [expanded, setExpanded] = useState(true);
   if (!args && !result) return null;
 
   const path = (args?.path ?? args?.filePath ?? args?.file ?? "") as string;

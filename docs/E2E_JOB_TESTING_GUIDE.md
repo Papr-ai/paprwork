@@ -295,7 +295,7 @@ After running tests, verify the following:
 - [ ] One-shot schedules disabled after permanent errors
 
 ### ✅ Run History
-- [ ] Every execution recorded in `~/Papr/data/job-runs.jsonl`
+- [ ] Every execution recorded in `$PAPR_HOME/data/job-runs.jsonl`
 - [ ] History includes `runId`, `status`, `duration`, `exitCode`, `error`, `attempt`
 - [ ] Statistics computed correctly (`totalRuns`, `completedRuns`, `failedRuns`, `avgDuration`)
 - [ ] History pruning works (max 5000 runs / 5MB)
@@ -359,19 +359,19 @@ grep "Error classification" ~/papr-jobs/{jobId}/logs/run.log
 ### Run History Not Recording
 
 **Check:**
-1. Is `~/Papr/data/job-runs.jsonl` being created?
+1. Is `$PAPR_HOME/data/job-runs.jsonl` being created?
 2. Are logs showing `[JobRunHistory] Appended run...`?
 
 **Debug:**
 ```bash
 # Check if history file exists
-ls -lh ~/Papr/data/job-runs.jsonl
+ls -lh $PAPR_HOME/data/job-runs.jsonl
 
 # Read recent entries
-tail -20 ~/Papr/data/job-runs.jsonl
+tail -20 $PAPR_HOME/data/job-runs.jsonl
 
 # Count total entries
-wc -l ~/Papr/data/job-runs.jsonl
+wc -l $PAPR_HOME/data/job-runs.jsonl
 ```
 
 ### Scheduler Not Waking
@@ -540,7 +540,7 @@ cat ~/papr-jobs/{jobId}/job.json
 cat ~/papr-jobs/{jobId}/logs/run.log
 
 # Check run history
-cat ~/Papr/data/job-runs.jsonl | grep "{jobId}"
+cat $PAPR_HOME/data/job-runs.jsonl | grep "{jobId}"
 ```
 
 ### Monitor Scheduler Activity
@@ -554,7 +554,7 @@ tail -f ~/Library/Logs/Electron/main.log | grep "\[JobsScheduler\]"
 
 ```bash
 # Get stats for all jobs
-cat ~/Papr/data/job-runs.jsonl | \
+cat $PAPR_HOME/data/job-runs.jsonl | \
   jq -s 'group_by(.jobId) | map({jobId: .[0].jobId, runs: length})' | \
   jq -r '.[] | "\(.jobId): \(.runs) runs"'
 ```

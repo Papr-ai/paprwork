@@ -1,0 +1,108 @@
+{
+  "_note": "Web-demo fixtures for Focus (Maya Chen, Head of Revenue). Strings like \"@+2\" resolve to local YYYY-MM-DD relative to today; \"@ts-3h\" to an ISO timestamp.",
+  "focus": {
+    "three": [
+      {
+        "id": "G1", "title": "Close $1.2M new ARR in Q1", "origin": "identity", "level": "L1", "status": "on-track",
+        "due": "@+34", "nextStep": "Send Dana the ROI one-pager before her CFO sync Thursday",
+        "entities": ["project/q1-enterprise-expansion", "company/northwind-traders"],
+        "signals": { "chats30": 14, "hours7": 9.5, "hours30": 31.2, "logDays": 18, "openTasks": 6, "appsOpened": 3, "onboarding": true, "overdue": 0, "nextDue": "@+1" },
+        "score": 17.4, "why": "Your top-ranked goal · 9.5h in chats this week · Northwind + Acme are ~$420K of it"
+      },
+      {
+        "id": "G2", "title": "Ship the Papr Work GA launch", "origin": "identity", "level": "L1", "status": "at-risk",
+        "due": "@+21", "nextStep": "Lock the launch-day customer quote with Priya",
+        "entities": ["project/papr-work-ga-launch"],
+        "signals": { "chats30": 9, "hours7": 4.1, "hours30": 15.8, "logDays": 11, "openTasks": 4, "appsOpened": 2, "onboarding": true, "overdue": 1, "nextDue": "@+0" },
+        "score": 12.9, "why": "4.1h this week · one overdue step · launch is 3 weeks out"
+      },
+      {
+        "id": "G3", "title": "Post 3 times a week on X", "origin": "user", "level": "L2", "status": "on-track",
+        "repeat": "weekly", "nextStep": "Reply to swyx's thread on agent memory, then post the Northwind story",
+        "entities": ["app/x-action-engine"],
+        "signals": { "chats30": 5, "hours7": 1.6, "hours30": 5.0, "logDays": 9, "openTasks": 2, "appsOpened": 5, "onboarding": false },
+        "score": 9.2, "why": "2 of 3 posts done this week · X Action Engine drafted 5 replies overnight"
+      }
+    ],
+    "candidates": [
+      {
+        "id": "G4", "title": "Hire two enterprise AEs", "origin": "identity", "level": "L1", "status": "proposed",
+        "nextStep": "Review the 4 shortlisted candidates from Sam",
+        "signals": { "chats30": 3, "hours7": 0.8, "hours30": 3.1, "logDays": 5, "openTasks": 2, "appsOpened": 0, "onboarding": false },
+        "score": 6.1, "why": "0.8h this week · 3 chats this month"
+      }
+    ],
+    "source": "user", "confirmed": true, "pickedAt": "@ts-2d",
+    "alignedPct": 74, "weekHours": 38.5,
+    "next": { "title": "Send Dana the ROI one-pager", "goalId": "G1", "due": "@+1" },
+    "evidence": "From 42 chats, your meetings and daily logs since Monday"
+  },
+  "goals": {
+    "archive": [], "periods": ["2026-Q1"],
+    "entityLinks": { "G1": ["project/q1-enterprise-expansion"], "G2": ["project/papr-work-ga-launch"], "G3": ["app/x-action-engine"], "G4": [] },
+    "goals": [
+      { "id": "G1", "title": "Close $1.2M new ARR in Q1", "status": "on-track", "level": "L1", "confidence": "high", "priority": 1, "nextMilestone": "Northwind 40-seat expansion signed", "entities": ["project/q1-enterprise-expansion"], "chatRefs": [] },
+      { "id": "G2", "title": "Ship the Papr Work GA launch", "status": "at-risk", "level": "L1", "confidence": "medium", "priority": 2, "nextMilestone": "Launch-day customer quote approved", "entities": ["project/papr-work-ga-launch"], "chatRefs": [] },
+      { "id": "G3", "title": "Post 3 times a week on X", "status": "on-track", "level": "L2", "confidence": "high", "priority": 3, "nextMilestone": "Northwind story thread", "entities": ["app/x-action-engine"], "chatRefs": [] },
+      { "id": "G4", "title": "Hire two enterprise AEs", "status": "proposed", "level": "L1", "confidence": "unknown", "priority": 4, "nextMilestone": "Shortlist interviews", "entities": [], "chatRefs": [] }
+    ],
+    "isEmpty": false, "proposedCount": 1, "confirmedCount": 3,
+    "byLevel": { "L1": 3, "L2": 1, "L3": 0 }, "identityMissing": false, "updatedAt": "@ts-2h"
+  },
+  "tasks": [
+    { "id": "t1", "title": "Send Dana the ROI one-pager", "status": "open", "owner": "me", "due": "@+1", "goal_id": "G1", "entity_ref": "people/dana-whitfield" },
+    { "id": "t2", "title": "Build the hours-saved ROI model for Marcus", "status": "open", "owner": "me", "due": "@+4", "goal_id": "G1", "entity_ref": "companies/acme-logistics" },
+    { "id": "t3", "title": "Send Northwind the security questionnaire", "status": "open", "owner": "Sam", "due": "@+2", "goal_id": "G1", "entity_ref": "companies/northwind-traders" },
+    { "id": "t4", "title": "Lock the launch-day customer quote", "status": "open", "owner": "Priya", "due": "@-1", "goal_id": "G2", "entity_ref": "projects/papr-work-ga-launch" },
+    { "id": "t5", "title": "Final pass on the GA launch post", "status": "open", "owner": "me", "due": "@+6", "goal_id": "G2", "entity_ref": "projects/papr-work-ga-launch" },
+    { "id": "t6", "title": "Reply to swyx on agent memory", "status": "open", "owner": "agent", "due": "@+0", "goal_id": "G3", "entity_ref": "apps/x-action-engine" },
+    { "id": "t7", "title": "Post the Northwind win story thread", "status": "open", "owner": "me", "due": "@+2", "goal_id": "G3", "entity_ref": "apps/x-action-engine" },
+    { "id": "t8", "title": "Review Sam's 4 AE candidates", "status": "open", "owner": "me", "due": "@+5", "goal_id": "G4", "entity_ref": "people/sam-ortiz" },
+    { "id": "t9", "title": "Recap the Northwind QBR for the team", "status": "done", "owner": "me", "due": "@-1", "goal_id": "G1", "entity_ref": "companies/northwind-traders" },
+    { "id": "t10", "title": "Draft Klein Supply intro email", "status": "done", "owner": "agent", "due": "@-2", "goal_id": "G1", "entity_ref": "companies/klein-supply" }
+  ],
+  "briefs": {
+    "@+0": {
+      "hero": { "title": "Good morning, Maya", "subtitle": "Lead with the ROI one-pager for Northwind, then unblock the GA launch quote with Priya.", "stats": [ { "value": "3", "label": "priorities" }, { "value": "4", "label": "meetings" }, { "value": "2", "label": "waiting on" } ] },
+      "sections": [
+        { "type": "priorities", "title": "Today's Priorities", "items": [
+          { "rank": 1, "title": "Send Dana the ROI one-pager (G1)", "why": "Her CFO sync is Thursday and she reopened pricing twice this week. The draft is in Artifacts — frame it on hours saved per rep.", "task_id": "t1" },
+          { "rank": 2, "title": "Lock the launch-day customer quote with Priya (G2)", "why": "It slipped a day and it's the last blocker on the GA post. Northwind's Dana already said yes informally.", "task_id": "t4" },
+          { "rank": 3, "title": "Reply to swyx on agent memory (G3)", "why": "X Action Engine scored it 94 — directly on your memory-as-moat thesis. Draft is ready to send.", "task_id": "t6" }
+        ] },
+        { "type": "timeline", "title": "Today", "items": [
+          { "time": "9:30", "title": "Revenue team standup", "tags": ["internal"], "detail": { "Prep": "Northwind + Acme are ~$420K of the $1.2M target." } },
+          { "time": "11:00", "title": "Northwind Traders — expansion follow-up", "tags": ["external"], "detail": { "Who": "Dana Whitfield (champion)", "Goal": "Confirm the 40-seat expansion timeline", "Bring": "ROI one-pager" } },
+          { "time": "14:00", "title": "GA launch sync with Priya", "tags": ["internal"], "detail": { "Decide": "Launch-day customer quote and post timing" } },
+          { "time": "16:30", "title": "Acme Logistics — deal desk", "tags": ["external"], "detail": { "Who": "Marcus Lee (CFO)", "Watch": "Numbers-first; lead with payback period" } }
+        ] },
+        { "type": "tracker", "title": "Q1 Pipeline", "items": [
+          { "label": "New ARR closed", "current": 510, "target": 1200, "unit": "K", "context": "Northwind expansion would add $180K" },
+          { "label": "Enterprise logos", "current": 3, "target": 6, "unit": "", "context": "Acme and Klein in late stage" }
+        ] },
+        { "type": "alerts", "title": "Waiting On", "items": [
+          { "severity": "medium", "message": "Acme legal review — redlines due from their counsel", "action": "Ask Marcus for a date on today's call" },
+          { "severity": "low", "message": "Security questionnaire for Northwind (Sam)", "action": "Due Friday — Sam has it" }
+        ] }
+      ]
+    },
+    "@-1": {
+      "hero": { "title": "Good morning, Maya", "subtitle": "QBR day with Northwind — walk in with the renewal math.", "stats": [ { "value": "2", "label": "priorities" }, { "value": "3", "label": "meetings" } ] },
+      "sections": [
+        { "type": "priorities", "title": "Today's Priorities", "items": [
+          { "rank": 1, "title": "Run the Northwind Q1 QBR (G1)", "why": "Budget is approved on Dana's side; get the CFO path clear." },
+          { "rank": 2, "title": "Approve the GA launch post outline (G2)", "why": "Priya needs it to brief design." }
+        ] }
+      ]
+    },
+    "@-2": {
+      "hero": { "title": "Good morning, Maya", "subtitle": "Pipeline review — Acme moved to procurement.", "stats": [ { "value": "2", "label": "priorities" } ] },
+      "sections": [
+        { "type": "priorities", "title": "Today's Priorities", "items": [
+          { "rank": 1, "title": "Prep Acme deal desk (G1)", "why": "Marcus wants a hard ROI model before signing." },
+          { "rank": 2, "title": "Post the memory-moat thread on X (G3)", "why": "Second post of the week." }
+        ] }
+      ]
+    }
+  }
+}

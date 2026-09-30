@@ -22,7 +22,15 @@ vi.mock("../../hooks/useAgent", () => ({
 }));
 
 vi.mock("../../src/lib/gateway", () => ({
-  gateway: { send: vi.fn().mockResolvedValue({ data: {} }) },
+  gateway: {
+    send: vi.fn().mockResolvedValue({ data: {} }),
+    stream: vi.fn(),
+    cancelRequest: vi.fn(),
+    isConnected: vi.fn(() => true),
+    getConnectionState: vi.fn(() => "connected"),
+    onConnectionChange: vi.fn(() => () => {}),
+    probeConnection: vi.fn().mockResolvedValue(true),
+  },
 }));
 
 vi.mock("../../utils/chatHistoryApi", () => ({
@@ -32,6 +40,17 @@ vi.mock("../../utils/chatHistoryApi", () => ({
 vi.mock("../../utils/historyMapper", () => ({
   mapHistoryMessages: vi.fn().mockReturnValue([]),
 }));
+
+// useAuthStatus → useOAuth reads window.electronAPI.oauth, which jsdom lacks.
+// Stable references: fresh objects per render feed effect deps and loop forever.
+vi.mock("../../hooks/useAuthStatus", () => {
+  const authStatus = {
+    status: {},
+    isModelAvailable: () => true,
+    refresh: async () => {},
+  };
+  return { useAuthStatus: () => authStatus };
+});
 
 // Mock permission store used by MessageList
 vi.mock("../../stores/permissionStore", () => ({
@@ -70,9 +89,12 @@ describe("ChatContainer", () => {
     useChatStore.setState({
       chats: [],
       chatStates: new Map(),
+      draftByChatId: new Map(),
       isLoading: false,
       error: null,
     });
+    // Drafts also persist to localStorage; clear so tests don't leak input text.
+    localStorage.clear();
 
     useTabStore.setState({
       tabs: [],
@@ -303,8 +325,9 @@ describe("ChatContainer", () => {
 
       render(<ChatContainer chatId={TEST_CHAT_ID} />);
 
-      const errorMessage = screen.queryByText(/Failed to connect/i);
-      expect(errorMessage).not.toBeNull();
+      // Raw errors render through describeProviderNotice: a friendly headline,
+      // with the provider's own text behind the details disclosure.
+      expect(screen.queryByText(/Something went wrong/i)).not.toBeNull();
     });
 
     it("should allow sending messages after error", async () => {

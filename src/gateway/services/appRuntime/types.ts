@@ -24,6 +24,50 @@ export interface AppAccessContext {
   canWrite: boolean;
 }
 
+/** Read-only GitHub credentials for Cloud App Host direct repo reads (host key only). */
+export interface AppRuntimeRepoCredentials {
+  githubOrg: string;
+  repoName: string;
+  repoPath: string;
+  token: string;
+  expiresAt: string;
+  defaultBranch: string;
+}
+
+/** GET /api/access — mini-apps use this to gate admin UI and owner-only flows. */
+export interface MiniAppAccessResponse {
+  mode: AppAccessMode | null;
+  canRead: boolean;
+  canWrite: boolean;
+  loggedIn: boolean;
+  isOwner: boolean;
+  /** Caller's Parse objectId — present when loggedIn; use for row filters (not publisher). */
+  userId?: string;
+  /** Same as userId — mirrors cloud API external_user_id naming. */
+  externalUserId?: string;
+  /** Publish-catalog owner Parse id — for admin comparisons, not row ACL. */
+  publisherUserId?: string;
+  /** Caller's email when known (session). */
+  email?: string;
+  appId?: string;
+}
+
+/** GET /api/members — Papr workspace roster for role assignment UIs. */
+export interface MiniAppWorkspaceMember {
+  userId: string;
+  email: string;
+  displayName: string;
+  role: string;
+  profileImageUrl?: string;
+}
+
+export interface MiniAppMembersResponse {
+  workspaceId: string;
+  workspaceName?: string;
+  namespaceId?: string;
+  members: MiniAppWorkspaceMember[];
+}
+
 export interface DbQueryResult {
   rows: Record<string, unknown>[];
   columns: string[];
@@ -37,6 +81,17 @@ export interface DbWriteResult {
   changes: number;
   lastInsertRowid: number;
   source?: string;
+}
+
+export interface DbWriteBatchStatement {
+  sourceId?: string;
+  sql: string;
+  params?: unknown[];
+}
+
+export interface DbWriteBatchResultItem extends DbWriteResult {
+  ok: boolean;
+  error?: string;
 }
 
 export interface DbSchemaTable {
@@ -66,6 +121,8 @@ export interface AppRuntimeRouteAuth {
   paprApiKey?: string;
   sessionToken?: string;
   shareToken?: string;
+  /** Parse _User.objectId from apps.papr.ai sign-in (same as desktop external_user_id). */
+  externalUserId?: string;
 }
 
 export interface TursoCredentialsProvider {
@@ -75,7 +132,7 @@ export interface TursoCredentialsProvider {
     userId: string,
     runtimeAuth: AppRuntimeRouteAuth,
     database: string,
-  ): Promise<{ tursoUrl: string; authToken: string }>;
+  ): Promise<{ tursoUrl: string; authToken: string; expiresAt?: string }>;
 }
 
 export interface AppPublishResolver {
@@ -85,6 +142,8 @@ export interface AppPublishResolver {
     paprApiKey?: string;
     sessionToken?: string;
     shareToken?: string;
+    externalUserId?: string;
+    callerEmail?: string;
   }): Promise<AppAccessContext | null>;
 }
 

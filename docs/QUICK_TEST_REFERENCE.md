@@ -70,7 +70,7 @@ npm test -- tests/schedule-engine.test.ts
 - Permanent errors (401, invalid API key) stop immediately
 
 ### ✅ Run History
-- Every execution recorded in ~/Papr/data/job-runs.jsonl
+- Every execution recorded in $PAPR_HOME/data/job-runs.jsonl
 - Statistics computed (totalRuns, completedRuns, failedRuns, avgDuration)
 - History survives app restarts
 

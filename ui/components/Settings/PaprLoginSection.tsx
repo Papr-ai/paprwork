@@ -4,17 +4,48 @@
 
 import React, { useState, useEffect, useRef, useCallback } from "react";
 import { gateway } from "../../src/lib/gateway";
-import { flushWorkspaceStateToGateway } from "../../lib/persistedAppState";
+import {
+  abortWorkspaceSwitchReload,
+  prepareWorkspaceSwitchReload,
+} from "../../lib/workspaceSwitchReload";
+import { buildWorkspaceUiCacheKey } from "../../lib/workspaceUiCache";
+import { confirmAndAbortStreamsForWorkspaceSwitch } from "../../lib/workspaceSwitchStreaming";
 import {
   MEMORY_AUDIENCE_LABELS,
   type MemoryAudience,
 } from "../../constants/memoryScope";
+import { useCloudMemoryStatusStore } from "../../stores/cloudMemoryStatusStore";
+import { formatPaprLoginStatusLine } from "../../utils/cloudMemoryStatus";
+import { openPaprPlanSettings } from "../../utils/paprCloudFeatureUi";
+import { ProfileAiConnections } from "./ProfileAiConnections";
+import { formatNamespaceOptionLabel } from "./formatNamespaceOptionLabel";
+import {
+  OrgNamespaceSetup,
+  type OrgNamespaceSetupRequest,
+} from "../Auth/OrgNamespaceSetup";
+import {
+  WORKSPACE_ROLE_PRIORITY,
+  canAssignWorkspaceRole,
+  canModifyMemberRole,
+  formatWorkspaceRoleLabel,
+  normalizeWorkspaceRole,
+  type WorkspaceRoleName,
+} from "../../../src/core/utils/workspaceRolePermissions";
+import { UserAvatar } from "../common/UserAvatar";
 import "./PaprLoginSection.css";
 
 interface Namespace {
   id: string;
   name: string;
   environmentType?: string;
+}
+
+/** Namespaces of one organization, as rendered in the Team picker's optgroup. */
+interface NamespaceGroup {
+  workspaceId: string;
+  organizationId: string;
+  organizationName: string;
+  namespaces: Namespace[];
 }
 
 interface Organization {
@@ -50,11 +81,27 @@ interface WorkspaceMember {
   };
 }
 
-interface PaprLoginSectionProps {
-  onApiKeyReceived?: (apiKey: string) => void;
+interface ProfileFieldsBinding {
+  name: string;
+  email: string;
+  imageUrl: string;
+  saving: boolean;
+  connectedSince?: string;
+  onNameChange: (value: string) => void;
+  onEmailChange: (value: string) => void;
+  onPhotoUpload: (event: React.ChangeEvent<HTMLInputElement>) => void;
+  onRemovePhoto: () => void;
+  onSave: () => void | Promise<void>;
+  onSyncFromPapr?: () => void;
+  fileInputRef: React.RefObject<HTMLInputElement | null>;
 }
 
-export function PaprLoginSection({ onApiKeyReceived }: PaprLoginSectionProps) {
+interface PaprLoginSectionProps {
+  onApiKeyReceived?: (apiKey: string) => void;
+  profileFields?: ProfileFieldsBinding;
+}
+
+export function PaprLoginSection({ onApiKeyReceived, profileFields }: PaprLoginSectionProps) {
   const [isLoading, setIsLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [isLoggedIn, setIsLoggedIn] = useState(false);
@@ -65,19 +112,25 @@ export function PaprLoginSection({ onApiKeyReceived }: PaprLoginSectionProps) {
   const [switchingOrganization, setSwitchingOrganization] = useState(false);
   const [organizationsLoaded, setOrganizationsLoaded] = useState(false);
 
-  const [namespaces, setNamespaces] = useState<Namespace[]>([]);
+  // Every org's namespaces, not just the active one — picking a team in another
+  // org switches the workspace along with it.
+  const [namespaceGroups, setNamespaceGroups] = useState<NamespaceGroup[]>([]);
   const [activeNamespaceId, setActiveNamespaceId] = useState<string | null>(null);
   const [switchingNamespace, setSwitchingNamespace] = useState(false);
   const [namespacesLoaded, setNamespacesLoaded] = useState(false);
 
   const [schemas, setSchemas] = useState<SchemaInfo[]>([]);
+  const [schemasError, setSchemasError] = useState<string | null>(null);
+  const [setupRequest, setSetupRequest] = useState<OrgNamespaceSetupRequest | null>(null);
   const [schemasLoading, setSchemasLoading] = useState(false);
   const [expandedSchema, setExpandedSchema] = useState<string | null>(null);
 
   const [workspaceName, setWorkspaceName] = useState<string | null>(null);
-  const [workspaceId, setWorkspaceId] = useState<string | null>(null);
   const [workspaceMembers, setWorkspaceMembers] = useState<WorkspaceMember[]>([]);
+  const [workspaceCurrentUserId, setWorkspaceCurrentUserId] = useState<string | null>(null);
+  const [workspaceCurrentUserRole, setWorkspaceCurrentUserRole] = useState<string>("member");
   const [workspaceMembersLoading, setWorkspaceMembersLoading] = useState(false);
+  const [roleUpdatingUserId, setRoleUpdatingUserId] = useState<string | null>(null);
   const [inviteEmail, setInviteEmail] = useState("");
   const [inviteLoading, setInviteLoading] = useState(false);
   const [inviteMessage, setInviteMessage] = useState<string | null>(null);
@@ -85,24 +138,13 @@ export function PaprLoginSection({ onApiKeyReceived }: PaprLoginSectionProps) {
     useState<MemoryAudience>("user");
   const [savingMemoryDefault, setSavingMemoryDefault] = useState(false);
   const switchingOrganizationRef = useRef(false);
+  const switchingNamespaceRef = useRef(false);
   const activeOrganizationIdRef = useRef<string | null>(null);
-  const organizationsRef = useRef(organizations);
+  const cloudStatus = useCloudMemoryStatusStore((state) => state.status);
 
   useEffect(() => {
     activeOrganizationIdRef.current = activeOrganizationId;
   }, [activeOrganizationId]);
-
-  useEffect(() => {
-    organizationsRef.current = organizations;
-  }, [organizations]);
-
-  const resolveParseOrganizationId = useCallback(
-    (workspaceId: string | null): string | undefined => {
-      if (!workspaceId) return undefined;
-      return organizations.find((org) => org.id === workspaceId)?.organizationId;
-    },
-    [organizations],
-  );
 
   useEffect(() => {
     checkLoginStatus();
@@ -147,28 +189,45 @@ export function PaprLoginSection({ onApiKeyReceived }: PaprLoginSectionProps) {
     [],
   );
 
-  const loadNamespaces = useCallback(async (parseOrganizationId?: string, forceRefresh = false) => {
-    try {
-      const result = await window.electronAPI.papr.listNamespaces(
-        parseOrganizationId
-          ? { organizationId: parseOrganizationId, forceRefresh }
-          : forceRefresh
-            ? { forceRefresh: true }
-            : undefined,
-      );
-      if (result.success && result.namespaces) {
-        setNamespaces(result.namespaces);
-        setActiveNamespaceId(result.activeNamespaceId || null);
+  /**
+   * Load namespaces for every organization in the active workspace.
+   *
+   * Cache-first by default: the main process answers from its disk cache and
+   * refreshes each org in the background, firing `papr:workspace-cache-updated`
+   * if anything actually changed. Pass `forceRefresh` for an explicit re-fetch.
+   */
+  const loadNamespaceGroups = useCallback(
+    async (workspaceId: string | null, forceRefresh = false) => {
+      if (!workspaceId) {
+        setNamespaceGroups([]);
+        setNamespacesLoaded(true);
+        return;
       }
-    } catch (err) {
-      console.error("Failed to load namespaces:", err);
-    } finally {
-      setNamespacesLoaded(true);
-    }
-  }, []);
+      try {
+        const result = await window.electronAPI.papr.listAllNamespaces({
+          workspaceId,
+          ...(forceRefresh ? { forceRefresh: true } : {}),
+        });
+        if (result.success && result.groups) {
+          setNamespaceGroups(result.groups);
+          // A switch in flight owns the selection — the profile on disk still
+          // holds the previous namespace until it completes.
+          if (!switchingNamespaceRef.current && !switchingOrganizationRef.current) {
+            setActiveNamespaceId(result.activeNamespaceId || null);
+          }
+        }
+      } catch (err) {
+        console.error("Failed to load namespaces:", err);
+      } finally {
+        setNamespacesLoaded(true);
+      }
+    },
+    [],
+  );
 
   const loadSchemas = useCallback(async () => {
     setSchemasLoading(true);
+    setSchemasError(null);
     try {
       const fetchSchemas = () =>
         gateway.send("memory:list-schemas", {}, { timeoutMs: 45_000 });
@@ -189,26 +248,25 @@ export function PaprLoginSection({ onApiKeyReceived }: PaprLoginSectionProps) {
       const data = response.data as
         | { schemas?: SchemaInfo[]; error?: string }
         | undefined;
-      if (data?.error) {
-        console.warn("[PaprLoginSection] Schema list warning:", data.error);
-      }
       setSchemas(data?.schemas ?? []);
+      setSchemasError(data?.error?.trim() ? data.error.trim() : null);
     } catch (err) {
       console.error("Failed to load schemas:", err);
       setSchemas([]);
+      setSchemasError(
+        err instanceof Error ? err.message : "Failed to load schemas",
+      );
     } finally {
       setSchemasLoading(false);
     }
   }, []);
 
   useEffect(() => {
-    if (isLoggedIn && activeOrganizationId && organizations.length > 0) {
-      const parseOrgId = resolveParseOrganizationId(activeOrganizationId);
-      if (parseOrgId) {
-        void loadNamespaces(parseOrgId, true);
-      }
+    if (isLoggedIn && activeOrganizationId && organizationsLoaded) {
+      setNamespacesLoaded(false);
+      void loadNamespaceGroups(activeOrganizationId);
     }
-  }, [isLoggedIn, activeOrganizationId, organizations, resolveParseOrganizationId, loadNamespaces]);
+  }, [isLoggedIn, activeOrganizationId, organizationsLoaded, loadNamespaceGroups]);
 
   useEffect(() => {
     if (
@@ -239,11 +297,14 @@ export function PaprLoginSection({ onApiKeyReceived }: PaprLoginSectionProps) {
     try {
       const result = await window.electronAPI.papr.listWorkspaceMembers();
       if (result.success) {
-        setWorkspaceId(result.workspaceId || null);
         setWorkspaceName(result.workspaceName || null);
         setWorkspaceMembers(result.members || []);
+        setWorkspaceCurrentUserId(result.currentUserId || null);
+        setWorkspaceCurrentUserRole(result.currentUserRole || "member");
       } else {
         setWorkspaceMembers([]);
+        setWorkspaceCurrentUserId(null);
+        setWorkspaceCurrentUserRole("member");
         setInviteMessage(result.error || "Could not load team members");
       }
     } catch (err) {
@@ -253,6 +314,48 @@ export function PaprLoginSection({ onApiKeyReceived }: PaprLoginSectionProps) {
       setWorkspaceMembersLoading(false);
     }
   }, []);
+
+  const handleMemberRoleChange = async (
+    member: WorkspaceMember,
+    newRole: WorkspaceRoleName,
+  ) => {
+    if (!workspaceCurrentUserId) {
+      setInviteMessage("Could not verify your team permissions");
+      return;
+    }
+
+    const permission = canAssignWorkspaceRole(newRole, {
+      currentUserId: workspaceCurrentUserId,
+      currentUserRole: workspaceCurrentUserRole,
+      targetMember: member,
+      members: workspaceMembers,
+    });
+    if (!permission.allowed) {
+      setInviteMessage(permission.reason);
+      return;
+    }
+
+    setRoleUpdatingUserId(member.user.objectId);
+    setInviteMessage(null);
+    setError(null);
+    try {
+      const result = await window.electronAPI.papr.updateWorkspaceMemberRole({
+        userId: member.user.objectId,
+        currentRole: member.user.role,
+        newRole,
+      });
+      if (result.success) {
+        setInviteMessage(`Updated ${member.user.displayName} to ${formatWorkspaceRoleLabel(newRole)}`);
+        await loadWorkspaceMembers();
+      } else {
+        setInviteMessage(result.error || "Failed to update role");
+      }
+    } catch (err) {
+      setInviteMessage(err instanceof Error ? err.message : "Failed to update role");
+    } finally {
+      setRoleUpdatingUserId(null);
+    }
+  };
 
   const handleInviteMember = async () => {
     const email = inviteEmail.trim();
@@ -303,77 +406,130 @@ export function PaprLoginSection({ onApiKeyReceived }: PaprLoginSectionProps) {
     }
   };
 
-  const handleSwitchOrganization = async (organizationId: string) => {
-    const org = organizations.find((o) => o.id === organizationId);
-    if (!org || organizationId === activeOrganizationId) return;
+  /** Core workspace switch. Callers own the confirm prompt. */
+  const switchToWorkspace = useCallback(
+    async (
+      workspaceId: string,
+      target?: { namespaceId: string; organizationId: string },
+    ) => {
+      const org = organizations.find((o) => o.id === workspaceId);
+      if (!org) return;
 
-    const parseOrgId = org.organizationId;
-    if (!parseOrgId) {
-      setError("Could not resolve organization");
+      if (!org.organizationId) {
+        setError("Could not resolve organization");
+        return;
+      }
+
+      setSwitchingOrganization(true);
+      switchingOrganizationRef.current = true;
+      setError(null);
+
+      try {
+        const targetWorkspaceKey =
+          target !== undefined
+            ? buildWorkspaceUiCacheKey(target.organizationId, target.namespaceId)
+            : org.organizationId && org.defaultNamespaceId
+              ? buildWorkspaceUiCacheKey(org.organizationId, org.defaultNamespaceId)
+              : undefined;
+
+        await prepareWorkspaceSwitchReload({
+          organizationName: org.name,
+          ...(targetWorkspaceKey ? { targetWorkspaceKey } : {}),
+        });
+        const result = await window.electronAPI.papr.switchOrganization(
+          workspaceId,
+          org.name,
+          target && {
+            preferredNamespaceId: target.namespaceId,
+            preferredOrganizationId: target.organizationId,
+          },
+        );
+        if (result.success) {
+          setActiveOrganizationId(workspaceId);
+          setActiveNamespaceId(result.activeNamespaceId || null);
+          setSchemas([]);
+          setSchemasError(null);
+          setWorkspaceMembers([]);
+          setWorkspaceName(null);
+          setInviteEmail("");
+          setInviteMessage(null);
+          if (result.apiKey && onApiKeyReceived) {
+            onApiKeyReceived(result.apiKey);
+          }
+        } else {
+          abortWorkspaceSwitchReload();
+          setError(result.error || "Failed to switch organization");
+        }
+      } catch (err) {
+        abortWorkspaceSwitchReload();
+        setError(err instanceof Error ? err.message : "Failed to switch organization");
+      } finally {
+        switchingOrganizationRef.current = false;
+        setSwitchingOrganization(false);
+        // Re-read namespaces for the workspace that is now active.
+        void loadNamespaceGroups(workspaceId);
+      }
+    },
+    [organizations, onApiKeyReceived, loadNamespaceGroups],
+  );
+
+  const handleSwitchOrganization = async (workspaceId: string) => {
+    if (!workspaceId || workspaceId === activeOrganizationId) return;
+    if (!organizations.some((org) => org.id === workspaceId)) return;
+
+    if (!(await confirmAndAbortStreamsForWorkspaceSwitch())) {
       return;
     }
 
-    setSwitchingOrganization(true);
-    switchingOrganizationRef.current = true;
-    setError(null);
-    setNamespaces([]);
-    setNamespacesLoaded(false);
-    try {
-      await flushWorkspaceStateToGateway();
-      const result = await window.electronAPI.papr.switchOrganization(organizationId, org.name);
-      if (result.success) {
-        setActiveOrganizationId(organizationId);
-        if (result.namespaces) {
-          setNamespaces(result.namespaces);
-          setNamespacesLoaded(true);
-        } else {
-          await loadNamespaces(parseOrgId, true);
-        }
-        if (result.activeNamespaceId) {
-          setActiveNamespaceId(result.activeNamespaceId);
-        } else {
-          setActiveNamespaceId(null);
-        }
-        setSchemas([]);
-        setWorkspaceMembers([]);
-        setWorkspaceId(null);
-        setWorkspaceName(null);
-        setInviteEmail("");
-        setInviteMessage(null);
-        if (result.apiKey && onApiKeyReceived) {
-          onApiKeyReceived(result.apiKey);
-        }
-      } else {
-        setError(result.error || "Failed to switch organization");
-      }
-    } catch (err) {
-      setError(err instanceof Error ? err.message : "Failed to switch organization");
-    } finally {
-      switchingOrganizationRef.current = false;
-      setSwitchingOrganization(false);
-    }
+    await switchToWorkspace(workspaceId);
   };
 
-  const handleSwitchNamespace = async (namespaceId: string) => {
-    const ns = namespaces.find((n) => n.id === namespaceId);
-    if (!ns || namespaceId === activeNamespaceId) return;
+  const handleSelectNamespace = async (namespaceId: string) => {
+    if (!namespaceId || namespaceId === activeNamespaceId) return;
+
+    const group = namespaceGroups.find((candidate) =>
+      candidate.namespaces.some((ns) => ns.id === namespaceId),
+    );
+    const ns = group?.namespaces.find((candidate) => candidate.id === namespaceId);
+    if (!group || !ns) return;
+
+    if (!(await confirmAndAbortStreamsForWorkspaceSwitch())) {
+      return;
+    }
 
     setSwitchingNamespace(true);
+    switchingNamespaceRef.current = true;
     setError(null);
     try {
-      await flushWorkspaceStateToGateway();
-      const result = await window.electronAPI.papr.switchNamespace(namespaceId, ns.name);
+      await prepareWorkspaceSwitchReload({
+        organizationName: group.organizationName,
+        namespaceName: ns.name,
+        targetWorkspaceKey: buildWorkspaceUiCacheKey(
+          group.organizationId,
+          namespaceId,
+        ),
+      });
+      // Team picker is scoped to the active workspace — switch namespace (and
+      // org when the namespace belongs to a secondary org in this workspace).
+      const result = await window.electronAPI.papr.switchNamespace(
+        namespaceId,
+        ns.name,
+        group.organizationId,
+      );
       if (result.success) {
         setActiveNamespaceId(namespaceId);
         if (result.apiKey && onApiKeyReceived) {
           onApiKeyReceived(result.apiKey);
         }
       } else {
+        abortWorkspaceSwitchReload();
         setError(result.error || "Failed to switch team");
       }
     } catch (err) {
+      abortWorkspaceSwitchReload();
       setError(err instanceof Error ? err.message : "Failed to switch team");
     } finally {
+      switchingNamespaceRef.current = false;
       setSwitchingNamespace(false);
     }
   };
@@ -398,12 +554,11 @@ export function PaprLoginSection({ onApiKeyReceived }: PaprLoginSectionProps) {
       if (result.success) {
         setIsLoggedIn(false);
         setUserEmail(null);
-        setNamespaces([]);
+        setNamespaceGroups([]);
         setActiveNamespaceId(null);
         setNamespacesLoaded(false);
         setSchemas([]);
         setWorkspaceMembers([]);
-        setWorkspaceId(null);
         setWorkspaceName(null);
         setInviteEmail("");
         setInviteMessage(null);
@@ -461,24 +616,17 @@ export function PaprLoginSection({ onApiKeyReceived }: PaprLoginSectionProps) {
       if (data.namespaceId) {
         setActiveNamespaceId(data.namespaceId);
       }
-      if (data.namespaces) {
-        setNamespaces(data.namespaces);
-        setNamespacesLoaded(true);
-      } else if (data.parseOrganizationId) {
-        void loadNamespaces(data.parseOrganizationId, true);
-      }
+      void loadNamespaceGroups(data.organizationId);
     };
 
     handleWorkspaceCacheUpdatedRef.current = () => {
       void loadOrganizations();
-      const parseOrgId = organizationsRef.current.find(
-        (org) => org.id === activeOrganizationIdRef.current,
-      )?.organizationId;
-      if (parseOrgId) {
-        void loadNamespaces(parseOrgId);
+      const workspaceId = activeOrganizationIdRef.current;
+      if (workspaceId) {
+        void loadNamespaceGroups(workspaceId);
       }
     };
-  }, [loadNamespaces]);
+  }, [loadNamespaceGroups]);
 
   useEffect(() => {
     const loginCb = handleLoginSuccessRef.current;
@@ -486,10 +634,17 @@ export function PaprLoginSection({ onApiKeyReceived }: PaprLoginSectionProps) {
     const orgCb = organizationChangedListenerRef.current;
     const cacheCb = workspaceCacheUpdatedListenerRef.current;
 
+    const onSetupRequired = (data: OrgNamespaceSetupRequest) => {
+      setSetupRequest(data);
+      setIsLoading(false);
+      setError(null);
+    };
+
     window.electronAPI.papr.onLoginSuccess(loginCb);
     window.electronAPI.papr.onNamespaceChanged(nsCb);
     window.electronAPI.papr.onOrganizationChanged(orgCb);
     window.electronAPI.papr.onWorkspaceCacheUpdated(cacheCb);
+    window.electronAPI.papr.onSetupRequired(onSetupRequired);
 
     const handleLoginSuccess = (event: CustomEvent) => {
       const { apiKey, email } = event.detail;
@@ -504,18 +659,25 @@ export function PaprLoginSection({ onApiKeyReceived }: PaprLoginSectionProps) {
       setIsLoading(false);
     };
 
+    const handleSetupRequired = (event: CustomEvent<OrgNamespaceSetupRequest>) => {
+      setSetupRequest(event.detail);
+      setIsLoading(false);
+      setError(null);
+    };
+
     const handleLogoutSuccess = () => {
       setIsLoggedIn(false);
       setUserEmail(null);
       setOrganizations([]);
       setActiveOrganizationId(null);
-      setNamespaces([]);
+      setNamespaceGroups([]);
       setActiveNamespaceId(null);
       setSchemas([]);
     };
 
     window.addEventListener("papr-auth-success", handleLoginSuccess as EventListener);
     window.addEventListener("papr-login-error", handleLoginError as EventListener);
+    window.addEventListener("papr-setup-required", handleSetupRequired as EventListener);
     window.addEventListener("papr-logout-success", handleLogoutSuccess as EventListener);
 
     return () => {
@@ -523,35 +685,78 @@ export function PaprLoginSection({ onApiKeyReceived }: PaprLoginSectionProps) {
       window.electronAPI.papr.removeNamespaceChangedListener(nsCb);
       window.electronAPI.papr.removeOrganizationChangedListener(orgCb);
       window.electronAPI.papr.removeWorkspaceCacheUpdatedListener(cacheCb);
+      window.electronAPI.papr.removeSetupRequiredListener(onSetupRequired);
       window.removeEventListener("papr-auth-success", handleLoginSuccess as EventListener);
       window.removeEventListener("papr-login-error", handleLoginError as EventListener);
+      window.removeEventListener("papr-setup-required", handleSetupRequired as EventListener);
       window.removeEventListener("papr-logout-success", handleLogoutSuccess as EventListener);
     };
   }, []);
 
+  if (setupRequest) {
+    return (
+      <div className="org-namespace-setup-overlay">
+        <OrgNamespaceSetup
+          request={setupRequest}
+          source="settings"
+          onComplete={() => {
+            setSetupRequest(null);
+            setIsLoading(false);
+            void checkLoginStatus();
+          }}
+        />
+      </div>
+    );
+  }
+
   // --- Logged-in state ---
   if (isLoggedIn) {
-    const activeNs = namespaces.find((n) => n.id === activeNamespaceId);
+    // An org the user belongs to but has no namespaces in would render an empty
+    // optgroup, so drop it from the picker entirely.
+    const populatedGroups = namespaceGroups.filter(
+      (group) =>
+        group.workspaceId === activeOrganizationId && group.namespaces.length > 0,
+    );
+    const activeNs = populatedGroups
+      .flatMap((group) => group.namespaces)
+      .find((ns) => ns.id === activeNamespaceId);
+    const compactLoginStatus = formatPaprLoginStatusLine({
+      connectedSince: profileFields?.connectedSince,
+      cloudStatus,
+    });
 
     return (
-      <div className="papr-section">
-        {/* Header row: status + logout */}
-        <div className="papr-section__header">
-          <div className="papr-section__status">
-            <span className="papr-section__dot papr-section__dot--connected" />
-            <span className="papr-section__status-text">Connected to Papr</span>
-            {userEmail && (
-              <span className="papr-section__email">{userEmail}</span>
-            )}
+      <div className={`papr-section${profileFields ? " papr-section--profile" : ""}`}>
+        {profileFields ? (
+          <>
+            <ProfileIdentitySection
+              {...profileFields}
+              isLoggedIn
+              userEmail={userEmail}
+              onLogout={() => void handleLogout()}
+            />
+            <ProfileAiConnections />
+          </>
+        ) : (
+          <div className="papr-section__header">
+            <div className="papr-section__status">
+              <span className={`papr-section__dot ${compactLoginStatus.dotClass}`} />
+              <span className="papr-section__status-text">{compactLoginStatus.text}</span>
+              {userEmail && (
+                <span className="papr-section__email">{userEmail}</span>
+              )}
+            </div>
+            <button
+              type="button"
+              className="papr-section__logout"
+              onClick={handleLogout}
+            >
+              Logout
+            </button>
           </div>
-          <button
-            type="button"
-            className="papr-section__logout"
-            onClick={handleLogout}
-          >
-            Logout
-          </button>
-        </div>
+        )}
+
+        {profileFields && <div className="profile-merged__divider" />}
 
         {/* Organization + Team selectors in a row */}
         <div className="papr-section__selectors">
@@ -567,7 +772,7 @@ export function PaprLoginSection({ onApiKeyReceived }: PaprLoginSectionProps) {
                 >
                   {organizations.map((org) => (
                     <option key={org.id} value={org.id}>
-                      {org.name}
+                      {org.name} ({org.organizationId ?? org.id})
                     </option>
                   ))}
                 </select>
@@ -576,20 +781,32 @@ export function PaprLoginSection({ onApiKeyReceived }: PaprLoginSectionProps) {
             </div>
           )}
 
-          {namespacesLoaded && namespaces.length > 0 && (
+          {namespacesLoaded && populatedGroups.length > 0 && (
             <div className="papr-selector">
               <label className="papr-selector__label">Team</label>
               <div className="papr-selector__wrapper">
                 <select
                   className="papr-selector__select"
                   value={activeNamespaceId || ""}
-                  onChange={(e) => handleSwitchNamespace(e.target.value)}
-                  disabled={switchingNamespace}
+                  onChange={(e) => void handleSelectNamespace(e.target.value)}
+                  disabled={switchingNamespace || switchingOrganization}
                 >
-                  {namespaces.map((ns) => (
-                    <option key={ns.id} value={ns.id}>
-                      {ns.name}{ns.environmentType ? ` (${ns.environmentType})` : ""}
+                  {!activeNamespaceId && <option value="">Select a team…</option>}
+                  {/* Keep the select from rendering blank when the active team's
+                      org failed to load (partial result). */}
+                  {activeNamespaceId && !activeNs && (
+                    <option value={activeNamespaceId}>
+                      Active team ({activeNamespaceId})
                     </option>
+                  )}
+                  {populatedGroups.map((group) => (
+                    <optgroup key={group.organizationId} label={group.organizationName}>
+                      {group.namespaces.map((ns) => (
+                        <option key={ns.id} value={ns.id}>
+                          {formatNamespaceOptionLabel(ns)}
+                        </option>
+                      ))}
+                    </optgroup>
                   ))}
                 </select>
                 {switchingNamespace && <Spinner />}
@@ -597,7 +814,7 @@ export function PaprLoginSection({ onApiKeyReceived }: PaprLoginSectionProps) {
             </div>
           )}
 
-          {namespacesLoaded && namespaces.length === 0 && activeOrganizationId && (
+          {namespacesLoaded && populatedGroups.length === 0 && (
             <div className="papr-selector">
               <label className="papr-selector__label">Team</label>
               <div className="papr-selector__empty-row">
@@ -605,10 +822,10 @@ export function PaprLoginSection({ onApiKeyReceived }: PaprLoginSectionProps) {
                 <button
                   type="button"
                   className="papr-team__refresh"
-                  onClick={() => {
-                    const parseOrgId = resolveParseOrganizationId(activeOrganizationId);
-                    if (parseOrgId) void loadNamespaces(parseOrgId, true);
-                  }}
+                  onClick={() =>
+                    activeOrganizationId &&
+                    void loadNamespaceGroups(activeOrganizationId, true)
+                  }
                 >
                   Refresh
                 </button>
@@ -616,7 +833,7 @@ export function PaprLoginSection({ onApiKeyReceived }: PaprLoginSectionProps) {
             </div>
           )}
 
-          {!namespacesLoaded && activeOrganizationId && (
+          {!namespacesLoaded && (
             <div className="papr-selector">
               <label className="papr-selector__label">Team</label>
               <div className="papr-selector__placeholder">
@@ -667,32 +884,106 @@ export function PaprLoginSection({ onApiKeyReceived }: PaprLoginSectionProps) {
         {/* Team members — needed for My team cloud app access */}
         <WorkspaceTeamSection
           workspaceName={workspaceName || undefined}
-          workspaceId={workspaceId || undefined}
           members={workspaceMembers}
+          currentUserId={workspaceCurrentUserId}
+          currentUserRole={workspaceCurrentUserRole}
           loading={workspaceMembersLoading}
           inviteEmail={inviteEmail}
           inviteLoading={inviteLoading}
           inviteMessage={inviteMessage}
+          roleUpdatingUserId={roleUpdatingUserId}
           onInviteEmailChange={setInviteEmail}
           onInvite={handleInviteMember}
+          onRoleChange={handleMemberRoleChange}
           onRefresh={() => void loadWorkspaceMembers()}
-          onOpenDashboard={() => void window.electronAPI.papr.openWorkspaceTeam()}
         />
 
         {/* Schemas section */}
         <SchemasSection
           schemas={schemas}
           loading={schemasLoading}
+          error={schemasError}
           expandedSchema={expandedSchema}
           onToggleSchema={setExpandedSchema}
           onRefresh={loadSchemas}
           namespaceName={activeNs?.name}
         />
+
       </div>
     );
   }
 
   // --- Logged-out state ---
+  if (profileFields) {
+    return (
+      <div className="papr-section papr-section--profile papr-section--logged-out">
+        <ProfileIdentitySection
+          {...profileFields}
+          isLoggedIn={false}
+          userEmail={null}
+        />
+
+        <ProfileAiConnections />
+
+        <div className="profile-merged__divider" />
+
+        <div className="profile-merged__connect">
+          <h3 className="profile-merged__connect-title">Connect to Papr</h3>
+          <p className="papr-section__description">
+            Sign in for memory, cloud sync, org workspaces, and API access.
+          </p>
+
+          {error && (
+            <div className="papr-section__error">
+              <svg width="14" height="14" viewBox="0 0 24 24" fill="none">
+                <circle cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="2"/>
+                <line x1="12" y1="8" x2="12" y2="12" stroke="currentColor" strokeWidth="2" strokeLinecap="round"/>
+                <line x1="12" y1="16" x2="12.01" y2="16" stroke="currentColor" strokeWidth="2" strokeLinecap="round"/>
+              </svg>
+              <span>{error}</span>
+            </div>
+          )}
+
+          <button
+            type="button"
+            className="papr-section__login-btn"
+            onClick={() => void handleLogin("login")}
+            disabled={isLoading}
+          >
+            {isLoading ? (
+              <>
+                <Spinner />
+                Waiting for login...
+              </>
+            ) : (
+              "Login with Papr"
+            )}
+          </button>
+
+          {isLoading ? (
+            <p className="papr-section__browser-hint">
+              Your browser should have opened. Finish sign-in there, then return here — Papr Work
+              will detect when you&apos;re logged in.
+            </p>
+          ) : null}
+
+          <p className="papr-section__note">
+            Don&apos;t have an account?{" "}
+            <button
+              type="button"
+              className="papr-section__inline-link"
+              onClick={() => void handleLogin("signup")}
+              disabled={isLoading}
+            >
+              Create account
+            </button>
+          </p>
+
+        </div>
+      </div>
+    );
+  }
+
   return (
     <div className="papr-section papr-section--logged-out">
       <div className="papr-section__header">
@@ -737,8 +1028,15 @@ export function PaprLoginSection({ onApiKeyReceived }: PaprLoginSectionProps) {
         )}
       </button>
 
+      {isLoading ? (
+        <p className="papr-section__browser-hint">
+          Your browser should have opened. Finish sign-in there, then return here — Papr Work will
+          detect when you&apos;re logged in.
+        </p>
+      ) : null}
+
       <p className="papr-section__note">
-        Don't have an account?{" "}
+        Don&apos;t have an account?{" "}
         <button
           type="button"
           className="papr-section__inline-link"
@@ -748,11 +1046,254 @@ export function PaprLoginSection({ onApiKeyReceived }: PaprLoginSectionProps) {
           Create account
         </button>
       </p>
+
     </div>
   );
 }
 
 // --- Sub-components ---
+
+function ProfileIdentitySection({
+  name,
+  email,
+  imageUrl,
+  saving,
+  connectedSince,
+  onNameChange,
+  onEmailChange,
+  onPhotoUpload,
+  onRemovePhoto,
+  onSave,
+  onSyncFromPapr,
+  fileInputRef,
+  isLoggedIn,
+  userEmail,
+  onLogout,
+}: ProfileFieldsBinding & {
+  isLoggedIn: boolean;
+  userEmail: string | null;
+  onLogout?: () => void;
+}) {
+  const hasProfileInfo = name.trim().length > 0 || email.trim().length > 0;
+  const [isEditing, setIsEditing] = useState(() => !hasProfileInfo);
+  const editSnapshotRef = useRef({ name, email });
+  const cloudStatus = useCloudMemoryStatusStore((state) => state.status);
+  const loginStatus = formatPaprLoginStatusLine({ connectedSince, cloudStatus });
+
+  const displayEmail = email.trim() || userEmail || "";
+  const displayName = name.trim() || "Add your name";
+
+  const startEditing = () => {
+    editSnapshotRef.current = { name, email };
+    setIsEditing(true);
+  };
+
+  const cancelEditing = () => {
+    onNameChange(editSnapshotRef.current.name);
+    onEmailChange(editSnapshotRef.current.email);
+    setIsEditing(false);
+  };
+
+  const handleSave = async () => {
+    await onSave();
+    setIsEditing(false);
+  };
+
+  const photoInput = (
+    <input
+      ref={fileInputRef}
+      type="file"
+      accept="image/*"
+      onChange={onPhotoUpload}
+      style={{ display: "none" }}
+    />
+  );
+
+  if (!isEditing && hasProfileInfo) {
+    return (
+      <div className="profile-merged__identity profile-merged__identity--compact">
+        <div className="profile-merged__display">
+          <button
+            type="button"
+            className="profile-merged__display-photo"
+            onClick={() => fileInputRef.current?.click()}
+            aria-label="Change profile photo"
+          >
+            <UserAvatar
+              imageUrl={imageUrl}
+              displayName={name}
+              email={displayEmail}
+              size={44}
+            />
+          </button>
+
+          <div className="profile-merged__display-info">
+            <div className="profile-merged__display-name-row">
+              <div className="profile-merged__display-name">{displayName}</div>
+              <button
+                type="button"
+                className="profile-merged__edit-icon-btn"
+                onClick={startEditing}
+                aria-label="Edit profile"
+                title="Edit profile"
+              >
+                <svg width="14" height="14" viewBox="0 0 24 24" fill="none" aria-hidden>
+                  <path
+                    d="M12 20h9M16.5 3.5a2.12 2.12 0 013 3L7 19l-4 1 1-4L16.5 3.5z"
+                    stroke="currentColor"
+                    strokeWidth="1.75"
+                    strokeLinecap="round"
+                    strokeLinejoin="round"
+                  />
+                </svg>
+              </button>
+            </div>
+            {displayEmail && (
+              <div className="profile-merged__display-email">{displayEmail}</div>
+            )}
+            {isLoggedIn && (
+              <div className="profile-merged__display-status">
+                <span className="profile-merged__display-status-text">{loginStatus.text}</span>
+                {cloudStatus ? (
+                  <button
+                    type="button"
+                    className="profile-merged__billing-link"
+                    onClick={openPaprPlanSettings}
+                  >
+                    Billing
+                  </button>
+                ) : null}
+              </div>
+            )}
+          </div>
+
+          {isLoggedIn && onLogout && (
+            <button
+              type="button"
+              className="profile-merged__logout-btn"
+              onClick={onLogout}
+            >
+              Logout
+            </button>
+          )}
+        </div>
+        {photoInput}
+      </div>
+    );
+  }
+
+  return (
+    <div className="profile-merged__identity profile-merged__identity--editing">
+      <div className="profile-merged__edit-header">
+        <h3 className="profile-merged__edit-title">Edit profile</h3>
+        {hasProfileInfo && (
+          <button
+            type="button"
+            className="profile-merged__edit-btn profile-merged__edit-btn--ghost"
+            onClick={cancelEditing}
+            disabled={saving}
+          >
+            Cancel
+          </button>
+        )}
+        {isLoggedIn && onLogout && (
+          <button type="button" className="profile-merged__logout-btn" onClick={onLogout}>
+            Logout
+          </button>
+        )}
+      </div>
+
+      <div className="profile-merged__body profile-merged__body--compact">
+        <div className="profile-photo-upload profile-merged__photo profile-merged__photo--compact">
+          <div
+            className="profile-photo-preview"
+            onClick={() => fileInputRef.current?.click()}
+          >
+            <UserAvatar
+              imageUrl={imageUrl}
+              displayName={name}
+              email={displayEmail}
+              alt="Profile"
+              size={72}
+            />
+          </div>
+          <div className="profile-photo-actions profile-photo-actions--compact">
+            <button
+              type="button"
+              className="settings-btn settings-btn--secondary settings-btn--small"
+              onClick={() => fileInputRef.current?.click()}
+              disabled={saving}
+            >
+              {imageUrl ? "Change" : "Upload"}
+            </button>
+            {imageUrl && (
+              <button
+                type="button"
+                className="settings-btn settings-btn--ghost settings-btn--small"
+                onClick={() => void onRemovePhoto()}
+                disabled={saving}
+              >
+                Remove
+              </button>
+            )}
+          </div>
+          {photoInput}
+        </div>
+
+        <div className="profile-merged__fields profile-merged__fields--compact">
+          <div className="form-group form-group--compact">
+            <label className="form-label" htmlFor="profile-name">
+              Name
+            </label>
+            <input
+              id="profile-name"
+              type="text"
+              className="form-input form-input--compact"
+              placeholder="Your name"
+              value={name}
+              onChange={(event) => onNameChange(event.target.value)}
+            />
+          </div>
+
+          <div className="form-group form-group--compact">
+            <label className="form-label" htmlFor="profile-email">
+              Email <span className="form-label__optional">(optional)</span>
+            </label>
+            <input
+              id="profile-email"
+              type="email"
+              className="form-input form-input--compact"
+              placeholder="your@email.com"
+              value={email}
+              onChange={(event) => onEmailChange(event.target.value)}
+            />
+          </div>
+
+          {isLoggedIn && onSyncFromPapr && (
+            <button
+              type="button"
+              className="profile-merged__sync-link"
+              onClick={onSyncFromPapr}
+            >
+              Sync from Papr
+            </button>
+          )}
+
+          <div className="profile-merged__save profile-merged__save--compact">
+            <button
+              type="button"
+              className="settings-btn settings-btn--primary settings-btn--small"
+              onClick={() => void handleSave()}
+              disabled={saving || !name.trim()}
+            >
+              {saving ? "Saving…" : "Save"}
+            </button>
+          </div>
+        </div>
+      </div>
+    </div>
+  );
+}
 
 function Spinner() {
   return (
@@ -765,28 +1306,32 @@ function Spinner() {
 
 function WorkspaceTeamSection({
   workspaceName,
-  workspaceId,
   members,
+  currentUserId,
+  currentUserRole,
   loading,
   inviteEmail,
   inviteLoading,
   inviteMessage,
+  roleUpdatingUserId,
   onInviteEmailChange,
   onInvite,
+  onRoleChange,
   onRefresh,
-  onOpenDashboard,
 }: {
   workspaceName?: string;
-  workspaceId?: string;
   members: WorkspaceMember[];
+  currentUserId: string | null;
+  currentUserRole: string;
   loading: boolean;
   inviteEmail: string;
   inviteLoading: boolean;
   inviteMessage: string | null;
+  roleUpdatingUserId: string | null;
   onInviteEmailChange: (value: string) => void;
   onInvite: () => void;
+  onRoleChange: (member: WorkspaceMember, newRole: WorkspaceRoleName) => void;
   onRefresh: () => void;
-  onOpenDashboard: () => void;
 }) {
   const [isCollapsed, setIsCollapsed] = useState(false);
 
@@ -833,7 +1378,6 @@ function WorkspaceTeamSection({
           {workspaceName && (
             <div className="papr-team__meta">
               <span>{workspaceName}</span>
-              {workspaceId && <code className="papr-team__id">{workspaceId}</code>}
             </div>
           )}
 
@@ -864,34 +1408,56 @@ function WorkspaceTeamSection({
           )}
 
           <ul className="papr-team__list">
-            {members.map((member) => (
-              <li key={member.objectId} className="papr-team__member">
-                <div className="papr-team__avatar">
-                  {member.user.profileImageUrl ? (
-                    <img src={member.user.profileImageUrl} alt="" />
+            {members.map((member) => {
+              const role = normalizeWorkspaceRole(member.user.role);
+              const canEditRole =
+                currentUserId !== null &&
+                canModifyMemberRole({
+                  currentUserId,
+                  currentUserRole,
+                  targetMember: member,
+                  members,
+                });
+              const isUpdatingRole = roleUpdatingUserId === member.user.objectId;
+
+              return (
+                <li key={member.objectId} className="papr-team__member">
+                  <UserAvatar
+                    imageUrl={member.user.profileImageUrl}
+                    displayName={member.user.displayName}
+                    email={member.user.email}
+                    size={32}
+                  />
+                  <div className="papr-team__member-info">
+                    <span className="papr-team__member-name">{member.user.displayName}</span>
+                    <span className="papr-team__member-email">{member.user.email}</span>
+                  </div>
+                  {canEditRole ? (
+                    <select
+                      className="papr-team__role-select"
+                      value={role}
+                      disabled={loading || isUpdatingRole}
+                      aria-label={`Role for ${member.user.displayName}`}
+                      onChange={(event) =>
+                        onRoleChange(member, event.target.value as WorkspaceRoleName)
+                      }
+                    >
+                      {WORKSPACE_ROLE_PRIORITY.map((option) => (
+                        <option key={option} value={option}>
+                          {formatWorkspaceRoleLabel(option)}
+                        </option>
+                      ))}
+                    </select>
                   ) : (
-                    <span>{member.user.displayName.charAt(0).toUpperCase()}</span>
+                    <span className="papr-team__role">{formatWorkspaceRoleLabel(role)}</span>
                   )}
-                </div>
-                <div className="papr-team__member-info">
-                  <span className="papr-team__member-name">{member.user.displayName}</span>
-                  <span className="papr-team__member-email">{member.user.email}</span>
-                </div>
-                <span className="papr-team__role">{member.user.role}</span>
-              </li>
-            ))}
+                </li>
+              );
+            })}
             {!loading && members.length === 0 && (
               <li className="papr-team__empty">No team members loaded yet.</li>
             )}
           </ul>
-
-          <button
-            type="button"
-            className="papr-team__dashboard-link"
-            onClick={onOpenDashboard}
-          >
-            Manage roles in dashboard
-          </button>
         </div>
       )}
     </div>
@@ -901,6 +1467,7 @@ function WorkspaceTeamSection({
 function SchemasSection({
   schemas,
   loading,
+  error,
   expandedSchema,
   onToggleSchema,
   onRefresh,
@@ -908,6 +1475,7 @@ function SchemasSection({
 }: {
   schemas: SchemaInfo[];
   loading: boolean;
+  error?: string | null;
   expandedSchema: string | null;
   onToggleSchema: (id: string | null) => void;
   onRefresh: () => void;
@@ -969,11 +1537,17 @@ function SchemasSection({
 
       {!isCollapsed && (
         <>
-          {loading && schemas.length === 0 && (
+          {loading && schemas.length === 0 && !error && (
             <div className="papr-schemas__empty">Loading schemas...</div>
           )}
 
-          {!loading && schemas.length === 0 && (
+          {error && (
+            <div className="papr-schemas__empty papr-schemas__empty--error">
+              {error}
+            </div>
+          )}
+
+          {!loading && schemas.length === 0 && !error && (
             <div className="papr-schemas__empty">
               No schemas in this namespace. The agent can create schemas using <code>register_schema</code>.
             </div>

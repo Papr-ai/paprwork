@@ -12,6 +12,7 @@ import {
   type TabMetadata,
   type AppState,
 } from "../services/storage/AppStateStorage.js";
+import { scheduleDeferredTabSave } from "../services/storage/deferredTabSave.js";
 import {
   getAppRuntimeLogService,
   type AppRuntimeLogEntry,
@@ -33,6 +34,8 @@ async function enrichAppWithLineage<T extends { id: string }>(
       sourceNamespaceId: lineage.sourceNamespaceId,
       installedAt: lineage.installedAt,
       lastSyncedAt: lineage.lastSyncedAt,
+      databasePolicy: lineage.databasePolicy,
+      sourceAudience: lineage.sourceAudience,
     },
   };
 }
@@ -52,6 +55,24 @@ interface UpdateAppPayload {
 
 interface DeleteAppPayload {
   appId: string;
+  unpublishFromCloud?: boolean;
+  deleteLinkedJobs?: boolean;
+  deleteTursoDatabases?: boolean;
+  deleteRegistryDbIds?: string[];
+  deleteRegistryTurso?: boolean;
+  confirmed?: boolean;
+}
+
+interface CopyAppToNamespacePayload {
+  appId: string;
+  targetOrganizationId: string;
+  targetNamespaceId: string;
+}
+
+interface AssignAppWorkspacePayload {
+  appId: string;
+  targetOrganizationId: string;
+  targetNamespaceId: string;
 }
 
 interface GetAppPayload {
@@ -128,6 +149,7 @@ interface SearchAppCodePayload {
   scope?: "all" | "app" | "jobs";
   jobFilter?: string[];
   limit?: number;
+  mode?: "keyword" | "memory" | "hybrid";
 }
 
 export async function setupAppHandlers(
@@ -155,6 +177,8 @@ export async function setupAppHandlers(
               sourceNamespaceId: lineage.sourceNamespaceId,
               installedAt: lineage.installedAt,
               lastSyncedAt: lineage.lastSyncedAt,
+              databasePolicy: lineage.databasePolicy,
+              sourceAudience: lineage.sourceAudience,
             },
           };
         });
@@ -169,12 +193,50 @@ export async function setupAppHandlers(
         break;
       }
 
+      case "app:list-unassigned": {
+        const apps = await appService.listUnassignedApps();
+        ws.send(
+          JSON.stringify({
+            id: message.id,
+            type: "app:list-unassigned:response",
+            success: true,
+            data: apps,
+          }),
+        );
+        break;
+      }
+
+      case "app:assign-workspace": {
+        const payload = message.payload as AssignAppWorkspacePayload;
+        const result = await appService.assignAppToWorkspace(
+          payload.appId,
+          payload.targetOrganizationId,
+          payload.targetNamespaceId,
+        );
+        ws.send(
+          JSON.stringify({
+            id: message.id,
+            type: "app:assign-workspace:response",
+            success: true,
+            data: result,
+          }),
+        );
+        break;
+      }
+
       case "app:create": {
         const payload = message.payload as CreateAppPayload;
         const app = await appService.createApp(
           payload.title,
           payload.description,
           payload.files,
+          undefined,
+          undefined,
+          undefined,
+          undefined,
+          // Direct UI action — this is the one path that is real human
+          // builder activity.
+          { creationSource: "user" },
         );
         ws.send(
           JSON.stringify({
@@ -189,27 +251,39 @@ export async function setupAppHandlers(
 
       case "app:get": {
         const payload = message.payload as GetAppPayload;
-        const app = await appService.getApp(payload.appId);
-        if (!app) {
+        const { withInteractiveHotPath } = await import(
+          "../services/gatewayInteractivePriority.js"
+        );
+        await withInteractiveHotPath("app:get", async () => {
+          const { markMiniAppInteractiveLoadWindow } = await import(
+            "../services/appRuntime/miniAppInteractiveLoadWindow.js"
+          );
+          markMiniAppInteractiveLoadWindow(payload.appId);
+          const app = await appService.getApp(payload.appId);
+          if (!app) {
+            ws.send(
+              JSON.stringify({
+                id: message.id,
+                type: "app:get:response",
+                success: false,
+                error: "App not found",
+              }),
+            );
+            return;
+          }
+          const enriched = await enrichAppWithLineage(
+            app,
+            appService.getAppsRootPath(),
+          );
           ws.send(
             JSON.stringify({
               id: message.id,
               type: "app:get:response",
-              success: false,
-              error: "App not found",
+              success: true,
+              data: enriched,
             }),
           );
-          break;
-        }
-        const enriched = await enrichAppWithLineage(app, appService.getAppsRootPath());
-        ws.send(
-          JSON.stringify({
-            id: message.id,
-            type: "app:get:response",
-            success: true,
-            data: enriched,
-          }),
-        );
+        });
         break;
       }
 
@@ -230,13 +304,45 @@ export async function setupAppHandlers(
 
       case "app:delete": {
         const payload = message.payload as DeleteAppPayload;
-        const success = await appService.deleteApp(payload.appId);
+        if (payload.confirmed === true) {
+          console.log(
+            `[Gateway] app:delete confirmed for ${payload.appId.slice(0, 8)}…`,
+          );
+        }
+        const result = await appService.deleteApp(payload.appId, {
+          unpublishFromCloud: payload.unpublishFromCloud === true,
+          deleteLinkedJobs: payload.deleteLinkedJobs === true,
+          deleteTursoDatabases: payload.deleteTursoDatabases === true,
+          deleteRegistryDbIds: payload.deleteRegistryDbIds,
+          deleteRegistryTurso: payload.deleteRegistryTurso === true,
+          confirmed: payload.confirmed === true,
+        });
+        // When not confirmed, we return a preview for the UI modal.
+        // This is a valid negotiated response, not a failure.
         ws.send(
           JSON.stringify({
             id: message.id,
             type: "app:delete:response",
+            success: result.deleted || result.preview !== undefined,
+            data: result,
+          }),
+        );
+        break;
+      }
+
+      case "app:copy-to-namespace": {
+        const payload = message.payload as CopyAppToNamespacePayload;
+        const result = await appService.copyAppToNamespace(
+          payload.appId,
+          payload.targetOrganizationId,
+          payload.targetNamespaceId,
+        );
+        ws.send(
+          JSON.stringify({
+            id: message.id,
+            type: "app:copy-to-namespace:response",
             success: true,
-            data: { success },
+            data: result,
           }),
         );
         break;
@@ -307,8 +413,18 @@ export async function setupAppHandlers(
 
       // ========== APP STATE PERSISTENCE ==========
       case "app:save_tabs": {
-        const tabs = message.payload as TabMetadata[];
-        getAppStateStorage().saveTabs(tabs);
+        const payload = message.payload as
+          | TabMetadata[]
+          | { tabs: TabMetadata[]; sync?: boolean };
+        const tabs = Array.isArray(payload) ? payload : payload.tabs;
+        const sync = !Array.isArray(payload) && payload.sync === true;
+
+        if (sync) {
+          getAppStateStorage().saveTabs(tabs);
+        } else {
+          scheduleDeferredTabSave(tabs);
+        }
+
         ws.send(
           JSON.stringify({
             id: message.id,
@@ -551,6 +667,7 @@ export async function setupAppHandlers(
           scope: payload.scope,
           jobFilter: payload.jobFilter,
           limit: payload.limit,
+          mode: payload.mode,
         });
         ws.send(
           JSON.stringify({

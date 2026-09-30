@@ -32,10 +32,13 @@ export class TemplateService {
       input.description?.trim() ||
       "Starter pipeline with Python job + SQLite + mini-app.";
 
-    const app = await appService.createApp(baseName, description, [
-      {
-        filename: "index.html",
-        content: `<!doctype html>
+    const app = await appService.createApp(
+      baseName,
+      description,
+      [
+        {
+          filename: "index.html",
+          content: `<!doctype html>
 <html>
   <head>
     <meta charset="UTF-8" />
@@ -56,8 +59,15 @@ export class TemplateService {
     <pre id="status">Template scaffold complete. Connect query adapters next.</pre>
   </body>
 </html>`,
-      },
-    ]);
+        },
+      ],
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      // Scaffolded from a starter template — not original builder work.
+      { creationSource: "template" },
+    );
 
     const job = await jobsService.createJob({
       name: `${safeSlug}-collector`,

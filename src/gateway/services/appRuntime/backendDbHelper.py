@@ -1,19 +1,28 @@
 #!/usr/bin/env python3
-"""Mini-app backend DB helper — local SQLite or Turso (stdlib-only).
+"""Mini-app backend DB helper — Papr /api/db contract (local, Turso, or gateway proxy).
 
 Env (injected by gateway when app has linked data-sources.json):
-  PAPR_DB_MODE=local|turso
-  APP_DB              — local SQLite path (local mode)
-  PAPR_DB_URL         — libsql URL (turso mode)
-  PAPR_DB_AUTH_TOKEN  — Turso auth token (turso mode)
+  Preferred (backend subprocess): proxy via same path as /api/db/*
+    PAPR_DB_MODE=proxy
+    PAPR_DB_PROXY_URL          — http://127.0.0.1:<port>/internal/backend-db
+    PAPR_DB_PROXY_TOKEN        — short-lived Bearer token
 
-Usage:
-  from papr_db import connect, execute, executemany
+  Legacy direct (fallback when proxy not set):
+    PAPR_DB_MODE               — local|turso
+    APP_DB / PAPR_DB_URL / PAPR_DB_AUTH_TOKEN
 
-  con = connect()
-  execute(con, "INSERT INTO items (name) VALUES (?)", ["hello"])
-  rows = execute(con, "SELECT name FROM items")
+Usage (preferred — matches POST /api/db/query and /api/db/write):
+  from papr_db import connect, query, write
+
+  con = connect()              # or connect("billing")
+  rows = query(con, "SELECT name FROM items WHERE id = ?", [1])
+  result = write(con, "INSERT INTO items (name) VALUES (?)", ["hello"])
+  # result.changes, result.last_insert_rowid
+  rows = query(con, "INSERT INTO items (name) VALUES (?) RETURNING *", ["hello"])
   con.close()
+
+Never use sqlite3.connect(APP_DB) — cloud has no local file.
+cursor() exists for legacy handlers only; prefer query()/write().
 """
 from __future__ import annotations
 
@@ -22,7 +31,29 @@ import os
 import sqlite3
 import urllib.error
 import urllib.request
-from typing import Any
+from dataclasses import dataclass
+from typing import Any, Union
+
+# Bump when this helper gains behaviour app backends depend on.
+# Vendored copies in <app>/backend/papr_db.py are refreshed by the gateway
+# when their PAPR_DB_HELPER_VERSION is lower (or absent). Copies at or above
+# this number are left alone, so hand-edited helpers are never clobbered.
+#   1 = pre-proxy (writes directly to the SQLite file — wedges replica sync)
+#   2 = proxy support (PAPR_DB_MODE=proxy), query()/write(), _ProxyConnection
+#   3 = proxy passes sourceId (required when app has 2+ linked databases)
+PAPR_DB_HELPER_VERSION = 3
+
+
+@dataclass(frozen=True)
+class QueryResult:
+    rows: list[dict[str, Any]]
+    count: int
+
+
+@dataclass(frozen=True)
+class WriteResult:
+    changes: int
+    last_insert_rowid: int | None = None
 
 
 def _col_names(cols: list[Any]) -> list[str]:
@@ -106,12 +137,46 @@ def _parse_turso_http_select(result: dict[str, Any]) -> list[dict[str, Any]]:
     return _parse_turso_rows(result, names)
 
 
-def _parse_turso_http_write(result: dict[str, Any]) -> int:
+def _parse_turso_last_insert_rowid(result: dict[str, Any]) -> int | None:
+    raw = result.get("last_insert_rowid")
+    if raw is None:
+        return None
+    return int(raw)
+
+
+def _parse_turso_http_write(result: dict[str, Any]) -> tuple[int, int | None]:
     if "rows_written" in result:
-        return int(result.get("rows_written", 0))
+        return int(result.get("rows_written", 0)), _parse_turso_last_insert_rowid(result)
     if "affected_row_count" in result:
-        return int(result.get("affected_row_count", 0))
-    return 0
+        return int(result.get("affected_row_count", 0)), _parse_turso_last_insert_rowid(result)
+    if "changes" in result:
+        return int(result.get("changes", 0)), _parse_turso_last_insert_rowid(result)
+    return 0, _parse_turso_last_insert_rowid(result)
+
+
+def _sql_returns_rows(sql: str) -> bool:
+    normalized = " ".join(sql.strip().upper().split())
+    if normalized.startswith(("SELECT", "WITH", "PRAGMA")):
+        return True
+    return " RETURNING " in f" {normalized} "
+
+
+def _sql_is_write(sql: str) -> bool:
+    normalized = " ".join(sql.strip().upper().split())
+    return normalized.startswith(("INSERT", "UPDATE", "DELETE", "REPLACE", "UPSERT"))
+
+
+def _turso_body_has_rowset(body: dict[str, Any]) -> bool:
+    if _parse_turso_columns(body):
+        return True
+    rows = body.get("rows")
+    return isinstance(rows, list) and len(rows) > 0
+
+
+def _parse_turso_execute_body(body: dict[str, Any]) -> list[dict[str, Any]] | tuple[int, int | None]:
+    if _turso_body_has_rowset(body):
+        return _parse_turso_http_select(body)
+    return _parse_turso_http_write(body)
 
 
 def _normalize_turso_payload(payload: Any) -> list[Any]:
@@ -160,63 +225,309 @@ def db_mode() -> str:
     return os.environ.get("PAPR_DB_MODE", "")
 
 
-def connect() -> sqlite3.Connection | "_TursoConnection":
+def _env_prefix_for_alias(alias: str) -> str | None:
+    suffix = "_ALIAS"
+    for key, value in os.environ.items():
+        if key.startswith("PAPR_DB_") and key.endswith(suffix) and value == alias:
+            return key[: -len(suffix)]
+    return None
+
+
+def _connect_local(path: str) -> sqlite3.Connection:
+    if not path:
+        raise RuntimeError("APP_DB not set — attach_database first")
+    return sqlite3.connect(path)
+
+
+def _connect_turso(url: str, token: str) -> "_TursoConnection":
+    if not url or not token:
+        raise RuntimeError("PAPR_DB_URL / PAPR_DB_AUTH_TOKEN not set")
+    return _TursoConnection(url, token)
+
+
+def _default_source_id() -> str | None:
+    """Alias to use when a handler calls connect() with no argument.
+
+    Only meaningful when exactly one database is linked — with several, the
+    gateway requires an explicit alias and guessing would silently read the
+    wrong database."""
+    active = (os.environ.get("PAPR_ACTIVE_SOURCE_ID", "") or "").strip()
+    if active:
+        return active
+    aliases = [
+        a.strip()
+        for a in (os.environ.get("PAPR_LINKED_DB_ALIASES", "") or "").split(",")
+        if a.strip()
+    ]
+    return aliases[0] if len(aliases) == 1 else None
+
+
+def _connect_proxy(source_id: str | None = None) -> "_ProxyConnection":
+    url = os.environ.get("PAPR_DB_PROXY_URL", "").strip()
+    token = os.environ.get("PAPR_DB_PROXY_TOKEN", "").strip()
+    if not url or not token:
+        raise RuntimeError("PAPR_DB_PROXY_URL / PAPR_DB_PROXY_TOKEN not set")
+    return _ProxyConnection(url, token, source_id or _default_source_id())
+
+
+def connect(
+    source_id: str | None = None,
+) -> sqlite3.Connection | "_TursoConnection" | "_ProxyConnection":
+    # Pass the alias through — the gateway needs it to pick a database when
+    # the app has more than one linked source.
+    if db_mode() == "proxy":
+        return _connect_proxy(source_id)
+
+    if source_id:
+        prefix = _env_prefix_for_alias(source_id)
+        if not prefix:
+            raise RuntimeError(
+                f'No linked database with alias "{source_id}". '
+                f'Linked: {os.environ.get("PAPR_LINKED_DB_ALIASES", "")}'
+            )
+        mode = os.environ.get(f"{prefix}_MODE", "local")
+        if mode == "local":
+            return _connect_local(os.environ.get(prefix, ""))
+        if mode == "turso":
+            return _connect_turso(
+                os.environ.get(f"{prefix}_URL", ""),
+                os.environ.get(f"{prefix}_AUTH_TOKEN", ""),
+            )
+        raise RuntimeError(f"Unknown DB mode for {source_id}: {mode}")
+
     mode = db_mode()
     if mode == "local":
-        path = os.environ.get("APP_DB", "")
-        if not path:
-            raise RuntimeError("APP_DB not set — link_app_data_source first")
-        return sqlite3.connect(path)
+        return _connect_local(os.environ.get("APP_DB", ""))
     if mode == "turso":
-        url = os.environ.get("PAPR_DB_URL", "")
-        token = os.environ.get("PAPR_DB_AUTH_TOKEN", "")
-        if not url or not token:
-            raise RuntimeError("PAPR_DB_URL / PAPR_DB_AUTH_TOKEN not set")
-        return _TursoConnection(url, token)
+        return _connect_turso(
+            os.environ.get("PAPR_DB_URL", ""),
+            os.environ.get("PAPR_DB_AUTH_TOKEN", ""),
+        )
     raise RuntimeError(
-        "No linked database — call link_app_data_source before using papr_db"
+        "No linked database — attach_database first, or pass connect(source_id=alias)"
     )
 
 
-def execute(
-    con: sqlite3.Connection | "_TursoConnection",
+Connection = Union[sqlite3.Connection, "_TursoConnection", "_ProxyConnection"]
+
+
+def query(
+    con: Connection,
     sql: str,
     params: list[Any] | tuple[Any, ...] | None = None,
-) -> list[dict[str, Any]] | int:
+) -> QueryResult:
     args = list(params or [])
     if isinstance(con, sqlite3.Connection):
         cur = con.cursor()
         cur.execute(sql, args)
-        if sql.strip().upper().startswith("SELECT"):
-            cols = [d[0] for d in cur.description or []]
-            return [dict(zip(cols, row)) for row in cur.fetchall()]
+        cols = [d[0] for d in cur.description or []]
+        rows = [dict(zip(cols, row)) for row in cur.fetchall()]
+        return QueryResult(rows=rows, count=len(rows))
+
+    if isinstance(con, _ProxyConnection):
+        payload = con._post("query", sql, args)
+        rows = payload.get("rows") or []
+        if not isinstance(rows, list):
+            rows = []
+        typed_rows = [row for row in rows if isinstance(row, dict)]
+        count = int(payload.get("count", len(typed_rows)))
+        return QueryResult(rows=typed_rows, count=count)
+
+    result = con.execute(sql, args)
+    if not isinstance(result, list):
+        raise RuntimeError("query() requires SELECT, WITH, or INSERT … RETURNING SQL")
+    return QueryResult(rows=result, count=len(result))
+
+
+def write(
+    con: Connection,
+    sql: str,
+    params: list[Any] | tuple[Any, ...] | None = None,
+) -> WriteResult:
+    args = list(params or [])
+    if _sql_returns_rows(sql):
+        raise RuntimeError("write() does not support RETURNING — use query()")
+    if not _sql_is_write(sql):
+        raise RuntimeError("write() requires INSERT, UPDATE, DELETE, REPLACE, or UPSERT SQL")
+
+    if isinstance(con, sqlite3.Connection):
+        cur = con.cursor()
+        cur.execute(sql, args)
+        if _sql_returns_rows(sql) or (cur.description and len(cur.description) > 0):
+            raise RuntimeError(
+                "write() received a row-returning statement — use query() for RETURNING"
+            )
         con.commit()
-        return cur.rowcount
-    return con.execute(sql, args)
+        last_id = cur.lastrowid
+        return WriteResult(changes=cur.rowcount, last_insert_rowid=last_id if last_id else None)
+
+    if isinstance(con, _ProxyConnection):
+        payload = con._post("write", sql, args)
+        last_id = payload.get("lastInsertRowid")
+        return WriteResult(
+            changes=int(payload.get("changes", 0)),
+            last_insert_rowid=int(last_id) if last_id is not None else None,
+        )
+
+    result = con.execute(sql, args)
+    if isinstance(result, list):
+        raise RuntimeError(
+            "write() received a row-returning statement — use query() for RETURNING"
+        )
+    last_id = con.lastrowid
+    return WriteResult(changes=int(result), last_insert_rowid=last_id)
+
+
+def execute(
+    con: Connection,
+    sql: str,
+    params: list[Any] | tuple[Any, ...] | None = None,
+) -> list[dict[str, Any]] | int:
+    """Legacy helper — prefer query() / write()."""
+    if _sql_returns_rows(sql) or not _sql_is_write(sql):
+        return query(con, sql, params).rows
+    return write(con, sql, params).changes
 
 
 def executemany(
-    con: sqlite3.Connection | "_TursoConnection",
+    con: Connection,
     sql: str,
     seq: list[list[Any] | tuple[Any, ...]],
 ) -> int:
-    if isinstance(con, sqlite3.Connection):
-        cur = con.cursor()
-        cur.executemany(sql, seq)
-        con.commit()
-        return cur.rowcount
     total = 0
     for params in seq:
-        total += int(con.execute(sql, list(params)))
+        total += write(con, sql, list(params)).changes
     return total
 
 
+class _ProxyConnection:
+    """Loopback client for gateway /internal/backend-db (same rules as /api/db/*)."""
+
+    def __init__(self, base_url: str, token: str, source_id: str | None = None) -> None:
+        self._base_url = base_url.rstrip("/")
+        self._token = token
+        # Which linked database this connection targets. The gateway rejects
+        # /internal/backend-db with HTTP 400 when an app has more than one
+        # linked database and no sourceId is supplied — connect("sync") must
+        # forward the alias as sourceId on every query/write.
+        self._source_id = source_id
+        self.lastrowid: int | None = None
+
+    def _post(self, route: str, sql: str, params: list[Any]) -> dict[str, Any]:
+        payload_body: dict[str, Any] = {"sql": sql, "params": params}
+        if self._source_id:
+            payload_body["sourceId"] = self._source_id
+        body = json.dumps(payload_body).encode("utf-8")
+        req = urllib.request.Request(
+            f"{self._base_url}/{route}",
+            data=body,
+            headers={
+                "Authorization": f"Bearer {self._token}",
+                "Content-Type": "application/json",
+            },
+            method="POST",
+        )
+        try:
+            with urllib.request.urlopen(req, timeout=60) as resp:
+                payload = json.loads(resp.read().decode("utf-8"))
+        except urllib.error.HTTPError as exc:
+            detail = exc.read().decode("utf-8", errors="replace")[:300]
+            raise RuntimeError(f"Backend DB proxy HTTP {exc.code}: {detail}") from exc
+        if not isinstance(payload, dict):
+            raise RuntimeError("Backend DB proxy returned invalid JSON")
+        if route == "write":
+            last_id = payload.get("lastInsertRowid")
+            self.lastrowid = int(last_id) if last_id is not None else None
+        return payload
+
+    def cursor(self) -> "_TursoCursor":
+        return _TursoCursor(self)
+
+    def commit(self) -> None:
+        return None
+
+    def execute(
+        self,
+        sql: str,
+        params: list[Any] | None = None,
+    ) -> list[dict[str, Any]] | int:
+        return execute(self, sql, params)
+
+    def close(self) -> None:
+        return None
+
+
+class _TursoCursor:
+    """Legacy sqlite3.Cursor shim — prefer query()/write()."""
+
+    def __init__(self, conn: _TursoConnection | _ProxyConnection) -> None:
+        self._conn = conn
+        self._rows: list[tuple[Any, ...]] = []
+        self.rowcount = -1
+        self.lastrowid: int | None = None
+        self.description: list[tuple[Any, ...]] | None = None
+
+    def execute(
+        self,
+        sql: str,
+        params: list[Any] | tuple[Any, ...] | None = None,
+    ) -> "_TursoCursor":
+        args = list(params or [])
+        if _sql_returns_rows(sql) or not _sql_is_write(sql):
+            result = query(self._conn, sql, args)
+            if result.rows:
+                names = list(result.rows[0].keys())
+                self.description = [(name, None, None, None, None, None, None) for name in names]
+                self._rows = [tuple(row[name] for name in names) for row in result.rows]
+            else:
+                self.description = []
+                self._rows = []
+            self.rowcount = result.count
+        else:
+            write_result = write(self._conn, sql, args)
+            self.description = None
+            self._rows = []
+            self.rowcount = write_result.changes
+        self.lastrowid = self._conn.lastrowid
+        return self
+
+    def executemany(
+        self,
+        sql: str,
+        seq: list[list[Any] | tuple[Any, ...]],
+    ) -> "_TursoCursor":
+        total = 0
+        for params in seq:
+            total += write(self._conn, sql, list(params)).changes
+        self.rowcount = total
+        self.lastrowid = self._conn.lastrowid
+        return self
+
+    def fetchone(self) -> tuple[Any, ...] | None:
+        if not self._rows:
+            return None
+        return self._rows[0]
+
+    def fetchall(self) -> list[tuple[Any, ...]]:
+        return list(self._rows)
+
+    def close(self) -> None:
+        return None
+
+
 class _TursoConnection:
-    """Minimal Turso/libsql HTTP client (stdlib only)."""
+    """Direct Turso HTTP client (fallback when proxy env is not set)."""
 
     def __init__(self, libsql_url: str, auth_token: str) -> None:
         self._url = _http_url(libsql_url)
         self._token = auth_token
+        self.lastrowid: int | None = None
+
+    def cursor(self) -> _TursoCursor:
+        return _TursoCursor(self)
+
+    def commit(self) -> None:
+        return None
 
     def execute(
         self,
@@ -244,22 +555,35 @@ class _TursoConnection:
 
         statements = _normalize_turso_payload(payload)
         if not statements:
-            return 0 if not sql.strip().upper().startswith("SELECT") else []
+            return [] if _sql_returns_rows(sql) else 0
 
         kind, body = _unwrap_turso_statement(statements[0])
         if kind == "error":
             raise RuntimeError(_turso_error_message(body))
 
         if kind == "http":
-            if sql.strip().upper().startswith("SELECT"):
-                return _parse_turso_http_select(body)
-            return _parse_turso_http_write(body)
+            parsed = _parse_turso_execute_body(body)
+            if isinstance(parsed, list):
+                self.lastrowid = _parse_turso_last_insert_rowid(body)
+                return parsed
+            rowcount, lastrowid = parsed
+            self.lastrowid = lastrowid
+            return rowcount
 
         if kind in {"hrana", "select"}:
-            if sql.strip().upper().startswith("SELECT"):
+            result_body = _as_dict(body.get("result"))
+            if kind == "select" or _turso_body_has_rowset(result_body):
+                self.lastrowid = _parse_turso_last_insert_rowid(result_body)
                 return _parse_hrana_select(body)
-            return _parse_turso_http_write(_as_dict(body.get("result")))
+            parsed = _parse_turso_execute_body(result_body)
+            if isinstance(parsed, list):
+                self.lastrowid = _parse_turso_last_insert_rowid(result_body)
+                return parsed
+            rowcount, lastrowid = parsed
+            self.lastrowid = lastrowid
+            return rowcount
 
+        self.lastrowid = None
         return 0
 
     def close(self) -> None:

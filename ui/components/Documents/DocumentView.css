@@ -7,6 +7,11 @@
   overflow: hidden;
 }
 
+/* Limit layout/paint invalidation to the doc pane when chat resizes beside it. */
+.content-area--split .content-pane--right .document-view {
+  contain: layout paint;
+}
+
 /* Loading & Error states */
 
 .document-view--loading,
@@ -183,8 +188,6 @@
   border: 1px solid var(--border-color, rgba(0, 0, 0, 0.08));
   border-radius: 10px;
   box-shadow: var(--shadow-3, 0 4px 16px rgba(0, 0, 0, 0.12));
-  backdrop-filter: blur(20px);
-  -webkit-backdrop-filter: blur(20px);
 }
 
 .document-view__bubble-btn {
@@ -393,8 +396,6 @@
   border: 1px solid var(--border-color, rgba(0, 0, 0, 0.08));
   border-radius: 12px;
   box-shadow: var(--shadow-3, 0 4px 16px rgba(0, 0, 0, 0.12));
-  backdrop-filter: blur(20px);
-  -webkit-backdrop-filter: blur(20px);
 }
 
 .slash-menu__empty {

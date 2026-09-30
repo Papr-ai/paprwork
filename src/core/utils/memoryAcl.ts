@@ -1,29 +1,42 @@
 /**
  * Papr Memory ACL helpers.
  *
- * Use Parse _User.objectId as external_user_id on memory.add bodies.
- * ACL principals use the external_user:{objectId} prefix — NOT bare user ids
- * and NOT Papr's internal user_id field.
+ * Paprwork users are real Papr accounts — use Parse _User.objectId with the
+ * `user:{objectId}` principal prefix for ACL fields the search filter indexes.
+ * Also send `user_id` + `external_user_id` on request bodies (dual-send).
  */
 
 import type { MemoryAddPolicy } from "@papr/memory/resources/shared.js";
 
+export const USER_PRINCIPAL_PREFIX = "user:" as const;
 export const EXTERNAL_USER_PRINCIPAL_PREFIX = "external_user:" as const;
 export const NAMESPACE_PRINCIPAL_PREFIX = "namespace:" as const;
 export const ORGANIZATION_PRINCIPAL_PREFIX = "organization:" as const;
 
 const PRINCIPAL_PATTERN =
-  /^(external_user|namespace|organization):[A-Za-z0-9_-]+$/;
+  /^(user|external_user|namespace|organization):[A-Za-z0-9_-]+$/;
 
-/** Strip `external_user:` prefix if the agent pasted a full principal. */
+/** Strip `user:` / `external_user:` prefix if a full principal was pasted. */
 export function normalizeExternalUserId(value: string): string {
   const trimmed = value.trim();
   if (trimmed.startsWith(EXTERNAL_USER_PRINCIPAL_PREFIX)) {
     return trimmed.slice(EXTERNAL_USER_PRINCIPAL_PREFIX.length).trim();
   }
+  if (trimmed.startsWith(USER_PRINCIPAL_PREFIX)) {
+    return trimmed.slice(USER_PRINCIPAL_PREFIX.length).trim();
+  }
   return trimmed;
 }
 
+export function toUserPrincipal(userId: string): string {
+  const id = normalizeExternalUserId(userId);
+  if (!id) {
+    throw new Error("user id must be non-empty");
+  }
+  return `${USER_PRINCIPAL_PREFIX}${id}`;
+}
+
+/** Third-party SDK end users; Paprwork uses toUserPrincipal for real accounts. */
 export function toExternalUserPrincipal(externalUserId: string): string {
   const id = normalizeExternalUserId(externalUserId);
   if (!id) {
@@ -62,13 +75,13 @@ export function normalizeReadPrincipal(value: string): string {
     return trimmed;
   }
 
-  // Convenience: bare Parse objectId → external_user principal
+  // Convenience: bare Parse objectId → user principal (real Papr account)
   if (!trimmed.includes(":")) {
-    return toExternalUserPrincipal(trimmed);
+    return toUserPrincipal(trimmed);
   }
 
   throw new Error(
-    `Invalid read ACL principal "${trimmed}". Use external_user:{objectId}, namespace:{id}, or organization:{id}.`,
+    `Invalid read ACL principal "${trimmed}". Use user:{objectId}, namespace:{id}, or organization:{id}.`,
   );
 }
 
@@ -101,7 +114,7 @@ export function buildExplicitReadPrincipals(
   const read: string[] = [];
 
   for (const userId of input.shareWithUserIds ?? []) {
-    read.push(toExternalUserPrincipal(userId));
+    read.push(toUserPrincipal(userId));
   }
 
   for (const principal of input.readAcl ?? []) {
@@ -121,15 +134,15 @@ export function buildExplicitReadPrincipals(
   return dedupeReadPrincipals(read);
 }
 
-export function buildWriterWriteAcl(writerExternalUserId: string): string[] {
-  return [toExternalUserPrincipal(writerExternalUserId)];
+export function buildWriterWriteAcl(writerUserId: string): string[] {
+  return [toUserPrincipal(writerUserId)];
 }
 
 /** Apply explicit read ACL, always keeping the writer on write ACL. */
 export function applyExplicitReadAclToPolicy(
   basePolicy: MemoryAddPolicy | undefined,
   input: {
-    writerExternalUserId: string;
+    writerUserId: string;
     explicitRead: ExplicitMemoryReadAclInput;
   },
 ): MemoryAddPolicy {
@@ -143,7 +156,7 @@ export function applyExplicitReadAclToPolicy(
     acl: {
       ...(basePolicy?.acl ?? {}),
       read,
-      write: buildWriterWriteAcl(input.writerExternalUserId),
+      write: buildWriterWriteAcl(input.writerUserId),
     },
   };
 }

@@ -15,7 +15,7 @@ const createDatabaseSchema = z.object({
     .min(1)
     .optional()
     .describe(
-      "Optional absolute path for data.db. Default: ~/Papr/data/databases/{slug}/data.db",
+      "Optional absolute path for data.db. Default: $PAPR_HOME/data/databases/{slug}/data.db",
     ),
   isolation: z
     .enum(["shared", "per-user"])
@@ -26,9 +26,13 @@ const createDatabaseSchema = z.object({
 const attachDatabaseSchema = z.object({
   appId: z.string().min(1),
   dbId: z.string().min(1),
-  alias: z.string().min(1).optional(),
-  role: z.enum(["primary", "readonly", "scratch"]).optional(),
-  setPrimary: z.boolean().optional(),
+  alias: z
+    .string()
+    .min(1)
+    .optional()
+    .describe(
+      "sourceId for /api/db/* (e.g. billing). Do not use legacy alias primary — omit to derive from database name.",
+    ),
 });
 
 const deleteDatabaseSchema = z.object({
@@ -36,7 +40,11 @@ const deleteDatabaseSchema = z.object({
   deleteTurso: z
     .boolean()
     .optional()
-    .describe("When true and no app references remain, delete Turso replica"),
+    .describe(
+      "When true and no app references remain, delete Turso replica. Default false. " +
+        "Never applies on team track/shared installs (local tombstone only). " +
+        "Publisher-only for shared-primary team databases.",
+    ),
 });
 
 function slugifyName(name: string): string {
@@ -50,10 +58,13 @@ function slugifyName(name: string): string {
 export const createDatabaseTool = createTool({
   id: "create_database",
   description:
-    "Create an independent SQLite database resource (registry entry + local file). " +
-    "Use attach_database to link it to a mini-app. " +
-    "isolation: 'shared' (default, one Turso DB for all users) or 'per-user' (separate Turso DB per authenticated user: d-{dbId8}-u-{userId8}). " +
-    "Jobs keep JOB_DB as private scratch; do not confuse isolation with cloud publish access settings.",
+    "Create an independent SQLite database (registry entry + local file). " +
+    "Schema: write_file on data/databases/{slug}/migrations/000N_….sql — applied on job run + Turso sync. " +
+    "Every synced table MUST have a PRIMARY KEY (INTEGER or TEXT) — required for cloud sync and row versioning. " +
+    "Next: attach_database({ appId, dbId, alias }) so the mini-app can read/write via /api/db/* with sourceId. " +
+    "Jobs that fill the DB: create_job({ writeDbIds: [dbId] }). " +
+    "isolation: 'shared' (default) or 'per-user' (separate Turso DB per signed-in user). " +
+    "For anonymous public apps use shared DB + owner_session column; for private multi-user use per-user or papr_user_id + GET /api/access isOwner admin.",
   inputSchema: createDatabaseSchema,
   execute: async (input) => {
     const args =
@@ -69,10 +80,22 @@ export const createDatabaseTool = createTool({
       args.localPath ??
       path.join(getPaprDataDir(), "databases", slug, "data.db");
 
+    const { assertEligibleRegistryLocalPath } = await import(
+      "../../gateway/services/registryDatabaseEligibility.js"
+    );
+    assertEligibleRegistryLocalPath(localPath);
+
     await fs.promises.mkdir(path.dirname(localPath), { recursive: true });
-    if (!fs.existsSync(localPath)) {
-      await fs.promises.writeFile(localPath, "");
-    }
+
+    const { ensureRegistryDatabase } = await import(
+      "../../gateway/services/jobs/databaseMigrations.js"
+    );
+    const { shouldDeferRegistrySqliteFileForReplica } = await import(
+      "../../gateway/utils/tursoReplicaEnabled.js"
+    );
+    await ensureRegistryDatabase(localPath, {
+      deferSqliteFile: shouldDeferRegistrySqliteFileForReplica(),
+    });
 
     const registry = await initializeDatabaseRegistry();
     const record = await registry.register({
@@ -88,6 +111,7 @@ export const createDatabaseTool = createTool({
         localPath: record.localPath,
         tursoShortName: record.tursoShortName,
         isolation: record.isolation,
+        syncMode: record.syncMode ?? "legacy",
       },
     };
   },
@@ -96,8 +120,10 @@ export const createDatabaseTool = createTool({
 export const attachDatabaseTool = createTool({
   id: "attach_database",
   description:
-    "Attach a registry database to a mini-app (alias + role). " +
-    "Equivalent to link_app_data_source with dbId instead of jobId.",
+    "Link a registry database to a mini-app (data/databases/{slug}/data.db only). " +
+    "Never attach Jobs/{jobId}/data/data.db — job scratch is local infra; use writeDbIds on jobs. " +
+    "Mini-app code names the DB on every call: sourceId = alias (e.g. 'billing'). " +
+    "Reads: POST /api/db/query. Writes: POST /api/db/write. Both endpoints accept sourceId.",
   inputSchema: attachDatabaseSchema,
   execute: async (input) => {
     const args =
@@ -115,6 +141,11 @@ export const attachDatabaseTool = createTool({
       throw new Error(`Database not found in registry: ${args.dbId}`);
     }
 
+    const { assertEligibleRegistryLocalPath } = await import(
+      "../../gateway/services/registryDatabaseEligibility.js"
+    );
+    assertEligibleRegistryLocalPath(record.localPath);
+
     const appService = getAppService();
     await appService.initialize();
 
@@ -123,7 +154,14 @@ export const attachDatabaseTool = createTool({
       throw new Error(`App not found: ${args.appId}`);
     }
 
-    const alias = args.alias ?? record.label ?? args.dbId;
+    const { resolveAttachAlias } = await import(
+      "../../gateway/services/appDataSources.js"
+    );
+    const alias = resolveAttachAlias({
+      requested: args.alias,
+      registryLabel: record.label,
+      dbId: args.dbId,
+    });
     const dataSources = await appService.linkAppDataSource(args.appId, {
       id: `${args.dbId}:${alias}`,
       type: "sqlite",
@@ -131,8 +169,6 @@ export const attachDatabaseTool = createTool({
       alias,
       dbPath: record.localPath,
       tables: [],
-      ...(args.role ? { role: args.role } : {}),
-      ...(args.setPrimary ? { setPrimary: args.setPrimary } : {}),
     });
 
     return {
@@ -150,7 +186,11 @@ export const deleteDatabaseTool = createTool({
   id: "delete_database",
   description:
     "Tombstone a registry database when no apps reference it. " +
-    "Optionally delete Turso replica when deleteTurso=true.",
+    "On team track/shared installs you are a collaborator on, this removes the local registry row only (no cloud upload, no Turso delete). " +
+    "Publisher shared-primary databases cannot be deleted by collaborators — unlink from apps or remove your local app install. " +
+    "Optionally delete Turso replica when deleteTurso=true (publisher-only for shared resources; default false). " +
+    "NEVER use to fix schema drift or cutover — that destroys cloud row data. " +
+    "For legacy→replica migration use `npm run cutover:replica -- --db-id=<dbId>` (preserves the existing Turso instance).",
   inputSchema: deleteDatabaseSchema,
   execute: async (input) => {
     const args =
@@ -173,10 +213,31 @@ export const deleteDatabaseTool = createTool({
       );
     }
 
-    await registry.tombstone(args.dbId);
+    const { getPaprRoot, getPaprAppsRoot } = await import("../utils/paprRoot.js");
+    const { resolveDatabaseDeleteScope } = await import(
+      "../../gateway/services/appDeleteScope.js"
+    );
+    const referencingAppIds = await registry.listReferencingAppIds(
+      args.dbId,
+      record.localPath,
+    );
+    const deleteScope = await resolveDatabaseDeleteScope(
+      record.tursoShortName,
+      referencingAppIds,
+      getPaprAppsRoot(),
+      getPaprRoot(),
+    );
+    if (deleteScope.blockDelete) {
+      throw new Error(deleteScope.blockReason ?? "Delete not allowed for this database.");
+    }
+
+    await registry.tombstone(args.dbId, {
+      skipCloudUpload: deleteScope.localOnly,
+    });
 
     let tursoDeleted = false;
-    if (args.deleteTurso) {
+    const deleteTurso = deleteScope.localOnly ? false : args.deleteTurso === true;
+    if (deleteTurso) {
       const { getTursoSyncBridge } = await import(
         "../../gateway/services/TursoSyncBridge.js"
       );
@@ -194,6 +255,7 @@ export const deleteDatabaseTool = createTool({
         dbId: args.dbId,
         tombstoned: true,
         tursoDeleted,
+        localOnly: deleteScope.localOnly || undefined,
       },
     };
   },

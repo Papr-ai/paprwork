@@ -8,6 +8,7 @@
   margin: 8px 0;
   flex-shrink: 0; /* Don't shrink in ExploringCard flex layout - preserve full height */
   min-height: 0; /* Allow flex child to participate in overflow correctly */
+  pointer-events: auto;
 }
 
 .mini-chat-card--collapsed {
@@ -126,6 +127,13 @@
   color: var(--text-secondary);
 }
 
+.mini-chat-card__waiting {
+  font-size: 12px;
+  color: var(--text-secondary);
+  font-style: italic;
+  padding: 4px 0 8px;
+}
+
 .mini-chat-card__activity {
   margin-top: 8px;
   padding: 8px;
@@ -161,8 +169,8 @@
 }
 
 .mini-chat-card__tool-call--error {
-  background: rgba(255, 59, 48, 0.08);
-  border-color: rgba(255, 59, 48, 0.2);
+  background: var(--hover-bg);
+  border-color: var(--border-color);
 }
 
 .mini-chat-card__tool-name {
@@ -179,7 +187,14 @@
 }
 
 .mini-chat-card__tool-call--error .mini-chat-card__tool-status {
-  color: #d70015;
+  color: var(--text-secondary);
+  font-size: 10px;
+  font-style: italic;
+  font-weight: 400;
+}
+
+.mini-chat-card__tool-status--agent {
+  white-space: nowrap;
 }
 
 .mini-chat-card__msg-avatar--sub {
@@ -334,7 +349,8 @@
 .mini-chat-card__error {
   margin-top: 8px;
   padding: 6px 0;
-  color: #d70015;
+  color: var(--text-secondary);
+  font-size: 12px;
 }
 
 .mini-chat-card__result {

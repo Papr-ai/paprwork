@@ -1,18 +1,31 @@
 /**
- * Poll gateway sync status for a single mini-app (publish bar chip).
+ * Cloud sync status for a single mini-app publish bar (manual check + active-upload polling).
  */
 
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { useChatStore } from "../stores/chatStore";
 import type { SyncItemsResponse } from "../components/Settings/CloudSyncDetails";
 import {
   deriveAppCloudSyncStatus,
+  mergeRemoteCodeCheckIntoStatus,
+  suppressStaleGitUpdatesAvailable,
   type AppCloudSyncStatus,
+  type RemoteCodeCheckSnapshot,
 } from "../utils/appCloudSyncStatus";
 import {
   readCachedAppCloudSyncStatus,
+  readCachedSyncItemsFetchedAt,
+  invalidateCachedSyncItemsForApp,
+  readCachedSyncItemsForApp,
   readCloudSyncTabSnapshot,
-  writeCloudSyncTabSnapshot,
+  touchCachedSyncItemsFetchedAt,
+  writeCachedSyncItemsForApp,
 } from "../utils/cloudSyncTabCache";
+import {
+  APP_CLOUD_SYNC_FOCUS_DEBOUNCE_MS,
+  isAppCloudSyncCacheFresh,
+} from "../utils/appCloudSyncFocusRefresh";
+import { isWorkspaceSwitchReloading } from "../lib/workspaceSwitchReload";
 
 const GATEWAY =
   typeof import.meta !== "undefined" && import.meta.env?.VITE_GATEWAY_PORT
@@ -32,15 +45,73 @@ interface GitSyncStatus {
 const STATUS_CACHE_MS = 1_500;
 let gitStatusInFlight: Promise<GitSyncStatus> | null = null;
 let cachedGitStatus: { value: GitSyncStatus; at: number } | null = null;
+/** Once cloud sync reports ready/disabled for the session, skip long startup polls. */
+let sessionGitSyncReady: GitSyncStatus | null = null;
+
+export function resetGitSyncSessionCacheForTests(): void {
+  sessionGitSyncReady = null;
+  cachedGitStatus = null;
+  gitStatusInFlight = null;
+}
+
+async function requestAppUpload(appId: string): Promise<void> {
+  const res = await fetch(`${GATEWAY}/api/sync/push`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ appId }),
+  });
+  if (res.status !== 202 && !res.ok) {
+    const body = (await res.json()) as { error?: string };
+    throw new Error(body.error ?? `Publish failed (${res.status})`);
+  }
+}
+
+async function waitForUploadCompletion(
+  appId: string,
+  refresh: (force?: boolean) => Promise<void>,
+): Promise<void> {
+  const deadline = Date.now() + 15 * 60_000;
+  let sawUploading = false;
+  while (Date.now() < deadline) {
+    await sleep(2_000);
+    const itemsRes = await fetch(
+      `${GATEWAY}/api/sync/items?appId=${encodeURIComponent(appId)}`,
+    );
+    if (!itemsRes.ok) {
+      continue;
+    }
+    const items = (await itemsRes.json()) as SyncItemsResponse;
+    if (items.uploadError?.message && !items.uploadError.retryPending) {
+      throw new Error(items.uploadError.message);
+    }
+    if (items.upload?.status === "failed" && !items.upload.retryPending) {
+      throw new Error(items.upload.detail ?? items.upload.label);
+    }
+    if (items.upload?.status === "uploading") {
+      sawUploading = true;
+    }
+    if (items.upload?.status === "idle") {
+      break;
+    }
+    // Flush finished but blocked (e.g. schema drift) — don't spin for 15m.
+    if (
+      sawUploading &&
+      items.upload?.status !== "uploading" &&
+      items.upload?.status !== undefined
+    ) {
+      break;
+    }
+  }
+  await refresh(true);
+}
 
 function sleep(ms: number): Promise<void> {
   return new Promise((resolve) => setTimeout(resolve, ms));
 }
 
-function readInitialSyncItems(): SyncItemsResponse | null {
-  const snapshot = readCloudSyncTabSnapshot();
-  const items = snapshot?.syncItems ?? null;
-  const git = snapshot?.gitStatus as GitSyncStatus | null;
+function readInitialSyncItems(appId: string): SyncItemsResponse | null {
+  const items = readCachedSyncItemsForApp(appId);
+  const git = readCloudSyncTabSnapshot()?.gitStatus as GitSyncStatus | null;
   if (!items?.enabled || !items.github) {
     return null;
   }
@@ -94,15 +165,27 @@ async function fetchGitSyncStatus(): Promise<GitSyncStatus> {
 
 /** Gateway returns enabled:false while CloudSyncService is still starting. */
 async function waitForGitSyncReady(): Promise<GitSyncStatus> {
+  if (sessionGitSyncReady !== null) {
+    if (
+      sessionGitSyncReady.enabled ||
+      (sessionGitSyncReady.reason &&
+        sessionGitSyncReady.reason !== "Cloud sync not initialized")
+    ) {
+      return sessionGitSyncReady;
+    }
+  }
+
   const deadline = Date.now() + GATEWAY_READY_MAX_MS;
   let last: GitSyncStatus = { enabled: false };
 
   while (Date.now() < deadline) {
     last = await fetchGitSyncStatus();
     if (last.enabled) {
+      sessionGitSyncReady = last;
       return last;
     }
     if (last.reason && last.reason !== "Cloud sync not initialized") {
+      sessionGitSyncReady = last;
       return last;
     }
     await sleep(GATEWAY_READY_POLL_MS);
@@ -113,19 +196,47 @@ async function waitForGitSyncReady(): Promise<GitSyncStatus> {
 
 export function useAppCloudSyncStatus(
   appId: string,
-  options?: { enabled?: boolean },
+  options?: {
+    enabled?: boolean;
+    previewTabVisible?: boolean;
+    /** When false, defer sync polling until the app iframe shell has loaded. */
+    previewShellLoaded?: boolean;
+  },
 ): {
   status: AppCloudSyncStatus | null;
   gitSyncEnabled: boolean | null;
+  globalAutoUploadEnabled: boolean;
   loading: boolean;
   refreshing: boolean;
   pushing: boolean;
+  pulling: boolean;
+  applyingUpdates: boolean;
   error: string | null;
+  lastCheckedAt: number | null;
+  /** True until the user runs "Check status" this session (cached snapshot may still show). */
+  needsStatusCheck: boolean;
+  checkStatus: () => Promise<void>;
   refresh: (force?: boolean) => Promise<void>;
   pushNow: () => Promise<void>;
+  bumpQueue: () => Promise<void>;
+  /** Resolves true when local reached the web head with no conflicts. */
+  pullUpdates: (resolution?: "take_theirs" | "keep_mine") => Promise<boolean>;
+  applyRemoteUpdates: () => Promise<void>;
+  /** Track-mode installs: publisher has newer code than last upstream sync. */
+  publisherUpdatesAvailable: boolean;
 } {
   const active = options?.enabled !== false;
-  const initialItems = readInitialSyncItems();
+  const previewTabVisible = options?.previewTabVisible !== false;
+  const previewShellLoaded = options?.previewShellLoaded ?? true;
+  const anyChatBusy = useChatStore((state) => {
+    for (const chatState of state.chatStates.values()) {
+      if (chatState.isSending || chatState.isStreaming) {
+        return true;
+      }
+    }
+    return false;
+  });
+  const initialItems = readInitialSyncItems(appId);
   const initialStatus = initialItems
     ? deriveAppCloudSyncStatus(
         appId,
@@ -137,6 +248,8 @@ export function useAppCloudSyncStatus(
   const [syncItems, setSyncItems] = useState<SyncItemsResponse | null>(
     initialItems,
   );
+  const globalAutoUploadEnabled =
+    syncItems?.appContext?.globalAutoUploadEnabled ?? true;
   const [gitSyncEnabled, setGitSyncEnabled] = useState<boolean | null>(() => {
     const git = readCloudSyncTabSnapshot()?.gitStatus as GitSyncStatus | null;
     return git?.enabled ?? null;
@@ -151,19 +264,76 @@ export function useAppCloudSyncStatus(
   const [loading, setLoading] = useState(initialStatus === null);
   const [refreshing, setRefreshing] = useState(false);
   const [pushing, setPushing] = useState(false);
+  const [pulling, setPulling] = useState(false);
+  const [applyingUpdates, setApplyingUpdates] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [remoteCodeCheck, setRemoteCodeCheck] =
+    useState<RemoteCodeCheckSnapshot | null>(null);
+  const [liveSyncPending, setLiveSyncPending] = useState(true);
   const hasLoadedOnceRef = useRef(initialStatus !== null);
   const refreshInFlightRef = useRef(false);
+  const [lastCheckedAt, setLastCheckedAt] = useState<number | null>(() =>
+    readCachedSyncItemsFetchedAt(appId),
+  );
+  const [checkedThisSession, setCheckedThisSession] = useState(false);
 
-  const status = useMemo(() => {
+  const status = useMemo((): AppCloudSyncStatus | null => {
     if (syncItems) {
-      return deriveAppCloudSyncStatus(appId, syncItems, gitGlobalStatus, {
+      if (
+        syncItems.appContext?.appId &&
+        syncItems.appContext.appId !== appId
+      ) {
+        return null;
+      }
+      const base = deriveAppCloudSyncStatus(appId, syncItems, gitGlobalStatus, {
         isUploading: pushing,
-        cloudPublishing,
+        refreshing,
       });
+      const merged = mergeRemoteCodeCheckIntoStatus(base, remoteCodeCheck);
+      return suppressStaleGitUpdatesAvailable(merged, liveSyncPending);
     }
     return null;
-  }, [appId, syncItems, gitGlobalStatus, pushing, cloudPublishing]);
+  }, [
+    appId,
+    syncItems,
+    gitGlobalStatus,
+    pushing,
+    refreshing,
+    remoteCodeCheck,
+    liveSyncPending,
+  ]);
+
+  const fetchRemoteCodeStatus = useCallback(async () => {
+    if (
+      !active ||
+      !previewTabVisible ||
+      !previewShellLoaded ||
+      gitSyncEnabled === false
+    ) {
+      setLiveSyncPending(false);
+      return;
+    }
+    try {
+      const res = await fetch(
+        `${GATEWAY}/api/apps/${encodeURIComponent(appId)}/remote-code-status`,
+      );
+      if (!res.ok) {
+        return;
+      }
+      const body = (await res.json()) as RemoteCodeCheckSnapshot;
+      setRemoteCodeCheck({
+        upToDate: body.upToDate,
+        remoteCommitSha: body.remoteCommitSha ?? null,
+        checkFailed: body.checkFailed,
+        publisherUpdatesAvailable: body.publisherUpdatesAvailable,
+        publisherLiveRevision: body.publisherLiveRevision ?? null,
+        storedUpstreamRevision: body.storedUpstreamRevision ?? null,
+        pendingUpdate: body.pendingUpdate ?? null,
+      });
+    } catch {
+      // Non-blocking metadata check
+    }
+  }, [active, appId, previewTabVisible, previewShellLoaded, gitSyncEnabled]);
 
   const refresh = useCallback(
     async (force = false) => {
@@ -171,10 +341,10 @@ export function useAppCloudSyncStatus(
       refreshInFlightRef.current = true;
       try {
         setError(null);
-        if (hasLoadedOnceRef.current) {
-          setRefreshing(true);
-        } else {
+        if (!hasLoadedOnceRef.current) {
           setLoading(true);
+        } else {
+          setRefreshing(true);
         }
 
         const git = await waitForGitSyncReady();
@@ -206,77 +376,296 @@ export function useAppCloudSyncStatus(
         setSyncItems(items);
         hasLoadedOnceRef.current = true;
 
+        const checkedAt = Date.now();
         if (shouldPersistSyncSnapshot(items, git)) {
-          const existing = readCloudSyncTabSnapshot();
-          writeCloudSyncTabSnapshot({
-            gitStatus: git,
-            vaultStatus: existing?.vaultStatus ?? null,
-            syncItems: items,
-          });
+          writeCachedSyncItemsForApp(appId, items);
+        } else {
+          touchCachedSyncItemsFetchedAt(appId, checkedAt);
         }
+        setLastCheckedAt(checkedAt);
+        setCheckedThisSession(true);
       } catch (err) {
         setError((err as Error).message.slice(0, 120));
       } finally {
         refreshInFlightRef.current = false;
         setLoading(false);
         setRefreshing(false);
+        try {
+          await fetchRemoteCodeStatus();
+        } finally {
+          setLiveSyncPending(false);
+        }
       }
     },
-    [active, appId],
+    [active, appId, fetchRemoteCodeStatus],
   );
 
+  const checkStatus = useCallback(async () => {
+    await refresh(true);
+  }, [refresh]);
+
   const pushNow = useCallback(async () => {
+    if (status?.gitRemoteRequiresReview) {
+      setError("Merge remote changes first, then upload.");
+      return;
+    }
     setPushing(true);
     setError(null);
     try {
-      const res = await fetch(`${GATEWAY}/api/sync/push`, {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ appId }),
-      });
-      if (!res.ok) {
-        const body = (await res.json()) as { error?: string };
-        throw new Error(body.error ?? `Sync failed (${res.status})`);
-      }
-      await refresh(true);
+      await requestAppUpload(appId);
+      await waitForUploadCompletion(appId, refresh);
+      await fetchRemoteCodeStatus();
     } catch (err) {
       setError((err as Error).message.slice(0, 120));
     } finally {
       setPushing(false);
     }
-  }, [refresh, appId]);
+  }, [refresh, appId, status?.gitRemoteRequiresReview, fetchRemoteCodeStatus]);
+
+  const bumpQueue = useCallback(async () => {
+    if (status?.gitRemoteRequiresReview) {
+      setError("Merge remote changes first, then upload.");
+      return;
+    }
+    setError(null);
+    try {
+      await requestAppUpload(appId);
+      await refresh(true);
+    } catch (err) {
+      setError((err as Error).message.slice(0, 120));
+    }
+  }, [refresh, appId, status?.gitRemoteRequiresReview]);
+
+  const pullUpdates = useCallback(async (
+    resolution?: "take_theirs" | "keep_mine",
+  ): Promise<boolean> => {
+    if (status?.gitRemoteRequiresReview) {
+      setError("Use Merge remote changes — Get updates cannot merge diverged git history.");
+      return false;
+    }
+    let settled = false;
+    setPulling(true);
+    setError(null);
+    try {
+      const res = await fetch(
+        `${GATEWAY}/api/apps/${encodeURIComponent(appId)}/sync-from-cloud`,
+        {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ wait: true, ...(resolution ? { resolution } : {}) }),
+        },
+      );
+      if (!res.ok) {
+        const body = (await res.json()) as { error?: string };
+        throw new Error(body.error ?? `Get updates failed (${res.status})`);
+      }
+      const body = (await res.json()) as {
+        code?: {
+          conflictFiles?: string[];
+          skipped?: boolean;
+          reason?: string;
+          commitSha?: string | null;
+        };
+      };
+      const code = body.code;
+      if (code?.skipped && code.reason) {
+        setError(code.reason.slice(0, 120));
+      }
+      // Conflicts are not an error: the update is held and the chip shows
+      // "Update conflicts" with Keep mine / Take theirs / Ask agent to merge.
+      const pullSettledAtHead =
+        code &&
+        (code.conflictFiles?.length ?? 0) === 0 &&
+        (!code.skipped || code.reason === "already at remote head");
+      if (pullSettledAtHead) {
+        settled = true;
+        setRemoteCodeCheck((prev) => ({
+          upToDate: true,
+          remoteCommitSha: code.commitSha ?? prev?.remoteCommitSha ?? null,
+          checkFailed: false,
+          publisherUpdatesAvailable: prev?.publisherUpdatesAvailable,
+          publisherLiveRevision: prev?.publisherLiveRevision ?? null,
+          storedUpstreamRevision: prev?.storedUpstreamRevision ?? null,
+        }));
+      }
+      await refresh(true);
+      await fetchRemoteCodeStatus();
+    } catch (err) {
+      setError((err as Error).message.slice(0, 120));
+      settled = false;
+    } finally {
+      setPulling(false);
+    }
+    return settled;
+  }, [refresh, appId, status?.gitRemoteRequiresReview, fetchRemoteCodeStatus]);
+
+  const applyRemoteUpdates = useCallback(async () => {
+    setApplyingUpdates(true);
+    setError(null);
+    try {
+      const res = await fetch(`${GATEWAY}/api/sync/apply-updates`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+      });
+      if (!res.ok) {
+        const body = (await res.json()) as { error?: string };
+        throw new Error(body.error ?? `Merge failed (${res.status})`);
+      }
+      await refresh(true);
+    } catch (err) {
+      const message = (err as Error).message.slice(0, 160);
+      setError(message);
+    } finally {
+      setApplyingUpdates(false);
+    }
+  }, [refresh]);
 
   useEffect(() => {
-    if (!active) {
+    if (!active || !previewTabVisible) {
       setLoading(false);
       return;
     }
-    void refresh(true);
-  }, [active, appId, refresh]);
+    if (!previewShellLoaded) {
+      return;
+    }
+
+    setPushing(false);
+    setPulling(false);
+    setApplyingUpdates(false);
+    setError(null);
+
+    const cached = readCachedSyncItemsForApp(appId);
+    const fetchedAt = readCachedSyncItemsFetchedAt(appId);
+    const cacheFresh = isAppCloudSyncCacheFresh(fetchedAt);
+
+    setSyncItems(cached);
+    hasLoadedOnceRef.current = cached !== null;
+    setLoading(cached === null);
+    if (fetchedAt !== null) {
+      setLastCheckedAt(fetchedAt);
+    }
+
+    if (cacheFresh) {
+      setLiveSyncPending(false);
+    } else {
+      setLiveSyncPending(true);
+      setRemoteCodeCheck(null);
+    }
+
+    const timer = setTimeout(() => {
+      setLoading(false);
+    }, APP_CLOUD_SYNC_FOCUS_DEBOUNCE_MS);
+
+    return () => clearTimeout(timer);
+  }, [active, appId, previewTabVisible, previewShellLoaded]);
 
   useEffect(() => {
-    if (!active) return;
-    const intervalMs =
+    setCheckedThisSession(false);
+    setLastCheckedAt(readCachedSyncItemsFetchedAt(appId));
+  }, [appId]);
+
+  useEffect(() => {
+    if (!active || !previewTabVisible || !previewShellLoaded || anyChatBusy) return;
+    const uploadInProgress =
       pushing ||
+      pulling ||
+      applyingUpdates ||
       status?.overall === "uploading" ||
-      status?.globallySyncing ||
-      status?.cloudPublishing
-        ? 3_000
-        : 25_000;
+      status?.uploadQueued === true ||
+      status?.publishStatus === "republishing" ||
+      status?.globallySyncing;
+    if (!uploadInProgress) {
+      return;
+    }
     const timer = setInterval(() => {
-      void refresh();
-    }, intervalMs);
+      void refresh(false);
+    }, 3_000);
     return () => clearInterval(timer);
-  }, [active, refresh, pushing, status?.overall, status?.globallySyncing, status?.cloudPublishing]);
+  }, [
+    active,
+    previewTabVisible,
+    previewShellLoaded,
+    anyChatBusy,
+    refresh,
+    pushing,
+    pulling,
+    applyingUpdates,
+    status?.overall,
+    status?.uploadQueued,
+    status?.publishStatus,
+    status?.globallySyncing,
+  ]);
+
+  const prevPushingRef = useRef(false);
+  useEffect(() => {
+    if (prevPushingRef.current && !pushing) {
+      void fetchRemoteCodeStatus();
+    }
+    prevPushingRef.current = pushing;
+  }, [pushing, fetchRemoteCodeStatus]);
+
+  useEffect(() => {
+    const handler = (event: Event) => {
+      const detail = (event as CustomEvent).detail as
+        | { type?: string; data?: { appId?: string } }
+        | undefined;
+      if (detail?.type === "app-update:pending") {
+        // Deferred remote update appeared / cleared — re-read remote status only.
+        if (detail.data?.appId === appId) void fetchRemoteCodeStatus();
+        return;
+      }
+      if (detail?.type !== "cloud-sync:items-stale") {
+        return;
+      }
+      if (isWorkspaceSwitchReloading()) {
+        return;
+      }
+      const staleAppId = detail.data?.appId;
+      if (staleAppId && staleAppId !== appId) {
+        return;
+      }
+      if (staleAppId) {
+        invalidateCachedSyncItemsForApp(staleAppId);
+      }
+      void refresh(true);
+    };
+    window.addEventListener("gateway-broadcast", handler);
+    return () => window.removeEventListener("gateway-broadcast", handler);
+  }, [appId, refresh, fetchRemoteCodeStatus]);
+
+  // Local dirty state comes from the file watcher and is knowable without any
+  // round trip, so it must render immediately on tab open. Only the WEB half
+  // ("has someone published elsewhere?") needs asking, so only that is gated.
+  const localStateKnown =
+    status != null &&
+    status.overall !== "disabled" &&
+    status.overall !== "synced";
+  const needsStatusCheck =
+    !checkedThisSession &&
+    !localStateKnown &&
+    !refreshing &&
+    !pushing &&
+    !pulling &&
+    !applyingUpdates;
 
   return {
     status,
     gitSyncEnabled,
+    globalAutoUploadEnabled,
     loading,
     refreshing,
     pushing,
+    pulling,
+    applyingUpdates,
     error,
+    lastCheckedAt,
+    needsStatusCheck,
+    checkStatus,
     refresh,
     pushNow,
+    bumpQueue,
+    pullUpdates,
+    applyRemoteUpdates,
+    publisherUpdatesAvailable: remoteCodeCheck?.publisherUpdatesAvailable ?? false,
   };
 }

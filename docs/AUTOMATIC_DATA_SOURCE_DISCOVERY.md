@@ -103,7 +103,7 @@ For each app:
 1. Get all jobs with `folder` matching app `title` (case-insensitive)
 2. Filter out jobs already linked as data sources
 3. For each unlinked job:
-   - Get database path (`~/Papr/jobs/{jobId}/data/data.db`)
+   - Get database path (`$PAPR_HOME/Jobs/{jobId}/data/data.db`)
    - Create data source entry
    - Link to app via `linkAppDataSource()`
 
@@ -252,7 +252,7 @@ Auto-discovery runs async and catches errors without blocking graph rebuild.
 3. **Check auto-linking:**
    ```bash
    # Check data-sources.json
-   cat ~/Papr/apps/{appId}/data-sources.json
+   cat $PAPR_HOME/apps/{appId}/data-sources.json
    
    # Should show 2 auto-discovered sources
    ```

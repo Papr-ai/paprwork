@@ -59,7 +59,11 @@ export function buildAddPolicy(input: {
   const transform_embedding = buildAddTransformEmbedding(input.signalDomain);
 
   let graph: GraphPolicyBlock | undefined;
-  if (input.graphSchemaId || input.graphMode === "manual") {
+  if (
+    input.graphSchemaId ||
+    input.graphMode === "manual" ||
+    input.graphMode === "auto"
+  ) {
     graph = {
       mode: input.graphMode ?? "auto",
       ...(input.graphSchemaId ? { schema_id: input.graphSchemaId } : {}),
@@ -130,16 +134,16 @@ export function buildSearchPolicy(input: {
   return { vector };
 }
 
-/** Source code indexing: programming domain, vector-only (no graph extraction).
- *  Code entities (CodeFile, API, Dependency) were graph noise — vector search
- *  with the 'code' signal domain is sufficient for code retrieval.
- *  schemaId parameter kept for backward compatibility but unused. */
+/** Source code indexing: plain vector add — no graph extraction, no holographic transform.
+ *  Code search uses the base Qwen embedding; holographic/code-domain transforms and
+ *  LLM graph extraction are unnecessary overhead for bulk file indexing. */
 export function buildCodeIndexAddPolicy(_schemaId: string): MemoryAddPolicy {
   return {
     transform_embedding: {
-      mode: "auto",
-      domain_id: "code",
+      mode: "none",
     },
-    // graph extraction disabled — vector-only for code memories
+    graph: {
+      mode: "none",
+    },
   };
 }

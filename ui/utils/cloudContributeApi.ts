@@ -1,0 +1,63 @@
+/**
+ * Contribute-back change requests for cloud-installed forks.
+ */
+
+const GATEWAY =
+  typeof import.meta !== "undefined" &&
+  import.meta.env?.VITE_GATEWAY_PORT
+    ? `http://${import.meta.env.VITE_GATEWAY_HOST || "localhost"}:${import.meta.env.VITE_GATEWAY_PORT || "18789"}`
+    : "http://localhost:18789";
+
+export interface SubmitCloudAppChangeInput {
+  sourceNamespaceId: string;
+  sourceSlug: string;
+  installedAppId: string;
+  title: string;
+  description: string;
+}
+
+export interface SubmitCloudAppChangeResult {
+  id: string;
+  prUrl?: string;
+  prNumber?: number;
+  branch?: string;
+  headSha?: string;
+  status?: string;
+}
+
+export async function submitCloudAppChange(
+  input: SubmitCloudAppChangeInput,
+): Promise<SubmitCloudAppChangeResult> {
+  const res = await fetch(`${GATEWAY}/api/cloud/apps/changes`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(input),
+  });
+  const body = (await res.json()) as SubmitCloudAppChangeResult & { error?: string };
+  if (!res.ok) {
+    throw new Error(body.error ?? `Failed (${res.status})`);
+  }
+  return body;
+}
+
+export type SentProposalStatus = "preparing" | "pending" | "approved" | "rejected";
+
+export interface SentProposal {
+  id: string;
+  title: string;
+  description: string;
+  status: SentProposalStatus;
+  createdAt: string;
+  resolvedAt?: string | null;
+  stagedPaths?: string[] | null;
+}
+
+/** Proposals you sent from this installed copy, newest first. */
+export async function listSentProposals(installedAppId: string): Promise<SentProposal[]> {
+  const res = await fetch(
+    `${GATEWAY}/api/cloud/apps/changes/outgoing?installedAppId=${encodeURIComponent(installedAppId)}`,
+  );
+  if (!res.ok) return [];
+  const body = (await res.json()) as { requests?: SentProposal[] };
+  return (body.requests ?? []).filter((r) => r.status !== "preparing");
+}

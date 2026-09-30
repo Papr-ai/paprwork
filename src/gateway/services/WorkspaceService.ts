@@ -47,6 +47,8 @@ export interface WorkspaceFile {
   content: string;
   truncated: boolean;
   rawLength: number;
+  /** ISO timestamp from filesystem mtime when available */
+  updatedAt?: string;
 }
 
 /** Full workspace context ready for system prompt injection */
@@ -62,10 +64,25 @@ export class WorkspaceService {
   private workspaceDir: string;
   private memoryDir: string;
   private initialized = false;
+  private initializedWorkspaceDir: string | null = null;
 
   constructor() {
     this.workspaceDir = getPaprWorkspaceDir();
     this.memoryDir = path.join(this.workspaceDir, "memory");
+  }
+
+  private refreshWorkspacePathsIfNeeded(): void {
+    const currentDir = getPaprWorkspaceDir();
+    if (this.workspaceDir === currentDir) {
+      return;
+    }
+    console.warn(
+      `[WorkspaceService] Workspace path changed (${this.workspaceDir} -> ${currentDir}); refreshing`,
+    );
+    this.workspaceDir = currentDir;
+    this.memoryDir = path.join(this.workspaceDir, "memory");
+    this.initialized = false;
+    this.initializedWorkspaceDir = null;
   }
 
   /** Get the workspace directory path */
@@ -78,7 +95,10 @@ export class WorkspaceService {
    * Safe to call multiple times (idempotent).
    */
   async initialize(): Promise<void> {
-    if (this.initialized) return;
+    this.refreshWorkspacePathsIfNeeded();
+    if (this.initialized && this.initializedWorkspaceDir === this.workspaceDir) {
+      return;
+    }
 
     // Create workspace directory structure
     await fs.mkdir(this.workspaceDir, { recursive: true });
@@ -98,6 +118,18 @@ export class WorkspaceService {
       "ONBOARD.md",
       "SLEEP.md",
     ];
+
+    // Nested templates (e.g. goals/archive.md) — seeded once, never overwritten.
+    const nestedTemplates = ["goals/archive.md"];
+    for (const rel of nestedTemplates) {
+      const destPath = path.join(this.workspaceDir, rel);
+      if (await this.fileExists(destPath)) continue;
+      const srcPath = path.join(templatesDir, rel);
+      if (!(await this.fileExists(srcPath))) continue;
+      await fs.mkdir(path.dirname(destPath), { recursive: true });
+      await fs.copyFile(srcPath, destPath);
+      console.log(`[WorkspaceService] Created template: ${rel}`);
+    }
 
     for (const filename of templateFiles) {
       const destPath = path.join(this.workspaceDir, filename);
@@ -127,6 +159,7 @@ export class WorkspaceService {
     await seedIdentityAboutFromProfile();
 
     this.initialized = true;
+    this.initializedWorkspaceDir = this.workspaceDir;
     console.log(
       `[WorkspaceService] Workspace initialized at ${this.workspaceDir}`,
     );
@@ -137,6 +170,7 @@ export class WorkspaceService {
    * Applies per-file and total truncation limits.
    */
   async loadWorkspaceContext(): Promise<WorkspaceContext> {
+    this.refreshWorkspacePathsIfNeeded();
     const files: WorkspaceFile[] = [];
     let totalChars = 0;
 
@@ -253,6 +287,14 @@ export class WorkspaceService {
 
   // ——— Private helpers ———
 
+  /** Local calendar date as YYYY-MM-DD (avoids UTC off-by-one for daily logs). */
+  private localDateString(date: Date): string {
+    const year = date.getFullYear();
+    const month = String(date.getMonth() + 1).padStart(2, "0");
+    const day = String(date.getDate()).padStart(2, "0");
+    return `${year}-${month}-${day}`;
+  }
+
   /**
    * Load today's and yesterday's daily memory logs.
    */
@@ -274,7 +316,7 @@ export class WorkspaceService {
     for (const { date, label } of dates) {
       if (budget <= 0) break;
 
-      const dateStr = date.toISOString().split("T")[0]; // YYYY-MM-DD
+      const dateStr = this.localDateString(date);
       const filename = `${dateStr}.md`;
       const filePath = path.join(this.memoryDir, filename);
       const loaded = await this.loadAndTruncate(
@@ -306,6 +348,9 @@ export class WorkspaceService {
       const raw = await fs.readFile(filePath, "utf8");
       if (raw.trim().length === 0) return null;
 
+      const stat = await fs.stat(filePath);
+      const updatedAt = stat.mtime.toISOString();
+
       const maxChars = Math.min(MAX_CHARS_PER_FILE, remainingBudget);
       let content = raw;
       let truncated = false;
@@ -322,6 +367,7 @@ export class WorkspaceService {
         content,
         truncated,
         rawLength: raw.length,
+        updatedAt,
       };
     } catch {
       return null;

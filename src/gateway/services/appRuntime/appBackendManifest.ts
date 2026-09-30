@@ -8,6 +8,7 @@ import type {
   AppBackendManifest,
   AppBackendRuntime,
 } from "../../../core/types/appBackend.js";
+import { filterVaultKeyNames } from "../../../core/utils/platformInjectedEnvKeys.js";
 
 const ALLOWED_RUNTIMES: ReadonlySet<AppBackendRuntime> = new Set([
   "python",
@@ -89,12 +90,17 @@ function parseActionSpec(
   }
   const description =
     typeof raw.description === "string" ? raw.description : undefined;
+  const sourceId =
+    typeof raw.sourceId === "string" && raw.sourceId.trim()
+      ? raw.sourceId.trim()
+      : undefined;
   return {
     handler: handler.trim(),
     runtime,
     keys: keyNames,
     timeoutMs,
     description,
+    sourceId,
   };
 }
 
@@ -134,7 +140,7 @@ export function collectBackendManifestKeyNames(
       }
     }
   }
-  return [...names];
+  return filterVaultKeyNames([...names]);
 }
 
 export function backendManifestRelativePath(appId: string): string {

@@ -1,0 +1,1521 @@
+/**
+ * Copy a mini-app bundle (app + linked jobs + DB registry) into another namespace.
+ * Independent fork: new app id, fork_empty linked DBs, no shared cloud repo identity.
+ * Source namespace is left unchanged — delete locally if you no longer want it there.
+ */
+
+import { randomUUID } from "crypto";
+import { promises as fs } from "fs";
+import path from "path";
+import {
+  readActiveWorkspacePointer,
+  resolveOrgNamespaceWorkspacePath,
+} from "../../core/utils/paprWorkspace.js";
+import type { MiniApp } from "./AppService.js";
+import { ensureUniqueAppTitle } from "../utils/uniqueAppNaming.js";
+import {
+  parseDataSourcesFile,
+  serializeDataSourcesFile,
+  type AppDataSourcesFile,
+} from "./appDataSources.js";
+import { resolveAppDependentJobIds } from "./cloudSync/resolveAppDependentJobs.js";
+import { mergeJobAppIds } from "./jobs/appIds.js";
+import type { JobRecord } from "./jobs/types.js";
+import type { DatabasesRegistryFile, DatabaseRecord } from "./DatabaseRegistryService.js";
+import { newDbId } from "./DatabaseRegistryService.js";
+import { dbTursoDatabaseName } from "./tursoDatabaseNaming.js";
+import type { InstallDbPolicy } from "./cloudInstallDbPolicy.js";
+import { LINKED_DATABASES_FILENAME } from "./cloudSync/linkedDatabasesForCloud.js";
+import { getPaprUserId } from "../utils/paprUserId.js";
+import {
+  ensureRegistryDbInWorkspace,
+  extractDatabaseSlugFromPath,
+  isReadableDbFile,
+  resolveReadableRegistryDbPath,
+  workspaceRegistryDbPath,
+} from "./resolveRegistryDbPath.js";
+import { isUnreadableDbPath } from "./portableDataSources.js";
+import { writeCloudAppMetadataFile } from "./cloudAppMetadataFile.js";
+import { applyIdRemapsToDirectory } from "../utils/applyIdRemaps.js";
+
+/** Same policy as cloud community fork — new dbIds, schema only, no publisher Turso primary. */
+const NAMESPACE_COPY_DB_POLICY: InstallDbPolicy = "fork_empty";
+
+export interface CopyAppToNamespaceInput {
+  appId: string;
+  targetOrganizationId: string;
+  targetNamespaceId: string;
+  sourcePaprHome: string;
+}
+
+export interface CopyAppToNamespaceResult {
+  /** New local app id in the target workspace (fork). */
+  appId: string;
+  /** App id in the source workspace that was copied. */
+  sourceAppId: string;
+  title: string;
+  sourceNamespaceId: string;
+  targetNamespaceId: string;
+  titleRenamed: boolean;
+  copiedJobIds: string[];
+  skippedJobIds: string[];
+  copiedRegistryDbSlugs: string[];
+}
+
+export class CopyAppError extends Error {
+  readonly code: string;
+
+  constructor(code: string, message: string) {
+    super(message);
+    this.name = "CopyAppError";
+    this.code = code;
+  }
+}
+
+async function readAppsIndex(indexPath: string): Promise<MiniApp[]> {
+  try {
+    const raw = await fs.readFile(indexPath, "utf8");
+    const parsed = JSON.parse(raw) as MiniApp[];
+    return Array.isArray(parsed) ? parsed : [];
+  } catch {
+    return [];
+  }
+}
+
+async function writeAppsIndex(indexPath: string, apps: MiniApp[]): Promise<void> {
+  await fs.mkdir(path.dirname(indexPath), { recursive: true });
+  const tmpPath = `${indexPath}.tmp-${process.pid}-${Date.now()}`;
+  await fs.writeFile(tmpPath, JSON.stringify(apps, null, 2), "utf8");
+  await fs.rename(tmpPath, indexPath);
+}
+
+async function readJobsIndex(indexPath: string): Promise<JobRecord[]> {
+  try {
+    const raw = await fs.readFile(indexPath, "utf8");
+    const parsed = JSON.parse(raw) as JobRecord[] | { jobs?: JobRecord[] };
+    if (Array.isArray(parsed)) {
+      return parsed;
+    }
+    return parsed.jobs ?? [];
+  } catch {
+    return [];
+  }
+}
+
+async function writeJobsIndex(indexPath: string, jobs: JobRecord[]): Promise<void> {
+  await fs.mkdir(path.dirname(indexPath), { recursive: true });
+  const tmpPath = `${indexPath}.tmp-${process.pid}-${Date.now()}`;
+  await fs.writeFile(tmpPath, JSON.stringify(jobs, null, 2), "utf8");
+  await fs.rename(tmpPath, indexPath);
+}
+
+async function readDatabasesRegistry(
+  indexPath: string,
+): Promise<DatabasesRegistryFile> {
+  try {
+    const raw = await fs.readFile(indexPath, "utf8");
+    const parsed = JSON.parse(raw) as DatabasesRegistryFile;
+    if (parsed?.databases && typeof parsed.databases === "object") {
+      return parsed;
+    }
+  } catch {
+    /* first run */
+  }
+  return { version: 1, databases: {} };
+}
+
+async function writeDatabasesRegistry(
+  indexPath: string,
+  registry: DatabasesRegistryFile,
+): Promise<void> {
+  await fs.mkdir(path.dirname(indexPath), { recursive: true });
+  const tmpPath = `${indexPath}.tmp-${process.pid}-${Date.now()}`;
+  await fs.writeFile(tmpPath, JSON.stringify(registry, null, 2), "utf8");
+  await fs.rename(tmpPath, indexPath);
+}
+
+async function pathExists(filePath: string): Promise<boolean> {
+  try {
+    await fs.access(filePath);
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+function jobDatabasePath(paprHome: string, jobId: string): string {
+  return path.join(paprHome, "Jobs", jobId, "data", "data.db");
+}
+
+const JOB_LOCAL_DB_REL = path.join("data", "data.db");
+
+async function copyJobDirectory(input: {
+  sourceJobDir: string;
+  targetJobDir: string;
+  preserveLocalDatabase: boolean;
+}): Promise<void> {
+  if (!input.preserveLocalDatabase) {
+    await fs.cp(input.sourceJobDir, input.targetJobDir, { recursive: true });
+    return;
+  }
+
+  async function walk(relativeDir: string): Promise<void> {
+    const currentSource = path.join(input.sourceJobDir, relativeDir);
+    const entries = await fs.readdir(currentSource, { withFileTypes: true });
+    for (const entry of entries) {
+      const rel = relativeDir
+        ? path.join(relativeDir, entry.name)
+        : entry.name;
+      if (rel.replace(/\\/g, "/") === JOB_LOCAL_DB_REL.replace(/\\/g, "/")) {
+        continue;
+      }
+      const src = path.join(input.sourceJobDir, rel);
+      const dest = path.join(input.targetJobDir, rel);
+      if (entry.isDirectory()) {
+        await fs.mkdir(dest, { recursive: true });
+        await walk(rel);
+        continue;
+      }
+      await fs.mkdir(path.dirname(dest), { recursive: true });
+      await fs.copyFile(src, dest);
+    }
+  }
+
+  await fs.mkdir(input.targetJobDir, { recursive: true });
+  await walk("");
+}
+
+async function replaceJobDirectoryPreservingDatabase(input: {
+  sourceJobDir: string;
+  targetJobDir: string;
+  preserveLocalDatabase: boolean;
+}): Promise<void> {
+  if (!input.preserveLocalDatabase) {
+    await fs.rm(input.targetJobDir, { recursive: true, force: true });
+    await copyJobDirectory(input);
+    return;
+  }
+
+  const localDbPath = path.join(input.targetJobDir, JOB_LOCAL_DB_REL);
+  let preservedDb: Buffer | null = null;
+  if (await pathExists(localDbPath)) {
+    preservedDb = await fs.readFile(localDbPath);
+  }
+
+  await fs.rm(input.targetJobDir, { recursive: true, force: true });
+  await copyJobDirectory(input);
+
+  if (preservedDb) {
+    const restorePath = path.join(input.targetJobDir, JOB_LOCAL_DB_REL);
+    await fs.mkdir(path.dirname(restorePath), { recursive: true });
+    await fs.writeFile(restorePath, preservedDb);
+  }
+}
+
+function prepareCopiedJobRecord(
+  sourceJob: JobRecord,
+  appId: string,
+  copiedJobIds: ReadonlySet<string>,
+): JobRecord {
+  const dependsOn = (sourceJob.dependsOn ?? []).filter((dep) =>
+    copiedJobIds.has(dep.jobId),
+  );
+  const runtimeCalls = (sourceJob.runtimeCalls ?? []).filter((calleeId) =>
+    copiedJobIds.has(calleeId),
+  );
+
+  return {
+    ...sourceJob,
+    appIds: [appId],
+    dependsOn,
+    runtimeCalls,
+    status: "pending",
+    lastRunAt: undefined,
+    completedAt: undefined,
+    exitCode: undefined,
+    error: undefined,
+    currentExecutionId: undefined,
+    lastExecutionId: undefined,
+    currentAttempt: undefined,
+    nextRetryAt: undefined,
+    lastOutput: undefined,
+    waitingPermissionKeys: undefined,
+    waitingScheduleRisk: undefined,
+    updatedAt: new Date().toISOString(),
+  };
+}
+
+async function rewriteDataSourcesForTarget(
+  targetAppDir: string,
+  targetPaprHome: string,
+): Promise<void> {
+  const configPath = path.join(targetAppDir, "data-sources.json");
+  let raw: string;
+  try {
+    raw = await fs.readFile(configPath, "utf8");
+  } catch {
+    return;
+  }
+
+  const targetDataDir = path.join(targetPaprHome, "data");
+  const config = parseDataSourcesFile(raw);
+  const sources = config.sources.map((source) => {
+    if (source.jobId) {
+      return {
+        ...source,
+        dbPath: jobDatabasePath(targetPaprHome, source.jobId),
+      };
+    }
+    const jobMatch = source.dbPath?.match(
+      /[/\\]Jobs[/\\]([0-9a-f-]{36})[/\\]data[/\\]/i,
+    );
+    if (jobMatch?.[1]) {
+      return {
+        ...source,
+        dbPath: jobDatabasePath(targetPaprHome, jobMatch[1]),
+      };
+    }
+
+    const slug = extractDatabaseSlugFromPath(source.dbPath ?? "");
+    if (slug) {
+      return {
+        ...source,
+        dbPath: workspaceRegistryDbPath(slug, targetDataDir),
+      };
+    }
+
+    if (source.dbId && isUnreadableDbPath(source.dbPath)) {
+      return { ...source, dbPath: "" };
+    }
+
+    return source;
+  });
+
+  const next: AppDataSourcesFile = { sources };
+  await fs.writeFile(configPath, serializeDataSourcesFile(next), "utf8");
+}
+
+async function hydrateDataSourcesFromRegistry(
+  targetAppDir: string,
+  targetRegistryPath: string,
+  targetPaprHome: string,
+): Promise<void> {
+  const configPath = path.join(targetAppDir, "data-sources.json");
+  let raw: string;
+  try {
+    raw = await fs.readFile(configPath, "utf8");
+  } catch {
+    return;
+  }
+
+  const registry = await readDatabasesRegistry(targetRegistryPath);
+  const targetDataDir = path.join(targetPaprHome, "data");
+  const config = parseDataSourcesFile(raw);
+  let changed = false;
+  const sources = config.sources.map((source) => {
+    if (source.jobId || !source.dbId) {
+      return source;
+    }
+    const record = registry.databases[source.dbId];
+    let registryPath = record?.localPath?.trim() ?? "";
+    if (!registryPath && record) {
+      const slug = resolveRegistrySlug(record);
+      if (slug) {
+        registryPath = workspaceRegistryDbPath(slug, targetDataDir);
+      }
+    }
+    if (!registryPath) {
+      return source;
+    }
+    if (source.dbPath?.trim() === registryPath) {
+      return source;
+    }
+    changed = true;
+    return { ...source, dbPath: registryPath };
+  });
+
+  if (!changed) {
+    return;
+  }
+
+  await fs.writeFile(
+    configPath,
+    serializeDataSourcesFile({ sources }),
+    "utf8",
+  );
+}
+
+function collectRegistryDbIds(
+  jobs: JobRecord[],
+  copiedJobIds: ReadonlySet<string>,
+): Set<string> {
+  const dbIds = new Set<string>();
+  for (const job of jobs) {
+    if (!copiedJobIds.has(job.id)) {
+      continue;
+    }
+    for (const dbId of job.writeDbIds ?? []) {
+      dbIds.add(dbId);
+    }
+  }
+  return dbIds;
+}
+
+function slugifyRegistryLabel(label: string): string {
+  return label
+    .toLowerCase()
+    .replace(/[^a-z0-9]+/g, "-")
+    .replace(/^-+|-+$/g, "")
+    .slice(0, 48) || "database";
+}
+
+function resolveRegistrySlug(record: DatabaseRecord): string | null {
+  const fromPath = extractDatabaseSlugFromPath(record.localPath ?? "");
+  if (fromPath) {
+    return fromPath;
+  }
+  const label = record.label?.trim();
+  if (label) {
+    return slugifyRegistryLabel(label);
+  }
+  return null;
+}
+
+async function uniqueForkRegistryLocalPath(input: {
+  localPath: string;
+  targetDbId: string;
+  targetPaprHome: string;
+  registry: DatabasesRegistryFile;
+}): Promise<string> {
+  const slug = extractDatabaseSlugFromPath(input.localPath);
+  if (!slug) {
+    return input.localPath;
+  }
+  const inUse =
+    (await pathExists(path.dirname(input.localPath))) ||
+    Object.values(input.registry.databases).some(
+      (record) => record.localPath === input.localPath,
+    );
+  if (!inUse) {
+    return input.localPath;
+  }
+  return workspaceRegistryDbPath(
+    `${slug}-${input.targetDbId.replace(/^db-/, "")}`,
+    path.join(input.targetPaprHome, "data"),
+  );
+}
+
+function resolveCopiedRegistryLocalPath(
+  record: DatabaseRecord,
+  targetPaprHome: string,
+  copiedJobIds: ReadonlySet<string>,
+): string {
+  const ownerJobId = record.ownerJobId;
+  if (ownerJobId && copiedJobIds.has(ownerJobId)) {
+    return jobDatabasePath(targetPaprHome, ownerJobId);
+  }
+  const slug = resolveRegistrySlug(record);
+  if (slug) {
+    return workspaceRegistryDbPath(slug, path.join(targetPaprHome, "data"));
+  }
+  return record.localPath;
+}
+
+async function readLinkedDatabasesAt(
+  appDir: string,
+): Promise<DatabasesRegistryFile> {
+  try {
+    const raw = await fs.readFile(
+      path.join(appDir, LINKED_DATABASES_FILENAME),
+      "utf8",
+    );
+    const parsed = JSON.parse(raw) as DatabasesRegistryFile;
+    if (parsed?.databases && typeof parsed.databases === "object") {
+      return parsed;
+    }
+  } catch {
+    /* no linked-databases.json */
+  }
+  return { version: 1, databases: {} };
+}
+
+async function collectLinkedRegistryDbIds(appDir: string): Promise<Set<string>> {
+  const dbIds = new Set<string>();
+  try {
+    const raw = await fs.readFile(
+      path.join(appDir, "data-sources.json"),
+      "utf8",
+    );
+    const config = parseDataSourcesFile(raw);
+    for (const source of config.sources) {
+      if (source.dbId) {
+        dbIds.add(source.dbId);
+      }
+    }
+  } catch {
+    /* no data sources */
+  }
+  return dbIds;
+}
+
+/** Ignore tombstoned registry rows when picking a template for an install. */
+function liveRecordOrUndefined(
+  record: DatabaseRecord | undefined,
+): DatabaseRecord | undefined {
+  return record && record.status !== "tombstone" ? record : undefined;
+}
+
+function stripReplicaSyncFields(
+  record: DatabaseRecord,
+): Omit<
+  DatabaseRecord,
+  | "cutoverAt"
+  | "cutoverInProgress"
+  | "cutoverStartedAt"
+  | "cutoverBlocked"
+  | "cutoverBlockReason"
+  | "lastReplicaPushError"
+  | "lastReplicaPushAt"
+  | "lastReplicaLocalMutationAt"
+> {
+  const {
+    cutoverAt: _cutoverAt,
+    cutoverInProgress: _cutoverInProgress,
+    cutoverStartedAt: _cutoverStartedAt,
+    cutoverBlocked: _cutoverBlocked,
+    cutoverBlockReason: _cutoverBlockReason,
+    lastReplicaPushError: _lastReplicaPushError,
+    lastReplicaPushAt: _lastReplicaPushAt,
+    lastReplicaLocalMutationAt: _lastReplicaLocalMutationAt,
+    ...rest
+  } = record;
+  return rest;
+}
+
+export async function applyDbIdRemapToAppFiles(
+  appDir: string,
+  dbIdRemap: ReadonlyMap<string, string>,
+): Promise<void> {
+  if (dbIdRemap.size === 0) {
+    return;
+  }
+
+  const configPath = path.join(appDir, "data-sources.json");
+  try {
+    const raw = await fs.readFile(configPath, "utf8");
+    const config = parseDataSourcesFile(raw);
+    let changed = false;
+    const sources = config.sources.map((source) => {
+      if (!source.dbId || !dbIdRemap.has(source.dbId)) {
+        return source;
+      }
+      const newDbId = dbIdRemap.get(source.dbId)!;
+      changed = true;
+      const nextId =
+        source.id === source.dbId
+          ? newDbId
+          : source.id.replace(source.dbId, newDbId);
+      return { ...source, dbId: newDbId, id: nextId };
+    });
+    if (changed) {
+      await fs.writeFile(
+        configPath,
+        serializeDataSourcesFile({ ...config, sources }),
+        "utf8",
+      );
+    }
+  } catch {
+    /* no data-sources.json */
+  }
+
+  const linkedPath = path.join(appDir, LINKED_DATABASES_FILENAME);
+  try {
+    const linked = await readLinkedDatabasesAt(appDir);
+    const nextDatabases: Record<string, DatabaseRecord> = {};
+    let linkedChanged = false;
+    for (const [key, record] of Object.entries(linked.databases)) {
+      const mappedKey = dbIdRemap.get(key) ?? key;
+      const mappedDbId = dbIdRemap.get(record.dbId) ?? record.dbId;
+      if (mappedKey !== key || mappedDbId !== record.dbId) {
+        linkedChanged = true;
+      }
+      nextDatabases[mappedKey] = {
+        ...record,
+        dbId: mappedDbId,
+        tursoShortName: dbTursoDatabaseName(mappedDbId),
+      };
+    }
+    if (linkedChanged) {
+      await fs.writeFile(
+        linkedPath,
+        JSON.stringify({ version: 1, databases: nextDatabases }, null, 2),
+        "utf8",
+      );
+    }
+  } catch {
+    /* no linked-databases.json */
+  }
+}
+
+async function writeJobJsonAt(jobDir: string, job: JobRecord): Promise<void> {
+  await fs.mkdir(jobDir, { recursive: true });
+  await fs.writeFile(
+    path.join(jobDir, "job.json"),
+    `${JSON.stringify(job, null, 2)}\n`,
+    "utf8",
+  );
+}
+
+/** Remap forked registry dbIds in jobs.json, bundled job.json, and Jobs/{id}/job.json. */
+export async function applyDbIdRemapToJobs(input: {
+  targetPaprHome: string;
+  appId: string;
+  copiedJobIds: readonly string[];
+  dbIdRemap: ReadonlyMap<string, string>;
+}): Promise<void> {
+  if (input.dbIdRemap.size === 0) {
+    return;
+  }
+
+  const { remapJobRecordDbIds } = await import("./jobs/remapJobDbIds.js");
+  const targetJobsIndexPath = path.join(
+    input.targetPaprHome,
+    "data",
+    "jobs.json",
+  );
+  const jobs = await readJobsIndex(targetJobsIndexPath);
+  const copiedSet = new Set(input.copiedJobIds);
+  let indexChanged = false;
+  const nextJobs = jobs.map((job) => {
+    const belongsToApp =
+      copiedSet.has(job.id) ||
+      (job.appIds ?? []).includes(input.appId);
+    if (!belongsToApp) {
+      return job;
+    }
+    const remapped = remapJobRecordDbIds(job, input.dbIdRemap);
+    if (remapped !== job) {
+      indexChanged = true;
+    }
+    return remapped;
+  });
+
+  if (indexChanged) {
+    await writeJobsIndex(targetJobsIndexPath, nextJobs);
+  }
+
+  const jobById = new Map(nextJobs.map((job) => [job.id, job]));
+  const targetAppDir = path.join(input.targetPaprHome, "apps", input.appId);
+  const targetJobsDir = path.join(input.targetPaprHome, "Jobs");
+
+  for (const jobId of input.copiedJobIds) {
+    const remapped = jobById.get(jobId);
+    if (!remapped) {
+      continue;
+    }
+    const canonicalDir = path.join(targetJobsDir, jobId);
+    if (await pathExists(canonicalDir)) {
+      await writeJobJsonAt(canonicalDir, remapped);
+    }
+    const bundledDir = path.join(targetAppDir, "jobs", jobId);
+    if (await pathExists(bundledDir)) {
+      await writeJobJsonAt(bundledDir, remapped);
+    }
+  }
+}
+
+async function copyRegistryDatabaseFiles(input: {
+  sourcePaprHome: string;
+  targetPaprHome: string;
+  sourceRegistryPath: string;
+  targetRegistryPath: string;
+  dbIds: ReadonlySet<string>;
+  copiedJobIds: ReadonlySet<string>;
+  /** Fork: copy migrations only — never publisher data.db bytes. */
+  schemaOnly?: boolean;
+  /** Forked dbId → publisher dbId, so schema is read from the publisher's folder. */
+  sourceDbIdFor?: ReadonlyMap<string, string>;
+}): Promise<string[]> {
+  const sourceRegistry = await readDatabasesRegistry(input.sourceRegistryPath);
+  const targetRegistry = await readDatabasesRegistry(input.targetRegistryPath);
+  const sourceDataDir = path.join(input.sourcePaprHome, "data");
+  const targetDataDir = path.join(input.targetPaprHome, "data");
+  const copiedSlugs: string[] = [];
+
+  for (const dbId of input.dbIds) {
+    const sourceDbId = input.sourceDbIdFor?.get(dbId) ?? dbId;
+    const record =
+      sourceRegistry.databases[sourceDbId] ?? targetRegistry.databases[dbId];
+    if (!record) {
+      continue;
+    }
+
+    if (record.ownerJobId && input.copiedJobIds.has(record.ownerJobId)) {
+      continue;
+    }
+
+    const slug = resolveRegistrySlug(record);
+    if (!slug) {
+      continue;
+    }
+    const targetRecord = targetRegistry.databases[dbId];
+    const targetSlug = (targetRecord && resolveRegistrySlug(targetRecord)) || slug;
+
+    const targetPath = workspaceRegistryDbPath(targetSlug, targetDataDir);
+    const sourcePath = resolveReadableRegistryDbPath({
+      dbPath: sourceRegistry.databases[sourceDbId]?.localPath,
+      registryPath: sourceRegistry.databases[sourceDbId]?.localPath,
+      dataDir: sourceDataDir,
+    });
+    const sourceSlugDir = path.join(sourceDataDir, "databases", slug);
+    const targetSlugDir = path.join(targetDataDir, "databases", targetSlug);
+
+    if (await pathExists(sourceSlugDir)) {
+      if (!(await pathExists(targetSlugDir))) {
+        await fs.mkdir(path.dirname(targetSlugDir), { recursive: true });
+        if (input.schemaOnly) {
+          const migrationsDir = path.join(sourceSlugDir, "migrations");
+          if (await pathExists(migrationsDir)) {
+            await fs.cp(
+              migrationsDir,
+              path.join(targetSlugDir, "migrations"),
+              { recursive: true },
+            );
+          }
+        } else {
+          await fs.cp(sourceSlugDir, targetSlugDir, { recursive: true });
+        }
+        copiedSlugs.push(slug);
+        continue;
+      }
+    }
+
+    if (
+      !input.schemaOnly &&
+      sourcePath &&
+      (await ensureRegistryDbInWorkspace({ sourcePath, targetPath }))
+    ) {
+      copiedSlugs.push(slug);
+      continue;
+    }
+
+    if (isReadableDbFile(targetPath)) {
+      copiedSlugs.push(slug);
+    }
+  }
+
+  return copiedSlugs;
+}
+
+export async function mergeDatabaseRegistryForCopy(input: {
+  sourceRegistryPath: string;
+  targetRegistryPath: string;
+  targetPaprHome: string;
+  copiedJobIds: ReadonlySet<string>;
+  dbIdsFromJobs: Set<string>;
+  appDir: string;
+  sourceAppDir?: string;
+  /** Fork install: mint new dbId per linked registry database. */
+  forkDbIds?: boolean;
+  localAppId?: string;
+}): Promise<{ registryDbIds: Set<string>; dbIdRemap: Map<string, string> }> {
+  const sourceRegistry = await readDatabasesRegistry(input.sourceRegistryPath);
+  const targetRegistry = await readDatabasesRegistry(input.targetRegistryPath);
+  const linkedFromTargetApp = await readLinkedDatabasesAt(input.appDir);
+  const linkedFromSourceApp = input.sourceAppDir
+    ? await readLinkedDatabasesAt(input.sourceAppDir)
+    : { version: 1 as const, databases: {} };
+  const dbIds = new Set(input.dbIdsFromJobs);
+
+  for (const sourceDbId of await collectLinkedRegistryDbIds(input.appDir)) {
+    dbIds.add(sourceDbId);
+  }
+
+  const merged: DatabasesRegistryFile = {
+    version: 1,
+    databases: { ...targetRegistry.databases },
+  };
+  const dbIdRemap = new Map<string, string>();
+  const registryDbIds = new Set<string>();
+
+  for (const dbId of dbIds) {
+    const record =
+      sourceRegistry.databases[dbId] ??
+      linkedFromSourceApp.databases[dbId] ??
+      linkedFromTargetApp.databases[dbId] ??
+      targetRegistry.databases[dbId];
+    if (!record) {
+      continue;
+    }
+
+    const ownerJobId = record.ownerJobId;
+    if (ownerJobId && input.copiedJobIds.has(ownerJobId)) {
+      const localPath = resolveCopiedRegistryLocalPath(
+        record,
+        input.targetPaprHome,
+        input.copiedJobIds,
+      );
+      const existing = liveRecordOrUndefined(merged.databases[dbId]);
+      merged.databases[dbId] = {
+        ...(existing ?? record),
+        // An install always (re)provisions this DB — never inherit a tombstone
+        // from an earlier failed install/delete, or integrity rolls it back.
+        status: "active",
+        localPath,
+        updatedAt: new Date().toISOString(),
+      };
+      registryDbIds.add(dbId);
+      continue;
+    }
+
+    const targetDbId =
+      input.forkDbIds && !ownerJobId ? newDbId() : dbId;
+    if (targetDbId !== dbId) {
+      dbIdRemap.set(dbId, targetDbId);
+    }
+
+    let localPath = resolveCopiedRegistryLocalPath(
+      record,
+      input.targetPaprHome,
+      input.copiedJobIds,
+    );
+    // A fork must not land in a folder another app already uses (the
+    // publisher's own copy on this machine, or an earlier install), or its
+    // "fresh data" silently becomes shared data.
+    if (targetDbId !== dbId) {
+      localPath = await uniqueForkRegistryLocalPath({
+        localPath,
+        targetDbId,
+        targetPaprHome: input.targetPaprHome,
+        registry: merged,
+      });
+    }
+    const existing = liveRecordOrUndefined(merged.databases[dbId]);
+    const base = stripReplicaSyncFields(existing ?? record);
+    // Fork keeps no storage mode from the publisher: provisionInstalledDatabases
+    // picks one for THIS device (replica / cloud-direct / local) right after merge.
+    const { syncMode: _forkOmitSyncMode, ...forkLocalBase } = base;
+    merged.databases[targetDbId] = {
+      ...(input.forkDbIds ? forkLocalBase : base),
+      dbId: targetDbId,
+      tursoShortName: dbTursoDatabaseName(targetDbId),
+      // Installed DBs start live. A tombstone on the local or publisher record
+      // (earlier failed install, deleted app) must not carry into this copy.
+      status: "active",
+      localPath,
+      ...(input.forkDbIds && input.localAppId
+        ? { schemaOwnerAppId: input.localAppId }
+        : {}),
+      updatedAt: new Date().toISOString(),
+      ...(input.forkDbIds ? { createdAt: new Date().toISOString() } : {}),
+    };
+    if (targetDbId !== dbId) {
+      delete merged.databases[dbId];
+    }
+    registryDbIds.add(targetDbId);
+  }
+
+  await writeDatabasesRegistry(input.targetRegistryPath, merged);
+  return { registryDbIds, dbIdRemap };
+}
+
+export type SyncAppLinkedResourcesScope = "full" | "jobs_and_code";
+
+export interface SyncAppLinkedResourcesInput {
+  appId: string;
+  sourcePaprHome: string;
+  targetPaprHome: string;
+  /** When source app id differs (cloud install remaps app id). */
+  sourceAppId?: string;
+  /** Fork install: mint new dbIds and copy schema only (no publisher rows). */
+  installDbPolicy?: InstallDbPolicy;
+  /**
+   * Track sync with shared publisher DB: update jobs + paths only — never
+   * re-copy registry SQLite from git.
+   */
+  syncScope?: SyncAppLinkedResourcesScope;
+}
+
+export interface SyncAppLinkedResourcesResult {
+  copiedJobIds: string[];
+  skippedJobIds: string[];
+  copiedRegistryDbSlugs: string[];
+  registryDbIds: string[];
+}
+
+export interface FinalizeCopiedAppResourcesInput {
+  targetPaprHome: string;
+  appId: string;
+  copiedJobIds: readonly string[];
+  registryDbIds: readonly string[];
+}
+
+/**
+ * Repair hardcoded paths, reset Turso sync cursors, and drop stale cloud prefs
+ * in the target workspace after a cross-namespace copy.
+ */
+export async function finalizeCopiedAppResources(
+  input: FinalizeCopiedAppResourcesInput,
+): Promise<void> {
+  const { clearTursoPushState } = await import("./tursoSyncState.js");
+  const { removeAppPublishPrefs } = await import("./cloudPublishPrefs.js");
+  const { runPostMigrationPathRepair } = await import(
+    "./postMigrationPathRepair.js"
+  );
+
+  for (const jobId of input.copiedJobIds) {
+    clearTursoPushState(jobId, input.targetPaprHome);
+  }
+  for (const dbId of input.registryDbIds) {
+    clearTursoPushState(dbId, input.targetPaprHome);
+  }
+
+  removeAppPublishPrefs(input.appId, input.targetPaprHome);
+
+  const { clearWriterLocalStateForApp } = await import(
+    "./syncV3/writerBaselineReconcile.js"
+  );
+  await clearWriterLocalStateForApp(input.appId, input.targetPaprHome);
+
+  await runPostMigrationPathRepair({
+    dryRun: false,
+    includeApps: true,
+    delayMs: 0,
+    paprBase: input.targetPaprHome,
+    scopePaprHome: input.targetPaprHome,
+    skipDataSources: true,
+  });
+
+  // Same rules as a fork install: schema-only databases, one clean retry,
+  // then a storage mode chosen for this device. Everything is written into the
+  // TARGET workspace's files — it is not the active workspace, so nothing here
+  // may go through the active-workspace registry singleton.
+  const { bootstrapCopiedAppDatabasesInWorkspace } = await import(
+    "./cloudAppInstallBootstrap.js"
+  );
+  let bootstrap = await bootstrapCopiedAppDatabasesInWorkspace(
+    input.appId,
+    input.targetPaprHome,
+  );
+  if (bootstrap.errors.length > 0) {
+    console.warn(
+      `[CopyApp] Database setup failed for ${input.appId}, retrying once from a clean slate:`,
+      bootstrap.errors.slice(0, 3).join(" | "),
+    );
+    await resetCopiedDatabaseFiles(input.targetPaprHome, input.registryDbIds);
+    bootstrap = await bootstrapCopiedAppDatabasesInWorkspace(
+      input.appId,
+      input.targetPaprHome,
+    );
+  }
+  if (bootstrap.errors.length > 0) {
+    console.error(
+      `[CopyApp] Database setup failed twice for ${input.appId}:`,
+      bootstrap.errors.join(" | "),
+    );
+    throw new CopyAppError(
+      "database_bootstrap_failed",
+      "Couldn't set up this app's database in the other workspace. Nothing was copied — please try again.",
+    );
+  }
+  if (bootstrap.warnings.length > 0) {
+    console.warn(
+      `[CopyApp] Post-copy database bootstrap warnings for ${input.appId}:`,
+      bootstrap.warnings.slice(0, 3).join(" | "),
+    );
+  }
+
+  await assignCopiedDatabaseStorage(input.targetPaprHome, input.registryDbIds);
+
+  const { preparePortableReplicaDatabases } = await import(
+    "./tursoReplica/portableReplicaBootstrap.js"
+  );
+  await preparePortableReplicaDatabases({
+    paprHome: input.targetPaprHome,
+    registryDbIds: input.registryDbIds,
+    copiedJobIds: input.copiedJobIds,
+    reason: "cross_namespace_copy",
+  });
+}
+
+function isUnderDir(child: string, parent: string): boolean {
+  const rel = path.relative(path.resolve(parent), path.resolve(child));
+  return rel.length > 0 && !rel.startsWith("..") && !path.isAbsolute(rel);
+}
+
+/** Registry records this copy created (never job-owned ones). */
+async function copiedRegistryRecords(
+  targetPaprHome: string,
+  registryDbIds: readonly string[],
+): Promise<DatabaseRecord[]> {
+  const registry = await readDatabasesRegistry(
+    path.join(targetPaprHome, "data", "databases.json"),
+  );
+  return registryDbIds
+    .map((dbId) => registry.databases[dbId])
+    .filter(
+      (record): record is DatabaseRecord =>
+        Boolean(record) && !record.ownerJobId && Boolean(record.localPath),
+    );
+}
+
+/** Clean slate before the one retry: drop the half-built database files. */
+async function resetCopiedDatabaseFiles(
+  targetPaprHome: string,
+  registryDbIds: readonly string[],
+): Promise<void> {
+  const { removeTursoReplicaLocalFiles } = await import(
+    "./tursoReplica/tursoReplicaFileGuard.js"
+  );
+  for (const record of await copiedRegistryRecords(targetPaprHome, registryDbIds)) {
+    if (isUnderDir(record.localPath, path.join(targetPaprHome, "data"))) {
+      removeTursoReplicaLocalFiles(record.localPath);
+    }
+  }
+}
+
+/**
+ * Pick how each copied database is stored on this device — the same decision
+ * a fork install makes (replica with an engine build, cloud-direct without,
+ * local when cloud sync is off). The cloud side is created when the user
+ * switches to the target workspace (rebootstrapPendingPortableReplicas),
+ * because only then do credentials and the registry belong to it.
+ */
+async function assignCopiedDatabaseStorage(
+  targetPaprHome: string,
+  registryDbIds: readonly string[],
+): Promise<void> {
+  const { syncModeForInstalledDatabase } = await import(
+    "../utils/tursoReplicaEnabled.js"
+  );
+  const syncMode = syncModeForInstalledDatabase({ installDbPolicy: "fork_empty" });
+  if (!syncMode) {
+    return;
+  }
+  const registryPath = path.join(targetPaprHome, "data", "databases.json");
+  const registry = await readDatabasesRegistry(registryPath);
+  const cloudDirectPaths: string[] = [];
+  let changed = false;
+  for (const dbId of registryDbIds) {
+    const record = registry.databases[dbId];
+    if (!record || record.ownerJobId) {
+      continue;
+    }
+    registry.databases[dbId] = {
+      ...record,
+      syncMode,
+      updatedAt: new Date().toISOString(),
+    };
+    changed = true;
+    if (syncMode === "cloud-direct") {
+      cloudDirectPaths.push(record.localPath);
+    }
+  }
+  if (changed) {
+    await writeDatabasesRegistry(registryPath, registry);
+  }
+  if (cloudDirectPaths.length > 0) {
+    // The local file is schema-only scaffolding. On first switch into the
+    // target workspace, rebootstrapPendingPortableReplicas builds the cloud
+    // primary from the migrations and removes the file (marker = "do that").
+    const { writeBootstrapPendingMarker } = await import(
+      "./tursoReplica/tursoReplicaBootstrapMarker.js"
+    );
+    for (const localPath of cloudDirectPaths) {
+      if (await pathExists(localPath)) {
+        writeBootstrapPendingMarker(localPath, "cross_namespace_copy");
+      }
+    }
+  }
+}
+
+/**
+ * Undo a copy that failed part-way: app folder, the databases it created,
+ * and jobs that did not exist in the target before. Never touches anything
+ * the target workspace already had.
+ */
+async function rollbackFailedCopy(input: {
+  targetPaprHome: string;
+  targetAppDir: string;
+  registryDbIds: readonly string[];
+  newJobIds: readonly string[];
+}): Promise<void> {
+  await fs.rm(input.targetAppDir, { recursive: true, force: true });
+
+  const registryPath = path.join(input.targetPaprHome, "data", "databases.json");
+  const records = await copiedRegistryRecords(input.targetPaprHome, input.registryDbIds);
+  if (records.length > 0) {
+    const registry = await readDatabasesRegistry(registryPath);
+    const databasesDir = path.join(input.targetPaprHome, "data", "databases");
+    for (const record of records) {
+      delete registry.databases[record.dbId];
+      const folder = path.dirname(record.localPath);
+      const stillUsed = Object.values(registry.databases).some(
+        (other) => path.dirname(other.localPath) === folder,
+      );
+      if (!stillUsed && isUnderDir(folder, databasesDir)) {
+        await fs.rm(folder, { recursive: true, force: true });
+      }
+    }
+    await writeDatabasesRegistry(registryPath, registry);
+  }
+
+  if (input.newJobIds.length > 0) {
+    const jobsIndexPath = path.join(input.targetPaprHome, "data", "jobs.json");
+    const drop = new Set(input.newJobIds);
+    const jobs = await readJobsIndex(jobsIndexPath);
+    await writeJobsIndex(
+      jobsIndexPath,
+      jobs.filter((job) => !drop.has(job.id)),
+    );
+    for (const jobId of input.newJobIds) {
+      await fs.rm(path.join(input.targetPaprHome, "Jobs", jobId), {
+        recursive: true,
+        force: true,
+      });
+    }
+  }
+}
+
+async function resolveSourceJobDirectory(
+  sourcePaprHome: string,
+  sourceAppId: string | undefined,
+  jobId: string,
+): Promise<string | null> {
+  const canonical = path.join(sourcePaprHome, "Jobs", jobId);
+  if (await pathExists(canonical)) {
+    return canonical;
+  }
+  if (sourceAppId) {
+    const bundled = path.join(sourcePaprHome, "apps", sourceAppId, "jobs", jobId);
+    if (await pathExists(bundled)) {
+      return bundled;
+    }
+  }
+  return null;
+}
+
+async function readJobRecordFromDir(
+  jobDir: string,
+): Promise<JobRecord | undefined> {
+  try {
+    const raw = await fs.readFile(path.join(jobDir, "job.json"), "utf8");
+    return JSON.parse(raw) as JobRecord;
+  } catch {
+    return undefined;
+  }
+}
+
+/** Copy linked job folders and jobs.json entries into the target workspace. */
+export async function syncAppJobsToTarget(
+  input: SyncAppLinkedResourcesInput,
+): Promise<Pick<SyncAppLinkedResourcesResult, "copiedJobIds" | "skippedJobIds">> {
+  const preserveLocalDatabase =
+    input.syncScope === "jobs_and_code" ||
+    input.installDbPolicy === "fork_empty";
+
+  if (
+    path.normalize(input.sourcePaprHome) === path.normalize(input.targetPaprHome)
+  ) {
+    return { copiedJobIds: [], skippedJobIds: [] };
+  }
+
+  const targetAppDir = path.join(input.targetPaprHome, "apps", input.appId);
+  if (!(await pathExists(targetAppDir))) {
+    return { copiedJobIds: [], skippedJobIds: [] };
+  }
+
+  const targetJobsDir = path.join(input.targetPaprHome, "Jobs");
+  const sourceJobsIndexPath = path.join(input.sourcePaprHome, "data", "jobs.json");
+  const targetJobsIndexPath = path.join(input.targetPaprHome, "data", "jobs.json");
+
+  await fs.mkdir(targetJobsDir, { recursive: true });
+
+  const sourceLookupAppId = input.sourceAppId ?? input.appId;
+  const dependentJobIds = resolveAppDependentJobIds(
+    input.sourcePaprHome,
+    sourceLookupAppId,
+  );
+  const copiedJobIdSet = new Set(dependentJobIds);
+  const sourceJobs = await readJobsIndex(sourceJobsIndexPath);
+  const sourceJobById = new Map(sourceJobs.map((job) => [job.id, job]));
+  const targetJobs = await readJobsIndex(targetJobsIndexPath);
+  const targetJobById = new Map(targetJobs.map((job) => [job.id, job]));
+
+  const copiedJobIds: string[] = [];
+  const skippedJobIds: string[] = [];
+
+  for (const jobId of dependentJobIds) {
+    const sourceJobDir = await resolveSourceJobDirectory(
+      input.sourcePaprHome,
+      input.sourceAppId,
+      jobId,
+    );
+    const targetJobDir = path.join(targetJobsDir, jobId);
+    let sourceJob = sourceJobById.get(jobId);
+    if (!sourceJob && sourceJobDir) {
+      sourceJob = await readJobRecordFromDir(sourceJobDir);
+    }
+
+    if (!sourceJobDir) {
+      continue;
+    }
+
+    if (await pathExists(targetJobDir)) {
+      const existing = targetJobById.get(jobId);
+      const sourceUpdatedMs = sourceJob?.updatedAt
+        ? new Date(sourceJob.updatedAt).getTime()
+        : 0;
+      const targetUpdatedMs = existing?.updatedAt
+        ? new Date(existing.updatedAt).getTime()
+        : 0;
+
+      if (sourceJob && sourceUpdatedMs > targetUpdatedMs) {
+        await replaceJobDirectoryPreservingDatabase({
+          sourceJobDir,
+          targetJobDir,
+          preserveLocalDatabase,
+        });
+        copiedJobIds.push(jobId);
+        targetJobById.set(
+          jobId,
+          prepareCopiedJobRecord(sourceJob, input.appId, copiedJobIdSet),
+        );
+      } else {
+        skippedJobIds.push(jobId);
+        if (sourceJob) {
+          const mergedAppIds = mergeJobAppIds(existing?.appIds, [input.appId]);
+          targetJobById.set(jobId, {
+            ...(existing ?? sourceJob),
+            appIds: mergedAppIds,
+            updatedAt: new Date().toISOString(),
+          });
+        }
+      }
+      continue;
+    }
+
+    await copyJobDirectory({
+      sourceJobDir,
+      targetJobDir,
+      preserveLocalDatabase,
+    });
+    copiedJobIds.push(jobId);
+
+    if (sourceJob) {
+      targetJobById.set(
+        jobId,
+        prepareCopiedJobRecord(sourceJob, input.appId, copiedJobIdSet),
+      );
+    }
+  }
+
+  await writeJobsIndex(targetJobsIndexPath, [...targetJobById.values()]);
+
+  return { copiedJobIds, skippedJobIds };
+}
+
+/** Merge registry metadata and copy SQLite files into the target workspace. */
+export async function syncAppDatabaseResourcesToTarget(
+  input: SyncAppLinkedResourcesInput & {
+    copiedJobIds: readonly string[];
+  },
+): Promise<
+  Pick<SyncAppLinkedResourcesResult, "copiedRegistryDbSlugs" | "registryDbIds">
+> {
+  const targetAppDir = path.join(input.targetPaprHome, "apps", input.appId);
+  const targetDatabasesPath = path.join(
+    input.targetPaprHome,
+    "data",
+    "databases.json",
+  );
+  const sourceJobsIndexPath = path.join(input.sourcePaprHome, "data", "jobs.json");
+  const targetJobsIndexPath = path.join(input.targetPaprHome, "data", "jobs.json");
+  const sourceJobs = await readJobsIndex(sourceJobsIndexPath);
+  const targetJobs = await readJobsIndex(targetJobsIndexPath);
+  const copiedJobIdSet = new Set(input.copiedJobIds);
+  const sourceLookupAppId = input.sourceAppId ?? input.appId;
+  const dependentJobIds = resolveAppDependentJobIds(
+    input.sourcePaprHome,
+    sourceLookupAppId,
+  );
+  const jobsForRegistry = dependentJobIds
+    .map((jobId) => targetJobs.find((job) => job.id === jobId))
+    .filter((job): job is JobRecord => job !== undefined);
+  const dbIdsFromJobs = collectRegistryDbIds(
+    jobsForRegistry.length > 0 ? jobsForRegistry : sourceJobs,
+    copiedJobIdSet,
+  );
+
+  const sourceRegistryPath = path.join(
+    input.sourcePaprHome,
+    "data",
+    "databases.json",
+  );
+  const sourceAppDir = input.sourceAppId
+    ? path.join(input.sourcePaprHome, "apps", input.sourceAppId)
+    : undefined;
+  const forkDbIds = input.installDbPolicy === "fork_empty";
+  const schemaOnly =
+    input.installDbPolicy === "fork_empty" ||
+    input.installDbPolicy === "shared_primary";
+  const { registryDbIds, dbIdRemap } = await mergeDatabaseRegistryForCopy({
+    sourceRegistryPath,
+    targetRegistryPath: targetDatabasesPath,
+    targetPaprHome: input.targetPaprHome,
+    copiedJobIds: copiedJobIdSet,
+    dbIdsFromJobs,
+    appDir: targetAppDir,
+    sourceAppDir,
+    forkDbIds,
+    localAppId: forkDbIds ? input.appId : undefined,
+  });
+  await applyDbIdRemapToAppFiles(targetAppDir, dbIdRemap);
+  await applyDbIdRemapToJobs({
+    targetPaprHome: input.targetPaprHome,
+    appId: input.appId,
+    copiedJobIds: input.copiedJobIds,
+    dbIdRemap,
+  });
+  await rewriteDataSourcesForTarget(targetAppDir, input.targetPaprHome);
+
+  const copiedRegistryDbSlugs = await copyRegistryDatabaseFiles({
+    sourcePaprHome: input.sourcePaprHome,
+    targetPaprHome: input.targetPaprHome,
+    sourceRegistryPath,
+    targetRegistryPath: targetDatabasesPath,
+    dbIds: registryDbIds,
+    copiedJobIds: copiedJobIdSet,
+    schemaOnly,
+    sourceDbIdFor: new Map(
+      [...dbIdRemap].map(([sourceDbId, forkDbId]) => [forkDbId, sourceDbId]),
+    ),
+  });
+
+  await hydrateDataSourcesFromRegistry(
+    targetAppDir,
+    targetDatabasesPath,
+    input.targetPaprHome,
+  );
+
+  const { hydrateAppFolderSchemaMigrationsToRegistry } = await import(
+    "./syncV3/syncPulledSchemaOwnerMigrations.js"
+  );
+  const appsRoot = path.join(input.targetPaprHome, "apps");
+  const hydratedMigrations = await hydrateAppFolderSchemaMigrationsToRegistry({
+    appId: input.appId,
+    paprRoot: input.targetPaprHome,
+    appsRoot,
+  });
+  if (hydratedMigrations.copied.length > 0) {
+    console.log(
+      `[CopyApp] Mirrored ${hydratedMigrations.copied.length} migration(s) from app folder into registry for ${input.appId}`,
+    );
+  }
+
+  return {
+    copiedRegistryDbSlugs,
+    registryDbIds: [...registryDbIds],
+  };
+}
+
+/** Copy linked jobs, database registry entries, and rewrite data-sources paths into target. */
+export async function syncAppLinkedResourcesToTarget(
+  input: SyncAppLinkedResourcesInput,
+): Promise<SyncAppLinkedResourcesResult> {
+  if (
+    path.normalize(input.sourcePaprHome) === path.normalize(input.targetPaprHome)
+  ) {
+    return {
+      copiedJobIds: [],
+      skippedJobIds: [],
+      copiedRegistryDbSlugs: [],
+      registryDbIds: [],
+    };
+  }
+
+  const targetAppDir = path.join(input.targetPaprHome, "apps", input.appId);
+  if (!(await pathExists(targetAppDir))) {
+    return {
+      copiedJobIds: [],
+      skippedJobIds: [],
+      copiedRegistryDbSlugs: [],
+      registryDbIds: [],
+    };
+  }
+
+  const jobsOnly = input.syncScope === "jobs_and_code";
+  const { copiedJobIds, skippedJobIds } = await syncAppJobsToTarget(input);
+
+  if (jobsOnly) {
+    await rewriteDataSourcesForTarget(targetAppDir, input.targetPaprHome);
+    return {
+      copiedJobIds,
+      skippedJobIds,
+      copiedRegistryDbSlugs: [],
+      registryDbIds: [],
+    };
+  }
+
+  const database = await syncAppDatabaseResourcesToTarget({
+    ...input,
+    copiedJobIds,
+  });
+
+  return {
+    copiedJobIds,
+    skippedJobIds,
+    copiedRegistryDbSlugs: database.copiedRegistryDbSlugs,
+    registryDbIds: database.registryDbIds,
+  };
+}
+
+export async function copyAppToNamespace(
+  input: CopyAppToNamespaceInput,
+): Promise<CopyAppToNamespaceResult> {
+  const pointer = readActiveWorkspacePointer();
+  if (!pointer) {
+    throw new CopyAppError("no_workspace", "No active workspace");
+  }
+
+  if (
+    pointer.organizationId === input.targetOrganizationId &&
+    pointer.namespaceId === input.targetNamespaceId
+  ) {
+    throw new CopyAppError("same_namespace", "App is already in this namespace");
+  }
+
+  const sourcePaprHome = input.sourcePaprHome;
+  const sourceAppsDir = path.join(sourcePaprHome, "apps");
+  const sourceIndexPath = path.join(sourcePaprHome, "data", "apps.json");
+  const sourceAppDir = path.join(sourceAppsDir, input.appId);
+
+  try {
+    await fs.access(sourceAppDir);
+  } catch {
+    throw new CopyAppError("app_not_found", "App folder not found");
+  }
+
+  const sourceApps = await readAppsIndex(sourceIndexPath);
+  const app = sourceApps.find((entry) => entry.id === input.appId);
+  if (!app) {
+    throw new CopyAppError("app_not_found", "App not found in registry");
+  }
+
+  const sourceAppId = input.appId;
+  const newAppId = randomUUID();
+
+  const targetPaprHome = resolveOrgNamespaceWorkspacePath(
+    input.targetOrganizationId,
+    input.targetNamespaceId,
+  );
+  const targetAppsDir = path.join(targetPaprHome, "apps");
+  const targetJobsDir = path.join(targetPaprHome, "Jobs");
+  const targetIndexPath = path.join(targetPaprHome, "data", "apps.json");
+  const targetAppDir = path.join(targetAppsDir, newAppId);
+
+  await fs.mkdir(targetAppsDir, { recursive: true });
+  await fs.mkdir(targetJobsDir, { recursive: true });
+  await fs.mkdir(path.dirname(targetIndexPath), { recursive: true });
+
+  if (await pathExists(targetAppDir)) {
+    throw new CopyAppError(
+      "target_conflict",
+      "Could not allocate a new app folder in the target namespace",
+    );
+  }
+
+  const targetApps = await readAppsIndex(targetIndexPath);
+
+  await fs.cp(sourceAppDir, targetAppDir, { recursive: true });
+
+  await fs.rm(path.join(targetAppDir, "papr-cloud-lineage.json"), {
+    force: true,
+  });
+  await fs.rm(path.join(targetAppDir, ".papr-cloud-revision"), { force: true });
+
+  if (sourceAppId !== newAppId) {
+    await applyIdRemapsToDirectory(
+      targetAppDir,
+      new Map([[sourceAppId, newAppId]]),
+    );
+  }
+
+  const jobIdsBefore = new Set(
+    (await readJobsIndex(path.join(targetPaprHome, "data", "jobs.json"))).map(
+      (job) => job.id,
+    ),
+  );
+  let copiedJobIds: string[] = [];
+  let skippedJobIds: string[] = [];
+  let copiedRegistryDbSlugs: string[] = [];
+  let registryDbIds: string[] = [];
+  try {
+    ({ copiedJobIds, skippedJobIds, copiedRegistryDbSlugs, registryDbIds } =
+      await syncAppLinkedResourcesToTarget({
+        appId: newAppId,
+        sourceAppId,
+        sourcePaprHome,
+        targetPaprHome,
+        installDbPolicy: NAMESPACE_COPY_DB_POLICY,
+      }));
+
+    await finalizeCopiedAppResources({
+      targetPaprHome,
+      appId: newAppId,
+      copiedJobIds,
+      registryDbIds,
+    });
+  } catch (error) {
+    try {
+      await rollbackFailedCopy({
+        targetPaprHome,
+        targetAppDir,
+        registryDbIds,
+        newJobIds: copiedJobIds.filter((jobId) => !jobIdsBefore.has(jobId)),
+      });
+    } catch (rollbackError) {
+      console.error(
+        `[CopyApp] Rollback after failed copy of ${sourceAppId} also failed:`,
+        (rollbackError as Error).message,
+      );
+    }
+    throw error;
+  }
+
+  const uniqueTitle = ensureUniqueAppTitle(
+    app.title,
+    targetApps.map((entry) => entry.title),
+  );
+  const titleRenamed = uniqueTitle !== app.title.trim();
+  const ownerUserId = getPaprUserId()?.trim();
+  const copiedApp: MiniApp = {
+    ...app,
+    id: newAppId,
+    title: uniqueTitle,
+    updatedAt: new Date().toISOString(),
+    cloudLineage: undefined,
+    organizationId: input.targetOrganizationId,
+    namespaceId: input.targetNamespaceId,
+    ...(ownerUserId ? { ownerUserId } : {}),
+  };
+
+  targetApps.push(copiedApp);
+  await writeAppsIndex(targetIndexPath, targetApps);
+  // metadata.json is copied from the source folder and still points at the source
+  // namespace. listApps() and pruneStrayWorkspaceAppCopies() prefer disk metadata,
+  // so refresh it here or the copy vanishes when you switch workspaces.
+  await writeCloudAppMetadataFile(targetPaprHome, newAppId);
+
+  return {
+    appId: newAppId,
+    sourceAppId,
+    title: copiedApp.title,
+    sourceNamespaceId: pointer.namespaceId,
+    targetNamespaceId: input.targetNamespaceId,
+    titleRenamed,
+    copiedJobIds,
+    skippedJobIds,
+    copiedRegistryDbSlugs,
+  };
+}

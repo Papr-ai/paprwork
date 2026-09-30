@@ -10,8 +10,6 @@
   align-items: center;
   justify-content: center;
   background: rgba(0, 0, 0, 0.5);
-  backdrop-filter: blur(4px);
-  -webkit-backdrop-filter: blur(4px);
   animation: modalBackdropIn 150ms ease;
 }
 
@@ -24,8 +22,6 @@
   width: 90%;
   max-width: 440px;
   background: var(--glass-bg, rgba(30, 30, 30, 0.95));
-  backdrop-filter: blur(20px);
-  -webkit-backdrop-filter: blur(20px);
   border: 1px solid var(--glass-border, var(--border));
   border-radius: 16px;
   padding: 28px;
@@ -159,3 +155,83 @@
   opacity: 0.4;
   cursor: default;
 }
+
+/* Guided "What should this app do?" layout. */
+.create-app-modal--guided { max-width: 560px; }
+.create-app-modal__goal {
+  min-height: 96px;
+  max-height: 220px;
+  font-size: 15px;
+  line-height: 1.5;
+}
+.create-app-modal__starters {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  margin-top: 10px;
+}
+.create-app-modal__chip {
+  height: 28px;
+  padding: 0 11px;
+  border-radius: 999px;
+  border: 1px solid var(--glass-border, var(--border));
+  background: transparent;
+  color: var(--text-secondary);
+  font-size: 12.5px;
+  cursor: pointer;
+  transition: all 120ms ease;
+}
+.create-app-modal__chip:hover { color: var(--text-primary); background: var(--hover); }
+.create-app-modal__chip.is-on {
+  border-color: var(--accent);
+  color: var(--accent);
+  background: color-mix(in srgb, var(--accent) 10%, transparent);
+}
+.create-app-modal__link {
+  margin-top: 14px;
+  padding: 0;
+  border: 0;
+  background: none;
+  color: var(--accent);
+  font-size: 13px;
+  font-weight: 500;
+  cursor: pointer;
+}
+.create-app-modal__more {
+  display: flex;
+  flex-direction: column;
+  gap: 16px;
+  margin-top: 18px;
+  padding-top: 16px;
+  border-top: 1px solid var(--glass-border, var(--border));
+}
+.create-app-modal__group { display: flex; flex-direction: column; gap: 4px; }
+.create-app-modal__group-label { font-size: 13px; font-weight: 500; color: var(--text-secondary); }
+.create-app-modal__seg {
+  display: inline-flex;
+  flex-wrap: wrap;
+  gap: 4px;
+  margin-top: 6px;
+  padding: 3px;
+  border-radius: 10px;
+  background: var(--input-bg, rgba(0, 0, 0, 0.06));
+  width: fit-content;
+}
+.create-app-modal__seg button {
+  height: 28px;
+  padding: 0 12px;
+  border: 0;
+  border-radius: 8px;
+  background: transparent;
+  color: var(--text-secondary);
+  font-size: 12.5px;
+  cursor: pointer;
+}
+.create-app-modal__seg button.is-on {
+  background: var(--glass-bg, #fff);
+  color: var(--text-primary);
+  font-weight: 600;
+  box-shadow: 0 1px 3px rgba(0, 0, 0, 0.12);
+}
+.create-app-modal--guided .create-app-modal__actions { align-items: center; }
+.create-app-modal__browse { margin: 0 auto 0 0; font-size: 12.5px; }

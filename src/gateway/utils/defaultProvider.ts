@@ -46,8 +46,8 @@ export async function getDefaultProviderAndModel(): Promise<{
   const defaultModelByProvider: Record<Provider, string> = {
     openai: "gpt-5-6-sol",
     "openai-codex": "gpt-5.3-codex",
-      anthropic: "claude-sonnet-5",
-    google: "gemini-3.5-flash",
+      anthropic: "claude-sonnet-5-5",
+    google: "gemini-3.8-flash",
     ollama: resolveDefaultOllamaModelId(),
     cursor: "composer-2.5",
     zai: "glm-5.2",
@@ -86,6 +86,16 @@ export async function getDefaultProviderAndModel(): Promise<{
       return { provider: "google", model: defaultModelByProvider.google };
     }
 
+    // 2b. Papr login enables cloud models via proxy (no BYOK/OAuth required)
+    const { getPaprApiKey } = await import("./keyResolver.js");
+    const paprApiKey = await getPaprApiKey();
+    if (paprApiKey) {
+      console.log(
+        "[DefaultProvider] No BYOK/OAuth — using Papr AI proxy (openai default)",
+      );
+      return { provider: "openai", model: defaultModelByProvider.openai };
+    }
+
     // 3. Fallback to Ollama (always available, no auth needed)
     console.log(
       "[DefaultProvider] No OAuth or API keys found, falling back to Ollama (local inference)",
@@ -111,8 +121,8 @@ export async function getAvailableProviders(): Promise<AvailableProvider[]> {
   const defaultModelByProvider: Record<Provider, string> = {
     openai: "gpt-5-6-sol",
     "openai-codex": "gpt-5.3-codex",
-      anthropic: "claude-sonnet-5",
-    google: "gemini-3.5-flash",
+      anthropic: "claude-sonnet-5-5",
+    google: "gemini-3.8-flash",
     ollama: resolveDefaultOllamaModelId(),
     cursor: "composer-2.5",
     zai: "glm-5.2",

@@ -8,13 +8,28 @@ import {
   getModelGroups,
   type AIModel,
 } from "./models";
+import { EFFORT_VARIANT_MODELS } from "./modelControls";
 
-/** Models kept for jobs/runtime but hidden from chat picker. */
+/** Jev-routed pseudo-model — see src/gateway/services/agent/jevTurnRouter.ts. */
+export const AUTO_MODEL_ID = "auto";
+
+/**
+ * Models kept for jobs/runtime but hidden from chat picker.
+ *
+ * The `-low` / `-high` / `-max` entries are not separate models: each is one
+ * API model at a fixed reasoning effort, and listing them made the picker three
+ * rows deep for one model. Effort is now a control on the model, so these ids
+ * survive only as the thing a saved preference or pinned chat migrates *from*
+ * (see {@link EFFORT_VARIANT_MODELS}, which preserves the effort they implied).
+ */
 export const CHAT_PICKER_EXCLUDED_MODEL_IDS: readonly string[] = [
   "composer-2.5",
   "gpt-5.5-low",
   "gpt-5.5",
   "gpt-5.5-high",
+  "gpt-5-6-sol-low",
+  "gpt-5-6-sol-high",
+  "glm-5.2-max",
 ];
 
 export function isChatPickerModelId(modelId: string): boolean {
@@ -24,8 +39,18 @@ export function isChatPickerModelId(modelId: string): boolean {
   );
 }
 
-/** Map retired picker ids to their successors. */
+/**
+ * Map retired picker ids to their successors.
+ *
+ * Effort variants collapse onto their base model here. The effort itself is not
+ * dropped — {@link unpackEffortVariant} recovers it for a chat that was pinned
+ * to the variant, so the chat keeps reasoning at the depth it was chosen for.
+ */
 export function migratePickerModelId(modelId: string): string {
+  const effortVariant = EFFORT_VARIANT_MODELS[modelId];
+  if (effortVariant) {
+    return effortVariant.modelId;
+  }
   if (
     modelId === "gpt-5.5-low" ||
     modelId === "gpt-5.5" ||
@@ -33,21 +58,68 @@ export function migratePickerModelId(modelId: string): string {
   ) {
     return "gpt-5-6-sol";
   }
-  if (modelId === "claude-opus-4-8") {
-    return "claude-opus-5";
+  if (modelId === "claude-sonnet-5") {
+    return "claude-sonnet-5-5";
+  }
+  if (modelId === "claude-opus-4-8" || modelId === "claude-opus-5") {
+    return "claude-opus-5-5";
+  }
+  if (modelId === "claude-fable-5") {
+    return "claude-fable-5-1";
+  }
+  if (modelId === "gemini-3.1-flash-lite") {
+    return "gemini-3.5-flash-lite";
+  }
+  if (modelId === "gemini-3.5-flash") {
+    return "gemini-3.8-flash";
+  }
+  if (modelId === "gemini-3.6-flash" || modelId === "gemini-3.7-flash") {
+    return "gemini-3.8-flash";
   }
   return modelId;
 }
 
 /** Flat default list shown to new users (cloud models only). */
 export const PICKER_DEFAULT_MODEL_IDS: readonly string[] = [
-  "claude-sonnet-5",
-  "claude-opus-4-6",
+  "auto",
+  "claude-sonnet-5-5",
+  "claude-opus-5",
+  "claude-opus-5-5",
+  "claude-fable-5-1",
   "gpt-5-6-sol",
-  "glm-5.2-max",
+  "gpt-6-astra",
+  "glm-5.2",
   "qwen/qwen3-32b",
-  "gemini-3.1-flash-lite",
-  "gemini-3.5-flash",
+  "gemini-3.5-flash-lite",
+  "gemini-3.8-flash",
+  "gemini-3.1-pro-preview",
+];
+
+/** Pre-Sonnet-5.5 defaults — upgrade saved picker preferences on next load. */
+export const PRE_SONNET_55_PICKER_DEFAULT_MODEL_IDS: readonly string[] = [
+  "claude-sonnet-5",
+  "claude-opus-5",
+  "claude-opus-5-5",
+  "claude-fable-5-1",
+  "gpt-5-6-sol",
+  "gpt-6-astra",
+  "glm-5.2",
+  "qwen/qwen3-32b",
+  "gemini-3.5-flash-lite",
+  "gemini-3.8-flash",
+  "gemini-3.1-pro-preview",
+];
+
+/** Pre-Opus-5.5/Astra defaults — upgrade saved picker preferences on next load. */
+export const PRE_OPUS_5_5_PICKER_DEFAULT_MODEL_IDS: readonly string[] = [
+  "claude-sonnet-5",
+  "claude-opus-5",
+  "claude-fable-5-1",
+  "gpt-5-6-sol",
+  "glm-5.2",
+  "qwen/qwen3-32b",
+  "gemini-3.5-flash-lite",
+  "gemini-3.8-flash",
   "gemini-3.1-pro-preview",
 ];
 
@@ -64,13 +136,93 @@ export const LEGACY_PICKER_DEFAULT_MODEL_IDS: readonly string[] = [
   "gemini-3.1-pro-preview",
 ];
 
-function sameModelIdSet(
-  a: readonly string[],
-  b: readonly string[],
-): boolean {
+/** Pre-Fable/Opus-5 defaults (Sonnet 5 era) — upgrade on next load. */
+export const PRE_FABLE_PICKER_DEFAULT_MODEL_IDS: readonly string[] = [
+  "claude-sonnet-5",
+  "claude-opus-4-6",
+  "gpt-5-6-sol",
+  "glm-5.2-max",
+  "qwen/qwen3-32b",
+  "gemini-3.1-flash-lite",
+  "gemini-3.5-flash",
+  "gemini-3.1-pro-preview",
+];
+
+/** Pre-Opus-5.5 defaults — upgrade saved picker preferences on next load. */
+export const PRE_OPUS_55_PICKER_DEFAULT_MODEL_IDS: readonly string[] = [
+  "claude-sonnet-5",
+  "claude-opus-5",
+  "claude-fable-5-1",
+  "gpt-5-6-sol",
+  "glm-5.2",
+  "qwen/qwen3-32b",
+  "gemini-3.5-flash-lite",
+  "gemini-3.8-flash",
+  "gemini-3.1-pro-preview",
+];
+
+/** Pre-Gemini-3.8 defaults (3.6 era) — upgrade saved picker preferences on next load. */
+export const PRE_GEMINI_38_PICKER_DEFAULT_MODEL_IDS: readonly string[] = [
+  "claude-sonnet-5",
+  "claude-opus-5",
+  "claude-fable-5-1",
+  "gpt-5-6-sol",
+  "glm-5.2-max",
+  "qwen/qwen3-32b",
+  "gemini-3.5-flash-lite",
+  "gemini-3.6-flash",
+  "gemini-3.1-pro-preview",
+];
+
+/** Pre-Gemini-3.6 defaults — upgrade saved picker preferences on next load. */
+export const PRE_GEMINI_36_PICKER_DEFAULT_MODEL_IDS: readonly string[] = [
+  "claude-sonnet-5",
+  "claude-opus-5",
+  "claude-fable-5-1",
+  "gpt-5-6-sol",
+  "glm-5.2-max",
+  "qwen/qwen3-32b",
+  "gemini-3.1-flash-lite",
+  "gemini-3.5-flash",
+  "gemini-3.1-pro-preview",
+];
+
+function sameModelIdSet(a: readonly string[], b: readonly string[]): boolean {
   if (a.length !== b.length) return false;
   const setA = new Set(a);
   return b.every((id) => setA.has(id));
+}
+
+/** Non-Anthropic defaults — if all missing from a short list, settings were likely clobbered. */
+const CROSS_PROVIDER_DEFAULT_MARKERS: readonly string[] = [
+  "gpt-5-6-sol",
+  "gemini-3.8-flash",
+  "glm-5.2",
+  "qwen/qwen3-32b",
+];
+
+function healTruncatedPickerList(migrated: string[]): string[] {
+  if (migrated.length >= PICKER_DEFAULT_MODEL_IDS.length) {
+    return migrated;
+  }
+  // Single-model lists are intentional user choices, not clobber artifacts.
+  if (migrated.length <= 1) {
+    return migrated;
+  }
+  const hasCrossProviderDefault = CROSS_PROVIDER_DEFAULT_MARKERS.some((id) =>
+    migrated.includes(id),
+  );
+  if (hasCrossProviderDefault) {
+    return migrated;
+  }
+  const allAnthropic = migrated.every((id) => {
+    const model = getModelById(id);
+    return model?.provider === "anthropic";
+  });
+  if (!allAnthropic) {
+    return migrated;
+  }
+  return [...new Set([...PICKER_DEFAULT_MODEL_IDS, ...migrated])];
 }
 
 /** Upgrade saved picker lists after Sonnet 5 launch. */
@@ -78,6 +230,34 @@ export function migrateEnabledPickerModelIds(
   enabledIds: string[] | null | undefined,
 ): string[] {
   if (!enabledIds || enabledIds.length === 0) {
+    return [...PICKER_DEFAULT_MODEL_IDS];
+  }
+
+  if (sameModelIdSet(enabledIds, PRE_SONNET_55_PICKER_DEFAULT_MODEL_IDS)) {
+    return [...PICKER_DEFAULT_MODEL_IDS];
+  }
+
+  if (sameModelIdSet(enabledIds, PRE_OPUS_5_5_PICKER_DEFAULT_MODEL_IDS)) {
+    return [...PICKER_DEFAULT_MODEL_IDS];
+  }
+
+  if (sameModelIdSet(enabledIds, PRE_FABLE_PICKER_DEFAULT_MODEL_IDS)) {
+    return [...PICKER_DEFAULT_MODEL_IDS];
+  }
+
+  if (sameModelIdSet(enabledIds, PRE_OPUS_55_PICKER_DEFAULT_MODEL_IDS)) {
+    return [...PICKER_DEFAULT_MODEL_IDS];
+  }
+
+  if (sameModelIdSet(enabledIds, PRE_GEMINI_38_PICKER_DEFAULT_MODEL_IDS)) {
+    return [...PICKER_DEFAULT_MODEL_IDS];
+  }
+
+  if (sameModelIdSet(enabledIds, PRE_GEMINI_36_PICKER_DEFAULT_MODEL_IDS)) {
+    return [...PICKER_DEFAULT_MODEL_IDS];
+  }
+
+  if (sameModelIdSet(enabledIds, LEGACY_PICKER_DEFAULT_MODEL_IDS)) {
     return [...PICKER_DEFAULT_MODEL_IDS];
   }
 
@@ -95,17 +275,50 @@ export function migrateEnabledPickerModelIds(
     return [...PICKER_DEFAULT_MODEL_IDS];
   }
 
-  // Swap the default Sonnet slot when users still have 4.6 enabled without 5.
+  if (sameModelIdSet(migrated, PRE_FABLE_PICKER_DEFAULT_MODEL_IDS)) {
+    return [...PICKER_DEFAULT_MODEL_IDS];
+  }
+
+  // Also checked before the collapse above. Both rounds are needed: a list
+  // holding a variant id such as `glm-5.2-max` does not match any snapshot
+  // until the collapse has run, and one holding only base ids is answered by
+  // the earlier round without paying for the map.
+  if (sameModelIdSet(migrated, PRE_SONNET_55_PICKER_DEFAULT_MODEL_IDS)) {
+    return [...PICKER_DEFAULT_MODEL_IDS];
+  }
+
+  if (sameModelIdSet(migrated, PRE_OPUS_5_5_PICKER_DEFAULT_MODEL_IDS)) {
+    return [...PICKER_DEFAULT_MODEL_IDS];
+  }
+
+  // Swap the default Sonnet slot when users still have 4.6 enabled without 5.5.
   if (
     migrated.includes("claude-sonnet-4-6") &&
-    !migrated.includes("claude-sonnet-5")
+    !migrated.includes("claude-sonnet-5-5")
   ) {
     return migrated.map((id) =>
-      id === "claude-sonnet-4-6" ? "claude-sonnet-5" : id,
+      id === "claude-sonnet-4-6" ? "claude-sonnet-5-5" : id,
     );
   }
 
-  return migrated;
+  // Upgrade Sonnet 5 → 5.5 in customized lists that still carry the old id.
+  if (
+    migrated.includes("claude-sonnet-5") &&
+    !migrated.includes("claude-sonnet-5-5")
+  ) {
+    return migrated.map((id) =>
+      id === "claude-sonnet-5" ? "claude-sonnet-5-5" : id,
+    );
+  }
+
+  const preOpus55Collapsed = [
+    ...new Set(PRE_OPUS_55_PICKER_DEFAULT_MODEL_IDS.map(migratePickerModelId)),
+  ];
+  if (sameModelIdSet(migrated, preOpus55Collapsed)) {
+    return [...PICKER_DEFAULT_MODEL_IDS];
+  }
+
+  return healTruncatedPickerList(migrated);
 }
 
 export function isPickerDefaultModelId(modelId: string): boolean {
@@ -124,6 +337,10 @@ export function getPickerModels(
   enabledIds: string[] | null | undefined,
 ): AIModel[] {
   const enabledSet = new Set(resolveEnabledPickerModelIds(enabledIds));
+  // Auto is always pinned: it is not a model the user opts into, it is the
+  // router over whatever models they already have. Saved picker lists that
+  // predate it would otherwise hide it for good.
+  enabledSet.add(AUTO_MODEL_ID);
   return CHAT_MODELS.filter(
     (model) => enabledSet.has(model.id) && isChatPickerModelId(model.id),
   );

@@ -1,11 +1,12 @@
 import { createTool } from "@mastra/core/tools";
 import { z } from "zod";
+import { getPaprAppsRoot, getPaprJobsRoot } from "../utils/paprRoot.js";
 
 const projectIdSchema = z.object({
   projectId: z
     .string()
     .min(1)
-    .describe("Mini-app or job ID (folder name under ~/Papr/apps/ or ~/Papr/jobs/)"),
+    .describe("Mini-app or job ID (folder under $PAPR_HOME/apps/ or $PAPR_HOME/Jobs/)"),
 });
 
 const fileSummarySchema = projectIdSchema.extend({
@@ -23,14 +24,12 @@ async function resolveFileSummary(projectId: string, filePath: string) {
 
   let resolvedPath = filePath;
   if (!filePath.startsWith("/") && !filePath.includes("Papr/")) {
-    const path = await import("path");
-    const os = await import("os");
-    const paprDir = path.join(os.homedir(), "Papr");
-
-    const appCandidate = path.join(paprDir, "apps", projectId, filePath);
-    const jobCandidate = path.join(paprDir, "Jobs", projectId, filePath);
-
+    const pathMod = await import("path");
     const fs = await import("fs");
+
+    const appCandidate = pathMod.join(getPaprAppsRoot(), projectId, filePath);
+    const jobCandidate = pathMod.join(getPaprJobsRoot(), projectId, filePath);
+
     if (fs.existsSync(appCandidate)) {
       resolvedPath = appCandidate;
     } else if (fs.existsSync(jobCandidate)) {

@@ -11,6 +11,9 @@ import type {
   AppRuntimeRouteAuth,
   TursoCredentialsProvider,
 } from "./types.js";
+import type { AppFileRow } from "../appFiles/appFilesSchema.js";
+import type { FilesDb } from "../appFiles/AppFilesService.js";
+import { splitSqlStatements } from "../jobs/migrationSqlHelpers.js";
 import { TursoDbAdapter } from "./TursoDbAdapter.js";
 import { getJobEventHub } from "../JobEventHub.js";
 import { publishDbChanged } from "../../utils/publishJobRunEvents.js";
@@ -27,15 +30,20 @@ import {
   assertReadOnlySql,
   assertWriteSql,
 } from "./sqlValidation.js";
-import { parseDataSourcesFile, type AppDataSourcesFile } from "../appDataSources.js";
+import { coalesceBatchSourceId, type AppDataSourcesFile } from "../appDataSources.js";
 import { resolveDbEventTarget } from "../../utils/resolveDbEventTarget.js";
 import { getMemoryServerBaseUrl } from "../../utils/cloudApiClient.js";
 import {
   fetchRuntimeDbToken,
+  getCloudAppHostKey,
+  getRuntimeJobStatus,
   listRuntimeJobs,
+  recordRuntimeTursoDbChanged,
   runRuntimeJob,
+  runtimeFetch,
 } from "./memoryRuntimeClient.js";
 import { CloudAppBackendService } from "./CloudAppBackendService.js";
+import { createCloudBackendDbProxyRouter, type BackendDbProxySession } from "./backendDbProxy.js";
 import {
   MINI_APP_BASH_DISABLED_CODE,
   MINI_APP_BASH_DISABLED_MESSAGE,
@@ -44,21 +52,25 @@ import {
   cacheControlForAppAsset,
   fetchCachedRuntimeRepoFile,
   getCachedTranspiledTypeScript,
+  invalidateAccessCacheForPublishedApp,
   invalidateRepoCacheForPublishedApp,
+  invalidateRepoCacheForNamespace,
   validateCachedAccess,
 } from "./cloudAppHostCache.js";
 import { shouldBypassRepoFileCache } from "./cloudAppHostRequestCache.js";
 import {
   cloudContextCookieHeaders,
+  injectPaprCloudContextMeta,
   isReservedCloudPathSegment,
   resolveCloudRouteContext,
 } from "./cloudAppHostContext.js";
+import { enrichRuntimeAuthWithPaprApiKey } from "./resolveCloudSessionPaprApiKey.js";
 import { CloudAppHostAuthService } from "./CloudAppHostAuthService.js";
 import { CloudAppHostCredentialService } from "./CloudAppHostCredentialService.js";
 import {
   buildShareTokenCookie,
   readShareTokenFromCookie,
-  sanitizeReturnToPath,
+  resolveCloudAuthReturnToFromRequest,
 } from "./cloudAppHostCookies.js";
 import {
   ensurePublishedAppRootTrailingSlash,
@@ -73,6 +85,25 @@ import {
 } from "./cloudAppPublishClient.js";
 import { getMiniAppContentType } from "../../utils/miniAppStaticAssets.js";
 import {
+  buildMiniAppAccessResponse,
+  mergeVerifiedCallerJobParams,
+} from "./miniAppAccess.js";
+import { configHasPerUserLinkedSources } from "./cloudAppPerUserAccess.js";
+import { applyPeopleAllowlist } from "./cloudAppPeopleAccess.js";
+import {
+  invalidateMemoryShareAllowlistCache,
+  loadSharePeopleAllowlistForCloudHost,
+} from "./cloudAppSharePeopleAllowlistLoader.js";
+import {
+  setSharePeopleAllowlistPush,
+  shareAllowlistFromPushBody,
+} from "./cloudAppHostShareAllowlistPushStore.js";
+import {
+  assertMiniAppMembersAccess,
+  listMiniAppMembers,
+  MiniAppMembersError,
+} from "./miniAppMembers.js";
+import {
   buildDbCacheKey,
   checkDbRateLimit,
   dbRateLimitKey,
@@ -81,7 +112,7 @@ import {
   setCachedDbResult,
 } from "./dbRequestGuard.js";
 import { isMiniAppTypeScriptFile } from "../../utils/miniAppTranspile.js";
-import { isLinkPreviewCrawler } from "../../../core/utils/cloudAppPreview.js";
+import { buildCloudAuthLoginUrl, isLinkPreviewCrawler } from "../../../core/utils/cloudAppPreview.js";
 import {
   buildShareGateLandingHtml,
   resolveShareGatePresentation,
@@ -91,17 +122,21 @@ import {
   resolvePreviewIconSvg,
 } from "./CloudAppPreviewService.js";
 import {
-  formatPublishedAppRevision,
+  PAPR_APP_META_RELATIVE_PATH,
+  readCloudAppMetaFromContent,
+} from "../cloudSync/cloudAppMeta.js";
+import { normalizeRequiredSchemaVersion } from "../jobs/migrationLedgerPolicy.js";
+import {
+  evaluateCloudAppSchemaGateCached,
+  toAppRevisionSchemaPayload,
+  warmCloudAppSchemaGate,
+} from "./cloudAppSchemaGate.js";
+import {
   injectPaprAppRevisionMeta,
+  prefetchIndexHtmlRepoFiles,
   resolvePublishedAppRevision,
 } from "./publishedAppRevision.js";
-import {
-  CLOUD_REPO_HEAD_RELATIVE_PATH,
-  parseCloudRepoHeadContent,
-} from "../cloudSync/cloudRepoHeadMarker.js";
-import { getAppRevisionHub } from "./AppRevisionHub.js";
-import { registerAppRevisionSseRoutes } from "./registerAppRevisionSse.js";
-import { hydrateCloudDatabaseRegistry } from "./cloudDatabaseRegistry.js";
+import { loadAppDataSourcesConfig } from "./cloudDatabaseRegistry.js";
 
 export interface CloudAppHostDeps {
   tursoCredentials: TursoCredentialsProvider;
@@ -127,6 +162,8 @@ export class MemoryServerPublishResolver implements AppPublishResolver {
     paprApiKey?: string;
     sessionToken?: string;
     shareToken?: string;
+    externalUserId?: string;
+    callerEmail?: string;
   }): Promise<AppAccessContext | null> {
     const headers: Record<string, string> = {
       "Content-Type": "application/json",
@@ -138,7 +175,7 @@ export class MemoryServerPublishResolver implements AppPublishResolver {
       headers["X-Session-Token"] = input.sessionToken;
     }
 
-    const res = await fetch(`${getMemoryServerBaseUrl()}/v1/cloud/apps/access/validate`, {
+    const res = await runtimeFetch(`${getMemoryServerBaseUrl()}/v1/cloud/apps/access/validate`, {
       method: "POST",
       headers,
       body: JSON.stringify({
@@ -146,6 +183,9 @@ export class MemoryServerPublishResolver implements AppPublishResolver {
         slug: input.slug,
         paprApiKey: input.paprApiKey,
         shareToken: input.shareToken,
+        ...(input.sessionToken ? { sessionToken: input.sessionToken } : {}),
+        ...(input.externalUserId ? { external_user_id: input.externalUserId } : {}),
+        ...(input.callerEmail ? { callerEmail: input.callerEmail } : {}),
       }),
     });
     if (res.status === 401 || res.status === 403 || res.status === 404 || res.status === 422) {
@@ -194,6 +234,44 @@ function getRequestPaprApiKey(req: Request): string | undefined {
   return undefined;
 }
 
+/** Exposed as Server-Timing for E2E / browser devtools (Phase 1 perf tracking). */
+function setCloudDbServerTiming(
+  res: Response,
+  parts: Record<string, number | string>,
+): void {
+  const header = Object.entries(parts)
+    .map(([name, value]) =>
+      typeof value === "number"
+        ? `${name};dur=${Math.round(value)}`
+        : `${name};desc="${String(value).replace(/"/g, "")}"`,
+    )
+    .join(", ");
+  if (header) {
+    res.setHeader("Server-Timing", header);
+  }
+}
+
+function cloudHostCacheTimingParts(perf: {
+  accessCacheHit: boolean;
+  configCacheHit: boolean;
+}): Record<string, string> {
+  return {
+    accessCache: perf.accessCacheHit ? "hit" : "miss",
+    configCache: perf.configCacheHit ? "hit" : "miss",
+  };
+}
+
+/**
+ * Ceiling for uploads initiated from a published cloud app.
+ *
+ * Desktop uploads are unbounded because the uploader owns the storage. On the
+ * cloud host the ticket is minted with the publisher's credential, so an
+ * authorized team member spends the owner's quota — `canWrite` answers who may
+ * upload but nothing caps how much. Rejecting before the ticket is minted keeps
+ * the check cheap and server-side.
+ */
+const CLOUD_UPLOAD_MAX_BYTES = 100 * 1024 * 1024;
+
 export class CloudAppHostService {
   private readonly turso: TursoDbAdapter;
   private readonly auth = new CloudAppHostAuthService();
@@ -210,7 +288,6 @@ export class CloudAppHostService {
     this.credentials.registerRoutes(app);
 
     registerPaprMiniAppSdkRoutes(app);
-    registerAppRevisionSseRoutes(app, getAppRevisionHub());
     registerAppAgentChatRoutes(app, {
       mode: "cloud",
       sessionStore: getMemoryAppAgentChatSessionStore(),
@@ -227,8 +304,7 @@ export class CloudAppHostService {
           return null;
         }
         try {
-          const { jobs } = await listRuntimeJobs(runtimeAuth);
-          const job = jobs.find((entry) => entry.id === jobId);
+          const job = await getRuntimeJobStatus(runtimeAuth, jobId);
           if (!job) {
             return null;
           }
@@ -237,6 +313,7 @@ export class CloudAppHostService {
             name: job.name,
             status: job.status ?? "unknown",
             completedAt: job.completedAt,
+            lastOutput: job.lastOutput,
           };
         } catch {
           return null;
@@ -252,10 +329,40 @@ export class CloudAppHostService {
       void this.handleInternalAppRevisionUpdated(req, res),
     );
 
+    app.post("/internal/app-access-updated", (req, res) =>
+      void this.handleInternalAppAccessUpdated(req, res),
+    );
+
+    app.post("/internal/app-repo-committed", (req, res) =>
+      void this.handleInternalAppRepoCommitted(req, res),
+    );
+
+    app.post("/internal/db-changed", (req, res) =>
+      void this.handleInternalDbChanged(req, res),
+    );
+
+    app.use(
+      "/internal/backend-db",
+      createCloudBackendDbProxyRouter({
+        query: async (session, sql, params, sourceId) =>
+          this.runBackendDbProxyQuery(session, sql, params, sourceId),
+        write: async (session, sql, params, sourceId) =>
+          this.runBackendDbProxyWrite(session, sql, params, sourceId),
+      }),
+    );
+
+    app.get("/api/access", (req, res) => void this.handleAccess(req, res));
+    app.get("/api/members", (req, res) => void this.handleMembers(req, res));
     app.get("/api/db/schema", (req, res) => this.handleSchema(req, res));
     app.post("/api/db/query", (req, res) => this.handleQuery(req, res));
-    app.post("/api/db/batch", (req, res) => this.handleBatchQuery(req, res));
+    const handleBatchQueryRoute = (req: Request, res: Response): void => {
+      void this.handleBatchQuery(req, res);
+    };
+    app.post("/api/db/batch", handleBatchQueryRoute);
+    app.post("/api/db/query-batch", handleBatchQueryRoute);
+    app.post("/api/db/read-batch", handleBatchQueryRoute);
     app.post("/api/db/write", (req, res) => this.handleWrite(req, res));
+    app.post("/api/db/write-batch", (req, res) => this.handleWriteBatch(req, res));
     app.post("/api/db/exec", (req, res) => this.handleExec(req, res));
     app.post("/api/bash/run", (req, res) => void this.handleBashRun(req, res));
     app.post("/api/app/backend/:action", (req, res) =>
@@ -268,6 +375,19 @@ export class CloudAppHostService {
     app.post("/api/jobs/run", (req, res) => void this.handleJobRun(req, res));
     app.post("/api/credentials/client-keys", (req, res) =>
       void this.handleClientKeys(req, res),
+    );
+    // Same path and body as the desktop gateway, so `papr.files.url(id)` is one
+    // call that works in both runtimes. Without this a published app that
+    // references a file 404s on apps.papr.ai.
+    app.post("/api/files/url", (req, res) => void this.handleFileUrl(req, res));
+    app.get("/api/files", (req, res) => void this.handleFileList(req, res));
+    // Writes are gated by access.canWrite — the same check /api/db/write uses —
+    // so a read-only link still cannot upload while a team member can.
+    app.post("/api/files/ticket", (req, res) =>
+      void this.handleFileTicket(req, res),
+    );
+    app.post("/api/files/commit", (req, res) =>
+      void this.handleFileCommit(req, res),
     );
 
     app.get("/:namespaceId/:slug/__papr__/app-revision.json", (req, res) => {
@@ -334,7 +454,121 @@ export class CloudAppHostService {
       paprApiKey: getRequestPaprApiKey(req),
       sessionToken: this.auth.getSessionToken(req),
       shareToken: getShareToken(req, ctx.namespaceId, ctx.slug),
+      externalUserId: this.auth.getExternalUserId(req),
     };
+  }
+
+  /**
+   * Turso replica actors: publisher (shared DBs) + session caller (per-user DBs).
+   */
+  private tursoDbRequest(
+    access: AppAccessContext,
+    runtimeAuth: AppRuntimeRouteAuth,
+  ): { userId: string; callerUserId?: string } {
+    return {
+      userId: access.userId,
+      callerUserId: runtimeAuth.externalUserId,
+    };
+  }
+
+  private backendDbProxyAccess(session: BackendDbProxySession): AppAccessContext {
+    const cloud = session.cloud;
+    if (!cloud) {
+      throw Object.assign(new Error("Invalid cloud backend DB proxy session"), {
+        status: 401,
+      });
+    }
+    return {
+      orgId: cloud.orgId,
+      namespaceId: cloud.namespaceId,
+      userId: cloud.userId,
+      appId: session.appId,
+      mode: "owner",
+      canRead: cloud.canRead,
+      canWrite: cloud.canWrite,
+    };
+  }
+
+  private async runBackendDbProxyQuery(
+    session: BackendDbProxySession,
+    sql: string,
+    params: unknown[] | undefined,
+    sourceId: string | undefined,
+  ): Promise<{ rows: Record<string, unknown>[]; count: number }> {
+    const cloud = session.cloud;
+    if (!cloud) {
+      throw Object.assign(new Error("Invalid cloud backend DB proxy session"), {
+        status: 401,
+      });
+    }
+    if (!cloud.canRead) {
+      throw Object.assign(new Error("Read not allowed for this link"), { status: 403 });
+    }
+    const access = this.backendDbProxyAccess(session);
+    const config = await this.loadDataSources(cloud.runtimeAuth);
+    return this.turso.query({
+      orgId: cloud.orgId,
+      namespaceId: cloud.namespaceId,
+      ...this.tursoDbRequest(access, cloud.runtimeAuth),
+      runtimeAuth: cloud.runtimeAuth,
+      config,
+      sourceId,
+      sql,
+      params,
+    });
+  }
+
+  private async runBackendDbProxyWrite(
+    session: BackendDbProxySession,
+    sql: string,
+    params: unknown[] | undefined,
+    sourceId: string | undefined,
+  ): Promise<{ changes: number; lastInsertRowid: number }> {
+    const cloud = session.cloud;
+    if (!cloud) {
+      throw Object.assign(new Error("Invalid cloud backend DB proxy session"), {
+        status: 401,
+      });
+    }
+    if (!cloud.canWrite) {
+      throw Object.assign(new Error("Write not allowed for this link"), { status: 403 });
+    }
+    const access = this.backendDbProxyAccess(session);
+    const config = await this.loadDataSources(cloud.runtimeAuth);
+    const result = await this.turso.write({
+      orgId: cloud.orgId,
+      namespaceId: cloud.namespaceId,
+      ...this.tursoDbRequest(access, cloud.runtimeAuth),
+      runtimeAuth: cloud.runtimeAuth,
+      config,
+      appId: session.appId,
+      sourceId,
+      sql,
+      params,
+    });
+    invalidateDbCacheForApp(cloud.runtimeAuth.namespaceId, cloud.runtimeAuth.slug);
+    this.publishDbChangedForSource(config, sourceId, session.appId, cloud.runtimeAuth);
+    return result;
+  }
+
+  private callerIsSignedIn(runtimeAuth: AppRuntimeRouteAuth): boolean {
+    return Boolean(
+      runtimeAuth.sessionToken?.trim() || runtimeAuth.externalUserId?.trim(),
+    );
+  }
+
+  private async accessBlockedForAnonymousPerUserData(
+    runtimeAuth: AppRuntimeRouteAuth,
+  ): Promise<boolean> {
+    if (this.callerIsSignedIn(runtimeAuth)) {
+      return false;
+    }
+    try {
+      const config = await this.loadDataSources(runtimeAuth);
+      return configHasPerUserLinkedSources(config);
+    } catch {
+      return false;
+    }
   }
 
   /**
@@ -440,10 +674,13 @@ export class CloudAppHostService {
       sessionToken,
     );
 
-    const returnTo = sanitizeReturnToPath(req.originalUrl.split("?")[0] ?? req.originalUrl);
-    const loginUrl = `/auth/login?returnTo=${encodeURIComponent(returnTo)}&start=1`;
+    const returnTo = resolveCloudAuthReturnToFromRequest(req, {
+      namespaceId: runtimeAuth.namespaceId,
+      slug: runtimeAuth.slug,
+    });
+    const loginUrl = `/auth/login?returnTo=${encodeURIComponent(returnTo)}`;
 
-    if (!resolved || visibilityRequiresPaprLogin(resolved.visibility)) {
+    if (!resolved || visibilityRequiresPaprLogin(resolved.visibility, resolved.requireSignIn)) {
       if (options.html) {
         await this.sendShareGatePreview(req, res, runtimeAuth);
         return;
@@ -481,64 +718,623 @@ export class CloudAppHostService {
     }
   }
 
-  private async resolveAccess(
+  /**
+   * POST /api/files/url — resolve one App Files id to a URL a browser can use.
+   *
+   * Mirrors the desktop route so mini-app code is identical in both runtimes.
+   * The difference is what can be returned: the desktop may hand back a local
+   * path, whereas the cloud has no filesystem and must answer with a CDN URL
+   * (published, app-scoped) or a short-lived signed URL (everything else).
+   *
+   * All of the judgement lives in `resolveCloudFileUrl`, which is pure and
+   * tested exhaustively; this method only fetches the row and acts.
+   */
+  private async handleFileUrl(req: Request, res: Response): Promise<void> {
+    try {
+      const { appId: requestedAppId, sourceId, id } = req.body as {
+        appId?: string;
+        sourceId?: string;
+        id?: string;
+      };
+      if (!id) {
+        res.status(400).json({ error: "id is required" });
+        return;
+      }
+
+      if (!this.enforceDbRateLimit(req, res, "read")) return;
+
+      const ctx = await this.resolveDbAppContext(req, res, requestedAppId);
+      if (!ctx) return;
+      const { runtimeAuth, access, appId } = ctx;
+
+      const config = await this.loadDataSources(runtimeAuth);
+      const result = await this.turso.query({
+        orgId: access.orgId,
+        namespaceId: access.namespaceId,
+        ...this.tursoDbRequest(access, runtimeAuth),
+        runtimeAuth,
+        config,
+        sourceId,
+        sql: "SELECT * FROM app_files WHERE id = ? LIMIT 1",
+        params: [id],
+      });
+
+      // Turso hands back untyped rows; app_files is our own schema, so the
+      // shape is known even though the adapter cannot express it.
+      let row = (result?.rows?.[0] ?? null) as unknown as AppFileRow | null;
+
+      const { resolveCloudFileUrl, buildCdnUrl } = await import(
+        "../appFiles/cloudFileUrl.js"
+      );
+
+      if (
+        row &&
+        row.upload_state !== "verified" &&
+        runtimeAuth.paprApiKey
+      ) {
+        const { tryFinalizeBrowserUpload } = await import(
+          "../appFiles/AppFilesService.js"
+        );
+        const filesDb = this.cloudFilesDb(
+          access,
+          runtimeAuth,
+          appId,
+          config,
+          sourceId,
+        );
+        row =
+          (await tryFinalizeBrowserUpload(filesDb, row, {
+            appId,
+            memoryApiKey: runtimeAuth.paprApiKey,
+          })) ?? row;
+      }
+
+      const decision = resolveCloudFileUrl(row, {
+        requestedAppId: appId,
+        canRead: access.canRead,
+        userId: runtimeAuth.externalUserId || null,
+        isPublished: true,
+      });
+
+      if (decision.kind === "deny") {
+        res.status(decision.status).json({ error: decision.reason });
+        return;
+      }
+
+      if (decision.kind === "cdn") {
+        res.json({
+          location: { kind: "cloud" },
+          url: buildCdnUrl(decision.objectKey),
+        });
+        return;
+      }
+
+      const { createReadUrl } = await import("../appFiles/appFilesClient.js");
+      const { url } = await createReadUrl(decision.appId, decision.objectKey, {
+        memoryApiKey: runtimeAuth.paprApiKey,
+      });
+      res.json({ location: { kind: "cloud" }, url });
+    } catch (err) {
+      res.status(500).json({ error: (err as Error).message });
+    }
+  }
+
+  /**
+   * GET /api/files — list this app's files.
+   *
+   * Read-only on purpose. Uploading from a published cloud app would need the
+   * visitor to hold write access to the owner's storage, which is a different
+   * trust decision than viewing published assets; until that is designed,
+   * cloud is read-only and the desktop remains the write path.
+   */
+  private async handleFileList(req: Request, res: Response): Promise<void> {
+    try {
+      const requestedAppId = req.query["appId"] as string | undefined;
+      const sourceId = req.query["sourceId"] as string | undefined;
+      if (!this.enforceDbRateLimit(req, res, "read")) return;
+
+      const ctx = await this.resolveDbAppContext(req, res, requestedAppId);
+      if (!ctx) return;
+      const { runtimeAuth, access, appId } = ctx;
+
+      if (!access.canRead) {
+        await this.respondAccessDenied(req, res, runtimeAuth);
+        return;
+      }
+
+      const config = await this.loadDataSources(runtimeAuth);
+      const result = await this.turso.query({
+        orgId: access.orgId,
+        namespaceId: access.namespaceId,
+        ...this.tursoDbRequest(access, runtimeAuth),
+        runtimeAuth,
+        config,
+        sourceId,
+        sql: `SELECT * FROM app_files WHERE app_id = ? ORDER BY created_at DESC`,
+        params: [appId],
+      });
+
+      const rows = (result?.rows ?? []) as unknown as AppFileRow[];
+      // User-scoped files belong to their uploader — a listing must not reveal
+      // one visitor's files to another, even though both can reach the app.
+      const visible = rows.filter(
+        (row) =>
+          !row.object_key.includes("/users/") ||
+          (runtimeAuth.externalUserId &&
+            row.object_key.includes(`/users/${runtimeAuth.externalUserId}/`)),
+      );
+      res.json({ files: visible });
+    } catch (err) {
+      res.status(500).json({ error: (err as Error).message });
+    }
+  }
+
+  /**
+   * Back AppFilesService with Turso instead of a local SQLite handle.
+   *
+   * Every statement goes through the same adapter `/api/db/*` uses, so per-user
+   * database isolation is inherited rather than reimplemented: `tursoDbRequest`
+   * supplies both the publisher and the calling user, and the routing layer
+   * picks the shared or the per-user database off the registry record. The
+   * files layer never has to know which mode a database is in.
+   */
+  private cloudFilesDb(
+    access: AppAccessContext,
+    runtimeAuth: AppRuntimeRouteAuth,
+    appId: string,
+    config: AppDataSourcesFile,
+    sourceId: string | undefined,
+  ): FilesDb {
+    const base = {
+      orgId: access.orgId,
+      namespaceId: access.namespaceId,
+      ...this.tursoDbRequest(access, runtimeAuth),
+      runtimeAuth,
+      config,
+      sourceId,
+    };
+    return {
+      exec: async (sql: string) => {
+        // ensureSchema ships multi-statement DDL; Turso rejects more than one.
+        for (const statement of splitSqlStatements(sql)) {
+          await this.turso.exec({ ...base, appId, sql: statement });
+        }
+      },
+      run: async (sql: string, params?: unknown[]) => {
+        const result = await this.turso.write({ ...base, appId, sql, params });
+        return { changes: result.changes ?? 0 };
+      },
+      all: async <T,>(sql: string, params?: unknown[]) => {
+        const result = await this.turso.query({ ...base, sql, params });
+        return (result?.rows ?? []) as unknown as T[];
+      },
+    };
+  }
+
+  /**
+   * Shared preamble for cloud file writes: authorize, rate-limit, and build a
+   * Turso-backed FilesDb. Returns null when it has already answered the request.
+   */
+  private async resolveFileWriteContext(
     req: Request,
-    appId?: string,
-  ): Promise<AppAccessContext | null> {
-    const runtimeAuth = this.buildRuntimeAuth(req);
-    if (!runtimeAuth) {
+    res: Response,
+    requestedAppId: string | undefined,
+    sourceId: string | undefined,
+  ): Promise<{ db: FilesDb; appId: string; memoryApiKey?: string } | null> {
+    if (!this.enforceDbRateLimit(req, res, "write")) return null;
+
+    const ctx = await this.resolveDbAppContext(req, res, requestedAppId);
+    if (!ctx) return null;
+    const { runtimeAuth, access, appId } = ctx;
+
+    if (!access.canWrite) {
+      if (!access.canRead) {
+        await this.respondAccessDenied(req, res, runtimeAuth);
+      } else {
+        res.status(403).json({ error: "Write not allowed for this link" });
+      }
       return null;
     }
 
-    const access = await validateCachedAccess(this.deps.publishResolver, runtimeAuth);
+    if (!runtimeAuth.paprApiKey) {
+      res.status(401).json({
+        error: "Sign in to Papr to upload files from this app.",
+      });
+      return null;
+    }
+
+    const config = await this.loadDataSources(runtimeAuth);
+    return {
+      db: this.cloudFilesDb(access, runtimeAuth, appId, config, sourceId),
+      appId,
+      memoryApiKey: runtimeAuth.paprApiKey,
+    };
+  }
+
+  /**
+   * POST /api/files/ticket — mint a resumable upload ticket from a published app.
+   *
+   * The bytes never transit this process: the browser PUTs straight to object
+   * storage, exactly as on desktop. What differs is only who is allowed to ask,
+   * which `resolveFileWriteContext` settles before any storage call is made.
+   *
+   * The size ceiling exists because the ticket is minted with the publisher's
+   * credential — an authorized team member uploads into the owner's quota, so
+   * "who" (canWrite) is not by itself a sufficient answer.
+   */
+  private async handleFileTicket(req: Request, res: Response): Promise<void> {
+    try {
+      const {
+        appId: requestedAppId,
+        sourceId,
+        fileName,
+        sizeBytes,
+        mime,
+        scope,
+        fingerprint,
+      } = req.body as {
+        appId?: string;
+        sourceId?: string;
+        fileName?: string;
+        sizeBytes?: number;
+        mime?: string | null;
+        scope?: "app" | "user";
+        fingerprint?: string;
+      };
+
+      if (!fileName || typeof sizeBytes !== "number" || !fingerprint) {
+        res
+          .status(400)
+          .json({ error: "fileName, sizeBytes and fingerprint are required" });
+        return;
+      }
+      if (sizeBytes > CLOUD_UPLOAD_MAX_BYTES) {
+        res.status(413).json({
+          error: `File exceeds the ${Math.round(
+            CLOUD_UPLOAD_MAX_BYTES / 1024 / 1024,
+          )} MB limit for uploads from a published app`,
+        });
+        return;
+      }
+
+      const ctx = await this.resolveFileWriteContext(
+        req,
+        res,
+        requestedAppId,
+        sourceId,
+      );
+      if (!ctx) return;
+
+      const { ensureSchema, createBrowserTicket } = await import(
+        "../appFiles/AppFilesService.js"
+      );
+      await ensureSchema(ctx.db);
+      res.json(
+        await createBrowserTicket(ctx.db, {
+          appId: ctx.appId,
+          fileName,
+          sizeBytes,
+          mime,
+          scope,
+          fingerprint,
+          memoryApiKey: ctx.memoryApiKey,
+        }),
+      );
+    } catch (err) {
+      res.status(500).json({ error: (err as Error).message });
+    }
+  }
+
+  /** POST /api/files/commit — verify a published-app upload once bytes land. */
+  private async handleFileCommit(req: Request, res: Response): Promise<void> {
+    try {
+      const {
+        appId: requestedAppId,
+        sourceId,
+        id,
+        objectKey,
+        sizeBytes,
+      } = req.body as {
+        appId?: string;
+        sourceId?: string;
+        id?: string;
+        objectKey?: string;
+        sizeBytes?: number;
+      };
+
+      if (!id || !objectKey || typeof sizeBytes !== "number") {
+        res
+          .status(400)
+          .json({ error: "id, objectKey and sizeBytes are required" });
+        return;
+      }
+
+      const ctx = await this.resolveFileWriteContext(
+        req,
+        res,
+        requestedAppId,
+        sourceId,
+      );
+      if (!ctx) return;
+
+      const { commitBrowserUpload } = await import(
+        "../appFiles/AppFilesService.js"
+      );
+      res.json(
+        await commitBrowserUpload(ctx.db, {
+          appId: ctx.appId,
+          id,
+          objectKey,
+          sizeBytes,
+          memoryApiKey: ctx.memoryApiKey,
+        }),
+      );
+    } catch (err) {
+      res.status(500).json({ error: (err as Error).message });
+    }
+  }
+
+  private async resolveAccess(
+    req: Request,
+    appId?: string,
+    enrichedAuth?: AppRuntimeRouteAuth,
+    perf?: { accessCacheHit?: boolean },
+  ): Promise<AppAccessContext | null> {
+    const baseAuth = enrichedAuth ?? this.buildRuntimeAuth(req);
+    if (!baseAuth) {
+      return null;
+    }
+
+    const runtimeAuth =
+      enrichedAuth ?? ((await enrichRuntimeAuthWithPaprApiKey(baseAuth)) ?? baseAuth);
+    const accessStats = { cacheHit: false as boolean | undefined };
+    const callerEmail = this.auth.getSessionEmail(req);
+    const access = await validateCachedAccess(
+      this.deps.publishResolver,
+      runtimeAuth,
+      accessStats,
+      callerEmail,
+    );
+    if (perf && accessStats.cacheHit !== undefined) {
+      perf.accessCacheHit = accessStats.cacheHit;
+    }
     if (!access) return null;
+
+    if (access.mode === "public_read" && !runtimeAuth.sessionToken) {
+      const resolved = await resolvePublishedApp(
+        runtimeAuth.namespaceId,
+        runtimeAuth.slug,
+        runtimeAuth.sessionToken,
+      );
+      if (
+        resolved &&
+        visibilityRequiresPaprLogin(resolved.visibility, resolved.requireSignIn)
+      ) {
+        return null;
+      }
+    }
+
     if (appId && access.appId !== appId) {
       return null;
     }
-    return access;
+
+    if (await this.accessBlockedForAnonymousPerUserData(runtimeAuth)) {
+      return null;
+    }
+
+    // Audience "people" is published with the *team* ACL, so `access` above has
+    // already said yes to every member of the workspace. Narrowing happens here
+    // — inside the one chokepoint all nine resolveAccess() call sites share —
+    // so /api/access, /api/db/query, /api/db/write, jobs and files are all
+    // covered by a single check instead of nine that can drift apart.
+    const peopleDecision = applyPeopleAllowlist(
+      access,
+      await loadSharePeopleAllowlistForCloudHost(runtimeAuth, access.appId),
+      runtimeAuth.externalUserId,
+      this.auth.getSessionEmail(req),
+    );
+    if (peopleDecision.denied) {
+      // null is the established "no access" result for every caller, and it
+      // yields canRead/canWrite false from buildMiniAppAccessResponse. Handing
+      // back a zeroed context instead would let a caller that only inspects
+      // `mode` believe it still had a session.
+      return null;
+    }
+
+    return peopleDecision.access;
+  }
+
+  /**
+   * Resolves auth + appId for /api/db/* and backend actions.
+   * When the client omits appId (team/community installs must not hardcode UUIDs),
+   * uses the published app's id from namespace/slug route context — same as
+   * cloudDesktopPreviewProxy injects for desktop cloud-preview.
+   */
+  private async resolveDbAppContext(
+    req: Request,
+    res: Response,
+    requestedAppId?: string,
+    perf?: { accessCacheHit?: boolean },
+  ): Promise<{
+    runtimeAuth: AppRuntimeRouteAuth;
+    access: AppAccessContext;
+    appId: string;
+  } | null> {
+    const baseAuth = this.buildRuntimeAuth(req);
+    if (!baseAuth) {
+      res.status(403).json({ error: "Forbidden" });
+      return null;
+    }
+
+    const runtimeAuth =
+      (await enrichRuntimeAuthWithPaprApiKey(baseAuth)) ?? baseAuth;
+
+    const trimmedAppId = requestedAppId?.trim() || undefined;
+    const access = await this.resolveAccess(req, trimmedAppId, runtimeAuth, perf);
+    if (!access) {
+      await this.respondAccessDenied(req, res, runtimeAuth);
+      return null;
+    }
+
+    const appId = trimmedAppId ?? access.appId;
+    if (!appId) {
+      res.status(400).json({ error: "appId could not be resolved from request context" });
+      return null;
+    }
+
+    return { runtimeAuth, access, appId };
   }
 
   private async loadDataSources(
     runtimeAuth: AppRuntimeRouteAuth,
     requestedPath = "data-sources.json",
-  ): Promise<ReturnType<typeof parseDataSourcesFile>> {
-    const file = await fetchCachedRuntimeRepoFile(runtimeAuth, requestedPath);
-    if (!file?.content) {
-      return { sources: [] };
+    stats?: { cacheHit?: boolean },
+  ): Promise<AppDataSourcesFile> {
+    return loadAppDataSourcesConfig(runtimeAuth, requestedPath, stats);
+  }
+
+  /** Fire-and-forget Turso client warm on app open (reads + legacy write paths). */
+  private async warmLinkedTursoSources(
+    runtimeAuth: AppRuntimeRouteAuth,
+    access: AppAccessContext,
+  ): Promise<void> {
+    const config = await this.loadDataSources(runtimeAuth);
+    if (config.sources.length === 0) {
+      return;
     }
-    const config = parseDataSourcesFile(file.content);
-    await hydrateCloudDatabaseRegistry(runtimeAuth, config);
-    return config;
+    await this.turso.warmLinkedSources({
+      orgId: access.orgId,
+      namespaceId: access.namespaceId,
+      ...this.tursoDbRequest(access, runtimeAuth),
+      runtimeAuth,
+      config,
+    });
+  }
+
+  private warmSchemaGateInBackground(
+    runtimeAuth: AppRuntimeRouteAuth,
+    access: AppAccessContext,
+    revision: string | null,
+  ): void {
+    void this.loadDataSources(runtimeAuth)
+      .then((config) => {
+        warmCloudAppSchemaGate({
+          turso: this.turso,
+          runtimeAuth,
+          orgId: access.orgId,
+          namespaceId: access.namespaceId,
+          userId: access.userId,
+          callerUserId: runtimeAuth.externalUserId,
+          config,
+          currentRevision: revision,
+        });
+      })
+      .catch(() => {});
   }
 
   private publishDbChangedForSource(
     config: AppDataSourcesFile,
     sourceId: string | undefined,
     appId: string,
+    runtimeAuth: AppRuntimeRouteAuth,
   ): void {
     const target = resolveDbEventTarget(config, sourceId, appId);
     if (target.jobId || target.dbId) {
       publishDbChanged(target);
+      void recordRuntimeTursoDbChanged(runtimeAuth, {
+        ...(target.jobId ? { jobId: target.jobId } : {}),
+        ...(target.dbId ? { dbId: target.dbId } : {}),
+        source: "cloud_app_host",
+      }).catch((err) => {
+        console.warn(
+          "[CloudAppHost] turso-db-changed record failed:",
+          (err as Error).message.slice(0, 120),
+        );
+      });
     }
   }
 
-  private async handleSchema(req: Request, res: Response): Promise<void> {
+  private async handleAccess(req: Request, res: Response): Promise<void> {
     try {
-      const appId = req.query["appId"] as string | undefined;
-      if (!appId) {
-        res.status(400).json({ error: "appId query param required" });
-        return;
-      }
-      if (!this.enforceDbRateLimit(req, res, "read")) return;
-
+      const requestedAppId = req.query["appId"] as string | undefined;
       const runtimeAuth = this.buildRuntimeAuth(req);
       if (!runtimeAuth) {
         res.status(403).json({ error: "Forbidden" });
         return;
       }
 
-      const access = await this.resolveAccess(req, appId);
-      if (!access?.canRead) {
+      const trimmedAppId = requestedAppId?.trim() || undefined;
+      const access = await this.resolveAccess(req, trimmedAppId);
+      const loggedIn = Boolean(this.auth.getSessionToken(req));
+      const appId = trimmedAppId ?? access?.appId;
+      const callerUserId = runtimeAuth.externalUserId;
+      const email = loggedIn ? this.auth.getSessionEmail(req) : undefined;
+
+      res.json(
+        buildMiniAppAccessResponse(access, loggedIn, appId, {
+          userId: callerUserId,
+          email,
+        }),
+      );
+    } catch (err) {
+      res.status(500).json({ error: (err as Error).message });
+    }
+  }
+
+  private async handleMembers(req: Request, res: Response): Promise<void> {
+    try {
+      const requestedAppId = req.query["appId"] as string | undefined;
+      const runtimeAuth = this.buildRuntimeAuth(req);
+      if (!runtimeAuth) {
+        res.status(403).json({ error: "Forbidden" });
+        return;
+      }
+
+      const trimmedAppId = requestedAppId?.trim() || undefined;
+      const access = await this.resolveAccess(req, trimmedAppId);
+      const loggedIn = Boolean(this.auth.getSessionToken(req));
+      const sessionToken = this.auth.getSessionToken(req);
+
+      try {
+        assertMiniAppMembersAccess(loggedIn, access);
+      } catch (err) {
+        if (err instanceof MiniAppMembersError) {
+          res.status(err.status).json({ error: err.message });
+          return;
+        }
+        throw err;
+      }
+
+      if (!sessionToken) {
+        res.status(401).json({ error: "Sign in with Papr to list workspace members." });
+        return;
+      }
+
+      const namespaceId = access?.namespaceId ?? runtimeAuth.namespaceId;
+      const result = await listMiniAppMembers({
+        sessionToken,
+        namespaceId,
+      });
+      res.json(result);
+    } catch (err) {
+      if (err instanceof MiniAppMembersError) {
+        res.status(err.status).json({ error: err.message });
+        return;
+      }
+      res.status(500).json({ error: (err as Error).message });
+    }
+  }
+
+  private async handleSchema(req: Request, res: Response): Promise<void> {
+    try {
+      const requestedAppId = req.query["appId"] as string | undefined;
+      if (!this.enforceDbRateLimit(req, res, "read")) return;
+
+      const ctx = await this.resolveDbAppContext(req, res, requestedAppId);
+      if (!ctx) return;
+      const { runtimeAuth, access } = ctx;
+
+      if (!access.canRead) {
         await this.respondAccessDenied(req, res, runtimeAuth);
         return;
       }
@@ -547,7 +1343,7 @@ export class CloudAppHostService {
       const sources = await this.turso.schema({
         orgId: access.orgId,
         namespaceId: access.namespaceId,
-        userId: access.userId,
+        ...this.tursoDbRequest(access, runtimeAuth),
         runtimeAuth,
         config,
       });
@@ -558,15 +1354,22 @@ export class CloudAppHostService {
   }
 
   private async handleQuery(req: Request, res: Response): Promise<void> {
+    const queryStarted = performance.now();
+    let accessMs = 0;
+    let configMs = 0;
+    let tursoQueryMs = 0;
+    let cacheHit = false;
+    const perf = { accessCacheHit: false, configCacheHit: false };
+
     try {
-      const { appId, sourceId, sql, params } = req.body as {
+      const { appId: requestedAppId, sourceId, sql, params } = req.body as {
         appId?: string;
         sourceId?: string;
         sql?: string;
         params?: unknown[];
       };
-      if (!appId || !sql) {
-        res.status(400).json({ error: "appId and sql are required" });
+      if (!sql) {
+        res.status(400).json({ error: "sql is required" });
         return;
       }
 
@@ -574,16 +1377,23 @@ export class CloudAppHostService {
 
       if (!this.enforceDbRateLimit(req, res, "read")) return;
 
-      const runtimeAuth = this.buildRuntimeAuth(req);
-      if (!runtimeAuth) {
-        res.status(403).json({ error: "Forbidden" });
+      const ctxStarted = performance.now();
+      const ctx = await this.resolveDbAppContext(req, res, requestedAppId, perf);
+      accessMs = performance.now() - ctxStarted;
+      if (!ctx) return;
+      const { runtimeAuth, access, appId } = ctx;
+
+      if (!access.canRead) {
+        await this.respondAccessDenied(req, res, runtimeAuth);
         return;
       }
 
-      const access = await this.resolveAccess(req, appId);
-      if (!access?.canRead) {
-        await this.respondAccessDenied(req, res, runtimeAuth);
-        return;
+      const configStarted = performance.now();
+      const configStats = { cacheHit: false as boolean | undefined };
+      const config = await this.loadDataSources(runtimeAuth, "data-sources.json", configStats);
+      configMs = performance.now() - configStarted;
+      if (configStats.cacheHit !== undefined) {
+        perf.configCacheHit = configStats.cacheHit;
       }
 
       // Micro-cache: collapse polling apps and concurrent viewers into
@@ -601,45 +1411,73 @@ export class CloudAppHostService {
         // Version gate: desktop boundary-sync pushes bump _papr_sync_meta on
         // Turso directly (they never call this host). A memoized single-row
         // version check bounds cache staleness for those writes to ~2.5s.
-        const gateConfig = await this.loadDataSources(runtimeAuth);
+        const versionStarted = performance.now();
         const changed = await this.turso.hasRemoteChanged({
           orgId: access.orgId,
           namespaceId: access.namespaceId,
-          userId: access.userId,
+          ...this.tursoDbRequest(access, runtimeAuth),
           runtimeAuth,
-          config: gateConfig,
+          config,
           sourceId,
         });
+        tursoQueryMs += performance.now() - versionStarted;
         if (changed) {
           invalidateDbCacheForApp(runtimeAuth.namespaceId, runtimeAuth.slug);
-          this.publishDbChangedForSource(gateConfig, sourceId, appId);
+          this.publishDbChangedForSource(config, sourceId, appId, runtimeAuth);
           cached = undefined;
         } else {
+          cacheHit = true;
           res.setHeader("X-Papr-Db-Cache", "hit");
+          setCloudDbServerTiming(res, {
+            access: accessMs,
+            config: configMs,
+            turso: tursoQueryMs,
+            total: performance.now() - queryStarted,
+            cache: "hit",
+            ...cloudHostCacheTimingParts(perf),
+          });
           res.json(cached);
           return;
         }
       }
 
-      const config = await this.loadDataSources(runtimeAuth);
+      const queryExecStarted = performance.now();
       const result = await this.turso.query({
         orgId: access.orgId,
         namespaceId: access.namespaceId,
-        userId: access.userId,
+        ...this.tursoDbRequest(access, runtimeAuth),
         runtimeAuth,
         config,
         sourceId,
         sql,
         params,
       });
+      tursoQueryMs += performance.now() - queryExecStarted;
       setCachedDbResult(cacheKey, result, {
         namespaceId: runtimeAuth.namespaceId,
         slug: runtimeAuth.slug,
+      });
+      setCloudDbServerTiming(res, {
+        access: accessMs,
+        config: configMs,
+        turso: tursoQueryMs,
+        total: performance.now() - queryStarted,
+        cache: "miss",
+        ...cloudHostCacheTimingParts(perf),
       });
       res.json(result);
     } catch (err) {
       const e = err as Error & { status?: number };
       res.status(e.status ?? 500).json({ error: e.message });
+    } finally {
+      const totalMs = Math.round(performance.now() - queryStarted);
+      if (process.env.CLOUD_DB_QUERY_TIMING !== "0") {
+        console.log(
+          `[CloudAppHost] /api/db/query timing accessMs=${Math.round(accessMs)} ` +
+            `configMs=${Math.round(configMs)} tursoQueryMs=${Math.round(tursoQueryMs)} ` +
+            `totalMs=${totalMs} cache=${cacheHit ? "hit" : "miss"}`,
+        );
+      }
     }
   }
 
@@ -651,13 +1489,19 @@ export class CloudAppHostService {
    * per-statement errors are returned in-place without failing the batch.
    */
   private async handleBatchQuery(req: Request, res: Response): Promise<void> {
+    const queryStarted = performance.now();
+    let accessMs = 0;
+    let configMs = 0;
+    let tursoQueryMs = 0;
+
     try {
-      const { appId, statements } = req.body as {
+      const { appId: requestedAppId, sourceId: batchSourceId, statements } = req.body as {
         appId?: string;
+        sourceId?: string;
         statements?: Array<{ sourceId?: string; sql?: string; params?: unknown[] }>;
       };
-      if (!appId || !Array.isArray(statements) || statements.length === 0) {
-        res.status(400).json({ error: "appId and non-empty statements[] are required" });
+      if (!Array.isArray(statements) || statements.length === 0) {
+        res.status(400).json({ error: "non-empty statements[] is required" });
         return;
       }
       if (statements.length > 25) {
@@ -674,47 +1518,55 @@ export class CloudAppHostService {
 
       if (!this.enforceDbRateLimit(req, res, "read", statements.length)) return;
 
-      const runtimeAuth = this.buildRuntimeAuth(req);
-      if (!runtimeAuth) {
-        res.status(403).json({ error: "Forbidden" });
-        return;
-      }
+      const ctxStarted = performance.now();
+      const ctx = await this.resolveDbAppContext(req, res, requestedAppId);
+      accessMs = performance.now() - ctxStarted;
+      if (!ctx) return;
+      const { runtimeAuth, access, appId } = ctx;
 
-      const access = await this.resolveAccess(req, appId);
-      if (!access?.canRead) {
+      if (!access.canRead) {
         await this.respondAccessDenied(req, res, runtimeAuth);
         return;
       }
 
+      const configStarted = performance.now();
       const config = await this.loadDataSources(runtimeAuth);
+      configMs = performance.now() - configStarted;
 
       // Version gate (see handleQuery): one memoized check per distinct
       // source in the batch; any change busts the app's cache up front.
-      const distinctSourceIds = [...new Set(statements.map((s) => s.sourceId))];
+      const distinctSourceIds = [
+        ...new Set(
+          statements.map((s) => coalesceBatchSourceId(s.sourceId, batchSourceId)),
+        ),
+      ];
+      const versionStarted = performance.now();
       for (const gateSourceId of distinctSourceIds) {
         const changed = await this.turso.hasRemoteChanged({
           orgId: access.orgId,
           namespaceId: access.namespaceId,
-          userId: access.userId,
+          ...this.tursoDbRequest(access, runtimeAuth),
           runtimeAuth,
           config,
           sourceId: gateSourceId,
         });
         if (changed) {
           invalidateDbCacheForApp(runtimeAuth.namespaceId, runtimeAuth.slug);
-          this.publishDbChangedForSource(config, gateSourceId, appId);
+          this.publishDbChangedForSource(config, gateSourceId, appId, runtimeAuth);
           break;
         }
       }
+      tursoQueryMs += performance.now() - versionStarted;
 
       const results: Array<Record<string, unknown>> = [];
       for (const stmt of statements) {
         try {
+          const effectiveSourceId = coalesceBatchSourceId(stmt.sourceId, batchSourceId);
           const cacheKey = buildDbCacheKey({
             namespaceId: runtimeAuth.namespaceId,
             slug: runtimeAuth.slug,
             appId,
-            sourceId: stmt.sourceId,
+            sourceId: effectiveSourceId,
             sql: stmt.sql as string,
             params: stmt.params,
           });
@@ -723,16 +1575,18 @@ export class CloudAppHostService {
             results.push({ ok: true, ...(cached as Record<string, unknown>) });
             continue;
           }
+          const stmtStarted = performance.now();
           const result = await this.turso.query({
             orgId: access.orgId,
             namespaceId: access.namespaceId,
-            userId: access.userId,
+            ...this.tursoDbRequest(access, runtimeAuth),
             runtimeAuth,
             config,
-            sourceId: stmt.sourceId,
+            sourceId: effectiveSourceId,
             sql: stmt.sql as string,
             params: stmt.params,
           });
+          tursoQueryMs += performance.now() - stmtStarted;
           setCachedDbResult(cacheKey, result, {
             namespaceId: runtimeAuth.namespaceId,
             slug: runtimeAuth.slug,
@@ -746,19 +1600,33 @@ export class CloudAppHostService {
     } catch (err) {
       const e = err as Error & { status?: number };
       res.status(e.status ?? 500).json({ error: e.message });
+    } finally {
+      const totalMs = Math.round(performance.now() - queryStarted);
+      if (process.env.CLOUD_DB_QUERY_TIMING !== "0") {
+        console.log(
+          `[CloudAppHost] /api/db/query-batch timing accessMs=${Math.round(accessMs)} ` +
+            `configMs=${Math.round(configMs)} tursoQueryMs=${Math.round(tursoQueryMs)} ` +
+            `totalMs=${totalMs}`,
+        );
+      }
     }
   }
 
   private async handleWrite(req: Request, res: Response): Promise<void> {
+    const writeStarted = performance.now();
+    let accessMs = 0;
+    let configMs = 0;
+    let tursoWriteMs = 0;
+
     try {
-      const { appId, sourceId, sql, params } = req.body as {
+      const { appId: requestedAppId, sourceId, sql, params } = req.body as {
         appId?: string;
         sourceId?: string;
         sql?: string;
         params?: unknown[];
       };
-      if (!appId || !sql) {
-        res.status(400).json({ error: "appId and sql are required" });
+      if (!sql) {
+        res.status(400).json({ error: "sql is required" });
         return;
       }
 
@@ -766,15 +1634,14 @@ export class CloudAppHostService {
 
       if (!this.enforceDbRateLimit(req, res, "write")) return;
 
-      const runtimeAuth = this.buildRuntimeAuth(req);
-      if (!runtimeAuth) {
-        res.status(403).json({ error: "Forbidden" });
-        return;
-      }
+      const ctxStarted = performance.now();
+      const ctx = await this.resolveDbAppContext(req, res, requestedAppId);
+      accessMs = performance.now() - ctxStarted;
+      if (!ctx) return;
+      const { runtimeAuth, access, appId } = ctx;
 
-      const access = await this.resolveAccess(req, appId);
-      if (!access?.canWrite) {
-        if (!access?.canRead) {
+      if (!access.canWrite) {
+        if (!access.canRead) {
           await this.respondAccessDenied(req, res, runtimeAuth);
         } else {
           res.status(403).json({ error: "Write not allowed for this link" });
@@ -782,36 +1649,157 @@ export class CloudAppHostService {
         return;
       }
 
+      const configStarted = performance.now();
       const config = await this.loadDataSources(runtimeAuth);
+      configMs = performance.now() - configStarted;
+
+      const writeStartedMs = performance.now();
       const result = await this.turso.write({
         orgId: access.orgId,
         namespaceId: access.namespaceId,
-        userId: access.userId,
+        ...this.tursoDbRequest(access, runtimeAuth),
         runtimeAuth,
         config,
+        appId,
         sourceId,
         sql,
         params,
       });
+      tursoWriteMs = performance.now() - writeStartedMs;
+
       // Bust read micro-cache and emit db-changed so UIs refresh
       invalidateDbCacheForApp(runtimeAuth.namespaceId, runtimeAuth.slug);
-      this.publishDbChangedForSource(config, sourceId, appId);
+      this.publishDbChangedForSource(config, sourceId, appId, runtimeAuth);
+      setCloudDbServerTiming(res, {
+        access: accessMs,
+        config: configMs,
+        turso: tursoWriteMs,
+        total: performance.now() - writeStarted,
+      });
       res.json(result);
     } catch (err) {
       const e = err as Error & { status?: number };
       res.status(e.status ?? 500).json({ error: e.message });
+    } finally {
+      const totalMs = Math.round(performance.now() - writeStarted);
+      if (process.env.CLOUD_DB_WRITE_TIMING !== "0") {
+        console.log(
+          `[CloudAppHost] /api/db/write timing accessMs=${Math.round(accessMs)} ` +
+            `configMs=${Math.round(configMs)} tursoWriteMs=${Math.round(tursoWriteMs)} ` +
+            `totalMs=${totalMs}`,
+        );
+      }
+    }
+  }
+
+  private async handleWriteBatch(req: Request, res: Response): Promise<void> {
+    const writeStarted = performance.now();
+    let accessMs = 0;
+    let configMs = 0;
+    let tursoWriteMs = 0;
+
+    try {
+      const { appId: requestedAppId, sourceId: batchSourceId, statements, atomic } =
+        req.body as {
+          appId?: string;
+          sourceId?: string;
+          statements?: Array<{ sourceId?: string; sql?: string; params?: unknown[] }>;
+          atomic?: boolean;
+        };
+      if (!Array.isArray(statements) || statements.length === 0) {
+        res.status(400).json({ error: "non-empty statements[] is required" });
+        return;
+      }
+      if (statements.length > TursoDbAdapter.MAX_WRITE_BATCH) {
+        res
+          .status(400)
+          .json({ error: `Batch limited to ${TursoDbAdapter.MAX_WRITE_BATCH} statements` });
+        return;
+      }
+      for (const stmt of statements) {
+        if (!stmt?.sql) {
+          res.status(400).json({ error: "Every statement requires sql" });
+          return;
+        }
+        assertWriteSql(stmt.sql);
+      }
+
+      if (!this.enforceDbRateLimit(req, res, "write", statements.length)) return;
+
+      const ctxStarted = performance.now();
+      const ctx = await this.resolveDbAppContext(req, res, requestedAppId);
+      accessMs = performance.now() - ctxStarted;
+      if (!ctx) return;
+      const { runtimeAuth, access, appId } = ctx;
+
+      if (!access.canWrite) {
+        if (!access.canRead) {
+          await this.respondAccessDenied(req, res, runtimeAuth);
+        } else {
+          res.status(403).json({ error: "Write not allowed for this link" });
+        }
+        return;
+      }
+
+      const configStarted = performance.now();
+      const config = await this.loadDataSources(runtimeAuth);
+      configMs = performance.now() - configStarted;
+
+      const writeStartedMs = performance.now();
+      const batchResult = await this.turso.writeBatch({
+        orgId: access.orgId,
+        namespaceId: access.namespaceId,
+        ...this.tursoDbRequest(access, runtimeAuth),
+        runtimeAuth,
+        config,
+        appId,
+        atomic: atomic === true,
+        statements: statements.map((stmt) => ({
+          sourceId: coalesceBatchSourceId(stmt.sourceId, batchSourceId),
+          sql: stmt.sql as string,
+          params: stmt.params,
+        })),
+      });
+      tursoWriteMs = performance.now() - writeStartedMs;
+
+      invalidateDbCacheForApp(runtimeAuth.namespaceId, runtimeAuth.slug);
+      const distinctSourceIds = [
+        ...new Set(statements.map((stmt) => stmt.sourceId)),
+      ];
+      for (const sourceId of distinctSourceIds) {
+        this.publishDbChangedForSource(config, sourceId, appId, runtimeAuth);
+      }
+      setCloudDbServerTiming(res, {
+        access: accessMs,
+        config: configMs,
+        turso: tursoWriteMs,
+        total: performance.now() - writeStarted,
+      });
+      res.json({ atomic: atomic === true, ...batchResult });
+    } catch (err) {
+      const e = err as Error & { status?: number };
+      res.status(e.status ?? 500).json({ error: e.message });
+    } finally {
+      const totalMs = Math.round(performance.now() - writeStarted);
+      if (process.env.CLOUD_DB_WRITE_TIMING !== "0") {
+        console.log(
+          `[CloudAppHost] /api/db/write-batch timing accessMs=${Math.round(accessMs)} ` +
+            `configMs=${Math.round(configMs)} tursoWriteMs=${Math.round(tursoWriteMs)} ` +
+            `totalMs=${totalMs}`,
+        );
+      }
     }
   }
 
   private async handleExec(req: Request, res: Response): Promise<void> {
     try {
-      const { appId, sourceId, sql } = req.body as {
+      const { appId: requestedAppId, sourceId, sql } = req.body as {
         appId?: string;
         sourceId?: string;
         sql?: string;
       };
-      if (!appId || !sql) {
-        res.status(400).json({ error: "appId and sql are required" });
+      if (!sql) {
+        res.status(400).json({ error: "sql is required" });
         return;
       }
 
@@ -819,15 +1807,12 @@ export class CloudAppHostService {
 
       if (!this.enforceDbRateLimit(req, res, "write")) return;
 
-      const runtimeAuth = this.buildRuntimeAuth(req);
-      if (!runtimeAuth) {
-        res.status(403).json({ error: "Forbidden" });
-        return;
-      }
+      const ctx = await this.resolveDbAppContext(req, res, requestedAppId);
+      if (!ctx) return;
+      const { runtimeAuth, access, appId } = ctx;
 
-      const access = await this.resolveAccess(req, appId);
-      if (!access?.canWrite) {
-        if (!access?.canRead) {
+      if (!access.canWrite) {
+        if (!access.canRead) {
           await this.respondAccessDenied(req, res, runtimeAuth);
         } else {
           res.status(403).json({ error: "Write not allowed for this link" });
@@ -839,15 +1824,16 @@ export class CloudAppHostService {
       const result = await this.turso.exec({
         orgId: access.orgId,
         namespaceId: access.namespaceId,
-        userId: access.userId,
+        ...this.tursoDbRequest(access, runtimeAuth),
         runtimeAuth,
         config,
+        appId,
         sourceId,
         sql,
       });
       // Bust read micro-cache and emit db-changed so UIs refresh
       invalidateDbCacheForApp(runtimeAuth.namespaceId, runtimeAuth.slug);
-      this.publishDbChangedForSource(config, sourceId, appId);
+      this.publishDbChangedForSource(config, sourceId, appId, runtimeAuth);
       res.json(result);
     } catch (err) {
       const e = err as Error & { status?: number };
@@ -923,19 +1909,12 @@ export class CloudAppHostService {
         params?: Record<string, string>;
         timeoutMs?: number;
       };
-      if (!body.appId || typeof body.appId !== "string") {
-        res.status(400).json({ error: "appId is required" });
-        return;
-      }
 
-      const runtimeAuth = this.buildRuntimeAuth(req);
-      if (!runtimeAuth) {
-        res.status(403).json({ error: "Forbidden — open the app in this browser tab first" });
-        return;
-      }
+      const ctx = await this.resolveDbAppContext(req, res, body.appId);
+      if (!ctx) return;
+      const { runtimeAuth, access, appId } = ctx;
 
-      const access = await this.resolveAccess(req, body.appId);
-      if (!access?.canRead) {
+      if (!access.canRead) {
         await this.respondAccessDenied(req, res, runtimeAuth);
         return;
       }
@@ -949,15 +1928,51 @@ export class CloudAppHostService {
         return;
       }
 
-      const backend = new CloudAppBackendService();
       const bypassFresh = shouldBypassRepoFileCache(req.headers);
+      const cacheOpts = bypassFresh ? { bypassFresh: true as const } : undefined;
+
+      const [dataSources, manifestFile] = await Promise.all([
+        this.loadDataSources(runtimeAuth),
+        fetchCachedRuntimeRepoFile(
+          runtimeAuth,
+          "backend/manifest.json",
+          cacheOpts,
+        ),
+      ]);
+
+      if (!manifestFile) {
+        res.status(404).json({ error: "Backend manifest not found" });
+        return;
+      }
+
+      const backend = new CloudAppBackendService();
+
+      const loggedIn = Boolean(this.auth.getSessionToken(req));
+      const callerEmail = loggedIn ? this.auth.getSessionEmail(req) : undefined;
+      const callerIdentity = loggedIn
+        ? {
+            userId: runtimeAuth.externalUserId,
+            ...(callerEmail ? { email: callerEmail } : {}),
+          }
+        : undefined;
 
       const result = await backend.runAction(runtimeAuth, {
-        appId: body.appId,
+        appId,
         action: action.trim(),
         params: body.params,
         timeoutMs: body.timeoutMs,
         bypassFresh,
+        callerIdentity,
+        loggedIn,
+        dataSources,
+        manifestContent: manifestFile?.content,
+        cloudAccess: {
+          orgId: access.orgId,
+          namespaceId: access.namespaceId,
+          userId: access.userId,
+          canRead: access.canRead,
+          canWrite: access.canWrite,
+        },
       });
 
       res.json(result);
@@ -1003,7 +2018,7 @@ export class CloudAppHostService {
   private async handleJobStatus(req: Request, res: Response): Promise<void> {
     try {
       const jobId = req.params.jobId;
-      if (!jobId) {
+      if (!jobId || typeof jobId !== "string" || !jobId.trim()) {
         res.status(400).json({ error: "jobId is required" });
         return;
       }
@@ -1014,8 +2029,7 @@ export class CloudAppHostService {
         return;
       }
 
-      const { jobs } = await listRuntimeJobs(runtimeAuth);
-      const job = jobs.find((entry) => entry.id === jobId);
+      const job = await getRuntimeJobStatus(runtimeAuth, jobId);
       if (!job) {
         res.status(404).json({ error: `Job not found: ${jobId}` });
         return;
@@ -1054,14 +2068,15 @@ export class CloudAppHostService {
   }
 
   private respondJobRunSignInRequired(req: Request, res: Response): void {
-    const returnTo = sanitizeReturnToPath(
-      req.originalUrl.split("?")[0] ?? req.originalUrl,
-    );
+    const runtimeAuth = this.buildRuntimeAuth(req);
+    const returnTo = resolveCloudAuthReturnToFromRequest(req, runtimeAuth
+      ? { namespaceId: runtimeAuth.namespaceId, slug: runtimeAuth.slug }
+      : undefined);
     res.status(403).json({
       error:
         "Sign in to Papr to run agent jobs from this app. Invite links can use the app UI and backend actions, but AI jobs require a Papr account.",
       code: "job_run_sign_in_required",
-      loginUrl: `/auth/login?returnTo=${encodeURIComponent(returnTo)}&start=1`,
+      loginUrl: `/auth/login?returnTo=${encodeURIComponent(returnTo)}`,
     });
   }
 
@@ -1137,7 +2152,14 @@ export class CloudAppHostService {
 
       const jobInput = {
         jobId: body.jobId,
-        params: body.params,
+        params: mergeVerifiedCallerJobParams(
+          body.params,
+          Boolean(this.auth.getSessionToken(req)),
+          {
+            userId: runtimeAuth.externalUserId,
+            email: this.auth.getSessionEmail(req),
+          },
+        ),
         timeoutMs: body.timeoutMs,
       };
 
@@ -1197,14 +2219,120 @@ export class CloudAppHostService {
     }
   }
 
+  private async handleInternalAppRepoCommitted(
+    req: Request,
+    res: Response,
+  ): Promise<void> {
+    if (!this.verifyCloudAppHostInternalKey(req, res)) {
+      return;
+    }
+
+    const { parseAppRepoCommittedPayload } = await import(
+      "../syncV3/appRepoCommittedInbound.js"
+    );
+    const event = parseAppRepoCommittedPayload(req.body);
+    if (!event) {
+      res.status(400).json({ error: "Invalid app-repo-committed payload" });
+      return;
+    }
+
+    try {
+      const { receiveAppRepoCommittedEvent } = await import(
+        "../syncV3/appRepoRevisionSubscriber.js"
+      );
+      await receiveAppRepoCommittedEvent(event);
+
+      const slug = await this.resolvePublishSlugForApp(event.appId);
+      if (slug) {
+        invalidateRepoCacheForPublishedApp(event.namespaceId, slug);
+        res.json({ ok: true, appId: event.appId, cacheInvalidated: true });
+        return;
+      }
+
+      invalidateRepoCacheForNamespace(event.namespaceId);
+      res.json({ ok: true, appId: event.appId, cacheInvalidated: true });
+    } catch (err) {
+      res.status(500).json({ error: (err as Error).message });
+    }
+  }
+
+  private async resolvePublishSlugForApp(appId: string): Promise<string | null> {
+    try {
+      const resp = await runtimeFetch(
+        `${getMemoryServerBaseUrl()}/v1/cloud/apps/publish/${encodeURIComponent(appId)}`,
+        {
+          method: "GET",
+          headers: {
+            "X-Cloud-App-Host-Key": getCloudAppHostKey(),
+          },
+        },
+      );
+      if (!resp.ok) {
+        return null;
+      }
+      const payload = (await resp.json()) as { slug?: string; enabled?: boolean };
+      if (payload.enabled === false) {
+        return null;
+      }
+      const slug = payload.slug?.trim();
+      return slug && slug.length > 0 ? slug : null;
+    } catch {
+      return null;
+    }
+  }
+
+  private handleInternalAppAccessUpdated(req: Request, res: Response): void {
+    if (!this.verifyCloudAppHostInternalKey(req, res)) {
+      return;
+    }
+
+    const body = req.body as {
+      namespaceId?: string;
+      slug?: string;
+      appId?: string;
+      allowedUserIds?: string[];
+      allowedEmails?: string[];
+      allowedEmailDomains?: string[];
+      shareAllowlist?: {
+        allowedUserIds?: string[];
+        allowedEmails?: string[];
+        allowedEmailDomains?: string[];
+      };
+    };
+    const namespaceId = body.namespaceId?.trim();
+    const slug = body.slug?.trim();
+    if (!namespaceId || !slug) {
+      res.status(400).json({ error: "namespaceId and slug are required" });
+      return;
+    }
+
+    const allowlist = shareAllowlistFromPushBody(body);
+    setSharePeopleAllowlistPush({
+      namespaceId,
+      slug,
+      appId: body.appId?.trim(),
+      allowlist,
+    });
+
+    invalidateAccessCacheForPublishedApp(namespaceId, slug);
+    if (body.appId?.trim()) {
+      invalidateMemoryShareAllowlistCache(body.appId.trim());
+    } else {
+      invalidateMemoryShareAllowlistCache();
+    }
+    res.json({
+      ok: true,
+      cacheInvalidated: true,
+      scope: "access",
+      allowlistStored: allowlist !== undefined,
+    });
+  }
+
   private async handleInternalAppRevisionUpdated(
     req: Request,
     res: Response,
   ): Promise<void> {
-    const configuredKey = process.env.PAPR_CLOUD_APP_HOST_KEY?.trim();
-    const providedKey = String(req.headers["x-cloud-app-host-key"] ?? "").trim();
-    if (!configuredKey || providedKey !== configuredKey) {
-      res.status(401).json({ error: "Unauthorized" });
+    if (!this.verifyCloudAppHostInternalKey(req, res)) {
       return;
     }
 
@@ -1216,21 +2344,64 @@ export class CloudAppHostService {
       return;
     }
 
-    try {
-      invalidateRepoCacheForPublishedApp(namespaceId, slug);
+    invalidateRepoCacheForPublishedApp(namespaceId, slug);
 
-      const runtimeAuth: AppRuntimeRouteAuth = { namespaceId, slug };
-      const revision = await resolvePublishedAppRevision(runtimeAuth, {
-        bypassFresh: true,
+    const runtimeAuth: AppRuntimeRouteAuth = { namespaceId, slug };
+    void import("./warmDeploySnapshot.js")
+      .then(({ warmDeploySnapshotForPublishedApp }) =>
+        warmDeploySnapshotForPublishedApp(runtimeAuth),
+      )
+      .then((result) => {
+        if (result.warmed > 0) {
+          console.log(
+            `[CloudAppHost] Deploy snapshot warmed ${result.warmed} file(s) ` +
+              `for ${namespaceId}/${slug} @ ${result.revision}`,
+          );
+        }
+      })
+      .catch((err: Error) => {
+        console.warn(
+          `[CloudAppHost] Deploy snapshot warm failed for ${namespaceId}/${slug}:`,
+          err.message.slice(0, 120),
+        );
       });
-      if (revision) {
-        getAppRevisionHub().publish({ namespaceId, slug, revision });
-      }
 
-      res.json({ ok: true, revision: revision ?? null });
-    } catch (err) {
-      res.status(500).json({ error: (err as Error).message });
+    res.json({ ok: true, cacheInvalidated: true });
+  }
+
+  private verifyCloudAppHostInternalKey(req: Request, res: Response): boolean {
+    const configuredKey = process.env.PAPR_CLOUD_APP_HOST_KEY?.trim();
+    const providedKey = String(req.headers["x-cloud-app-host-key"] ?? "").trim();
+    if (!configuredKey || providedKey !== configuredKey) {
+      res.status(401).json({ error: "Unauthorized" });
+      return false;
     }
+    return true;
+  }
+
+  private handleInternalDbChanged(req: Request, res: Response): void {
+    if (!this.verifyCloudAppHostInternalKey(req, res)) {
+      return;
+    }
+
+    const body = req.body as {
+      jobId?: string;
+      dbId?: string;
+      tables?: string[];
+    };
+    const jobId = body.jobId?.trim();
+    const dbId = body.dbId?.trim();
+    if (!jobId && !dbId) {
+      res.status(400).json({ error: "jobId or dbId is required" });
+      return;
+    }
+
+    publishDbChanged({
+      ...(jobId ? { jobId } : {}),
+      ...(dbId ? { dbId } : {}),
+      tables: Array.isArray(body.tables) ? body.tables : [],
+    });
+    res.json({ ok: true });
   }
 
   private async handleAppRevision(req: Request, res: Response): Promise<void> {
@@ -1257,7 +2428,43 @@ export class CloudAppHostService {
       }
 
       res.setHeader("Cache-Control", "no-cache, must-revalidate");
-      res.json({ revision });
+      const metaFile = await fetchCachedRuntimeRepoFile(
+        runtimeAuth,
+        PAPR_APP_META_RELATIVE_PATH,
+        { bypassFresh },
+      );
+      const meta = metaFile
+        ? readCloudAppMetaFromContent(metaFile.content)
+        : null;
+      const requiredSchemaVersion = normalizeRequiredSchemaVersion(
+        meta?.requiredSchemaVersion,
+      );
+
+      let schemaPayload: ReturnType<typeof toAppRevisionSchemaPayload>;
+      if (requiredSchemaVersion) {
+        const config = await this.loadDataSources(runtimeAuth);
+        const gate = await evaluateCloudAppSchemaGateCached({
+          turso: this.turso,
+          runtimeAuth,
+          orgId: access.orgId,
+          namespaceId: access.namespaceId,
+          userId: access.userId,
+          callerUserId: runtimeAuth.externalUserId,
+          config,
+          currentRevision: revision,
+        });
+        schemaPayload = toAppRevisionSchemaPayload(revision, gate);
+      } else {
+        schemaPayload = {
+          revision,
+          requiredSchemaVersion: null,
+          remoteSchemaVersion: null,
+          schemaReady: true,
+          schemaSyncing: false,
+        };
+      }
+
+      res.json(schemaPayload);
     } catch (err) {
       res.status(500).json({ error: (err as Error).message });
     }
@@ -1327,7 +2534,11 @@ export class CloudAppHostService {
         return;
       }
 
-      await this.sendAppFile(req, res, runtimeAuth, requestedPath);
+      if (access) {
+        void this.warmLinkedTursoSources(runtimeAuth, access).catch(() => {});
+      }
+
+      await this.sendAppFile(req, res, runtimeAuth, requestedPath, access);
     } catch (err) {
       res.status(500).send((err as Error).message);
     }
@@ -1339,20 +2550,27 @@ export class CloudAppHostService {
     runtimeAuth: AppRuntimeRouteAuth,
   ): Promise<void> {
     const publicBaseUrl = getCloudAppPublicBaseUrl(req);
-    const access = await this.resolveAccess(req);
-    const meta = await resolveCloudAppPreviewMeta({
-      runtimeAuth,
-      publicBaseUrl,
-      canReadRepo: access?.canRead === true,
-    });
-    const returnTo = sanitizeReturnToPath(req.originalUrl.split("?")[0] ?? req.originalUrl);
-    const loginUrl = `/auth/login?returnTo=${encodeURIComponent(returnTo)}&start=1`;
     const hasSession = Boolean(runtimeAuth.sessionToken);
+    // Prefer publish-catalog branding for unsigned visitors; repo metadata when signed in.
+    const canReadRepo = hasSession;
     const published = await resolvePublishedApp(
       runtimeAuth.namespaceId,
       runtimeAuth.slug,
       runtimeAuth.sessionToken,
     );
+    const meta = await resolveCloudAppPreviewMeta({
+      runtimeAuth,
+      publicBaseUrl,
+      canReadRepo,
+      publishedApp: published,
+    });
+    const iconSvg = await resolvePreviewIconSvg(runtimeAuth, canReadRepo, published);
+    const returnTo = resolveCloudAuthReturnToFromRequest(req, {
+      namespaceId: runtimeAuth.namespaceId,
+      slug: runtimeAuth.slug,
+    });
+    const loginUrl = buildCloudAuthLoginUrl(returnTo, "login");
+    const signupUrl = buildCloudAuthLoginUrl(returnTo, "signup");
     const presentation = resolveShareGatePresentation({
       hasSession,
       hasShareToken: Boolean(runtimeAuth.shareToken),
@@ -1361,7 +2579,9 @@ export class CloudAppHostService {
     res
       .status(200)
       .setHeader("Content-Type", "text/html; charset=utf-8")
-      .send(buildShareGateLandingHtml(meta, loginUrl, presentation));
+      .send(
+        buildShareGateLandingHtml(meta, loginUrl, presentation, iconSvg, signupUrl),
+      );
   }
 
   private async handleOpenGraphIcon(
@@ -1381,9 +2601,22 @@ export class CloudAppHostService {
     res: Response,
     runtimeAuth: AppRuntimeRouteAuth,
     requestedPath: string,
+    access: AppAccessContext | null = null,
   ): Promise<void> {
     // Browser reload (F5 / hard reload) bypasses SWR so synced changes appear immediately.
     const bypassFresh = shouldBypassRepoFileCache(req.headers);
+
+    if (requestedPath === "index.html") {
+      await this.sendPublishedIndexHtml(
+        req,
+        res,
+        runtimeAuth,
+        access,
+        bypassFresh,
+      );
+      return;
+    }
+
     const file = await fetchCachedRuntimeRepoFile(runtimeAuth, requestedPath, {
       bypassFresh,
     });
@@ -1396,82 +2629,6 @@ export class CloudAppHostService {
     let content = file.content;
     let contentType = getMiniAppContentType(ext) || file.contentType;
     let transpiled = false;
-
-    if (ext === ".html" && requestedPath === "index.html") {
-      const distBundle = await fetchCachedRuntimeRepoFile(
-        runtimeAuth,
-        "dist/app.js",
-        { bypassFresh },
-      );
-      if (distBundle) {
-        const distCss = await fetchCachedRuntimeRepoFile(
-          runtimeAuth,
-          "dist/app.css",
-          { bypassFresh },
-        );
-        const { rewriteHtmlForBundledDist, appendDistAssetCacheBusters } =
-          await import("../../utils/miniAppBuild.js");
-        const { createHash } = await import("node:crypto");
-        content = rewriteHtmlForBundledDist(content, {
-          hasDistCss: distCss !== null,
-        });
-        const appJsHash = createHash("sha256")
-          .update(distBundle.content)
-          .digest("hex")
-          .slice(0, 16);
-        content = appendDistAssetCacheBusters(content, {
-          appJs: appJsHash,
-          ...(distCss
-            ? {
-                appCss: createHash("sha256")
-                  .update(distCss.content)
-                  .digest("hex")
-                  .slice(0, 16),
-              }
-            : {}),
-        });
-
-        const repoHeadFile = await fetchCachedRuntimeRepoFile(
-          runtimeAuth,
-          CLOUD_REPO_HEAD_RELATIVE_PATH,
-          { bypassFresh },
-        );
-        const repoHead = repoHeadFile
-          ? parseCloudRepoHeadContent(repoHeadFile.content)
-          : "0";
-        const revision = formatPublishedAppRevision(repoHead, distBundle.content);
-        if (revision) {
-          content = injectPaprAppRevisionMeta(content, revision);
-        }
-      }
-
-      const publicBaseUrl = getCloudAppPublicBaseUrl(req);
-      const previewMeta = await resolveCloudAppPreviewMeta({
-        runtimeAuth,
-        publicBaseUrl,
-        canReadRepo: true,
-      });
-      content = injectCloudAppPreviewIntoHtml(
-        injectPublishedAppBaseHref(
-          content,
-          publishedAppBaseHref(runtimeAuth.namespaceId, runtimeAuth.slug),
-        ),
-        previewMeta,
-        runtimeAuth.namespaceId,
-        runtimeAuth.slug,
-      );
-
-      // Platform scripts: auth guard + auto-reload when synced bundle changes.
-      const platformScripts = [
-        `<script src="/__papr__/papr-auth-guard.js" defer></script>`,
-        `<script src="/__papr__/papr-app-refresh.js" defer></script>`,
-      ].join("\n");
-      if (content.includes("</head>")) {
-        content = content.replace("</head>", `${platformScripts}\n</head>`);
-      } else {
-        content = platformScripts + "\n" + content;
-      }
-    }
 
     const isDistAsset = requestedPath.startsWith("dist/");
     if (!isDistAsset && isMiniAppTypeScriptFile(requestedPath)) {
@@ -1495,12 +2652,108 @@ export class CloudAppHostService {
       transpiled = true;
     }
 
-    const cacheControl = cacheControlForAppAsset(requestedPath, { transpiled });
-    if (cacheControl) {
-      res.setHeader("Cache-Control", cacheControl);
+    const cachePolicy = cacheControlForAppAsset(requestedPath, { transpiled });
+    if (cachePolicy) {
+      res.setHeader("Cache-Control", cachePolicy.cacheControl);
+      if (cachePolicy.cdnCacheControl) {
+        res.setHeader("CDN-Cache-Control", cachePolicy.cdnCacheControl);
+      }
     }
 
     res.setHeader("Content-Type", contentType);
+    res.send(content);
+  }
+
+  private async sendPublishedIndexHtml(
+    req: Request,
+    res: Response,
+    runtimeAuth: AppRuntimeRouteAuth,
+    access: AppAccessContext | null,
+    bypassFresh: boolean,
+  ): Promise<void> {
+    const publicBaseUrl = getCloudAppPublicBaseUrl(req);
+    const [bundle, previewMeta] = await Promise.all([
+      prefetchIndexHtmlRepoFiles(runtimeAuth, { bypassFresh }),
+      resolveCloudAppPreviewMeta({
+        runtimeAuth,
+        publicBaseUrl,
+        canReadRepo: true,
+      }),
+    ]);
+    if (!bundle.indexHtml) {
+      res.status(404).send("Not found");
+      return;
+    }
+
+    let content = bundle.indexHtml.content;
+    const revision = bundle.revision;
+    const distBundle = bundle.distJs;
+    const distCss = bundle.distCss;
+
+    if (distBundle) {
+      const { rewriteHtmlForBundledDist, appendDistAssetCacheBusters } =
+        await import("../../utils/miniAppBuild.js");
+      const { createHash } = await import("node:crypto");
+      content = rewriteHtmlForBundledDist(content, {
+        hasDistCss: distCss !== null,
+      });
+      const appJsHash = createHash("sha256")
+        .update(distBundle.content)
+        .digest("hex")
+        .slice(0, 16);
+      content = appendDistAssetCacheBusters(content, {
+        appJs: appJsHash,
+        ...(distCss
+          ? {
+              appCss: createHash("sha256")
+                .update(distCss.content)
+                .digest("hex")
+                .slice(0, 16),
+            }
+          : {}),
+      });
+
+      if (revision) {
+        content = injectPaprAppRevisionMeta(content, revision);
+      }
+    } else if (revision) {
+      const { appendLegacyTypeScriptCacheBusters } =
+        await import("../../utils/miniAppBuild.js");
+      content = appendLegacyTypeScriptCacheBusters(content, revision);
+      content = injectPaprAppRevisionMeta(content, revision);
+    }
+
+    if (access) {
+      this.warmSchemaGateInBackground(runtimeAuth, access, revision ?? null);
+    }
+
+    content = injectCloudAppPreviewIntoHtml(
+      injectPublishedAppBaseHref(
+        injectPaprCloudContextMeta(
+          content,
+          runtimeAuth.namespaceId,
+          runtimeAuth.slug,
+        ),
+        publishedAppBaseHref(runtimeAuth.namespaceId, runtimeAuth.slug),
+      ),
+      previewMeta,
+      runtimeAuth.namespaceId,
+      runtimeAuth.slug,
+    );
+
+    const platformScripts = [
+      `<script src="/__papr__/papr-native-dialog-shim.js"></script>`,
+      `<script src="/__papr__/papr-auth-guard.js" defer></script>`,
+      `<script src="/__papr__/papr-version-check.js" defer></script>`,
+    ].join("\n");
+    if (content.includes("</head>")) {
+      content = content.replace("</head>", `${platformScripts}\n</head>`);
+    } else {
+      content = platformScripts + "\n" + content;
+    }
+
+    res.setHeader("Cache-Control", "no-cache, must-revalidate");
+    res.setHeader("Content-Type", "text/html; charset=utf-8");
     res.send(content);
   }
 
@@ -1530,7 +2783,9 @@ export class CloudAppHostService {
         return;
       }
 
-      await this.sendAppFile(req, res, runtimeAuth, requestedPath);
+      void this.warmLinkedTursoSources(runtimeAuth, access).catch(() => {});
+
+      await this.sendAppFile(req, res, runtimeAuth, requestedPath, access);
     } catch (err) {
       res.status(500).send((err as Error).message);
     }

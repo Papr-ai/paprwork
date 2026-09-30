@@ -2,7 +2,16 @@
  * Multi-option cloud sharing — Papr login access + optional external link.
  */
 
-import type { CloudAccessMode } from "./cloudPublishPrefs.js";
+import {
+  audienceModelToSharing,
+  liveLinkPermissionForAudienceModel,
+  peopleAudienceUsesExternalGate,
+  publishPrefsToAudienceModel,
+  sharingToAudienceModel,
+  shouldListInCommunity,
+  type ShareAudienceModel,
+} from "../../core/utils/shareAudienceModel.js";
+import type { CloudAccessMode, CloudPublishAppPrefs } from "./cloudPublishPrefs.js";
 
 export type CloudLoginAccess = "private" | "team" | "public" | "none";
 export type CloudExternalLink = "off" | "read" | "read_write";
@@ -16,6 +25,9 @@ export interface MemoryPublishSharingFields {
   visibility: CloudAccessMode;
   linkPermission: "read" | "read_write";
   shareLinkEnabled: boolean;
+  requireSignIn?: boolean;
+  /** False for team / people / link — only true public community shares. */
+  communityCatalogListed?: boolean;
 }
 
 const LOGIN_ACCESS_MODES: readonly CloudLoginAccess[] = [
@@ -66,7 +78,10 @@ export function accessModeToSharingSettings(
 export function sharingSettingsToAccessMode(
   settings: CloudSharingSettings,
 ): CloudAccessMode {
-  if (settings.externalLink !== "off" && settings.loginAccess === "none") {
+  if (settings.externalLink !== "off") {
+    if (settings.loginAccess === "team") {
+      return "team";
+    }
     return settings.externalLink === "read_write" ? "link_read_write" : "link_read";
   }
   if (settings.loginAccess === "public") {
@@ -76,6 +91,148 @@ export function sharingSettingsToAccessMode(
     return "team";
   }
   return "private";
+}
+
+export function audienceModelToPublishFields(
+  model: ShareAudienceModel,
+  actualSharing?: CloudSharingSettings,
+): MemoryPublishSharingFields {
+  const sharing = audienceModelToSharing(model);
+  const externalLink = actualSharing?.externalLink ?? sharing.externalLink;
+  const shareLinkEnabled = externalLink !== "off";
+
+  if (model.audience === "link") {
+    const linkPermission = liveLinkPermissionForAudienceModel(model);
+    const loginAccess = actualSharing?.loginAccess ?? sharing.loginAccess;
+    const linkVisibility =
+      linkPermission === "read_write" ? "link_read_write" : "link_read";
+    if (loginAccess === "team") {
+      return {
+        visibility: "team",
+        linkPermission,
+        shareLinkEnabled: externalLink !== "off",
+      };
+    }
+    return {
+      visibility: linkVisibility,
+      linkPermission,
+      shareLinkEnabled: true,
+      ...(model.requireSignIn !== false ? { requireSignIn: true } : {}),
+    };
+  }
+
+  const linkPermission = liveLinkPermissionForAudienceModel(model);
+
+  if (model.audience === "public") {
+    return {
+      visibility: "public_read",
+      linkPermission,
+      shareLinkEnabled,
+      communityCatalogListed: true,
+      ...(model.requireSignIn === true ? { requireSignIn: true } : {}),
+    };
+  }
+
+  if (model.audience === "team") {
+    return {
+      visibility: "team",
+      linkPermission,
+      shareLinkEnabled,
+      communityCatalogListed: false,
+    };
+  }
+
+  if (model.audience === "people") {
+    if (peopleAudienceUsesExternalGate(model)) {
+      return {
+        visibility: "public_read",
+        linkPermission,
+        shareLinkEnabled,
+        requireSignIn: true,
+        communityCatalogListed: false,
+      };
+    }
+    return {
+      visibility: "team",
+      linkPermission,
+      shareLinkEnabled,
+      communityCatalogListed: false,
+    };
+  }
+
+  const fallback = sharingSettingsToPublishFields({
+    loginAccess: sharing.loginAccess,
+    externalLink,
+  });
+  return {
+    ...fallback,
+    communityCatalogListed: shouldListInCommunity(model.audience, true),
+  };
+}
+
+export function resolvePublishFieldsFromPrefs(
+  prefs: Pick<
+    CloudPublishAppPrefs,
+    | "loginAccess"
+    | "externalLink"
+    | "accessMode"
+    | "codeAccess"
+    | "requireSignIn"
+    | "allowedUserIds"
+    | "allowedEmails"
+    | "allowedEmailDomains"
+  >,
+): MemoryPublishSharingFields {
+  const sharing = resolveSharingSettings(prefs);
+  const model = publishPrefsToAudienceModel(
+    sharing.loginAccess,
+    sharing.externalLink,
+    prefs.codeAccess ?? "off",
+    {
+      requireSignIn: prefs.requireSignIn,
+      allowedUserIds: prefs.allowedUserIds,
+      allowedEmails: prefs.allowedEmails,
+      allowedEmailDomains: prefs.allowedEmailDomains,
+    },
+  );
+  const fields = audienceModelToPublishFields(model, sharing);
+  if (fields.communityCatalogListed === undefined) {
+    return {
+      ...fields,
+      communityCatalogListed: shouldListInCommunity(model.audience, true),
+    };
+  }
+  return fields;
+}
+
+/** Merge stored publish prefs with PATCH overrides for memory field resolution. */
+export function mergePublishPrefsForFields(
+  prefs: CloudPublishAppPrefs,
+  patch: Partial<
+    Pick<
+      CloudPublishAppPrefs,
+      | "loginAccess"
+      | "externalLink"
+      | "accessMode"
+      | "codeAccess"
+      | "requireSignIn"
+      | "allowedUserIds"
+      | "allowedEmails"
+      | "allowedEmailDomains"
+    >
+  > = {},
+): Parameters<typeof resolvePublishFieldsFromPrefs>[0] {
+  return {
+    loginAccess: patch.loginAccess ?? prefs.loginAccess,
+    externalLink: patch.externalLink ?? prefs.externalLink,
+    accessMode: patch.accessMode ?? prefs.accessMode,
+    codeAccess: patch.codeAccess ?? prefs.codeAccess ?? "off",
+    requireSignIn:
+      patch.requireSignIn !== undefined ? patch.requireSignIn : prefs.requireSignIn,
+    allowedUserIds: patch.allowedUserIds ?? prefs.allowedUserIds,
+    allowedEmails: patch.allowedEmails ?? prefs.allowedEmails,
+    allowedEmailDomains: patch.allowedEmailDomains ?? prefs.allowedEmailDomains,
+  };
 }
 
 export function sharingSettingsToPublishFields(
@@ -94,25 +251,18 @@ export function sharingSettingsToPublishFields(
     };
   }
 
-  if (settings.loginAccess === "public") {
-    return {
-      visibility: "public_read",
-      linkPermission,
-      shareLinkEnabled,
-    };
-  }
-
-  if (settings.loginAccess === "team") {
-    return {
-      visibility: "team",
-      linkPermission,
-      shareLinkEnabled,
-    };
+  if (settings.loginAccess === "public" || settings.loginAccess === "team") {
+    const model = sharingToAudienceModel(
+      settings.loginAccess,
+      settings.externalLink,
+      "off",
+    );
+    return audienceModelToPublishFields(model, settings);
   }
 
   return {
     visibility: "private",
-    linkPermission,
+    linkPermission: "read_write",
     shareLinkEnabled,
   };
 }
@@ -133,6 +283,7 @@ export function resolveSharingSettings(input: {
   loginAccess?: CloudLoginAccess;
   externalLink?: CloudExternalLink;
   accessMode?: CloudAccessMode;
+  shareToken?: string;
 }): CloudSharingSettings {
   if (input.loginAccess !== undefined || input.externalLink !== undefined) {
     return {
@@ -140,7 +291,15 @@ export function resolveSharingSettings(input: {
       externalLink: normalizeExternalLink(input.externalLink),
     };
   }
-  return accessModeToSharingSettings(input.accessMode ?? "private");
+  const fromAccessMode = accessModeToSharingSettings(input.accessMode ?? "private");
+  if (
+    input.accessMode === "public_read" &&
+    input.shareToken?.trim() &&
+    fromAccessMode.externalLink === "off"
+  ) {
+    return { loginAccess: "public", externalLink: "read" };
+  }
+  return fromAccessMode;
 }
 
 export function sharingSettingsSummary(settings: CloudSharingSettings): string {

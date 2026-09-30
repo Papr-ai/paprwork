@@ -144,6 +144,48 @@ describe("Empty Chat Detection in TabStore", () => {
     });
   });
 
+  // ── Explicit New Chat (forceNew) ────────────────────────────────
+
+  describe("Explicit New Chat", () => {
+    it("should always create a tab when forceNew is set", () => {
+      initChat("temp-111");
+      syncGlobal();
+      const tab1 = useTabStore
+        .getState()
+        .createTab("chat", "temp-111", "New Chat");
+
+      initChat("temp-222");
+      syncGlobal();
+      const tab2 = useTabStore
+        .getState()
+        .createTab("chat", "temp-222", "New Chat", {}, { forceNew: true });
+
+      expect(useTabStore.getState().tabs).toHaveLength(2);
+      expect(tab2).not.toBe(tab1);
+      expect(useTabStore.getState().activeTabId).toBe(tab2);
+    });
+
+    it("should not reuse a blank chat merged with an app", () => {
+      initChat("temp-111");
+      syncGlobal();
+      useTabStore.getState().createTab("chat", "temp-111", "New Chat");
+      useTabStore.getState().createTab("app", "app-1", "Data Room");
+      // Merge the blank chat into the app tab (split view)
+      useTabStore.getState().addChild("app-app-1", "chat-temp-111", "right");
+
+      initChat("temp-222");
+      syncGlobal();
+      const tabId = useTabStore
+        .getState()
+        .createTab("chat", "temp-222", "New Chat");
+
+      expect(tabId).toBe("chat-temp-222");
+      expect(
+        useTabStore.getState().getTab("chat-temp-222")?.displayMode,
+      ).toBe("standalone");
+    });
+  });
+
   // ── Non-Chat Tabs ───────────────────────────────────────────────
 
   describe("Non-Chat Tabs", () => {

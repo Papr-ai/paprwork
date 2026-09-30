@@ -52,22 +52,37 @@ export interface CloudRuntimeErrorResponse {
   message?: string;
 }
 
-export interface PendingCloudRunNotification {
+/** Full runtime patch delivered via heartbeat (supersedes thin notification). */
+export interface JobRuntimePatch {
+  jobId: string;
+  status: string;
+  lastRunAt?: string;
+  completedAt?: string;
+  exitCode?: number;
+  error?: string | null;
+  lastOutput?: string;
+  scheduleState?: {
+    nextRunAt?: string;
+    lastScheduledRunAt?: string;
+    lastTriggeredAt?: string;
+    currentIdempotencyKey?: string;
+    lastIdempotencyKey?: string;
+    pendingDueAtForApproval?: string;
+  };
+  recordedAt: string;
+  source?: "cloud_scheduler" | "cloud_manual" | "desktop" | string;
+  jobName?: string;
   orgId?: string;
   namespaceId?: string;
   userId?: string;
-  jobId: string;
-  jobName?: string;
-  status: string;
-  exitCode?: number;
-  lastOutput?: string;
-  source?: string;
-  recordedAt?: string;
 }
+
+/** @deprecated Prefer JobRuntimePatch — kept for backward-compatible heartbeat payloads. */
+export type PendingCloudRunNotification = JobRuntimePatch;
 
 export interface DesktopHeartbeatResponse {
   recordedAt: string;
   staleAfterSeconds: number;
   desktopAwake: boolean;
-  pendingCloudRuns?: PendingCloudRunNotification[];
+  pendingCloudRuns?: JobRuntimePatch[];
 }

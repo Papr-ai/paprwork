@@ -82,6 +82,7 @@ describe("SystemPrompt - Agent Docs & Skills Visibility", () => {
 
     expect(prompt).toContain("# Skills Directory");
     expect(prompt).toContain("read_skill()");
+    expect(prompt).toContain("skills-catalog.json");
     expect(prompt).toContain(
       'read_skill({ skillId: "preloaded-app-and-jobs-guide" })',
     );
@@ -110,6 +111,8 @@ describe("SystemPrompt - Agent Docs & Skills Visibility", () => {
     });
 
     expect(prompt).toContain("# Installed Skills Directory");
+    expect(prompt).toContain("Marketplace Skills Catalog");
+    expect(prompt).toContain("skills-catalog.json");
     expect(prompt).toContain(
       "**Paprwork Design System** (`preloaded-paprwork-design-system`)",
     );
@@ -146,7 +149,7 @@ describe("SystemPrompt - Agent Docs & Skills Visibility", () => {
       includeExtendedAppPlaybook: true,
     });
 
-    expect(prompt).toContain("**2. Create a Plan (after brief for complex work):**");
+    expect(prompt).toContain("**2. Create a Plan (after Product Architect for new apps):**");
     expect(prompt).toContain('{ id: "design", description: "Design UI layout" }');
     expect(prompt).toContain('{ id: "build", description: "Build components" }');
     expect(prompt).toContain('{ id: "test", description: "Test functionality" }');

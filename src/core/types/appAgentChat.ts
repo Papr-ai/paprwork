@@ -54,6 +54,7 @@ export interface AppAgentChatSession {
 
 export type AppAgentChatSseEventType =
   | "app-agent:turn-start"
+  | "app-agent:status"
   | "app-agent:thinking-delta"
   | "app-agent:text-delta"
   | "app-agent:tool-call"

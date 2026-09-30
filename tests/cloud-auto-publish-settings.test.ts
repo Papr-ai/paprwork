@@ -18,8 +18,8 @@ describe("cloudAutoPublishSettings", () => {
     fs.rmSync(tmpHome, { recursive: true, force: true });
   });
 
-  it("defaults to enabled when no settings file exists", () => {
-    expect(isCloudAutoPublishGloballyEnabled(settingsPath)).toBe(true);
+  it("defaults to disabled when no settings file exists", () => {
+    expect(isCloudAutoPublishGloballyEnabled(settingsPath)).toBe(false);
   });
 
   it("reads false when user disables auto publish in settings", () => {

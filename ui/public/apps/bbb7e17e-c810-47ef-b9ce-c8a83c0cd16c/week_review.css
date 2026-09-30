@@ -1,0 +1,42 @@
+/* Monday review — banner above Your three + the review sub-view. Same glass vocabulary as three.css. */
+.wrbanner { display: flex; align-items: center; gap: 8px; width: 100%; margin: 0 0 14px; padding: 11px 14px; border-radius: 14px; cursor: pointer;
+  border: 1px solid rgba(0,96,224,.18); background: linear-gradient(135deg, rgba(0,96,224,.06), rgba(0,172,250,.05)); font: 500 13.5px var(--font); color: var(--ink); text-align: left; }
+.wrbanner span { flex: 1; }
+.wrbanner b { font-weight: 500; font-size: 12px; color: var(--soft); }
+.wrbanner svg { width: 14px; height: 14px; color: var(--blue); }
+.wrbanner:hover { border-color: rgba(0,96,224,.32); }
+
+.wrbar { position: relative; height: 6px; border-radius: 6px; background: rgba(10,16,32,.07); margin-top: -4px; }
+.wrbar i { position: absolute; inset: 0 auto 0 0; border-radius: 6px; background: linear-gradient(90deg, #0060e0, #00acfa); }
+.wrbar b { position: absolute; top: -4px; width: 2px; height: 14px; border-radius: 2px; background: var(--ink); opacity: .55; transform: translateX(-1px); }
+.wr .t3sub { margin-top: -8px; }
+
+.wrlist { display: grid; border: 1px solid var(--line); border-radius: 14px; overflow: hidden; }
+.wrrow { display: grid; grid-template-columns: 1fr auto; grid-template-rows: auto auto; column-gap: 12px; row-gap: 2px; padding: 12px 14px; }
+.wrrow + .wrrow { border-top: 1px solid var(--line); }
+.wrrow b { font-size: 14px; font-weight: 600; color: var(--ink); letter-spacing: -.005em; }
+.wrrow span { grid-row: 2; font-size: 12.5px; color: var(--soft); font-variant-numeric: tabular-nums; }
+.wrpill { grid-row: 1 / span 2; grid-column: 2; align-self: center; font-style: normal; font-size: 11.5px; font-weight: 600; padding: 3px 9px; border-radius: 999px; }
+.wrpill.is-on { color: #0a7a3d; background: rgba(16,160,80,.1); }
+.wrpill.is-risk { color: #9a5b00; background: rgba(230,150,0,.12); }
+.wrpill.is-off { color: var(--mid); background: rgba(10,16,32,.06); }
+
+.wrdrift { display: grid; gap: 4px; padding: 14px 16px; border-radius: 14px; border: 1px solid rgba(230,150,0,.25); background: rgba(230,150,0,.05); }
+.wrdrift b { font-size: 14px; font-weight: 600; color: var(--ink); }
+.wrdrift p { margin: 0; font-size: 13px; color: var(--mid); }
+.wrdrift nav { display: flex; gap: 4px; margin: 4px 0 0 -8px; }
+.t3link.quiet { color: var(--mid); font-weight: 500; }
+.wrq { margin: 4px 0 -8px; font-size: 14px; font-weight: 600; color: var(--ink); }
+
+.t3add { justify-self: start; border: 1px dashed #cfd7e3; background: none; border-radius: 12px; padding: 10px 14px; font: 500 13px var(--font); color: var(--blue); cursor: pointer; }
+.t3add:hover { background: rgba(0,96,224,.05); border-color: rgba(0,96,224,.35); }
+
+@media (prefers-color-scheme: dark) {
+  .wrbanner { border-color: rgba(76,157,255,.25); background: rgba(76,157,255,.07); }
+  .wrbar { background: rgba(255,255,255,.08); }
+  .wrpill.is-on { color: #5fd08f; background: rgba(95,208,143,.12); }
+  .wrpill.is-risk { color: #f0b65a; background: rgba(240,182,90,.12); }
+  .wrpill.is-off { background: rgba(255,255,255,.07); }
+  .wrdrift { border-color: rgba(240,182,90,.25); background: rgba(240,182,90,.06); }
+  .t3add { border-color: #2c3442; }
+}

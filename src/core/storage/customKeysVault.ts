@@ -1,13 +1,31 @@
 /** User-selected visibility for integration keys. */
-export type IntegrationKeyVaultAudience = "user" | "namespace" | "org";
+export type IntegrationKeyVaultAudience =
+  | "user"
+  | "members"
+  | "namespace"
+  | "org";
 
 export function normalizeIntegrationKeyVaultAudience(
   value?: IntegrationKeyVaultAudience | null,
 ): IntegrationKeyVaultAudience {
-  if (value === "namespace" || value === "org") {
+  if (
+    value === "namespace" ||
+    value === "org" ||
+    value === "members"
+  ) {
     return value;
   }
   return "user";
+}
+
+export function isSharedVaultAudience(
+  audience?: IntegrationKeyVaultAudience | null,
+): boolean {
+  return (
+    audience === "namespace" ||
+    audience === "org" ||
+    audience === "members"
+  );
 }
 
 /** Cross-org integration keys (shared across all Papr workspaces). */
@@ -32,7 +50,7 @@ export function resolveIntegrationKeyOrganizationId(input: {
   organizationId?: string;
   activeOrganizationId?: string | null;
 }): string {
-  if (input.orgScope === "all") {
+  if (input.orgScope === "all" || input.orgScope === undefined) {
     return SHARED_ORG_ID;
   }
 

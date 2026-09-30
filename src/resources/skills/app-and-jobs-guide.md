@@ -23,7 +23,7 @@ description: Complete workflow for building Paprwork mini-apps and jobs — stag
 2. **Validate upstream data** — Run small probes with `bash` before committing schema. Check real field names, pagination, auth constraints.
 3. **Define contracts** — Lock the SQLite write model (what jobs write) and read model (what app queries). Add indexes for app query paths.
 4. **Implement jobs** — `create_job` → `run_job` → `read_job_logs`. Adjust schema based on real output.
-5. **Wire app to data** — `create_job` with `appIds` auto-links; or `attach_database` / `link_app_data_source({ dbId })` for standalone DBs. Validate end-to-end with realistic data across all UI states.
+5. **Wire app to data** — `create_database` → `attach_database` → `/api/db/query` and `/api/db/write` with `sourceId`. Jobs use `writeDbIds`. Validate end-to-end with realistic data across all UI states.
 
 If the task is explicit and small, merge steps. Always explain tradeoffs when skipping discovery.
 
@@ -42,11 +42,13 @@ If the task is explicit and small, merge steps. Always explain tradeoffs when sk
 | `run_job` | Execute a job and wait for output |
 | `read_job_logs` | Read execution logs for a job |
 | `list_job_files` / `read_job_file` / `edit_file` | Browse and patch job scripts |
-| `link_app_data_source` | Manual fallback: wire app to job DB or registry `dbId` (auto-link usually handles job-owned) |
+| `link_app_data_source` | Attach job DB or registry `dbId` to app (prefer `attach_database` for registry DBs) |
+| `create_database` | Create standalone registry DB |
+| `attach_database` | Link registry `dbId` to mini-app with optional `alias` |
 | `read_app_data_sources` | List registered data sources for an app |
 | `read_skill` | Load a skill for detailed guidance |
 
-> Mini-app REST APIs: **`/api/db/query`** (reads), **`/api/db/write`** (writes), **`/api/db/exec`** (CREATE TABLE IF NOT EXISTS only), **`/api/app/backend/:action`**, **`/api/jobs/run`**, **`/api/credentials/client-keys`** (publishable keys only). **`/api/bash/run` is disabled** for mini-apps.
+> Mini-app REST APIs: **`/api/db/query`** (single read), **`/api/db/batch`** (batch reads; aliases `query-batch`, `read-batch`), **`/api/db/write`** (single write), **`/api/db/write-batch`** (batch writes — default **`atomic: false`**, optional **`atomic: true`** on same database), **`/api/db/exec`** (CREATE TABLE IF NOT EXISTS only), **`/api/app/backend/:action`**, **`/api/jobs/run`**, **`/api/credentials/client-keys`** (publishable keys only). **`/api/bash/run` is disabled** for mini-apps.
 
 ---
 
@@ -90,24 +92,81 @@ Desktop injects from Settings directly. Cloud injects from GCP vault **only for 
 
 See APP_AND_JOBS_GUIDE.md § App backend for full manifest example.
 
+### Verified caller identity (multi-user / ACL backends)
+
+**NOT row-level SQL.** No `papr_current_user()`, no `/api/db/secure-query`, no `/api/db/action`. `/api/db/query` is unchanged — any SELECT still runs.
+
+**Mechanism:** `POST /api/app/backend/{actionName}` — `actionName` from `apps/{appId}/backend/manifest.json`. Handler gets env `PAPR_CALLER_USER_ID` (session-trusted).
+
+**Older apps:** may have no `backend/` folder — endpoint returns **ENOENT** on manifest (route is live, not 404). Scaffold before verify.
+
+**Minimal manifest (copy verbatim — `version` is numeric `1`, field is `handler` not `entry`):**
+```json
+{
+  "version": 1,
+  "actions": {
+    "ping": {
+      "handler": "ping.py",
+      "runtime": "python",
+      "timeoutMs": 10000
+    }
+  }
+}
+```
+
+**Params env:** `PAPR_ACTION_PARAMS` (JSON) + `PAPR_PARAM_{key}` per param. **No `PAPR_PARAMS_JSON`.** Spoofed `PAPR_CALLER_USER_ID` in params is **overwritten** — `PAPR_PARAM_PAPR_CALLER_USER_ID` = session id (fail-safe).
+
+**Common wrong probes (all fail):** `SELECT papr_current_user()`, `/api/db/action`, `/api/app-actions`.
+
+**Verify:**
+```bash
+curl -s -X POST http://localhost:18789/api/app/backend/ping \
+  -H "Content-Type: application/json" \
+  -d '{"appId":"APP_ID","params":{"PAPR_CALLER_USER_ID":"fake"}}'
+# stdout JSON: callerUserId = real session id, NOT "fake"
+```
+
+When a backend handler must know **who invoked it** (roster lookup, role-scoped reads, passcode claim):
+
+- **`POST /api/app/backend/:action`** and **`POST /api/jobs/run`** inject server env vars when the caller is signed in — they **override** any client spoofing in `params` (including `PAPR_PARAM_*` copies of identity keys).
+- **`PAPR_CALLER_USER_ID`** — Papr user id (Parse objectId); use for ACL and roster binding.
+- **`PAPR_CALLER_EMAIL`** — when email is known from session.
+- **Optional** for public/ping handlers — ignore when identity is not needed.
+- **Never** authorize from client `userId`, `role`, or other business identity params — only `PAPR_CALLER_USER_ID` / `PAPR_CALLER_EMAIL`.
+
+```python
+user_id = os.environ.get("PAPR_CALLER_USER_ID")
+if not user_id:
+    sys.exit("Sign in required")
+# lookup role from roster WHERE papr_user_id = user_id
+```
+
+```typescript
+const userId = process.env.PAPR_CALLER_USER_ID;
+if (!userId) throw new Error("Sign in required");
+```
+
+For sensitive multi-role apps: put reads/writes in backend actions (not raw `/api/db/query` from the browser). See system prompt § **Backend ACL — what changed vs what did NOT**.
+
 ### Backend linked database (local + cloud)
 
-When a backend handler must **read or write** the app's linked SQLite/Turso DB (form save, API cache, etc.):
+When a backend handler must **read or write** linked SQLite/Turso databases:
 
-1. **Ensure a linked source exists** — `create_job({ appIds })` auto-links; or `attach_database` / `link_app_data_source({ dbId })` for standalone DBs.
-2. Gateway injects automatically on every backend action:
-   - **Desktop (local file):** `PAPR_DB_MODE=local`, `APP_DB=/path/to/data.db`
-   - **Cloud / no local file:** `PAPR_DB_MODE=turso`, `PAPR_DB_URL`, `PAPR_DB_AUTH_TOKEN`
-3. **Python:** `from papr_db import connect, execute` (scaffolded as `backend/papr_db.py`)
-4. **Node/TS:** read `process.env.APP_DB` (local) or use `PAPR_DB_URL` + `PAPR_DB_AUTH_TOKEN` with libsql/fetch
+1. **Ensure sources are linked** — `create_database` → `attach_database({ alias })`
+2. **Name the DB** — `"sourceId": "billing"` on the action in `manifest.json`, or `params: { sourceId: "billing" }` from the frontend
+3. Gateway injects **every** linked source as `PAPR_DB_{KEY}*` plus `APP_DB` for the active source
+4. **Python:** `from papr_db import connect, execute` — `connect("billing")` or `connect()`; never `sqlite3.connect(APP_DB)` (cloud uses Turso). Insert id: `INSERT … RETURNING`, or `con.lastrowid` after INSERT.
+5. **Node/TS:** No cross-env DB helper — use Python backend handlers for SQL, or `/api/db/*` from the frontend.
 
 **❌ NEVER:** parse `data-sources.json` manually, grep keychain for DB paths, or read API keys from SQLite.
 
-**Simple form-only save (no backend logic):** frontend `POST /api/db/write` — no backend action needed.
+**Simple form-only save (no backend logic):** frontend `POST /api/db/write` with `sourceId` — no backend action needed.
 
 ---
 
-> **Cloud (automatic, ready):** Synced apps auto-publish to `apps.papr.ai`. **`create_job({ appIds })` auto-links** `data-sources.json` (required for cloud `/api/db/*`). Manual `link_app_data_source` only for standalone `dbId` or failed auto-link. `/api/db/*` and `/api/jobs/run` work on cloud; **`window.paprAPI` is desktop-only**. **Never use `/tmp` file IPC between jobs and mini-apps** — job sandbox ≠ bash sandbox on cloud; use `$APP_DB` + `/api/db/query` and job `params` instead. See APP_AND_JOBS_GUIDE.md § Mini-app ↔ job communication.
+> **Cloud (automatic, ready):** Synced apps auto-publish to `apps.papr.ai`. Use **`attach_database`** / `link_app_data_source` so `data-sources.json` exists (required for cloud `/api/db/*`). `/api/db/*` and `/api/jobs/run` work on cloud; **`window.paprAPI` is desktop-only**. **Never use `/tmp` file IPC between jobs and mini-apps** — use `writeDbIds` + `/api/db/*` with `sourceId` and job `params` instead. See APP_AND_JOBS_GUIDE.md § Mini-app ↔ job communication.
+
+> **Published app Run now:** `POST /api/jobs/run` on `apps.papr.ai` runs in the **cloud sandbox** — desktop can be asleep. Requires synced job code + vault keys. **Scheduled jobs** when desktop heartbeat is stale may show `pendingCloudRuns` — that path may need Paprwork awake. Do not conflate the two when debugging.
 
 ---
 
@@ -135,16 +194,16 @@ See full patterns in APP_AND_JOBS_GUIDE.md → "Job Resilience & Patterns"
 ## File Structure
 
 ```
-~/Papr/apps/{appId}/
+$PAPR_HOME/apps/{appId}/
   index.html            # Entry point — NO inline JS, load app.ts as module
   style.css             # Liquid Glass styles
   app.ts                # Main entry (TypeScript — auto-transpiled by gateway)
   types.ts              # Shared interfaces
   components/           # One component per file (<150 lines each)
   utils/                # Helpers, formatters, API calls
-  data-sources.json     # Created by create_job auto-link or attach_database / link_app_data_source
+  data-sources.json     # Created by attach_database / link_app_data_source
 
-~/Papr/jobs/{jobId}/
+$PAPR_HOME/Jobs/{jobId}/
   job.json              # Config (schedule, type, command, env, deps)
   code/main.py          # (Python) or code/main.js (Node) or code/run.sh (Shell)
   code/requirements.txt # Python dependencies
@@ -173,23 +232,23 @@ See full patterns in APP_AND_JOBS_GUIDE.md → "Job Resilience & Patterns"
 
 ## SQLite Workflow
 
-### Step 1 — Ensure data source is linked (usually automatic)
-
-**Default (job-owned):** `create_job({ appIds: [appId], ... })` auto-links the job's `data.db` to the app. Check `read_app_data_sources({ appId })` — only call manual link if missing:
+### Step 1 — Create and attach database
 
 ```javascript
-// Manual fallback only:
-link_app_data_source({ appId: "your-app-id", jobId: "your-job-id", setPrimary: true })
+const { dbId } = await create_database({ name: "Dashboard data" })
+await attach_database({ appId, dbId, alias: "main" })
+create_job({
+  name: "Sync",
+  appIds: [appId],
+  writeDbIds: [dbId],
+  type: "python",
+  command: 'python3 code/main.py --db "$PAPR_DB_MAIN"',
+})
 ```
 
-**Standalone registry DB:**
-```javascript
-create_database({ name: "CRM" })
-attach_database({ appId, dbId, setPrimary: true })
-// or: link_app_data_source({ appId, dbId, setPrimary: true })
-```
+Manual link fallback: `link_app_data_source({ appId, jobId, alias: "sync" })` or `{ dbId, alias }`.
 
-**Env vars in jobs:** `$APP_DB` = UI-facing tables (primary linked source). `$JOB_DB` = job scratch (`job_runs`, temp). When the job DB is primary, both point at the **same** `data.db`.
+**Env vars in jobs:** `PAPR_DB_{ALIAS}` from `writeDbIds`. `$JOB_DB` = scratch only.
 
 ### Step 2 — Inspect schema (optional, from app JS)
 ```javascript
@@ -199,10 +258,10 @@ const { sources } = await fetch('/api/db/schema?appId=APP_ID').then(r => r.json(
 
 ### Step 3 — Query in app code
 
-No `sourceId` needed — the platform reads the table name from the SQL and automatically opens the correct database. Only pass `sourceId` if two linked sources happen to have a table with the same name.
+Pass **`sourceId`** = alias from `attach_database`. Required when 2+ DBs linked; optional when only one.
 
 ```typescript
-const APP_ID = 'your-app-id';  // hardcode this
+const APP_ID = 'your-app-id';
 
 async function loadData() {
   const { rows } = await fetch('/api/db/query', {
@@ -210,8 +269,8 @@ async function loadData() {
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({
       appId: APP_ID,
-      sql: 'SELECT * FROM threads ORDER BY score DESC LIMIT 100'
-      // No sourceId needed — platform finds which linked DB has "threads"
+      sourceId: 'main',
+      sql: 'SELECT * FROM threads ORDER BY score DESC LIMIT 100',
     })
   }).then(r => r.json()) as { rows: Thread[] };
   return rows;
@@ -220,35 +279,61 @@ async function loadData() {
 
 ### Step 4 — Write from app code (UPDATE / INSERT / DELETE)
 
-Use `/api/db/write` when the app needs to update state directly — marking items, resetting status, inserting user actions.
+All linked DBs are **writable**. Use `/api/db/write` (not `/api/db/query` — mutations return 403 on query).
 
 ```typescript
-// UPDATE — e.g. mark a thread as selected before triggering a job
 const { changes } = await fetch('/api/db/write', {
   method: 'POST',
   headers: { 'Content-Type': 'application/json' },
   body: JSON.stringify({
     appId: APP_ID,
+    sourceId: 'main',
     sql: 'UPDATE threads SET status = ? WHERE id = ?',
-    params: ['selected', threadId]   // always use ? placeholders + params array
+    params: ['selected', threadId],
   })
 }).then(r => r.json()) as { changes: number };
 
-// INSERT
 const { lastInsertRowid } = await fetch('/api/db/write', {
   method: 'POST',
   headers: { 'Content-Type': 'application/json' },
   body: JSON.stringify({
     appId: APP_ID,
+    sourceId: 'main',
     sql: 'INSERT INTO actions (thread_id, action, created_at) VALUES (?, ?, datetime("now"))',
-    params: [threadId, 'regenerate']
+    params: [threadId, 'regenerate'],
   })
 }).then(r => r.json()) as { lastInsertRowid: number };
 ```
 
-**Security:** Only `INSERT`, `UPDATE`, `DELETE`, `REPLACE` allowed — SELECT and DDL blocked. Only databases registered in `data-sources.json` (via auto-link, `attach_database`, or manual `link_app_data_source`). Always use `params` array with `?` placeholders, never interpolate user input.
+**Security:** Only `INSERT`, `UPDATE`, `DELETE`, `REPLACE` on `/api/db/write`. Only databases in `data-sources.json`. Always use `params` with `?` placeholders.
 
 **Write vs trigger a job:** Use `/api/db/write` for direct state changes the app owns (select, flag, delete). Use `/api/jobs/run` when the change requires backend processing (LLM call, API call, complex logic).
+
+### Batch reads and writes (two lanes — do not mix)
+
+| Lane | Endpoint | Use when |
+|------|----------|----------|
+| Read batch | `POST /api/db/batch` (aliases: `query-batch`, `read-batch`) | 2+ **SELECT**s on mount — one HTTP round trip, max 25 statements |
+| Write batch | `POST /api/db/write-batch` | 2+ **INSERT/UPDATE/DELETE** in one user action — max 25 statements |
+
+- **Never** put INSERT/UPDATE/DELETE in `/api/db/batch` — each statement gets `{ ok: false, error: "Only SELECT..." }`.
+- **`write-batch` returns `{ atomic, results }`** — default **`atomic: false`**: statements commit one at a time; check every `results[i].ok`. Pass **`atomic: true`** for all-or-nothing on the **same linked database** (`sourceId`).
+- Cross-database sequences still need **`/api/app/backend/:action`** or a job.
+
+```typescript
+// Batch read — page load
+const { results } = await fetch('/api/db/batch', {
+  method: 'POST',
+  headers: { 'Content-Type': 'application/json' },
+  body: JSON.stringify({
+    appId: APP_ID,
+    statements: [
+      { sourceId: 'main', sql: 'SELECT * FROM people LIMIT 50' },
+      { sourceId: 'main', sql: 'SELECT * FROM settings WHERE id = 1' },
+    ],
+  }),
+}).then(r => r.json());
+```
 
 ---
 
@@ -346,7 +431,7 @@ Mini-apps run in sandboxed iframes with restricted permissions:
 |------|---------|---------|
 | `python` | Scripts with logic, API calls, data processing, ML | `command: "python3 code/main.py --token ${GITHUB_TOKEN}"` |
 | `bash` | Simple shell one-liners | `command: "curl -H 'Authorization: Bearer ${KEY}' ..."` |
-| `node` | Node.js/TypeScript scripts | `command: "node code/main.js --api-key ${KEY}"` |
+| `node` | Node.js/TypeScript scripts | `command: "node code/main.js", requiredKeys: ["KEY"]` |
 
 **Use `type: "python"` when:** The job has multi-step logic, API calls, data processing, or needs pip packages. Pass API keys as CLI arguments in the command.
 
@@ -618,18 +703,18 @@ When a job will be triggered by a button click:
 
 | Layer | Set by | Available in job |
 |-------|--------|-------------------|
-| API keys (custom from Settings) | `create_job` command | Pass as CLI args: `--token ${KEY_NAME}` |
+| API keys (custom from Settings) | `create_job` command | Declare `requiredKeys: ["KEY_NAME"]` and read `os.environ["KEY_NAME"]` / `process.env.KEY_NAME`. |
 | Job config env (`SUBREDDIT=python`) | `create_job` / `update_job` | `os.environ`, `$VAR` |
 | Runtime params (`THREAD_ID=abc123`) | `params` in `/api/jobs/run` | `os.environ.get('THREAD_ID')`, `$THREAD_ID` |
 
-Runtime params: `os.environ.get('THREAD_ID')`. API keys: pass via CLI args, parse with `argparse`.
+Runtime params: `os.environ.get('THREAD_ID')`. API keys: declare requiredKeys and read from os.environ/process.env; never pass secrets as CLI args.
 
 ---
 
 ## Job Triggering Patterns
 
 > **Live updates:** import from `/__papr__/papr-job-events.ts` (runtime SDK). See system prompt and this skill.
-> Run `validate_app` after edits — it returns a copy-paste snippet when polling anti-patterns are detected.
+> Run `validate_app` after edits — polling errors return a copy-paste snippet; **load warnings** flag multi-query mount without batch and `onDbChanged` without `debounceMs` (plus preview DB request counts on desktop).
 
 **Three ways a job can send data back to the app:**
 
@@ -695,7 +780,8 @@ const JOB_ID = 'your-job-id';
 // Auto-refresh when DB data changes (any write path: job, agent, Turso pull)
 const unsub = subscribeJobEvents({
   jobIds: [JOB_ID],
-  onDbChanged: () => loadData(),          // DB content changed → re-query
+  debounceMs: 300,                        // coalesce db-changed bursts during job writes
+  onDbChanged: () => loadData(),          // DB content changed → re-query (prefer batch inside)
   onStatusChanged: (e) => {               // Job lifecycle → update status badge
     if (e.status === 'completed' || e.status === 'failed') updateStatus(e);
   },
@@ -802,7 +888,7 @@ create_job({ type: "bash", command: "pip3 install requests && python3 fetch.py" 
 
 // ❌ Using os.getenv for custom API keys
 // Python: token = os.getenv('GITHUB_TOKEN')
-// → Custom keys from Settings are NOT in env. Pass as CLI args.
+// → Custom keys from Settings are injected into job env when declared in requiredKeys. Do not pass secrets as CLI args.
 
 // ❌ Building a separate HTTP server job as a bridge
 create_job({ name: "api-bridge", type: "node", command: "node server.js" })
@@ -873,9 +959,9 @@ const { rows } = await fetch('/api/db/query', {
 - [ ] Job type correct: `python` for scripts, `bash` for one-liners
 - [ ] Python jobs with API keys: command uses `--token ${KEY_NAME}`, script uses argparse
 - [ ] Design system loaded (`read_skill({ skillId: "preloaded-paprwork-design-system" })`)
-- [ ] Data source linked: `create_job({ appIds })` auto-link succeeded, or `attach_database` / manual `link_app_data_source` — verify with `read_app_data_sources`
+- [ ] Data source linked: `attach_database` or `link_app_data_source` — verify with `read_app_data_sources`
 - [ ] App uses APP_ID constant (not hardcoded string scattered everywhere)
-- [ ] Job uses `JOB_DIR` env var for all file paths (not hardcoded `~/Papr/...`)
+- [ ] Job uses `JOB_DIR` env var for all file paths (not hardcoded `$PAPR_HOME/...` or legacy `~/Papr/...`)
 - [ ] Button has loading/disabled state during job execution
 - [ ] WebSocket listener set up for job completion push
 - [ ] Error states handled in UI (not just happy path)

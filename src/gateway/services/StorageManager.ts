@@ -12,6 +12,7 @@ import type {
   ChatMetadata,
   ChatSummarySnapshot,
 } from "./storage/IStorageProvider.js";
+import type { TurnMetricsSummary } from "./agent/turnMetrics.js";
 import { LocalStorageProvider } from "./storage/LocalStorageProvider.js";
 import { PaprMemoryProvider } from "./storage/PaprMemoryProvider.js";
 import { HybridStorageProvider } from "./storage/HybridStorageProvider.js";
@@ -33,50 +34,88 @@ export class StorageManager {
   private provider: IStorageProvider | null = null;
   private currentMode: StorageMode | null = null;
   private config: StorageConfig | null = null;
+  /** In-flight initialize() — readers await this before touching the provider. */
+  private ready: Promise<void> = Promise.resolve();
+
+  /**
+   * Close the current provider before replacing it (re-init or mode switch).
+   */
+  private disposeCurrentProvider(): void {
+    if (!this.provider) {
+      return;
+    }
+
+    try {
+      if (this.provider instanceof HybridStorageProvider) {
+        this.provider.getLocalProvider().close();
+      } else if (this.provider instanceof LocalStorageProvider) {
+        this.provider.close();
+      }
+    } catch (error) {
+      console.warn(
+        "[StorageManager] Provider dispose warning:",
+        error instanceof Error ? error.message : error,
+      );
+    }
+
+    this.provider = null;
+  }
 
   /**
    * Initialize storage with specified mode and configuration
    */
   async initialize(config: StorageConfig): Promise<void> {
+    this.disposeCurrentProvider();
+
     this.config = config;
     this.currentMode = config.mode;
 
     console.log(`[StorageManager] Creating provider for mode: ${config.mode}`);
-    // Create appropriate provider based on mode
-    switch (config.mode) {
-      case "local":
-        this.provider = new LocalStorageProvider(
-          config.userDataPath || this.getDefaultUserDataPath(),
-        );
-        break;
 
-      case "papr":
-        if (!config.paprApiKey) {
-          throw new Error("PAPR API key required for PAPR mode");
-        }
-        this.provider = new PaprMemoryProvider({
-          apiKey: config.paprApiKey,
-        });
-        break;
+    const initTask = (async (): Promise<void> => {
+      let provider: IStorageProvider;
+      switch (config.mode) {
+        case "local":
+          provider = new LocalStorageProvider(
+            config.userDataPath || this.getDefaultUserDataPath(),
+          );
+          break;
 
-      case "hybrid":
-        if (!config.paprApiKey) {
-          throw new Error("PAPR API key required for Hybrid mode");
-        }
-        this.provider = new HybridStorageProvider(
-          config.userDataPath || this.getDefaultUserDataPath(),
-          { apiKey: config.paprApiKey },
-        );
-        break;
+        case "papr":
+          if (!config.paprApiKey) {
+            throw new Error("PAPR API key required for PAPR mode");
+          }
+          provider = new PaprMemoryProvider({
+            apiKey: config.paprApiKey,
+          });
+          break;
 
-      default:
-        throw new Error(`Unknown storage mode: ${config.mode}`);
-    }
+        case "hybrid":
+          if (!config.paprApiKey) {
+            throw new Error("PAPR API key required for Hybrid mode");
+          }
+          provider = new HybridStorageProvider(
+            config.userDataPath || this.getDefaultUserDataPath(),
+            { apiKey: config.paprApiKey },
+          );
+          break;
 
-    console.log(`[StorageManager] Provider created, initializing...`);
-    // Initialize the provider
-    await this.provider.initialize();
-    console.log(`✓ StorageManager initialized in ${config.mode} mode`);
+        default:
+          throw new Error(`Unknown storage mode: ${config.mode}`);
+      }
+
+      console.log(`[StorageManager] Provider created, initializing...`);
+      await provider.initialize();
+      this.provider = provider;
+      console.log(`✓ StorageManager initialized in ${config.mode} mode`);
+    })();
+
+    this.ready = initTask;
+    await initTask;
+  }
+
+  private async awaitReady(): Promise<void> {
+    await this.ready;
   }
 
   /**
@@ -113,6 +152,19 @@ export class StorageManager {
   async saveMessage(chatId: string, message: StoredMessage): Promise<void> {
     const provider = this.ensureInitialized();
     await provider.saveMessage(chatId, message);
+  }
+
+  /**
+   * Attach turn measurements to a saved assistant message. A no-op on
+   * providers with no local database to write them to.
+   */
+  async recordTurnMetrics(
+    messageId: string,
+    summary: TurnMetricsSummary,
+    durationMs?: number,
+  ): Promise<void> {
+    const provider = this.ensureInitialized();
+    await provider.recordTurnMetrics?.(messageId, summary, durationMs);
   }
 
   /**
@@ -252,6 +304,12 @@ export class StorageManager {
   }> {
     const provider = this.ensureInitialized();
     return await provider.getChatStats(chatId);
+  }
+
+  async getTurnUsage(chatId: string) {
+    await this.awaitReady();
+    const provider = this.ensureInitialized();
+    return await provider.getTurnUsage(chatId);
   }
 
   async getGlobalCostStats(): Promise<{
@@ -496,9 +554,34 @@ export class StorageManager {
 // Singleton instance
 let storageManagerInstance: StorageManager | null = null;
 
-/** Reset global singleton after org/namespace workspace switch. */
-export function resetStorageManagerSingleton(): void {
+/** Close SQLite connections before dropping the singleton. */
+export async function shutdownStorageManager(): Promise<void> {
+  if (!storageManagerInstance) {
+    return;
+  }
+
+  try {
+    if (storageManagerInstance.isInitialized()) {
+      const provider = storageManagerInstance.currentProvider;
+      if (provider instanceof HybridStorageProvider) {
+        provider.getLocalProvider().close();
+      } else if (provider instanceof LocalStorageProvider) {
+        provider.close();
+      }
+    }
+  } catch (error) {
+    console.warn(
+      "[StorageManager] Shutdown warning:",
+      error instanceof Error ? error.message : error,
+    );
+  }
+
   storageManagerInstance = null;
+}
+
+/** Reset global singleton after org/namespace workspace switch. */
+export async function resetStorageManagerSingleton(): Promise<void> {
+  await shutdownStorageManager();
 }
 
 /**

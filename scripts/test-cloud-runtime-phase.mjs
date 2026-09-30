@@ -69,7 +69,32 @@ async function testHeartbeat() {
     fail("heartbeat pendingCloudRuns", "missing array");
     return;
   }
-  ok(`heartbeat (pending=${body.pendingCloudRuns.length})`);
+  ok(`heartbeat (cloudRuns=${body.pendingCloudRuns.length})`);
+}
+
+async function testHeartbeatSyncV3Handshake() {
+  const res = await fetch(`${BASE}/v1/cloud/runtime/heartbeat`, {
+    method: "POST",
+    headers: {
+      "Content-Type": "application/json",
+      "X-API-Key": apiKey,
+    },
+    body: JSON.stringify({
+      syncProtocol: "v3",
+      appVersion: "2.0.0-e2e",
+      syncV3Capabilities: ["SYNC_V3_PER_APP_REPOS"],
+    }),
+  });
+  if (!res.ok) {
+    fail("heartbeat v3 handshake", `${res.status} ${(await res.text()).slice(0, 120)}`);
+    return;
+  }
+  const body = await res.json();
+  if (!body.recordedAt) {
+    fail("heartbeat v3 shape", JSON.stringify(body).slice(0, 120));
+    return;
+  }
+  ok("heartbeat v3 Sync V3 handshake");
 }
 
 async function testSessionsStreamCursor() {
@@ -161,6 +186,7 @@ async function testListJobs() {
 console.log(`\nCloud runtime phase tests → ${BASE}\n`);
 
 await testHeartbeat();
+await testHeartbeatSyncV3Handshake();
 await testListJobs();
 await testSessionsStreamAnthropic();
 await testSessionsStreamCursor();

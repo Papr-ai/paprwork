@@ -30,20 +30,46 @@ function shouldKillProcess(consecutiveFailures, isSuccess, threshold = 3) {
   return { newCount, shouldKill: newCount >= threshold };
 }
 
-/** Parse /health JSON body. Gateway returns { status: "ok" | "starting" }. */
+/** Parse /health JSON body. Gateway returns { status, syncBusy?, eventLoopLagMs? }. */
 function parseHealthResponse(body) {
   try {
     const parsed = JSON.parse(body);
+    const syncBusy = parsed.syncBusy === true;
+    const eventLoopLagMs =
+      typeof parsed.eventLoopLagMs === "number" ? parsed.eventLoopLagMs : undefined;
+    // syncBusy is a grace hint for periodic health (don't SIGKILL during upload).
+    // Once status is "ok", the gateway is ready — do not block startup on syncBusy.
     if (parsed.status === "ok") {
-      return { alive: true, ready: true };
+      return syncBusy
+        ? { alive: true, ready: true, syncBusy: true, eventLoopLagMs }
+        : { alive: true, ready: true, eventLoopLagMs };
     }
-    if (parsed.status === "starting") {
-      return { alive: true, ready: false };
+    if (syncBusy) {
+      return { alive: true, ready: false, syncBusy: true, eventLoopLagMs };
     }
-    return { alive: false, ready: false };
+    if (parsed.status === "starting" || parsed.status === "switching") {
+      return { alive: true, ready: false, eventLoopLagMs };
+    }
+    return { alive: false, ready: false, eventLoopLagMs };
   } catch {
     return { alive: false, ready: false };
   }
+}
+
+/** Sync grace controls restart suppression, not whether the HTTP request succeeded. */
+function getHealthObservation(health, requestOutcome = "response", previouslyFailed = false) {
+  const failed = requestOutcome !== "response" || !health.alive;
+  if (!failed && !previouslyFailed) return null;
+  let reason = "Health request responded again";
+  if (failed) {
+    reason = requestOutcome === "timeout"
+      ? "Health request timed out"
+      : requestOutcome === "error"
+        ? "Health request failed"
+        : "Health response was invalid or unhealthy";
+    if (health.syncBusy) reason += " during sync grace";
+  }
+  return { status: failed ? "failed" : "recovered", reason };
 }
 
 /**
@@ -59,6 +85,9 @@ function shouldKillUnhealthyGateway(
   if (health.ready) {
     return { newCount: 0, shouldKill: false };
   }
+  if (health.syncBusy) {
+    return { newCount: 0, shouldKill: false };
+  }
   if (health.alive && !health.ready) {
     return { newCount: 0, shouldKill: false };
   }
@@ -67,6 +96,68 @@ function shouldKillUnhealthyGateway(
   }
   const newCount = consecutiveFailures + 1;
   return { newCount, shouldKill: newCount >= threshold };
+}
+
+/** Read gateway sync busy marker written during Upload now / long flush. */
+function parseGatewaySyncBusyState(raw) {
+  try {
+    const parsed = typeof raw === "string" ? JSON.parse(raw) : raw;
+    if (
+      typeof parsed?.appId !== "string" ||
+      typeof parsed?.startedAtMs !== "number"
+    ) {
+      return null;
+    }
+    return parsed;
+  } catch {
+    return null;
+  }
+}
+
+function isGatewaySyncBusyGraceActive(
+  state,
+  nowMs = Date.now(),
+  maxAgeMs = 15 * 60_000,
+) {
+  if (!state) {
+    return false;
+  }
+  const age = nowMs - state.startedAtMs;
+  return age >= 0 && age < maxAgeMs;
+}
+
+/**
+ * Pick which PIDs reported on the gateway port are safe to SIGKILL.
+ *
+ * `lsof -ti:PORT` reports every socket on the port, including *outbound client*
+ * connections. The Electron main process POSTs to the gateway while starting up,
+ * so when an orphaned gateway is answering on the port that POST connects and
+ * main's own PID joins the list. The supervisor then SIGKILLs itself ~0.6s into
+ * launch and the app never loads. Without an orphan the POST is refused, no
+ * socket exists, and the bug stays invisible — so filter here as well as passing
+ * `-sTCP:LISTEN`, and never return a PID we depend on.
+ */
+function selectOrphanPidsToKill(rawOutput, protectedPids = []) {
+  if (typeof rawOutput !== "string") {
+    return [];
+  }
+  const protectedSet = new Set(
+    protectedPids
+      .map((pid) => Number.parseInt(String(pid), 10))
+      .filter((pid) => Number.isInteger(pid) && pid > 0),
+  );
+
+  const seen = new Set();
+  const result = [];
+  for (const line of rawOutput.split(/\r?\n/)) {
+    const pid = Number.parseInt(line.trim(), 10);
+    // Drop blank lines, non-numeric noise, and pid 0 (kernel / whole process group).
+    if (!Number.isInteger(pid) || pid <= 0) continue;
+    if (protectedSet.has(pid) || seen.has(pid)) continue;
+    seen.add(pid);
+    result.push(pid);
+  }
+  return result;
 }
 
 const VALID_STATE_TRANSITIONS = {
@@ -88,7 +179,11 @@ module.exports = {
   getNotificationType,
   shouldKillProcess,
   parseHealthResponse,
+  getHealthObservation,
   shouldKillUnhealthyGateway,
+  parseGatewaySyncBusyState,
+  isGatewaySyncBusyGraceActive,
+  selectOrphanPidsToKill,
   isValidTransition,
   VALID_STATE_TRANSITIONS,
 };

@@ -1,0 +1,14 @@
+.org-namespace-setup__loading-message {
+  min-height: 1.4em;
+  transition: opacity 0.25s ease;
+}
+
+.org-namespace-setup__terms {
+  margin-top: 16px;
+}
+
+.org-namespace-setup-overlay {
+  position: fixed;
+  inset: 0;
+  z-index: 10000;
+}

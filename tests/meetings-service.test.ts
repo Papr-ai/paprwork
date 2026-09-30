@@ -3,6 +3,7 @@ import path from "path";
 import { promises as fs } from "fs";
 import { afterEach, describe, expect, test, vi } from "vitest";
 import { MeetingsService } from "../src/gateway/services/MeetingsService.js";
+import { useIsolatedPaprWorkspace } from "./setup/isolatedWorkspace.js";
 
 const tmpRoots: string[] = [];
 
@@ -37,6 +38,10 @@ async function setupService(): Promise<MeetingsService> {
 }
 
 describe("MeetingsService", () => {
+  // Redirects HOME/PAPR_HOME to a temp dir so fixtures never land in
+  // the developer's real ~/Papr workspace.
+  useIsolatedPaprWorkspace("meetings-service");
+
   test("creates and lists meetings", async () => {
     const service = await setupService();
     const meeting = await service.createMeeting({

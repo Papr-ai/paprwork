@@ -1,5 +1,7 @@
 import React from "react";
 import type { CloudCompatibilityReport } from "../../src/core/types/cloudAppCompatibility";
+import { openPaprPlanSettings } from "../../utils/cloudMemoryStatus";
+import { useCloudMemoryStatusStore } from "../../stores/cloudMemoryStatusStore";
 
 export function cloudCompatibilityLabel(level: CloudCompatibilityReport["level"]): string {
   switch (level) {
@@ -21,6 +23,8 @@ export function CloudCompatibilityBadge({
   report,
   loading = false,
 }: CloudCompatibilityBadgeProps) {
+  const cloudStatus = useCloudMemoryStatusStore((state) => state.status);
+
   if (loading) {
     return (
       <span className="cloud-compat-badge cloud-compat-badge--loading">
@@ -28,16 +32,29 @@ export function CloudCompatibilityBadge({
       </span>
     );
   }
-  if (!report) return null;
 
-  return (
-    <span
-      className={`cloud-compat-badge cloud-compat-badge--${report.level}`}
-      title={report.summary}
-    >
-      {cloudCompatibilityLabel(report.level)}
-    </span>
-  );
+  if (cloudStatus?.level === "paused") {
+    return (
+      <button
+        type="button"
+        className="cloud-compat-badge cloud-compat-badge--paused"
+        title={cloudStatus.detail}
+        onClick={openPaprPlanSettings}
+      >
+        Papr Cloud paused
+      </button>
+    );
+  }
+
+  // Compatibility levels no longer badge the bar. "Hybrid" and "Desktop only"
+  // are publish-time facts, and they are already stated where they matter: the
+  // blocking CloudCompatibilityPanel shown before a desktop-only publish. A
+  // permanent word next to the app name spent real width on a caveat the user
+  // can act on only at publish time.
+  //
+  // Paused is different and stays: it is billing state, not app state, and it
+  // is the only place in the app flow that surfaces it.
+  return null;
 }
 
 interface CloudCompatibilityPanelProps {

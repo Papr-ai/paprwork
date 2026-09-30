@@ -134,7 +134,7 @@ Start the app and send a message. You should see:
 Check SQLite database:
 
 ```bash
-sqlite3 ~/Papr/data/chats.db
+sqlite3 $PAPR_HOME/data/chats.db
 ```
 
 ```sql
@@ -349,7 +349,7 @@ npm run type-check
 npm start
 
 # 3. Query database after sending a message
-sqlite3 ~/Papr/data/chats.db "SELECT prompt_tokens, completion_tokens, total_tokens FROM messages WHERE role='assistant' ORDER BY timestamp DESC LIMIT 1;"
+sqlite3 $PAPR_HOME/data/chats.db "SELECT prompt_tokens, completion_tokens, total_tokens FROM messages WHERE role='assistant' ORDER BY timestamp DESC LIMIT 1;"
 
 # Expected output: Non-zero numbers like:
 # 50234|2613|52847

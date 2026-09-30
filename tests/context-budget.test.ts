@@ -3,6 +3,8 @@ import {
   computeHistoryTokenBudget,
   GEMINI_HISTORY_TOKEN_CAP,
   isContextLengthError,
+  MIN_CONTEXT_LIMIT,
+  resolveEffectiveContextWindow,
   resolveModelContextWindow,
   resolveSummarizeHistoryTokenThreshold,
   shouldForceGeminiResummarize,
@@ -47,6 +49,49 @@ describe("contextBudget", () => {
     expect(shouldForceGeminiResummarize("google", 149_999)).toBe(false);
     expect(shouldForceGeminiResummarize("google", 150_000)).toBe(true);
     expect(shouldForceGeminiResummarize("openai", 200_000)).toBe(false);
+  });
+
+  it("narrows the window to a user-chosen cap", () => {
+    const capped = computeHistoryTokenBudget({
+      provider: "anthropic",
+      modelId: "claude-opus-5",
+      toolTokenEstimate: 86_000,
+      maxOutputTokens: 16_000,
+      contextLimit: 200_000,
+    });
+    // floor(200000 * 0.85) - 86000 - 16000 = 68000
+    expect(capped).toBe(68_000);
+  });
+
+  it("never widens the window past what the model advertises", () => {
+    const asked = computeHistoryTokenBudget({
+      provider: "groq",
+      modelId: "qwen/qwen3-32b",
+      toolTokenEstimate: 20_000,
+      maxOutputTokens: 16_000,
+      contextLimit: 1_000_000,
+    });
+    const unasked = computeHistoryTokenBudget({
+      provider: "groq",
+      modelId: "qwen/qwen3-32b",
+      toolTokenEstimate: 20_000,
+      maxOutputTokens: 16_000,
+    });
+    expect(asked).toBe(unasked);
+  });
+
+  it("ignores a cap that would starve the tool schemas", () => {
+    // A 20K cap cannot carry ~86K of tools, so it clamps to the floor rather
+    // than computing a budget the request could never satisfy.
+    expect(
+      resolveEffectiveContextWindow("anthropic", "claude-opus-5", 20_000),
+    ).toBe(MIN_CONTEXT_LIMIT);
+  });
+
+  it("falls back to the model window when no cap is set", () => {
+    expect(
+      resolveEffectiveContextWindow("anthropic", "claude-opus-5"),
+    ).toBe(resolveModelContextWindow("anthropic", "claude-opus-5"));
   });
 
   it("detects Groq context length errors", () => {

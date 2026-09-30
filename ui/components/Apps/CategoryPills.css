@@ -1,0 +1,40 @@
+.category-pills {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  margin: 0 0 18px;
+}
+.category-pills__pill {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  height: 30px;
+  padding: 0 12px;
+  border-radius: 999px;
+  border: 1px solid var(--border-color);
+  background: transparent;
+  color: var(--text-secondary);
+  font-size: 13px;
+  font-weight: 500;
+  cursor: pointer;
+  transition: background 0.12s, color 0.12s, border-color 0.12s;
+}
+.category-pills__pill:hover {
+  color: var(--text-primary);
+  border-color: color-mix(in srgb, var(--text-primary) 22%, transparent);
+}
+/* Accent fill + white text reads in both light and dark themes
+   (text-primary as a fill turned light gray in dark mode). */
+.category-pills__pill.is-active {
+  background: var(--accent, #0071E3);
+  border-color: var(--accent, #0071E3);
+  color: #fff;
+}
+.category-pills__pill.is-active:hover { color: #fff; }
+.category-pills__count {
+  font-size: 11.5px;
+  opacity: 0.6;
+}
+
+/* Same height as the pill row while the first sort runs, so the grid doesn't jump. */
+.category-pills--reserve { min-height: 30px; }

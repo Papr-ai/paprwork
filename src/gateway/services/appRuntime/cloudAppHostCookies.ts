@@ -3,7 +3,12 @@
  */
 
 import * as crypto from "crypto";
-import { ensurePublishedAppRootTrailingSlash } from "../../../core/utils/cloudAppPath.js";
+import {
+  ensurePublishedAppRootTrailingSlash,
+  publishedAppBaseHref,
+} from "../../../core/utils/cloudAppPath.js";
+
+const NON_BROWSABLE_RETURN_TO_PREFIXES = ["/api/", "/auth/", "/__papr__/"] as const;
 
 export const PAPR_SESSION_COOKIE = "papr_session";
 export const PAPR_AUTH_PENDING_COOKIE = "papr_auth_pending";
@@ -85,14 +90,58 @@ function cookieSuffix(maxAgeSec: number, secure: boolean, path = "/"): string {
   return `Path=${path}; HttpOnly; SameSite=Lax; Max-Age=${maxAgeSec}${secure ? "; Secure" : ""}`;
 }
 
-export function buildSessionCookie(sessionToken: string, secure: boolean): string {
+function cookieSuffixEmbedded(maxAgeSec: number, secure: boolean, path = "/"): string {
+  // SameSite=None so cookies work in Paprwork desktop iframes (cross-site parent).
+  const sameSite = secure ? "None" : "Lax";
+  return `Path=${path}; HttpOnly; SameSite=${sameSite}; Max-Age=${maxAgeSec}${secure ? "; Secure" : ""}`;
+}
+
+export function buildSessionCookie(
+  sessionToken: string,
+  secure: boolean,
+  externalUserId?: string,
+  email?: string,
+): string {
   const secret = getCookieSigningSecret();
-  const value = encodeSignedJson(
-    { sessionToken, exp: Date.now() + SESSION_MAX_AGE_SEC * 1000 },
-    secret,
-  );
+  const payload: Record<string, unknown> = {
+    sessionToken,
+    exp: Date.now() + SESSION_MAX_AGE_SEC * 1000,
+  };
+  const trimmedUserId = externalUserId?.trim();
+  if (trimmedUserId) {
+    payload.externalUserId = trimmedUserId;
+  }
+  const trimmedEmail = email?.trim();
+  if (trimmedEmail) {
+    payload.email = trimmedEmail;
+  }
+  const value = encodeSignedJson(payload, secret);
   // Path=/ is required — Path=/auth only sends the cookie to /auth/* (breaks app routes).
   return `${PAPR_SESSION_COOKIE}=${encodeURIComponent(value)}; ${cookieSuffix(SESSION_MAX_AGE_SEC, secure, "/")}`;
+}
+
+/** Session cookie for desktop-bridge / embedded iframe preview (cross-site parent). */
+export function buildSessionCookieForEmbeddedPreview(
+  sessionToken: string,
+  secure: boolean,
+  externalUserId?: string,
+  email?: string,
+): string {
+  const secret = getCookieSigningSecret();
+  const payload: Record<string, unknown> = {
+    sessionToken,
+    exp: Date.now() + SESSION_MAX_AGE_SEC * 1000,
+  };
+  const trimmedUserId = externalUserId?.trim();
+  if (trimmedUserId) {
+    payload.externalUserId = trimmedUserId;
+  }
+  const trimmedEmail = email?.trim();
+  if (trimmedEmail) {
+    payload.email = trimmedEmail;
+  }
+  const value = encodeSignedJson(payload, secret);
+  return `${PAPR_SESSION_COOKIE}=${encodeURIComponent(value)}; ${cookieSuffixEmbedded(SESSION_MAX_AGE_SEC, secure, "/")}`;
 }
 
 /** Clears session cookies at both / and legacy /auth paths (production had a bad scope). */
@@ -103,21 +152,44 @@ export function clearLegacySessionCookies(secure: boolean): string[] {
   ];
 }
 
-export function readSessionTokenFromCookie(
+export interface CloudAppSessionCookie {
+  sessionToken: string;
+  externalUserId?: string;
+  email?: string;
+}
+
+export function readCloudAppSessionFromCookie(
   cookieHeader: string | undefined,
-): string | undefined {
+): CloudAppSessionCookie | undefined {
   if (!cookieHeader) return undefined;
   const secret = getCookieSigningSecret();
   for (const part of cookieHeader.split(";")) {
     const trimmed = part.trim();
     if (!trimmed.startsWith(`${PAPR_SESSION_COOKIE}=`)) continue;
     const raw = decodeURIComponent(trimmed.slice(PAPR_SESSION_COOKIE.length + 1));
-    const parsed = decodeSignedJson<{ sessionToken?: string; exp?: number }>(raw, secret);
+    const parsed = decodeSignedJson<{
+      sessionToken?: string;
+      externalUserId?: string;
+      email?: string;
+      exp?: number;
+    }>(raw, secret);
     if (!parsed?.sessionToken || typeof parsed.exp !== "number") return undefined;
     if (parsed.exp < Date.now()) return undefined;
-    return parsed.sessionToken;
+    const externalUserId = parsed.externalUserId?.trim();
+    const email = parsed.email?.trim();
+    return {
+      sessionToken: parsed.sessionToken,
+      ...(externalUserId ? { externalUserId } : {}),
+      ...(email ? { email } : {}),
+    };
   }
   return undefined;
+}
+
+export function readSessionTokenFromCookie(
+  cookieHeader: string | undefined,
+): string | undefined {
+  return readCloudAppSessionFromCookie(cookieHeader)?.sessionToken;
 }
 
 export function clearSessionCookie(secure: boolean): string {
@@ -218,6 +290,60 @@ export function sanitizeReturnToPath(returnTo: string | undefined): string {
   if (returnTo.startsWith("//")) return "/";
   if (returnTo.includes("://")) return "/";
   return returnTo;
+}
+
+export function isBrowsableCloudReturnToPath(path: string): boolean {
+  const normalized = sanitizeReturnToPath(path.split("?")[0]);
+  if (normalized === "/") {
+    return false;
+  }
+  for (const prefix of NON_BROWSABLE_RETURN_TO_PREFIXES) {
+    if (normalized === prefix.slice(0, -1) || normalized.startsWith(prefix)) {
+      return false;
+    }
+  }
+  return true;
+}
+
+export function cloudAppRootPath(namespaceId: string, slug: string): string {
+  return publishedAppBaseHref(namespaceId, slug);
+}
+
+export function resolveCloudAuthReturnToPath(
+  candidate: string | undefined,
+  fallback?: { namespaceId?: string; slug?: string },
+): string {
+  const sanitized = sanitizeReturnToPath(candidate?.split("?")[0]);
+  if (isBrowsableCloudReturnToPath(sanitized)) {
+    return ensurePublishedAppRootTrailingSlash(sanitized);
+  }
+  if (fallback?.namespaceId && fallback.slug) {
+    return cloudAppRootPath(fallback.namespaceId, fallback.slug);
+  }
+  return "/";
+}
+
+export function resolveCloudAuthReturnToFromRequest(
+  req: {
+    originalUrl?: string;
+    headers?: { referer?: string };
+  },
+  fallback?: { namespaceId?: string; slug?: string },
+): string {
+  const referer = req.headers?.referer;
+  if (referer) {
+    try {
+      const refPath = new URL(referer).pathname;
+      if (isBrowsableCloudReturnToPath(refPath)) {
+        return ensurePublishedAppRootTrailingSlash(refPath);
+      }
+    } catch {
+      /* ignore malformed referer */
+    }
+  }
+
+  const fromUrl = req.originalUrl?.split("?")[0];
+  return resolveCloudAuthReturnToPath(fromUrl, fallback);
 }
 
 export function stripShareTokenFromPath(originalUrl: string): string {

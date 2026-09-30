@@ -10,7 +10,7 @@ Published and desktop mini-apps often need **in-app AI chat**: users stay in the
 
 | Surface | Today | Target |
 |---------|-------|--------|
-| Desktop Paprwork | `chat.open` → main chat tab | Bound **sub-agent** panel with app context |
+| Desktop Paprwork | `chat.open` → **Pen chat tab** (split with app when open) | Bound **sub-agent** via `delegate_task` |
 | Published web | No `paprAPI`; jobs only | Floating **bubble + live chat** |
 | Builder agent | Manual wiring | `enable_app_agent_chat` tool |
 
@@ -29,8 +29,8 @@ flowchart TB
 
   subgraph desktop [Desktop Paprwork]
     SDK[papr-agent-chat.js] -->|paprAPI| CH[chat.open app-agent]
-    CH --> OV[AppAgentChatOverlay]
-    OV --> D[subagent:delegate appIds]
+    CH --> TAB[Pen chat tab + app split]
+    TAB --> D[delegate_task to sub-agent]
     D --> MC[MiniChatCard]
   end
 
@@ -63,12 +63,14 @@ enable_app_agent_chat({
 })
 ```
 
-**Stored on:** `MiniApp.agentChat` in `~/Papr/data/apps.json` + public fields in `metadata.json` on publish.
+**Stored on:** `MiniApp.agentChat` in `$PAPR_HOME/data/apps.json` + public fields in `metadata.json` on publish.
 
 ### 2. Desktop UX
 
-- SDK bubble → `paprAPI.invoke('chat.open', { mode: 'app-agent', appId, subAgentId })`
-- Paprwork shows `AppAgentChatOverlay` with `MiniChatCard`
+- SDK bubble → `paprAPI.invoke('chat.open', { mode: 'app-agent', appId, subAgentId, message? })`
+- Paprwork opens a **full Pen chat tab** (merged with the app tab when it is already open)
+- Pen orchestrates in-app work via `delegate_task` to the configured sub-agent (MiniChatCard in chat)
+- User messages from the bubble auto-send; bubble-only open (no typed message) leaves the chat ready to compose
 
 ### 3. Web UX (Phase 2)
 
@@ -99,7 +101,7 @@ enable_app_agent_chat({
 1. **CloudAppHost routes** — session create, message send, SSE stream
 2. **Direct user ↔ sub-agent** — no main-agent relay; `delegate_task` / `request_agent_input` blocked in embedded tool allowlist
 3. **Tool override** from `agentChat.allowedToolIds` at runtime (desktop)
-4. **Session persistence** — file store on desktop (`~/Papr/data/app-agent-sessions/`); in-memory on cloud host
+4. **Session persistence** — file store on desktop (`$PAPR_HOME/data/app-agent-sessions/`); in-memory on cloud host
 5. **App refresh** — SDK reloads page when turn completes with file writes
 
 **Cloud execution path (published web bubble):**
@@ -127,6 +129,22 @@ See **`docs/APP_AGENT_GATEWAY_WARM_SPEC.md`** for the full memory + gateway cont
 5. `publish_cloud_app` — sync `subagents.json` + app config + `metadata.json`
 6. Test desktop bubble → overlay; test published web bubble → live chat
 
+**Do not confuse with `delegate_task`:** That is Pen's sidebar delegation in main chat (path 2). Embedded chat (path 3) uses `/api/app-agent/sessions` — multi-turn, composer always visible.
+
+---
+
+## Embedded sub-agent scope (what it can access)
+
+| Resource | Access |
+|----------|--------|
+| App source files | ✅ `read_app_file`, `edit_app_file`, `edit_app_file_lines`, `list_app_files` |
+| Linked registry DBs | ✅ Schema via `read_app_data_sources`; env paths (`PAPR_DB_*`, `APP_ID`) injected in system prompt |
+| DB writes from agent | ✅ Via `bash` + sqlite on injected paths, or extend `allowedToolIds` — mini-app UI uses `/api/db/write` |
+| Background jobs | ❌ Not from embedded chat — wire app buttons to `/api/jobs/run` |
+| `delegate_task` / main-agent relay | ❌ Blocked in embedded mode |
+
+Default tool list: `DEFAULT_APP_AGENT_CHAT_TOOL_IDS` in `src/core/types/appAgentChat.ts`. Deck Studio–style scoring needs `bash` (or similar) in `allowedToolIds` on both `create_sub_agent` and `enable_app_agent_chat`.
+
 ---
 
 ## Files
@@ -138,6 +156,7 @@ See **`docs/APP_AGENT_GATEWAY_WARM_SPEC.md`** for the full memory + gateway cont
 | `src/gateway/services/appAgentChat/*` | Session store, runners, routes |
 | `src/resources/mini-app-sdk/papr-agent-chat.ts` | Client SDK (live chat) |
 | `ui/components/Apps/AppAgentChatOverlay.tsx` | Desktop floating panel |
+| `ui/components/Apps/EmbeddedAppAgentChatPanel.tsx` | Multi-turn session UI (desktop overlay body) |
 | `tests/app-agent-chat.test.ts` | Unit tests |
 
 ---

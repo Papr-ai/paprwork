@@ -1,52 +1,139 @@
 /**
- * Serve the shared mini-app SDK from resources (transpiled on demand).
+ * Serve the shared mini-app SDK from resources (bundled on demand).
  */
 
 import type { Express, Request, Response } from "express";
+import { existsSync, readFileSync } from "fs";
 import path from "path";
 import { fileURLToPath } from "url";
-import { promises as fs } from "fs";
+import {
+  MINI_APP_SDK_MODULES,
+  type MiniAppSdkFormat,
+} from "../../resources/mini-app-sdk/sdk-manifest.js";
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
 
-const SDK_DIR = path.join(__dirname, "../../resources/mini-app-sdk");
+/**
+ * SDK sources must live OUTSIDE app.asar in packaged builds.
+ *
+ * esbuild bundles these files, and esbuild is a native binary running as a
+ * separate process. The asar virtual filesystem is patched into Electron's
+ * `fs` module only — a child process sees `app.asar` as a single opaque
+ * file, so every bundle failed with:
+ *
+ *   Could not resolve ".../app.asar/dist/resources/mini-app-sdk/papr-job-events.ts"
+ *
+ * Mini-apps import `/__papr__/papr-job-events.ts`, so that 500 meant the app
+ * bundle never evaluated and rendered blank — with an empty console, because
+ * a failed module fetch logs nothing.
+ *
+ * `dist/resources/mini-app-sdk/**` is in electron-builder `asarUnpack`, so
+ * prefer the unpacked copy whenever this file is loaded from inside an asar.
+ * Do NOT probe with fs.existsSync to choose: Electron's patched `fs` reports
+ * the in-asar path as readable, which is exactly the path esbuild cannot use.
+ */
+function resolveSdkDir(): string {
+  const bundled = path.join(__dirname, "../../resources/mini-app-sdk");
+  return bundled.includes(`app.asar${path.sep}`)
+    ? bundled.replace(`app.asar${path.sep}`, `app.asar.unpacked${path.sep}`)
+    : bundled;
+}
+
+const SDK_DIR = resolveSdkDir();
+
+function prebuiltBundlePath(sdkFileName: string): string {
+  const base = sdkFileName.replace(/\.ts$/, ".js");
+  return path.join(SDK_DIR, "bundled", base);
+}
+
+// Share one compilation between concurrent cold previews. Packaged builds use
+// prebuilt bundles, avoiding an esbuild process on the HTML critical path.
+const inlineBundles = new Map<string, Promise<string>>();
+export function loadInlineMiniAppSdk(sdkFileName: string): Promise<string> {
+  const cached = inlineBundles.get(sdkFileName);
+  if (cached) return cached;
+  const pending = (async () => {
+    const prebuilt = prebuiltBundlePath(sdkFileName);
+    let code: string;
+    if (existsSync(prebuilt)) {
+      code = readFileSync(prebuilt, "utf8");
+    } else {
+      const esbuild = await import("esbuild");
+      const result = await esbuild.build({
+        entryPoints: [path.join(SDK_DIR, sdkFileName)],
+        bundle: true,
+        format: "iife",
+        platform: "browser",
+        target: "es2020",
+        write: false,
+      });
+      code = result.outputFiles[0].text;
+    }
+    // Escape HTML end tags even when they appear inside JS string literals.
+    return code
+      .replace(/\n?\/\/# sourceMappingURL=data:[^\n]*/g, "")
+      .replace(/<\/script/gi, "<\\/script");
+  })();
+  inlineBundles.set(sdkFileName, pending);
+  pending.catch(() => inlineBundles.delete(sdkFileName));
+  return pending;
+}
+
+function sendSdkJavaScript(
+  res: Response,
+  code: string,
+  cacheImmutable: boolean,
+): void {
+  res.setHeader("Content-Type", "application/javascript; charset=utf-8");
+  res.setHeader(
+    "Cache-Control",
+    cacheImmutable
+      ? "public, max-age=31536000, immutable"
+      : "public, max-age=60",
+  );
+  res.send(code);
+}
 
 async function serveSdkFile(
   sdkFileName: string,
   _req: Request,
   res: Response,
+  format: MiniAppSdkFormat = "iife",
 ): Promise<void> {
   try {
-    const filePath = path.join(SDK_DIR, sdkFileName);
-    const content = await fs.readFile(filePath, "utf8");
-    const { transpileMiniAppTypeScript } = await import(
-      "./miniAppTranspile.js"
-    );
-    const result = await transpileMiniAppTypeScript(content, sdkFileName);
-    if (!result.success || !result.code) {
-      res.status(500).send(result.message ?? "Transpile failed");
+    const prebuiltPath = prebuiltBundlePath(sdkFileName);
+    if (existsSync(prebuiltPath)) {
+      sendSdkJavaScript(res, readFileSync(prebuiltPath, "utf8"), true);
       return;
     }
-    res.setHeader("Content-Type", "application/javascript; charset=utf-8");
-    res.setHeader("Cache-Control", "public, max-age=3600");
-    res.send(result.code);
+
+    const filePath = path.join(SDK_DIR, sdkFileName);
+    const esbuild = await import("esbuild");
+    const result = await esbuild.build({
+      entryPoints: [filePath],
+      bundle: true,
+      format,
+      platform: "browser",
+      target: "es2020",
+      write: false,
+      sourcemap: "inline",
+    });
+    const code = result.outputFiles?.[0]?.text;
+    if (!code) {
+      res.status(500).send("SDK bundle failed");
+      return;
+    }
+    sendSdkJavaScript(res, code, false);
   } catch (err) {
     res.status(500).send((err as Error).message);
   }
 }
 
 export function registerPaprMiniAppSdkRoutes(app: Express): void {
-  app.get("/__papr__/papr-job-events.ts", (req, res) =>
-    serveSdkFile("papr-job-events.ts", req, res),
-  );
-  app.get("/__papr__/papr-auth-guard.js", (req, res) =>
-    serveSdkFile("papr-auth-guard.ts", req, res),
-  );
-  app.get("/__papr__/papr-app-refresh.js", (req, res) =>
-    serveSdkFile("papr-app-refresh.ts", req, res),
-  );
-  app.get("/__papr__/papr-agent-chat.js", (req, res) =>
-    serveSdkFile("papr-agent-chat.ts", req, res),
-  );
+  for (const module of MINI_APP_SDK_MODULES) {
+    app.get(module.route, (req, res) =>
+      serveSdkFile(module.file, req, res, module.format),
+    );
+  }
 }

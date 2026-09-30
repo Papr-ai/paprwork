@@ -1,0 +1,53 @@
+{
+  "description": "Genesis snapshot + mixed row batch. Refresh: npm run fixtures:capture-workspace-log",
+  "replicaId": "j-prod-sample-3",
+  "cursor": 0,
+  "nextCursor": 4,
+  "hasMore": false,
+  "entries": [
+    {
+      "seq": 1,
+      "hlc": "2026-08-03T00:00:00.000Z",
+      "kind": "snapshot",
+      "dbSourceId": "primary",
+      "payload": {
+        "snapshotHash": "genesis-hash-prod-3",
+        "tableCount": 2,
+        "genesis": true
+      }
+    },
+    {
+      "seq": 2,
+      "hlc": "2026-08-03T00:00:01.000Z",
+      "kind": "row",
+      "dbSourceId": "primary",
+      "payload": {
+        "appId": "fixture-app-3",
+        "sql": "INSERT INTO events (type) VALUES (?)",
+        "params": ["open"]
+      }
+    },
+    {
+      "seq": 3,
+      "hlc": "2026-08-03T00:00:03.000Z",
+      "kind": "row",
+      "dbSourceId": "primary",
+      "payload": {
+        "appId": "fixture-app-3",
+        "sql": "INSERT INTO events (type) VALUES (?)",
+        "params": ["click"]
+      }
+    },
+    {
+      "seq": 4,
+      "hlc": "2026-08-03T00:00:04.000Z",
+      "kind": "row",
+      "dbSourceId": "primary",
+      "payload": {
+        "appId": "fixture-app-3",
+        "sql": "INSERT INTO events (type) VALUES (?)",
+        "params": ["close"]
+      }
+    }
+  ]
+}

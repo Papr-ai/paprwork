@@ -428,6 +428,30 @@ export function MemoryTab() {
     void loadPreview(false);
   }, []);
 
+  useEffect(() => {
+    const onWorkspaceSwitchStart = () => {
+      setPreview(null);
+      setDetail(null);
+    };
+    const onWorkspaceSwitch = () => {
+      setPreview(null);
+      setDetail(null);
+      void loadPreview(true, { silent: true });
+    };
+    window.addEventListener("papr-workspace-switch-start", onWorkspaceSwitchStart);
+    window.addEventListener("papr-workspace-switch-complete", onWorkspaceSwitch);
+    return () => {
+      window.removeEventListener(
+        "papr-workspace-switch-start",
+        onWorkspaceSwitchStart,
+      );
+      window.removeEventListener(
+        "papr-workspace-switch-complete",
+        onWorkspaceSwitch,
+      );
+    };
+  }, []);
+
   const checkPaprLogin = async () => {
     try {
       const result = await window.electronAPI.papr.checkLoginStatus();
@@ -507,9 +531,13 @@ export function MemoryTab() {
     return () => window.clearInterval(timer);
   }, [preview?.cache?.paprPending]);
 
-  const openFolder = async (folderPath: string) => {
+  const openFolder = async (
+    payload:
+      | { target: "workspace" | "paprHome" }
+      | { folderPath: string },
+  ) => {
     try {
-      await gateway.send("memory:open-folder", { folderPath });
+      await gateway.send("memory:open-folder", payload);
     } catch (err) {
       console.error("Failed to open folder:", err);
     }
@@ -663,7 +691,7 @@ export function MemoryTab() {
                 <button
                   type="button"
                   className="memory-link-btn"
-                  onClick={() => openFolder("~/Papr/workspace/")}
+                  onClick={() => openFolder({ target: "workspace" })}
                 >
                   Open folder
                 </button>
@@ -818,7 +846,7 @@ export function MemoryTab() {
               <button
                 type="button"
                 className="memory-link-btn memory-link-btn--block"
-                onClick={() => openFolder("~/Papr/")}
+                onClick={() => openFolder({ target: "paprHome" })}
               >
                 Open Papr data folder
               </button>

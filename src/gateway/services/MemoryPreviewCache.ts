@@ -11,6 +11,8 @@ import { getPaprDataDir } from "../../core/utils/paprRoot.js";
 import path from "path";
 
 export const MEMORY_PREVIEW_CACHE_TTL_MS = 24 * 60 * 60 * 1000;
+/** Back off background sync.getTiers retries after failure (matches syncTiersClient). */
+export const MEMORY_PREVIEW_SYNC_TIERS_FAILURE_BACKOFF_MS = 30 * 60 * 1000;
 
 export interface CachedMemoryPreviewStatus {
   paprConfigured: boolean;
@@ -35,6 +37,8 @@ export interface CachedPaprMemory {
 interface MemoryPreviewCacheFile {
   version: 1;
   fetchedAt: string;
+  /** ISO timestamp of the last failed sync.getTiers attempt (for client backoff). */
+  syncTiersFailedAt?: string;
   paprMemory: CachedPaprMemory;
   status: CachedMemoryPreviewStatus;
 }
@@ -70,10 +74,54 @@ export function isMemoryPreviewCacheIncomplete(
   return false;
 }
 
+export function getSyncTiersFailureBackoffRemainingMs(
+  syncTiersFailedAt: string | undefined,
+  nowMs: number = Date.now(),
+): number {
+  if (!syncTiersFailedAt) {
+    return 0;
+  }
+  const failedAt = Date.parse(syncTiersFailedAt);
+  if (Number.isNaN(failedAt)) {
+    return 0;
+  }
+  const elapsed = nowMs - failedAt;
+  if (elapsed >= MEMORY_PREVIEW_SYNC_TIERS_FAILURE_BACKOFF_MS) {
+    return 0;
+  }
+  return MEMORY_PREVIEW_SYNC_TIERS_FAILURE_BACKOFF_MS - elapsed;
+}
+
+/** Whether a background refresh should be queued (respects TTL + failure backoff). */
+export function shouldQueueMemoryPreviewRefresh(input: {
+  isFresh: boolean;
+  isIncomplete: boolean;
+  syncTiersFailedAt?: string;
+  previewRefreshInFlight?: boolean;
+  nowMs?: number;
+}): boolean {
+  if (input.previewRefreshInFlight) {
+    return false;
+  }
+  if (input.isFresh && !input.isIncomplete) {
+    return false;
+  }
+  if (
+    getSyncTiersFailureBackoffRemainingMs(
+      input.syncTiersFailedAt,
+      input.nowMs,
+    ) > 0
+  ) {
+    return false;
+  }
+  return true;
+}
+
 export async function readMemoryPreviewCache(): Promise<{
   paprMemory: CachedPaprMemory;
   status: CachedMemoryPreviewStatus;
   fetchedAt: string;
+  syncTiersFailedAt?: string;
   isFresh: boolean;
   isIncomplete: boolean;
 } | null> {
@@ -87,6 +135,7 @@ export async function readMemoryPreviewCache(): Promise<{
       paprMemory: data.paprMemory,
       status: data.status,
       fetchedAt: data.fetchedAt,
+      syncTiersFailedAt: data.syncTiersFailedAt,
       isFresh: isFresh(data.fetchedAt, MEMORY_PREVIEW_CACHE_TTL_MS),
       isIncomplete: isMemoryPreviewCacheIncomplete(
         data.paprMemory,
@@ -109,10 +158,12 @@ export async function clearMemoryPreviewCache(): Promise<void> {
 export async function writeMemoryPreviewCache(input: {
   paprMemory: CachedPaprMemory;
   status: CachedMemoryPreviewStatus;
+  syncTiersFailedAt?: string | null;
 }): Promise<void> {
   const file: MemoryPreviewCacheFile = {
     version: 1,
     fetchedAt: new Date().toISOString(),
+    syncTiersFailedAt: input.syncTiersFailedAt ?? undefined,
     paprMemory: input.paprMemory,
     status: input.status,
   };

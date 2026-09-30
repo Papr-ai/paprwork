@@ -1,0 +1,178 @@
+/**
+ * Settings popover — same surface as the other chat popovers so it reads as
+ * part of the composer rather than a new kind of panel.
+ */
+
+.model-settings-popover {
+  position: absolute;
+  bottom: calc(100% + 8px);
+  left: 0;
+  min-width: 236px;
+  max-width: 300px;
+  max-height: 420px;
+  overflow-y: auto;
+  padding: 4px;
+  background: var(--popover-bg);
+  border: 1px solid var(--border-color);
+  border-radius: 14px;
+  box-shadow: var(--popover-shadow);
+  z-index: 10000;
+  animation: dropdownSlideIn 0.15s ease-out;
+}
+
+.model-settings-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  width: 100%;
+  padding: 8px 10px;
+  border: none;
+  border-radius: 8px;
+  background: transparent;
+  color: var(--text-primary);
+  font-size: 13px;
+  font-weight: 500;
+  cursor: pointer;
+  text-align: left;
+  transition: background 0.15s var(--ease);
+}
+
+.model-settings-row:hover {
+  background: var(--hover-bg);
+}
+
+.model-settings-row__label {
+  display: flex;
+  align-items: baseline;
+  gap: 6px;
+  min-width: 0;
+}
+
+/* The one control that costs more — say so where the choice is made. */
+.model-settings-row__hint {
+  font-size: 10px;
+  font-weight: 500;
+  color: var(--text-tertiary);
+  white-space: nowrap;
+}
+
+.model-settings-row__value {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  flex-shrink: 0;
+  color: var(--text-secondary);
+  font-size: 12.5px;
+  font-weight: 500;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.model-settings-chevron {
+  flex-shrink: 0;
+  opacity: 0.5;
+}
+
+.model-settings-switch {
+  position: relative;
+  flex-shrink: 0;
+  width: 34px;
+  height: 20px;
+  border-radius: 10px;
+  background: var(--border-color);
+  transition: background 0.18s var(--ease);
+}
+
+.model-settings-switch--on {
+  background: var(--success-color, #34c759);
+}
+
+.model-settings-switch__knob {
+  position: absolute;
+  top: 2px;
+  left: 2px;
+  width: 16px;
+  height: 16px;
+  border-radius: 50%;
+  background: #fff;
+  box-shadow: 0 1px 2px rgba(0, 0, 0, 0.2);
+  transition: transform 0.18s var(--ease);
+}
+
+.model-settings-switch--on .model-settings-switch__knob {
+  transform: translateX(14px);
+}
+
+.model-settings-divider {
+  height: 1px;
+  margin: 4px 8px;
+  background: var(--border-color, rgba(0, 0, 0, 0.08));
+}
+
+.model-settings-back {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  width: 100%;
+  padding: 6px 8px 8px;
+  border: none;
+  background: transparent;
+  color: var(--text-tertiary);
+  font-size: 11px;
+  font-weight: 600;
+  letter-spacing: 0.4px;
+  text-transform: uppercase;
+  cursor: pointer;
+}
+
+.model-settings-back:hover {
+  color: var(--text-primary);
+}
+
+.model-settings-option {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  width: 100%;
+  padding: 7px 10px;
+  border: none;
+  border-radius: 8px;
+  background: transparent;
+  color: var(--text-primary);
+  font-size: 13px;
+  font-weight: 500;
+  cursor: pointer;
+  text-align: left;
+  transition: background 0.15s var(--ease);
+}
+
+.model-settings-option:hover {
+  background: var(--hover-bg);
+}
+
+.model-settings-option--selected {
+  color: var(--primary-color);
+}
+
+.model-settings-option__label {
+  display: flex;
+  align-items: baseline;
+  gap: 6px;
+}
+
+.model-settings-note {
+  margin: 6px 10px 4px;
+  font-size: 10.5px;
+  line-height: 1.4;
+  color: var(--text-tertiary);
+}
+
+/* Model list rendered as a panel inside this popover, not its own surface. */
+.model-picker-list--embedded {
+  display: block;
+  max-height: 320px;
+  overflow-y: auto;
+}

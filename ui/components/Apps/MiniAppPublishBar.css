@@ -12,21 +12,55 @@
   min-height: 0;
   border: 0;
   background: var(--panel-bg-active, #fff);
+  position: relative;
+  z-index: 0;
 }
 
 .mini-app-publish-bar {
   display: flex;
   align-items: center;
-  justify-content: space-between;
-  gap: 12px;
-  padding: 8px 14px;
+  gap: 10px;
+  padding: 5px 12px;
+  min-height: 36px;
   border-bottom: 1px solid var(--border-color);
   background: var(--glass-bg);
-  backdrop-filter: blur(12px);
-  -webkit-backdrop-filter: blur(12px);
   flex-shrink: 0;
   position: relative;
   z-index: 2;
+  /* Container query, not a media query: the bar collapses when the *bar* is
+     narrow, which happens with a wide window and an open side panel too. */
+  container-type: inline-size;
+  container-name: publishbar;
+}
+
+/* Compact: collapse by worst-value-per-pixel. The URL row goes first (the app
+   itself and Share both reach the link). The chip keeps its words. */
+@container publishbar (max-width: 1000px) {
+  /* Descendant selector for specificity, not style: a container query adds
+     none, and the base `.mini-app-publish-bar__url-row { display: flex }` is
+     declared later in this same file — so a bare class here lost the cascade
+     and the URL row stayed visible while the chip text correctly hid. */
+  .mini-app-publish-bar .mini-app-publish-bar__url-row {
+    display: none;
+  }
+
+  /* The status words stay in compact mode: a coloured dot alone is not
+     enough to read the state. Long labels shrink with an ellipsis instead
+     (the pill's title attribute keeps the full sentence). */
+  .mini-app-publish-bar__web-sync-chip-text {
+    min-width: 0;
+    max-width: 150px;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+
+  /* Files-mode fallback text ("Live · …"), not lineage — lineage is a glyph
+     now and cheap enough to keep. This line restates what the chip already
+     says whenever the chip is present, so it yields space first. */
+  .mini-app-publish-bar .mini-app-publish-bar__status {
+    display: none;
+  }
 }
 
 .mini-app-view__frame-wrap {
@@ -40,6 +74,7 @@
 .mini-app-view__overlay {
   position: absolute;
   inset: 0;
+  z-index: 1;
   display: flex;
   align-items: center;
   justify-content: center;
@@ -50,13 +85,156 @@
   text-align: center;
 }
 
+.mini-app-view__overlay--hint {
+  flex-direction: column;
+  gap: 12px;
+}
+
+.mini-app-view__runtime-error-title {
+  margin: 0;
+  font-size: 16px;
+  font-weight: 600;
+}
+
+.mini-app-view__runtime-error {
+  margin: 0;
+  max-width: min(720px, 100%);
+  max-height: 40vh;
+  overflow: auto;
+  padding: 12px;
+  border-radius: 8px;
+  background: rgba(0, 0, 0, 0.35);
+  color: #f5f5f7;
+  font-size: 12px;
+  line-height: 1.4;
+  text-align: left;
+  white-space: pre-wrap;
+  word-break: break-word;
+}
+
+.mini-app-view__runtime-error-hint {
+  margin: 0;
+  max-width: min(520px, 100%);
+  font-size: 13px;
+  line-height: 1.45;
+  opacity: 0.92;
+}
+
+/** Non-blocking runtime errors from iframe (API / console / unhandled rejection). */
+.mini-app-view__runtime-banner {
+  position: absolute;
+  top: 0;
+  left: 0;
+  right: 0;
+  z-index: 2;
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 10px 12px;
+  border-bottom: 1px solid rgba(255, 59, 48, 0.35);
+  background: color-mix(in srgb, var(--panel-bg-active, #fff) 92%, #ff3b30 8%);
+  box-shadow: 0 4px 16px rgba(0, 0, 0, 0.12);
+  pointer-events: auto;
+}
+
+.mini-app-view__runtime-banner-body {
+  flex: 1;
+  min-width: 0;
+  text-align: left;
+}
+
+.mini-app-view__runtime-banner-title {
+  margin: 0 0 4px;
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--text-primary);
+}
+
+.mini-app-view__runtime-banner-message {
+  margin: 0;
+  max-height: 72px;
+  overflow: auto;
+  font-size: 12px;
+  line-height: 1.4;
+  white-space: pre-wrap;
+  word-break: break-word;
+  color: var(--text-secondary, rgba(255, 255, 255, 0.75));
+  font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
+}
+
+.mini-app-view__runtime-banner-hint {
+  margin: 8px 0 0;
+  font-size: 12px;
+  line-height: 1.4;
+  color: var(--text-secondary);
+}
+
+.mini-app-view__runtime-banner-actions {
+  display: flex;
+  flex-shrink: 0;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.mini-app-view__runtime-banner-btn {
+  border: 1px solid var(--border-color);
+  border-radius: 6px;
+  padding: 4px 10px;
+  font-size: 12px;
+  font-weight: 500;
+  cursor: pointer;
+  background: var(--bg-secondary);
+  color: var(--text-primary);
+}
+
+.mini-app-view__runtime-banner-btn:hover {
+  filter: brightness(1.05);
+}
+
+.mini-app-view__runtime-banner-btn--ghost {
+  background: transparent;
+}
+
+/** Transient load/retry status — does not block the iframe. */
+.mini-app-view__status-banner {
+  position: absolute;
+  bottom: 0;
+  left: 0;
+  right: 0;
+  z-index: 2;
+  padding: 8px 12px;
+  font-size: 12px;
+  text-align: center;
+  border-top: 1px solid var(--border-color);
+  background: color-mix(in srgb, var(--glass-bg) 90%, transparent);
+  color: var(--text-secondary);
+  pointer-events: none;
+}
+
+.mini-app-view__status-banner p {
+  margin: 0;
+}
+
+/* One control height for the whole bar. Every control was previously sized on
+   its own, so the toggle, URL field and buttons all sat at different heights
+   and read as unrelated parts. Prototype geometry: 9px radius, 13px text. */
+.mini-app-publish-bar {
+  --pb-control-h: 34px;
+  --pb-radius: 9px;
+  --pb-font: 13px;
+}
+
 .mini-app-publish-bar__segment {
   display: inline-flex;
-  padding: 2px;
-  border-radius: 999px;
+  align-items: center;
+  height: var(--pb-control-h);
+  padding: 3px;
+  border-radius: var(--pb-radius);
   border: 1px solid var(--border-color);
   background: var(--bg-secondary);
   flex-shrink: 0;
+  box-sizing: border-box;
 }
 
 .mini-app-publish-bar__segment--with-sync {
@@ -66,12 +244,13 @@
 .mini-app-publish-bar__segment-btn {
   display: inline-flex;
   align-items: center;
-  gap: 5px;
-  font-size: 11px;
-  font-weight: 600;
-  padding: 4px 10px;
+  gap: 4px;
+  font-size: var(--pb-font);
+  font-weight: 500;
+  padding: 0 13px;
+  height: 100%;
   border: 0;
-  border-radius: 999px;
+  border-radius: 7px;
   background: transparent;
   color: var(--text-secondary);
   cursor: pointer;
@@ -91,14 +270,293 @@
 .mini-app-publish-bar__web-option {
   display: inline-flex;
   align-items: center;
-  gap: 2px;
-  padding-right: 2px;
+  gap: 6px;
+  padding-right: 4px;
   border-radius: 999px;
+  /* The chip carries variable-length text ("Live · checked 12m ago"), so the
+     segment must be allowed to size to it rather than overlap its neighbours. */
+  flex-shrink: 0;
+  min-width: 0;
+}
+
+.mini-app-publish-bar__check-status-btn {
+  font-size: 11px;
+  font-weight: 500;
+  line-height: 1;
+  padding: 4px 8px;
+  border: 1px solid var(--border-subtle, rgba(128, 128, 128, 0.35));
+  border-radius: 999px;
+  background: var(--surface-elevated, rgba(128, 128, 128, 0.08));
+  color: var(--text-secondary, inherit);
+  cursor: pointer;
+  white-space: nowrap;
+  flex-shrink: 0;
+}
+
+.mini-app-publish-bar__check-status-btn:hover:not(:disabled) {
+  background: var(--surface-hover, rgba(128, 128, 128, 0.14));
+}
+
+.mini-app-publish-bar__check-status-btn:disabled {
+  opacity: 0.55;
+  cursor: default;
+}
+
+.mini-app-publish-bar__web-option--active .mini-app-publish-bar__check-status-btn {
+  border-color: rgba(255, 255, 255, 0.35);
+  background: rgba(255, 255, 255, 0.12);
+  color: #fff;
 }
 
 .mini-app-publish-bar__web-option--active .mini-app-publish-bar__segment-btn {
   background: var(--accent);
   color: #fff;
+}
+
+/* The chip sits with the title, not inside the Local/Web toggle: it describes
+   the app, not which preview you are looking at. */
+.mini-app-publish-bar__chip-anchor {
+  display: inline-flex;
+  align-items: center;
+  flex-shrink: 0;
+}
+
+/* Two-sided status rows: local vs web, each labelled by location. */
+.mini-app-publish-bar__sync-sides {
+  margin: 0 0 10px;
+  padding: 10px 0;
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  border-top: 1px solid var(--border-subtle, rgba(128, 128, 128, 0.18));
+  border-bottom: 1px solid var(--border-subtle, rgba(128, 128, 128, 0.18));
+}
+
+.mini-app-publish-bar__sync-side {
+  display: flex;
+  flex-direction: column;
+  align-items: stretch;
+  gap: 2px;
+  font-size: 13px;
+  line-height: 1.45;
+}
+
+.mini-app-publish-bar__sync-side dt {
+  color: var(--text-secondary, inherit);
+  font-weight: 600;
+}
+
+.mini-app-publish-bar__sync-side dd {
+  margin: 0;
+  color: var(--text-primary, inherit);
+  font-weight: 500;
+  text-align: left;
+}
+
+/* Labelled pill variant: state + age + refresh as one object. */
+/* Doubled class: the base __web-sync-dot rule is declared later in this file
+   and would otherwise re-apply the 18px circle, crushing the labelled pill. */
+.mini-app-publish-bar__web-sync-dot.mini-app-publish-bar__web-sync-dot--chip {
+  width: auto;
+  height: auto;
+  border-radius: 999px;
+  padding: 0 2px 0 0;
+  gap: 0;
+  background: var(--surface-elevated, rgba(128, 128, 128, 0.08));
+  border: 1px solid var(--border-subtle, rgba(128, 128, 128, 0.28));
+  cursor: default;
+}
+
+.mini-app-publish-bar__web-sync-dot.mini-app-publish-bar__web-sync-dot--chip::before {
+  display: none;
+}
+
+.mini-app-publish-bar__web-sync-chip-main {
+  display: inline-flex;
+  align-items: center;
+  gap: 7px;
+  padding: 5px 11px;
+  border: 0;
+  background: transparent;
+  border-radius: 999px;
+  color: inherit;
+  font-size: 12px;
+  font-weight: 500;
+  line-height: 1;
+  white-space: nowrap;
+  cursor: pointer;
+}
+
+/* Inert, not disabled — the element still receives hover so it can show its
+   own tooltip, but the arrow cursor says there is nothing to click. Using
+   :disabled here killed pointer events, which is why the tooltip had to be
+   moved to the wrapper and ended up firing over dead padding. */
+.mini-app-publish-bar__web-sync-chip-main--inert {
+  cursor: default;
+}
+
+.mini-app-publish-bar__web-sync-chip-dot {
+  width: 7px;
+  height: 7px;
+  border-radius: 50%;
+  background: currentColor;
+  flex-shrink: 0;
+}
+
+/* Semantic tones, ported from the v2 prototype (status.css .statuschip).
+   Tinted fill + matching text so "Unpublished changes" reads amber and a
+   failure reads red — a gray pill makes every state look equally calm.
+   color-mix against --bg-secondary keeps the tints legible in dark mode. */
+.mini-app-publish-bar__web-sync-dot--chip.mini-app-publish-bar__web-sync-dot--tone-ok {
+  color: #0b7a45;
+  background: color-mix(in srgb, #0f9d58 14%, var(--bg-secondary));
+  border-color: color-mix(in srgb, #0f9d58 34%, var(--border-color));
+}
+
+.mini-app-publish-bar__web-sync-dot--chip.mini-app-publish-bar__web-sync-dot--tone-warn {
+  color: #cc7a00;
+  background: color-mix(in srgb, #cc7a00 14%, var(--bg-secondary));
+  border-color: color-mix(in srgb, #cc7a00 34%, var(--border-color));
+}
+
+.mini-app-publish-bar__web-sync-dot--chip.mini-app-publish-bar__web-sync-dot--tone-bad {
+  color: #c8372a;
+  background: color-mix(in srgb, #c8372a 14%, var(--bg-secondary));
+  border-color: color-mix(in srgb, #c8372a 34%, var(--border-color));
+}
+
+.mini-app-publish-bar__web-sync-dot--chip.mini-app-publish-bar__web-sync-dot--tone-info {
+  color: #0b78c4;
+  background: color-mix(in srgb, #0b78c4 14%, var(--bg-secondary));
+  border-color: color-mix(in srgb, #0b78c4 34%, var(--border-color));
+}
+
+/* Idle and busy stay neutral: nothing is wrong, so nothing should shout. */
+.mini-app-publish-bar__web-sync-dot--chip.mini-app-publish-bar__web-sync-dot--tone-idle,
+.mini-app-publish-bar__web-sync-dot--chip.mini-app-publish-bar__web-sync-dot--tone-busy {
+  color: var(--text-secondary, inherit);
+}
+
+@media (prefers-color-scheme: dark) {
+  .mini-app-publish-bar__web-sync-dot--chip.mini-app-publish-bar__web-sync-dot--tone-ok {
+    color: #4ade80;
+  }
+  .mini-app-publish-bar__web-sync-dot--chip.mini-app-publish-bar__web-sync-dot--tone-warn {
+    color: #fbbf24;
+  }
+  .mini-app-publish-bar__web-sync-dot--chip.mini-app-publish-bar__web-sync-dot--tone-bad {
+    color: #f87171;
+  }
+  .mini-app-publish-bar__web-sync-dot--chip.mini-app-publish-bar__web-sync-dot--tone-info {
+    color: #60a5fa;
+  }
+}
+
+/* The chip's trailing control — pull, review, or re-check. A tinted pill with
+   its own edge, not a bare glyph: the point is that this half of the chip is
+   pressable, which a divider alone never said. Colour is inherited from the
+   chip's tone, so the action never disagrees with the state it belongs to, and
+   it stays lighter than the primary button, which still owns publishing. */
+.mini-app-publish-bar__web-sync-chip-act {
+  display: inline-flex;
+  align-items: center;
+  /* Fill the chip's height (inset 2px) so the action reads as the pill's
+     right end, not a smaller button floating inside it. */
+  align-self: stretch;
+  margin: 2px 0 2px 1px;
+  padding: 0 7px;
+  border: 0;
+  border-radius: 999px;
+  background: rgba(255, 255, 255, 0.55);
+  box-shadow: inset 0 0 0 1px rgba(10, 16, 32, 0.07);
+  color: inherit;
+  font-weight: 600;
+  font-size: 11px;
+  line-height: 1;
+  cursor: pointer;
+  flex-shrink: 0;
+  transition:
+    background 0.13s ease,
+    box-shadow 0.13s ease;
+}
+
+.mini-app-publish-bar__web-sync-chip-act:hover {
+  background: var(--surface-raised, #fff);
+  box-shadow:
+    inset 0 0 0 1px rgba(10, 16, 32, 0.14),
+    0 1px 3px rgba(10, 16, 32, 0.1);
+}
+
+/* Present at all times, collapsed to zero width rather than display:none — so
+   it animates open on approach and stays reachable by screen readers. */
+.mini-app-publish-bar__web-sync-chip-act-verb {
+  max-width: 0;
+  overflow: hidden;
+  white-space: nowrap;
+  opacity: 0;
+  transition:
+    max-width 0.18s ease,
+    opacity 0.13s ease,
+    margin-left 0.18s ease;
+}
+
+.mini-app-publish-bar__web-sync-chip-act:hover
+  .mini-app-publish-bar__web-sync-chip-act-verb,
+.mini-app-publish-bar__web-sync-chip-act:focus-visible
+  .mini-app-publish-bar__web-sync-chip-act-verb {
+  max-width: 140px;
+  opacity: 1;
+  margin-left: 5px;
+}
+
+/* Dark mode: the pill lifts off the chip with light, not with white — a white
+   fill here would outweigh the primary button and read as the loudest thing in
+   a dark bar. */
+@media (prefers-color-scheme: dark) {
+  .mini-app-publish-bar__web-sync-chip-act {
+    background: rgba(255, 255, 255, 0.1);
+    box-shadow: inset 0 0 0 1px rgba(255, 255, 255, 0.14);
+  }
+
+  .mini-app-publish-bar__web-sync-chip-act:hover {
+    background: rgba(255, 255, 255, 0.18);
+    box-shadow: inset 0 0 0 1px rgba(255, 255, 255, 0.24);
+  }
+}
+
+/* Honour reduced-motion: the label still appears, it just does not slide. */
+@media (prefers-reduced-motion: reduce) {
+  .mini-app-publish-bar__web-sync-chip-act,
+  .mini-app-publish-bar__web-sync-chip-act-verb {
+    transition: none;
+  }
+}
+
+/* Lineage mark — sits with the title, same muted weight as secondary text so
+   it orients without competing with the app name. */
+.mini-app-publish-bar__lineage-mark {
+  display: inline-flex;
+  align-items: center;
+  color: var(--text-tertiary, var(--text-secondary));
+  flex-shrink: 0;
+  cursor: default;
+}
+
+/* Fork + audience badge for collaborator copies. */
+.mini-app-publish-bar__lineage-mark {
+  gap: 2px;
+}
+
+.mini-app-publish-bar__lineage-mark .mini-app-publish-bar__share-audience {
+  display: inline-flex;
+  opacity: 0.85;
+  /* The badge carries its own "Your team" title; let the mark's full
+     tooltip win so hovering either glyph explains the relationship. */
+  pointer-events: none;
+}
+
+.mini-app-publish-bar__lineage-mark:hover {
+  color: var(--text-secondary);
 }
 
 .mini-app-publish-bar__web-sync-dot {
@@ -132,9 +590,120 @@
   color: #ff9500;
 }
 
-.mini-app-publish-bar__web-sync-dot--loading,
-.mini-app-publish-bar__web-sync-dot--neutral {
+.mini-app-publish-bar__web-sync-dot--action_required {
+  color: #ff9500;
+  position: relative;
+}
+
+.mini-app-publish-bar__web-sync-dot--action_required::before {
+  animation: mini-app-publish-bar-sync-pulse 1.6s ease-in-out infinite;
+  box-shadow: 0 0 0 0 rgba(255, 149, 0, 0.55);
+}
+
+.mini-app-publish-bar__web-sync-dot-badge {
+  position: absolute;
+  top: -3px;
+  right: -4px;
+  min-width: 11px;
+  height: 11px;
+  padding: 0 2px;
+  border-radius: 6px;
+  background: #ff3b30;
+  color: #fff;
+  font-size: 8px;
+  font-weight: 700;
+  line-height: 11px;
+  text-align: center;
+  pointer-events: none;
+}
+
+@keyframes mini-app-publish-bar-sync-pulse {
+  0%,
+  100% {
+    box-shadow: 0 0 0 0 rgba(255, 149, 0, 0.45);
+  }
+  50% {
+    box-shadow: 0 0 0 4px rgba(255, 149, 0, 0);
+  }
+}
+
+.mini-app-publish-bar__action-callout {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 8px 12px;
+  border-bottom: 1px solid rgba(255, 149, 0, 0.35);
+  background: rgba(255, 149, 0, 0.12);
+  color: var(--text-primary);
+  font-size: 13px;
+  flex-shrink: 0;
+}
+
+.mini-app-publish-bar__action-callout-text {
+  flex: 1;
+  line-height: 1.35;
+}
+
+.mini-app-publish-bar__action-callout-btn {
+  flex-shrink: 0;
+  padding: 4px 10px;
+  border: 0;
+  border-radius: 6px;
+  background: var(--accent);
+  color: #fff;
+  font-size: 12px;
+  font-weight: 600;
+  cursor: pointer;
+}
+
+.mini-app-publish-bar__action-callout-btn:hover {
+  filter: brightness(1.05);
+}
+
+.mini-app-publish-bar__action-callout-btn:disabled {
+  opacity: 0.6;
+  cursor: default;
+}
+
+.mini-app-publish-bar__action-callout-btn--secondary {
+  background: transparent;
+  color: var(--accent);
+  border: 1px solid color-mix(in srgb, var(--accent) 45%, transparent);
+}
+
+.mini-app-publish-bar__action-callout-dismiss {
+  flex-shrink: 0;
+  width: 22px;
+  height: 22px;
+  padding: 0;
+  border: 0;
+  border-radius: 4px;
+  background: transparent;
+  color: var(--text-secondary);
+  font-size: 16px;
+  line-height: 1;
+  cursor: pointer;
+}
+
+.mini-app-publish-bar__action-callout-dismiss:hover {
+  background: rgba(0, 0, 0, 0.06);
+}
+
+.mini-app-publish-bar__web-sync-dot--loading {
   color: var(--text-tertiary);
+}
+
+.mini-app-publish-bar__web-sync-dot--disabled {
+  color: var(--text-tertiary);
+}
+
+.mini-app-publish-bar__web-sync-dot--disabled::before {
+  background: transparent;
+  box-shadow: inset 0 0 0 1.5px currentColor;
+}
+
+.mini-app-publish-bar__web-sync-dot--error {
+  color: #ff3b30;
 }
 
 .mini-app-publish-bar__web-sync-dot--spinning::before {
@@ -151,23 +720,27 @@
 }
 
 .mini-app-publish-bar__url-row {
+  flex: 1 1 0;
+  min-width: 0;
+  max-width: min(380px, 100%);
+  margin-inline: auto;
   display: flex;
   align-items: center;
-  gap: 4px;
-  min-width: 0;
-  max-width: min(420px, 40vw);
-  padding: 2px 4px 2px 8px;
-  border-radius: 8px;
+  height: var(--pb-control-h);
+  gap: 2px;
+  padding: 0 3px 0 10px;
+  border-radius: var(--pb-radius);
   border: 1px solid var(--border-color);
   background: var(--bg-secondary);
+  box-sizing: border-box;
 }
 
 .mini-app-publish-bar__icon-button {
   display: inline-flex;
   align-items: center;
   justify-content: center;
-  width: 24px;
-  height: 24px;
+  width: 22px;
+  height: 22px;
   border: 0;
   border-radius: 6px;
   background: transparent;
@@ -189,11 +762,70 @@
 .mini-app-publish-bar__left {
   display: flex;
   align-items: center;
-  gap: 10px;
+  gap: 8px;
   min-width: 0;
-  flex: 1;
-  flex-wrap: wrap;
-  row-gap: 8px;
+  flex: 0 1 auto;
+  flex-wrap: nowrap;
+  overflow: hidden;
+}
+
+.mini-app-publish-bar__meta {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  min-width: 0;
+  flex-shrink: 1;
+  overflow: hidden;
+}
+
+.mini-app-publish-bar__title {
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--text-primary);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  flex-shrink: 0;
+  max-width: min(180px, 28vw);
+}
+
+/* Click the name to rename. Looks like plain text until hovered. */
+.mini-app-publish-bar__title-button {
+  background: none;
+  border: 1px solid transparent;
+  border-radius: 6px;
+  padding: 2px 6px;
+  margin-left: -6px;
+  font-family: inherit;
+  text-align: left;
+  cursor: text;
+}
+
+.mini-app-publish-bar__title-button:hover {
+  border-color: var(--border-subtle, rgba(255, 255, 255, 0.12));
+  background: var(--surface-hover, rgba(255, 255, 255, 0.04));
+}
+
+.mini-app-publish-bar__title-input {
+  font-family: inherit;
+  background: var(--surface-input, rgba(0, 0, 0, 0.25));
+  border: 1px solid var(--accent, #3b82f6);
+  border-radius: 6px;
+  padding: 2px 6px;
+  margin-left: -6px;
+  outline: none;
+  width: min(220px, 30vw);
+  max-width: min(220px, 30vw);
+}
+
+.mini-app-publish-bar__status {
+  font-size: 10px;
+  color: var(--text-secondary);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  min-width: 0;
+  flex-shrink: 1;
 }
 
 .mini-app-publish-bar__dot {
@@ -270,30 +902,154 @@
   }
 }
 
+.share-sheet__sync-banner {
+  margin: 0 0 14px;
+  padding: 10px 12px;
+  border-radius: 10px;
+  font-size: 12px;
+  line-height: 1.45;
+}
+
+.share-sheet__sync-banner p {
+  margin: 0;
+}
+
+.share-sheet__sync-banner-selection {
+  margin-top: 8px !important;
+  padding-top: 8px;
+  border-top: 1px solid color-mix(in srgb, currentColor 12%, transparent);
+  font-size: 11px;
+  line-height: 1.45;
+  color: var(--text-primary);
+}
+
+.share-sheet__sync-banner-selection-label {
+  display: block;
+  margin-bottom: 2px;
+  font-size: 10px;
+  font-weight: 700;
+  letter-spacing: 0.02em;
+  text-transform: uppercase;
+  color: var(--text-secondary);
+}
+
+.share-sheet__sync-banner--info {
+  background: color-mix(in srgb, var(--accent) 12%, transparent);
+  color: var(--text-primary);
+}
+
+.share-sheet__sync-banner--warn {
+  background: color-mix(in srgb, #ff9500 14%, transparent);
+  color: var(--text-primary);
+}
+
+.share-sheet__sync-banner--success {
+  background: color-mix(in srgb, #34c759 14%, transparent);
+  color: var(--text-primary);
+}
+
+.share-sheet__sync-banner--error {
+  background: color-mix(in srgb, #e84c60 12%, transparent);
+  border-color: rgba(232, 76, 96, 0.35);
+  color: var(--error);
+}
+
+.share-sheet__error-details {
+  margin-top: 8px;
+  font-size: 12px;
+}
+
+.share-sheet__error-details summary {
+  cursor: pointer;
+  font-weight: 600;
+}
+
+.share-sheet__error-details p {
+  margin: 8px 0 0;
+  white-space: pre-wrap;
+  word-break: break-word;
+  color: var(--text-secondary);
+}
+
+.share-sheet__sync-banner-btn {
+  margin-top: 8px;
+  padding: 6px 10px;
+  border: 0;
+  border-radius: 8px;
+  background: var(--accent);
+  color: #fff;
+  font-size: 11px;
+  font-weight: 600;
+  cursor: pointer;
+}
+
+.share-sheet__sync-banner-btn:disabled {
+  opacity: 0.6;
+  cursor: not-allowed;
+}
+
+.share-sheet__link-hint {
+  margin: 0 0 8px;
+  font-size: 11px;
+  line-height: 1.45;
+  color: var(--text-secondary);
+}
+
 .mini-app-publish-bar__sync-popover {
   position: absolute;
   top: calc(100% + 8px);
   left: 0;
   z-index: 50;
-  width: min(300px, 72vw);
-  padding: 12px 14px;
+  width: min(360px, 92vw);
+  padding: 14px 16px;
   border-radius: 12px;
   border: 1px solid var(--border-color);
   background: var(--popover-bg);
   box-shadow: var(--popover-shadow);
+  font-size: 13px;
+  line-height: 1.5;
+}
+
+.mini-app-publish-bar__sync-popover--stacked {
+  display: flex;
+  flex-direction: column;
+  max-height: min(72vh, 440px);
+  padding-bottom: 12px;
+}
+
+.mini-app-publish-bar__sync-popover-scroll {
+  flex: 1 1 auto;
+  min-height: 0;
+  overflow-y: auto;
+  margin-bottom: 10px;
+  padding-right: 6px;
+  font-size: 13px;
+  line-height: 1.5;
+}
+
+.mini-app-publish-bar__sync-popover-actions {
+  flex-shrink: 0;
+  margin-top: auto;
+  padding-top: 8px;
+  border-top: 1px solid var(--border-color);
+}
+
+.mini-app-publish-bar__sync-popover--portal {
+  position: fixed;
+  z-index: 10000;
 }
 
 .mini-app-publish-bar__sync-popover-title {
-  margin: 0 0 8px;
-  font-size: 12px;
+  margin: 0 0 10px;
+  font-size: 15px;
   font-weight: 700;
   color: var(--text-primary);
 }
 
 .mini-app-publish-bar__sync-popover-summary {
   margin: 0 0 10px;
-  font-size: 11px;
-  line-height: 1.45;
+  font-size: 13px;
+  line-height: 1.5;
   color: var(--text-secondary);
 }
 
@@ -303,10 +1059,10 @@
   list-style: none;
   display: flex;
   flex-direction: column;
-  gap: 6px;
-  font-size: 11px;
+  gap: 8px;
+  font-size: 13px;
   color: var(--text-secondary);
-  line-height: 1.4;
+  line-height: 1.5;
 }
 
 .mini-app-publish-bar__sync-popover-list li {
@@ -323,52 +1079,108 @@
 
 .mini-app-publish-bar__sync-popover-hint {
   margin: 0 0 10px;
-  font-size: 10px;
-  line-height: 1.45;
+  font-size: 13px;
+  line-height: 1.5;
+  color: var(--text-secondary);
+}
+
+.mini-app-publish-bar__sync-popover-hint--ok {
+  margin-bottom: 0;
+}
+
+.mini-app-publish-bar__sync-popover-hint--subtle {
+  margin: 0 0 10px;
+  font-size: 12px;
+  line-height: 1.5;
   color: var(--text-tertiary);
 }
 
-.mini-app-publish-bar__sync-popover-error {
+.mini-app-publish-bar__sync-popover-hint--warn {
+  color: var(--text-secondary);
+}
+
+.mini-app-publish-bar__sync-popover-section-title {
   margin: 0 0 8px;
-  font-size: 10px;
+  font-size: 11px;
+  font-weight: 600;
+  color: var(--text-secondary);
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+}
+
+.mini-app-publish-bar__sync-popover-error {
+  margin: 0 0 10px;
+  font-size: 13px;
+  line-height: 1.5;
   color: #ff3b30;
+}
+
+.mini-app-publish-bar__sync-remote-banner {
+  margin: 0 0 8px;
+  padding: 8px 10px;
+  border-radius: 8px;
+  background: rgba(255, 159, 10, 0.12);
+  border: 1px solid rgba(255, 159, 10, 0.35);
+}
+
+.mini-app-publish-bar__sync-remote-banner--metadata {
+  background: rgba(10, 132, 255, 0.1);
+  border-color: rgba(10, 132, 255, 0.35);
+}
+
+.mini-app-publish-bar__sync-remote-banner-btn {
+  width: 100%;
+  margin-top: 10px;
+}
+
+.mini-app-publish-bar__sync-remote-banner-title {
+  margin: 0;
+  font-size: 14px;
+  font-weight: 600;
+  line-height: 1.45;
+}
+
+.mini-app-publish-bar__sync-remote-banner-body {
+  margin: 6px 0 0;
+  font-size: 13px;
+  line-height: 1.5;
+  opacity: 0.95;
+}
+
+.mini-app-publish-bar__sync-remote-banner-commits {
+  margin: 8px 0 0;
+  padding-left: 18px;
+  font-size: 11px;
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+  opacity: 0.85;
+}
+
+.mini-app-publish-bar__sync-popover-actions {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
 }
 
 .mini-app-publish-bar__sync-popover-btn {
   width: 100%;
-  padding: 8px 10px;
+  padding: 10px 12px;
   border: 0;
   border-radius: 8px;
   background: var(--accent);
   color: #fff;
-  font-size: 11px;
+  font-size: 13px;
   font-weight: 600;
   cursor: pointer;
+}
+
+.mini-app-publish-bar__sync-popover-btn--secondary {
+  background: var(--bg-secondary, rgba(120, 120, 128, 0.16));
+  color: var(--text-primary);
 }
 
 .mini-app-publish-bar__sync-popover-btn:disabled {
   opacity: 0.6;
   cursor: not-allowed;
-}
-
-.mini-app-publish-bar__meta {
-  display: flex;
-  flex-direction: column;
-  min-width: 0;
-}
-
-.mini-app-publish-bar__title {
-  font-size: 13px;
-  font-weight: 600;
-  color: var(--text-primary);
-  white-space: nowrap;
-  overflow: hidden;
-  text-overflow: ellipsis;
-}
-
-.mini-app-publish-bar__status {
-  font-size: 11px;
-  color: var(--text-secondary);
 }
 
 .mini-app-publish-bar__url-row .mini-app-publish-bar__url {
@@ -378,30 +1190,64 @@
 }
 
 .mini-app-publish-bar__url {
-  font-size: 11px;
+  font-size: 10px;
   color: var(--text-tertiary);
   font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
   white-space: nowrap;
   overflow: hidden;
   text-overflow: ellipsis;
+  flex: 1;
+  min-width: 0;
+  text-align: center;
 }
 
 .mini-app-publish-bar__actions {
   display: flex;
   align-items: center;
-  gap: 8px;
-  flex-shrink: 0;
+  gap: 6px;
+  flex: 0 0 auto;
+  margin-left: auto;
 }
 
+/* Sizing ported from the v2 prototype (bar.css .pb-btn): 13px text in a
+   rounded rect, not an 11px pill. The bar's actions are the densest thing the
+   user clicks, so they get real hit area rather than chip-sized targets. */
 .mini-app-publish-bar__button {
-  font-size: 12px;
-  font-weight: 600;
-  padding: 6px 12px;
-  border-radius: 999px;
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  font-size: var(--pb-font);
+  font-weight: 500;
+  height: var(--pb-control-h);
+  padding: 0 14px;
+  border-radius: var(--pb-radius);
   border: 1px solid var(--border-color);
-  background: transparent;
+  background: var(--bg-primary, transparent);
   color: var(--text-primary);
+  white-space: nowrap;
   cursor: pointer;
+  box-sizing: border-box;
+}
+
+/* Icon-only action. Tightens to the glyph (plus a count badge when present)
+   rather than keeping a text button's side padding, which would read as a
+   label that failed to load. */
+.mini-app-publish-bar__button--icon {
+  min-width: var(--pb-control-h, 34px);
+  padding: 0 8px;
+  justify-content: center;
+  gap: 5px;
+  color: var(--text-secondary);
+}
+
+.mini-app-publish-bar__button--icon:hover:not(:disabled) {
+  color: var(--text-primary);
+  background: var(--hover);
+}
+
+.mini-app-publish-bar__button--compact {
+  font-size: 12px;
+  padding: 5px 11px;
 }
 
 .mini-app-publish-bar__button:disabled {
@@ -413,83 +1259,177 @@
   background: var(--accent);
   border-color: transparent;
   color: #fff;
+  font-weight: 600;
+  box-shadow: 0 4px 12px color-mix(in srgb, var(--accent) 22%, transparent);
 }
 
-.mini-app-publish-bar__button--track {
-  background: rgba(37, 99, 235, 0.12);
-  color: #2563eb;
-  border: 1px solid rgba(37, 99, 235, 0.28);
-  white-space: nowrap;
+/* Publish split button (shared forks). One child of the right cluster, so the
+   cluster's gap does not open between the halves. */
+.mini-app-publish-bar__split {
+  position: relative;
+  display: inline-flex;
+  align-items: stretch;
 }
 
-.mini-app-publish-bar__button--track:hover:not(:disabled) {
-  background: rgba(37, 99, 235, 0.18);
+.mini-app-publish-bar__split--on .mini-app-publish-bar__split-main {
+  border-top-right-radius: 0;
+  border-bottom-right-radius: 0;
 }
 
-.mini-app-publish-bar__track-pull {
+/* A 1px seam, not a gap: the halves read as one control with two targets. */
+.mini-app-publish-bar__split-caret {
+  margin-left: 1px;
+  padding-left: 8px;
+  padding-right: 8px;
+  min-width: 0;
+  border-top-left-radius: 0;
+  border-bottom-left-radius: 0;
+}
+
+/* Double class: .pb-overflow__menu positions itself for the ··· trigger and may
+   load later — a single class here would lose the cascade silently. */
+.pb-overflow__menu.mini-app-publish-bar__split-menu {
+  position: absolute;
+  top: calc(100% + 6px);
+  right: 0;
+  left: auto;
+  z-index: 40;
+  min-width: 240px;
+}
+
+/* Prototype primary tones: a failed publish is red, not accent-blue, so the
+   button agrees with the chip instead of looking like a normal next step. */
+.mini-app-publish-bar__button--primary.mini-app-publish-bar__button--tone-bad {
+  background: #c8372a;
+  box-shadow: none;
+}
+
+.mini-app-publish-bar__button--primary.mini-app-publish-bar__button--tone-info {
+  background: #0b78c4;
+  box-shadow: none;
+}
+
+.mini-app-publish-bar__button--primary.mini-app-publish-bar__button--tone-busy {
+  background: #9fb3c8;
+  box-shadow: none;
+}
+
+/* Share sheet: link beside the title, three question tabs beneath it. */
+.share-sheet__header-link {
   display: flex;
   align-items: center;
-  gap: 10px;
-  padding: 6px 10px;
-  border-radius: 10px;
-  background: rgba(37, 99, 235, 0.08);
-  border: 1px solid rgba(37, 99, 235, 0.16);
-  max-width: 320px;
+  gap: 4px;
+  flex: 1;
+  min-width: 0;
+  margin-left: 12px;
+  padding: 3px 4px 3px 8px;
+  border: 1px solid var(--border-color);
+  border-radius: 9px;
 }
 
-.mini-app-publish-bar__track-pull-copy {
+.share-sheet__header-link .share-sheet__url-input {
+  flex: 1;
+  min-width: 0;
+  border: 0;
+  background: transparent;
+  font-size: 12px;
+  color: var(--text-secondary);
+  padding: 0;
+}
+
+.share-steps {
+  display: flex;
+  gap: 6px;
+  margin-bottom: 14px;
+}
+
+/* Each tab carries its current answer, so the strip doubles as a summary of
+   the whole decision — you can read the sheet without opening every step. */
+.share-steps__tab {
+  flex: 1;
   display: flex;
   flex-direction: column;
   gap: 2px;
   min-width: 0;
+  padding: 8px 10px;
+  border: 1px solid var(--border-color);
+  border-radius: 10px;
+  background: transparent;
+  text-align: left;
+  cursor: pointer;
 }
 
-.mini-app-publish-bar__track-pull-label {
-  font-size: 11px;
+.share-steps__tab b {
+  font-size: 12.5px;
   font-weight: 600;
-  color: #2563eb;
-  letter-spacing: 0.02em;
+  color: var(--text-primary);
 }
 
-.mini-app-publish-bar__track-pull-meta {
-  font-size: 11px;
-  color: var(--text-secondary, #6b7280);
-  white-space: nowrap;
+.share-steps__tab span {
+  font-size: 11.5px;
+  color: var(--text-tertiary, var(--text-secondary));
   overflow: hidden;
   text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
-.share-sheet__track-pull {
-  display: flex;
-  flex-direction: column;
-  gap: 8px;
-  margin-bottom: 14px;
-  padding-bottom: 14px;
-  border-bottom: 1px solid rgba(0, 0, 0, 0.08);
+.share-steps__tab--on {
+  border-color: var(--accent, #007aff);
+  background: color-mix(in srgb, var(--accent, #007aff) 7%, transparent);
 }
 
-.share-sheet__track-pull-desc {
-  margin: 0;
-  font-size: 13px;
-  line-height: 1.45;
-  color: var(--text-secondary, #6b7280);
+/* Dimmed rather than hidden: a step that vanishes reads as a bug, a step that
+   shows "—" teaches that the earlier answer made it irrelevant. */
+.share-steps__tab--dim b,
+.share-steps__tab--dim span {
+  opacity: 0.45;
 }
 
-@media (prefers-color-scheme: dark) {
-  .mini-app-publish-bar__track-pull {
-    background: rgba(96, 165, 250, 0.1);
-    border-color: rgba(96, 165, 250, 0.2);
-  }
+/* Audience lives as an icon on Share: the words ("Public · Code install") cost
+   a third of the bar to say something you only check before sending a link. */
+.mini-app-publish-bar__share-audience {
+  display: inline-flex;
+  align-items: center;
+  color: var(--text-tertiary, inherit);
+  flex-shrink: 0;
+}
 
-  .mini-app-publish-bar__button--track {
-    background: rgba(96, 165, 250, 0.14);
-    color: #93c5fd;
-    border-color: rgba(96, 165, 250, 0.28);
-  }
+/* Code-access badge sits on the audience glyph rather than beside it: "public
+   AND forkable" is one fact, and two separate icons would not fit the row. */
+.mini-app-publish-bar__share-audience--code {
+  position: relative;
+  /* Room for the badge's overhang so it never clips the "Share" text. */
+  margin-right: 4px;
+}
 
-  .share-sheet__track-pull {
-    border-bottom-color: rgba(255, 255, 255, 0.08);
-  }
+.mini-app-publish-bar__share-code-badge {
+  position: absolute;
+  right: -5px;
+  bottom: -4px;
+  display: inline-flex;
+  padding: 1px;
+  border-radius: 50%;
+  /* Opaque disc punches the badge out of the glyph underneath, so the angle
+     brackets stay legible instead of tangling with the lock/globe strokes. */
+  background: var(--bg-secondary, #fff);
+  color: var(--accent, #007aff);
+}
+
+.mini-app-publish-bar__button--primary .mini-app-publish-bar__share-code-badge {
+  background: var(--accent, #007aff);
+  color: #fff;
+}
+
+.mini-app-publish-bar__button--primary .mini-app-publish-bar__share-audience {
+  color: currentColor;
+}
+
+.mini-app-publish-bar__send-wrap {
+  position: relative;
+}
+
+.mini-app-publish-bar__button--send {
+  border-style: dashed;
 }
 
 .mini-app-publish-bar__toast,
@@ -520,8 +1460,6 @@
   justify-content: center;
   padding: 24px;
   background: rgba(0, 0, 0, 0.45);
-  backdrop-filter: blur(4px);
-  -webkit-backdrop-filter: blur(4px);
 }
 
 .share-sheet {
@@ -531,9 +1469,35 @@
   flex-direction: column;
   border-radius: 14px;
   border: 1px solid var(--border-color);
-  background: var(--glass-bg-active, var(--panel-bg-active));
+  /* Solid, not glass. The liquid-glass tokens are 85-90% alpha, which is fine
+     for a panel floating over your own app but not for a dialog carrying dense
+     settings text — whatever is behind it bleeds through and competes with the
+     labels. Modals are the one surface that should never be translucent. */
+  background: #fff;
   box-shadow: 0 24px 48px rgba(0, 0, 0, 0.25);
   color: var(--text-primary);
+}
+
+@media (prefers-color-scheme: dark) {
+  .share-sheet {
+    background: #1c1c1e;
+  }
+}
+
+.share-sheet--wide {
+  width: min(560px, 100%);
+  max-height: min(90vh, 720px);
+}
+
+.share-sheet__panel--contributions {
+  overflow-y: auto;
+  flex: 1;
+  min-height: 0;
+  padding-top: 8px;
+}
+
+.share-sheet__section-desc--lead {
+  margin: 0 0 16px;
 }
 
 .share-sheet__header {
@@ -546,6 +1510,8 @@
 
 .share-sheet__title {
   margin: 0;
+  /* Never squeezed by the link beside it — the link truncates instead. */
+  flex-shrink: 0;
   font-size: 16px;
   font-weight: 600;
   color: var(--text-primary);
@@ -749,6 +1715,9 @@
   color: var(--text-primary);
   font-size: 12px;
   font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+  text-align: left;
+  overflow: hidden;
+  text-overflow: ellipsis;
 }
 
 .share-sheet__icon-btn {
@@ -780,6 +1749,26 @@
   border: 0;
 }
 
+.share-sheet__fieldset--locked {
+  pointer-events: none;
+}
+
+.share-sheet__fieldset--locked .share-sheet__row:not(.share-sheet__row--selected) {
+  opacity: 0.55;
+}
+
+/* Selection owns the card's border, not just a background band — the tint
+   alone was easy to miss against a translucent sheet. */
+.share-sheet__row--selected {
+  border-color: var(--accent, #007aff);
+  background: color-mix(in srgb, var(--accent) 7%, transparent);
+}
+
+.share-sheet__row--selected input[type="radio"],
+.share-sheet__row--selected input[type="checkbox"] {
+  accent-color: var(--accent);
+}
+
 .share-sheet__legend {
   padding: 0;
   margin-bottom: 8px;
@@ -788,11 +1777,180 @@
   color: var(--text-primary);
 }
 
+/* Toggles are cards too, so a switch and a radio option read as the same kind
+   of object — the prototype's Access step puts both in one visual family. */
 .share-sheet__toggle-row {
-  margin-top: 16px;
-  padding: 12px 16px;
-  background: var(--bg-tertiary);
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  margin-bottom: 7px;
+  padding: 11px 13px;
+  border: 1px solid var(--border-color);
+  border-radius: 10px;
+  cursor: pointer;
+}
+
+.share-sheet__toggle-row--on {
+  border-color: var(--accent, #007aff);
+  background: color-mix(in srgb, var(--accent) 7%, transparent);
+}
+
+/* Dimmed but still readable — the row explains its own precondition instead of
+   just going dead under the cursor. */
+.share-sheet__toggle-row--off {
+  opacity: 0.55;
+  cursor: default;
+}
+
+/* The real checkbox stays in the DOM for keyboard and screen readers; the
+   switch beside it is the visible control. Hiding it with display:none would
+   take it out of the tab order. */
+.share-sheet__switch-input {
+  position: absolute;
+  opacity: 0;
+  width: 0;
+  height: 0;
+}
+
+.share-sheet__switch {
+  position: relative;
+  flex-shrink: 0;
+  width: 34px;
+  height: 20px;
+  border-radius: 20px;
+  background: #cdd5e2;
+  transition: background 0.15s;
+}
+
+.share-sheet__switch i {
+  position: absolute;
+  top: 2px;
+  left: 2px;
+  width: 16px;
+  height: 16px;
+  border-radius: 50%;
+  background: #fff;
+  transition: transform 0.15s;
+}
+
+.share-sheet__switch--on {
+  background: var(--accent, #007aff);
+}
+
+.share-sheet__switch--on i {
+  transform: translateX(14px);
+}
+
+.share-sheet__switch-input:focus-visible + .share-sheet__switch {
+  outline: 2px solid var(--accent, #007aff);
+  outline-offset: 2px;
+}
+
+/* Audience glyph in the option row — same mark as the Share button, so the
+   icon learned here is the icon recognised on the bar. */
+.share-sheet__opt-glyph {
+  display: inline-flex;
+  flex-shrink: 0;
+  margin-top: 1px;
+  color: var(--text-tertiary, var(--text-secondary));
+}
+
+.share-sheet__row--selected .share-sheet__opt-glyph {
+  color: var(--accent, #007aff);
+}
+
+.share-sheet__inline-code {
+  display: inline-flex;
+  vertical-align: -1px;
+  margin-left: 6px;
+  color: var(--accent, #007aff);
+}
+
+/* Nested follow-ups: sign-in and per-user data only exist because someone can
+   view, so they live inside the view card rather than beside it. One outer
+   border holds the whole group, so the hierarchy is visible, not implied. */
+.share-sheet__toggle-group {
+  margin-bottom: 7px;
+  border: 1px solid var(--border-color);
+  border-radius: 10px;
+  overflow: hidden;
+}
+
+.share-sheet__toggle-group--on {
+  border-color: var(--accent, #007aff);
+}
+
+/* Inner rows drop their own border — the group owns the outline now. */
+.share-sheet__toggle-group .share-sheet__toggle-row {
+  margin-bottom: 0;
+  border: 0;
+  border-radius: 0;
+  background: transparent;
+}
+
+.share-sheet__toggle-row--head {
+  background: color-mix(in srgb, var(--accent) 7%, transparent) !important;
+}
+
+/* Indent plus a rule: the children read as consequences of the row above,
+   which is the whole point of nesting them. */
+.share-sheet__toggle-nest {
+  padding-left: 13px;
+  border-top: 1px solid var(--border-color);
+}
+
+.share-sheet__toggle-nest .share-sheet__toggle-row + .share-sheet__toggle-row {
+  border-top: 1px solid var(--border-color);
+}
+
+/* Inline text button — for an escape hatch that changes one setting, where a
+   full secondary button would outweigh what it does. */
+.share-sheet__text-link {
+  display: inline-block;
+  margin: 2px 0 12px;
+  padding: 0;
+  border: 0;
+  background: transparent;
+  color: var(--accent, #007aff);
+  font-size: 12.5px;
+  cursor: pointer;
+}
+
+.share-sheet__text-link:hover:not(:disabled) {
+  text-decoration: underline;
+}
+
+.share-sheet__text-link:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+
+/* Mine/Theirs as a segmented control, matching the prototype: two named
+   outcomes you compare side by side, not a dropdown that hides one of them. */
+.share-sheet__scope-seg {
+  display: inline-flex;
+  flex-shrink: 0;
+  padding: 3px;
   border-radius: 8px;
+  background: var(--bg-secondary);
+}
+
+.share-sheet__scope-seg button {
+  padding: 4px 10px;
+  border: 0;
+  border-radius: 6px;
+  background: transparent;
+  color: var(--text-secondary);
+  font-size: 12px;
+  cursor: pointer;
+}
+
+.share-sheet__scope-seg button.is-on {
+  background: var(--panel-bg-active, #fff);
+  color: var(--text-primary);
+  font-weight: 500;
+  box-shadow: 0 1px 3px rgba(10, 16, 32, 0.09);
 }
 
 .share-sheet__toggle-label {
@@ -817,14 +1975,16 @@
   color: var(--text-secondary);
 }
 
+/* Separate cards, not a joined list with dividers — matches the prototype's
+   Access step. Each option is its own object you can select, so the selected
+   state can own the whole card border instead of tinting one band of a list. */
 .share-sheet__list {
   list-style: none;
   margin: 0;
   padding: 0;
-  border-radius: 10px;
-  border: 1px solid var(--border-color);
-  background: var(--bg-secondary);
-  overflow: hidden;
+  display: flex;
+  flex-direction: column;
+  gap: 7px;
 }
 
 .share-sheet__list--compact .share-sheet__row {
@@ -835,13 +1995,10 @@
   display: flex;
   align-items: flex-start;
   gap: 10px;
-  padding: 10px 12px;
+  padding: 11px 13px;
   cursor: pointer;
-  border-bottom: 1px solid var(--border-color);
-}
-
-.share-sheet__list li:last-child .share-sheet__row {
-  border-bottom: 0;
+  border: 1px solid var(--border-color);
+  border-radius: 10px;
 }
 
 .share-sheet__row:hover {
@@ -861,9 +2018,11 @@
   min-width: 0;
 }
 
+/* 500, not 600 — matches the prototype. At 600 beside a 12.5px grey subtitle
+   the label shouted, and every option shouting is the same as none doing so. */
 .share-sheet__row-label {
-  font-size: 13px;
-  font-weight: 600;
+  font-size: 13.5px;
+  font-weight: 500;
   color: var(--text-primary);
 }
 
@@ -878,11 +2037,15 @@
   padding: 10px 14px;
   border: 0;
   border-radius: 10px;
-  background: var(--accent);
+  background: var(
+    --papr-blue-gradient,
+    linear-gradient(135deg, #0060e0, #00acfa)
+  );
   color: #fff;
   font-size: 13px;
   font-weight: 600;
   cursor: pointer;
+  box-shadow: 0 2px 10px var(--papr-blue-glow, rgba(0, 96, 224, 0.28));
 }
 
 .share-sheet__primary-btn:disabled {
@@ -930,6 +2093,14 @@
   font-size: 12px;
   line-height: 1.45;
   color: var(--text-tertiary);
+}
+
+.share-sheet__save-row .share-sheet__footnote {
+  margin: 0 0 10px;
+}
+
+.share-sheet__save-row .share-sheet__primary-btn {
+  margin-top: 0;
 }
 
 .share-sheet__inline-link {
@@ -998,10 +2169,197 @@
   align-items: baseline;
 }
 
+.share-sheet__changes-contributor {
+  margin: 4px 0 0;
+  font-size: 12px;
+  font-weight: 500;
+  color: var(--text-primary);
+}
+
+.mini-app-publish-bar__contributions-badge {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-width: 18px;
+  height: 18px;
+  padding: 0 5px;
+  border-radius: 999px;
+  font-size: 11px;
+  font-weight: 600;
+  line-height: 1;
+  /* Solid, not an 18% tint. Beside the word "Contributions" the count was a
+     secondary detail; as the only thing left in the button it carries the
+     whole message, so it has to survive a glance. */
+  background: var(--accent, #007aff);
+  color: #fff;
+}
+
+.mini-app-publish-bar__contributions-badge--warn {
+  min-width: 18px;
+  padding: 0;
+  background: var(--danger, #ff3b30);
+}
+
+.mini-app-publish-bar__contributions-panel {
+  margin: 0 12px 10px;
+  padding: 12px 14px;
+  border-radius: 12px;
+  border: 1px solid var(--border-color);
+  background: var(--bg-secondary);
+}
+
+.publish-bar-contributions__title {
+  margin: 0 0 4px;
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--text-primary);
+}
+
+.publish-bar-contributions__desc {
+  margin: 0 0 12px;
+  font-size: 12px;
+  line-height: 1.45;
+  color: var(--text-secondary);
+}
+
 .share-sheet__changes-meta {
   font-size: 11px;
   color: var(--text-tertiary);
   font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+}
+
+.share-sheet__changes-summary {
+  margin: 8px 0 12px;
+  padding: 10px 12px;
+  border-radius: 10px;
+  border: 1px solid var(--border-color);
+  background: var(--bg-secondary);
+}
+
+.share-sheet__changes-summary-label {
+  margin: 0 0 6px;
+  font-size: 11px;
+  font-weight: 600;
+  letter-spacing: 0.02em;
+  text-transform: uppercase;
+  color: var(--text-tertiary);
+}
+
+.share-sheet__changes-paths {
+  margin: 8px 0 0;
+  padding-left: 18px;
+  font-size: 11px;
+  line-height: 1.5;
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+  color: var(--text-secondary);
+}
+
+.share-sheet__changes-meta--plain {
+  margin-top: 8px;
+}
+
+.share-sheet__footnote--muted {
+  margin-top: 8px;
+  margin-bottom: 0;
+  color: var(--text-tertiary);
+}
+
+.share-sheet__changes-history {
+  margin-top: 16px;
+  padding-top: 12px;
+  border-top: 1px solid var(--border-color);
+}
+
+.share-sheet__changes-history-toggle {
+  font-size: 12px;
+}
+
+.share-sheet__changes-history-label {
+  margin-top: 12px;
+  margin-bottom: 8px;
+}
+
+.share-sheet__changes-success {
+  margin: 0 0 12px;
+  padding: 10px 12px;
+  border-radius: 10px;
+  color: var(--papr-blue-deep, #0060e0);
+  background: color-mix(in srgb, var(--papr-blue-deep, #0060e0) 10%, transparent);
+}
+
+.share-sheet__changes-uploading {
+  margin-top: 16px;
+  padding-top: 4px;
+}
+
+.share-sheet__changes-list--uploading {
+  gap: 10px;
+  margin-top: 8px;
+}
+
+.share-sheet__changes-item--uploading {
+  opacity: 0.92;
+  border-style: dashed;
+}
+
+.share-sheet__changes-upload-spinner {
+  display: inline-block;
+  width: 12px;
+  height: 12px;
+  margin-right: 6px;
+  vertical-align: -2px;
+  border: 2px solid rgba(0, 96, 224, 0.2);
+  border-top-color: var(--papr-blue-deep, #0060e0);
+  border-radius: 50%;
+  animation: share-sheet-changes-spin 0.7s linear infinite;
+}
+
+@keyframes share-sheet-changes-spin {
+  to {
+    transform: rotate(360deg);
+  }
+}
+
+.share-sheet__changes-actions--compact {
+  margin-top: 8px;
+}
+
+.share-sheet__changes-list--history {
+  gap: 10px;
+}
+
+.share-sheet__changes-item--history {
+  padding: 10px 12px;
+  background: var(--bg-primary);
+}
+
+.share-sheet__changes-status {
+  font-size: 11px;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.02em;
+  padding: 2px 8px;
+  border-radius: 6px;
+  flex-shrink: 0;
+}
+
+.share-sheet__changes-status--accepted {
+  color: var(--success, #34c759);
+  background: color-mix(in srgb, var(--success, #34c759) 12%, transparent);
+}
+
+.share-sheet__changes-status--declined {
+  color: var(--text-secondary);
+  background: var(--bg-secondary);
+}
+
+.share-sheet__changes-desc--history {
+  margin-top: 6px;
+  margin-bottom: 0;
+  display: -webkit-box;
+  -webkit-line-clamp: 3;
+  -webkit-box-orient: vertical;
+  overflow: hidden;
 }
 
 .share-sheet__changes-desc {
@@ -1041,11 +2399,92 @@
   gap: 12px;
 }
 
+/* One bordered container, plain rows inside — not a grey card per key.
+   A filled block per row made two keys look like six separate panels; the
+   list is one object, so it gets one outline and hairline separators. */
 .share-sheet__cred-row {
-  padding: 10px 12px;
-  border-radius: 10px;
+  padding: 11px 13px;
+  border-radius: 0;
+  border: 0;
+  background: transparent;
+}
+
+/* Review layout: name and purpose on the left, who-pays control on the right.
+   Edit sits between them and only appears on hover — it is the rarest action
+   in this list, so it should not compete with the one you came to change. */
+.share-sheet__cred-main {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+
+.share-sheet__cred-id {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  min-width: 0;
+  flex: 1;
+}
+
+.share-sheet__cred-id b {
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+  font-size: 12.5px;
+  font-weight: 500;
+  color: var(--text-primary);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.share-sheet__cred-id span {
+  font-size: 12px;
+  color: var(--text-secondary);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.share-sheet__cred-edit-btn {
+  flex-shrink: 0;
+  padding: 0;
+  border: 0;
+  background: transparent;
+  color: var(--text-tertiary, var(--text-secondary));
+  font-size: 12px;
+  cursor: pointer;
+  opacity: 0;
+}
+
+.share-sheet__cred-row:hover .share-sheet__cred-edit-btn,
+.share-sheet__cred-edit-btn:focus-visible {
+  opacity: 1;
+}
+
+.share-sheet__cred-edit {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.share-sheet__cred-edit-actions {
+  display: flex;
+  justify-content: space-between;
+  gap: 12px;
+}
+
+.share-sheet__cred-edit-actions .share-sheet__text-link {
+  margin: 0;
+}
+
+.share-sheet__cred-list {
   border: 1px solid var(--border-color);
-  background: var(--bg-secondary);
+  border-radius: 10px;
+  overflow: hidden;
+  gap: 0 !important;
+}
+
+.share-sheet__cred-list > li + li {
+  border-top: 1px solid var(--border-color);
 }
 
 .share-sheet__cred-fields {
@@ -1061,8 +2500,14 @@
   padding: 8px 10px;
   border-radius: 8px;
   border: 1px solid var(--border-color);
-  background: var(--bg-primary);
+  background: var(--input-bg, var(--bg-secondary));
+  color: var(--text-primary);
   font-size: 12px;
+  font-family: inherit;
+}
+
+.share-sheet__cred-input::placeholder {
+  color: var(--text-tertiary);
 }
 
 .share-sheet__cred-input--wide {
@@ -1073,22 +2518,33 @@
   padding: 8px 10px;
   border-radius: 8px;
   border: 1px solid var(--border-color);
-  background: var(--bg-primary);
+  background: var(--input-bg, var(--bg-secondary));
+  color: var(--text-primary);
   font-size: 12px;
+  font-family: inherit;
 }
 
 .cloud-compat-badge {
   display: inline-flex;
   align-items: center;
   width: fit-content;
-  margin-top: 4px;
-  padding: 2px 8px;
+  margin-top: 0;
+  padding: 1px 6px;
   border-radius: 999px;
-  font-size: 10px;
+  font-size: 9px;
   font-weight: 700;
   letter-spacing: 0.02em;
   text-transform: uppercase;
   border: 1px solid var(--border-color);
+  flex-shrink: 0;
+  font-family: inherit;
+  line-height: 1.4;
+}
+
+button.cloud-compat-badge {
+  cursor: pointer;
+  appearance: none;
+  background: transparent;
 }
 
 .cloud-compat-badge--loading {
@@ -1112,6 +2568,17 @@
   color: #b91c1c;
   border-color: color-mix(in srgb, #ef4444 40%, var(--border-color));
   background: color-mix(in srgb, #ef4444 10%, var(--bg-secondary));
+}
+
+.cloud-compat-badge--paused {
+  color: #b45309;
+  border-color: color-mix(in srgb, #f59e0b 45%, var(--border-color));
+  background: color-mix(in srgb, #f59e0b 14%, var(--bg-secondary));
+}
+
+button.cloud-compat-badge--paused:hover {
+  border-color: color-mix(in srgb, #f59e0b 60%, var(--border-color));
+  background: color-mix(in srgb, #f59e0b 20%, var(--bg-secondary));
 }
 
 .share-sheet__notice--warn {
@@ -1179,4 +2646,125 @@
   margin: 0 0 10px;
   font-size: 13px;
   color: var(--text-primary);
+}
+
+/* Allowlist for audience "people". Sits directly beneath its own radio row and
+   is indented to the option's text column, so it reads as the continuation of
+   "Specific people" rather than a new question. */
+.share-sheet__people {
+  margin: 6px 0 2px 0;
+  padding: 10px 12px 10px 14px;
+  border: 1px solid var(--border-color);
+  border-top: 0;
+  border-radius: 0 0 10px 10px;
+  background: var(--glass-bg, rgba(120, 120, 128, 0.05));
+}
+
+/* Square off the selected row's bottom corners so the row and its allowlist
+   read as one attached surface instead of two stacked cards. */
+.share-sheet__row--selected:has(+ .share-sheet__people) {
+  border-bottom-left-radius: 0;
+  border-bottom-right-radius: 0;
+}
+
+/* Propose sheet — proposals you already sent, under Send to owner. */
+.propose-history {
+  margin-top: 16px;
+  padding-top: 12px;
+  border-top: 1px solid var(--border-color);
+}
+
+.propose-history__heading {
+  margin: 0 0 8px;
+  font-size: 11px;
+  font-weight: 600;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+  color: var(--text-secondary);
+}
+
+.propose-history__list {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  max-height: 200px;
+  overflow-y: auto;
+}
+
+.propose-history__item {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 9px 12px;
+  border-radius: 10px;
+  border: 1px solid var(--border-color);
+  background: var(--bg-secondary);
+}
+
+.propose-history__main {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  min-width: 0;
+}
+
+.propose-history__title {
+  font-size: 13px;
+  font-weight: 500;
+  color: var(--text-primary);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.propose-history__meta {
+  font-size: 11px;
+  color: var(--text-secondary);
+}
+
+.propose-history__status {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  flex-shrink: 0;
+  padding: 3px 9px;
+  border-radius: 999px;
+  font-size: 11px;
+  font-weight: 600;
+  border: 1px solid transparent;
+}
+
+.propose-history__dot {
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  background: currentColor;
+}
+
+.propose-history__status--warn {
+  color: #cc7a00;
+  background: color-mix(in srgb, #cc7a00 12%, transparent);
+  border-color: color-mix(in srgb, #cc7a00 30%, transparent);
+}
+
+.propose-history__status--ok {
+  color: #0b7a45;
+  background: color-mix(in srgb, #0f9d58 12%, transparent);
+  border-color: color-mix(in srgb, #0f9d58 30%, transparent);
+}
+
+.propose-history__status--bad {
+  color: #c8372a;
+  background: color-mix(in srgb, #c8372a 12%, transparent);
+  border-color: color-mix(in srgb, #c8372a 30%, transparent);
+}
+
+@media (prefers-color-scheme: dark) {
+  .propose-history__status--warn { color: #fbbf24; }
+  .propose-history__status--ok { color: #4ade80; }
+  .propose-history__status--bad { color: #f87171; }
 }

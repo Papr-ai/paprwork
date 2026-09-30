@@ -11,11 +11,29 @@ import type {
   ChatState,
   StreamingState,
   SequenceItem,
+  StreamRecoveryReason,
+  LastTurnOutcome,
+  MessageAttachment,
 } from "../types/chat";
 import type { MemoryAudience } from "../constants/memoryScope";
 import type { ToolCall } from "../types/core";
 import { gateway } from "../src/lib/gateway";
 import { trackEvent } from "../lib/telemetry";
+import { userMessageDedupKey } from "../utils/messageDedup";
+import {
+  readChatModel,
+  readNewChatDefaultModel,
+  renameChatModel,
+  writeChatModel,
+  writeNewChatDefaultModel,
+} from "../utils/chatModelMemory";
+import { renameChatSettings } from "../utils/chatModelSettings";
+import {
+  forgetDraft,
+  readDraft,
+  renameDraft,
+  writeDraft,
+} from "../utils/chatDraftStore";
 
 // Re-export types for backward compatibility
 export type { ChatMetadata, ChatMessage, ChatState, StreamingState, SequenceItem, MessageAttachment };
@@ -30,12 +48,17 @@ interface ChatStore {
   // Per-chat state for parallel streaming (keyed by chatId)
   chatStates: Map<string, ChatState>;
 
+  /** Input drafts — isolated from chatStates so typing does not re-render MessageList. */
+  draftByChatId: Map<string, string>;
+
   // UI state (global - only for non-chat-specific loading/errors)
   isLoading: boolean;
   error: string | null;
 
   // Actions
   addMessage: (message: ChatMessage, chatId?: string) => void;
+  /** Resume streaming on an existing assistant row (hidden continue / reconnect). */
+  reactivateAssistantMessage: (chatId: string, messageId: string) => void;
   prependMessages: (messages: ChatMessage[], chatId: string) => void;
   /** Clear cached chats/messages after org/namespace workspace switch. */
   resetForWorkspaceSwitch: () => void;
@@ -48,12 +71,25 @@ interface ChatStore {
   /** Move chat state from a temp id to a permanent id (first message in new chat). */
   migrateChatId: (oldChatId: string, newChatId: string) => void;
   setChats: (chats: ChatMetadata[]) => void;
+  /** Optimistic title after agent:generate-title (before chat:list reload). */
+  patchChatTitle: (chatId: string, title: string) => void;
   setChatMemoryScope: (chatId: string, scope: MemoryAudience) => void;
   getChatMemoryScope: (chatId: string) => MemoryAudience;
   setLoading: (loading: boolean) => void;
   setSending: (chatId: string, sending: boolean) => void;
+  setWaitingForAgentSlot: (chatId: string, waiting: boolean) => void;
   setConnectionPaused: (chatId: string, paused: boolean) => void;
-  setNeedsStreamRecovery: (chatId: string, needs: boolean) => void;
+  setFinishingWork: (chatId: string, finishing: boolean) => void;
+  setNeedsStreamRecovery: (
+    chatId: string,
+    needs: boolean,
+    reason?: StreamRecoveryReason,
+    detail?: string,
+  ) => void;
+  setLastTurnOutcome: (
+    chatId: string,
+    outcome: LastTurnOutcome | undefined,
+  ) => void;
   setError: (error: string | null) => void;
 
   // Parallel chat state management
@@ -73,7 +109,10 @@ interface ChatStore {
 
   // Model selection per chat
   setLastSelectedModel: (chatId: string, modelId: string) => void;
+  /** The model this chat is on, or undefined — never another chat's model. */
   getLastSelectedModel: (chatId: string) => string | undefined;
+  /** Seed for chats with no history of their own. */
+  getDefaultModelForNewChat: () => string | undefined;
 
   // ──────────────────────────────────────────────────────────────────────
   // Live streaming slice (ephemeral, separate from chatStates.messages)
@@ -126,11 +165,35 @@ export const defaultChatState: ChatState = {
   isLoadingMore: false,
 };
 
+/**
+ * Names the call site that drops a provider-refusal banner.
+ *
+ * That banner is the only per-chat record of a refused turn, and two actions
+ * clear it as a side effect rather than as their stated purpose — so when it
+ * disappears there is nothing in the log saying which one did it, and the
+ * clearing call has to be guessed at from the surrounding chunk order. Logged
+ * only for a refusal, which happens at most once a turn, so the ordinary
+ * connection banner costs nothing.
+ */
+function warnIfRefusalBannerCleared(
+  chatId: string,
+  previous: ChatState,
+  clearedBy: string,
+): void {
+  if (!previous.needsStreamRecovery) return;
+  if (previous.streamRecoveryReason !== "rateLimit") return;
+  console.warn(
+    `[chatStore] Refusal banner cleared for ${chatId} by ${clearedBy}`,
+    new Error("refusal banner cleared").stack,
+  );
+}
+
 export const useChatStore = create<ChatStore>((set, get) => ({
   // Initial state
   chats: [],
   memoryScopeByChatId: new Map(),
   chatStates: new Map(),
+  draftByChatId: new Map(),
   streamingState: new Map(),
   isLoading: false,
   error: null,
@@ -170,15 +233,72 @@ export const useChatStore = create<ChatStore>((set, get) => ({
       };
     }),
 
+  reactivateAssistantMessage: (chatId, messageId) =>
+    set((state) => {
+      const chatState = state.chatStates.get(chatId);
+      if (!chatState) return state;
+
+      const existing = chatState.messages.find((m) => m.id === messageId);
+      if (!existing) return state;
+
+      const updatedMessages = chatState.messages.map((msg) =>
+        msg.id === messageId
+          ? {
+              ...msg,
+              isStreaming: true,
+              interrupted: undefined,
+              streamingContent: msg.streamingContent ?? msg.content ?? "",
+              streamingReasoning:
+                msg.streamingReasoning ?? msg.reasoning ?? "",
+            }
+          : msg,
+      );
+
+      const newChatStates = new Map(state.chatStates);
+      newChatStates.set(chatId, {
+        ...chatState,
+        messages: updatedMessages,
+        isStreaming: true,
+      });
+
+      const toolCalls = new Map<string, ToolCall>();
+      for (const tc of existing.toolCalls ?? []) {
+        toolCalls.set(tc.id, tc);
+      }
+
+      const nextStreaming = new Map(state.streamingState);
+      nextStreaming.set(chatId, {
+        messageId,
+        text: existing.content ?? "",
+        reasoning: existing.reasoning ?? "",
+        sequence: existing.sequence ?? [],
+        toolCalls,
+      });
+
+      return {
+        chatStates: newChatStates,
+        streamingState: nextStreaming,
+      };
+    }),
+
   prependMessages: (messages, chatId) =>
     set((state) => {
       const chatState = state.chatStates.get(chatId) || {
         ...defaultChatState,
       };
-      
-      // Deduplicate: only prepend messages that don't already exist
-      const existingIds = new Set(chatState.messages.map(m => m.id));
-      const newMessages = messages.filter(m => !existingIds.has(m.id));
+
+      const existingIds = new Set(chatState.messages.map((m) => m.id));
+      const existingUserKeys = new Set(
+        chatState.messages
+          .map((m) => userMessageDedupKey(m))
+          .filter((key): key is string => key !== null),
+      );
+      const newMessages = messages.filter((message) => {
+        if (existingIds.has(message.id)) return false;
+        const userKey = userMessageDedupKey(message);
+        if (userKey && existingUserKeys.has(userKey)) return false;
+        return true;
+      });
       const updatedMessages = [...newMessages, ...chatState.messages];
 
       const newChatStates = new Map(state.chatStates);
@@ -286,6 +406,14 @@ export const useChatStore = create<ChatStore>((set, get) => ({
     set((state) => {
       if (oldChatId === newChatId) return state;
 
+      // Carry the persisted model and its dials across the rename, or the chat
+      // loses them the moment its first message gives it a permanent id.
+      renameChatModel(oldChatId, newChatId);
+      renameChatSettings(oldChatId, newChatId);
+      // Reachable: a user can start typing a *second* message while the first
+      // is still streaming, which is exactly when this rename happens.
+      renameDraft(oldChatId, newChatId);
+
       const oldState = state.chatStates.get(oldChatId);
       const newChatStates = new Map(state.chatStates);
       const existingNew = newChatStates.get(newChatId);
@@ -340,6 +468,33 @@ export const useChatStore = create<ChatStore>((set, get) => ({
       };
     }),
 
+  patchChatTitle: (chatId, title) =>
+    set((state) => {
+      const trimmed = title.trim();
+      if (!trimmed) return state;
+      const existing = state.chats.find((chat) => chat.id === chatId);
+      if (existing) {
+        return {
+          chats: state.chats.map((chat) =>
+            chat.id === chatId ? { ...chat, title: trimmed } : chat,
+          ),
+        };
+      }
+      const now = new Date().toISOString();
+      return {
+        chats: [
+          {
+            id: chatId,
+            title: trimmed,
+            createdAt: now,
+            updatedAt: now,
+            messageCount: 1,
+          },
+          ...state.chats,
+        ],
+      };
+    }),
+
   setChats: (incoming) =>
     set((state) => {
       const memoryScopeByChatId = new Map(state.memoryScopeByChatId);
@@ -383,6 +538,7 @@ export const useChatStore = create<ChatStore>((set, get) => ({
       chats: [],
       memoryScopeByChatId: new Map(),
       chatStates: new Map(),
+      draftByChatId: new Map(),
       streamingState: new Map(),
       isLoading: false,
       error: null,
@@ -400,15 +556,38 @@ export const useChatStore = create<ChatStore>((set, get) => ({
       newChatStates.set(chatId, {
         ...chatState,
         isSending: sending,
+        ...(sending ? {} : { isWaitingForAgentSlot: false }),
       });
 
       return { chatStates: newChatStates };
     }),
 
+  setWaitingForAgentSlot: (chatId, waiting) =>
+    set((state) => {
+      const chatState = state.chatStates.get(chatId);
+      if (!chatState) return state;
+
+      const newChatStates = new Map(state.chatStates);
+      newChatStates.set(chatId, {
+        ...chatState,
+        isWaitingForAgentSlot: waiting,
+      });
+
+      return { chatStates: newChatStates };
+    }),
+
+  // NOTE: unpausing clears `needsStreamRecovery` (and with it the reason and
+  // the provider's message, via setNeedsStreamRecovery's own reset). A caller
+  // that needs to decide whether a banner survives must therefore read the
+  // state BEFORE calling this, not after — reading after always sees false.
   setConnectionPaused: (chatId, paused) =>
     set((state) => {
       const chatState = state.chatStates.get(chatId);
       if (!chatState) return state;
+
+      if (!paused) {
+        warnIfRefusalBannerCleared(chatId, chatState, "setConnectionPaused");
+      }
 
       const newChatStates = new Map(state.chatStates);
       newChatStates.set(chatId, {
@@ -420,7 +599,7 @@ export const useChatStore = create<ChatStore>((set, get) => ({
       return { chatStates: newChatStates };
     }),
 
-  setNeedsStreamRecovery: (chatId, needs) =>
+  setFinishingWork: (chatId, finishing) =>
     set((state) => {
       const chatState = state.chatStates.get(chatId);
       if (!chatState) return state;
@@ -428,9 +607,48 @@ export const useChatStore = create<ChatStore>((set, get) => ({
       const newChatStates = new Map(state.chatStates);
       newChatStates.set(chatId, {
         ...chatState,
-        needsStreamRecovery: needs,
-        ...(needs ? { connectionPaused: false } : {}),
+        isFinishingWork: finishing,
       });
+
+      return { chatStates: newChatStates };
+    }),
+
+  setNeedsStreamRecovery: (chatId, needs, reason = "connection", detail) =>
+    set((state) => {
+      const chatState = state.chatStates.get(chatId);
+      if (!chatState) return state;
+
+      if (!needs) {
+        warnIfRefusalBannerCleared(chatId, chatState, "setNeedsStreamRecovery");
+      }
+
+      const newChatStates = new Map(state.chatStates);
+      newChatStates.set(chatId, {
+        ...chatState,
+        needsStreamRecovery: needs,
+        ...(needs
+          ? {
+              connectionPaused: false,
+              streamRecoveryReason: reason,
+              streamRecoveryDetail: detail,
+            }
+          : {
+              streamRecoveryReason: undefined,
+              streamRecoveryDetail: undefined,
+            }),
+      });
+
+      return { chatStates: newChatStates };
+    }),
+
+  setLastTurnOutcome: (chatId, outcome) =>
+    set((state) => {
+      const chatState = state.chatStates.get(chatId);
+      if (!chatState) return state;
+      if (chatState.lastTurnOutcome === outcome) return state;
+
+      const newChatStates = new Map(state.chatStates);
+      newChatStates.set(chatId, { ...chatState, lastTurnOutcome: outcome });
 
       return { chatStates: newChatStates };
     }),
@@ -492,30 +710,44 @@ export const useChatStore = create<ChatStore>((set, get) => ({
       return { chatStates: newChatStates };
     }),
 
-  // Draft message management
-  setDraftMessage: (chatId, draft) =>
+  // Draft message management (separate map — avoids invalidating message list on save)
+  //
+  // The map is a cache; `chatDraftStore` is the durable copy. Unsent text is
+  // the one piece of chat state that exists nowhere else — messages come back
+  // from the server, a half-typed message does not — so it is also written to
+  // localStorage here, on the same debounce that already fed this map.
+  setDraftMessage: (chatId, draft) => {
+    const prev = get().draftByChatId.get(chatId) ?? "";
+    if (prev === draft) return;
+    writeDraft(chatId, draft);
     set((state) => {
-      const chatState = state.chatStates.get(chatId) || { ...defaultChatState };
-      const newChatStates = new Map(state.chatStates);
-      newChatStates.set(chatId, { ...chatState, draftMessage: draft });
-      return { chatStates: newChatStates };
-    }),
-
-  getDraftMessage: (chatId) => {
-    const state = get();
-    const chatState = state.chatStates.get(chatId);
-    return chatState?.draftMessage || "";
+      const draftByChatId = new Map(state.draftByChatId);
+      if (draft) {
+        draftByChatId.set(chatId, draft);
+      } else {
+        draftByChatId.delete(chatId);
+      }
+      return { draftByChatId };
+    });
   },
 
-  clearDraftMessage: (chatId) =>
-    set((state) => {
-      const chatState = state.chatStates.get(chatId);
-      if (!chatState) return state;
+  // Falls back to the durable copy, so a draft survives anything that empties
+  // the in-memory map: a reload, a renderer crash, a workspace switch.
+  getDraftMessage: (chatId) => {
+    const cached = get().draftByChatId.get(chatId);
+    if (cached !== undefined) return cached;
+    return readDraft(chatId);
+  },
 
-      const newChatStates = new Map(state.chatStates);
-      newChatStates.set(chatId, { ...chatState, draftMessage: "" });
-      return { chatStates: newChatStates };
-    }),
+  clearDraftMessage: (chatId) => {
+    forgetDraft(chatId);
+    set((state) => {
+      if (!state.draftByChatId.has(chatId)) return state;
+      const draftByChatId = new Map(state.draftByChatId);
+      draftByChatId.delete(chatId);
+      return { draftByChatId };
+    });
+  },
 
   setLastSelectedModel: (chatId, modelId) =>
     set((state) => {
@@ -533,43 +765,50 @@ export const useChatStore = create<ChatStore>((set, get) => ({
         } catch { /* ignore */ }
       }
 
-      if (typeof window !== "undefined") {
-        try {
-          localStorage.setItem("paprwork_last_model_id", modelId);
-          // Also save to Gateway settings for reliable persistence
-          gateway.send('settings:save-ui-preferences', { lastModelId: modelId }).catch(() => {});
-        } catch {
-          /* ignore */
-        }
+      // Two separate facts: this chat is on this model, and a new chat should
+      // start here. Keeping them apart is what stops one chat's pick from
+      // becoming another chat's model.
+      writeChatModel(chatId, modelId);
+      writeNewChatDefaultModel(modelId);
+      try {
+        gateway
+          .send("settings:save-ui-preferences", { lastModelId: modelId })
+          .catch(() => {});
+      } catch {
+        /* ignore */
       }
       return { chatStates: newChatStates };
     }),
 
+  /**
+   * The model *this* chat is on — never another chat's. Returns undefined when
+   * the chat has no selection of its own; callers decide what to fall back to
+   * (see ChatContainer, which prefers the chat's own history over any global).
+   */
   getLastSelectedModel: (chatId) => {
-    const state = get();
-    const fromChat = state.chatStates.get(chatId)?.lastSelectedModelId;
+    const fromChat = get().chatStates.get(chatId)?.lastSelectedModelId;
     if (fromChat) return fromChat;
-    if (typeof window !== "undefined") {
-      try {
-        const persisted = localStorage.getItem("paprwork_last_model_id");
-        if (persisted) return persisted;
-      } catch {
-        /* ignore */
-      }
-    }
-    return undefined;
+    return readChatModel(chatId);
   },
+
+  /** What a brand-new chat should open on: the last model picked anywhere. */
+  getDefaultModelForNewChat: () => readNewChatDefaultModel(),
 
   // Load UI preferences from settings (called on app mount)
   loadUIPreferences: async () => {
     try {
       const response = await gateway.send('settings:get', {});
-      if (response.success && response.data?.uiPreferences) {
-        const { lastModelId } = response.data.uiPreferences;
-        if (lastModelId) {
-          // Store in localStorage for fast access
-          localStorage.setItem("paprwork_last_model_id", lastModelId);
-        }
+      // `GatewayResponse.data` is `unknown` by design; narrow it the same way
+      // the other settings:get callers do rather than widening the response.
+      const uiPreferences = response.success
+        ? (response.data as { uiPreferences?: { lastModelId?: string } })
+            ?.uiPreferences
+        : undefined;
+      const lastModelId = uiPreferences?.lastModelId;
+      if (lastModelId) {
+        // Seeds *new* chats only. An existing chat resolves its own model from
+        // its per-chat selection or its history — see resolveChatModelId.
+        writeNewChatDefaultModel(lastModelId);
       }
     } catch (error) {
       console.error('[ChatStore] Failed to load UI preferences:', error);

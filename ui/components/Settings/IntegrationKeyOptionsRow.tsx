@@ -59,6 +59,7 @@ interface IntegrationKeySelectFieldProps {
   value: string;
   onChange: (value: string) => void;
   options: Array<{ value: string; label: string }>;
+  disabled?: boolean;
 }
 
 export function IntegrationKeySelectField({
@@ -68,6 +69,7 @@ export function IntegrationKeySelectField({
   value,
   onChange,
   options,
+  disabled = false,
 }: IntegrationKeySelectFieldProps) {
   return (
     <div className="integration-key-options-row__field">
@@ -76,6 +78,7 @@ export function IntegrationKeySelectField({
         id={id}
         className="form-input integration-key-options-row__select"
         value={value}
+        disabled={disabled}
         onChange={(event) => onChange(event.target.value)}
       >
         {options.map((option) => (

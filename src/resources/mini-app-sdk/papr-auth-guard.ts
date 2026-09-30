@@ -7,10 +7,16 @@
  * Works for any app that calls fetch('/api/jobs/run', …) — no button attributes needed.
  */
 
+import { buildPaprAuthOverlayMarkup } from "./papr-auth-ui.js";
+
 const API_PREFIX = "/api/";
 const OVERLAY_ID = "__papr_auth_overlay__";
+const NS_META = "papr-cloud-namespace";
+const SLUG_META = "papr-cloud-slug";
+const ACCESS_DENIED_DISMISS_COOLDOWN_MS = 60_000;
 const AGENT_JOB_TYPES = new Set(["agent", "subagent"]);
 const JOB_RUN_PATH = "/api/jobs/run";
+const NON_BROWSABLE_PREFIXES = ["/api/", "/auth/", "/__papr__/"];
 
 interface AuthErrorBody {
   error?: string;
@@ -34,10 +40,114 @@ type AuthErrorKind = "sign_in" | "no_access" | "key_missing";
 let loggedIn = false;
 let agentJobIds = new Set<string>();
 let jobsCatalogLoaded = false;
+let accessDeniedDismissedAt = 0;
+
+function readCloudContextFromPage(): { namespaceId?: string; slug?: string } {
+  const namespaceId =
+    document.querySelector(`meta[name="${NS_META}"]`)?.getAttribute("content")?.trim() ??
+    undefined;
+  const slug =
+    document.querySelector(`meta[name="${SLUG_META}"]`)?.getAttribute("content")?.trim() ??
+    undefined;
+  return { namespaceId, slug };
+}
+
+function isBrowsableReturnToPath(path: string): boolean {
+  if (!path.startsWith("/") || path === "/") {
+    return false;
+  }
+  for (const prefix of NON_BROWSABLE_PREFIXES) {
+    if (path === prefix.slice(0, -1) || path.startsWith(prefix)) {
+      return false;
+    }
+  }
+  return true;
+}
+
+function resolveAuthReturnToPath(): string {
+  const path = window.location.pathname;
+  if (isBrowsableReturnToPath(path)) {
+    return path.endsWith("/") ? path : `${path}/`;
+  }
+
+  const { namespaceId, slug } = readCloudContextFromPage();
+  if (namespaceId && slug) {
+    return `/${namespaceId}/${slug}/`;
+  }
+
+  return "/";
+}
+
+/** Tab-local app identity — avoids site-wide papr_cloud_* cookie collisions. */
+function withCloudContextHeaders(init?: RequestInit): RequestInit | undefined {
+  const { namespaceId, slug } = readCloudContextFromPage();
+  if (!namespaceId || !slug) {
+    return init;
+  }
+
+  const headers = new Headers(init?.headers);
+  if (!headers.has("X-Papr-Namespace-Id")) {
+    headers.set("X-Papr-Namespace-Id", namespaceId);
+  }
+  if (!headers.has("X-Papr-Slug")) {
+    headers.set("X-Papr-Slug", slug);
+  }
+  return { ...init, headers };
+}
+
+function requestNeedsCloudContextHeaders(url: string): boolean {
+  const path = url.includes("://") ? new URL(url, window.location.origin).pathname : url;
+  return path.startsWith(API_PREFIX) || path.startsWith("/auth/");
+}
+
+function applyCloudContextToFetch(
+  input: RequestInfo | URL,
+  init?: RequestInit,
+): { input: RequestInfo | URL; init?: RequestInit } {
+  const url = requestUrl(input);
+  if (!requestNeedsCloudContextHeaders(url)) {
+    return { input, init };
+  }
+
+  const { namespaceId, slug } = readCloudContextFromPage();
+  if (!namespaceId || !slug) {
+    return { input, init: withCloudContextHeaders(init) };
+  }
+
+  if (input instanceof Request) {
+    const headers = new Headers(input.headers);
+    if (!headers.has("X-Papr-Namespace-Id")) {
+      headers.set("X-Papr-Namespace-Id", namespaceId);
+    }
+    if (!headers.has("X-Papr-Slug")) {
+      headers.set("X-Papr-Slug", slug);
+    }
+    return { input: new Request(input, { headers }), init: undefined };
+  }
+
+  return { input, init: withCloudContextHeaders(init) };
+}
 
 function loginUrl(returnTo?: string): string {
-  const path = returnTo ?? window.location.pathname;
-  return `/auth/login?returnTo=${encodeURIComponent(path)}&start=1`;
+  const path = returnTo ?? resolveAuthReturnToPath();
+  return `/auth/login?returnTo=${encodeURIComponent(path)}`;
+}
+
+function normalizeServerLoginUrl(serverLoginUrl: string | undefined): string | undefined {
+  if (!serverLoginUrl) {
+    return undefined;
+  }
+  try {
+    const parsed = new URL(serverLoginUrl, window.location.origin);
+    const returnTo = parsed.searchParams.get("returnTo");
+    if (!returnTo || isBrowsableReturnToPath(returnTo)) {
+      return serverLoginUrl;
+    }
+    parsed.searchParams.set("returnTo", resolveAuthReturnToPath());
+    return `${parsed.pathname}${parsed.search}`;
+  } catch {
+    return loginUrl();
+  }
 }
 
 function classifyAuthError(
@@ -47,7 +157,7 @@ function classifyAuthError(
   if (status === 401 || body.error === "authentication_required") {
     return {
       kind: "sign_in",
-      loginUrl: body.loginUrl ?? loginUrl(),
+      loginUrl: normalizeServerLoginUrl(body.loginUrl) ?? loginUrl(),
       message: body.message ?? "Sign in to Papr to use this app.",
     };
   }
@@ -55,11 +165,23 @@ function classifyAuthError(
     if (body.code === "job_run_sign_in_required") {
       return {
         kind: "sign_in",
-        loginUrl: body.loginUrl ?? loginUrl(),
+        loginUrl: normalizeServerLoginUrl(body.loginUrl) ?? loginUrl(),
         message:
           body.error ??
           body.message ??
           "Sign in to Papr to run AI agent jobs from this app.",
+      };
+    }
+    if (
+      typeof body.error === "string" &&
+      body.error.toLowerCase().includes("write not allowed")
+    ) {
+      return {
+        kind: "no_access",
+        message:
+          body.message ??
+          body.error ??
+          "This app is read-only. The owner must republish with write access enabled.",
       };
     }
     if (body.authenticated) {
@@ -80,7 +202,7 @@ function classifyAuthError(
     }
     return {
       kind: "sign_in",
-      loginUrl: body.loginUrl ?? loginUrl(),
+      loginUrl: normalizeServerLoginUrl(body.loginUrl) ?? loginUrl(),
       message: "Sign in to Papr to use this app.",
     };
   }
@@ -89,60 +211,45 @@ function classifyAuthError(
 
 function showOverlay(info: { kind: AuthErrorKind; loginUrl?: string; message: string }): void {
   if (document.getElementById(OVERLAY_ID)) return;
+  if (
+    info.kind === "no_access" &&
+    accessDeniedDismissedAt > 0 &&
+    Date.now() - accessDeniedDismissedAt < ACCESS_DENIED_DISMISS_COOLDOWN_MS
+  ) {
+    return;
+  }
 
-  const overlay = document.createElement("div");
-  overlay.id = OVERLAY_ID;
-  overlay.style.cssText = `
-    position: fixed; inset: 0; z-index: 2147483647;
-    display: flex; align-items: center; justify-content: center;
-    background: rgba(0,0,0,0.45); backdrop-filter: blur(8px);
-    font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
-  `;
-
-  const card = document.createElement("div");
-  card.style.cssText = `
-    background: #fff; border-radius: 16px; padding: 32px 36px;
-    max-width: 400px; width: 90%; text-align: center;
-    box-shadow: 0 8px 32px rgba(0,0,0,0.18);
-  `;
-
-  const icon = info.kind === "sign_in" ? "🔐" : info.kind === "no_access" ? "🚫" : "🔑";
   const title =
     info.kind === "sign_in"
-      ? "Sign in required"
+      ? "Welcome!"
       : info.kind === "no_access"
         ? "Access denied"
         : "Configuration needed";
 
-  card.innerHTML = `
-    <div style="font-size:48px;margin-bottom:12px">${icon}</div>
-    <h2 style="margin:0 0 8px;font-size:20px;font-weight:600;color:#1a1a1a">${title}</h2>
-    <p style="margin:0 0 24px;font-size:14px;color:#666;line-height:1.5">${info.message}</p>
-  `;
+  const subtitle =
+    info.kind === "sign_in"
+      ? info.message || "Sign in to Papr to use this cloud app."
+      : info.message;
 
-  if (info.loginUrl) {
-    const btn = document.createElement("a");
-    btn.href = info.loginUrl;
-    btn.textContent = "Sign in to Papr";
-    btn.style.cssText = `
-      display: inline-block; padding: 10px 28px; border-radius: 8px;
-      background: #2563eb; color: #fff; text-decoration: none;
-      font-size: 14px; font-weight: 500;
-    `;
-    card.appendChild(btn);
-  }
+  const overlay = document.createElement("div");
+  overlay.id = OVERLAY_ID;
+  const markup = buildPaprAuthOverlayMarkup({
+    title,
+    message: subtitle,
+    loginUrl: info.loginUrl,
+    showDismiss: true,
+  });
+  overlay.className = markup.overlayClass;
+  overlay.innerHTML = markup.html;
 
-  const dismiss = document.createElement("button");
-  dismiss.textContent = "Dismiss";
-  dismiss.style.cssText = `
-    display: block; margin: 16px auto 0; padding: 6px 16px;
-    background: none; border: 1px solid #ddd; border-radius: 6px;
-    color: #888; font-size: 12px; cursor: pointer;
-  `;
-  dismiss.onclick = () => overlay.remove();
-  card.appendChild(dismiss);
+  const dismiss = overlay.querySelector("[data-papr-auth-dismiss]");
+  dismiss?.addEventListener("click", () => {
+    overlay.remove();
+    if (info.kind === "no_access") {
+      accessDeniedDismissedAt = Date.now();
+    }
+  });
 
-  overlay.appendChild(card);
   document.body.appendChild(overlay);
 }
 
@@ -203,9 +310,11 @@ const _originalFetch = window.fetch;
 
 async function refreshPlatformAuthState(): Promise<void> {
   try {
+    const statusScoped = applyCloudContextToFetch("/auth/status");
+    const jobsScoped = applyCloudContextToFetch("/api/jobs/list");
     const [statusRes, jobsRes] = await Promise.all([
-      _originalFetch("/auth/status"),
-      _originalFetch("/api/jobs/list"),
+      _originalFetch.call(window, statusScoped.input, statusScoped.init),
+      _originalFetch.call(window, jobsScoped.input, jobsScoped.init),
     ]);
     if (statusRes.ok) {
       const status = (await statusRes.json()) as AuthStatusBody;
@@ -230,16 +339,17 @@ window.fetch = async function paprPlatformGuardFetch(
   init?: RequestInit,
 ): Promise<Response> {
   const url = requestUrl(input);
+  const scoped = applyCloudContextToFetch(input, init);
 
-  if (url.includes(API_PREFIX) && isJobRunRequest(url, init)) {
-    const jobId = parseJobRunBody(init);
+  if (url.includes(API_PREFIX) && isJobRunRequest(url, scoped.init)) {
+    const jobId = parseJobRunBody(scoped.init);
     if (jobId && requiresSignInForJob(jobId)) {
       showAgentJobSignInOverlay();
       return jobRunSignInResponse();
     }
   }
 
-  const response = await _originalFetch.call(window, input, init);
+  const response = await _originalFetch.call(window, scoped.input, scoped.init);
 
   if (!url.includes(API_PREFIX)) return response;
   if (response.status !== 401 && response.status !== 403) return response;

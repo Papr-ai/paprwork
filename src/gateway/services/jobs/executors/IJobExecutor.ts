@@ -1,7 +1,8 @@
-import type { ChildProcessWithoutNullStreams } from "child_process";
+import type { ChildProcess } from "child_process";
 import type { JobRecord, JobType } from "../types.js";
 
 export interface ExecutorLaunchParams {
+  signal?: AbortSignal;
   runId: string;
   job: JobRecord;
   jobDir: string;
@@ -37,7 +38,7 @@ export interface ExecutorLaunchParams {
 export interface ExecutorLaunchResult {
   mode: "process" | "immediate";
   command: string;
-  process?: ChildProcessWithoutNullStreams;
+  process?: ChildProcess;
   exitCode?: number;
   outputMessage?: string;
   errorMessage?: string;

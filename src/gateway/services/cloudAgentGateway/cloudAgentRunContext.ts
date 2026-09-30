@@ -6,33 +6,62 @@ import fs from "fs/promises";
 import os from "os";
 import path from "path";
 import type { Provider } from "../../../core/types/agents.js";
-import { cloneUserRepoToPaprHome } from "./cloneUserRepo.js";
+import { isWarmWorkspaceFresh } from "./appRepoCloneCache.js";
+import {
+  cloneUserRepoToPaprHome,
+  materializeAppWorkspaceToPaprHome,
+} from "./cloneUserRepo.js";
 import { rewritePaprPathForCloudRun } from "./cloudPaprPath.js";
 import { prepareCloudJobEnvironment } from "./prepareCloudJobEnvironment.js";
 import { reinitializeWorkspaceServicesForCloudRun } from "./reinitializeWorkspaceServices.js";
+import { startCloudAgentTursoDebouncedPush } from "./cloudAgentTursoDebouncedPush.js";
+import { startCloudAppWriterDebouncedPush, getCloudAppWriterPushedAppIds } from "./cloudAppWriterDebouncedPush.js";
+import {
+  isSkippedEmptyTursoTarget,
+  notifyCloudDbChangedForTarget,
+  tursoTargetHasLocalData,
+  type TursoPushOutcome,
+} from "./cloudTursoPushHelpers.js";
+import { notifyCloudDbChanged } from "../cloudSync/notifyCloudDbChanged.js";
 import {
   pullLinkedSourceFromCloud,
   pushLinkedSourceToCloud,
   type TursoBookendTarget,
 } from "./syncJobTursoBookends.js";
 import { reconcileCloudProviderAuth } from "./resolveCloudProviderAuth.js";
-import type { CloudAgentRunRequest, CloudTursoSource } from "./types.js";
+import { clearKeyCache } from "../../utils/keyResolver.js";
+import { invalidatePaprUserIdCache } from "../../utils/paprUserId.js";
+import { hydrateSubAgentsRegistryForCloudRun, applySubAgentsHydrationFromMongo } from "./hydrateSubAgentsRegistryForCloudRun.js";
+import { fetchSubAgentsIndexFromCloudDirect } from "../syncV3/MetadataRegistryClient.js";
+import type { CloudAgentRunRequest, CloudLinkedSource, CloudTursoSource } from "./types.js";
+import { shouldUseCloudSandboxTursoDirect } from "./cloudSandboxTursoDirect.js";
+import {
+  resolveCloudAgentChatId,
+  resolveCloudAppAgentStreamOverrides,
+  resolveCloudUserDataPath,
+} from "./cloudAppAgentSession.js";
+import { resolveCloudWorkspaceChatStreamOverrides } from "./cloudWorkspaceChatSession.js";
 import { getJobsService } from "../JobsService.js";
 import {
   AgentJobExecutor,
   type AgentJobSessionInput,
 } from "../jobs/executors/AgentJobExecutor.js";
 import type { JobType } from "../jobs/types.js";
+import { normalizeRuntimeParams } from "../../utils/normalizeRuntimeParams.js";
 
 export interface CloudRunHandle {
   runRoot: string;
   paprHome: string;
   tursoTargets: TursoBookendTarget[];
-  finish: (options?: { deleteWorkspace?: boolean }) => Promise<void>;
+  finish: (options?: { deleteWorkspace?: boolean; prepOnly?: boolean }) => Promise<void>;
 }
 
 interface CloudRunEnvSnapshot {
   previousPaprHome?: string;
+  previousPaprUserData?: string;
+  previousPaprOrgId?: string;
+  previousPaprNamespaceId?: string;
+  previousPaprApiKey?: string;
   previousHome?: string;
   previousJobDir?: string;
   previousJobDb?: string;
@@ -40,6 +69,7 @@ interface CloudRunEnvSnapshot {
   previousAppDb?: string;
   previousAppDbAlias?: string;
   previousVaultEnv: Map<string, string | undefined>;
+  previousTelemetryPaprUserId?: string;
 }
 
 export function resolveCloudRunRoot(request: CloudAgentRunRequest): string {
@@ -48,11 +78,39 @@ export function resolveCloudRunRoot(request: CloudAgentRunRequest): string {
   return path.join(os.tmpdir(), baseDir, key);
 }
 
+function dbEventIdsForSyncKey(
+  syncKey: string,
+  linked?: CloudLinkedSource,
+): Pick<TursoBookendTarget, "jobId" | "dbId"> {
+  if (linked?.dbId) {
+    return {
+      dbId: linked.dbId,
+      ...(linked.jobId ? { jobId: linked.jobId } : {}),
+    };
+  }
+  if (linked?.jobId) {
+    return { jobId: linked.jobId };
+  }
+  if (syncKey.startsWith("db-")) {
+    return { dbId: syncKey };
+  }
+  return { jobId: syncKey };
+}
+
 export function resolveTursoBookendTargets(
   request: CloudAgentRunRequest,
   paprHome: string,
 ): TursoBookendTarget[] {
   const byKey = new Map<string, TursoBookendTarget>();
+  const linkedByKey = new Map<string, CloudLinkedSource>();
+  for (const linked of request.linkedSources ?? []) {
+    if (linked.dbId) {
+      linkedByKey.set(linked.dbId, linked);
+    }
+    if (linked.jobId) {
+      linkedByKey.set(linked.jobId, linked);
+    }
+  }
 
   const addSource = (source: CloudTursoSource): void => {
     const dbPath = rewritePaprPathForCloudRun(source.dbPath, paprHome);
@@ -60,11 +118,14 @@ export function resolveTursoBookendTargets(
     if (!syncKey || byKey.has(syncKey)) {
       return;
     }
+    const linked = linkedByKey.get(syncKey);
     byKey.set(syncKey, {
       syncKey,
       dbPath,
       tursoUrl: source.databaseUrl,
       authToken: source.authToken,
+      ...dbEventIdsForSyncKey(syncKey, linked),
+      jobId: request.jobId,
     });
   };
 
@@ -74,11 +135,14 @@ export function resolveTursoBookendTargets(
     }
   } else if (request.turso) {
     const jobDbPath = path.join(paprHome, "Jobs", request.turso.jobId, "data", "data.db");
+    const linked = linkedByKey.get(request.turso.jobId);
     byKey.set(request.turso.jobId, {
       syncKey: request.turso.jobId,
       dbPath: jobDbPath,
       tursoUrl: request.turso.databaseUrl,
       authToken: request.turso.authToken,
+      ...dbEventIdsForSyncKey(request.turso.jobId, linked),
+      jobId: request.jobId,
     });
   }
 
@@ -88,6 +152,10 @@ export function resolveTursoBookendTargets(
 function captureCloudRunEnv(): CloudRunEnvSnapshot {
   return {
     previousPaprHome: process.env.PAPR_HOME,
+    previousPaprUserData: process.env.PAPR_USER_DATA,
+    previousPaprOrgId: process.env.PAPR_ORG_ID,
+    previousPaprNamespaceId: process.env.PAPR_NAMESPACE_ID,
+    previousPaprApiKey: process.env.PAPR_API_KEY,
     previousHome: process.env.HOME,
     previousJobDir: process.env.JOB_DIR,
     previousJobDb: process.env.JOB_DB,
@@ -95,6 +163,7 @@ function captureCloudRunEnv(): CloudRunEnvSnapshot {
     previousAppDb: process.env.APP_DB,
     previousAppDbAlias: process.env.APP_DB_ALIAS,
     previousVaultEnv: new Map(),
+    previousTelemetryPaprUserId: process.env.PAPRWORK_TELEMETRY_PAPR_USER_ID,
   };
 }
 
@@ -112,9 +181,30 @@ function applyVaultKeys(
   }
 }
 
+function applyPaprApiKey(
+  request: CloudAgentRunRequest,
+  snapshot: CloudRunEnvSnapshot,
+): void {
+  const key = request.paprApiKey?.trim();
+  if (!key) {
+    return;
+  }
+  snapshot.previousPaprApiKey = process.env.PAPR_API_KEY;
+  process.env.PAPR_API_KEY = key;
+  clearKeyCache("PAPR_API_KEY");
+}
+
 async function restoreCloudRunEnv(snapshot: CloudRunEnvSnapshot): Promise<void> {
   if (snapshot.previousPaprHome === undefined) delete process.env.PAPR_HOME;
   else process.env.PAPR_HOME = snapshot.previousPaprHome;
+  if (snapshot.previousPaprUserData === undefined) delete process.env.PAPR_USER_DATA;
+  else process.env.PAPR_USER_DATA = snapshot.previousPaprUserData;
+  if (snapshot.previousPaprOrgId === undefined) delete process.env.PAPR_ORG_ID;
+  else process.env.PAPR_ORG_ID = snapshot.previousPaprOrgId;
+  if (snapshot.previousPaprNamespaceId === undefined) delete process.env.PAPR_NAMESPACE_ID;
+  else process.env.PAPR_NAMESPACE_ID = snapshot.previousPaprNamespaceId;
+  if (snapshot.previousPaprApiKey === undefined) delete process.env.PAPR_API_KEY;
+  else process.env.PAPR_API_KEY = snapshot.previousPaprApiKey;
   if (snapshot.previousHome === undefined) delete process.env.HOME;
   else process.env.HOME = snapshot.previousHome;
   if (snapshot.previousJobDir === undefined) delete process.env.JOB_DIR;
@@ -127,6 +217,13 @@ async function restoreCloudRunEnv(snapshot: CloudRunEnvSnapshot): Promise<void> 
   else process.env.APP_DB = snapshot.previousAppDb;
   if (snapshot.previousAppDbAlias === undefined) delete process.env.APP_DB_ALIAS;
   else process.env.APP_DB_ALIAS = snapshot.previousAppDbAlias;
+
+  if (snapshot.previousTelemetryPaprUserId === undefined) {
+    delete process.env.PAPRWORK_TELEMETRY_PAPR_USER_ID;
+  } else {
+    process.env.PAPRWORK_TELEMETRY_PAPR_USER_ID = snapshot.previousTelemetryPaprUserId;
+  }
+  invalidatePaprUserIdCache();
 
   for (const [keyName, previousValue] of snapshot.previousVaultEnv.entries()) {
     if (previousValue === undefined) delete process.env[keyName];
@@ -152,16 +249,55 @@ async function pullTursoTargets(tursoTargets: TursoBookendTarget[]): Promise<voi
   }
 }
 
-async function pushTursoTargets(tursoTargets: TursoBookendTarget[]): Promise<void> {
-  for (const target of tursoTargets) {
-    await pushLinkedSourceToCloud(target);
+async function pushTursoTargets(
+  tursoTargets: TursoBookendTarget[],
+): Promise<TursoPushOutcome> {
+  if (tursoTargets.length === 0) {
+    return { ok: true, failures: [], retainSandbox: false };
   }
+
+  const failures: string[] = [];
+  let retainSandbox = false;
+
+  for (const target of tursoTargets) {
+    const hadLocalData = tursoTargetHasLocalData(target.dbPath);
+    const result = await pushLinkedSourceToCloud(target);
+    if (isSkippedEmptyTursoTarget(result)) {
+      if (
+        result.reason === "local_db_empty" ||
+        result.reason === "local_db_missing"
+      ) {
+        console.log(
+          `[CloudAgentRun] Skipping empty Turso target ${target.syncKey} (${result.reason})`,
+        );
+      }
+      continue;
+    }
+    if (result.status !== "pushed") {
+      failures.push(
+        `${target.syncKey}@${target.dbPath}: ${result.reason ?? result.error ?? "unknown"} (status=${result.status})`,
+      );
+      if (hadLocalData) {
+        retainSandbox = true;
+      }
+      continue;
+    }
+    await notifyCloudDbChangedForTarget(target, result);
+  }
+
+  return {
+    ok: failures.length === 0,
+    failures,
+    retainSandbox,
+  };
 }
 
 export interface BeginCloudAgentRunOptions {
   /** Skip git clone when workspace directory already exists (session reuse). */
   skipClone?: boolean;
   runRoot?: string;
+  /** Warm-only: clone + hydrate on disk; skip job env, Turso bookends, and sync push on finish. */
+  prepOnly?: boolean;
 }
 
 export async function beginCloudAgentRun(
@@ -183,15 +319,10 @@ export async function beginCloudAgentRun(
   const envSnapshot = captureCloudRunEnv();
   const tursoTargets = resolveTursoBookendTargets(request, paprHome);
 
-  const skipClone = options.skipClone === true;
-  if (!skipClone) {
-    await cloneUserRepoToPaprHome({
-      targetPaprHome: paprHome,
-      cloneUrl: request.repoCloneUrl,
-      token: request.repoToken,
-      branch: request.repoBranch,
-    });
-  } else {
+  const prepOnly = options.prepOnly === true;
+  let skipClone = options.skipClone === true;
+
+  if (skipClone) {
     try {
       await fs.access(paprHome);
     } catch {
@@ -199,34 +330,243 @@ export async function beginCloudAgentRun(
         `Warm workspace missing on disk for session ${request.workspaceSessionId ?? request.runId}`,
       );
     }
+
+    if (
+      request.workspaceScope === "app" &&
+      request.appRepoOwner &&
+      request.appRepoName
+    ) {
+      const warmFresh = await isWarmWorkspaceFresh({
+        paprHome,
+        owner: request.appRepoOwner,
+        repo: request.appRepoName,
+        branch: request.repoBranch,
+        token: request.repoToken,
+      });
+      if (!warmFresh) {
+        console.log(
+          `[CloudAgentRun] Warm workspace stale for ${request.appRepoOwner}/${request.appRepoName} ` +
+            `session=${request.workspaceSessionId ?? request.runId} — rematerializing`,
+        );
+        skipClone = false;
+      }
+    }
+  }
+
+  const mongoHydratePromise = skipClone
+    ? null
+    : fetchSubAgentsIndexFromCloudDirect(request.paprApiKey).catch(() => null);
+
+  if (!skipClone) {
+    if (
+      request.workspaceScope === "app" &&
+      request.appId &&
+      request.appRepoOwner &&
+      request.appRepoName
+    ) {
+      await materializeAppWorkspaceToPaprHome({
+        targetPaprHome: paprHome,
+        appId: request.appId,
+        jobId: request.jobId,
+        owner: request.appRepoOwner,
+        repo: request.appRepoName,
+        token: request.repoToken,
+        branch: request.repoBranch,
+        scaffoldFiles: request.scaffoldFiles,
+      });
+    } else {
+      if (!request.repoCloneUrl) {
+        throw new Error(
+          "repoCloneUrl is required for namespace workspace clone",
+        );
+      }
+      await cloneUserRepoToPaprHome({
+        targetPaprHome: paprHome,
+        cloneUrl: request.repoCloneUrl,
+        token: request.repoToken,
+        branch: request.repoBranch,
+      });
+    }
+  }
+
+  const userDataPath = resolveCloudUserDataPath(runRoot);
+  await fs.mkdir(userDataPath, { recursive: true });
+
+  try {
+    if (mongoHydratePromise) {
+      const mongoEntries = await mongoHydratePromise;
+      if (mongoEntries !== null) {
+        await applySubAgentsHydrationFromMongo(paprHome, mongoEntries);
+      }
+    } else {
+      await hydrateSubAgentsRegistryForCloudRun({
+        paprHome,
+        paprApiKey: request.paprApiKey,
+      });
+    }
+  } catch (err) {
+    console.warn(
+      "[CloudAgentRun] Sub-agents Mongo hydrate failed:",
+      (err as Error).message.slice(0, 160),
+    );
+  }
+
+  if (prepOnly) {
+    return {
+      runRoot,
+      paprHome,
+      tursoTargets,
+      finish: async (finishOptions?: { deleteWorkspace?: boolean; prepOnly?: boolean }) => {
+        if (finishOptions?.deleteWorkspace) {
+          await fs.rm(runRoot, { recursive: true, force: true }).catch(() => undefined);
+        }
+      },
+    };
   }
 
   process.env.PAPR_HOME = paprHome;
+  process.env.PAPR_USER_DATA = userDataPath;
   if (request.orgId) {
     process.env.PAPR_ORG_ID = request.orgId;
   }
   if (request.namespaceId) {
     process.env.PAPR_NAMESPACE_ID = request.namespaceId;
   }
+  const actingUserId = request.userId?.trim();
+  if (actingUserId) {
+    process.env.PAPRWORK_TELEMETRY_PAPR_USER_ID = actingUserId;
+    invalidatePaprUserIdCache();
+  }
   process.env.HOME = runRoot;
   applyVaultKeys(request, envSnapshot);
+  applyPaprApiKey(request, envSnapshot);
 
-  await pullTursoTargets(tursoTargets);
   await reinitializeWorkspaceServicesForCloudRun({
     paprApiKey: request.paprApiKey,
+    userDataPath,
   });
-  await prepareCloudJobEnvironment(request.jobId);
+
+  const tursoDirect = shouldUseCloudSandboxTursoDirect(paprHome);
+  await prepareCloudJobEnvironment({
+    jobId: request.jobId,
+    userId: request.userId,
+    tursoSources: request.tursoSources,
+  });
+
+  let tursoDebouncedPush: Awaited<
+    ReturnType<typeof startCloudAgentTursoDebouncedPush>
+  > | null = null;
+  if (tursoDirect) {
+    console.log(
+      "[CloudAgentRun] Turso direct mode — skipping pull/push bookends and debounced SQLite watcher",
+    );
+  } else {
+    await pullTursoTargets(tursoTargets);
+    tursoDebouncedPush = await startCloudAgentTursoDebouncedPush(tursoTargets);
+  }
+  const writerDebouncedPush = await startCloudAppWriterDebouncedPush();
 
   return {
     runRoot,
     paprHome,
     tursoTargets,
-    finish: async (finishOptions?: { deleteWorkspace?: boolean }) => {
-      await pushTursoTargets(tursoTargets);
-      await restoreCloudRunEnv(envSnapshot);
+    finish: async (finishOptions?: { deleteWorkspace?: boolean; prepOnly?: boolean }) => {
+      if (finishOptions?.prepOnly) {
+        await restoreCloudRunEnv(envSnapshot);
+        if (finishOptions.deleteWorkspace) {
+          await fs.rm(runRoot, { recursive: true, force: true }).catch(() => undefined);
+        }
+        return;
+      }
+      let syncSucceeded = true;
+      let retainSandbox = false;
+      let writerPushedAppIds: string[] = [];
+      try {
+        if (tursoDebouncedPush) {
+          await tursoDebouncedPush.flush();
+          await tursoDebouncedPush.stop();
+        }
+        if (writerDebouncedPush) {
+          const writerResult = await writerDebouncedPush.flushAndStop();
+          writerPushedAppIds = getCloudAppWriterPushedAppIds();
+          if (writerResult.failed.length > 0) {
+            syncSucceeded = false;
+            retainSandbox = true;
+            throw new Error(
+              `App code writer flush failed: ${writerResult.failed
+                .map((failure) => `${failure.appId} (${failure.error})`)
+                .join("; ")}`,
+            );
+          }
+        }
+        if (!tursoDirect) {
+          const outcome = await pushTursoTargets(tursoTargets);
+          if (!outcome.ok) {
+            syncSucceeded = false;
+            retainSandbox = outcome.retainSandbox;
+            throw new Error(
+              `Turso sync did not complete for cloud agent run. ${outcome.failures.join("; ")}`,
+            );
+          }
+        } else if (tursoTargets.length > 0) {
+          // Direct Turso writes skip push bookends — still notify cloud app host for SSE.
+          for (const target of tursoTargets) {
+            await notifyCloudDbChanged({
+              ...(target.jobId ? { jobId: target.jobId } : {}),
+              ...(target.dbId ? { dbId: target.dbId } : {}),
+              tables: [],
+            });
+          }
+        }
 
-      const deleteWorkspace = finishOptions?.deleteWorkspace ?? true;
-      if (deleteWorkspace) {
+        if (writerPushedAppIds.length > 0) {
+          const { syncPublishedAppCatalogLayer } = await import(
+            "../syncV3/syncPublishedAppCatalogLayer.js"
+          );
+          const { webReady } = await import("../cloudSync/webReady.js");
+          for (const appId of writerPushedAppIds) {
+            const ready = await webReady(appId, paprHome);
+            if (!ready.ready) {
+              console.warn(
+                `[CloudAgentRun] Skipping catalog sync for ${appId}: ${ready.detail ?? ready.reason ?? "not web-ready"}`,
+              );
+              continue;
+            }
+            await syncPublishedAppCatalogLayer(appId, { afterWriterChange: true });
+          }
+        }
+      } catch (error) {
+        syncSucceeded = false;
+        if (!retainSandbox) {
+          retainSandbox = !tursoDirect && tursoTargets.some((target) =>
+            tursoTargetHasLocalData(target.dbPath),
+          );
+        }
+        console.error(
+          `[CloudAgentRun] Turso push failed for ${runRoot}:`,
+          (error as Error).message,
+        );
+        throw error;
+      } finally {
+        await restoreCloudRunEnv(envSnapshot);
+
+        const deleteWorkspace = finishOptions?.deleteWorkspace ?? true;
+        if (!deleteWorkspace) {
+          return;
+        }
+        if (syncSucceeded) {
+          await fs.rm(runRoot, { recursive: true, force: true }).catch(() => undefined);
+          return;
+        }
+        if (retainSandbox) {
+          console.warn(
+            `[CloudAgentRun] Retaining sandbox at ${runRoot} — local DB data did not sync to Turso`,
+          );
+          return;
+        }
+        console.log(
+          `[CloudAgentRun] No local DB data to recover — deleting sandbox at ${runRoot}`,
+        );
         await fs.rm(runRoot, { recursive: true, force: true }).catch(() => undefined);
       }
     },
@@ -260,7 +600,7 @@ function applyRuntimeParamsToProcessEnv(
   runtimeParams: Record<string, string> | undefined,
 ): void {
   if (!runtimeParams) return;
-  for (const [key, value] of Object.entries(runtimeParams)) {
+  for (const [key, value] of Object.entries(normalizeRuntimeParams(runtimeParams))) {
     if (key === "prompt") continue;
     process.env[key] = value;
   }
@@ -276,6 +616,9 @@ export async function resolveCloudAgentJobStreamInput(
   jobId: string;
   runId: string;
   prompt: string;
+  chatId: string;
+  streamUserMessage: string;
+  systemPromptOverride?: string;
   provider: Provider;
   model?: string;
   allowedToolIds?: string[];
@@ -283,6 +626,7 @@ export async function resolveCloudAgentJobStreamInput(
   authOverride: { apiKey: string; authType: "oauth" | "apiKey" };
   paprApiKey?: string;
   session: AgentJobSessionInput;
+  appendLog: (line: string) => Promise<void>;
 }> {
   applyRuntimeParamsToProcessEnv(request.runtimeParams);
 
@@ -302,12 +646,16 @@ export async function resolveCloudAgentJobStreamInput(
   }
 
   const executor = new AgentJobExecutor();
+  const appendLog = async (line: string): Promise<void> => {
+    console.log(`[CloudJobLog][${request.jobId}] ${line}`);
+    await jobsService.appendJobRunLog(request.jobId, line);
+  };
   const session = await executor.buildSessionInput({
     runId: request.runId,
     job,
     jobDir,
     defaultCommandByType: UNUSED_DEFAULT_COMMANDS,
-    appendLog: async () => undefined,
+    appendLog,
     runtimeParams: request.runtimeParams,
   });
 
@@ -320,13 +668,39 @@ export async function resolveCloudAgentJobStreamInput(
   const provider = session.provider ?? llmAuth.provider;
   const model = session.model ?? request.model;
 
+  const workspaceChatOverrides = await resolveCloudWorkspaceChatStreamOverrides(request);
+  const appAgentOverrides =
+    workspaceChatOverrides == null
+      ? await resolveCloudAppAgentStreamOverrides(request)
+      : null;
+  const streamOverrides = workspaceChatOverrides ?? appAgentOverrides;
+  const chatId = streamOverrides?.chatId ?? resolveCloudAgentChatId(request);
+
+  if (workspaceChatOverrides) {
+    const { seedWorkspaceChatHistoryFromClient } = await import(
+      "./workspaceClientHistorySeed.js"
+    );
+    await seedWorkspaceChatHistoryFromClient(
+      chatId,
+      request.runtimeParams?.clientHistory,
+    );
+  }
+
   return {
     jobId: session.jobId,
     runId: session.runId,
     prompt: session.prompt,
+    chatId,
+    streamUserMessage: streamOverrides?.userMessage ?? session.prompt,
+    ...(streamOverrides?.systemPrompt
+      ? { systemPromptOverride: streamOverrides.systemPrompt }
+      : {}),
     provider,
     model,
-    allowedToolIds: session.allowedToolIds ?? request.allowedToolIds,
+    allowedToolIds:
+      appAgentOverrides?.allowedToolIds ??
+      session.allowedToolIds ??
+      request.allowedToolIds,
     maxTurns: session.maxTurns ?? request.maxTurns,
     authOverride: {
       apiKey: llmAuth.token,
@@ -334,6 +708,7 @@ export async function resolveCloudAgentJobStreamInput(
     },
     paprApiKey: request.paprApiKey,
     session,
+    appendLog,
   };
 }
 

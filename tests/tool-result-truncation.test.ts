@@ -8,6 +8,7 @@ import {
   HISTORY_TOOL_RESULT_MAX_CHARS,
   RECENT_TURN_RETENTION_COUNT,
   resolveHistoryToolResultCharLimit,
+  resolveMidTurnToolResultCharLimit,
   truncateHistoryToolResult,
   truncateToCharLimit,
   truncateToolResultForModelContext,
@@ -31,6 +32,34 @@ describe("toolResultTruncation", () => {
     expect(categorizeTool("edit_app_file_lines")).toBe("file_edit");
     expect(categorizeTool("get_file_code_summary")).toBe("code_cache");
     expect(categorizeTool("create_plan")).toBe("small_crud");
+    expect(categorizeTool("generate_media")).toBe("small_crud");
+    expect(categorizeTool("list_media_models")).toBe("small_crud");
+    expect(categorizeTool("query_cloud_turso")).toBe("small_crud");
+    expect(categorizeTool("get_job_history")).toBe("job_run");
+  });
+
+  test("structured job and cloud query tools use moderate limits, not bash 400", () => {
+    expect(getDefaultHistoryCharLimit("job_run", "get_job_history")).toBe(
+      DEFAULT_TOOL_RESULT_TRUNCATION_SETTINGS.moderateMaxChars,
+    );
+    expect(getDefaultHistoryCharLimit("small_crud", "query_cloud_turso")).toBe(
+      DEFAULT_TOOL_RESULT_TRUNCATION_SETTINGS.moderateMaxChars,
+    );
+    expect(
+      resolveMidTurnToolResultCharLimit("get_job_history", 10_000),
+    ).toBe(DEFAULT_TOOL_RESULT_TRUNCATION_SETTINGS.moderateMaxChars);
+    expect(
+      resolveMidTurnToolResultCharLimit("query_cloud_turso", 10_000),
+    ).toBe(DEFAULT_TOOL_RESULT_TRUNCATION_SETTINGS.moderateMaxChars);
+    expect(resolveMidTurnToolResultCharLimit("bash", 10_000)).toBe(
+      DEFAULT_TOOL_RESULT_TRUNCATION_SETTINGS.aggressiveMaxChars,
+    );
+  });
+
+  test("generate_media results use moderate history limit not bash 400", () => {
+    expect(getDefaultHistoryCharLimit("small_crud", "generate_media")).toBe(
+      DEFAULT_TOOL_RESULT_TRUNCATION_SETTINGS.moderateMaxChars,
+    );
   });
 
   test("file reads under absolute cap stay full in history", () => {
@@ -437,7 +466,14 @@ describe("toolResultTruncation", () => {
     expect(truncated).toBe(longContent);
   });
 
-  test("get_full_tool_result stays full cross-turn (never memory_search 800 cap)", () => {
+  // Changed deliberately. This previously asserted `null` — exempt from truncation
+  // in every turn, forever. That made each recovery fetch permanently resident at
+  // full size, and the cost compounded with use: over six weeks it grew from 414
+  // calls / ~8K tokens to 7,559 calls / ~8M tokens, the second-largest tool payload
+  // in the corpus. It now stays full for the recent-turn window and then decays to
+  // the moderate limit, so the recovery still works in the turn that needs it.
+  // Mid-turn behaviour is unchanged: see tests/full-tool-result-retention.test.ts.
+  test("get_full_tool_result stays full for the recent-turn window, then decays", () => {
     const history = [
       { role: "user", content: "recover" },
       {
@@ -472,7 +508,9 @@ describe("toolResultTruncation", () => {
       isOrphan: false,
     });
 
-    expect(limit).toBeNull();
+    // Five user turns have passed, which is outside the four-turn window.
+    expect(limit).not.toBeNull();
+    expect(limit!).toBeLessThan(longContent.length);
 
     const truncated = truncateHistoryToolResult({
       toolName: "get_full_tool_result",
@@ -484,7 +522,23 @@ describe("toolResultTruncation", () => {
       isOrphan: false,
     });
 
-    expect(truncated).toBe(longContent);
+    expect(truncated.length).toBeLessThan(longContent.length);
+    // The decayed form names the tool that fetches it again, so nothing is stranded.
+    expect(truncated).toContain("get_full_tool_result");
+
+    // Inside the window it is still whole: the turn that fetched it can use it.
+    const inWindow = [history[0], history[1], { role: "user", content: "next" }];
+    expect(
+      truncateHistoryToolResult({
+        toolName: "get_full_tool_result",
+        toolCallId: "recover-1",
+        args: { toolCallId: "orig-1" },
+        resultStr: longContent,
+        history: inWindow,
+        messageIndex: 1,
+        isOrphan: false,
+      }),
+    ).toBe(longContent);
   });
 
   test("disableAllTruncation keeps bash results full cross-turn", () => {

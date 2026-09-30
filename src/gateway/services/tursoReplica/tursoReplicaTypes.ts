@@ -1,0 +1,77 @@
+/**
+ * Plan A — Turso Sync replica types (Turso primary, local file is replica cache).
+ */
+
+import type { MigrationPushConflict } from "./tursoReplicaMigrationConflict.js";
+
+/**
+ * Per-database sync path in databases.json.
+ * cloud-direct: no local file — reads/writes/migrations hit the Turso primary
+ * (devices without a Turso Sync engine build: Intel Mac, Windows ARM).
+ */
+export type DatabaseSyncMode = "legacy" | "replica" | "cloud-direct";
+
+export interface TursoReplicaDatabaseStats {
+  cdcOperations: number;
+}
+
+export interface TursoReplicaConnectOptions {
+  localPath: string;
+  tursoUrl: string;
+  authToken: string;
+  /** When false, do not bootstrap from remote if local file exists. */
+  bootstrapIfEmpty?: boolean;
+  clientName?: string;
+  /** Online primary writes — experimental Turso Sync remote write path. */
+  remoteWritesExperimental?: boolean;
+}
+
+export interface TursoReplicaPushResult {
+  ok: true;
+}
+
+export interface TursoReplicaPushError {
+  ok: false;
+  error: string;
+  conflictCode?: MigrationPushConflict["code"];
+  localOnlyMigrationIds?: string[];
+  cloudAheadMigrationIds?: string[];
+}
+
+export type TursoReplicaPushResponse = TursoReplicaPushResult | TursoReplicaPushError;
+
+export interface TursoReplicaSyncStatus {
+  online: boolean;
+  syncMode: DatabaseSyncMode;
+  pendingPush: boolean;
+  pendingOps: number;
+  lastPushError: string | null;
+  migrationConflict: boolean;
+  cutoverBlocked: boolean;
+  cutoverBlockReason: string | null;
+  /** True when sync WAL is empty but -info claims progress — pull/push will wedge. */
+  sidecarWedge: boolean;
+  /** Resolved Turso database short name used for this replica. */
+  tursoDatabase?: string;
+  /** Post-repair bootstrap marker still on disk — local replica may be empty. */
+  bootstrapPending: boolean;
+  bootstrapAttempts: number;
+  lastBootstrapError: string | null;
+  stats: TursoReplicaDatabaseStats | null;
+}
+
+export interface TursoReplicaWriteResult {
+  changes: number;
+  lastInsertRowid: number;
+  pendingPush: boolean;
+  backend: "turso-replica";
+}
+
+/**
+ * When false: replica-only write, no Turso push.
+ * When true: await pull/push before returning (migrations / explicit sync).
+ * When omitted: debounced background push (mini-app API default).
+ */
+export interface TursoReplicaWriteOptions {
+  pushAfterWrite?: boolean;
+}

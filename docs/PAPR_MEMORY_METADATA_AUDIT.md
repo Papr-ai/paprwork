@@ -338,7 +338,7 @@ await papr.memory.search({
 
 1. Should we store full tool args/results or just tool names?
    - Concern: Tool results can be large (file contents, bash output)
-   - Suggestion: Store tool names + status, full results in `~/Papr/Chats/*.txt`
+   - Suggestion: Store tool names + status, full results in `$PAPR_HOME/Chats/*.txt`
 
 2. Should we track token costs in PAPR Memory?
    - Benefit: Cost analytics across all conversations

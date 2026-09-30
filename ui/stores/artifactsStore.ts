@@ -25,6 +25,10 @@ export interface ArtifactCloudLineage {
   sourceNamespaceId: string;
   installedAt: string;
   lastSyncedAt?: string;
+  /** shared = team collaborator (publisher's data); forked = own data. */
+  databasePolicy?: "shared" | "forked";
+  /** Who the source is shared with: collaborator mark by the title. */
+  sourceAudience?: "team" | "people" | "community";
 }
 
 export interface Artifact {
@@ -39,6 +43,13 @@ export interface Artifact {
   favorite?: boolean;
   /** Lifecycle status (apps only). Undefined = "active". */
   status?: "draft" | "active" | "archived";
+  /**
+   * Archived flag (documents only). Kept separate from `status` on purpose:
+   * an app has a three-state lifecycle (draft/active/archived), a document
+   * has a binary one. Folding documents into `status` would invent
+   * "draft"/"active" document states that nothing can produce.
+   */
+  archived?: boolean;
   /** ISO timestamp of the last time the user opened this app. */
   lastOpenedAt?: string;
   /** Total number of times the user has opened this app. */
@@ -132,17 +143,17 @@ export const useArtifactsStore = create<ArtifactsState>((set, get) => ({
     // Apply search
     if (searchQuery) {
       const query = searchQuery.toLowerCase();
+      const matches = (value: unknown): boolean =>
+        typeof value === "string" && value.toLowerCase().includes(query);
+
       filtered = filtered.filter(
         (a) =>
-          a.title.toLowerCase().includes(query) ||
-          a.id.toLowerCase().includes(query) ||
-          a.description?.toLowerCase().includes(query) ||
-          a.tags?.some((tag) => tag.toLowerCase().includes(query)) ||
-          a.cloudLineage?.sourceSlug.toLowerCase().includes(query) ||
-          Object.values(a.metadata ?? {}).some(
-            (value) =>
-              typeof value === "string" && value.toLowerCase().includes(query),
-          ),
+          matches(a.title) ||
+          matches(a.id) ||
+          matches(a.description) ||
+          (Array.isArray(a.tags) && a.tags.some(matches)) ||
+          matches(a.cloudLineage?.sourceSlug) ||
+          Object.values(a.metadata ?? {}).some(matches),
       );
     }
 

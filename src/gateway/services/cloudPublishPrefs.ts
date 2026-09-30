@@ -12,6 +12,7 @@ import type {
   CloudExternalLink,
   CloudLoginAccess,
 } from "./cloudSharingSettings.js";
+import { readDerivedFromFile } from "./cloudSync/jsonFileCache.js";
 
 export type CloudAccessMode =
   | "private"
@@ -20,8 +21,15 @@ export type CloudAccessMode =
   | "link_read_write"
   | "public_read";
 
+export type CloudUploadModePref = "auto" | "manual" | "inherit";
+export type CloudEnabledPref = true | false | "inherit";
+
 export interface CloudPublishAppPrefs {
   autoPublish: boolean;
+  /** When false, skip cloud upload for this app. inherit = follow global cloud sync. */
+  cloudEnabled?: CloudEnabledPref;
+  /** auto = push on change; manual = Publish changes only; inherit = global cloudAutoUploadEnabled. */
+  uploadMode?: CloudUploadModePref;
   accessMode: CloudAccessMode;
   /** Who can open the app after signing in with Papr. */
   loginAccess?: CloudLoginAccess;
@@ -31,8 +39,25 @@ export interface CloudPublishAppPrefs {
   shareToken?: string;
   /** Allow others to install/sync app source into Paprwork (stored locally until server ACL). */
   codeAccess?: CodeAccess;
+  /** @deprecated Record only — never used to override computed ACL. */
+  liveLinkPermission?: "read" | "read_write";
   /** API keys the app needs — mirrored from requirements.json for quick reads. */
   credentialRequirements?: RequiredKeySpec[];
+  /** Public Community apps: require Papr sign-in before opening (default false). */
+  requireSignIn?: boolean;
+  /**
+   * Audience "people": Parse _User.objectId values allowed to open the app.
+   * Empty or absent means the app is not user-restricted — with
+   * loginAccess "team" that is plain "anyone in my workspace". Enforced in
+   * appRuntime/cloudAppPeopleAccess.ts, not in the UI.
+   */
+  allowedUserIds?: string[];
+  /** Audience "people": signed-in users with these emails (any workspace). */
+  allowedEmails?: string[];
+  /** Audience "people": signed-in users with *@{domain} emails. */
+  allowedEmailDomains?: string[];
+  /** When true, linked registry DBs use per-user Turso isolation. */
+  perUserIsolation?: boolean;
   lastAutoPublishAttemptAt?: string;
   lastAutoPublishError?: string;
 }
@@ -71,17 +96,64 @@ export function saveCloudPublishPrefs(
   fs.writeFileSync(filePath, JSON.stringify(prefs, null, 2), "utf8");
 }
 
+/**
+ * Read-only prefs lookup used on sync hot paths (once per app per queue scan).
+ * Writers keep using loadCloudPublishPrefs so mutations always see fresh state.
+ */
+export function hasStoredAppPublishPrefs(
+  appId: string,
+  paprDir?: string,
+): boolean {
+  const prefs = loadCloudPublishPrefs(paprDir);
+  return appId in prefs.apps;
+}
+
+/** Synthetic default when no prefs file entry exists yet. */
+export function isUninitializedSharingPrefs(
+  prefs: CloudPublishAppPrefs,
+): boolean {
+  return (
+    prefs.accessMode === "private" &&
+    prefs.loginAccess === undefined &&
+    (prefs.externalLink === undefined || prefs.externalLink === "off")
+  );
+}
+
+/** Synthetic default or auto-publish seed — not an explicit user sharing choice. */
+export function isDefaultPrivatePublishPrefs(
+  prefs: CloudPublishAppPrefs,
+): boolean {
+  return (
+    isUninitializedSharingPrefs(prefs) ||
+    (prefs.accessMode === "private" &&
+      prefs.loginAccess === "private" &&
+      (prefs.externalLink === undefined || prefs.externalLink === "off"))
+  );
+}
+
 export function getAppPublishPrefs(
   appId: string,
   paprDir?: string,
 ): CloudPublishAppPrefs {
-  const prefs = loadCloudPublishPrefs(paprDir);
-  return (
-    prefs.apps[appId] ?? {
-      autoPublish: true,
-      accessMode: "private",
-    }
+  const prefs = readDerivedFromFile<CloudPublishPrefsFile>(
+    prefsPath(paprDir),
+    "cloudPublishPrefs",
+    (raw) => {
+      const parsed = JSON.parse(raw) as CloudPublishPrefsFile;
+      return parsed.apps && typeof parsed.apps === "object"
+        ? parsed
+        : { apps: {} };
+    },
+    { apps: {} },
   );
+  const entry = prefs.apps[appId];
+  return entry
+    ? { ...entry }
+    : {
+        autoPublish: false,
+        uploadMode: "manual",
+        accessMode: "private",
+      };
 }
 
 export function setAppPublishPrefs(
@@ -90,9 +162,59 @@ export function setAppPublishPrefs(
   paprDir?: string,
 ): CloudPublishAppPrefs {
   const prefs = loadCloudPublishPrefs(paprDir);
-  const current = getAppPublishPrefs(appId, paprDir);
+  const current = prefs.apps[appId] ?? {
+    autoPublish: false,
+    uploadMode: "manual" as const,
+    accessMode: "private" as const,
+  };
   const next = { ...current, ...update };
   prefs.apps[appId] = next;
   saveCloudPublishPrefs(prefs, paprDir);
   return next;
+}
+
+/** Remove local publish prefs when an app is deleted (does not touch cloud). */
+export function removeAppPublishPrefs(appId: string, paprDir?: string): void {
+  const prefs = loadCloudPublishPrefs(paprDir);
+  if (!(appId in prefs.apps)) {
+    return;
+  }
+  delete prefs.apps[appId];
+  saveCloudPublishPrefs(prefs, paprDir);
+}
+
+/**
+ * flush — Sync V3 per-app flush/post-hook: only apps that just uploaded.
+ * catalog — background recovery: synced apps + prefs apps with autoPublish on.
+ */
+export type AutoPublishCandidateScope = "flush" | "catalog";
+
+/** Per-app flush path (Sync V3): only the app(s) that just finished writer upload. */
+export function mergeAutoPublishCandidateAppIds(
+  catalogAppIds: readonly string[],
+  syncedAppIds: readonly string[] | undefined,
+  prefsFile: CloudPublishPrefsFile,
+  scope: AutoPublishCandidateScope = "flush",
+): string[] {
+  if (scope === "flush") {
+    return syncedAppIds && syncedAppIds.length > 0 ? [...syncedAppIds] : [];
+  }
+
+  const ids = new Set<string>(
+    syncedAppIds && syncedAppIds.length > 0 ? syncedAppIds : catalogAppIds,
+  );
+  for (const [appId, prefs] of Object.entries(prefsFile.apps)) {
+    if (prefs.autoPublish !== false) {
+      ids.add(appId);
+    }
+  }
+  return [...ids];
+}
+
+/** Memory publish record missing or disabled — local prefs still want cloud link. */
+export function needsPublishRecovery(
+  memory: { enabled?: boolean } | null,
+  autoPublish: boolean,
+): boolean {
+  return autoPublish && memory?.enabled !== true;
 }

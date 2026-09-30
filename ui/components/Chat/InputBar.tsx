@@ -4,6 +4,7 @@
  */
 
 import * as React from "react";
+import type { PlanProvider } from "../../utils/subscriptionPlanUsage";
 import {
   useState,
   useRef,
@@ -15,28 +16,47 @@ import {
 } from "react";
 import { CHAT_MODELS } from "../../constants/models";
 import type { AIModel } from "../../constants/models";
-import { ModelPickerDropdown } from "./ModelPickerDropdown";
-import { ChatHistoryDropdown } from "./ChatHistoryDropdown";
+import { ModelSettingsButton } from "./ModelSettingsButton";
+import type { ChatModelSettings } from "../../utils/chatModelSettings";
+import type { ResolvedModelSettings } from "../../utils/buildAgentConfig";
 import { ChatMemoryScopeSelector } from "./ChatMemoryScopeSelector";
 import { ContextDropdown } from "./ContextDropdown";
+import { ContextMeter } from "./ContextMeter";
+import { ProviderErrorChip } from "./ProviderErrorChip";
+import type { ProviderNotice } from "../../utils/providerErrorPresentation";
+import type { ContextInfo } from "./ContextInspectorModal";
 import { ContextPills } from "./ContextPills";
 import { SlashCommandMenu } from "./SlashCommandMenu";
 import type { Artifact } from "../../stores/artifactsStore";
 import {
   createArtifactsFromIncomingFiles,
-  extractFilesFromDataTransfer,
+  readIncomingFiles,
+  classifyAttachmentFiles,
+  describeRejectedAttachments,
 } from "../../utils/chatAttachmentFiles";
 import { useChatStore } from "../../stores/chatStore";
 import { useOllama } from "../../hooks/useOllama";
 import { useDebouncedCallback } from "../../hooks/useDebouncedCallback";
+import { useDismissOnOutsideClick } from "../../hooks/useDismissOnOutsideClick";
+import { getUnavailableModelMessage } from "../../utils/modelAvailabilityMessage";
 import "./InputBar.css";
 
 interface InputBarProps {
   chatId: string; // Chat ID for persisting draft messages
-  onSend: (message: string, context?: Artifact[]) => void;
+  onSend: (
+    message: string,
+    context?: Artifact[],
+  ) => void | Promise<void>;
+  /** Stop the in-flight turn, then send immediately (double-enter shortcut). */
+  onInterruptAndSend?: (
+    message: string,
+    context?: Artifact[],
+  ) => void | Promise<void>;
   onQueue?: (message: string, context?: Artifact[]) => void;
   /** Number of messages currently queued for this chat. */
   queuedCount?: number;
+  /** Stop the in-flight turn and send the first queued message (double-enter on empty input). */
+  onSendFirstQueuedNow?: () => void | Promise<void>;
   onStop?: () => void;
   onSlashCommand?: (commandId: string) => void;
   isSending?: boolean;
@@ -51,8 +71,34 @@ interface InputBarProps {
   onOpenSettingsModels?: () => void;
   /** Models pinned to the chat picker (from Settings) */
   pickerModels?: AIModel[];
+  /** Effective thinking/effort/context/fast for this chat and model. */
+  modelSettings: ResolvedModelSettings;
+  onChangeModelSettings: (patch: ChatModelSettings) => void;
+  /** Fast mode is API-key only — pi-ai carries no `speed` parameter. */
+  authType?: "oauth" | "apiKey";
+  /** Subscription OAuth hides API-dollar estimates in the context panel. */
+  billingMode?: "metered" | "subscription";
+  /** Whose subscription allowance the context panel should read. */
+  planProvider?: PlanProvider | null;
   /** Fires after file context pills are added (e.g. drag-drop) so parent can clear drag-over UI */
   onFileAttachmentsAdded?: () => void;
+  /** Bump to open the context panel from outside (the /context command). */
+  contextPanelSignal?: number;
+  /** Hand the loaded breakdown to the parent's full inspector. */
+  onOpenContextInspector?: (info: ContextInfo, sectionId?: string) => void;
+  /**
+   * The current provider failure, already phrased for a person, or null.
+   *
+   * It renders here rather than above the transcript because a failed turn is
+   * a fact about the message you just sent: the answer belongs next to the
+   * send button and the context dial, not pinned to the top of the window
+   * where it outranks the conversation.
+   */
+  providerNotice?: ProviderNotice | null;
+  /** Retry in flight, so the notice's one button can show its own progress. */
+  isResumingStream?: boolean;
+  onResumeStream?: () => void;
+  onDismissProviderNotice?: () => void;
 }
 
 export interface InputBarRef {
@@ -66,8 +112,10 @@ export const InputBar = forwardRef<InputBarRef, InputBarProps>(
     {
       chatId,
       onSend,
+      onInterruptAndSend,
       onQueue,
       queuedCount = 0,
+      onSendFirstQueuedNow,
       onStop,
       onSlashCommand,
       isSending = false,
@@ -79,33 +127,74 @@ export const InputBar = forwardRef<InputBarRef, InputBarProps>(
       onOpenSettingsModels,
       onFileAttachmentsAdded,
       pickerModels,
+      modelSettings,
+      onChangeModelSettings,
+      authType,
+      billingMode = "metered",
+      planProvider = null,
+      contextPanelSignal,
+      onOpenContextInspector,
+      providerNotice = null,
+      isResumingStream = false,
+      onResumeStream,
+      onDismissProviderNotice,
     },
     ref,
   ) => {
-    // Get draft message from store
-    const draftMessage = useChatStore((state) => state.getDraftMessage(chatId));
+    // Draft lives outside chatStates so debounced saves do not re-render MessageList.
     const setDraftMessage = useChatStore((state) => state.setDraftMessage);
     const clearDraftMessage = useChatStore((state) => state.clearDraftMessage);
 
     // Ollama status for showing install indicator
-    const { hasModel, hostTotalRamGb } = useOllama();
+    const { hasModel, hostTotalRamGb } = useOllama({
+      subscribeDownloadProgress: false,
+    });
 
-    const [message, setMessage] = useState(draftMessage);
+    // Seeded through the store's getter, which falls back to the durable copy:
+    // after a reload or a crash the in-memory map is empty, and reading it
+    // directly would paint an empty composer over a draft that still exists.
+    const [message, setMessage] = useState(() =>
+      useChatStore.getState().getDraftMessage(chatId),
+    );
     const [isFocused, setIsFocused] = useState(false);
-    const [showModelPicker, setShowModelPicker] = useState(false);
-    const [showChatHistory, setShowChatHistory] = useState(false);
     const [showContextDropdown, setShowContextDropdown] = useState(false);
+    const [showModelSettings, setShowModelSettings] = useState(false);
     const [showSlashMenu, setShowSlashMenu] = useState(false);
     const [slashQuery, setSlashQuery] = useState("");
     const [selectedArtifacts, setSelectedArtifacts] = useState<Artifact[]>([]);
     const [isSavingAttachments, setIsSavingAttachments] = useState(false);
+    const [attachmentError, setAttachmentError] = useState<string | null>(null);
     const textareaRef = useRef<HTMLTextAreaElement>(null);
     const inputBarRef = useRef<HTMLDivElement>(null);
+    const contextAddBtnRef = useRef<HTMLButtonElement>(null);
+    const contextDropdownRef = useRef<HTMLDivElement>(null);
     const lastSendAttemptRef = useRef<number>(0);
+    const resizeRafRef = useRef<number | null>(null);
+
+    const scheduleTextareaResize = useCallback(() => {
+      if (resizeRafRef.current != null) return;
+      resizeRafRef.current = requestAnimationFrame(() => {
+        resizeRafRef.current = null;
+        const el = textareaRef.current;
+        if (!el) return;
+        el.style.height = "auto";
+        el.style.height = `${Math.min(el.scrollHeight, 200)}px`;
+      });
+    }, []);
+
+    useEffect(() => {
+      return () => {
+        if (resizeRafRef.current != null) {
+          cancelAnimationFrame(resizeRafRef.current);
+        }
+      };
+    }, []);
 
     // Use first model as default if none selected
     const currentModel = selectedModel || CHAT_MODELS[0];
     const visiblePickerModels = pickerModels ?? [currentModel];
+    const modelAvailable = isModelAvailable?.(currentModel) ?? true;
+    const unavailableMessage = getUnavailableModelMessage(currentModel);
 
     // Sync message state with store when chatId changes
     useEffect(() => {
@@ -126,13 +215,64 @@ export const InputBar = forwardRef<InputBarRef, InputBarProps>(
       debouncedSaveDraft(chatId, message);
     }, [message, chatId, debouncedSaveDraft]);
 
+    // The debounce leaves a 300ms window in which the newest keystrokes exist
+    // only in component state. Flush on the way out so that window does not
+    // include the moment the pane unmounts or the page goes away.
+    const pendingDraftRef = useRef({ chatId, message });
+    pendingDraftRef.current = { chatId, message };
+    useEffect(() => {
+      const flush = () => {
+        const pending = pendingDraftRef.current;
+        setDraftMessage(pending.chatId, pending.message);
+      };
+      window.addEventListener("pagehide", flush);
+      return () => {
+        window.removeEventListener("pagehide", flush);
+        flush();
+      };
+    }, [setDraftMessage]);
+
     const appendFileArtifacts = useCallback(
-      async (files: File[]) => {
-        if (files.length === 0) return;
+      async (incoming: File[]) => {
+        if (incoming.length === 0) return;
+
+        // Classify here rather than at each drop target: the drop surfaces
+        // (whole chat, message list, input bar) and paste all funnel through
+        // this one function, and it is the only one of them that owns an error
+        // surface to report a rejection on.
+        const { accepted, rejected } = classifyAttachmentFiles(incoming);
+        const rejectionMessage = describeRejectedAttachments(rejected);
+
+        if (accepted.length === 0) {
+          setAttachmentError(
+            rejectionMessage ??
+              "Could not attach file. Try again or check that Paprwork can access the file.",
+          );
+          return;
+        }
+
         setIsSavingAttachments(true);
+        setAttachmentError(null);
         try {
-          const newArtifacts = await createArtifactsFromIncomingFiles(files, chatId);
-          if (newArtifacts.length === 0) return;
+          const newArtifacts = await createArtifactsFromIncomingFiles(
+            accepted,
+            chatId,
+          );
+          if (newArtifacts.length === 0) {
+            setAttachmentError(
+              "Could not attach file. Try again or check that Paprwork can access the file.",
+            );
+            return;
+          }
+          if (newArtifacts.length < accepted.length) {
+            // A partial failure used to be invisible: some files attached and
+            // the rest vanished with nothing said.
+            setAttachmentError(
+              `Attached ${newArtifacts.length} of ${accepted.length} files. The rest could not be read.`,
+            );
+          } else if (rejectionMessage) {
+            setAttachmentError(rejectionMessage);
+          }
           setSelectedArtifacts((prev) => {
             const out = [...prev];
             for (const a of newArtifacts) {
@@ -143,6 +283,17 @@ export const InputBar = forwardRef<InputBarRef, InputBarProps>(
           setIsFocused(true);
           onFileAttachmentsAdded?.();
           queueMicrotask(() => textareaRef.current?.focus());
+        } catch (error) {
+          // This was a try/finally with no catch, so anything thrown on the way
+          // in — the base64 encode running out of stack on a large file, an IPC
+          // rejection — became an unhandled rejection and the drop looked like
+          // it had simply been ignored.
+          console.error("[InputBar] Failed to attach files:", error);
+          setAttachmentError(
+            `Could not attach file: ${
+              error instanceof Error ? error.message : String(error)
+            }`,
+          );
         } finally {
           setIsSavingAttachments(false);
         }
@@ -159,7 +310,7 @@ export const InputBar = forwardRef<InputBarRef, InputBarProps>(
 
     const handleFileDrop = useCallback(
       (e: React.DragEvent) => {
-        const files = extractFilesFromDataTransfer(e.dataTransfer);
+        const files = readIncomingFiles(e.dataTransfer);
         if (files.length === 0) return;
         e.preventDefault();
         e.stopPropagation();
@@ -170,7 +321,7 @@ export const InputBar = forwardRef<InputBarRef, InputBarProps>(
 
     const handlePaste = useCallback(
       (e: React.ClipboardEvent<HTMLTextAreaElement>) => {
-        const files = extractFilesFromDataTransfer(e.clipboardData);
+        const files = readIncomingFiles(e.clipboardData);
         if (files.length === 0) return;
         e.preventDefault();
         void appendFileArtifacts(files);
@@ -197,6 +348,13 @@ export const InputBar = forwardRef<InputBarRef, InputBarProps>(
       textareaRef.current?.focus();
     }, []);
 
+    useDismissOnOutsideClick(
+      showContextDropdown,
+      () => setShowContextDropdown(false),
+      contextAddBtnRef,
+      contextDropdownRef,
+    );
+
     // Context artifact management
     const handleSelectArtifact = useCallback((artifact: Artifact) => {
       setSelectedArtifacts((prev) => {
@@ -221,6 +379,19 @@ export const InputBar = forwardRef<InputBarRef, InputBarProps>(
       [onSlashCommand],
     );
 
+    const restoreComposerAfterFailedSend = (
+      text: string,
+      artifacts: Artifact[],
+    ) => {
+      setMessage(text);
+      setDraftMessage(chatId, text);
+      setSelectedArtifacts(artifacts);
+      if (textareaRef.current) {
+        textareaRef.current.style.height = "auto";
+        scheduleTextareaResize();
+      }
+    };
+
     const handleSend = () => {
       const trimmedMessage = message.trim();
       const hasAttachments = selectedArtifacts.length > 0;
@@ -228,55 +399,44 @@ export const InputBar = forwardRef<InputBarRef, InputBarProps>(
 
       const messageToSend =
         trimmedMessage ||
-        (hasAttachments
-          ? "Please review the attached file(s)."
-          : "");
+        (hasAttachments ? "Please review the attached file(s)." : "");
+      const artifactsToSend =
+        selectedArtifacts.length > 0 ? [...selectedArtifacts] : undefined;
       const now = Date.now();
       const timeSinceLastAttempt = now - lastSendAttemptRef.current;
-      
+
       // If agent is working
       if (isSending) {
-        // If user pressed send again within 1 second (double-enter or double-click), 
-        // stop agent and send immediately
+
+        // Double-enter / double-click within 1s: stop the current turn and send now.
         if (timeSinceLastAttempt < 1000) {
-          if (onStop) {
-            onStop();
-          }
-          onSend(
-            messageToSend,
-            selectedArtifacts.length > 0 ? selectedArtifacts : undefined,
-          );
+          const sendNow = onInterruptAndSend ?? onSend;
+          void sendNow(messageToSend, artifactsToSend);
           setMessage("");
           clearDraftMessage(chatId);
           setSelectedArtifacts([]);
-          
+
           if (textareaRef.current) {
             textareaRef.current.style.height = "auto";
           }
-          lastSendAttemptRef.current = 0; // Reset
+          lastSendAttemptRef.current = 0;
         } else {
           // First attempt while agent is working - queue the message
           if (onQueue) {
-            onQueue(
-              messageToSend,
-              selectedArtifacts.length > 0 ? selectedArtifacts : undefined,
-            );
+            onQueue(messageToSend, artifactsToSend);
           }
           setMessage("");
           clearDraftMessage(chatId);
           setSelectedArtifacts([]);
-          
+
           if (textareaRef.current) {
             textareaRef.current.style.height = "auto";
           }
           lastSendAttemptRef.current = now;
         }
       } else {
-        // Agent not working - send normally
-        onSend(
-          messageToSend,
-          selectedArtifacts.length > 0 ? selectedArtifacts : undefined,
-        );
+        // Agent not working - send normally; restore the composer if send fails
+        // before the user message is committed (e.g. stuck prior send lock).
         setMessage("");
         clearDraftMessage(chatId);
         setSelectedArtifacts([]);
@@ -285,6 +445,18 @@ export const InputBar = forwardRef<InputBarRef, InputBarProps>(
           textareaRef.current.style.height = "auto";
         }
         lastSendAttemptRef.current = 0;
+
+        void (async () => {
+          try {
+            await onSend(messageToSend, artifactsToSend);
+          } catch (error) {
+            console.warn("[InputBar] Send failed, restoring composer:", error);
+            restoreComposerAfterFailedSend(
+              messageToSend,
+              artifactsToSend ?? [],
+            );
+          }
+        })();
       }
     };
 
@@ -315,12 +487,15 @@ export const InputBar = forwardRef<InputBarRef, InputBarProps>(
         e.preventDefault();
         // Double-Enter shortcut: first Enter queued the message + cleared
         // the input. A second Enter on an empty input while the agent is
-        // still working AND there is a queued message should stop the
-        // agent. The existing processNextQueued effect in ChatContainer
-        // automatically sends the queued message when isSending goes
-        // false, so we only need to call onStop here.
-        if (!message.trim() && isSending && queuedCount > 0 && onStop) {
-          onStop();
+        // still working should stop and send the queued message now.
+        if (
+          !message.trim() &&
+          isSending &&
+          queuedCount > 0 &&
+          onSendFirstQueuedNow
+        ) {
+          void onSendFirstQueuedNow();
+          lastSendAttemptRef.current = 0;
           return;
         }
         handleSend();
@@ -340,11 +515,8 @@ export const InputBar = forwardRef<InputBarRef, InputBarProps>(
         setSlashQuery("");
       }
 
-      // Auto-resize textarea
-      if (textareaRef.current) {
-        textareaRef.current.style.height = "auto";
-        textareaRef.current.style.height = `${textareaRef.current.scrollHeight}px`;
-      }
+      // Auto-resize textarea (deferred to next frame to avoid blocking input paint)
+      scheduleTextareaResize();
     };
 
     // Handle blur - only hide if clicking outside the entire input bar
@@ -353,7 +525,8 @@ export const InputBar = forwardRef<InputBarRef, InputBarProps>(
       const relatedTarget = e.relatedTarget as Node | null;
       if (!relatedTarget || !inputBarRef.current?.contains(relatedTarget)) {
         setIsFocused(false);
-        setShowModelPicker(false);
+        setShowModelSettings(false);
+        setShowContextDropdown(false);
       }
     };
 
@@ -380,19 +553,32 @@ export const InputBar = forwardRef<InputBarRef, InputBarProps>(
           {/* Context pills - shown when artifacts are selected */}
           {(isFocused || selectedArtifacts.length > 0) && (
             <div className="input-context-section">
+              {attachmentError ? (
+                <div className="input-context-section__error" role="alert">
+                  {attachmentError}
+                </div>
+              ) : null}
               <ContextPills
                 artifacts={selectedArtifacts}
                 onRemove={handleRemoveArtifact}
-                onAddClick={() => setShowContextDropdown(!showContextDropdown)}
-              />
-              <ContextDropdown
-                chatId={chatId}
-                isOpen={showContextDropdown}
-                onClose={() => setShowContextDropdown(false)}
-                onSelectArtifact={handleSelectArtifact}
-                selectedIds={selectedArtifacts.map((a) => a.id)}
+                onAddClick={() => {
+                  setShowModelSettings(false);
+                  setShowContextDropdown(!showContextDropdown);
+                }}
+                addButtonRef={contextAddBtnRef}
               />
             </div>
+          )}
+
+          {showContextDropdown && (
+            <ContextDropdown
+              chatId={chatId}
+              isOpen={showContextDropdown}
+              onClose={() => setShowContextDropdown(false)}
+              onSelectArtifact={handleSelectArtifact}
+              selectedIds={selectedArtifacts.map((a) => a.id)}
+              dropdownRef={contextDropdownRef}
+            />
           )}
 
           {/* Input row */}
@@ -412,87 +598,58 @@ export const InputBar = forwardRef<InputBarRef, InputBarProps>(
               placeholder={placeholder}
               rows={1}
             />
+            {providerNotice ? (
+              <ProviderErrorChip
+                notice={providerNotice}
+                isResuming={isResumingStream}
+                onResume={onResumeStream}
+                onDismiss={onDismissProviderNotice}
+              />
+            ) : null}
+            {selectedModel ? (
+              <ContextMeter
+                chatId={chatId}
+                model={selectedModel.id}
+                contextLimit={modelSettings.contextLimit}
+                isSending={isSending}
+                openSignal={contextPanelSignal}
+                billingMode={billingMode}
+                planProvider={planProvider}
+                onOpenFullInspector={(info, sectionId) =>
+                  onOpenContextInspector?.(info, sectionId)
+                }
+              />
+            ) : null}
           </div>
 
           {/* Footer - below textarea, shown when focused */}
           {isFocused && (
             <div className="input-footer">
               <div className="model-controls">
-                <button
-                  className="model-selector-pill"
-                  title="Select model"
-                  onMouseDown={(e) => e.preventDefault()}
-                  onClick={() => {
-                    setShowModelPicker(!showModelPicker);
-                  }}
-                >
-                  <span>{currentModel.name}</span>
-                  <svg width="12" height="12" viewBox="0 0 24 24" fill="none">
-                    <path
-                      d="M6 9l6 6 6-6"
-                      stroke="currentColor"
-                      strokeWidth="2"
-                      strokeLinecap="round"
-                      strokeLinejoin="round"
-                    />
-                  </svg>
-                </button>
-                <button
-                  className="chat-history-btn"
-                  title="Chat history"
-                  onMouseDown={(e) => e.preventDefault()}
-                  onClick={() => {
-                    setShowChatHistory(!showChatHistory);
-                    setShowModelPicker(false);
-                  }}
-                >
-                  <svg width="16" height="16" viewBox="0 0 24 24" fill="none">
-                    <circle
-                      cx="12"
-                      cy="12"
-                      r="10"
-                      stroke="currentColor"
-                      strokeWidth="1.5"
-                    />
-                    <path
-                      d="M12 6v6l4 2"
-                      stroke="currentColor"
-                      strokeWidth="1.5"
-                      strokeLinecap="round"
-                    />
-                  </svg>
-                </button>
-
-                {/* Chat History Dropdown */}
-                {showChatHistory && (
-                  <ChatHistoryDropdown
-                    onClose={() => setShowChatHistory(false)}
-                  />
+                {!modelAvailable && (
+                  <p className="model-unavailable-notice">
+                    {unavailableMessage}
+                  </p>
                 )}
-
-                {/* Model Picker Dropdown */}
-                {showModelPicker && (
-                  <ModelPickerDropdown
-                    currentModelId={currentModel.id}
-                    pickerModels={visiblePickerModels}
-                    isModelAvailable={isModelAvailable}
-                    hasModel={hasModel}
-                    hostTotalRamGb={hostTotalRamGb}
-                    onSelect={(model) => {
-                      onModelChange?.(model);
-                      setShowModelPicker(false);
-                      textareaRef.current?.focus();
-                    }}
-                    onOpenSettings={() => {
-                      onOpenSettings?.();
-                      setShowModelPicker(false);
-                    }}
-                    onOpenSettingsModels={() => {
-                      onOpenSettingsModels?.();
-                      setShowModelPicker(false);
-                    }}
-                  />
-                )}
+                <ModelSettingsButton
+                  model={currentModel}
+                  resolved={modelSettings}
+                  authType={authType}
+                  onChangeSettings={onChangeModelSettings}
+                  pickerModels={visiblePickerModels}
+                  isModelAvailable={isModelAvailable}
+                  hasModel={hasModel}
+                  hostTotalRamGb={hostTotalRamGb}
+                  onSelectModel={(model) => onModelChange?.(model)}
+                  onOpenSettings={() => onOpenSettings?.()}
+                  onOpenSettingsModels={() => onOpenSettingsModels?.()}
+                  open={showModelSettings}
+                  onOpenChange={(next) => {
+                    if (next) setShowContextDropdown(false);
+                    setShowModelSettings(next);
+                  }}
+                  onDismissed={() => textareaRef.current?.focus()}
+                />
               </div>
               <div className="input-footer__actions">
                 <ChatMemoryScopeSelector chatId={chatId} compact />
@@ -502,7 +659,9 @@ export const InputBar = forwardRef<InputBarRef, InputBarProps>(
                   onClick={isSending ? handleStop : handleSend}
                   disabled={
                     isSavingAttachments ||
-                    (!isSending && !message.trim() && selectedArtifacts.length === 0)
+                    (!isSending &&
+                      !message.trim() &&
+                      selectedArtifacts.length === 0)
                   }
                   type="button"
                   aria-label={isSending ? "Stop agent" : "Send message"}
@@ -512,30 +671,30 @@ export const InputBar = forwardRef<InputBarRef, InputBarProps>(
                       : "Send message"
                   }
                 >
-                {isSending ? (
-                  // Stop icon (square)
-                  <svg width="16" height="16" viewBox="0 0 20 20" fill="none">
-                    <rect
-                      x="5"
-                      y="5"
-                      width="10"
-                      height="10"
-                      fill="currentColor"
-                      rx="1"
-                    />
-                  </svg>
-                ) : (
-                  // Send icon (paper plane)
-                  <svg width="16" height="16" viewBox="0 0 20 20" fill="none">
-                    <path
-                      d="M2.5 10L17.5 3.33333L10.8333 18.3333L9.16667 11.6667L2.5 10Z"
-                      stroke="currentColor"
-                      strokeWidth="1.5"
-                      strokeLinecap="round"
-                      strokeLinejoin="round"
-                    />
-                  </svg>
-                )}
+                  {isSending ? (
+                    // Stop icon (square)
+                    <svg width="16" height="16" viewBox="0 0 20 20" fill="none">
+                      <rect
+                        x="5"
+                        y="5"
+                        width="10"
+                        height="10"
+                        fill="currentColor"
+                        rx="1"
+                      />
+                    </svg>
+                  ) : (
+                    // Send icon (paper plane)
+                    <svg width="16" height="16" viewBox="0 0 20 20" fill="none">
+                      <path
+                        d="M2.5 10L17.5 3.33333L10.8333 18.3333L9.16667 11.6667L2.5 10Z"
+                        stroke="currentColor"
+                        strokeWidth="1.5"
+                        strokeLinecap="round"
+                        strokeLinejoin="round"
+                      />
+                    </svg>
+                  )}
                 </button>
               </div>
             </div>
@@ -546,4 +705,4 @@ export const InputBar = forwardRef<InputBarRef, InputBarProps>(
   },
 );
 
-InputBar.displayName = 'InputBar';
+InputBar.displayName = "InputBar";

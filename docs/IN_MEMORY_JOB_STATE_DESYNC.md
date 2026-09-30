@@ -12,7 +12,7 @@
 
 ```
 User: "Jobs stuck in running status"
-Agent: [Manually edits ~/Papr/data/jobs.json]
+Agent: [Manually edits $PAPR_HOME/data/jobs.json]
 Agent: Changed status from "running" to "completed" on disk ✅
 Agent: "The real problem was: jobs stuck in 'running' status. 
        The Papr scheduler wouldn't trigger new runs because it thought 
@@ -25,14 +25,14 @@ Agent: "What you need to do: Restart Papr (Cmd+Q → reopen)"
 
 Paprwork has **two** sources of truth for job state:
 
-1. **Disk:** `~/Papr/data/jobs.json` (persistent storage)
+1. **Disk:** `$PAPR_HOME/data/jobs.json` (persistent storage)
 2. **Memory:** `JobsService.jobs` Map (runtime state)
 
 **Timeline:**
 ```
 1. Jobs stuck in "running" status (disk + memory)
 2. Agent edits jobs.json directly via bash:
-   bash({ command: "jq '...' ~/Papr/data/jobs.json > tmp && mv tmp jobs.json" })
+   bash({ command: "jq '...' $PAPR_HOME/data/jobs.json > tmp && mv tmp jobs.json" })
 3. Disk now shows "completed" ✅
 4. Memory still shows "running" ❌
 5. Scheduler checks memory, sees "running", skips job
@@ -66,7 +66,7 @@ async initialize(): Promise<void> {
 ```typescript
 export const reloadJobsTool = createTool({
   id: "reload_jobs",
-  description: `Reload all jobs from disk, picking up any manual edits made to ~/Papr/data/jobs.json.
+  description: `Reload all jobs from disk, picking up any manual edits made to $PAPR_HOME/data/jobs.json.
 
 Use this when:
 - You manually edited jobs.json to fix job status
@@ -260,7 +260,7 @@ list_jobs()
 
 // 3. Manually edit jobs.json
 bash({ 
-  command: `jq '.[] | if .id == "test-123" then .status = "completed" else . end' ~/Papr/data/jobs.json > /tmp/jobs.json && mv /tmp/jobs.json ~/Papr/data/jobs.json`
+  command: `jq '.[] | if .id == "test-123" then .status = "completed" else . end' $PAPR_HOME/data/jobs.json > /tmp/jobs.json && mv /tmp/jobs.json $PAPR_HOME/data/jobs.json`
 })
 
 // 4. Check in-memory (still stale)
@@ -329,7 +329,7 @@ async initialize(): Promise<void> {
 
 ```typescript
 // All job mutations append to transaction log
-await fs.appendFile('~/Papr/data/jobs-log.jsonl', JSON.stringify({
+await fs.appendFile('$PAPR_HOME/data/jobs-log.jsonl', JSON.stringify({
   timestamp: new Date().toISOString(),
   operation: 'update',
   jobId: 'abc',

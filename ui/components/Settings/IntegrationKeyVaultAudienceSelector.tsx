@@ -60,7 +60,11 @@ export function IntegrationKeyVaultAudienceSelector({
 export function formatVaultAudienceLabel(
   audience?: IntegrationKeyVaultAudience | null,
 ): string {
-  if (audience === "namespace" || audience === "org") {
+  if (
+    audience === "members" ||
+    audience === "namespace" ||
+    audience === "org"
+  ) {
     return VAULT_AUDIENCE_LABELS[audience].label;
   }
   return VAULT_AUDIENCE_LABELS.user.label;

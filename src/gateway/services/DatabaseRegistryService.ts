@@ -8,7 +8,11 @@
 import { createHash, randomUUID } from "crypto";
 import * as fs from "fs";
 import * as path from "path";
-import { getPaprDataDir } from "../../core/utils/paprRoot.js";
+import { getPaprDataDir, getPaprRoot } from "../../core/utils/paprRoot.js";
+import {
+  canPerformWorkspaceWrite,
+  getWorkspaceWriteGeneration,
+} from "./workspaceWriteGuard.js";
 import {
   dbTursoDatabaseName,
   jobTursoDatabaseName,
@@ -18,6 +22,13 @@ import {
   parseDataSourcesFile,
   type AppDataSource,
 } from "./appDataSources.js";
+import type { DatabaseSyncMode } from "./tursoReplica/tursoReplicaTypes.js";
+import { defaultSyncModeForNewRegistryDb } from "../utils/tursoReplicaEnabled.js";
+import { isJobScratchDatabasePath } from "./jobs/jobScratchDatabasePath.js";
+import {
+  assertEligibleRegistryLocalPath,
+  isEligibleRegistryLocalPath,
+} from "./registryDatabaseEligibility.js";
 
 export const DATABASES_REGISTRY_FILENAME = "databases.json";
 
@@ -30,10 +41,30 @@ export interface DatabaseRecord {
   tursoShortName: string;
   label?: string;
   ownerJobId?: string;
+  /** App whose repo ships migrations/ for this dbId (one owner per shared db). */
+  schemaOwnerAppId?: string;
   isolation: DatabaseIsolation;
   status: DatabaseStatus;
+  /** legacy = CDC/log path; replica = Turso Sync (@tursodatabase/sync). */
+  syncMode?: DatabaseSyncMode;
+  cutoverAt?: string;
+  /** True while cutover is running — cleared on success or rollback (crash resume). */
+  cutoverInProgress?: boolean;
+  cutoverStartedAt?: string;
+  cutoverBlocked?: boolean;
+  cutoverBlockReason?: string;
+  lastReplicaPushError?: string;
+  /** ISO timestamp of last successful replica push (Plan A phantom CDC guard). */
+  lastReplicaPushAt?: string;
+  /** ISO timestamp of last local replica mutation (DML/DDL/migration). */
+  lastReplicaLocalMutationAt?: string;
   createdAt: string;
   updatedAt: string;
+}
+
+export interface DatabaseRegistrySaveOptions {
+  /** Local-only bookkeeping (replica push timestamps) — skip memory server upload. */
+  skipCloudUpload?: boolean;
 }
 
 export interface DatabasesRegistryFile {
@@ -47,6 +78,13 @@ function defaultRegistry(): DatabasesRegistryFile {
 
 export function normalizeDbPath(dbPath: string): string {
   return path.normalize(dbPath);
+}
+
+/** Slug segment from a registry db path (`data/databases/{slug}/data.db`). */
+export function registrySlugFromLocalPath(localPath: string): string | null {
+  const normalized = localPath.replace(/\\/g, "/");
+  const match = normalized.match(/\/data\/databases\/([^/]+)\/data\.db$/);
+  return match?.[1] ?? null;
 }
 
 export function dbIdFromPath(dbPath: string): string {
@@ -102,6 +140,15 @@ export function resolveTursoDatabaseNameForSource(
   return null;
 }
 
+/** A local file with real content (promotion / bundle import) — not an empty placeholder. */
+function hasPopulatedFile(filePath: string): boolean {
+  try {
+    return fs.statSync(filePath).size > 0;
+  } catch {
+    return false;
+  }
+}
+
 let registryInstance: DatabaseRegistryService | null = null;
 
 export class DatabaseRegistryService {
@@ -109,6 +156,8 @@ export class DatabaseRegistryService {
   private appsRootDir: string;
   private cache: DatabasesRegistryFile | null = null;
   private saveLock: Promise<void> | null = null;
+  private boundPaprDir: string | null = null;
+  private boundWriteGeneration: number | null = null;
 
   constructor(paprDataDir?: string, appsRootDir?: string) {
     const dataDir = paprDataDir ?? getPaprDataDir();
@@ -118,8 +167,25 @@ export class DatabaseRegistryService {
   }
 
   async initialize(): Promise<void> {
+    this.bindWorkspaceWriteContext();
     this.cache = await this.load();
     await this.backfillFromAppsIfNeeded();
+  }
+
+  private bindWorkspaceWriteContext(): void {
+    this.boundPaprDir = getPaprRoot();
+    this.boundWriteGeneration = getWorkspaceWriteGeneration();
+  }
+
+  private isWriteContextValid(context: string): boolean {
+    if (this.boundPaprDir === null || this.boundWriteGeneration === null) {
+      return true;
+    }
+    return canPerformWorkspaceWrite(
+      this.boundWriteGeneration,
+      this.boundPaprDir,
+      context,
+    );
   }
 
   getRegistryPath(): string {
@@ -139,25 +205,71 @@ export class DatabaseRegistryService {
     return defaultRegistry();
   }
 
-  private async save(state: DatabasesRegistryFile): Promise<void> {
-    if (this.saveLock) {
-      await this.saveLock;
+  private async save(
+    state: DatabasesRegistryFile,
+    options?: DatabaseRegistrySaveOptions,
+  ): Promise<void> {
+    if (!this.isWriteContextValid("databases.json save")) {
+      return;
     }
+    // Chain onto whatever is in flight instead of `if (lock) await lock`.
+    // Two callers arriving while saveLock was null both skipped the await and
+    // both assigned, so they ran concurrently — and with a tmp name built only
+    // from pid+ms they collided on the SAME file. The loser's rename then hit
+    // "ENOENT: rename databases.json.tmp-... -> databases.json", which is what
+    // crashed sequence editing (delete step + add step + change delay fire
+    // several /api/db/write calls in the same millisecond).
+    const previous = this.saveLock ?? Promise.resolve();
 
     this.saveLock = (async () => {
-      const tmpPath = `${this.registryPath}.tmp-${process.pid}-${Date.now()}`;
+      await previous.catch(() => {});
+      // Random suffix: pid+ms is not unique within a single process tick.
+      const unique = `${process.pid}-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
+      const tmpPath = `${this.registryPath}.tmp-${unique}`;
       await fs.promises.mkdir(path.dirname(this.registryPath), {
         recursive: true,
       });
       await fs.promises.writeFile(tmpPath, JSON.stringify(state, null, 2), "utf8");
       await fs.promises.rename(tmpPath, this.registryPath);
       this.cache = state;
+
+      // Cloud upload is deliberately NOT awaited. It fetches the memory server
+      // with a 15s timeout, and awaiting it made every registry save — i.e.
+      // every /api/app/backend write that touches a linked DB — block on a
+      // network round trip. In the app that surfaced as "Adding..." hanging for
+      // seconds and deletes reporting "Could not delete" after the write had
+      // already succeeded on disk.
+      //
+      // Durability is unaffected: the file rename above is the source of truth,
+      // and a failed upload is retried from the metadata outbox.
+      //
+      // Replica push timestamps are local bookkeeping only — memory server ignores
+      // them, so skip uploading ~50KB full registry snapshots on every row write.
+      if (!options?.skipCloudUpload) {
+        const updatedAt = new Date().toISOString();
+        void (async () => {
+          try {
+            const { uploadDatabasesRegistryToCloud } = await import(
+              "./syncV3/MetadataRegistryClient.js"
+            );
+            await uploadDatabasesRegistryToCloud(state, updatedAt);
+          } catch (err) {
+            console.warn(
+              "[DatabaseRegistry] cloud upload failed:",
+              (err as Error).message.slice(0, 120),
+            );
+          }
+        })();
+      }
     })();
 
+    const mine = this.saveLock;
     try {
-      await this.saveLock;
+      await mine;
     } finally {
-      this.saveLock = null;
+      // Only clear the tail. Unconditional `= null` let a later caller chain
+      // onto a lock this one had already dropped, reopening the same race.
+      if (this.saveLock === mine) this.saveLock = null;
     }
   }
 
@@ -171,6 +283,111 @@ export class DatabaseRegistryService {
       return undefined;
     }
     return record;
+  }
+
+  async updateLocalPath(dbId: string, localPath: string): Promise<void> {
+    const state = this.getState();
+    const record = state.databases[dbId];
+    if (!record || record.status === "tombstone") {
+      return;
+    }
+    state.databases[dbId] = {
+      ...record,
+      localPath: normalizeDbPath(localPath),
+      updatedAt: new Date().toISOString(),
+    };
+    await this.save(state);
+  }
+
+  /** Mark legacy database as cut over to Plan A replica sync. */
+  async markSyncModeReplicaCutover(dbId: string): Promise<void> {
+    const state = this.getState();
+    const record = state.databases[dbId];
+    if (!record || record.status === "tombstone") {
+      return;
+    }
+    const now = new Date().toISOString();
+    state.databases[dbId] = {
+      ...record,
+      syncMode: "replica",
+      cutoverAt: now,
+      cutoverInProgress: false,
+      cutoverStartedAt: undefined,
+      cutoverBlocked: false,
+      cutoverBlockReason: undefined,
+      updatedAt: now,
+    };
+    await this.save(state);
+  }
+
+  async updateReplicaPushState(
+    dbId: string,
+    patch: {
+      lastReplicaPushError?: string | null;
+      lastReplicaPushAt?: string | null;
+      lastReplicaLocalMutationAt?: string | null;
+      cutoverBlocked?: boolean;
+      cutoverBlockReason?: string | null;
+      cutoverInProgress?: boolean;
+      cutoverStartedAt?: string | null;
+    },
+  ): Promise<void> {
+    const state = this.getState();
+    const record = state.databases[dbId];
+    if (!record || record.status === "tombstone") {
+      return;
+    }
+    state.databases[dbId] = {
+      ...record,
+      ...(patch.lastReplicaPushError !== undefined
+        ? {
+            lastReplicaPushError:
+              patch.lastReplicaPushError === null
+                ? undefined
+                : patch.lastReplicaPushError,
+          }
+        : {}),
+      ...(patch.lastReplicaPushAt !== undefined
+        ? {
+            lastReplicaPushAt:
+              patch.lastReplicaPushAt === null
+                ? undefined
+                : patch.lastReplicaPushAt,
+          }
+        : {}),
+      ...(patch.lastReplicaLocalMutationAt !== undefined
+        ? {
+            lastReplicaLocalMutationAt:
+              patch.lastReplicaLocalMutationAt === null
+                ? undefined
+                : patch.lastReplicaLocalMutationAt,
+          }
+        : {}),
+      ...(patch.cutoverBlocked !== undefined
+        ? { cutoverBlocked: patch.cutoverBlocked }
+        : {}),
+      ...(patch.cutoverBlockReason !== undefined
+        ? {
+            cutoverBlockReason:
+              patch.cutoverBlockReason === null
+                ? undefined
+                : patch.cutoverBlockReason,
+          }
+        : {}),
+      ...(patch.cutoverInProgress !== undefined
+        ? { cutoverInProgress: patch.cutoverInProgress }
+        : {}),
+      ...(patch.cutoverStartedAt !== undefined
+        ? {
+            cutoverStartedAt:
+              patch.cutoverStartedAt === null
+                ? undefined
+                : patch.cutoverStartedAt,
+          }
+        : {}),
+      updatedAt: new Date().toISOString(),
+    };
+    await this.save(state, { skipCloudUpload: true });
   }
 
   getByPath(dbPath: string): DatabaseRecord | undefined {
@@ -196,11 +413,23 @@ export class DatabaseRegistryService {
     localPath: string;
     label?: string;
     ownerJobId?: string;
+    schemaOwnerAppId?: string;
     isolation?: DatabaseIsolation;
     dbId?: string;
     tursoShortName?: string;
+    /**
+     * Caller already decided (cloud install). Omit to let
+     * chooseSyncModeForNewDatabase() decide — the normal case.
+     */
+    syncMode?: DatabaseSyncMode | null;
   }): Promise<DatabaseRecord> {
     const normalizedPath = normalizeDbPath(input.localPath);
+    if (isJobScratchDatabasePath(normalizedPath)) {
+      throw new Error(
+        `Refusing to register job scratch in databases.json: ${normalizedPath}. ` +
+          "Use data/databases/{slug}/data.db for app data; Jobs/{id}/data/data.db is local job infra only.",
+      );
+    }
     const existing = this.getByPath(normalizedPath);
     if (existing) {
       return existing;
@@ -214,14 +443,25 @@ export class DatabaseRegistryService {
         ? jobTursoDatabaseName(input.ownerJobId)
         : dbTursoDatabaseName(dbId));
 
+    const syncMode =
+      input.syncMode === null
+        ? undefined
+        : input.syncMode ??
+          defaultSyncModeForNewRegistryDb({
+            hasExistingLocalData: hasPopulatedFile(normalizedPath),
+          });
     const record: DatabaseRecord = {
       dbId,
       localPath: normalizedPath,
       tursoShortName,
       ...(input.label ? { label: input.label } : {}),
       ...(input.ownerJobId ? { ownerJobId: input.ownerJobId } : {}),
+      ...(input.schemaOwnerAppId
+        ? { schemaOwnerAppId: input.schemaOwnerAppId }
+        : {}),
       isolation: input.isolation ?? "shared",
       status: "active",
+      ...(syncMode ? { syncMode } : {}),
       createdAt: now,
       updatedAt: now,
     };
@@ -229,21 +469,87 @@ export class DatabaseRegistryService {
     const state = this.getState();
     state.databases[dbId] = record;
     await this.save(state);
+
+    if (syncMode === "replica") {
+      try {
+        const { provisionTursoReplicaForRecord } = await import(
+          "./tursoReplica/tursoReplicaProvision.js"
+        );
+        await provisionTursoReplicaForRecord(record);
+        await this.updateReplicaPushState(dbId, { lastReplicaPushError: null });
+      } catch (error) {
+        const message = (error as Error).message.slice(0, 500);
+        console.warn(
+          `[DatabaseRegistry] Turso replica provision failed for ${dbId}: ${message}`,
+        );
+        await this.updateReplicaPushState(dbId, {
+          lastReplicaPushError: message,
+        });
+      }
+    }
+    // cloud-direct needs no provisioning: the Turso primary is created on the
+    // first credential fetch, and there is deliberately no local file.
+
     return record;
+  }
+
+  /**
+   * Set the storage mode on an existing record. Cloud install uses this after
+   * the registry merge (see provisionInstalledDatabase), which then does the
+   * provisioning for the chosen mode.
+   */
+  async assignSyncMode(
+    dbId: string,
+    syncMode: DatabaseSyncMode | undefined,
+  ): Promise<DatabaseRecord | undefined> {
+    const state = this.getState();
+    const record = state.databases[dbId];
+    if (!record || record.status === "tombstone") {
+      return undefined;
+    }
+    if (
+      syncMode === "replica" &&
+      !isEligibleRegistryLocalPath(record.localPath)
+    ) {
+      throw new Error(
+        `Cannot assign syncMode=replica to job scratch path: ${record.localPath}`,
+      );
+    }
+    const { syncMode: _previous, ...rest } = record;
+    const next: DatabaseRecord = {
+      ...rest,
+      ...(syncMode ? { syncMode } : {}),
+      updatedAt: new Date().toISOString(),
+    };
+    state.databases[dbId] = next;
+    await this.save(state);
+    return next;
   }
 
   async ensureForPath(
     dbPath: string,
-    options?: { label?: string; ownerJobId?: string },
+    options?: {
+      label?: string;
+      ownerJobId?: string;
+      schemaOwnerAppId?: string;
+    },
   ): Promise<DatabaseRecord> {
     const normalized = normalizeDbPath(dbPath);
     const existing = this.getByPath(normalized);
     if (existing) {
-      if (options?.ownerJobId && !existing.ownerJobId) {
+      const ownerJobId = options?.ownerJobId;
+      const schemaOwnerAppId = options?.schemaOwnerAppId;
+      if (
+        (ownerJobId && !existing.ownerJobId) ||
+        (schemaOwnerAppId && !existing.schemaOwnerAppId)
+      ) {
         const state = this.getState();
         state.databases[existing.dbId] = {
           ...existing,
-          ownerJobId: options.ownerJobId,
+          ...(ownerJobId && !existing.ownerJobId ? { ownerJobId } : {}),
+          ...(schemaOwnerAppId && !existing.schemaOwnerAppId
+            ? { schemaOwnerAppId }
+            : {}),
           updatedAt: new Date().toISOString(),
         };
         await this.save(state);
@@ -258,7 +564,25 @@ export class DatabaseRegistryService {
       localPath: normalized,
       label: options?.label,
       ownerJobId: options?.ownerJobId,
+      schemaOwnerAppId: options?.schemaOwnerAppId,
     });
+  }
+
+  /** Registry DBs whose migration SQL ships in this app's repo (schema owner). */
+  listBySchemaOwnerApp(appId: string): DatabaseRecord[] {
+    const trimmed = appId.trim();
+    if (!trimmed) {
+      return [];
+    }
+    return Object.values(this.getState().databases).filter(
+      (record) =>
+        record.status === "active" && record.schemaOwnerAppId === trimmed,
+    );
+  }
+
+  isSchemaOwner(appId: string, dbId: string): boolean {
+    const record = this.getById(dbId);
+    return record?.schemaOwnerAppId === appId.trim();
   }
 
   async setIsolation(
@@ -276,7 +600,10 @@ export class DatabaseRegistryService {
     return record;
   }
 
-  async tombstone(dbId: string): Promise<void> {
+  async tombstone(
+    dbId: string,
+    options?: DatabaseRegistrySaveOptions,
+  ): Promise<void> {
     const state = this.getState();
     const record = state.databases[dbId];
     if (!record) {
@@ -284,7 +611,7 @@ export class DatabaseRegistryService {
     }
     record.status = "tombstone";
     record.updatedAt = new Date().toISOString();
-    await this.save(state);
+    await this.save(state, options);
   }
 
   /**
@@ -395,7 +722,12 @@ export class DatabaseRegistryService {
     });
     const byPath = new Map<
       string,
-      { dbPath: string; label?: string; ownerJobId?: string }
+      {
+        dbPath: string;
+        label?: string;
+        ownerJobId?: string;
+        schemaOwnerAppId?: string;
+      }
     >();
 
     for (const entry of entries) {
@@ -420,15 +752,37 @@ export class DatabaseRegistryService {
             continue;
           }
           const normalized = normalizeDbPath(source.dbPath);
+          if (isJobScratchDatabasePath(normalized)) {
+            console.warn(
+              `[DatabaseRegistry] Skipping job scratch dbPath in data-sources sync: ${normalized}`,
+            );
+            continue;
+          }
+          if (
+            source.dbId &&
+            this.getState().databases[source.dbId]?.status === "tombstone"
+          ) {
+            // The app points at a database that was deleted (e.g. an install
+            // rollback that has not removed the app folder yet). Registering
+            // the path again would mint a new id — and on replica devices a
+            // new cloud database — for something that was just cleaned up.
+            continue;
+          }
           const existing = byPath.get(normalized);
           if (!existing) {
             byPath.set(normalized, {
               dbPath: normalized,
               label: source.alias,
               ownerJobId: source.jobId,
+              schemaOwnerAppId: entry.name,
             });
-          } else if (!existing.ownerJobId && source.jobId) {
-            existing.ownerJobId = source.jobId;
+          } else {
+            if (!existing.ownerJobId && source.jobId) {
+              existing.ownerJobId = source.jobId;
+            }
+            if (!existing.schemaOwnerAppId) {
+              existing.schemaOwnerAppId = entry.name;
+            }
           }
         }
       } catch {
@@ -442,6 +796,7 @@ export class DatabaseRegistryService {
       await this.ensureForPath(item.dbPath, {
         label: item.label,
         ownerJobId: item.ownerJobId,
+        schemaOwnerAppId: item.schemaOwnerAppId,
       });
       if (!before) {
         added += 1;
@@ -502,7 +857,15 @@ export class DatabaseRegistryService {
         existing.status === "tombstone" ||
         incoming.updatedAt > existing.updatedAt
       ) {
-        state.databases[dbId] = incoming;
+        const next =
+          !isEligibleRegistryLocalPath(incoming.localPath) &&
+          incoming.syncMode === "replica"
+            ? (() => {
+                const { syncMode: _drop, ...rest } = incoming;
+                return rest as DatabaseRecord;
+              })()
+            : incoming;
+        state.databases[dbId] = next;
         merged += 1;
       }
     }
@@ -527,6 +890,7 @@ export class DatabaseRegistryService {
     }
 
     const normalizedPath = normalizeDbPath(source.dbPath);
+    assertEligibleRegistryLocalPath(normalizedPath);
     const dbId = source.dbId ?? dbIdFromPath(normalizedPath);
     const now = new Date().toISOString();
     const record: DatabaseRecord = {

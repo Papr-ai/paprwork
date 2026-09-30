@@ -5,6 +5,7 @@ import {
   getJobsService,
   type JobDelivery,
   type JobDependency,
+  type JobExecutionCapability,
   type JobMemoryPolicy,
   type JobRetryPolicy,
   type JobSchedule,
@@ -21,6 +22,7 @@ interface CreateJobPayload {
   appIds: string[];
   folder?: string;
   command?: string;
+  requiredKeys?: string[];
   dependsOn?: JobDependency[];
   retries?: JobRetryPolicy;
   deliver?: JobDelivery;
@@ -81,6 +83,7 @@ interface JobLogsPayload {
 interface DeleteJobPayload {
   jobId: string;
   deleteFiles?: boolean;
+  deleteTursoDb?: boolean;
 }
 
 interface UpdateJobPayload {
@@ -100,6 +103,7 @@ interface UpdateJobPayload {
   maxTurns?: number;
   memoryPolicy?: "none" | "summary" | "full";
   reportChatId?: string;
+  executionCapability?: JobExecutionCapability;
 }
 
 interface JobDbInfoPayload {
@@ -212,6 +216,24 @@ export async function setupJobsHandlers(
         sendResponse(ws, { id: message.id, success: true, data: job });
         break;
       }
+      case "jobs:active-list": {
+        sendResponse(ws, {
+          id: message.id,
+          success: true,
+          data: { jobs: jobsService.listActiveJobs() },
+        });
+        break;
+      }
+      case "jobs:stop-all": {
+        const payload = (message.payload ?? {}) as { reason?: string };
+        const reason =
+          typeof payload.reason === "string" && payload.reason.trim()
+            ? payload.reason.trim()
+            : "Job stopped — workspace switch";
+        const result = await jobsService.stopAllJobs(reason);
+        sendResponse(ws, { id: message.id, success: true, data: result });
+        break;
+      }
       case "jobs:update": {
         const payload = message.payload as UpdateJobPayload;
         const { jobId, ...updates } = payload;
@@ -228,13 +250,26 @@ export async function setupJobsHandlers(
         sendResponse(ws, { id: message.id, success: true, data: job });
         break;
       }
+      case "jobs:cloud-status": {
+        await jobsService.initialize();
+        const localJobs = await jobsService.listJobs();
+        const { fetchCloudJobSummaries } = await import(
+          "../services/jobs/jobCloudSummary.js"
+        );
+        const report = await fetchCloudJobSummaries(
+          localJobs.map((job) => job.id),
+        );
+        sendResponse(ws, { id: message.id, success: true, data: report });
+        break;
+      }
       case "jobs:delete": {
         const payload = message.payload as DeleteJobPayload;
         const result = await jobsService.deleteJob(
           payload.jobId,
           payload.deleteFiles ?? false,
+          payload.deleteTursoDb ?? false,
         );
-        sendResponse(ws, { id: message.id, success: true, data: result });
+        sendResponse(ws, { id: message.id, success: true, data: { deleted: true, ...result } });
         break;
       }
       case "jobs:logs": {

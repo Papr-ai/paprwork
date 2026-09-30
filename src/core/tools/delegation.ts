@@ -1,5 +1,14 @@
 import { createTool } from "@mastra/core/tools";
 import { z } from "zod";
+import {
+  buildDelegateTaskValidationError,
+  CODEBASE_EXPLORER_DELEGATE_EXAMPLE,
+  CODEBASE_EXPLORER_DELEGATE_ID,
+  DELEGATE_TASK_EXAMPLE,
+  formatDelegateTaskZodError,
+  PRODUCT_ARCHITECT_DELEGATE_ID,
+  unwrapDelegateTaskRawInput,
+} from "./delegateTaskValidation.js";
 
 /** Valid model IDs for sub-agents — prevents agent from typing name/id in model field */
 const SUBAGENT_MODEL_IDS = [
@@ -8,6 +17,7 @@ const SUBAGENT_MODEL_IDS = [
   "gpt-5-6-sol-low",
   "gpt-5-6-sol",
   "gpt-5-6-sol-high",
+  "gpt-6-astra",
   "gpt-5.4-mini",
   "gpt-5.5-low",
   "gpt-5.5",
@@ -15,15 +25,20 @@ const SUBAGENT_MODEL_IDS = [
   "gpt-5.3-codex",
   "claude-haiku-4-5",
   "claude-sonnet-4-6",
+  "claude-sonnet-5-5",
   "claude-sonnet-5",
   "claude-sonnet-4-5",
   "claude-opus-4-6",
   "claude-opus-5",
-  "claude-fable-5",
+  "claude-opus-5-5",
+  "claude-fable-5-1",
   "gemini-2.5-flash",
   "gemini-2.5-flash-lite",
   "gemini-3.1-flash-lite",
-  "gemini-3.5-flash",
+  "gemini-3.5-flash-lite",
+  "gemini-3.6-flash",
+  "gemini-3.7-flash",
+  "gemini-3.8-flash",
   "gemini-3.1-pro-preview",
 ] as const;
 
@@ -54,30 +69,48 @@ const createSubAgentSchema = z.object({
 
 const deleteSubAgentSchema = z.object({
   agentId: z.string().min(1),
-});
-
-const delegateTaskSchema = z.object({
-  task: z.string().min(1),
-  context: z.string().optional(),
-  useAgentId: z
-    .string()
-    .min(1)
-    .describe(
-      "REQUIRED. Exact sub-agent id from list_sub_agents() or create_sub_agent() — e.g. 'research-specialist' or 'agent-uuid'. Never omit; omitting previously routed to the wrong agent.",
-    ),
-  reportChatId: z
-    .string()
-    .min(1)
+  force: z
+    .boolean()
     .optional()
     .describe(
-      "Chat ID to deliver result to. Omit for logs-only. When delegating work the user should see, pass this or leave empty to auto-use current chat.",
+      "Set true only after removing app agent chat / job references. Default blocks delete when apps or jobs still reference this profile.",
     ),
-  background: z.boolean().optional(),
-  outputMode: z.enum(["natural", "structured"]).optional(),
-  outputSchema: z.record(z.string(), z.unknown()).optional(),
-  maxTurns: z.number().int().min(1).max(100).optional(),
-  memoryPolicy: z.enum(["none", "summary", "full"]).optional(),
 });
+
+const delegateTaskSchema = z
+  .object({
+    useAgentId: z
+      .string()
+      .min(1)
+      .describe(
+        'REQUIRED first field. Exact sub-agent id from list_sub_agents() — for every new mini-app use "product-architect". Never agentId, subAgentId, or display name.',
+      ),
+    task: z
+      .string()
+      .min(1)
+      .describe(
+        "What the sub-agent should produce. For product-architect: Product brief + Paprwork architecture for: [one-sentence user goal].",
+      ),
+    context: z
+      .string()
+      .optional()
+      .describe(
+        "Optional constraints: user requirements, existing apps/jobs, data sources, brand notes.",
+      ),
+    reportChatId: z
+      .string()
+      .min(1)
+      .optional()
+      .describe(
+        "Chat ID to deliver result to. Omit to auto-use current chat.",
+      ),
+    background: z.boolean().optional(),
+    outputMode: z.enum(["natural", "structured"]).optional(),
+    outputSchema: z.record(z.string(), z.unknown()).optional(),
+    maxTurns: z.number().int().min(1).max(100).optional(),
+    memoryPolicy: z.enum(["none", "summary", "full"]).optional(),
+  })
+  .strict();
 
 const getDelegationRunSchema = z.object({
   runId: z.string().min(1),
@@ -89,14 +122,14 @@ const listDelegationRunsSchema = z.object({
 
 type CreateSubAgentArgs = z.infer<typeof createSubAgentSchema>;
 type DeleteSubAgentArgs = z.infer<typeof deleteSubAgentSchema>;
-type DelegateTaskArgs = z.infer<typeof delegateTaskSchema>;
 type GetDelegationRunArgs = z.infer<typeof getDelegationRunSchema>;
 type ListDelegationRunsArgs = z.infer<typeof listDelegationRunsSchema>;
 
 export const listSubAgentsTool = createTool({
   id: "list_sub_agents",
   description:
-    "List available sub-agent profiles. For app+job automation, product-architect (brief + architecture) is recommended before heavy build work.",
+    "List sub-agent profiles. REQUIRED before delegate_task — copy the exact id field into useAgentId. " +
+    `For every create_app: delegate to id "${PRODUCT_ARCHITECT_DELEGATE_ID}" first (tool-enforced).`,
   // OpenAI function tools require parameters schema to always be an object.
   inputSchema: z.object({}),
   execute: async () => {
@@ -111,12 +144,12 @@ export const listSubAgentsTool = createTool({
       data: {
         count: summaries.length,
         /** Always use exact id — built-ins are seeded even if custom agents dominate the list */
-        recommendedForAppBuild: "product-architect",
+        recommendedForAppBuild: PRODUCT_ARCHITECT_DELEGATE_ID,
         builtInAgents: builtIn,
         agents: summaries,
         hint:
-          'delegate_task({ useAgentId: "product-architect", task: "...", context: "..." }) ' +
-          "for brief + architecture before complex app+job work. Full profiles: create_sub_agent / get agent by id.",
+          `${DELEGATE_TASK_EXAMPLE} — required before create_app (gate enforced). ` +
+          "Wait for delegation to complete (get_delegation_run / MiniChat card) before create_plan or create_app.",
       },
     };
   },
@@ -154,25 +187,83 @@ export const createSubAgentTool = createTool({
 
 export const deleteSubAgentTool = createTool({
   id: "delete_sub_agent",
-  description: "Delete a persistent sub-agent profile",
+  description:
+    "Delete a persistent sub-agent profile. Blocked when apps (agent chat) or subagent jobs still reference the profile unless force: true.",
   inputSchema: deleteSubAgentSchema,
   execute: async (input) => {
     const args = (input as { context?: DeleteSubAgentArgs }).context ?? input;
     const { getSubAgentService } =
       await import("../../gateway/services/SubAgentService.js");
     const service = getSubAgentService();
-    const deleted = await service.deleteAgent(args.agentId);
-    return { success: true, data: { agentId: args.agentId, deleted } };
+    try {
+      const deleted = await service.deleteAgent(args.agentId, {
+        force: args.force === true,
+      });
+      return { success: true, data: { agentId: args.agentId, deleted } };
+    } catch (error) {
+      throw new Error(
+        JSON.stringify({
+          success: false,
+          error: (error as Error).message,
+        }),
+      );
+    }
   },
 });
 
 export const delegateTaskTool = createTool({
   id: "delegate_task",
   description:
-    "Delegate a task to a specific sub-agent (background job with MiniChat). REQUIRED: call list_sub_agents() first, then pass useAgentId with the exact id field from the agent list — not the display name unless it uniquely matches.",
+    "Delegate work to a sub-agent (background job + MiniChat). " +
+    "REQUIRED before create_app: list_sub_agents() then " +
+    `${DELEGATE_TASK_EXAMPLE}. ` +
+    `For multi-step read-only investigation (4+ tool calls before any write), prefer ${CODEBASE_EXPLORER_DELEGATE_ID}: ${CODEBASE_EXPLORER_DELEGATE_EXAMPLE}. ` +
+    "Parameter name is useAgentId only — not agentId or subAgentId. Wait for completion before create_app.",
   inputSchema: delegateTaskSchema,
   execute: async (input) => {
-    const args = (input as { context?: DelegateTaskArgs }).context ?? input;
+    const raw = unwrapDelegateTaskRawInput(input);
+    const validationError = buildDelegateTaskValidationError(raw);
+    if (validationError) {
+      return {
+        success: false,
+        error: validationError,
+        type: "validation_error" as const,
+        data: {
+          retryExample: DELEGATE_TASK_EXAMPLE,
+          requiredField: "useAgentId",
+          productArchitectId: PRODUCT_ARCHITECT_DELEGATE_ID,
+        },
+      };
+    }
+
+    const parsed = delegateTaskSchema.safeParse(raw);
+    if (!parsed.success) {
+      return {
+        success: false,
+        error: formatDelegateTaskZodError(parsed.error),
+        type: "validation_error" as const,
+        data: {
+          retryExample: DELEGATE_TASK_EXAMPLE,
+          issues: parsed.error.issues.map((issue) => ({
+            path: issue.path.join("."),
+            message: issue.message,
+          })),
+        },
+      };
+    }
+
+    const args = parsed.data;
+    // Sub-agents get no workspace files — hand the architect the user's brand so the
+    // plan uses it (or flags that it must be asked for).
+    if (args.useAgentId === PRODUCT_ARCHITECT_DELEGATE_ID) {
+      const { loadBrandDesignContext } = await import(
+        "../../gateway/services/brandDesignContext.js"
+      );
+      const brand = await loadBrandDesignContext();
+      if (brand && !(args.context ?? "").includes("## User Brand")) {
+        args.context = [args.context, brand.block].filter(Boolean).join("\n\n");
+      }
+    }
     const { getSubAgentService } =
       await import("../../gateway/services/SubAgentService.js");
     const { getCurrentChatId } = await import("./context.js");
@@ -196,7 +287,9 @@ export const delegateTaskTool = createTool({
 
 export const getDelegationRunTool = createTool({
   id: "get_delegation_run",
-  description: "Get status/details for one delegated sub-agent run",
+  description:
+    "Get status/details for one delegated sub-agent run. resultText is the full handoff (not truncated for agent jobs). " +
+    "codebase-explorer returns markdown + JSON findings — read once, then implement without repeating the same reads.",
   inputSchema: getDelegationRunSchema,
   execute: async (input) => {
     const args = (input as { context?: GetDelegationRunArgs }).context ?? input;

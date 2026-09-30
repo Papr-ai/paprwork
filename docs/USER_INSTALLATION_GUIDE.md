@@ -10,7 +10,7 @@ This guide explains what's included in the Paprwork app and what prerequisites u
 
 ### ✅ What's Included (Nothing to Install!)
 
-The packaged app (DMG/PKG for Mac, EXE for Windows, AppImage/DEB for Linux) includes **EVERYTHING** you need:
+The packaged app (PKG or ZIP for Mac, EXE for Windows, AppImage/DEB for Linux) includes **EVERYTHING** you need:
 
 - **Electron Runtime** - Built-in, no separate install needed
 - **Node.js** - Embedded in Electron (v24.13.0)
@@ -204,7 +204,7 @@ Agent: [Runs platform-specific install]
 
 ## 🚀 Recommended Setup for Non-Technical Users
 
-1. **Download packaged app** (DMG/EXE/AppImage)
+1. **Download packaged app** — Mac: **`.pkg` recommended** (auto-opens after install); **`.zip`** is manual drag-to-Applications. Windows: `.exe`. Linux: AppImage or `.deb`.
 2. **Double-click to install**
 3. **Sign in with Papr** (optional but recommended - auto-provisions API keys)
 4. **Start chatting** - Everything else auto-installs as needed!

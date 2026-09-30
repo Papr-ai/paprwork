@@ -5,6 +5,7 @@ import { describe, expect, it, beforeEach } from "vitest";
 import type { CloudPublishState } from "../ui/utils/cloudPublishApi";
 import {
   readCachedCloudPublishState,
+  selectAppIdsForPublishRevalidation,
   writeCachedCloudPublishState,
 } from "../ui/utils/cloudPublishCache";
 
@@ -44,5 +45,24 @@ describe("cloudPublishCache", () => {
     writeCachedCloudPublishState("app-1", sampleState("app-1"));
     writeCachedCloudPublishState("app-1", null);
     expect(readCachedCloudPublishState("app-1")).toBeNull();
+  });
+
+  it("bootstraps revalidation when publish cache is empty", () => {
+    const ids = ["a", "b", "c"];
+    expect(selectAppIdsForPublishRevalidation(ids, {})).toEqual(ids);
+  });
+
+  it("prefers cached apps when revalidating", () => {
+    const cached = { b: sampleState("b") };
+    expect(
+      selectAppIdsForPublishRevalidation(["a", "b", "c"], cached),
+    ).toEqual(["b"]);
+  });
+
+  it("refuses to write publish state under the wrong app id", () => {
+    writeCachedCloudPublishState("app-1", sampleState("app-1"));
+    writeCachedCloudPublishState("app-2", sampleState("app-1"));
+    expect(readCachedCloudPublishState("app-2")).toBeNull();
+    expect(readCachedCloudPublishState("app-1")?.loginAccess).toBe("team");
   });
 });

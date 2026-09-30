@@ -10,6 +10,48 @@ import {
 import type { AppDataSource } from "../src/gateway/services/appDataSources.js";
 import type { DbQueryPool } from "../src/gateway/services/DbQueryPool.js";
 
+const mockQueryLinkedDbViaTursoReplica = vi.fn();
+const mockShouldUseTursoReplicaForSource = vi.fn();
+const mockReplicaClose = vi.fn(async () => undefined);
+const mockGetTursoReplicaService = vi.fn(() => ({
+  close: mockReplicaClose,
+}));
+const mockIsReplicaReadPathDegraded = vi.fn(() => false);
+const mockClearReplicaReadPathDegraded = vi.fn();
+const mockIsTursoReplicaOnline = vi.fn(() => true);
+
+vi.mock("../src/gateway/services/tursoReplica/TursoReplicaService.js", () => ({
+  getTursoReplicaService: () => mockGetTursoReplicaService(),
+}));
+
+vi.mock("../src/gateway/services/tursoReplica/tursoReplicaBackgroundRecovery.js", () => ({
+  isReplicaReadPathDegraded: (...args: unknown[]) =>
+    mockIsReplicaReadPathDegraded(...args),
+  clearReplicaReadPathDegraded: (...args: unknown[]) =>
+    mockClearReplicaReadPathDegraded(...args),
+}));
+
+vi.mock("../src/gateway/utils/tursoReplicaEnabled.js", () => ({
+  isTursoReplicaOnline: () => mockIsTursoReplicaOnline(),
+  isTursoReplicaSyncFeatureEnabled: () => true,
+  shouldUseTursoReplicaForDb: () => true,
+  shouldRunReplicaCutover: () => false,
+  isLegacyWorkspaceRowSyncEnabled: () => false,
+}));
+
+vi.mock("../src/gateway/services/DatabaseRegistryService.js", () => ({
+  resolveTursoDatabaseNameForSource: () => null,
+}));
+
+vi.mock("../src/gateway/services/tursoReplica/tursoReplicaRouting.js", () => ({
+  queryLinkedDbViaTursoReplica: (...args: unknown[]) =>
+    mockQueryLinkedDbViaTursoReplica(...args),
+  recoverReplicaAfterCheckpointError: vi.fn(),
+  schemaLinkedDbViaTursoReplica: vi.fn(),
+  shouldUseTursoReplicaForSource: (...args: unknown[]) =>
+    mockShouldUseTursoReplicaForSource(...args),
+}));
+
 describe("isLocalDbReadable", () => {
   it("returns false for missing file", () => {
     expect(isLocalDbReadable("/tmp/does-not-exist-db-router.db")).toBe(false);
@@ -39,6 +81,12 @@ describe("DbRouter", () => {
 
   beforeEach(() => {
     resetDbRouterTursoCache();
+    mockShouldUseTursoReplicaForSource.mockReturnValue(false);
+    mockQueryLinkedDbViaTursoReplica.mockReset();
+    mockReplicaClose.mockClear();
+    mockIsReplicaReadPathDegraded.mockReturnValue(false);
+    mockClearReplicaReadPathDegraded.mockClear();
+    mockIsTursoReplicaOnline.mockReturnValue(true);
     pool = {
       query: vi.fn().mockResolvedValue({
         rows: [{ id: 1 }],
@@ -75,5 +123,94 @@ describe("DbRouter", () => {
     await expect(
       router.write("app-1", source, "INSERT INTO t VALUES (1)", []),
     ).rejects.toThrow(/Cannot write/);
+  });
+
+  it("uses turso replica sync engine for replica sources", async () => {
+    const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), "db-router-replica-"));
+    const dbPath = path.join(tmpDir, "data.db");
+    fs.writeFileSync(dbPath, "sqlite");
+    const replicaSource: AppDataSource = {
+      ...source,
+      dbId: "db-test",
+      dbPath,
+      alias: "sqa",
+    };
+
+    mockShouldUseTursoReplicaForSource.mockReturnValue(true);
+    mockQueryLinkedDbViaTursoReplica.mockResolvedValue({
+      rows: [{ id: 1 }],
+      columns: ["id"],
+      count: 1,
+    });
+
+    const router = new DbRouter(pool);
+    const result = await router.query("app-1", replicaSource, "SELECT 1", []);
+
+    expect(result.backend).toBe("turso-replica");
+    expect(pool.query).not.toHaveBeenCalled();
+    expect(mockQueryLinkedDbViaTursoReplica).toHaveBeenCalledWith(
+      replicaSource,
+      "SELECT 1",
+      [],
+      { pullBeforeRead: false },
+    );
+
+    fs.rmSync(tmpDir, { recursive: true, force: true });
+  });
+
+  it("times out mini-app replica reads when local db is missing", async () => {
+    const replicaSource: AppDataSource = {
+      ...source,
+      dbId: "db-test",
+      alias: "sqa",
+    };
+
+    mockShouldUseTursoReplicaForSource.mockReturnValue(true);
+    mockQueryLinkedDbViaTursoReplica.mockRejectedValue(
+      new Error("replica read (sqa) timed out after 2500ms"),
+    );
+
+    const router = new DbRouter(pool);
+    await expect(
+      router.query("app-1", replicaSource, "SELECT 1", []),
+    ).rejects.toThrow(/timed out/);
+
+    expect(mockQueryLinkedDbViaTursoReplica).toHaveBeenCalledTimes(2);
+    expect(pool.query).not.toHaveBeenCalled();
+    expect(mockReplicaClose).not.toHaveBeenCalled();
+  });
+
+  it("prefers local replica over Turso primary when path is degraded", async () => {
+    const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), "db-router-degraded-"));
+    const dbPath = path.join(tmpDir, "data.db");
+    fs.writeFileSync(dbPath, "sqlite");
+    const replicaSource: AppDataSource = {
+      ...source,
+      dbId: "db-test",
+      dbPath,
+      alias: "sqa",
+    };
+
+    mockShouldUseTursoReplicaForSource.mockReturnValue(true);
+    mockIsReplicaReadPathDegraded.mockReturnValue(true);
+    mockQueryLinkedDbViaTursoReplica.mockResolvedValue({
+      rows: [{ id: 1 }],
+      columns: ["id"],
+      count: 1,
+    });
+
+    const router = new DbRouter(pool);
+    const result = await router.query("app-1", replicaSource, "SELECT 1", []);
+
+    expect(result.backend).toBe("turso-replica");
+    expect(mockQueryLinkedDbViaTursoReplica).toHaveBeenCalledWith(
+      replicaSource,
+      "SELECT 1",
+      [],
+      { pullBeforeRead: false },
+    );
+    expect(mockClearReplicaReadPathDegraded).toHaveBeenCalledWith(dbPath);
+
+    fs.rmSync(tmpDir, { recursive: true, force: true });
   });
 });

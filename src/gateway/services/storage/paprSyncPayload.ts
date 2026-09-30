@@ -7,6 +7,7 @@
  */
 
 import type { MemoryAddPolicy } from "@papr/memory/resources/shared.js";
+import { buildPaprMemoryUserIdentity } from "../../../core/utils/paprMemoryUserIdentity.js";
 import type { StoredMessage } from "./IStorageProvider.js";
 
 /** Client budget — leave headroom for memory server → Parse wrapper. */
@@ -35,7 +36,10 @@ export interface PaprMessageStoreBody {
     createdAt: string;
     role: "user" | "assistant";
     customMetadata: PaprSyncCustomMetadata;
+    user_id?: string;
+    external_user_id?: string;
   };
+  user_id?: string;
   external_user_id?: string;
   namespace_id?: string;
   policy?: MemoryAddPolicy;
@@ -232,22 +236,51 @@ function buildPaprSyncSummaryFallback(message: StoredMessage): string {
   return `${preview}${toolLine}\n[Full message stored locally — cloud sync truncated due to size]`;
 }
 
+/** Paprwork isolated job runs use session ids like ``job:{jobId}:{runId}``. */
+export function isJobSessionChatId(chatId: string): boolean {
+  return chatId.startsWith("job:");
+}
+
+export {
+  extractJobIdFromChatId,
+  JOB_SESSION_PROCESS_INTERVAL_MS,
+  resetJobSessionProcessThrottleForTests,
+  shouldEnableJobSessionProcessMessages,
+} from "./jobSessionProcessThrottle.js";
+
+import { shouldEnableJobSessionProcessMessages } from "./jobSessionProcessThrottle.js";
+
+function resolveProcessMessages(
+  chatId: string,
+  processMessages?: boolean,
+): boolean {
+  if (processMessages !== undefined) {
+    return processMessages;
+  }
+  if (!isJobSessionChatId(chatId)) {
+    return true;
+  }
+  // Occasional job summaries — throttled to avoid cross-session analysis storms.
+  return shouldEnableJobSessionProcessMessages(chatId);
+}
+
 function assembleStoreBody(
   chatId: string,
   message: StoredMessage,
   content: string | PaprContentBlock[],
   customMetadata: PaprSyncCustomMetadata,
   scope?: {
-    externalUserId?: string;
+    userId?: string;
     namespaceId?: string;
     policy?: MemoryAddPolicy;
   },
+  processMessages?: boolean,
 ): PaprMessageStoreBody {
   const body: PaprMessageStoreBody = {
     content,
     role: message.role,
     sessionId: chatId,
-    process_messages: true,
+    process_messages: resolveProcessMessages(chatId, processMessages),
     metadata: {
       conversationId: chatId,
       createdAt: message.timestamp,
@@ -256,8 +289,12 @@ function assembleStoreBody(
     },
   };
 
-  if (scope?.externalUserId) {
-    body.external_user_id = scope.externalUserId;
+  if (scope?.userId) {
+    const identity = buildPaprMemoryUserIdentity(scope.userId);
+    body.user_id = identity.user_id;
+    body.external_user_id = identity.external_user_id;
+    body.metadata.user_id = identity.user_id;
+    body.metadata.external_user_id = identity.external_user_id;
   }
   if (scope?.namespaceId) {
     body.namespace_id = scope.namespaceId;
@@ -272,15 +309,17 @@ function assembleStoreBody(
 export function buildPaprSyncStoreBody(input: {
   chatId: string;
   message: StoredMessage;
-  externalUserId?: string;
+  userId?: string;
   namespaceId?: string;
   policy?: MemoryAddPolicy;
   maxBytes?: number;
+  /** Override auto job-session detection when callers need explicit control. */
+  processMessages?: boolean;
 }): PaprMessageStoreBody {
   const maxBytes = input.maxBytes ?? PAPR_SYNC_MAX_BYTES;
   const customMetadata = buildPaprSyncCustomMetadata(input.message);
   const scope = {
-    externalUserId: input.externalUserId,
+    userId: input.userId,
     namespaceId: input.namespaceId,
     policy: input.policy,
   };
@@ -294,6 +333,7 @@ export function buildPaprSyncStoreBody(input: {
       content,
       customMetadata,
       scope,
+      input.processMessages,
     );
 
     if (measurePaprStoreBodyBytes(body) <= maxBytes) {
@@ -311,5 +351,6 @@ export function buildPaprSyncStoreBody(input: {
     buildPaprSyncSummaryFallback(input.message),
     customMetadata,
     scope,
+    input.processMessages,
   );
 }

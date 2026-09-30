@@ -1,3 +1,6 @@
+import { DiagnosticOperation } from "../../../core/utils/performanceDiagnostics.js";
+import { scanCodeFiles } from "./scanCodeFiles.js";
+import { gatewayBackgroundBudget } from "../gatewayBackgroundBudget.js";
 /**
  * Smart Code Index Manager
  * 
@@ -22,6 +25,14 @@ import {
 import * as path from 'path';
 import * as fs from 'fs';
 import { resolvePaprUserDataPath } from '../../../core/utils/paprWorkspace.js';
+import { reportPaprQuotaError, isPaprSubscriptionBlockedMessage } from '../../../core/utils/paprQuota.js';
+import { readCodeFileForIndex } from '../CodeIndexIoPool.js';
+
+/**
+ * Max transient failures per file before it is dropped from the index queue.
+ * Prevents a single unparseable file from looping the batch scheduler forever.
+ */
+const MAX_INDEX_ATTEMPTS = 3;
 
 export interface IndexManagerConfig {
   paprDir?: string;
@@ -32,6 +43,7 @@ export interface IndexManagerConfig {
 }
 
 export class SmartCodeIndexManager {
+  private initialScanAbort = new AbortController();
   private config: Required<IndexManagerConfig>;
   private tracker: CodeIndexTracker;
   private indexer: CodeIndexerService;
@@ -43,6 +55,7 @@ export class SmartCodeIndexManager {
   private queueInterval: NodeJS.Timeout | null = null;
   private isIndexing: boolean = false;
   private rateLimitHit: boolean = false;
+  private subscriptionPaused: boolean = false;
   private stopped = false;
   
   constructor(client: Papr, config: IndexManagerConfig) {
@@ -55,7 +68,14 @@ export class SmartCodeIndexManager {
     };
     
     this.tracker = new CodeIndexTracker(this.config.dataDir);
-    this.indexer = new CodeIndexerService(client, this.config.schemaId, this.config.paprDir);
+    // Tracker is passed so re-indexed files UPDATE their existing memory
+    // instead of inserting a duplicate (indexed_files.memory_id).
+    this.indexer = new CodeIndexerService(
+      client,
+      this.config.schemaId,
+      this.config.paprDir,
+      this.tracker,
+    );
     this.watcher = new CodeFileWatcher(client, this.config.schemaId, this.config.paprDir);
     this.summaryPipeline = new CodeSummaryIndexPipeline(
       client,
@@ -79,7 +99,16 @@ export class SmartCodeIndexManager {
     console.log('🚀 Starting Smart Code Index Manager...');
     
     // Initial indexing on startup
-    await this.initialIndex();
+    const scanTrace = new DiagnosticOperation("indexing", "initial-scan");
+    try {
+      await this.initialIndex();
+      scanTrace.finish(this.stopped ? "cancelled" : "completed");
+    } catch (error) {
+      scanTrace.error(error);
+      scanTrace.finish("error");
+      throw error;
+    }
+    if (this.stopped) return;
     
     // Start file watcher
     this.startFileWatcher();
@@ -104,6 +133,7 @@ export class SmartCodeIndexManager {
 
     console.log('🛑 Stopping Smart Code Index Manager...');
     this.stopped = true;
+    this.initialScanAbort.abort();
     
     if (this.debounceTimer) {
       clearTimeout(this.debounceTimer);
@@ -149,27 +179,34 @@ export class SmartCodeIndexManager {
     
     this.purgeInvalidQueuedFiles();
 
-    // Scan filesystem for all code files
-    const allFiles = this.scanAllFiles();
-    console.log(`   Found: ${allFiles.length} total code files`);
-    
-    // Queue files that need indexing
     let newFiles = 0;
     let changedFiles = 0;
-    
-    for (const filePath of allFiles) {
-      try {
-        if (this.tracker.needsIndexing(filePath)) {
-          const isNew = !fs.existsSync(filePath); // Simplified check
-          this.tracker.queueFile(filePath, isNew ? 1 : 0);
-          if (isNew) newFiles++;
-          else changedFiles++;
+    let scannedFiles = 0;
+    try {
+      for await (const filePath of scanCodeFiles(this.config.paprDir, this.initialScanAbort.signal)) {
+        if (this.stopped) return;
+        scannedFiles++;
+        try {
+          // Per-file admission lets a newly started chat pause further indexing.
+          await gatewayBackgroundBudget.run("code-index:initial-file", async () => {
+            const fileIo = await readCodeFileForIndex(filePath);
+            if (this.stopped) return;
+            if (this.tracker.needsIndexingWithHash(filePath, fileIo.hash)) {
+              this.tracker.queueFile(filePath, 0);
+              changedFiles++;
+            }
+          }, this.initialScanAbort.signal);
+        } catch (error) {
+          if (this.stopped) return;
+          console.warn(`   ⚠️ Error checking ${filePath}:`, (error as Error).message);
         }
-      } catch (error) {
-        console.error(`   ⚠️  Error checking ${filePath}:`, (error as Error).message);
       }
+    } catch (error) {
+      if (this.stopped) return;
+      throw error;
     }
-    
+    console.log(`   Found: ${scannedFiles} total code files`);
+
     const queueSize = this.tracker.getQueueSize();
     console.log(`   Queued: ${queueSize} files (${newFiles} new, ${changedFiles} changed)`);
     
@@ -180,58 +217,6 @@ export class SmartCodeIndexManager {
     }
   }
   
-  /**
-   * Scan filesystem for all code files inside project directories only.
-   */
-  private scanAllFiles(): string[] {
-    const files: string[] = [];
-    const codeExtensions = ['.ts', '.tsx', '.js', '.jsx', '.py'];
-    const excludeDirs = [
-      'node_modules', '.venv', 'venv', '.git', 'dist', 'build', 'data',
-      '__pycache__', '.next', '.nuxt', 'papr_repo'
-    ];
-
-    const scanProjectTree = (dir: string): void => {
-      if (!fs.existsSync(dir)) return;
-
-      for (const entry of fs.readdirSync(dir)) {
-        if (excludeDirs.includes(entry) || entry.includes('_repo')) {
-          continue;
-        }
-
-        const fullPath = path.join(dir, entry);
-        const stat = fs.statSync(fullPath);
-
-        if (stat.isDirectory()) {
-          scanProjectTree(fullPath);
-        } else if (stat.isFile()) {
-          const ext = path.extname(entry);
-          if (codeExtensions.includes(ext)) {
-            files.push(fullPath);
-          }
-        }
-      }
-    };
-
-    for (const container of ['apps', 'Jobs'] as const) {
-      const containerPath = path.join(this.config.paprDir, container);
-      if (!fs.existsSync(containerPath)) continue;
-
-      for (const entry of fs.readdirSync(containerPath)) {
-        const projectPath = path.join(containerPath, entry);
-        try {
-          if (fs.statSync(projectPath).isDirectory()) {
-            scanProjectTree(projectPath);
-          }
-        } catch {
-          // Skip unreadable entries
-        }
-      }
-    }
-
-    return files;
-  }
-
   /**
    * Remove queued files that cannot be indexed (e.g. loose files in Jobs/ root).
    */
@@ -317,7 +302,18 @@ export class SmartCodeIndexManager {
    * Run batch indexing
    */
   private async runBatch(): Promise<void> {
-    if (this.stopped || this.rateLimitHit) {
+    if (this.stopped || this.rateLimitHit || this.subscriptionPaused) {
+      return;
+    }
+
+    const { isHeavyBackgroundWorkDeferred } = await import(
+      "../gatewayBackgroundWork.js"
+    );
+    if (await isHeavyBackgroundWorkDeferred()) {
+      console.log(
+        "[CodeIndexing] Deferring batch — interactive hot path or gateway load",
+      );
+      this.scheduleBatch(5000);
       return;
     }
 
@@ -335,7 +331,7 @@ export class SmartCodeIndexManager {
     this.isIndexing = true;
 
     try {
-      await this.processBatch();
+      await gatewayBackgroundBudget.run("code-index:batch", () => this.processBatch(), this.initialScanAbort.signal);
     } catch (error) {
       console.error('❌ Batch processing error:', error);
     } finally {
@@ -350,7 +346,7 @@ export class SmartCodeIndexManager {
 
       this.isIndexing = false;
 
-      if (!this.stopped && !this.rateLimitHit && this.tracker.getQueueSize() > 0) {
+      if (!this.stopped && !this.rateLimitHit && !this.subscriptionPaused && this.tracker.getQueueSize() > 0) {
         this.scheduleBatch(1000);
       }
     }
@@ -382,15 +378,15 @@ export class SmartCodeIndexManager {
           continue;
         }
         
-        // Re-check if still needs indexing (may have been indexed by another process)
-        if (!this.tracker.needsIndexing(queuedFile.file_path)) {
+        const fileIo = await readCodeFileForIndex(queuedFile.file_path);
+
+        if (!this.tracker.needsIndexingWithHash(queuedFile.file_path, fileIo.hash)) {
           console.log(`   ⏭️  Skipped (unchanged): ${path.basename(queuedFile.file_path)}`);
           this.tracker.dequeueFile(queuedFile.file_path);
           continue;
         }
-        
-        // Index the file
-        await this.indexSingleFile(queuedFile.file_path);
+
+        await this.indexSingleFile(queuedFile.file_path, fileIo);
         
         // Remove from queue
         this.tracker.dequeueFile(queuedFile.file_path);
@@ -402,17 +398,31 @@ export class SmartCodeIndexManager {
         
       } catch (error) {
         const err = error as Error;
-        
+
+        if (isPaprSubscriptionBlockedMessage(err.message)) {
+          reportPaprQuotaError(error, "code-index");
+          console.error(`   ⏹️  Code indexing paused — no active Papr subscription.`);
+          console.error(`   💡 ${err.message.slice(0, 200)}`);
+          console.error(
+            "   💡 Fix billing in Settings → Plan & usage, then restart the app.",
+          );
+          this.subscriptionPaused = true;
+          this.tracker.dequeueFile(queuedFile.file_path);
+          break;
+        }
+
         // Check if it's a rate limit or service error from PAPR Memory
-        const isRateLimitError = error instanceof Papr.RateLimitError || 
-                                  error instanceof Papr.PermissionDeniedError ||
-                                  err.message.includes('403') || 
-                                  err.message.includes('503') || // Service unavailable (often rate limiting)
-                                  err.message.includes('429') || // Too many requests
-                                  err.message.includes('limit') ||
-                                  err.message.includes('quota');
+        const isRateLimitError =
+          error instanceof Papr.RateLimitError ||
+          err.message.includes("503") ||
+          err.message.includes("429") ||
+          err.message.includes("limit") ||
+          err.message.includes("quota") ||
+          (err.message.includes("403") &&
+            !isPaprSubscriptionBlockedMessage(err.message));
         
         if (isRateLimitError) {
+          reportPaprQuotaError(error, "code-index");
           // Extract the actual error message from PAPR API
           let errorMessage = err.message;
           if (error instanceof Papr.RateLimitError) {
@@ -433,8 +443,29 @@ export class SmartCodeIndexManager {
           console.error('   ⚠️  Removing from queue (permanent error)');
           this.tracker.dequeueFile(queuedFile.file_path);
         } else {
-          console.error(`   ❌ Failed to index ${queuedFile.file_path}: ${err.message}`);
-          // Keep in queue for transient errors
+          // Transient error: keep in queue, but bound the retries. Without a
+          // cap, a file that always fails (e.g. malformed JSON from the summary
+          // model) is retried every second forever, flooding logs and starving
+          // the rest of the queue.
+          const attempts = this.tracker.recordQueueFailure(
+            queuedFile.file_path,
+            err.message,
+          );
+
+          if (attempts >= MAX_INDEX_ATTEMPTS) {
+            console.error(
+              `   ❌ Failed to index ${queuedFile.file_path}: ${err.message}`,
+            );
+            console.error(
+              `   ⚠️  Giving up after ${attempts} attempts — removing from queue.`,
+            );
+            this.tracker.dequeueFile(queuedFile.file_path);
+          } else {
+            console.error(
+              `   ❌ Failed to index ${queuedFile.file_path} ` +
+                `(attempt ${attempts}/${MAX_INDEX_ATTEMPTS}): ${err.message}`,
+            );
+          }
         }
       }
     }
@@ -460,33 +491,35 @@ export class SmartCodeIndexManager {
   /**
    * Index a single file
    */
-  private async indexSingleFile(filePath: string): Promise<void> {
-    const hash = this.tracker.calculateFileHash(filePath);
-    const content = fs.readFileSync(filePath, 'utf-8');
-    
+  private async indexSingleFile(
+    filePath: string,
+    fileIo: { content: string; hash: string; lineCount: number },
+  ): Promise<void> {
     const projectInfo = getProjectPathInfo(filePath, this.config.paprDir);
     if (!projectInfo) {
       throw new Error('File is not indexable — must be inside apps/{id}/ or Jobs/{id}/');
     }
 
     try {
-      await this.summaryPipeline.processChangedFile(filePath);
+      await this.summaryPipeline.processChangedFile(filePath, {
+        content: fileIo.content,
+        hash: fileIo.hash,
+      });
     } catch (error) {
       const message = error instanceof Error ? error.message : String(error);
       console.warn(`[CodeSummary] File summary failed for ${path.basename(filePath)}: ${message}`);
     }
 
-    await this.indexer.indexSingleCodeFile(filePath);
-    
-    // Record in tracker after successful API indexing
+    await this.indexer.indexSingleCodeFile(filePath, fileIo);
+
     this.tracker.recordIndexedFile({
       file_path: filePath,
-      content_hash: hash,
+      content_hash: fileIo.hash,
       last_indexed_at: new Date(),
       schema_version: this.config.schemaId,
       project_id: projectInfo.projectId,
-      lines_of_code: content.split('\n').length,
-      language: this.detectLanguage(path.extname(filePath))
+      lines_of_code: fileIo.lineCount,
+      language: this.detectLanguage(path.extname(filePath)),
     });
   }
   
@@ -520,6 +553,18 @@ export class SmartCodeIndexManager {
 
     this.queueInterval = setInterval(checkQueue, 10000);
 
+    if (this.tracker.getQueueSize() > 0) {
+      this.scheduleBatch(0);
+    }
+  }
+
+  /** Resume indexing after billing restore (active/trialing subscription). */
+  resumeAfterSubscriptionRestore(): void {
+    if (this.stopped || !this.subscriptionPaused) {
+      return;
+    }
+    this.subscriptionPaused = false;
+    console.log("[CodeIndexing] Resuming after billing restore");
     if (this.tracker.getQueueSize() > 0) {
       this.scheduleBatch(0);
     }

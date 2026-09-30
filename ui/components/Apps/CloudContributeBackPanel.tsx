@@ -1,14 +1,16 @@
 /**
- * Fork/track panel — pull upstream updates (track) or contribute back (fork/track).
+ * Propose sheet body — send edits to the publisher, then see what you sent.
+ *
+ * No GitHub links: the publisher's repo is private, so a PR URL would 404 for
+ * the contributor. Status comes from the memory server's outgoing list.
  */
 
-import { useState } from "react";
+import { useCallback, useEffect, useState } from "react";
 import {
-  formatLastSyncedAt,
-  formatTrackSyncSummary,
-  pullTrackUpstream,
-  type TrackSyncResult,
-} from "../../utils/cloudTrackSyncApi";
+  listSentProposals,
+  submitCloudAppChange,
+  type SentProposal,
+} from "../../utils/cloudContributeApi";
 
 export interface ForkLineageInfo {
   mode: "fork" | "track";
@@ -23,74 +25,69 @@ interface CloudContributeBackPanelProps {
   appTitle: string;
   lineage: ForkLineageInfo;
   busy?: boolean;
-  onTrackPullComplete?: (result: TrackSyncResult) => void;
 }
 
-const GATEWAY =
-  typeof import.meta !== "undefined" &&
-  import.meta.env?.VITE_GATEWAY_PORT
-    ? `http://${import.meta.env.VITE_GATEWAY_HOST || "localhost"}:${import.meta.env.VITE_GATEWAY_PORT || "18789"}`
-    : "http://localhost:18789";
+const STATUS_LABEL: Record<string, { label: string; tone: string }> = {
+  pending: { label: "Waiting for review", tone: "warn" },
+  approved: { label: "Accepted", tone: "ok" },
+  rejected: { label: "Declined", tone: "bad" },
+};
+
+function relativeTime(iso?: string | null): string {
+  if (!iso) return "";
+  const ms = Date.now() - new Date(iso).getTime();
+  const min = Math.round(ms / 60_000);
+  if (min < 1) return "just now";
+  if (min < 60) return `${min}m ago`;
+  const h = Math.round(min / 60);
+  if (h < 24) return `${h}h ago`;
+  const d = Math.round(h / 24);
+  return d < 30 ? `${d}d ago` : new Date(iso).toLocaleDateString();
+}
 
 export function CloudContributeBackPanel({
   appTitle,
   lineage,
   busy = false,
-  onTrackPullComplete,
 }: CloudContributeBackPanelProps) {
   const [title, setTitle] = useState(`Updates to ${appTitle}`);
   const [description, setDescription] = useState("");
   const [submitting, setSubmitting] = useState(false);
-  const [pulling, setPulling] = useState(false);
-  const [message, setMessage] = useState<string | null>(null);
+  const [sent, setSent] = useState(false);
   const [error, setError] = useState<string | null>(null);
-  const [lastSyncedAt, setLastSyncedAt] = useState(lineage.lastSyncedAt);
+  const [proposals, setProposals] = useState<SentProposal[] | null>(null);
 
-  const modeLabel = lineage.mode === "track" ? "Tracking upstream" : "Fork";
-  const lastSyncedLabel = formatLastSyncedAt(lastSyncedAt);
-
-  const pullUpstream = async () => {
-    setPulling(true);
-    setError(null);
-    setMessage(null);
+  const loadProposals = useCallback(async () => {
     try {
-      const result = await pullTrackUpstream(lineage.installedAppId);
-      setLastSyncedAt(result.lastSyncedAt);
-      setMessage(formatTrackSyncSummary(result));
-      onTrackPullComplete?.(result);
-    } catch (err) {
-      setError((err as Error).message.slice(0, 160));
-    } finally {
-      setPulling(false);
+      setProposals(await listSentProposals(lineage.installedAppId));
+    } catch {
+      setProposals([]);
     }
-  };
+  }, [lineage.installedAppId]);
+
+  useEffect(() => {
+    void loadProposals();
+  }, [loadProposals]);
 
   const submit = async () => {
     if (!description.trim()) {
-      setError("Describe what you changed");
+      setError("Add a short summary of what you changed");
       return;
     }
     setSubmitting(true);
     setError(null);
-    setMessage(null);
+    setSent(false);
     try {
-      const res = await fetch(`${GATEWAY}/api/cloud/apps/changes`, {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          sourceNamespaceId: lineage.sourceNamespaceId,
-          sourceSlug: lineage.sourceSlug,
-          installedAppId: lineage.installedAppId,
-          title: title.trim(),
-          description: description.trim(),
-        }),
+      await submitCloudAppChange({
+        sourceNamespaceId: lineage.sourceNamespaceId,
+        sourceSlug: lineage.sourceSlug,
+        installedAppId: lineage.installedAppId,
+        title: title.trim(),
+        description: description.trim(),
       });
-      const body = (await res.json()) as { error?: string; id?: string };
-      if (!res.ok) {
-        throw new Error(body.error ?? `Failed (${res.status})`);
-      }
-      setMessage("Change request sent to the owner for review.");
+      setSent(true);
       setDescription("");
+      void loadProposals();
     } catch (err) {
       setError((err as Error).message.slice(0, 160));
     } finally {
@@ -100,44 +97,13 @@ export function CloudContributeBackPanel({
 
   return (
     <div className="share-sheet__section share-sheet__fork">
-      <p className="share-sheet__section-title">
-        {modeLabel} · from cloud
-      </p>
       <p className="share-sheet__section-desc">
-        Installed from{" "}
-        <strong>
-          {lineage.sourceSlug} ({lineage.sourceAppId.slice(0, 8)}…)
-        </strong>
-        . Your copy stays local — API keys and data are yours.
+        Send your edits to the owner. They can accept them into the main app or
+        decline; either way your copy stays as it is.
       </p>
-
-      {lineage.mode === "track" ? (
-        <div className="share-sheet__track-pull">
-          <p className="share-sheet__track-pull-desc">
-            When the publisher updates their app, pull their latest code here.
-            Files you edited locally are kept — overlapping changes are skipped
-            as conflicts.
-          </p>
-          {lastSyncedLabel ? (
-            <p className="share-sheet__footnote">
-              Last pulled {lastSyncedLabel}
-            </p>
-          ) : (
-            <p className="share-sheet__footnote">Not pulled since install</p>
-          )}
-          <button
-            type="button"
-            className="share-sheet__secondary-btn"
-            disabled={busy || pulling}
-            onClick={() => void pullUpstream()}
-          >
-            {pulling ? "Pulling from publisher…" : "Pull latest from publisher"}
-          </button>
-        </div>
-      ) : null}
 
       <label className="share-sheet__field-label" htmlFor="change-title">
-        Request title
+        Proposal title
       </label>
       <input
         id="change-title"
@@ -148,22 +114,22 @@ export function CloudContributeBackPanel({
       />
 
       <label className="share-sheet__field-label" htmlFor="change-desc">
-        What changed?
+        What did you change?
       </label>
       <textarea
         id="change-desc"
         className="share-sheet__textarea"
         rows={4}
-        placeholder="Describe fixes or features you want the owner to review…"
+        placeholder="Briefly explain the fix or feature you want the owner to review…"
         value={description}
-        onChange={(e) => setDescription(e.target.value)}
+        onChange={(e) => {
+          setDescription(e.target.value);
+          if (sent) setSent(false);
+        }}
         disabled={busy || submitting}
       />
 
       {error ? <p className="share-sheet__error">{error}</p> : null}
-      {message ? (
-        <p className="share-sheet__notice share-sheet__notice--success">{message}</p>
-      ) : null}
 
       <button
         type="button"
@@ -171,8 +137,39 @@ export function CloudContributeBackPanel({
         disabled={busy || submitting}
         onClick={() => void submit()}
       >
-        {submitting ? "Sending…" : "Send changes to owner"}
+        {submitting ? "Sending proposal…" : sent ? "Sent ✓" : "Send to owner"}
       </button>
+
+      {proposals && proposals.length > 0 ? (
+        <div className="propose-history">
+          <p className="propose-history__heading">Your proposals</p>
+          <ul className="propose-history__list">
+            {proposals.map((p) => {
+              const status = STATUS_LABEL[p.status] ?? { label: p.status, tone: "idle" };
+              const when =
+                p.status === "pending" ? relativeTime(p.createdAt) : relativeTime(p.resolvedAt ?? p.createdAt);
+              const files = p.stagedPaths?.length ?? 0;
+              return (
+                <li key={p.id} className="propose-history__item">
+                  <div className="propose-history__main">
+                    <span className="propose-history__title" title={p.description}>
+                      {p.title}
+                    </span>
+                    <span className="propose-history__meta">
+                      {when}
+                      {files > 0 ? ` · ${files} file${files === 1 ? "" : "s"}` : ""}
+                    </span>
+                  </div>
+                  <span className={`propose-history__status propose-history__status--${status.tone}`}>
+                    <span className="propose-history__dot" aria-hidden />
+                    {status.label}
+                  </span>
+                </li>
+              );
+            })}
+          </ul>
+        </div>
+      ) : null}
     </div>
   );
 }

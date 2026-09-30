@@ -4,7 +4,7 @@
  * Watches ~/Papr folder for code changes and auto-reindexes.
  */
 
-import chokidar, { FSWatcher } from 'chokidar';
+import { TreeWatcher } from '../TreeWatcher.js';
 import * as path from 'path';
 import { getPaprRoot } from '../../../core/utils/paprRoot.js';
 import { Papr } from '@papr/memory';
@@ -12,7 +12,7 @@ import { isIndexableCodePath } from './codeIndexPaths.js';
 // import { CodeIndexerService } from './CodeIndexerService.js';
 
 export class CodeFileWatcher {
-  private watcher: FSWatcher | null = null;
+  private watcher: TreeWatcher | null = null;
   private paprDir: string;
   private onFileChange?: (filePath: string) => void;
   private onFileDelete?: (filePath: string) => void;
@@ -39,6 +39,22 @@ export class CodeFileWatcher {
     this.onFileDelete = callback;
   }
   
+  private static readonly IGNORED_SEGMENTS = [
+    '/node_modules/', '/.venv/', '/venv/', '/.git/', '/dist/', '/build/', '/data/',
+  ];
+  private static readonly CODE_EXT = /\.(ts|tsx|js|jsx|py)$/;
+
+  /** Same file set the old glob patterns described. */
+  static isWatchedCodePath(absPath: string): boolean {
+    const normalized = absPath.replace(/\\/g, '/');
+    for (const seg of CodeFileWatcher.IGNORED_SEGMENTS) {
+      if (normalized.includes(seg)) return false;
+    }
+    const base = path.basename(normalized);
+    if (base === 'job.json' || base === 'data-sources.json') return true;
+    return CodeFileWatcher.CODE_EXT.test(base);
+  }
+
   /**
    * Start watching for file changes
    */
@@ -46,38 +62,32 @@ export class CodeFileWatcher {
     console.log('👀 Starting code file watcher...');
     console.log(`   Watching: ${this.paprDir}`);
     
-    const patterns = [
-      `${this.paprDir}/apps/**/*.{ts,tsx,js,jsx,py}`,
-      `${this.paprDir}/Jobs/**/*.{ts,tsx,js,jsx,py}`,
-      `${this.paprDir}/Jobs/**/job.json`,
-      `${this.paprDir}/apps/**/data-sources.json`,
-      `${this.paprDir}/Jobs/**/data-sources.json`
+    // chokidar ≥4 has no glob support, so the previous `apps/**/*.{ts,...}`
+    // patterns were watching literal paths that never existed. Watch the two
+    // roots recursively (1 OS handle each) and filter by extension here.
+    const roots = [
+      path.join(this.paprDir, 'apps'),
+      path.join(this.paprDir, 'Jobs'),
     ];
-    
-    this.watcher = chokidar.watch(patterns, {
-      ignored: [
-        '**/node_modules/**',
-        '**/.venv/**',
-        '**/venv/**',
-        '**/.git/**',
-        '**/dist/**',
-        '**/build/**',
-        '**/data/**'
-      ],
-      persistent: true,
-      ignoreInitial: true,
-      awaitWriteFinish: {
-        stabilityThreshold: 2000,
-        pollInterval: 100
-      }
+
+    this.watcher = new TreeWatcher({
+      roots,
+      recursive: true,
+      settleMs: 2000, // was awaitWriteFinish.stabilityThreshold
+      ignore: (absPath) => !CodeFileWatcher.isWatchedCodePath(absPath),
+      onEvent: (event) => {
+        if (event.type === 'unlink') {
+          void this.handleDelete(event.path);
+        } else {
+          void this.handleChange(event.path, event.type === 'add' ? 'added' : 'changed');
+        }
+      },
+      onError: (err, root) => {
+        if ((err as NodeJS.ErrnoException).code === 'ENOENT') return; // root not created yet
+        console.error('❌ Watcher error:', root, err.message);
+      },
     });
-    
-    this.watcher
-      .on('add', (filePath: string) => this.handleChange(filePath, 'added'))
-      .on('change', (filePath: string) => this.handleChange(filePath, 'changed'))
-      .on('unlink', (filePath: string) => this.handleDelete(filePath))
-      .on('error', (err: unknown) => console.error('❌ Watcher error:', err));
-    
+
     console.log('✅ File watcher started');
   }
   
@@ -86,7 +96,8 @@ export class CodeFileWatcher {
    */
   stop(): void {
     if (this.watcher) {
-      this.watcher.close();
+      void this.watcher.close();
+      this.watcher = null;
       console.log('🛑 File watcher stopped');
     }
   }

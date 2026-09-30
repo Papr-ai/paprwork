@@ -4,8 +4,12 @@ import * as fs from "fs";
 import * as os from "os";
 import * as path from "path";
 import { LocalStorageProvider } from "../src/gateway/services/storage/LocalStorageProvider.js";
+import { useIsolatedPaprWorkspace } from "./setup/isolatedWorkspace.js";
 
 describe("LocalStorageProvider.patchDelegateTaskToolResult", () => {
+  // Keeps fixtures out of the developer's real ~/Papr workspace.
+  useIsolatedPaprWorkspace("delegation-tool-result-patch");
+
   let tmpDir: string;
   let provider: LocalStorageProvider;
 

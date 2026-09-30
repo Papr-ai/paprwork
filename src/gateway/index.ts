@@ -1,3 +1,4 @@
+import { recordGatewayHealthEvent } from "./services/gatewayHealthEvents.js";
 /**
  * Gateway Process Entry Point
  *
@@ -12,10 +13,17 @@
  * - No .env files in production (packaged app)
  */
 
-// Load environment variables from .env.local (for development)
+// Load environment for development. `.env.local` is read before `.env`
+// because dotenv never overwrites an already-set variable, so the first file
+// to define a key wins. Both are gitignored and absent in packaged/cloud
+// builds, where dotenv no-ops and the platform supplies the environment.
 import dotenv from "dotenv";
 import { resolve } from "path";
 dotenv.config({ path: resolve(process.cwd(), ".env.local") });
+dotenv.config({ path: resolve(process.cwd(), ".env") });
+
+import { logTursoReplicaStartupGuard } from "./utils/tursoReplicaEnabled.js";
+logTursoReplicaStartupGuard();
 
 // CRITICAL: Ensure crypto is available globally for @mastra/core
 // In newer Node.js versions (v16+), crypto is already global
@@ -33,18 +41,54 @@ import { WebSocketServer } from "ws";
 import path from "path";
 import { fileURLToPath } from "url";
 import { initializeAgentService } from "./services/AgentService.js";
-import { getPaprAppsRoot, getPaprRoot, isCloudAgentGatewayMode } from "../core/utils/paprRoot.js";
+import { registerAppFilesRoutes } from "./services/appFiles/appFilesRoutes.js";
+import { registerChatgptHistoryRoutes } from "./services/chatgptHistoryRoutes.js";
+import {
+  getPaprAppsRoot,
+  getPaprRoot,
+  isCloudAgentGatewayMode,
+} from "../core/utils/paprRoot.js";
+import { buildAppsHealth } from "../core/utils/appsHealth.js";
+import { getAppCategoryService } from "./services/AppCategoryService.js";
+import {
+  clearGatewaySyncBusy,
+  clearStaleGatewaySyncBusy,
+  readGatewaySyncBusyState,
+  isGatewaySyncBusyGraceActive,
+} from "./services/cloudSync/syncBusyState.js";
+import {
+  sampleEventLoopLagMs,
+  startGatewayEventLoopMonitor,
+  stopGatewayEventLoopMonitor,
+} from "./services/gatewayEventLoopMonitor.js";
+import { scheduleCoalescedBackgroundWork } from "./services/gatewayBackgroundWork.js";
+import {
+  createSyncItemsRouteTimer,
+  logSyncItemsRoute,
+} from "./utils/syncItemsRouteLog.js";
 import {
   applyActiveWorkspaceEnv,
   readActiveWorkspacePointer,
 } from "../core/utils/paprWorkspace.js";
-import { switchActiveWorkspace } from "./services/workspaceSwitchService.js";
+import {
+  applyGatewayPaprApiKey,
+  switchActiveWorkspace,
+  getWorkspaceSwitchHealthStatus,
+  getWorkspaceSwitchStatus,
+} from "./services/workspaceSwitchService.js";
+import { workspaceReadinessMiddleware } from "./services/workspaceReadiness.js";
+import { createGatewayBootGate } from "./services/gatewayBootGate.js";
 import { initializeChatService } from "./services/ChatService.js";
 import { initializeDocumentService } from "./services/DocumentService.js";
 import { initializeAppService, getAppService } from "./services/AppService.js";
+import { resolveAppDataSource } from "./services/appDataSources.js";
+import { resolveMiniAppIdFromRequest } from "./utils/inferMiniAppIdFromRequest.js";
 import {
-  resolveAppDataSource,
-} from "./services/appDataSources.js";
+  registerCloudDesktopPreviewApiProxy,
+  registerCloudDesktopPreviewRoutes,
+} from "./services/appRuntime/cloudDesktopPreviewProxy.js";
+import { registerCloudPreviewSessionSeedRoute } from "./services/appRuntime/cloudPreviewSessionSeed.js";
+import type { Request } from "express";
 import {
   initializeJobsService,
   getJobsService,
@@ -71,15 +115,19 @@ import { setPermissionRequester } from "./permissions/PermissionRequester.js";
 import type { KeyPermissionRequest } from "../core/types/permissions.js";
 import { initializeDbPool } from "./services/DbQueryPool.js";
 import { initializeDbRouter } from "./services/appRuntime/DbRouter.js";
-import { forwardRendererTelemetry } from "./services/rendererTelemetryForward.js";
+import {
+  prepareRendererTelemetry,
+  sendPreparedRendererTelemetry,
+} from "./services/rendererTelemetryForward.js";
 import { getPaprApiKey } from "./utils/keyResolver.js";
 import { getMemoryServerBaseUrl } from "./utils/cloudApiClient.js";
 import {
   initializeCloudSyncService,
   getCloudSyncService,
 } from "./services/CloudSyncService.js";
-import { initializeTursoSyncBridge } from "./services/TursoSyncBridge.js";
+import { ensureTursoSyncBridge } from "./services/TursoSyncBridge.js";
 import { buildTursoSyncItemsReport } from "./services/tursoSyncStatus.js";
+import { isLoopbackRequest } from "./utils/isLoopbackRequest.js";
 import { buildCloudLinkSyncReport } from "./services/cloudPublishStatus.js";
 import {
   getCachedCloudLinkSyncReport,
@@ -87,23 +135,47 @@ import {
   setCachedCloudLinkSyncReport,
 } from "./services/syncItemsCache.js";
 import {
-  getCloudAppPublishService,
-} from "./services/CloudAppPublishService.js";
-import { getCloudAppInstallService } from "./services/CloudAppInstallService.js";
+  getCachedTursoSyncItemsReport,
+  invalidateTursoSyncItemsCache,
+  setCachedTursoSyncItemsReport,
+  tursoSyncItemsCacheKey,
+} from "./services/tursoSyncItemsCache.js";
+import {
+  getCachedSyncItemsAppResponse,
+  invalidateSyncItemsAppResponseCache,
+  setCachedSyncItemsAppResponse,
+} from "./services/syncItemsAppResponseCache.js";
+import {
+  buildLocalDbReadCacheKey,
+  getCachedLocalDbReadResult,
+  invalidateLocalDbReadCacheForApp,
+  setCachedLocalDbReadResult,
+} from "./services/appRuntime/localDbReadCache.js";
+import {
+  buildLocalDbBatchCoalesceKey,
+  coalesceInFlightLocalDbRead,
+} from "./services/appRuntime/localDbReadCoalesce.js";
+import { getCloudAppPublishService } from "./services/CloudAppPublishService.js";
+import {
+  CloudCatalogInstallChoiceRequiredError,
+  runCloudCatalogInstall,
+} from "./services/runCloudCatalogInstall.js";
 import {
   discoverAppRequirements,
   writeAppRequirements,
 } from "./services/cloudAppRequirements.js";
 import type { RequiredKeySpec } from "../core/types/bundles.js";
 import { getCloudAppLineageService } from "./services/CloudAppLineageService.js";
-import { getCloudAppChangeMergeService } from "./services/CloudAppChangeMergeService.js";
+import { getCloudAppContributeService } from "./services/CloudAppContributeService.js";
 import { getCloudAppTrackSyncService } from "./services/CloudAppTrackSyncService.js";
 import {
   getAppPublishPrefs,
+  loadCloudPublishPrefs,
   setAppPublishPrefs,
   type CloudAccessMode,
 } from "./services/cloudPublishPrefs.js";
 import { prefsSharingFieldsChanged } from "./services/cloudPublishDrift.js";
+import { prefsPeopleAllowlistChanged } from "./services/cloudShareAllowlistMemory.js";
 import {
   initializeVaultSyncService,
   getVaultSyncService,
@@ -131,11 +203,22 @@ const HOST = process.env.GATEWAY_HOST || "0.0.0.0";
 async function initializeServices(): Promise<void> {
   console.log("[Gateway] Initializing services...");
 
+  const { timeStartupStep, timeStartupSync } =
+    await import("./services/gatewayStartupTiming.js");
+
   try {
-    const { refreshToolResultTruncationSettings } = await import(
-      "./services/agent/toolResultTruncationSettings.js"
+    await timeStartupStep(
+      "services",
+      "toolResultTruncationSettings",
+      async () => {
+        const { refreshToolResultTruncationSettings } =
+          await import("./services/agent/toolResultTruncationSettings.js");
+        await refreshToolResultTruncationSettings();
+        const { refreshExperimentSettings } =
+          await import("./services/experimentSettings.js");
+        await refreshExperimentSettings();
+      },
     );
-    await refreshToolResultTruncationSettings();
     console.log("[Gateway] Tool truncation settings loaded");
     // DON'T request keys on startup!
     // AgentService will lazy-load them when first message is sent
@@ -156,16 +239,20 @@ async function initializeServices(): Promise<void> {
     }
 
     console.log("[Gateway] Initializing AgentService...");
-    await initializeAgentService({
-      mode: storageMode,
-      paprApiKey: undefined, // Will be loaded lazily
-      openaiApiKey: undefined, // Will be loaded lazily
-    });
+    await timeStartupStep("services", "AgentService", () =>
+      initializeAgentService({
+        mode: storageMode,
+        paprApiKey: undefined, // Will be loaded lazily
+        openaiApiKey: undefined, // Will be loaded lazily
+      }),
+    );
     console.log("[Gateway] AgentService initialized");
 
     // Initialize workspace (creates ~/Papr/workspace/ and templates on first run)
     console.log("[Gateway] Initializing WorkspaceService...");
-    await initializeWorkspaceService();
+    await timeStartupStep("services", "WorkspaceService", () =>
+      initializeWorkspaceService(),
+    );
     console.log("[Gateway] WorkspaceService initialized");
 
     // Note: Code indexing now uses lazy initialization
@@ -173,46 +260,70 @@ async function initializeServices(): Promise<void> {
 
     // Initialize other services
     console.log("[Gateway] Initializing ChatService...");
-    await initializeChatService();
+    await timeStartupStep("services", "ChatService", () =>
+      initializeChatService(),
+    );
     console.log("[Gateway] ChatService initialized");
 
     console.log("[Gateway] Initializing DocumentService...");
-    await initializeDocumentService();
+    await timeStartupStep("services", "DocumentService", () =>
+      initializeDocumentService(),
+    );
     console.log("[Gateway] DocumentService initialized");
 
     console.log("[Gateway] Initializing AppService...");
-    await initializeAppService();
+    await timeStartupStep("services", "AppService", () =>
+      initializeAppService(),
+    );
     console.log("[Gateway] AppService initialized");
 
     console.log("[Gateway] Initializing JobsService...");
-    await initializeJobsService();
-    console.log("[Gateway] JobsService initialized");
+    await timeStartupStep("services", "JobsService", () =>
+      initializeJobsService(),
+    );
+    console.log("[Gateway] JobsService core ready (maintenance in background)");
 
-    // Now that JobsService is ready, install any default jobs deferred by AppService
-    const { getAppService } = await import("./services/AppService.js");
-    await getAppService().installPendingDefaultJobs();
+    if (
+      process.env.CLOUD_SYNC_ENABLED !== "false" &&
+      process.env.TURSO_SYNC_ENABLED !== "false"
+    ) {
+      timeStartupSync("services", "TursoSyncBridge", () => {
+        ensureTursoSyncBridge();
+      });
+      console.log(
+        "[Gateway] TursoSyncBridge initialized (replica credentials ready)",
+      );
+    }
 
     console.log("[Gateway] Initializing SkillService...");
-    await initializeSkillService();
+    await timeStartupStep("services", "SkillService", () =>
+      initializeSkillService(),
+    );
     console.log("[Gateway] SkillService initialized");
 
     console.log("[Gateway] Initializing BundleService...");
-    await initializeBundleService();
+    await timeStartupStep("services", "BundleService", () =>
+      initializeBundleService(),
+    );
     console.log("[Gateway] BundleService initialized");
 
     console.log("[Gateway] Initializing SubAgentService...");
-    await initializeSubAgentService();
+    await timeStartupStep("services", "SubAgentService", () =>
+      initializeSubAgentService(),
+    );
     console.log("[Gateway] SubAgentService initialized");
 
     console.log("[Gateway] Initializing PlanService...");
-    await initializePlanService();
+    await timeStartupStep("services", "PlanService", () =>
+      initializePlanService(),
+    );
     console.log("[Gateway] PlanService initialized");
 
-    // Register built-in sleep job (depends on JobsService being initialized)
-    const { getWorkspaceService } =
-      await import("./services/WorkspaceService.js");
-    await getWorkspaceService().ensureSleepJob();
-    await getWorkspaceService().ensureWikiWriterJob();
+    await timeStartupStep("services", "appRepoRevisionSubscriber", async () => {
+      const { startAppRepoRevisionSubscriber } =
+        await import("./services/syncV3/appRepoRevisionSubscriber.js");
+      startAppRepoRevisionSubscriber();
+    });
 
     console.log("[Gateway] All services initialized");
     console.log(
@@ -228,9 +339,7 @@ async function initializeServices(): Promise<void> {
  * Start the Gateway server
  */
 const productionUiPath =
-  process.env.NODE_ENV === "production"
-    ? path.join(__dirname, "../ui")
-    : null;
+  process.env.NODE_ENV === "production" ? path.join(__dirname, "../ui") : null;
 
 function registerEarlyProductionUi(app: express.Application): void {
   if (!productionUiPath) return;
@@ -261,6 +370,13 @@ function registerProductionUiCatchAll(app: express.Application): void {
   app.use((req, res, next) => {
     if (req.path.startsWith("/assets/")) {
       return next();
+    }
+    // Unknown /api/* must not fall through to the SPA shell (apps parse HTML as JSON).
+    if (req.path.startsWith("/api/")) {
+      res
+        .status(404)
+        .json({ error: `Unknown API route: ${req.method} ${req.path}` });
+      return;
     }
     res.sendFile(path.join(productionUiPath, "index.html"));
   });
@@ -304,9 +420,21 @@ async function startGateway(): Promise<void> {
   }
 
   try {
+    const {
+      beginGatewayStartupTiming,
+      timeStartupStep,
+      timeStartupSync,
+      beginRouteRegistrationTiming,
+      lapRouteRegistrationSection,
+      printGatewayStartupSummary,
+    } = await import("./services/gatewayStartupTiming.js");
+    beginGatewayStartupTiming();
+
     // Initialize permission system
     console.log("[Gateway] Initializing permission system...");
-    initializePermissionBridge();
+    timeStartupSync("pre-http", "permissionBridge", () => {
+      initializePermissionBridge();
+    });
     setPermissionRequester(async (request: KeyPermissionRequest) => {
       return await requestPermissionFromMain(request);
     });
@@ -314,14 +442,31 @@ async function startGateway(): Promise<void> {
 
     // Set up key cache invalidation listener
     console.log("[Gateway] Setting up key cache invalidation listener...");
-    const { setupKeyCacheInvalidationListener } = await import(
-      "./utils/keyResolver.js"
+    await timeStartupStep(
+      "pre-http",
+      "keyCacheInvalidationListener",
+      async () => {
+        const { setupKeyCacheInvalidationListener } =
+          await import("./utils/keyResolver.js");
+        setupKeyCacheInvalidationListener();
+      },
     );
-    setupKeyCacheInvalidationListener();
     console.log("[Gateway] Key cache invalidation listener ready");
+
+    await timeStartupStep("pre-http", "paprQuotaListener", async () => {
+      const { setPaprQuotaExceededListener } =
+        await import("../core/utils/paprQuota.js");
+      const { broadcastPaprQuotaStatus } =
+        await import("./utils/paprQuotaNotify.js");
+      setPaprQuotaExceededListener(broadcastPaprQuotaStatus);
+    });
+    console.log("[Gateway] Papr quota status listener ready");
 
     // Bind HTTP early so supervisor health checks succeed while services load.
     // Large chats.db + tool registration can take 60s+ on cold start.
+    // Clear stale busy marker from a previous gateway process (crash mid-upload).
+    clearGatewaySyncBusy();
+    clearStaleGatewaySyncBusy();
     let gatewayReady = false;
     const app = express();
     const server = createServer(app);
@@ -335,11 +480,21 @@ async function startGateway(): Promise<void> {
       if (origin) {
         try {
           const url = new URL(origin);
-          if (url.hostname === "localhost" || url.hostname === "127.0.0.1" || url.hostname === "[::1]") {
+          if (
+            url.hostname === "localhost" ||
+            url.hostname === "127.0.0.1" ||
+            url.hostname === "[::1]"
+          ) {
             res.setHeader("Access-Control-Allow-Origin", origin);
             res.setHeader("Vary", "Origin");
-            res.setHeader("Access-Control-Allow-Methods", "GET,POST,PUT,PATCH,DELETE,OPTIONS");
-            res.setHeader("Access-Control-Allow-Headers", "Content-Type,Authorization");
+            res.setHeader(
+              "Access-Control-Allow-Methods",
+              "GET,POST,PUT,PATCH,DELETE,OPTIONS",
+            );
+            res.setHeader(
+              "Access-Control-Allow-Headers",
+              "Content-Type,Authorization",
+            );
           }
         } catch {
           // Invalid Origin headers receive no CORS grant.
@@ -352,32 +507,67 @@ async function startGateway(): Promise<void> {
       next();
     });
 
+    app.use(workspaceReadinessMiddleware);
+
     app.get("/health", (_req, res) => {
+      if (getWorkspaceSwitchHealthStatus() === "switching") {
+        res.json({
+          status: "switching",
+          timestamp: Date.now(),
+        });
+        return;
+      }
+      clearStaleGatewaySyncBusy();
+      const syncBusy = isGatewaySyncBusyGraceActive(readGatewaySyncBusyState());
+      const eventLoopLagMs = Math.round(sampleEventLoopLagMs(false));
       res.json({
         status: gatewayReady ? "ok" : "starting",
         timestamp: Date.now(),
+        ...(syncBusy ? { syncBusy: true } : {}),
+        ...(eventLoopLagMs >= 200 ? { eventLoopLagMs } : {}),
       });
     });
 
-    registerEarlyProductionUi(app);
+    timeStartupSync("pre-http", "expressAppAndHealthRoute", () => {
+      registerEarlyProductionUi(app);
+    });
 
-    await listenGatewayServer(server);
+    // Everything below this point is registered after `initializeServices()`,
+    // which on a cold start can take longer than the 60s the main process waits
+    // before loading the UI anyway. Without this, requests arriving in that
+    // window fell through to Express's default 404 — so an app that was merely
+    // not-yet-routable rendered "Cannot GET /apps/<id>/index.html", which reads
+    // as "deleted". Registered after the early UI static handler so the app
+    // shell can still load, and before `listen` so it covers the whole window.
+    app.use(createGatewayBootGate(() => gatewayReady));
+
+    await timeStartupStep("pre-http", "listenGatewayServer", () =>
+      listenGatewayServer(server),
+    );
+    startGatewayEventLoopMonitor();
     console.log("[Gateway] Health endpoint live (services still loading)...");
 
-    await initializeServices();
+    await timeStartupStep("services", "initializeServices (total)", () =>
+      initializeServices(),
+    );
 
-    setupWebSocketHandlers(wss);
-    getJobEventHub().subscribe((event) => {
-      broadcast({ type: event.type, data: event.data });
+    timeStartupSync("routes", "websocketHandlers", () => {
+      setupWebSocketHandlers(wss);
+      getJobEventHub().subscribe((event) => {
+        broadcast({ type: event.type, data: event.data });
+      });
     });
     console.log("[Gateway] WebSocket server created");
+
+    beginRouteRegistrationTiming();
 
     // ── Mini-app SQLite query API ────────────────────────────────────────────
     // All synchronous better-sqlite3 calls run in a worker-thread pool so they
     // never block the main event loop (keeps health checks & WebSocket alive).
     //
-    // Apps call: fetch('/api/db/query', { method: 'POST', body: JSON.stringify({ appId, sql, params }) })
-    // Apps call: fetch('/api/db/schema?appId=<id>') to list tables and columns
+    // Apps call: fetch('/api/db/query', { method: 'POST', body: JSON.stringify({ sql, params }) })
+    // appId is optional when called from a mini-app iframe — inferred from Referer (/apps/{uuid}/…).
+    // Apps call: fetch('/api/db/schema') — appId inferred the same way, or pass ?appId=
     //
     // Security:
     //  - Only SELECT statements allowed on /query (read-only)
@@ -385,13 +575,16 @@ async function startGateway(): Promise<void> {
     //  - Path traversal blocked at the linked dbPath level
     //
     // Source routing (when sourceId is omitted):
-    //  - Uses primary source from data-sources.json when configured
-    //  - Single source → use it automatically
-    //  - Multiple sources → secondary table routing for reads only
+    //  - Single linked source → use it automatically
+    //  - Legacy `primary` alias (or role: primary) → that source only
+    //  - Multiple sources without legacy default → sourceId required (400)
     // ─────────────────────────────────────────────────────────────────────────
 
+    const { resolveDbQueryPoolSize } =
+      await import("./services/gatewayBackgroundConcurrency.js");
     const dbPool = initializeDbPool(
       new URL("./workers/db-query-worker.js", import.meta.url),
+      resolveDbQueryPoolSize(),
     );
     const dbRouter = initializeDbRouter(dbPool);
 
@@ -427,15 +620,40 @@ async function startGateway(): Promise<void> {
       });
     }
 
+    function resolveRequestAppId(
+      req: Request,
+      explicitAppId: string | undefined,
+    ): { appId: string } | { error: string; status: number } {
+      const resolved = resolveMiniAppIdFromRequest(explicitAppId, req.headers);
+      if (!resolved.appId) {
+        return {
+          error: resolved.error ?? "appId is required",
+          status: resolved.status ?? 400,
+        };
+      }
+      return { appId: resolved.appId };
+    }
+
+    app.use((req, _res, next) => {
+      (
+        req as import("express").Request & { paprReceivedAt?: number }
+      ).paprReceivedAt = performance.now();
+      next();
+    });
     app.use(express.json({ limit: "5mb" }));
+
+    registerCloudDesktopPreviewApiProxy(app);
+    registerCloudPreviewSessionSeedRoute(app);
 
     app.get("/api/db/schema", async (req, res) => {
       try {
-        const appId = req.query["appId"] as string | undefined;
-        if (!appId) {
-          res.status(400).json({ error: "appId query param required" });
+        const explicitAppId = req.query["appId"] as string | undefined;
+        const resolved = resolveRequestAppId(req, explicitAppId);
+        if ("error" in resolved) {
+          res.status(resolved.status).json({ error: resolved.error });
           return;
         }
+        const appId = resolved.appId;
         const appService = getAppService();
         const sources = await appService.listAppDataSources(appId);
         if (!sources.length) {
@@ -474,7 +692,6 @@ async function startGateway(): Promise<void> {
       }
     });
 
-    // ── App data health (primary DB row counts, contract status, orphan files) ──
     app.get("/api/apps/:appId/data-health", async (req, res) => {
       try {
         const appId = req.params.appId;
@@ -482,9 +699,8 @@ async function startGateway(): Promise<void> {
           res.status(400).json({ error: "appId required" });
           return;
         }
-        const { getDataContractService } = await import(
-          "./services/DataContractService.js"
-        );
+        const { getDataContractService } =
+          await import("./services/DataContractService.js");
         const report = await getDataContractService().getDataHealth(appId);
         res.json(report);
       } catch (err) {
@@ -498,6 +714,23 @@ async function startGateway(): Promise<void> {
       }
     });
 
+    app.get("/api/apps/:appId/feature-availability", async (req, res) => {
+      try {
+        const appId = req.params.appId?.trim();
+        if (!appId) {
+          res.status(400).json({ error: "appId required" });
+          return;
+        }
+        const { assessAppFeatureAvailabilityForApp } =
+          await import("./services/cloudAppPublishReadiness.js");
+        const report = await assessAppFeatureAvailabilityForApp(appId);
+        res.json(report);
+      } catch (err) {
+        console.error("[Gateway] /api/apps/feature-availability error:", err);
+        res.status(500).json({ error: (err as Error).message });
+      }
+    });
+
     /** Public embedded sub-agent chat config for mini-app SDK */
     app.get("/api/apps/:appId/agent-chat", async (req, res) => {
       try {
@@ -507,9 +740,8 @@ async function startGateway(): Promise<void> {
           return;
         }
         const { getAppService } = await import("./services/AppService.js");
-        const { toPublicAppAgentChatConfig } = await import(
-          "../core/types/appAgentChat.js"
-        );
+        const { toPublicAppAgentChatConfig } =
+          await import("../core/types/appAgentChat.js");
         const appService = getAppService();
         await appService.initialize();
         const miniApp = await appService.getApp(appId);
@@ -539,10 +771,11 @@ async function startGateway(): Promise<void> {
         const limit =
           typeof limitRaw === "string" ? Number.parseInt(limitRaw, 10) : 100;
         const sinceMs =
-          typeof sinceRaw === "string" ? Number.parseInt(sinceRaw, 10) : undefined;
-        const { getAppRuntimeLogService } = await import(
-          "./services/AppRuntimeLogService.js"
-        );
+          typeof sinceRaw === "string"
+            ? Number.parseInt(sinceRaw, 10)
+            : undefined;
+        const { getAppRuntimeLogService } =
+          await import("./services/AppRuntimeLogService.js");
         const logs = getAppRuntimeLogService().getLogs(appId, {
           limit: Number.isFinite(limit) ? limit : 100,
           sinceMs: Number.isFinite(sinceMs) ? sinceMs : undefined,
@@ -554,12 +787,13 @@ async function startGateway(): Promise<void> {
       }
     });
 
+    lapRouteRegistrationSection("mini-app-db-query-api");
+
     // ── Database registry (independent first-class DBs) ──
     app.get("/api/databases", async (_req, res) => {
       try {
-        const { initializeDatabaseRegistry } = await import(
-          "./services/DatabaseRegistryService.js"
-        );
+        const { initializeDatabaseRegistry } =
+          await import("./services/DatabaseRegistryService.js");
         const registry = await initializeDatabaseRegistry();
         const databases = await Promise.all(
           registry.listActive().map(async (record) => ({
@@ -594,16 +828,13 @@ async function startGateway(): Promise<void> {
         const body = req.body as {
           dbId?: string;
           alias?: string;
-          role?: "primary" | "readonly" | "scratch";
-          setPrimary?: boolean;
         };
         if (!appId || !body.dbId) {
           res.status(400).json({ error: "appId and dbId required" });
           return;
         }
-        const { initializeDatabaseRegistry } = await import(
-          "./services/DatabaseRegistryService.js"
-        );
+        const { initializeDatabaseRegistry } =
+          await import("./services/DatabaseRegistryService.js");
         const registry = await initializeDatabaseRegistry();
         const record = registry.getById(body.dbId);
         if (!record) {
@@ -612,15 +843,20 @@ async function startGateway(): Promise<void> {
         }
         const appService = getAppService();
         await appService.initialize();
+        const { resolveAttachAlias } =
+          await import("./services/appDataSources.js");
+        const alias = resolveAttachAlias({
+          requested: body.alias,
+          registryLabel: record.label,
+          dbId: body.dbId,
+        });
         const sources = await appService.linkAppDataSource(appId, {
-          id: body.dbId,
+          id: `${body.dbId}:${alias}`,
           type: "sqlite",
           dbId: body.dbId,
-          alias: body.alias ?? record.label ?? body.dbId,
+          alias,
           dbPath: record.localPath,
           tables: [],
-          role: body.role,
-          setPrimary: body.setPrimary,
         });
         res.json({ success: true, sources });
       } catch (err) {
@@ -634,6 +870,236 @@ async function startGateway(): Promise<void> {
       }
     });
 
+    app.get("/api/apps/:appId/remote-code-status", async (req, res) => {
+      try {
+        const appId = req.params.appId;
+        if (!appId) {
+          res.status(400).json({ error: "appId required" });
+          return;
+        }
+        const { checkAppRemoteCodeStatus } =
+          await import("./services/syncV3/checkAppRemoteCodeStatus.js");
+        const { checkPublisherUpstreamRevision } =
+          await import("./services/syncV3/checkPublisherUpstreamRevision.js");
+        const { getPendingAppUpdate } =
+          await import("./services/syncV3/appRepoPendingUpdate.js");
+        const { readCloudAppLineageMode } =
+          await import("./services/CloudAppLineageService.js");
+        const [status, publisher, lineageMode] = await Promise.all([
+          checkAppRemoteCodeStatus(appId),
+          checkPublisherUpstreamRevision(appId),
+          readCloudAppLineageMode(appId),
+        ]);
+        // A collaborator never publishes this copy: its own repo can't be
+        // "newer" in any way the user can act on. Updates come from the
+        // publisher only (publisherUpdatesAvailable), so the chip and the
+        // popover can't disagree.
+        if (lineageMode === "track") {
+          res.json({
+            ...status,
+            ...publisher,
+            upToDate: true,
+            codeReason: "collaborator: publisher is the source",
+            pendingUpdate: null,
+          });
+          return;
+        }
+        // pendingUpdate: a remote commit arrived but auto-pull was deferred
+        // (pending row push, conflicts). Share bar shows "Update waiting".
+        res.json({
+          ...status,
+          ...publisher,
+          pendingUpdate: getPendingAppUpdate(appId),
+        });
+      } catch (err) {
+        console.error("[Gateway] /api/apps/remote-code-status error:", err);
+        res.status(500).json({ error: (err as Error).message });
+      }
+    });
+
+    app.post("/api/apps/:appId/sync-from-cloud", async (req, res) => {
+      const { PhaseTimer } = await import("./utils/phaseTiming.js");
+      try {
+        const appId = req.params.appId;
+        if (!appId) {
+          res.status(400).json({ error: "appId required" });
+          return;
+        }
+        const body = (req.body ?? {}) as {
+          wait?: boolean;
+          resolution?: string;
+        };
+        const waitForCompletion = body.wait === true;
+        const resolution =
+          body.resolution === "take_theirs" || body.resolution === "keep_mine"
+            ? body.resolution
+            : "hold";
+        const sync = getCloudSyncService();
+        const token = sync ? await sync.ensureFreshToken() : null;
+
+        // No background pull — use GET remote-code-status to detect updates, then POST with wait:true.
+        if (!waitForCompletion) {
+          res.status(400).json({
+            error:
+              "Background pull disabled. Poll GET /api/apps/:appId/remote-code-status and POST with { wait: true } to pull.",
+          });
+          return;
+        }
+
+        const timer = new PhaseTimer();
+        const { pullAppFromCloud } =
+          await import("./services/syncV3/pullAppFromCloud.js");
+        const result = await pullAppFromCloud(appId, {
+          token,
+          waitForTurso: true,
+          allowRecentSkip: false,
+          preferCloudOverLocal: true,
+          resolution,
+        });
+        timer.mark("pullAppFromCloud");
+        if (result.code.skipped && result.code.reason) {
+          console.log(
+            `[Gateway] /api/apps/sync-from-cloud skipped for ${appId}: ${result.code.reason.slice(0, 120)}`,
+          );
+        }
+        timer.logIfSlow(`Gateway sync-from-cloud app=${appId}`, 200);
+        res.json({ success: true, ...result });
+      } catch (err) {
+        console.error("[Gateway] /api/apps/sync-from-cloud error:", err);
+        res.status(500).json({ error: (err as Error).message });
+      }
+    });
+
+    // Diagnostics: per-op worker timings (queue wait vs engine time) for replica stalls.
+    app.get("/api/debug/turso-worker-timings", async (_req, res) => {
+      const { getTursoReplicaSyncWorkerClient } =
+        await import("./services/tursoReplica/TursoReplicaSyncWorkerClient.js");
+      res.json({
+        timings: getTursoReplicaSyncWorkerClient().getRecentTimings(),
+      });
+    });
+
+    app.get("/api/debug/replica-read-phases", async (_req, res) => {
+      const { getRecentReplicaReadPhaseTraces } =
+        await import("./services/tursoReplica/replicaReadPhaseTrace.js");
+      res.json({ traces: getRecentReplicaReadPhaseTraces() });
+    });
+
+    // Small, bounded diagnostic snapshots; no request contents or URLs retained.
+    app.post("/api/debug/renderer-performance", async (req, res) => {
+      const { rendererPerformanceDiagnostics } =
+        await import("./services/rendererPerformanceDiagnostics.js");
+      if (!rendererPerformanceDiagnostics.record(req.body)) {
+        res
+          .status(400)
+          .json({ error: "Invalid or out-of-order renderer sample" });
+        return;
+      }
+      res.status(204).end();
+    });
+
+    app.get(
+      ["/api/debug/gateway-background", "/api/debug/gateway-performance"],
+      async (_req, res) => {
+        const { getRecentBackgroundTaskTimings } =
+          await import("./services/gatewayBackgroundWork.js");
+        const { sampleEventLoopLagMs, getGatewayResourceDiagnostics } =
+          await import("./services/gatewayEventLoopMonitor.js");
+        const { getPerformanceDiagnostics } =
+          await import("../core/utils/performanceDiagnostics.js");
+        const { buildGatewayPerformanceTimeline } =
+          await import("./services/gatewayPerformanceTimeline.js");
+        const capturedAt = new Date().toISOString();
+        const resources = getGatewayResourceDiagnostics();
+        const operations = getPerformanceDiagnostics();
+        const timeline = buildGatewayPerformanceTimeline({
+          capturedAt,
+          samples: resources.samples,
+          active: operations.active,
+          recent: operations.recent,
+        });
+        res.json({
+          schemaVersion: 7,
+          renderer: (
+            await import("./services/rendererPerformanceDiagnostics.js")
+          ).rendererPerformanceDiagnostics.snapshot(),
+          cloudPause: (
+            await import("../core/utils/paprQuota.js")
+          ).getPaprCloudPauseDiagnostics(),
+          capturedAt,
+          process: { pid: process.pid, uptimeSeconds: process.uptime() },
+          resources,
+          operations,
+          timeline,
+          agentConcurrency: (
+            await import("./services/agent/agentStreamConcurrency.js")
+          )
+            .getAgentStreamConcurrencyGate()
+            .getStats(),
+          backgroundBudget: (
+            await import("./services/gatewayBackgroundBudget.js")
+          ).gatewayBackgroundBudget.stats(),
+          recentTasks: getRecentBackgroundTaskTimings(),
+          eventLoopLagMs: sampleEventLoopLagMs(false),
+        });
+      },
+    );
+
+    app.get("/api/debug/gateway-performance/view", async (_req, res) => {
+      const { readFile } = await import("node:fs/promises");
+      const viewPath = path.join(
+        path.dirname(fileURLToPath(import.meta.url)),
+        "..",
+        "resources",
+        "gateway-performance-view.html",
+      );
+      const html = await readFile(viewPath, "utf8");
+      res.setHeader("Content-Type", "text/html; charset=utf-8");
+      res.send(html);
+    });
+
+    app.get("/api/dev/papr-api-catalog", async (req, res) => {
+      try {
+        const { getPaprApiCatalog } =
+          await import("../core/paprApiCatalog/loadCatalog.js");
+        const { searchPaprApiCatalog, formatCatalogEntryForAgent } =
+          await import("../core/paprApiCatalog/searchCatalog.js");
+        const catalog = getPaprApiCatalog();
+        const q = typeof req.query.q === "string" ? req.query.q.trim() : "";
+        if (!q) {
+          res.json(catalog);
+          return;
+        }
+        const surfaceRaw = req.query.surface;
+        const surface =
+          typeof surfaceRaw === "string" && surfaceRaw.length > 0
+            ? surfaceRaw
+            : "any";
+        const limitRaw = req.query.limit;
+        const limit =
+          typeof limitRaw === "string" && /^\d+$/.test(limitRaw)
+            ? Number.parseInt(limitRaw, 10)
+            : 10;
+        const hits = searchPaprApiCatalog(catalog, {
+          query: q,
+          surface: surface as "any",
+          limit,
+        });
+        res.json({
+          query: q,
+          surface,
+          count: hits.length,
+          results: hits.map((hit) => ({
+            score: hit.score,
+            ...formatCatalogEntryForAgent(hit.entry, "full"),
+          })),
+        });
+      } catch (err) {
+        console.error("[Gateway] /api/dev/papr-api-catalog error:", err);
+        res.status(500).json({ error: (err as Error).message });
+      }
+    });
+
     app.post("/api/apps/:appId/normalize-databases", async (req, res) => {
       try {
         const appId = req.params.appId;
@@ -641,10 +1107,10 @@ async function startGateway(): Promise<void> {
           res.status(400).json({ error: "appId required" });
           return;
         }
-        const apply = (req.body as { apply?: boolean } | undefined)?.apply === true;
-        const { normalizeAppDatabases } = await import(
-          "./services/dbPathNormalization.js"
-        );
+        const apply =
+          (req.body as { apply?: boolean } | undefined)?.apply === true;
+        const { normalizeAppDatabases } =
+          await import("./services/dbPathNormalization.js");
         const report = await normalizeAppDatabases(appId, { dryRun: !apply });
         res.json(report);
       } catch (err) {
@@ -659,18 +1125,37 @@ async function startGateway(): Promise<void> {
     });
 
     app.post("/api/db/query", async (req, res) => {
+      const receivedAt =
+        (req as import("express").Request & { paprReceivedAt?: number })
+          .paprReceivedAt ?? performance.now();
+      let traceActive = false;
       try {
-        const { appId, sourceId, sql, params } = req.body as {
+        const {
+          appId: bodyAppId,
+          sourceId,
+          sql,
+          params,
+        } = req.body as {
           appId?: string;
           sourceId?: string;
           sql?: string;
           params?: unknown[];
         };
 
-        if (!appId || !sql) {
-          res.status(400).json({ error: "appId and sql are required" });
+        if (!sql) {
+          res.status(400).json({ error: "sql is required" });
           return;
         }
+
+        const resolved = resolveRequestAppId(req, bodyAppId);
+        if ("error" in resolved) {
+          res.status(resolved.status).json({ error: resolved.error });
+          return;
+        }
+        const appId = resolved.appId;
+        const { markMiniAppInteractiveLoadWindow } =
+          await import("./services/appRuntime/miniAppInteractiveLoadWindow.js");
+        markMiniAppInteractiveLoadWindow(appId);
 
         const trimmed = sql.trim().toLowerCase();
         if (!trimmed.startsWith("select") && !trimmed.startsWith("with")) {
@@ -681,6 +1166,7 @@ async function startGateway(): Promise<void> {
         }
 
         let source: import("./services/appDataSources.js").AppDataSource;
+        const resolveSourceStarted = performance.now();
         try {
           source = await resolveLinkedSource(appId, sourceId, sql, "read");
         } catch (err) {
@@ -689,64 +1175,242 @@ async function startGateway(): Promise<void> {
           return;
         }
 
-        const result = await dbRouter.query(appId, source, sql, params);
+        const sourceKey = source.alias ?? source.dbPath;
+        let cacheKey: string | undefined;
+        if (isLoopbackRequest(req)) {
+          cacheKey = buildLocalDbReadCacheKey({
+            appId,
+            sourceKey,
+            sql,
+            params,
+          });
+          const cached = getCachedLocalDbReadResult(cacheKey);
+          if (cached) {
+            const { notifyMiniAppFirstDataPaint } =
+              await import("./services/tursoPullScheduler.js");
+            notifyMiniAppFirstDataPaint(appId);
+            res.json(cached);
+            return;
+          }
+        }
+
+        const { shouldUseTursoReplicaForSource } =
+          await import("./services/tursoReplica/tursoReplicaRouting.js");
+        const useReplicaTrace = shouldUseTursoReplicaForSource(source);
+        const {
+          withReplicaReadTrace,
+          finishReplicaReadTrace,
+          markReplicaReadPhase,
+        } = await import("./services/tursoReplica/replicaReadPhaseTrace.js");
+
+        const runQuery = async () => {
+          const { withInteractiveHotPath } =
+            await import("./services/gatewayInteractivePriority.js");
+          const coalesceKey =
+            cacheKey ??
+            buildLocalDbReadCacheKey({ appId, sourceKey, sql, params });
+          const routerStarted = performance.now();
+          const result = await withInteractiveHotPath("mini-app:db-query", () =>
+            coalesceInFlightLocalDbRead(coalesceKey, () =>
+              dbRouter.query(appId, source, sql, params),
+            ),
+          );
+          markReplicaReadPhase(
+            "dbRouterCoalesceMs",
+            performance.now() - routerStarted,
+          );
+          return result;
+        };
+
+        let result: Awaited<ReturnType<typeof dbRouter.query>>;
+        if (useReplicaTrace) {
+          traceActive = true;
+          const resolveSourceMs = performance.now() - resolveSourceStarted;
+          const httpQueueMs = performance.now() - receivedAt;
+          result = await withReplicaReadTrace(
+            `app=${appId} source=${source.alias ?? sourceKey}`,
+            { appId, source: String(source.alias ?? sourceKey) },
+            async () => {
+              markReplicaReadPhase("httpQueueMs", httpQueueMs);
+              markReplicaReadPhase("resolveSourceMs", resolveSourceMs);
+              const routed = await runQuery();
+              finishReplicaReadTrace({
+                backend: routed.backend,
+                rows: routed.count,
+              });
+              return routed;
+            },
+          );
+        } else {
+          result = await runQuery();
+        }
+
         console.log(
           `[Gateway] /api/db/query app=${appId} source=${source.alias} backend=${result.backend} rows=${result.count}`,
         );
-        res.json({ ...result, source: source.alias });
+        const payload = { ...result, source: source.alias };
+        if (cacheKey) {
+          setCachedLocalDbReadResult(cacheKey, payload, appId);
+        }
+        const { notifyMiniAppFirstDataPaint } =
+          await import("./services/tursoPullScheduler.js");
+        notifyMiniAppFirstDataPaint(appId);
+        res.json(payload);
       } catch (err) {
+        const message = (err as Error).message;
+        if (traceActive) {
+          const { finishReplicaReadTrace, getReplicaReadTraceStore } =
+            await import("./services/tursoReplica/replicaReadPhaseTrace.js");
+          if (getReplicaReadTraceStore()) {
+            finishReplicaReadTrace({ error: message.slice(0, 160) });
+          }
+        }
         console.error("[Gateway] /api/db/query error:", err);
-        res.status(500).json({ error: (err as Error).message });
+        const { httpStatusForMiniAppDbQueryError } =
+          await import("./services/tursoReplica/replicaSchemaQueryErrorMessage.js");
+        res
+          .status(httpStatusForMiniAppDbQueryError(message))
+          .json({ error: message });
       }
     });
+    lapRouteRegistrationSection("database-registry");
+
     // ── Mini-app batch read API ─────────────────────────────────────────────
     // Runs multiple read-only statements in one HTTP round trip. Mirrors the
     // Cloud App Host /api/db/batch contract so apps behave identically in
     // local preview and on apps.papr.ai.
-    app.post("/api/db/batch", async (req, res) => {
+    // Aliases: /api/db/query-batch and /api/db/read-batch (same handler).
+    // Writes belong on POST /api/db/write-batch — never mix INSERT/UPDATE into batch.
+    const handleDbReadBatch = async (
+      req: import("express").Request,
+      res: import("express").Response,
+    ): Promise<void> => {
       try {
-        const { appId, statements } = req.body as {
+        const {
+          appId: bodyAppId,
+          sourceId: batchSourceId,
+          statements,
+        } = req.body as {
           appId?: string;
-          statements?: Array<{ sourceId?: string; sql?: string; params?: unknown[] }>;
+          sourceId?: string;
+          statements?: Array<{
+            sourceId?: string;
+            sql?: string;
+            params?: unknown[];
+          }>;
         };
-        if (!appId || !Array.isArray(statements) || statements.length === 0) {
-          res.status(400).json({ error: "appId and non-empty statements[] are required" });
+        if (!Array.isArray(statements) || statements.length === 0) {
+          res.status(400).json({ error: "non-empty statements[] is required" });
           return;
         }
+
+        const resolved = resolveRequestAppId(req, bodyAppId);
+        if ("error" in resolved) {
+          res.status(resolved.status).json({ error: resolved.error });
+          return;
+        }
+        const appId = resolved.appId;
+        const { markMiniAppInteractiveLoadWindow } =
+          await import("./services/appRuntime/miniAppInteractiveLoadWindow.js");
+        markMiniAppInteractiveLoadWindow(appId);
         if (statements.length > 25) {
           res.status(400).json({ error: "Batch limited to 25 statements" });
           return;
         }
 
-        const results: Array<Record<string, unknown>> = [];
-        for (const stmt of statements) {
-          const sql = stmt?.sql;
-          if (!sql) {
-            results.push({ ok: false, error: "sql is required" });
-            continue;
-          }
-          const trimmed = sql.trim().toLowerCase();
-          if (!trimmed.startsWith("select") && !trimmed.startsWith("with")) {
-            results.push({
-              ok: false,
-              error: "Only SELECT (and WITH ... SELECT) queries are allowed",
-            });
-            continue;
-          }
-          try {
-            const source = await resolveLinkedSource(appId, stmt.sourceId, sql, "read");
-            const result = await dbRouter.query(appId, source, sql, stmt.params);
-            results.push({ ok: true, ...result, source: source.alias });
-          } catch (stmtErr) {
-            results.push({ ok: false, error: (stmtErr as Error).message });
-          }
-        }
-        res.json({ results });
+        const { withInteractiveHotPath } =
+          await import("./services/gatewayInteractivePriority.js");
+        const batchCoalesceKey = buildLocalDbBatchCoalesceKey(
+          appId,
+          statements,
+        );
+        const { executeMiniAppReadBatch } =
+          await import("./services/appRuntime/miniAppDbReadBatch.js");
+        const { coalesceBatchSourceId } =
+          await import("./services/appDataSources.js");
+        type Prepared =
+          import("./services/appRuntime/miniAppDbReadBatch.js").PreparedMiniAppReadStatement;
+        const payload = await withInteractiveHotPath(
+          "mini-app:db-query-batch",
+          () =>
+            coalesceInFlightLocalDbRead(batchCoalesceKey, async () => {
+              const prepared: Prepared[] = [];
+              const validationRows: Array<Record<string, unknown>> = new Array(
+                statements.length,
+              );
+              for (let index = 0; index < statements.length; index++) {
+                const stmt = statements[index];
+                const sql = stmt?.sql;
+                if (!sql) {
+                  validationRows[index] = {
+                    ok: false,
+                    error: "sql is required",
+                  };
+                  continue;
+                }
+                const trimmed = sql.trim().toLowerCase();
+                if (
+                  !trimmed.startsWith("select") &&
+                  !trimmed.startsWith("with")
+                ) {
+                  validationRows[index] = {
+                    ok: false,
+                    error:
+                      "Only SELECT (and WITH ... SELECT) queries are allowed",
+                  };
+                  continue;
+                }
+                try {
+                  const source = await resolveLinkedSource(
+                    appId,
+                    coalesceBatchSourceId(stmt.sourceId, batchSourceId),
+                    sql,
+                    "read",
+                  );
+                  prepared.push({ index, source, sql, params: stmt.params });
+                } catch (resolveErr) {
+                  validationRows[index] = {
+                    ok: false,
+                    error: (resolveErr as Error).message,
+                  };
+                }
+              }
+
+              const results: Array<Record<string, unknown>> =
+                validationRows.map(
+                  (row) =>
+                    row ?? { ok: false, error: "Statement was not executed" },
+                );
+              if (prepared.length > 0) {
+                const executed = await executeMiniAppReadBatch(
+                  dbRouter,
+                  appId,
+                  prepared,
+                  statements.length,
+                );
+                for (let i = 0; i < statements.length; i++) {
+                  if (executed[i] !== undefined) {
+                    results[i] = executed[i];
+                  }
+                }
+              }
+              return { results };
+            }),
+        );
+        const { notifyMiniAppFirstDataPaint } =
+          await import("./services/tursoPullScheduler.js");
+        notifyMiniAppFirstDataPaint(appId);
+        res.json(payload);
       } catch (err) {
         console.error("[Gateway] /api/db/batch error:", err);
         res.status(500).json({ error: (err as Error).message });
       }
-    });
+    };
+    app.post("/api/db/batch", handleDbReadBatch);
+    app.post("/api/db/query-batch", handleDbReadBatch);
+    app.post("/api/db/read-batch", handleDbReadBatch);
+
+    lapRouteRegistrationSection("mini-app-batch-read-api");
 
     // ── Mini-app SQLite write API ────────────────────────────────────────────
     // Apps call: fetch('/api/db/write', { method: 'POST', body: JSON.stringify({ appId, sql, params }) })
@@ -758,21 +1422,36 @@ async function startGateway(): Promise<void> {
     //  - Bound params required for any user-supplied values (prevents SQL injection)
     //
     // Returns: { changes: number, lastInsertRowid: number }
+    //
+    // Turso push: TursoLinkedDbWatcher schedules debounced push on data.db/WAL
+    // changes — no explicit scheduleTursoPushForJob here (avoids double enqueue).
     // ─────────────────────────────────────────────────────────────────────────
 
     app.post("/api/db/write", async (req, res) => {
       try {
-        const { appId, sourceId, sql, params } = req.body as {
+        const {
+          appId: bodyAppId,
+          sourceId,
+          sql,
+          params,
+        } = req.body as {
           appId?: string;
           sourceId?: string;
           sql?: string;
           params?: unknown[];
         };
 
-        if (!appId || !sql) {
-          res.status(400).json({ error: "appId and sql are required" });
+        if (!sql) {
+          res.status(400).json({ error: "sql is required" });
           return;
         }
+
+        const resolved = resolveRequestAppId(req, bodyAppId);
+        if ("error" in resolved) {
+          res.status(resolved.status).json({ error: resolved.error });
+          return;
+        }
+        const appId = resolved.appId;
 
         const trimmed = sql.trim().toLowerCase();
         const isWrite =
@@ -798,38 +1477,254 @@ async function startGateway(): Promise<void> {
           return;
         }
 
-        const result = await dbRouter.write(appId, source, sql, params);
+        const { writeLinkedDbRowLocalFirst } =
+          await import("./services/syncV3/localFirstDbWrite.js");
+        const { assertReplaySafeRowSql } =
+          await import("./services/syncV3/replaySafeSql.js");
+        assertReplaySafeRowSql(sql);
+        const { assertValidHomeBriefWrite } =
+          await import("./services/dailyBriefWriteGuard.js");
+        assertValidHomeBriefWrite(appId, source, sql, params);
+        const result = await writeLinkedDbRowLocalFirst(
+          dbPool,
+          dbRouter,
+          appId,
+          source,
+          sql,
+          params,
+        );
         console.log(
           `[Gateway] /api/db/write app=${appId} source=${source.alias} changes=${result.changes}`,
         );
-        const syncKey = source.dbId ?? source.jobId ?? source.dbPath;
-        void import("./services/tursoPushScheduler.js").then(({ scheduleTursoPushForJob }) =>
-          scheduleTursoPushForJob(syncKey),
-        );
+        invalidateLocalDbReadCacheForApp(appId);
+        invalidateTursoSyncItemsCache(appId);
+        invalidateSyncItemsAppResponseCache(appId);
         res.json(result);
       } catch (err) {
-        const e = err as Error & { status?: number };
+        const e = err as Error & { status?: number; name?: string };
+        if (e.name === "NonReplaySafeSqlError") {
+          res.status(400).json({ error: e.message });
+          return;
+        }
         console.error("[Gateway] /api/db/write error:", err);
         res.status(e.status ?? 500).json({ error: e.message });
       }
     });
     // ─────────────────────────────────────────────────────────────────────────
 
+    lapRouteRegistrationSection("mini-app-write-api");
+
+    // ── Mini-app SQLite write batch API ─────────────────────────────────────
+    // Apps call: fetch('/api/db/write-batch', { method: 'POST', body: JSON.stringify({ appId, statements: [...] }) })
+    // Same write rules as /api/db/write; up to 25 statements per request.
+    // Returns: { atomic: boolean, results: [{ ok, changes, lastInsertRowid, source?, error? }, ...] }
+    // Default atomic: false — partial commits possible. Pass atomic: true for one SQLite transaction
+    // (all statements must target the same linked database).
+    // ─────────────────────────────────────────────────────────────────────────
+
+    app.post("/api/db/write-batch", async (req, res) => {
+      try {
+        const {
+          appId: bodyAppId,
+          sourceId: batchSourceId,
+          statements,
+          atomic,
+        } = req.body as {
+          appId?: string;
+          sourceId?: string;
+          statements?: Array<{
+            sourceId?: string;
+            sql?: string;
+            params?: unknown[];
+          }>;
+          atomic?: boolean;
+        };
+
+        if (!Array.isArray(statements) || statements.length === 0) {
+          res.status(400).json({ error: "non-empty statements[] is required" });
+          return;
+        }
+        if (statements.length > 25) {
+          res.status(400).json({ error: "Batch limited to 25 statements" });
+          return;
+        }
+
+        const resolved = resolveRequestAppId(req, bodyAppId);
+        if ("error" in resolved) {
+          res.status(resolved.status).json({ error: resolved.error });
+          return;
+        }
+        const appId = resolved.appId;
+
+        const { executeMiniAppWriteBatch } =
+          await import("./services/miniAppWriteBatch.js");
+        const { coalesceBatchSourceId } =
+          await import("./services/appDataSources.js");
+
+        const payload = await executeMiniAppWriteBatch({
+          appId,
+          statements: statements.map((stmt) => ({
+            ...stmt,
+            sourceId: coalesceBatchSourceId(stmt.sourceId, batchSourceId),
+          })),
+          atomic: atomic === true,
+          pool: dbPool,
+          dbRouter,
+          resolveLinkedSource,
+        });
+
+        console.log(
+          `[Gateway] /api/db/write-batch app=${appId} count=${statements.length} atomic=${payload.atomic}`,
+        );
+        invalidateLocalDbReadCacheForApp(appId);
+        invalidateTursoSyncItemsCache(appId);
+        invalidateSyncItemsAppResponseCache(appId);
+        res.json(payload);
+      } catch (err) {
+        const e = err as Error & { status?: number };
+        if (e.status) {
+          res.status(e.status).json({ error: e.message });
+          return;
+        }
+        console.error("[Gateway] /api/db/write-batch error:", err);
+        res.status(500).json({ error: e.message });
+      }
+    });
+    // ─────────────────────────────────────────────────────────────────────────
+
+    lapRouteRegistrationSection("mini-app-write-batch-api");
+
+    // ── Backend handler DB proxy (loopback — same rules as /api/db/*) ───────
+    // Python papr_db uses PAPR_DB_MODE=proxy to route query/write here instead
+    // of raw sqlite3 or Turso tokens in the subprocess.
+    // ─────────────────────────────────────────────────────────────────────────
+    const { createDesktopBackendDbProxyRouter } =
+      await import("./services/appRuntime/backendDbProxy.js");
+    app.use(
+      "/internal/backend-db",
+      createDesktopBackendDbProxyRouter({
+        resolveSource: resolveLinkedSource,
+        resolveRegistrySource: async (dbId, sourceId) => {
+          const { getDatabaseRegistryService } =
+            await import("./services/DatabaseRegistryService.js");
+          const { resolveExistingRegistryDbPath, targetFromRegistryRecord } =
+            await import("./services/jobAppDatabase.js");
+          const record = getDatabaseRegistryService().getById(dbId);
+          if (!record || record.status !== "active") {
+            throw Object.assign(new Error(`Database not found: ${dbId}`), {
+              status: 404,
+            });
+          }
+          const target = targetFromRegistryRecord(record);
+          if (
+            sourceId?.trim() &&
+            sourceId.trim() !== target.alias &&
+            sourceId.trim() !== dbId
+          ) {
+            throw Object.assign(
+              new Error(
+                `Unknown sourceId ${sourceId} for registry database ${dbId}`,
+              ),
+              { status: 400 },
+            );
+          }
+          const dbPath =
+            resolveExistingRegistryDbPath(record.localPath) ?? record.localPath;
+          return {
+            id: target.alias,
+            type: "sqlite" as const,
+            dbId: record.dbId,
+            alias: target.alias,
+            dbPath,
+            tables: [],
+            linkedAt: record.createdAt,
+          };
+        },
+        query: async (appId, source, sql, params) => {
+          const { withInteractiveHotPath } =
+            await import("./services/gatewayInteractivePriority.js");
+          const result = await withInteractiveHotPath("mini-app:db-query", () =>
+            dbRouter.query(appId, source, sql, params),
+          );
+          return { rows: result.rows, count: result.count };
+        },
+        write: async (appId, source, sql, params) => {
+          const { writeLinkedDbRowLocalFirst } =
+            await import("./services/syncV3/localFirstDbWrite.js");
+          const result = await writeLinkedDbRowLocalFirst(
+            dbPool,
+            dbRouter,
+            appId,
+            source,
+            sql,
+            params,
+          );
+          return {
+            changes: result.changes,
+            lastInsertRowid: result.lastInsertRowid,
+          };
+        },
+      }),
+    );
+
+    lapRouteRegistrationSection("backend-db-proxy");
+
+    // ── App Files API (large blobs → GCS, pointer rows in the app DB) ───────
+    // Apps call: fetch('/api/files/upload', { body: { appId, filePath } }).
+    // Bytes never go through git — repoHygiene rejects anything over 25 MB, so
+    // this is where large assets belong.
+    // ─────────────────────────────────────────────────────────────────────────
+    registerChatgptHistoryRoutes(app);
+    registerAppFilesRoutes(app, {
+      resolveSource: (appId, sourceId, sql, operation) =>
+        resolveLinkedSource(appId, sourceId, sql, operation),
+      dbQuery: (appId, source, sql, params) =>
+        dbRouter.query(appId, source as never, sql, params) as never,
+      dbWrite: (appId, source, sql, params) =>
+        dbRouter.write(appId, source as never, sql, params) as never,
+      // Lets App Files choose a home when the caller named no sourceId.
+      // Ids are returned rather than aliases because aliases are not unique —
+      // a duplicated job link yields two sources sharing one alias.
+      listSources: async (appId) => {
+        const config = await getAppService().getDataSourcesConfig(appId);
+        return config.sources.map((source) => ({
+          id: source.id,
+          alias: source.alias,
+        }));
+      },
+    });
+
+    lapRouteRegistrationSection("app-files-api");
+
     // ── Mini-app SQLite DDL API ──────────────────────────────────────────────
     // Apps call: fetch('/api/db/exec', { method: 'POST', body: JSON.stringify({ appId, sql }) })
     // Only CREATE TABLE IF NOT EXISTS is allowed (safe schema bootstrapping).
+    //
+    // Turso push: same as /api/db/write — TursoLinkedDbWatcher only.
     // ─────────────────────────────────────────────────────────────────────────
     app.post("/api/db/exec", async (req, res) => {
       try {
-        const { appId, sql } = req.body as {
+        const {
+          appId: bodyAppId,
+          sourceId,
+          sql,
+        } = req.body as {
           appId?: string;
+          sourceId?: string;
           sql?: string;
         };
 
-        if (!appId || !sql) {
-          res.status(400).json({ error: "appId and sql are required" });
+        if (!sql) {
+          res.status(400).json({ error: "sql is required" });
           return;
         }
+
+        const resolved = resolveRequestAppId(req, bodyAppId);
+        if ("error" in resolved) {
+          res.status(resolved.status).json({ error: resolved.error });
+          return;
+        }
+        const appId = resolved.appId;
 
         const trimmed = sql.trim().toLowerCase();
         if (!trimmed.startsWith("create table if not exists")) {
@@ -842,20 +1737,24 @@ async function startGateway(): Promise<void> {
 
         let source: import("./services/appDataSources.js").AppDataSource;
         try {
-          source = await resolveLinkedSource(appId, undefined, sql, "write");
+          source = await resolveLinkedSource(appId, sourceId, sql, "write");
         } catch (err) {
           const e = err as Error & { status?: number };
           res.status(e.status ?? 400).json({ error: e.message });
           return;
         }
 
-        await dbRouter.exec(appId, source, sql);
+        const { execLinkedDbSchemaLocalFirst } =
+          await import("./services/syncV3/localFirstDbWrite.js");
+        await execLinkedDbSchemaLocalFirst(
+          dbPool,
+          dbRouter,
+          appId,
+          source,
+          sql,
+        );
         console.log(
           `[Gateway] /api/db/exec app=${appId} source=${source.alias}`,
-        );
-        const syncKey = source.dbId ?? source.jobId ?? source.dbPath;
-        void import("./services/tursoPushScheduler.js").then(({ scheduleTursoPushForJob }) =>
-          scheduleTursoPushForJob(syncKey),
         );
         res.json({ success: true });
       } catch (err) {
@@ -865,6 +1764,8 @@ async function startGateway(): Promise<void> {
       }
     });
     // ─────────────────────────────────────────────────────────────────────────
+
+    lapRouteRegistrationSection("mini-app-ddl-api");
 
     // ── Mini-app Jobs API ─────────────────────────────────────────────────────
     // Gives mini-apps the same job-triggering capability that agents have via
@@ -895,6 +1796,124 @@ async function startGateway(): Promise<void> {
       } catch (err) {
         console.error("[Gateway] /api/jobs/list error:", err);
         res.status(500).json({ error: (err as Error).message });
+      }
+    });
+
+    //  GET  /api/apps/health             → per-app job health for Apps library cards
+    //    One batched call for the whole library, built from in-memory job
+    //    records (never run logs or job databases).
+    app.get("/api/apps/health", async (_req, res) => {
+      try {
+        const jobs = await getJobsService().listJobs();
+        // Sharing prefs ride along so card share icons come from the same local
+        // file the Share sheet writes — not a partial, possibly stale cache.
+        const sharing: Record<string, unknown> = {};
+        for (const [id, p] of Object.entries(loadCloudPublishPrefs().apps)) {
+          if (p.loginAccess === undefined && p.externalLink === undefined)
+            continue;
+          sharing[id] = {
+            loginAccess: p.loginAccess,
+            externalLink: p.externalLink,
+            codeAccess: p.codeAccess,
+            requireSignIn: p.requireSignIn,
+            allowedUserIds: p.allowedUserIds,
+            allowedEmails: p.allowedEmails,
+            allowedEmailDomains: p.allowedEmailDomains,
+          };
+        }
+        res.json({
+          apps: buildAppsHealth(jobs),
+          sharing,
+          generatedAt: new Date().toISOString(),
+        });
+      } catch (err) {
+        console.error("[Gateway] /api/apps/health error:", err);
+        res.status(500).json({ error: (err as Error).message });
+      }
+    });
+
+    //  App categories (filter pills on Library / Team / Community).
+    //  GET  /api/apps/categories            → live categories + key → category
+    //  POST /api/apps/categories/sync       → categorize library apps (Jev, LLM for new)
+    //  POST /api/apps/categories/categorize → categorize catalog entries { items, scope }
+    //  POST /api/apps/categories/assign     → user override { key, category|null }
+    app.get("/api/apps/categories", (_req, res) => {
+      try {
+        res.json(getAppCategoryService().snapshot());
+      } catch (err) {
+        res.status(500).json({ error: (err as Error).message });
+      }
+    });
+    app.post("/api/apps/categories/sync", async (_req, res) => {
+      try {
+        const appService = getAppService();
+        await appService.initialize();
+        const apps = await appService.listApps();
+        const items = apps
+          .filter((a) => a.status !== "archived")
+          .map((a) => ({
+            key: `app:${a.id}`,
+            title: a.title,
+            description: a.description,
+            tags: a.tags,
+          }));
+        res.json(
+          await getAppCategoryService().categorize(items, {
+            allowPropose: true,
+          }),
+        );
+      } catch (err) {
+        console.error("[Gateway] /api/apps/categories/sync error:", err);
+        res.status(500).json({ error: (err as Error).message });
+      }
+    });
+    app.post("/api/apps/categories/categorize", async (req, res) => {
+      try {
+        const body = (req.body ?? {}) as {
+          items?: Array<{
+            key?: string;
+            title?: string;
+            description?: string;
+            tags?: string[];
+          }>;
+          scope?: "team" | "community";
+        };
+        const items = (body.items ?? [])
+          .filter(
+            (i) => typeof i.key === "string" && typeof i.title === "string",
+          )
+          .slice(0, 400)
+          .map((i) => ({
+            key: i.key as string,
+            title: i.title as string,
+            description: i.description,
+            tags: Array.isArray(i.tags) ? i.tags : undefined,
+          }));
+        // Community is a shared, public list: never invent categories from it.
+        const allowPropose = body.scope === "team";
+        res.json(
+          await getAppCategoryService().categorize(items, { allowPropose }),
+        );
+      } catch (err) {
+        console.error("[Gateway] /api/apps/categories/categorize error:", err);
+        res.status(500).json({ error: (err as Error).message });
+      }
+    });
+    app.post("/api/apps/categories/assign", (req, res) => {
+      try {
+        const { key, category } = (req.body ?? {}) as {
+          key?: string;
+          category?: string | null;
+        };
+        if (!key) {
+          res.status(400).json({ error: "key is required" });
+          return;
+        }
+        res.json(
+          getAppCategoryService().setUserCategory(key, category ?? null),
+        );
+      } catch (err) {
+        res.status(400).json({ error: (err as Error).message });
       }
     });
 
@@ -952,6 +1971,14 @@ async function startGateway(): Promise<void> {
             }
           }
         }
+        const { mergeVerifiedCallerJobParams } =
+          await import("./services/appRuntime/miniAppAccess.js");
+        const { getPaprCallerIdentity } = await import("./utils/paprUserId.js");
+        const verifiedParams = mergeVerifiedCallerJobParams(
+          params,
+          true,
+          getPaprCallerIdentity(),
+        );
         const jobsService = getJobsService();
         const job = await jobsService.getJob(jobId);
         if (!job) {
@@ -960,7 +1987,7 @@ async function startGateway(): Promise<void> {
         }
         if (wait) {
           try {
-            const result = await jobsService.runJob(jobId, params);
+            const result = await jobsService.runJob(jobId, verifiedParams);
             res.json({
               jobId,
               status: result.status,
@@ -971,9 +1998,10 @@ async function startGateway(): Promise<void> {
           } catch (runErr: unknown) {
             if (isExpectedJobRunCollision(runErr)) {
               const snapshot = await jobsService.getJob(jobId);
-              const reason = runErr instanceof JobsService.DependencyRunningError
-                ? "dependency_running"
-                : "already_running";
+              const reason =
+                runErr instanceof JobsService.DependencyRunningError
+                  ? "dependency_running"
+                  : "already_running";
               res.status(409).json({
                 jobId,
                 status: snapshot?.status ?? "pending",
@@ -989,23 +2017,41 @@ async function startGateway(): Promise<void> {
             throw runErr;
           }
         } else {
-          jobsService.runJob(jobId, params).catch((err: unknown) => {
-            if (isExpectedJobRunCollision(err)) {
-              const note =
-                err instanceof JobsService.DependencyRunningError
-                  ? `dependency ${err.dependencyId} still running`
-                  : (err as Error).message;
-              console.warn(
-                `[Gateway] /api/jobs/run skipped for ${jobId}: ${note}`,
-              );
+          try {
+            const started = await jobsService.startJobRunForApi(
+              jobId,
+              verifiedParams,
+            );
+            if (started.status === "failed") {
+              res.status(503).json({
+                jobId: started.jobId,
+                status: "failed",
+                error: started.error ?? "Job failed to start",
+              });
               return;
             }
-            console.error(
-              `[Gateway] /api/jobs/run background error for ${jobId}:`,
-              err,
-            );
-          });
-          res.json({ jobId, status: "running" });
+            res.json({ jobId: started.jobId, status: started.status });
+          } catch (runErr: unknown) {
+            if (isExpectedJobRunCollision(runErr)) {
+              const snapshot = await jobsService.getJob(jobId);
+              const reason =
+                runErr instanceof JobsService.DependencyRunningError
+                  ? "dependency_running"
+                  : "already_running";
+              res.status(409).json({
+                jobId,
+                status: snapshot?.status ?? "pending",
+                error:
+                  runErr instanceof Error ? runErr.message : String(runErr),
+                reason,
+                ...(runErr instanceof JobsService.DependencyRunningError
+                  ? { dependencyId: runErr.dependencyId }
+                  : {}),
+              });
+              return;
+            }
+            throw runErr;
+          }
         }
       } catch (err) {
         console.error("[Gateway] /api/jobs/run error:", err);
@@ -1013,7 +2059,127 @@ async function startGateway(): Promise<void> {
       }
     });
 
+    // Explicit escape hatch for a phantom `running` flag (no tracked process
+    // after a failed spawn). Refuses when the job is genuinely running.
+    app.post("/api/jobs/clear-stale", async (req, res) => {
+      try {
+        const { jobId } = req.body as { jobId?: string };
+        if (!jobId) {
+          res.status(400).json({ error: "jobId is required" });
+          return;
+        }
+        const jobsService = getJobsService();
+        const job = await jobsService.getJob(jobId);
+        if (!job) {
+          res.status(404).json({ error: `Job not found: ${jobId}` });
+          return;
+        }
+        const cleared = await jobsService.clearStaleRunningState(jobId);
+        const snapshot = await jobsService.getJob(jobId);
+        res.status(cleared ? 200 : 409).json({
+          jobId,
+          cleared,
+          status: snapshot?.status ?? job.status,
+          ...(cleared
+            ? {}
+            : {
+                reason:
+                  job.status === "running"
+                    ? "job has an active process or agent run"
+                    : `job is not running (status: ${job.status})`,
+              }),
+        });
+      } catch (err) {
+        res.status(500).json({ error: (err as Error).message });
+      }
+    });
+
     registerPaprMiniAppSdkRoutes(app);
+
+    app.get("/api/access", async (req, res) => {
+      try {
+        const explicitAppId = req.query["appId"] as string | undefined;
+        const resolved = resolveRequestAppId(req, explicitAppId);
+        if ("error" in resolved) {
+          res.status(resolved.status).json({ error: resolved.error });
+          return;
+        }
+        const { buildLocalDesktopAccessResponse } =
+          await import("./services/appRuntime/miniAppAccess.js");
+        const { getPaprCallerIdentity } = await import("./utils/paprUserId.js");
+        res.json(
+          buildLocalDesktopAccessResponse(
+            resolved.appId,
+            getPaprCallerIdentity(),
+          ),
+        );
+      } catch (err) {
+        console.error("[Gateway] /api/access error:", err);
+        res.status(500).json({ error: (err as Error).message });
+      }
+    });
+
+    app.get("/api/members", async (req, res) => {
+      try {
+        const explicitAppId = req.query["appId"] as string | undefined;
+        const resolved = resolveRequestAppId(req, explicitAppId);
+        if ("error" in resolved) {
+          res.status(resolved.status).json({ error: resolved.error });
+          return;
+        }
+        void resolved;
+
+        const { getApiKey } = await import("./utils/keyResolver.js");
+        const { getPaprWorkspaceId, getGatewayPaprProfile } =
+          await import("./utils/paprGatewayProfile.js");
+        const { readActiveWorkspacePointer } =
+          await import("../core/utils/paprWorkspace.js");
+        const { listMiniAppMembers } =
+          await import("./services/appRuntime/miniAppMembers.js");
+
+        const sessionToken = await getApiKey("PAPR_SESSION_TOKEN");
+        if (!sessionToken) {
+          res.status(401).json({
+            error: "Sign in with Papr to list workspace members.",
+          });
+          return;
+        }
+
+        const workspaceId = getPaprWorkspaceId();
+        if (!workspaceId) {
+          res.status(503).json({
+            error:
+              "No Papr workspace id is available. Sign out and sign in again to refresh workspace metadata.",
+          });
+          return;
+        }
+
+        const pointer = readActiveWorkspacePointer();
+        const profile = getGatewayPaprProfile();
+        const namespaceId =
+          process.env.PAPR_NAMESPACE_ID?.trim() || pointer?.namespaceId;
+
+        const result = await listMiniAppMembers({
+          sessionToken,
+          workspaceId,
+          workspaceName: profile.paprWorkspaceName,
+          namespaceId,
+        });
+        res.json(result);
+      } catch (err) {
+        if (
+          err instanceof Error &&
+          err.name === "MiniAppMembersError" &&
+          "status" in err &&
+          typeof err.status === "number"
+        ) {
+          res.status(err.status).json({ error: err.message });
+          return;
+        }
+        console.error("[Gateway] /api/members error:", err);
+        res.status(500).json({ error: (err as Error).message });
+      }
+    });
 
     registerAppAgentChatRoutes(app, {
       mode: "desktop",
@@ -1027,6 +2193,13 @@ async function startGateway(): Promise<void> {
 
     registerJobEventsSseRoutes(app, {
       hub: getJobEventHub(),
+      onDbIdsSubscribe: (dbIds) => {
+        void import("./services/tursoPullScheduler.js").then(
+          ({ scheduleTursoPullForDbIds }) => {
+            scheduleTursoPullForDbIds(dbIds);
+          },
+        );
+      },
       pollJobStatus: async (jobId, _req) => {
         const job = await getJobsService().getJob(jobId);
         if (!job) {
@@ -1042,6 +2215,8 @@ async function startGateway(): Promise<void> {
         };
       },
     });
+
+    lapRouteRegistrationSection("mini-app-jobs-api");
 
     // ── Mini-app Job Creation API ─────────────────────────────────────────────
     // Lets mini-apps programmatically create jobs (the same capability agents have
@@ -1111,12 +2286,11 @@ async function startGateway(): Promise<void> {
         const jobsService = getJobsService();
         const createInput: CreateJobInput = {
           ...input,
-          appIds:
-            input.appIds?.length
-              ? input.appIds
-              : input.appId
-                ? [input.appId]
-                : [],
+          appIds: input.appIds?.length
+            ? input.appIds
+            : input.appId
+              ? [input.appId]
+              : [],
         };
         const job = await jobsService.createJob(createInput);
 
@@ -1137,6 +2311,8 @@ async function startGateway(): Promise<void> {
       }
     });
     // ─────────────────────────────────────────────────────────────────────────
+
+    lapRouteRegistrationSection("mini-app-job-create-api");
 
     // ── Brand API (mini-apps) ─────────────────────────────────────────────────
     //  GET /api/brand?appId=...     → merged brand tokens + cssVariables
@@ -1193,6 +2369,8 @@ async function startGateway(): Promise<void> {
     });
     // ─────────────────────────────────────────────────────────────────────────
 
+    lapRouteRegistrationSection("brand-api");
+
     // ── Mini-app Bash API ─────────────────────────────────────────────────────
     // Lets mini-apps run quick shell commands (the same capability agents have
     // via the bash tool).  Intended for lightweight backend calls like resetting
@@ -1206,6 +2384,8 @@ async function startGateway(): Promise<void> {
     //    returns: { stdout, stderr, exitCode }
     // ─────────────────────────────────────────────────────────────────────────
 
+    lapRouteRegistrationSection("mini-app-bash-api");
+
     // ── Cloud Publish (local handlers — must register before cloud proxy) ───
     app.get("/api/cloud/publish/:appId", async (req, res) => {
       try {
@@ -1213,10 +2393,21 @@ async function startGateway(): Promise<void> {
           req.params.appId,
         );
         const prefs = getAppPublishPrefs(req.params.appId);
-        const { scanAppCloudCompatibility } = await import(
-          "./services/cloudAppCompatibility.js"
-        );
-        const compatibility = await scanAppCloudCompatibility(req.params.appId);
+        let compatibility: unknown = null;
+        try {
+          const { scanAppCloudCompatibility } =
+            await import("./services/cloudAppCompatibility.js");
+          compatibility = await scanAppCloudCompatibility(req.params.appId);
+        } catch (compatErr) {
+          console.warn(
+            `[Gateway] /api/cloud/publish/${req.params.appId} compatibility scan failed:`,
+            compatErr,
+          );
+          compatibility = {
+            ok: false,
+            error: (compatErr as Error).message,
+          };
+        }
         res.json({ ...config, prefs, compatibility });
       } catch (err) {
         res.status(500).json({ error: (err as Error).message });
@@ -1225,11 +2416,23 @@ async function startGateway(): Promise<void> {
 
     app.get("/api/cloud/publish/:appId/compatibility", async (req, res) => {
       try {
-        const { scanAppCloudCompatibility } = await import(
-          "./services/cloudAppCompatibility.js"
-        );
+        const { scanAppCloudCompatibility } =
+          await import("./services/cloudAppCompatibility.js");
         const compatibility = await scanAppCloudCompatibility(req.params.appId);
         res.json(compatibility);
+      } catch (err) {
+        res.status(500).json({ error: (err as Error).message });
+      }
+    });
+
+    app.get("/api/cloud/publish/:appId/readiness", async (req, res) => {
+      try {
+        const { buildCloudPublishReadinessForApp } =
+          await import("./services/cloudAppPublishReadiness.js");
+        const readiness = await buildCloudPublishReadinessForApp(
+          req.params.appId,
+        );
+        res.json(readiness);
       } catch (err) {
         res.status(500).json({ error: (err as Error).message });
       }
@@ -1242,13 +2445,20 @@ async function startGateway(): Promise<void> {
           loginAccess?: import("./services/cloudSharingSettings.js").CloudLoginAccess;
           externalLink?: import("./services/cloudSharingSettings.js").CloudExternalLink;
           codeAccess?: import("../core/utils/shareAudienceModel.js").CodeAccess;
+          requireSignIn?: boolean;
+          perUserIsolation?: boolean;
+          // Audience "people". First publish of a restricted app goes through
+          // POST (not PATCH), so omitting it here silently published the app
+          // to the whole workspace.
+          allowedUserIds?: string[];
+          allowedEmails?: string[];
+          allowedEmailDomains?: string[];
           slug?: string;
           autoPublish?: boolean;
           acknowledgeDesktopOnly?: boolean;
         };
-        const { scanAppCloudCompatibility } = await import(
-          "./services/cloudAppCompatibility.js"
-        );
+        const { scanAppCloudCompatibility } =
+          await import("./services/cloudAppCompatibility.js");
         const compatibility = await scanAppCloudCompatibility(req.params.appId);
         if (
           compatibility.requiresAcknowledgement &&
@@ -1262,13 +2472,20 @@ async function startGateway(): Promise<void> {
           return;
         }
         if (body.autoPublish !== undefined) {
-          setAppPublishPrefs(req.params.appId, { autoPublish: body.autoPublish });
+          setAppPublishPrefs(req.params.appId, {
+            autoPublish: body.autoPublish,
+          });
         }
         if (
           body.accessMode ||
           body.loginAccess !== undefined ||
           body.externalLink !== undefined ||
-          body.codeAccess !== undefined
+          body.codeAccess !== undefined ||
+          body.requireSignIn !== undefined ||
+          body.perUserIsolation !== undefined ||
+          body.allowedUserIds !== undefined ||
+          body.allowedEmails !== undefined ||
+          body.allowedEmailDomains !== undefined
         ) {
           setAppPublishPrefs(req.params.appId, {
             ...(body.accessMode ? { accessMode: body.accessMode } : {}),
@@ -1281,15 +2498,32 @@ async function startGateway(): Promise<void> {
             ...(body.codeAccess !== undefined
               ? { codeAccess: body.codeAccess }
               : {}),
+            ...(body.requireSignIn !== undefined
+              ? { requireSignIn: body.requireSignIn }
+              : {}),
+            ...(body.perUserIsolation !== undefined
+              ? { perUserIsolation: body.perUserIsolation }
+              : {}),
+            ...(body.allowedUserIds !== undefined
+              ? { allowedUserIds: body.allowedUserIds }
+              : {}),
+            ...(body.allowedEmails !== undefined
+              ? { allowedEmails: body.allowedEmails }
+              : {}),
+            ...(body.allowedEmailDomains !== undefined
+              ? { allowedEmailDomains: body.allowedEmailDomains }
+              : {}),
           });
         }
-        const config = await getCloudAppPublishService().publishApp(
+        const config = await getCloudAppPublishService().publishOrUpdateSharing(
           req.params.appId,
           {
             accessMode: body.accessMode,
             loginAccess: body.loginAccess,
             externalLink: body.externalLink,
             codeAccess: body.codeAccess,
+            requireSignIn: body.requireSignIn,
+            perUserIsolation: body.perUserIsolation,
             slug: body.slug,
           },
         );
@@ -1319,16 +2553,33 @@ async function startGateway(): Promise<void> {
       try {
         const body = req.body as {
           autoPublish?: boolean;
+          uploadMode?: import("./services/cloudPublishPrefs.js").CloudUploadModePref;
+          cloudEnabled?: import("./services/cloudPublishPrefs.js").CloudEnabledPref;
           accessMode?: CloudAccessMode;
           loginAccess?: import("./services/cloudSharingSettings.js").CloudLoginAccess;
           externalLink?: import("./services/cloudSharingSettings.js").CloudExternalLink;
           codeAccess?: import("../core/utils/shareAudienceModel.js").CodeAccess;
+          requireSignIn?: boolean;
+          perUserIsolation?: boolean;
+          allowedUserIds?: string[];
+          allowedEmails?: string[];
+          allowedEmailDomains?: string[];
         };
         const prefs = setAppPublishPrefs(req.params.appId, body);
         invalidateCloudLinkSyncReportCache();
-        if (prefsSharingFieldsChanged(body)) {
-          const config = await getCloudAppPublishService().republishIfPublished(
+        const sharingChanged = prefsSharingFieldsChanged(body);
+        const allowlistChanged = prefsPeopleAllowlistChanged(body);
+        if (sharingChanged || allowlistChanged) {
+          const config = await getCloudAppPublishService().updateSharing(
             req.params.appId,
+            {
+              accessMode: body.accessMode,
+              loginAccess: body.loginAccess,
+              externalLink: body.externalLink,
+              codeAccess: body.codeAccess,
+              requireSignIn: body.requireSignIn,
+              perUserIsolation: body.perUserIsolation,
+            },
           );
           res.json({ prefs, ...(config ? { config } : {}) });
           return;
@@ -1354,14 +2605,89 @@ async function startGateway(): Promise<void> {
           namespaceId: string;
           slug: string;
           mode?: "fork" | "track";
+          installDbPolicy?: "fork_empty" | "shared_primary";
           shareToken?: string;
+          catalogScope?: "global" | "namespace" | "community" | "team";
+          visibility?: string;
+          codeInstallable?: boolean;
+          title?: string;
+          communityCatalogListed?: boolean;
         };
         if (!body.namespaceId || !body.slug) {
           res.status(400).json({ error: "namespaceId and slug are required" });
           return;
         }
-        const result = await getCloudAppInstallService().installApp(body);
+        const result = await runCloudCatalogInstall(body);
         res.json(result);
+      } catch (err) {
+        const message = (err as Error).message;
+        const code =
+          err instanceof Error && "code" in err
+            ? String((err as { code?: string }).code)
+            : undefined;
+        if (err instanceof CloudCatalogInstallChoiceRequiredError) {
+          res.status(400).json({
+            error: message,
+            code: err.code,
+            catalogScope: err.catalogScope,
+            namespaceId: err.namespaceId,
+            slug: err.slug,
+            visibility: err.visibility,
+            options: err.options,
+          });
+          return;
+        }
+        const status =
+          code === "community_track_forbidden" ||
+          code === "non_team_track_forbidden" ||
+          code === "per_user_db" ||
+          code === "install_mode_choice_required"
+            ? 400
+            : code === "install_db_setup_failed" ||
+                code === "install_linked_resources_missing"
+              ? 422
+              : 500;
+        const detail =
+          err instanceof Error && "detail" in err
+            ? String((err as { detail?: string }).detail ?? "")
+            : "";
+        res.status(status).json({
+          error: message,
+          ...(code ? { code } : {}),
+          ...(detail ? { detail } : {}),
+        });
+      }
+    });
+
+    app.post("/api/cloud/apps/:appId/bootstrap-databases", async (req, res) => {
+      try {
+        const appId = req.params.appId?.trim();
+        if (!appId) {
+          res.status(400).json({ error: "appId is required" });
+          return;
+        }
+        const { finalizePortableCloudAppResources } =
+          await import("./services/cloudAppLinkedResourcesInstall.js");
+        await finalizePortableCloudAppResources();
+        const {
+          bootstrapInstalledAppDatabases,
+          buildCloudInstallAgentSetupMessage,
+        } = await import("./services/cloudAppInstallBootstrap.js");
+        const bootstrap = await bootstrapInstalledAppDatabases(appId);
+        const appService = getAppService();
+        const app = await appService.getApp(appId);
+        const agentSetupMessage =
+          bootstrap.errors.length > 0 ||
+          !bootstrap.ready ||
+          bootstrap.needsSeed ||
+          bootstrap.warnings.length > 0
+            ? buildCloudInstallAgentSetupMessage({
+                appTitle: app?.title ?? appId,
+                appId,
+                bootstrap,
+              })
+            : undefined;
+        res.json({ bootstrap, agentSetupMessage });
       } catch (err) {
         res.status(500).json({ error: (err as Error).message });
       }
@@ -1370,7 +2696,10 @@ async function startGateway(): Promise<void> {
     app.get("/api/cloud/apps/:appId/requirements", async (req, res) => {
       try {
         const paprDir = getPaprRoot();
-        const discovery = await discoverAppRequirements(paprDir, req.params.appId);
+        const discovery = await discoverAppRequirements(
+          paprDir,
+          req.params.appId,
+        );
         res.json(discovery);
       } catch (err) {
         res.status(500).json({ error: (err as Error).message });
@@ -1390,7 +2719,20 @@ async function startGateway(): Promise<void> {
           req.params.appId,
           body.requirements as RequiredKeySpec[],
         );
-        res.json({ requirements: file.requirements, updatedAt: file.updatedAt });
+        res.json({
+          requirements: file.requirements,
+          updatedAt: file.updatedAt,
+        });
+      } catch (err) {
+        res.status(500).json({ error: (err as Error).message });
+      }
+    });
+
+    app.post("/api/cloud/track-sync/pull-on-publish", async (_req, res) => {
+      try {
+        const results =
+          await getCloudAppTrackSyncService().pullTrackAppsOnPublish();
+        res.json({ results });
       } catch (err) {
         res.status(500).json({ error: (err as Error).message });
       }
@@ -1405,12 +2747,175 @@ async function startGateway(): Promise<void> {
       }
     });
 
-    app.post("/api/cloud/track-sync/:appId", async (req, res) => {
+    app.get("/api/cloud/track-sync/:appId/local-edits", async (req, res) => {
       try {
-        const result = await getCloudAppTrackSyncService().syncTrackApp(
+        const result = await getCloudAppTrackSyncService().localEdits(
           req.params.appId,
         );
         res.json(result);
+      } catch (err) {
+        res.status(500).json({ error: (err as Error).message });
+      }
+    });
+
+    app.post("/api/cloud/track-sync/:appId", async (req, res) => {
+      try {
+        const discardLocal =
+          (req.body as { discardLocal?: boolean } | undefined)?.discardLocal ===
+          true;
+        const result = await getCloudAppTrackSyncService().syncTrackApp(
+          req.params.appId,
+          { discardLocal },
+        );
+        res.json(result);
+      } catch (err) {
+        res.status(500).json({ error: (err as Error).message });
+      }
+    });
+
+    app.post("/api/cloud/apps/changes", async (req, res) => {
+      try {
+        const paprApiKey = await getPaprApiKey();
+        if (!paprApiKey) {
+          res
+            .status(401)
+            .json({
+              error: "PAPR_API_KEY not configured. Login with Papr first.",
+            });
+          return;
+        }
+
+        const body = req.body as {
+          sourceNamespaceId?: string;
+          sourceSlug?: string;
+          installedAppId?: string;
+          title?: string;
+          description?: string;
+        };
+        if (
+          !body.sourceNamespaceId?.trim() ||
+          !body.sourceSlug?.trim() ||
+          !body.installedAppId?.trim() ||
+          !body.title?.trim() ||
+          !body.description?.trim()
+        ) {
+          res
+            .status(400)
+            .json({ error: "Missing required contribute-back fields" });
+          return;
+        }
+
+        const result = await getCloudAppContributeService().propose({
+          sourceNamespaceId: body.sourceNamespaceId.trim(),
+          sourceSlug: body.sourceSlug.trim(),
+          installedAppId: body.installedAppId.trim(),
+          title: body.title.trim(),
+          description: body.description.trim(),
+        });
+        // Those edits are now "proposed", not "unproposed", in the share bar.
+        await getCloudAppTrackSyncService()
+          .recordProposed(body.installedAppId.trim())
+          .catch(() => undefined);
+        res.json(result);
+      } catch (err) {
+        res.status(500).json({ error: (err as Error).message });
+      }
+    });
+
+    // Proposals this user sent, optionally for one installed copy. Used by the
+    // Propose sheet to show status (waiting / accepted / declined).
+    app.get("/api/cloud/apps/changes/outgoing", async (req, res) => {
+      try {
+        const paprApiKey = await getPaprApiKey();
+        if (!paprApiKey) {
+          res
+            .status(401)
+            .json({
+              error: "PAPR_API_KEY not configured. Login with Papr first.",
+            });
+          return;
+        }
+        const installedAppId =
+          typeof req.query.installedAppId === "string"
+            ? req.query.installedAppId.trim()
+            : "";
+        const query = installedAppId
+          ? `?installedAppId=${encodeURIComponent(installedAppId)}`
+          : "";
+        const { cloudApiFetch } = await import("./utils/cloudApiClient.js");
+        const upstream = await cloudApiFetch(
+          `/v1/cloud/apps/changes/outgoing${query}`,
+        );
+        const bodyText = await upstream.text();
+        if (!upstream.ok) {
+          // Older memory servers have no outgoing route: show no history.
+          if (upstream.status === 404 || upstream.status === 405) {
+            res.json({ requests: [] });
+            return;
+          }
+          res.status(upstream.status).json({ error: bodyText.slice(0, 240) });
+          return;
+        }
+        res.status(200).type("application/json").send(bodyText);
+      } catch (err) {
+        res.status(500).json({ error: (err as Error).message });
+      }
+    });
+
+    app.get("/api/cloud/apps/changes/incoming", async (req, res) => {
+      try {
+        const paprApiKey = await getPaprApiKey();
+        if (!paprApiKey) {
+          res.status(401).json({
+            error: "PAPR_API_KEY not configured. Login with Papr first.",
+          });
+          return;
+        }
+
+        const statusParam =
+          typeof req.query.status === "string" ? req.query.status.trim() : "";
+        const query = statusParam
+          ? `?status=${encodeURIComponent(statusParam)}`
+          : "";
+        const { cloudApiFetch } = await import("./utils/cloudApiClient.js");
+        const upstream = await cloudApiFetch(
+          `/v1/cloud/apps/changes/incoming${query}`,
+        );
+        const bodyText = await upstream.text();
+        if (!upstream.ok) {
+          let message = bodyText.slice(0, 240);
+          try {
+            const parsed = JSON.parse(bodyText) as {
+              error?: string;
+              detail?: string;
+              message?: string;
+            };
+            message =
+              parsed.error ?? parsed.detail ?? parsed.message ?? message;
+          } catch {
+            /* keep raw slice */
+          }
+          res.status(upstream.status).json({ error: message });
+          return;
+        }
+
+        let payload: unknown;
+        try {
+          payload = JSON.parse(bodyText) as unknown;
+        } catch {
+          res.status(200);
+          const contentType = upstream.headers.get("content-type");
+          if (contentType) {
+            res.setHeader("Content-Type", contentType);
+          }
+          res.send(bodyText);
+          return;
+        }
+
+        const { enrichIncomingChangeRequestsBody } =
+          await import("./services/changeRequestContributorEnrich.js");
+        const enriched = await enrichIncomingChangeRequestsBody(payload);
+        res.status(200).json(enriched);
       } catch (err) {
         res.status(500).json({ error: (err as Error).message });
       }
@@ -1420,20 +2925,20 @@ async function startGateway(): Promise<void> {
       try {
         const paprApiKey = await getPaprApiKey();
         if (!paprApiKey) {
-          res.status(401).json({ error: "PAPR_API_KEY not configured. Login with Papr first." });
-          return;
-        }
-
-        const request = await getCloudAppChangeMergeService().getChangeRequest(
-          req.params.requestId,
-        );
-        if (!request) {
-          res.status(404).json({ error: "Change request not found" });
+          res
+            .status(401)
+            .json({
+              error: "PAPR_API_KEY not configured. Login with Papr first.",
+            });
           return;
         }
 
         const memoryServerBase = getMemoryServerBaseUrl();
-        const targetUrl = `${memoryServerBase}/v1/cloud/apps/changes/${encodeURIComponent(req.params.requestId)}/approve`;
+        const { appendCloudActingUserQuery } =
+          await import("./utils/cloudActingUser.js");
+        const targetUrl = `${memoryServerBase}${appendCloudActingUserQuery(
+          `/v1/cloud/apps/changes/${encodeURIComponent(req.params.requestId)}/approve`,
+        )}`;
         const upstream = await fetch(targetUrl, {
           method: "POST",
           headers: {
@@ -1451,47 +2956,46 @@ async function startGateway(): Promise<void> {
           return;
         }
 
-        let mergeResult = null;
-        try {
-          mergeResult = await getCloudAppChangeMergeService().mergeForkIntoSource(
-            request.sourceAppId,
-            request.installedAppId,
-          );
-          mergeResult.requestId = req.params.requestId;
-        } catch (mergeErr) {
-          console.warn(
-            "[Gateway] Change merge after approve:",
-            (mergeErr as Error).message,
-          );
-        }
-
         const parsed = bodyText
           ? (JSON.parse(bodyText) as Record<string, unknown>)
           : {};
-        res.json({ ...parsed, merge: mergeResult });
+        const { readSourceAppIdFromApproveBody, followUpContributeApprove } =
+          await import("./services/contributeApproveFollowUp.js");
+        const sourceAppId = readSourceAppIdFromApproveBody(parsed);
+        const pullResult = await followUpContributeApprove(sourceAppId);
+
+        res.json({ ...parsed, pull: pullResult, sourceAppId });
       } catch (err) {
         res.status(500).json({ error: (err as Error).message });
       }
     });
 
+    lapRouteRegistrationSection("cloud-publish-routes");
+
     // ── Cloud Proxy ──────────────────────────────────────────────────────────
     // Proxy /api/cloud/* → Memory Server /v1/cloud/*
     // Attaches user's PAPR_API_KEY from keychain automatically.
     // ─────────────────────────────────────────────────────────────────────────
-    const cloudProxyHandler: import("express").RequestHandler = async (req, res) => {
+    const cloudProxyHandler: import("express").RequestHandler = async (
+      req,
+      res,
+    ) => {
       try {
         const paprApiKey = await getPaprApiKey();
         if (!paprApiKey) {
-          res.status(401).json({ error: "PAPR_API_KEY not configured. Login with Papr first." });
+          res
+            .status(401)
+            .json({
+              error: "PAPR_API_KEY not configured. Login with Papr first.",
+            });
           return;
         }
 
         const memoryServerBase = getMemoryServerBaseUrl();
 
         const cloudPath = req.originalUrl.replace(/^\/api\/cloud/, "/v1/cloud");
-        const targetUrl = `${memoryServerBase}${cloudPath}`;
-
-        console.log(`[Gateway] Cloud proxy: ${req.method} ${cloudPath} → ${memoryServerBase}`);
+        const { appendCloudActingUserQuery, mergeCloudActingUserBody } =
+          await import("./utils/cloudActingUser.js");
 
         const headers: Record<string, string> = {
           "X-API-Key": paprApiKey,
@@ -1501,28 +3005,62 @@ async function startGateway(): Promise<void> {
         const isVaultSync = cloudPath.includes("/vault/sync");
         const isReposInit = cloudPath.includes("/repos/init");
         const isRuntimeJobRun = cloudPath.includes("/runtime/job-run");
-        const proxyTimeoutMs = isVaultSync
-          ? 120_000
-          : isRuntimeJobRun
-            ? 930_000
-            : isReposInit
-              ? 60_000
-              : 30_000;
+        let proxyTimeoutMs: number;
+        if (isVaultSync) {
+          const { resolveVaultPushTimeoutMs } =
+            await import("./services/vaultSyncBackgroundPush.js");
+          proxyTimeoutMs = resolveVaultPushTimeoutMs();
+        } else if (isRuntimeJobRun) {
+          proxyTimeoutMs = 930_000;
+        } else if (isReposInit) {
+          proxyTimeoutMs = 60_000;
+        } else {
+          proxyTimeoutMs = 30_000;
+        }
         const proxyController = new AbortController();
-        const proxyTimer = setTimeout(() => proxyController.abort(), proxyTimeoutMs);
+        const proxyTimer = setTimeout(
+          () => proxyController.abort(),
+          proxyTimeoutMs,
+        );
 
         const fetchOpts: RequestInit = {
           method: req.method,
           headers,
           signal: proxyController.signal,
         };
+        let proxiedPath = cloudPath;
         if (req.method !== "GET" && req.method !== "HEAD" && req.body) {
-          fetchOpts.body = JSON.stringify(req.body);
+          const payload =
+            typeof req.body === "object" &&
+            req.body !== null &&
+            !Array.isArray(req.body)
+              ? mergeCloudActingUserBody(req.body as Record<string, unknown>)
+              : req.body;
+          fetchOpts.body = JSON.stringify(payload);
+        } else {
+          proxiedPath = appendCloudActingUserQuery(cloudPath);
         }
+
+        const targetUrl = `${memoryServerBase}${proxiedPath}`;
+        console.log(
+          `[Gateway] Cloud proxy: ${req.method} ${proxiedPath} → ${memoryServerBase}`,
+        );
 
         const upstream = await fetch(targetUrl, fetchOpts);
         clearTimeout(proxyTimer);
         const body = await upstream.text();
+
+        if (isVaultSync) {
+          const {
+            recordVaultSyncPlatformFailure,
+            recordVaultSyncPlatformSuccess,
+          } = await import("./services/vaultSyncPlatformBackoff.js");
+          if (upstream.ok) {
+            recordVaultSyncPlatformSuccess();
+          } else if (upstream.status >= 500) {
+            recordVaultSyncPlatformFailure(upstream.status, body);
+          }
+        }
 
         res.status(upstream.status);
         const ct = upstream.headers.get("content-type");
@@ -1530,7 +3068,9 @@ async function startGateway(): Promise<void> {
         res.send(body);
       } catch (err) {
         console.error("[Gateway] Cloud proxy error:", err);
-        res.status(502).json({ error: `Cloud proxy failed: ${(err as Error).message}` });
+        res
+          .status(502)
+          .json({ error: `Cloud proxy failed: ${(err as Error).message}` });
       }
     };
 
@@ -1539,6 +3079,8 @@ async function startGateway(): Promise<void> {
     app.post(cloudPathRegex, cloudProxyHandler);
     app.put(cloudPathRegex, cloudProxyHandler);
     app.delete(cloudPathRegex, cloudProxyHandler);
+
+    lapRouteRegistrationSection("cloud-proxy");
 
     // ── Cloud Sync Status + Triggers ─────────────────────────────────────
     app.get("/api/sync/status", (_req, res) => {
@@ -1551,6 +3093,13 @@ async function startGateway(): Promise<void> {
     });
 
     app.post("/api/workspace/switch", async (req, res) => {
+      if (!isLoopbackRequest(req)) {
+        res.status(403).json({
+          success: false,
+          error: "Workspace control endpoints are localhost-only",
+        });
+        return;
+      }
       try {
         const organizationId =
           typeof req.body?.organizationId === "string"
@@ -1583,13 +3132,228 @@ async function startGateway(): Promise<void> {
             typeof req.body?.paprApiKey === "string"
               ? req.body.paprApiKey
               : undefined,
+          skipLegacyMigration: req.body?.skipLegacyMigration === true,
+          runPostMigrationPathRepair:
+            req.body?.runPostMigrationPathRepair === true,
         });
         res.json(result);
       } catch (error) {
+        const { WorkspaceSwitchApiKeyError: ApiKeyError } =
+          await import("./services/workspaceSwitchService.js");
+        const status = error instanceof ApiKeyError ? 400 : 500;
+        res.status(status).json({
+          success: false,
+          error:
+            error instanceof Error ? error.message : "Workspace switch failed",
+        });
+      }
+    });
+
+    app.post("/api/workspace/papr-api-key", async (req, res) => {
+      if (!isLoopbackRequest(req)) {
+        res.status(403).json({
+          success: false,
+          error: "Workspace control endpoints are localhost-only",
+        });
+        return;
+      }
+      const paprApiKey =
+        typeof req.body?.paprApiKey === "string"
+          ? req.body.paprApiKey.trim()
+          : "";
+      if (!paprApiKey) {
+        res
+          .status(400)
+          .json({ success: false, error: "paprApiKey is required" });
+        return;
+      }
+      try {
+        await applyGatewayPaprApiKey(paprApiKey);
+        res.json({ success: true });
+      } catch (error) {
         res.status(500).json({
           success: false,
-          error: error instanceof Error ? error.message : "Workspace switch failed",
+          error:
+            error instanceof Error
+              ? error.message
+              : "Failed to apply Papr API key",
         });
+      }
+    });
+
+    // Structured view of IDENTITY.md → ## Goals for the Home app (read-only;
+    // goals are edited through chat so the agent keeps IDENTITY.md canonical).
+    app.get("/api/workspace/goals", async (_req, res) => {
+      try {
+        const { readWorkspaceGoals } =
+          await import("./services/workspaceGoals.js");
+        res.json(await readWorkspaceGoals());
+      } catch (error) {
+        res.status(500).json({
+          error: error instanceof Error ? error.message : String(error),
+        });
+      }
+    });
+
+    // Focus — "Your three". Pen picks from IDENTITY.md goals + onboarding OKRs, ranked by chat
+    // time, daily logs, open tasks and goal-linked apps; the user keeps / edits / swaps any time.
+    // Saved to workspace/goals/focus.json (IDENTITY.md stays agent-owned).
+    app.get("/api/workspace/focus", async (_req, res) => {
+      try {
+        const { getFocus } = await import("./services/focusGoals.js");
+        res.json(await getFocus());
+      } catch (error) {
+        res.status(500).json({ error: error instanceof Error ? error.message : String(error) });
+      }
+    });
+
+    app.put("/api/workspace/focus", async (req, res) => {
+      try {
+        const { setFocus } = await import("./services/focusGoals.js");
+        res.json(await setFocus((req.body ?? {}) as Parameters<typeof setFocus>[0]));
+      } catch (error) {
+        const message = error instanceof Error ? error.message : String(error);
+        res.status(message.startsWith("Pick at least") ? 400 : 500).json({ error: message });
+      }
+    });
+
+    app.post("/api/workspace/focus/repick", async (_req, res) => {
+      try {
+        const { repickFocus } = await import("./services/focusGoals.js");
+        res.json(await repickFocus());
+      } catch (error) {
+        res.status(500).json({ error: error instanceof Error ? error.message : String(error) });
+      }
+    });
+
+    // Nudges — at most one sentence a day from your agent, only at a breakpoint the renderer picked.
+    // Policy (caps, quiet hours, backoff, mutes) in services/nudgePolicy.ts; jobs may propose, never force.
+    app.get("/api/nudge/next", async (_req, res) => {
+      try {
+        const { nextNudge } = await import("./services/nudges.js");
+        res.json(await nextNudge());
+      } catch (error) {
+        res.status(500).json({ error: error instanceof Error ? error.message : String(error) });
+      }
+    });
+
+    app.post("/api/nudge/event", async (req, res) => {
+      try {
+        const { key, kind, event } = (req.body ?? {}) as Record<string, unknown>;
+        if (typeof key !== "string" || typeof kind !== "string" || !["shown", "go", "later", "dismiss"].includes(String(event))) {
+          res.status(400).json({ error: "Need key, kind and event: shown | go | later | dismiss" });
+          return;
+        }
+        const { recordNudgeEvent } = await import("./services/nudges.js");
+        const ledger = await recordNudgeEvent({ key, kind, event: event as "shown" | "go" | "later" | "dismiss" });
+        res.json({ ok: true, unengaged: ledger.unengaged });
+      } catch (error) {
+        res.status(500).json({ error: error instanceof Error ? error.message : String(error) });
+      }
+    });
+
+    // Settings → Dev: what the policy would do right now and why. Read-only, so safe everywhere.
+    app.get("/api/nudge/debug", async (_req, res) => {
+      try {
+        const { nudgeDebug } = await import("./services/nudges.js");
+        res.json(await nudgeDebug());
+      } catch (error) {
+        res.status(500).json({ error: error instanceof Error ? error.message : String(error) });
+      }
+    });
+
+    // Settings → Dev: wipe shown/mutes/backoff. Never in packaged builds, where it would reset a real user's caps.
+    app.post("/api/nudge/debug/reset", async (_req, res) => {
+      if (process.env.NODE_ENV === "production") {
+        res.status(403).json({ error: "Dev builds only" });
+        return;
+      }
+      try {
+        const { resetNudgeLedger } = await import("./services/nudges.js");
+        await resetNudgeLedger();
+        res.json({ ok: true });
+      } catch (error) {
+        res.status(500).json({ error: error instanceof Error ? error.message : String(error) });
+      }
+    });
+
+    app.post("/api/nudge/propose", async (req, res) => {
+      try {
+        const { proposeNudge } = await import("./services/nudges.js");
+        res.json({ ok: true, queued: await proposeNudge(req.body) });
+      } catch (error) {
+        const message = error instanceof Error ? error.message : String(error);
+        res.status(message.startsWith("Invalid nudge") ? 400 : 500).json({ error: message });
+      }
+    });
+
+    // Lazy first-run setup for the bundled Home dashboard (job + DB + data-sources).
+    app.post("/api/home/ensure-brief-setup", async (req, res) => {
+      try {
+        const { appId: bodyAppId } = (req.body ?? {}) as { appId?: string };
+        const { DEFAULT_HOME_APP_ID } =
+          await import("./services/defaultHomeBundle.js");
+        const appId = bodyAppId?.trim() || DEFAULT_HOME_APP_ID;
+        const result = await getAppService().ensureHomeDailyBriefReady(appId);
+        res.json(result);
+      } catch (error) {
+        const message = error instanceof Error ? error.message : String(error);
+        const status = message.includes("not found") ? 404 : 500;
+        res.status(status).json({ error: message });
+      }
+    });
+
+    // Unified tasks (L3 goals + entity Open Items), projected into the Home DB.
+    app.get("/api/workspace/tasks", async (req, res) => {
+      try {
+        const status =
+          typeof req.query.status === "string" ? req.query.status : "open";
+        const { readWorkspaceTasks } =
+          await import("./services/workspaceTasks.js");
+        res.json(await readWorkspaceTasks({ status }));
+      } catch (error) {
+        res
+          .status(500)
+          .json({
+            error: error instanceof Error ? error.message : String(error),
+          });
+      }
+    });
+
+    // Complete / reopen a task: edits the source markdown (entity Open Item
+    // checkbox or L3 goal block), then re-projects. One check → every agent sees it.
+    app.post("/api/workspace/tasks/:taskId/done", async (req, res) => {
+      try {
+        const body = (req.body ?? {}) as { done?: boolean; outcome?: string };
+        const { setTaskDone } = await import("./services/workspaceTasks.js");
+        const result = await setTaskDone(
+          String(req.params.taskId),
+          body.done !== false,
+          body.outcome,
+        );
+        res.status(result.ok ? 200 : 404).json(result);
+      } catch (error) {
+        res
+          .status(500)
+          .json({
+            error: error instanceof Error ? error.message : String(error),
+          });
+      }
+    });
+
+    // Re-project IDENTITY.md goals + entity Open Items into the Home DB now
+    // (agents call this after editing goals in chat; Sleep/Wiki trigger it on completion).
+    app.post("/api/workspace/project", async (_req, res) => {
+      try {
+        const { projectGoalsAndTasks } =
+          await import("./services/goalsTasksProjection.js");
+        res.json(await projectGoalsAndTasks("api"));
+      } catch (error) {
+        res
+          .status(500)
+          .json({
+            error: error instanceof Error ? error.message : String(error),
+          });
       }
     });
 
@@ -1600,6 +3364,10 @@ async function startGateway(): Promise<void> {
         return;
       }
       res.json({ active: true, pointer });
+    });
+
+    app.get("/api/workspace/switch-status", (_req, res) => {
+      res.json(getWorkspaceSwitchStatus());
     });
 
     app.get("/api/sync/items", async (req, res) => {
@@ -1614,35 +3382,171 @@ async function startGateway(): Promise<void> {
         return;
       }
 
-      const forceRefresh = req.query.refresh === "1" || req.query.refresh === "true";
+      const forceRefresh =
+        req.query.refresh === "1" || req.query.refresh === "true";
       const appId =
         typeof req.query.appId === "string" && req.query.appId.trim().length > 0
           ? req.query.appId.trim()
           : undefined;
 
+      const timer = createSyncItemsRouteTimer();
+      let tursoFromCache = false;
+      let responseFromCache = false;
+
+      if (appId && !forceRefresh) {
+        const cachedPayload = getCachedSyncItemsAppResponse(appId);
+        if (cachedPayload) {
+          responseFromCache = true;
+          timer.mark("appResponseCache");
+          res.json(cachedPayload);
+          logSyncItemsRoute(timer, {
+            appId,
+            forceRefresh,
+            tursoCached: cachedPayload.tursoCached === true,
+            responseCached: true,
+          });
+          return;
+        }
+      }
+
       try {
-        let appContext: { appId: string; dependentJobIds: string[] } | undefined;
+        const { yieldToInteractiveHotPath } =
+          await import("./services/gatewayBackgroundWork.js");
+        await yieldToInteractiveHotPath("api:sync/items", {
+          minQuietMs: 300,
+          maxWaitMs: 45_000,
+        });
+
+        let appContext:
+          | {
+              appId: string;
+              dependentJobIds: string[];
+              registryDbIds: string[];
+              globalAutoUploadEnabled: boolean;
+              publishLive: boolean;
+              publishedAt: string | null;
+            }
+          | undefined;
         if (appId) {
-          const { resolveAppDependentJobIds } = await import(
-            "./services/cloudSync/resolveAppDependentJobs.js"
-          );
+          const { resolveAppDependentJobIds, readDataSourceRegistryDbIds } =
+            await import("./services/cloudSync/resolveAppDependentJobs.js");
+          const { isCloudAutoUploadGloballyEnabled } =
+            await import("./services/cloudUploadMode.js");
           if (forceRefresh) {
-            await sync.reconcileAppDependentPaths(appId);
+            await sync.reconcileAppDependentPathsIfNeeded(appId);
+            timer.mark("reconcileIfNeeded");
           }
+          let publishLive = false;
+          let publishedAt: string | null = null;
+          try {
+            const { getCloudAppPublishService } =
+              await import("./services/CloudAppPublishService.js");
+            const publishService = getCloudAppPublishService();
+            if (publishService) {
+              const cfg = await publishService.getPublishConfig(appId);
+              publishLive = cfg.enabled === true && !!cfg.shareUrl;
+              publishedAt = cfg.publishedAt;
+            }
+          } catch {
+            /* publish lookup optional for sync status */
+          }
+          timer.mark("publishConfig");
           appContext = {
             appId,
-            dependentJobIds: resolveAppDependentJobIds(
-              getPaprRoot(),
-              appId,
-            ),
+            dependentJobIds: resolveAppDependentJobIds(getPaprRoot(), appId),
+            registryDbIds: readDataSourceRegistryDbIds(getPaprRoot(), appId),
+            globalAutoUploadEnabled: isCloudAutoUploadGloballyEnabled(),
+            publishLive,
+            publishedAt,
           };
         }
 
         const github = sync.getGitHubSyncItemsReport();
-        const turso = await buildTursoSyncItemsReport(
-          getPaprAppsRoot(),
-          appId,
-        );
+        const tursoCacheKey = tursoSyncItemsCacheKey(appId);
+        let turso = !forceRefresh
+          ? getCachedTursoSyncItemsReport(tursoCacheKey)
+          : null;
+        tursoFromCache = turso !== null;
+        if (!turso) {
+          turso = await buildTursoSyncItemsReport(getPaprAppsRoot(), appId, {
+            liveReplicaProbe: forceRefresh,
+          });
+          if (!forceRefresh) {
+            setCachedTursoSyncItemsReport(tursoCacheKey, turso);
+          }
+          tursoFromCache = false;
+        }
+        timer.mark("turso");
+
+        let publish = null;
+        if (appId) {
+          const { buildPublishLayerReport } =
+            await import("./services/cloudSync/webReady.js");
+          publish = await buildPublishLayerReport(appId, {
+            paprDir: getPaprRoot(),
+            cloudPublishing: sync.isCloudPublishingForApp(appId),
+            publishLive: appContext?.publishLive === true,
+            tursoReport: turso,
+          });
+          timer.mark("publishLayer");
+        }
+
+        let upload = null;
+        let appSync = null;
+        let uploadError: {
+          message: string;
+          at: string;
+          retryPending?: boolean;
+          kind?: "conflict" | "error";
+          conflictPaths?: string[];
+        } | null = null;
+        {
+          const { getSyncCoordinator } =
+            await import("./services/cloudSync/SyncCoordinator.js");
+          const { buildCoordinatorStatusReport } =
+            await import("./services/cloudSync/coordinatorStatusReport.js");
+          const coordinator = getSyncCoordinator();
+          upload = buildCoordinatorStatusReport(coordinator, appId);
+          timer.mark("uploadCoordinator");
+          if (appId) {
+            const coordErr = coordinator?.getFlushError(appId);
+            const syncErr = sync.getManualFlushError(appId);
+            if (coordErr) {
+              uploadError = {
+                message: coordErr.message,
+                at: coordErr.at,
+                retryPending: coordErr.retryPending,
+                ...(coordErr.kind ? { kind: coordErr.kind } : {}),
+                ...(coordErr.conflictPaths?.length
+                  ? { conflictPaths: coordErr.conflictPaths }
+                  : {}),
+              };
+            } else if (syncErr) {
+              uploadError = {
+                ...syncErr,
+                retryPending: false,
+              };
+            }
+
+            const { buildAppSyncV3Report } =
+              await import("./services/syncV3/appSyncV3StatusReport.js");
+            const githubReport = sync.getGitHubSyncItemsReport();
+            appSync = await buildAppSyncV3Report({
+              appId,
+              paprDir: getPaprRoot(),
+              stateManager: sync.stateManager,
+              queuedPaths: githubReport.queuedPaths,
+              coordinatorUploading: upload?.status === "uploading",
+              coordinatorWaiting: upload?.status === "waiting",
+              coordinatorQueued: upload?.waitingReason === "queued",
+              queuePosition: upload?.queuePosition,
+              queueDepth: upload?.queueDepth,
+              flushErrorMessage: uploadError?.message ?? null,
+              flushErrorKind: uploadError?.kind,
+            });
+            timer.mark("appSyncV3");
+          }
+        }
 
         let cloudLinks = null;
         let fromCache = false;
@@ -1653,18 +3557,55 @@ async function startGateway(): Promise<void> {
             cloudLinks = await buildCloudLinkSyncReport();
             setCachedCloudLinkSyncReport(cloudLinks);
           }
+          timer.mark("cloudLinks");
         }
 
-        res.json({
+        let oversizedAppFiles = undefined;
+        if (appId) {
+          const { buildOversizedAppFilesReport } =
+            await import("./services/cloudSync/oversizedAppFilesReport.js");
+          oversizedAppFiles = await buildOversizedAppFilesReport(
+            getPaprRoot(),
+            appId,
+          );
+          timer.mark("oversizedFiles");
+        }
+
+        const payload = {
           enabled: true,
           github,
           turso,
+          tursoCached: tursoFromCache,
+          publish,
+          upload,
+          appSync,
           cloudLinks,
           appContext,
           cached: fromCache,
-        });
+          ...(appId
+            ? {
+                uploadError,
+                oversizedAppFiles,
+              }
+            : {}),
+        };
+        if (appId && !forceRefresh) {
+          setCachedSyncItemsAppResponse(
+            appId,
+            payload as Record<string, unknown>,
+          );
+        }
+        res.json(payload);
       } catch (err) {
+        timer.mark("error");
         res.status(500).json({ error: (err as Error).message });
+      } finally {
+        logSyncItemsRoute(timer, {
+          appId,
+          forceRefresh,
+          tursoCached: tursoFromCache,
+          responseCached: responseFromCache,
+        });
       }
     });
 
@@ -1680,14 +3621,66 @@ async function startGateway(): Promise<void> {
           : undefined;
       try {
         if (appId) {
-          await sync.pushAppNow(appId);
-        } else {
-          await sync.pushNow();
+          const { getSyncCoordinator } =
+            await import("./services/cloudSync/SyncCoordinator.js");
+          const coordinator = getSyncCoordinator();
+          if (coordinator) {
+            coordinator.bumpFlushQueue(appId);
+          }
+          const inFlight =
+            coordinator?.getStatus().activeFlush?.appId === appId;
+          sync.pushAppNowInBackground(appId);
+          res.status(202).json({
+            accepted: true,
+            alreadyInProgress: inFlight,
+            bumpedQueue: true,
+            ...sync.getState(),
+          });
+          return;
         }
+        await sync.pushNow();
         res.json({ success: true, ...sync.getState() });
       } catch (err) {
         res.status(500).json({ error: (err as Error).message });
       }
+    });
+
+    app.post("/api/sync/pull", async (_req, res) => {
+      const sync = getCloudSyncService();
+      if (!sync) {
+        res.status(503).json({ error: "Cloud sync not initialized" });
+        return;
+      }
+      try {
+        await sync.pullNow();
+        res.json({ success: true, ...sync.getState() });
+      } catch (err) {
+        res.status(500).json({ error: (err as Error).message });
+      }
+    });
+
+    app.post("/api/sync/apply-updates", async (_req, res) => {
+      const sync = getCloudSyncService();
+      if (!sync) {
+        res.status(503).json({ error: "Cloud sync not initialized" });
+        return;
+      }
+      try {
+        await sync.applyGitRemoteUpdates();
+        res.json({ success: true, ...sync.getState() });
+      } catch (err) {
+        res.status(500).json({ error: (err as Error).message });
+      }
+    });
+
+    app.post("/api/sync/dismiss-updates", async (_req, res) => {
+      const sync = getCloudSyncService();
+      if (!sync) {
+        res.status(503).json({ error: "Cloud sync not initialized" });
+        return;
+      }
+      sync.dismissGitRemoteUpdates();
+      res.json({ success: true, ...sync.getState() });
     });
 
     app.post("/api/sync/retry", async (req, res) => {
@@ -1697,7 +3690,9 @@ async function startGateway(): Promise<void> {
         return;
       }
       const relativePath =
-        typeof req.body?.relativePath === "string" ? req.body.relativePath.trim() : "";
+        typeof req.body?.relativePath === "string"
+          ? req.body.relativePath.trim()
+          : "";
       if (!relativePath) {
         res.status(400).json({ error: "relativePath is required" });
         return;
@@ -1724,13 +3719,16 @@ async function startGateway(): Promise<void> {
         return;
       }
       try {
-        const { repairTursoJobDatabase } = await import("./services/tursoSyncState.js");
+        const { repairTursoJobDatabase } =
+          await import("./services/tursoSyncState.js");
         const result = repairTursoJobDatabase(jobId, dbPath);
         res.json(result);
       } catch (err) {
         res.status(500).json({ error: (err as Error).message });
       }
     });
+
+    lapRouteRegistrationSection("cloud-sync-routes");
 
     // ── Vault Sync Status + Triggers ──────────────────────────────────────
     app.get("/api/vault/status", (_req, res) => {
@@ -1756,21 +3754,69 @@ async function startGateway(): Promise<void> {
       }
     });
 
-    // Renderer telemetry: same-origin POST → gateway forwards to Papr proxy (no CORS).
-    app.post("/api/telemetry/events", async (req, res) => {
-      try {
-        const result = await forwardRendererTelemetry(req.body);
-        if (result.status === 204) {
-          res.sendStatus(204);
-          return;
-        }
-        res.status(result.status).json({
-          error: result.error ?? "telemetry error",
-        });
-      } catch (err) {
-        console.error("[Gateway] /api/telemetry/events:", err);
-        res.status(500).json({ error: "internal error" });
+    app.post("/api/vault/pull-shared", async (_req, res) => {
+      const vault = getVaultSyncService();
+      if (!vault) {
+        res.status(503).json({ error: "Vault sync not initialized" });
+        return;
       }
+      try {
+        const upserted = await vault.pullSharedKeys();
+        res.json({ success: true, ...vault.getState(), upserted });
+      } catch (err) {
+        res.status(500).json({ error: (err as Error).message });
+      }
+    });
+
+    app.post("/api/vault/sync-key", async (req, res) => {
+      const vault = getVaultSyncService();
+      if (!vault) {
+        res.status(503).json({ error: "Vault sync not initialized" });
+        return;
+      }
+      const body = req.body as {
+        name?: string;
+        previousAudience?: string;
+        nextAudience?: string;
+        targetOrgId?: string;
+        mode?: "delete" | "update";
+      };
+      if (
+        !body.name?.trim() ||
+        (body.mode !== "delete" && body.mode !== "update")
+      ) {
+        res
+          .status(400)
+          .json({ error: "name and mode (delete|update) are required" });
+        return;
+      }
+      try {
+        const result = await vault.syncKeyVaultChange({
+          name: body.name.trim(),
+          previousAudience: body.previousAudience as
+            | import("../core/storage/customKeysVault.js").IntegrationKeyVaultAudience
+            | undefined,
+          nextAudience: body.nextAudience as
+            | import("../core/storage/customKeysVault.js").IntegrationKeyVaultAudience
+            | undefined,
+          targetOrgId: body.targetOrgId,
+          mode: body.mode,
+        });
+        res.json({ success: true, ...vault.getState(), result });
+      } catch (err) {
+        res.status(500).json({ error: (err as Error).message });
+      }
+    });
+
+    // Renderer telemetry: validate sync, respond immediately, forward async (never block hot path).
+    app.post("/api/telemetry/events", (req, res) => {
+      const prepared = prepareRendererTelemetry(req.body);
+      if (!prepared.ok) {
+        res.status(prepared.status).json({ error: prepared.error });
+        return;
+      }
+      res.sendStatus(204);
+      void sendPreparedRendererTelemetry(prepared.payload);
     });
 
     app.post("/api/bash/run", async (_req, res) => {
@@ -1785,15 +3831,15 @@ async function startGateway(): Promise<void> {
     app.post("/api/credentials/client-keys", async (req, res) => {
       try {
         const body = req.body as { appId?: string; names?: string[] };
-        if (!body.appId?.trim()) {
-          res.status(400).json({ error: "appId is required" });
+        const resolved = resolveRequestAppId(req, body.appId);
+        if ("error" in resolved) {
+          res.status(resolved.status).json({ error: resolved.error });
           return;
         }
-        const { resolveDesktopClientKeys } = await import(
-          "./services/ClientKeysService.js"
-        );
+        const { resolveDesktopClientKeys } =
+          await import("./services/ClientKeysService.js");
         const result = await resolveDesktopClientKeys({
-          appId: body.appId.trim(),
+          appId: resolved.appId,
           names: body.names,
         });
         if (result.status && result.error) {
@@ -1821,32 +3867,30 @@ async function startGateway(): Promise<void> {
           appId?: string;
           params?: Record<string, string>;
         };
-        if (!body.appId) {
-          res.status(400).json({ error: "appId is required" });
+        const resolved = resolveRequestAppId(req, body.appId);
+        if ("error" in resolved) {
+          res.status(resolved.status).json({ error: resolved.error });
           return;
         }
+        const appId = resolved.appId;
 
-        const { AppBackendService } = await import(
-          "./services/appRuntime/AppBackendService.js"
-        );
-        const { substituteCustomKeysInCommand } = await import(
-          "./utils/keySubstitution.js"
-        );
+        const { AppBackendService } =
+          await import("./services/appRuntime/AppBackendService.js");
+        const { substituteCustomKeysInCommand } =
+          await import("./utils/keySubstitution.js");
+        const { isPlatformInjectedEnvKey } =
+          await import("../core/utils/platformInjectedEnvKeys.js");
         const { sanitizeError } = await import("../core/tools/security.js");
 
         const backend = new AppBackendService();
-        const manifestPath = `apps/${body.appId}/backend/manifest.json`;
+        const manifestPath = `apps/${appId}/backend/manifest.json`;
         const fs = await import("fs/promises");
         const path = await import("path");
         const { getPaprRoot } = await import("../core/utils/paprRoot.js");
-        const { parseAppBackendManifest } = await import(
-          "./services/appRuntime/appBackendManifest.js"
-        );
+        const { parseAppBackendManifest } =
+          await import("./services/appRuntime/appBackendManifest.js");
         const manifestRaw = JSON.parse(
-          await fs.readFile(
-            path.join(getPaprRoot(), manifestPath),
-            "utf8",
-          ),
+          await fs.readFile(path.join(getPaprRoot(), manifestPath), "utf8"),
         ) as unknown;
         const manifest = parseAppBackendManifest(manifestRaw);
         const spec = manifest.actions[action.trim()];
@@ -1859,29 +3903,44 @@ async function startGateway(): Promise<void> {
         const secretValues: string[] = [];
         if (spec.keys?.length) {
           for (const keyName of spec.keys) {
-            const sub = await substituteCustomKeysInCommand(`echo \${${keyName}}`);
+            if (isPlatformInjectedEnvKey(keyName)) {
+              continue;
+            }
+            const sub = await substituteCustomKeysInCommand(
+              `echo \${${keyName}}`,
+            );
             if (sub.usedKeyNames.includes(keyName)) {
               // Extract actual value from the substituted command
-              const extractedValue = sub.command.replace(/^echo /,"").trim();
+              const extractedValue = sub.command.replace(/^echo /, "").trim();
               vaultEnv[keyName] = extractedValue;
               secretValues.push(...sub.keyValues);
             }
           }
         }
 
-        const { resolveDesktopAppBackendDatabaseEnv, collectBackendDatabaseSecrets } =
-          await import("./services/appRuntime/appBackendDatabase.js");
+        const {
+          resolveDesktopAppBackendDatabaseEnv,
+          collectBackendDatabaseSecrets,
+        } = await import("./services/appRuntime/appBackendDatabase.js");
+        const actionSourceId = body.params?.sourceId ?? spec.sourceId;
         const databaseEnv = await resolveDesktopAppBackendDatabaseEnv({
-          appId: body.appId,
+          appId,
           paprRoot: getPaprRoot(),
+          sourceId: actionSourceId,
         });
         secretValues.push(...collectBackendDatabaseSecrets(databaseEnv));
 
+        const { getPaprCallerIdentity } = await import("./utils/paprUserId.js");
+        const callerIdentity = getPaprCallerIdentity();
+        const loggedIn = Boolean(callerIdentity.userId?.trim());
+
         const result = await backend.runAction({
-          appId: body.appId,
+          appId,
           action: action.trim(),
           params: body.params,
           vaultEnv,
+          callerIdentity,
+          loggedIn,
         });
 
         res.json({
@@ -1895,6 +3954,8 @@ async function startGateway(): Promise<void> {
     });
     // ─────────────────────────────────────────────────────────────────────────
 
+    lapRouteRegistrationSection("vault-sync-routes");
+
     // ── Job Files Endpoint ────────────────────────────────────────────────────
     // Serves files from job directories with correct MIME types
     // Supports videos, images, and other media files
@@ -1903,7 +3964,7 @@ async function startGateway(): Promise<void> {
     app.get("/api/jobs/:jobId/files/:filename", async (req, res) => {
       try {
         const { jobId, filename } = req.params;
-        
+
         // Security: prevent directory traversal
         if (filename.includes("..") || filename.includes("/")) {
           res.status(400).send("Invalid filename");
@@ -1951,7 +4012,7 @@ async function startGateway(): Promise<void> {
 
         const contentType = mimeTypes[ext] || "application/octet-stream";
         res.setHeader("Content-Type", contentType);
-        
+
         // Send the file as binary
         res.sendFile(filePath);
       } catch (error) {
@@ -1961,42 +4022,124 @@ async function startGateway(): Promise<void> {
     });
     // ─────────────────────────────────────────────────────────────────────────
 
+    app.get("/api/generated-media/:filename", async (req, res) => {
+      try {
+        const { filename } = req.params;
+        if (!filename || filename.includes("..") || filename.includes("/")) {
+          res.status(400).send("Invalid filename");
+          return;
+        }
+
+        const mediaRoot = path.join(getPaprRoot(), "data", "generated-media");
+        const filePath = path.join(mediaRoot, filename);
+        const resolved = path.resolve(filePath);
+        if (!resolved.startsWith(path.resolve(mediaRoot) + path.sep)) {
+          res.status(400).send("Invalid filename");
+          return;
+        }
+
+        const fs = await import("fs/promises");
+        try {
+          await fs.access(resolved);
+        } catch {
+          res.status(404).send("File not found");
+          return;
+        }
+
+        const ext = path.extname(filename).toLowerCase();
+        const mimeTypes: Record<string, string> = {
+          ".mp4": "video/mp4",
+          ".webm": "video/webm",
+          ".png": "image/png",
+          ".jpg": "image/jpeg",
+          ".jpeg": "image/jpeg",
+          ".gif": "image/gif",
+          ".webp": "image/webp",
+        };
+        res.setHeader(
+          "Content-Type",
+          mimeTypes[ext] ?? "application/octet-stream",
+        );
+        res.sendFile(resolved);
+      } catch (error) {
+        console.error("[Gateway] Failed to serve generated media:", error);
+        res.status(500).send("Failed to read generated media");
+      }
+    });
+    // ─────────────────────────────────────────────────────────────────────────
+
+    lapRouteRegistrationSection("job-files-and-generated-media");
+
+    registerCloudDesktopPreviewRoutes(app);
+
     // Serve mini-app files for iframe rendering in UI.
     // Supports on-the-fly TypeScript transpilation via esbuild.
     // Use RegExp route for Express/path-to-regexp compatibility.
     app.get(/^\/apps\/([^/]+)\/?(.*)$/, async (req, res) => {
+      const staticReceivedAt = performance.now();
+      let staticAppId = "";
+      let staticRequestedPath = "index.html";
+      let staticStatusCode = 500;
+      let staticByteLength: number | undefined;
+      const { createMiniAppStaticServeTimer } =
+        await import("./utils/miniAppStaticServeLog.js");
+      const staticServeTimer = createMiniAppStaticServeTimer(staticReceivedAt);
+      const { enterInteractiveHotPath, leaveInteractiveHotPath } =
+        await import("./services/gatewayInteractivePriority.js");
+      enterInteractiveHotPath("mini-app:static");
       try {
         const appService = getAppService();
         const appId = req.params[0];
+        staticAppId = appId;
         const wildcard = req.params[1];
         const requestedPath =
           typeof wildcard === "string" && wildcard.length > 0
             ? wildcard
             : "index.html";
+        staticRequestedPath = requestedPath;
+        staticServeTimer.markPhase("setupMs");
 
         if (requestedPath.includes("..")) {
+          staticStatusCode = 400;
           res.status(400).send("Invalid app path");
           return;
         }
 
+        // Per-app origin: ask for an origin-keyed agent cluster so this app
+        // cannot share a main thread with the chat UI, and refuse to serve one
+        // app's files from another app's origin — that would pull B's code into
+        // A's process and undo the isolation we just asked for.
+        const { appIdFromHost } =
+          await import("../core/miniApps/miniAppOrigin.js");
+        const hostAppId = appIdFromHost(req.headers.host);
+        if (hostAppId) {
+          if (hostAppId.toLowerCase() !== appId.toLowerCase()) {
+            staticStatusCode = 403;
+            res.status(403).send("App origin does not match requested app");
+            return;
+          }
+          res.setHeader("Origin-Agent-Cluster", "?1");
+        }
+
         const ext = path.extname(requestedPath).toLowerCase();
 
-        const {
-          getMiniAppContentType,
-          isMiniAppBinaryExtension,
-        } = await import("./utils/miniAppStaticAssets.js");
+        const { getMiniAppContentType, isMiniAppBinaryExtension } =
+          await import("./utils/miniAppStaticAssets.js");
 
         if (isMiniAppBinaryExtension(ext)) {
           const filePath = await appService.resolveAppFilePath(
             appId,
             requestedPath,
           );
+          staticServeTimer.markPhase("resolveMs");
           if (!filePath) {
+            staticStatusCode = 404;
             res.status(404).send("Not found");
             return;
           }
           res.setHeader("Cache-Control", "no-store, no-cache, must-revalidate");
           res.setHeader("Content-Type", getMiniAppContentType(ext));
+          staticStatusCode = 200;
           res.sendFile(filePath);
           return;
         }
@@ -2004,26 +4147,63 @@ async function startGateway(): Promise<void> {
         // For bundled apps: serve dist/ output when requesting the bundled JS/CSS.
         // The iframe's index.html references dist/app.js and dist/app.css.
         if (requestedPath.startsWith("dist/")) {
-          const distContent = await appService.readAppFile(appId, requestedPath);
-          if (distContent === null) {
+          const distPath = await appService.resolveAppFilePath(
+            appId,
+            requestedPath,
+          );
+          staticServeTimer.markPhase("resolveMs");
+          if (!distPath) {
+            staticStatusCode = 404;
             res.status(404).send("Not found — run build first");
             return;
           }
-          res.setHeader("Cache-Control", "no-store, no-cache, must-revalidate");
-          res.setHeader("Content-Type", getMiniAppContentType(ext));
-          if (ext === ".js" && typeof distContent === "string") {
-            const { appendModuleRanMarker } = await import(
-              "./utils/miniAppBootWatchdog.js"
-            );
-            res.send(appendModuleRanMarker(distContent));
+          const fs = await import("fs/promises");
+          let distStat;
+          try {
+            distStat = await fs.stat(distPath);
+          } catch {
+            staticStatusCode = 404;
+            res.status(404).send("Not found — run build first");
             return;
           }
+          staticServeTimer.markPhase("statMs");
+          const {
+            buildMiniAppDistEtag,
+            ifNoneMatchIncludes,
+            MINI_APP_DIST_CACHE_CONTROL,
+            readIfNoneMatchHeader,
+          } = await import("./utils/miniAppDistCache.js");
+          const etag = buildMiniAppDistEtag(distStat);
+          res.setHeader("Cache-Control", MINI_APP_DIST_CACHE_CONTROL);
+          res.setHeader("ETag", etag);
+          res.setHeader("Content-Type", getMiniAppContentType(ext));
+          if (ifNoneMatchIncludes(readIfNoneMatchHeader(req.headers), etag)) {
+            staticStatusCode = 304;
+            res.status(304).end();
+            return;
+          }
+          const distContent = await fs.readFile(distPath, "utf8");
+          staticServeTimer.markPhase("readMs");
+          staticByteLength = Buffer.byteLength(distContent, "utf8");
+          if (ext === ".js") {
+            const { appendModuleRanMarker } =
+              await import("./utils/miniAppBootWatchdog.js");
+            const body = appendModuleRanMarker(distContent);
+            staticByteLength = Buffer.byteLength(body, "utf8");
+            staticServeTimer.markPhase("transformMs");
+            staticStatusCode = 200;
+            res.send(body);
+            return;
+          }
+          staticStatusCode = 200;
           res.send(distContent);
           return;
         }
 
         let content = await appService.readAppFile(appId, requestedPath);
+        staticServeTimer.markPhase("readMs");
         if (content === null) {
+          staticStatusCode = 404;
           res.status(404).send("Not found");
           return;
         }
@@ -2033,10 +4213,19 @@ async function startGateway(): Promise<void> {
         if (ext === ".ts" || ext === ".tsx") {
           try {
             const nodeBuiltins = [
-              "fs", "path", "crypto", "child_process", "os",
-              "net", "http", "https", "stream", "buffer", "process",
+              "fs",
+              "path",
+              "crypto",
+              "child_process",
+              "os",
+              "net",
+              "http",
+              "https",
+              "stream",
+              "buffer",
+              "process",
             ];
-            
+
             const contentStr = content as string;
             const hasNodeImports = nodeBuiltins.some(
               (mod) =>
@@ -2055,19 +4244,16 @@ async function startGateway(): Promise<void> {
               );
             }
 
-            const { transpileMiniAppTypeScript } = await import(
-              "./utils/miniAppTranspile.js"
-            );
+            const { transpileMiniAppTypeScript } =
+              await import("./utils/miniAppTranspile.js");
             const transpileResult = await transpileMiniAppTypeScript(
               contentStr,
               requestedPath,
             );
             if (!transpileResult.success) {
-              const { isEsbuildInfrastructureError } = await import(
-                "./utils/miniAppTranspile.js"
-              );
-              const rawMessage =
-                transpileResult.message ?? "Unknown error";
+              const { isEsbuildInfrastructureError } =
+                await import("./utils/miniAppTranspile.js");
+              const rawMessage = transpileResult.message ?? "Unknown error";
               const location =
                 transpileResult.line !== undefined
                   ? ` at line ${transpileResult.line}`
@@ -2080,20 +4266,22 @@ async function startGateway(): Promise<void> {
                 `[Gateway] TypeScript transpile error for ${requestedPath}:`,
                 message,
               );
+              staticStatusCode = 500;
               res.status(500).send(message);
               return;
             }
 
             {
-              const { appendModuleRanMarker } = await import(
-                "./utils/miniAppBootWatchdog.js"
+              const { appendModuleRanMarker } =
+                await import("./utils/miniAppBootWatchdog.js");
+              content = appendModuleRanMarker(
+                transpileResult.code ?? contentStr,
               );
-              content = appendModuleRanMarker(transpileResult.code ?? contentStr);
             }
+            staticServeTimer.markPhase("transpileMs");
           } catch (transpileError) {
-            const { formatEsbuildErrorMessage } = await import(
-              "./utils/miniAppTranspile.js"
-            );
+            const { formatEsbuildErrorMessage } =
+              await import("./utils/miniAppTranspile.js");
             const formatted = formatEsbuildErrorMessage(
               (transpileError as Error).message,
             );
@@ -2101,6 +4289,7 @@ async function startGateway(): Promise<void> {
               `[Gateway] TypeScript transpile error for ${requestedPath}:`,
               transpileError,
             );
+            staticStatusCode = 500;
             res.status(500).send(`TypeScript compilation error:\n${formatted}`);
             return;
           }
@@ -2109,36 +4298,66 @@ async function startGateway(): Promise<void> {
         if (ext === ".html" && typeof content === "string") {
           const appDir = await appService.getAppPath(appId);
           if (appDir && requestedPath === "index.html") {
-            const { preferBundledEntryInHtml } = await import(
-              "./utils/miniAppBuild.js"
-            );
+            const { preferBundledEntryInHtml } =
+              await import("./utils/miniAppBuild.js");
             content = await preferBundledEntryInHtml(content, appDir);
           }
 
-          const { injectMiniAppBaseStyles } = await import(
-            "./utils/miniAppBaseStyles.js"
-          );
-          const { getBrandService, buildBrandStyleTag } = await import(
-            "./services/BrandService.js"
-          );
+          const { injectMiniAppBaseStyles } =
+            await import("./utils/miniAppBaseStyles.js");
+          const { getBrandService, buildBrandStyleTag } =
+            await import("./services/BrandService.js");
           const brand = await getBrandService().loadMergedBrand(appId);
           const brandStyleTag = buildBrandStyleTag(brand.cssVariables);
           content = injectMiniAppBaseStyles(content, brandStyleTag);
 
+          const { injectMiniAppNativeDialogShim } =
+            await import("./utils/injectMiniAppNativeDialogShim.js");
+          content = injectMiniAppNativeDialogShim(content);
+
+          const { injectMiniAppApiErrorFetch } =
+            await import("./utils/injectMiniAppApiErrorFetch.js");
+          content = injectMiniAppApiErrorFetch(content);
+
+          const { injectMiniAppPreviewFetchGate } =
+            await import("./utils/injectMiniAppPreviewFetchGate.js");
+          content = await injectMiniAppPreviewFetchGate(content);
+
           // Boot watchdog: turns a silent blank iframe into a labeled
           // diagnostic banner (entry module never ran / threw / rendered nothing).
-          const { injectMiniAppBootWatchdog } = await import(
-            "./utils/miniAppBootWatchdog.js"
-          );
+          const { injectMiniAppBootWatchdog } =
+            await import("./utils/miniAppBootWatchdog.js");
           content = injectMiniAppBootWatchdog(content);
+          staticServeTimer.markPhase("htmlInjectMs");
         }
 
         res.setHeader("Cache-Control", "no-store, no-cache, must-revalidate");
         res.setHeader("Content-Type", getMiniAppContentType(ext));
+        if (typeof content === "string") {
+          staticByteLength = Buffer.byteLength(content, "utf8");
+        }
+        staticStatusCode = 200;
         res.send(content);
+        // Register app-open reconcile; cloud→local pull runs after first DB read (data paint).
+        if (requestedPath === "index.html") {
+          void import("./services/tursoPullScheduler.js").then(
+            ({ scheduleTursoPullForAppOpen }) => {
+              scheduleTursoPullForAppOpen(appId);
+            },
+          );
+        }
       } catch (error) {
         console.error("[Gateway] Failed to serve app file:", error);
+        staticStatusCode = 500;
         res.status(500).send("Failed to read app file");
+      } finally {
+        leaveInteractiveHotPath("mini-app:static");
+        staticServeTimer.finishIfNeeded({
+          appId: staticAppId,
+          requestedPath: staticRequestedPath,
+          statusCode: staticStatusCode,
+          byteLength: staticByteLength,
+        });
       }
     });
 
@@ -2148,67 +4367,310 @@ async function startGateway(): Promise<void> {
       console.log("[Gateway] Serving UI from:", productionUiPath);
     }
 
+    lapRouteRegistrationSection("mini-app-hosting-and-preview-routes");
+
     gatewayReady = true;
+    const { markGatewayRoutesReady } =
+      await import("./services/gatewayReadiness.js");
+    markGatewayRoutesReady();
+    printGatewayStartupSummary();
     console.log("[Gateway] All routes registered — gateway fully ready");
+
+    void import("./services/GatewayBackgroundWorkerClient.js")
+      .then(({ ensureGatewayBackgroundWorkerStarted }) =>
+        ensureGatewayBackgroundWorkerStarted(),
+      )
+      .catch((err) => {
+        console.warn(
+          "[Gateway] Background worker start failed (non-fatal):",
+          err instanceof Error ? err.message : err,
+        );
+      });
+
+    if (!isCloudAgentGatewayMode()) {
+      void import("./services/tursoPullScheduler.js").then(
+        ({ markTursoPullSchedulerGatewayBoot }) => {
+          markTursoPullSchedulerGatewayBoot();
+        },
+      );
+      timeStartupSync("post-ready", "JobsScheduler.start", () => {
+        getJobsScheduler().start();
+      });
+      void import("./services/platforms/SessionKeeperService.js")
+        .then(({ getSessionKeeperService }) => {
+          getSessionKeeperService().start();
+        })
+        .catch((err) => {
+          console.warn(
+            "[Gateway] Session keeper start failed:",
+            err instanceof Error ? err.message : err,
+          );
+        });
+      void import("./services/jobs/deferredStartupBootstrap.js")
+        .then(({ runDeferredJobsWorkspaceBootstrap }) =>
+          runDeferredJobsWorkspaceBootstrap(),
+        )
+        .catch((err) => {
+          console.warn(
+            "[Gateway] Deferred jobs bootstrap failed:",
+            err instanceof Error ? err.message : err,
+          );
+        });
+    }
 
     // Cloud services start AFTER the HTTP server is listening.
     // Staggered to avoid thundering herd on memory.papr.ai at startup.
     // Skipped in cloud_agent mode (Cloud Run agent gateway is stateless per-run).
-    if (!isCloudAgentGatewayMode() && process.env.CLOUD_SYNC_ENABLED !== "false") {
+    if (
+      !isCloudAgentGatewayMode() &&
+      process.env.CLOUD_SYNC_ENABLED !== "false"
+    ) {
       const cloudSyncStartupDelayMs = Number(
         process.env.CLOUD_SYNC_STARTUP_DELAY_MS ?? "30000",
       );
-      setTimeout(() => {
-        const cloudSync = initializeCloudSyncService();
-        cloudSync.initialize().catch((err) => {
-          console.warn(
-            "[Gateway] Cloud sync init failed (non-fatal):",
-            (err as Error).message,
-          );
-        });
-      }, cloudSyncStartupDelayMs);
+      const cloudSyncStartupRetryMs = Number(
+        process.env.CLOUD_SYNC_STARTUP_RETRY_MS ?? "5000",
+      );
 
-      setTimeout(() => {
-        initializeVaultSyncService({ gatewayPort: Number(PORT) })
-          .then((vaultSync) => {
-            getCustomKeysService().onKeyChange((keyName) => {
-              if (keyName) {
-                vaultSync.onKeyChanged(keyName).catch((e) =>
-                  console.warn("[Gateway] Vault key push failed:", (e as Error).message),
+      const tryDeferredCloudSyncStartup = (): void => {
+        void (async () => {
+          await timeStartupStep(
+            "deferred",
+            "CloudSync.startup (wait+init)",
+            async () => {
+              const { waitForWorkspaceReady } =
+                await import("./services/workspaceReadiness.js");
+              await waitForWorkspaceReady();
+
+              const { waitForInteractiveQuietBeforeBackgroundWork } =
+                await import("./services/gatewayInteractivePriority.js");
+              await waitForInteractiveQuietBeforeBackgroundWork(
+                "CloudSync.startup",
+              );
+
+              if (getCloudSyncService()) {
+                console.log(
+                  "[Gateway] Cloud sync already initialized (e.g. workspace switch) — skipping deferred startup init",
                 );
-              } else {
-                vaultSync.pushAllKeys().catch((e) =>
-                  console.warn("[Gateway] Vault full push failed:", (e as Error).message),
-                );
+                return;
               }
-            });
-          })
-          .catch((err) => {
+              const cloudSync = initializeCloudSyncService();
+              ensureTursoSyncBridge();
+              await cloudSync.initialize();
+            },
+          ).catch((err) => {
             console.warn(
-              "[Gateway] Vault sync init failed (non-fatal):",
+              "[Gateway] Cloud sync init failed (non-fatal):",
               (err as Error).message,
             );
           });
-      }, 45_000);
+        })().catch((err) => {
+          console.warn(
+            "[Gateway] Deferred cloud sync startup failed:",
+            (err as Error).message,
+          );
+          setTimeout(tryDeferredCloudSyncStartup, cloudSyncStartupRetryMs);
+        });
+      };
+
+      setTimeout(tryDeferredCloudSyncStartup, cloudSyncStartupDelayMs);
+
+      const tryDeferredVaultSyncStartup = (): void => {
+        void (async () => {
+          await timeStartupStep(
+            "deferred",
+            "VaultSync.startup (wait+init)",
+            async () => {
+              const { waitForWorkspaceReady } =
+                await import("./services/workspaceReadiness.js");
+              await waitForWorkspaceReady();
+
+              const { waitForInteractiveQuietBeforeBackgroundWork } =
+                await import("./services/gatewayInteractivePriority.js");
+              await waitForInteractiveQuietBeforeBackgroundWork(
+                "VaultSync.startup",
+              );
+
+              const vaultStartupDelayMs = Number(
+                process.env.VAULT_STARTUP_DELAY_MS ?? "5000",
+              );
+              if (vaultStartupDelayMs > 0) {
+                await new Promise((resolve) =>
+                  setTimeout(resolve, vaultStartupDelayMs),
+                );
+              }
+
+              const vaultSync = await initializeVaultSyncService({
+                gatewayPort: Number(PORT),
+              });
+              getCustomKeysService().onKeyChange((keyName) => {
+                if (keyName) {
+                  vaultSync
+                    .onKeyChanged(keyName)
+                    .catch((e) =>
+                      console.warn(
+                        "[Gateway] Vault key push failed:",
+                        (e as Error).message,
+                      ),
+                    );
+                } else {
+                  vaultSync.scheduleDebouncedPushAll();
+                }
+              });
+            },
+          );
+        })().catch((err) => {
+          console.warn(
+            "[Gateway] Vault sync init failed (non-fatal):",
+            err instanceof Error ? err.message : err,
+          );
+        });
+      };
+
+      tryDeferredVaultSyncStartup();
 
       const tursoStartupDelayMs = Number(
-        process.env.TURSO_STARTUP_DELAY_MS ?? "90000",
+        process.env.TURSO_STARTUP_DELAY_MS ?? "15000",
       );
       setTimeout(() => {
-        const tursoBridge = initializeTursoSyncBridge();
-        if (process.env.TURSO_PULL_ON_STARTUP === "true") {
-          void tursoBridge.pullLinkedSourcesIfNeeded().catch((err) =>
+        const tursoBridge = ensureTursoSyncBridge();
+        void import("./services/tursoSyncSession.js")
+          .then(({ isTursoStartupSyncIndexEnabled }) => {
+            if (!isTursoStartupSyncIndexEnabled()) {
+              console.log(
+                "[Gateway] Turso startup sync-index skipped (set TURSO_STARTUP_SYNC_INDEX=true to enable; heartbeat + app-open reconcile remain active)",
+              );
+              return;
+            }
+            return timeStartupStep(
+              "deferred",
+              "Turso.syncTursoFromSyncIndex",
+              async () => {
+                const { syncTursoFromSyncIndex } =
+                  await import("./services/TursoSyncBridge.js");
+                const summary = await syncTursoFromSyncIndex();
+                if (summary.pulled > 0 || summary.pushed > 0) {
+                  console.log(
+                    `[Gateway] Turso startup sync-index: pulled=${summary.pulled} pushed=${summary.pushed}`,
+                  );
+                }
+              },
+            );
+          })
+          .catch((err) =>
             console.warn(
-              "[Gateway] Turso startup pull failed (non-fatal):",
+              "[Gateway] Turso startup sync-index failed (non-fatal):",
               (err as Error).message.slice(0, 120),
             ),
           );
+        if (process.env.TURSO_PULL_ON_STARTUP === "true") {
+          void tursoBridge
+            .pullLinkedSourcesIfNeeded()
+            .catch((err) =>
+              console.warn(
+                "[Gateway] Turso startup pull failed (non-fatal):",
+                (err as Error).message.slice(0, 120),
+              ),
+            );
         }
         void import("./services/tursoPushScheduler.js")
-          .then(({ pushDirtyLinkedJobsOnStartup }) => pushDirtyLinkedJobsOnStartup())
+          .then(({ pushDirtyLinkedJobsOnStartup }) =>
+            pushDirtyLinkedJobsOnStartup(),
+          )
           .catch((err) =>
             console.warn(
               "[Gateway] Turso startup dirty push failed (non-fatal):",
+              (err as Error).message.slice(0, 120),
+            ),
+          );
+        void import("./services/tursoReplica/cutover/tursoReplicaCutoverOrchestrator.js")
+          .then(({ runPendingReplicaCutovers }) =>
+            runPendingReplicaCutovers({ fromStartup: true }).then((batch) => {
+              if (batch.results.length === 0) {
+                return;
+              }
+              console.log(
+                `[Gateway] Replica cutover: attempted=${batch.attempted} ` +
+                  `succeeded=${batch.succeeded} blocked=${batch.blocked} skipped=${batch.skipped}`,
+              );
+              for (const result of batch.results) {
+                if (!result.ok && result.error) {
+                  console.warn(
+                    `[Gateway] Replica cutover ${result.dbId}: ${result.error.slice(0, 160)}`,
+                  );
+                }
+              }
+            }),
+          )
+          .catch((err) =>
+            console.warn(
+              "[Gateway] Replica cutover startup failed (non-fatal):",
+              (err as Error).message.slice(0, 120),
+            ),
+          );
+        void import("./services/tursoReplica/cutover/tursoReplicaCutoverMigrationAuthority.js")
+          .then(({ repairAllReplicaMigrationAuthorityOnStartup }) => {
+            const repairEnabled =
+              process.env.TURSO_MIGRATION_REPAIR_ON_STARTUP === "1" ||
+              process.env.TURSO_MIGRATION_REPAIR_ON_STARTUP === "true";
+            if (!repairEnabled) {
+              console.log(
+                "[Gateway] Skipping workspace-wide replica migration repair on startup " +
+                  "(per-DB repair still runs on publish/pull/drift; set TURSO_MIGRATION_REPAIR_ON_STARTUP=1 for full scan)",
+              );
+              return;
+            }
+            const delayMs = Number(
+              process.env.TURSO_MIGRATION_REPAIR_STARTUP_DELAY_MS ?? 120_000,
+            );
+            const run = () => {
+              void repairAllReplicaMigrationAuthorityOnStartup().catch((err) =>
+                console.warn(
+                  "[Gateway] Replica migration repair startup failed (non-fatal):",
+                  (err as Error).message.slice(0, 120),
+                ),
+              );
+            };
+            if (delayMs <= 0) {
+              run();
+              return;
+            }
+            console.log(
+              `[Gateway] Deferring replica migration repair for ${delayMs}ms ` +
+                "(interactive app reads take priority)",
+            );
+            setTimeout(run, delayMs);
+          })
+          .catch((err) =>
+            console.warn(
+              "[Gateway] Replica migration repair startup failed (non-fatal):",
+              (err as Error).message.slice(0, 120),
+            ),
+          );
+        void import("./utils/tursoReplicaEnabled.js")
+          .then(({ isLegacyWorkspaceRowSyncEnabled }) => {
+            if (!isLegacyWorkspaceRowSyncEnabled()) {
+              return;
+            }
+            return import("./services/syncV3/workspaceLogSync.js").then(
+              async ({ catchUpAllLinkedSourcesFromWorkspaceLog }) => {
+                const appsRoot = tursoBridge.getAppsRootDir();
+                if (!appsRoot) {
+                  return;
+                }
+                const applied =
+                  await catchUpAllLinkedSourcesFromWorkspaceLog(appsRoot);
+                if (applied > 0) {
+                  console.log(
+                    `[Gateway] Workspace log startup catch-up materialized ${applied} row op(s)`,
+                  );
+                }
+              },
+            );
+          })
+          .catch((err) =>
+            console.warn(
+              "[Gateway] Workspace log startup catch-up failed (non-fatal):",
               (err as Error).message.slice(0, 120),
             ),
           );
@@ -2234,12 +4696,20 @@ async function startGateway(): Promise<void> {
     // Handle shutdown
     const shutdown = async () => {
       console.log("[Gateway] Shutting down gracefully...");
+      stopGatewayEventLoopMonitor();
+
+      try {
+        const { shutdownGatewayBackgroundWorker } =
+          await import("./services/GatewayBackgroundWorkerClient.js");
+        await shutdownGatewayBackgroundWorker();
+      } catch (error) {
+        console.error("[Gateway] Failed to stop background worker:", error);
+      }
 
       // Stop code indexing
       try {
-        const { stopCodeIndexing } = await import(
-          "./services/CodeIndexingService.js"
-        );
+        const { stopCodeIndexing } =
+          await import("./services/CodeIndexingService.js");
         await stopCodeIndexing();
       } catch (error) {
         console.error("[Gateway] Failed to stop code indexing:", error);
@@ -2271,19 +4741,45 @@ async function startGateway(): Promise<void> {
 
       try {
         try {
-          const { stopDatabaseMemorySync } = await import(
-            "./services/DatabaseMemorySync.js"
-          );
+          const { stopDatabaseMemorySync } =
+            await import("./services/DatabaseMemorySync.js");
           stopDatabaseMemorySync();
         } catch {
           /* non-fatal */
         }
-        const { stopTursoLinkedDbWatcher } = await import(
-          "./services/TursoLinkedDbWatcher.js"
-        );
+        const { stopTursoLinkedDbWatcher } =
+          await import("./services/TursoLinkedDbWatcher.js");
         await stopTursoLinkedDbWatcher();
       } catch (error) {
         console.error("[Gateway] Failed to stop Turso DB watcher:", error);
+      }
+
+      try {
+        const { cancelAllScheduledTursoReplicaPushes } =
+          await import("./services/tursoReplica/tursoReplicaPushScheduler.js");
+        cancelAllScheduledTursoReplicaPushes("gateway shutdown");
+        const { drainTursoReplicaConnections } =
+          await import("./services/tursoReplica/TursoReplicaService.js");
+        await drainTursoReplicaConnections("gateway shutdown");
+      } catch (error) {
+        console.error(
+          "[Gateway] Failed to drain Turso replica connections:",
+          error,
+        );
+      }
+
+      try {
+        const { getSessionKeeperService } =
+          await import("./services/platforms/SessionKeeperService.js");
+        getSessionKeeperService().stop();
+        const { closeRealChromePlatformSession } =
+          await import("./services/platforms/platformAgentBrowser.js");
+        await closeRealChromePlatformSession();
+        const { getPlatformSessionService } =
+          await import("./services/platforms/PlatformSessionService.js");
+        await getPlatformSessionService().shutdown();
+      } catch (error) {
+        console.error("[Gateway] Failed to stop platform sessions:", error);
       }
 
       getJobsScheduler().stop();
@@ -2306,60 +4802,75 @@ async function startGateway(): Promise<void> {
         });
       });
     }
-    
+
     // Handle system power state changes from Electron main process
     process.on("message", async (message: unknown) => {
       if (typeof message !== "object" || message === null) return;
-      
-      const msg = message as { type?: string; timestamp?: number };
-      
+
+      const msg = message as {
+        type?: string;
+        timestamp?: number;
+        event?: unknown;
+      };
+      if (msg.type === "HEALTH_OBSERVATION") {
+        recordGatewayHealthEvent(msg.event);
+        return;
+      }
+
       if (msg.type === "SYSTEM_SUSPEND") {
         console.log("[Gateway] System suspending - pausing operations");
         // Note: Node.js process will be suspended by OS, no cleanup needed
         // The OS will freeze all timers and I/O operations
       } else if (msg.type === "SYSTEM_RESUME") {
-        console.log("[Gateway] System resumed - reconciling state");
-        
-        try {
-          // Immediately reconcile jobs that may have been missed during sleep
-          const jobsService = getJobsService();
-          await jobsService.reconcileStaleRunningJobs();
-          
-          // Force scheduler to re-evaluate all jobs immediately
-          const scheduler = getJobsScheduler();
-          await scheduler.tickNow();
-          
-          console.log("[Gateway] State reconciliation complete after system resume");
-        } catch (error) {
-          console.error("[Gateway] Failed to reconcile state after resume:", error);
-        }
+        console.log(
+          "[Gateway] System resumed — scheduling job reconcile (deferred until interactive quiet)",
+        );
+        scheduleCoalescedBackgroundWork("system:resume-jobs", async () => {
+          try {
+            const jobsService = getJobsService();
+            await jobsService.reconcileStaleRunningJobs();
+            await getJobsScheduler().tickNow();
+            console.log(
+              "[Gateway] Job reconcile complete after system resume (background)",
+            );
+          } catch (error) {
+            console.error(
+              "[Gateway] Failed to reconcile jobs after system resume:",
+              error,
+            );
+          }
+        });
       }
     });
-    
-    if (!isCloudAgentGatewayMode()) {
-      getJobsScheduler().start();
-    }
-    
+
+    // Scheduler + session keeper start after deferred jobs bootstrap (see gatewayReady block).
+
     // Start code indexing after a delay (non-blocking)
-    console.log('[Gateway] Scheduling code indexing check in 3 seconds...');
+    console.log("[Gateway] Scheduling code indexing check in 3 seconds...");
     setTimeout(async () => {
-      console.log('[Gateway] Code indexing check starting...');
+      console.log("[Gateway] Code indexing check starting...");
       try {
-        const { getPaprApiKey: resolvePaprKey } = await import('./utils/keyResolver.js');
-        console.log('[Gateway] Requesting PAPR_API_KEY...');
+        const { getPaprApiKey: resolvePaprKey } =
+          await import("./utils/keyResolver.js");
+        console.log("[Gateway] Requesting PAPR_API_KEY...");
         const paprKey = await resolvePaprKey();
-        
+
         if (paprKey) {
-          console.log('[Gateway] PAPR_API_KEY found, starting code indexing...');
-          const { ensureIndexingStarted } = await import('./services/CodeIndexingService.js');
+          console.log(
+            "[Gateway] PAPR_API_KEY found, starting code indexing...",
+          );
+          const { ensureIndexingStarted } =
+            await import("./services/CodeIndexingService.js");
           await ensureIndexingStarted(paprKey);
-          console.log('[Gateway] Code indexing initialization complete');
+          console.log("[Gateway] Code indexing initialization complete");
         } else {
-          console.log('[Gateway] No PAPR_API_KEY found, skipping code indexing');
+          console.log(
+            "[Gateway] No PAPR_API_KEY found, skipping code indexing",
+          );
         }
       } catch (error) {
-        console.error('[Gateway] Failed to start code indexing:', error);
-        console.error('[Gateway] Error stack:', (error as Error).stack);
+        console.error("[Gateway] Failed to start code indexing:", error);
+        console.error("[Gateway] Error stack:", (error as Error).stack);
       }
     }, 3000); // Wait 3 seconds after Gateway starts
   } catch (error) {
@@ -2373,6 +4884,33 @@ startGateway();
 
 // Increase max listeners for process IPC (CustomKeysService uses many concurrent requests)
 process.setMaxListeners(20);
+
+// Track heap growth. The gateway has been aborting on V8 OOM mid-turn, and the
+// ceiling cannot be raised (Electron clamps it to the 4GB default), so the only
+// way forward is capturing where the memory goes before the limit is reached.
+void import("./services/MemoryWatchdog.js")
+  .then(({ startMemoryWatchdog }) => startMemoryWatchdog())
+  .catch((error) => {
+    console.warn("[Gateway] Memory watchdog unavailable:", error);
+  });
+
+void import("./services/FdWatchdog.js")
+  .then(({ startFdWatchdog }) => startFdWatchdog())
+  .catch((error) => {
+    console.warn("[Gateway] FD watchdog unavailable:", error);
+  });
+
+void import("../core/utils/spawnResourceErrorHandler.js")
+  .then(({ setSpawnResourceErrorHandler }) =>
+    setSpawnResourceErrorHandler((reason) => {
+      void import("./services/fdPressureRecovery.js").then(
+        ({ attemptFdPressureRecovery }) => attemptFdPressureRecovery(reason),
+      );
+    }),
+  )
+  .catch((error) => {
+    console.warn("[Gateway] Spawn resource error handler unavailable:", error);
+  });
 
 // Handle uncaught errors
 process.on("uncaughtException", (error) => {

@@ -9,7 +9,7 @@
  * - Error handling
  */
 
-import { exec, spawn } from "child_process";
+import { spawn } from "child_process";
 import { z } from "zod";
 import { createTool } from "@mastra/core/tools";
 import type { ToolResult } from "../types/tools.js";
@@ -26,13 +26,126 @@ import {
 } from "../utils/appDbGuidance.js";
 import {
   buildSqlitePathWarnings,
+  detectScratchDbWriteWhenRegistryExpected,
   formatSqlitePathWarningBlock,
 } from "../utils/sqlitePathGuard.js";
+import { getJobToolEnv } from "./context.js";
+
+function mergeBashEnv(inputEnv?: Record<string, string>): Record<string, string> {
+  return { ...getJobToolEnv(), ...(inputEnv ?? {}) };
+}
+
+function jobDbSchemaDdlBlockResult(
+  command: string,
+  env: Record<string, string>,
+): ToolResult<BashOutput> | null {
+  const mergedEnv = mergeBashEnv(env);
+
+  const replicaBlock = detectReplicaRegistrySqliteBlock(command, {
+    appDb:
+      typeof mergedEnv.APP_DB === "string" ? mergedEnv.APP_DB : undefined,
+    jobDb:
+      typeof mergedEnv.JOB_DB === "string" ? mergedEnv.JOB_DB : undefined,
+    env: mergedEnv,
+  });
+  if (replicaBlock) {
+    return {
+      success: false,
+      error: replicaBlock.message,
+      type: "validation_error",
+      data: {
+        stdout: "",
+        stderr: replicaBlock.message,
+        exitCode: 1,
+        command,
+        duration: 0,
+        _schemaMigrationReminder: replicaBlock.message,
+      },
+    };
+  }
+
+  const scratchWriteBlock = detectScratchDbWriteWhenRegistryExpected(command, {
+    appDb:
+      typeof mergedEnv.APP_DB === "string" ? mergedEnv.APP_DB : undefined,
+    jobDb:
+      typeof mergedEnv.JOB_DB === "string" ? mergedEnv.JOB_DB : undefined,
+    env: mergedEnv,
+  });
+  if (scratchWriteBlock) {
+    return {
+      success: false,
+      error: scratchWriteBlock.message,
+      type: "validation_error",
+      data: {
+        stdout: "",
+        stderr: scratchWriteBlock.message,
+        exitCode: 1,
+        command,
+        duration: 0,
+        _schemaMigrationReminder: scratchWriteBlock.message,
+      },
+    };
+  }
+
+  const migrationWrite = bashMigrationWriteBlockReason(command);
+  if (migrationWrite) {
+    return {
+      success: false,
+      error: migrationWrite,
+      type: "validation_error",
+      data: { stdout: "", stderr: migrationWrite, exitCode: 1, command },
+    } as never;
+  }
+
+  const block = detectJobDbSchemaDdlBlock(command, {
+    appDb:
+      typeof mergedEnv.APP_DB === "string" ? mergedEnv.APP_DB : undefined,
+    jobDb:
+      typeof mergedEnv.JOB_DB === "string" ? mergedEnv.JOB_DB : undefined,
+    env: mergedEnv,
+  });
+  if (!block) {
+    return null;
+  }
+  return {
+    success: false,
+    error: block.message,
+    type: "validation_error",
+    data: {
+      stdout: "",
+      stderr: block.message,
+      exitCode: 1,
+      command,
+      duration: 0,
+      migrationPath: block.migrationPath,
+      suggestedSql: block.suggestedSql,
+      _schemaMigrationReminder: block.message,
+    },
+  };
+}
 import {
   isJobsIndexBashWriteBlocked,
   JOBS_INDEX_BASH_BLOCK_MESSAGE,
 } from "../utils/jobsIndexBashGuard.js";
-import { getShell, getShellCommand } from "../utils/platform.js";
+import { detectJobDbSchemaDdlBlock } from "../utils/jobDbSchemaGuard.js";
+import { bashMigrationWriteBlockReason } from "../utils/migrationFileGuard.js";
+import { detectReplicaRegistrySqliteBlock } from "../utils/replicaBashSqliteGuard.js";
+import {
+  buildNamespaceGitTrapWarning,
+  detectNamespaceGitTrapCommand,
+} from "../utils/namespaceGitTrapGuard.js";
+import { isPaprAppsOrJobsSearchPath } from "../utils/paprAgentPaths.js";
+import { getShellCommand } from "../utils/platform.js";
+import { classifyChildProcessError, isSpawnResourceError } from "../utils/childProcessErrors.js";
+import { notifySpawnResourceError } from "../utils/spawnResourceErrorHandler.js";
+import { execShellCommand } from "../utils/shellExec.js";
+import { SPAWN_STDIO_IGNORE_IN } from "../utils/spawnStdio.js";
+import {
+  detectPlatformBrowserBashTip,
+  formatPlatformBrowserBashTip,
+} from "../utils/platformBrowserBashGuard.js";
+
+import { destroyChildProcessStreams } from "../utils/destroyChildProcessStreams.js";
 
 /** Commands that fetch or produce external content - wrap stdout for prompt injection defense */
 const CURL_WGET_REGEX = /\b(curl|wget)\b/i;
@@ -117,6 +230,12 @@ export interface BashOutput {
   exitCode: number;
   command: string;
   duration: number;
+  /** Present when schema DDL is blocked on a synced database. */
+  migrationPath?: string;
+  suggestedSql?: string;
+  _schemaMigrationReminder?: string;
+  /** Actionable recovery hint when spawn fails (EBADF, EMFILE, fd pressure). */
+  _processHint?: string;
 }
 
 /**
@@ -132,13 +251,12 @@ function detectPaprGrepCommand(command: string): { pattern: string; path: string
   if (!match) return null;
   
   const pattern = match[1];
-  const path = match[2].trim();
-  
-  // Check if path contains PAPR/apps or PAPR/Jobs
-  if (path.includes('Papr/apps') || path.includes('Papr/jobs')) {
-    return { pattern, path };
+  const grepPath = match[2].trim();
+
+  if (isPaprAppsOrJobsSearchPath(grepPath)) {
+    return { pattern, path: grepPath };
   }
-  
+
   return null;
 }
 
@@ -160,11 +278,12 @@ export function buildHybridMemorySearchQuery(
   grepPath: string,
 ): string {
   const scope =
-    grepPath.includes("Papr/apps") || grepPath.includes("Papr/Jobs")
-      ? grepPath.includes("Papr/Jobs")
-        ? "jobs"
-        : "mini-apps"
-      : "projects";
+    isPaprAppsOrJobsSearchPath(grepPath) &&
+    /(?:Jobs|jobs)\//i.test(grepPath.replace(/\\/g, "/"))
+      ? "jobs"
+      : isPaprAppsOrJobsSearchPath(grepPath)
+        ? "mini-apps"
+        : "projects";
   const projectId = extractProjectIdFromPaprPath(grepPath);
   const projectClause = projectId ? ` Focus on project ${projectId}.` : "";
 
@@ -195,7 +314,11 @@ async function searchPaprMemoryForCode(
     const { buildSearchPolicy } = await import(
       "../../gateway/utils/paprMemoryPolicy.js"
     );
-    const client = new Papr({ xAPIKey: paprKey });
+    const { PAPR_DEFAULT_HEADERS } = await import("./paprSurface.js");
+    const client = new Papr({
+      xAPIKey: paprKey,
+      defaultHeaders: PAPR_DEFAULT_HEADERS,
+    });
 
     const projectId = extractProjectIdFromPaprPath(grepPath);
     const customMetadata: Record<string, string> = {
@@ -269,32 +392,79 @@ async function executeBackgroundedCommand(
 ): Promise<ToolResult<BashOutput>> {
   return new Promise((resolve) => {
     const [shellPath, shellArgs] = getShellCommand(command);
-    
+
     // Spawn detached with stdio ignored to prevent hanging on orphaned pipes
     const proc = spawn(shellPath, shellArgs, {
       cwd: cwd || process.cwd(),
       env: Object.keys(env).length > 0 ? { ...process.env, ...env } : process.env,
       detached: true,
-      stdio: 'ignore', // Critical: don't inherit stdio pipes
+      stdio: "ignore", // Critical: don't inherit stdio pipes
     });
 
-    // Unref so parent doesn't wait for child
-    proc.unref();
+    let settled = false;
+    const finish = (result: ToolResult<BashOutput>): void => {
+      if (settled) return;
+      settled = true;
+      resolve(result);
+    };
 
-    const duration = Date.now() - startTime;
-    const pid = proc.pid;
-
-    // Return immediately - the process is now fully detached
-    resolve({
-      success: true,
-      data: {
-        stdout: `Background process started (PID: ${pid})\nNote: Use Job system for monitoring long-running processes.`,
-        stderr: '',
-        exitCode: 0,
-        command: sanitizeError(originalCommand, apiKeys),
-        duration,
-      },
+    proc.on("error", (err) => {
+      notifySpawnResourceError(err, "bash background spawn");
+      const classified = classifyChildProcessError(err);
+      finish({
+        success: false,
+        error: classified?.message ?? (err as Error).message,
+        type: classified?.type ?? "spawn_error",
+        data: {
+          stdout: "",
+          stderr: classified?.message ?? (err as Error).message,
+          exitCode: -1,
+          command: sanitizeError(originalCommand, apiKeys),
+          duration: Date.now() - startTime,
+          ...(classified?.agentHint ? { _processHint: classified.agentHint } : {}),
+        },
+      });
     });
+
+    const reportStarted = (): void => {
+      proc.unref();
+      const pid = proc.pid;
+      if (pid === undefined) {
+        finish({
+          success: false,
+          error: "Background process failed to start (no PID assigned)",
+          type: "spawn_error",
+          data: {
+            stdout: "",
+            stderr: "Background process failed to start (no PID assigned)",
+            exitCode: -1,
+            command: sanitizeError(originalCommand, apiKeys),
+            duration: Date.now() - startTime,
+          },
+        });
+        return;
+      }
+
+      finish({
+        success: true,
+        data: {
+          stdout:
+            `Background process started (PID: ${pid})\n` +
+            "Note: Use Job system for monitoring long-running processes.",
+          stderr: "",
+          exitCode: 0,
+          command: sanitizeError(originalCommand, apiKeys),
+          duration: Date.now() - startTime,
+        },
+      });
+    };
+
+    // spawn may succeed synchronously (pid set) or emit 'spawn' async
+    if (proc.pid !== undefined) {
+      reportStarted();
+    } else {
+      proc.on("spawn", reportStarted);
+    }
   });
 }
 
@@ -308,18 +478,14 @@ const WRITE_KEYWORDS_RE = /(>|>>|tee\b|sed\s+-i|cat\s+>|patch\b|git\s+(commit|re
  */
 async function gitFingerprint(cwd: string | undefined): Promise<string | null> {
   try {
-    const { exec } = await import("child_process");
-    const { promisify } = await import("util");
-    const execA = promisify(exec);
     const opts = { cwd: cwd || process.cwd(), timeout: 1500 };
 
     try {
-      await execA("git rev-parse --is-inside-work-tree", opts);
+      await execShellCommand("git rev-parse --is-inside-work-tree", opts);
     } catch {
       return null;
     }
-    // Single short status to capture all dirty/untracked state
-    const { stdout } = await execA(
+    const { stdout } = await execShellCommand(
       "git status --porcelain --untracked-files=normal",
       opts,
     );
@@ -349,18 +515,16 @@ async function captureGitChangesIfChanged(
     const after = await gitFingerprint(cwd);
     if (after === null || after === beforeFingerprint) return "";
 
-    const { exec } = await import("child_process");
-    const { promisify } = await import("util");
-    const execA = promisify(exec);
     const opts = { cwd: cwd || process.cwd(), timeout: 2500 };
 
-    const { stdout: stat } = await execA("git diff HEAD --stat", opts).catch(() => ({
+    const { stdout: stat } = await execShellCommand("git diff HEAD --stat", opts).catch(() => ({
       stdout: "",
+      stderr: "",
     }));
     let combinedStat = stat.trim();
 
     try {
-      const { stdout: untracked } = await execA(
+      const { stdout: untracked } = await execShellCommand(
         "git ls-files --others --exclude-standard",
         opts,
       );
@@ -377,10 +541,10 @@ async function captureGitChangesIfChanged(
     }
     if (!combinedStat) return "";
 
-    const { stdout: namesOut } = await execA(
+    const { stdout: namesOut } = await execShellCommand(
       "git diff HEAD --name-only",
       opts,
-    ).catch(() => ({ stdout: "" }));
+    ).catch(() => ({ stdout: "", stderr: "" }));
     const files = namesOut.split("\n").map((s) => s.trim()).filter(Boolean);
 
     const payload = JSON.stringify({ stat: combinedStat, files });
@@ -401,7 +565,7 @@ export async function executeBashCommand(
   let { command } = input;
   const cwd = input.cwd || "";
   const timeout = input.timeout || 60000;
-  const env = input.env || {};
+  const env = mergeBashEnv(input.env);
 
   // Capture git fingerprint BEFORE command runs (cheap; no-op outside repos)
   // Only when the command might write — saves the probe for read-only ops.
@@ -426,6 +590,11 @@ export async function executeBashCommand(
         error: JOBS_INDEX_BASH_BLOCK_MESSAGE,
         type: "validation_error",
       };
+    }
+
+    const schemaDdlBlock = jobDbSchemaDdlBlockResult(command, env);
+    if (schemaDdlBlock) {
+      return schemaDdlBlock;
     }
     
     // Check if this is a grep command in PAPR folders
@@ -525,46 +694,18 @@ export async function executeBashCommand(
       );
     }
 
-    // Execute with timeout and improved buffer
-    // Use a race between execAsync and explicit SIGKILL timeout
-    let childProcess: ReturnType<typeof exec> | null = null;
-    const execPromise = new Promise<{ stdout: string; stderr: string }>((resolve, reject) => {
-      childProcess = exec(command, {
-        cwd: cwd || process.cwd(),
-        timeout,
-        maxBuffer: 100 * 1024 * 1024, // 100MB buffer (up from 10MB)
-        env:
-          Object.keys(env).length > 0 
-            ? { ...process.env, ...(env as Record<string, string>) } 
-            : process.env,
-        shell: getShell(),
-      }, (error, stdout, stderr) => {
-        if (error) {
-          reject(error);
-        } else {
-          resolve({ stdout: stdout || '', stderr: stderr || '' });
-        }
-      });
+    // Execute with timeout and improved buffer (stdin ignored — prevents EBADF)
+    const mergedExecEnv: NodeJS.ProcessEnv =
+      Object.keys(env).length > 0
+        ? { ...process.env, ...(env as Record<string, string>) }
+        : process.env;
+
+    const { stdout, stderr } = await execShellCommand(command, {
+      cwd: cwd || process.cwd(),
+      timeout,
+      maxBuffer: 100 * 1024 * 1024,
+      env: mergedExecEnv,
     });
-
-    // Explicit SIGKILL timeout handler (fallback if exec's timeout doesn't work)
-    const killTimer = setTimeout(() => {
-      if (childProcess && !childProcess.killed) {
-        console.warn('[Bash Tool] Timeout exceeded, sending SIGKILL');
-        childProcess.kill('SIGKILL');
-      }
-    }, timeout + 5000); // Give exec 5s grace period, then SIGKILL
-
-    let stdout: string;
-    let stderr: string;
-    
-    try {
-      const result = await execPromise;
-      stdout = result.stdout;
-      stderr = result.stderr;
-    } finally {
-      clearTimeout(killTimer);
-    }
     
     // Validate output exists (catch undefined/null from process failures)
     if (stdout === undefined && stderr === undefined) {
@@ -630,15 +771,17 @@ export async function executeBashCommand(
       // best-effort only
     }
 
+    const mergedEnv: NodeJS.ProcessEnv =
+      Object.keys(env).length > 0
+        ? { ...process.env, ...(env as Record<string, string>) }
+        : process.env;
+
     const sqliteWarnings = buildSqlitePathWarnings(command, {
       appDb:
-        typeof env.APP_DB === "string"
-          ? env.APP_DB
-          : process.env.APP_DB,
+        typeof mergedEnv.APP_DB === "string" ? mergedEnv.APP_DB : undefined,
       jobDb:
-        typeof env.JOB_DB === "string"
-          ? env.JOB_DB
-          : process.env.JOB_DB,
+        typeof mergedEnv.JOB_DB === "string" ? mergedEnv.JOB_DB : undefined,
+      env: mergedEnv,
     });
     if (sqliteWarnings.length > 0) {
       sanitizedStdout += formatSqlitePathWarningBlock(sqliteWarnings);
@@ -647,6 +790,25 @@ export async function executeBashCommand(
     const appDbGuidance = buildAppDbBashGuidance(command);
     if (appDbGuidance) {
       sanitizedStdout += formatAppDbGuidanceBlock(appDbGuidance);
+    }
+
+    const oversizedWarning = await (async () => {
+      const { formatOversizedAppFileWarningBlock } = await import(
+        "../utils/oversizedAppFileWarnings.js"
+      );
+      return formatOversizedAppFileWarningBlock(input.command, cwd || process.cwd());
+    })();
+    if (oversizedWarning) {
+      sanitizedStdout += oversizedWarning;
+    }
+
+    if (detectNamespaceGitTrapCommand(command)) {
+      sanitizedStdout = buildNamespaceGitTrapWarning() + sanitizedStdout;
+    }
+
+    const platformBashTip = detectPlatformBrowserBashTip(command);
+    if (platformBashTip) {
+      sanitizedStdout += formatPlatformBrowserBashTip(platformBashTip);
     }
 
     void import("../../gateway/services/toolCapture/ToolCaptureService.js")
@@ -674,52 +836,24 @@ export async function executeBashCommand(
         ...(sqliteWarnings.length > 0
           ? { _sqlitePathWarnings: sqliteWarnings }
           : {}),
+        ...(oversizedWarning ? { _largeFileReminder: oversizedWarning.trim() } : {}),
       },
     };
   } catch (error: unknown) {
     const duration = Date.now() - startTime;
     const apiKeys = getApiKeysForSanitization();
 
-    // Handle exec errors (non-zero exit codes)
-    if (error && typeof error === "object" && "code" in error) {
+    if (isSpawnResourceError(error)) {
+      notifySpawnResourceError(error, "bash tool spawn");
+    }
+
+    const classified = classifyChildProcessError(error, timeout);
+    if (classified) {
       const execError = error as {
-        code?: number;
         stdout?: string;
         stderr?: string;
-        killed?: boolean;
-        signal?: string;
       };
-
-      // Timeout
-      if (execError.killed || execError.signal === "SIGTERM" || execError.signal === "SIGKILL") {
-        const sanitizedError = sanitizeError(
-          `Command timed out after ${timeout}ms`,
-          apiKeys,
-        );
-        let errStdout = sanitizeError(execError.stdout || "", apiKeys);
-        const wrapSource = shouldWrapBashOutput(input.command);
-        if (wrapSource && errStdout) {
-          errStdout = wrapUntrustedContent(wrapSource, "", errStdout);
-        }
-        return {
-          success: false,
-          error: sanitizedError,
-          type: "timeout_error",
-          data: {
-            stdout: errStdout,
-            stderr: sanitizeError(execError.stderr || "", apiKeys),
-            exitCode: execError.code || -1,
-            command: sanitizeError(input.command, apiKeys),
-            duration,
-          },
-        };
-      }
-
-      // Non-zero exit code
-      const sanitizedError = sanitizeError(
-        `Command failed with exit code ${execError.code}`,
-        apiKeys,
-      );
+      const sanitizedError = sanitizeError(classified.message, apiKeys);
       let errStdout = sanitizeError(execError.stdout || "", apiKeys);
       const wrapSource = shouldWrapBashOutput(input.command);
       if (wrapSource && errStdout) {
@@ -728,13 +862,16 @@ export async function executeBashCommand(
       return {
         success: false,
         error: sanitizedError,
-        type: "execution_error",
+        type: classified.type,
         data: {
           stdout: errStdout,
           stderr: sanitizeError(execError.stderr || "", apiKeys),
-          exitCode: execError.code || 1,
+          exitCode: classified.exitCode,
           command: sanitizeError(input.command, apiKeys),
           duration,
+          ...(classified.agentHint
+            ? { _processHint: classified.agentHint }
+            : {}),
         },
       };
     }
@@ -764,7 +901,7 @@ export async function executeBashCommandStreaming(
   let command = input.command;
   const cwd = input.cwd || "";
   const timeout = input.timeout || 60000;
-  const env = input.env || {};
+  const env = mergeBashEnv(input.env);
 
   if (!command || command.trim().length === 0) {
     return {
@@ -780,6 +917,11 @@ export async function executeBashCommandStreaming(
       error: JOBS_INDEX_BASH_BLOCK_MESSAGE,
       type: "validation_error",
     };
+  }
+
+  const schemaDdlBlock = jobDbSchemaDdlBlockResult(command, env);
+  if (schemaDdlBlock) {
+    return schemaDdlBlock;
   }
 
   // Get API keys for sanitization and substitution
@@ -860,6 +1002,7 @@ export async function executeBashCommandStreaming(
       cwd: cwd || process.cwd(),
       env: env ? { ...process.env, ...(env as Record<string, string>) } : process.env,
       timeout,
+      stdio: SPAWN_STDIO_IGNORE_IN,
     });
 
     // Stream stdout (sanitize before sending)
@@ -881,7 +1024,8 @@ export async function executeBashCommandStreaming(
     // Handle exit
     proc.on("close", (code: number | null) => {
       if (killTimer) clearTimeout(killTimer);
-      
+      destroyChildProcessStreams(proc);
+
       const duration = Date.now() - startTime;
       const exitCode = code ?? -1;
 
@@ -897,7 +1041,7 @@ export async function executeBashCommandStreaming(
       }
 
       if (exitCode === 0) {
-        // App file edits: AppService chokidar watcher handles debounced rebuild + reload.
+        // App file edits: AppService tree watcher handles debounced rebuild + reload.
 
         void import("../../gateway/services/toolCapture/ToolCaptureService.js")
           .then(({ scheduleBashCapture }) =>
@@ -945,12 +1089,19 @@ export async function executeBashCommandStreaming(
     // Handle errors
     proc.on("error", (error: Error) => {
       if (killTimer) clearTimeout(killTimer);
-      
+      destroyChildProcessStreams(proc);
+
       const duration = Date.now() - startTime;
       let sanitizedStdout = sanitizeError(stdoutData, apiKeys);
       const sanitizedStderr = sanitizeError(stderrData, apiKeys);
       const sanitizedCommand = sanitizeError(input.command, apiKeys);
-      const sanitizedError = sanitizeError(error.message, apiKeys);
+      const classified = classifyChildProcessError(error, timeout);
+      const failure = classified ?? {
+        type: "spawn_error" as const,
+        message: `Could not start command — ${error.message}`,
+        exitCode: -1,
+      };
+      const sanitizedError = sanitizeError(failure.message, apiKeys);
 
       const wrapSource = shouldWrapBashOutput(input.command);
       if (wrapSource && sanitizedStdout) {
@@ -959,14 +1110,15 @@ export async function executeBashCommandStreaming(
 
       resolve({
         success: false,
-        error: `Failed to execute: ${sanitizedError}`,
-        type: "spawn_error",
+        error: sanitizedError,
+        type: failure.type,
         data: {
           stdout: sanitizedStdout,
           stderr: sanitizedStderr,
-          exitCode: -1,
+          exitCode: failure.exitCode,
           command: sanitizedCommand,
           duration,
+          ...(failure.agentHint ? { _processHint: failure.agentHint } : {}),
         },
       });
     });
@@ -991,7 +1143,8 @@ export const bashTool = createTool({
 WHEN TO USE BASH TOOL:
 ✓ Short commands that complete in <60 seconds
 ✓ Commands with output <100MB
-✓ One-off operations: file operations, git commands, package installs, quick scripts, API probes (curl), sqlite peeks
+✓ One-off operations: file operations, git commands, package installs, quick scripts, API probes (curl), sqlite peeks on job scratch DBs
+✗ NEVER sqlite3/sqlite3.connect on a registry DB (data/databases/*/data.db) — even SELECT truncates the WAL and wedges cloud sync; blocked. Use query_cloud_turso / papr_db_sync_status, or sqlite3 "file:$PATH?mode=ro"
 ✓ Commands where you need to see the full output immediately
 ✓ Exploring data shape BEFORE committing to create_job — bash first, job only when reusable/scheduled/app-wired
 

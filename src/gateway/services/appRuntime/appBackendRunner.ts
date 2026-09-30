@@ -7,8 +7,22 @@ import * as fs from "fs/promises";
 import * as os from "os";
 import * as path from "path";
 import { fileURLToPath } from "url";
+import { destroyChildProcessStreams } from "../../../core/utils/destroyChildProcessStreams.js";
+import { notifySpawnResourceError } from "../../../core/utils/spawnResourceErrorHandler.js";
 import type { AppBackendActionSpec } from "../../../core/types/appBackend.js";
 import type { AppBackendRunResult } from "../../../core/types/appBackend.js";
+import {
+  mergeVerifiedCallerJobParams,
+  VERIFIED_CALLER_EMAIL_PARAM,
+  VERIFIED_CALLER_USER_ID_PARAM,
+  type MiniAppCallerIdentity,
+} from "./miniAppAccess.js";
+import {
+  isBackendPythonWorkerEnabled,
+  runPythonHandlerViaWorker,
+} from "./appBackendPythonWorker.js";
+
+export type { MiniAppCallerIdentity };
 
 const DEFAULT_TIMEOUT_MS = 30_000;
 export const MAX_BACKEND_TIMEOUT_MS = 600_000;
@@ -28,19 +42,39 @@ export function buildBackendActionEnv(input: {
   vaultEnv?: Record<string, string>;
   databaseEnv?: Record<string, string>;
   paprRoot?: string;
+  /** Server-resolved caller — injected when signed in; overrides client identity params. */
+  callerIdentity?: MiniAppCallerIdentity;
+  loggedIn?: boolean;
 }): Record<string, string> {
-  const env: Record<string, string> = {
-    ...(process.env as Record<string, string>),
-    ...(input.databaseEnv ?? {}),
-    PAPR_APP_ID: input.appId,
-    PAPR_ACTION: input.action,
-    ...(input.paprRoot ? { PAPR_ROOT: input.paprRoot } : {}),
-    ...(input.vaultEnv ?? {}),
-  };
-  if (input.params) {
-    env.PAPR_ACTION_PARAMS = JSON.stringify(input.params);
-    for (const [key, value] of Object.entries(input.params)) {
-      env[`PAPR_PARAM_${key}`] = value;
+  const mergedParams = mergeVerifiedCallerJobParams(
+    input.params,
+    input.loggedIn ?? false,
+    input.callerIdentity,
+  );
+
+    const env: Record<string, string> = {};
+    for (const [key, value] of Object.entries({
+      ...(process.env as Record<string, string>),
+      ...(input.databaseEnv ?? {}),
+      PAPR_APP_ID: input.appId,
+      PAPR_ACTION: input.action,
+      ...(input.paprRoot ? { PAPR_ROOT: input.paprRoot } : {}),
+      ...(input.vaultEnv ?? {}),
+    })) {
+      env[key] = String(value);
+    }
+  if (mergedParams) {
+    env.PAPR_ACTION_PARAMS = JSON.stringify(mergedParams);
+    for (const [key, value] of Object.entries(mergedParams)) {
+      env[`PAPR_PARAM_${key}`] = String(value);
+    }
+  }
+  const callerUserId = input.callerIdentity?.userId?.trim();
+  if (input.loggedIn && callerUserId) {
+    env[VERIFIED_CALLER_USER_ID_PARAM] = callerUserId;
+    const callerEmail = input.callerIdentity?.email?.trim();
+    if (callerEmail) {
+      env[VERIFIED_CALLER_EMAIL_PARAM] = callerEmail;
     }
   }
   return env;
@@ -71,10 +105,13 @@ function spawnWithTimeout(
     }, timeoutMs);
     proc.on("error", (err) => {
       clearTimeout(timer);
+      destroyChildProcessStreams(proc);
+      notifySpawnResourceError(err, "app backend spawn");
       reject(err);
     });
     proc.on("close", (code) => {
       clearTimeout(timer);
+      destroyChildProcessStreams(proc);
       resolve({
         stdout,
         stderr,
@@ -84,11 +121,71 @@ function spawnWithTimeout(
   });
 }
 
-export function runPythonHandlerAtPath(
+const HELPER_VERSION_RE = /^PAPR_DB_HELPER_VERSION\s*=\s*(\d+)/m;
+
+function readHelperVersion(source: string): number {
+  const match = HELPER_VERSION_RE.exec(source);
+  if (!match) return 0; // absent => pre-versioning => stale
+  const parsed = Number.parseInt(match[1], 10);
+  return Number.isFinite(parsed) ? parsed : 0;
+}
+
+/**
+ * Refresh <app>/backend/papr_db.py when the vendored copy predates the
+ * canonical helper.
+ *
+ * The helper is copied into each app at create time (AppService scaffolding),
+ * and nothing rewrote it afterwards — so apps created before proxy support
+ * kept a helper that writes straight to the SQLite file. For replica-managed
+ * databases that bypasses the sync engine and wedges its WAL sidecars, which
+ * silently blocks sync in BOTH directions until repaired by hand.
+ *
+ * Version-gated rather than unconditional: copies at or above the canonical
+ * version are left untouched, so a newer or hand-edited helper is never
+ * clobbered, and we don't churn the git-synced backend/ folder on every run.
+ * Running at handler-exec time (not cutover) means legacy -> replica
+ * migrations self-heal on next use with no extra migration step.
+ */
+async function refreshVendoredDbHelper(handlerPath: string): Promise<void> {
+  try {
+    const vendoredPath = path.join(path.dirname(handlerPath), "papr_db.py");
+    const canonical = await loadBackendDbHelperPy();
+    const canonicalVersion = readHelperVersion(canonical);
+    if (canonicalVersion === 0) return; // canonical unversioned: do nothing
+
+    let existing: string | null = null;
+    try {
+      existing = await fs.readFile(vendoredPath, "utf8");
+    } catch {
+      // No vendored helper at all. This used to return, which meant apps
+      // created before the scaffolding wrote papr_db.py could NEVER import it:
+      // `import papr_db` raised ModuleNotFoundError on every request, because
+      // nothing else puts the helper on a path-mode handler's sys.path.
+      // Creating it here lets those older apps self-heal on next use, the same
+      // way a stale copy is upgraded below.
+      existing = null;
+    }
+
+    if (existing !== null && readHelperVersion(existing) >= canonicalVersion) {
+      return;
+    }
+
+    await fs.writeFile(vendoredPath, canonical, "utf8");
+    console.log(
+      `[appBackendRunner] ${existing === null ? "Vendored missing" : "Refreshed stale"} papr_db.py -> v${canonicalVersion} (${vendoredPath})`,
+    );
+  } catch (error) {
+    // Never block handler execution on a refresh failure.
+    console.warn(`[appBackendRunner] papr_db.py refresh skipped: ${String(error)}`);
+  }
+}
+
+export async function runPythonHandlerAtPath(
   handlerPath: string,
   env: Record<string, string>,
   timeoutMs: number,
 ): Promise<AppBackendRunResult> {
+  await refreshVendoredDbHelper(handlerPath);
   return spawnWithTimeout("python3", [handlerPath], env, timeoutMs);
 }
 
@@ -151,6 +248,15 @@ export async function runPythonHandlerFromSource(
   env: Record<string, string>,
   timeoutMs: number,
 ): Promise<AppBackendRunResult> {
+  if (isBackendPythonWorkerEnabled()) {
+    return runPythonHandlerViaWorker({
+      handlerSource,
+      dbHelperSource: await loadBackendDbHelperPy(),
+      env,
+      timeoutMs,
+    });
+  }
+
   const tmpdir = await fs.mkdtemp(path.join(os.tmpdir(), "papr-backend-"));
   const handlerPath = path.join(tmpdir, "handler.py");
   try {

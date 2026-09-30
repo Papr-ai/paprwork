@@ -22,7 +22,7 @@ FATAL ERROR: JavaScript heap out of memory (3648.3 MB)
 The accumulated text **can't be eliminated** because it's needed for:
 - Saving to database (full conversation history)
 - Creating StoredMessage objects
-- Exporting chats to ~/Papr/ folder
+- Exporting chats to `$PAPR_HOME/Chats/` folder
 
 The problem wasn't accumulation itself, but **lack of per-stream memory limits**.
 
