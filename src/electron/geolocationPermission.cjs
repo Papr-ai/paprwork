@@ -16,12 +16,17 @@ const { session, dialog } = require("electron");
 function registerGeolocationPermissionHandlers({
   getMainWindow,
   settingsStorage,
+  // Electron keeps ONE handler per session — setting ours replaces any earlier
+  // one. Non-geolocation permissions (mic/camera for mini-apps, clipboard)
+  // are delegated here instead of being silently denied.
+  fallbackCheck = () => false,
+  fallbackRequest = (_wc, _perm, callback) => callback(false),
 }) {
   const getMode = () => settingsStorage.getWeatherLocationMode();
 
-  session.defaultSession.setPermissionCheckHandler((_webContents, permission) => {
+  session.defaultSession.setPermissionCheckHandler((webContents, permission, requestingOrigin, details) => {
     if (permission !== "geolocation") {
-      return false;
+      return fallbackCheck(webContents, permission, requestingOrigin, details);
     }
 
     const mode = getMode();
@@ -33,9 +38,9 @@ function registerGeolocationPermissionHandlers({
   });
 
   session.defaultSession.setPermissionRequestHandler(
-    (_webContents, permission, callback) => {
+    (webContents, permission, callback, details) => {
       if (permission !== "geolocation") {
-        callback(false);
+        fallbackRequest(webContents, permission, callback, details);
         return;
       }
 
