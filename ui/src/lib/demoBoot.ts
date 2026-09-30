@@ -91,6 +91,37 @@ export function installDemoBridges(): void {
  * has Paprwork installed must never see their own local apps/jobs leak into the
  * landing-page iframe. Fail those calls exactly like an offline gateway would.
  */
+const HOME_FIXTURES = "/apps/bbb7e17e-c810-47ef-b9ce-c8a83c0cd16c/demo-focus.json";
+
+/** Resolve "@+N" (local date N days out) and "@ts-Nh|d" tokens in the fixture file. */
+function resolveDemoDates(v: unknown): unknown {
+  if (typeof v === "string") {
+    const d = /^@([+-]\d+)$/.exec(v);
+    if (d) {
+      const t = new Date();
+      t.setDate(t.getDate() + Number(d[1]));
+      return `${t.getFullYear()}-${String(t.getMonth() + 1).padStart(2, "0")}-${String(t.getDate()).padStart(2, "0")}`;
+    }
+    const ts = /^@ts-(\d+)([hd])$/.exec(v);
+    if (ts) return new Date(Date.now() - Number(ts[1]) * (ts[2] === "h" ? 36e5 : 864e5)).toISOString();
+    return v;
+  }
+  if (Array.isArray(v)) return v.map(resolveDemoDates);
+  if (v && typeof v === "object") {
+    return Object.fromEntries(Object.entries(v).map(([k, x]) => [k, resolveDemoDates(x)]));
+  }
+  return v;
+}
+
+async function demoFocusResponse(realFetch: typeof fetch): Promise<Response> {
+  const r = await realFetch(HOME_FIXTURES);
+  const all = (await r.json()) as { focus: unknown };
+  return new Response(JSON.stringify(resolveDemoDates(all.focus)), {
+    status: 200,
+    headers: { "Content-Type": "application/json" },
+  });
+}
+
 function isolateFromLocalGateway(): void {
   const realFetch = window.fetch.bind(window);
   const LOCAL_GATEWAY = /^(https?|wss?):\/\/(localhost|127\.0\.0\.1)(:\d+)?\//i;
@@ -99,6 +130,8 @@ function isolateFromLocalGateway(): void {
       typeof input === "string" ? input : input instanceof URL ? input.href : input.url;
     // Same-origin requests (the demo's own static files, e.g. when previewing
     // a build served from localhost) are allowed through.
+    // Focus peek on the rail reads the same fixtures the Focus (Home) app uses.
+    if (/\/api\/workspace\/focus(\?|$)/.test(url)) return demoFocusResponse(realFetch);
     if (LOCAL_GATEWAY.test(url) && !url.startsWith(`${window.location.origin}/`)) {
       return Promise.reject(new TypeError("Failed to fetch (demo: no local gateway)"));
     }

@@ -22,6 +22,8 @@ import {
   type EffortLevel,
 } from "../constants/modelControls";
 import type { ChatModelSettings } from "./chatModelSettings";
+import { AUTO_MODEL_ID } from "../constants/modelPicker";
+import type { AuthStatus } from "../hooks/useAuthStatus";
 
 export interface ResolvedModelSettings {
   thinking: boolean;
