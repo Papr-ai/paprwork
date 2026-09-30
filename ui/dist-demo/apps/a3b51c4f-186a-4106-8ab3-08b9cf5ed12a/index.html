@@ -1,8 +1,13 @@
-<!DOCTYPE html>
+<!doctype html>
 <html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
-<title>Sales Deck Studio</title>
-<style>html,body{margin:0;height:100%;background:transparent}iframe{border:0;width:100%;height:100%;display:block}</style>
-</head><body>
-<!-- Web demo: the live published build of this Community app on apps.papr.ai -->
-<iframe src="https://apps.papr.ai/85ZIB7mD1V/sales-deck-studio/" title="Sales Deck Studio" allow="clipboard-write"></iframe>
-</body></html>
+<title>Sales Deck Studio — Demo</title><script src="/demo-media/demo-theme.js"></script><link rel="stylesheet" href="demo.css"></head>
+<body>
+<header><div class="brand">Sales Deck Studio<em>Demo workspace</em></div><a href="https://apps.papr.ai/85ZIB7mD1V/sales-deck-studio/" target="_blank" rel="noopener">Install in Papr Work</a></header>
+<div class="shell three"><aside><small>Slides</small><div class="thumbs" id="thumbs" style="margin-top:8px"></div><div class="user"><img src="/demo-media/me.jpg" alt=""><div><b>Maya Chen</b><br><small>Papr · Demo data</small></div></div></aside>
+<main><div class="row" style="margin-bottom:14px"><div class="grow"><small>Deck</small><h1>Papr × Northwind — memory for revenue teams</h1></div><button id="draft">Draft with agent</button><button class="primary" id="present">Present</button></div>
+<div class="slide" id="slide"></div><p class="muted" style="font-size:12px;margin-top:8px">Click the title to edit · ← → to move between slides</p></main>
+<aside class="right"><div class="row"><small class="grow">Buyer scorecard</small><button id="score" style="padding:5px 10px;font-size:12px">Score deck</button></div>
+<div class="card" style="margin:10px 0;text-align:center"><strong style="font-size:34px" id="overall">3.6</strong><span class="muted"> / 5</span><p class="muted" style="font-size:12px" id="when">Last scored yesterday</p></div><div class="grid" id="crit"></div></aside></div>
+<div class="present" id="pres"><div class="slide" id="pslide"></div><div class="ctl"><button id="pprev">←</button><span id="pnum"></span><button id="pnext">→</button><button id="pclose">Esc</button></div></div>
+<div class="toast" id="toast"></div>
+<script src="demo.js"></script></body></html>
