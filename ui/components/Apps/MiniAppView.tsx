@@ -43,6 +43,7 @@ import {
 import { useCloudPreviewChatBridge } from "../../hooks/useCloudPreviewChatBridge";
 import { resolveMiniAppPreviewOrigin } from "../../utils/miniAppPreviewOrigin";
 import {
+  MINI_APP_SHELL_ANNOUNCE_GRACE_MS,
   ShellLoadWatch,
   describeIsolationOutcome,
   isShellAnnouncementFor,
