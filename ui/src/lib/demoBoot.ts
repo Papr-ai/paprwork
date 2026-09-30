@@ -82,6 +82,28 @@ export function installDemoBridges(): void {
   if (!w.paprAPI) w.paprAPI = makeDeepMock(["paprAPI"]);
   // Mark demo mode for any UI code that wants to adapt copy
   w.__PAPR_DEMO__ = true;
+  isolateFromLocalGateway();
+}
+
+/**
+ * The real renderer talks to a desktop gateway on localhost:18789 over plain
+ * fetch() as well as the WebSocket. The demo has no gateway — and a visitor who
+ * has Paprwork installed must never see their own local apps/jobs leak into the
+ * landing-page iframe. Fail those calls exactly like an offline gateway would.
+ */
+function isolateFromLocalGateway(): void {
+  const realFetch = window.fetch.bind(window);
+  const LOCAL_GATEWAY = /^(https?|wss?):\/\/(localhost|127\.0\.0\.1)(:\d+)?\//i;
+  window.fetch = (input: RequestInfo | URL, init?: RequestInit) => {
+    const url =
+      typeof input === "string" ? input : input instanceof URL ? input.href : input.url;
+    // Same-origin requests (the demo's own static files, e.g. when previewing
+    // a build served from localhost) are allowed through.
+    if (LOCAL_GATEWAY.test(url) && !url.startsWith(`${window.location.origin}/`)) {
+      return Promise.reject(new TypeError("Failed to fetch (demo: no local gateway)"));
+    }
+    return realFetch(input, init);
+  };
 }
 
 installDemoBridges();

@@ -16,6 +16,8 @@ import {
 } from "./demoMemory";
 import { MEETINGS_ICON, MEETINGS_DESC } from "./demoMeetingIcon";
 import { X_ACTION_ICON, X_ACTION_DESC } from "./demoXIcon";
+// Snapshot of the live Papr Cloud Community catalog (public_read apps).
+import demoCommunityCatalog from "./demoCommunityCatalog.json";
 
 /** Real community apps embedded in the demo (served from /apps/{id}/). */
 const MEETINGS_APP_ID = "6e432b37-6cf2-45f1-9ad8-ec70a56d4a3c";
@@ -86,6 +88,11 @@ const handlers: Record<string, (payload: any) => unknown> = {
   "agent:get-agent-stats": () => ({ totalRuns: 0, totalTokens: 0 }),
   "agent:get-cost-stats": () => ({ totalCostUsd: 0 }),
   "agent:stop": () => ({}),
+  // Apps → Community: real public catalog snapshot (cards open the live apps.papr.ai build)
+  "bundle:fetch-community-catalog": (p) =>
+    p?.scope === "namespace"
+      ? { ...demoCommunityCatalog, scope: "namespace", entries: [], sources: { opensource: 0, cloud: 0 } }
+      : demoCommunityCatalog,
   // Memory (Wiki Library) — fixture knowledge graph
   "memory:wiki-home": () => wikiHome(),
   "memory:wiki-entity": (p) => wikiEntity(p ?? {}),

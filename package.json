@@ -16,6 +16,7 @@
     "catalog:papr-api": "node --import tsx scripts/generate-papr-api-catalog.mjs",
     "build:electron": "tsc -p tsconfig.electron.json && shx mkdir -p dist/electron && shx cp src/electron/preload.cjs dist/electron/preload.cjs",
     "build:ui": "cd ui && vite build",
+    "build:demo": "cd ui && cross-env VITE_DEMO_MODE=1 VITE_REQUIRE_PAPR_AUTH=false vite build --outDir dist-demo --emptyOutDir",
     "build:ui:commercial": "cd ui && cross-env VITE_REQUIRE_PAPR_AUTH=true vite build",
     "start:commercial": "node scripts/ensure-electron-native.mjs && npm run build:gateway && npm run build:electron && npm run build:ui:commercial && cross-env NODE_ENV=production electron .",
     "gateway:dev": "cross-env ELECTRON_RUN_AS_NODE=1 NODE_ENV=development electron ./node_modules/tsx/dist/cli.mjs watch src/gateway/index.ts",
