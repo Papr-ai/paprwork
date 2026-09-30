@@ -5,12 +5,11 @@
  * Every destination and action from the previous 240px sidebar is still here.
  */
 
-import { useMemo, useCallback, useEffect, useState } from "react";
+import { useMemo, useCallback, useEffect } from "react";
 import { useChat } from "../../hooks/useChat";
 import { useTabs } from "../../hooks/useTabs";
 import type { TabType } from "../../types/tabs";
 import { FocusPeek, openFocusGoal } from "./FocusPeek";
-import { OnboardingCard } from "./OnboardingCard";
 import { ProfileFooter } from "./ProfileFooter";
 import { RailItem } from "./RailItem";
 import { RailPeek } from "./RailPeek";
@@ -22,7 +21,6 @@ import { useAgentIdentity, useAgentName } from "../Agent/agentIdentityStore";
 import { useAgentWork } from "../Agent/agentWork";
 import { AgentNudge } from "../Agent/AgentNudge";
 import { useAgentNudge, type NudgeAction } from "../Agent/useAgentNudge";
-import { shouldShowOnboarding } from "../../utils/onboardingState";
 import { switchToChatTab, switchToFocusTab, switchToMemoryTab } from "../../lib/ensureDefaultChatTab";
 import "./Sidebar.css";
 
@@ -81,11 +79,6 @@ export function Sidebar() {
         new CustomEvent("papr:open-settings", { detail: { tab: "profile" } }),
       );
     }, 60);
-  }, [createTab, switchToTab]);
-
-  const handleOpenGettingStarted = useCallback(() => {
-    const tabId = createTab("getting-started", "default", "Getting Started");
-    switchToTab(tabId);
   }, [createTab, switchToTab]);
 
   const handleNewChat = useCallback(async () => {
@@ -167,13 +160,6 @@ export function Sidebar() {
       if (action.goalId) openFocusGoal(action.goalId);
     }
   });
-  const [showOnboarding, setShowOnboarding] = useState(shouldShowOnboarding);
-
-  useEffect(() => {
-    const sync = () => setShowOnboarding(shouldShowOnboarding());
-    window.addEventListener("papr-onboarding-changed", sync);
-    return () => window.removeEventListener("papr-onboarding-changed", sync);
-  }, []);
 
   const openSearch = () => window.dispatchEvent(new CustomEvent("papr-open-command-palette"));
   const openChatHistory = () => {
@@ -289,21 +275,6 @@ export function Sidebar() {
         icon={<RailIcons.memory />}
       />
 
-      <RailItem
-        label="Getting started"
-        onClick={handleOpenGettingStarted}
-        icon={<RailIcons.start />}
-        badge={showOnboarding}
-        peekFromBottom
-        peek={
-          showOnboarding ? (
-            <OnboardingCard
-              onOpenGettingStarted={handleOpenGettingStarted}
-              onSendMessage={handleOnboardingSendMessage}
-            />
-          ) : undefined
-        }
-      />
       <ProfileFooter onOpenProfile={handleOpenProfile} onOpenSettings={handleOpenSettings} />
     </nav>
   );

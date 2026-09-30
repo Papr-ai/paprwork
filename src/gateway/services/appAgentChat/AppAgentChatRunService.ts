@@ -72,43 +72,26 @@ export class AppAgentChatRunService {
     const { resolveJobProviderModel } = await import(
       "../../utils/resolveJobProviderModel.js"
     );
-    const { getProviderAuth, getApiKeys } = await import("../../utils/keyResolver.js");
-
     const resolved = await resolveJobProviderModel({
       provider: profile.provider,
       model: profile.model,
     });
-    let provider = resolved.provider;
-    let model = resolved.model;
-
-    let apiKey: string | undefined;
-    let authType: "oauth" | "apiKey" | undefined;
-
-    if (provider === "openai" || provider === "openai-codex" || provider === "anthropic") {
-      const authProvider = provider === "openai-codex" ? "openai" : provider;
-      const auth = await getProviderAuth(authProvider);
-      if (!auth) {
-        throw new Error(
-          `No authentication configured for ${authProvider}. Add API key or OAuth in Settings.`,
-        );
-      }
-      apiKey = auth.type === "oauth" ? auth.token : auth.key;
-      authType = auth.type;
-    } else if (provider === "google") {
-      const keys = await getApiKeys(["GOOGLE_API_KEY"]);
-      apiKey = keys.GOOGLE_API_KEY;
-      if (!apiKey) {
-        throw new Error("Missing GOOGLE_API_KEY in Settings.");
-      }
-    } else if (provider === "ollama") {
-      apiKey = "";
-    } else {
-      const keys = await getApiKeys(["OPENAI_API_KEY"]);
-      apiKey = keys.OPENAI_API_KEY;
-      if (!apiKey) {
-        throw new Error("No provider authentication available for app-agent chat.");
-      }
+    const { resolveAgentProviderCredentials, agentProviderAuthErrorMessage } =
+      await import("../../utils/resolveAgentProviderCredentials.js");
+    const creds = await resolveAgentProviderCredentials(
+      resolved.provider,
+      resolved.model,
+    );
+    if (!creds) {
+      throw new Error(
+        agentProviderAuthErrorMessage(resolved.provider, resolved.model),
+      );
     }
+    const provider = resolved.provider;
+    const model = resolved.model;
+    const apiKey = creds.apiKey;
+    const authType = creds.authType;
+    const usePaprProxy = creds.usePaprProxy;
 
     const allowedToolIds = filterEmbeddedAppAgentToolIds(
       input.agentChat.allowedToolIds ?? profile.allowedToolIds,
@@ -120,6 +103,7 @@ export class AppAgentChatRunService {
       model,
       apiKey: apiKey ?? "",
       authType,
+      usePaprProxy,
       systemPrompt,
       // No composer here to choose a cap, so budget against a measured window
       // rather than the model's advertised 1M.

@@ -467,3 +467,23 @@ describe("migrationWritesRows (snapshot must not cover seeding migrations)", () 
     expect(migrationWritesRows("CREATE TABLE t (note TEXT DEFAULT 'insert into x');")).toBe(false);
   });
 });
+
+describe("engine-internal objects in published snapshots", () => {
+  it("never snapshots or applies __turso_internal_* tables", async () => {
+    const { isInternalSchemaObject } = await import(
+      "../src/gateway/services/jobs/schemaSnapshot"
+    );
+    const { isInternalSchemaStatement } = await import(
+      "../src/gateway/services/jobs/schemaSnapshotApply"
+    );
+    const name = "__turso_internal_seq___turso_internal_autoincrement_turso_cdc";
+    expect(isInternalSchemaObject(name)).toBe(true);
+    expect(
+      isInternalSchemaStatement(`CREATE TABLE "${name}"(value INTEGER PRIMARY KEY)`),
+    ).toBe(true);
+    expect(isInternalSchemaStatement('CREATE TABLE "audits" (id TEXT)')).toBe(false);
+    expect(
+      isInternalSchemaStatement("CREATE INDEX idx_a ON audits(owner_session)"),
+    ).toBe(false);
+  });
+});

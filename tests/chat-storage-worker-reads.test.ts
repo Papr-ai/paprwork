@@ -5,6 +5,7 @@ import os from "node:os";
 import path from "node:path";
 import { pathToFileURL } from "node:url";
 import type Database from "better-sqlite3";
+import { readTurnUsageAsync } from "../src/gateway/services/storage/turnMetricsStore.js";
 import { LocalStorageProvider } from "../src/gateway/services/storage/LocalStorageProvider.js";
 import { getPerformanceDiagnostics, resetPerformanceDiagnosticsForTests } from "../src/core/utils/performanceDiagnostics.js";
 
@@ -70,6 +71,24 @@ test("chat reads preserve committed data, pagination, usage totals and diagnosti
     expect((await provider.loadMessagesForLLM("chat")).map(m => m.content)).toEqual(["first", "second"]);
     expect(getPerformanceDiagnostics().recent.some(op => op.name === "chat-db:getTurnUsage")).toBe(true);
   } finally { prepare.mockRestore(); }
+}, 15000);
+
+test("usage reads use chat-scoped plans and concurrent refreshes share database work", async () => {
+  await readTurnUsageAsync(async (sql, params) => {
+    const plan = db.prepare(`EXPLAIN QUERY PLAN ${sql}`).all(...params) as Array<{detail: string}>;
+    expect(plan.some(row => row.detail.includes("chat_id=?"))).toBe(true);
+    expect(plan.some(row => row.detail.includes("(role=?)"))).toBe(false);
+    return db.prepare(sql).all(...params) as Record<string, unknown>[];
+  }, "chat");
+  const internals = provider as unknown as { readRows: (name: string, sql: string, params: unknown[]) => Promise<unknown[]> };
+  const spy = vi.spyOn(internals, "readRows");
+  const reads = await Promise.all(Array.from({length: 30}, () => provider.getTurnUsage("chat")));
+  expect(spy).toHaveBeenCalledTimes(2);
+  expect(reads.every(read => read.totals.promptTokens === 30)).toBe(true);
+  db.prepare("UPDATE messages SET prompt_tokens=40 WHERE id='b'").run();
+  expect((await provider.getTurnUsage("chat")).totals.promptTokens).toBe(50);
+  expect(spy).toHaveBeenCalledTimes(4);
+  spy.mockRestore();
 }, 15000);
 
 test("expensive SQLite scans leave the main event loop responsive and worker errors recover", async () => {

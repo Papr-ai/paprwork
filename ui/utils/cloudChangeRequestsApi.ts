@@ -44,12 +44,29 @@ export interface CloudChangeRequest {
   submitterDisplayName?: string;
   externalUserDisplayName?: string;
   userDisplayName?: string;
+  /** Pending only: "clean" | "conflict" | "unknown" — server GitHub recheck. */
+  mergeState?: "clean" | "conflict" | "unknown" | string | null;
+  /** Set when a newer proposal from the same copy replaced this one. */
+  supersededBy?: string | null;
   [key: string]: unknown;
 }
 
 function parseErrorMessage(body: unknown, status: number): string {
   if (body && typeof body === "object") {
     const record = body as Record<string, unknown>;
+    // Structured merge errors: { detail: { code, message, githubMessage, ... } }
+    const detailObj = record.detail;
+    if (detailObj && typeof detailObj === "object") {
+      const d = detailObj as Record<string, unknown>;
+      const base = typeof d.message === "string" ? d.message : "";
+      const gh =
+        typeof d.githubMessage === "string" && d.githubMessage
+          ? ` (GitHub: ${d.githubMessage})`
+          : "";
+      if (base) {
+        return `${base}${gh}`.slice(0, 400);
+      }
+    }
     const msg =
       (typeof record.error === "string" && record.error) ||
       (typeof record.detail === "string" && record.detail) ||
@@ -288,5 +305,21 @@ export async function resolveCloudChangeRequest(
         detail: { type: "cloud-change-requests:stale" },
       }),
     );
+    // Reject goes through the generic cloud proxy (no server-side follow-up),
+    // so nudge the contributor's bar here too when their copy is on this machine.
+    const installedAppId =
+      body && typeof body === "object"
+        ? (body as Record<string, unknown>).installedAppId
+        : undefined;
+    if (typeof installedAppId === "string" && installedAppId.trim()) {
+      window.dispatchEvent(
+        new CustomEvent("gateway-broadcast", {
+          detail: {
+            type: "cloud-sync:items-stale",
+            data: { appId: installedAppId.trim() },
+          },
+        }),
+      );
+    }
   }
 }

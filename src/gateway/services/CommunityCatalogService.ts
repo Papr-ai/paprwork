@@ -419,6 +419,8 @@ async function fetchRemoteCloudCatalog(
   try {
     const response = await cloudApiFetch(path, {
       skipActingUser: options?.globalCommunity === true,
+      // Catalog is a listing; fail fast instead of hanging the UI/agent 60s.
+      timeoutMs: 15_000,
     });
     if (!response.ok) {
       if (response.status !== 404) {
@@ -1102,10 +1104,16 @@ export class CommunityCatalogService {
       );
     }
 
-    namespaceCatalogCache.set(namespaceId, {
-      fetchedAt: Date.now(),
-      catalog,
-    });
+    // Never cache an empty listing: it is usually a failed/slow remote fetch,
+    // and caching it hides every team app for the full TTL.
+    if (catalog.entries.length > 0) {
+      namespaceCatalogCache.set(namespaceId, {
+        fetchedAt: Date.now(),
+        catalog,
+      });
+    } else {
+      console.warn(`[CommunityCatalog] empty team catalog for ${namespaceId}; not cached`);
+    }
     return catalog;
   }
 

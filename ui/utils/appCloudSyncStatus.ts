@@ -1658,7 +1658,27 @@ export function resolvePublishBarStatus(input: PublishBarStatusInput): {
  * Publish here, and Propose greys out when nothing differs from the
  * publisher's last synced code.
  */
-export type CollaboratorLatestProposalStatus = "pending" | "approved" | "rejected";
+export type CollaboratorLatestProposalStatus =
+  | "pending"
+  | "approved"
+  | "rejected"
+  /** Pending, but it overlaps changes the owner accepted since: update + re-propose. */
+  | "needs_update";
+
+/** Newest sent proposal → bar status. Pending + merge conflict = needs update. */
+export function collaboratorProposalStatusFromSent(
+  newest: { status?: string; mergeState?: string | null } | undefined,
+): CollaboratorLatestProposalStatus | null {
+  if (!newest) return null;
+  if (newest.status === "pending" && newest.mergeState === "conflict") {
+    return "needs_update";
+  }
+  return newest.status === "pending" ||
+    newest.status === "approved" ||
+    newest.status === "rejected"
+    ? newest.status
+    : null;
+}
 
 export function resolveCollaboratorBar(input: {
   /** true/false from the local-edits check; null = unknown (keep Propose enabled). */
@@ -1695,6 +1715,10 @@ export function resolveCollaboratorBar(input: {
     tone: PublishBarChipTone;
     state: WebSyncVisualState;
   } | null => {
+    // Needs update outranks everything: the owner can't accept it as is.
+    if (input.latestProposalStatus === "needs_update") {
+      return { label: "Needs update", tone: "warn", state: "warn" };
+    }
     if (!allProposed || !input.latestProposalStatus) {
       return null;
     }
@@ -1712,7 +1736,10 @@ export function resolveCollaboratorBar(input: {
     }
   })();
 
-  const chip = publisherAhead && input.latestProposalStatus !== "approved"
+  const needsUpdate = input.latestProposalStatus === "needs_update";
+  const chip = needsUpdate && proposalChip
+    ? proposalChip
+    : publisherAhead && input.latestProposalStatus !== "approved"
     ? { label: "Publisher has updates", tone: "info" as const, state: "updates_available" as const }
     : proposalChip ??
       (publisherAhead
@@ -1722,7 +1749,11 @@ export function resolveCollaboratorBar(input: {
           : hasLocalEdits
             ? { label: "Edits not proposed", tone: "warn" as const, state: "warn" as const }
             : { label: "In sync with publisher", tone: "ok" as const, state: "synced" as const });
-  const chipAction = publisherAhead
+  // Needs update: one click gets the publisher's latest, then reopens Propose
+  // (the new proposal replaces the stale one on the server).
+  const chipAction = needsUpdate
+    ? { kind: "upstream" as const, glyph: "down" as const, verb: "Update & re-propose" }
+    : publisherAhead
     ? { kind: "upstream" as const, glyph: "down" as const, verb: "Update" }
     : hasLocalEdits && !allProposed
       ? { kind: "propose" as const, glyph: "up" as const, verb: "Propose" }

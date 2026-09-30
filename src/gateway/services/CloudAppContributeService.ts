@@ -24,6 +24,7 @@ import {
 import { resolveMigrationRootFromDbPath } from "./jobs/databaseMigrations.js";
 import { applyIdRemapsToDirectory } from "../utils/applyIdRemaps.js";
 import { mergeContributeDataIndexesIntoRepo } from "./cloudSync/contributeDataIndexMerge.js";
+import { stripProposalExcludedAppFiles } from "./cloudSync/contributeProposalPaths.js";
 import {
   appSourceRepoRelativeDir,
   linkedJobRepoRelativeDir,
@@ -273,6 +274,9 @@ async function buildContributeStaging(
     tempRoot,
     "app-staging",
   );
+  // Build outputs + per-copy metadata stay at the owner's version on the
+  // branch; the owner's publish regenerates them after the merge.
+  stripProposalExcludedAppFiles(appFiles);
   if (appFiles.size > 0) {
     trees.push({
       repoRelativeDir: appRepoDir,
@@ -325,6 +329,14 @@ async function pushContributeBranch(
   const env = ephemeralGitEnv();
   const cloneUrl = authCloneUrl(prepare.cloneUrl, prepare.token);
 
+  const t0 = Date.now();
+  let tPrev = t0;
+  const timings: Record<string, number> = {};
+  const mark = (step: string) => {
+    const now = Date.now();
+    timings[step] = now - tPrev;
+    tPrev = now;
+  };
   try {
     const trees = await buildContributeStaging(
       forkAppId,
@@ -335,18 +347,21 @@ async function pushContributeBranch(
     if (trees.length === 0) {
       throw new Error("No app or linked job files to contribute");
     }
+    mark("stage");
 
     await runCommand(
       "git",
       ["clone", "--filter=blob:none", cloneUrl, repoDir],
       { env, timeoutMs: 180_000 },
     );
+    mark("clone");
 
     await runCommand(
       "git",
       ["checkout", "-b", prepare.branch, "origin/main"],
       { cwd: repoDir, env },
     );
+    mark("checkout");
 
     for (const tree of trees) {
       await writeStagedTree(repoDir, tree);
@@ -382,11 +397,17 @@ async function pushContributeBranch(
 
     const commitMsg = `contrib: ${prepare.branch}\n\nContribute-back from ${forkAppId}`;
     await runCommand("git", ["commit", "-m", commitMsg], { cwd: repoDir, env });
+    mark("write+commit");
 
     await runCommand(
       "git",
       ["push", "-u", "origin", prepare.branch],
       { cwd: repoDir, env, timeoutMs: 180_000 },
+    );
+    mark("push");
+    console.info(
+      `[CloudContribute] push ${prepare.branch} total=${Date.now() - t0}ms`,
+      timings,
     );
 
     const headSha = (
@@ -465,6 +486,21 @@ export class CloudAppContributeService {
       prNumber?: number;
       status: string;
     };
+    // Record what was sent so the share bar stops showing "Edits not proposed".
+    // Done here (not in the HTTP route) so the agent tool path does it too.
+    try {
+      const { getCloudAppTrackSyncService } = await import(
+        "./CloudAppTrackSyncService.js"
+      );
+      await getCloudAppTrackSyncService().recordProposed(input.installedAppId);
+      // Tell the open share bar to re-read (chip -> "Waiting for review").
+      const { notifyCloudSyncItemsStale } = await import(
+        "./cloudSync/cloudSyncBroadcast.js"
+      );
+      notifyCloudSyncItemsStale(input.installedAppId);
+    } catch {
+      // Proposal is already submitted; never fail it over bookkeeping.
+    }
     return {
       id: submitted.id,
       prUrl: submitted.prUrl,

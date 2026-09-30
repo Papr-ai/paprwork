@@ -53,8 +53,6 @@ import {
 } from "./utils/openAppAgentMainChat";
 import "./styles/liquid-glass.css";
 import "./App.css";
-import { shouldShowOnboarding } from "./utils/onboardingState";
-import { ensureGettingStartedTab } from "./lib/ensureWorkspaceLandingTab";
 import {
   attachWorkspaceSwitchBroadcastListener,
   isWorkspaceSwitchReloading,
@@ -230,7 +228,6 @@ export function App() {
     }
   }, []);
   
-  // Create getting-started tab on first run
   useEffect(() => {
     // Add platform class to body for platform-specific CSS
     const platform = navigator.platform.toLowerCase();
@@ -241,23 +238,6 @@ export function App() {
     } else {
       document.body.classList.add('platform-linux');
     }
-    
-    const checkOnboarding = () => {
-      if (!shouldShowOnboarding()) return;
-
-      const { tabs: currentTabs } = useTabStore.getState();
-      const existingTab = currentTabs.find((t) => t.type === "getting-started");
-      if (!existingTab) {
-        ensureGettingStartedTab();
-      }
-    };
-
-    checkOnboarding();
-
-    // Listen for changes from OnboardingView/OnboardingCard
-    window.addEventListener("papr-onboarding-changed", checkOnboarding);
-    return () =>
-      window.removeEventListener("papr-onboarding-changed", checkOnboarding);
   }, []);
 
   // Reload chats/jobs when Papr org or namespace workspace changes

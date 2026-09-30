@@ -24,7 +24,6 @@ import { AgentsView } from "../Agents/AgentsViewCards";
 import { ViewsView } from "../Views/ViewsView";
 import { TableView } from "../Views/TableView";
 import { ChatGPTConvHistoryView } from "../ChatGPT/ChatGPTConvHistoryView";
-import { OnboardingView } from "../Onboarding/OnboardingView";
 import { MemoryView } from "../Memory/MemoryView";
 import { FocusView } from "../Focus/FocusView";
 import { PlatformBrowserTab } from "../Platform/PlatformBrowserTab";
@@ -400,8 +399,6 @@ export function ContentArea() {
       case "app": {
         return null;
       }
-      case "getting-started":
-        return <OnboardingView />;
       case "home":
         return <HomeRedirect />;
       case "jobs":

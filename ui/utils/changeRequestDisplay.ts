@@ -66,7 +66,7 @@ export function listUploadingIncomingChangeRequests(
 
 export function isResolvedChangeRequest(req: CloudChangeRequest): boolean {
   const status = typeof req.status === "string" ? req.status.trim() : "";
-  return status === "approved" || status === "rejected";
+  return status === "approved" || status === "rejected" || status === "superseded";
 }
 
 export function resolvedChangeRequestSortKey(req: CloudChangeRequest): number {
@@ -89,6 +89,15 @@ export function listResolvedChangeRequests(
     .sort((a, b) => resolvedChangeRequestSortKey(b) - resolvedChangeRequestSortKey(a));
 }
 
+/**
+ * Pending proposal that no longer merges: it was based on an older version
+ * and overlaps edits accepted since. Accept would fail, so the owner sees
+ * "Needs update" and the options that can actually work.
+ */
+export function changeRequestNeedsUpdate(req: CloudChangeRequest): boolean {
+  return req.status === "pending" && req.mergeState === "conflict";
+}
+
 export function changeRequestStatusLabel(req: CloudChangeRequest): string {
   const status = typeof req.status === "string" ? req.status.trim() : "";
   if (status === "approved") {
@@ -96,6 +105,9 @@ export function changeRequestStatusLabel(req: CloudChangeRequest): string {
   }
   if (status === "rejected") {
     return "Declined";
+  }
+  if (status === "superseded") {
+    return "Replaced by a newer proposal";
   }
   return status || "Unknown";
 }

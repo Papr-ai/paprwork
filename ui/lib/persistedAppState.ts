@@ -282,7 +282,14 @@ export function applyPersistedAppStateToTabStore(
   snapshot: PersistedAppStateSnapshot,
   options?: ApplyPersistedAppStateOptions,
 ): void {
+  // "getting-started" tabs were retired with the in-workspace onboarding;
+  // saved tab bars may still carry one.
   let restoredTabs = snapshot.tabs;
+  if (restoredTabs.some((tab) => (tab.type as string) === "getting-started")) {
+    restoredTabs = restoredTabs.filter(
+      (tab) => (tab.type as string) !== "getting-started",
+    );
+  }
 
   if (
     options?.validChatIds ||

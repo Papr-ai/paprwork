@@ -227,7 +227,17 @@ export class CloudAppTrackSyncService {
     );
 
     try {
-      const upstreamFiles = await collectLocalFiles(upstreamDir);
+      // Install rewrote the publisher's app id to ours; do the same to incoming
+      // files so updates compare like-for-like and don't reintroduce their id.
+      const publisherAppId = prepare.source?.appId;
+      const upstreamFiles = new Map(
+        [...(await collectLocalFiles(upstreamDir))].map(([rel, content]) => [
+          rel,
+          publisherAppId && publisherAppId !== appId
+            ? content.split(publisherAppId).join(appId)
+            : content,
+        ]),
+      );
       const localFiles = await collectLocalFiles(path.join(this.appsDir, appId));
       const snapshot = lineage.syncSnapshot ?? {};
 

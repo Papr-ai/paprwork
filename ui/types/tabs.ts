@@ -20,7 +20,6 @@ export type TabType =
   | "focus"
   | "settings"
   | "platform"
-  | "getting-started"
   | "chatgpt-conv-history";
 
 export type DisplayMode = "standalone" | "parent" | "child";

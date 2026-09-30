@@ -9,8 +9,6 @@ import { getAgentService } from "./AgentService.js";
 import { getJobsService } from "./JobsService.js";
 import { broadcast } from "../websocket/index.js";
 import type { AgentConfigInternal, Provider } from "../../core/types/agents.js";
-import { getProviderAuth } from "../utils/keyResolver.js";
-import { getApiKeys } from "../utils/keyResolver.js";
 import type { JobRecord } from "./jobs/types.js";
 import { DEFAULT_SESSION_CONTEXT_LIMIT } from "./agent/contextBudget.js";
 import { resolveDelegationResultExcerptChars } from "../../core/subagents/codebaseExplorer.js";
@@ -86,36 +84,12 @@ async function resolveConfigForChat(
 
   const provider: Provider = "anthropic";
   const model = "claude-sonnet-5-5";
-  const auth = await getProviderAuth("anthropic");
-  let apiKey: string;
-  let authType: "oauth" | "apiKey" = "apiKey";
-  if (auth) {
-    apiKey = auth.type === "oauth" ? auth.token : auth.key;
-    authType = auth.type;
-  } else {
-    const keys = await getApiKeys(["ANTHROPIC_API_KEY"]);
-    apiKey = keys.ANTHROPIC_API_KEY || "";
-  }
-
-  if (!apiKey) {
-    const { resolvePaprProxyAuth } = await import("../utils/keyResolver.js");
-    const paprProxy = await resolvePaprProxyAuth();
-    if (paprProxy) {
-      console.log(
-        "[SubAgentResponseTrigger] No direct API key — falling back to Papr AI proxy",
-      );
-      return {
-        provider,
-        model,
-        apiKey: paprProxy.apiKey,
-        authType: "apiKey",
-        usePaprProxy: paprProxy.usePaprProxy,
-        systemPrompt: "",
-        contextLimit: DEFAULT_SESSION_CONTEXT_LIMIT,
-      };
-    }
+  const { resolveAgentProviderCredentials } =
+    await import("../utils/resolveAgentProviderCredentials.js");
+  const creds = await resolveAgentProviderCredentials(provider, model);
+  if (!creds) {
     console.warn(
-      "[SubAgentResponseTrigger] No API key for default provider, skipping",
+      "[SubAgentResponseTrigger] No API key or Papr proxy for default provider, skipping",
     );
     return null;
   }
@@ -123,8 +97,9 @@ async function resolveConfigForChat(
   return {
     provider,
     model,
-    apiKey,
-    authType,
+    apiKey: creds.apiKey,
+    authType: creds.authType,
+    usePaprProxy: creds.usePaprProxy,
     systemPrompt: "",
     // Sub-agent replies have no composer to choose a cap; without this they
     // budget against the model's advertised 1M window.

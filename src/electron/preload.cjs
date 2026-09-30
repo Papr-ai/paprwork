@@ -113,8 +113,37 @@ contextBridge.exposeInMainWorld("electronAPI", {
     const loginErrorListenerMap = new WeakMap();
     const setupRequiredListenerMap = new WeakMap();
     const logoutSuccessListenerMap = new WeakMap();
-    const namespaceChangedListenerMap = new WeakMap();
-    const organizationChangedListenerMap = new WeakMap();
+    // One shared ipcRenderer listener per channel, fanned out to a Set of
+    // subscribers. Registering per-subscriber ipcRenderer listeners made the
+    // count scale with mounted components (one per keep-alive app tab) and
+    // tripped MaxListenersExceededWarning; it also re-dispatched the DOM event
+    // once per subscriber. Now: one IPC listener, one DOM event per message.
+    const createFanout = (channel, domEventName) => {
+      const subscribers = new Set();
+      ipcRenderer.on(channel, (_event, data) => {
+        for (const cb of Array.from(subscribers)) {
+          try {
+            cb(data);
+          } catch (err) {
+            console.error(`[preload] ${channel} subscriber threw:`, err);
+          }
+        }
+        window.dispatchEvent(new CustomEvent(domEventName, { detail: data }));
+      });
+      return {
+        subscribe: (callback) => {
+          subscribers.add(callback);
+          return () => {
+            subscribers.delete(callback);
+          };
+        },
+        unsubscribe: (callback) => {
+          subscribers.delete(callback);
+        },
+      };
+    };
+    const namespaceChangedFanout = createFanout("papr:namespace-changed", "papr-namespace-changed");
+    const organizationChangedFanout = createFanout("papr:organization-changed", "papr-organization-changed");
     const workspaceSwitchStartingListenerMap = new WeakMap();
     const workspaceCacheUpdatedListenerMap = new WeakMap();
 
@@ -197,39 +226,15 @@ contextBridge.exposeInMainWorld("electronAPI", {
       listNamespaces: (options) => ipcRenderer.invoke("papr:list-namespaces", options),
       listAllNamespaces: (options) => ipcRenderer.invoke("papr:list-all-namespaces", options),
       switchNamespace: (namespaceId, namespaceName, organizationId) => ipcRenderer.invoke("papr:switch-namespace", namespaceId, namespaceName, organizationId),
-      onNamespaceChanged: (callback) => {
-        const wrapper = (_event, data) => {
-          callback(data);
-          window.dispatchEvent(new CustomEvent('papr-namespace-changed', { detail: data }));
-        };
-        namespaceChangedListenerMap.set(callback, wrapper);
-        ipcRenderer.on("papr:namespace-changed", wrapper);
-      },
-      removeNamespaceChangedListener: (callback) => {
-        const wrapper = namespaceChangedListenerMap.get(callback);
-        if (wrapper) {
-          ipcRenderer.removeListener("papr:namespace-changed", wrapper);
-          namespaceChangedListenerMap.delete(callback);
-        }
-      },
-      
+      // Returns a disposer. removeNamespaceChangedListener kept for compat.
+      onNamespaceChanged: (callback) => namespaceChangedFanout.subscribe(callback),
+      removeNamespaceChangedListener: (callback) => namespaceChangedFanout.unsubscribe(callback),
+
       listOrganizations: () => ipcRenderer.invoke("papr:list-organizations"),
       switchOrganization: (organizationId, organizationName, options) => ipcRenderer.invoke("papr:switch-organization", organizationId, organizationName, options),
-      onOrganizationChanged: (callback) => {
-        const wrapper = (_event, data) => {
-          callback(data);
-          window.dispatchEvent(new CustomEvent('papr-organization-changed', { detail: data }));
-        };
-        organizationChangedListenerMap.set(callback, wrapper);
-        ipcRenderer.on("papr:organization-changed", wrapper);
-      },
-      removeOrganizationChangedListener: (callback) => {
-        const wrapper = organizationChangedListenerMap.get(callback);
-        if (wrapper) {
-          ipcRenderer.removeListener("papr:organization-changed", wrapper);
-          organizationChangedListenerMap.delete(callback);
-        }
-      },
+      // Returns a disposer. removeOrganizationChangedListener kept for compat.
+      onOrganizationChanged: (callback) => organizationChangedFanout.subscribe(callback),
+      removeOrganizationChangedListener: (callback) => organizationChangedFanout.unsubscribe(callback),
 
       onWorkspaceSwitchStarting: (callback) => {
         const wrapper = (_event, data) => {

@@ -81,6 +81,9 @@ export function isInternalSchemaObject(name: string): boolean {
     lower.startsWith("sqlite_") ||
     lower.startsWith("_papr_") ||
     lower.startsWith("turso_") ||
+    // Engine-private tables (e.g. __turso_internal_seq_… from AUTOINCREMENT +
+    // CDC). Publishing one into a snapshot made every fresh install fail.
+    lower.startsWith("__turso") ||
     lower.startsWith("libsql_") ||
     lower.startsWith("_litestream") ||
     lower === "schema_migrations"

@@ -1,27 +1,11 @@
 /**
- * Default landing tab when a workspace has no restored tabs (empty org / first login).
- * Prefer onboarding for new users; otherwise open Profile in Settings.
+ * Default landing tab when a workspace has no restored tabs (empty org / first
+ * login). Onboarding now happens in the gated AuthFlow before the workspace
+ * exists, so there is no in-workspace "Getting Started" tab — land on a chat.
  */
 
 import { useTabStore } from "../stores/tabStore";
-import { shouldShowOnboarding } from "../utils/onboardingState";
-import { ensureSettingsTab } from "./ensureSettingsTab";
-
-export function ensureGettingStartedTab(): string {
-  const { tabs, createTab, switchToTab } = useTabStore.getState();
-  const existing = tabs.find((tab) => tab.type === "getting-started");
-  if (existing) {
-    switchToTab(existing.id);
-    return existing.id;
-  }
-  const tabId = createTab(
-    "getting-started",
-    "getting-started",
-    "Getting Started",
-  );
-  switchToTab(tabId);
-  return tabId;
-}
+import { ensureDefaultChatTab } from "./ensureDefaultChatTab";
 
 export function needsWorkspaceLandingTab(): boolean {
   const { tabs, activeTabId, getTab } = useTabStore.getState();
@@ -31,7 +15,7 @@ export function needsWorkspaceLandingTab(): boolean {
   return tabs.length === 0;
 }
 
-/** Open onboarding or Profile when the workspace tab bar is empty. */
+/** Open a chat when the workspace tab bar is empty. */
 export function ensureWorkspaceLandingTab(): string {
   const { tabs, activeTabId, getTab, switchToTab } = useTabStore.getState();
 
@@ -45,9 +29,5 @@ export function ensureWorkspaceLandingTab(): string {
     return fallback.id;
   }
 
-  if (shouldShowOnboarding()) {
-    return ensureGettingStartedTab();
-  }
-
-  return ensureSettingsTab({ section: "profile" });
+  return ensureDefaultChatTab();
 }

@@ -81,12 +81,22 @@ describe("cloudInstallDbPolicy", () => {
     ).not.toThrow();
   });
 
-  it("rejects track without team visibility", () => {
+  it("asks for visibility (not 'not team-shared') when it is missing", () => {
     expect(() =>
       assertTrackAllowedForCatalog({
         mode: "track",
         catalogScope: "namespace",
       }),
-    ).toThrow(/requires a team-shared app/);
+    ).toThrow(/requires `visibility`/);
+  });
+
+  it("names the actual visibility when it is not team", () => {
+    expect(() =>
+      assertTrackAllowedForCatalog({
+        mode: "track",
+        catalogScope: "namespace",
+        visibility: "public_read",
+      }),
+    ).toThrow(/visibility is "public_read"/);
   });
 });

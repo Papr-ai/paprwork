@@ -264,6 +264,58 @@ export function buildPrReviewAgentPrompt(input: {
   return parts.join(" ");
 }
 
+/**
+ * Owner: a proposal overlaps edits accepted since it was made (e.g. both
+ * changed the same heading). Ask the agent for a merged version the owner
+ * approves before anything is published.
+ */
+export function buildProposalConflictMergeAgentPrompt(input: {
+  sourceAppId: string;
+  requestId: string;
+  title: string;
+  description?: string;
+  stagedPaths?: string[];
+}): string {
+  const parts = [
+    `A proposal for my app (${input.sourceAppId}) conflicts with changes I accepted since it was made. Help me combine them.`,
+    `Proposal: "${input.title}" (change request id ${input.requestId}).`,
+  ];
+  if (input.description?.trim()) {
+    parts.push(`Contributor summary: ${input.description.trim()}.`);
+  }
+  if (input.stagedPaths && input.stagedPaths.length > 0) {
+    parts.push(`Files in proposal: ${input.stagedPaths.slice(0, 20).join(", ")}.`);
+  }
+  parts.push(
+    "Steps: 1) get_cloud_app_pr_review({ requestId }) for what the contributor changed; read_cloud_app_pr_file for their full versions and read_file on my local app for mine.",
+    "2) For each overlapping spot, write a merged version that keeps the intent of both, and show me a short before/after per file. Do not write anything yet.",
+    "3) Only after I confirm: write the merged files into my app, publish with push_cloud_sync({ appId }), then resolve_cloud_app_pr({ requestId, action: \"approve\", mergedManually: true }).",
+    "Ignore build outputs (dist/, backend/bundle.json, __papr__/, metadata.json) — they are regenerated on publish. If the two changes can't sensibly be combined, say so and suggest declining.",
+  );
+  return parts.join(" ");
+}
+
+/**
+ * Contributor: the owner can't accept my proposal as is. Bring in the
+ * publisher's latest, resolve any overlap with my edits, then propose again
+ * (the new proposal replaces the old one automatically).
+ */
+export function buildContributorProposalUpdateAgentPrompt(input: {
+  appId: string;
+  sourceSlug: string;
+  conflictFiles: string[];
+}): string {
+  return [
+    `My proposal to ${input.sourceSlug} is out of date: they accepted other changes that overlap mine.`,
+    `My copy's app id: ${input.appId}.`,
+    input.conflictFiles.length > 0
+      ? `Updating from the publisher kept my versions of: ${input.conflictFiles.join(", ")}.`
+      : "",
+    "Use pull_publisher_updates({ appId, checkOnly: true }) to confirm, then compare my files with the publisher's (inspect_cloud_repo on their app, read_file on mine).",
+    "Merge each conflicting file so their accepted change and my edit both survive, show me the result, and after I confirm write it locally and send a new proposal with submit_cloud_app_pr — it replaces my old one.",
+  ].filter(Boolean).join(" ");
+}
+
 /** Held Get updates: same files edited locally and in the incoming update. */
 export function buildUpdateConflictAgentPrompt(input: {
   appId?: string;

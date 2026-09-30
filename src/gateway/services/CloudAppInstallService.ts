@@ -448,12 +448,10 @@ export class CloudAppInstallService {
           ? {
               lastSyncedAt: new Date().toISOString(),
               trackAutoPull: true,
-              syncSnapshot: Object.fromEntries(
-                files.map((file) => [
-                  file.filename.replace(/\\/g, "/"),
-                  createHash("sha256").update(file.content, "utf8").digest("hex"),
-                ]),
-              ),
+              // Hash what is on disk (after publisher→local ID remap), not the
+              // raw upstream files; otherwise remapped files look like local
+              // edits and every "Update from publisher" reports them as conflicts.
+              syncSnapshot: await snapshotInstalledFiles(appDir, files),
             }
           : {}),
       };
@@ -539,4 +537,19 @@ export function getCloudAppInstallService(): CloudAppInstallService {
     instance = new CloudAppInstallService();
   }
   return instance;
+}
+
+async function snapshotInstalledFiles(
+  appDir: string,
+  files: ReadonlyArray<{ filename: string; content: string }>,
+): Promise<Record<string, string>> {
+  const out: Record<string, string> = {};
+  for (const file of files) {
+    const rel = file.filename.replace(/\\/g, "/");
+    const content = await fs
+      .readFile(path.join(appDir, rel), "utf8")
+      .catch(() => file.content);
+    out[rel] = createHash("sha256").update(content, "utf8").digest("hex");
+  }
+  return out;
 }

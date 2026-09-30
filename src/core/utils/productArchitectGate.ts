@@ -1,5 +1,8 @@
 import { MULTI_USER_ACL_CONTRACT } from "../constants/multiUserAclDirective.js";
-import { readTriageTierFromToolCall } from "./architectTriage.js";
+import {
+  getRecordedArchitectTriageTier,
+  readTriageTierFromToolCall,
+} from "./architectTriage.js";
 
 /** Stable id for the built-in Product Architect sub-agent profile */
 export const PRODUCT_ARCHITECT_ID = "product-architect";
@@ -211,6 +214,9 @@ export async function hasCompletedProductArchitectInChat(
 
 /** True when architect_triage returned tier "lite" in this chat (latest triage wins). */
 export async function hasLiteArchitectTriageInChat(chatId: string): Promise<boolean> {
+  // Live record is fresher than persisted messages (checkpoints are debounced).
+  const live = getRecordedArchitectTriageTier(chatId);
+  if (live) return live === "lite";
   const { getAgentService } = await import(
     "../../gateway/services/AgentService.js"
   );

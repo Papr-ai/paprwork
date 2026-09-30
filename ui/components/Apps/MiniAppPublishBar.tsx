@@ -25,7 +25,10 @@ import {
   pullTrackUpstream,
 } from "../../utils/cloudTrackSyncApi";
 import { listSentProposals } from "../../utils/cloudContributeApi";
-import type { CollaboratorLatestProposalStatus } from "../../utils/appCloudSyncStatus";
+import {
+  collaboratorProposalStatusFromSent,
+  type CollaboratorLatestProposalStatus,
+} from "../../utils/appCloudSyncStatus";
 import {
   resolveEffectiveAutoUpload,
 } from "../../utils/appUploadMode";
@@ -71,7 +74,10 @@ import {
   buildGenericSyncAgentPrompt,
   webSyncPushButtonLabel,
 } from "./WebSyncPopover";
-import { openCloudSyncAgentChat } from "../../utils/openCloudSyncAgentChat";
+import {
+  buildContributorProposalUpdateAgentPrompt,
+  openCloudSyncAgentChat,
+} from "../../utils/openCloudSyncAgentChat";
 import type { AppWorkspaceMode, AppWorkspacePanel } from "../../hooks/useAppWorkspace";
 import {
   CloudCompatibilityBadge,
@@ -1026,6 +1032,19 @@ export function MiniAppPublishBar({
     };
   }, [copyToWorkspaceOpen]);
   const [collabEditsTick, setCollabEditsTick] = useState(0);
+  // A proposal sent from anywhere (agent tool, another tab) re-reads the chip.
+  useEffect(() => {
+    const onBroadcast = (event: Event) => {
+      const d = (event as CustomEvent).detail as
+        | { type?: string; data?: { appId?: string } }
+        | undefined;
+      if (d?.type !== "cloud-sync:items-stale") return;
+      if (d.data?.appId && d.data.appId !== appId) return;
+      setCollabEditsTick((n) => n + 1);
+    };
+    window.addEventListener("gateway-broadcast", onBroadcast);
+    return () => window.removeEventListener("gateway-broadcast", onBroadcast);
+  }, [appId]);
   useEffect(() => {
     if (!isTrackCollaborator) return;
     let cancelled = false;
@@ -1050,12 +1069,9 @@ export function MiniAppPublishBar({
     let cancelled = false;
     void listSentProposals(appId).then((rows) => {
       if (cancelled) return;
-      const newest = rows[0]?.status;
-      const mapped: CollaboratorLatestProposalStatus | null =
-        newest === "pending" || newest === "approved" || newest === "rejected"
-          ? newest
-          : null;
-      setLatestProposalStatus(mapped);
+      // Superseded rows are history; the newest live proposal drives the chip.
+      const newest = rows.find((r) => r.status !== "superseded");
+      setLatestProposalStatus(collaboratorProposalStatusFromSent(newest));
     });
     return () => {
       cancelled = true;
@@ -1640,6 +1656,42 @@ export function MiniAppPublishBar({
     openPropose();
   };
 
+  /** Stale proposal: get the publisher's latest, then propose again (the new
+   *  proposal replaces the old one). Overlapping files go to the agent. */
+  const handleUpdateAndRepropose = async () => {
+    setUpstreamPulling(true);
+    setUpstreamNotice(null);
+    try {
+      const result = await pullTrackUpstream(appId);
+      onTrackPullComplete?.();
+      await webSyncRefresh(true);
+      if (result.conflictFiles.length > 0) {
+        setUpstreamNotice({
+          tone: "warn",
+          message: `Your edits overlap theirs in ${result.conflictFiles.join(", ")} — opened the agent to combine them.`,
+        });
+        openCloudSyncAgentChat(
+          buildContributorProposalUpdateAgentPrompt({
+            appId,
+            sourceSlug: cloudLineage?.sourceSlug ?? "the publisher",
+            conflictFiles: result.conflictFiles,
+          }),
+        );
+        return;
+      }
+      setUpstreamNotice({
+        tone: "ok",
+        message: "Up to date with the publisher — send your proposal again.",
+      });
+      openPropose();
+    } catch (err) {
+      setUpstreamNotice({ tone: "bad", message: (err as Error).message.slice(0, 120) });
+    } finally {
+      setUpstreamPulling(false);
+      setCollabEditsTick((n) => n + 1);
+    }
+  };
+
   const handleChipAction = () => {
     if (!publishBarChipAction) return;
     if (publishBarChipAction.kind === "updates") {
@@ -1761,7 +1813,9 @@ export function MiniAppPublishBar({
                             glyph: collabBar.chipAction.glyph,
                             verb: collabBar.chipAction.verb,
                             onRun: () =>
-                              collabBar.chipAction?.kind === "upstream"
+                              latestProposalStatus === "needs_update"
+                                ? void handleUpdateAndRepropose()
+                                : collabBar.chipAction?.kind === "upstream"
                                 ? void handleUpstreamPull()
                                 : openPropose(),
                           }

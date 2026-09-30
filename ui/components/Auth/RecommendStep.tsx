@@ -29,6 +29,7 @@ import { AuthProgressDots } from "./AuthProgressDots";
 import { openChatWithPrompt } from "../../utils/openChatWithPrompt";
 import { openOnboardingInstall } from "../../utils/openOnboardingInstall";
 import { isGatewayReady, waitForGatewayReady } from "../../utils/waitForGatewayReady";
+import { runAfterWorkspaceMount } from "../../utils/runAfterWorkspaceMount";
 import type { CommunityCatalogEntry } from "../../../src/core/types/communityCatalog";
 import type { CloudInstallResponse } from "../../utils/cloudCatalogInstall";
 import "../Onboarding/OnboardingView.css";
@@ -74,10 +75,12 @@ export function RecommendStep({ onComplete, previewMode = false, onBack }: Recom
         await waitForGatewayReady();
         setPreparing(false);
       }
+      // Arm before release — the restore that follows release would otherwise
+      // wipe whatever we open (see runAfterWorkspaceMount).
+      runAfterWorkspaceMount(then, { immediate: previewMode });
       onComplete();
-      window.setTimeout(then, 400);
     },
-    [onComplete],
+    [onComplete, previewMode],
   );
 
   useEffect(() => {
@@ -154,6 +157,15 @@ export function RecommendStep({ onComplete, previewMode = false, onBack }: Recom
     [advancePhase, releaseWhenReady],
   );
 
+  /** Install failed in a way Pen can fix — release, then hand off in chat. */
+  const handleInstallHandoff = useCallback(
+    (message: string) => {
+      advancePhase({ intent: "explore", firstChatSent: true });
+      void releaseWhenReady(() => openChatWithPrompt(message));
+    },
+    [advancePhase, releaseWhenReady],
+  );
+
   const handleSkip = useCallback(() => {
     trackEvent("paprwork_onboarding_skipped", {
       phase: "auth_recommend",
@@ -209,6 +221,7 @@ export function RecommendStep({ onComplete, previewMode = false, onBack }: Recom
         <RecommendedApps
           onInstalled={handleInstalled}
           onFreeform={handleFreeform}
+          onInstallHandoff={handleInstallHandoff}
           onSkip={handleSkip}
           hideSkip
           freeformOpen={freeformOpen}

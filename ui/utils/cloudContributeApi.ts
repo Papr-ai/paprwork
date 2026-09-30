@@ -40,13 +40,20 @@ export async function submitCloudAppChange(
   return body;
 }
 
-export type SentProposalStatus = "preparing" | "pending" | "approved" | "rejected";
+export type SentProposalStatus =
+  | "preparing"
+  | "pending"
+  | "approved"
+  | "rejected"
+  | "superseded";
 
 export interface SentProposal {
   id: string;
   title: string;
   description: string;
   status: SentProposalStatus;
+  /** Pending only: "conflict" = the owner can't accept it until it's updated. */
+  mergeState?: string | null;
   createdAt: string;
   resolvedAt?: string | null;
   stagedPaths?: string[] | null;

@@ -186,12 +186,28 @@ export async function getAvailableProviders(): Promise<AvailableProvider[]> {
       });
     }
 
-    // Ollama is always available (local inference)
-    providers.push({
-      provider: "ollama",
-      model: defaultModelByProvider.ollama,
-      hasAuth: true,
-    });
+    const { getPaprApiKey } = await import("./keyResolver.js");
+    const paprApiKey = await getPaprApiKey();
+    if (paprApiKey) {
+      for (const cloud of ["openai", "anthropic", "google"] as const) {
+        if (!providers.find((p) => p.provider === cloud)) {
+          providers.push({
+            provider: cloud,
+            model: defaultModelByProvider[cloud],
+            hasAuth: true,
+          });
+        }
+      }
+    }
+
+    // Local Ollama only when no cloud auth (matches main chat — no silent Ollama fallback)
+    if (providers.length === 0) {
+      providers.push({
+        provider: "ollama",
+        model: defaultModelByProvider.ollama,
+        hasAuth: true,
+      });
+    }
   } catch (error) {
     console.error("[DefaultProvider] Error getting available providers:", error);
   }

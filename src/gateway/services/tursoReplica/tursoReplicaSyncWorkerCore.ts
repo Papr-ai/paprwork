@@ -15,6 +15,7 @@ import type {
   TursoSyncWorkerResult,
 } from "./tursoReplicaSyncWorkerProtocol.js";
 import { TursoReplicaPathScheduler } from "./tursoReplicaPathScheduler.js";
+import { isReplicaRemoteHttpError } from "./tursoReplicaErrors.js";
 import {
   applyMigrationInTx,
   type MigrationTx,
@@ -95,7 +96,10 @@ export class TursoSyncWorkerCore {
     } catch (error) {
       outcome = "error";
       // An engine error may leave the handle poisoned; drop it so the next request reopens.
-      if (request.op !== "close") {
+      // Remote/HTTP failures are the exception: nothing local changed, and a reopen of a
+      // bootstrap-pending replica would hit the same failing remote on the caller's
+      // local write — turning a background sync hiccup into a failed job write.
+      if (request.op !== "close" && !isReplicaRemoteHttpError(error)) {
         await this.closeHandle(request.localPath);
       }
       throw error;

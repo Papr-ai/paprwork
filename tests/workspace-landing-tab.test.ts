@@ -1,13 +1,6 @@
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { beforeEach, describe, expect, it } from "vitest";
 import { useTabStore } from "../ui/stores/tabStore";
-
-vi.mock("../ui/utils/onboardingState", () => ({
-  shouldShowOnboarding: vi.fn(() => true),
-}));
-
-import { shouldShowOnboarding } from "../ui/utils/onboardingState";
 import {
-  ensureGettingStartedTab,
   ensureWorkspaceLandingTab,
   needsWorkspaceLandingTab,
 } from "../ui/lib/ensureWorkspaceLandingTab";
@@ -23,28 +16,18 @@ describe("ensureWorkspaceLandingTab", () => {
       history: [],
       historyIndex: -1,
     });
-    vi.mocked(shouldShowOnboarding).mockReturnValue(true);
   });
 
-  it("opens Getting Started when onboarding is active and tabs are empty", () => {
+  it("opens a chat when tabs are empty (no in-workspace Getting Started)", () => {
     const tabId = ensureWorkspaceLandingTab();
     const { tabs, activeTabId } = useTabStore.getState();
     expect(tabs).toHaveLength(1);
-    expect(tabs[0]?.type).toBe("getting-started");
-    expect(activeTabId).toBe(tabId);
-  });
-
-  it("opens Profile when onboarding is completed and tabs are empty", () => {
-    vi.mocked(shouldShowOnboarding).mockReturnValue(false);
-    const tabId = ensureWorkspaceLandingTab();
-    const { tabs, activeTabId } = useTabStore.getState();
-    expect(tabs).toHaveLength(1);
-    expect(tabs[0]?.type).toBe("settings");
+    expect(tabs[0]?.type).toBe("chat");
     expect(activeTabId).toBe(tabId);
   });
 
   it("needsWorkspaceLandingTab is false when an active tab exists", () => {
-    ensureGettingStartedTab();
+    ensureWorkspaceLandingTab();
     expect(needsWorkspaceLandingTab()).toBe(false);
   });
 

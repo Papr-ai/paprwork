@@ -199,22 +199,22 @@ export function assertTrackAllowedForCatalog(input: {
   }
 
   const visibility = input.visibility?.trim();
-  const teamShared =
-    visibility !== undefined &&
-    visibility.length > 0 &&
-    (visibility === "team" || visibility.startsWith("team_"));
 
-  if (input.catalogScope === "namespace" && visibility && !teamShared) {
+  // Team installs are gated on the catalog entry's visibility. When the caller
+  // did not pass it we cannot tell "not team-shared" from "not told", so say
+  // what is actually wrong instead of blaming the app.
+  if (!visibility) {
     throw new CloudInstallDbPolicyError(
-      "non_team_track_forbidden",
-      "Collaborate install requires a team-shared app. Install a fork copy instead.",
+      "visibility_required",
+      'Collaborate (track) install from a team catalog requires `visibility`. Pass the visibility from the catalog entry (list_community_apps), e.g. visibility: "team". Without it the app cannot be verified as team-shared.',
     );
   }
 
+  const teamShared = visibility === "team" || visibility.startsWith("team_");
   if (!teamShared) {
     throw new CloudInstallDbPolicyError(
       "non_team_track_forbidden",
-      "Collaborate install requires a team-shared app. Install a fork copy instead.",
+      `Collaborate install requires a team-shared app, but this app's visibility is "${visibility}". Install a fork copy instead.`,
     );
   }
 }

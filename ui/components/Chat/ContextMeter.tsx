@@ -1,13 +1,14 @@
 /**
  * The dial in the composer, and the panel behind it.
  *
- * Two reads, deliberately split by cost: the meter is one SQL row and refreshes
+ * Two reads, deliberately split by cost: the meter reads usage and refreshes
  * after every turn; the composition breakdown rebuilds the whole system prompt
  * and is only fetched when the panel opens.
  */
 
 import React, { useCallback, useEffect, useRef, useState } from "react";
 import { gateway } from "../../src/lib/gateway";
+import { createCoalescedRefresh } from "../../utils/coalescedRefresh";
 import { resolveAgentFocusContext } from "../../utils/agentFocusContext";
 import { ContextMeterRing } from "./ContextMeterRing";
 import { ContextUsagePanel } from "./ContextUsagePanel";
@@ -28,11 +29,7 @@ import {
 } from "../../utils/subscriptionPlanUsage";
 import "./ContextMeter.css";
 
-/**
- * Cheap enough to run every second: one indexed SQLite row plus an in-memory
- * map read, over a local socket. The ceiling on freshness is the agent's step
- * boundary, not this.
- */
+/** Minimum delay after a completed refresh while streaming. */
 const LIVE_POLL_MS = 1000;
 const PLAN_USAGE_MIN_INTERVAL_MS = 45_000;
 
@@ -78,47 +75,70 @@ export const ContextMeter: React.FC<ContextMeterProps> = ({
   const wasSending = useRef(isSending);
   const containerRef = useRef<HTMLDivElement>(null);
   const lastPlanFetchMs = useRef(0);
+  const refreshQueue = useRef(createCoalescedRefresh());
+  const meterGeneration = useRef(0);
 
-  const loadMeter = useCallback(async () => {
-    try {
-      const response = await gateway.send("chat:context-meter", {
-        chatId,
-        model,
-        contextLimit,
-      });
-      if (isContextMeter(response.data)) {
-        setMeter(response.data);
-        setMeterReady(true);
+  useEffect(() => {
+    meterGeneration.current++;
+    return () => {
+      meterGeneration.current++;
+      refreshQueue.current.clear();
+    };
+  }, [chatId, model, contextLimit]);
+
+  const loadMeter = useCallback(() => {
+    const generation = meterGeneration.current;
+    return refreshQueue.current.run(async () => {
+      if (generation !== meterGeneration.current || document.hidden) return;
+      try {
+        const response = await gateway.send("chat:context-meter", {
+          chatId,
+          model,
+          contextLimit,
+        });
+        if (generation === meterGeneration.current && isContextMeter(response.data)) {
+          setMeter(response.data);
+          setMeterReady(true);
+        }
+      } catch {
+        if (generation === meterGeneration.current) setMeterReady(false);
       }
-    } catch {
-      /* the dial is ambient: a failed read shows nothing, never an error */
-    }
+    });
   }, [chatId, model, contextLimit]);
 
   useEffect(() => {
     setMeter(null);
     setMeterReady(false);
-  }, [chatId, contextLimit]);
+  }, [chatId, model, contextLimit]);
 
   useEffect(() => {
     void loadMeter();
   }, [loadMeter]);
 
-  /**
-   * While the agent works, re-read on a timer.
-   *
-   * The turn is the thing the user is watching and it is the one thing the
-   * old meter could not see: everything about a turn is written to SQLite
-   * once, at the end, so a refresh keyed only to the end of streaming left the
-   * dial frozen for the entire time it had something to say. A step boundary
-   * is seconds apart at best, so a 1s poll is never the limiting factor —
-   * `getContextMeter` is a single indexed row plus an in-memory read.
-   */
+  /** Wait for completion before polling again; slow reads cannot accumulate. */
   useEffect(() => {
-    if (!isSending) return;
-    void loadMeter();
-    const timer = window.setInterval(() => void loadMeter(), LIVE_POLL_MS);
-    return () => window.clearInterval(timer);
+    let stopped = false;
+    let loop = 0;
+    let timer: ReturnType<typeof setTimeout> | undefined;
+    const poll = async (version = loop) => {
+      await loadMeter();
+      if (!stopped && version === loop && isSending && !document.hidden) {
+        timer = setTimeout(() => void poll(version), LIVE_POLL_MS);
+      }
+    };
+    const onVisibility = () => {
+      loop++;
+      clearTimeout(timer);
+      if (!document.hidden) void poll();
+    };
+    // Initial read is handled above. Start the recurring loop after its interval.
+    if (isSending && !document.hidden) timer = setTimeout(() => void poll(), LIVE_POLL_MS);
+    document.addEventListener("visibilitychange", onVisibility);
+    return () => {
+      stopped = true;
+      clearTimeout(timer);
+      document.removeEventListener("visibilitychange", onVisibility);
+    };
   }, [isSending, loadMeter]);
 
   /**

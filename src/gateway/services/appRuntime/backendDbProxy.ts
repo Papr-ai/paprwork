@@ -186,7 +186,10 @@ export function createDesktopBackendDbProxyRouter(
       res.json({ rows: result.rows, count: result.count });
     } catch (err) {
       const e = err as Error & { status?: number };
-      res.status(e.status ?? 500).json({ error: e.message });
+      const { httpStatusForDbRouteError } = await import(
+        "../tursoReplica/replicaSchemaQueryErrorMessage.js"
+      );
+      res.status(httpStatusForDbRouteError(e)).json({ error: e.message });
     }
   });
 
@@ -225,7 +228,10 @@ export function createDesktopBackendDbProxyRouter(
       });
     } catch (err) {
       const e = err as Error & { status?: number };
-      res.status(e.status ?? 500).json({ error: e.message });
+      const { httpStatusForDbRouteError } = await import(
+        "../tursoReplica/replicaSchemaQueryErrorMessage.js"
+      );
+      res.status(httpStatusForDbRouteError(e)).json({ error: e.message });
     }
   });
 
