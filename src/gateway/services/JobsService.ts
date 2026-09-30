@@ -3221,6 +3221,17 @@ export class JobsService {
     await this.preflightJobRun(jobId);
     this.launchFailures.delete(jobId);
 
+    // The record still holds the PREVIOUS run's terminal state until runJob
+    // writes "running". runJob can sit in gatewayBackgroundBudget ("Waiting
+    // for execution capacity"), so the first polls below would otherwise read
+    // e.g. a prior cloud run's { status: "failed", error: "Exit code 1" } and
+    // report it as this launch failing (HTTP 503) while the new run proceeds.
+    // Only trust a terminal status once the record has been written since
+    // this launch began.
+    const priorUpdatedAt = (await this.getJob(jobId))?.updatedAt;
+    const isFreshRecord = (job: JobRecord | null | undefined): boolean =>
+      !!job && job.updatedAt !== priorUpdatedAt;
+
     const runPromise = gatewayBackgroundBudget.runInteractive(() => this.runJob(jobId, runtimeParams)).catch(
       async (err: unknown) => {
         if (
@@ -3251,11 +3262,12 @@ export class JobsService {
       if (!job) {
         break;
       }
-      if (job.status === "failed" && job.error) {
+      const fresh = isFreshRecord(job);
+      if (fresh && job.status === "failed" && job.error) {
         void runPromise.catch(() => undefined);
         return { jobId, status: "failed", error: job.error };
       }
-      if (job.status === "completed") {
+      if (fresh && job.status === "completed") {
         void runPromise.catch(() => undefined);
         return { jobId, status: "completed" };
       }
@@ -3271,6 +3283,11 @@ export class JobsService {
     // may still be in progress. Report honestly rather than guessing.
     const snapshot = await this.getJob(jobId);
     void runPromise.catch(() => undefined);
+    if (!isFreshRecord(snapshot)) {
+      // Untouched since launch: still queued behind execution capacity or a
+      // dependency. The previous run's terminal state is not this run's.
+      return { jobId, status: "pending" };
+    }
     if (snapshot?.status === "failed") {
       return { jobId, status: "failed", error: snapshot.error ?? "Job failed to start" };
     }
