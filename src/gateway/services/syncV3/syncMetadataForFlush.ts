@@ -10,6 +10,7 @@ import { DATABASES_REGISTRY_FILENAME } from "../DatabaseRegistryService.js";
 import { uploadAppDbConfigToCloud } from "./appDbConfigUpload.js";
 import { uploadDatabasesRegistryToCloud } from "./MetadataRegistryClient.js";
 import { flushMetadataOutbox } from "./metadataOutbox.js";
+import { registryUploadErrorDetail } from "./registryUploadDiagnostics.js";
 import { yieldEventLoop } from "../cloudSync/yieldEventLoop.js";
 
 const METADATA_FLUSH_TIMEOUT_MS = 60_000;
@@ -82,7 +83,9 @@ export async function syncMetadataToCloudForFlush(
       timeoutMs: METADATA_FLUSH_TIMEOUT_MS,
     });
     if (!registryUploaded) {
-      errors.push("namespace databases registry upload failed");
+      errors.push(
+        `namespace databases registry upload failed${registryUploadErrorDetail()}`,
+      );
     }
   }
 
@@ -111,7 +114,9 @@ export async function syncMetadataToCloudForFlush(
         { timeoutMs: METADATA_FLUSH_TIMEOUT_MS },
       );
       if (!registryRetryOk) {
-        errors.push("namespace databases registry upload failed");
+        errors.push(
+          `namespace databases registry upload failed${registryUploadErrorDetail()}`,
+        );
       }
     }
   }

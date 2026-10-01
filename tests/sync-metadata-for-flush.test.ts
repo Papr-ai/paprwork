@@ -24,6 +24,7 @@ vi.mock("../src/gateway/services/cloudSync/yieldEventLoop.js", () => ({
   yieldEventLoop: async () => undefined,
 }));
 
+import { setLastRegistryUploadError } from "../src/gateway/services/syncV3/registryUploadDiagnostics.js";
 import { syncMetadataToCloudForFlush } from "../src/gateway/services/syncV3/syncMetadataForFlush.js";
 
 describe("syncMetadataToCloudForFlush", () => {
@@ -85,5 +86,21 @@ describe("syncMetadataToCloudForFlush", () => {
 
     expect(mockUploadAppDbConfig).toHaveBeenCalledTimes(2);
     expect(mockFlushMetadataOutbox).toHaveBeenCalledTimes(3);
+  });
+
+  it("includes the server's rejection reason in the registry error", async () => {
+    mockUploadDatabasesRegistry.mockImplementation(async () => {
+      setLastRegistryUploadError(
+        "databases registry upload failed (422): duplicate localPath",
+      );
+      return false;
+    });
+    mockFlushMetadataOutbox.mockResolvedValue({ flushed: 0, failed: 1 });
+
+    await expect(
+      syncMetadataToCloudForFlush(paprDir, appId, "sha-1"),
+    ).rejects.toThrow(
+      /namespace databases registry upload failed \(databases registry upload failed \(422\): duplicate localPath\)/,
+    );
   });
 });

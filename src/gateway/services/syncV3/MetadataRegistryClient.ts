@@ -14,6 +14,7 @@ import type { DatabasesRegistryFile } from "../DatabaseRegistryService.js";
 import type { JobConfigSlice } from "../jobs/jobRuntimeFields.js";
 import type { SubAgentConfigSlice } from "../subagents/subAgentMetadataSlice.js";
 import { enqueueMetadataOutboxEntry, flushMetadataOutbox } from "./metadataOutbox.js";
+import { setLastRegistryUploadError } from "./registryUploadDiagnostics.js";
 
 export interface MetadataUpsertResponse {
   accepted: boolean;
@@ -161,7 +162,12 @@ export async function uploadDatabasesRegistryToCloud(
       options,
     );
     if (!ok) {
+      setLastRegistryUploadError(
+        "server did not accept the registry, or no Papr login/API key",
+      );
       await enqueueMetadataOutboxEntry({ kind: "databases", updatedAt, registry });
+    } else {
+      setLastRegistryUploadError(null);
     }
     return ok;
   } catch (err) {
@@ -169,6 +175,7 @@ export async function uploadDatabasesRegistryToCloud(
       "[MetadataRegistry] databases registry upload error:",
       (err as Error).message.slice(0, 120),
     );
+    setLastRegistryUploadError((err as Error).message);
     await enqueueMetadataOutboxEntry({ kind: "databases", updatedAt, registry });
     return false;
   }
