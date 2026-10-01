@@ -110,3 +110,33 @@ describe("isAppCodeRecentlyVerified", () => {
     expect(result).toEqual({ verified: false });
   });
 });
+
+describe("isLocalAppCodeAtRemoteHead — new repo scaffold", () => {
+  beforeEach(() => {
+    readAppRepoCommitCursors.mockReset();
+    readOidCache.mockReset();
+  });
+
+  test("a repo holding only the creation README is not 'newer on web'", async () => {
+    readAppRepoCommitCursors.mockResolvedValue({});
+    readOidCache.mockResolvedValue({ version: 1, updatedAt: "", apps: { "app-1": { "app.ts": "x" } } });
+    const scaffold: AppRepoHeadResponse = {
+      commitSha: "d992812b",
+      files: [{ path: "README.md", blobOid: "oid-readme" }],
+    };
+    await expect(isLocalAppCodeAtRemoteHead("app-1", scaffold)).resolves.toBe(true);
+  });
+
+  test("README plus real app files from elsewhere still counts as newer", async () => {
+    readAppRepoCommitCursors.mockResolvedValue({});
+    readOidCache.mockResolvedValue({ version: 1, updatedAt: "", apps: { "app-1": {} } });
+    const real: AppRepoHeadResponse = {
+      commitSha: "5e60f50c",
+      files: [
+        { path: "README.md", blobOid: "oid-readme" },
+        { path: "app.ts", blobOid: "oid-app" },
+      ],
+    };
+    await expect(isLocalAppCodeAtRemoteHead("app-1", real)).resolves.toBe(false);
+  });
+});

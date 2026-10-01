@@ -375,6 +375,11 @@ export class SyncCoordinator {
     await clearDeadLetterOutboxEntries(appId);
     this.noteTursoFlushedForApp(appId);
     this.sync.clearManualFlushError(appId);
+    // A publish that went through means the web accepted our files — drop
+    // conflict events from earlier attempts so the chip stops saying
+    // "Conflict on the web" until the next restart.
+    const { clearWriterConflictsForApp } = await import("../syncV3/writerConflict.js");
+    clearWriterConflictsForApp(appId);
     // Mark app folder synced after a successful ordered flush so startup
     // enqueueAutoUploadApps does not treat the app as perpetually dirty.
     this.sync.markRelativePathSynced(path.join("apps", appId));

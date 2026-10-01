@@ -126,3 +126,14 @@ export async function detachFromOriginal(appId: string): Promise<{ detached: boo
   if (!res.ok) throw new Error(body.error ?? `Detach failed (${res.status})`);
   return body;
 }
+
+/** Plain-language reason a "Duplicate as my own app" attempt failed. */
+export function describeDuplicateError(message: string): string {
+  if (/code install is not enabled|lack permission|\(403\)/i.test(message)) {
+    return "The owner hasn't allowed copies of this app. Ask them to turn on \"Edit the code\" in Share, then try again.";
+  }
+  if (/fetch failed|network|ECONN/i.test(message)) {
+    return "Couldn't reach Papr Cloud. Check your connection and try again.";
+  }
+  return `Couldn't duplicate: ${message.slice(0, 160)}`;
+}

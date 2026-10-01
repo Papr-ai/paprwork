@@ -1,6 +1,6 @@
 {
   "version": 1,
-  "generatedAt": "2026-10-01T08:24:33.253Z",
+  "generatedAt": "2026-10-01T21:51:06.271Z",
   "entryCount": 201,
   "entries": [
     {
@@ -1946,7 +1946,7 @@
     {
       "id": "agent-tool-papr_db_apply_migration",
       "title": "papr_db_apply_migration",
-      "summary": "Apply migrations/{id}.sql to a registry database (Plan A schema path). Automated dual apply: embedded replica → Turso primary (HTTP) → pull to align. Never pushes DDL via replica push — avoids schema drift on Turso. Updates __papr__/app-meta.json requiredSchemaVersion for the schema-owner app. For NEW schema changes use papr_db_create_migration (names + applies in one step). This tool re-applies an EXISTING migration file (recovery, pulled files). For manual control use papr_db_apply_migration_replica then papr_db_apply_migration_cloud.",
+      "summary": "Apply migrations/{id}.sql to a registry database (Plan A schema path). Single route: applies once on the embedded replica (statements + ledger rows in one transaction), then pushes that change to Turso through sync — the SQL is never run a second time on the primary. Offline: the change uploads on reconnect. Updates __papr__/app-meta.json requiredSchemaVersion for the schema-owner app. For NEW schema changes use papr_db_create_migration (names + applies in one step). This tool re-applies an EXISTING migration file (recovery, pulled files). papr_db_apply_migration_replica / _cloud are manual...",
       "surfaces": [
         "agent-tool"
       ],
@@ -2014,7 +2014,7 @@
     {
       "id": "agent-tool-papr_db_create_migration",
       "title": "papr_db_create_migration",
-      "summary": "Create AND apply a new schema migration on a registry database. Pass a short name + SQL only — the system assigns the filename NNNN_YYYYMMDDHHMMSS_name.sql (next number + UTC timestamp) so collaborators can never produce the same filename. Then applies it like papr_db_apply_migration (replica → Turso primary → pull align). Use this for EVERY new schema change; do not write_file migration files or pick numbers yourself. Never edit or rename existing migration files. Never hard-code a user id: write '{{papr.owner_user_id}}' (quoted) for owner/user columns in seed rows or backfills — it is fil...",
+      "summary": "Create AND apply a new schema migration on a registry database. Pass a short name + SQL only — the system assigns the filename NNNN_YYYYMMDDHHMMSS_name.sql (next number + UTC timestamp) so collaborators can never produce the same filename. Then applies it like papr_db_apply_migration (once on the replica, then pushed to Turso through sync). Use this for EVERY new schema change; do not write_file migration files or pick numbers yourself. Never edit or rename existing migration files. Never hard-code a user id: write '{{papr.owner_user_id}}' (quoted) for owner/user columns in seed rows or bac...",
       "surfaces": [
         "agent-tool"
       ],

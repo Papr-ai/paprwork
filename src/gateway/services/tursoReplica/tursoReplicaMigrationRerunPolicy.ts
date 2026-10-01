@@ -34,9 +34,15 @@ export interface ReplicaMigrationFacts {
   satisfied: boolean | null;
   /** Every statement is additive or idempotent (migrationRerunSafety). */
   rerunSafe: boolean;
+  /**
+   * Pending only: a migration at or after this one is missing from the ledger
+   * but its schema is already fully on the database. The ledger is behind the
+   * real state, so "absent from the ledger" no longer means "never ran".
+   */
+  ledgerBehind?: boolean;
 }
 
-export type RefusalReason = "recorded_unverified" | "unknown_ledger";
+export type RefusalReason = "recorded_unverified" | "unknown_ledger" | "ledger_behind";
 
 export type ReplicaMigrationDecision =
   | { action: "apply"; reason: "pending" | "reapply_additive" | "unknown_ledger_additive" }
@@ -54,8 +60,16 @@ export function replicaMigrationNeedsVerification(
 export function decideReplicaMigration(
   facts: ReplicaMigrationFacts,
 ): ReplicaMigrationDecision {
-  const { recorded, ledgerReadable, satisfied, rerunSafe } = facts;
+  const { recorded, ledgerReadable, satisfied, rerunSafe, ledgerBehind } = facts;
   if (!recorded && ledgerReadable) {
+    // Enrichment, 2026-10: ledger listed 0001-0004 while 0005-0014 had run.
+    // Replaying a DELETE+INSERT seed over live rows broke the install.
+    if (satisfied === true) {
+      return { action: "skip", reason: "schema_present" };
+    }
+    if (ledgerBehind && !rerunSafe) {
+      return { action: "refuse", reason: "ledger_behind" };
+    }
     return { action: "apply", reason: "pending" };
   }
   if (satisfied === true) {
@@ -82,12 +96,18 @@ export function describeRefusedMigration(
   const why =
     reason === "recorded_unverified"
       ? "it is recorded as applied, but its schema could not be confirmed on the replica"
-      : "the migration ledger could not be read, so there is no way to tell whether it already ran";
+      : reason === "ledger_behind"
+        ? "it is missing from the migration ledger, but later migrations are already on " +
+          "the database, so the ledger is behind and this one most likely ran already"
+        : "the migration ledger could not be read, so there is no way to tell whether it already ran";
   const next =
     reason === "recorded_unverified"
       ? "Repair the schema with a NEW additive migration (CREATE TABLE IF NOT EXISTS, " +
         "ALTER TABLE ... ADD COLUMN, INSERT OR IGNORE)."
-      : "It will be decided on a later run, once the ledger can be read.";
+      : reason === "ledger_behind"
+        ? "Record it in the ledger without running it, or make the migration replay-safe " +
+          "(INSERT OR IGNORE / ON CONFLICT DO NOTHING instead of DELETE + INSERT)."
+        : "It will be decided on a later run, once the ledger can be read.";
   return (
     `[TursoReplica] NOT re-running ${migrationId} on ${dbLabel}: ${why}, and ` +
     `running it again would drop, move or overwrite rows (${hazards.join("; ")}). ` +

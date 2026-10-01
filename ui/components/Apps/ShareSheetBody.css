@@ -1,0 +1,432 @@
+/* Share sheet v6 — flat rows, tinted on hover/selected, one button shape.
+   Ported from the Share Bar Redesign prototype (v6.css / v6c.css). */
+
+.ss6 {
+  --ss6-blue: var(--accent, #0060e0);
+  --ss6-tint: rgba(0, 96, 224, 0.06);
+  --ss6-hover: rgba(15, 23, 42, 0.04);
+  --ss6-chip: #f1f4f9;
+  --ss6-line: #edf1f6;
+  display: flex;
+  flex-direction: column;
+  padding: 4px 16px 16px;
+  overflow-y: auto;
+  min-height: 0;
+}
+
+@media (prefers-color-scheme: dark) {
+  .ss6 {
+    --ss6-tint: rgba(64, 150, 255, 0.14);
+    --ss6-hover: rgba(255, 255, 255, 0.05);
+    --ss6-chip: rgba(255, 255, 255, 0.07);
+    --ss6-line: rgba(255, 255, 255, 0.08);
+  }
+}
+
+.ss6-h {
+  margin: 12px 8px 4px;
+  font-size: 11px;
+  font-weight: 600;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  color: var(--text-secondary);
+}
+
+.ss6-progress,
+.ss6-note,
+.ss6-hint {
+  margin: 6px 8px 2px;
+  font-size: 12px;
+  line-height: 1.45;
+  color: var(--text-secondary);
+}
+
+.ss6-progress {
+  margin-top: 2px;
+}
+
+.ss6-note--warn {
+  color: var(--warning, #b45309);
+}
+
+.ss6-foot .ss6-hint {
+  margin: 0;
+}
+
+/* Options and toggles */
+.ss6-opt,
+.ss6-tog {
+  display: flex;
+  align-items: flex-start;
+  gap: 10px;
+  width: 100%;
+  margin-bottom: 2px;
+  padding: 8px;
+  border: none;
+  border-radius: 9px;
+  background: transparent;
+  color: var(--text-primary);
+  font: inherit;
+  text-align: left;
+  cursor: pointer;
+}
+
+.ss6-opt:hover:not(:disabled),
+.ss6-tog:hover:not(:disabled) {
+  background: var(--ss6-hover);
+}
+
+.ss6-opt--on,
+.ss6-opt--on:hover:not(:disabled) {
+  background: var(--ss6-tint);
+}
+
+.ss6-opt:disabled,
+.ss6-tog:disabled {
+  cursor: default;
+  opacity: 0.55;
+}
+
+.ss6-opt:focus-visible,
+.ss6-tog:focus-visible,
+.ss6-arow:focus-visible,
+.ss6-btn:focus-visible {
+  outline: 2px solid var(--ss6-blue);
+  outline-offset: 1px;
+}
+
+.ss6-radio {
+  flex-shrink: 0;
+  width: 16px;
+  height: 16px;
+  margin-top: 1px;
+  border: 1.5px solid #c3cbd8;
+  border-radius: 50%;
+}
+
+.ss6-opt--on .ss6-radio {
+  border: 5px solid var(--ss6-blue);
+}
+
+.ss6-opt-ico {
+  flex-shrink: 0;
+  display: inline-flex;
+  margin-top: 1px;
+  color: var(--text-secondary);
+}
+
+.ss6-opt--on .ss6-opt-ico {
+  color: var(--ss6-blue);
+}
+
+.ss6-opt-text {
+  display: flex;
+  flex: 1;
+  flex-direction: column;
+  gap: 2px;
+  min-width: 0;
+}
+
+.ss6-opt-text b {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 13px;
+  font-weight: 500;
+}
+
+.ss6-opt-text em {
+  font-size: 12px;
+  font-style: normal;
+  line-height: 1.4;
+  color: var(--text-secondary);
+}
+
+.ss6-sub {
+  margin: 0 0 4px 30px;
+  padding-left: 8px;
+  border-left: 2px solid var(--ss6-line);
+}
+
+.ss6-people {
+  margin: 0 0 6px 34px;
+}
+
+.ss6-code {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 18px;
+  height: 16px;
+  border-radius: 4px;
+  background: var(--ss6-chip);
+  color: var(--ss6-blue);
+}
+
+/* Switch */
+.ss6-switch {
+  flex-shrink: 0;
+  position: relative;
+  width: 30px;
+  height: 18px;
+  margin-top: 1px;
+  border-radius: 999px;
+  background: #d5dce7;
+  transition: background 0.18s ease;
+}
+
+.ss6-switch i {
+  position: absolute;
+  top: 2px;
+  left: 2px;
+  width: 14px;
+  height: 14px;
+  border-radius: 50%;
+  background: #fff;
+  box-shadow: 0 1px 2px rgba(0, 0, 0, 0.2);
+  transition: transform 0.18s ease;
+}
+
+.ss6-tog--on .ss6-switch {
+  background: var(--ss6-blue);
+}
+
+.ss6-tog--on .ss6-switch i {
+  transform: translateX(12px);
+}
+
+/* Buttons — one shape everywhere */
+.ss6-btn {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 7px 14px;
+  border: 1px solid var(--border-color);
+  border-radius: 9px;
+  background: transparent;
+  color: var(--text-primary);
+  font: inherit;
+  font-size: 13px;
+  font-weight: 500;
+  cursor: pointer;
+  white-space: nowrap;
+}
+
+.ss6-btn:hover:not(:disabled) {
+  background: var(--ss6-hover);
+}
+
+.ss6-btn--primary {
+  border-color: transparent;
+  background: var(
+    --papr-blue-gradient,
+    linear-gradient(135deg, #0060e0, #00acfa)
+  );
+  color: #fff;
+}
+
+.ss6-btn--primary:hover:not(:disabled) {
+  background: var(
+    --papr-blue-gradient,
+    linear-gradient(135deg, #0060e0, #00acfa)
+  );
+  filter: brightness(1.05);
+}
+
+.ss6-btn:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+
+.ss6-icon-btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 30px;
+  height: 30px;
+  border: none;
+  border-radius: 8px;
+  background: transparent;
+  color: var(--text-secondary);
+  cursor: pointer;
+}
+
+.ss6-icon-btn:hover {
+  background: var(--ss6-hover);
+  color: var(--text-primary);
+}
+
+/* Footer + draft progress dots */
+.ss6-foot {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  margin-top: 10px;
+  padding: 10px 8px 2px;
+  border-top: 1px solid var(--ss6-line);
+}
+
+.ss6-dots {
+  display: inline-flex;
+  gap: 5px;
+}
+
+.ss6-dots i {
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  background: #d5dce7;
+}
+
+.ss6-dots i.on {
+  background: var(--ss6-blue);
+}
+
+.ss6-dots i.done {
+  background: #9cbcec;
+}
+
+/* Link hero — first thing on a live app */
+.ss6-hero {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  margin: 8px 0 10px;
+  padding: 12px;
+  border: 1px solid rgba(0, 96, 224, 0.12);
+  border-radius: 12px;
+  background: linear-gradient(
+    180deg,
+    rgba(0, 96, 224, 0.07),
+    rgba(0, 96, 224, 0.03)
+  );
+}
+
+.ss6-hero--muted {
+  border-color: transparent;
+  background: var(--ss6-chip);
+}
+
+.ss6-hero-ico,
+.ss6-tico {
+  flex-shrink: 0;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 32px;
+  height: 32px;
+  border-radius: 9px;
+}
+
+.ss6-hero-ico {
+  background: var(--bg-primary, #fff);
+  color: var(--ss6-blue);
+  box-shadow: 0 1px 2px rgba(15, 23, 42, 0.08);
+}
+
+.ss6-hero--muted .ss6-hero-ico {
+  color: var(--text-secondary);
+}
+
+.ss6-hero-txt {
+  display: flex;
+  flex: 1;
+  flex-direction: column;
+  gap: 2px;
+  min-width: 0;
+}
+
+.ss6-hero-txt b {
+  overflow: hidden;
+  font-size: 13px;
+  font-weight: 600;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  color: var(--text-primary);
+}
+
+.ss6-hero-txt small {
+  font-size: 12px;
+  color: var(--text-secondary);
+}
+
+.ss6-hero-actions {
+  display: inline-flex;
+  flex-shrink: 0;
+  align-items: center;
+  gap: 4px;
+}
+
+/* Live summary rows — click to edit one answer */
+.ss6-summary {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+
+.ss6-arow {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  width: 100%;
+  padding: 8px;
+  border: none;
+  border-radius: 9px;
+  background: transparent;
+  color: var(--text-primary);
+  font: inherit;
+  text-align: left;
+  cursor: pointer;
+}
+
+.ss6-arow:hover {
+  background: var(--ss6-hover);
+}
+
+.ss6-tico {
+  background: var(--ss6-chip);
+  color: var(--text-secondary);
+}
+
+.ss6-row-v {
+  display: flex;
+  flex: 1;
+  flex-direction: column;
+  gap: 1px;
+  min-width: 0;
+}
+
+.ss6-row-v small {
+  font-size: 11.5px;
+  color: var(--text-secondary);
+}
+
+.ss6-row-v b {
+  overflow: hidden;
+  font-size: 13px;
+  font-weight: 500;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.ss6-change {
+  display: inline-flex;
+  flex-shrink: 0;
+  align-items: center;
+  gap: 3px;
+  font-size: 12px;
+  font-weight: 500;
+  color: var(--ss6-blue);
+}
+
+.ss6-arow:hover .ss6-change {
+  text-decoration: underline;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .ss6-switch,
+  .ss6-switch i {
+    transition: none;
+  }
+}

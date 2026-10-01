@@ -11,6 +11,8 @@ interface DuplicateAppNameModalProps {
   open: boolean;
   sourceTitle: string;
   busy?: boolean;
+  /** Why the last attempt failed — shown in the dialog (the bar banner is often hidden). */
+  error?: string | null;
   onCancel: () => void;
   onConfirm: (title: string) => void;
 }
@@ -19,6 +21,7 @@ export function DuplicateAppNameModal({
   open,
   sourceTitle,
   busy,
+  error,
   onCancel,
   onConfirm,
 }: DuplicateAppNameModalProps) {
@@ -71,6 +74,11 @@ export function DuplicateAppNameModal({
               }}
             />
           </label>
+          {error ? (
+            <p className="move-app-modal__error" role="alert">
+              {error}
+            </p>
+          ) : null}
           <div className="move-app-modal__actions">
             <button type="button" className="move-app-modal__btn move-app-modal__btn--secondary" disabled={busy} onClick={onCancel}>
               Cancel

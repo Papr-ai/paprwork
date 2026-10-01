@@ -2,6 +2,7 @@
  * Per-app Get updates — pull code from per-app repo + Turso rows from workspace log.
  */
 
+import { clearWriterConflictsForApp } from "./writerConflict.js";
 import { reconcileLinkedSourcesFromCloud } from "../tursoSyncSession.js";
 import { getCloudSyncService } from "../cloudSync/cloudSyncSingleton.js";
 import { getTursoSyncBridge } from "../TursoSyncBridge.js";
@@ -42,10 +43,13 @@ function markAppCodeBaselineSynced(appId: string, code: PullAppCodeFromRepoResul
     return;
   }
   clearPendingAppUpdate(appId);
+  // Local now matches the web, so any earlier "Conflict on the web" is resolved.
+  clearWriterConflictsForApp(appId);
   const sync = getCloudSyncService();
   if (!sync) {
     return;
   }
+  sync.clearManualFlushError(appId);
   sync.markRelativePathSynced(`apps/${appId}`);
 }
 

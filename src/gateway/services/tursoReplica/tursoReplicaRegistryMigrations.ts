@@ -20,7 +20,10 @@ import {
 import { REMOTE_SCHEMA_MIGRATIONS_TABLE } from "../tursoPlatformSchema.js";
 import { paprDbApplyMigration } from "./PaprDbService.js";
 import { queryLinkedDbViaTursoReplica } from "./tursoReplicaRouting.js";
-import { migrationSatisfiedOnReplica } from "./tursoReplicaMigrationVerify.js";
+import {
+  migrationSatisfiedOnReplica,
+  verifyMigrationOnReplica,
+} from "./tursoReplicaMigrationVerify.js";
 import {
   decideReplicaMigration,
   describeRefusedMigration,
@@ -158,6 +161,36 @@ export async function applyReplicaRegistryDatabaseMigrations(
   }
   const appliedNow: string[] = [];
 
+  // Pending migrations whose schema is FULLY on the database (every op checked,
+  // none unverifiable): they ran but were never recorded. Anything pending at or
+  // before the newest of them is under a ledger that is behind.
+  const pendingFullyPresent = new Set<string>();
+  if (ledgers.readable) {
+    for (const fileName of files) {
+      const bareId = fileName.replace(/\.sql$/, "");
+      if (ledgers.ids.has(fileName) || ledgers.ids.has(bareId)) {
+        continue;
+      }
+      try {
+        const check = await verifyMigrationOnReplica(source, migrationRoot, bareId);
+        if (check.satisfied && check.unverifiable.length === 0) {
+          pendingFullyPresent.add(fileName);
+        }
+      } catch {
+        /* unverifiable: not evidence either way */
+      }
+    }
+  }
+  const newestPresent = [...pendingFullyPresent].sort().pop();
+  if (newestPresent) {
+    report(
+      `[TursoReplica] Migration ledger of ${dbLabel} is behind: ` +
+        `${[...pendingFullyPresent].map((f) => f.replace(/\.sql$/, "")).join(", ")} ` +
+        `already on the database but not recorded.`,
+      "warn",
+    );
+  }
+
   for (const fileName of files) {
     const bareId = fileName.replace(/\.sql$/, "");
     const recorded = ledgers.ids.has(fileName) || ledgers.ids.has(bareId);
@@ -167,11 +200,13 @@ export async function applyReplicaRegistryDatabaseMigrations(
     const satisfied = replicaMigrationNeedsVerification(recorded, ledgers.readable)
       ? await verify(bareId)
       : null;
+    const pending = !recorded && ledgers.readable;
     const decision = decideReplicaMigration({
       recorded,
       ledgerReadable: ledgers.readable,
-      satisfied,
+      satisfied: pending ? (pendingFullyPresent.has(fileName) ? true : null) : satisfied,
       rerunSafe: safety.safe,
+      ledgerBehind: pending && newestPresent !== undefined && fileName <= newestPresent,
     });
 
     if (decision.action === "skip") {

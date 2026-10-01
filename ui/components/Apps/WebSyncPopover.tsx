@@ -1133,8 +1133,8 @@ export function ShareAudienceIcon({
   const audienceLabel = shareAudienceShortLabel(audience);
   const canFork = codeAccess === "install";
   const label = canFork
-    ? `${audienceLabel} · can copy the code`
-    : audienceLabel;
+    ? `Shared with: ${audienceLabel} · can install a copy`
+    : `Shared with: ${audienceLabel}`;
   return (
     <span
       className={`mini-app-publish-bar__share-audience${
