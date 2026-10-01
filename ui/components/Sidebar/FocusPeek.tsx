@@ -32,6 +32,26 @@ function fmtDue(due?: string): string {
   return Number.isNaN(d.getTime()) ? `by ${due}` : `by ${d.toLocaleDateString(undefined, { month: "short", day: "numeric" })}`;
 }
 
+/** A goal name you can read in one glance: first clause, at most ~28 characters on a word boundary. */
+export function shortTitle(title: string, max = 28): string {
+  const clause = title.split(/\s+(?:and|for|on|with|by|to)\s+|[,:;—–]/i)[0].trim() || title;
+  if (clause.length <= max) return clause;
+  const words = clause.split(/\s+/);
+  let out = words[0];
+  for (const w of words.slice(1)) {
+    if (`${out} ${w}`.length > max) break;
+    out = `${out} ${w}`;
+  }
+  return out;
+}
+
+export type FocusPace = "on" | "risk" | "off";
+
+/** Same read as the Home dashboard: 1h+ this week moved it, some time barely touched it, none is cold. */
+export function paceOf(hours?: number): FocusPace {
+  return !hours || hours <= 0 ? "off" : hours >= 1 ? "on" : "risk";
+}
+
 /** Hours this week, glanceable: "7.6h", "<1h" or "—" when nothing touched it yet. */
 export function fmtHours(h?: number): string {
   if (!h || h <= 0) return "—";
@@ -81,11 +101,15 @@ export function FocusPeek({ status, onOpen }: FocusPeekProps) {
                 type="button"
                 onClick={() => onOpen(g.id)}
                 role="menuitem"
-                title={[g.target, fmtDue(g.due), g.why].filter(Boolean).join(" · ")}
+                title={[g.title, g.target, fmtDue(g.due), g.why].filter(Boolean).join(" · ")}
               >
-                <span className="focus-peek__title">{g.title}</span>
-                <span className="focus-peek__hours" aria-label={`${fmtHours(g.signals?.hours7)} this week`}>
-                  {fmtHours(g.signals?.hours7)}
+                <span className="focus-peek__title">{shortTitle(g.title)}</span>
+                <span
+                  className={`focus-peek__meter is-${paceOf(g.signals?.hours7)}`}
+                  role="img"
+                  aria-label={`${fmtHours(g.signals?.hours7)} this week`}
+                >
+                  <i style={{ width: `${Math.round(Math.min(1, (g.signals?.hours7 ?? 0) / 5) * 100)}%` }} />
                 </span>
               </button>
             </li>
