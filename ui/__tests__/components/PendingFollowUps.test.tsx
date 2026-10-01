@@ -184,4 +184,24 @@ describe("auto-continue vs a waiting follow-up", () => {
       }),
     ).toBe("queuedFollowUp");
   });
+
+  it("stacks with master's live-stream guard — both block, live stream wins", () => {
+    const messages = [
+      { id: "u1", role: "user", content: "go" },
+      { id: "a1", role: "assistant", content: "", interrupted: true },
+    ] as ChatMessage[];
+    const base = {
+      chatId: CHAT,
+      messages,
+      isSending: false,
+      connectionPaused: false,
+      needsStreamRecovery: false,
+      gatewayReady: true,
+    };
+    expect(getAutoContinueBlockReason({ ...base, liveStreamRequestId: "r1" })).toBe("isSending");
+    expect(
+      getAutoContinueBlockReason({ ...base, liveStreamRequestId: "r1", hasQueuedFollowUp: true }),
+    ).toBe("isSending");
+    expect(getAutoContinueBlockReason({ ...base, hasQueuedFollowUp: true })).toBe("queuedFollowUp");
+  });
 });
