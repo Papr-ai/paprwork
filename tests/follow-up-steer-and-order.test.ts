@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
 import {
+  cancelYieldRequest,
   consumeTurnStart,
   isYieldRequested,
   requestYieldAtBoundary,
@@ -33,6 +34,16 @@ describe("steer: pause at next tool boundary", () => {
     requestYieldAtBoundary(id, 0);
     expect(consumeTurnStart(id, { hiddenContinue: true, now: 1 }).steerFollowUp).toBe(false);
     expect(consumeTurnStart(id, { now: 2 }).steerFollowUp).toBe(true);
+  });
+
+  it("leaving the chat cancels the pause so the agent keeps working", () => {
+    const id = "c-left";
+    requestYieldAtBoundary(id, 0);
+    cancelYieldRequest(id);
+    expect(isYieldRequested(id)).toBe(false);
+    expect(shouldStopForYield(id, 5)).toBe(false);
+    // The turn after it is a normal one, not a steered follow-up.
+    expect(consumeTurnStart(id, { now: 1 }).steerFollowUp).toBe(false);
   });
 
   it("expires a stale follow-up tag", () => {

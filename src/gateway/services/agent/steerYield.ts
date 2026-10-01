@@ -28,6 +28,17 @@ export function requestYieldAtBoundary(chatId: string, now = Date.now()): void {
 }
 
 /**
+ * The user left the chat with a follow-up still queued. Nobody is there to
+ * deliver it the moment the turn pauses, so let the agent keep working; the
+ * message stays queued in the UI and sends when they return (which asks for
+ * the yield again) or when the turn ends on its own.
+ */
+export function cancelYieldRequest(chatId: string): void {
+  yieldRequests.delete(chatId);
+  pendingSteerFollowUps.delete(chatId);
+}
+
+/**
  * Called once when a new (non-retry) turn starts. Clears any stale yield so it
  * cannot stop the follow-up itself, and reports whether this turn carries a
  * message the user sent while the previous turn was working.
