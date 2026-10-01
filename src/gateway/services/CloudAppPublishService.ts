@@ -43,6 +43,7 @@ import { memoryShareAllowlistBodyFromPrefs } from "./cloudShareAllowlistMemory.j
 import { scheduleCloudAppHostAccessInvalidation } from "./cloudAppPublishAllowlistSync.js";
 import {
   detectAutoPublishDrift,
+  codeAccessPatchFromMemory,
   resolveShareTokenForConfig,
   resolveSharingSettingsForDisplay,
   slugifyPublishTitle,
@@ -784,7 +785,11 @@ export class CloudAppPublishService {
         return parsePublishConfig(appId, null, resolveSharingSettings(prefs));
       }
 
-      return buildConfigFromMemory(appId, data, prefs, expectedSlug);
+      const codePatch = codeAccessPatchFromMemory(prefs, data);
+      const effectivePrefs = codePatch
+        ? setAppPublishPrefs(appId, codePatch, this.paprDir)
+        : prefs;
+      return buildConfigFromMemory(appId, data, effectivePrefs, expectedSlug);
     } catch (error) {
       const message = (error as Error).message;
       if (message.includes("404") || message.includes("Not Found")) {

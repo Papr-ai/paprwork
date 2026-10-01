@@ -25,7 +25,7 @@ import {
   execLinkedDbViaTursoReplica,
 } from "./tursoReplicaRouting.js";
 import {
-  applyRegistryMigrationDualPath,
+  applyRegistryMigrationSingleRoute,
   applyRegistryMigrationOnCloudPrimary,
   applyRegistryMigrationOnReplicaOnly,
   buildMigrationParityReport,
@@ -627,6 +627,7 @@ export async function paprDbApplyMigration(options: {
   cloudApplied?: boolean;
   paired?: boolean;
   pulled?: boolean;
+  pushError?: string;
 }> {
   await initializeDatabaseRegistry();
   const source = resolveSource({ dbId: options.dbId });
@@ -661,12 +662,14 @@ export async function paprDbApplyMigration(options: {
 
   assertPaprDbMigrationApplyAllowed();
 
-  const result = await applyRegistryMigrationDualPath(
+  const result = await applyRegistryMigrationSingleRoute(
     source,
     migrationRoot,
     migrationFileName,
   );
-  await clearReplicaPushErrorOnSuccess(source);
+  if (result.pushed) {
+    await clearReplicaPushErrorOnSuccess(source);
+  }
   if (result.applied || result.replicaApplied) {
     const { afterRegistryMigrationApplied } = await import(
       "./tursoReplicaPostMigration.js"
@@ -681,13 +684,14 @@ export async function paprDbApplyMigration(options: {
   return {
     applied: result.applied,
     migrationId: result.migrationId,
-    pendingPush: !result.paired && !result.pulled,
+    pendingPush: !result.pushed,
     backend: "turso-replica",
     applyToken: result.applyToken,
     replicaApplied: result.replicaApplied,
     cloudApplied: result.cloudApplied,
     paired: result.paired,
-    pulled: result.pulled,
+    pulled: result.pushed,
+    ...(result.pushError ? { pushError: result.pushError } : {}),
   };
 }
 

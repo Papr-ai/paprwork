@@ -20,6 +20,7 @@ import {
   discardTrackLocalEdits,
   detachFromOriginal,
   duplicateAsOwnApp,
+  describeDuplicateError,
   fetchTrackLocalEdits,
   formatTrackSyncSummary,
   pullTrackUpstream,
@@ -774,6 +775,7 @@ export function MiniAppPublishBar({
   const papr = usePaprNamespace();
   const [copyToWorkspaceOpen, setCopyToWorkspaceOpen] = useState(false);
   const [duplicateNameOpen, setDuplicateNameOpen] = useState(false);
+  const [duplicateError, setDuplicateError] = useState<string | null>(null);
   const [currentOrganizationId, setCurrentOrganizationId] = useState<string | null>(null);
   useEffect(() => {
     if (!copyToWorkspaceOpen) return;
@@ -1432,6 +1434,7 @@ export function MiniAppPublishBar({
   const handleDuplicateAsOwn = async (title: string) => {
     if (!cloudLineage) return;
     setUpstreamPulling(true);
+    setDuplicateError(null);
     try {
       const copy = await duplicateAsOwnApp({
         namespaceId: cloudLineage.sourceNamespaceId,
@@ -1445,7 +1448,9 @@ export function MiniAppPublishBar({
       });
       onOpenDependencyApp?.(copy.appId, copy.title);
     } catch (err) {
-      setUpstreamNotice({ tone: "bad", message: (err as Error).message.slice(0, 120) });
+      // Keep the dialog open and say why: the bar's notice only renders inside
+      // the Share sheet, so failures here used to look like nothing happened.
+      setDuplicateError(describeDuplicateError((err as Error).message));
     } finally {
       setUpstreamPulling(false);
     }
@@ -1546,7 +1551,11 @@ export function MiniAppPublishBar({
         open={duplicateNameOpen}
         sourceTitle={appTitle}
         busy={upstreamPulling}
-        onCancel={() => setDuplicateNameOpen(false)}
+        error={duplicateError}
+        onCancel={() => {
+          setDuplicateNameOpen(false);
+          setDuplicateError(null);
+        }}
         onConfirm={(title) => void handleDuplicateAsOwn(title)}
       />
       <CopyAppModal

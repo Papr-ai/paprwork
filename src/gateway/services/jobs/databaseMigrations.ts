@@ -460,6 +460,34 @@ async function applySnapshotToLocalDb(
   return plan.coveredFiles;
 }
 
+/**
+ * Team-shared database on a collaborator's desktop: the publisher owns the
+ * schema and migrates the shared primary; this copy only pulls. Covers every
+ * caller (install, job runs, flush) in one place.
+ */
+async function isCollaboratorCopyOfSharedDb(dbPath: string): Promise<boolean> {
+  try {
+    const { getDatabaseRegistryService } = await import("../DatabaseRegistryService.js");
+    const record = getDatabaseRegistryService().getByPath(dbPath);
+    if (!record) {
+      return false;
+    }
+    const { isCollaboratorOnSharedDatabase } = await import(
+      "../sharedPrimaryTursoResolve.js"
+    );
+    if (!isCollaboratorOnSharedDatabase(record.dbId)) {
+      return false;
+    }
+    console.log(
+      `[Migrations] Skipping ${record.label ?? record.dbId}: team-shared database, ` +
+        "the publisher owns its schema (collaborator copy pulls only)",
+    );
+    return true;
+  } catch {
+    return false;
+  }
+}
+
 /** Apply migrations for a registry db path (no-op when layout unrecognized). */
 export async function applyRegistryDatabaseMigrations(
   dbPath: string,
@@ -467,6 +495,9 @@ export async function applyRegistryDatabaseMigrations(
 ): Promise<string[]> {
   const layout = resolvePersistedDatabaseLayout(dbPath);
   if (!layout || layout.kind !== "registry") {
+    return [];
+  }
+  if (await isCollaboratorCopyOfSharedDb(layout.dbPath)) {
     return [];
   }
   if (

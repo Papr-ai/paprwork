@@ -263,6 +263,22 @@ export function detectAutoPublishDrift(input: PublishDriftInput): string[] {
 }
 
 /** UI display: local prefs when set; otherwise show what is live on cloud. Read-only. */
+/**
+ * The cloud copy is the truth for "Edit the code". Local prefs can be missing
+ * it (another device, reinstall) or stale, and the Share sheet saves the whole
+ * sharing model on every click — so a stale local "off" would silently turn
+ * code install off for everyone. Returns the prefs patch to adopt, or null.
+ */
+export function codeAccessPatchFromMemory(
+  prefs: Pick<CloudPublishAppPrefs, "codeAccess">,
+  memory: MemoryPublishResponseFields | null,
+): Pick<CloudPublishAppPrefs, "codeAccess"> | null {
+  if (!memory?.enabled) return null;
+  const live = memory.codeAccess;
+  if (live !== "install" && live !== "off") return null;
+  return prefs.codeAccess === live ? null : { codeAccess: live };
+}
+
 export function resolveSharingSettingsForDisplay(
   prefs: CloudPublishAppPrefs,
   memory: MemoryPublishResponseFields | null,

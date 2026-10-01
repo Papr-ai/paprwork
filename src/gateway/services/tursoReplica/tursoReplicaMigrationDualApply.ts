@@ -1,6 +1,8 @@
 /**
- * Explicit replica + Turso primary migration apply (Plan A).
- * Desktop path: embedded replica. Cloud authority: Turso primary via HTTP.
+ * Registry migration apply (Plan A).
+ * Default path: applyRegistryMigrationSingleRoute — apply once on the embedded
+ * replica, push through sync. The replica-only / cloud-primary halves remain as
+ * manual recovery tools (papr_db_apply_migration_replica / _cloud).
  */
 
 import type { AppDataSource } from "../appDataSources.js";
@@ -23,7 +25,6 @@ import { isMigrationLedgerMarker } from "../jobs/migrationLedgerPolicy.js";
 import {
   computeMigrationSqlChecksum,
   createMigrationApplyPair,
-  getMigrationApplyPair,
   listUnpairedMigrations,
   markMigrationCloudApplied,
   validateMigrationApplyToken,
@@ -32,8 +33,10 @@ import {
 import {
   migrateLinkedDbViaTursoReplica,
   pullLinkedDbViaTursoReplica,
+  pushLinkedDbViaTursoReplica,
   queryLinkedDbViaTursoReplica,
 } from "./tursoReplicaRouting.js";
+import { REMOTE_SCHEMA_MIGRATIONS_TABLE } from "../tursoPlatformSchema.js";
 import {
   checkMigrationPushConflict,
   listLocalOnlyMigrationIds,
@@ -246,8 +249,44 @@ export async function alignReplicaAfterCloudMigration(
   return { pulled };
 }
 
-/** Combined happy path: replica apply → cloud primary apply → pull align. */
-export async function applyRegistryMigrationDualPath(
+/**
+ * `_papr_schema_migrations` rows written on the replica, in the migration's own
+ * transaction, so both ledgers reach the cloud through the same push as the
+ * schema and seed rows they describe.
+ */
+export function replicaPaprLedgerStatements(
+  migrationId: string,
+): Array<{ sql: string; params?: unknown[] }> {
+  const table = `"${REMOTE_SCHEMA_MIGRATIONS_TABLE}"`;
+  return [
+    {
+      sql:
+        `CREATE TABLE IF NOT EXISTS ${table} (` +
+        "id TEXT PRIMARY KEY, applied_at TEXT NOT NULL, " +
+        "source TEXT NOT NULL DEFAULT 'database_migration', content_hash TEXT)",
+    },
+    {
+      sql:
+        `INSERT OR IGNORE INTO ${table} (id, applied_at, source) ` +
+        "VALUES (?, datetime('now'), 'database_migration')",
+      params: [migrationId],
+    },
+  ];
+}
+
+/**
+ * Single route: apply once on the replica (statements + both ledger rows in one
+ * transaction), then push that change to the Turso primary through sync.
+ *
+ * Replaces the old dual apply (replica with push held + the same SQL again on
+ * the primary over HTTP + pull). The sync engine could not tell those two
+ * copies apart: on pull it replayed the held replica change over the primary's
+ * copy, so non-idempotent seeds (DELETE + INSERT into a UNIQUE table) failed
+ * with "failed to replay local change after remote apply", and the replica's
+ * schema_migrations row never reached the cloud. Verified against a live Turso
+ * database on 2026-10-01 (see tests/migration-single-route.test.ts).
+ */
+export async function applyRegistryMigrationSingleRoute(
   source: AppDataSource,
   migrationRoot: string,
   migrationFileName: string,
@@ -258,42 +297,79 @@ export async function applyRegistryMigrationDualPath(
   replicaApplied: boolean;
   cloudApplied: boolean;
   paired: boolean;
-  pulled: boolean;
+  pushed: boolean;
+  pushError: string | null;
 }> {
-  const replicaResult = await applyRegistryMigrationOnReplicaOnly(
-    source,
-    migrationRoot,
-    migrationFileName,
-  );
+  const migrationId = normalizeMigrationId(migrationFileName);
+  const sql = await loadMigrationSql(migrationRoot, migrationFileName);
+  const sqlChecksum = computeMigrationSqlChecksum(sql);
+  const online = isTursoReplicaOnline();
 
-  let cloudApplied = false;
-  if (isTursoReplicaOnline()) {
-    const cloudResult = await applyRegistryMigrationOnCloudPrimary(
+  if (online) {
+    await pullLinkedDbViaTursoReplica(source);
+  }
+  await ensureReplicaSchemaMigrationsLedger(source);
+
+  let applied = false;
+  if (!(await migrationAlreadyAppliedOnReplica(source, migrationRoot, migrationId))) {
+    const outcome = await migrateLinkedDbViaTursoReplica(
       source,
-      migrationRoot,
-      migrationFileName,
-      replicaResult.applyToken,
+      splitSqlStatements(sql),
+      [...localLedgerStatements(migrationId), ...replicaPaprLedgerStatements(migrationId)],
+      // Push explicitly below (pull-first + migration conflict check), not in the write.
+      REPLICA_NO_PUSH,
     );
-    cloudApplied = cloudResult.applied || cloudResult.paired;
+    for (const skip of outcome.skipped) {
+      console.warn(`[TursoReplica] ${migrationId}: skipped (${skip.reason})`);
+    }
+    applied = true;
+    const schemaOk =
+      isMigrationLedgerMarker(migrationId) ||
+      (await migrationSchemaSatisfiedOnReplica(source, migrationRoot, migrationId));
+    if (!schemaOk) {
+      console.warn(
+        `[TursoReplica] ${migrationId} committed atomically but post-apply schema verification ` +
+          "did not confirm it. Run papr_db_migration_parity if the app misbehaves.",
+      );
+    }
   }
 
-  const pullResult = isTursoReplicaOnline()
-    ? await alignReplicaAfterCloudMigration(source)
-    : { pulled: false };
-
-  const pair = await getMigrationApplyPair(
+  const pair = await createMigrationApplyPair({
     migrationRoot,
-    replicaResult.migrationId,
-  );
+    migrationId,
+    sqlChecksum,
+    replicaAppliedAt: new Date().toISOString(),
+  });
+
+  // Offline: the change waits in the replica and the normal background push
+  // uploads it (with the same conflict check) on reconnect.
+  let pushed = false;
+  let pushError: string | null = null;
+  if (online) {
+    const push = await pushLinkedDbViaTursoReplica(source);
+    pushed = push.ok;
+    pushError = push.ok ? null : (push.error ?? "replica push failed");
+  }
+
+  let paired = false;
+  if (pushed) {
+    const marked = await markMigrationCloudApplied({
+      migrationRoot,
+      migrationId,
+      applyToken: pair.applyToken,
+    });
+    paired = marked.pairedAt !== null;
+  }
 
   return {
-    applied: replicaResult.applied || cloudApplied,
-    migrationId: replicaResult.migrationId,
-    applyToken: replicaResult.applyToken,
-    replicaApplied: replicaResult.applied || Boolean(pair?.replicaAppliedAt),
-    cloudApplied: Boolean(pair?.cloudAppliedAt),
-    paired: Boolean(pair?.pairedAt),
-    pulled: pullResult.pulled,
+    applied,
+    migrationId,
+    applyToken: pair.applyToken,
+    replicaApplied: true,
+    cloudApplied: pushed,
+    paired,
+    pushed,
+    pushError,
   };
 }
 

@@ -151,3 +151,44 @@ function readRegistryDbIdsSync(appDir: string): string[] {
   }
 }
 
+/**
+ * True when this desktop is a COLLABORATOR on a team-shared database: a local
+ * app installed with the shared-primary policy points at it, and the app that
+ * owns its schema is not on this desktop. The publisher migrates the shared
+ * primary; collaborators only pull. Running migrations here replays them over
+ * live team rows whenever the local ledger lags (Enrichment install, 2026-10).
+ */
+export function isCollaboratorOnSharedDatabase(dbId: string): boolean {
+  const record = getDatabaseRegistryService().getById(dbId);
+  if (!record || record.isolation === "per-user") {
+    return false;
+  }
+  const owner = record.schemaOwnerAppId?.trim();
+  const appsRoot = getPaprAppsRoot();
+  if (owner) {
+    try {
+      if (statSync(path.join(appsRoot, owner)).isDirectory()) {
+        return false;
+      }
+    } catch {
+      /* owner app not on this desktop */
+    }
+  }
+  let appIds: string[];
+  try {
+    appIds = readdirSync(appsRoot);
+  } catch {
+    return false;
+  }
+  for (const appId of appIds) {
+    const appDir = path.join(appsRoot, appId);
+    const lineage = readLineageSync(appDir);
+    if (!lineage || !lineageUsesSharedPrimaryDatabase(lineage)) {
+      continue;
+    }
+    if (readRegistryDbIdsSync(appDir).includes(dbId)) {
+      return true;
+    }
+  }
+  return false;
+}

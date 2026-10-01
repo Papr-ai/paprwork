@@ -127,4 +127,16 @@ describe("decideReplicaMigration", () => {
       decideReplicaMigration({ recorded: false, ledgerReadable: false, satisfied: false, rerunSafe: false }),
     ).toEqual({ action: "refuse", reason: "unknown_ledger" });
   });
+
+  it("refuses a destructive pending migration when the ledger is behind (Enrichment)", () => {
+    expect(
+      decideReplicaMigration({ recorded: false, ledgerReadable: true, satisfied: null, rerunSafe: false, ledgerBehind: true }),
+    ).toEqual({ action: "refuse", reason: "ledger_behind" });
+    expect(
+      decideReplicaMigration({ recorded: false, ledgerReadable: true, satisfied: null, rerunSafe: true, ledgerBehind: true }),
+    ).toEqual({ action: "apply", reason: "pending" });
+    expect(
+      decideReplicaMigration({ recorded: false, ledgerReadable: true, satisfied: true, rerunSafe: false }),
+    ).toEqual({ action: "skip", reason: "schema_present" });
+  });
 });

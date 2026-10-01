@@ -31,6 +31,14 @@ export function isAppCodeRecentlyVerified(
   return { verified: true, commitSha: cursor.lastCommitSha };
 }
 
+/** Paths the writer seeds when it creates a per-app repo (never app code). */
+const SCAFFOLD_PATHS = new Set(["README.md", ".gitignore"]);
+
+/** True when the remote repo has only the creation scaffold — no published app files. */
+export function isScaffoldOnlyHead(head: AppRepoHeadResponse): boolean {
+  return head.files.every((file) => SCAFFOLD_PATHS.has(file.path));
+}
+
 /** True when last-pulled commit or acked blob OIDs match remote HEAD (no git clone needed). */
 export async function isLocalAppCodeAtRemoteHead(
   appId: string,
@@ -43,6 +51,14 @@ export async function isLocalAppCodeAtRemoteHead(
 
   const cursors = await readAppRepoCommitCursors();
   if (cursors[trimmed]?.lastCommitSha === head.commitSha) {
+    return true;
+  }
+
+  // A brand-new writer repo holds only the bot's scaffold commit (README.md).
+  // That is not "newer code on the web" — nothing has been published yet, and
+  // the first publish is about to replace it. Without this, a new app shows
+  // "Newer version on web" the moment it goes live, before its first commit.
+  if (isScaffoldOnlyHead(head)) {
     return true;
   }
 
