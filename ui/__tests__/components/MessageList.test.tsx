@@ -476,4 +476,27 @@ describe("MessageList", () => {
       expect(messageList).toBeDefined();
     });
   });
+
+  describe("empty agent turns", () => {
+    const shell: ChatMessage = { id: "a-empty", role: "assistant", content: "" };
+    const msgs: ChatMessage[] = [
+      { id: "u1", role: "user", content: "same for 183" },
+      shell,
+      { id: "u2", role: "user", content: "same for 189" },
+      { id: "a2", role: "assistant", content: "On it." },
+    ];
+
+    it("does not render a settled turn that produced nothing", () => {
+      render(<MessageList chatId="test-chat" messages={msgs} isStreaming={false} />);
+      expect(screen.getAllByTestId("message-item-assistant")).toHaveLength(1);
+      expect(screen.getAllByTestId("message-item-user")).toHaveLength(2);
+    });
+
+    it("keeps the live turn's row while the agent is working", () => {
+      render(
+        <MessageList chatId="test-chat" messages={[msgs[0], shell]} isSending={true} />,
+      );
+      expect(screen.getAllByTestId("message-item-assistant")).toHaveLength(1);
+    });
+  });
 });

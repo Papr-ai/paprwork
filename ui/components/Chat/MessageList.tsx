@@ -21,6 +21,7 @@ import { readIncomingFiles } from "../../utils/chatAttachmentFiles";
 import { isHiddenContinueUserMessage } from "../../lib/agentStreamRecovery";
 import { groupDelegationFollowUpMessages } from "../../utils/delegationMessageGrouping";
 import { AgentLoadingDots } from "./AgentLoadingDots";
+import { assistantMessageHasVisibleContent } from "../../utils/assistantMessageVisibility";
 import "./MessageList.css";
 
 interface MessageListProps {
@@ -98,7 +99,21 @@ export const MessageList: React.FC<MessageListProps> = ({
   );
 
   // Filter out sub-agent trigger messages from main chat (they appear in MiniChatCard)
-  const filteredMessages = groupedMessages.filter((msg) => {
+  const turnUiActive = agentTurnInFlight || !!isSending || !!isWaitingForAgentSlot;
+  const filteredMessages = groupedMessages.filter((msg, index) => {
+    // An agent turn that ended with nothing at all (stopped before its first
+    // token — e.g. "Send now" on a queued follow-up right after the previous
+    // one started) is not a message. Rendering it leaves an empty "Pen" shell
+    // between the user's messages. The live turn keeps its row (loading dots).
+    if (
+      msg.role === "assistant" &&
+      !msg.isStreaming &&
+      !msg.error &&
+      !assistantMessageHasVisibleContent(msg) &&
+      !(turnUiActive && index === groupedMessages.length - 1)
+    ) {
+      return false;
+    }
     // Hide synthetic sub-agent user messages
     if (msg.role === "user" && isHiddenContinueUserMessage(msg.content)) {
       return false;

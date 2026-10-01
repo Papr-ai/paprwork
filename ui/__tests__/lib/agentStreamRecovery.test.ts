@@ -757,3 +757,70 @@ describe("shouldResumeWithFreshGatewayStream", () => {
     ).toBe(false);
   });
 });
+
+describe("mergeHistoryWithLocal — saved messages outside the window (stuck queue)", () => {
+  // Real ids are msg-<uuid>; optimistic sends are msg-user-<ms>.
+  const oldContinue = "msg-cb366112-daa2-49c5-9e92-658b3a1a01c0";
+  const a1 = "msg-8abcbcd7-78e9-4ece-af4a-3df8602ca34b";
+  const u2 = "msg-3c6504e4-8a93-4039-b838-86fd005901a0";
+  const a2 = "msg-265851e4-ac7f-440d-82f7-d2ea2abe5a50";
+
+  it("never plants an older saved user message below the latest reply", () => {
+    // "continue" was typed while a1 streamed: locally it sits after a1, but by
+    // timestamp it is older — so the newest-N window starts at a1 without it.
+    const local: ChatMessage[] = [
+      { id: a1, role: "assistant", content: "This changes the picture" },
+      { id: oldContinue, role: "user", content: "continue" },
+      { id: u2, role: "user", content: "same for 181" },
+      { id: a2, role: "assistant", content: "Done" },
+    ];
+    const server: ChatMessage[] = [
+      { id: a1, role: "assistant", content: "This changes the picture" },
+      { id: u2, role: "user", content: "same for 181" },
+      { id: a2, role: "assistant", content: "Done" },
+    ];
+
+    const merged = mergeHistoryWithLocal(local, server);
+
+    expect(merged.at(-1)?.id).toBe(a2);
+    expect(merged.findIndex((m) => m.id === oldContinue)).toBeLessThan(
+      merged.findIndex((m) => m.id === a2),
+    );
+    // …so the queue can drain: the last user turn has its reply.
+    expect(priorUserTurnSettledForQueue(merged)).toBe(true);
+  });
+
+  it("heals a store where the old message already sits at the tail", () => {
+    const local: ChatMessage[] = [
+      { id: u2, role: "user", content: "same for 181" },
+      { id: a2, role: "assistant", content: "Done" },
+      { id: oldContinue, role: "user", content: "continue" },
+    ];
+    const server: ChatMessage[] = [
+      { id: u2, role: "user", content: "same for 181" },
+      { id: a2, role: "assistant", content: "Done" },
+    ];
+    expect(priorUserTurnSettledForQueue(local)).toBe(false);
+
+    const merged = mergeHistoryWithLocal(local, server);
+
+    expect(merged.at(-1)?.id).toBe(a2);
+    expect(priorUserTurnSettledForQueue(merged)).toBe(true);
+  });
+
+  it("still keeps an unsent optimistic message at the end", () => {
+    const local: ChatMessage[] = [
+      { id: u2, role: "user", content: "same for 181" },
+      { id: a2, role: "assistant", content: "Done" },
+      { id: "msg-user-1790880085911", role: "user", content: "same for 189" },
+    ];
+    const server: ChatMessage[] = [
+      { id: u2, role: "user", content: "same for 181" },
+      { id: a2, role: "assistant", content: "Done" },
+    ];
+
+    expect(mergeHistoryWithLocal(local, server).at(-1)?.id).toBe(
+      "msg-user-1790880085911",
+    );
+  });
+});
