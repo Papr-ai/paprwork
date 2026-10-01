@@ -258,6 +258,7 @@ export class CloudAppInstallService {
       mode,
       catalogScope: input.catalogScope,
       accessMode: prepare.accessMode,
+      explicitPolicy: input.installDbPolicy,
     });
     const cloned = await cloneAppSource(prepare);
 
@@ -272,6 +273,7 @@ export class CloudAppInstallService {
       linkedIsolations,
       input.catalogScope,
       input.installDbPolicy,
+      prepare.accessMode,
     );
     const databasePolicy = databasePolicyFromInstallPolicy(installDbPolicy);
 
@@ -474,18 +476,24 @@ export class CloudAppInstallService {
         );
       }
 
+      // The publisher commit this copy starts from. Proposals branch from it
+      // and pulls merge against it (see cloudSync/threeWayMerge.ts).
+      const { readHeadCommit } = await import("./cloudSync/threeWayMerge.js");
+      const baseCommit = await readHeadCommit(cloned.repoDir);
+
       const lineage: CloudAppLineageFile = {
         schemaVersion: "1.2.0",
         lineageId: prepare.lineageId,
         mode: prepare.mode,
         source: prepare.source,
         databasePolicy,
+        ...(baseCommit ? { baseCommit } : {}),
         ...(input.sourceAudience ? { sourceAudience: input.sourceAudience } : {}),
         installedAt: new Date().toISOString(),
         ...(prepare.mode === "track"
           ? {
               lastSyncedAt: new Date().toISOString(),
-              trackAutoPull: true,
+              trackAutoPull: false,
               // Hash what is on disk (after publisher→local ID remap), not the
               // raw upstream files; otherwise remapped files look like local
               // edits and every "Update from publisher" reports them as conflicts.

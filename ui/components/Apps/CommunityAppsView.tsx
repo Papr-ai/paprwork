@@ -17,8 +17,8 @@ import { useTabs } from "../../hooks/useTabs";
 import type { WizardResult } from "./ImportSetupWizard";
 import type { CommunityCatalogEntry, CommunityCatalogScope } from "../../../src/core/types/communityCatalog";
 import { isTeamSharedVisibility } from "../../../src/core/types/communityCatalog";
-import { requiresInstallModeChoice } from "../../../src/core/utils/cloudCatalogInstallPolicy";
-import type { RequirementItem, RequiredKeySpec } from "../../../src/core/types/bundles";
+import { resolveOneInstallSelection } from "../../../src/core/utils/cloudCatalogInstallPolicy";
+import type { RequirementItem } from "../../../src/core/types/bundles";
 import { normalizeRequirements } from "../../../src/core/types/bundles";
 import { lookupService } from "../../../src/core/data/knownServices";
 import { useAppCategories } from "../../hooks/useAppCategories";
@@ -54,7 +54,6 @@ import {
   cloudCatalogPreviewEntityId,
   type CloudCatalogPreviewTabMetadata,
 } from "../../types/cloudCatalogPreviewTab";
-import { CloudCatalogInstallModal } from "./CloudCatalogInstallModal";
 import { ShareAudienceIcon } from "./WebSyncPopover";
 import { shareGlyphForCatalogEntry } from "../../utils/shareGlyph";
 import { shareAudienceShortLabel } from "../../utils/shareAudienceGlyphs";
@@ -66,6 +65,7 @@ import {
   extractOptionalInstallDependencies,
   installCloudCatalogApp,
   planCloudInstallFailureHandoff,
+  type CloudCatalogInstallSelection,
 } from "../../utils/cloudCatalogInstall";
 import { openCloudInstalledAppWithChat } from "../../utils/openCloudInstalledAppWithChat";
 import type { CloudAppDependenciesFile } from "../../../src/core/types/cloudAppDependencies";
@@ -76,12 +76,6 @@ const GATEWAY =
     ? `http://${import.meta.env.VITE_GATEWAY_HOST || "localhost"}:${import.meta.env.VITE_GATEWAY_PORT || "18789"}`
     : "http://localhost:18789";
 
-type CloudInstallMode = "fork" | "track";
-type CloudInstallDbPolicy = "fork_empty" | "shared_primary";
-interface CloudCatalogInstallSelection {
-  mode: CloudInstallMode;
-  installDbPolicy: CloudInstallDbPolicy;
-}
 
 interface CommunityCatalog {
   schemaVersion: string;
@@ -264,7 +258,6 @@ export function CommunityAppsView({
   const [installToast, setInstallToast] = useState<string | null>(null);
   const [installError, setInstallError] = useState<string | null>(null);
   const [lineageIndex, setLineageIndex] = useState<CloudLineageIndex | null>(null);
-  const [installModeEntry, setInstallModeEntry] = useState<CommunityCatalogEntry | null>(null);
   const [optionalDepsNotice, setOptionalDepsNotice] = useState<{
     appId: string;
     appTitle: string;
@@ -505,7 +498,7 @@ export function CommunityAppsView({
       installDbPolicy: "fork_empty",
     },
   ) => {
-    const { mode, installDbPolicy } = selection;
+    const { mode } = selection;
     if (!entry.namespaceId || !entry.slug) {
       setError("This cloud app is missing namespace or slug metadata");
       return;
@@ -530,7 +523,7 @@ export function CommunityAppsView({
       const body = result.data;
 
       const title = body.app?.title ?? entry.name;
-      const modeLabel = mode === "track" ? "Linked" : "Forked";
+      const modeLabel = "Installed";
       trackEvent("paprwork_community_app_installed", { app_name: entry.name, app_id: entry.appId } as Record<string, unknown>);
 
       const optionalDeps = extractOptionalInstallDependencies(body);
@@ -618,20 +611,15 @@ export function CommunityAppsView({
       void installCloudApp(entry);
       return;
     }
-    if (
-      !requiresInstallModeChoice({
+    // v5: one Install (see resolveOneInstallSelection).
+    void installCloudApp(
+      entry,
+      resolveOneInstallSelection({
         catalogScope: scope,
         visibility: entry.visibility,
         codeInstallable: entry.codeInstallable,
-      })
-    ) {
-      void installCloudApp(entry, {
-        mode: "fork",
-        installDbPolicy: "fork_empty",
-      });
-      return;
-    }
-    setInstallModeEntry(entry);
+      }),
+    );
   };
 
   const openLocalApp = useCallback(
@@ -668,7 +656,7 @@ export function CommunityAppsView({
       };
 
       const entityId = cloudCatalogPreviewEntityId(entry.catalogId);
-      const tabId = createTab("app", entityId, entry.name, metadata);
+      const tabId = createTab("app", entityId, entry.name, metadata as unknown as Record<string, unknown>);
       switchToTab(tabId);
     },
     [createTab, switchToTab],
@@ -1010,22 +998,6 @@ export function CommunityAppsView({
       ) : (
         renderCatalogGrid(publicWorkspaceEntries)
       )}
-
-      {installModeEntry ? (
-        <CloudCatalogInstallModal
-          entry={installModeEntry}
-          catalogScope={scope}
-          installing={installingId === installModeEntry.catalogId}
-          onClose={() => setInstallModeEntry(null)}
-          onSelectMode={(selection) => {
-            const target = installModeEntry;
-            if (!target) return;
-            void installCloudApp(target, selection).finally(() => {
-              setInstallModeEntry(null);
-            });
-          }}
-        />
-      ) : null}
 
       {optionalDepsNotice ? (
         <CloudInstallOptionalDepsNotice

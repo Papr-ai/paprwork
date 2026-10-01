@@ -394,12 +394,17 @@ export const ChatContainer: React.FC<ChatContainerProps> = ({ chatId }): React.R
     const autoContinueArgs = {
       chatId,
       messages,
-      isSending: isSending || isWaitingForAgentSlot,
+      isSending:
+        isSending ||
+        isWaitingForAgentSlot ||
+        isFinishingWork ||
+        !!liveStreamRequestId,
       connectionPaused,
       needsStreamRecovery,
       streamRecoveryReason,
       lastTurnOutcome,
       gatewayReady: gatewaySupervisorReady,
+      liveStreamRequestId,
     };
     const autoContinueBlock = getAutoContinueBlockReason(autoContinueArgs);
     if (autoContinueBlock) {
@@ -450,6 +455,8 @@ export const ChatContainer: React.FC<ChatContainerProps> = ({ chatId }): React.R
     gatewaySupervisorReady,
     isSending,
     isWaitingForAgentSlot,
+    isFinishingWork,
+    liveStreamRequestId,
     messages,
     needsStreamRecovery,
     streamRecoveryReason,

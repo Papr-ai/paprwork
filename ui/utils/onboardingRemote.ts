@@ -54,11 +54,15 @@ export function recordOnboardingStep(step: OnboardingStepId): void {
  * Mark onboarding finished. Awaited by callers that want the write to land
  * before the gate releases, but still safe to ignore.
  */
-export async function recordOnboardingComplete(): Promise<void> {
+export async function recordOnboardingComplete(
+  options: { marketingOptIn?: boolean } = {},
+): Promise<void> {
   try {
     await window.electronAPI?.papr?.setOnboardingState?.({
       step: "done",
       completed: true,
+      // Only an explicit tick is sent; unticked = not asked here (never a silent opt-out).
+      ...(options.marketingOptIn === true ? { marketingOptIn: true } : {}),
     });
   } catch {
     // Soft by design.

@@ -2762,6 +2762,25 @@ async function startGateway(): Promise<void> {
       }
     });
 
+    app.post("/api/cloud/track-sync/:appId/detach", async (req, res) => {
+      try {
+        const result = await getCloudAppTrackSyncService().detach(req.params.appId);
+        if (!result.detached) {
+          res.status(409).json({
+            ...result,
+            error:
+              result.reason === "on_team_data"
+                ? "Switch this copy to your own data before detaching."
+                : "This app isn't linked to an original.",
+          });
+          return;
+        }
+        res.json(result);
+      } catch (err) {
+        res.status(500).json({ error: (err as Error).message });
+      }
+    });
+
     app.post("/api/cloud/track-sync/:appId", async (req, res) => {
       try {
         const discardLocal =

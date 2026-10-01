@@ -86,7 +86,7 @@ describe("reconcileOidCacheWithRemoteHead", () => {
     expect(second.pathsUpdated).toBe(0);
   });
 
-  it("replaces stale OIDs for paths on HEAD", async () => {
+  it("keeps a known OID even when HEAD moved (stale copy must 409, not overwrite)", async () => {
     const appId = "aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa";
     const cache = await readOidCache();
     cache.apps[appId] = { "README.md": "staleoid1111111111111111111111111111111111" };
@@ -104,10 +104,16 @@ describe("reconcileOidCacheWithRemoteHead", () => {
     const headFiles = [
       { path: "README.md", blobOid: "freshoid2222222222222222222222222222222222" },
     ];
-    const result = await reconcileOidCacheWithRemoteHead(appId, headFiles);
-    expect(result.realigned).toBe(true);
+    const result = await reconcileOidCacheWithRemoteHead(appId, [
+      ...headFiles,
+      { path: "index.html", blobOid: "newpath3333333333333333333333333333333333" },
+    ]);
+    expect(result).toEqual({ realigned: true, pathsUpdated: 1 });
+    expect(await getCachedBlobOid(appId, "index.html")).toBe(
+      "newpath3333333333333333333333333333333333",
+    );
     expect(await getCachedBlobOid(appId, "README.md")).toBe(
-      "freshoid2222222222222222222222222222222222",
+      "staleoid1111111111111111111111111111111111",
     );
   });
 

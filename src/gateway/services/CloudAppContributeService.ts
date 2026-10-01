@@ -24,7 +24,16 @@ import {
 import { resolveMigrationRootFromDbPath } from "./jobs/databaseMigrations.js";
 import { applyIdRemapsToDirectory } from "../utils/applyIdRemaps.js";
 import { mergeContributeDataIndexesIntoRepo } from "./cloudSync/contributeDataIndexMerge.js";
-import { stripProposalExcludedAppFiles } from "./cloudSync/contributeProposalPaths.js";
+import { buildProposalChangeSet, type ProposalTree } from "./cloudSync/contributeChangeSet.js";
+import { isLocalScratchPath } from "./cloudSync/proposalFileMerge.js";
+import {
+  previewMergeConflicts,
+  readFilesAtCommit,
+  resolveBaseCommit,
+} from "./cloudSync/threeWayMerge.js";
+import { hashBlobContent } from "./syncV3/computeParentHash.js";
+import { isCollaboratorEditablePath } from "./CloudAppTrackSyncService.js";
+import type { CloudAppLineageFile } from "../../core/types/cloudAppLineage.js";
 import {
   applyProposableMetadata,
   hasMetadataChanges,
@@ -33,6 +42,7 @@ import {
 import { parseCloudAppLineageFile } from "../../core/utils/cloudAppLineage.js";
 import {
   appSourceRepoRelativeDir,
+  isAppRepoRootPath,
   linkedJobRepoRelativeDir,
 } from "./cloudSync/cloudGitClone.js";
 
@@ -130,7 +140,15 @@ async function readLineageId(installedAppId: string): Promise<string> {
     CLOUD_LINEAGE_FILENAME,
   );
   const raw = await fs.readFile(lineagePath, "utf8");
-  const parsed = JSON.parse(raw) as { lineageId?: string };
+  const parsed = JSON.parse(raw) as { lineageId?: string; detachedAt?: string };
+  // Detach is one-way: the copy no longer follows or proposes to the original.
+  // The server still has the lineage (kept for credit), so refuse here.
+  if (parsed.detachedAt) {
+    throw Object.assign(
+      new Error("This copy was detached from the original, so it can't propose changes to it."),
+      { code: "copy_detached" },
+    );
+  }
   if (!parsed.lineageId?.trim()) {
     throw new Error("Fork lineage missing — reinstall from cloud catalog");
   }
@@ -260,72 +278,6 @@ async function collectMigrationTrees(
   return trees;
 }
 
-async function buildContributeStaging(
-  forkAppId: string,
-  targetAppId: string,
-  repoPath: string,
-  tempRoot: string,
-): Promise<StagedRepoTree[]> {
-  const paprDir = getPaprRoot();
-  await prepareAppForCloudGitSync(paprDir, forkAppId);
-
-  const remaps = new Map<string, string>([[forkAppId, targetAppId]]);
-  const trees: StagedRepoTree[] = [];
-  const appRepoDir = appSourceRepoRelativeDir(repoPath, targetAppId);
-
-  const forkAppDir = path.join(getPaprAppsRoot(), forkAppId);
-  const appFiles = await stageDirectoryWithRemaps(
-    forkAppDir,
-    remaps,
-    tempRoot,
-    "app-staging",
-  );
-  // Build outputs + per-copy metadata stay at the owner's version on the
-  // branch; the owner's publish regenerates them after the merge.
-  stripProposalExcludedAppFiles(appFiles);
-  if (appFiles.size > 0) {
-    trees.push({
-      repoRelativeDir: appRepoDir,
-      files: appFiles,
-    });
-  }
-
-  for (const jobId of resolveAppDependentJobIds(paprDir, forkAppId)) {
-    const jobDir = path.join(paprDir, "Jobs", jobId);
-    if (!(await pathExists(jobDir))) continue;
-    const jobFiles = await stageDirectoryWithRemaps(
-      jobDir,
-      remaps,
-      tempRoot,
-      `job-${jobId}`,
-    );
-    if (jobFiles.size > 0) {
-      trees.push({
-        repoRelativeDir: linkedJobRepoRelativeDir(repoPath, jobId),
-        files: jobFiles,
-      });
-    }
-  }
-
-  trees.push(...(await collectMigrationTrees(paprDir, forkAppId, remaps, tempRoot)));
-  return trees;
-}
-
-async function writeStagedTree(
-  repoDir: string,
-  tree: StagedRepoTree,
-): Promise<void> {
-  const targetDir =
-    tree.repoRelativeDir === "."
-      ? repoDir
-      : path.join(repoDir, tree.repoRelativeDir);
-  for (const [relative, content] of tree.files) {
-    const dest = path.join(targetDir, relative);
-    await fs.mkdir(path.dirname(dest), { recursive: true });
-    await fs.writeFile(dest, content, "utf8");
-  }
-}
-
 /** Returns the repo-relative metadata.json path if it was changed. */
 async function applyMetadataFieldProposal(
   repoDir: string,
@@ -362,10 +314,78 @@ async function applyMetadataFieldProposal(
   return repoRel;
 }
 
+interface StagedProposalTree {
+  repoRelativeDir: string;
+  files: Map<string, string>;
+  kind: "app" | "job" | "migrations";
+}
+
+/** Local side of a proposal: app folder, linked Jobs/{id}, registry migrations. */
+async function buildContributeStaging(
+  forkAppId: string,
+  targetAppId: string,
+  repoPath: string,
+  tempRoot: string,
+): Promise<StagedProposalTree[]> {
+  const paprDir = getPaprRoot();
+  await prepareAppForCloudGitSync(paprDir, forkAppId);
+
+  const remaps = new Map<string, string>([[forkAppId, targetAppId]]);
+  const trees: StagedProposalTree[] = [];
+
+  const forkAppDir = path.join(getPaprAppsRoot(), forkAppId);
+  const appFiles = await stageDirectoryWithRemaps(forkAppDir, remaps, tempRoot, "app-staging");
+  trees.push({
+    repoRelativeDir: appSourceRepoRelativeDir(repoPath, targetAppId),
+    files: appFiles,
+    kind: "app",
+  });
+
+  for (const jobId of resolveAppDependentJobIds(paprDir, forkAppId)) {
+    const jobDir = path.join(paprDir, "Jobs", jobId);
+    if (!(await pathExists(jobDir))) continue;
+    const jobFiles = await stageDirectoryWithRemaps(jobDir, remaps, tempRoot, `job-${jobId}`);
+    trees.push({
+      repoRelativeDir: linkedJobRepoRelativeDir(repoPath, jobId),
+      files: jobFiles,
+      kind: "job",
+    });
+  }
+
+  for (const tree of await collectMigrationTrees(paprDir, forkAppId, remaps, tempRoot)) {
+    let dir = tree.repoRelativeDir;
+    // Per-app repos keep schema-owner migrations at databases/{slug}/migrations
+    // (see syncV3/collectAppOpFiles.ts), not the workspace's data/databases/.
+    if (isAppRepoRootPath(repoPath) && dir.startsWith("data/databases/")) {
+      dir = dir.slice("data/".length);
+    }
+    trees.push({ repoRelativeDir: dir, files: tree.files, kind: "migrations" });
+  }
+  return trees;
+}
+
+/** Repo-path → blob id of local files that should match the publisher verbatim. */
+function localBlobIdsForInference(trees: StagedProposalTree[]): Map<string, string> {
+  const out = new Map<string, string>();
+  for (const tree of trees) {
+    if (tree.kind === "migrations") continue;
+    for (const [rel, content] of tree.files) {
+      if (isLocalScratchPath(rel, { job: tree.kind === "job" })) continue;
+      if (tree.kind === "job" && rel === "job.json") continue;
+      if (tree.kind === "app") {
+        if (!isCollaboratorEditablePath(rel) || rel === "README.md" || rel.startsWith("jobs/")) continue;
+      }
+      const repoPath = tree.repoRelativeDir === "." ? rel : `${tree.repoRelativeDir}/${rel}`;
+      out.set(repoPath, hashBlobContent(content));
+    }
+  }
+  return out;
+}
+
 async function pushContributeBranch(
   prepare: PrepareResponse,
   forkAppId: string,
-): Promise<{ headSha: string; stagedPaths: string[] }> {
+): Promise<{ headSha: string; stagedPaths: string[]; baseCommit: string }> {
   const tempRoot = await fs.mkdtemp(path.join(os.tmpdir(), "papr-contrib-"));
   const repoDir = path.join(tempRoot, "repo");
   const env = ephemeralGitEnv();
@@ -380,37 +400,83 @@ async function pushContributeBranch(
     tPrev = now;
   };
   try {
-    const trees = await buildContributeStaging(
+    const staged = await buildContributeStaging(
       forkAppId,
       prepare.targetAppId,
       prepare.repoPath,
       tempRoot,
     );
-    if (trees.length === 0) {
-      throw new Error("No app or linked job files to contribute");
-    }
     mark("stage");
 
-    await runCommand(
-      "git",
-      ["clone", "--filter=blob:none", cloneUrl, repoDir],
-      { env, timeoutMs: 180_000 },
-    );
+    await runCommand("git", ["clone", "--filter=blob:none", "--no-checkout", cloneUrl, repoDir], {
+      env,
+      timeoutMs: 180_000,
+    });
     mark("clone");
 
-    await runCommand(
-      "git",
-      ["checkout", "-b", prepare.branch, "origin/main"],
-      { cwd: repoDir, env },
+    // Branch from the commit this copy is based on — not the publisher's
+    // latest main. Files the publisher changed since then are untouched by
+    // the branch, and GitHub's three-way merge decides what actually overlaps.
+    let lineage: CloudAppLineageFile | null = null;
+    try {
+      lineage = parseCloudAppLineageFile(
+        await fs.readFile(path.join(getPaprAppsRoot(), forkAppId, CLOUD_LINEAGE_FILENAME), "utf8"),
+      );
+    } catch {
+      lineage = null;
+    }
+    const base = await resolveBaseCommit(
+      repoDir,
+      lineage?.baseCommit,
+      async () => localBlobIdsForInference(staged),
+      env,
     );
+    if (!base) {
+      throw new Error(
+        "Couldn't tell which version of the publisher's app this copy is based on. " +
+          "Get the publisher's updates first, then propose again.",
+      );
+    }
+    if (base.inferred) {
+      console.info(`[CloudContribute] inferred base commit ${base.sha.slice(0, 12)} for ${forkAppId}`);
+    }
+    mark("base");
+
+    const hasJobTrees = staged.some((t) => t.kind === "job");
+    const trees: ProposalTree[] = [];
+    for (const tree of staged) {
+      trees.push({
+        repoDir: tree.repoRelativeDir,
+        local: tree.files,
+        base: await readFilesAtCommit(repoDir, base.sha, tree.repoRelativeDir, env, tree.files),
+        kind: tree.kind,
+        // The app folder's bundled jobs/ copy is stale once Jobs/{id} exists;
+        // the job trees own those paths.
+        ...(tree.kind === "app" && hasJobTrees ? { skipPrefixes: ["jobs/"] } : {}),
+      });
+    }
+    const changes = buildProposalChangeSet(trees);
+    if (changes.ignored.length > 0) {
+      console.info(
+        `[CloudContribute] left out platform-rewritten files: ${changes.ignored.join(", ")}`,
+      );
+    }
+    mark("diff");
+
+    await runCommand("git", ["checkout", "-b", prepare.branch, base.sha], { cwd: repoDir, env });
     mark("checkout");
 
-    for (const tree of trees) {
-      await writeStagedTree(repoDir, tree);
+    for (const [repoPath, content] of changes.writes) {
+      const dest = path.join(repoDir, repoPath);
+      await fs.mkdir(path.dirname(dest), { recursive: true });
+      await fs.writeFile(dest, content, "utf8");
+    }
+    for (const repoPath of changes.deletes) {
+      await fs.rm(path.join(repoDir, repoPath), { force: true });
     }
 
     // metadata.json never ships whole; deliberate title/description/icon/tag
-    // edits are applied field-by-field onto the owner's current file.
+    // edits are applied field-by-field onto the publisher's file.
     const metadataRepoPath = await applyMetadataFieldProposal(
       repoDir,
       forkAppId,
@@ -426,48 +492,59 @@ async function pushContributeBranch(
 
     const stagePaths = [
       ...new Set([
-        ...trees.map((t) => t.repoRelativeDir),
+        ...changes.writes.keys(),
+        ...changes.deletes,
         ...indexMerge.paths,
         ...(metadataRepoPath ? [metadataRepoPath] : []),
       ]),
-    ];
-    await runCommand("git", ["add", "--", ...stagePaths], {
-      cwd: repoDir,
-      env,
-    });
+    ].sort();
+    if (stagePaths.length === 0) {
+      throw new Error("No changes to contribute — your copy matches the publisher's");
+    }
+    await runCommand("git", ["add", "-A", "--", ...stagePaths], { cwd: repoDir, env });
 
-    const staged = (
-      await runCommand("git", ["diff", "--cached", "--name-only"], {
-        cwd: repoDir,
-        env,
-      })
+    const stagedNames = (
+      await runCommand("git", ["diff", "--cached", "--name-only"], { cwd: repoDir, env })
     ).trim();
-    if (!staged) {
-      throw new Error("No changes to contribute — fork matches upstream");
+    if (!stagedNames) {
+      throw new Error("No changes to contribute — your copy matches the publisher's");
     }
 
-    const commitMsg = `contrib: ${prepare.branch}\n\nContribute-back from ${forkAppId}`;
+    const commitMsg = `contrib: ${prepare.branch}\n\nContribute-back from ${forkAppId} (base ${base.sha.slice(0, 12)})`;
     await runCommand("git", ["commit", "-m", commitMsg], { cwd: repoDir, env });
     mark("write+commit");
 
-    await runCommand(
-      "git",
-      ["push", "-u", "origin", prepare.branch],
-      { cwd: repoDir, env, timeoutMs: 180_000 },
-    );
+    // Same check GitHub will do on approve, done before anything is sent:
+    // edits that overlap lines the publisher changed since the base.
+    const conflicts = await previewMergeConflicts(repoDir, "origin/main", "HEAD", env);
+    if (conflicts && conflicts.length > 0) {
+      throw Object.assign(
+        new Error(
+          `Your edits overlap changes the publisher made since your copy was updated (${conflicts
+            .slice(0, 6)
+            .join(", ")}${conflicts.length > 6 ? ", …" : ""}). Get the publisher's updates, resolve those files, then propose again.`,
+        ),
+        { code: "contribute_conflicts", conflictFiles: conflicts },
+      );
+    }
+    mark("conflict-check");
+
+    await runCommand("git", ["push", "-u", "origin", prepare.branch], {
+      cwd: repoDir,
+      env,
+      timeoutMs: 180_000,
+    });
     mark("push");
     console.info(
-      `[CloudContribute] push ${prepare.branch} total=${Date.now() - t0}ms`,
+      `[CloudContribute] push ${prepare.branch} files=${stagedNames.split("\n").length} total=${Date.now() - t0}ms`,
       timings,
     );
 
-    const headSha = (
-      await runCommand("git", ["rev-parse", "HEAD"], { cwd: repoDir, env })
-    ).trim();
+    const headSha = (await runCommand("git", ["rev-parse", "HEAD"], { cwd: repoDir, env })).trim();
     if (!headSha) {
       throw new Error("Failed to resolve commit SHA after push");
     }
-    return { headSha, stagedPaths: stagePaths };
+    return { headSha, stagedPaths: stagedNames.split("\n").filter(Boolean), baseCommit: base.sha };
   } finally {
     await fs.rm(tempRoot, { recursive: true, force: true }).catch(() => {});
   }

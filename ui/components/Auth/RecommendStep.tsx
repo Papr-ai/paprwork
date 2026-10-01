@@ -17,7 +17,7 @@
  * workspace, so the gate must be gone before it fires.
  */
 
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import { RecommendedApps } from "../Onboarding/RecommendedApps";
 import {
   getOnboardingState,
@@ -61,6 +61,14 @@ export function RecommendStep({ onComplete, previewMode = false, onBack }: Recom
   const [providerLine, setProviderLine] = useState<string | undefined>();
   /** Holding on this screen until the gateway can actually answer a chat. */
   const [preparing, setPreparing] = useState(false);
+  /**
+   * Marketing email consent. UNCHECKED by default — a pre-ticked box is not
+   * valid consent (GDPR Art. 7 / Recital 32). Lives on this stage because it is
+   * the one every new user reaches; read via ref so advancePhase stays stable.
+   */
+  const [marketingOptIn, setMarketingOptIn] = useState(false);
+  const marketingOptInRef = useRef(false);
+  marketingOptInRef.current = marketingOptIn;
 
   /**
    * Release the gate only once the gateway has finished loading. Releasing
@@ -123,7 +131,7 @@ export function RecommendStep({ onComplete, previewMode = false, onBack }: Recom
       // Durable, per-user record — this is the last gated stage, so reaching
       // any exit means setup is finished. Skipping still counts: the user made
       // a choice and must not be re-gated on their next machine.
-      void recordOnboardingComplete();
+      void recordOnboardingComplete({ marketingOptIn: marketingOptInRef.current });
     },
     [previewMode],
   );
@@ -227,6 +235,16 @@ export function RecommendStep({ onComplete, previewMode = false, onBack }: Recom
           freeformOpen={freeformOpen}
           onFreeformOpenChange={setFreeformOpen}
         />
+        {!previewMode && (
+          <label className="recommend-step__consent">
+            <input
+              type="checkbox"
+              checked={marketingOptIn}
+              onChange={(event) => setMarketingOptIn(event.target.checked)}
+            />
+            <span>Email me occasional product updates and tips from Papr. Unsubscribe anytime.</span>
+          </label>
+        )}
         {(onBack || freeformOpen) && (
           <div className="onboarding-foot">
             <button

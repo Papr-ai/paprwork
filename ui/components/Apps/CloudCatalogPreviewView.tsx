@@ -9,7 +9,6 @@ import { canInstallCloudCatalogEntry } from "../../utils/communityAppLocalOpen";
 import { fetchCatalogEntryById } from "../../utils/fetchCatalogEntry";
 import { prepareCloudPreviewIframe } from "../../utils/cloudPreviewSession";
 import { useCloudCatalogInstallFlow } from "../../hooks/useCloudCatalogInstallFlow";
-import { CloudCatalogInstallModal } from "./CloudCatalogInstallModal";
 import { CloudInstallOptionalDepsNotice } from "./CloudInstallOptionalDepsNotice";
 import { MiniAppPreviewUrlBar } from "./MiniAppPreviewUrlBar";
 import { usePreviewTabLifecycle } from "../../utils/previewIframeLifecycle";
@@ -88,15 +87,12 @@ export function CloudCatalogPreviewView({
   );
 
   const {
-    installModeEntry,
-    setInstallModeEntry,
     installingId,
     installToast,
     optionalDepsNotice,
     setOptionalDepsNotice,
     continueFromOptionalDeps,
     openCommunityAppsFromOptionalDeps,
-    installCloudApp,
     startCloudInstall,
     resolveLocalAppId,
   } = useCloudCatalogInstallFlow();
@@ -373,20 +369,6 @@ export function CloudCatalogPreviewView({
           </div>
         ) : null}
       </div>
-
-      {installModeEntry ? (
-        <CloudCatalogInstallModal
-          entry={installModeEntry.entry}
-          catalogScope={installModeEntry.catalogScope}
-          installing={installingId === installModeEntry.entry.catalogId}
-          onClose={() => setInstallModeEntry(null)}
-          onSelectMode={(selection) => {
-            const { entry: target, catalogScope } = installModeEntry;
-            setInstallModeEntry(null);
-            void installCloudApp(target, selection, catalogScope);
-          }}
-        />
-      ) : null}
 
       {optionalDepsNotice ? (
         <CloudInstallOptionalDepsNotice

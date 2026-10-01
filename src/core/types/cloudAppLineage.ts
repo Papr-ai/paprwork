@@ -27,8 +27,18 @@ export interface CloudAppLineageFile {
   lastSyncedAt?: string;
   /** Live revision from apps.papr.ai at last sync (track mode). */
   upstreamRevision?: string;
-  /** Auto-pull when publisher ships a new revision (default true). */
+  /**
+   * Auto-pull when the publisher ships a new revision. v5: opt-in only
+   * (absent = off). New installs write false; code changes only when the user
+   * picks Get updates. Background checks still light "Publisher has updates".
+   */
   trackAutoPull?: boolean;
+  /**
+   * v5: when the user detached this copy. An event, not a second state field:
+   * mode/databasePolicy already say "own app"; this only tells a detached copy
+   * apart from an older fork install so proposals can be refused for it.
+   */
+  detachedAt?: string;
   /** relative path → sha256 of last synced upstream content */
   syncSnapshot?: Record<string, string>;
   /**

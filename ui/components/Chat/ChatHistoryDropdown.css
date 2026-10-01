@@ -2,34 +2,48 @@
  * ChatHistoryDropdown - Compact chat history selector
  */
 
+/* Invisible bridge so the pointer can travel from the button to the card without closing it. */
+.chat-history-dropdown::before {
+  content: "";
+  position: absolute;
+  left: 0;
+  right: 0;
+  top: -10px;
+  height: 10px;
+}
+
 .chat-history-dropdown {
+  font-family: var(--font-body);
   position: absolute;
   top: calc(100% + 8px);
   right: 0;
   width: 320px;
-  max-height: 420px;
-  background: var(--popover-bg);
-  border: 1px solid var(--border-color);
-  border-radius: 8px;
-  box-shadow: var(--popover-shadow);
+  max-height: min(560px, calc(100vh - 80px));
+  padding: 8px;
+  background: var(--rail-card);
+  backdrop-filter: blur(22px) saturate(1.6);
+  -webkit-backdrop-filter: blur(22px) saturate(1.6);
+  border: 1px solid rgba(255, 255, 255, 0.7);
+  border-radius: 16px;
+  box-shadow: 0 18px 50px rgba(10, 16, 32, 0.16), 0 0 0 1px var(--rail-card-line);
   z-index: 1000;
   display: flex;
   flex-direction: column;
-  overflow: hidden;
+  overflow: visible;
 }
 
 .chat-history-search {
-  padding: 8px;
-  border-bottom: 1px solid var(--border-color);
+  padding: 2px 0 6px;
   flex-shrink: 0;
 }
 
 .chat-history-search-input {
   width: 100%;
-  padding: 6px 10px;
+  padding: 7px 10px;
+  font: inherit;
   font-size: 13px;
   border: 1px solid var(--border-color);
-  border-radius: 6px;
+  border-radius: 9px;
   background: var(--background-secondary);
   color: var(--text-primary);
   outline: none;
@@ -48,84 +62,12 @@
 .chat-history-list {
   overflow-y: auto;
   flex: 1;
+  min-height: 0;
 }
 
-.chat-history-empty {
-  padding: 20px;
-  text-align: center;
-  color: var(--text-tertiary);
-  font-size: 13px;
-}
-
-.chat-history-section {
-  padding: 4px 0;
-}
-
-.chat-history-section:not(:last-child) {
-  border-bottom: 1px solid var(--border-color);
-}
-
-.chat-history-section-label {
-  font-size: 11px;
-  font-weight: 700;
-  color: var(--text-primary);
-  padding: 8px 12px 4px;
-  text-transform: uppercase;
-  letter-spacing: 0.5px;
-}
-
-.chat-history-group {
-  padding: 4px 0 8px;
-}
-
-.chat-history-group:not(:last-child) {
-  border-bottom: 1px solid var(--border-color);
-}
-
-.chat-history-group-label {
-  font-size: 11px;
-  font-weight: 600;
-  color: var(--text-secondary);
-  padding: 4px 12px;
-  text-transform: uppercase;
-  letter-spacing: 0.5px;
-}
-
-.chat-history-item {
-  width: 100%;
-  padding: 0;
-  margin: 0;
-  border: none;
-  background: transparent;
-  cursor: pointer;
-  text-align: left;
-  transition: background-color 0.1s ease;
-}
-
-.chat-history-item:hover {
-  background: var(--popover-bg-hover);
-}
-
-.chat-history-item-content {
-  display: flex;
-  align-items: center;
-  gap: 8px;
-  padding: 6px 12px;
-}
-
-.chat-history-item-title {
-  flex: 1;
-  font-size: 13px;
-  color: var(--text-primary);
-  white-space: nowrap;
-  overflow: hidden;
-  text-overflow: ellipsis;
-}
-
-.chat-history-item-time {
-  font-size: 11px;
-  color: var(--text-secondary);
-  flex-shrink: 0;
+/* Rows, group labels and empty state use the rail peek classes (Sidebar.css). */
+.chat-history-list .rail-peek__group + .rail-peek__group {
+  margin-top: 4px;
 }
 
 .chat-history-item-icon {
@@ -146,4 +88,12 @@
 .chat-history-item-icon--svg svg {
   width: 14px;
   height: 14px;
+}
+
+@media (prefers-color-scheme: dark) {
+  .chat-history-dropdown {
+    background: var(--rail-card);
+    border-color: rgba(255, 255, 255, 0.08);
+    box-shadow: 0 18px 50px rgba(0, 0, 0, 0.5), 0 0 0 1px var(--rail-card-line);
+  }
 }

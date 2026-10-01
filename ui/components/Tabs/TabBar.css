@@ -161,3 +161,9 @@ body:not(.platform-darwin) .tab-bar__tabs {
   width: 14px;
   height: 14px;
 }
+
+/* Wraps the history button + dropdown so hover covers both (peek like the rail). */
+.tab-bar__history {
+  position: relative;
+  display: flex;
+}

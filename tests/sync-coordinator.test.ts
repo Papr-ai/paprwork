@@ -39,7 +39,7 @@ describe("SyncCoordinator", () => {
     initializeSyncCoordinator(mockSync);
   });
 
-  it("coalesces concurrent flushNow calls for the same app", async () => {
+  it("coalesces concurrent auto flushNow calls for the same app", async () => {
     const coordinator = getSyncCoordinator();
     expect(coordinator).not.toBeNull();
 
@@ -48,12 +48,43 @@ describe("SyncCoordinator", () => {
     );
 
     const [a, b] = await Promise.all([
-      coordinator!.flushNow("app-a"),
-      coordinator!.flushNow("app-a"),
+      coordinator!.flushNow("app-a", { trigger: "auto" }),
+      coordinator!.flushNow("app-a", { trigger: "auto" }),
     ]);
 
     expect(a.appId).toBe("app-a");
     expect(b.appId).toBe("app-a");
+    expect(flushAppNow).toHaveBeenCalledTimes(1);
+  });
+
+  it("a manual publish during a running flush runs once more after it (edits made mid-flush are not lost)", async () => {
+    const coordinator = getSyncCoordinator()!;
+    const { flushAppNow } = await import(
+      "../src/gateway/services/cloudSync/flushAppNow.js"
+    );
+
+    // Three clicks while the first flush runs: one follow-up, not three.
+    const results = await Promise.all([
+      coordinator.flushNow("app-a"),
+      coordinator.flushNow("app-a"),
+      coordinator.flushNow("app-a"),
+    ]);
+
+    expect(results.every((r) => r.appId === "app-a")).toBe(true);
+    expect(flushAppNow).toHaveBeenCalledTimes(2);
+  });
+
+  it("an auto flush during a running flush just joins it", async () => {
+    const coordinator = getSyncCoordinator()!;
+    const { flushAppNow } = await import(
+      "../src/gateway/services/cloudSync/flushAppNow.js"
+    );
+
+    await Promise.all([
+      coordinator.flushNow("app-a"),
+      coordinator.flushNow("app-a", { trigger: "auto" }),
+    ]);
+
     expect(flushAppNow).toHaveBeenCalledTimes(1);
   });
 
@@ -274,5 +305,32 @@ describe("SyncCoordinator", () => {
     );
 
     asyncSpy.mockRestore();
+  });
+
+  it("manual push uploads when the marker says clean but file contents differ from the cloud", async () => {
+    vi.mocked(mockSync.hasRelativePathChanged).mockReturnValueOnce(false);
+    const pending = await import(
+      "../src/gateway/services/cloudSync/pendingLocalUploads.js"
+    );
+    const { flushAppNow } = await import(
+      "../src/gateway/services/cloudSync/flushAppNow.js"
+    );
+    const markerSpy = vi
+      .spyOn(pending, "appNeedsOrderedFlushAsync")
+      .mockResolvedValueOnce(false);
+    const contentSpy = vi
+      .spyOn(pending, "appHasUnsentCodeByContent")
+      .mockResolvedValueOnce(true);
+
+    const coordinator = getSyncCoordinator()!;
+    await coordinator.flushNow("stale-marker-app", { trigger: "manual" });
+
+    expect(flushAppNow).toHaveBeenCalledWith(
+      mockSync,
+      "stale-marker-app",
+      expect.anything(),
+    );
+    markerSpy.mockRestore();
+    contentSpy.mockRestore();
   });
 });

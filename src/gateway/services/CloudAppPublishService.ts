@@ -87,6 +87,27 @@ import {
   reconcilePlatformCatalogManifest,
 } from "./syncV3/platformCatalogManifest.js";
 import { withPublishInFlight } from "./cloudPublishInFlight.js";
+import { getCloudAppLineageService } from "./CloudAppLineageService.js";
+import { isOnTeamData } from "../../core/utils/copyAxes.js";
+
+/** A copy on the team's live data ships code only through proposals (v5). */
+export class TeamDataCopyPublishError extends Error {
+  constructor(appId: string) {
+    super(
+      `App ${appId} is a copy on the team's live data. Its code reaches the team only through a proposal; ` +
+        "switch to your own data to publish it to its own link.",
+    );
+    this.name = "TeamDataCopyPublishError";
+  }
+}
+
+async function copyIsOnTeamData(appId: string): Promise<boolean> {
+  try {
+    return isOnTeamData(await getCloudAppLineageService().readLineageForApp(appId));
+  } catch {
+    return false;
+  }
+}
 import { coerceRequireSignInForPerUserIsolation } from "./appRuntime/cloudAppPerUserAccess.js";
 
 export interface CloudPublishConfig {
@@ -790,6 +811,9 @@ export class CloudAppPublishService {
   ): Promise<CloudPublishConfig> {
     if (!this.isWriteAllowed(`publishApp ${appId}`)) {
       throw new WorkspaceWriteBlockedError(`Blocked publishApp ${appId}`);
+    }
+    if (await copyIsOnTeamData(appId)) {
+      throw new TeamDataCopyPublishError(appId);
     }
     const prefs = getAppPublishPrefs(appId, this.paprDir);
     const catalogMeta = loadAppCatalogMeta(this.paprDir);
@@ -1532,6 +1556,9 @@ export class CloudAppPublishService {
 
         try {
           if (!this.isWriteAllowed(`auto-publish ${appId}`)) {
+            continue;
+          }
+          if (await copyIsOnTeamData(appId)) {
             continue;
           }
           const published = await this.publishApp(appId);

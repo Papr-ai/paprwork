@@ -3,6 +3,7 @@
  */
 
 import type { CloudLineageAppEntry } from "../../gateway/services/CloudAppLineageService.js";
+import { isOnTeamData } from "./copyAxes.js";
 
 export interface PublishLineageSummary {
   mode: "fork" | "track";
@@ -30,7 +31,7 @@ export function toPublishLineageSummary(
 }
 
 const TRACK_COLLABORATOR_WARNING =
-  "This app is a track install (collaborate with upstream). publish_cloud_app updates Memory sharing for YOUR local app id and slug — it does NOT refresh the publisher's live apps.papr.ai URL. " +
+  "This copy is on the team's live data, so its code reaches the team only through a proposal. publish_cloud_app is refused for it. " +
   "To ship code: push_cloud_sync({ appId }) then submit_cloud_app_pr. " +
   "To ship shared database rows: push_cloud_sync({ appId }) (or targets: ['turso']) and confirm turso.sources[].pendingPush is clear in get_cloud_sync_status. " +
   "The live team URL stays on the publisher's slug until they merge your PR and publish.";
@@ -38,7 +39,8 @@ const TRACK_COLLABORATOR_WARNING =
 export function trackCollaboratorPublishWarning(
   entry: CloudLineageAppEntry | null,
 ): string | null {
-  if (!entry || entry.mode !== "track") {
+  // v5: copies on their own data publish to their own link like any app.
+  if (!entry || !isOnTeamData(entry)) {
     return null;
   }
   return TRACK_COLLABORATOR_WARNING;

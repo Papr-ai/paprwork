@@ -1,6 +1,6 @@
 {
   "version": 1,
-  "generatedAt": "2026-10-01T00:01:46.253Z",
+  "generatedAt": "2026-10-01T08:24:33.253Z",
   "entryCount": 201,
   "entries": [
     {
@@ -960,7 +960,7 @@
     {
       "id": "agent-tool-get_cloud_app_publish",
       "title": "get_cloud_app_publish",
-      "summary": "Get cloud publish status for a mini-app (apps.papr.ai).\n\nReturns live status, slug, loginAccess, externalLink, codeAccess (off | install), requireSignIn, perUserIsolation, Community listing, URLs, and **lineage** (mode fork|track, source.slug) when installed via install_cloud_app.\n\nIf lineage.mode is **track**, also returns trackInstallWarning — you are a collaborator; use submit_cloud_app_pr + push_cloud_sync, not publish_cloud_app, to update the publisher's live URL.\n\n**Prefer this over export_app_bundle** when Cloud Sync + Papr login are enabled.\nIf Cloud Sync is off, the tool returns an...",
+      "summary": "Get cloud publish status for a mini-app (apps.papr.ai).\n\nReturns live status, slug, loginAccess, externalLink, codeAccess (off | install), requireSignIn, perUserIsolation, Community listing, URLs, and **lineage** (mode fork|track, source.slug) when installed via install_cloud_app.\n\nIf the copy is on the team's shared data (lineage.databasePolicy shared), also returns trackInstallWarning: code changes go to the owner with submit_cloud_app_pr, and shared rows sync with push_cloud_sync. A copy on its own data has no warning and publishes to its own link.\n\n**Prefer this over export_app_bundle**...",
       "surfaces": [
         "agent-tool"
       ],
@@ -1395,7 +1395,7 @@
     {
       "id": "agent-tool-install_cloud_app",
       "title": "install_cloud_app",
-      "summary": "Install a Papr Cloud mini-app source into the user's Paprwork workspace.\n\nUses the same install pipeline as the Community / Team Apps UI (POST /api/cloud/install).\n\nRequires Papr login. Publisher must enable **Edit the code** (codeAccess=install).\n\nFor team-shared apps, ask the user fork vs collaborate before calling — or omit mode to receive the same options as the UI modal.",
+      "summary": "Install a Papr Cloud mini-app source into the user's Paprwork workspace.\n\nUses the same install pipeline as the Community / Team Apps UI (POST /api/cloud/install).\n\nRequires Papr login. Publisher must enable **Edit the code** (codeAccess=install).\n\nOne Install (v5): omit mode and installDbPolicy. Every copy is the user's own, linked to the original: Get updates and Propose from the app bar. Team-shared apps start on the team's live data (code reaches the team only by proposal) and can switch to their own data later.",
       "surfaces": [
         "agent-tool"
       ],
@@ -2196,7 +2196,7 @@
     {
       "id": "agent-tool-publish_cloud_app",
       "title": "publish_cloud_app",
-      "summary": "Publish or update cloud sharing for a mini-app on apps.papr.ai.\n\n**Track collaborator guard:** If papr-cloud-lineage.json has mode=track (team collaborate install), this tool registers sharing for YOUR local app id — it does NOT update the publisher's live apps.papr.ai bundle. Check get_cloud_app_publish → lineage; when mode=track, use push_cloud_sync + submit_cloud_app_pr instead. Shared DB rows still need push_cloud_sync (Turso).\n\n**Preferred path for sharing** (when Cloud Sync + Papr login are on):\n- **Community + fork/install:** loginAccess=public, codeAccess=install\n- **Live web only:*...",
+      "summary": "Publish or update cloud sharing for a mini-app on apps.papr.ai.\n\n**Installed copies:** a copy on its OWN data (Community installs, per-user team apps, detached copies) publishes to its own link like any app; it never updates the original. A copy on the TEAM's shared data is refused: send code with submit_cloud_app_pr, and shared rows with push_cloud_sync. Check get_cloud_app_publish → lineage.databasePolicy.\n\n**Preferred path for sharing** (when Cloud Sync + Papr login are on):\n- **Community + fork/install:** loginAccess=public, codeAccess=install\n- **Live web only:** loginAccess=public (or...",
       "surfaces": [
         "agent-tool"
       ],
@@ -2875,7 +2875,7 @@
     {
       "id": "agent-tool-submit_cloud_app_pr",
       "title": "submit_cloud_app_pr",
-      "summary": "Open a contribute-back GitHub PR to the upstream app owner (CONTRIBUTOR ONLY — local fork via install_cloud_app).\n\nNot for editing the owner's app directly. Pushes your fork's app source, linked Jobs, and migration SQL to the owner's papr-work repo. Returns prUrl, branch, and headSha.",
+      "summary": "Open a contribute-back GitHub PR to the upstream app owner (CONTRIBUTOR ONLY — local fork via install_cloud_app).\n\nNot for editing the owner's app directly. Pulls the publisher's latest first (stops with conflictFiles if your edits overlap theirs — ask the user). The PR branches from the publisher commit your copy is based on and carries only the files you changed, added or deleted. Returns prUrl, branch, headSha, stagedPaths.",
       "surfaces": [
         "agent-tool"
       ],

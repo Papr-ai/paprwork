@@ -212,6 +212,8 @@ export interface ElectronAPI {
     setOnboardingState: (update: {
       step?: string;
       completed?: boolean;
+      /** Only `true` is sent — server stamps marketingOptInAt + source. */
+      marketingOptIn?: boolean;
     }) => Promise<{ success: boolean; error?: string }>;
     getProfile: () => Promise<{
       success: boolean;

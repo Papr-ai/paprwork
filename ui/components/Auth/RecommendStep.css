@@ -280,3 +280,25 @@
 .recommend-step .onboarding-freeform .onboarding-view-title {
   font-size: 32px;
 }
+
+/* Marketing consent — quiet, unchecked by default, below the choices. */
+.recommend-step__consent {
+  display: flex;
+  align-items: flex-start;
+  gap: 10px;
+  margin-top: 22px;
+  font-size: 13px;
+  line-height: 1.45;
+  color: var(--onb-soft);
+  cursor: pointer;
+  user-select: none;
+}
+
+.recommend-step__consent input {
+  margin: 2px 0 0;
+  width: 15px;
+  height: 15px;
+  flex: none;
+  accent-color: var(--onb-g2);
+  cursor: pointer;
+}

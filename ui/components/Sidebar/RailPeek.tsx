@@ -1,17 +1,20 @@
 /**
- * RailPeek — flyout body for Chats / Apps / Docs: Pinned (favorites) + Recent, full titles
- * wrapping to two lines instead of truncating, and one "See all" action.
+ * RailPeek — flyout body for Chats / Apps / Docs: Pinned (favorites) + Recent, one-line titles
+ * (full title on hover), the shared chat status mark, and one "See all" action.
  */
 import type { ReactNode } from "react";
 import { RailIcons } from "./railIcons";
-import { AgentGlyph } from "../Agent/AgentGlyph";
-import { useAgentIdentity, useAgentName } from "../Agent/agentIdentityStore";
+import { ChatStatusMark } from "../Chat/ChatStatusMark";
+import type { ChatActivity } from "../Chat/chatActivity";
 
 export interface PeekRow {
   id: string;
   title: string;
   sub?: string;
-  live?: boolean;
+  /** Chat status — same signal as the tab bar dots. */
+  activity?: ChatActivity;
+  /** Optional icon before the title (e.g. app icons in the mixed tab-bar history). */
+  leading?: ReactNode;
   onOpen: () => void;
   /** Present for favorites — shows an unpin control on hover. */
   onRemove?: () => void;
@@ -30,23 +33,21 @@ interface RailPeekProps {
   footer?: { label: string; onClick: () => void };
 }
 
-/** Chats the agent is writing in carry the same Replay mark — nothing else. */
-function Working() {
-  const name = useAgentName();
-  const papr = useAgentIdentity((s) => s.look) === "papr";
-  return (
-    <span className="rail-peek__working" role="img" aria-label={`${name} is working`} title={`${name} is working`}>
-      <AgentGlyph size={papr ? 14 : 16} state="working" />
-    </span>
-  );
-}
-
-function Row({ row }: { row: PeekRow }) {
+/** One peek row — shared by the rail peeks and the tab-bar history dropdown. */
+export function PeekRowView({ row }: { row: PeekRow }) {
   return (
     <div className="rail-peek__row">
-      <button type="button" className="rail-peek__open" onClick={row.onOpen} role="menuitem">
-        <span className="rail-peek__title">{row.title}</span>
-        {row.live ? <Working /> : null}
+      <button
+        type="button"
+        className={`rail-peek__open${row.leading ? " rail-peek__open--lead" : ""}`}
+        onClick={row.onOpen}
+        role="menuitem"
+      >
+        {row.leading}
+        <span className="rail-peek__title" title={row.title}>
+          {row.title}
+        </span>
+        <ChatStatusMark activity={row.activity} />
         {row.sub ? <span className="rail-peek__sub">{row.sub}</span> : null}
       </button>
       {row.onRemove ? (
@@ -79,7 +80,7 @@ export function RailPeek({ title, groups, empty, footer }: RailPeekProps) {
             {g.title}
           </h6>
           {g.rows.map((r) => (
-            <Row key={r.id} row={r} />
+            <PeekRowView key={r.id} row={r} />
           ))}
         </div>
       ))}
@@ -100,10 +101,10 @@ export function relativeTime(iso?: string): string {
   if (!iso) return "";
   const t = new Date(iso).getTime();
   if (Number.isNaN(t)) return "";
-  const mins = Math.round((Date.now() - t) / 60000);
+  const mins = Math.floor((Date.now() - t) / 60000);
   if (mins < 1) return "now";
   if (mins < 60) return `${mins}m`;
-  const hours = Math.round(mins / 60);
+  const hours = Math.floor(mins / 60);
   if (hours < 24) return `${hours}h`;
   if (hours < 48) return "Yesterday";
   const d = new Date(t);

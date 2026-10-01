@@ -174,7 +174,7 @@ export function mergeTrackedMetadata(
   localRaw: string | undefined,
   upstreamRaw: string,
   baselines: { local: MetadataBaseline; upstream?: MetadataBaseline },
-  options: { discardLocal?: boolean } = {},
+  options: { discardLocal?: boolean; copyAppId?: string } = {},
 ): {
   content: string;
   baseline: MetadataBaseline;
@@ -185,11 +185,22 @@ export function mergeTrackedMetadata(
   if (!upstream) return null;
   const local = localRaw !== undefined ? parseObject(localRaw) : null;
   const result: Record<string, unknown> = { ...upstream };
-  if (local) {
-    for (const key of PER_COPY_KEYS) {
-      if (local[key] !== undefined) result[key] = local[key];
-    }
+  // This copy's own ids. Never take the publisher's: a missing local key stays
+  // missing, or the copy reads as the publisher's app and is hidden as foreign.
+  // A copy is never owned by the publisher, so an ownerUserId equal to
+  // upstream's means an earlier pull leaked it: drop, don't keep. (Callers
+  // remap the publisher's app id to ours in upstream text, so appId equality
+  // is expected; copyAppId pins it explicitly. org / namespace legitimately
+  // match for a teammate in the same workspace.)
+  for (const key of PER_COPY_KEYS) {
+    const leaked =
+      key === "ownerUserId" &&
+      local?.[key] !== undefined &&
+      local[key] === upstream[key];
+    if (local && local[key] !== undefined && !leaked) result[key] = local[key];
+    else delete result[key];
   }
+  if (options.copyAppId) result.appId = options.copyAppId;
   const localFields = pickProposableMetadata(local);
   const upstreamFields = pickProposableMetadata(upstream);
   const pending = options.discardLocal

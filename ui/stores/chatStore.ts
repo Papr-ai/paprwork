@@ -563,7 +563,18 @@ export const useChatStore = create<ChatStore>((set, get) => ({
         ...(sending ? {} : { isWaitingForAgentSlot: false }),
       });
 
-      return { chatStates: newChatStates };
+      // A turn starting or finishing is activity: bump the chat's recency locally so every
+      // recent-chats surface (rail peek, history dropdown) reorders immediately instead of
+      // waiting for the next chat:list reload. The server bumps updated_at the same way.
+      const wasSending = chatState.isSending === true;
+      if (wasSending === sending) return { chatStates: newChatStates };
+      const now = new Date().toISOString();
+      return {
+        chatStates: newChatStates,
+        chats: state.chats.map((chat) =>
+          chat.id === chatId ? { ...chat, updatedAt: now } : chat,
+        ),
+      };
     }),
 
   setWaitingForAgentSlot: (chatId, waiting) =>

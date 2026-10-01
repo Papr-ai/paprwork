@@ -36,10 +36,33 @@ describe("cloudInstallDbPolicy", () => {
     ).toThrow(CloudInstallDbPolicyError);
   });
 
-  it("track + per-user throws", () => {
-    expect(() => resolveInstallDbPolicy("track", ["per-user"])).toThrow(
-      CloudInstallDbPolicyError,
-    );
+  it("track + per-user starts on own data by default, refuses explicit shared", () => {
+    expect(resolveInstallDbPolicy("track", ["per-user"], "namespace")).toBe("fork_empty");
+    expect(() =>
+      resolveInstallDbPolicy("track", ["per-user"], "namespace", "shared_primary"),
+    ).toThrow(CloudInstallDbPolicyError);
+    expect(resolveInstallDbPolicy("track", ["per-user"], "global", "fork_empty")).toBe("fork_empty");
+  });
+
+  it("v5: team app reached as link/public (not team) starts on own data instead of failing", () => {
+    expect(resolveInstallDbPolicy("track", ["shared"], "namespace", undefined, "link_read")).toBe("fork_empty");
+    expect(resolveInstallDbPolicy("track", ["shared"], "namespace", undefined, "public_read")).toBe("fork_empty");
+    expect(resolveInstallDbPolicy("track", ["shared"], "namespace", undefined, "team")).toBe("shared_primary");
+    expect(resolveInstallDbPolicy("track", ["shared"], "namespace", undefined, "owner")).toBe("shared_primary");
+    // Older servers don't send accessMode; the DB token endpoint still enforces.
+    expect(resolveInstallDbPolicy("track", ["shared"], "namespace", undefined, undefined)).toBe("shared_primary");
+  });
+
+  it("v5: server access gate only refuses an explicit request for team data", () => {
+    expect(() =>
+      assertTrackAccessFromServer({ mode: "track", catalogScope: "namespace", accessMode: "link_read" }),
+    ).not.toThrow();
+    expect(() =>
+      assertTrackAccessFromServer({ mode: "track", catalogScope: "namespace", accessMode: "link_read", explicitPolicy: "shared_primary" }),
+    ).toThrow(CloudInstallDbPolicyError);
+    expect(() =>
+      assertTrackAccessFromServer({ mode: "track", catalogScope: "namespace", accessMode: "team", explicitPolicy: "shared_primary" }),
+    ).not.toThrow();
   });
 
   it("maps install policy to lineage databasePolicy", () => {
@@ -91,18 +114,19 @@ describe("cloudInstallDbPolicy", () => {
     ).not.toThrow();
   });
 
-  it("rejects team collaborate when the server reports non-team access", () => {
+  it("rejects an explicit team-data install when the server reports non-team access", () => {
     expect(() =>
       assertTrackAccessFromServer({
         mode: "track",
         catalogScope: "namespace",
         accessMode: "public_read",
+        explicitPolicy: "shared_primary",
       }),
     ).toThrow(/you reach this app as "public_read"/);
   });
 
   it("allows collaborate for team/owner access and older servers", () => {
-    for (const accessMode of ["team", "owner", undefined]) {
+    for (const accessMode of ["team", "owner", "people", undefined]) {
       expect(() =>
         assertTrackAccessFromServer({ mode: "track", catalogScope: "namespace", accessMode }),
       ).not.toThrow();

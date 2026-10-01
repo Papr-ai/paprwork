@@ -31,7 +31,6 @@ import type {
 } from "../../../src/core/types/communityCatalog";
 import {
   ONBOARDING_RECOMMENDATIONS,
-  type OnboardingRecommendation,
 } from "../../constants/onboardingRecommendations";
 import {
   installCloudCatalogApp,
@@ -39,6 +38,7 @@ import {
   type CloudInstallResponse,
 } from "../../utils/cloudCatalogInstall";
 import { openChatWithPrompt } from "../../utils/openChatWithPrompt";
+import { resolveOneInstallSelection } from "../../../src/core/utils/cloudCatalogInstallPolicy";
 import { FreeformPrompt } from "./FreeformPrompt";
 import { trackEvent } from "../../lib/telemetry";
 
@@ -196,7 +196,11 @@ export function RecommendedApps({
     setInstallError(null);
     const result = await installCloudCatalogApp(
       entry,
-      { mode: "fork", installDbPolicy: "fork_empty" },
+      resolveOneInstallSelection({
+        catalogScope: "global",
+        visibility: entry.visibility,
+        codeInstallable: entry.codeInstallable,
+      }),
       { catalogScope: "global" },
     ).catch((err: unknown) => ({
       ok: false as const,

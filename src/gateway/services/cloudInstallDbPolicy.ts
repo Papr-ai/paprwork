@@ -97,11 +97,25 @@ function assertExplicitInstallDbPolicyAllowed(input: {
   }
 }
 
+/**
+ * Access modes that work on the publisher's data: owner, team, and people
+ * named on a "specific people" share. Public readers and link holders get
+ * their own copy.
+ */
+const SHARED_DATA_ACCESS_MODES = new Set(["owner", "team", "people"]);
+
+/** Server says this caller may use the publisher's team data. Older servers omit it (token endpoint still enforces). */
+export function serverAllowsTeamData(accessMode?: string | null): boolean {
+  const access = accessMode?.trim();
+  return !access || SHARED_DATA_ACCESS_MODES.has(access);
+}
+
 export function resolveInstallDbPolicy(
   mode: CloudAppInstallMode,
   linkedIsolations: readonly DatabaseIsolation[],
   catalogScope?: "global" | "namespace",
   explicitPolicy?: InstallDbPolicy,
+  accessMode?: string | null,
 ): InstallDbPolicy {
   if (mode === "fork") {
     return "fork_empty";
@@ -113,7 +127,11 @@ export function resolveInstallDbPolicy(
       catalogScope,
       explicitPolicy,
     });
-    assertPerUserTrackAllowed(linkedIsolations);
+    // Per-user databases can't be one shared team database; a linked copy
+    // with its own data is fine.
+    if (explicitPolicy === "shared_primary") {
+      assertPerUserTrackAllowed(linkedIsolations);
+    }
     return explicitPolicy;
   }
 
@@ -121,7 +139,15 @@ export function resolveInstallDbPolicy(
     return "fork_empty";
   }
 
-  assertPerUserTrackAllowed(linkedIsolations);
+  // v5: a team app with per-user databases has no team data to start on, so
+  // the copy starts on its own data instead of failing the one Install.
+  if (linkedIsolations.some((isolation) => isolation === "per-user")) {
+    return "fork_empty";
+  }
+  // Reached as link/public rather than team: still a linked copy, own data.
+  if (!serverAllowsTeamData(accessMode)) {
+    return "fork_empty";
+  }
 
   return "shared_primary";
 }
@@ -191,13 +217,16 @@ export function assertTrackAccessFromServer(input: {
   mode: CloudAppInstallMode;
   catalogScope?: "global" | "namespace";
   accessMode?: string | null;
+  /** v5: only an explicit request for team data is refused; otherwise the copy falls back to own data. */
+  explicitPolicy?: InstallDbPolicy;
 }): void {
   if (input.mode !== "track" || input.catalogScope === "global") return;
+  if (input.explicitPolicy !== "shared_primary") return;
+  if (serverAllowsTeamData(input.accessMode)) return;
   const access = input.accessMode?.trim();
-  if (!access || access === "team" || access === "owner") return;
   throw new CloudInstallDbPolicyError(
     "non_team_track_forbidden",
-    `Collaborate install requires a team-shared app, but you reach this app as "${access}". Install a fork copy instead.`,
+    `Collaborate install requires a team or specific-people share, but you reach this app as "${access}". Install a fork copy instead.`,
   );
 }
 

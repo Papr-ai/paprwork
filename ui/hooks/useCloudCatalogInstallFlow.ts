@@ -7,7 +7,7 @@ import type {
   CommunityCatalogEntry,
   CommunityCatalogScope,
 } from "../../src/core/types/communityCatalog";
-import { requiresInstallModeChoice } from "../../src/core/utils/cloudCatalogInstallPolicy";
+import { resolveOneInstallSelection } from "../../src/core/utils/cloudCatalogInstallPolicy";
 import { useArtifacts } from "./useArtifacts";
 import { useChat } from "./useChat";
 import { useTabs } from "./useTabs";
@@ -19,7 +19,6 @@ import {
   installCloudCatalogApp,
   planCloudInstallFailureHandoff,
   type CloudCatalogInstallSelection,
-  type CloudInstallMode,
 } from "../utils/cloudCatalogInstall";
 import { openCloudInstalledAppWithChat } from "../utils/openCloudInstalledAppWithChat";
 import type { CloudAppDependenciesFile } from "../../src/core/types/cloudAppDependencies";
@@ -29,10 +28,6 @@ import {
 } from "../utils/communityAppLocalOpen";
 
 export function useCloudCatalogInstallFlow() {
-  const [installModeEntry, setInstallModeEntry] = useState<{
-    entry: CommunityCatalogEntry;
-    catalogScope?: CommunityCatalogScope;
-  } | null>(null);
   const [installingId, setInstallingId] = useState<string | null>(null);
   const [installToast, setInstallToast] = useState<string | null>(null);
   const [lineageIndex, setLineageIndex] = useState<CloudLineageIndex | null>(null);
@@ -129,7 +124,7 @@ export function useCloudCatalogInstallFlow() {
 
         const body = result.data;
         const title = body.app?.title ?? entry.name;
-        const modeLabel = mode === "track" ? "Linked" : "Forked";
+        const modeLabel = "Installed";
         trackEvent("paprwork_community_app_installed", {
           app_name: entry.name,
           app_id: entry.appId,
@@ -226,21 +221,17 @@ export function useCloudCatalogInstallFlow() {
         );
         return;
       }
-      if (
-        !requiresInstallModeChoice({
+      // v5: one Install. No Copy vs Collaborate choice; the copy is linked
+      // and the data choice lives on the bar (Data switch / Detach).
+      void installCloudApp(
+        entry,
+        resolveOneInstallSelection({
           catalogScope,
           visibility: entry.visibility,
           codeInstallable: entry.codeInstallable,
-        })
-      ) {
-        void installCloudApp(
-          entry,
-          { mode: "fork", installDbPolicy: "fork_empty" },
-          catalogScope,
-        );
-        return;
-      }
-      setInstallModeEntry({ entry, catalogScope });
+        }),
+        catalogScope,
+      );
     },
     [installCloudApp],
   );
@@ -308,8 +299,6 @@ export function useCloudCatalogInstallFlow() {
   );
 
   return {
-    installModeEntry,
-    setInstallModeEntry,
     installingId,
     installToast,
     optionalDepsNotice,

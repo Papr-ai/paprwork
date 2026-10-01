@@ -49,13 +49,22 @@ export async function reconcileOidCacheWithRemoteHead(
   }
 
   const cache = await readOidCache();
-  const appCache = cache.apps[trimmed];
-  if (!oidCacheNeedsRealignWithHead(appCache, headFiles)) {
+  const appCache = cache.apps[trimmed] ?? {};
+  // Only fill paths we have NO baseline for (fresh app id, namespace copy).
+  // Never replace a known OID with HEAD's: that OID is what this copy last
+  // synced, and the writer's parentHash check is what stops a stale copy from
+  // overwriting newer cloud commits (merged proposals, other devices). A
+  // stale baseline must 409 into the conflict flow, not be papered over.
+  const missing = headFiles.filter((file) => appCache[file.path] === undefined);
+  if (missing.length === 0) {
     return { realigned: false, pathsUpdated: 0 };
   }
 
-  const pathsUpdated = await overwriteOidCacheFromHead(trimmed, headFiles);
-  return { realigned: true, pathsUpdated };
+  await overwriteOidCacheFromHead(trimmed, [
+    ...Object.entries(appCache).map(([p, blobOid]) => ({ path: p, blobOid })),
+    ...missing,
+  ]);
+  return { realigned: true, pathsUpdated: missing.length };
 }
 
 /**

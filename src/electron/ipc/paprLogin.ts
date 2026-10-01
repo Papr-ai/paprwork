@@ -3900,15 +3900,27 @@ export function initializePaprLoginIPC(
   /** Record a checkpoint or completion. Never blocks the UI — failures are soft. */
   ipcMain.handle(
     "papr:set-onboarding-state",
-    async (_event, update: { step?: string; completed?: boolean }) => {
+    async (
+      _event,
+      update: { step?: string; completed?: boolean; marketingOptIn?: boolean },
+    ) => {
       try {
         const profile = settingsStorage.getPaprProfile();
         if (!profile?.sessionToken || !profile.userId) {
           return { success: true };
         }
 
-        const { saveOnboardingState } = await import("./paprOnboardingSync.js");
-        await saveOnboardingState(profile.sessionToken, profile.userId, update);
+        const { saveOnboardingState, saveMarketingConsent } = await import(
+          "./paprOnboardingSync.js"
+        );
+        const { marketingOptIn, ...progress } = update;
+        await saveOnboardingState(profile.sessionToken, profile.userId, progress);
+        // Isolated: a consent write failure must not fail the progress write.
+        if (marketingOptIn === true) {
+          await saveMarketingConsent(profile.sessionToken, profile.userId, true).catch(
+            (err) => console.warn("[onboarding] marketing consent not saved:", err?.message),
+          );
+        }
         return { success: true };
       } catch (error) {
         return {

@@ -225,4 +225,24 @@ describe("track sync of metadata.json", () => {
     expect(JSON.parse(out.content).title).toBe("QA_2");
     expect(metadataProposalFromLocal(out.content, out.baseline)).toEqual({});
   });
+
+  it("never copies the publisher's app/owner ids onto the copy", () => {
+    const upstream = JSON.stringify({ appId: "pub", ownerUserId: "A", namespaceId: "ns", title: "T" });
+    const leaked = JSON.stringify({ appId: "pub", ownerUserId: "A", namespaceId: "ns", title: "T" });
+    const out = mergeTrackedMetadata(leaked, upstream, { local: { title: "T" }, upstream: { title: "T" } }, { copyAppId: "copy" })!;
+    const meta = JSON.parse(out.content);
+    expect(meta.appId).toBe("copy");
+    expect(meta.ownerUserId).toBeUndefined();
+    expect(meta.namespaceId).toBe("ns");
+    const fresh = mergeTrackedMetadata(undefined, upstream, { local: { title: "T" } })!;
+    expect(JSON.parse(fresh.content).ownerUserId).toBeUndefined();
+    const own = mergeTrackedMetadata(JSON.stringify({ appId: "copy", ownerUserId: "B" }), upstream, { local: { title: "T" } })!;
+    expect(JSON.parse(own.content)).toMatchObject({ appId: "copy", ownerUserId: "B" });
+    // Real pulls remap the publisher's id to ours in upstream text first.
+    const remapped = JSON.stringify({ appId: "copy", ownerUserId: "A", title: "T" });
+    const kept = mergeTrackedMetadata(JSON.stringify({ appId: "copy", ownerUserId: "B" }), remapped, { local: { title: "T" } }, { copyAppId: "copy" })!;
+    expect(JSON.parse(kept.content)).toMatchObject({ appId: "copy", ownerUserId: "B" });
+    const healed = mergeTrackedMetadata(JSON.stringify({ ownerUserId: "B" }), remapped, { local: { title: "T" } }, { copyAppId: "copy" })!;
+    expect(JSON.parse(healed.content).appId).toBe("copy");
+  });
 });

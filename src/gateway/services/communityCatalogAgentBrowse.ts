@@ -8,8 +8,6 @@ import type {
 } from "../../core/types/communityCatalog.js";
 import {
   browseScopeFromCatalogScope,
-  getCloudCatalogInstallModeOptions,
-  requiresInstallModeChoice,
   type CloudCatalogInstallModeOption,
 } from "../../core/utils/cloudCatalogInstallPolicy.js";
 import { isCommunityBrowseListing } from "./CommunityCatalogService.js";
@@ -72,12 +70,12 @@ function formatInstallCommand(input: {
   slug: string;
   catalogScope: "community" | "team";
   visibility?: string;
-  mode: "fork" | "track";
 }): string {
   const visibilityPart = input.visibility
     ? `, visibility: "${input.visibility}"`
     : "";
-  return `install_cloud_app({ namespaceId: "${input.namespaceId}", slug: "${input.slug}", catalogScope: "${input.catalogScope}"${visibilityPart}, mode: "${input.mode}" })`;
+  // v5: no mode. The one Install picks linked + own/team data like the UI.
+  return `install_cloud_app({ namespaceId: "${input.namespaceId}", slug: "${input.slug}", catalogScope: "${input.catalogScope}"${visibilityPart} })`;
 }
 
 export function toAgentCommunityAppListing(
@@ -91,14 +89,10 @@ export function toAgentCommunityAppListing(
   }
 
   const browseScope = browseScopeFromCatalogScope(catalogScope);
-  const codeInstallable = entry.codeInstallable === true;
-  const policyInput = {
-    catalogScope,
-    visibility: entry.visibility,
-    codeInstallable,
-  };
-  const installOptions = getCloudCatalogInstallModeOptions(policyInput);
-  const needsChoice = requiresInstallModeChoice(policyInput);
+  // v5: one Install, so there is never a copy-vs-collaborate choice to ask.
+  // installOptions stays in the shape for older agent prompts, always empty.
+  const installOptions: CloudCatalogInstallModeOption[] = [];
+  const needsChoice = false;
   const isOwned = entry.isOwned === true;
 
   return {
@@ -116,15 +110,12 @@ export function toAgentCommunityAppListing(
     installOptions,
     installCommand: isOwned
       ? null
-      : needsChoice
-        ? null
-        : formatInstallCommand({
-            namespaceId,
-            slug,
-            catalogScope: browseScope,
-            visibility: entry.visibility,
-            mode: "fork",
-          }),
+      : formatInstallCommand({
+          namespaceId,
+          slug,
+          catalogScope: browseScope,
+          visibility: entry.visibility,
+        }),
   };
 }
 

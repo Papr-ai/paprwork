@@ -951,6 +951,15 @@ export function findLastVisibleUserMessage(
   return undefined;
 }
 
+/**
+ * A hidden continue turn only makes sense when there is a visible user message
+ * to continue from. On a fresh chat the marker would be the first and only
+ * user message the agent sees, so it fabricates the "previous" conversation.
+ */
+export function canSendContinueMarker(messages: ChatMessage[]): boolean {
+  return findLastVisibleUserMessage(messages) !== undefined;
+}
+
 export function assistantMessageWasStopped(message: ChatMessage): boolean {
   if (!message.sequence) return false;
   return message.sequence.some(
@@ -998,6 +1007,7 @@ export type AutoContinueBlockReason =
   | "providerRefused"
   | "userStopped"
   | "awaitingStreamResubscribe"
+  | "awaitingFirstResponse"
   | "maxAttempts";
 
 /** Why auto-continue did not run — for logs and support. */
@@ -1010,8 +1020,10 @@ export function getAutoContinueBlockReason(args: {
   streamRecoveryReason?: StreamRecoveryReason;
   lastTurnOutcome?: LastTurnOutcome;
   gatewayReady: boolean;
+  liveStreamRequestId?: string;
 }): AutoContinueBlockReason | null {
   if (args.isSending) return "isSending";
+  if (args.liveStreamRequestId) return "isSending";
   if (isResumingStream(args.chatId)) return "resumingStream";
 
   // Above the turn-state tests, because a refusal produces no assistant message
@@ -1040,6 +1052,12 @@ export function getAutoContinueBlockReason(args: {
       .slice(lastUserIndex + 1)
       .some((m) => m.role === "assistant");
     if (hasAssistantForTurn) return "turnComplete";
+    // Visible user turn with no assistant row yet — normal while the first reply
+    // is in flight. Hidden continue belongs after a dropped/interrupted stream,
+    // not on a fresh one-click send from an app button.
+    if (!args.needsStreamRecovery && !args.connectionPaused) {
+      return "awaitingFirstResponse";
+    }
   } else if (assistantMessageWasStopped(lastAssistant)) {
     return "userStopped";
   }
@@ -1074,6 +1092,7 @@ export function shouldAutoContinueInterruptedTurn(args: {
   streamRecoveryReason?: StreamRecoveryReason;
   lastTurnOutcome?: LastTurnOutcome;
   gatewayReady: boolean;
+  liveStreamRequestId?: string;
 }): boolean {
   return getAutoContinueBlockReason(args) === null;
 }

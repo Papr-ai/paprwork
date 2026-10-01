@@ -3,7 +3,9 @@
  * Tooltips are instant; peeks open on hover intent (120ms) or keyboard focus.
  */
 
-.rail {
+/* .rail-scope lets surfaces outside the rail (tab-bar history) reuse the peek row styles. */
+.rail,
+.rail-scope {
   --rail-bg: #f6f7f9;
   --rail-line: #eceff3;
   --rail-ink: var(--text-primary);
@@ -14,7 +16,9 @@
   --rail-hover: rgba(10, 16, 32, 0.05);
   --rail-active: rgba(0, 96, 224, 0.09);
   --rail-row-hover: rgba(0, 96, 224, 0.07);
+}
 
+.rail {
   height: 100%;
   width: 100%;
   display: flex;
@@ -150,8 +154,15 @@
   width: 7px;
   height: 7px;
   border-radius: 50%;
-  background: var(--papr-blue-mid, #00acfa);
+  /* Same green as the tab / chat-list "done" dot (ChatStatusMark.css). */
+  background: #10b981;
   box-shadow: 0 0 0 2px var(--rail-bg);
+}
+
+@media (prefers-color-scheme: dark) {
+  .rail-btn__badge:not(.rail-btn__badge--warn) {
+    background: #34d399;
+  }
 }
 
 .rail-btn__badge--warn {
@@ -183,8 +194,10 @@
   transition: opacity 0.12s ease, transform 0.12s ease;
 }
 
+/* Keyboard focus only — a mouse click focuses the button too, and :focus-within would keep the
+   tip/peek pinned open after the pointer leaves. */
 .rail-item:hover .rail-tip,
-.rail-item:focus-within .rail-tip {
+.rail-item:has(:focus-visible) .rail-tip {
   opacity: 1;
   transform: translate(0, -50%);
 }
@@ -228,7 +241,7 @@
 }
 
 .rail-item--has-peek:hover .rail-peek,
-.rail-item--has-peek:focus-within .rail-peek {
+.rail-item--has-peek:has(:focus-visible) .rail-peek {
   opacity: 1;
   visibility: visible;
   pointer-events: auto;
@@ -288,7 +301,9 @@
   flex: 1;
   min-width: 0;
   display: grid;
-  grid-template-columns: 1fr auto auto;
+  grid-template-columns: minmax(0, 1fr);
+  grid-auto-flow: column;
+  grid-auto-columns: auto;
   align-items: center;
   gap: 8px;
   text-align: left;
@@ -303,11 +318,16 @@
   border-radius: 9px;
 }
 
+/* Rows with a leading icon: icon | title | status | time. */
+.rail-peek__open--lead {
+  grid-template-columns: auto minmax(0, 1fr);
+}
+
 .rail-peek__title {
-  display: -webkit-box;
-  -webkit-line-clamp: 2;
-  -webkit-box-orient: vertical;
+  min-width: 0;
+  white-space: nowrap;
   overflow: hidden;
+  text-overflow: ellipsis;
 }
 
 .rail-peek__sub {
@@ -391,7 +411,8 @@
 }
 
 @media (prefers-color-scheme: dark) {
-  .rail {
+  .rail,
+  .rail-scope {
     --rail-bg: #0c0f14;
     --rail-line: #242b36;
     --rail-card: rgba(26, 31, 41, 0.95);
