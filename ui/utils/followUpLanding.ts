@@ -1,9 +1,8 @@
 /**
- * Follow-up "landing": a message the user sent while the agent was working
- * shows inline as a ghost (pending) at the bottom of the transcript. When it
- * is actually sent, the real user message mounts in the same spot — this
- * marks it so it can finish the ghost → solid transition instead of popping
- * in from nothing. One concept, one animation.
+ * Follow-up "landing": a message the user queued while the agent was working
+ * waits in the stack above the input bar. When the agent picks it up, the row
+ * leaves the stack and the real user message mounts in the transcript — this
+ * marks it so it arrives with one short slide instead of popping in.
  */
 
 const LANDING_WINDOW_MS = 4_000;

@@ -105,6 +105,8 @@ export interface InputBarRef {
   focus: () => void;
   /** Add dropped or pasted files as the same context attachments as "Attach file". */
   attachFiles: (files: File[]) => void;
+  /** Put a queued follow-up back in the composer to change it (kept above any draft). */
+  editText: (text: string) => void;
 }
 
 export const InputBar = forwardRef<InputBarRef, InputBarProps>(
@@ -339,8 +341,17 @@ export const InputBar = forwardRef<InputBarRef, InputBarProps>(
         attachFiles: (files: File[]) => {
           void appendFileArtifacts(files);
         },
+        editText: (text: string) => {
+          setMessage((current) => {
+            const next = current.trim() ? `${text}\n\n${current}` : text;
+            setDraftMessage(chatId, next);
+            return next;
+          });
+          scheduleTextareaResize();
+          textareaRef.current?.focus();
+        },
       }),
-      [appendFileArtifacts],
+      [appendFileArtifacts, chatId, setDraftMessage, scheduleTextareaResize],
     );
 
     // Auto-focus on mount

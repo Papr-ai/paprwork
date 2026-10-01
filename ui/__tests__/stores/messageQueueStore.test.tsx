@@ -84,9 +84,9 @@ describe("queued follow-ups survive leaving the chat", () => {
   });
 });
 
-describe("held (not sent) follow-ups in the transcript", () => {
+describe("held (not sent) follow-ups in the queue", () => {
   it("say Not sent and offer Send when the agent is idle", () => {
-    expect(pendingStatusText("Pen", false, 0, true)).toBe("Not sent");
+    expect(pendingStatusText(false, 0, true)).toBe("Not sent");
     const onSendNow = vi.fn();
     render(
       <QueuedMessages
@@ -96,8 +96,8 @@ describe("held (not sent) follow-ups in the transcript", () => {
         agentWorking={false}
       />,
     );
-    const item = screen.getByTestId("pending-follow-up");
-    expect(item.className).toContain("pending-follow-up--held");
+    const item = screen.getByTestId("queued-follow-up");
+    expect(item.className).toContain("queued-row--held");
     expect(item.textContent).toContain("Not sent");
     fireEvent.click(screen.getByRole("button", { name: "Send" }));
     expect(onSendNow).toHaveBeenCalledWith("h");
