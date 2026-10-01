@@ -1035,6 +1035,14 @@ export const ChatContainer: React.FC<ChatContainerProps> = ({ chatId }): React.R
     setMessageQueue(prev => prev.filter(q => q.id !== messageId));
   }, [setMessageQueue]);
 
+  /** Edit = take it out of the queue and put it back in the composer. */
+  const handleEditQueued = useCallback((messageId: string) => {
+    const item = useMessageQueueStore.getState().queue.find(q => q.id === messageId);
+    if (!item) return;
+    setMessageQueue(prev => prev.filter(q => q.id !== messageId));
+    inputBarRef.current?.editText(item.text);
+  }, [setMessageQueue]);
+
   const processNextQueued = useCallback(async () => {
     const nextMessage = nextSendableQueued;
     if (isProcessingQueue.current || !nextMessage) {
@@ -1343,16 +1351,15 @@ export const ChatContainer: React.FC<ChatContainerProps> = ({ chatId }): React.R
         onFilesDropped={handleFilesDroppedToChat}
         onLoadOlder={() => loadOlderMessages(chatId)}
         onRetryHistory={() => syncHistoryFromServer({ force: true })}
-        pendingFollowUpCount={currentChatQueue.length}
-        pendingFollowUps={
-          <QueuedMessages
-            queue={currentChatQueue}
-            onSendNow={handleSendQueuedNow}
-            onRemove={handleRemoveQueued}
-            agentName={agentName}
-            agentWorking={isSending || isWaitingForModel || isWaitingForAgentSlot}
-          />
-        }
+      />
+
+      {/* Unsent follow-ups sit with the composer, not in the transcript. */}
+      <QueuedMessages
+        queue={currentChatQueue}
+        onSendNow={handleSendQueuedNow}
+        onRemove={handleRemoveQueued}
+        onEdit={handleEditQueued}
+        agentWorking={isSending || isWaitingForModel || isWaitingForAgentSlot}
       />
 
       <InputBar

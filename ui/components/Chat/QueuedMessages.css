@@ -1,117 +1,154 @@
 /**
- * Pending follow-ups — inline ghost of the user's own message.
- * One concept: ghost → solid. Nothing pulses, nothing slides.
+ * Queued follow-ups — a compact stack attached to the top of the input bar.
+ * Solid, readable text (never ghosted). One motion: the sent message slides
+ * into the transcript.
  */
 
-.pending-follow-ups {
+.queued-tray {
   display: flex;
   flex-direction: column;
+  gap: 4px;
+  /* Flush against the input bar below it. */
+  margin: 0 20px;
+  /* Respond to the chat pane's width, not the window's (sidebars, splits). */
+  container-type: inline-size;
 }
 
-/* Same layout as a sent message; only the ink is lighter. */
-.pending-follow-up .message-item {
-  margin-bottom: 0;
-  padding-bottom: 0.25rem;
-  animation: pendingFollowUpIn 0.2s var(--ease) both;
-}
-
-.pending-follow-up .message-content {
-  /* Ghosted, still readable (~4:1 on light glass). */
-  opacity: 0.6;
-  transition: opacity 0.2s var(--ease);
-}
-
-/* Aligns under the message text: item padding + avatar + gap. */
-.pending-follow-up__meta {
+.queued-row {
   display: flex;
-  flex-wrap: wrap;
   align-items: center;
-  column-gap: 12px;
-  min-height: 28px;
-  padding: 0 1.5rem 0 calc(1.5rem + 32px + 12px);
-  margin-bottom: 1rem;
-  font-size: 12px;
-  line-height: 1.4;
-  /* Secondary, not tertiary: tertiary fails AA at 12px. */
-  color: var(--text-secondary);
+  gap: 10px;
+  min-height: 40px;
+  padding: 4px 6px 4px 14px;
+  /* Liquid glass, same material as the composer it attaches to. */
+  background: var(--glass-bg-active);
+  backdrop-filter: blur(20px) saturate(180%);
+  -webkit-backdrop-filter: blur(20px) saturate(180%);
+  border: 1px solid var(--border-color);
+  border-radius: 12px;
+  box-shadow: var(--shadow-sm);
+  animation: queuedRowIn 0.18s var(--ease) both;
 }
 
-/* Never truncated: this line is the whole point. Actions wrap instead. */
-.pending-follow-up__status {
+.queued-row:last-child {
+  /* Join visually with the input bar. */
+  border-bottom-left-radius: 0;
+  border-bottom-right-radius: 0;
+}
+
+.queued-row__text {
+  flex: 1;
   min-width: 0;
+  padding: 6px 0;
+  border: none;
+  background: transparent;
+  color: var(--text-primary);
+  font: inherit;
+  font-size: 13px;
+  line-height: 1.4;
+  text-align: left;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  cursor: pointer;
 }
 
-/* Actions stay out of the way until the item is hovered or focused. */
-.pending-follow-up__actions {
+.queued-row__text--open {
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+
+/* Secondary, not tertiary: tertiary fails AA at 12px. */
+.queued-row__status {
+  flex-shrink: 0;
+  font-size: 12px;
+  color: var(--text-secondary);
+  white-space: nowrap;
+}
+
+/* Not sent (restored after a restart): the one state that needs a decision. */
+/* Text stays high-contrast; the amber dot carries the hue (amber text fails AA). */
+.queued-row--held .queued-row__status {
   display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  color: var(--text-primary);
+  font-weight: 500;
+}
+
+.queued-row--held .queued-row__status::before {
+  content: "";
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  background: var(--warning-color);
+}
+
+.queued-row__actions {
+  display: inline-flex;
+  flex-shrink: 0;
   gap: 2px;
-  opacity: 0;
-  transition: opacity 0.15s var(--ease);
 }
 
-.pending-follow-up:hover .pending-follow-up__actions,
-.pending-follow-up:focus-within .pending-follow-up__actions {
-  opacity: 1;
-}
-
-@media (hover: none) {
-  .pending-follow-up__actions {
-    opacity: 1;
-  }
-}
-
-/* Not sent (restored after a restart): the user must act, so actions show. */
-.pending-follow-up--held .pending-follow-up__actions {
-  opacity: 1;
-}
-
-.pending-follow-up__action {
+.queued-row__icon {
+  width: 28px;
   height: 28px;
-  padding: 0 10px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  padding: 0;
   border: none;
   border-radius: 999px;
   background: transparent;
-  color: var(--primary-color);
-  font: inherit;
-  font-weight: 500;
+  color: var(--text-secondary);
   cursor: pointer;
-  transition: background 0.15s var(--ease);
+  transition: background 0.15s var(--ease), color 0.15s var(--ease);
 }
 
-.pending-follow-up__action:hover {
-  background: color-mix(in srgb, var(--primary-color) 10%, transparent);
+.queued-row__icon:hover {
+  background: var(--hover-bg);
+  color: var(--text-primary);
 }
 
-.pending-follow-up__action:focus-visible {
+.queued-row__icon--send {
+  color: var(--primary-color);
+}
+
+.queued-row__icon--send:hover {
+  background: var(--primary-color);
+  color: #fff;
+}
+
+.queued-row__icon:focus-visible,
+.queued-row__text:focus-visible {
   outline: 2px solid var(--primary-color);
   outline-offset: 1px;
 }
 
-.pending-follow-up__action--quiet {
-  color: var(--text-secondary);
+/* Narrow windows: the status phrase yields before the text does. */
+@container (max-width: 440px) {
+  .queued-row:not(.queued-row--held) .queued-row__status {
+    display: none;
+  }
 }
 
-.pending-follow-up__action--quiet:hover {
-  background: var(--hover-bg);
-}
-
-/* The real message, when it lands where the ghost was, finishes the motion. */
+/* The sent message arrives in the transcript with one short slide. */
 .message-item.message-item--landing {
-  animation: followUpLand 0.32s var(--ease) both;
+  animation: followUpLand 0.24s var(--ease) both;
 }
 
-@keyframes pendingFollowUpIn {
-  from { opacity: 0; }
-  to { opacity: 1; }
+@keyframes queuedRowIn {
+  from { opacity: 0; transform: translateY(4px); }
+  to { opacity: 1; transform: none; }
 }
 
 @keyframes followUpLand {
-  from { opacity: 0.6; }
-  to { opacity: 1; }
+  from { opacity: 0; transform: translateY(8px); }
+  to { opacity: 1; transform: none; }
 }
 
 @media (prefers-reduced-motion: reduce) {
-  .pending-follow-up .message-item,
+  .queued-row,
   .message-item.message-item--landing {
     animation: none;
   }

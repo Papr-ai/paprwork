@@ -1,13 +1,12 @@
 /**
- * Pending follow-ups — messages sent while the agent is working.
+ * Queued follow-ups — messages sent while the agent is working.
  *
  * The UX contract under test:
- *  - The follow-up shows INLINE in the transcript, at the very bottom (below
- *    the work in progress), in the user's own message layout — not in a tray.
- *  - One status line says when the agent will read it.
- *  - "Send now" and "Remove" act on that message only.
- *  - When the real message is sent, it mounts with the landing class so it
- *    finishes ghost → solid instead of popping in.
+ *  - They wait in a stack above the input bar, NOT in the transcript: the
+ *    transcript only shows what the agent has actually received.
+ *  - Text is solid and readable; one status phrase says when it goes.
+ *  - Edit / Remove / Send now act on that message only.
+ *  - When it is sent, the real message mounts with the landing class.
  *  - Auto-continue never jumps ahead of a waiting follow-up.
  */
 import { afterEach, describe, expect, it, vi } from "vitest";
@@ -17,7 +16,6 @@ import {
   pendingStatusText,
   type QueuedMessage,
 } from "../../components/Chat/QueuedMessages";
-import { MessageList } from "../../components/Chat/MessageList";
 import { MessageItem } from "../../components/Chat/MessageItem";
 import {
   isLandingFollowUp,
@@ -36,22 +34,21 @@ function q(id: string, text: string): QueuedMessage {
 afterEach(() => resetFollowUpLandingForTests());
 
 describe("pendingStatusText", () => {
-  it("tells the user the agent reads it after the current step", () => {
-    expect(pendingStatusText("Pen", true, 0)).toBe(
-      "Pen reads this after the current step",
-    );
+  it("the first one sends after the current step", () => {
+    expect(pendingStatusText(true, 0)).toBe("Sends after current step");
   });
-  it("marks later follow-ups as queued behind the first", () => {
-    expect(pendingStatusText("Pen", true, 1)).toBe(
-      "Queued · Pen reads this next",
-    );
+  it("later ones are simply queued", () => {
+    expect(pendingStatusText(true, 1)).toBe("Queued");
   });
-  it("says Sending… once the agent is idle and the drain is about to send", () => {
-    expect(pendingStatusText("Pen", false, 0)).toBe("Sending…");
+  it("says Sending… once the agent is idle", () => {
+    expect(pendingStatusText(false, 0)).toBe("Sending…");
+  });
+  it("restored ones are Not sent", () => {
+    expect(pendingStatusText(true, 0, true)).toBe("Not sent");
   });
 });
 
-describe("QueuedMessages (inline pending follow-ups)", () => {
+describe("QueuedMessages (stack above the input bar)", () => {
   it("renders nothing when the queue is empty", () => {
     const { container } = render(
       <QueuedMessages queue={[]} onSendNow={vi.fn()} onRemove={vi.fn()} />,
@@ -59,72 +56,50 @@ describe("QueuedMessages (inline pending follow-ups)", () => {
     expect(container.firstChild).toBeNull();
   });
 
-  it("renders the follow-up in the user's message layout with a status line", () => {
+  it("is a compact list row, not a ghosted transcript message", () => {
     render(
-      <QueuedMessages
-        queue={[q("a", "also check the logs")]}
-        onSendNow={vi.fn()}
-        onRemove={vi.fn()}
-        agentName="Pen"
-      />,
+      <QueuedMessages queue={[q("a", "also check the logs")]} onSendNow={vi.fn()} onRemove={vi.fn()} />,
     );
-    const item = screen.getByTestId("pending-follow-up");
-    expect(item.querySelector('[data-testid="message-item-user"]')).not.toBeNull();
-    expect(item.textContent).toContain("also check the logs");
-    expect(item.textContent).toContain("Pen reads this after the current step");
+    const row = screen.getByTestId("queued-follow-up");
+    expect(row.querySelector('[data-testid="message-item-user"]')).toBeNull();
+    expect(screen.getByRole("list", { name: "Queued messages" })).toBeTruthy();
+    expect(row.textContent).toContain("also check the logs");
+    expect(row.textContent).toContain("Sends after current step");
   });
 
-  it("Send now and Remove act on that message only", () => {
+  it("click expands a long message and collapses it again", () => {
+    render(<QueuedMessages queue={[q("a", "long text")]} onSendNow={vi.fn()} onRemove={vi.fn()} />);
+    const text = screen.getByRole("button", { name: "long text" });
+    expect(text.getAttribute("aria-expanded")).toBe("false");
+    fireEvent.click(text);
+    expect(text.getAttribute("aria-expanded")).toBe("true");
+    fireEvent.click(text);
+    expect(text.getAttribute("aria-expanded")).toBe("false");
+  });
+
+  it("Edit / Remove / Send now act on that message only", () => {
     const onSendNow = vi.fn();
     const onRemove = vi.fn();
+    const onEdit = vi.fn();
     render(
-      <QueuedMessages
-        queue={[q("a", "first"), q("b", "second")]}
-        onSendNow={onSendNow}
-        onRemove={onRemove}
-      />,
+      <QueuedMessages queue={[q("a", "first"), q("b", "second")]}
+        onSendNow={onSendNow} onRemove={onRemove} onEdit={onEdit} />,
     );
-    const items = screen.getAllByTestId("pending-follow-up");
-    fireEvent.click(items[1].querySelector("button")!);
+    fireEvent.click(screen.getAllByRole("button", { name: "Send now" })[1]);
     expect(onSendNow).toHaveBeenCalledWith("b");
-    fireEvent.click(items[0].querySelector('[aria-label="Remove message"]')!);
+    fireEvent.click(screen.getAllByRole("button", { name: "Remove message" })[0]);
     expect(onRemove).toHaveBeenCalledWith("a");
+    fireEvent.click(screen.getAllByRole("button", { name: "Edit message" })[1]);
+    expect(onEdit).toHaveBeenCalledWith("b");
   });
 
-  it("sits below the work in progress — after the last transcript message", () => {
-    const messages: ChatMessage[] = [
-      { id: "u1", role: "user", content: "build it" },
-      { id: "a1", role: "assistant", content: "working…", isStreaming: true },
-    ] as ChatMessage[];
-    const { container } = render(
-      <MessageList
-        chatId={CHAT}
-        messages={messages}
-        isSending
-        pendingFollowUpCount={1}
-        pendingFollowUps={
-          <QueuedMessages
-            queue={[q("p1", "use the blue one")]}
-            onSendNow={vi.fn()}
-            onRemove={vi.fn()}
-          />
-        }
-      />,
-    );
-    const pending = screen.getByTestId("pending-follow-up");
-    const nodes = container.querySelectorAll(
-      '.message-list > [data-testid="message-item-user"], .message-list > [data-testid="message-item-assistant"]',
-    );
-    const lastTranscriptItem = nodes[nodes.length - 1];
-    expect(lastTranscriptItem).toBeTruthy();
-    expect(
-      lastTranscriptItem.compareDocumentPosition(pending) &
-        Node.DOCUMENT_POSITION_FOLLOWING,
-    ).toBeTruthy();
+  it("hides Edit when no handler is wired", () => {
+    render(<QueuedMessages queue={[q("a", "x")]} onSendNow={vi.fn()} onRemove={vi.fn()} />);
+    expect(screen.queryByRole("button", { name: "Edit message" })).toBeNull();
   });
 });
 
-describe("follow-up landing (ghost → solid)", () => {
+describe("follow-up landing (slides into the transcript)", () => {
   it("matches the user message that was just sent from the queue", () => {
     markFollowUpLanding(CHAT, "use the blue one", 1_000);
     expect(
