@@ -14,6 +14,9 @@
  *   step, reads it, continues below it.
  *   "Send now" → stop the current step immediately and send this instead.
  *   Remove → drop it before the agent sees it.
+ *
+ * Follow-ups survive leaving the chat (stores/messageQueueStore.ts). Ones
+ * restored after a restart are `held`: shown as "Not sent", never auto-sent.
  */
 import React from "react";
 import "./QueuedMessages.css";
@@ -27,6 +30,11 @@ export interface QueuedMessage {
   timestamp: number;
   chatId: string;
   contextArtifacts?: Artifact[];
+  /**
+   * Restored from a previous session. Never auto-sent — the user decides
+   * (Send / Remove), because hours-old intent should not fire on its own.
+   */
+  held?: boolean;
 }
 
 interface QueuedMessagesProps {
@@ -43,7 +51,9 @@ export function pendingStatusText(
   agentName: string,
   agentWorking: boolean,
   position: number,
+  held = false,
 ): string {
+  if (held) return "Not sent";
   if (!agentWorking) return "Sending…";
   if (position > 0) return `Queued · ${agentName} reads this next`;
   return `${agentName} reads this after the current step`;
@@ -69,13 +79,13 @@ export const QueuedMessages: React.FC<QueuedMessagesProps> = ({
         return (
           <div
             key={msg.id}
-            className="pending-follow-up"
+            className={`pending-follow-up${msg.held ? " pending-follow-up--held" : ""}`}
             data-testid="pending-follow-up"
           >
             <MessageItem chatId={msg.chatId} message={asMessage} />
             <div className="pending-follow-up__meta">
               <span className="pending-follow-up__status">
-                {pendingStatusText(agentName, agentWorking, index)}
+                {pendingStatusText(agentName, agentWorking, index, msg.held)}
               </span>
               <span className="pending-follow-up__actions">
                 <button
@@ -83,9 +93,13 @@ export const QueuedMessages: React.FC<QueuedMessagesProps> = ({
                   className="pending-follow-up__action"
                   onMouseDown={(e) => e.preventDefault()}
                   onClick={() => onSendNow(msg.id)}
-                  title="Stop the current step and send this now"
+                  title={
+                    agentWorking
+                      ? "Stop the current step and send this now"
+                      : "Send this message"
+                  }
                 >
-                  Send now
+                  {msg.held && !agentWorking ? "Send" : "Send now"}
                 </button>
                 <button
                   type="button"

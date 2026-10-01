@@ -60,6 +60,11 @@
   }
 }
 
+/* Not sent (restored after a restart): the user must act, so actions show. */
+.pending-follow-up--held .pending-follow-up__actions {
+  opacity: 1;
+}
+
 .pending-follow-up__action {
   height: 28px;
   padding: 0 10px;
