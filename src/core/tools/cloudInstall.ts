@@ -96,7 +96,14 @@ const resolveChangeSchema = z.object({
     .boolean()
     .optional()
     .describe(
-      "approve only. true = you already merged these changes into the owner's app by hand (conflict resolution) AND published — closes the PR and marks the proposal accepted instead of merging it.",
+      "approve only. true = you already merged these changes into the owner's app by hand (conflict resolution) AND published — closes the PR and marks the proposal accepted instead of merging it. The server verifies the publish reached main (a commit after the proposal that touches its files) and returns 409 merge_not_published otherwise.",
+    ),
+  mergedCommitSha: z
+    .string()
+    .regex(/^[0-9a-f]{7,40}$/i)
+    .optional()
+    .describe(
+      "mergedManually only, optional: commit sha of your merged publish (e.g. from get_cloud_observability appWriterRepo last commit). Omit and the server finds it.",
     ),
 });
 
@@ -397,7 +404,7 @@ export const resolveCloudAppPrTool = createTool({
   id: CLOUD_APP_PR_TOOL_IDS.resolve,
   description: `Approve or reject an incoming contribute-back GitHub PR (OWNER ONLY). Approve merges on GitHub then runs Get updates (pullAppFromCloud) for the source app — do not push local over the merge. Review first with ${CLOUD_APP_PR_TOOL_IDS.review}.
 
-If the proposal has mergeState "conflict" (it was based on an older version and overlaps newer edits), a plain approve fails. Either reject, or resolve it yourself: read the owner's current files (read_file on the local app) and the proposal's versions (${CLOUD_APP_PR_TOOL_IDS.readFile}), write a merged version that keeps both sides' intent, show the owner the result, and only after they confirm publish (push_cloud_sync({ appId })) and call this tool with { action: "approve", mergedManually: true }.`,
+If the proposal has mergeState "conflict" (it was based on an older version and overlaps newer edits), a plain approve fails. Either reject, or resolve it yourself: read the owner's current files (read_file on the local app) and the proposal's versions (${CLOUD_APP_PR_TOOL_IDS.readFile}), write a merged version that keeps both sides' intent, show the owner the result, and only after they confirm publish (push_cloud_sync({ appId })) and call this tool with { action: "approve", mergedManually: true }. The server checks that publish is on main; if it answers 409 merge_not_published, the publish hasn't landed yet — wait for push_cloud_sync to finish (or re-run it) and retry. Never report the proposal accepted until this call succeeds.`,
   inputSchema: resolveChangeSchema,
   execute: async (input) => {
     const args =
@@ -409,7 +416,13 @@ If the proposal has mergeState "conflict" (it was based on an older version and 
       const path =
         args.action === "approve"
           ? `/v1/cloud/apps/changes/${args.requestId}/approve${
-              args.mergedManually ? "?mergedManually=true" : ""
+              args.mergedManually
+                ? `?mergedManually=true${
+                    args.mergedCommitSha
+                      ? `&mergedCommitSha=${encodeURIComponent(args.mergedCommitSha)}`
+                      : ""
+                  }`
+                : ""
             }`
           : `/v1/cloud/apps/changes/${args.requestId}/reject`;
       const response = await cloudApiFetch(path, { method: "POST" });

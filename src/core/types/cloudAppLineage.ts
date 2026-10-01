@@ -32,6 +32,13 @@ export interface CloudAppLineageFile {
   /** relative path → sha256 of last synced upstream content */
   syncSnapshot?: Record<string, string>;
   /**
+   * Publisher git commit this copy is based on: set at install, advanced only
+   * by a pull that applied cleanly. Proposals branch from it and pulls merge
+   * against it, so a stale local file is never mistaken for an edit.
+   * Absent on older installs (callers infer from installedAt).
+   */
+  baseCommit?: string;
+  /**
    * Who the publisher shared the source with when this copy was installed.
    * Drives the collaborator mark by the title (team / specific people /
    * Community). Absent on older installs: callers fall back to databasePolicy.
@@ -42,4 +49,24 @@ export interface CloudAppLineageFile {
    * Edits matching it are "proposed" (waiting on the owner), not "unproposed".
    */
   proposedSnapshot?: Record<string, string>;
+  /**
+   * title / description / icon / tags as this copy had them at install or
+   * the last clean sync (after the install title suffix). Fields that differ
+   * from it are the collaborator's deliberate metadata edits, proposed
+   * field-by-field; absent on older installs (metadata edits not proposed).
+   */
+  metadataBaseline?: CloudAppMetadataFields;
+  /**
+   * The publisher's title / description / icon / tags at the last sync.
+   * A track pull only replaces a field the publisher actually changed, so the
+   * copy's install suffix ("Title_2") and pending edits survive updates.
+   */
+  metadataUpstreamBaseline?: CloudAppMetadataFields;
+}
+
+export interface CloudAppMetadataFields {
+  title?: string;
+  description?: string;
+  icon?: string;
+  tags?: string[];
 }

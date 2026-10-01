@@ -32,6 +32,7 @@ export type RegistryDbSchemaReadErrorCode =
   | "missing"
   | "locked"
   | "parked"
+  | "turso_access_denied"
   | "unopenable"
   | "unreadable";
 
@@ -176,6 +177,12 @@ async function readReplicaRegistrySchema(
     }
     if (isSqliteNotDbError(error)) {
       return { ok: false, code: "unreadable", message };
+    }
+    const { classifyTursoCredentialFailure } = await import(
+      "../tursoCredentialErrors.js"
+    );
+    if (classifyTursoCredentialFailure(message) === "access_denied") {
+      return { ok: false, code: "turso_access_denied", message };
     }
     return { ok: false, code: "unopenable", message };
   }

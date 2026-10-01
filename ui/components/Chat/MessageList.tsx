@@ -29,6 +29,8 @@ interface MessageListProps {
   isLoading?: boolean;
   isSending?: boolean;
   isWaitingForAgentSlot?: boolean;
+  /** True while a gateway turn is in flight (includes tracked request id). */
+  agentTurnInFlight?: boolean;
   /** When set, file drops on the list attach the same way as Add context → file upload */
   onFilesDropped?: (files: File[]) => void;
   /** Called when user scrolls to the top (for loading older messages) */
@@ -50,6 +52,7 @@ export const MessageList: React.FC<MessageListProps> = ({
   isLoading,
   isSending,
   isWaitingForAgentSlot,
+  agentTurnInFlight = false,
   onFilesDropped,
   onLoadOlder,
   onRetryHistory,
@@ -120,9 +123,25 @@ export const MessageList: React.FC<MessageListProps> = ({
     (m) => m.isStreaming,
   );
 
+  const streamUiActive =
+    agentTurnInFlight || !!isSending || !!isWaitingForAgentSlot;
+
+  const lastVisibleMessage = filteredMessages[filteredMessages.length - 1];
+  const awaitingFirstAssistantRow =
+    streamUiActive &&
+    !hasStreamingAssistantMessage &&
+    (!lastVisibleMessage || lastVisibleMessage.role === "user");
+
+  const lastAssistantIndex = useMemo(() => {
+    for (let i = filteredMessages.length - 1; i >= 0; i -= 1) {
+      if (filteredMessages[i].role === "assistant") return i;
+    }
+    return -1;
+  }, [filteredMessages]);
+
   /** History reload dots — hide while the agent turn placeholder or streaming row is shown. */
   const showHistoryLoadingIndicator =
-    isLoading && !isSending && !hasStreamingAssistantMessage;
+    isLoading && !streamUiActive && !hasStreamingAssistantMessage;
 
   // Detect scroll position for auto-scroll and load-more triggers
   useEffect(() => {
@@ -325,12 +344,18 @@ export const MessageList: React.FC<MessageListProps> = ({
           )}
         </div>
       )}
-      {filteredMessages.map((message) => (
+      {filteredMessages.map((message, index) => (
         <MessageItem
           key={message.id}
           chatId={chatId}
           message={message}
           delegationFollowUps={message.delegationFollowUps}
+          turnInFlight={
+            streamUiActive &&
+            index === lastAssistantIndex &&
+            message.role === "assistant" &&
+            !message.isStreaming
+          }
         />
       ))}
       {activeRequest && (
@@ -366,7 +391,7 @@ export const MessageList: React.FC<MessageListProps> = ({
         </div>
       )}
       {isWaitingForAgentSlot &&
-        isSending &&
+        streamUiActive &&
         !hasStreamingAssistantMessage && (
         <div className="message-item">
           <div className="message-avatar-container">
@@ -417,9 +442,7 @@ export const MessageList: React.FC<MessageListProps> = ({
           </div>
         </div>
       )}
-      {isSending &&
-        !isWaitingForAgentSlot &&
-        !hasStreamingAssistantMessage && (
+      {awaitingFirstAssistantRow && !isWaitingForAgentSlot && (
         <div className="message-item">
           <div className="message-avatar-container">
             <div className="message-avatar-assistant">

@@ -90,4 +90,21 @@ describe("ensureStreamingAssistantMessageRow", () => {
 
     expect(chatHasLiveStreamBlockingHistory(chatId)).toBe(true);
   });
+
+  it("blocks history reload while liveStreamRequestId is set without isSending", () => {
+    useChatStore.setState((state) => {
+      const next = new Map(state.chatStates);
+      const chat = next.get(chatId);
+      if (!chat) return state;
+      next.set(chatId, {
+        ...chat,
+        isSending: false,
+        isStreaming: false,
+        liveStreamRequestId: "req-stream-1",
+      });
+      return { chatStates: next };
+    });
+
+    expect(chatHasLiveStreamBlockingHistory(chatId)).toBe(true);
+  });
 });

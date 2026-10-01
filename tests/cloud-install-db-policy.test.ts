@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
 import {
+  assertTrackAccessFromServer,
   assertTrackAllowedForCatalog,
   CloudInstallDbPolicyError,
   databasePolicyFromInstallPolicy,
@@ -81,13 +82,34 @@ describe("cloudInstallDbPolicy", () => {
     ).not.toThrow();
   });
 
-  it("asks for visibility (not 'not team-shared') when it is missing", () => {
+  it("defers to the server when visibility is not passed", () => {
     expect(() =>
       assertTrackAllowedForCatalog({
         mode: "track",
         catalogScope: "namespace",
       }),
-    ).toThrow(/requires `visibility`/);
+    ).not.toThrow();
+  });
+
+  it("rejects team collaborate when the server reports non-team access", () => {
+    expect(() =>
+      assertTrackAccessFromServer({
+        mode: "track",
+        catalogScope: "namespace",
+        accessMode: "public_read",
+      }),
+    ).toThrow(/you reach this app as "public_read"/);
+  });
+
+  it("allows collaborate for team/owner access and older servers", () => {
+    for (const accessMode of ["team", "owner", undefined]) {
+      expect(() =>
+        assertTrackAccessFromServer({ mode: "track", catalogScope: "namespace", accessMode }),
+      ).not.toThrow();
+    }
+    expect(() =>
+      assertTrackAccessFromServer({ mode: "fork", catalogScope: "namespace", accessMode: "public_read" }),
+    ).not.toThrow();
   });
 
   it("names the actual visibility when it is not team", () => {

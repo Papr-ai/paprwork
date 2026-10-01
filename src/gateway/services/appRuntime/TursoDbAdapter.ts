@@ -15,7 +15,9 @@ import {
 import {
   ensureRemoteSyncInfrastructure,
   ensureRemoteTableSyncTriggers,
+  remoteInsertTriggersCoverSyncableTables,
 } from "../tursoSyncLog.js";
+import { writeRemoteCdcReadyMarker } from "./cloudRemoteCdcReadyCache.js";
 import { jobTursoDatabaseName } from "../tursoDatabaseNaming.js";
 import { shouldSkipMigrationForRemoteLedger } from "../jobs/migrationLedgerPolicy.js";
 import {
@@ -77,6 +79,8 @@ export class TursoDbAdapter {
   private syncVersionMemo = new Map<string, SyncVersionMemo>();
   /** Remote changelog triggers installed per client key. */
   private remoteSyncReady = new Set<string>();
+  /** Dedupe concurrent CDC prep for the same linked database. */
+  private remoteChangeLogPrep = new Map<string, Promise<void>>();
 
   constructor(private readonly credentials: TursoCredentialsProvider) {}
 
@@ -246,12 +250,61 @@ export class TursoDbAdapter {
   private async ensureRemoteChangeLogReady(
     client: Client,
     cacheKey: string,
+    schemaRevision: string | null = null,
   ): Promise<void> {
     if (this.remoteSyncReady.has(cacheKey)) {
       return;
     }
+    const inflight = this.remoteChangeLogPrep.get(cacheKey);
+    if (inflight) {
+      await inflight;
+      return;
+    }
+
+    const prep = this.runEnsureRemoteChangeLogReady(client, cacheKey, schemaRevision);
+    this.remoteChangeLogPrep.set(cacheKey, prep);
+    try {
+      await prep;
+    } finally {
+      if (this.remoteChangeLogPrep.get(cacheKey) === prep) {
+        this.remoteChangeLogPrep.delete(cacheKey);
+      }
+    }
+  }
+
+  private async runEnsureRemoteChangeLogReady(
+    client: Client,
+    cacheKey: string,
+    schemaRevision: string | null,
+  ): Promise<void> {
+    if (this.remoteSyncReady.has(cacheKey)) {
+      return;
+    }
+    const startedMs = performance.now();
     await ensureRemoteSyncInfrastructure(client);
     const tableNames = await this.listRemoteTables(client);
+    const syncableCount = filterSyncableTables(tableNames).length;
+    const revisionKey = schemaRevision?.trim() || "unknown";
+
+    const triggersReady = await remoteInsertTriggersCoverSyncableTables(
+      client,
+      tableNames,
+    );
+    if (triggersReady) {
+      this.remoteSyncReady.add(cacheKey);
+      writeRemoteCdcReadyMarker(cacheKey, revisionKey, {
+        tableCount: syncableCount,
+        recordedAtMs: Date.now(),
+      });
+      if (process.env.CLOUD_DB_WRITE_TIMING !== "0") {
+        console.log(
+          `[TursoDbAdapter] remote CDC ready (fast path) key=${cacheKey} ` +
+            `tables=${syncableCount} warmCdcMs=${Math.round(performance.now() - startedMs)}`,
+        );
+      }
+      return;
+    }
+
     for (const tableName of tableNames) {
       const cols = await client.execute(
         `PRAGMA table_info(${quoteIdent(tableName)})`,
@@ -264,6 +317,16 @@ export class TursoDbAdapter {
       await ensureRemoteTableSyncTriggers(client, columns, tableName);
     }
     this.remoteSyncReady.add(cacheKey);
+    writeRemoteCdcReadyMarker(cacheKey, revisionKey, {
+      tableCount: syncableCount,
+      recordedAtMs: Date.now(),
+    });
+    if (process.env.CLOUD_DB_WRITE_TIMING !== "0") {
+      console.log(
+        `[TursoDbAdapter] remote CDC ready (full prep) key=${cacheKey} ` +
+          `tables=${syncableCount} warmCdcMs=${Math.round(performance.now() - startedMs)}`,
+      );
+    }
   }
 
   /**
@@ -934,20 +997,41 @@ export class TursoDbAdapter {
     namespaceId: string;
     runtimeAuth: AppRuntimeRouteAuth;
     config: AppDataSourcesFile;
+    /** When true, also prepare remote CDC triggers (replica direct-write path). */
+    warmRemoteChangeLog?: boolean;
   }): Promise<void> {
     const actors = this.toActors(input);
+    let schemaRevision: string | null = null;
+    if (input.warmRemoteChangeLog) {
+      schemaRevision = await this.getMaxAppliedMigrationId(input);
+    }
+
     for (const source of input.config.sources) {
       if (!source.jobId && !source.dbId) {
         continue;
       }
       try {
-        await this.getClientForSource(
+        const client = await this.getClientForSource(
           input.orgId,
           input.namespaceId,
           actors,
           input.runtimeAuth,
           source,
         );
+        if (!input.warmRemoteChangeLog) {
+          continue;
+        }
+        if (this.usesWorkspaceLogAuthorityForSource(source)) {
+          continue;
+        }
+        const actingUserId = resolveTursoActingUserIdForSource(source, actors);
+        const database = await this.resolveTursoDatabaseName(source, actors);
+        const cacheKey = this.clientKey(
+          input.runtimeAuth,
+          actingUserId,
+          database,
+        );
+        await this.ensureRemoteChangeLogReady(client, cacheKey, schemaRevision);
       } catch {
         /* best-effort warm */
       }

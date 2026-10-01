@@ -181,6 +181,26 @@ export async function readLinkedDbIsolations(input: {
   return [...isolations];
 }
 
+/**
+ * Server-verified gate for team collaborate: prepare_install reports how the
+ * caller reaches the source app. Only owner/team may track (and so attach the
+ * publisher's shared database). Older servers omit accessMode — the DB token
+ * endpoint still enforces team/owner, so we let those through.
+ */
+export function assertTrackAccessFromServer(input: {
+  mode: CloudAppInstallMode;
+  catalogScope?: "global" | "namespace";
+  accessMode?: string | null;
+}): void {
+  if (input.mode !== "track" || input.catalogScope === "global") return;
+  const access = input.accessMode?.trim();
+  if (!access || access === "team" || access === "owner") return;
+  throw new CloudInstallDbPolicyError(
+    "non_team_track_forbidden",
+    `Collaborate install requires a team-shared app, but you reach this app as "${access}". Install a fork copy instead.`,
+  );
+}
+
 export function assertTrackAllowedForCatalog(input: {
   mode: CloudAppInstallMode;
   catalogScope?: "global" | "namespace";
@@ -200,14 +220,10 @@ export function assertTrackAllowedForCatalog(input: {
 
   const visibility = input.visibility?.trim();
 
-  // Team installs are gated on the catalog entry's visibility. When the caller
-  // did not pass it we cannot tell "not team-shared" from "not told", so say
-  // what is actually wrong instead of blaming the app.
+  // Callers often know only namespaceId + slug (agents, deep links). The
+  // memory server verifies access on prepare — see assertTrackAccessFromServer.
   if (!visibility) {
-    throw new CloudInstallDbPolicyError(
-      "visibility_required",
-      'Collaborate (track) install from a team catalog requires `visibility`. Pass the visibility from the catalog entry (list_community_apps), e.g. visibility: "team". Without it the app cannot be verified as team-shared.',
-    );
+    return;
   }
 
   const teamShared = visibility === "team" || visibility.startsWith("team_");

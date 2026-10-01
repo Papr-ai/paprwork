@@ -272,6 +272,12 @@ export function useAppCloudSyncStatus(
   const [liveSyncPending, setLiveSyncPending] = useState(true);
   const hasLoadedOnceRef = useRef(initialStatus !== null);
   const refreshInFlightRef = useRef(false);
+  // A stale signal that lands mid-refresh must not be dropped: that refresh may
+  // have read disk before the save, leaving Publish grey over real edits.
+  // Coalesces to ONE rerun however many signals arrive (gateway already
+  // debounces saves per app, so no timer is needed here).
+  const refreshAgainRef = useRef(false);
+  const refreshRef = useRef<((force?: boolean) => Promise<void>) | null>(null);
   const [lastCheckedAt, setLastCheckedAt] = useState<number | null>(() =>
     readCachedSyncItemsFetchedAt(appId),
   );
@@ -337,7 +343,11 @@ export function useAppCloudSyncStatus(
 
   const refresh = useCallback(
     async (force = false) => {
-      if (!active || refreshInFlightRef.current) return;
+      if (!active) return;
+      if (refreshInFlightRef.current) {
+        if (force) refreshAgainRef.current = true;
+        return;
+      }
       refreshInFlightRef.current = true;
       try {
         setError(null);
@@ -395,10 +405,15 @@ export function useAppCloudSyncStatus(
         } finally {
           setLiveSyncPending(false);
         }
+        if (refreshAgainRef.current) {
+          refreshAgainRef.current = false;
+          void refreshRef.current?.(true);
+        }
       }
     },
     [active, appId, fetchRemoteCodeStatus],
   );
+  refreshRef.current = refresh;
 
   const checkStatus = useCallback(async () => {
     await refresh(true);

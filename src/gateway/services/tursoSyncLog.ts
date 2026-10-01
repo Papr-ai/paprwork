@@ -8,6 +8,7 @@ import type { Client } from "@libsql/client";
 import type Database from "better-sqlite3";
 import { PAPR_ROW_SYNC_COLUMNS } from "../../core/types/jobMigrations.js";
 import {
+  filterSyncableTables,
   quoteIdent,
   readRemoteTableSchema,
   readTableSchema,
@@ -322,6 +323,28 @@ async function remoteTriggerExists(remote: Client, name: string): Promise<boolea
     args: [name],
   });
   return result.rows.length > 0;
+}
+
+/**
+ * True when every syncable table already has its insert CDC trigger on Turso.
+ * Used to skip the expensive per-table refresh on a new Cloud Run instance.
+ */
+export async function remoteInsertTriggersCoverSyncableTables(
+  remote: Client,
+  tableNames: string[],
+): Promise<boolean> {
+  const syncable = filterSyncableTables(tableNames);
+  if (syncable.length === 0) {
+    return true;
+  }
+  for (const tableName of syncable) {
+    const suffix = triggerSuffix(tableName);
+    const insertName = `_papr_tr_${suffix}_ai`;
+    if (!(await remoteTriggerExists(remote, insertName))) {
+      return false;
+    }
+  }
+  return true;
 }
 
 /** Serialize remote _au trigger refresh per table (debounced cloud pushes can overlap). */

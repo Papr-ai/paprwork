@@ -1208,6 +1208,7 @@ export class CloudAppHostService {
       ...this.tursoDbRequest(access, runtimeAuth),
       runtimeAuth,
       config,
+      warmRemoteChangeLog: access.canWrite,
     });
   }
 

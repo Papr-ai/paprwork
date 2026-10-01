@@ -248,7 +248,10 @@ export class TursoSyncBridge {
     );
   }
 
-  async fetchCredentials(databaseName: string): Promise<TursoCredentials> {
+  async fetchCredentials(
+    databaseName: string,
+    options?: { appId?: string },
+  ): Promise<TursoCredentials> {
     const now = Date.now();
     const cached = this.credentialsCacheByDb.get(databaseName);
     if (cached && cached.expiresAt > now) {
@@ -266,7 +269,7 @@ export class TursoSyncBridge {
       return inFlight;
     }
 
-    const promise = this.fetchCredentialsUncached(databaseName)
+    const promise = this.fetchCredentialsUncached(databaseName, options?.appId)
       .then((bundle) => {
         this.rememberCredentials(databaseName, bundle.creds, bundle.expiresAtMs);
         this.credentialsFetchPromises.delete(databaseName);
@@ -351,30 +354,6 @@ export class TursoSyncBridge {
     saveTursoCredentialsEntry(databaseName, creds, expiresAtMs);
   }
 
-  private async tryFetchSharedPrimaryCredentials(
-    databaseName: string,
-  ): Promise<{ creds: TursoCredentials; expiresAtMs: number } | null> {
-    const { lookupSharedPrimaryTursoEntry } = await import(
-      "./sharedPrimaryTursoStore.js"
-    );
-    const entry = lookupSharedPrimaryTursoEntry(databaseName);
-    if (!entry) {
-      return null;
-    }
-
-    const { fetchInstallDbTursoCredentials } = await import(
-      "./cloudInstallTursoCredentials.js"
-    );
-    const result = await fetchInstallDbTursoCredentials({
-      namespaceId: entry.namespaceId,
-      slug: entry.slug,
-      tursoShortName: databaseName,
-      shareToken: entry.shareToken,
-    });
-    const expiresAtMs = this.resolveCredentialExpiryMs(result.expiresAt);
-    return { creds: result.creds, expiresAtMs };
-  }
-
   private resolveCredentialExpiryMs(expiresAt?: string): number {
     const now = Date.now();
     if (expiresAt) {
@@ -388,14 +367,8 @@ export class TursoSyncBridge {
 
   private async fetchCredentialsUncached(
     databaseName: string,
+    appId?: string,
   ): Promise<{ creds: TursoCredentials; expiresAtMs: number }> {
-    const sharedPrimary = await this.tryFetchSharedPrimaryCredentials(
-      databaseName,
-    );
-    if (sharedPrimary) {
-      return sharedPrimary;
-    }
-
     const apiKey = await getPaprApiKey();
     if (!apiKey) {
       throw new Error("PAPR_API_KEY not configured");
@@ -410,7 +383,10 @@ export class TursoSyncBridge {
           "X-API-Key": apiKey,
         },
         body: JSON.stringify(
-          mergeCloudActingUserBody({ database: databaseName }),
+          mergeCloudActingUserBody({
+            database: databaseName,
+            ...(appId?.trim() ? { appId: appId.trim() } : {}),
+          }),
         ),
         signal: AbortSignal.timeout(30_000),
       },

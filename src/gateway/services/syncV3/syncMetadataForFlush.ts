@@ -1,6 +1,7 @@
 /**
- * Push namespace databases.json + per-app db config to Mongo before web publish.
- * Git/repo files are source of truth; Mongo must match after every flush.
+ * Push namespace databases.json + per-app db config to Mongo after app writer flush.
+ * Local disk + per-app git remain source of truth; Mongo is a best-effort runtime mirror
+ * retried via metadata outbox + heartbeat (same as DatabaseRegistryService.save).
  */
 
 import * as fs from "fs";
@@ -8,13 +9,21 @@ import * as path from "path";
 import type { DatabasesRegistryFile } from "../DatabaseRegistryService.js";
 import { DATABASES_REGISTRY_FILENAME } from "../DatabaseRegistryService.js";
 import { uploadAppDbConfigToCloud } from "./appDbConfigUpload.js";
-import { uploadDatabasesRegistryToCloud } from "./MetadataRegistryClient.js";
+import { syncDatabasesRegistryToCloudCoalesced } from "./databasesRegistryCloudSync.js";
 import { flushMetadataOutbox } from "./metadataOutbox.js";
 import { yieldEventLoop } from "../cloudSync/yieldEventLoop.js";
 
 const METADATA_FLUSH_TIMEOUT_MS = 60_000;
 const METADATA_OUTBOX_RETRY_ATTEMPTS = 3;
 const METADATA_OUTBOX_RETRY_DELAY_MS = 2_000;
+
+export interface MetadataFlushSyncResult {
+  warnings: string[];
+  appDbConfigUploaded: boolean;
+  databasesRegistryUploaded: boolean;
+  databasesRegistrySkippedDuplicate: boolean;
+  metadataOutboxRecovered: boolean;
+}
 
 async function retryQueuedMetadataUploads(): Promise<boolean> {
   for (let attempt = 0; attempt < METADATA_OUTBOX_RETRY_ATTEMPTS; attempt += 1) {
@@ -53,73 +62,94 @@ function readNamespaceDatabasesRegistry(
 }
 
 /**
- * Upload app db-config + namespace databases registry to Memory Mongo.
- * Throws on failure so Upload/publish does not succeed with stale runtime metadata.
+ * Best-effort metadata dual-write after publish. Never throws — app code upload must not
+ * fail because Memory Mongo hiccuped; outbox + heartbeat drain pending snapshots.
  */
 export async function syncMetadataToCloudForFlush(
   paprDir: string,
   appId: string,
   commitSha?: string,
-): Promise<void> {
-  const updatedAt = new Date().toISOString();
-  const errors: string[] = [];
+): Promise<MetadataFlushSyncResult> {
+  const warnings: string[] = [];
   const configPath = path.join(paprDir, "apps", appId, "data-sources.json");
   const registry = readNamespaceDatabasesRegistry(paprDir);
 
-  const appUploaded = await uploadAppDbConfigToCloud(
-    paprDir,
-    appId,
-    commitSha,
-    { timeoutMs: METADATA_FLUSH_TIMEOUT_MS },
-  );
-  if (appUploaded === false && fs.existsSync(configPath)) {
-    errors.push(`app db-config upload failed for ${appId}`);
+  let appDbConfigUploaded = !fs.existsSync(configPath);
+  if (fs.existsSync(configPath)) {
+    appDbConfigUploaded = await uploadAppDbConfigToCloud(
+      paprDir,
+      appId,
+      commitSha,
+      { timeoutMs: METADATA_FLUSH_TIMEOUT_MS },
+    );
+    if (!appDbConfigUploaded) {
+      warnings.push(`app db-config upload queued for retry (${appId})`);
+    }
   }
 
-  let registryUploaded = true;
+  let databasesRegistryUploaded = false;
+  let databasesRegistrySkippedDuplicate = false;
   if (registry) {
-    registryUploaded = await uploadDatabasesRegistryToCloud(registry, updatedAt, {
-      timeoutMs: METADATA_FLUSH_TIMEOUT_MS,
-    });
-    if (!registryUploaded) {
-      errors.push("namespace databases registry upload failed");
+    const registryResult = await syncDatabasesRegistryToCloudCoalesced(
+      paprDir,
+      registry,
+      { timeoutMs: METADATA_FLUSH_TIMEOUT_MS },
+    );
+    databasesRegistryUploaded = registryResult.uploaded;
+    databasesRegistrySkippedDuplicate = registryResult.skippedDuplicate;
+    if (registryResult.queuedForRetry) {
+      warnings.push("namespace databases registry upload queued for retry");
+    }
+  } else {
+    databasesRegistryUploaded = true;
+  }
+
+  let metadataOutboxRecovered = false;
+  if (warnings.length > 0) {
+    metadataOutboxRecovered = await retryQueuedMetadataUploads();
+    if (metadataOutboxRecovered) {
+      warnings.length = 0;
+      appDbConfigUploaded = true;
+      databasesRegistryUploaded = true;
+    } else {
+      if (fs.existsSync(configPath) && !appDbConfigUploaded) {
+        appDbConfigUploaded = await uploadAppDbConfigToCloud(
+          paprDir,
+          appId,
+          commitSha,
+          { timeoutMs: METADATA_FLUSH_TIMEOUT_MS },
+        );
+        if (!appDbConfigUploaded) {
+          warnings.push(`app db-config upload still pending (${appId})`);
+        }
+      }
+      if (registry && !databasesRegistryUploaded) {
+        const retry = await syncDatabasesRegistryToCloudCoalesced(
+          paprDir,
+          registry,
+          { force: true, timeoutMs: METADATA_FLUSH_TIMEOUT_MS },
+        );
+        databasesRegistryUploaded = retry.uploaded;
+        if (retry.queuedForRetry) {
+          warnings.push(
+            "namespace databases registry upload still pending (will retry in background)",
+          );
+        }
+      }
     }
   }
 
-  if (errors.length > 0) {
-    const recoveredViaOutbox = await retryQueuedMetadataUploads();
-    if (recoveredViaOutbox) {
-      return;
-    }
-
-    errors.length = 0;
-    if (fs.existsSync(configPath)) {
-      const appRetryOk = await uploadAppDbConfigToCloud(
-        paprDir,
-        appId,
-        commitSha,
-        { timeoutMs: METADATA_FLUSH_TIMEOUT_MS },
-      );
-      if (!appRetryOk) {
-        errors.push(`app db-config upload failed for ${appId}`);
-      }
-    }
-    if (registry) {
-      const registryRetryOk = await uploadDatabasesRegistryToCloud(
-        registry,
-        updatedAt,
-        { timeoutMs: METADATA_FLUSH_TIMEOUT_MS },
-      );
-      if (!registryRetryOk) {
-        errors.push("namespace databases registry upload failed");
-      }
-    }
-  }
-
-  if (errors.length > 0) {
-    throw new Error(
-      `Metadata sync to cloud failed — ${errors.join("; ")}. ` +
-        "Web runtime may reject db-token until metadata outbox retries succeed.",
+  if (warnings.length > 0) {
+    console.warn(
+      `[MetadataFlush] ${appId}: publish succeeded; runtime metadata still catching up — ${warnings.join("; ")}`,
     );
   }
+
+  return {
+    warnings,
+    appDbConfigUploaded,
+    databasesRegistryUploaded,
+    databasesRegistrySkippedDuplicate,
+    metadataOutboxRecovered,
+  };
 }

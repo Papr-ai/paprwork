@@ -14,9 +14,9 @@ import type { JobGraph } from "../src/gateway/services/jobs/types.js";
 import { invalidatePaprUserIdCache } from "../src/gateway/utils/paprUserId.js";
 import { CLOUD_LINEAGE_FILENAME } from "../src/gateway/services/CloudAppLineageService.js";
 import {
-  registerSharedPrimaryTursoEntries,
-  SHARED_PRIMARY_TURSO_FILENAME,
-} from "../src/gateway/services/sharedPrimaryTursoStore.js";
+  getDatabaseRegistryService,
+  resetDatabaseRegistryForWorkspaceSwitch,
+} from "../src/gateway/services/DatabaseRegistryService.js";
 
 describe("appDeleteScope", () => {
   const workspace = useIsolatedPaprWorkspace("app-delete-scope");
@@ -66,8 +66,45 @@ describe("appDeleteScope", () => {
   }
 
   beforeEach(() => {
+    resetDatabaseRegistryForWorkspaceSwitch();
     fs.rmSync(path.join(appsRoot(), appId), { recursive: true, force: true });
   });
+
+  async function writeCollaboratorSharedPrimaryFixture(input: {
+    tursoShortName: string;
+    dbId?: string;
+  }): Promise<string> {
+    const dbId = input.dbId ?? "db-block0100-0000-4000-8000-000000000001";
+    writeLineage("track", "user-publisher", "shared");
+    const appDir = path.join(appsRoot(), appId);
+    fs.writeFileSync(
+      path.join(appDir, "data-sources.json"),
+      JSON.stringify({
+        sources: [
+          {
+            id: "src-main",
+            type: "sqlite",
+            alias: "main",
+            dbId,
+            dbPath: path.join(workspace.paprHome, "data", "databases", "main", "data.db"),
+            tables: [],
+            linkedAt: "2026-01-01T00:00:00.000Z",
+          },
+        ],
+      }),
+    );
+    const dbPath = path.join(workspace.paprHome, "data", "databases", "main", "data.db");
+    fs.mkdirSync(path.dirname(dbPath), { recursive: true });
+    fs.writeFileSync(dbPath, Buffer.alloc(1));
+    const registry = getDatabaseRegistryService();
+    await registry.register({
+      dbId,
+      localPath: dbPath,
+      tursoShortName: input.tursoShortName,
+      isolation: "shared",
+    });
+    return dbId;
+  }
 
   it("collaborator track install is local uninstall only", async () => {
     setUserId("user-collaborator");
@@ -103,20 +140,9 @@ describe("appDeleteScope", () => {
     expect(scope.sourceSlug).toBe("team-dashboard");
   });
 
-  it("blocks Turso delete on shared primary for non-publisher", () => {
+  it("blocks Turso delete on shared primary for non-publisher", async () => {
     setUserId("user-collaborator");
-    registerSharedPrimaryTursoEntries(
-      [
-        {
-          tursoShortName: "d-shared01",
-          namespaceId: "ns-pub",
-          slug: "team-dashboard",
-          publisherUserId: "user-publisher",
-          localAppId: appId,
-        },
-      ],
-      workspace.paprHome,
-    );
+    await writeCollaboratorSharedPrimaryFixture({ tursoShortName: "d-shared01" });
 
     expect(
       shouldBlockTursoDeleteForSharedPrimary("d-shared01", workspace.paprHome),
@@ -183,18 +209,7 @@ describe("appDeleteScope", () => {
 
   it("database delete blocked for shared-primary non-publisher", async () => {
     setUserId("user-collaborator");
-    registerSharedPrimaryTursoEntries(
-      [
-        {
-          tursoShortName: "d-block01",
-          namespaceId: "ns-pub",
-          slug: "team-dashboard",
-          publisherUserId: "user-publisher",
-          localAppId: appId,
-        },
-      ],
-      workspace.paprHome,
-    );
+    await writeCollaboratorSharedPrimaryFixture({ tursoShortName: "d-block01" });
 
     const scope = await resolveDatabaseDeleteScope(
       "d-block01",

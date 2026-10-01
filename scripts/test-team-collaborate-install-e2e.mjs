@@ -132,6 +132,7 @@ function isDbFilePresent(dbPath) {
 
 async function runInstall(paprHome, userId, mode) {
   process.env.PAPR_HOME = paprHome;
+  syncInstallWorkspaceEnv();
   process.env.PAPRWORK_TELEMETRY_PAPR_USER_ID = userId;
   process.env.PAPR_API_KEY = apiKey;
   process.env.PAPR_MEMORY_SERVER_URL = memoryBase;
@@ -155,6 +156,7 @@ async function runInstall(paprHome, userId, mode) {
 
 async function runTrackSync(paprHome, userId, localAppId) {
   process.env.PAPR_HOME = paprHome;
+  syncInstallWorkspaceEnv();
   process.env.PAPRWORK_TELEMETRY_PAPR_USER_ID = userId;
   process.env.PAPR_API_KEY = apiKey;
   process.env.PAPR_MEMORY_SERVER_URL = memoryBase;
@@ -166,6 +168,25 @@ async function runTrackSync(paprHome, userId, localAppId) {
     ).href
   );
   return trackMod.getCloudAppTrackSyncService().syncTrackApp(localAppId);
+}
+
+function parseApiKeyScope(key) {
+  const match = key.match(/^sk-org-([^-]+)-namespace-([^-]+)(?:-.+)?$/);
+  if (!match) {
+    return null;
+  }
+  return { organizationId: match[1], namespaceId: match[2] };
+}
+
+/** Align gateway key resolver with the E2E namespace key (not the desktop active workspace). */
+function syncInstallWorkspaceEnv() {
+  const scope = parseApiKeyScope(apiKey);
+  if (scope) {
+    process.env.PAPR_ORG_ID = scope.organizationId;
+    process.env.PAPR_NAMESPACE_ID = scope.namespaceId;
+    return;
+  }
+  process.env.PAPR_NAMESPACE_ID = namespaceId;
 }
 
 function seedWorkspace(paprHome) {
@@ -193,6 +214,7 @@ async function main() {
   console.log(`Namespace: ${namespaceId}`);
   console.log("=".repeat(60));
 
+  process.env.PAPR_E2E_NAMESPACE_ID = namespaceId;
   const resolved = await resolvePaprApiKey();
   if (!resolved?.key) {
     console.error(
@@ -291,12 +313,27 @@ async function main() {
     check("databasePolicy=shared", lineage?.databasePolicy === "shared", lineage?.databasePolicy);
     check("lineage mode=track", lineage?.mode === "track", lineage?.mode);
 
-    const sharedStorePath = join(trackHome, "data", ".shared-primary-turso.json");
-    check("shared-primary turso store exists", existsSync(sharedStorePath), sharedStorePath);
-    if (existsSync(sharedStorePath)) {
-      const store = readJson(sharedStorePath);
-      const keys = Object.keys(store.databases ?? {});
-      check("shared-primary has turso entries", keys.length > 0, `count=${keys.length}`);
+    const registryPath = join(trackHome, "data", "databases.json");
+    const trackDbIds = registryDbIdsFromHome(trackHome);
+    const tursoShortFromRegistry =
+      trackDbIds[0] && existsSync(registryPath)
+        ? readJson(registryPath).databases[trackDbIds[0]]?.tursoShortName
+        : null;
+    if (tursoShortFromRegistry) {
+      const { resolveSharedPrimaryTursoEntry } = await import(
+        pathToFileURL(
+          join(process.cwd(), "dist/gateway/services/sharedPrimaryTursoResolve.js"),
+        ).href
+      );
+      const resolved = resolveSharedPrimaryTursoEntry(tursoShortFromRegistry, trackHome);
+      check("lineage resolves shared-primary Turso segment", resolved !== null, "null");
+      check(
+        "resolved publisher matches lineage source",
+        resolved?.publisherUserId === lineage?.source?.userId,
+        `${resolved?.publisherUserId} vs ${lineage?.source?.userId}`,
+      );
+    } else {
+      check("registry tursoShortName present", false, registryPath);
     }
 
     trackDbPathBeforeSync = primaryDbPathFromApp(trackHome, trackLocalAppId);
@@ -309,14 +346,10 @@ async function main() {
       trackDbPathBeforeSync ?? "no db path",
     );
 
-    const tursoShort =
-      registryDbIdsFromHome(trackHome)[0] &&
-      readJson(join(trackHome, "data", "databases.json")).databases[
-        registryDbIdsFromHome(trackHome)[0]
-      ]?.tursoShortName;
+    const tursoShort = tursoShortFromRegistry;
     if (tursoShort) {
       const token = await memoryFetch(
-        localMemoryBase,
+        memoryBase,
         apiKey,
         "/v1/cloud/apps/install/db-token",
         {
@@ -329,11 +362,23 @@ async function main() {
           },
         },
       );
-      check(
-        "teammate install/db-token authorized",
-        token.status === 200 && !!token.data?.tursoUrl,
-        `status=${token.status} ${token.text.slice(0, 120)}`,
-      );
+      const trialGate =
+        token.status === 403 &&
+        String(token.text).includes("dashboard.papr.ai") &&
+        String(token.text).toLowerCase().includes("trial");
+      if (token.status === 200 && token.data?.tursoUrl) {
+        check("teammate install/db-token authorized", true, token.data.tursoUrl.slice(0, 40));
+      } else if (trialGate) {
+        console.log(
+          `  ${YELLOW}SKIP${RESET} teammate install/db-token (Papr trial gate on memory — track install + lineage already validated)`,
+        );
+      } else {
+        check(
+          "teammate install/db-token authorized",
+          false,
+          `status=${token.status} ${token.text.slice(0, 120)}`,
+        );
+      }
     }
 
     console.log(`\n${BOLD}--- Teammate track sync (code-only path) ---${RESET}`);
@@ -375,14 +420,23 @@ async function main() {
         );
       }
 
-      check(
-        "fork has no shared-primary store entries",
-        !existsSync(join(forkHome, "data", ".shared-primary-turso.json")) ||
-          Object.keys(
-            readJson(join(forkHome, "data", ".shared-primary-turso.json")).databases ?? {},
-          ).length === 0,
-        forkHome,
-      );
+      const forkTurso =
+        registryDbIdsFromHome(forkHome)[0] &&
+        readJson(join(forkHome, "data", "databases.json")).databases[
+          registryDbIdsFromHome(forkHome)[0]
+        ]?.tursoShortName;
+      if (forkTurso) {
+        const { resolveSharedPrimaryTursoEntry } = await import(
+          pathToFileURL(
+            join(process.cwd(), "dist/gateway/services/sharedPrimaryTursoResolve.js"),
+          ).href
+        );
+        check(
+          "fork does not resolve publisher shared-primary segment",
+          resolveSharedPrimaryTursoEntry(forkTurso, forkHome) === null,
+          forkTurso,
+        );
+      }
 
       if (!skipCleanup) {
         rmSync(forkRoot, { recursive: true, force: true });

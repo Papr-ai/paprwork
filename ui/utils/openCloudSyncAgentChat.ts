@@ -289,7 +289,7 @@ export function buildProposalConflictMergeAgentPrompt(input: {
   parts.push(
     "Steps: 1) get_cloud_app_pr_review({ requestId }) for what the contributor changed; read_cloud_app_pr_file for their full versions and read_file on my local app for mine.",
     "2) For each overlapping spot, write a merged version that keeps the intent of both, and show me a short before/after per file. Do not write anything yet.",
-    "3) Only after I confirm: write the merged files into my app, publish with push_cloud_sync({ appId }), then resolve_cloud_app_pr({ requestId, action: \"approve\", mergedManually: true }).",
+    "3) Only after I confirm: write the merged files into my app, publish with push_cloud_sync({ appId }), then resolve_cloud_app_pr({ requestId, action: \"approve\", mergedManually: true }). If that returns merge_not_published, the publish has not reached the web yet — wait for it and retry; don't tell me it's accepted until it succeeds.",
     "Ignore build outputs (dist/, backend/bundle.json, __papr__/, metadata.json) — they are regenerated on publish. If the two changes can't sensibly be combined, say so and suggest declining.",
   );
   return parts.join(" ");

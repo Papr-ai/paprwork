@@ -197,9 +197,13 @@ export async function resolveLocalAppBackendDatabaseEnv(input: {
   const config = parseDataSourcesFile(raw);
   const { getTursoSyncBridge } = await import("../TursoSyncBridge.js");
   const bridge = getTursoSyncBridge();
+  const scopedAppId = input.appId.trim();
   const fetchTursoToken =
     input.fetchTursoToken ??
-    (bridge ? (database) => bridge.fetchCredentials(database) : undefined);
+    (bridge
+      ? (database) =>
+          bridge.fetchCredentials(database, { appId: scopedAppId })
+      : undefined);
 
   return resolveAppBackendDatabaseEnvFromConfig({
     appId: input.appId,

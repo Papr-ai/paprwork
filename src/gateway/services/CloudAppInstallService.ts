@@ -3,6 +3,10 @@
  */
 
 import { getPaprRoot, getPaprAppsRoot } from "../../core/utils/paprRoot.js";
+import {
+  parseProposableMetadata,
+  pickProposableMetadata,
+} from "./cloudSync/contributeMetadataFields.js";
 import { createHash } from "node:crypto";
 import { promises as fs } from "node:fs";
 import * as path from "node:path";
@@ -46,6 +50,8 @@ interface MemoryInstallResponse {
   token: string;
   expiresAt: string;
   lineageId: string;
+  /** Caller's verified access to the source app (owner/team/public_read/link_*). */
+  accessMode?: string | null;
 }
 
 export interface CloudAppInstallInput {
@@ -119,6 +125,44 @@ async function cloneAppSource(
     },
     "papr-cloud-install-",
   );
+}
+
+/**
+ * Baselines for field-level metadata proposals: what the copy's metadata.json
+ * says right after install (incl. the "_2" title suffix) and what the
+ * publisher's said.
+ */
+async function readInstallMetadataBaselines(
+  appDir: string,
+  files: AppFile[],
+  app: { title: string; description: string; icon?: string; tags?: string[] },
+): Promise<{
+  metadataBaseline: ReturnType<typeof pickProposableMetadata>;
+  metadataUpstreamBaseline?: ReturnType<typeof pickProposableMetadata>;
+}> {
+  let onDisk: ReturnType<typeof pickProposableMetadata> | null = null;
+  try {
+    onDisk = parseProposableMetadata(
+      await fs.readFile(path.join(appDir, "metadata.json"), "utf8"),
+    );
+  } catch {
+    onDisk = null;
+  }
+  const upstream = parseProposableMetadata(
+    files.find((file) => file.filename === "metadata.json")?.content,
+  );
+  return {
+    metadataBaseline:
+      onDisk && onDisk.title
+        ? onDisk
+        : pickProposableMetadata({
+            title: app.title,
+            description: app.description,
+            icon: app.icon,
+            tags: app.tags,
+          }),
+    ...(upstream ? { metadataUpstreamBaseline: upstream } : {}),
+  };
 }
 
 function resolveTitle(files: AppFile[], slug: string): string {
@@ -196,6 +240,7 @@ export class CloudAppInstallService {
   async installApp(input: CloudAppInstallInput): Promise<CloudAppInstallResult> {
     const mode = input.mode ?? "fork";
     const {
+      assertTrackAccessFromServer,
       assertTrackAllowedForCatalog,
       databasePolicyFromInstallPolicy,
       readLinkedDbIsolations,
@@ -209,6 +254,11 @@ export class CloudAppInstallService {
     });
 
     const prepare = await this.prepareInstall({ ...input, mode });
+    assertTrackAccessFromServer({
+      mode,
+      catalogScope: input.catalogScope,
+      accessMode: prepare.accessMode,
+    });
     const cloned = await cloneAppSource(prepare);
 
     const linkedIsolations = await readLinkedDbIsolations({
@@ -296,18 +346,6 @@ export class CloudAppInstallService {
         console.log(
           `[CloudAppInstall] Mirrored ${hydratedMigrations.copied.length} migration(s) from app folder into registry for ${app.id}`,
         );
-      }
-
-      if (installDbPolicy === "shared_primary") {
-        const { registerSharedPrimaryTursoForInstalledApp } = await import(
-          "./cloudInstallTursoCredentials.js"
-        );
-        registerSharedPrimaryTursoForInstalledApp({
-          localAppId: app.id,
-          source: prepare.source,
-          registryDbIds: linked.registryDbIds,
-          shareToken: input.shareToken,
-        });
       }
 
       // One decision point for how each installed database is stored on this
@@ -452,6 +490,9 @@ export class CloudAppInstallService {
               // raw upstream files; otherwise remapped files look like local
               // edits and every "Update from publisher" reports them as conflicts.
               syncSnapshot: await snapshotInstalledFiles(appDir, files),
+              // What this copy's title/description/icon/tags start as (incl.
+              // the "_2" suffix) so later edits to them can be proposed.
+              ...(await readInstallMetadataBaselines(appDir, files, app)),
             }
           : {}),
       };

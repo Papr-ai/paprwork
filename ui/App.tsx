@@ -29,6 +29,7 @@ import {
 } from "./stores/permissionStore";
 import { initJobPermissionListener } from "./stores/jobPermissionStore";
 import { initPaprQuotaListener } from "./stores/paprQuotaStore";
+import { initProposalNoticeListener } from "./stores/proposalNoticeListener";
 import { initJobLiveLogsListener } from "./stores/jobLiveLogsStore";
 import { initSubagentJobStore } from "./stores/subagentJobStore";
 import { UpdateBanner } from "./components/UpdateBanner/UpdateBanner";
@@ -51,6 +52,7 @@ import {
   buildAppAgentMainChatMessage,
   findAppTabId,
 } from "./utils/openAppAgentMainChat";
+import { dispatchPaprOnboardingSend } from "./utils/paprOnboardingSend";
 import "./styles/liquid-glass.css";
 import "./App.css";
 import {
@@ -481,6 +483,7 @@ export function App() {
     initPermissionListener();
     initJobPermissionListener();
     initPaprQuotaListener();
+    initProposalNoticeListener();
     initJobLiveLogsListener();
     initSubagentJobStore();
     initPlatformConnectListener();
@@ -547,11 +550,7 @@ export function App() {
                   appData.agentChat?.welcomeMessage,
               });
               window.setTimeout(() => {
-                window.dispatchEvent(
-                  new CustomEvent("papr-onboarding-send", {
-                    detail: { message: penMessage },
-                  }),
-                );
+                dispatchPaprOnboardingSend(penMessage, chatId);
               }, 300);
             }
           } catch (err) {

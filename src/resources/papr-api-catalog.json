@@ -1,6 +1,6 @@
 {
   "version": 1,
-  "generatedAt": "2026-09-30T04:59:01.285Z",
+  "generatedAt": "2026-10-01T00:01:46.253Z",
   "entryCount": 201,
   "entries": [
     {
@@ -2646,7 +2646,7 @@
     {
       "id": "agent-tool-resolve_cloud_app_pr",
       "title": "resolve_cloud_app_pr",
-      "summary": "Approve or reject an incoming contribute-back GitHub PR (OWNER ONLY). Approve merges on GitHub then runs Get updates (pullAppFromCloud) for the source app — do not push local over the merge. Review first with get_cloud_app_pr_review.",
+      "summary": "Approve or reject an incoming contribute-back GitHub PR (OWNER ONLY). Approve merges on GitHub then runs Get updates (pullAppFromCloud) for the source app — do not push local over the merge. Review first with get_cloud_app_pr_review.\n\nIf the proposal has mergeState \"conflict\" (it was based on an older version and overlaps newer edits), a plain approve fails. Either reject, or resolve it yourself: read the owner's current files (read_file on the local app) and the proposal's versions (read_cloud_app_pr_file), write a merged version that keeps both sides' intent, show the owner the result, an...",
       "surfaces": [
         "agent-tool"
       ],

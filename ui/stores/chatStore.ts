@@ -80,6 +80,10 @@ interface ChatStore {
   setWaitingForAgentSlot: (chatId: string, waiting: boolean) => void;
   setConnectionPaused: (chatId: string, paused: boolean) => void;
   setFinishingWork: (chatId: string, finishing: boolean) => void;
+  setLiveStreamRequestId: (
+    chatId: string,
+    requestId: string | undefined,
+  ) => void;
   setNeedsStreamRecovery: (
     chatId: string,
     needs: boolean,
@@ -608,6 +612,20 @@ export const useChatStore = create<ChatStore>((set, get) => ({
       newChatStates.set(chatId, {
         ...chatState,
         isFinishingWork: finishing,
+      });
+
+      return { chatStates: newChatStates };
+    }),
+
+  setLiveStreamRequestId: (chatId, requestId) =>
+    set((state) => {
+      const chatState = state.chatStates.get(chatId);
+      if (!chatState) return state;
+
+      const newChatStates = new Map(state.chatStates);
+      newChatStates.set(chatId, {
+        ...chatState,
+        liveStreamRequestId: requestId,
       });
 
       return { chatStates: newChatStates };

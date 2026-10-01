@@ -246,13 +246,15 @@ export class DatabaseRegistryService {
       // Replica push timestamps are local bookkeeping only — memory server ignores
       // them, so skip uploading ~50KB full registry snapshots on every row write.
       if (!options?.skipCloudUpload) {
-        const updatedAt = new Date().toISOString();
+        const paprDir = path.dirname(path.dirname(this.registryPath));
         void (async () => {
           try {
-            const { uploadDatabasesRegistryToCloud } = await import(
-              "./syncV3/MetadataRegistryClient.js"
+            const { syncDatabasesRegistryToCloudCoalesced } = await import(
+              "./syncV3/databasesRegistryCloudSync.js"
             );
-            await uploadDatabasesRegistryToCloud(state, updatedAt);
+            await syncDatabasesRegistryToCloudCoalesced(paprDir, state, {
+              force: true,
+            });
           } catch (err) {
             console.warn(
               "[DatabaseRegistry] cloud upload failed:",
@@ -609,6 +611,10 @@ export class DatabaseRegistryService {
     if (!record) {
       return;
     }
+    const { assertMayTombstoneDatabaseRecord } = await import(
+      "./databaseRegistryTombstonePolicy.js"
+    );
+    assertMayTombstoneDatabaseRecord(record);
     record.status = "tombstone";
     record.updatedAt = new Date().toISOString();
     await this.save(state, options);

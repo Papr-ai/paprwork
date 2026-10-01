@@ -81,6 +81,8 @@ interface MessageItemProps {
   chatId: string;
   message: ChatMessage;
   delegationFollowUps?: ChatMessage[];
+  /** Gateway turn still running but this row lost isStreaming. */
+  turnInFlight?: boolean;
 }
 
 /**
@@ -708,6 +710,7 @@ const MessageItemInner: React.FC<MessageItemProps> = ({
   chatId,
   message,
   delegationFollowUps = [],
+  turnInFlight = false,
 }) => {
   const isUser = message.role === "user";
   const content = message.isStreaming
@@ -762,8 +765,8 @@ const MessageItemInner: React.FC<MessageItemProps> = ({
   const hasSequence = message.sequence && message.sequence.length > 0;
   const showStreamingPlaceholder =
     !isUser &&
-    !!message.isStreaming &&
-    !assistantMessageHasVisibleContent(message);
+    !assistantMessageHasVisibleContent(message) &&
+    (!!message.isStreaming || turnInFlight);
 
   return (
     <div
@@ -1103,5 +1106,6 @@ export const MessageItem = React.memo(MessageItemInner, (prev, next) => {
   if (prev.message.toolCalls !== next.message.toolCalls) return false;
   if (prev.chatId !== next.chatId) return false;
   if (prev.delegationFollowUps !== next.delegationFollowUps) return false;
+  if (prev.turnInFlight !== next.turnInFlight) return false;
   return true;
 });

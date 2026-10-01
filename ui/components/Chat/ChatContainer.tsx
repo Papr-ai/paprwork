@@ -66,9 +66,12 @@ import "./ChatContainer.css";
 import { trackEvent } from "../../lib/telemetry";
 import {
   chatHasLiveStreamBlockingHistory,
+  chatIsStreamingOnServer,
   getAutoContinueBlockReason,
+  isResumingStream as isChatResumingStream,
   shouldDrainMessageQueue,
 } from "../../lib/agentStreamRecovery";
+import { assistantMessageHasVisibleContent } from "../../utils/assistantMessageVisibility";
 import { clearQueuedMessagesForChat } from "../../utils/messageQueue";
 import { useGatewaySupervisorStatus } from "../../hooks/useGatewaySupervisorStatus";
 import { useGatewayConnectionState } from "../../hooks/useGatewayConnectionState";
@@ -188,6 +191,8 @@ export const ChatContainer: React.FC<ChatContainerProps> = ({ chatId }): React.R
     streamRecoveryReason,
     streamRecoveryDetail,
     lastTurnOutcome,
+    isFinishingWork,
+    liveStreamRequestId,
   } = useChatStore(
     useShallow((state) => {
       const cs = state.chatStates.get(chatId);
@@ -202,6 +207,8 @@ export const ChatContainer: React.FC<ChatContainerProps> = ({ chatId }): React.R
         streamRecoveryReason: cs?.streamRecoveryReason ?? "connection",
         streamRecoveryDetail: cs?.streamRecoveryDetail,
         lastTurnOutcome: cs?.lastTurnOutcome,
+        isFinishingWork: cs?.isFinishingWork ?? false,
+        liveStreamRequestId: cs?.liveStreamRequestId,
       };
     }),
   );
@@ -464,6 +471,15 @@ export const ChatContainer: React.FC<ChatContainerProps> = ({ chatId }): React.R
       : null;
 
   const isWaitingForModel = selectedModel.provider === 'ollama' && installing === selectedModel.id;
+
+  const agentTurnInFlight =
+    isSending ||
+    isWaitingForAgentSlot ||
+    isWaitingForModel ||
+    isFinishingWork ||
+    !!liveStreamRequestId;
+
+  const mountStreamRecoveryAttempted = useRef(new Set<string>());
 
   /** Model that last answered in *this* chat — the durable per-chat record. */
   const historyModelId = useMemo(() => findHistoryModelId(messages), [messages]);
@@ -1029,14 +1045,61 @@ export const ChatContainer: React.FC<ChatContainerProps> = ({ chatId }): React.R
   // Listen for onboarding messages dispatched from OnboardingCard via sidebar
   useEffect(() => {
     const handler = (e: Event) => {
-      const detail = (e as CustomEvent<{ message: string }>).detail;
-      if (detail?.message) {
-        handleSendMessage(detail.message);
-      }
+      const detail = (e as CustomEvent<{ message: string; chatId?: string }>)
+        .detail;
+      if (!detail?.message) return;
+      if (detail.chatId && detail.chatId !== chatId) return;
+      handleSendMessage(detail.message);
     };
     window.addEventListener("papr-onboarding-send", handler);
     return () => window.removeEventListener("papr-onboarding-send", handler);
-  }, [handleSendMessage]);
+  }, [chatId, handleSendMessage]);
+
+  /**
+   * Collab QA opens a fresh chat tab and auto-sends after 300ms. If the UI loses
+   * the WebSocket subscriber while the gateway keeps streaming, resubscribe once.
+   */
+  useEffect(() => {
+    if (mountStreamRecoveryAttempted.current.has(chatId)) return;
+    mountStreamRecoveryAttempted.current.add(chatId);
+
+    const timer = window.setTimeout(() => {
+      void (async () => {
+        if (isChatResumingStream(chatId)) return;
+
+        const cs = useChatStore.getState().chatStates.get(chatId);
+        if (!cs) return;
+        if (cs.isSending || cs.liveStreamRequestId) return;
+
+        const stillStreaming = await chatIsStreamingOnServer(chatId);
+        if (!stillStreaming) return;
+
+        const last = cs.messages[cs.messages.length - 1];
+        const uiLooksIdle =
+          !last ||
+          last.role === "user" ||
+          (last.role === "assistant" &&
+            !last.isStreaming &&
+            !assistantMessageHasVisibleContent(last));
+
+        if (!uiLooksIdle) return;
+
+        console.log(
+          `[ChatContainer] Gateway still streaming for ${chatId} but UI is idle — resubscribing`,
+        );
+        try {
+          await retryStreamRecovery(
+            chatId,
+            makeAgentConfig(DEFAULT_SYSTEM_PROMPT),
+          );
+        } catch (error) {
+          console.warn("[ChatContainer] Mount stream recovery failed:", error);
+        }
+      })();
+    }, 800);
+
+    return () => window.clearTimeout(timer);
+  }, [chatId, makeAgentConfig, retryStreamRecovery]);
 
   const handleChatDragEnter = useCallback((e: React.DragEvent<HTMLDivElement>) => {
     e.preventDefault();
@@ -1230,6 +1293,7 @@ export const ChatContainer: React.FC<ChatContainerProps> = ({ chatId }): React.R
         isLoading={chatIsLoading}
         isSending={isSending || isWaitingForModel}
         isWaitingForAgentSlot={isWaitingForAgentSlot}
+        agentTurnInFlight={agentTurnInFlight}
         onFilesDropped={handleFilesDroppedToChat}
         onLoadOlder={() => loadOlderMessages(chatId)}
         onRetryHistory={() => syncHistoryFromServer({ force: true })}

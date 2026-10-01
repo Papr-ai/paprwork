@@ -35,9 +35,11 @@ async function main() {
   const { readActiveWorkspacePointer } = await importDist(
     "core/utils/paprWorkspace.js",
   );
-  const { paprNamespaceApiKeyName } = await importDist(
-    "core/utils/paprApiKey.js",
-  );
+  const {
+    paprNamespaceApiKeyName,
+    parsePaprApiKeyScope,
+    isInternalPaprNamespaceApiKeyName,
+  } = await importDist("core/utils/paprApiKey.js");
 
   const storage = new CustomKeysStorage();
   await storage.initialize();
@@ -47,22 +49,51 @@ async function main() {
     await storage.setActiveOrganization(pointer.organizationId);
   }
 
+  const isUsablePaprApiKey = (value) => {
+    const trimmed = value?.trim();
+    if (!trimmed?.startsWith("sk-")) {
+      return false;
+    }
+    return Boolean(parsePaprApiKeyScope(trimmed));
+  };
+
+  const tryWriteKey = async (name) => {
+    const value = await storage.getKeyByName(name);
+    if (!isUsablePaprApiKey(value)) {
+      return false;
+    }
+    process.stdout.write(value.trim());
+    app.quit();
+    process.exit(0);
+  };
+
+  const candidateNames = [];
+  const e2eNamespace = process.env.PAPR_E2E_NAMESPACE_ID?.trim();
+  if (e2eNamespace) {
+    candidateNames.push(paprNamespaceApiKeyName(e2eNamespace));
+  }
   if (pointer?.namespaceId) {
-    const namespaceKey = await storage.getKeyByName(
-      paprNamespaceApiKeyName(pointer.namespaceId),
-    );
-    if (namespaceKey?.trim()) {
-      process.stdout.write(namespaceKey.trim());
-      app.quit();
-      process.exit(0);
+    candidateNames.push(paprNamespaceApiKeyName(pointer.namespaceId));
+  }
+  candidateNames.push("PAPR_API_KEY");
+
+  const listed = await storage.listKeys();
+  for (const meta of listed) {
+    if (isInternalPaprNamespaceApiKeyName(meta.name)) {
+      candidateNames.push(meta.name);
     }
   }
 
-  const alias = await storage.getKeyByName("PAPR_API_KEY");
-  if (alias?.trim()) {
-    process.stdout.write(alias.trim());
-    app.quit();
-    process.exit(0);
+  const seen = new Set();
+  for (const name of candidateNames) {
+    const normalized = name.trim().toUpperCase();
+    if (seen.has(normalized)) {
+      continue;
+    }
+    seen.add(normalized);
+    if (await tryWriteKey(name)) {
+      return;
+    }
   }
 
   app.quit();

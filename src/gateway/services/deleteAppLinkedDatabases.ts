@@ -202,8 +202,9 @@ export async function deleteSoleLinkerRegistryDatabases(
     if (deleteTurso && tursoBridge) {
       if (shouldBlockTursoDeleteForSharedPrimary(record.tursoShortName)) {
         console.warn(
-          `[deleteApp] Skipping Turso delete for ${record.tursoShortName} — shared primary (publisher only)`,
+          `[deleteApp] Skipping registry + Turso delete for ${record.tursoShortName} — shared primary (publisher only)`,
         );
+        continue;
       } else {
         try {
           const deleted = await tursoBridge.deleteTursoDatabaseByName(

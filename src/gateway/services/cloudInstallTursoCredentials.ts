@@ -7,15 +7,6 @@ import { cloudApiFetch } from "../utils/cloudApiClient.js";
 import { mergeCloudActingUserBody } from "../utils/cloudActingUser.js";
 import { getPaprApiKey } from "../utils/keyResolver.js";
 import type { InstallDbPolicy } from "./cloudInstallDbPolicy.js";
-import {
-  getDatabaseRegistryService,
-  tursoNameForRecord,
-} from "./DatabaseRegistryService.js";
-import {
-  lookupSharedPrimaryTursoEntry,
-  registerSharedPrimaryTursoEntries,
-  type SharedPrimaryTursoEntry,
-} from "./sharedPrimaryTursoStore.js";
 import type { TursoCredentials } from "./tursoSyncBridgeCore.js";
 
 export interface InstallTursoCredentialResult {
@@ -85,7 +76,10 @@ export async function fetchTursoCredentialsForInstall(input: {
     });
   }
 
-  const shared = lookupSharedPrimaryTursoEntry(input.tursoShortName);
+  const { resolveSharedPrimaryTursoEntry } = await import(
+    "./sharedPrimaryTursoResolve.js"
+  );
+  const shared = resolveSharedPrimaryTursoEntry(input.tursoShortName);
   if (shared) {
     return fetchInstallDbTursoCredentials({
       namespaceId: shared.namespaceId,
@@ -100,36 +94,12 @@ export async function fetchTursoCredentialsForInstall(input: {
   );
 }
 
-export function registerSharedPrimaryTursoForInstalledApp(input: {
+/** @deprecated Publisher Turso segments resolve via lineage + data-sources, not this store. */
+export function registerSharedPrimaryTursoForInstalledApp(_input: {
   localAppId: string;
   source: CloudAppLineageSource;
   registryDbIds: readonly string[];
   shareToken?: string;
 }): void {
-  if (input.registryDbIds.length === 0) {
-    return;
-  }
-
-  const registry = getDatabaseRegistryService();
-  const entries: Array<
-    SharedPrimaryTursoEntry & { tursoShortName: string }
-  > = [];
-
-  for (const dbId of input.registryDbIds) {
-    const record = registry.getById(dbId);
-    if (!record || record.isolation === "per-user") {
-      continue;
-    }
-    const tursoShortName = tursoNameForRecord(record, input.source.userId);
-    entries.push({
-      tursoShortName,
-      namespaceId: input.source.namespaceId,
-      slug: input.source.slug,
-      publisherUserId: input.source.userId,
-      localAppId: input.localAppId,
-      ...(input.shareToken ? { shareToken: input.shareToken } : {}),
-    });
-  }
-
-  registerSharedPrimaryTursoEntries(entries);
+  /* no-op — kept for callers not yet removed */
 }

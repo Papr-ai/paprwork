@@ -11,10 +11,12 @@ import {
 describe("notifyAppSaveForWriterOps", () => {
   let tmpDir: string;
   let scheduleAutoFlush: ReturnType<typeof vi.fn<(appId: string) => void>>;
+  let notifyStale: ReturnType<typeof vi.fn<(appId: string) => void>>;
 
   beforeEach(() => {
     tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), "app-save-watcher-"));
     scheduleAutoFlush = vi.fn();
+    notifyStale = vi.fn();
     setAppPublishPrefs(
       "app-manual",
       { uploadMode: "manual", cloudEnabled: true, autoPublish: false },
@@ -36,6 +38,7 @@ describe("notifyAppSaveForWriterOps", () => {
       "app-manual",
       scheduleAutoFlush,
       tmpDir,
+      notifyStale,
     );
     expect(scheduled).toBe(false);
     expect(scheduleAutoFlush).not.toHaveBeenCalled();
@@ -46,6 +49,7 @@ describe("notifyAppSaveForWriterOps", () => {
       "app-auto",
       scheduleAutoFlush,
       tmpDir,
+      notifyStale,
     );
     expect(scheduled).toBe(true);
     expect(scheduleAutoFlush).toHaveBeenCalledWith("app-auto");
@@ -61,9 +65,22 @@ describe("notifyAppSaveForWriterOps", () => {
       "app-cloud-off",
       scheduleAutoFlush,
       tmpDir,
+      notifyStale,
     );
     expect(scheduled).toBe(false);
     expect(scheduleAutoFlush).not.toHaveBeenCalled();
     expect(getAppPublishPrefs("app-cloud-off", tmpDir).cloudEnabled).toBe(false);
+  });
+
+  it("tells the publish bar a manual-upload app is dirty", async () => {
+    // Regression: manual apps never flushed, so nothing broadcast and the
+    // renderer kept a stale "synced" snapshot with Publish greyed out.
+    await notifyAppSaveForWriterOps("app-manual", scheduleAutoFlush, tmpDir, notifyStale);
+    expect(notifyStale).toHaveBeenCalledWith("app-manual");
+  });
+
+  it("leaves the stale broadcast to the flush for auto-upload apps", async () => {
+    await notifyAppSaveForWriterOps("app-auto", scheduleAutoFlush, tmpDir, notifyStale);
+    expect(notifyStale).not.toHaveBeenCalled();
   });
 });

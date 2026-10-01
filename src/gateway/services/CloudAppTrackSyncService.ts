@@ -25,6 +25,13 @@ import {
 import { getAppService } from "./AppService.js";
 import { decideTrackPullAction } from "./cloudSync/trackPullOnPublishLogic.js";
 import { fetchPublishedAppRevision } from "./cloudSync/trackUpstreamRevision.js";
+import {
+  hasMetadataChanges,
+  mergeTrackedMetadata,
+  metadataProposalFromLocal,
+  proposableMetadataHash,
+  type MetadataBaseline,
+} from "./cloudSync/contributeMetadataFields.js";
 
 export interface TrackSyncResult {
   appId: string;
@@ -98,12 +105,23 @@ async function writeLineageFile(
  * the publisher's copy (different app/db ids, rebuilt bundle), so they are not
  * edits a collaborator made or could propose.
  */
+/** Proposed-snapshot key for field-level metadata edits (not a real path). */
+export const METADATA_PROPOSAL_KEY = "metadata.json#fields";
+
 const PLATFORM_MANAGED_FILES = new Set([
   "backend/bundle.json",
   "papr-cloud-dependencies.json",
   "linked-databases.json",
   "metadata.json",
   "data-sources.json",
+]);
+
+/** Platform files holding this copy's own app/db ids — kept when they differ locally. */
+const LOCAL_WIRING_FILES = new Set([
+  "linked-databases.json",
+  "data-sources.json",
+  "papr-cloud-dependencies.json",
+  "metadata.json",
 ]);
 
 export function isCollaboratorEditablePath(rel: string): boolean {
@@ -171,6 +189,18 @@ export class CloudAppTrackSyncService {
       const now = tracked.get(rel);
       return now === undefined ? sent !== "" : now !== sent;
     });
+    // metadata.json itself is platform-managed, but deliberate title /
+    // description / icon / tag edits are proposable field by field.
+    const metaChanges = metadataProposalFromLocal(
+      local.get("metadata.json"),
+      lineage.metadataBaseline,
+    );
+    if (hasMetadataChanges(metaChanges)) {
+      files.push("metadata.json");
+      if (proposed[METADATA_PROPOSAL_KEY] !== proposableMetadataHash(metaChanges)) {
+        unproposed.push("metadata.json");
+      }
+    }
     return { known: true, files, unproposed };
   }
 
@@ -186,6 +216,13 @@ export class CloudAppTrackSyncService {
     // Deleted files: "" marks "sent as deleted".
     for (const rel of Object.keys(lineage.syncSnapshot ?? {})) {
       if (isCollaboratorEditablePath(rel) && !(rel in proposedSnapshot)) proposedSnapshot[rel] = "";
+    }
+    const metaChanges = metadataProposalFromLocal(
+      local.get("metadata.json"),
+      lineage.metadataBaseline,
+    );
+    if (hasMetadataChanges(metaChanges)) {
+      proposedSnapshot[METADATA_PROPOSAL_KEY] = proposableMetadataHash(metaChanges);
     }
     await writeLineageFile(appId, this.appsDir, { ...lineage, proposedSnapshot });
   }
@@ -246,7 +283,35 @@ export class CloudAppTrackSyncService {
       const conflictFiles: string[] = [];
       const skippedFiles: string[] = [];
 
+      let nextMetadataBaseline: MetadataBaseline | undefined = lineage.metadataBaseline;
+      let nextMetadataUpstream: MetadataBaseline | undefined =
+        lineage.metadataUpstreamBaseline;
       for (const [filename, upstreamContent] of upstreamFiles) {
+        if (filename === "metadata.json" && lineage.metadataBaseline) {
+          const localContent = localFiles.get(filename);
+          const merged = mergeTrackedMetadata(
+            localContent,
+            upstreamContent,
+            {
+              local: lineage.metadataBaseline,
+              upstream: lineage.metadataUpstreamBaseline,
+            },
+            { discardLocal: options.discardLocal },
+          );
+          if (!merged) {
+            skippedFiles.push(filename);
+            continue;
+          }
+          nextMetadataBaseline = merged.baseline;
+          nextMetadataUpstream = merged.upstreamBaseline;
+          if (localContent !== undefined && hashContent(localContent) === hashContent(merged.content)) {
+            skippedFiles.push(filename);
+            continue;
+          }
+          const written = await appService.writeAppFile(appId, filename, merged.content);
+          (written ? updatedFiles : skippedFiles).push(filename);
+          continue;
+        }
         const upstreamHash = hashContent(upstreamContent);
         const localContent = localFiles.get(filename);
         const localHash = localContent !== undefined ? hashContent(localContent) : null;
@@ -262,7 +327,16 @@ export class CloudAppTrackSyncService {
           localHash === snapshotHash ||
           snapshotHash === undefined;
 
-        if (!localUnchanged && localHash !== upstreamHash && !options.discardLocal) {
+        // Platform-written files are never a collaborator's edit, so they can't
+        // conflict. Generated output (dist/, __papr__/, backend bundle) follows
+        // the publisher; id-bearing wiring files that differ locally keep the
+        // local copy — the linked-resource install below rewrites them.
+        if (!isCollaboratorEditablePath(filename)) {
+          if (LOCAL_WIRING_FILES.has(filename) && !localUnchanged && !options.discardLocal) {
+            skippedFiles.push(filename);
+            continue;
+          }
+        } else if (!localUnchanged && localHash !== upstreamHash && !options.discardLocal) {
           conflictFiles.push(filename);
           continue;
         }
@@ -291,6 +365,8 @@ export class CloudAppTrackSyncService {
         lastSyncedAt,
         syncSnapshot: nextSnapshot,
         ...(upstreamRevision ? { upstreamRevision } : {}),
+        ...(nextMetadataBaseline ? { metadataBaseline: nextMetadataBaseline } : {}),
+        ...(nextMetadataUpstream ? { metadataUpstreamBaseline: nextMetadataUpstream } : {}),
       });
 
       const sharedDatabase =

@@ -536,15 +536,14 @@ export function chatHasLiveStreamBlockingHistory(chatId: string): boolean {
   if (chatState.isSending) return true;
 
   const hasActiveRequest =
-    activeStreamRequests.has(chatId) || isResumingStream(chatId);
+    activeStreamRequests.has(chatId) ||
+    isResumingStream(chatId) ||
+    !!chatState.liveStreamRequestId;
 
-  if (hasActiveRequest && chatState.connectionPaused === true) return true;
-  if (
-    hasActiveRequest &&
-    chatState.messages.some((m) => m.isStreaming) === true
-  ) {
-    return true;
-  }
+  // A tracked gateway stream can outlive isStreaming / isSending on the row
+  // (history reload, tab switch, half-open socket). Block reload whenever the
+  // client still owns an active request id for this chat.
+  if (hasActiveRequest) return true;
 
   return false;
 }
@@ -600,6 +599,7 @@ let gatewayRecoveryRegistered = false;
 
 export function trackActiveStream(chatId: string, requestId: string): void {
   activeStreamRequests.set(chatId, requestId);
+  useChatStore.getState().setLiveStreamRequestId(chatId, requestId);
 }
 
 /** Resolve chatId when a chunk only carries the gateway stream requestId. */
@@ -627,6 +627,7 @@ export function isStreamDoneChunkWithChatId(
 
 export function untrackActiveStream(chatId: string): void {
   activeStreamRequests.delete(chatId);
+  useChatStore.getState().setLiveStreamRequestId(chatId, undefined);
   appliedChunkCounts.delete(chatId);
   clearResumeRetry(chatId);
   cancelSubscribeHandler(chatId);

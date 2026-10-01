@@ -168,6 +168,7 @@ function resolveTursoDatabaseName(source: AppDataSource): string | null {
 
 async function getTursoClientForSource(
   source: AppDataSource,
+  appId?: string,
 ): Promise<Client | null> {
   const databaseName = resolveTursoDatabaseName(source);
   if (!databaseName) {
@@ -199,7 +200,10 @@ async function getTursoClientForSource(
       return null;
     }
     try {
-      const credentials = await bridge.fetchCredentials(databaseName);
+      const credentials = await bridge.fetchCredentials(
+        databaseName,
+        appId?.trim() ? { appId: appId.trim() } : undefined,
+      );
       tursoUnavailableUntil.delete(databaseName);
       const client = createClient({
         url: credentials.tursoUrl,
@@ -302,7 +306,7 @@ export class DbRouter {
       const local = await this.pool.query(appId, source.dbPath, sql, params);
       result = { ...local, backend: "local" };
     } else {
-      const client = await getTursoClientForSource(source);
+      const client = await getTursoClientForSource(source, appId);
       if (!client) {
         const pathHint = source.dbPath?.trim()
           ? source.dbPath
@@ -699,7 +703,8 @@ export class DbRouter {
     | { ok: false; kind: "unavailable" }
     | { ok: false; kind: "failed"; message: string }
   > {
-    const client = existingClient ?? (await getTursoClientForSource(source));
+    const client =
+      existingClient ?? (await getTursoClientForSource(source, appId));
     if (!client) {
       return { ok: false, kind: "unavailable" };
     }

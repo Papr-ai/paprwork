@@ -121,6 +121,18 @@ function schemaReadIssue(
     ];
   }
 
+  if (code === "turso_access_denied") {
+    return [
+      {
+        rule: "primary-database-turso-access-denied",
+        severity: "error",
+        message: `Cannot obtain a Turso token for the shared app database (${message}).`,
+        remediation:
+          "This usually means the signed-in user is a collaborator on a team app but the memory server minted a token against the wrong Turso segment, or access was denied. Confirm the app is team-shared, you are in the namespace ACL, and memory.papr.ai (or your local memory server) is running the shared-database token fix. Track/collaborate installs should include papr-cloud-lineage.json; the owner may need to re-publish if linked databases changed.",
+      },
+    ];
+  }
+
   if (code === "parked") {
     // The link is fine — the replica file itself is parked by the sync layer.
     // Suggesting a restart or re-link sends users (and agents) the wrong way:

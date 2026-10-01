@@ -179,4 +179,52 @@ describe("CloudAppTrackSyncService shared database track sync", () => {
     expect(bootstrapInstalledAppDatabases).toHaveBeenCalledWith(APP_ID);
     expect(pullTrackSharedAppDatabase).not.toHaveBeenCalled();
   });
+
+  it("never reports platform-generated files as conflicts", async () => {
+    // Collaborator copy differs from the install snapshot on generated files
+    // only (rebuilt bundle, new schema version) plus one real edit.
+    writeTrackApp(appsDir, {
+      schemaVersion: "1.2.0",
+      lineageId: "lineage-3",
+      mode: "track",
+      databasePolicy: "forked",
+      source: {
+        orgId: "org-1",
+        namespaceId: "ns-1",
+        userId: "owner-1",
+        appId: "source-app-1",
+        slug: "demo-app",
+      },
+      installedAt: "2026-01-01T00:00:00.000Z",
+      syncSnapshot: {
+        "index.html": "snap-index",
+        "__papr__/app-meta.json": "snap-meta",
+        "backend/bundle.json": "snap-bundle",
+        "linked-databases.json": "snap-linked",
+      },
+    });
+    const appDir = join(appsDir, APP_ID);
+    mkdirSync(join(appDir, "__papr__"), { recursive: true });
+    mkdirSync(join(appDir, "backend"), { recursive: true });
+    writeFileSync(join(appDir, "__papr__", "app-meta.json"), '{"distRevision":"local"}', "utf8");
+    writeFileSync(join(appDir, "backend", "bundle.json"), '{"local":true}', "utf8");
+    writeFileSync(join(appDir, "linked-databases.json"), '{"db":"local-db"}', "utf8");
+
+    mkdirSync(join(upstreamAppDir, "__papr__"), { recursive: true });
+    mkdirSync(join(upstreamAppDir, "backend"), { recursive: true });
+    writeFileSync(join(upstreamAppDir, "__papr__", "app-meta.json"), '{"distRevision":"up"}', "utf8");
+    writeFileSync(join(upstreamAppDir, "backend", "bundle.json"), '{"up":true}', "utf8");
+    writeFileSync(join(upstreamAppDir, "linked-databases.json"), '{"db":"publisher-db"}', "utf8");
+
+    const result = await service.syncTrackApp(APP_ID);
+
+    // The real edit still conflicts; generated files never do.
+    expect(result.conflictFiles).toEqual(["index.html"]);
+    expect(result.updatedFiles).toEqual(
+      expect.arrayContaining(["__papr__/app-meta.json", "backend/bundle.json"]),
+    );
+    // Copy-specific wiring keeps the local ids.
+    expect(result.skippedFiles).toContain("linked-databases.json");
+    expect(result.updatedFiles).not.toContain("linked-databases.json");
+  });
 });

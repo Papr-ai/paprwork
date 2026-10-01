@@ -89,6 +89,8 @@ export interface ChatState {
   isWaitingForAgentSlot?: boolean;
   /** Post-tool text summary in progress (wrap-up continuation). */
   isFinishingWork?: boolean;
+  /** Gateway stream request id while the client still owns the turn. */
+  liveStreamRequestId?: string;
   /** Auto-resume failed — user can tap Continue to retry stream recovery */
   needsStreamRecovery?: boolean;
   /** Defaults to "connection" when unset, matching the original recovery banner. */

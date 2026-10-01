@@ -4,16 +4,16 @@ import * as os from "os";
 import * as path from "path";
 
 const mockUploadAppDbConfig = vi.fn();
-const mockUploadDatabasesRegistry = vi.fn();
+const mockSyncDatabasesRegistry = vi.fn();
 const mockFlushMetadataOutbox = vi.fn();
 
 vi.mock("../src/gateway/services/syncV3/appDbConfigUpload.js", () => ({
   uploadAppDbConfigToCloud: (...args: unknown[]) => mockUploadAppDbConfig(...args),
 }));
 
-vi.mock("../src/gateway/services/syncV3/MetadataRegistryClient.js", () => ({
-  uploadDatabasesRegistryToCloud: (...args: unknown[]) =>
-    mockUploadDatabasesRegistry(...args),
+vi.mock("../src/gateway/services/syncV3/databasesRegistryCloudSync.js", () => ({
+  syncDatabasesRegistryToCloudCoalesced: (...args: unknown[]) =>
+    mockSyncDatabasesRegistry(...args),
 }));
 
 vi.mock("../src/gateway/services/syncV3/metadataOutbox.js", () => ({
@@ -45,7 +45,11 @@ describe("syncMetadataToCloudForFlush", () => {
     );
 
     mockUploadAppDbConfig.mockResolvedValue(true);
-    mockUploadDatabasesRegistry.mockResolvedValue(true);
+    mockSyncDatabasesRegistry.mockResolvedValue({
+      uploaded: true,
+      skippedDuplicate: false,
+      queuedForRetry: false,
+    });
     mockFlushMetadataOutbox.mockResolvedValue({ flushed: 0, failed: 0 });
   });
 
@@ -54,36 +58,42 @@ describe("syncMetadataToCloudForFlush", () => {
     vi.clearAllMocks();
   });
 
-  it("succeeds when initial uploads succeed", async () => {
-    await expect(
-      syncMetadataToCloudForFlush(paprDir, appId, "sha-1"),
-    ).resolves.toBeUndefined();
+  it("returns success when initial uploads succeed", async () => {
+    const result = await syncMetadataToCloudForFlush(paprDir, appId, "sha-1");
+    expect(result.warnings).toEqual([]);
+    expect(result.appDbConfigUploaded).toBe(true);
+    expect(result.databasesRegistryUploaded).toBe(true);
     expect(mockUploadAppDbConfig).toHaveBeenCalledTimes(1);
     expect(mockFlushMetadataOutbox).not.toHaveBeenCalled();
   });
 
-  it("succeeds via outbox when direct upload fails then outbox flushes", async () => {
+  it("does not throw when direct upload fails — returns warnings and retries outbox", async () => {
     mockUploadAppDbConfig.mockResolvedValueOnce(false);
-    mockFlushMetadataOutbox.mockResolvedValueOnce({ flushed: 1, failed: 0 });
+    mockSyncDatabasesRegistry.mockResolvedValueOnce({
+      uploaded: false,
+      skippedDuplicate: false,
+      queuedForRetry: true,
+    });
+    mockFlushMetadataOutbox.mockResolvedValueOnce({ flushed: 0, failed: 1 });
 
-    await expect(
-      syncMetadataToCloudForFlush(paprDir, appId, "sha-1"),
-    ).resolves.toBeUndefined();
+    const result = await syncMetadataToCloudForFlush(paprDir, appId, "sha-1");
 
-    expect(mockUploadAppDbConfig).toHaveBeenCalledTimes(1);
-    expect(mockFlushMetadataOutbox).toHaveBeenCalledTimes(1);
+    expect(result.warnings.length).toBeGreaterThan(0);
+    expect(mockFlushMetadataOutbox).toHaveBeenCalled();
   });
 
-  it("throws when direct upload and outbox recovery both fail", async () => {
-    mockUploadAppDbConfig.mockResolvedValue(false);
-    mockUploadDatabasesRegistry.mockResolvedValue(false);
-    mockFlushMetadataOutbox.mockResolvedValue({ flushed: 0, failed: 1 });
+  it("clears warnings when outbox recovery succeeds", async () => {
+    mockUploadAppDbConfig.mockResolvedValueOnce(false);
+    mockSyncDatabasesRegistry.mockResolvedValueOnce({
+      uploaded: false,
+      skippedDuplicate: false,
+      queuedForRetry: true,
+    });
+    mockFlushMetadataOutbox.mockResolvedValueOnce({ flushed: 2, failed: 0 });
 
-    await expect(
-      syncMetadataToCloudForFlush(paprDir, appId, "sha-1"),
-    ).rejects.toThrow(/Metadata sync to cloud failed/);
+    const result = await syncMetadataToCloudForFlush(paprDir, appId, "sha-1");
 
-    expect(mockUploadAppDbConfig).toHaveBeenCalledTimes(2);
-    expect(mockFlushMetadataOutbox).toHaveBeenCalledTimes(3);
+    expect(result.warnings).toEqual([]);
+    expect(result.metadataOutboxRecovered).toBe(true);
   });
 });

@@ -26,6 +26,12 @@ import { applyIdRemapsToDirectory } from "../utils/applyIdRemaps.js";
 import { mergeContributeDataIndexesIntoRepo } from "./cloudSync/contributeDataIndexMerge.js";
 import { stripProposalExcludedAppFiles } from "./cloudSync/contributeProposalPaths.js";
 import {
+  applyProposableMetadata,
+  hasMetadataChanges,
+  metadataProposalFromLocal,
+} from "./cloudSync/contributeMetadataFields.js";
+import { parseCloudAppLineageFile } from "../../core/utils/cloudAppLineage.js";
+import {
   appSourceRepoRelativeDir,
   linkedJobRepoRelativeDir,
 } from "./cloudSync/cloudGitClone.js";
@@ -320,6 +326,42 @@ async function writeStagedTree(
   }
 }
 
+/** Returns the repo-relative metadata.json path if it was changed. */
+async function applyMetadataFieldProposal(
+  repoDir: string,
+  forkAppId: string,
+  appRepoDir: string,
+): Promise<string | null> {
+  const forkDir = path.join(getPaprAppsRoot(), forkAppId);
+  let lineageRaw: string;
+  let localRaw: string;
+  try {
+    lineageRaw = await fs.readFile(path.join(forkDir, CLOUD_LINEAGE_FILENAME), "utf8");
+    localRaw = await fs.readFile(path.join(forkDir, "metadata.json"), "utf8");
+  } catch {
+    return null;
+  }
+  const baseline = parseCloudAppLineageFile(lineageRaw)?.metadataBaseline;
+  const changes = metadataProposalFromLocal(localRaw, baseline);
+  if (!hasMetadataChanges(changes)) return null;
+
+  const repoRel = appRepoDir === "." ? "metadata.json" : path.posix.join(appRepoDir, "metadata.json");
+  const ownerPath = path.join(repoDir, repoRel);
+  let ownerRaw: string;
+  try {
+    ownerRaw = await fs.readFile(ownerPath, "utf8");
+  } catch {
+    return null;
+  }
+  const next = applyProposableMetadata(ownerRaw, changes);
+  if (!next) return null;
+  await fs.writeFile(ownerPath, next, "utf8");
+  console.info(
+    `[CloudContribute] proposing metadata fields: ${Object.keys(changes).join(", ")}`,
+  );
+  return repoRel;
+}
+
 async function pushContributeBranch(
   prepare: PrepareResponse,
   forkAppId: string,
@@ -367,6 +409,14 @@ async function pushContributeBranch(
       await writeStagedTree(repoDir, tree);
     }
 
+    // metadata.json never ships whole; deliberate title/description/icon/tag
+    // edits are applied field-by-field onto the owner's current file.
+    const metadataRepoPath = await applyMetadataFieldProposal(
+      repoDir,
+      forkAppId,
+      appSourceRepoRelativeDir(prepare.repoPath, prepare.targetAppId),
+    );
+
     const indexMerge = await mergeContributeDataIndexesIntoRepo({
       repoDir,
       contributorPaprDir: getPaprRoot(),
@@ -378,6 +428,7 @@ async function pushContributeBranch(
       ...new Set([
         ...trees.map((t) => t.repoRelativeDir),
         ...indexMerge.paths,
+        ...(metadataRepoPath ? [metadataRepoPath] : []),
       ]),
     ];
     await runCommand("git", ["add", "--", ...stagePaths], {

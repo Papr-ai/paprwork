@@ -488,3 +488,18 @@ describe("publish bar v2 chip labels", () => {
     expect(chip.label).toBe("Live · last checked 45m ago");
   });
 });
+
+describe("publish bar: unpublished local edits on a live app", () => {
+  // Exact shape the gateway reported for LinkedIn Outreach while Publish was greyed.
+  it("enables Publish when a live app has manual-hold local changes", () => {
+    const raw = items({ publishLive: true, codeStatus: "pending", codePhase: "changed", hasLocalChanges: true });
+    raw.appSync.manualUploadHold = true;
+    const s = deriveAppCloudSyncStatus(APP, raw, "synced");
+    const state = webSyncVisualState(s, {});
+    expect(state).not.toBe("synced");
+    const action = resolvePublishBarPrimaryAction({
+      state, live: true, syncEnabled: true, pushing: false, pulling: false, hasLocalChanges: true,
+    });
+    expect(action?.disabled).toBeFalsy();
+  });
+});

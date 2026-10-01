@@ -7,6 +7,7 @@ import { buildDesktopHeartbeatBody } from "../syncV3/buildDesktopHeartbeatBody.j
 import type { CloudSyncService } from "../CloudSyncService.js";
 import { readGatewaySyncBusyState } from "./syncBusyState.js";
 import { notifyCloudSyncItemsStale } from "./cloudSyncBroadcast.js";
+import { getPaprUserId } from "../../utils/paprUserId.js";
 
 export const PULL_INTERVAL_MS = 5 * 60_000;
 export const DESKTOP_HEARTBEAT_INTERVAL_MS = 60_000;
@@ -83,6 +84,13 @@ export function startRuntimeDispatchSubscriber(): void {
 }
 
 /** Tell memory server the desktop gateway is awake (cloud scheduler defers). */
+async function pollProposalEventsForCurrentUser(paprDir: string): Promise<void> {
+  const userId = getPaprUserId();
+  if (!userId) return;
+  const { pollProposalEvents } = await import("./proposalEvents.js");
+  await pollProposalEvents(paprDir, userId);
+}
+
 export function startDesktopHeartbeat(host: CloudSyncPeriodicHost): void {
   if (host.getHeartbeatTimer()) {
     console.warn(
@@ -114,6 +122,9 @@ export function startDesktopHeartbeat(host: CloudSyncPeriodicHost): void {
       // Do not parse pendingCloudRuns from heartbeat — SSE is the sole consumer.
       // Parsing would race the destructive server drain and drop patches.
       await res.text();
+      // Proposal accepted/declined/needs-update from another machine: refresh
+      // share bars + inbox and raise an OS notice within one heartbeat.
+      void pollProposalEventsForCurrentUser(host.sync.getPaprDir());
       if (queueDepth > 0) {
         return;
       }

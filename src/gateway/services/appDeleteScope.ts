@@ -9,7 +9,7 @@ import { parseCloudAppLineageFile } from "../../core/utils/cloudAppLineage.js";
 import type { DatabasePolicy } from "../../core/types/cloudAppLineage.js";
 import { getPaprUserId } from "../utils/paprUserId.js";
 import { CLOUD_LINEAGE_FILENAME } from "./CloudAppLineageService.js";
-import { lookupSharedPrimaryTursoEntry } from "./sharedPrimaryTursoStore.js";
+import { resolveSharedPrimaryTursoEntry } from "./sharedPrimaryTursoResolve.js";
 import { promises as fs } from "fs";
 import type { JobGraph } from "./jobs/types.js";
 
@@ -112,7 +112,7 @@ export function isPublisherSharedPrimaryTursoName(
   tursoShortName: string,
   paprDir?: string,
 ): boolean {
-  const entry = lookupSharedPrimaryTursoEntry(tursoShortName.trim(), paprDir);
+  const entry = resolveSharedPrimaryTursoEntry(tursoShortName.trim(), paprDir);
   return entry !== null;
 }
 
@@ -121,7 +121,7 @@ export function shouldBlockTursoDeleteForSharedPrimary(
   tursoShortName: string,
   paprDir?: string,
 ): boolean {
-  const entry = lookupSharedPrimaryTursoEntry(tursoShortName.trim(), paprDir);
+  const entry = resolveSharedPrimaryTursoEntry(tursoShortName.trim(), paprDir);
   if (!entry) {
     return false;
   }

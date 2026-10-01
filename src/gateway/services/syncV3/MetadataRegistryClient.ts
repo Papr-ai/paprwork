@@ -52,9 +52,21 @@ export async function uploadDatabasesRegistryToCloudDirect(
     return false;
   }
 
+  const { sanitizeDatabasesRegistryForCloudExport } = await import(
+    "../databaseRegistryTombstonePolicy.js"
+  );
+  const { registry: sanitized, strippedDbIds } =
+    sanitizeDatabasesRegistryForCloudExport(registry);
+  if (strippedDbIds.length > 0) {
+    console.warn(
+      "[MetadataRegistry] Stripped unauthorized database tombstone(s) from cloud upload:",
+      strippedDbIds.join(", "),
+    );
+  }
+
   const res = await cloudApiFetch("/v1/cloud/metadata/databases", {
     method: "PUT",
-    body: { registry, updatedAt },
+    body: { registry: sanitized, updatedAt },
     timeoutMs: options?.timeoutMs ?? 15_000,
   });
   if (!res.ok) {

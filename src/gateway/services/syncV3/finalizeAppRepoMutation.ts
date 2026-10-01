@@ -32,6 +32,8 @@ export interface FinalizeAppRepoMutationResult {
   commitSha?: string;
   catalogSynced: boolean;
   catalogError?: string;
+  /** Memory Mongo metadata still catching up (outbox will retry). */
+  metadataSyncWarnings?: string[];
   /** Files held back by the batch budget — this app needs another flush. */
   deferred: number;
 }
@@ -86,7 +88,11 @@ export async function finalizeAppRepoMutation(
   const { syncMetadataToCloudForFlush } = await import(
     "./syncMetadataForFlush.js"
   );
-  await syncMetadataToCloudForFlush(paprDir, appId, pushResult.commitSha);
+  const metadataSync = await syncMetadataToCloudForFlush(
+    paprDir,
+    appId,
+    pushResult.commitSha,
+  );
 
   return {
     appId,
@@ -94,6 +100,8 @@ export async function finalizeAppRepoMutation(
     commitSha: pushResult.commitSha,
     catalogSynced,
     catalogError,
+    metadataSyncWarnings:
+      metadataSync.warnings.length > 0 ? metadataSync.warnings : undefined,
     deferred: pushResult.deferred,
   };
 }
