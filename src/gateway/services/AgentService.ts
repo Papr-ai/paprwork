@@ -169,6 +169,12 @@ import { getWorkspaceService } from "./WorkspaceService.js";
 import type { WorkspaceContextData } from "../../core/agents/SystemPrompt.js";
 import { getPaprWorkspacePathsForAgent } from "../../core/utils/paprAgentPaths.js";
 import type { TokenUsageForCost } from "./CostCalculation.js";
+import {
+  consumeTurnStart,
+  isYieldRequested,
+  shouldStopForYield,
+  withSteerNote,
+} from "./agent/steerYield.js";
 
 type StoredTokenUsage = TokenUsageForCost & { totalTokens: number };
 
@@ -741,6 +747,26 @@ export class AgentService {
 
     // Mark streaming only after a slot is acquired — pi-ai / AI SDK work has not started yet.
     this.sessionManager.setStreaming(chatId, true);
+
+    // A fresh turn clears any stale "pause at next boundary" request so it can
+    // never stop the follow-up itself, and learns whether it *is* a follow-up
+    // the user sent while the previous turn was working (see steerYield.ts).
+    const isInternalRerun =
+      options?._isSilentRetry === true ||
+      options?._isContextCompressRetry === true ||
+      options?._isWrapUpContinuation === true;
+    const { steerFollowUp } = isInternalRerun
+      ? { steerFollowUp: false }
+      : consumeTurnStart(chatId, {
+          hiddenContinue: userMessage.startsWith(
+            AgentService.HIDDEN_CONTINUE_PREFIX,
+          ),
+        });
+    if (steerFollowUp) {
+      console.log(
+        `[AgentService] Steered follow-up for ${chatId} — previous turn paused at a tool boundary`,
+      );
+    }
     clearInFlightToolResults(chatId);
 
     // Declared out here so the outer `finally` can close the live meter. The
@@ -1452,6 +1478,7 @@ export class AgentService {
       const piToolContext = {
         chatId,
         turnMetrics,
+        shouldYield: () => isYieldRequested(chatId),
         jevTrim: createJevTrimRegistry(toolTrimArm),
         userMessage,
         ...(focusAppId ? { activeAppId: focusAppId } : {}),
@@ -1852,6 +1879,20 @@ export class AgentService {
           const maxSteps = options?.maxSteps ?? 100;
           const FORCE_STOP = 95;
 
+          // User sent a follow-up: finish this step (tool results kept) and
+          // hand the floor back so their message runs next.
+          if (shouldStopForYield(chatId, stepCount)) {
+            console.log(
+              `[TurnEnd:ai-sdk] ${JSON.stringify({
+                ts: new Date().toISOString(),
+                chatId,
+                trigger: "yielded_to_user",
+                stepCount,
+              })}`,
+            );
+            return true;
+          }
+
           if (stepCount >= FORCE_STOP) {
             console.warn(
               `[AgentService] 🛑 Force stopping at step ${stepCount} (threshold: ${FORCE_STOP}/${maxSteps})`,
@@ -1936,12 +1977,15 @@ export class AgentService {
             return { messages: msgs };
           }
 
-          const msgs = [...stepOptions.messages];
+          let msgs = [...stepOptions.messages];
           compactWithMetrics(msgs);
           trimOldestHistoryTurns(msgs, {
             ...historyTrimBounds,
             maxTokens: historyTokenBudget,
           });
+          if (steerFollowUp) {
+            msgs = withSteerNote(msgs as any) as typeof msgs;
+          }
 
           // A step is the billed unit — it re-sends the whole prefix — so a
           // turn that calls one tool per step pays N times for work that could
@@ -2333,7 +2377,11 @@ export class AgentService {
           this.buildNativeSearchToolsForPiAi(piProvider);
 
         const piContext = buildPiContext({
-          messages: messages as any[],
+          // Steered follow-up: the model-only note rides right after the
+          // user's message (never persisted; see agent/steerYield.ts).
+          messages: (steerFollowUp
+            ? withSteerNote(messages as any[])
+            : messages) as any[],
           tools: tools as any,
           apiId: piApiId,
           providerId: piProvider,
@@ -2495,6 +2543,7 @@ export class AgentService {
               aborted: abortController.signal.aborted,
               hasInterruptedTools: false,
               continuationsUsed: stopInfo.continuationsUsed,
+              yieldedToUser: isYieldRequested(chatId),
             });
             if (decision.action !== "continue") {
               return null;
@@ -2910,6 +2959,7 @@ export class AgentService {
             aborted: abortController.signal.aborted,
             hasInterruptedTools: false,
             continuationsUsed: attempt,
+            yieldedToUser: isYieldRequested(chatId),
           });
 
           if (decision.action !== "continue") {
@@ -3002,6 +3052,7 @@ export class AgentService {
         aborted: abortController.signal.aborted,
         isWrapUpContinuation: Boolean(options?._isWrapUpContinuation),
         providerStreamFailed,
+        yieldedToUser: isYieldRequested(chatId),
       });
       const wrapUpMessage =
         turnEndPlanState.pendingSteps > 0
@@ -3105,6 +3156,7 @@ export class AgentService {
           toolCallCount: toolCalls.length,
           aborted: abortController.signal.aborted,
           isWrapUpContinuation: Boolean(options?._isWrapUpContinuation),
+          yieldedToUser: isYieldRequested(chatId),
         });
         if (toolCalls.length > 0 && skip.skipReason) {
           console.warn(
@@ -3123,6 +3175,7 @@ export class AgentService {
           toolCallCount: toolCalls.length,
           aborted: abortController.signal.aborted,
           isWrapUpContinuation: Boolean(options?._isWrapUpContinuation),
+          yieldedToUser: isYieldRequested(chatId),
         });
         // Re-read: a continuation step may have completed steps since the
         // pre-wrap-up snapshot.

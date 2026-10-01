@@ -140,7 +140,11 @@ export function useChat() {
           return { chatStates: newChatStates };
         });
 
-        const history = await fetchChatHistory(chatId, { limit });
+        let history = await fetchChatHistory(chatId, { limit });
+        // Hidden auto-continue rows count toward the page but never render, so
+        // a short chat could show "Earlier" with nothing behind it. Widen the
+        // first page until it holds enough visible messages (bounded).
+        history = await widenForHiddenRows(chatId, history, limit);
 
         const serverMessages = mapHistoryMessages(history);
 
@@ -185,7 +189,7 @@ export function useChat() {
             ...existingState,
             messages,
             isLoading: false,
-            hasMoreMessages: serverMessages.length === limit,
+            hasMoreMessages: history.length >= limit && history.length % limit === 0,
             historyLoadFailed: false,
           });
           return { chatStates: newChatStates };
@@ -403,4 +407,28 @@ export function useChat() {
     loadMessages,
     loadOlderMessages,
   };
+}
+
+const MAX_FIRST_PAGE = 240;
+function isHiddenRow(row: unknown): boolean {
+  const r = row as { role?: string; content?: unknown };
+  return r?.role === "user" && typeof r.content === "string" &&
+    r.content.startsWith("[__papr_continue__]");
+}
+/** Exported for tests: grow the first history page past hidden rows. */
+export async function widenForHiddenRows(
+  chatId: string,
+  history: unknown[],
+  limit: number,
+  fetchPage: typeof fetchChatHistory = fetchChatHistory,
+): Promise<unknown[]> {
+  let page = history;
+  let size = limit;
+  while (page.length === size && size < MAX_FIRST_PAGE) {
+    const visible = page.filter((r) => !isHiddenRow(r)).length;
+    if (visible >= Math.ceil(limit / 2)) break;
+    size = Math.min(size * 2, MAX_FIRST_PAGE);
+    page = await fetchPage(chatId, { limit: size });
+  }
+  return page;
 }

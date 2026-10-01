@@ -94,6 +94,7 @@ export function shouldRequestWrapUpSummary(args: {
   aborted: boolean;
   isWrapUpContinuation: boolean;
   providerStreamFailed?: boolean;
+  yieldedToUser?: boolean;
 }): boolean {
   return explainPostStreamWrapUp(args).requested;
 }

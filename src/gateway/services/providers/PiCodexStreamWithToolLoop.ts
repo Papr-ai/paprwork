@@ -468,6 +468,11 @@ export async function* createPiCodexStreamWithToolLoop(
     jevTrim?: JevTrimRegistry;
     /** The user's message, for the Jev trim goal. */
     userMessage?: string;
+    /**
+     * True once the user sent a follow-up and asked this turn to pause at the
+     * next tool boundary (see agent/steerYield.ts).
+     */
+    shouldYield?: () => boolean;
   },
   /**
    * Consulted when the model stops on its own. Returning a nudge keeps the loop
@@ -1306,6 +1311,12 @@ export async function* createPiCodexStreamWithToolLoop(
             `total tool calls: ${totalToolCalls}` +
             (widthNudge ? `, width nudge -> ${widthNudge.target}` : ""),
         );
+        // Tool results are in context and persisted; hand the floor back to
+        // the user's follow-up instead of starting another model step.
+        if (toolContext?.shouldYield?.()) {
+          emitTurnEnd("yielded_to_user");
+          break stepLoop;
+        }
       } else {
         // Orphan drain — tools ran after stop/length; continue so the model sees results.
         appendToolTurnToContext(context, doneMessage, toolResults, cumulativeTokens, {
