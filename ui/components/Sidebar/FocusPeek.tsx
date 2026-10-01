@@ -1,8 +1,8 @@
 /**
- * FocusPeek — the rail logo's hover card. One job: "am I working on what matters?"
- * The next step, your three goals with the evidence behind each, and how much of this week
- * went to them. Pen's picks are shown as-is (quietly accepted); edits happen on the Focus page.
- * Weather lives on the Focus page, not here.
+ * FocusPeek — the rail logo's hover card. One job: a one-glance answer to "is my time going to
+ * what matters?" Header: is my agent working. Body: your three, one line each, with this week's
+ * hours. Footer: share of the week on these + Open Focus. Each row opens that goal; the next step,
+ * evidence and targets live on the Focus page (and in each row's tooltip), not here.
  */
 import { useCallback, useEffect, useRef, useState } from "react";
 import { getGatewayHttpBase } from "../../utils/gatewayHttpBase";
@@ -30,6 +30,12 @@ function fmtDue(due?: string): string {
   if (!due) return "";
   const d = new Date(/^\d{4}-\d{2}-\d{2}$/.test(due) ? `${due}T12:00` : due);
   return Number.isNaN(d.getTime()) ? `by ${due}` : `by ${d.toLocaleDateString(undefined, { month: "short", day: "numeric" })}`;
+}
+
+/** Hours this week, glanceable: "7.6h", "<1h" or "—" when nothing touched it yet. */
+export function fmtHours(h?: number): string {
+  if (!h || h <= 0) return "—";
+  return h < 1 ? "<1h" : `${Math.round(h * 10) / 10}h`;
 }
 
 export function useFocusState() {
@@ -67,36 +73,35 @@ export function FocusPeek({ status, onOpen }: FocusPeekProps) {
         <b>Focus</b>
         <span>{status}</span>
       </header>
-      {state?.next ? (
-        <button type="button" className="focus-peek__next" onClick={() => onOpen(state.next?.goalId)} role="menuitem">
-          <small>Next</small>
-          <span>{state.next.title}</span>
-        </button>
-      ) : null}
       {three.length ? (
-        <ol className="focus-peek__three">
-          {three.map((g, i) => (
+        <ul className="focus-peek__three">
+          {three.map((g) => (
             <li key={g.id}>
-              <button type="button" onClick={() => onOpen(g.id)} role="menuitem">
-                <i>{i + 1}</i>
-                <span className="focus-peek__goal">
-                  <b>{g.title}</b>
-                  <em>{[g.target, fmtDue(g.due)].filter(Boolean).join(" · ") || g.why}</em>
+              <button
+                type="button"
+                onClick={() => onOpen(g.id)}
+                role="menuitem"
+                title={[g.target, fmtDue(g.due), g.why].filter(Boolean).join(" · ")}
+              >
+                <span className="focus-peek__title">{g.title}</span>
+                <span className="focus-peek__hours" aria-label={`${fmtHours(g.signals?.hours7)} this week`}>
+                  {fmtHours(g.signals?.hours7)}
                 </span>
               </button>
             </li>
           ))}
-        </ol>
+        </ul>
       ) : (
         <p className="rail-peek__empty">{state ? "No goals yet. Open Focus and Pen will draft them." : "Loading your three…"}</p>
       )}
       <footer className="rail-peek__footer focus-peek__foot">
         {state?.alignedPct != null ? (
-          <span className="focus-peek__aligned">
-            <i style={{ width: `${Math.min(100, state.alignedPct)}%` }} />
-            <b>{state.alignedPct}%</b> of this week on these
+          <span className="focus-peek__aligned" title="Share of this week's tracked work that touched these three">
+            <b>{state.alignedPct}%</b> of this week
           </span>
-        ) : null}
+        ) : (
+          <span />
+        )}
         <button type="button" onClick={() => onOpen()}>
           Open Focus
           <RailIcons.arrow />
