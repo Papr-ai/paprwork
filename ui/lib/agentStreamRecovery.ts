@@ -950,6 +950,15 @@ export function findLastVisibleUserMessage(
   return undefined;
 }
 
+/**
+ * A hidden continue turn only makes sense when there is a visible user message
+ * to continue from. On a fresh chat the marker would be the first and only
+ * user message the agent sees, so it fabricates the "previous" conversation.
+ */
+export function canSendContinueMarker(messages: ChatMessage[]): boolean {
+  return findLastVisibleUserMessage(messages) !== undefined;
+}
+
 export function assistantMessageWasStopped(message: ChatMessage): boolean {
   if (!message.sequence) return false;
   return message.sequence.some(

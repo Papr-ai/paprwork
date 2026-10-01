@@ -55,6 +55,7 @@ import {
   finalizeStreamingMessages,
   HIDDEN_CONTINUE_USER_MESSAGE,
   interruptedTurnNeedsContinue,
+  canSendContinueMarker,
   isHiddenContinueUserMessage,
   isResumingStream,
   lastUserTurnNeedsContinue,
@@ -2028,6 +2029,18 @@ export function useAgent() {
 
   const continueInterruptedTurn = useCallback(
     async (chatId: string, config: AgentConfig) => {
+      const existingMessages =
+        useChatStore.getState().chatStates.get(chatId)?.messages ?? [];
+      if (!canSendContinueMarker(existingMessages)) {
+        // Nothing visible to continue: sending the marker would be the only
+        // user message the agent sees and it would invent prior context.
+        console.warn(
+          `[useAgent] Refusing hidden continue for ${chatId}: no prior user message`,
+        );
+        clearResumeRetry(chatId);
+        setNeedsStreamRecovery(chatId, false);
+        return;
+      }
       console.log(
         `[useAgent] Starting hidden continue turn for ${chatId}`,
       );
