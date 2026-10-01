@@ -2,9 +2,9 @@
  * Queued follow-ups — messages sent while the agent is working.
  *
  * The UX contract under test:
- *  - They wait in a stack above the input bar, NOT in the transcript: the
- *    transcript only shows what the agent has actually received.
- *  - Text is solid and readable; one status phrase says when it goes.
+ *  - They sit at the bottom of the thread, where they will land, inside a
+ *    dashed frame ("not sent yet"). Text is never faded.
+ *  - One status phrase says when it goes.
  *  - Edit / Remove / Send now act on that message only.
  *  - When it is sent, the real message mounts with the landing class.
  *  - Auto-continue never jumps ahead of a waiting follow-up.
@@ -48,7 +48,7 @@ describe("pendingStatusText", () => {
   });
 });
 
-describe("QueuedMessages (stack above the input bar)", () => {
+describe("QueuedMessages (in the thread, dashed until sent)", () => {
   it("renders nothing when the queue is empty", () => {
     const { container } = render(
       <QueuedMessages queue={[]} onSendNow={vi.fn()} onRemove={vi.fn()} />,
@@ -56,26 +56,20 @@ describe("QueuedMessages (stack above the input bar)", () => {
     expect(container.firstChild).toBeNull();
   });
 
-  it("is a compact list row, not a ghosted transcript message", () => {
+  it("reads as your message, framed as not sent yet — never faded", () => {
     render(
       <QueuedMessages queue={[q("a", "also check the logs")]} onSendNow={vi.fn()} onRemove={vi.fn()} />,
     );
     const row = screen.getByTestId("queued-follow-up");
-    expect(row.querySelector('[data-testid="message-item-user"]')).toBeNull();
+    expect(row.className).toContain("message-item");
+    expect(row.querySelector(".queued-item__card")).toBeTruthy();
+    expect(row.querySelector(".message-sender-name")).toBeTruthy();
+    expect(row.getAttribute("style")).toBeNull();
     expect(screen.getByRole("list", { name: "Queued messages" })).toBeTruthy();
     expect(row.textContent).toContain("also check the logs");
     expect(row.textContent).toContain("Sends after current step");
   });
 
-  it("click expands a long message and collapses it again", () => {
-    render(<QueuedMessages queue={[q("a", "long text")]} onSendNow={vi.fn()} onRemove={vi.fn()} />);
-    const text = screen.getByRole("button", { name: "long text" });
-    expect(text.getAttribute("aria-expanded")).toBe("false");
-    fireEvent.click(text);
-    expect(text.getAttribute("aria-expanded")).toBe("true");
-    fireEvent.click(text);
-    expect(text.getAttribute("aria-expanded")).toBe("false");
-  });
 
   it("Edit / Remove / Send now act on that message only", () => {
     const onSendNow = vi.fn();

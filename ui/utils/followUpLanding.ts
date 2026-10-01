@@ -1,8 +1,8 @@
 /**
  * Follow-up "landing": a message the user queued while the agent was working
- * waits in the stack above the input bar. When the agent picks it up, the row
- * leaves the stack and the real user message mounts in the transcript — this
- * marks it so it arrives with one short slide instead of popping in.
+ * waits at the bottom of the thread inside a dashed frame. When the agent
+ * picks it up, the real user message mounts in the same spot — this marks it
+ * so its dashed frame dissolves instead of the message popping in.
  */
 
 const LANDING_WINDOW_MS = 4_000;

@@ -37,6 +37,13 @@ interface MessageListProps {
   onLoadOlder?: () => void;
   /** Re-fetch history after a failed load. See `historyLoadFailed`. */
   onRetryHistory?: () => void;
+  /**
+   * Follow-ups the user sent while the agent is working, rendered at the
+   * very bottom of the thread — where they will land once sent.
+   */
+  pendingFollowUps?: React.ReactNode;
+  /** Count of pending follow-ups; a new one scrolls into view. */
+  pendingFollowUpCount?: number;
 }
 
 /** Job auto-deliver placeholders — SubAgentResponseTrigger handles user-facing updates instead */
@@ -56,6 +63,8 @@ export const MessageList: React.FC<MessageListProps> = ({
   onFilesDropped,
   onLoadOlder,
   onRetryHistory,
+  pendingFollowUps,
+  pendingFollowUpCount = 0,
 }) => {
   const listRef = useRef<HTMLDivElement>(null);
   const messagesEndRef = useRef<HTMLDivElement>(null);
@@ -198,6 +207,19 @@ export const MessageList: React.FC<MessageListProps> = ({
       lastScrollHeight.current = currentScrollHeight;
     }
   }, [filteredMessages, activeRequest, isLoading]);
+
+  // The user just queued a follow-up: always show it, even if they had
+  // scrolled up to read — they need to see where it went.
+  const prevPendingCount = useRef(pendingFollowUpCount);
+  useLayoutEffect(() => {
+    const grew = pendingFollowUpCount > prevPendingCount.current;
+    prevPendingCount.current = pendingFollowUpCount;
+    const listElement = listRef.current;
+    if (!grew || !listElement) return;
+    autoScrollEnabled.current = true;
+    listElement.scrollTop = listElement.scrollHeight;
+    lastScrollHeight.current = listElement.scrollHeight;
+  }, [pendingFollowUpCount]);
 
 
   // Also scroll on any re-render when streaming (covers thinking/tool updates)
@@ -484,6 +506,7 @@ export const MessageList: React.FC<MessageListProps> = ({
           </div>
         </div>
       )}
+      {pendingFollowUps}
       <div ref={messagesEndRef} />
     </div>
   );
