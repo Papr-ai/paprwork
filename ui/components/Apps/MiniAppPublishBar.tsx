@@ -45,16 +45,13 @@ import {
   type SharePeopleMember,
 } from "./SharePeoplePicker";
 import {
-  isCodePermission,
   isPermissionAvailable,
   publishPrefsToAudienceModel,
   shareAudienceHasPeopleRestriction,
-  shouldListInCommunity,
   type ShareAudience,
   type ShareAudienceModel,
   type SharePermission,
 } from "../../utils/shareAudienceModel";
-import { shareAudienceGlyphPath } from "../../utils/shareAudienceGlyphs";
 import type { Artifact, ArtifactCloudLineage } from "../../stores/artifactsStore";
 import { CopyAppModal } from "./CopyAppModal";
 import { PublishBarTitle } from "./PublishBarTitle";
@@ -71,7 +68,13 @@ import {
 } from "../../utils/contributionPanelCopy";
 import { CloudChangeRequestsPanel } from "./CloudChangeRequestsPanel";
 import { CloudContributeBackPanel } from "./CloudContributeBackPanel";
-import { CloudAppCredentialsPanel } from "./CloudAppCredentialsPanel";
+import { ShareSheetBody } from "./ShareSheetBody";
+import {
+  resolveSharingPatch,
+  sharePublishLabel,
+  type SharingDraft,
+  type SharingPatch,
+} from "../../utils/shareSheetModel";
 import { PublishBarOverflowMenu } from "./PublishBarOverflowMenu";
 import { AppWorkspacePanelMenu } from "./AppWorkspacePanelMenu";
 import {
@@ -79,7 +82,6 @@ import {
   WebSyncStatusDot,
   ShareAudienceIcon,
   buildGenericSyncAgentPrompt,
-  webSyncPushButtonLabel,
 } from "./WebSyncPopover";
 import {
   buildContributorProposalUpdateAgentPrompt,
@@ -133,83 +135,6 @@ interface MiniAppPublishBarProps {
   onOpenDependencyApp?: (appId: string, title?: string) => void;
 }
 
-const ACCESS_OPTIONS: {
-  value: ShareAudience;
-  label: string;
-  description: string;
-}[] = [
-  {
-    value: "private",
-    label: "Only me",
-    description: "Just you — sign in with Papr to open it",
-  },
-  {
-    value: "team",
-    label: "Anyone in my workspace",
-    description: "People in your Papr workspace — sign in required",
-  },
-  {
-    value: "people",
-    label: "Specific people",
-    description: "Teammates, guest emails, or anyone on a company domain — sign in required",
-  },
-  {
-    value: "link",
-    label: "Anyone with the link",
-    description: "Unlisted — share via link (optionally require Papr sign-in)",
-  },
-  {
-    value: "public",
-    label: "Public in Community Apps",
-    description: "Listed in Community Apps — any Papr user can discover and open it",
-  },
-];
-
-const PERMISSION_OPTIONS: {
-  value: SharePermission;
-  label: string;
-  description: string;
-}[] = [
-  {
-    value: "write",
-    label: "Can view and interact",
-    description: "Open the app, read data, and use interactive features",
-  },
-  {
-    value: "edit",
-    label: "Can edit code",
-    description: "Install the app, then send changes",
-  },
-];
-
-function formatShareSelectionSummary(
-  audience: ShareAudience,
-  permission: SharePermission,
-  requireSignIn: boolean,
-  perUserIsolation: boolean,
-): string {
-  const accessLabel =
-    ACCESS_OPTIONS.find((option) => option.value === audience)?.label ?? audience;
-  if (audience === "private") {
-    return accessLabel;
-  }
-  const permissionLabel =
-    PERMISSION_OPTIONS.find((option) => option.value === permission)?.label ??
-    permission;
-  const parts = [accessLabel, permissionLabel];
-  if (audience === "link" || audience === "public") {
-    parts.push(requireSignIn ? "Sign-in required" : "No sign-in required");
-  }
-  if (
-    perUserIsolation &&
-    (audience === "team" ||
-      ((audience === "link" || audience === "public") && requireSignIn))
-  ) {
-    parts.push("Per-user data");
-  }
-  return parts.join(" · ");
-}
-
 function sharePrefsOptions(cloud: CloudPublishControls): {
   requireSignIn?: boolean;
   perUserIsolation?: boolean;
@@ -236,114 +161,6 @@ function requireSignInFromModel(model: ShareAudienceModel): boolean {
     return model.requireSignIn !== false;
   }
   return true;
-}
-
-type ShareStep = "who" | "access" | "keys";
-
-/**
- * Same glyphs as the Share button's audience icon and the prototype's audIcon.
- * Audience is the one answer that shows up outside this sheet, so the icon has
- * to be learned here and recognised on the bar — different art in the two
- * places would break that.
- */
-function ShareOptionGlyph({ audience }: { audience: ShareAudience }) {
-  const d = shareAudienceGlyphPath(audience);
-  return (
-    <span className="share-sheet__opt-glyph" aria-hidden>
-      <svg viewBox="0 0 16 16" width="15" height="15" focusable="false">
-        <path
-          d={d}
-          fill="none"
-          stroke="currentColor"
-          strokeWidth="1.4"
-          strokeLinecap="round"
-          strokeLinejoin="round"
-        />
-      </svg>
-    </span>
-  );
-}
-
-/** Angle brackets, inline in the "can edit code" label — same mark the Share
- *  button badges, so the glyph means one thing everywhere it appears. */
-function InlineCodeGlyph() {
-  return (
-    <span className="share-sheet__inline-code" aria-hidden>
-      <svg viewBox="0 0 16 16" width="11" height="11" focusable="false">
-        <path
-          d="M6 4.5 2.5 8 6 11.5M10 4.5 13.5 8 10 11.5"
-          fill="none"
-          stroke="currentColor"
-          strokeWidth="2.2"
-          strokeLinecap="round"
-          strokeLinejoin="round"
-        />
-      </svg>
-    </span>
-  );
-}
-
-/** Switch, not a checkbox. Sign-in and per-user data are settings you flip on
- *  an app, not items you tick in a list — and the radio options they sit beside
- *  already own the "pick one of these" shape. */
-function ShareSwitch({ on }: { on: boolean }) {
-  return (
-    <span
-      className={`share-sheet__switch${on ? " share-sheet__switch--on" : ""}`}
-      aria-hidden
-    >
-      <i />
-    </span>
-  );
-}
-
-/**
- * Three ordered questions instead of one long form. Merged down from four:
- * code access, sign-in and per-user data all answer "what does a visitor get",
- * so splitting them made the sheet feel longer without making any one choice
- * easier.
- *
- * Tabs rather than a forced funnel — editing an existing app's sharing is
- * usually a one-field change, so you can jump straight to the field you came
- * for. Each tab carries its current answer, so the strip doubles as a summary.
- */
-function ShareStepTabs({
-  step,
-  onStep,
-  answers,
-  dimmed,
-}: {
-  step: ShareStep;
-  onStep: (next: ShareStep) => void;
-  answers: Record<ShareStep, string>;
-  dimmed: Record<ShareStep, boolean>;
-}) {
-  const steps: { id: ShareStep; n: number; title: string }[] = [
-    { id: "who", n: 1, title: "Who" },
-    { id: "access", n: 2, title: "Access" },
-    { id: "keys", n: 3, title: "Keys" },
-  ];
-  return (
-    <div className="share-steps" role="tablist">
-      {steps.map((s) => (
-        <button
-          key={s.id}
-          type="button"
-          role="tab"
-          aria-selected={step === s.id}
-          className={`share-steps__tab${step === s.id ? " share-steps__tab--on" : ""}${
-            dimmed[s.id] ? " share-steps__tab--dim" : ""
-          }`}
-          onClick={() => onStep(s.id)}
-        >
-          <b>
-            {s.n}. {s.title}
-          </b>
-          <span>{answers[s.id]}</span>
-        </button>
-      ))}
-    </div>
-  );
 }
 
 interface ShareSheetProps {
@@ -390,34 +207,6 @@ function ShareSheet({
       </div>
     </div>,
     document.body,
-  );
-}
-
-function OpenExternalIcon() {
-  return (
-    <svg className="share-sheet__icon" viewBox="0 0 16 16" fill="none" aria-hidden>
-      <path
-        d="M10.5 2.5H13.5V5.5M8.5 7.5L13 3M6.5 3H3.5C2.95 3 2.5 3.45 2.5 4V12.5C2.5 13.05 2.95 13.5 3.5 13.5H12C12.55 13.5 13 13.05 13 12.5V9.5"
-        stroke="currentColor"
-        strokeWidth="1.4"
-        strokeLinecap="round"
-        strokeLinejoin="round"
-      />
-    </svg>
-  );
-}
-
-function CopyIcon() {
-  return (
-    <svg className="share-sheet__icon" viewBox="0 0 16 16" fill="none" aria-hidden>
-      <rect x="5.5" y="5.5" width="8" height="8" rx="1.5" stroke="currentColor" strokeWidth="1.4" />
-      <path
-        d="M4.5 10.5H3.5C2.95 10.5 2.5 10.05 2.5 9.5V3.5C2.5 2.95 2.95 2.5 3.5 2.5H9.5C10.05 2.5 10.5 2.95 10.5 3.5V4.5"
-        stroke="currentColor"
-        strokeWidth="1.4"
-        strokeLinecap="round"
-      />
-    </svg>
   );
 }
 
@@ -516,8 +305,6 @@ export function MiniAppPublishBar({
   };
   const [requireSignIn, setRequireSignIn] = useState(true);
   const [perUserIsolation, setPerUserIsolation] = useState(false);
-  /** Share sheet reads as three ordered questions rather than one long form. */
-  const [shareStep, setShareStep] = useState<"who" | "access" | "keys">("who");
   const [webSyncPopoverOpen, setWebSyncPopoverOpen] = useState(false);
   const webSyncAnchorRef = useRef<HTMLDivElement>(null);
   // The desktop-only confirm renders at the bottom of a long, scrolling sheet;
@@ -963,50 +750,6 @@ export function MiniAppPublishBar({
       allowedEmailDomains,
     });
 
-  const pickAudience = (nextAudience: ShareAudience) => {
-    let nextPermission = permission;
-    if (nextAudience === "private") {
-      nextPermission = "read";
-    } else if (!isPermissionAvailable(nextAudience, nextPermission)) {
-      nextPermission = "write";
-    }
-    setAudience(nextAudience);
-    setPermission(nextPermission);
-    if (nextAudience === "people") {
-      void ensureWorkspacePeople();
-    }
-    if (nextAudience === "link") {
-      setRequireSignIn(true);
-      setPerUserIsolation(true);
-    } else if (nextAudience === "public") {
-      setRequireSignIn(false);
-      setPerUserIsolation(false);
-    }
-  };
-
-  const pickPermission = (nextPermission: SharePermission) => {
-    if (!isPermissionAvailable(audience, nextPermission)) return;
-    setPermission(nextPermission);
-  };
-
-  const saveSharingSettings = () => {
-    void applySharing(
-      audience,
-      permission,
-      requireSignIn,
-      perUserIsolation,
-      allowedUserIds,
-      allowedEmails,
-      allowedEmailDomains,
-    );
-  };
-
-  const showSignInToggle = audience === "link" || audience === "public";
-  const showPerUserIsolationToggle =
-    audience === "team" ||
-    audience === "people" ||
-    ((audience === "link" || audience === "public") && requireSignIn);
-
   const isTrackCollaborator = cloudLineage?.mode === "track";
   const cloudPublishFailedEarly = Boolean(cloud.errorDetail) && !needsDesktopAck;
   // v5: the data decides the button. Only a linked team copy on the team's
@@ -1117,8 +860,6 @@ export function MiniAppPublishBar({
     : cloud.live
       ? (copyUrl ?? webDisplayUrl)
       : null;
-  const showCodePanel = isCodePermission(permission);
-  const listsInCommunity = shouldListInCommunity(audience, cloud.live);
   // "Linked to a publisher" — collaborators only. Plain forks behave as owned apps.
   const isFork = isTrackCollaborator;
 
@@ -1139,11 +880,6 @@ export function MiniAppPublishBar({
   // would otherwise remove the only entry point after we dropped auto-open).
   const showContributionsInbox = showOwnerChangeRequests;
   const contributionsBadgeCount = incomingChanges.open.length;
-
-  const removeFromCommunity = () => {
-    const nextPermission = permission === "edit" ? "edit" : "write";
-    void applySharing("link", nextPermission, false);
-  };
 
   const takeOffWeb = () => {
     void cloud.unpublish();
@@ -1396,67 +1132,6 @@ export function MiniAppPublishBar({
     !webSyncPushing &&
     !shareSyncNotice;
 
-  const shareSelectionSummary = formatShareSelectionSummary(
-    audience,
-    permission,
-    requireSignIn,
-    perUserIsolation,
-  );
-  /**
-   * Later steps are meaningless for a private app. Dim them and say so rather
-   * than hiding them — a step that vanishes reads as a bug, a step that
-   * explains itself teaches the dependency.
-   */
-  const stepDimmed: Record<ShareStep, boolean> = {
-    who: false,
-    access: audience === "private",
-    keys: audience === "private",
-  };
-  const stepAnswers: Record<ShareStep, string> = {
-    who: ACCESS_OPTIONS.find((o) => o.value === audience)?.label ?? audience,
-    access: stepDimmed.access
-      ? "—"
-      : `${permission === "edit" ? "Use + code" : "Use only"} · ${
-          requireSignIn ? "sign in" : "no sign-in"
-        } · ${perUserIsolation && requireSignIn ? "separate DBs" : "one DB"}`,
-    keys: stepDimmed.keys ? "—" : "Per key",
-  };
-
-  // The link lives in the header: it is what most visits to this sheet are for,
-  // and burying it behind a tab to gain consistency would be a bad trade.
-  const shareLinkNode =
-    cloud.live && (copyUrl || webDisplayUrl) ? (
-      <div className="share-sheet__header-link">
-        <input
-          className="share-sheet__url-input"
-          readOnly
-          value={copyUrl ?? webDisplayUrl ?? ""}
-          aria-label="Share link"
-          title={copyUrl ?? webDisplayUrl ?? ""}
-          onFocus={(event) => event.currentTarget.select()}
-          onClick={(event) => event.currentTarget.select()}
-        />
-        <button
-          type="button"
-          className="share-sheet__icon-btn"
-          title="Copy link"
-          aria-label="Copy link"
-          onClick={() => void cloud.copyLink(copyUrl ?? webDisplayUrl)}
-        >
-          <CopyIcon />
-        </button>
-        <button
-          type="button"
-          className="share-sheet__icon-btn"
-          title="Open in browser"
-          aria-label="Open in browser"
-          onClick={() => void cloud.openInBrowser(copyUrl ?? webDisplayUrl)}
-        >
-          <OpenExternalIcon />
-        </button>
-      </div>
-    ) : null;
-
   const shareSyncBanner = (() => {
     // Update result outranks idle chatter: the user just changed local files
     // and the outcome is the only thing they are waiting to read.
@@ -1570,6 +1245,71 @@ export function MiniAppPublishBar({
       setShareSyncNotice(null);
     }
   };
+
+  /** v6 Share: every answer saves the moment it is picked on a live app; a
+   *  draft just collects answers until the final Publish. */
+  const sharingDraft: SharingDraft = {
+    audience,
+    permission,
+    requireSignIn,
+    perUserIsolation,
+  };
+  const reportSharingError = (err: unknown) =>
+    cloud.reportError(publishErrorMessage(err));
+  const changeSharing = (patch: SharingPatch) => {
+    if (shareSheetBusy) return;
+    const next = resolveSharingPatch(sharingDraft, patch);
+    setAudience(next.audience);
+    setPermission(next.permission);
+    setRequireSignIn(next.requireSignIn);
+    setPerUserIsolation(next.perUserIsolation);
+    if (next.audience === "people") void ensureWorkspacePeople();
+    if (!cloud.live) return;
+    // An empty "Specific people" list would save as the whole workspace —
+    // hold the change until someone is added.
+    if (
+      next.audience === "people" &&
+      !shareAudienceHasPeopleRestriction({
+        allowedUserIds,
+        allowedEmails,
+        allowedEmailDomains,
+      })
+    ) {
+      return;
+    }
+    applySharing(
+      next.audience,
+      next.permission,
+      next.requireSignIn,
+      next.perUserIsolation,
+    ).catch(reportSharingError);
+  };
+  const changePeople = (ids: string[], emails: string[], domains: string[]) => {
+    setAllowedUserIds(ids);
+    setAllowedEmails(emails);
+    setAllowedEmailDomains(domains);
+    const restricted = shareAudienceHasPeopleRestriction({
+      allowedUserIds: ids,
+      allowedEmails: emails,
+      allowedEmailDomains: domains,
+    });
+    if (!cloud.live || shareSheetBusy || !restricted) return;
+    applySharing(
+      audience,
+      permission,
+      requireSignIn,
+      perUserIsolation,
+      ids,
+      emails,
+      domains,
+    ).catch(reportSharingError);
+  };
+  const shareLinkHint =
+    cloud.live && (copyUrl || webDisplayUrl) && !shareLinkReady
+      ? cloud.externalLink !== "off" && !(copyUrl ?? "").includes("?t=")
+        ? "Invite token appears once the upload finishes."
+        : "May show \"not found\" until the upload finishes."
+      : null;
 
   const handleConfirmDesktopPublish = () => {
     setShareSyncNotice("Publishing to the web…");
@@ -2389,424 +2129,90 @@ export function MiniAppPublishBar({
       ) : null}
 
       {shareOpen ? (
-        <ShareSheet
-          title="Share"
-          headerAside={shareLinkNode}
-          onClose={() => setShareOpen(false)}
-        >
-
-          <div className="share-sheet__panel">
-            <PaprCloudRequirementsPanel featureId="publish_share" />
-
-            {shareSyncBanner ? (
-              <div
-                className={`share-sheet__sync-banner share-sheet__sync-banner--${shareSyncBanner.tone}`}
-                role="status"
-              >
-                <p>{shareSyncBanner.message}</p>
-                {"detail" in shareSyncBanner &&
-                shareSyncBanner.detail &&
-                shareSyncBanner.detail !== shareSyncBanner.message ? (
-                  <details className="share-sheet__error-details">
-                    <summary>View full error</summary>
-                    <p>{shareSyncBanner.detail}</p>
-                  </details>
-                ) : null}
-                {shareSheetBusy ? (
-                  <p className="share-sheet__sync-banner-selection">
-                    <span className="share-sheet__sync-banner-selection-label">
-                      Your selection
-                    </span>
-                    {shareSelectionSummary}
-                  </p>
-                ) : null}
-                {shareSyncBanner.tone === "warn" ? (
-                  <button
-                    type="button"
-                    className="share-sheet__sync-banner-btn"
-                    disabled={shareSheetBusy}
-                    onClick={() => void handleWebSyncPushOrPublish()}
-                  >
-                    {webSyncPushing
-                      ? webSyncPushButtonLabel({ appLive: cloud.live, pushing: true })
-                      : webSyncPushButtonLabel({ appLive: cloud.live, pushing: false })}
-                  </button>
-                ) : null}
-              </div>
-            ) : null}
-
-            {/* Link not yet usable — kept in the panel, not the header, so a
-                caveat never widens the title row. */}
-            {cloud.live && (copyUrl || webDisplayUrl) && !shareLinkReady ? (
-              <p className="share-sheet__link-hint">
-                {cloud.externalLink !== "off" && !(copyUrl ?? "").includes("?t=")
-                  ? "Invite link token will appear after upload and publish finish."
-                  : "The link above may show \"not found\" until upload completes."}
-              </p>
-            ) : null}
-
-            <ShareStepTabs
-              step={shareStep}
-              onStep={setShareStep}
-              answers={stepAnswers}
-              dimmed={stepDimmed}
-            />
-
-            {isFork ? (
-              <div className="share-sheet__notice share-sheet__notice--info">
-                <p>
-                  <strong>Publish your copy</strong> — this puts <em>your</em> local
-                  fork on the web. It does not change the team&apos;s shared upstream
-                  app.
-                </p>
-              </div>
-            ) : null}
-
-            {shareStep === "who" ? (
-            <fieldset
-              className={
-                shareSheetBusy
-                  ? "share-sheet__fieldset share-sheet__fieldset--locked"
-                  : "share-sheet__fieldset"
-              }
-            >
-              <legend className="share-sheet__legend">
-                {isFork ? "Who can access your copy" : "Who can access"}
-              </legend>
-              <ul className="share-sheet__list">
-                {ACCESS_OPTIONS.map((option) => (
-                  <li key={option.value}>
-                    <label
-                      className={
-                        audience === option.value
-                          ? "share-sheet__row share-sheet__row--selected"
-                          : "share-sheet__row"
-                      }
-                    >
-                      <input
-                        type="radio"
-                        name={`access-${appId}`}
-                        checked={audience === option.value}
-                        onChange={() => {
-                          if (shareSheetBusy) return;
-                          pickAudience(option.value);
-                        }}
-                      />
-                      <ShareOptionGlyph audience={option.value} />
-                      <span className="share-sheet__row-text">
-                        <span className="share-sheet__row-label">{option.label}</span>
-                        <span className="share-sheet__row-desc">{option.description}</span>
-                      </span>
-                    </label>
-
-                    {/* Attached to its own option rather than appended after
-                        the whole list. Rendered after </ul> it sat below
-                        "Public in Community Apps", so it read as a setting
-                        belonging to that option instead of to this one. */}
-                    {option.value === "people" && audience === "people" ? (
-                      <div className="share-sheet__people">
-                        <SharePeoplePicker
-                          members={workspacePeople}
-                          value={allowedUserIds}
-                          onChange={setAllowedUserIds}
-                          allowedEmails={allowedEmails}
-                          allowedEmailDomains={allowedEmailDomains}
-                          onEmailsChange={setAllowedEmails}
-                          onDomainsChange={setAllowedEmailDomains}
-                          loading={workspacePeopleLoading}
-                          disabled={shareSheetBusy}
-                          currentUserId={workspaceSelfId}
-                        />
-                      </div>
-                    ) : null}
-                  </li>
-                ))}
-              </ul>
-            </fieldset>
-            ) : null}
-
-            {/* Access reads as one question with its follow-ups nested, not
-                four sibling settings. "Can view" is the gate: sign-in and
-                per-user data only exist because someone can view, so they sit
-                inside it. "Can edit code" is genuinely separate, so it sits
-                outside as its own switch. */}
-            {shareStep === "access" && audience !== "private" ? (
-              <fieldset
-                className={
-                  shareSheetBusy
-                    ? "share-sheet__fieldset share-sheet__fieldset--locked"
-                    : "share-sheet__fieldset"
+        <ShareSheet title="Share" onClose={() => setShareOpen(false)}>
+          <ShareSheetBody
+            appId={appId}
+            appTitle={appTitle}
+            live={cloud.live}
+            draft={sharingDraft}
+            onChange={changeSharing}
+            peoplePicker={
+              <SharePeoplePicker
+                members={workspacePeople}
+                value={allowedUserIds}
+                onChange={(ids) => changePeople(ids, allowedEmails, allowedEmailDomains)}
+                allowedEmails={allowedEmails}
+                allowedEmailDomains={allowedEmailDomains}
+                onEmailsChange={(emails) =>
+                  changePeople(allowedUserIds, emails, allowedEmailDomains)
                 }
-              >
-                <legend className="share-sheet__legend">What they get</legend>
-
-                <div className="share-sheet__toggle-group share-sheet__toggle-group--on">
-                  {/* Turning this off is not decorative — it means nobody can
-                      open the app, which is exactly "Only me". So it writes
-                      back to audience rather than being a switch that is
-                      permanently on and does nothing. */}
-                  <label className="share-sheet__toggle-row share-sheet__toggle-row--on share-sheet__toggle-row--head">
-                    <span className="share-sheet__row-text">
-                      <span className="share-sheet__row-label">
-                        Can view and interact
-                      </span>
-                      <span className="share-sheet__row-desc">
-                        Open the app, read data, and use interactive features
-                      </span>
-                    </span>
-                    <input
-                      type="checkbox"
-                      className="share-sheet__switch-input"
-                      checked
-                      onChange={() => {
-                        if (shareSheetBusy) return;
-                        pickAudience("private");
-                        setShareStep("who");
-                      }}
-                    />
-                    <ShareSwitch on />
-                  </label>
-
-                  {showSignInToggle || showPerUserIsolationToggle ? (
-                    <div className="share-sheet__toggle-nest">
-                      {showSignInToggle ? (
-                        <label
-                          className={`share-sheet__toggle-row${
-                            requireSignIn ? " share-sheet__toggle-row--on" : ""
-                          }`}
-                        >
-                          <span className="share-sheet__row-text">
-                            <span className="share-sheet__row-label">
-                              Require Papr sign-in
-                            </span>
-                            <span className="share-sheet__row-desc">
-                              {requireSignIn
-                                ? audience === "public"
-                                  ? "Visitors must sign in to Papr before using the app"
-                                  : "Viewers must sign in with a Papr account"
-                                : audience === "public"
-                                  ? "Anyone can discover and open this app without an account"
-                                  : "Anyone with the link can open it without an account"}
-                            </span>
-                          </span>
-                          <input
-                            type="checkbox"
-                            className="share-sheet__switch-input"
-                            checked={requireSignIn}
-                            onChange={(event) => {
-                              if (shareSheetBusy) return;
-                              const checked = event.target.checked;
-                              setRequireSignIn(checked);
-                              setPerUserIsolation(checked);
-                            }}
-                          />
-                          <ShareSwitch on={requireSignIn} />
-                        </label>
-                      ) : null}
-
-                      {showPerUserIsolationToggle ? (
-                        <label
-                          className={`share-sheet__toggle-row${
-                            perUserIsolation ? " share-sheet__toggle-row--on" : ""
-                          }${requireSignIn ? "" : " share-sheet__toggle-row--off"}`}
-                        >
-                          <span className="share-sheet__row-text">
-                            <span className="share-sheet__row-label">
-                              Give each person a separate database
-                            </span>
-                            {/* Stating the dependency beats silently disabling:
-                                an anonymous visitor cannot be told apart, so
-                                there is nobody to give a database to. */}
-                            <span className="share-sheet__row-desc">
-                              {!requireSignIn
-                                ? "Needs sign-in — anonymous visitors can't be told apart."
-                                : perUserIsolation
-                                  ? "Each signed-in user gets their own private database copy"
-                                  : "All signed-in users share the same database"}
-                            </span>
-                          </span>
-                          <input
-                            type="checkbox"
-                            className="share-sheet__switch-input"
-                            checked={perUserIsolation}
-                            disabled={!requireSignIn}
-                            onChange={(event) => {
-                              if (shareSheetBusy) return;
-                              const checked = event.target.checked;
-                              setPerUserIsolation(checked);
-                              if (checked) setRequireSignIn(true);
-                            }}
-                          />
-                          <ShareSwitch on={perUserIsolation} />
-                        </label>
-                      ) : null}
-                    </div>
-                  ) : null}
-                </div>
-
-                {/* A switch, not a second radio: this is an extra capability
-                    layered on viewing, and radios framed it as an alternative
-                    to viewing — which it never was. */}
-                {(() => {
-                  const codeOption = PERMISSION_OPTIONS.find((o) => o.value === "edit");
-                  const codeOn = permission === "edit";
-                  const codeAvailable = isPermissionAvailable(audience, "edit");
-                  if (!codeOption) return null;
-                  return (
-                    <label
-                      className={`share-sheet__toggle-row${
-                        codeOn ? " share-sheet__toggle-row--on" : ""
-                      }${codeAvailable ? "" : " share-sheet__toggle-row--off"}`}
-                    >
-                      <span className="share-sheet__row-text">
-                        <span className="share-sheet__row-label">
-                          {codeOption.label}
-                          <InlineCodeGlyph />
-                        </span>
-                        <span className="share-sheet__row-desc">
-                          {codeAvailable
-                            ? codeOption.description
-                            : "Available for team and public apps."}
-                        </span>
-                      </span>
-                      <input
-                        type="checkbox"
-                        className="share-sheet__switch-input"
-                        checked={codeOn}
-                        disabled={!codeAvailable}
-                        onChange={(event) => {
-                          if (shareSheetBusy || !codeAvailable) return;
-                          pickPermission(event.target.checked ? "edit" : "write");
-                        }}
-                      />
-                      <ShareSwitch on={codeOn} />
-                    </label>
-                  );
-                })()}
-              </fieldset>
-            ) : null}
-
-            {cloud.live && hasSharingDraftChanges ? (
-              <div className="share-sheet__section share-sheet__save-row">
-                <p className="share-sheet__footnote">
-                  Choose who can access and what they can do, then save — nothing
-                  is published until you confirm.
-                </p>
-                <button
-                  type="button"
-                  className="share-sheet__primary-btn"
-                  disabled={shareSheetBusy || peopleAllowlistEmpty}
-                  onClick={saveSharingSettings}
-                  title={
-                    peopleAllowlistEmpty
-                      ? "Add at least one workspace member, email, or domain — or pick a different audience"
-                      : undefined
-                  }
-                >
-                  {shareSheetBusy
-                    ? "Saving…"
-                    : peopleAllowlistEmpty
-                      ? "Add an allowlist entry to save"
-                      : "Save sharing settings"}
-                </button>
-              </div>
-            ) : null}
-
-            {/* Publish button if not live */}
-            {!cloud.live ? (
-              <div className="share-sheet__notice share-sheet__notice--info">
-                <p>
-                  {isFork
-                    ? "Publish your copy on the web to get a shareable link for this fork."
-                    : "Publish your app on the web first to get a shareable link."}
-                </p>
+                onDomainsChange={(domains) =>
+                  changePeople(allowedUserIds, allowedEmails, domains)
+                }
+                loading={workspacePeopleLoading}
+                disabled={shareSheetBusy}
+                currentUserId={workspaceSelfId}
+              />
+            }
+            linkUrl={cloud.live ? (copyUrl ?? webDisplayUrl ?? null) : null}
+            linkHint={shareLinkHint}
+            onCopyLink={() => void cloud.copyLink(copyUrl ?? webDisplayUrl)}
+            onOpenLink={() => void cloud.openInBrowser(copyUrl ?? webDisplayUrl)}
+            busy={shareSheetBusy}
+            peopleAllowlistEmpty={peopleAllowlistEmpty}
+            publishLabel={sharePublishLabel(
+              audience,
+              allowedUserIds.length + allowedEmails.length + allowedEmailDomains.length,
+              isFork,
+            )}
+            publishDisabled={cloud.loading || publishBlockedByIntegrity}
+            onPublish={() => void handlePublishClick()}
+            notices={
+              <>
+                <PaprCloudRequirementsPanel featureId="publish_share" />
+                {shareSyncBanner ? (
+                  <div
+                    className={`share-sheet__sync-banner share-sheet__sync-banner--${shareSyncBanner.tone}`}
+                    role="status"
+                  >
+                    <p>{shareSyncBanner.message}</p>
+                    {"detail" in shareSyncBanner &&
+                    shareSyncBanner.detail &&
+                    shareSyncBanner.detail !== shareSyncBanner.message ? (
+                      <details className="share-sheet__error-details">
+                        <summary>View full error</summary>
+                        <p>{shareSyncBanner.detail}</p>
+                      </details>
+                    ) : null}
+                  </div>
+                ) : null}
+                {isFork ? (
+                  <div className="share-sheet__notice share-sheet__notice--info">
+                    <p>
+                      <strong>Your copy</strong> — sharing here puts <em>your</em> fork
+                      on the web. It does not change the team&apos;s shared app.
+                    </p>
+                  </div>
+                ) : null}
                 <CloudPublishDependenciesPanel
                   readiness={readiness}
                   loading={readinessLoading}
                   onOpenDependencyApp={onOpenDependencyApp}
                 />
-                <button
-                  type="button"
-                  className="share-sheet__primary-btn"
-                  disabled={
-                    shareSheetBusy || cloud.loading || publishBlockedByIntegrity
-                  }
-                  onClick={() => void handlePublishClick()}
-                >
-                  {isFork ? "Publish your copy" : "Publish on Web"}
-                </button>
-              </div>
-            ) : (
-              <CloudPublishDependenciesPanel
-                readiness={readiness}
-                loading={readinessLoading}
-                onOpenDependencyApp={onOpenDependencyApp}
-              />
-            )}
-
-            {/* Contribute-back lives in its own Propose sheet — Share is only
-                about who can reach your copy. */}
-
-            {/* Scope is per key in this panel, which is why the tab summary
-                says "Per key" rather than one global owner/visitor answer. */}
-            {shareStep === "keys" && audience !== "private" ? (
-              <CloudAppCredentialsPanel
-                appId={appId}
-                appTitle={appTitle}
-                busy={cloud.busy}
-                appLive={cloud.live}
-              />
-            ) : null}
-
-            {/* Dimmed steps still open — saying why beats a blank panel. */}
-            {shareStep !== "who" && audience === "private" ? (
-              <p className="share-sheet__section-desc">
-                Not needed — only you can open this app.
-              </p>
-            ) : null}
-
-            {/* The green "Listed in Community Apps" notice restated the Public
-                option's own description back at the person who just chose it.
-                The escape hatch is the only part that carried information, so
-                only it survives — as a link, since it just switches audience. */}
-            {cloud.live && listsInCommunity && shareStep === "who" ? (
-              <button
-                type="button"
-                className="share-sheet__text-link"
-                disabled={cloud.busy}
-                onClick={removeFromCommunity}
-              >
-                Unlist from Community — share via link only
-              </button>
-            ) : null}
-
-            {/* The option itself already says "Install into Paprwork to
-                personalize and send changes back" — repeating it here as a
-                paragraph taught nothing. Only the inbox pointer survives,
-                because that is the one thing the option does not say. */}
-            {showCodePanel && cloud.live && showOwnerChangeRequests ? (
-              <p className="share-sheet__section-desc">
-                Review incoming proposals from the inbox icon on the app bar.
-              </p>
-            ) : null}
-
-            {/* Unpublish lives in the bar's "..." menu now. Keeping a second
-                copy here meant two routes to a destructive action and a block
-                of text in a sheet that is meant to be three questions. */}
-
-            {/* Cloud compatibility info - only show if blocking publish */}
-            {needsDesktopAck ? (
-              <div ref={desktopAckRef}>
-              <CloudCompatibilityPanel
-                report={compatReport ?? cloud.compatibility}
-                loading={compatLoading}
-                showConfirm={needsDesktopAck}
-                confirmBusy={cloud.busy}
-                onConfirmPublish={handleConfirmDesktopPublish}
-              />
-              </div>
-            ) : null}
-          </div>
+                {needsDesktopAck ? (
+                  <div ref={desktopAckRef}>
+                    <CloudCompatibilityPanel
+                      report={compatReport ?? cloud.compatibility}
+                      loading={compatLoading}
+                      showConfirm={needsDesktopAck}
+                      confirmBusy={cloud.busy}
+                      onConfirmPublish={handleConfirmDesktopPublish}
+                    />
+                  </div>
+                ) : null}
+              </>
+            }
+          />
         </ShareSheet>
       ) : null}
     </>

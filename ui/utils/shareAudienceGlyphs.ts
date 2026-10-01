@@ -21,18 +21,19 @@ export function shareAudienceGlyphPath(audience: ShareAudience): string {
   }
 }
 
+/** Same words as the Share sheet (v6 "one vocabulary"). */
 export function shareAudienceShortLabel(audience: ShareAudience): string {
   switch (audience) {
     case "public":
-      return "Anyone on the web";
+      return "Community";
     case "team":
-      return "Your team";
+      return "Workspace";
     case "people":
       return "Specific people";
     case "link":
       return "Anyone with the link";
     default:
-      return "Only you";
+      return "Only me";
   }
 }
 
