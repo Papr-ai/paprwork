@@ -1273,7 +1273,15 @@ export class JobsService {
 
         const jobId =
           typeof raw.id === "string" && raw.id.length > 0 ? raw.id : dirName;
-        if (tombstones.has(jobId)) {
+        if (tombstones.has(jobId) || tombstones.has(dirName)) {
+          continue;
+        }
+        // A job lives at Jobs/<id>/. A folder whose name differs from the id in
+        // its job.json is an archive or copy (e.g. "<id>.migrated") — never load it.
+        if (jobId !== dirName) {
+          console.warn(
+            `[JobsService] Ignoring job folder ${dirName}: job.json id ${jobId} does not match folder name`,
+          );
           continue;
         }
         let runtimeRaw: Partial<JobRecord> | null = null;
@@ -3607,6 +3615,12 @@ export class JobsService {
       }
     }
 
+    // Tombstone FIRST, locally, for every delete (including collaborator
+    // local-only deletes). If we crash or a cloud call throws after this point,
+    // the startup folder scan still knows the job is deleted and won't revive it.
+    const { addJobTombstones } = await import("./jobs/jobTombstones.js");
+    await addJobTombstones(this.boundPaprDir ?? getPaprRoot(), [jobId]);
+
     // Remove from index; upload catalog unless collaborator local-only delete
     this.deleteJobFromMemory(jobId);
     if (localOnlyDelete) {
@@ -3630,17 +3644,18 @@ export class JobsService {
       await this.deleteJobCloudArtifactsForJob(jobId);
     }
 
-    // Optionally remove the job directory (scripts, logs, scratch db)
-    if (deleteFiles) {
-      const jobDir = this.getJobDir(jobId);
-      try {
+    // Never leave a deleted job's folder in Jobs/. deleteFiles wipes it;
+    // otherwise move it to backups/deleted-jobs/ (gitignored, recoverable).
+    const jobDir = this.getJobDir(jobId);
+    try {
+      if (deleteFiles) {
         await fs.rm(jobDir, { recursive: true, force: true });
-      } catch (error) {
-        console.warn(
-          `[JobsService] Could not remove job dir ${jobDir}:`,
-          error,
-        );
+      } else {
+        const { moveJobDirToBackups } = await import("./jobs/jobFolderArchive.js");
+        await moveJobDirToBackups(jobDir, this.boundPaprDir ?? getPaprRoot(), "deleted-jobs");
       }
+    } catch (error) {
+      console.warn(`[JobsService] Could not remove job dir ${jobDir}:`, error);
     }
 
     getGatewayTelemetry().trackFireAndForget("paprwork_job_deleted", {
