@@ -4,7 +4,7 @@
  */
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { fireEvent, render, screen } from "@testing-library/react";
-import { FocusPeek, fmtHours } from "../components/Sidebar/FocusPeek";
+import { FocusPeek, fmtHours, paceOf, shortTitle } from "../components/Sidebar/FocusPeek";
 
 const STATE = {
   three: [
@@ -27,14 +27,25 @@ describe("fmtHours", () => {
   });
 });
 
+describe("shortTitle / paceOf", () => {
+  it("cuts long goal names to a readable first clause", () => {
+    expect(shortTitle("Close pre-seed Tranche 1 and build a $1-2M-lead-capable pipeline")).toBe("Close pre-seed Tranche 1");
+    expect(shortTitle("Distribution via content creation, build following")).toBe("Distribution via content");
+    expect(shortTitle("Write daily")).toBe("Write daily");
+  });
+  it("reads pace from time this week", () => {
+    expect([paceOf(2), paceOf(0.4), paceOf(0), paceOf()]).toEqual(["on", "risk", "off", "off"]);
+  });
+});
+
 describe("FocusPeek", () => {
   it("shows status, three one-line goals with hours, share of week, and no next-step card", async () => {
     vi.spyOn(globalThis, "fetch").mockResolvedValue(new Response(JSON.stringify(STATE), { status: 200 }));
     render(<FocusPeek status="Pen is working · 2 chats" onOpen={() => {}} />);
     expect(await screen.findByText("Close Tranche 2")).toBeTruthy();
     expect(screen.getByText("Pen is working · 2 chats")).toBeTruthy();
-    expect(screen.getByText("7.6h")).toBeTruthy();
-    expect(screen.getByText("<1h")).toBeTruthy();
+    expect(screen.getByLabelText("7.6h this week").className).toContain("is-on");
+    expect(screen.getByLabelText("<1h this week").className).toContain("is-risk");
     expect(screen.getByText("68%")).toBeTruthy();
     expect(screen.queryByText("Decide on the Data Room blurb")).toBeNull();
     expect(screen.getByText("Close Tranche 2").closest("button")?.getAttribute("title")).toContain("$1.25M raised");
