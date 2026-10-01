@@ -97,7 +97,7 @@ describe("held (not sent) follow-ups in the queue", () => {
       />,
     );
     const item = screen.getByTestId("queued-follow-up");
-    expect(item.className).toContain("queued-row--held");
+    expect(item.className).toContain("queued-item--held");
     expect(item.textContent).toContain("Not sent");
     fireEvent.click(screen.getByRole("button", { name: "Send" }));
     expect(onSendNow).toHaveBeenCalledWith("h");

@@ -1351,15 +1351,16 @@ export const ChatContainer: React.FC<ChatContainerProps> = ({ chatId }): React.R
         onFilesDropped={handleFilesDroppedToChat}
         onLoadOlder={() => loadOlderMessages(chatId)}
         onRetryHistory={() => syncHistoryFromServer({ force: true })}
-      />
-
-      {/* Unsent follow-ups sit with the composer, not in the transcript. */}
-      <QueuedMessages
-        queue={currentChatQueue}
-        onSendNow={handleSendQueuedNow}
-        onRemove={handleRemoveQueued}
-        onEdit={handleEditQueued}
-        agentWorking={isSending || isWaitingForModel || isWaitingForAgentSlot}
+        pendingFollowUpCount={currentChatQueue.length}
+        pendingFollowUps={
+          <QueuedMessages
+            queue={currentChatQueue}
+            onSendNow={handleSendQueuedNow}
+            onRemove={handleRemoveQueued}
+            onEdit={handleEditQueued}
+            agentWorking={isSending || isWaitingForModel || isWaitingForAgentSlot}
+          />
+        }
       />
 
       <InputBar

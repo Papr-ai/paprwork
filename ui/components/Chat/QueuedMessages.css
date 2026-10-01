@@ -1,155 +1,126 @@
 /**
- * Queued follow-ups — a compact stack attached to the top of the input bar.
- * Solid, readable text (never ghosted). One motion: the sent message slides
- * into the transcript.
+ * Queued follow-ups — in the thread, where they will land.
+ * One concept: a dashed frame means "not sent yet". When sent, the frame
+ * dissolves. Text is never faded.
  */
 
-.queued-tray {
+.queued-list {
+  --queued-dash: color-mix(in srgb, var(--text-secondary) 45%, transparent);
+}
+
+.queued-item {
+  margin-bottom: 0.25rem;
+  animation: queuedIn 0.2s var(--ease) both;
+}
+
+.queued-item__content {
+  gap: 6px;
+}
+
+.queued-item__card {
   display: flex;
   flex-direction: column;
   gap: 4px;
-  /* Flush against the input bar below it. */
-  margin: 0 20px;
-  /* Respond to the chat pane's width, not the window's (sidebars, splits). */
-  container-type: inline-size;
+  margin: -10px -14px 0;
+  padding: 10px 14px;
+  border: 1.5px dashed var(--queued-dash);
+  border-radius: 14px;
 }
 
-.queued-row {
-  display: flex;
-  align-items: center;
-  gap: 10px;
-  min-height: 40px;
-  padding: 4px 6px 4px 14px;
-  /* Liquid glass, same material as the composer it attaches to. */
-  background: var(--glass-bg-active);
-  backdrop-filter: blur(20px) saturate(180%);
-  -webkit-backdrop-filter: blur(20px) saturate(180%);
-  border: 1px solid var(--border-color);
-  border-radius: 12px;
-  box-shadow: var(--shadow-sm);
-  animation: queuedRowIn 0.18s var(--ease) both;
-}
-
-.queued-row:last-child {
-  /* Join visually with the input bar. */
-  border-bottom-left-radius: 0;
-  border-bottom-right-radius: 0;
-}
-
-.queued-row__text {
-  flex: 1;
-  min-width: 0;
-  padding: 6px 0;
-  border: none;
-  background: transparent;
+.queued-item__text {
   color: var(--text-primary);
-  font: inherit;
-  font-size: 13px;
-  line-height: 1.4;
-  text-align: left;
-  white-space: nowrap;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  cursor: pointer;
-}
-
-.queued-row__text--open {
   white-space: pre-wrap;
   overflow-wrap: anywhere;
 }
 
-/* Secondary, not tertiary: tertiary fails AA at 12px. */
-.queued-row__status {
-  flex-shrink: 0;
+.queued-item__meta {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  justify-content: space-between;
+  gap: 2px 12px;
+  min-height: 24px;
   font-size: 12px;
+}
+
+.queued-item__status {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
   color: var(--text-secondary);
   white-space: nowrap;
 }
 
-/* Not sent (restored after a restart): the one state that needs a decision. */
-/* Text stays high-contrast; the amber dot carries the hue (amber text fails AA). */
-.queued-row--held .queued-row__status {
-  display: inline-flex;
-  align-items: center;
-  gap: 6px;
+/* Not sent: the one state that needs a decision. Amber on the dot, not the text (AA). */
+.queued-item--held .queued-item__status {
   color: var(--text-primary);
   font-weight: 500;
 }
 
-.queued-row--held .queued-row__status::before {
-  content: "";
+.queued-item--held .queued-item__card {
+  border-color: color-mix(in srgb, var(--warning-color) 60%, transparent);
+}
+
+.queued-item__dot {
   width: 6px;
   height: 6px;
   border-radius: 50%;
   background: var(--warning-color);
 }
 
-.queued-row__actions {
+.queued-item__actions {
   display: inline-flex;
-  flex-shrink: 0;
   gap: 2px;
 }
 
-.queued-row__icon {
-  width: 28px;
-  height: 28px;
-  display: inline-flex;
-  align-items: center;
-  justify-content: center;
-  padding: 0;
+.queued-item__actions button {
+  padding: 3px 8px;
   border: none;
   border-radius: 999px;
   background: transparent;
   color: var(--text-secondary);
+  font: inherit;
   cursor: pointer;
   transition: background 0.15s var(--ease), color 0.15s var(--ease);
 }
 
-.queued-row__icon:hover {
+.queued-item__actions button:hover {
   background: var(--hover-bg);
   color: var(--text-primary);
 }
 
-.queued-row__icon--send {
+.queued-item__actions .queued-item__send {
   color: var(--primary-color);
+  font-weight: 500;
 }
 
-.queued-row__icon--send:hover {
-  background: var(--primary-color);
-  color: #fff;
-}
-
-.queued-row__icon:focus-visible,
-.queued-row__text:focus-visible {
+.queued-item__actions button:focus-visible {
   outline: 2px solid var(--primary-color);
   outline-offset: 1px;
 }
 
-/* Narrow windows: the status phrase yields before the text does. */
-@container (max-width: 440px) {
-  .queued-row:not(.queued-row--held) .queued-row__status {
-    display: none;
-  }
-}
-
-/* The sent message arrives in the transcript with one short slide. */
+/* Sent: the real message mounts in the same spot; its dashed frame dissolves. */
 .message-item.message-item--landing {
-  animation: followUpLand 0.24s var(--ease) both;
+  animation: none;
 }
 
-@keyframes queuedRowIn {
-  from { opacity: 0; transform: translateY(4px); }
-  to { opacity: 1; transform: none; }
+.message-item.message-item--landing .message-content {
+  border-radius: 14px;
+  outline: 1.5px dashed color-mix(in srgb, var(--text-secondary) 45%, transparent);
+  outline-offset: 10px;
+  animation: queuedFrameDissolve 0.5s var(--ease) 0.08s forwards;
 }
 
-@keyframes followUpLand {
-  from { opacity: 0; transform: translateY(8px); }
+@keyframes queuedFrameDissolve {
+  to { outline-color: transparent; }
+}
+
+@keyframes queuedIn {
+  from { opacity: 0; transform: translateY(6px); }
   to { opacity: 1; transform: none; }
 }
 
 @media (prefers-reduced-motion: reduce) {
-  .queued-row,
-  .message-item.message-item--landing {
-    animation: none;
-  }
+  .queued-item { animation: none; }
+  .message-item.message-item--landing .message-content { animation: none; outline: none; }
 }
