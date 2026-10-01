@@ -626,7 +626,7 @@ describe("autoContinueInterruptedTurn helpers", () => {
     ).toBe(true);
   });
 
-  it("allows auto-continue when provider dropped before any assistant row", () => {
+  it("does not auto-continue a fresh first user message without recovery evidence", () => {
     const messages: ChatMessage[] = [
       { id: "u1", role: "user", content: "Build it" },
     ];
@@ -638,6 +638,33 @@ describe("autoContinueInterruptedTurn helpers", () => {
         isSending: false,
         connectionPaused: false,
         needsStreamRecovery: false,
+        gatewayReady: true,
+      }),
+    ).toBe(false);
+    expect(
+      getAutoContinueBlockReason({
+        chatId: "chat-1",
+        messages,
+        isSending: false,
+        connectionPaused: false,
+        needsStreamRecovery: false,
+        gatewayReady: true,
+      }),
+    ).toBe("awaitingFirstResponse");
+  });
+
+  it("allows auto-continue when provider dropped before any assistant row and recovery is flagged", () => {
+    const messages: ChatMessage[] = [
+      { id: "u1", role: "user", content: "Build it" },
+    ];
+
+    expect(
+      shouldAutoContinueInterruptedTurn({
+        chatId: "chat-1",
+        messages,
+        isSending: false,
+        connectionPaused: false,
+        needsStreamRecovery: true,
         gatewayReady: true,
       }),
     ).toBe(true);

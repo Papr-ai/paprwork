@@ -11,6 +11,7 @@ import { DATABASES_REGISTRY_FILENAME } from "../DatabaseRegistryService.js";
 import { uploadAppDbConfigToCloud } from "./appDbConfigUpload.js";
 import { syncDatabasesRegistryToCloudCoalesced } from "./databasesRegistryCloudSync.js";
 import { flushMetadataOutbox } from "./metadataOutbox.js";
+import { registryUploadErrorDetail } from "./registryUploadDiagnostics.js";
 import { yieldEventLoop } from "../cloudSync/yieldEventLoop.js";
 
 const METADATA_FLUSH_TIMEOUT_MS = 60_000;
@@ -98,7 +99,9 @@ export async function syncMetadataToCloudForFlush(
     databasesRegistryUploaded = registryResult.uploaded;
     databasesRegistrySkippedDuplicate = registryResult.skippedDuplicate;
     if (registryResult.queuedForRetry) {
-      warnings.push("namespace databases registry upload queued for retry");
+      warnings.push(
+        `namespace databases registry upload queued for retry${registryUploadErrorDetail()}`,
+      );
     }
   } else {
     databasesRegistryUploaded = true;
@@ -132,7 +135,7 @@ export async function syncMetadataToCloudForFlush(
         databasesRegistryUploaded = retry.uploaded;
         if (retry.queuedForRetry) {
           warnings.push(
-            "namespace databases registry upload still pending (will retry in background)",
+            `namespace databases registry upload still pending (will retry in background)${registryUploadErrorDetail()}`,
           );
         }
       }

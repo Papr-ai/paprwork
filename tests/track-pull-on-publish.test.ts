@@ -62,6 +62,16 @@ describe("decideTrackPullAction", () => {
     ).toEqual({ action: "skip", reason: "not_track" });
   });
 
+  it("skips when auto-pull was never turned on (v5 default)", () => {
+    expect(
+      decideTrackPullAction({
+        mode: "track",
+        lineage: makeLineage({ trackAutoPull: undefined }),
+        liveRevision: "rev-live",
+      }),
+    ).toEqual({ action: "skip", reason: "auto_pull_disabled" });
+  });
+
   it("skips when auto-pull is disabled", () => {
     expect(
       decideTrackPullAction({

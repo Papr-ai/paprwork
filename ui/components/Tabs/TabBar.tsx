@@ -32,10 +32,42 @@ export function TabBar() {
     useState<React.CSSProperties>({ display: "none" });
   const [dropIndicatorOnTop, setDropIndicatorOnTop] = useState(false);
   const [showHistory, setShowHistory] = useState(false);
+  // "hover" peeks like the rail (closes when the pointer leaves, no focus steal);
+  // "click" pins it open with the search focused until an outside click.
+  const [historyMode, setHistoryMode] = useState<"hover" | "click">("click");
+  const hoverTimer = useRef<number | undefined>(undefined);
+  const clearHoverTimer = () => window.clearTimeout(hoverTimer.current);
+  const onHistoryEnter = () => {
+    clearHoverTimer();
+    if (showHistory) return;
+    // Same 120ms hover intent as the rail peeks.
+    hoverTimer.current = window.setTimeout(() => {
+      setHistoryMode("hover");
+      setShowHistory(true);
+    }, 120);
+  };
+  const onHistoryLeave = () => {
+    clearHoverTimer();
+    if (!showHistory || historyMode !== "hover") return;
+    hoverTimer.current = window.setTimeout(() => setShowHistory(false), 180);
+  };
+  const onHistoryClick = () => {
+    clearHoverTimer();
+    if (showHistory && historyMode === "click") {
+      setShowHistory(false);
+      return;
+    }
+    setHistoryMode("click");
+    setShowHistory(true);
+  };
+  useEffect(() => clearHoverTimer, []);
 
   // Rail "All chats" opens this same history dropdown.
   useEffect(() => {
-    const open = () => setShowHistory(true);
+    const open = () => {
+      setHistoryMode("click");
+      setShowHistory(true);
+    };
     window.addEventListener("papr-open-chat-history", open);
     return () => window.removeEventListener("papr-open-chat-history", open);
   }, []);
@@ -305,10 +337,16 @@ export function TabBar() {
             />
           </svg>
         </button>
+        <div
+          className="tab-bar__history"
+          onMouseEnter={onHistoryEnter}
+          onMouseLeave={onHistoryLeave}
+        >
         <button
           ref={historyBtnRef}
           className="tab-bar__action-btn"
-          onClick={() => setShowHistory((open) => !open)}
+          onClick={onHistoryClick}
+          aria-expanded={showHistory}
           aria-label="Recent history"
           title="Recent chats and apps"
         >
@@ -332,8 +370,11 @@ export function TabBar() {
           <ChatHistoryDropdown
             onClose={() => setShowHistory(false)}
             dropdownRef={historyDropdownRef}
+            autoFocusSearch={historyMode === "click"}
+            onInteract={() => setHistoryMode("click")}
           />
         )}
+        </div>
       </div>
     </div>
   );

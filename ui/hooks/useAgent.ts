@@ -54,6 +54,7 @@ import {
   ensureTrackedStream,
   finalizeStreamingMessages,
   HIDDEN_CONTINUE_USER_MESSAGE,
+  canSendContinueMarker,
   interruptedTurnNeedsContinue,
   isHiddenContinueUserMessage,
   isResumingStream,
@@ -2028,6 +2029,16 @@ export function useAgent() {
 
   const continueInterruptedTurn = useCallback(
     async (chatId: string, config: AgentConfig) => {
+      const existingMessages =
+        useChatStore.getState().chatStates.get(chatId)?.messages ?? [];
+      if (!canSendContinueMarker(existingMessages)) {
+        console.warn(
+          `[useAgent] Refusing hidden continue for ${chatId}: no prior user message`,
+        );
+        clearResumeRetry(chatId);
+        setNeedsStreamRecovery(chatId, false);
+        return;
+      }
       console.log(
         `[useAgent] Starting hidden continue turn for ${chatId}`,
       );
@@ -2677,6 +2688,8 @@ export function useAgent() {
           lastTurnOutcome:
             useChatStore.getState().chatStates.get(chatId)?.lastTurnOutcome,
           gatewayReady: gateway.isConnected(),
+          liveStreamRequestId:
+            useChatStore.getState().chatStates.get(chatId)?.liveStreamRequestId,
         })
       ) {
         return;

@@ -173,6 +173,8 @@ export async function postAppOps(
   await applyAckedBlobOids(appId, parsed.data.files);
   const { writeAppRepoCommitCursor } = await import("./appRepoCommittedFanout.js");
   await writeAppRepoCommitCursor(appId, parsed.data.commitSha);
+  const { rememberOwnAppCommit } = await import("./appRepoPendingUpdate.js");
+  rememberOwnAppCommit(appId, parsed.data.commitSha);
   try {
     const { realignLocalAppCodeBaseline } = await import("./appRepoHeadSyncCheck.js");
     await realignLocalAppCodeBaseline(appId);

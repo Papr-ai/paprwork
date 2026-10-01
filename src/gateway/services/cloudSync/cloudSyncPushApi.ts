@@ -89,10 +89,13 @@ export async function pushAppNow(
     await coordinator.flushNow(appId, { trigger: "manual" });
     return;
   }
-  const { appNeedsOrderedFlushAsync } = await import("./pendingLocalUploads.js");
+  const { appNeedsOrderedFlushAsync, appHasUnsentCodeByContent } = await import(
+    "./pendingLocalUploads.js"
+  );
   if (
     !sync.getManualFlushError(appId) &&
-    !(await appNeedsOrderedFlushAsync(sync, appId))
+    !(await appNeedsOrderedFlushAsync(sync, appId)) &&
+    !(await appHasUnsentCodeByContent(sync.getPaprDir(), appId))
   ) {
     console.log(
       `[CloudSync] Manual upload skipped for ${appId} — already up to date`,

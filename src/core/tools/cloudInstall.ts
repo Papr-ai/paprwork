@@ -39,13 +39,13 @@ const installCloudAppSchema = z.object({
     .enum(["fork", "track"])
     .optional()
     .describe(
-      "fork = independent copy. track = collaborate (code link). Omit on apps that need a choice to get the same options as the UI modal.",
+      "Omit (recommended): one Install like the UI — the copy stays linked to the original for updates and proposals. fork = legacy detached copy, only if the user explicitly asks for no link.",
     ),
   installDbPolicy: z
     .enum(["fork_empty", "shared_primary"])
     .optional()
     .describe(
-      "DATA policy with mode. fork_empty = private database. shared_primary = shared team database (team track only). Must match the UI option the user picked.",
+      "Omit (recommended): team-shared apps start on the team's data, everything else on the user's own data. fork_empty = own data. shared_primary = team data (team apps only).",
     ),
   catalogScope: z
     .enum(["community", "team", "global", "namespace"])
@@ -183,7 +183,7 @@ Do NOT discover apps via paprwork-community-apps/registry.json, list_app_bundles
               ? browseScope === "team"
                 ? "No forkable team apps yet. Teammates must publish with codeAccess=install (Edit the code)."
                 : "No forkable community apps match. Publishers must enable Edit the code on their share settings."
-              : "Pick an app and run install_cloud_app with namespaceId, slug, catalogScope, and visibility. Team-shared apps need fork vs collaborate — ask the user first or omit mode to get the same options as the UI.",
+              : "Pick an app and run install_cloud_app with namespaceId, slug, catalogScope, and visibility. Omit mode: one Install, same as the UI.",
         },
         duration: performance.now() - startTime,
         timestamp: new Date().toISOString(),
@@ -209,7 +209,7 @@ Uses the same install pipeline as the Community / Team Apps UI (POST /api/cloud/
 
 Requires Papr login. Publisher must enable **Edit the code** (codeAccess=install).
 
-For team-shared apps, ask the user fork vs collaborate before calling — or omit mode to receive the same options as the UI modal.`,
+One Install (v5): omit mode and installDbPolicy. Every copy is the user's own, linked to the original: Get updates and Propose from the app bar. Team-shared apps start on the team's live data (code reaches the team only by proposal) and can switch to their own data later.`,
   inputSchema: installCloudAppSchema,
   execute: async (input) => {
     const args =
@@ -280,7 +280,7 @@ export const submitCloudAppPrTool = createTool({
   id: CLOUD_APP_PR_TOOL_IDS.submit,
   description: `Open a contribute-back GitHub PR to the upstream app owner (CONTRIBUTOR ONLY — local fork via install_cloud_app).
 
-Not for editing the owner's app directly. Pushes your fork's app source, linked Jobs, and migration SQL to the owner's papr-work repo. Returns prUrl, branch, and headSha.`,
+Not for editing the owner's app directly. Pulls the publisher's latest first (stops with conflictFiles if your edits overlap theirs — ask the user). The PR branches from the publisher commit your copy is based on and carries only the files you changed, added or deleted. Returns prUrl, branch, headSha, stagedPaths.`,
   inputSchema: submitChangeSchema,
   execute: async (input) => {
     const args =
@@ -289,6 +289,35 @@ Not for editing the owner's app directly. Pushes your fork's app source, linked 
     const startTime = performance.now();
     try {
       await requirePaprCloudLogin();
+      // Same as the Propose button: get the publisher's latest first, and stop
+      // if anything overlaps, so the proposal never carries stale files.
+      const { checkPublisherUpstreamRevision } = await import(
+        "../../gateway/services/syncV3/checkPublisherUpstreamRevision.js"
+      );
+      const upstream = await checkPublisherUpstreamRevision(args.installedAppId);
+      if (upstream.publisherUpdatesAvailable) {
+        const { getCloudAppTrackSyncService } = await import(
+          "../../gateway/services/CloudAppTrackSyncService.js"
+        );
+        const pulled = await getCloudAppTrackSyncService().syncTrackApp(args.installedAppId);
+        if (pulled.conflictFiles.length > 0) {
+          return {
+            success: false,
+            data: {
+              proposed: false,
+              needsUserDecision: true,
+              reason:
+                "The publisher changed the same lines you edited. Nothing was proposed. " +
+                "Show the user these files and ask how to resolve them before proposing.",
+              conflictFiles: pulled.conflictFiles,
+              updatedFiles: pulled.updatedFiles,
+              mergedFiles: pulled.mergedFiles ?? [],
+            },
+            duration: performance.now() - startTime,
+            timestamp: new Date().toISOString(),
+          };
+        }
+      }
       const data = await getCloudAppContributeService().propose({
         sourceNamespaceId: args.sourceNamespaceId,
         sourceSlug: args.sourceSlug,

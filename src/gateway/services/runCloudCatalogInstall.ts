@@ -10,7 +10,7 @@ import {
   catalogScopeFromBrowseScope,
   getCloudCatalogInstallModeOptions,
   requiresInstallModeChoice,
-  resolveAutomaticInstallMode,
+  resolveOneInstallSelection,
 } from "../../core/utils/cloudCatalogInstallPolicy.js";
 import {
   getCloudAppInstallService,
@@ -119,26 +119,21 @@ export function buildCloudCatalogInstallInput(
     codeInstallable,
   };
 
-  let mode = input.mode;
-  if (!mode) {
-    const automatic = resolveAutomaticInstallMode(policyInput);
-    if (automatic === null) {
-      throw new CloudCatalogInstallChoiceRequiredError({
-        catalogScope: policyInput.catalogScope,
-        namespaceId: input.namespaceId,
-        slug: input.slug,
-        visibility: input.visibility,
-        codeInstallable,
-      });
-    }
-    mode = automatic;
-  }
+  // v5: one Install. Without an explicit mode every installable copy stays
+  // linked to the original, with data chosen by the catalog (see
+  // resolveOneInstallSelection). An explicit "fork" still installs a detached
+  // copy for older callers; CloudCatalogInstallChoiceRequiredError is no
+  // longer thrown.
+  const one = resolveOneInstallSelection(policyInput);
+  const mode = input.mode ?? one.mode;
+  const installDbPolicy =
+    input.installDbPolicy ?? (input.mode === undefined ? one.installDbPolicy : undefined);
 
   return {
     namespaceId: input.namespaceId,
     slug: input.slug,
     mode,
-    ...(input.installDbPolicy ? { installDbPolicy: input.installDbPolicy } : {}),
+    ...(installDbPolicy ? { installDbPolicy } : {}),
     shareToken: input.shareToken,
     // Forward the defaulted scope, not the raw one. Both entry points (the
     // /api/cloud/install route and the install_cloud_app tool) accept

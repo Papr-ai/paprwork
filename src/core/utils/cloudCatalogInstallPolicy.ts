@@ -140,3 +140,28 @@ export function browseScopeFromCatalogScope(
 ): "community" | "team" {
   return catalogScope === "namespace" ? "team" : "community";
 }
+
+/**
+ * v5: one Install button. Every code-installable copy stays linked to the
+ * original (track); the data follows the catalog: Community copies and team
+ * apps without team sharing get their own data, team-shared apps start on the
+ * team's data and can switch later. Apps whose code can't be installed, or
+ * namespace apps that aren't team-shared, install as a plain detached copy.
+ */
+export function resolveOneInstallSelection(input: {
+  catalogScope: CommunityCatalogScope;
+  visibility?: string;
+  codeInstallable: boolean;
+}): { mode: CloudAppInstallMode; installDbPolicy?: CloudCatalogInstallDbPolicy } {
+  if (!requiresInstallModeChoice(input)) {
+    return { mode: "fork", installDbPolicy: "fork_empty" };
+  }
+  // Data is decided by the gateway after prepare, where it can see the
+  // databases' isolation and the server-verified access mode: Community →
+  // own data; team-shared with team/owner access → team data; per-user
+  // databases or non-team access → own data. Sending an explicit
+  // shared_primary here would turn those fallbacks into install failures.
+  return input.catalogScope === "global"
+    ? { mode: "track", installDbPolicy: "fork_empty" }
+    : { mode: "track" };
+}

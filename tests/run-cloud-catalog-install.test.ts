@@ -2,78 +2,48 @@ import { describe, expect, it } from "vitest";
 import { resolveInstallDbPolicy } from "../src/gateway/services/cloudInstallDbPolicy.js";
 import {
   buildCloudCatalogInstallInput,
-  CloudCatalogInstallChoiceRequiredError,
 } from "../src/gateway/services/runCloudCatalogInstall.js";
 
 describe("runCloudCatalogInstall", () => {
-  it("throws choice required for team-shared apps without mode", () => {
-    expect(() =>
-      buildCloudCatalogInstallInput({
-        namespaceId: "ns-1",
-        slug: "team-app",
-        catalogScope: "team",
-        visibility: "team",
-      }),
-    ).toThrow(CloudCatalogInstallChoiceRequiredError);
+  // v5: one Install. Omitting mode never asks a question; every installable
+  // copy is linked to the original and the data follows the catalog.
+  it("team-shared app without mode: linked copy, data left to the gateway", () => {
+    const input = buildCloudCatalogInstallInput({
+      namespaceId: "ns-1",
+      slug: "team-app",
+      catalogScope: "team",
+      visibility: "team",
+    });
+    expect(input.mode).toBe("track");
+    // No explicit shared_primary: the gateway picks team data only when the
+    // databases are shared and the server confirms team/owner access.
+    expect(input.installDbPolicy).toBeUndefined();
+    expect(resolveInstallDbPolicy(input.mode!, ["shared"], input.catalogScope, input.installDbPolicy, "team")).toBe("shared_primary");
+    expect(resolveInstallDbPolicy(input.mode!, ["per-user"], input.catalogScope, input.installDbPolicy, "team")).toBe("fork_empty");
+    expect(resolveInstallDbPolicy(input.mode!, ["shared"], input.catalogScope, input.installDbPolicy, "link_read")).toBe("fork_empty");
   });
 
-  it("asks community apps for a choice instead of silently forking", () => {
-    // Community used to fork automatically: the right default for "I just want
-    // to run this" and the wrong one for "I want to help build this", which had
-    // no path at all. Now that collaborate is offered, the mode is the caller's
-    // to pick, so an omitted mode is a question rather than a default.
-    expect(() =>
+  it("community app without mode: linked copy on its own data, never shared", () => {
+    expect(
       buildCloudCatalogInstallInput({
         namespaceId: "ns-1",
         slug: "community-app",
         catalogScope: "community",
         visibility: "public_read",
       }),
-    ).toThrow(CloudCatalogInstallChoiceRequiredError);
+    ).toMatchObject({ mode: "track", installDbPolicy: "fork_empty" });
   });
 
-  it("does not describe a community app as a team app, or collaborate as shared data", () => {
-    // The agent relays this sentence to the user, so it decides what they think
-    // they are choosing between. Calling community collaborate a shared
-    // database is the conflation this whole change exists to undo — and it
-    // would be describing a data leak that no longer happens.
-    let raised: CloudCatalogInstallChoiceRequiredError | null = null;
-    try {
-      buildCloudCatalogInstallInput({
-        namespaceId: "ns-1",
-        slug: "community-app",
-        catalogScope: "community",
-        visibility: "public_read",
-      });
-    } catch (err) {
-      raised = err as CloudCatalogInstallChoiceRequiredError;
-    }
-
-    expect(raised).toBeInstanceOf(CloudCatalogInstallChoiceRequiredError);
-    expect(raised?.message).toContain("Community app");
-    expect(raised?.message).not.toContain("Team app");
-    expect(raised?.message).not.toContain("shared team database");
-    // And it still names both modes, so the agent can put the choice to the user.
-    expect(raised?.message).toContain('mode "fork"');
-    expect(raised?.message).toContain('mode "track"');
-  });
-
-  it("still calls a team app a team app", () => {
-    let raised: CloudCatalogInstallChoiceRequiredError | null = null;
-    try {
-      buildCloudCatalogInstallInput({
-        namespaceId: "ns-1",
-        slug: "team-app",
-        catalogScope: "team",
-        visibility: "team",
-      });
-    } catch (err) {
-      raised = err as CloudCatalogInstallChoiceRequiredError;
-    }
-
-    expect(raised?.message).toContain("Team app");
-    expect(raised?.message).toContain("Collaborate (data sharing)");
-    expect(raised?.message).toContain('installDbPolicy "shared_primary"');
+  it("explicit fork still installs a detached copy for older callers", () => {
+    const input = buildCloudCatalogInstallInput({
+      namespaceId: "ns-1",
+      slug: "team-app",
+      mode: "fork",
+      catalogScope: "team",
+      visibility: "team",
+    });
+    expect(input.mode).toBe("fork");
+    expect(input.installDbPolicy).toBeUndefined();
   });
 
   it("passes explicit installDbPolicy through", () => {

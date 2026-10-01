@@ -147,7 +147,7 @@ export function Sidebar() {
   }, [createTab, switchToTab]);
 
   const favoritesApi = useSidebarFavorites();
-  const { chatGroups, appGroups, docGroups, hasUnreadChats } = useRailPeeks(favoritesApi);
+  const { chatGroups, appGroups, docGroups, hasUnreadChats, refreshChats } = useRailPeeks(favoritesApi);
   const agentName = useAgentName();
   const agentLook = useAgentIdentity((s) => s.look);
   const work = useAgentWork();
@@ -226,6 +226,7 @@ export function Sidebar() {
         onClick={() => handleNavClick("chat")}
         icon={<RailIcons.chats />}
         badge={hasUnreadChats}
+        onPeekOpen={refreshChats}
         peek={
           <RailPeek
             title="Chats"

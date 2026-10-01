@@ -24,6 +24,10 @@ vi.mock("../src/gateway/services/cloudSync/yieldEventLoop.js", () => ({
   yieldEventLoop: async () => undefined,
 }));
 
+import {
+  resetRegistryUploadDiagnosticsForTests,
+  setLastRegistryUploadError,
+} from "../src/gateway/services/syncV3/registryUploadDiagnostics.js";
 import { syncMetadataToCloudForFlush } from "../src/gateway/services/syncV3/syncMetadataForFlush.js";
 
 describe("syncMetadataToCloudForFlush", () => {
@@ -31,6 +35,7 @@ describe("syncMetadataToCloudForFlush", () => {
   const appId = "65b7eb05-5ec0-47da-918a-c63e64916f1e";
 
   beforeEach(() => {
+    resetRegistryUploadDiagnosticsForTests();
     paprDir = fs.mkdtempSync(path.join(os.tmpdir(), "papr-metadata-flush-"));
     const appDir = path.join(paprDir, "apps", appId);
     fs.mkdirSync(appDir, { recursive: true });
@@ -95,5 +100,29 @@ describe("syncMetadataToCloudForFlush", () => {
 
     expect(result.warnings).toEqual([]);
     expect(result.metadataOutboxRecovered).toBe(true);
+  });
+
+  it("includes the server's rejection reason in the registry warning", async () => {
+    mockSyncDatabasesRegistry.mockImplementation(async () => {
+      setLastRegistryUploadError(
+        "databases registry upload failed (422): duplicate localPath",
+      );
+      return {
+        uploaded: false,
+        skippedDuplicate: false,
+        queuedForRetry: true,
+      };
+    });
+    mockFlushMetadataOutbox.mockResolvedValue({ flushed: 0, failed: 1 });
+
+    const result = await syncMetadataToCloudForFlush(paprDir, appId, "sha-1");
+
+    expect(
+      result.warnings.some((w) =>
+        /namespace databases registry upload queued for retry \(databases registry upload failed \(422\): duplicate localPath\)/.test(
+          w,
+        ),
+      ),
+    ).toBe(true);
   });
 });

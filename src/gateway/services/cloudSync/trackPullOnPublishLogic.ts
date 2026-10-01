@@ -26,7 +26,8 @@ export function decideTrackPullAction(input: {
   if (!input.lineage) {
     return { action: "skip", reason: "no_lineage" };
   }
-  if (input.lineage.trackAutoPull === false) {
+  // v5: code only changes when the user asks. Auto-pull is an explicit opt-in.
+  if (input.lineage.trackAutoPull !== true) {
     return { action: "skip", reason: "auto_pull_disabled" };
   }
   if (!input.liveRevision) {

@@ -11,7 +11,11 @@ import {
 import { ingestAppRepoCommittedEvent } from "./appRepoCommittedInbound.js";
 import { pullDesktopAppOnRemoteCommit } from "./pullAppCodeFromRepo.js";
 import { parsePublishedAppRoute } from "../cloudSync/notifyCloudAppRevision.js";
-import { clearPendingAppUpdate, markPendingAppUpdate } from "./appRepoPendingUpdate.js";
+import {
+  clearPendingAppUpdate,
+  isOwnAppCommit,
+  markPendingAppUpdate,
+} from "./appRepoPendingUpdate.js";
 
 let unsubscribe: (() => void) | null = null;
 
@@ -21,7 +25,16 @@ let unsubscribe: (() => void) | null = null;
  * so a later Get updates never reports "already at remote head" falsely.
  */
 export async function applyRemoteCommit(appId: string, commitSha: string): Promise<boolean> {
+  if (isOwnAppCommit(appId, commitSha)) {
+    clearPendingAppUpdate(appId);
+    return true;
+  }
   const outcome = await pullDesktopAppOnRemoteCommit({ appId, commitSha });
+  // Our own publish may have been acked while the pull was deciding.
+  if (!outcome.pulled && isOwnAppCommit(appId, commitSha)) {
+    clearPendingAppUpdate(appId);
+    return true;
+  }
   if (outcome.pulled) {
     await writeAppRepoCommitCursor(appId, commitSha);
     clearPendingAppUpdate(appId);

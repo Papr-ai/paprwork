@@ -90,32 +90,28 @@ describe("communityCatalogAgentBrowse", () => {
     );
 
     expect(listings).toHaveLength(3);
-    // Forkable community apps now ask copy vs collaborate, so there is no
-    // single command to pre-bake — the agent surfaces installOptions instead.
+    // v5: one Install. Every non-owned listing has a ready command with no
+    // mode, and no choice to put to the user.
     expect(listings[0]?.name).toBe("Fork me");
-    expect(listings[0]?.requiresInstallModeChoice).toBe(true);
-    expect(listings[0]?.installCommand).toBeNull();
-    expect(listings[0]?.installOptions.map((option) => option.mode)).toEqual([
-      "fork",
-      "track",
-    ]);
+    expect(listings[0]?.requiresInstallModeChoice).toBe(false);
+    expect(listings[0]?.installOptions).toEqual([]);
+    expect(listings[0]?.installCommand).toContain("install_cloud_app(");
+    expect(listings[0]?.installCommand).not.toContain("mode:");
     expect(listings[1]?.name).toBe("Mine");
     expect(listings[1]?.installCommand).toBeNull();
     expect(listings[2]?.name).toBe("Team shared");
-    expect(listings[2]?.requiresInstallModeChoice).toBe(true);
+    expect(listings[2]?.requiresInstallModeChoice).toBe(false);
   });
 
-  it("requires install mode choice for team-shared namespace apps", () => {
+  it("v5: team-shared namespace apps get the same one Install command", () => {
     const listings = buildAgentCommunityAppListings(
       [entry({ name: "Collaborate", visibility: "team" })],
       "namespace",
     );
 
-    expect(listings[0]?.requiresInstallModeChoice).toBe(true);
-    expect(listings[0]?.installCommand).toBeNull();
-    expect(listings[0]?.installOptions.map((option) => option.mode)).toEqual([
-      "fork",
-      "track",
-    ]);
+    expect(listings[0]?.requiresInstallModeChoice).toBe(false);
+    expect(listings[0]?.installOptions).toEqual([]);
+    expect(listings[0]?.installCommand).toContain('catalogScope: "team"');
+    expect(listings[0]?.installCommand).not.toContain("mode:");
   });
 });

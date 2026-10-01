@@ -75,6 +75,7 @@ function parseAppIdFromRelativePath(relativePath: string): string | null {
 export class SyncCoordinator {
   private readonly sync: CloudSyncService;
   private readonly activeFlushes = new Map<string, Promise<CoordinatorFlushResult>>();
+  private readonly manualFollowUps = new Map<string, Promise<CoordinatorFlushResult>>();
   private readonly gitDebounceTimers = new Map<string, NodeJS.Timeout>();
   private readonly tursoFlushedAppIds = new Set<string>();
   private readonly flushQueue: NamespaceFlushQueueItem[] = [];
@@ -175,11 +176,27 @@ export class SyncCoordinator {
     const trigger: FlushTrigger = options?.trigger ?? "manual";
     const inflight = this.activeFlushes.get(appId);
     if (inflight) {
-      if (trigger === "manual") {
-        moveFlushQueueItemToFront(this.flushQueue, appId);
-        this.updateGatewayBusyState(trigger);
+      if (trigger !== "manual") {
+        return inflight;
       }
-      return inflight;
+      moveFlushQueueItemToFront(this.flushQueue, appId);
+      this.updateGatewayBusyState(trigger);
+      // A flush already running collected its files before this click, so it
+      // can miss the edit the user just made — and its end-of-flush "synced"
+      // stamp then hid that edit from later publishes. Run once more after it
+      // (coalesced: many clicks during one flush = one follow-up).
+      const followUp = this.manualFollowUps.get(appId);
+      if (followUp) {
+        return followUp;
+      }
+      const next = inflight
+        .catch(() => undefined)
+        .then(() => {
+          this.manualFollowUps.delete(appId);
+          return this.flushNow(appId, { trigger: "manual" });
+        });
+      this.manualFollowUps.set(appId, next);
+      return next;
     }
 
     const debounceTimer = this.gitDebounceTimers.get(appId);
@@ -252,7 +269,17 @@ export class SyncCoordinator {
         !this.sync.getManualFlushError(item.appId) &&
         !this.flushErrors.has(item.appId)
       ) {
-        if (!(await appNeedsOrderedFlushAsync(this.sync, item.appId))) {
+        const markerSaysClean = !(await appNeedsOrderedFlushAsync(this.sync, item.appId));
+        const { appHasUnsentCodeByContent } = await import("./pendingLocalUploads.js");
+        if (
+          markerSaysClean &&
+          item.trigger === "manual" &&
+          (await appHasUnsentCodeByContent(this.sync.getPaprDir(), item.appId))
+        ) {
+          console.warn(
+            `[SyncCoordinator] ${item.appId}: sync marker said up to date but file contents differ from the cloud repo — uploading`,
+          );
+        } else if (markerSaysClean) {
           if (hasDeadLetterOutbox) {
             const cleared = await clearDeadLetterOutboxEntries(item.appId);
             console.log(

@@ -1,0 +1,22 @@
+/* Shared chat status glyph — matches the tab bar's dots (Tab.css). */
+.chat-status-mark {
+  display: inline-grid;
+  place-items: center;
+  flex: none;
+  min-width: 16px;
+}
+
+.chat-status-mark__done {
+  width: 7px;
+  height: 7px;
+  border-radius: 50%;
+  background: #10b981;
+  box-shadow: 0 0 0 3px rgba(16, 185, 129, 0.16);
+}
+
+@media (prefers-color-scheme: dark) {
+  .chat-status-mark__done {
+    background: #34d399;
+    box-shadow: 0 0 0 3px rgba(52, 211, 153, 0.18);
+  }
+}

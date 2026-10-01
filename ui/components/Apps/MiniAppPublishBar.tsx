@@ -14,17 +14,24 @@ import {
   resolvePublishBarChipForForkUpstream,
   resolvePublishBarChipLabel,
   resolvePublishBarPrimaryAction,
-  resolveCollaboratorBar,
   webSyncVisualState,
 } from "../../utils/appCloudSyncStatus";
 import {
   discardTrackLocalEdits,
+  detachFromOriginal,
   duplicateAsOwnApp,
   fetchTrackLocalEdits,
   formatTrackSyncSummary,
   pullTrackUpstream,
 } from "../../utils/cloudTrackSyncApi";
 import { listSentProposals } from "../../utils/cloudContributeApi";
+import {
+  copyAxesFromLineage,
+  deriveCopyState,
+  resolveCopyBar,
+  usesSharedData,
+  type CopyChipAction,
+} from "../../utils/copyState";
 import {
   collaboratorProposalStatusFromSent,
   type CollaboratorLatestProposalStatus,
@@ -1001,6 +1008,12 @@ export function MiniAppPublishBar({
     ((audience === "link" || audience === "public") && requireSignIn);
 
   const isTrackCollaborator = cloudLineage?.mode === "track";
+  const cloudPublishFailedEarly = Boolean(cloud.errorDetail) && !needsDesktopAck;
+  // v5: the data decides the button. Only a linked team copy on the team's
+  // live data proposes; every other copy is the user's own and publishes to
+  // its own link (proposing is one step away, on the split caret).
+  const copyAxes = cloudLineage ? copyAxesFromLineage(cloudLineage) : null;
+  const onTeamData = copyAxes?.link === "linked" && copyAxes.dataMode === "team";
   // A plain fork (mode "fork") is fully the user's own app: no Propose, no
   // "In sync with publisher", no "Update from publisher". Only collaborators
   // (track) stay linked to the publisher. The fork mark by the title still
@@ -1077,17 +1090,6 @@ export function MiniAppPublishBar({
       cancelled = true;
     };
   }, [appId, isTrackCollaborator, proposeOpen, collabEditsTick]);
-  const collabBar = isTrackCollaborator
-    ? resolveCollaboratorBar({
-        hasLocalEdits: collabLocalEdits,
-        hasUnproposedEdits: collabUnproposed,
-        latestProposalStatus,
-        publisherAhead: webSyncPublisherUpdatesAvailable,
-        pullingUpstream: upstreamPulling,
-        busy: cloud.busy,
-        sourceSlug: cloudLineage?.sourceSlug ?? "the publisher",
-      })
-    : null;
   const upstreamWebUrl =
     isTrackCollaborator && cloudLineage
       ? buildUpstreamPublishedWebUrl({
@@ -1103,14 +1105,14 @@ export function MiniAppPublishBar({
         })
       : null;
 
-  const webDisplayUrl = isTrackCollaborator
+  const webDisplayUrl = onTeamData
     ? upstreamWebUrl
     : cloud.publishedWebUrl ?? cloud.shareUrl;
-  const copyUrl = isTrackCollaborator
+  const copyUrl = onTeamData
     ? upstreamWebUrl
     : cloud.externalLinkUrl ?? cloud.loginUrl ?? webDisplayUrl;
   /** Shareable web URL only — never localhost (misleading when previewing locally). */
-  const previewDisplayUrl = isTrackCollaborator
+  const previewDisplayUrl = onTeamData
     ? upstreamWebUrl
     : cloud.live
       ? (copyUrl ?? webDisplayUrl)
@@ -1148,7 +1150,7 @@ export function MiniAppPublishBar({
     setShareOpen(false);
   };
 
-  const canOpenWebPreview = isTrackCollaborator
+  const canOpenWebPreview = onTeamData
     ? !!upstreamPreviewUrl
     : cloud.live && !!cloud.publishedPreviewUrl;
   // Chip stays calm until a user-initiated or in-flight refresh — not hook
@@ -1163,6 +1165,28 @@ export function MiniAppPublishBar({
     pulling: webSyncPulling,
     refreshing: webSyncRefreshing,
   });
+  // v5: one resolver for every installed copy. Chip, primary kind and badge
+  // all come from resolveCopyBar(deriveCopyState(...)); nothing else in the
+  // bar decides them for a copy.
+  const copyBar = cloudLineage
+    ? resolveCopyBar(
+        deriveCopyState(cloudLineage, {
+          live: cloud.live,
+          hasLocalEdits: collabLocalEdits,
+          hasUnproposedEdits: collabUnproposed,
+          hasUnpublishedEdits: webSyncStatus?.hasLocalChanges === true,
+          publisherAhead: webSyncPublisherUpdatesAvailable,
+          pullState: upstreamPulling
+            ? "pulling"
+            : webSyncState === "action_required"
+              ? "conflict"
+              : "idle",
+          lastPublishFailed: cloudPublishFailedEarly,
+          proposal: latestProposalStatus ?? "none",
+          busy: cloud.busy,
+        }),
+      )
+    : null;
   const webSyncActionNeeded =
     webSyncStatus != null &&
     webSyncStatus.overall !== "synced" &&
@@ -1214,17 +1238,18 @@ export function MiniAppPublishBar({
   // publisher — so they are "unpublished" until proposed. The file watcher
   // already knows this without a round trip; hard-coding "In sync with
   // publisher" here lied whenever you had edited anything.
-  const forkUnproposedEdits =
-    forkUnpublished && webSyncStatus?.hasLocalChanges === true;
+  // v5: an unpublished copy on its own data is a draft like any owned app
+  // (chip "Draft", primary Publish), not "Edits not proposed".
+  const forkUnproposedEdits = false;
   // Where local edits go: a collaborator (track) or an unpublished fork sends
   // them upstream for review; publishing your own copy lives under Share.
-  const proposeIsPrimary = isTrackCollaborator || forkUnpublished;
+  const proposeIsPrimary = copyBar?.primary.kind === "propose";
   // A shared fork has two destinations: its own web copy (the common case,
   // reversible — so the default click) and the publisher (occasional, lands
   // in someone else's queue — so one deliberate step away on the ▾). The two
   // halves have independent enabled states: right after you publish, Publish
   // has nothing left to send, which is exactly when Propose is most wanted.
-  const showProposeSplit = isFork && cloud.live && Boolean(cloudLineage);
+  const showProposeSplit = isFork && !onTeamData && Boolean(cloudLineage);
   const openPropose = () => {
     setShareOpen(false);
     setProposeOpen(true);
@@ -1248,9 +1273,29 @@ export function MiniAppPublishBar({
     forkUpstreamChip != null &&
     publishBarStatus.state !== "action_required" &&
     publishBarStatus.state !== "error";
-  const publishBarChip = collabBar
-    ? { label: collabBar.chip.label, showRefresh: false, tone: collabBar.chip.tone }
-    : forkChipOverrides
+  // Own-data copies keep the web-sync chip (Draft / Newer version on web /
+  // Checking…) unless the copy resolver has something about the original to
+  // say. Team-data copies always show the copy chip.
+  const copyChipWins =
+    copyBar != null &&
+    (onTeamData ||
+      (copyBar.chip.action != null &&
+        copyBar.chip.action !== "publish" &&
+        copyBar.chip.action !== "retry_publish") ||
+      copyBar.chip.tone === "busy");
+  const copyChipState = (tone: string): typeof publishBarStatus.state =>
+    tone === "bad"
+      ? "error"
+      : tone === "warn"
+        ? "warn"
+        : tone === "info"
+          ? "updates_available"
+          : tone === "busy"
+            ? "syncing"
+            : "synced";
+  const publishBarChip = copyChipWins && copyBar
+    ? { label: copyBar.chip.label, showRefresh: false, tone: copyBar.chip.tone }
+    : !copyBar && forkChipOverrides
     ? {
         label: forkUpstreamChip.label,
         showRefresh: false,
@@ -1258,18 +1303,14 @@ export function MiniAppPublishBar({
       }
     : forkUnproposedEdits
       ? { label: "Edits not proposed", showRefresh: false, tone: "warn" as const }
-      : forkUnpublished
-        ? { label: "In sync with publisher", showRefresh: false, tone: "ok" as const }
-        : publishBarChipBase;
-  const publishBarChipState = collabBar
-    ? collabBar.chip.state
-    : forkChipOverrides
+      : publishBarChipBase;
+  const publishBarChipState = copyChipWins && copyBar
+    ? copyChipState(copyBar.chip.tone)
+    : !copyBar && forkChipOverrides
     ? forkUpstreamChip.state
     : forkUnproposedEdits
       ? ("warn" as const)
-      : forkUnpublished
-        ? ("synced" as const)
-        : publishBarStatus.state;
+      : publishBarStatus.state;
   // Preview mode uses the chip for all web-sync states; draft publish failures
   // show the chip even in Files mode so "Failed to publish" is one click away.
   const chipSpeaks = workspaceMode === "preview" || cloudPublishFailed;
@@ -1287,20 +1328,31 @@ export function MiniAppPublishBar({
   // marks the owner sees on their side of the same app.
   // sourceAudience is recorded at install; older installs fall back to the
   // database policy (shared = team, own data = Community).
-  const lineageKind: "fork" | "team" | "people" | "community" | null = !cloudLineage
+  // Badge comes from the copy resolver: linked → origin (person = team,
+  // globe = Community); detached → fork mark only.
+  const copyBadge = copyBar?.badge ?? null;
+  const lineageKind: "fork" | "team" | "people" | "community" | null = !cloudLineage || !copyBadge
     ? null
-    : cloudLineage.mode !== "track"
+    : copyBadge.kind === "fork_mark"
       ? "fork"
-      : cloudLineage.sourceAudience ??
-        (cloudLineage.databasePolicy === "forked" ? "community" : "team");
+      : copyBadge.icon === "globe"
+        ? "community"
+        : cloudLineage.sourceAudience === "people"
+          ? "people"
+          : "team";
+  const ownDataTail = "Your own data. Publish puts your copy at its own link; you can still get updates and propose edits.";
   const lineageTitle = !cloudLineage
     ? null
     : lineageKind === "team"
-      ? `Team app from ${cloudLineage.sourceSlug}. You share its data; your code edits go to the owner as proposals.`
+      ? onTeamData
+        ? `Team app from ${cloudLineage.sourceSlug}. You're on the team's data; your code edits go to the owner as proposals.`
+        : `Your copy of ${cloudLineage.sourceSlug}'s team app. ${ownDataTail}`
       : lineageKind === "people"
-      ? `Shared with you by the owner of ${cloudLineage.sourceSlug}. Your code edits go to the owner as proposals.`
+      ? onTeamData
+        ? `Shared with you by the owner of ${cloudLineage.sourceSlug}. You're on their data; code edits go as proposals.`
+        : `Your copy of ${cloudLineage.sourceSlug}. ${ownDataTail}`
       : lineageKind === "community"
-        ? `Community app from ${cloudLineage.sourceSlug}. Your data is your own; your code edits go to the publisher as proposals.`
+        ? `Your copy of ${cloudLineage.sourceSlug} from Community. ${ownDataTail}`
         : `Forked from ${cloudLineage.sourceSlug}. Your own app: your own data and code, not linked to the publisher's edits.`;
   const metaStatusText = (() => {
     if (chipSpeaks) return null;
@@ -1467,7 +1519,11 @@ export function MiniAppPublishBar({
       setPublishErrorDetailOpen(true);
       return;
     }
-    if (collabBar?.openProposeSheetOnChipClick) {
+    if (
+      copyBar?.chip.action === "view_proposal" ||
+      copyBar?.chip.action === "see_decline" ||
+      (onTeamData && copyBar?.chip.action === "propose")
+    ) {
       setWebSyncPopoverOpen(false);
       openPropose();
       return;
@@ -1553,7 +1609,9 @@ export function MiniAppPublishBar({
   };
 
   const handleWebSyncPushOrPublish = async (pullFirst = false) => {
-    if (!cloud.live && isTrackCollaborator) {
+    // Team-data copies never publish (their code goes by proposal); push
+    // keeps their shared rows flowing. Every other copy publishes itself.
+    if (!cloud.live && onTeamData) {
       await guardedWebSyncPushNow();
       return;
     }
@@ -1618,6 +1676,19 @@ export function MiniAppPublishBar({
     }
   };
 
+  const handleDetach = async () => {
+    const who = cloudLineage?.sourceSlug ?? "the original";
+    if (!confirm(`Detach from ${who}? You keep your copy and data, but won't get ${who}'s updates or be able to propose changes. This can't be undone.`)) return;
+    try {
+      await detachFromOriginal(appId);
+      setUpstreamNotice({ tone: "ok", message: `Detached from ${who}. This copy is fully yours now.` });
+      onTrackPullComplete?.();
+      await webSyncRefresh(true);
+    } catch (err) {
+      setUpstreamNotice({ tone: "bad", message: (err as Error).message.slice(0, 120) });
+    }
+  };
+
   const handleDuplicateAsOwn = async (title: string) => {
     if (!cloudLineage) return;
     setUpstreamPulling(true);
@@ -1649,7 +1720,8 @@ export function MiniAppPublishBar({
   /** Collaborator Propose: Updating… first when the publisher is ahead, then
    *  the Propose sheet. Conflicts stop before anything is sent. */
   const handleCollaboratorPropose = async () => {
-    if (collabBar?.primary.pullFirst) {
+    // Publisher ahead: get their changes first so the proposal sits on top.
+    if (onTeamData && webSyncPublisherUpdatesAvailable) {
       const clean = await handleUpstreamPull();
       if (!clean) return;
     }
@@ -1689,6 +1761,31 @@ export function MiniAppPublishBar({
     } finally {
       setUpstreamPulling(false);
       setCollabEditsTick((n) => n + 1);
+    }
+  };
+
+  const runCopyChipAction = (action: CopyChipAction | null) => {
+    switch (action) {
+      case "get_updates":
+        void handleUpstreamPull();
+        return;
+      case "update_and_repropose":
+        void handleUpdateAndRepropose();
+        return;
+      case "review_conflicts":
+        handleWebSyncDotClick();
+        return;
+      case "publish":
+      case "retry_publish":
+        void handleWebSyncPushOrPublish();
+        return;
+      case "propose":
+      case "see_decline":
+      case "view_proposal":
+        openPropose();
+        return;
+      default:
+        return;
     }
   };
 
@@ -1807,17 +1904,18 @@ export function MiniAppPublishBar({
                       : undefined
                   }
                   action={
-                    collabBar
-                      ? collabBar.chipAction
+                    copyChipWins && copyBar
+                      ? copyBar.chip.action && copyBar.chip.verb
                         ? {
-                            glyph: collabBar.chipAction.glyph,
-                            verb: collabBar.chipAction.verb,
-                            onRun: () =>
-                              latestProposalStatus === "needs_update"
-                                ? void handleUpdateAndRepropose()
-                                : collabBar.chipAction?.kind === "upstream"
-                                ? void handleUpstreamPull()
-                                : openPropose(),
+                            glyph:
+                              copyBar.chip.action === "get_updates" ||
+                              copyBar.chip.action === "update_and_repropose"
+                                ? ("down" as const)
+                                : copyBar.chip.action === "propose"
+                                  ? ("up" as const)
+                                  : ("open" as const),
+                            verb: copyBar.chip.verb,
+                            onRun: () => runCopyChipAction(copyBar.chip.action),
                           }
                         : undefined
                       : publishBarChipAction
@@ -1910,7 +2008,7 @@ export function MiniAppPublishBar({
                     trackCollaborator={isTrackCollaborator}
                     sourceSlug={cloudLineage?.sourceSlug}
                     proposalWaiting={
-                      collabBar?.chip.label === "Proposal sent"
+                      copyBar?.chip.label === "Proposal sent"
                     }
                     onViewProposals={() => {
                       setWebSyncPopoverOpen(false);
@@ -1991,6 +2089,11 @@ export function MiniAppPublishBar({
                 ? () => void handleDiscardEdits()
                 : undefined
             }
+            // Detach is only offered off team data; a team-data copy must
+            // switch to its own data first (the gateway refuses otherwise).
+            onDetach={
+              isTrackCollaborator && !usesSharedData(cloudLineage) ? () => void handleDetach() : undefined
+            }
             onShowInFinder={handleShowInFinder}
             onCopyToWorkspace={
               papr.isLoggedIn ? () => setCopyToWorkspaceOpen(true) : undefined
@@ -2056,7 +2159,7 @@ export function MiniAppPublishBar({
           {/* Collaborators (team or Community) get no Share: the app belongs
               to the publisher. To share it, use Duplicate as my own app in
               the menu, then share that copy. */}
-          {!isTrackCollaborator && (cloud.live || isFork) ? (
+          {!onTeamData && cloud.live ? (
             <button
               type="button"
               className={`mini-app-publish-bar__button${
@@ -2083,25 +2186,15 @@ export function MiniAppPublishBar({
 
           {/* Persistent, not a dismissible banner: unpublished work is a
               standing fact, and the action for it should not disappear. */}
-          {collabBar ? (
+          {copyBar?.primary.kind === "propose" ? (
             <button
               type="button"
               className="mini-app-publish-bar__button mini-app-publish-bar__button--primary"
-              disabled={collabBar.primary.disabled || upstreamPulling}
-              title={collabBar.primary.title}
+              disabled={copyBar.primary.disabled}
+              title={copyBar.primary.title}
               onClick={() => void handleCollaboratorPropose()}
             >
-              {collabBar.primary.label}
-            </button>
-          ) : proposeIsPrimary ? (
-            <button
-              type="button"
-              className="mini-app-publish-bar__button mini-app-publish-bar__button--primary"
-              disabled={cloud.busy || upstreamPulling}
-              title={`Send your edits to ${cloudLineage?.sourceSlug ?? "the publisher"} for review`}
-              onClick={openPropose}
-            >
-              Propose
+              {copyBar.primary.label}
             </button>
           ) : publishBarAction ? (
             <div

@@ -169,7 +169,7 @@ export const getCloudAppPublishTool = createTool({
 
 Returns live status, slug, loginAccess, externalLink, codeAccess (off | install), requireSignIn, perUserIsolation, Community listing, URLs, and **lineage** (mode fork|track, source.slug) when installed via install_cloud_app.
 
-If lineage.mode is **track**, also returns trackInstallWarning — you are a collaborator; use submit_cloud_app_pr + push_cloud_sync, not publish_cloud_app, to update the publisher's live URL.
+If the copy is on the team's shared data (lineage.databasePolicy shared), also returns trackInstallWarning: code changes go to the owner with submit_cloud_app_pr, and shared rows sync with push_cloud_sync. A copy on its own data has no warning and publishes to its own link.
 
 **Prefer this over export_app_bundle** when Cloud Sync + Papr login are enabled.
 If Cloud Sync is off, the tool returns an error — use export_app_bundle instead (recommend enabling Cloud first).`,
@@ -217,7 +217,7 @@ export const publishCloudAppTool = createTool({
   id: "publish_cloud_app",
   description: `Publish or update cloud sharing for a mini-app on apps.papr.ai.
 
-**Track collaborator guard:** If papr-cloud-lineage.json has mode=track (team collaborate install), this tool registers sharing for YOUR local app id — it does NOT update the publisher's live apps.papr.ai bundle. Check get_cloud_app_publish → lineage; when mode=track, use push_cloud_sync + submit_cloud_app_pr instead. Shared DB rows still need push_cloud_sync (Turso).
+**Installed copies:** a copy on its OWN data (Community installs, per-user team apps, detached copies) publishes to its own link like any app; it never updates the original. A copy on the TEAM's shared data is refused: send code with submit_cloud_app_pr, and shared rows with push_cloud_sync. Check get_cloud_app_publish → lineage.databasePolicy.
 
 **Preferred path for sharing** (when Cloud Sync + Papr login are on):
 - **Community + fork/install:** loginAccess=public, codeAccess=install

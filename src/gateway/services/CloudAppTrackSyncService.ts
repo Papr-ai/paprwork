@@ -13,7 +13,20 @@ import {
 } from "../../core/utils/cloudAppLineage.js";
 import { fileContentHash } from "../utils/fileContentHash.js";
 import { ephemeralGitEnv } from "../utils/ephemeralGitEnv.js";
-import { cloneCloudAppSource } from "./cloudSync/cloudGitClone.js";
+import {
+  cloneCloudAppSource,
+  linkedJobRepoRelativeDir,
+} from "./cloudSync/cloudGitClone.js";
+import {
+  mergeFileContents,
+  readFilesAtCommit,
+  readHeadCommit,
+  resolveBaseCommit,
+} from "./cloudSync/threeWayMerge.js";
+import { dataSourcesForPull, isLocalScratchPath } from "./cloudSync/proposalFileMerge.js";
+import { hashBlobContent } from "./syncV3/computeParentHash.js";
+import { resolveAppDependentJobIds } from "./cloudSync/resolveAppDependentJobs.js";
+import { getPaprRoot } from "../../core/utils/paprRoot.js";
 import {
   CLOUD_LINEAGE_FILENAME,
   getCloudAppLineageService,
@@ -36,8 +49,14 @@ import {
 export interface TrackSyncResult {
   appId: string;
   updatedFiles: string[];
+  /** Files where both sides changed different lines; combined automatically. */
+  mergedFiles?: string[];
   conflictFiles: string[];
   skippedFiles: string[];
+  /** Upstream files that could not be written locally. When non-empty the
+   *  base commit and snapshot do not advance for them — the update is not
+   *  counted as applied, so the next Get updates retries. */
+  failedFiles?: string[];
   lastSyncedAt: string;
   upstreamRevision?: string | null;
 }
@@ -73,6 +92,32 @@ async function collectLocalFiles(appDir: string): Promise<Map<string, string>> {
     }
   }
   await walk(appDir, appDir);
+  return files;
+}
+
+/** Text files of a job folder, minus run output (data/, logs/, *.db, caches). */
+async function collectJobSourceFiles(jobDir: string): Promise<Map<string, string>> {
+  const files = new Map<string, string>();
+  async function walk(dir: string): Promise<void> {
+    let entries: import("node:fs").Dirent[];
+    try {
+      entries = await fs.readdir(dir, { withFileTypes: true });
+    } catch {
+      return;
+    }
+    for (const entry of entries) {
+      if (entry.name.startsWith(".")) continue;
+      const full = path.join(dir, entry.name);
+      const rel = path.relative(jobDir, full).replace(/\\/g, "/");
+      if (isLocalScratchPath(rel, { job: true })) continue;
+      if (entry.isDirectory()) {
+        await walk(full);
+      } else if (entry.isFile()) {
+        files.set(rel, await fs.readFile(full, "utf8"));
+      }
+    }
+  }
+  await walk(jobDir);
   return files;
 }
 
@@ -152,10 +197,19 @@ export function listLocalEditsAgainstSnapshot(
 }
 
 export class CloudAppTrackSyncService {
-  private readonly appsDir: string;
+  private readonly fixedAppsDir: string | undefined;
 
   constructor(appsDir?: string) {
-    this.appsDir = appsDir ?? getPaprAppsRoot();
+    this.fixedAppsDir = appsDir;
+  }
+
+  /**
+   * Resolved per call, not at construction: the singleton outlives workspace
+   * switches, and a captured path made pulls, detach and local-edit checks
+   * read the previous workspace's apps.
+   */
+  private get appsDir(): string {
+    return this.fixedAppsDir ?? getPaprAppsRoot();
   }
 
   /**
@@ -205,6 +259,31 @@ export class CloudAppTrackSyncService {
   }
 
   /** After a proposal is sent: remember the content that went out. */
+  /**
+   * v5 Detach: stop following the original for good. The copy keeps its code
+   * and data; updates, proposals and the origin menu go away. Stored as
+   * mode "fork" so every existing linked-only path (pulls, upstream checks,
+   * proposals, delete scope) already treats it as the user's own app.
+   *
+   * A copy on the team's live data can't detach in place: its code would
+   * drift from the team's while writing everyone's data. The caller must
+   * switch it to its own data first.
+   */
+  async detach(appId: string): Promise<{ detached: boolean; reason?: "not_linked" | "on_team_data" }> {
+    const lineage = await readLineageFile(appId, this.appsDir);
+    if (!lineage || lineage.mode !== "track") return { detached: false, reason: "not_linked" };
+    const { usesSharedData } = await import("../../core/utils/copyAxes.js");
+    if (usesSharedData(lineage)) return { detached: false, reason: "on_team_data" };
+    await writeLineageFile(appId, this.appsDir, {
+      ...lineage,
+      mode: "fork",
+      databasePolicy: "forked",
+      trackAutoPull: false,
+      detachedAt: new Date().toISOString(),
+    });
+    return { detached: true };
+  }
+
   async recordProposed(appId: string): Promise<void> {
     const lineage = await readLineageFile(appId, this.appsDir);
     if (!lineage || lineage.mode !== "track") return;
@@ -278,7 +357,58 @@ export class CloudAppTrackSyncService {
       const localFiles = await collectLocalFiles(path.join(this.appsDir, appId));
       const snapshot = lineage.syncSnapshot ?? {};
 
+      // The commit this copy is based on, so files both sides touched can be
+      // merged line by line instead of reported as whole-file conflicts.
+      const upstreamHead = await readHeadCommit(repoDir, env);
+      const appRepoPrefix = path
+        .relative(repoDir, upstreamDir)
+        .replace(/\\/g, "/");
+      const toPublisherIds = (content: string) =>
+        publisherAppId && publisherAppId !== appId
+          ? content.split(appId).join(publisherAppId)
+          : content;
+      const toLocalIds = (content: string) =>
+        publisherAppId && publisherAppId !== appId
+          ? content.split(publisherAppId).join(appId)
+          : content;
+      const base = await resolveBaseCommit(
+        repoDir,
+        lineage.baseCommit,
+        async () => {
+          const oids = new Map<string, string>();
+          for (const [rel, content] of localFiles) {
+            if (!isCollaboratorEditablePath(rel) || rel === "README.md" || rel.startsWith("jobs/")) continue;
+            oids.set(appRepoPrefix ? `${appRepoPrefix}/${rel}` : rel, hashBlobContent(toPublisherIds(content)));
+          }
+          return oids;
+        },
+        env,
+      ).catch(() => null);
+      const baseFiles = base
+        ? new Map(
+            [
+              ...(await readFilesAtCommit(
+                repoDir,
+                base.sha,
+                appRepoPrefix || ".",
+                env,
+                new Map([...localFiles].map(([rel, c]) => [rel, toPublisherIds(c)])),
+              )),
+            ].map(([rel, c]) => [rel, toLocalIds(c)]),
+          )
+        : new Map<string, string>();
+      const mergedFiles: string[] = [];
+
       const appService = getAppService();
+      // Every write below goes through AppService, which answers false for an
+      // app it cannot see. Fail up front instead of "applying" an update that
+      // wrote nothing.
+      if (!(await appService.getApp(appId))) {
+        throw new Error(
+          `Can't get updates: app ${appId} isn't available in this workspace`,
+        );
+      }
+      const failedFiles: string[] = [];
       const updatedFiles: string[] = [];
       const conflictFiles: string[] = [];
       const skippedFiles: string[] = [];
@@ -296,7 +426,7 @@ export class CloudAppTrackSyncService {
               local: lineage.metadataBaseline,
               upstream: lineage.metadataUpstreamBaseline,
             },
-            { discardLocal: options.discardLocal },
+            { discardLocal: options.discardLocal, copyAppId: appId },
           );
           if (!merged) {
             skippedFiles.push(filename);
@@ -309,7 +439,7 @@ export class CloudAppTrackSyncService {
             continue;
           }
           const written = await appService.writeAppFile(appId, filename, merged.content);
-          (written ? updatedFiles : skippedFiles).push(filename);
+          (written ? updatedFiles : failedFiles).push(filename);
           continue;
         }
         const upstreamHash = hashContent(upstreamContent);
@@ -331,26 +461,48 @@ export class CloudAppTrackSyncService {
         // conflict. Generated output (dist/, __papr__/, backend bundle) follows
         // the publisher; id-bearing wiring files that differ locally keep the
         // local copy — the linked-resource install below rewrites them.
+        if (filename === "data-sources.json" && localContent !== undefined && !options.discardLocal) {
+          // Keep this machine's links (and dbPaths); add any the publisher added.
+          const next = dataSourcesForPull(localContent, upstreamContent);
+          if (next === null) {
+            skippedFiles.push(filename);
+          } else {
+            const written = await appService.writeAppFile(appId, filename, next);
+            (written ? updatedFiles : failedFiles).push(filename);
+          }
+          continue;
+        }
         if (!isCollaboratorEditablePath(filename)) {
           if (LOCAL_WIRING_FILES.has(filename) && !localUnchanged && !options.discardLocal) {
             skippedFiles.push(filename);
             continue;
           }
         } else if (!localUnchanged && localHash !== upstreamHash && !options.discardLocal) {
+          const baseContent = baseFiles.get(filename);
+          if (localContent !== undefined && baseContent !== undefined) {
+            const merged = await mergeFileContents(localContent, baseContent, upstreamContent);
+            if (merged.clean && merged.content !== undefined) {
+              if (merged.content === localContent) {
+                skippedFiles.push(filename);
+                continue;
+              }
+              const written = await appService.writeAppFile(appId, filename, merged.content);
+              (written ? mergedFiles : failedFiles).push(filename);
+              continue;
+            }
+          }
           conflictFiles.push(filename);
           continue;
         }
 
         const written = await appService.writeAppFile(appId, filename, upstreamContent);
-        if (written) {
-          updatedFiles.push(filename);
-        } else {
-          skippedFiles.push(filename);
-        }
+        (written ? updatedFiles : failedFiles).push(filename);
       }
 
       const nextSnapshot: Record<string, string> = { ...snapshot };
       for (const [filename, content] of upstreamFiles) {
+        // A file that failed to write still holds the old content locally.
+        if (failedFiles.includes(filename)) continue;
         nextSnapshot[filename] = hashContent(content);
       }
 
@@ -364,10 +516,28 @@ export class CloudAppTrackSyncService {
         schemaVersion: lineage.schemaVersion ?? "1.2.0",
         lastSyncedAt,
         syncSnapshot: nextSnapshot,
+        // Advance the base only when everything applied; with conflicts the
+        // kept local files are still based on the old commit.
+        ...(conflictFiles.length === 0 && failedFiles.length === 0 && upstreamHead
+          ? { baseCommit: upstreamHead }
+          : base
+            ? { baseCommit: base.sha }
+            : {}),
         ...(upstreamRevision ? { upstreamRevision } : {}),
         ...(nextMetadataBaseline ? { metadataBaseline: nextMetadataBaseline } : {}),
         ...(nextMetadataUpstream ? { metadataUpstreamBaseline: nextMetadataUpstream } : {}),
       });
+
+      // Linked-job install replaces job folders wholesale with the publisher's
+      // copy. Remember the collaborator's job code first so edits survive.
+      const paprRoot = getPaprRoot();
+      const jobIdsBefore = resolveAppDependentJobIds(paprRoot, appId);
+      const localJobFiles = new Map<string, Map<string, string>>();
+      if (!options.discardLocal) {
+        for (const jobId of jobIdsBefore) {
+          localJobFiles.set(jobId, await collectJobSourceFiles(path.join(paprRoot, "Jobs", jobId)));
+        }
+      }
 
       const sharedDatabase =
         lineage.databasePolicy === "shared" ||
@@ -398,6 +568,16 @@ export class CloudAppTrackSyncService {
           );
         }
         await finalizePortableCloudAppResources();
+        await this.restoreJobEdits({
+          localJobFiles,
+          baseSha: base?.sha ?? null,
+          repoDir,
+          repoPath: prepare.repoPath,
+          env,
+          toLocalIds,
+          mergedFiles,
+          conflictFiles,
+        });
         const { bootstrapInstalledAppDatabases, pullTrackSharedAppDatabase } =
           await import("./cloudAppInstallBootstrap.js");
         const bootstrap = sharedDatabase
@@ -421,16 +601,84 @@ export class CloudAppTrackSyncService {
         );
       }
 
+      if (conflictFiles.some((f) => f.startsWith("jobs/")) && base) {
+        // A job edit conflicted after the base was advanced above: put it back.
+        const latest = await readLineageFile(appId, this.appsDir);
+        if (latest && latest.baseCommit !== base.sha) {
+          await writeLineageFile(appId, this.appsDir, { ...latest, baseCommit: base.sha });
+        }
+      }
+
       return {
         appId,
         updatedFiles,
+        mergedFiles,
         conflictFiles,
         skippedFiles,
+        ...(failedFiles.length > 0 ? { failedFiles } : {}),
         lastSyncedAt,
         upstreamRevision,
       };
     } finally {
       await cleanup();
+    }
+  }
+
+  /**
+   * After the publisher's job folders were copied in: put back the
+   * collaborator's job edits, merged line by line with the publisher's
+   * changes. Overlaps keep the local version and are reported as conflicts.
+   */
+  private async restoreJobEdits(input: {
+    localJobFiles: Map<string, Map<string, string>>;
+    baseSha: string | null;
+    repoDir: string;
+    repoPath: string;
+    env: NodeJS.ProcessEnv;
+    toLocalIds: (content: string) => string;
+    mergedFiles: string[];
+    conflictFiles: string[];
+  }): Promise<void> {
+    const paprRoot = getPaprRoot();
+    for (const [jobId, before] of input.localJobFiles) {
+      const jobDir = path.join(paprRoot, "Jobs", jobId);
+      const after = await collectJobSourceFiles(jobDir);
+      const base = input.baseSha
+        ? await readFilesAtCommit(
+            input.repoDir,
+            input.baseSha,
+            linkedJobRepoRelativeDir(input.repoPath, jobId),
+            input.env,
+          )
+        : new Map<string, string>();
+      for (const [rel, local] of before) {
+        // job.json carries per-machine fields (schedule on/off, keys); the
+        // installer already merged it.
+        if (rel === "job.json") continue;
+        const upstream = after.get(rel);
+        if (upstream === local) continue;
+        const baseRaw = base.get(rel);
+        const baseContent = baseRaw === undefined ? undefined : input.toLocalIds(baseRaw);
+        if (baseContent !== undefined && local === baseContent) continue; // not edited
+        const label = `jobs/${jobId}/${rel}`;
+        let next: string | null = null;
+        if (upstream === undefined || baseContent === undefined) {
+          next = local; // local-only file, or no base: keep the collaborator's
+        } else {
+          const merged = await mergeFileContents(local, baseContent, upstream);
+          if (merged.clean && merged.content !== undefined) {
+            next = merged.content;
+            if (upstream !== baseContent) input.mergedFiles.push(label);
+          } else {
+            next = local;
+            input.conflictFiles.push(label);
+          }
+        }
+        if (next !== undefined && next !== upstream) {
+          await fs.mkdir(path.dirname(path.join(jobDir, rel)), { recursive: true });
+          await fs.writeFile(path.join(jobDir, rel), next, "utf8");
+        }
+      }
     }
   }
 

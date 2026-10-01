@@ -29,6 +29,8 @@ interface PublishBarOverflowMenuProps {
   onDuplicateAsOwn?: () => void;
   /** Collaborator with local edits: reset to the publisher's code. */
   onDiscardEdits?: () => void;
+  /** v5: linked copy on its own data — stop following the original for good. */
+  onDetach?: () => void;
   /** Reveal the app folder in Finder / Explorer. */
   onShowInFinder?: () => void;
   /** Copy into another org or workspace (same dialog as the Apps page card menu). */
@@ -67,6 +69,7 @@ export function PublishBarOverflowMenu({
   upstreamSlug,
   onDuplicateAsOwn,
   onDiscardEdits,
+  onDetach,
   onShowInFinder,
   onCopyToWorkspace,
 }: PublishBarOverflowMenuProps) {
@@ -151,7 +154,7 @@ export function PublishBarOverflowMenu({
             </>
           ) : null}
 
-          {onDuplicateAsOwn || onDiscardEdits ? (
+          {onDuplicateAsOwn || onDiscardEdits || onDetach ? (
             <>
               <div className="pb-overflow__sep" />
               {onDuplicateAsOwn ? (
@@ -187,6 +190,23 @@ export function PublishBarOverflowMenu({
                     {upstreamSlug
                       ? `Go back to ${upstreamSlug}'s latest code`
                       : "Go back to the publisher's latest code"}
+                  </span>
+                </button>
+              ) : null}
+              {onDetach ? (
+                <button
+                  type="button"
+                  role="menuitem"
+                  className="pb-overflow__item"
+                  disabled={busy}
+                  onClick={() => {
+                    onDetach();
+                    setOpen(false);
+                  }}
+                >
+                  Detach from {upstreamSlug ?? "the original"}
+                  <span className="pb-overflow__hint">
+                    Keep your copy and data. No more updates or proposals. Can't be undone
                   </span>
                 </button>
               ) : null}

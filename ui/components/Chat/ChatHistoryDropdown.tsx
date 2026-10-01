@@ -11,11 +11,18 @@ import { useArtifacts } from "../../hooks/useArtifacts";
 import type { ChatMetadata } from "../../types/chat";
 import { isUserFacingChatId } from "../../utils/chatVisibility";
 import { gateway } from "../../src/lib/gateway";
+import { useChatActivity } from "./chatActivity";
+import { PeekRowView, relativeTime, type PeekRow } from "../Sidebar/RailPeek";
+import "../Sidebar/Sidebar.css";
 import "./ChatHistoryDropdown.css";
 
 interface ChatHistoryDropdownProps {
   onClose: () => void;
   dropdownRef?: React.RefObject<HTMLDivElement | null>;
+  /** Focus search on open — off for hover peeks so the composer keeps focus. */
+  autoFocusSearch?: boolean;
+  /** Typing in search pins a hover peek open. */
+  onInteract?: () => void;
 }
 
 type HistoryEntry =
@@ -33,32 +40,6 @@ type HistoryEntry =
       sortAt: number;
       app: Artifact;
     };
-
-function formatRelativeTime(dateString: string): string {
-  if (!dateString) return "";
-
-  const date = new Date(dateString);
-  if (isNaN(date.getTime())) {
-    return "";
-  }
-
-  const now = new Date();
-  const diffMs = now.getTime() - date.getTime();
-  const diffMins = Math.floor(diffMs / (1000 * 60));
-  const diffHours = Math.floor(diffMs / (1000 * 60 * 60));
-  const diffDays = Math.floor(diffMs / (1000 * 60 * 60 * 24));
-
-  if (diffMins < 1) {
-    return "now";
-  }
-  if (diffMins < 60) {
-    return `${diffMins}m`;
-  }
-  if (diffHours < 24) {
-    return `${diffHours}h`;
-  }
-  return `${diffDays}d`;
-}
 
 function chatSortTime(chat: ChatMetadata): number {
   return new Date(chat.updatedAt || chat.createdAt).getTime();
@@ -205,6 +186,8 @@ function sortNewestFirst(entries: HistoryEntry[]): HistoryEntry[] {
 export const ChatHistoryDropdown: React.FC<ChatHistoryDropdownProps> = ({
   onClose,
   dropdownRef,
+  autoFocusSearch = true,
+  onInteract,
 }) => {
   const { chats } = useChatStore();
   const artifacts = useArtifactsStore((state) => state.artifacts);
@@ -212,6 +195,7 @@ export const ChatHistoryDropdown: React.FC<ChatHistoryDropdownProps> = ({
   const { createTab } = useTabStore();
   const { loadMessages } = useChat();
   const [searchQuery, setSearchQuery] = React.useState("");
+  const activityOf = useChatActivity();
 
   useEffect(() => {
     void loadArtifacts();
@@ -292,42 +276,42 @@ export const ChatHistoryDropdown: React.FC<ChatHistoryDropdownProps> = ({
     onClose();
   };
 
-  const renderEntry = (entry: HistoryEntry): React.ReactElement => {
-    const timeLabel =
-      entry.kind === "chat"
-        ? formatRelativeTime(entry.chat.updatedAt || entry.chat.createdAt)
-        : formatRelativeTime(entry.app.lastOpenedAt ?? entry.app.updatedAt);
-
-    return (
-      <button
-        key={`${entry.kind}-${entry.id}`}
-        type="button"
-        className="chat-history-item"
-        onClick={() =>
-          entry.kind === "chat"
-            ? void handleChatSelect(entry.chat.id, entry.chat.title)
-            : handleAppSelect(entry.app)
+  // Rows render with the rail peek's own row component + classes, so spacing, type, hover and
+  // status marks are identical to the left-nav Chats peek (no parallel CSS to drift).
+  const toRow = (entry: HistoryEntry): PeekRow =>
+    entry.kind === "chat"
+      ? {
+          id: `chat-${entry.id}`,
+          title: entry.title,
+          sub: relativeTime(entry.chat.updatedAt || entry.chat.createdAt),
+          activity: activityOf(entry.chat.id),
+          leading: <ChatHistoryIcon />,
+          onOpen: () => void handleChatSelect(entry.chat.id, entry.chat.title),
         }
-      >
-        <div className="chat-history-item-content">
-          {entry.kind === "chat" ? (
-            <ChatHistoryIcon />
-          ) : (
-            renderAppIcon(entry.app.icon)
-          )}
-          <div className="chat-history-item-title">{entry.title}</div>
-          <div className="chat-history-item-time">{timeLabel}</div>
-        </div>
-      </button>
-    );
-  };
+      : {
+          id: `app-${entry.id}`,
+          title: entry.title,
+          sub: relativeTime(entry.app.lastOpenedAt ?? entry.app.updatedAt),
+          leading: renderAppIcon(entry.app.icon),
+          onOpen: () => handleAppSelect(entry.app),
+        };
+
+  const renderGroup = (label: string, entries: HistoryEntry[]) => (
+    <div className="rail-peek__group" key={label}>
+      <h6>{label}</h6>
+      {entries.map((e) => {
+        const row = toRow(e);
+        return <PeekRowView key={row.id} row={row} />;
+      })}
+    </div>
+  );
 
   const hasResults = isSearching
     ? searchApps.length > 0 || searchChats.length > 0
     : mergedEntries.length > 0;
 
   return (
-    <div className="chat-history-dropdown" ref={dropdownRef}>
+    <div className="chat-history-dropdown rail-scope" ref={dropdownRef}>
       <div className="chat-history-search">
         <input
           type="text"
@@ -335,32 +319,23 @@ export const ChatHistoryDropdown: React.FC<ChatHistoryDropdownProps> = ({
           className="chat-history-search-input"
           value={searchQuery}
           onChange={(e) => setSearchQuery(e.target.value)}
-          autoFocus
+          onFocus={onInteract}
+          autoFocus={autoFocusSearch}
         />
       </div>
 
       <div className="chat-history-list">
         {!hasResults ? (
-          <div className="chat-history-empty">
+          <p className="rail-peek__empty">
             {isSearching ? "No results found" : "No recent history yet"}
-          </div>
+          </p>
         ) : isSearching ? (
           <>
-            {searchApps.length > 0 && (
-              <div className="chat-history-section">
-                <div className="chat-history-section-label">Apps</div>
-                {searchApps.map(renderEntry)}
-              </div>
-            )}
-            {searchChats.length > 0 && (
-              <div className="chat-history-section">
-                <div className="chat-history-section-label">Chats</div>
-                {searchChats.map(renderEntry)}
-              </div>
-            )}
+            {searchApps.length > 0 && renderGroup("Apps", searchApps)}
+            {searchChats.length > 0 && renderGroup("Chats", searchChats)}
           </>
         ) : (
-          mergedEntries.map(renderEntry)
+          renderGroup("Recent", mergedEntries)
         )}
       </div>
     </div>

@@ -72,7 +72,29 @@ export function markPendingAppUpdate(
   timers.set(input.appId, timer);
 }
 
+/**
+ * Commits this desktop wrote itself (writer ack). The commit event for our own
+ * publish can arrive before the ack returns; without this it was parked as a
+ * "newer version on web" until the 30s retry noticed nothing was newer.
+ */
+const OWN_COMMITS_MAX = 50;
+const ownCommits = new Map<string, string[]>();
+
+export function rememberOwnAppCommit(appId: string, commitSha: string): void {
+  const list = ownCommits.get(appId) ?? [];
+  if (!list.includes(commitSha)) list.push(commitSha);
+  while (list.length > OWN_COMMITS_MAX) list.shift();
+  ownCommits.set(appId, list);
+  // Ack after the event: the waiting "update" is our own publish.
+  if (pending.get(appId)?.commitSha === commitSha) clearPendingAppUpdate(appId);
+}
+
+export function isOwnAppCommit(appId: string, commitSha: string): boolean {
+  return ownCommits.get(appId)?.includes(commitSha) ?? false;
+}
+
 export function resetPendingAppUpdatesForTests(): void {
+  ownCommits.clear();
   for (const timer of timers.values()) clearTimeout(timer);
   timers.clear();
   pending.clear();

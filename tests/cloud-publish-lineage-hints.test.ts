@@ -34,19 +34,33 @@ describe("cloudPublishLineageHints", () => {
     });
   });
 
-  it("warns on track mode only", () => {
+  it("warns only for copies that write the team's shared data", () => {
     expect(trackCollaboratorPublishWarning(trackShared)).toContain(
       "submit_cloud_app_pr",
     );
     expect(
-      trackCollaboratorPublishWarning({ ...trackShared, mode: "fork" }),
+      trackCollaboratorPublishWarning({ ...trackShared, mode: "fork", databasePolicy: "forked" }),
     ).toBeNull();
+    // Same routing rule as lineageUsesSharedPrimaryDatabase: shared data is
+    // refused whatever mode says.
+    expect(
+      trackCollaboratorPublishWarning({ ...trackShared, mode: "fork" }),
+    ).not.toBeNull();
   });
 
   it("merges lineage and warning into publish tool payload", () => {
     const base = { appId: "local-uuid", enabled: true };
     const merged = appendLineageToPublishData(base, trackShared);
     expect(merged.lineage).toMatchObject({ mode: "track", sourceSlug: "talent-assessment" });
-    expect(merged.trackInstallWarning).toContain("apps.papr.ai");
+    expect(merged.trackInstallWarning).toContain("proposal");
+  });
+
+  it("v5: a linked copy on its own data publishes like any app (no warning)", () => {
+    expect(
+      trackCollaboratorPublishWarning({ ...trackShared, databasePolicy: "forked", sourceAudience: "community" }),
+    ).toBeNull();
+    expect(
+      trackCollaboratorPublishWarning({ ...trackShared, databasePolicy: "forked", sourceAudience: "team" }),
+    ).toBeNull();
   });
 });

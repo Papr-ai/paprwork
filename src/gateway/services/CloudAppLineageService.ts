@@ -39,6 +39,10 @@ function sourceKey(namespaceId: string, slug: string): string {
 export class CloudAppLineageService {
   constructor(private readonly appsDir: string) {}
 
+  get appsRoot(): string {
+    return this.appsDir;
+  }
+
   async readLineageForApp(appId: string): Promise<CloudLineageAppEntry | null> {
     const filePath = path.join(this.appsDir, appId, CLOUD_LINEAGE_FILENAME);
     try {
@@ -106,8 +110,11 @@ function defaultAppsDir(): string {
 export function getCloudAppLineageService(
   appsDir?: string,
 ): CloudAppLineageService {
-  if (!singleton || appsDir) {
-    singleton = new CloudAppLineageService(appsDir ?? defaultAppsDir());
+  // Re-bind when the active workspace moved: a singleton holding the old
+  // apps root kept answering lineage for the previous workspace after a switch.
+  const want = appsDir ?? defaultAppsDir();
+  if (!singleton || singleton.appsRoot !== want) {
+    singleton = new CloudAppLineageService(want);
   }
   return singleton;
 }

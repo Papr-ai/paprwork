@@ -131,6 +131,25 @@ export async function appNeedsOrderedFlushAsync(
   return appHasLinkedSchemaDrift(appId, paprDir);
 }
 
+/**
+ * Content check behind the cheap mtime/size marker: true when any app file's
+ * blob differs from what the writer repo last acknowledged (OID cache). The
+ * marker can claim "synced" after a real edit (a stray markRelativePathSynced
+ * between edit and push); a manual push must not trust it alone.
+ */
+export async function appHasUnsentCodeByContent(
+  paprDir: string,
+  appId: string,
+): Promise<boolean> {
+  try {
+    const { collectAppOpFiles } = await import("../syncV3/collectAppOpFiles.js");
+    const collected = await collectAppOpFiles(paprDir, appId);
+    return collected.files.length > 0;
+  } catch {
+    return false;
+  }
+}
+
 /** Load sync state from disk and check whether a mini-app still has unpushed git work. */
 export function readAppHasPendingLocalUpload(
   appId: string,

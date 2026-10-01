@@ -11,6 +11,8 @@ const GATEWAY =
 export interface TrackSyncResult {
   appId: string;
   updatedFiles: string[];
+  /** Both sides edited different lines; combined automatically. */
+  mergedFiles?: string[];
   conflictFiles: string[];
   skippedFiles: string[];
   lastSyncedAt: string;
@@ -87,6 +89,10 @@ export function formatTrackSyncSummary(result: TrackSyncResult): string {
       `Updated ${result.updatedFiles.length} file${result.updatedFiles.length === 1 ? "" : "s"}`,
     );
   }
+  const merged = result.mergedFiles?.length ?? 0;
+  if (merged > 0) {
+    parts.push(`Merged ${merged} file${merged === 1 ? "" : "s"} with your edits`);
+  }
   if (result.conflictFiles.length > 0) {
     parts.push(
       `${result.conflictFiles.length} conflict${result.conflictFiles.length === 1 ? "" : "s"} (kept your edits)`,
@@ -108,4 +114,15 @@ export function formatLastSyncedAt(iso: string | undefined): string | null {
     hour: "numeric",
     minute: "2-digit",
   });
+}
+
+/** v5 Detach: stop following the original. Refused (409) while on team data. */
+export async function detachFromOriginal(appId: string): Promise<{ detached: boolean }> {
+  const res = await fetch(
+    `${GATEWAY}/api/cloud/track-sync/${encodeURIComponent(appId)}/detach`,
+    { method: "POST" },
+  );
+  const body = (await res.json()) as { detached: boolean; error?: string };
+  if (!res.ok) throw new Error(body.error ?? `Detach failed (${res.status})`);
+  return body;
 }

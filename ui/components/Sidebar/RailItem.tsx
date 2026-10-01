@@ -21,6 +21,8 @@ interface RailItemProps {
   ariaLabel?: string;
   /** Announces background work (e.g. the agent is working) to assistive tech. */
   busy?: boolean;
+  /** Called when the pointer or focus enters the item (e.g. to refresh peek data). */
+  onPeekOpen?: () => void;
   /** Extra classes on the item (e.g. the agent's nudge phase). */
   className?: string;
   /** Rendered next to the button, positioned against the item (e.g. the agent's nudge). */
@@ -40,12 +42,18 @@ export function RailItem({
   testId,
   ariaLabel,
   busy,
+  onPeekOpen,
   className,
   overlay,
 }: RailItemProps) {
   const classes = ["rail-item", peek ? "rail-item--has-peek" : "", peekFromBottom ? "rail-item--peek-bottom" : "", className ?? ""];
   return (
-    <div className={classes.filter(Boolean).join(" ")} data-agent-hover={variant === "agent" ? "" : undefined}>
+    <div
+      className={classes.filter(Boolean).join(" ")}
+      data-agent-hover={variant === "agent" ? "" : undefined}
+      onMouseEnter={onPeekOpen}
+      onFocus={onPeekOpen}
+    >
       <button
         type="button"
         className={`rail-btn rail-btn--${variant}${active ? " is-active" : ""}`}

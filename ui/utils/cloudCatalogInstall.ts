@@ -18,7 +18,8 @@ export type CloudInstallDbPolicy = "fork_empty" | "shared_primary";
 
 export interface CloudCatalogInstallSelection {
   mode: CloudInstallMode;
-  installDbPolicy: CloudInstallDbPolicy;
+  /** Omitted by the one Install: the gateway picks own vs team data. */
+  installDbPolicy?: CloudInstallDbPolicy;
 }
 
 const GATEWAY =
@@ -444,7 +445,7 @@ export async function installCloudCatalogApp(
         namespaceId: entry.namespaceId,
         slug: entry.slug,
         mode,
-        installDbPolicy,
+        ...(installDbPolicy ? { installDbPolicy } : {}),
         catalogScope: options?.catalogScope,
         visibility: entry.visibility,
         communityCatalogListed: entry.communityCatalogListed,

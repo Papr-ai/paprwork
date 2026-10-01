@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { mkdtempSync, mkdirSync, rmSync, writeFileSync } from "fs";
+import { mkdtempSync, mkdirSync, readFileSync, rmSync, writeFileSync } from "fs";
 import { tmpdir } from "os";
 import { join } from "path";
 import { serializeCloudAppLineageFile } from "../src/core/utils/cloudAppLineage.js";
@@ -53,9 +53,11 @@ vi.mock("../src/gateway/services/CloudAppInstallService.js", () => ({
   }),
 }));
 
+const appSvc = vi.hoisted(() => ({ found: true, writeOk: true }));
 vi.mock("../src/gateway/services/AppService.js", () => ({
   getAppService: () => ({
-    writeAppFile: vi.fn().mockResolvedValue(true),
+    getApp: vi.fn(async () => (appSvc.found ? { id: "x" } : null)),
+    writeAppFile: vi.fn(async () => appSvc.writeOk),
   }),
 }));
 
@@ -89,6 +91,8 @@ describe("CloudAppTrackSyncService shared database track sync", () => {
     mkdirSync(upstreamAppDir, { recursive: true });
     writeFileSync(join(upstreamAppDir, "index.html"), "<html>upstream</html>", "utf8");
     service = new CloudAppTrackSyncService(appsDir);
+    appSvc.found = true;
+    appSvc.writeOk = true;
     installCloudAppLinkedResources.mockReset();
     finalizePortableCloudAppResources.mockReset();
     pullTrackSharedAppDatabase.mockReset();
@@ -226,5 +230,47 @@ describe("CloudAppTrackSyncService shared database track sync", () => {
     // Copy-specific wiring keeps the local ids.
     expect(result.skippedFiles).toContain("linked-databases.json");
     expect(result.updatedFiles).not.toContain("linked-databases.json");
+  });
+
+  const forkedLineage = (): CloudAppLineageFile => ({
+    schemaVersion: "1.2.0",
+    lineageId: "lineage-fail",
+    mode: "track",
+    databasePolicy: "forked",
+    source: {
+      orgId: "org-1",
+      namespaceId: "ns-1",
+      userId: "owner-1",
+      appId: "source-app-1",
+      slug: "demo-app",
+    },
+    installedAt: "2026-01-01T00:00:00.000Z",
+    baseCommit: "base-old",
+    syncSnapshot: {},
+  });
+  const readLineage = () =>
+    JSON.parse(readFileSync(join(appsDir, APP_ID, CLOUD_LINEAGE_FILENAME), "utf8"));
+
+  it("Get updates: a write that fails is reported and never counted as applied", async () => {
+    writeTrackApp(appsDir, forkedLineage());
+    appSvc.writeOk = false;
+
+    const result = await service.syncTrackApp(APP_ID, { discardLocal: true });
+
+    expect(result.updatedFiles).not.toContain("index.html");
+    expect(result.failedFiles).toContain("index.html");
+    const after = readLineage();
+    expect(after.baseCommit).toBe("base-old");
+    expect(after.syncSnapshot?.["index.html"]).toBeUndefined();
+  });
+
+  it("Get updates: an app the workspace can't see fails loudly instead of no-op success", async () => {
+    writeTrackApp(appsDir, forkedLineage());
+    appSvc.found = false;
+
+    await expect(service.syncTrackApp(APP_ID, { discardLocal: true })).rejects.toThrow(
+      /isn't available/,
+    );
+    expect(readLineage().baseCommit).toBe("base-old");
   });
 });

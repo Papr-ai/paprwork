@@ -148,3 +148,37 @@ export async function saveOnboardingState(
     input: { id: userId, fields },
   });
 }
+
+/**
+ * Record marketing consent captured during Paprwork onboarding.
+ *
+ * Separate mutation ON PURPOSE: if the server schema doesn't have
+ * marketingOptInSource yet, this fails alone and never blocks onboarding
+ * completion. The server stamps marketingOptInAt and validates the source
+ * (cloud/handlers/marketingConsent.js) — clients cannot set the timestamp.
+ *
+ * Only called with `true`: an unticked box means "not asked here", so we
+ * never overwrite a web opt-in the user didn't see.
+ */
+const UPDATE_MARKETING_CONSENT = `
+  mutation UpdatePaprWorkMarketingConsent($input: UpdateUserInput!) {
+    updateUser(input: $input) {
+      user { objectId marketingOptIn }
+    }
+  }
+`;
+
+export const MARKETING_CONSENT_SOURCE = "paprwork_onboarding";
+
+export async function saveMarketingConsent(
+  sessionToken: string,
+  userId: string,
+  optIn: true,
+): Promise<void> {
+  await onboardingGraphQL(sessionToken, UPDATE_MARKETING_CONSENT, {
+    input: {
+      id: userId,
+      fields: { marketingOptIn: optIn, marketingOptInSource: MARKETING_CONSENT_SOURCE },
+    },
+  });
+}
