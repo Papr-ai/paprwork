@@ -30,6 +30,8 @@ import {
   AGENT_INTERRUPT_TIMEOUT_MS,
   isSendGenerationCurrent,
   nextSendGeneration,
+  noSendSince,
+  peekSendGeneration,
 } from "../utils/agentSendLifecycle";
 import { isAppTabMergedWithChat, isPlatformTabMergedWithChat } from "../utils/appTabMerge";
 import { openPlatformBrowserTab } from "../lib/openPlatformBrowserTab";
@@ -2030,7 +2032,17 @@ export function useAgent() {
   );
 
   const continueInterruptedTurn = useCallback(
-    async (chatId: string, config: AgentConfig) => {
+    async (
+      chatId: string,
+      config: AgentConfig,
+      stillWanted?: () => boolean,
+    ) => {
+      if (stillWanted && !stillWanted()) {
+        console.log(
+          `[useAgent] Skipping hidden continue for ${chatId}: a user message was sent since it was scheduled`,
+        );
+        return;
+      }
       const existingMessages =
         useChatStore.getState().chatStates.get(chatId)?.messages ?? [];
       if (!canSendContinueMarker(existingMessages)) {
@@ -2094,7 +2106,21 @@ export function useAgent() {
   );
 
   const retryStreamRecovery = useCallback(
-    async (chatId: string, config?: AgentConfig) => {
+    async (
+      chatId: string,
+      config?: AgentConfig,
+      options?: { stillWanted?: () => boolean },
+    ) => {
+      const stillWanted = options?.stillWanted;
+      // Checked before every step that cancels, resubscribes, or rewrites the
+      // chat: after a user send each of those would act on the user's turn.
+      const superseded = (): boolean => {
+        if (!stillWanted || stillWanted()) return false;
+        console.log(
+          `[useAgent] Stream recovery for ${chatId} superseded by a user message`,
+        );
+        return true;
+      };
       const chatStateBefore = useChatStore.getState().chatStates.get(chatId);
       const wasAwaitingRecovery =
         chatStateBefore?.needsStreamRecovery ?? false;
@@ -2125,10 +2151,11 @@ export function useAgent() {
       };
 
       if (resumeWithFreshStream && config) {
+        if (superseded()) return;
         await releaseServerStream();
         try {
           await syncStreamFromHistory(chatId, "resolve");
-          await continueInterruptedTurn(chatId, config);
+          await continueInterruptedTurn(chatId, config, stillWanted);
         } catch (continueError) {
           const message =
             continueError instanceof Error
@@ -2156,6 +2183,8 @@ export function useAgent() {
           requestId = ensureTrackedStream(chatId);
         }
       }
+
+      if (superseded()) return;
 
       if (requestId) {
         setConnectionPaused(chatId, true);
@@ -2187,8 +2216,10 @@ export function useAgent() {
         }
       }
 
+      if (superseded()) return;
       const { needsContinue } = await syncStreamFromHistory(chatId, "resolve");
       if (needsContinue) {
+        if (superseded()) return;
         if (!config) {
           setError(
             "Could not reconnect to the stream. Send a new message to continue.",
@@ -2200,7 +2231,7 @@ export function useAgent() {
         }
         try {
           await releaseServerStream();
-          await continueInterruptedTurn(chatId, config);
+          await continueInterruptedTurn(chatId, config, stillWanted);
         } catch (continueError) {
           const message =
             continueError instanceof Error
@@ -2520,10 +2551,9 @@ export function useAgent() {
           setTabStreaming(`chat-${finalChatId}`, true);
 
           scheduleChatTitleGeneration(finalChatId, message);
-        }
-
-        if (finalChatId !== chatId) {
-          await interruptIfActive(finalChatId);
+          // No interruptIfActive(finalChatId): the id was just created, so its
+          // only "active work" is this send's own isSending — interrupting it
+          // clears isSending and auto-continue fires on the first message.
         }
 
         // Reset streaming state for this chatId
@@ -2702,8 +2732,15 @@ export function useAgent() {
         `[useAgent] Auto-continuing interrupted turn for ${chatId} (attempt ${attempt}/3) — trying stream recovery first`,
       );
 
+      const sendSnapshot = peekSendGeneration(
+        sendGenerationRef.current,
+        chatId,
+      );
       try {
-        await retryStreamRecovery(chatId, config);
+        await retryStreamRecovery(chatId, config, {
+          stillWanted: () =>
+            noSendSince(sendGenerationRef.current, chatId, sendSnapshot),
+        });
       } catch (error) {
         console.warn(
           `[useAgent] Auto-continue attempt ${attempt} failed for ${chatId}:`,
