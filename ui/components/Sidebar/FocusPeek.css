@@ -1,4 +1,4 @@
-/* Focus peek (rail logo hover): your three at a glance. One line per goal, hours on the right. */
+/* Focus peek (rail logo hover): your three at a glance. Short name + a time-this-week meter. */
 .focus-peek__three {
   list-style: none;
   margin: 0;
@@ -35,11 +35,30 @@
   text-overflow: ellipsis;
 }
 
-.focus-peek__hours {
-  font-size: 11.5px;
-  font-weight: 500;
-  font-variant-numeric: tabular-nums;
-  color: var(--rail-soft);
+.focus-peek__meter {
+  position: relative;
+  width: 64px;
+  height: 4px;
+  border-radius: 4px;
+  background: rgba(10, 16, 32, 0.08);
+  overflow: hidden;
+}
+
+.focus-peek__meter i {
+  position: absolute;
+  inset: 0 auto 0 0;
+  border-radius: 4px;
+  background: var(--rail-blue);
+}
+
+.focus-peek__meter.is-risk i {
+  background: #ea8a3b;
+}
+
+@media (prefers-color-scheme: dark) {
+  .focus-peek__meter {
+    background: rgba(255, 255, 255, 0.1);
+  }
 }
 
 .focus-peek__foot {
