@@ -1008,6 +1008,7 @@ export type AutoContinueBlockReason =
   | "userStopped"
   | "awaitingStreamResubscribe"
   | "awaitingFirstResponse"
+  | "queuedFollowUp"
   | "maxAttempts";
 
 /** Why auto-continue did not run — for logs and support. */
@@ -1021,9 +1022,15 @@ export function getAutoContinueBlockReason(args: {
   lastTurnOutcome?: LastTurnOutcome;
   gatewayReady: boolean;
   liveStreamRequestId?: string;
+  /**
+   * The user has a follow-up waiting. Their message is the next turn —
+   * a hidden "continue" here would jump ahead of it and bury it.
+   */
+  hasQueuedFollowUp?: boolean;
 }): AutoContinueBlockReason | null {
   if (args.isSending) return "isSending";
   if (args.liveStreamRequestId) return "isSending";
+  if (args.hasQueuedFollowUp) return "queuedFollowUp";
   if (isResumingStream(args.chatId)) return "resumingStream";
 
   // Above the turn-state tests, because a refusal produces no assistant message
@@ -1093,6 +1100,7 @@ export function shouldAutoContinueInterruptedTurn(args: {
   lastTurnOutcome?: LastTurnOutcome;
   gatewayReady: boolean;
   liveStreamRequestId?: string;
+  hasQueuedFollowUp?: boolean;
 }): boolean {
   return getAutoContinueBlockReason(args) === null;
 }

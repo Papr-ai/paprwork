@@ -73,6 +73,7 @@ import {
 } from "../../lib/agentStreamRecovery";
 import { assistantMessageHasVisibleContent } from "../../utils/assistantMessageVisibility";
 import { clearQueuedMessagesForChat } from "../../utils/messageQueue";
+import { markFollowUpLanding } from "../../utils/followUpLanding";
 import { useGatewaySupervisorStatus } from "../../hooks/useGatewaySupervisorStatus";
 import { useGatewayConnectionState } from "../../hooks/useGatewayConnectionState";
 import { useAgentName } from "../Agent/agentIdentityStore";
@@ -405,6 +406,7 @@ export const ChatContainer: React.FC<ChatContainerProps> = ({ chatId }): React.R
       lastTurnOutcome,
       gatewayReady: gatewaySupervisorReady,
       liveStreamRequestId,
+      hasQueuedFollowUp: currentChatQueue.length > 0,
     };
     const autoContinueBlock = getAutoContinueBlockReason(autoContinueArgs);
     if (autoContinueBlock) {
@@ -462,6 +464,7 @@ export const ChatContainer: React.FC<ChatContainerProps> = ({ chatId }): React.R
     streamRecoveryReason,
     lastTurnOutcome,
     makeAgentConfig,
+    currentChatQueue.length,
   ]);
 
   const gatewayBanner =
@@ -948,6 +951,12 @@ export const ChatContainer: React.FC<ChatContainerProps> = ({ chatId }): React.R
       ...(context && context.length > 0 ? { contextArtifacts: context } : {}),
     };
     setMessageQueue(prev => [...prev, queuedMessage]);
+    // Ask the agent to pause after its current step (tools included) so this
+    // follow-up runs next and the reply lands below it — not after the whole
+    // task. Best-effort: an older gateway just keeps the old queue behavior.
+    void gateway.send("agent:yield", { chatId }).catch((error: unknown) => {
+      console.warn("[ChatContainer] agent:yield failed:", error);
+    });
   }, [chatId]);
 
   const handleSendQueuedNow = useCallback(async (messageId: string) => {
@@ -961,6 +970,7 @@ export const ChatContainer: React.FC<ChatContainerProps> = ({ chatId }): React.R
     isProcessingQueue.current = true;
     try {
       await interruptActiveStream(chatId);
+      markFollowUpLanding(chatId, queued.text);
       await handleSendMessage(
         queued.text,
         queued.contextArtifacts,
@@ -1009,6 +1019,7 @@ export const ChatContainer: React.FC<ChatContainerProps> = ({ chatId }): React.R
     setMessageQueue(prev => prev.filter(q => q.id !== nextMessage.id));
 
     try {
+      markFollowUpLanding(chatId, nextMessage.text);
       await handleSendMessage(
         nextMessage.text,
         nextMessage.contextArtifacts,
@@ -1018,7 +1029,7 @@ export const ChatContainer: React.FC<ChatContainerProps> = ({ chatId }): React.R
     } finally {
       isProcessingQueue.current = false;
     }
-  }, [currentChatQueue, handleSendMessage]);
+  }, [currentChatQueue, handleSendMessage, chatId]);
 
   // Auto-send next queued message when the prior user turn is fully settled.
   useEffect(() => {
@@ -1304,12 +1315,16 @@ export const ChatContainer: React.FC<ChatContainerProps> = ({ chatId }): React.R
         onFilesDropped={handleFilesDroppedToChat}
         onLoadOlder={() => loadOlderMessages(chatId)}
         onRetryHistory={() => syncHistoryFromServer({ force: true })}
-      />
-
-      <QueuedMessages
-        queue={currentChatQueue}
-        onSendNow={handleSendQueuedNow}
-        onRemove={handleRemoveQueued}
+        pendingFollowUpCount={currentChatQueue.length}
+        pendingFollowUps={
+          <QueuedMessages
+            queue={currentChatQueue}
+            onSendNow={handleSendQueuedNow}
+            onRemove={handleRemoveQueued}
+            agentName={agentName}
+            agentWorking={isSending || isWaitingForModel || isWaitingForAgentSlot}
+          />
+        }
       />
 
       <InputBar
