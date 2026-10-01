@@ -1383,7 +1383,9 @@ export function useAgent() {
               }
             }
             untrackActiveStream(chatId);
-            resetAutoContinueAttempts(chatId);
+            // Do NOT reset auto-continue attempts here: a hidden continue's own
+            // `done` reset the 3-attempt cap, so the loop never tripped (63
+            // silent continues in one turn). Only a real user send resets it.
           }
           break;
 

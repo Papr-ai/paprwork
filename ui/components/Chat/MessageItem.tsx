@@ -5,6 +5,7 @@
  */
 
 import React, { useEffect } from "react";
+import { isLandingFollowUp } from "../../utils/followUpLanding";
 import type { ChatMessage } from "../../stores/chatStore";
 import { useChatStore } from "../../stores/chatStore";
 import { UserAvatar } from "../common/UserAvatar";
@@ -713,6 +714,11 @@ const MessageItemInner: React.FC<MessageItemProps> = ({
   turnInFlight = false,
 }) => {
   const isUser = message.role === "user";
+  // A follow-up that was shown as a pending ghost finishes ghost → solid
+  // instead of fading in from nothing. Decided once at mount.
+  const [isLanding] = React.useState(() =>
+    isLandingFollowUp(chatId, message),
+  );
   const content = message.isStreaming
     ? message.streamingContent || message.content
     : message.content;
@@ -770,7 +776,7 @@ const MessageItemInner: React.FC<MessageItemProps> = ({
 
   return (
     <div
-      className="message-item"
+      className={`message-item${isLanding ? " message-item--landing" : ""}`}
       data-testid={`message-item-${isUser ? "user" : "assistant"}`}
     >
       {/* Avatar - matches v1 exactly */}

@@ -16,7 +16,8 @@ export type PiTurnEndReason =
   | "text_only_wrap_up_ignored_tools"
   | "max_steps_exhausted"
   | "rate_limit_exhausted"
-  | "provider_error";
+  | "provider_error"
+  | "yielded_to_user";
 
 export interface PiTurnEndLogInput {
   chatId?: string;
@@ -174,9 +175,14 @@ export function explainPostStreamWrapUp(args: {
   isWrapUpContinuation: boolean;
   /** The stream died in transport rather than the model finishing. */
   providerStreamFailed?: boolean;
+  /** Paused at a tool boundary for a user follow-up — that message is next. */
+  yieldedToUser?: boolean;
 }): { requested: boolean; skipReason?: string } {
   if (args.aborted) {
     return { requested: false, skipReason: "aborted" };
+  }
+  if (args.yieldedToUser) {
+    return { requested: false, skipReason: "yielded_to_user" };
   }
   // A dropped connection reaches here looking exactly like a turn that ran
   // tools and went quiet, which is the one case the wrap-up is for. The

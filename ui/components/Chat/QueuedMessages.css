@@ -1,123 +1,118 @@
 /**
- * QueuedMessages Styles - Message queue display
+ * Pending follow-ups — inline ghost of the user's own message.
+ * One concept: ghost → solid. Nothing pulses, nothing slides.
  */
 
-.queued-messages {
-  /* Flush against InputBar — no bottom gap. */
-  margin: 0 20px 0 20px;
-}
-
-.queued-message-item {
+.pending-follow-ups {
   display: flex;
-  align-items: center;
-  gap: 10px;
-  padding: 10px 14px;
-  background: var(--background-color);
-  border: 1px solid var(--border-color);
-  border-radius: 12px;
-  margin-bottom: 6px;
-  box-shadow: var(--shadow-sm);
-  transition: all 0.15s var(--ease);
+  flex-direction: column;
 }
 
-.queued-message-item:last-child {
+/* Same layout as a sent message; only the ink is lighter. */
+.pending-follow-up .message-item {
   margin-bottom: 0;
-  /* Join visually with the InputBar below. */
-  border-bottom-left-radius: 0;
-  border-bottom-right-radius: 0;
+  padding-bottom: 0.25rem;
+  animation: pendingFollowUpIn 0.2s var(--ease) both;
 }
 
-.queued-message-item:hover {
+.pending-follow-up .message-content {
+  /* Ghosted, still readable (~4:1 on light glass). */
+  opacity: 0.6;
+  transition: opacity 0.2s var(--ease);
+}
+
+/* Aligns under the message text: item padding + avatar + gap. */
+.pending-follow-up__meta {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  column-gap: 12px;
+  min-height: 28px;
+  padding: 0 1.5rem 0 calc(1.5rem + 32px + 12px);
+  margin-bottom: 1rem;
+  font-size: 12px;
+  line-height: 1.4;
+  /* Secondary, not tertiary: tertiary fails AA at 12px. */
+  color: var(--text-secondary);
+}
+
+/* Never truncated: this line is the whole point. Actions wrap instead. */
+.pending-follow-up__status {
+  min-width: 0;
+}
+
+/* Actions stay out of the way until the item is hovered or focused. */
+.pending-follow-up__actions {
+  display: inline-flex;
+  gap: 2px;
+  opacity: 0;
+  transition: opacity 0.15s var(--ease);
+}
+
+.pending-follow-up:hover .pending-follow-up__actions,
+.pending-follow-up:focus-within .pending-follow-up__actions {
+  opacity: 1;
+}
+
+@media (hover: none) {
+  .pending-follow-up__actions {
+    opacity: 1;
+  }
+}
+
+/* Not sent (restored after a restart): the user must act, so actions show. */
+.pending-follow-up--held .pending-follow-up__actions {
+  opacity: 1;
+}
+
+.pending-follow-up__action {
+  height: 28px;
+  padding: 0 10px;
+  border: none;
+  border-radius: 999px;
+  background: transparent;
+  color: var(--primary-color);
+  font: inherit;
+  font-weight: 500;
+  cursor: pointer;
+  transition: background 0.15s var(--ease);
+}
+
+.pending-follow-up__action:hover {
+  background: color-mix(in srgb, var(--primary-color) 10%, transparent);
+}
+
+.pending-follow-up__action:focus-visible {
+  outline: 2px solid var(--primary-color);
+  outline-offset: 1px;
+}
+
+.pending-follow-up__action--quiet {
+  color: var(--text-secondary);
+}
+
+.pending-follow-up__action--quiet:hover {
   background: var(--hover-bg);
 }
 
-.queued-message-label {
-  font-size: 11px;
-  font-weight: 600;
-  color: var(--text-secondary);
-  text-transform: uppercase;
-  letter-spacing: 0.3px;
-  flex-shrink: 0;
+/* The real message, when it lands where the ghost was, finishes the motion. */
+.message-item.message-item--landing {
+  animation: followUpLand 0.32s var(--ease) both;
 }
 
-.queued-message-text {
-  flex: 1;
-  font-size: 13px;
-  color: var(--text-primary);
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-  min-width: 0;
-  cursor: pointer;
-  line-height: 1.4;
-  transition: all 0.15s var(--ease);
-  background: transparent;
-  border: none;
-  padding: 0;
-  text-align: left;
-  font-family: inherit;
+@keyframes pendingFollowUpIn {
+  from { opacity: 0; }
+  to { opacity: 1; }
 }
 
-.queued-message-text:hover {
-  color: var(--primary-color);
+@keyframes followUpLand {
+  from { opacity: 0.6; }
+  to { opacity: 1; }
 }
 
-.queued-message-text-expanded {
-  white-space: normal;
-  word-wrap: break-word;
-}
-
-.queued-message-actions {
-  display: flex;
-  gap: 4px;
-  flex-shrink: 0;
-}
-
-.queued-message-icon-btn {
-  width: 28px;
-  height: 28px;
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  /* No border / focus ring — buttons are flush icons. */
-  border: none;
-  outline: none;
-  border-radius: 6px;
-  background: transparent;
-  font-size: 14px;
-  cursor: pointer;
-  transition: all 0.15s var(--ease);
-  padding: 0;
-}
-
-.queued-message-icon-btn:focus,
-.queued-message-icon-btn:focus-visible {
-  outline: none;
-  box-shadow: none;
-}
-
-.queued-message-delete-icon {
-  color: var(--text-secondary);
-}
-
-.queued-message-delete-icon:hover {
-  background: var(--error-color, #e74c3c);
-  color: white;
-}
-
-.queued-message-send-icon {
-  color: var(--primary-color);
-}
-
-.queued-message-send-icon:hover {
-  background: var(--primary-color);
-  color: white;
-}
-
-/* Dark mode adjustments */
-@media (prefers-color-scheme: dark) {
-  .queued-message-item {
-    background: rgba(28, 28, 30, 0.95);
-    border-color: rgba(255, 255, 255, 0.10);
+@media (prefers-reduced-motion: reduce) {
+  .pending-follow-up .message-item,
+  .message-item.message-item--landing {
+    animation: none;
   }
 }

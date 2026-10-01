@@ -73,6 +73,8 @@ import {
 } from "../../lib/agentStreamRecovery";
 import { assistantMessageHasVisibleContent } from "../../utils/assistantMessageVisibility";
 import { clearQueuedMessagesForChat } from "../../utils/messageQueue";
+import { markFollowUpLanding } from "../../utils/followUpLanding";
+import { useMessageQueueStore } from "../../stores/messageQueueStore";
 import { useGatewaySupervisorStatus } from "../../hooks/useGatewaySupervisorStatus";
 import { useGatewayConnectionState } from "../../hooks/useGatewayConnectionState";
 import { useAgentName } from "../Agent/agentIdentityStore";
@@ -336,7 +338,11 @@ export const ChatContainer: React.FC<ChatContainerProps> = ({ chatId }): React.R
   const lastLoggedAutoContinueBlockRef = useRef<string | null>(null);
   const [isResumingStream, setIsResumingStream] = useState(false);
   const [isFileDragOver, setIsFileDragOver] = useState(false);
-  const [messageQueue, setMessageQueue] = useState<QueuedMessage[]>([]);
+  // Lives above the component tree (and in localStorage): leaving the chat
+  // for a mini-app or another tab unmounts this component, and the queue
+  // must not go with it. See stores/messageQueueStore.ts.
+  const messageQueue = useMessageQueueStore((s) => s.queue);
+  const setMessageQueue = useMessageQueueStore((s) => s.setQueue);
   const isProcessingQueue = useRef(false);
   const queueTransitionInFlightRef = useRef(false);
 
@@ -345,6 +351,29 @@ export const ChatContainer: React.FC<ChatContainerProps> = ({ chatId }): React.R
     () => messageQueue.filter(q => q.chatId === chatId),
     [messageQueue, chatId]
   );
+  /** Next follow-up that should auto-send. Held ones wait for the user. */
+  const nextSendableQueued = useMemo(
+    () => currentChatQueue.find((q) => !q.held),
+    [currentChatQueue],
+  );
+  const hasSendableQueued = nextSendableQueued !== undefined;
+
+  // The yield (pause after the current step) only makes sense while someone
+  // is here to deliver the follow-up. Leaving the chat cancels it so the agent
+  // keeps working instead of stalling; coming back asks again. The message
+  // itself stays queued either way.
+  const hasSendableQueuedRef = useRef(hasSendableQueued);
+  hasSendableQueuedRef.current = hasSendableQueued;
+  useEffect(() => {
+    if (hasSendableQueuedRef.current) {
+      void gateway.send("agent:yield", { chatId }).catch(() => {});
+    }
+    return () => {
+      if (hasSendableQueuedRef.current) {
+        void gateway.send("agent:yield-cancel", { chatId }).catch(() => {});
+      }
+    };
+  }, [chatId]);
 
   const syncHistoryFromServer = useCallback(
     (options?: { force?: boolean }) => {
@@ -405,6 +434,7 @@ export const ChatContainer: React.FC<ChatContainerProps> = ({ chatId }): React.R
       lastTurnOutcome,
       gatewayReady: gatewaySupervisorReady,
       liveStreamRequestId,
+      hasQueuedFollowUp: hasSendableQueued,
     };
     const autoContinueBlock = getAutoContinueBlockReason(autoContinueArgs);
     if (autoContinueBlock) {
@@ -462,6 +492,7 @@ export const ChatContainer: React.FC<ChatContainerProps> = ({ chatId }): React.R
     streamRecoveryReason,
     lastTurnOutcome,
     makeAgentConfig,
+    hasSendableQueued,
   ]);
 
   const gatewayBanner =
@@ -923,7 +954,7 @@ export const ChatContainer: React.FC<ChatContainerProps> = ({ chatId }): React.R
     // surviving record that the user asked us to stop.
     setLastTurnOutcome(chatId, "userStopped");
     await interruptActiveStream(chatId);
-  }, [chatId, interruptActiveStream, setLastTurnOutcome]);
+  }, [chatId, interruptActiveStream, setLastTurnOutcome, setMessageQueue]);
 
   const handleStopAgent = useCallback(async () => {
     // Block auto-drain — Stop means halt, not "stop then send whatever was queued".
@@ -948,7 +979,13 @@ export const ChatContainer: React.FC<ChatContainerProps> = ({ chatId }): React.R
       ...(context && context.length > 0 ? { contextArtifacts: context } : {}),
     };
     setMessageQueue(prev => [...prev, queuedMessage]);
-  }, [chatId]);
+    // Ask the agent to pause after its current step (tools included) so this
+    // follow-up runs next and the reply lands below it — not after the whole
+    // task. Best-effort: an older gateway just keeps the old queue behavior.
+    void gateway.send("agent:yield", { chatId }).catch((error: unknown) => {
+      console.warn("[ChatContainer] agent:yield failed:", error);
+    });
+  }, [chatId, setMessageQueue]);
 
   const handleSendQueuedNow = useCallback(async (messageId: string) => {
     const queued = messageQueue.find(q => q.id === messageId && q.chatId === chatId);
@@ -961,6 +998,7 @@ export const ChatContainer: React.FC<ChatContainerProps> = ({ chatId }): React.R
     isProcessingQueue.current = true;
     try {
       await interruptActiveStream(chatId);
+      markFollowUpLanding(chatId, queued.text);
       await handleSendMessage(
         queued.text,
         queued.contextArtifacts,
@@ -969,7 +1007,7 @@ export const ChatContainer: React.FC<ChatContainerProps> = ({ chatId }): React.R
       isProcessingQueue.current = false;
       queueTransitionInFlightRef.current = false;
     }
-  }, [messageQueue, handleSendMessage, interruptActiveStream, chatId]);
+  }, [messageQueue, setMessageQueue, handleSendMessage, interruptActiveStream, chatId]);
 
   const handleSendFirstQueuedNow = useCallback(async () => {
     const first = currentChatQueue[0];
@@ -995,20 +1033,21 @@ export const ChatContainer: React.FC<ChatContainerProps> = ({ chatId }): React.R
 
   const handleRemoveQueued = useCallback((messageId: string) => {
     setMessageQueue(prev => prev.filter(q => q.id !== messageId));
-  }, []);
+  }, [setMessageQueue]);
 
   const processNextQueued = useCallback(async () => {
-    if (isProcessingQueue.current || currentChatQueue.length === 0) {
+    const nextMessage = nextSendableQueued;
+    if (isProcessingQueue.current || !nextMessage) {
       return;
     }
 
     isProcessingQueue.current = true;
-    const nextMessage = currentChatQueue[0];
-    
+
     // Remove this specific message from the queue (not just the first one)
     setMessageQueue(prev => prev.filter(q => q.id !== nextMessage.id));
 
     try {
+      markFollowUpLanding(chatId, nextMessage.text);
       await handleSendMessage(
         nextMessage.text,
         nextMessage.contextArtifacts,
@@ -1018,7 +1057,7 @@ export const ChatContainer: React.FC<ChatContainerProps> = ({ chatId }): React.R
     } finally {
       isProcessingQueue.current = false;
     }
-  }, [currentChatQueue, handleSendMessage]);
+  }, [nextSendableQueued, setMessageQueue, handleSendMessage, chatId]);
 
   // Auto-send next queued message when the prior user turn is fully settled.
   useEffect(() => {
@@ -1032,7 +1071,7 @@ export const ChatContainer: React.FC<ChatContainerProps> = ({ chatId }): React.R
         needsStreamRecovery,
         queueTransitionInFlight: queueTransitionInFlightRef.current,
       }) ||
-      currentChatQueue.length === 0 ||
+      !hasSendableQueued ||
       isProcessingQueue.current
     ) {
       return;
@@ -1045,7 +1084,7 @@ export const ChatContainer: React.FC<ChatContainerProps> = ({ chatId }): React.R
     isWaitingForAgentSlot,
     connectionPaused,
     needsStreamRecovery,
-    currentChatQueue.length,
+    hasSendableQueued,
     processNextQueued,
   ]);
 
@@ -1304,12 +1343,16 @@ export const ChatContainer: React.FC<ChatContainerProps> = ({ chatId }): React.R
         onFilesDropped={handleFilesDroppedToChat}
         onLoadOlder={() => loadOlderMessages(chatId)}
         onRetryHistory={() => syncHistoryFromServer({ force: true })}
-      />
-
-      <QueuedMessages
-        queue={currentChatQueue}
-        onSendNow={handleSendQueuedNow}
-        onRemove={handleRemoveQueued}
+        pendingFollowUpCount={currentChatQueue.length}
+        pendingFollowUps={
+          <QueuedMessages
+            queue={currentChatQueue}
+            onSendNow={handleSendQueuedNow}
+            onRemove={handleRemoveQueued}
+            agentName={agentName}
+            agentWorking={isSending || isWaitingForModel || isWaitingForAgentSlot}
+          />
+        }
       />
 
       <InputBar

@@ -525,7 +525,10 @@ export class LocalStorageProvider implements IStorageProvider {
       UPDATE messages SET
         role = ?,
         content = ?,
-        timestamp = ?,
+        -- Keep the row's first timestamp. History is ORDER BY timestamp, so
+        -- bumping it on every checkpoint/continue moved a reply below user
+        -- messages sent after it (turn order must be anchored at creation).
+        timestamp = COALESCE(timestamp, ?),
         thinking = ?,
         tool_calls = ?,
         error = ?,

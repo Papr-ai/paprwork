@@ -117,6 +117,12 @@ export interface TurnEndInput {
   /** Continuations already spent this turn. */
   continuationsUsed: number;
   maxContinuations?: number;
+  /**
+   * The user sent a follow-up while this turn was working and asked it to
+   * pause at the next tool boundary. Their message is the next turn, so never
+   * continue or wrap up on top of it.
+   */
+  yieldedToUser?: boolean;
 }
 
 export function decideTurnEnd(input: TurnEndInput): TurnEndDecision {
@@ -125,6 +131,9 @@ export function decideTurnEnd(input: TurnEndInput): TurnEndDecision {
 
   if (input.aborted) {
     return { action: "none", reason: "aborted" };
+  }
+  if (input.yieldedToUser) {
+    return { action: "none", reason: "yielded_to_user" };
   }
   if (input.toolCallCount === 0) {
     // Nothing ran, so the model answered directly. Pushing it to "continue"

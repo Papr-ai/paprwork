@@ -349,6 +349,46 @@ export async function setupAgentHandlers(
         break;
       }
 
+      case "agent:yield-cancel": {
+        // User left the chat with a follow-up queued — see cancelYieldRequest.
+        const { chatId } = message.payload as StopStreamingPayload;
+        if (!chatId) {
+          sendError(ws, message.id, "Missing chatId");
+          return;
+        }
+        const { cancelYieldRequest } = await import(
+          "../services/agent/steerYield.js"
+        );
+        cancelYieldRequest(chatId);
+        sendResponse(ws, { id: message.id, success: true, data: { chatId } });
+        break;
+      }
+
+      case "agent:yield": {
+        // User sent a follow-up while the agent is working: finish the current
+        // step (tools included), then end the turn so their message runs next
+        // and the reply continues below it. Softer than agent:stop, which
+        // aborts mid-tool. See services/agent/steerYield.ts.
+        const { chatId } = message.payload as StopStreamingPayload;
+        if (!chatId) {
+          sendError(ws, message.id, "Missing chatId");
+          return;
+        }
+        const streaming = agentService.getSessionManager().isStreaming(chatId);
+        if (streaming) {
+          const { requestYieldAtBoundary } = await import(
+            "../services/agent/steerYield.js"
+          );
+          requestYieldAtBoundary(chatId);
+        }
+        sendResponse(ws, {
+          id: message.id,
+          success: true,
+          data: { chatId, yielding: streaming },
+        });
+        break;
+      }
+
       case "agent:stop": {
         const { chatId } = message.payload as StopStreamingPayload;
 
