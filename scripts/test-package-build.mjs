@@ -240,15 +240,24 @@ function checkPackagedApp() {
     return false;
   }
   
-  // Find the .app bundle (might be in mac/ or mac-universal/)
-  const macDirs = ['mac', 'mac-universal', 'mac-arm64', 'mac-x64'];
+  // Prefer arch-specific output (local + CI) over stale release/mac from an old x64 build.
+  const macDirs = ['mac-arm64', 'mac-x64', 'mac-universal', 'mac'];
   let appPath = null;
-  
+  let newestMtime = 0;
+
   for (const dir of macDirs) {
     const candidatePath = join(releasePath, dir, 'Papr Work.app');
-    if (existsSync(candidatePath)) {
+    if (!existsSync(candidatePath)) continue;
+    const binaryPath = join(candidatePath, 'Contents', 'MacOS', 'Papr Work');
+    let mtime = 0;
+    try {
+      mtime = statSync(binaryPath).mtimeMs;
+    } catch {
+      mtime = statSync(candidatePath).mtimeMs;
+    }
+    if (mtime >= newestMtime) {
+      newestMtime = mtime;
       appPath = candidatePath;
-      break;
     }
   }
   
