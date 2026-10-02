@@ -1,7 +1,9 @@
 /**
  * Queued follow-ups — in the thread, where they will land.
- * One concept: a dashed frame means "not sent yet". When sent, the frame
- * dissolves. Text is never faded.
+ * One concept: a dashed frame means "not sent yet". It wraps the whole
+ * message (avatar, name, words, status), drawn inside the row's padding so
+ * the avatar stays on the thread's avatar column. When sent, the same frame
+ * dissolves on the real message. Text is never faded.
  */
 
 .queued-list {
@@ -9,8 +11,20 @@
 }
 
 .queued-item {
+  position: relative;
   margin-bottom: 0.25rem;
   animation: queuedIn 0.2s var(--ease) both;
+}
+
+/* The frame: inset into the row's 24px side padding, so nothing in the row moves. */
+.queued-item::before,
+.message-item.message-item--landing::before {
+  content: "";
+  position: absolute;
+  inset: 6px 12px;
+  border: 1.5px dashed var(--queued-dash, color-mix(in srgb, var(--text-secondary) 45%, transparent));
+  border-radius: 16px;
+  pointer-events: none;
 }
 
 .queued-item__content {
@@ -21,10 +35,6 @@
   display: flex;
   flex-direction: column;
   gap: 4px;
-  margin: -10px -14px 0;
-  padding: 10px 14px;
-  border: 1.5px dashed var(--queued-dash);
-  border-radius: 14px;
 }
 
 .queued-item__text {
@@ -57,7 +67,7 @@
   font-weight: 500;
 }
 
-.queued-item--held .queued-item__card {
+.queued-item--held::before {
   border-color: color-mix(in srgb, var(--warning-color) 60%, transparent);
 }
 
@@ -99,20 +109,18 @@
   outline-offset: 1px;
 }
 
-/* Sent: the real message mounts in the same spot; its dashed frame dissolves. */
+/* Sent: the real message mounts in the same spot; the same frame, avatar inside, dissolves. */
 .message-item.message-item--landing {
+  position: relative;
   animation: none;
 }
 
-.message-item.message-item--landing .message-content {
-  border-radius: 14px;
-  outline: 1.5px dashed color-mix(in srgb, var(--text-secondary) 45%, transparent);
-  outline-offset: 10px;
+.message-item.message-item--landing::before {
   animation: queuedFrameDissolve 0.5s var(--ease) 0.08s forwards;
 }
 
 @keyframes queuedFrameDissolve {
-  to { outline-color: transparent; }
+  to { border-color: transparent; }
 }
 
 @keyframes queuedIn {
@@ -122,5 +130,5 @@
 
 @media (prefers-reduced-motion: reduce) {
   .queued-item { animation: none; }
-  .message-item.message-item--landing .message-content { animation: none; outline: none; }
+  .message-item.message-item--landing::before { display: none; }
 }

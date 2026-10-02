@@ -6,7 +6,8 @@
  * top-to-bottom as the order of events; putting the follow-up there answers
  * "where did my message go?" without a second place to look.
  *
- * One signal for "not sent yet": a dashed frame, plus one status line
+ * One signal for "not sent yet": a dashed frame around the whole message,
+ * avatar included (it sits on the thread's avatar column), plus one status line
  * (clock · "Sends after current step"). Messaging apps teach this already —
  * a pending message sits in the thread with a pending mark. We do NOT fade
  * the text: grey reads as failed or disabled.
@@ -53,9 +54,9 @@ export function pendingStatusText(
   held = false,
 ): string {
   if (held) return "Not sent";
-  if (!agentWorking) return "Sending…";
+  // Only the first in line is ever sending; the rest keep their place.
   if (position > 0) return "Queued";
-  return "Sends after current step";
+  return agentWorking ? "Sends after current step" : "Sending…";
 }
 
 const keepFocus = (e: React.MouseEvent) => e.preventDefault();
