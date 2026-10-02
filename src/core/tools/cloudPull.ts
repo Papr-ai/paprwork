@@ -42,6 +42,14 @@ const pullCloudAppSchema = appIdSchema.extend({
     .enum(["hold", "take_theirs", "keep_mine"])
     .optional()
     .describe("Conflict handling. Default hold (apply nothing on conflict). Only pass take_theirs/keep_mine after the user chose."),
+  fileResolutions: z
+    .record(z.string(), z.enum(["mine", "theirs"]))
+    .optional()
+    .describe("Per-file choice for overlapping files (path → mine|theirs). Only after the user chose."),
+  dryRun: z
+    .boolean()
+    .optional()
+    .describe("Report what the update would bring (incoming, merged, overlapping files) without writing anything."),
 });
 
 export const pullCloudAppUpdatesTool = createTool({
@@ -61,7 +69,7 @@ Never pick a resolution without the user's choice.
 If the status shows gitRemoteRequiresReview or writerConflict, do not call this — the user must review in the app tab first.`,
   inputSchema: pullCloudAppSchema,
   execute: async (input) => {
-    const { appId, resolution } = unwrapContext(input);
+    const { appId, resolution, fileResolutions, dryRun } = unwrapContext(input);
     const startTime = performance.now();
     try {
       const sync = getCloudSyncService();
@@ -72,6 +80,8 @@ If the status shows gitRemoteRequiresReview or writerConflict, do not call this 
         allowRecentSkip: false,
         preferCloudOverLocal: true,
         resolution,
+        fileResolutions,
+        dryRun,
       });
       return {
         success: true,
@@ -86,6 +96,8 @@ If the status shows gitRemoteRequiresReview or writerConflict, do not call this 
           needsUserDecision: result.code.conflictFiles.length > 0,
           heldForConflicts: result.code.heldForConflicts ?? false,
           keptLocalFiles: result.code.keptLocalFiles ?? [],
+          mergedFiles: result.code.mergedFiles ?? [],
+          ...(dryRun ? { dryRun: true, incoming: result.code.incoming ?? [] } : {}),
         },
         duration: performance.now() - startTime,
         timestamp: new Date().toISOString(),
@@ -102,6 +114,14 @@ const publisherSchema = z.object({
     .boolean()
     .optional()
     .describe("Only report whether the publisher has a newer revision; do not pull. Default false."),
+  fileResolutions: z
+    .record(z.string(), z.enum(["mine", "theirs"]))
+    .optional()
+    .describe("Per-file choice for overlapping files (path → mine|theirs). Only after the user chose."),
+  dryRun: z
+    .boolean()
+    .optional()
+    .describe("Report what the update would bring (incoming, merged, overlapping files) without writing anything."),
 });
 
 export const pullPublisherUpdatesTool = createTool({
@@ -116,7 +136,7 @@ Local edits are kept on conflict. Returns updatedFiles, conflictFiles, skippedFi
 **If conflictFiles is non-empty, STOP and tell the user which files conflict — do not submit a PR or publish until they decide.**`,
   inputSchema: publisherSchema,
   execute: async (input) => {
-    const { appId, checkOnly } = unwrapContext(input);
+    const { appId, checkOnly, fileResolutions, dryRun } = unwrapContext(input);
     const startTime = performance.now();
     try {
       const status = await checkPublisherUpstreamRevision(appId);
@@ -137,7 +157,7 @@ Local edits are kept on conflict. Returns updatedFiles, conflictFiles, skippedFi
       }
       let result;
       try {
-        result = await getCloudAppTrackSyncService().syncTrackApp(appId);
+        result = await getCloudAppTrackSyncService().syncTrackApp(appId, { fileResolutions, dryRun });
       } catch (err) {
         const message = (err as Error).message;
         if (/not in track mode/i.test(message)) {
@@ -165,6 +185,9 @@ Local edits are kept on conflict. Returns updatedFiles, conflictFiles, skippedFi
           upstreamRevision: result.upstreamRevision ?? status.liveRevision,
           updatedFiles: result.updatedFiles,
           conflictFiles: result.conflictFiles,
+          mergedFiles: result.mergedFiles ?? [],
+          takenTheirsFiles: result.takenTheirsFiles ?? [],
+          ...(dryRun ? { dryRun: true, pulled: false, incoming: result.incoming ?? [] } : {}),
           skippedFiles: result.skippedFiles,
           needsUserDecision: result.conflictFiles.length > 0,
         },

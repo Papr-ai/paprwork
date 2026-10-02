@@ -220,7 +220,10 @@ export function useAppCloudSyncStatus(
   pushNow: () => Promise<void>;
   bumpQueue: () => Promise<void>;
   /** Resolves true when local reached the web head with no conflicts. */
-  pullUpdates: (resolution?: "take_theirs" | "keep_mine") => Promise<boolean>;
+  pullUpdates: (
+    resolution?: "take_theirs" | "keep_mine",
+    fileResolutions?: Record<string, "mine" | "theirs">,
+  ) => Promise<boolean>;
   applyRemoteUpdates: () => Promise<void>;
   /** Track-mode installs: publisher has newer code than last upstream sync. */
   publisherUpdatesAvailable: boolean;
@@ -453,6 +456,7 @@ export function useAppCloudSyncStatus(
 
   const pullUpdates = useCallback(async (
     resolution?: "take_theirs" | "keep_mine",
+    fileResolutions?: Record<string, "mine" | "theirs">,
   ): Promise<boolean> => {
     if (status?.gitRemoteRequiresReview) {
       setError("Use Merge remote changes — Get updates cannot merge diverged git history.");
@@ -467,7 +471,11 @@ export function useAppCloudSyncStatus(
         {
           method: "POST",
           headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ wait: true, ...(resolution ? { resolution } : {}) }),
+          body: JSON.stringify({
+            wait: true,
+            ...(resolution ? { resolution } : {}),
+            ...(fileResolutions ? { fileResolutions } : {}),
+          }),
         },
       );
       if (!res.ok) {

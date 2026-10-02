@@ -65,6 +65,7 @@ vi.mock("../src/gateway/services/cloudSync/cloudSyncSingleton.js", () => ({
   getCloudSyncService: () => ({
     ensureFreshToken: async () => "tok",
     markRelativePathSynced: () => {},
+    clearManualFlushError: () => {},
   }),
 }));
 

@@ -329,3 +329,48 @@ export function buildUpdateConflictAgentPrompt(input: {
     "then call pull_cloud_app_updates with resolution \"keep_mine\" to apply the rest of the update (including migrations), and tell me what you merged before I publish.",
   ].filter(Boolean).join(" ");
 }
+
+/**
+ * Status panel, "Ask agent" on some overlapping files: the update was already
+ * applied with my version of these files kept. Combine the incoming version
+ * into them. Nothing else is left to apply.
+ */
+export function buildMergeAfterUpdateAgentPrompt(input: {
+  appId: string;
+  files: string[];
+  /** Original's slug for a linked copy; omit for my own app's web copy. */
+  publisherSlug?: string;
+}): string {
+  const source = input.publisherSlug
+    ? `the publisher's version (${input.publisherSlug} — inspect_cloud_repo on their app)`
+    : "the web version (inspect_cloud_repo on this app)";
+  const next = input.publisherSlug
+    ? "Then I'll propose the result."
+    : "Then I'll publish the result.";
+  return [
+    "I just got an update for my app and kept my version of files that overlapped it.",
+    `App id: ${input.appId}.`,
+    `Files to combine: ${input.files.join(", ")}.`,
+    `For each one, read my local file (read_file) and ${source}, merge them so both sets of changes survive, and write the merged file locally.`,
+    "Database schema files (.sql): never rewrite one that already ran — add a new migration instead.",
+    `Show me what you merged before writing. ${next}`,
+  ].join(" ");
+}
+
+/** Status panel, "Ask agent to merge all": nothing applied yet. */
+export function buildMergeAllAgentPrompt(input: {
+  appId: string;
+  files: string[];
+  publisherSlug?: string;
+}): string {
+  if (!input.publisherSlug) {
+    return buildUpdateConflictAgentPrompt({ appId: input.appId, files: input.files });
+  }
+  return [
+    `An update from ${input.publisherSlug} overlaps my edits and is on hold.`,
+    `My copy's app id: ${input.appId}.`,
+    `Overlapping files: ${input.files.join(", ")}.`,
+    "Compare each with the publisher's version (inspect_cloud_repo on their app, read_file on mine) and merge so both survive.",
+    "Show me the merge, and after I confirm write it locally and call pull_publisher_updates to bring in the rest — my merged files are kept.",
+  ].join(" ");
+}

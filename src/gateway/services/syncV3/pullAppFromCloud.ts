@@ -10,6 +10,7 @@ import {
   pullAppCodeFromRepo,
   type PullAppCodeFromRepoResult,
   type PullConflictResolution,
+  type PullFileResolution,
 } from "./pullAppCodeFromRepo.js";
 import { applyRegistryMigrationsAfterPull } from "./syncPulledSchemaOwnerMigrations.js";
 import { clearPendingAppUpdate, markPendingAppUpdate } from "./appRepoPendingUpdate.js";
@@ -27,8 +28,8 @@ function shouldMarkAppCodeBaselineSynced(code: PullAppCodeFromRepoResult): boole
   if (code.conflictFiles.length > 0) {
     return false;
   }
-  if ((code.keptLocalFiles?.length ?? 0) > 0) {
-    // Keep mine: local edits still need publishing — don't mark the folder synced.
+  if ((code.keptLocalFiles?.length ?? 0) > 0 || (code.mergedFiles?.length ?? 0) > 0) {
+    // Keep mine / merged: local edits still need publishing — don't mark synced.
     return false;
   }
   if (!code.skipped) {
@@ -67,6 +68,10 @@ export async function pullAppFromCloud(
     preferCloudOverLocal?: boolean;
     /** Conflict handling — default "hold" (all-or-nothing). */
     resolution?: PullConflictResolution;
+    /** Per-file Mine / Theirs for overlapping files. */
+    fileResolutions?: Record<string, PullFileResolution>;
+    /** Report what Get updates would do; write nothing, pull no rows. */
+    dryRun?: boolean;
   },
 ): Promise<PullAppFromCloudResult> {
   const code = await pullAppCodeFromRepo(appId, {
@@ -74,7 +79,12 @@ export async function pullAppFromCloud(
     allowRecentSkip: options.allowRecentSkip,
     preferCloudOverLocal: options.preferCloudOverLocal,
     resolution: options.resolution,
+    fileResolutions: options.fileResolutions,
+    dryRun: options.dryRun,
   });
+  if (options.dryRun) {
+    return { appId, code, tursoScheduled: false };
+  }
 
   if ((code.keptLocalFiles?.length ?? 0) > 0) {
     clearPendingAppUpdate(appId);
