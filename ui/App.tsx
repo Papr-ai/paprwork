@@ -32,7 +32,6 @@ import { initPaprQuotaListener } from "./stores/paprQuotaStore";
 import { initProposalNoticeListener } from "./stores/proposalNoticeListener";
 import { initJobLiveLogsListener } from "./stores/jobLiveLogsStore";
 import { initSubagentJobStore } from "./stores/subagentJobStore";
-import { UpdateBanner } from "./components/UpdateBanner/UpdateBanner";
 import { PaprQuotaBanner } from "./components/PaprQuotaBanner/PaprQuotaBanner";
 import { ConnectionIndicator } from "./components/ConnectionIndicator/ConnectionIndicator";
 import { useAppStatePersistence } from "./hooks/useAppStatePersistence";
@@ -646,7 +645,6 @@ export function App() {
       <PaprQuotaBanner />
       <CloudFeatureLockModal />
       <ConnectionIndicator />
-      <UpdateBanner />
     </>
   );
 }

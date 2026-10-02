@@ -75,6 +75,13 @@ export function UpdateBanner() {
     };
 
     api.onStatus(handler);
+
+    void api.getStatus?.().then((cached) => {
+      if (cached) {
+        handler(cached);
+      }
+    });
+
     return () => api.removeStatusListener(handler);
   }, []);
 

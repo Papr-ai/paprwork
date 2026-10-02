@@ -2140,10 +2140,15 @@ class GatewayProcessSupervisor {
 //  Sends status to renderer via IPC so the UI can show an update banner.
 // ---------------------------------------------------------------------------
 
+const { mergeUpdateStatusCache } = require("./updaterStatusCache.cjs");
+
 const UPDATE_RECOVERY_HINT =
   "If the app won't open after updating: quit Papr Work, delete " +
   "~/Library/Caches/com.paprwork.v2.ShipIt, remove /Applications/Papr Work.app, " +
   "then reinstall the latest arm64 .pkg from GitHub Releases.";
+
+/** @type {import("./updaterStatusCache.cjs").UpdateStatusPayload | null} */
+let cachedUpdateStatusPayload = null;
 
 function formatUpdateError(rawMessage) {
   const message =
@@ -2261,6 +2266,24 @@ function setupAutoUpdater() {
   autoUpdater.on("update-downloaded", (info) => {
     console.log(`[AutoUpdater] Update downloaded: v${info.version}`);
     sendUpdateStatus("ready", { version: info.version });
+    try {
+      const { Notification } = require("electron");
+      if (Notification.isSupported()) {
+        const notification = new Notification({
+          title: "Papr Work update ready",
+          body: `Version ${info.version} is downloaded. Restart to update.`,
+        });
+        notification.on("click", () => {
+          if (mainWindow && !mainWindow.isDestroyed()) {
+            mainWindow.show();
+            mainWindow.focus();
+          }
+        });
+        notification.show();
+      }
+    } catch (notificationError) {
+      console.warn("[AutoUpdater] Could not show update notification:", notificationError.message);
+    }
   });
 
   autoUpdater.on("error", (err) => {
@@ -2303,6 +2326,8 @@ function setupAutoUpdater() {
     });
   });
 
+  ipcMain.handle("updater:get-status", () => cachedUpdateStatusPayload);
+
   // Check on launch (after a short delay to not block startup)
   setTimeout(() => {
     // Skip auto-check in development mode
@@ -2331,8 +2356,12 @@ function setupAutoUpdater() {
 }
 
 function sendUpdateStatus(status, data) {
-  if (mainWindow && !mainWindow.isDestroyed()) {
-    mainWindow.webContents.send("updater:status", { status, ...data });
+  const payload = { status, ...(data || {}) };
+  const merged = mergeUpdateStatusCache(cachedUpdateStatusPayload, payload);
+  const changed = merged !== cachedUpdateStatusPayload;
+  cachedUpdateStatusPayload = merged;
+  if (changed && mainWindow && !mainWindow.isDestroyed()) {
+    mainWindow.webContents.send("updater:status", merged);
   }
 }
 

@@ -47,6 +47,12 @@ export function useAppUpdater(): UseAppUpdaterReturn {
 
     updaterAPI.onStatus(handler);
 
+    void updaterAPI.getStatus?.().then((cached) => {
+      if (cached) {
+        handler(cached);
+      }
+    });
+
     // Read version from meta tag
     const metaVersion = document.querySelector('meta[name="app-version"]')?.getAttribute('content');
     if (metaVersion) setCurrentVersion(metaVersion);

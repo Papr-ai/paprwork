@@ -12,31 +12,32 @@
     }
     strong { font-weight: 600; }
     p { margin: 0 0 10px; }
-    .open-app {
-      display: inline-block;
-      margin: 12px 0 14px;
-      padding: 8px 16px;
-      background: #0071e3;
-      color: #fff !important;
-      text-decoration: none;
-      border-radius: 8px;
-      font-weight: 600;
-    }
-    .open-app:hover { background: #0077ed; }
     .hint { color: #6e6e73; font-size: 12px; }
+    .path {
+      display: inline-block;
+      margin: 8px 0 12px;
+      padding: 6px 10px;
+      background: #f5f5f7;
+      border-radius: 6px;
+      font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+      font-size: 11px;
+    }
   </style>
 </head>
 <body>
   <p><strong>Papr Work is installed.</strong></p>
   <p>
-    When you click <strong>Close</strong>, Papr Work should open automatically.
-    If it does not, use the button below or open it from Applications.
-  </p>
-  <p>
-    <a class="open-app" href="file:///Applications/Papr%20Work.app/">Open Papr Work</a>
+    Click <strong>Close</strong> to finish. Papr Work should open automatically
+    within a few seconds.
   </p>
   <p class="hint">
-    You can also press <strong>⌘Space</strong>, type <strong>Papr Work</strong>, and press Return.
+    If it does not open, press <strong>⌘Space</strong>, type <strong>Papr Work</strong>,
+    and press Return — or open from Applications:
+  </p>
+  <p class="path">/Applications/Papr Work.app</p>
+  <p class="hint">
+    (Installer pages cannot launch apps from a button; automatic open runs when
+    installation completes.)
   </p>
 </body>
 </html>

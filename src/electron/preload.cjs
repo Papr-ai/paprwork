@@ -357,6 +357,7 @@ contextBridge.exposeInMainWorld("electronAPI", {
       check: () => {
         ipcRenderer.send("updater:check");
       },
+      getStatus: () => ipcRenderer.invoke("updater:get-status"),
     };
   })(),
 

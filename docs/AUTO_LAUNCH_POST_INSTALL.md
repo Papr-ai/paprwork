@@ -43,11 +43,12 @@ Created post-install script: `build/pkg-scripts/postinstall`
 Post-install (`build/pkg-scripts/postinstall`):
 
 1. Fixes ownership on `/Applications/Papr Work.app` for the console user (ShipIt updates).
-2. Registers a **one-shot LaunchAgent** in the user’s GUI session (`launchctl bootstrap gui/$uid`) that runs `/usr/bin/open` — this is more reliable on macOS 13+ than `launchctl asuser` alone from a root postinstall script.
-3. Falls back to `sudo -u … open` if bootstrap fails.
-4. Logs to `/var/log/paprwork-postinstall.log` if launch does not work (support debugging).
+2. Strips quarantine (`xattr -dr com.apple.quarantine`) so Gatekeeper does not block the first launch.
+3. Opens the app with **`sudo -u $USER open -a`** in the console user’s GUI session (primary path).
+4. If that fails, registers a **one-shot LaunchAgent** with a short delay, then `open -a`.
+5. Logs to `/var/log/paprwork-postinstall.log` for support debugging.
 
-The PKG **conclusion** screen (`build/pkg-conclusion.html`) tells users Papr Work should open when they click Close, and how to find it in Applications / Spotlight if not.
+The PKG **conclusion** screen (`build/pkg-conclusion.html`) does **not** use a `file://` link (Installer WebView cannot open apps that way). It tells users to click **Close** for automatic open, and how to launch from Spotlight or `/Applications/Papr Work.app` if needed.
 
 **Note:** The **ZIP** download (unzip → drag to Applications) has **no** post-install hook — only the **PKG** auto-opens. Release notes should steer Mac users to the `.pkg` when possible.
 

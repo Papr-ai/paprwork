@@ -653,6 +653,8 @@ export interface ElectronAPI {
     removeStatusListener: (callback: (data: UpdateStatus) => void) => void;
     install: () => void;
     check: () => void;
+    /** Last update status (for renderer that mounted after IPC events). */
+    getStatus: () => Promise<UpdateStatus | null>;
   };
 
   // System integration for mini-apps (generic invoke)

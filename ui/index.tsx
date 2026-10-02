@@ -24,6 +24,7 @@ window.addEventListener("unhandledrejection", (event) => {
 import React from "react";
 import ReactDOM from "react-dom/client";
 import App from "./App";
+import { UpdateBanner } from "./components/UpdateBanner/UpdateBanner";
 import { startRendererPerformanceReporting } from "./utils/rendererPerformance";
 import { installMiniAppPreviewWakeResync } from "./utils/previewIframeLifecycle";
 const stopRendererPerformance = startRendererPerformanceReporting(
@@ -48,7 +49,10 @@ const root = ReactDOM.createRoot(
 console.log(`[React] Root created at +${(performance.now() - reactStartTime).toFixed(2)}ms`);
 
 root.render(
-  <App />
+  <>
+    <UpdateBanner />
+    <App />
+  </>
 );
 
 console.log(`[React] Render called at +${(performance.now() - reactStartTime).toFixed(2)}ms`);

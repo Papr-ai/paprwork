@@ -94,6 +94,7 @@ function checkBuilderConfig() {
     'src/electron/index.cjs',
     'src/electron/supervisor-logic.cjs',
     'src/electron/preload.cjs',
+    'src/electron/updaterStatusCache.cjs',
     'src/electron/ipc/**/*.cjs',
     'src/resources/**/*',
     'package.json'
@@ -299,6 +300,7 @@ function checkAsarContents(appPath) {
       'src/electron/index.cjs',
       'src/electron/main.cjs',
       'src/electron/preload.cjs',
+      'src/electron/updaterStatusCache.cjs',
       'src/resources/workspace-templates/SLEEP.md',
     ];
 

@@ -34,17 +34,28 @@ user_home() {
   fi
 }
 
-launch_for_user() {
+open_app_as_user() {
   local u="$1"
-  local uid home agent_dir plist
+  local home
+  home="$(user_home "$u")"
 
+  log "open as $u (home=$home)"
+  /usr/bin/xattr -dr com.apple.quarantine "$APP_PATH" >>"$LOG" 2>&1 || true
+
+  # Prefer direct open in the user's GUI session (works on modern macOS).
+  if /usr/bin/sudo -u "$u" env HOME="$home" USER="$u" /usr/bin/open -a "$APP_PATH" >>"$LOG" 2>&1; then
+    log "open -a succeeded"
+    return 0
+  fi
+
+  log "open -a failed; trying LaunchAgent with delay"
+  local uid agent_dir plist
   uid="$(/usr/bin/id -u "$u" 2>/dev/null)"
   if [ -z "$uid" ]; then
     log "no uid for $u"
     return 1
   fi
 
-  home="$(user_home "$u")"
   agent_dir="$home/Library/LaunchAgents"
   plist="$agent_dir/${LABEL}.plist"
 
@@ -60,8 +71,9 @@ launch_for_user() {
   <string>${LABEL}</string>
   <key>ProgramArguments</key>
   <array>
-    <string>/usr/bin/open</string>
-    <string>${APP_PATH}</string>
+    <string>/bin/bash</string>
+    <string>-c</string>
+    <string>/usr/bin/sleep 3; /usr/bin/xattr -dr com.apple.quarantine '${APP_PATH}' 2>/dev/null; /usr/bin/open -a '${APP_PATH}'</string>
   </array>
   <key>RunAtLoad</key>
   <true/>
@@ -74,16 +86,16 @@ EOF
   /usr/sbin/chown "$u:staff" "$plist"
   /bin/chmod 644 "$plist"
 
-  log "launchctl bootstrap gui/$uid for $u"
+  /bin/launchctl bootout "gui/$uid" "$plist" >>"$LOG" 2>&1 || true
   if /bin/launchctl bootstrap "gui/$uid" "$plist" >>"$LOG" 2>&1; then
-    /bin/sleep 2
+    /bin/sleep 5
     /bin/launchctl bootout "gui/$uid" "$plist" >>"$LOG" 2>&1 || true
     /bin/rm -f "$plist"
     return 0
   fi
 
-  log "bootstrap failed; trying open as user"
-  /usr/bin/sudo -u "$u" env HOME="$home" USER="$u" /usr/bin/open "$APP_PATH" >>"$LOG" 2>&1
+  log "bootstrap failed"
+  return 1
 }
 
 log "postinstall start"
@@ -103,8 +115,9 @@ fi
 /bin/sleep 1
 
 if [ -n "$CONSOLE_USER" ]; then
-  launch_for_user "$CONSOLE_USER"
+  open_app_as_user "$CONSOLE_USER"
 else
+  /usr/bin/xattr -dr com.apple.quarantine "$APP_PATH" >>"$LOG" 2>&1 || true
   /usr/bin/open "$APP_PATH" >>"$LOG" 2>&1 || true
 fi
 
