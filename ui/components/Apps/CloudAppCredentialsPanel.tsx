@@ -2,7 +2,7 @@
  * Share sheet — configure which API keys are owner vs visitor-provided.
  */
 
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useEffect, useState, type MutableRefObject } from "react";
 import type {
   CredentialScope,
   RequiredKeySpec,
@@ -20,6 +20,14 @@ interface CloudAppCredentialsPanelProps {
   /** When false, keys still save to requirements.json but are not on the live catalog yet. */
   appLive?: boolean;
   onSaved?: () => void;
+  /**
+   * Embedded in the Share sheet's step flow: no title and no Save button of
+   * its own. The sheet's one footer button saves through `saveRef`, so there is
+   * never a second Save to miss.
+   */
+  embedded?: boolean;
+  onDirtyChange?: (dirty: boolean) => void;
+  saveRef?: MutableRefObject<(() => Promise<boolean>) | null>;
 }
 
 interface DraftRow {
@@ -51,12 +59,23 @@ function toSpec(row: DraftRow): RequiredKeySpec {
   };
 }
 
+function fingerprint(specs: RequiredKeySpec[]): string {
+  return JSON.stringify(
+    specs
+      .map((s) => [s.name, s.service, s.description ?? "", s.credentialScope])
+      .sort(),
+  );
+}
+
 export function CloudAppCredentialsPanel({
   appId,
   appTitle,
   busy = false,
   appLive = true,
   onSaved,
+  embedded = false,
+  onDirtyChange,
+  saveRef,
 }: CloudAppCredentialsPanelProps) {
   const [rows, setRows] = useState<DraftRow[]>([]);
   const [detectedKeyNames, setDetectedKeyNames] = useState<string[]>([]);
@@ -67,6 +86,8 @@ export function CloudAppCredentialsPanel({
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [message, setMessage] = useState<string | null>(null);
+  /** The rows as loaded, to tell real edits from the starting state. */
+  const [savedFingerprint, setSavedFingerprint] = useState("[]");
 
   const load = useCallback(async () => {
     setLoading(true);
@@ -75,6 +96,8 @@ export function CloudAppCredentialsPanel({
       const discovery = await fetchAppRequirements(appId);
       setRows(discovery.requirements.map(toDraft));
       setDetectedKeyNames(discovery.detectedKeyNames ?? []);
+      // Baseline is what loaded; unsaved detections are tracked separately.
+      setSavedFingerprint(fingerprint(discovery.requirements));
     } catch (err) {
       setError((err as Error).message.slice(0, 160));
     } finally {
@@ -109,15 +132,25 @@ export function CloudAppCredentialsPanel({
     setRows((prev) => prev.filter((_, i) => i !== index));
   };
 
-  const save = async () => {
-    const normalized = rows
-      .map(toSpec)
-      .filter((spec) => spec.name.length > 0);
+  const normalized = rows.map(toSpec).filter((spec) => spec.name.length > 0);
+  // Detected-but-unsaved keys count as a change: saving is what adds them.
+  const dirty =
+    !loading &&
+    (detectedKeyNames.length > 0 ||
+      fingerprint(normalized) !== savedFingerprint);
 
+  useEffect(() => {
+    onDirtyChange?.(dirty);
+  }, [dirty, onDirtyChange]);
+
+  const save = async (): Promise<boolean> => {
+    if (!dirty) return true;
     for (const spec of normalized) {
       if (!/^[A-Z][A-Z0-9_]*$/.test(spec.name)) {
-        setError(`Key name must be UPPER_SNAKE_CASE: ${spec.name || "(empty)"}`);
-        return;
+        setError(
+          `Key name must be UPPER_SNAKE_CASE: ${spec.name || "(empty)"}`,
+        );
+        return false;
       }
     }
 
@@ -127,24 +160,35 @@ export function CloudAppCredentialsPanel({
     try {
       await saveAppRequirements(appId, normalized);
       setDetectedKeyNames([]);
-      setMessage(
-        appLive
-          ? "Saved. Republish to update the live app catalog."
-          : "Saved to requirements.json. Publish on Web to apply the catalog.",
-      );
+      setSavedFingerprint(fingerprint(normalized));
+      if (!embedded) {
+        setMessage(
+          appLive
+            ? "Saved. Republish to update the live app catalog."
+            : "Saved to requirements.json. Publish on Web to apply the catalog.",
+        );
+      }
       onSaved?.();
+      return true;
     } catch (err) {
       setError((err as Error).message.slice(0, 160));
+      return false;
     } finally {
       setSaving(false);
     }
   };
 
-  const hasUserKeys = rows.some((row) => row.credentialScope === "user" && row.name.trim());
+  if (saveRef) saveRef.current = save;
+
+  const hasUserKeys = rows.some(
+    (row) => row.credentialScope === "user" && row.name.trim(),
+  );
 
   return (
     <div className="share-sheet__section share-sheet__credentials">
-      <p className="share-sheet__section-title">API credentials</p>
+      {embedded ? null : (
+        <p className="share-sheet__section-title">API credentials</p>
+      )}
       {/* "Mine" is a spending decision, not a config detail — say so once here
           rather than making people infer it from the word "owner". */}
       <p className="share-sheet__section-desc">
@@ -154,8 +198,8 @@ export function CloudAppCredentialsPanel({
         {!appLive ? (
           <>
             {" "}
-            Edits save to <code>requirements.json</code> in your app folder; publish
-            when you are ready for them to apply on the web.
+            Edits save to <code>requirements.json</code> in your app folder;
+            publish when you are ready for them to apply on the web.
           </>
         ) : null}
       </p>
@@ -167,17 +211,17 @@ export function CloudAppCredentialsPanel({
           {rows.length === 0 ? (
             <p className="share-sheet__footnote">
               No keys detected yet. Declare keys in{" "}
-              <code>backend/manifest.json</code> action <code>keys</code> arrays,
-              linked job commands (<code>${"{KEY_NAME}"}</code>), enable embedded
-              app assistant chat, or add them manually below.
+              <code>backend/manifest.json</code> action <code>keys</code>{" "}
+              arrays, linked job commands (<code>${"{KEY_NAME}"}</code>), enable
+              embedded app assistant chat, or add them manually below.
             </p>
           ) : null}
 
           {detectedKeyNames.length > 0 ? (
             <p className="share-sheet__footnote">
               Detected from app backend, linked jobs, and embedded chat:{" "}
-              <strong>{detectedKeyNames.join(", ")}</strong>. Save credentials
-              to include them in the published catalog.
+              <strong>{detectedKeyNames.join(", ")}</strong>. Save to include
+              them in the published catalog.
             </p>
           ) : null}
 
@@ -198,7 +242,9 @@ export function CloudAppCredentialsPanel({
                         placeholder="KEY_NAME"
                         value={row.name}
                         onChange={(e) =>
-                          updateRow(index, { name: e.target.value.toUpperCase() })
+                          updateRow(index, {
+                            name: e.target.value.toUpperCase(),
+                          })
                         }
                         aria-label="Key name"
                       />
@@ -206,7 +252,9 @@ export function CloudAppCredentialsPanel({
                         className="share-sheet__cred-input"
                         placeholder="Service (e.g. X / Twitter)"
                         value={row.service}
-                        onChange={(e) => updateRow(index, { service: e.target.value })}
+                        onChange={(e) =>
+                          updateRow(index, { service: e.target.value })
+                        }
                         aria-label="Service name"
                       />
                       <input
@@ -266,9 +314,13 @@ export function CloudAppCredentialsPanel({
                           <button
                             key={scope}
                             type="button"
-                            className={row.credentialScope === scope ? "is-on" : ""}
+                            className={
+                              row.credentialScope === scope ? "is-on" : ""
+                            }
                             aria-pressed={row.credentialScope === scope}
-                            onClick={() => updateRow(index, { credentialScope: scope })}
+                            onClick={() =>
+                              updateRow(index, { credentialScope: scope })
+                            }
                           >
                             {label}
                           </button>
@@ -290,14 +342,16 @@ export function CloudAppCredentialsPanel({
             >
               Add key
             </button>
-            <button
-              type="button"
-              className="share-sheet__primary-btn"
-              disabled={busy || saving}
-              onClick={() => void save()}
-            >
-              {saving ? "Saving…" : "Save credentials"}
-            </button>
+            {embedded ? null : (
+              <button
+                type="button"
+                className="share-sheet__primary-btn"
+                disabled={busy || saving}
+                onClick={() => void save()}
+              >
+                {saving ? "Saving…" : "Save credentials"}
+              </button>
+            )}
           </div>
 
           {/* Was two sentences: a restatement of what "Theirs" already means,
@@ -315,7 +369,9 @@ export function CloudAppCredentialsPanel({
 
       {error ? <p className="share-sheet__error">{error}</p> : null}
       {message ? (
-        <p className="share-sheet__notice share-sheet__notice--success">{message}</p>
+        <p className="share-sheet__notice share-sheet__notice--success">
+          {message}
+        </p>
       ) : null}
     </div>
   );

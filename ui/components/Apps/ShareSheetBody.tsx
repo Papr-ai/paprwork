@@ -11,7 +11,7 @@
  * Reference: Share Bar Redesign prototype, v6.
  */
 
-import React, { useEffect, useState } from "react";
+import React, { useEffect, useRef, useState } from "react";
 import type { RequiredKeySpec } from "../../../src/core/types/bundles";
 import type { ShareAudience } from "../../utils/shareAudienceModel";
 import { shareAudienceGlyphPath } from "../../utils/shareAudienceGlyphs";
@@ -263,15 +263,25 @@ function WhatStep({ props }: { props: ShareSheetBodyProps }) {
   );
 }
 
+interface KeysDraft {
+  dirty: boolean;
+  setDirty: (dirty: boolean) => void;
+  saveRef: React.MutableRefObject<(() => Promise<boolean>) | null>;
+  onSaved: () => void;
+}
+
+/** Stays mounted for the whole edit (hidden off-step) so Back/Next keep edits. */
 function KeysStep({
   props,
-  onSaved,
+  keys,
+  hidden,
 }: {
   props: ShareSheetBodyProps;
-  onSaved: () => void;
+  keys: KeysDraft;
+  hidden: boolean;
 }) {
   return (
-    <div>
+    <div hidden={hidden}>
       <h6 className="ss6-h">Whose API keys it runs on</h6>
       <MissingKeysWarning props={props} />
       <CloudAppCredentialsPanel
@@ -279,7 +289,10 @@ function KeysStep({
         appTitle={props.appTitle}
         busy={props.busy}
         appLive
-        onSaved={onSaved}
+        embedded
+        onDirtyChange={keys.setDirty}
+        saveRef={keys.saveRef}
+        onSaved={keys.onSaved}
       />
     </div>
   );
@@ -316,15 +329,13 @@ function MissingKeysWarning({ props }: { props: ShareSheetBodyProps }) {
 function StepView({
   id,
   props,
-  onKeysSaved,
 }: {
   id: ShareStepId;
   props: ShareSheetBodyProps;
-  onKeysSaved: () => void;
 }) {
   if (id === "who") return <WhoStep props={props} />;
   if (id === "what") return <WhatStep props={props} />;
-  return <KeysStep props={props} onSaved={onKeysSaved} />;
+  return null;
 }
 
 function LinkHero({ props }: { props: ShareSheetBodyProps }) {
@@ -473,15 +484,21 @@ function FlowFooter({
   steps,
   flow,
   setFlow,
+  keys,
 }: {
   props: ShareSheetBodyProps;
   steps: ShareStepId[];
   flow: EditFlow;
   setFlow: (flow: EditFlow | null) => void;
+  keys: KeysDraft;
 }) {
+  const [saving, setSaving] = useState(false);
   const idx = Math.max(0, steps.indexOf(flow.at));
   const last = idx >= steps.length - 1;
-  const keysOnly = flow.start === "keys";
+  const keysInFlow = steps.includes("keys");
+  const sharingChanged = props.dirty && flow.start !== "keys";
+  const keysChanged = keysInFlow && keys.dirty;
+  const changed = sharingChanged || keysChanged;
   const back = () => {
     if (idx > 0) {
       setFlow({ ...flow, at: steps[idx - 1] });
@@ -490,25 +507,38 @@ function FlowFooter({
     props.onDiscard();
     setFlow(null);
   };
+  // One button saves everything walked through. Keys go first: they can fail
+  // validation, and a half-applied change is worse than none.
   const save = async () => {
-    if (await props.onSave()) setFlow(null);
+    setSaving(true);
+    try {
+      if (keysChanged && !(await keys.saveRef.current?.())) return;
+      if (sharingChanged && !(await props.onSave())) return;
+      setFlow(null);
+    } finally {
+      setSaving(false);
+    }
   };
-  const blocked = props.busy || props.peopleAllowlistEmpty;
+  const blocked = props.busy || saving || props.peopleAllowlistEmpty;
+  const saveLabel =
+    sharingChanged || !keysChanged ? "Save changes" : "Save keys";
   return (
     <div className="ss6-foot">
       <button type="button" className="ss6-btn" onClick={back}>
-        {keysOnly ? "Done" : idx > 0 ? "Back" : "Cancel"}
+        {idx > 0 ? "Back" : changed ? "Cancel" : "Back"}
       </button>
-      {!keysOnly && steps.length > 1 ? (
+      {steps.length > 1 ? (
         <span className="ss6-hint">
           Step {idx + 1} of {steps.length}
         </span>
+      ) : changed ? (
+        <span className="ss6-hint">Not saved yet</span>
       ) : null}
-      {keysOnly ? null : !last ? (
+      {!last ? (
         <button
           type="button"
           className="ss6-btn ss6-btn--primary"
-          disabled={!props.dirty || blocked}
+          disabled={blocked}
           onClick={() => setFlow({ ...flow, at: steps[idx + 1] })}
         >
           Next
@@ -517,10 +547,10 @@ function FlowFooter({
         <button
           type="button"
           className="ss6-btn ss6-btn--primary"
-          disabled={!props.dirty || blocked}
+          disabled={!changed || blocked}
           onClick={() => void save()}
         >
-          {props.busy ? "Saving…" : "Save changes"}
+          {saving || props.busy ? "Saving…" : saveLabel}
         </button>
       )}
     </div>
@@ -536,9 +566,16 @@ export function ShareSheetBody(props: ShareSheetBodyProps) {
   );
   const [keysReload, setKeysReload] = useState(0);
   const keySpecs = useKeySpecs(props.appId, keysReload);
-  const onKeysSaved = () => {
-    setKeysReload((n) => n + 1);
-    props.onKeysSaved?.();
+  const [keysDirty, setKeysDirty] = useState(false);
+  const keysSaveRef = useRef<(() => Promise<boolean>) | null>(null);
+  const keys: KeysDraft = {
+    dirty: keysDirty,
+    setDirty: setKeysDirty,
+    saveRef: keysSaveRef,
+    onSaved: () => {
+      setKeysReload((n) => n + 1);
+      props.onKeysSaved?.();
+    },
   };
   const steps = flow
     ? shareEditFlow(
@@ -555,16 +592,20 @@ export function ShareSheetBody(props: ShareSheetBodyProps) {
       {notices}
       {flow && at ? (
         <>
-          <StepView id={at} props={props} onKeysSaved={onKeysSaved} />
+          <StepView id={at} props={props} />
+          {steps.includes("keys") ? (
+            <KeysStep props={props} keys={keys} hidden={at !== "keys"} />
+          ) : null}
           {at === "who" && props.peopleAllowlistEmpty ? (
             <p className="ss6-note ss6-note--warn">
               Add at least one person, email or domain.
             </p>
           ) : null}
-          {flow.start !== "keys" && at === "keys" ? (
+          {at === "keys" ? (
             <p className="ss6-note">
-              Check these still fit who can open it. Nothing changes until you
-              save.
+              {flow.start === "keys"
+                ? "Key changes reach people the next time you Publish."
+                : "Check these still fit who can open it. Nothing changes until you save."}
             </p>
           ) : null}
           <FlowFooter
@@ -572,6 +613,7 @@ export function ShareSheetBody(props: ShareSheetBodyProps) {
             steps={steps}
             flow={{ ...flow, at }}
             setFlow={setFlow}
+            keys={keys}
           />
         </>
       ) : (
