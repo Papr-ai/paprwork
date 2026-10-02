@@ -1,9 +1,10 @@
 /**
  * Share sheet v6 — "Share is three questions".
  *
- * Draft app: who → what → keys as three short steps, ending in one Publish.
- * Live app: the link first (the thing people open Share for), then the three
- * answers as rows. Clicking a row opens that step; every click saves at once.
+ * Share only exists once an app is live; the bar's Publish gets it there.
+ * The link comes first (the thing people open Share for), then the three
+ * answers as rows. Clicking a row opens that step. Narrowing saves at once;
+ * opening the app up asks once (see sharingConfirmPrompt), inline.
  * Publishing code stays on the bar — this sheet never says "Update web".
  *
  * Reference: Share Bar Redesign prototype, v6.
@@ -19,11 +20,11 @@ import {
   SHARE_AUDIENCE_ORDER,
   SHARE_STEP_TITLE,
   perUserDataAvailable,
-  shareSteps,
   signInIsOptional,
   summarizeKeys,
   summarizeWhat,
   type ShareStepId,
+  type SharingConfirmPrompt,
   type SharingDraft,
   type SharingPatch,
 } from "../../utils/shareSheetModel";
@@ -33,12 +34,10 @@ import "./ShareSheetBody.css";
 export interface ShareSheetBodyProps {
   appId: string;
   appTitle: string;
-  live: boolean;
   draft: SharingDraft;
   onChange: (patch: SharingPatch) => void;
   /** Rendered under "Specific people" when it is selected. */
   peoplePicker: React.ReactNode;
-  /** Live link; null until published. */
   linkUrl: string | null;
   /** Caveat under the link (upload still running, token pending). */
   linkHint?: string | null;
@@ -47,9 +46,15 @@ export interface ShareSheetBodyProps {
   busy: boolean;
   /** Blocks the change that would widen "Specific people" to the whole workspace. */
   peopleAllowlistEmpty: boolean;
-  publishLabel: string;
-  publishDisabled: boolean;
-  onPublish: () => void;
+  /** A change that opens the app up, waiting for one explicit confirm. */
+  pendingConfirm: SharingConfirmPrompt | null;
+  onConfirmPending: () => void;
+  onCancelPending: () => void;
+  /** "Mine" keys not in the owner's keychain (shown in the keys step + row). */
+  missingKeys: RequiredKeySpec[];
+  onAddMissingKeys: () => void;
+  /** Bumped by the keys step after a save so the bar chip re-checks. */
+  onKeysSaved?: () => void;
   /** Status / errors / dependency panels, rendered above the steps. */
   notices?: React.ReactNode;
   /** Optional deep link into one step (e.g. a missing-key chip). */
@@ -265,13 +270,72 @@ function KeysStep({
   return (
     <div>
       <h6 className="ss6-h">Whose API keys it runs on</h6>
+      <MissingKeysWarning props={props} />
       <CloudAppCredentialsPanel
         appId={props.appId}
         appTitle={props.appTitle}
         busy={props.busy}
-        appLive={props.live}
+        appLive
         onSaved={onSaved}
       />
+    </div>
+  );
+}
+
+function MissingKeysWarning({ props }: { props: ShareSheetBodyProps }) {
+  const { missingKeys } = props;
+  if (missingKeys.length === 0) return null;
+  const required = missingKeys.some((spec) => spec.required !== false);
+  const names = missingKeys.map((spec) => spec.name).join(", ");
+  return (
+    <div
+      className={`ss6-alert ss6-alert--${required ? "bad" : "warn"}`}
+      role="alert"
+    >
+      <span>
+        <b>{names}</b> {missingKeys.length === 1 ? "is" : "are"} set to Mine but
+        not on your account.{" "}
+        {required
+          ? "People can't use the app until you add it, or switch it to Theirs."
+          : "Optional features that need it won't work for people."}
+      </span>
+      <button
+        type="button"
+        className="ss6-btn"
+        onClick={props.onAddMissingKeys}
+      >
+        Add key
+      </button>
+    </div>
+  );
+}
+
+function ConfirmBar({ props }: { props: ShareSheetBodyProps }) {
+  const prompt = props.pendingConfirm;
+  if (!prompt) return null;
+  return (
+    <div className="ss6-confirm" role="alertdialog" aria-label={prompt.title}>
+      <span className="ss6-confirm-txt">
+        <b>{prompt.title}</b>
+        <small>{prompt.body}</small>
+      </span>
+      <span className="ss6-confirm-actions">
+        <button
+          type="button"
+          className="ss6-btn"
+          onClick={props.onCancelPending}
+        >
+          Cancel
+        </button>
+        <button
+          type="button"
+          className="ss6-btn ss6-btn--primary"
+          disabled={props.busy}
+          onClick={props.onConfirmPending}
+        >
+          {prompt.confirmLabel}
+        </button>
+      </span>
     </div>
   );
 }
@@ -311,7 +375,7 @@ function LinkHero({ props }: { props: ShareSheetBodyProps }) {
         <AudienceGlyph audience={draft.audience} />
       </span>
       <span className="ss6-hero-txt">
-        <b title={linkUrl ?? ""}>{linkUrl ?? "Link appears after publish"}</b>
+        <b title={linkUrl ?? ""}>{linkUrl ?? "Preparing link…"}</b>
         <small>{linkHint || SHARE_AUDIENCE_COPY[draft.audience].sub}</small>
       </span>
       {linkUrl ? (
@@ -366,7 +430,12 @@ function LiveSummary({
   onEdit: (id: ShareStepId) => void;
 }) {
   const { draft } = props;
-  const rows: { id: ShareStepId; value: string; icon: React.ReactNode }[] = [
+  const rows: {
+    id: ShareStepId;
+    value: string;
+    icon: React.ReactNode;
+    tone?: "bad" | "warn";
+  }[] = [
     {
       id: "who",
       value: SHARE_AUDIENCE_COPY[draft.audience].label,
@@ -381,7 +450,13 @@ function LiveSummary({
     });
     rows.push({
       id: "keys",
-      value: summarizeKeys(keySpecs),
+      value: summarizeKeys(keySpecs, props.missingKeys),
+      tone:
+        props.missingKeys.length === 0
+          ? undefined
+          : props.missingKeys.some((spec) => spec.required !== false)
+            ? "bad"
+            : "warn",
       icon: <Glyph d={ICON_PATHS.keys} />,
     });
   }
@@ -393,7 +468,7 @@ function LiveSummary({
           <button
             key={row.id}
             type="button"
-            className="ss6-arow"
+            className={`ss6-arow${row.tone ? ` ss6-arow--${row.tone}` : ""}`}
             onClick={() => onEdit(row.id)}
           >
             <span className="ss6-tico">{row.icon}</span>
@@ -416,106 +491,51 @@ function LiveSummary({
 }
 
 export function ShareSheetBody(props: ShareSheetBodyProps) {
-  const { draft, live, busy, notices } = props;
+  const { notices } = props;
   const [edit, setEdit] = useState<ShareStepId | null>(
     props.initialEdit ?? null,
   );
-  const [step, setStep] = useState(0);
   const [keysReload, setKeysReload] = useState(0);
   const keySpecs = useKeySpecs(props.appId, keysReload);
-  const onKeysSaved = () => setKeysReload((n) => n + 1);
+  const onKeysSaved = () => {
+    setKeysReload((n) => n + 1);
+    props.onKeysSaved?.();
+  };
 
-  const steps = shareSteps(draft.audience);
-  const stepIndex = Math.min(step, steps.length - 1);
-
-  if (live) {
-    return (
-      <div className="ss6">
-        {notices}
-        {edit ? (
-          <>
-            <StepView id={edit} props={props} onKeysSaved={onKeysSaved} />
-            {edit === "who" && props.peopleAllowlistEmpty ? (
-              <p className="ss6-note ss6-note--warn">
-                Add at least one person, email or domain. Until then the current
-                access stays.
-              </p>
-            ) : null}
-            <div className="ss6-foot">
-              <button
-                type="button"
-                className="ss6-btn"
-                onClick={() => setEdit(null)}
-              >
-                Back
-              </button>
-              <span className="ss6-hint">Changes apply right away</span>
-            </div>
-          </>
-        ) : (
-          <LiveSummary props={props} keySpecs={keySpecs} onEdit={setEdit} />
-        )}
-      </div>
-    );
-  }
-
-  const current = steps[stepIndex];
-  const last = stepIndex === steps.length - 1;
   return (
     <div className="ss6">
       {notices}
-      <p className="ss6-progress">
-        {SHARE_STEP_TITLE[current]} · {stepIndex + 1} of {steps.length}
-      </p>
-      <StepView id={current} props={props} onKeysSaved={onKeysSaved} />
-      <div className="ss6-foot">
-        {stepIndex > 0 ? (
-          <button
-            type="button"
-            className="ss6-btn"
-            onClick={() => setStep(stepIndex - 1)}
-          >
-            Back
-          </button>
-        ) : (
-          <span className="ss6-dots" aria-hidden>
-            {steps.map((id, i) => (
-              <i
-                key={id}
-                className={
-                  i === stepIndex ? "on" : i < stepIndex ? "done" : undefined
-                }
-              />
-            ))}
-          </span>
-        )}
-        {last ? (
-          <button
-            type="button"
-            className="ss6-btn ss6-btn--primary"
-            disabled={
-              busy || props.publishDisabled || props.peopleAllowlistEmpty
-            }
-            title={
-              props.peopleAllowlistEmpty
-                ? "Add at least one person, email or domain — or pick a different audience"
-                : undefined
-            }
-            onClick={props.onPublish}
-          >
-            {busy ? "Publishing…" : props.publishLabel}
-          </button>
-        ) : (
-          <button
-            type="button"
-            className="ss6-btn ss6-btn--primary"
-            disabled={current === "who" && props.peopleAllowlistEmpty}
-            onClick={() => setStep(stepIndex + 1)}
-          >
-            Next
-          </button>
-        )}
-      </div>
+      {edit ? (
+        <>
+          <StepView id={edit} props={props} onKeysSaved={onKeysSaved} />
+          {edit === "who" && props.peopleAllowlistEmpty ? (
+            <p className="ss6-note ss6-note--warn">
+              Add at least one person, email or domain. Until then the current
+              access stays.
+            </p>
+          ) : null}
+          <ConfirmBar props={props} />
+          <div className="ss6-foot">
+            <button
+              type="button"
+              className="ss6-btn"
+              onClick={() => {
+                props.onCancelPending();
+                setEdit(null);
+              }}
+            >
+              Back
+            </button>
+            <span className="ss6-hint">
+              {props.pendingConfirm
+                ? "Not saved yet"
+                : "Changes apply right away"}
+            </span>
+          </div>
+        </>
+      ) : (
+        <LiveSummary props={props} keySpecs={keySpecs} onEdit={setEdit} />
+      )}
     </div>
   );
 }

@@ -70,9 +70,14 @@ import {
 import { CloudChangeRequestsPanel } from "./CloudChangeRequestsPanel";
 import { CloudContributeBackPanel } from "./CloudContributeBackPanel";
 import { ShareSheetBody } from "./ShareSheetBody";
+import { openKeySettings, useMissingAppKeys } from "../../hooks/useMissingAppKeys";
 import {
   resolveSharingPatch,
-  sharePublishLabel,
+  missingKeysLabel,
+  missingKeysTone,
+  sameSharing,
+  sharingConfirmPrompt,
+  type ShareStepId,
   type SharingDraft,
   type SharingPatch,
 } from "../../utils/shareSheetModel";
@@ -236,6 +241,9 @@ export function MiniAppPublishBar({
   onTitleChange,
 }: MiniAppPublishBarProps) {
   const [shareOpen, setShareOpen] = useState(false);
+  /** Lets the missing-key chip open Share straight on the keys step. */
+  const [shareInitialStep, setShareInitialStep] = useState<ShareStepId | null>(null);
+  const [keysCheckToken, setKeysCheckToken] = useState(0);
   /** Propose has its own sheet. It used to open Share and scroll to the
    *  contribute form, but Share opens on "1. Who can access your copy" with a
    *  "Publish your copy" banner — so asking to send edits upstream landed you
@@ -758,6 +766,14 @@ export function MiniAppPublishBar({
   // its own link (proposing is one step away, on the split caret).
   const copyAxes = cloudLineage ? copyAxesFromLineage(cloudLineage) : null;
   const onTeamData = copyAxes?.link === "linked" && copyAxes.dataMode === "team";
+  /** "Mine" keys missing from the owner's keychain — a status, not a setting.
+   *  Only the owner of a live app pays for "Mine", so only they see it. */
+  const missingKeys = useMissingAppKeys(
+    appId,
+    cloud.live && !onTeamData,
+    keysCheckToken,
+  );
+  const missingTone = missingKeysTone(missingKeys);
   // A plain fork (mode "fork") is fully the user's own app: no Propose, no
   // "In sync with publisher", no "Update from publisher". Only collaborators
   // (track) stay linked to the publisher. The fork mark by the title still
@@ -1248,25 +1264,31 @@ export function MiniAppPublishBar({
     }
   };
 
-  /** v6 Share: every answer saves the moment it is picked on a live app; a
-   *  draft just collects answers until the final Publish. */
+  /** v6 Share: narrowing saves the moment it is picked; opening the app up
+   *  waits for one inline confirm (sharingConfirmPrompt). Share is live-only —
+   *  the bar's Publish is how an app gets on the web. */
   const sharingDraft: SharingDraft = {
     audience,
     permission,
     requireSignIn,
     perUserIsolation,
   };
+  const savedSharing: SharingDraft = {
+    audience: appliedModel.audience,
+    permission: appliedModel.permission,
+    requireSignIn: appliedRequireSignIn,
+    perUserIsolation: appliedPerUserIsolation,
+  };
   const reportSharingError = (err: unknown) =>
     cloud.reportError(publishErrorMessage(err));
-  const changeSharing = (patch: SharingPatch) => {
-    if (shareSheetBusy) return;
-    const next = resolveSharingPatch(sharingDraft, patch);
+  const showSharing = (next: SharingDraft) => {
     setAudience(next.audience);
     setPermission(next.permission);
     setRequireSignIn(next.requireSignIn);
     setPerUserIsolation(next.perUserIsolation);
-    if (next.audience === "people") void ensureWorkspacePeople();
-    if (!cloud.live) return;
+  };
+  const saveSharing = (next: SharingDraft) => {
+    if (!cloud.live || sameSharing(next, savedSharing)) return;
     // An empty "Specific people" list would save as the whole workspace —
     // hold the change until someone is added.
     if (
@@ -1285,6 +1307,23 @@ export function MiniAppPublishBar({
       next.requireSignIn,
       next.perUserIsolation,
     ).catch(reportSharingError);
+  };
+  const changeSharing = (patch: SharingPatch) => {
+    if (shareSheetBusy) return;
+    const next = resolveSharingPatch(sharingDraft, patch);
+    showSharing(next);
+    if (next.audience === "people") void ensureWorkspacePeople();
+    // Compared against what is live, so stepping through options and back
+    // never asks, and the question always describes the real change.
+    if (sharingConfirmPrompt(savedSharing, next)) return;
+    saveSharing(next);
+  };
+  const pendingSharingConfirm = sameSharing(sharingDraft, savedSharing)
+    ? null
+    : sharingConfirmPrompt(savedSharing, sharingDraft);
+  const confirmPendingSharing = () => saveSharing(sharingDraft);
+  const cancelPendingSharing = () => {
+    if (pendingSharingConfirm) showSharing(savedSharing);
   };
   const changePeople = (ids: string[], emails: string[], domains: string[]) => {
     setAllowedUserIds(ids);
@@ -1908,6 +1947,36 @@ export function MiniAppPublishBar({
           {/* Collaborators (team or Community) get no Share: the app belongs
               to the publisher. To share it, use Duplicate as my own app in
               the menu, then share that copy. */}
+          {missingTone ? (
+            <button
+              type="button"
+              className={`mini-app-publish-bar__keys-chip mini-app-publish-bar__keys-chip--${missingTone}`}
+              title={`${missingKeys.map((k) => k.name).join(", ")} ${
+                missingKeys.length === 1 ? "is" : "are"
+              } set to Mine but not on your account${
+                missingTone === "bad"
+                  ? ". People can't use the app until it's added."
+                  : ". Optional features won't work for people."
+              }`}
+              onClick={() => {
+                setShareInitialStep("keys");
+                setShareOpen(true);
+              }}
+            >
+              <svg viewBox="0 0 16 16" width="13" height="13" aria-hidden focusable="false">
+                <path
+                  d="M10 2.5a3.5 3.5 0 1 1-2.9 5.5L2.5 12.6v1.9h2v-1.5h1.5V11.5h1.5l.9-.9A3.5 3.5 0 0 1 10 2.5Zm1 2.6h.01"
+                  fill="none"
+                  stroke="currentColor"
+                  strokeWidth="1.4"
+                  strokeLinecap="round"
+                  strokeLinejoin="round"
+                />
+              </svg>
+              {missingKeysLabel(missingKeys)}
+            </button>
+          ) : null}
+
           {!onTeamData && cloud.live ? (
             <button
               type="button"
@@ -2138,11 +2207,17 @@ export function MiniAppPublishBar({
       ) : null}
 
       {shareOpen ? (
-        <ShareSheet title="Share" onClose={() => setShareOpen(false)}>
+        <ShareSheet
+          title="Share"
+          onClose={() => {
+            cancelPendingSharing();
+            setShareOpen(false);
+            setShareInitialStep(null);
+          }}
+        >
           <ShareSheetBody
             appId={appId}
             appTitle={appTitle}
-            live={cloud.live}
             draft={sharingDraft}
             onChange={changeSharing}
             peoplePicker={
@@ -2169,13 +2244,13 @@ export function MiniAppPublishBar({
             onOpenLink={() => void cloud.openInBrowser(copyUrl ?? webDisplayUrl)}
             busy={shareSheetBusy}
             peopleAllowlistEmpty={peopleAllowlistEmpty}
-            publishLabel={sharePublishLabel(
-              audience,
-              allowedUserIds.length + allowedEmails.length + allowedEmailDomains.length,
-              isFork,
-            )}
-            publishDisabled={cloud.loading || publishBlockedByIntegrity}
-            onPublish={() => void handlePublishClick()}
+            pendingConfirm={pendingSharingConfirm}
+            onConfirmPending={confirmPendingSharing}
+            onCancelPending={cancelPendingSharing}
+            missingKeys={missingKeys}
+            onAddMissingKeys={openKeySettings}
+            onKeysSaved={() => setKeysCheckToken((n) => n + 1)}
+            initialEdit={shareInitialStep}
             notices={
               <>
                 <PaprCloudRequirementsPanel featureId="publish_share" />

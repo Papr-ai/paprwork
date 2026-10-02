@@ -2768,3 +2768,50 @@ button.cloud-compat-badge--paused:hover {
   .propose-history__status--ok { color: #4ade80; }
   .propose-history__status--bad { color: #f87171; }
 }
+
+/* Missing "Mine" key — red if the app needs it, orange if optional.
+   Same tint recipe as the status chip tones above. */
+.mini-app-publish-bar__keys-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  height: 26px;
+  padding: 0 10px;
+  border: 1px solid;
+  border-radius: 999px;
+  font: inherit;
+  font-size: 12px;
+  font-weight: 500;
+  white-space: nowrap;
+  cursor: pointer;
+}
+
+.mini-app-publish-bar__keys-chip--bad {
+  color: #c8372a;
+  background: color-mix(in srgb, #c8372a 14%, var(--bg-secondary));
+  border-color: color-mix(in srgb, #c8372a 34%, var(--border-color));
+}
+
+.mini-app-publish-bar__keys-chip--warn {
+  color: #cc7a00;
+  background: color-mix(in srgb, #cc7a00 14%, var(--bg-secondary));
+  border-color: color-mix(in srgb, #cc7a00 34%, var(--border-color));
+}
+
+.mini-app-publish-bar__keys-chip:hover {
+  filter: brightness(0.97);
+}
+
+.mini-app-publish-bar__keys-chip:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 1px;
+}
+
+@media (prefers-color-scheme: dark) {
+  .mini-app-publish-bar__keys-chip--bad {
+    color: #f87171;
+  }
+  .mini-app-publish-bar__keys-chip--warn {
+    color: #fbbf24;
+  }
+}

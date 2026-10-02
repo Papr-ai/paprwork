@@ -32,17 +32,12 @@
   color: var(--text-secondary);
 }
 
-.ss6-progress,
 .ss6-note,
 .ss6-hint {
   margin: 6px 8px 2px;
   font-size: 12px;
   line-height: 1.45;
   color: var(--text-secondary);
-}
-
-.ss6-progress {
-  margin-top: 2px;
 }
 
 .ss6-note--warn {
@@ -267,26 +262,6 @@
   border-top: 1px solid var(--ss6-line);
 }
 
-.ss6-dots {
-  display: inline-flex;
-  gap: 5px;
-}
-
-.ss6-dots i {
-  width: 6px;
-  height: 6px;
-  border-radius: 50%;
-  background: #d5dce7;
-}
-
-.ss6-dots i.on {
-  background: var(--ss6-blue);
-}
-
-.ss6-dots i.done {
-  background: #9cbcec;
-}
-
 /* Link hero — first thing on a live app */
 .ss6-hero {
   display: flex;
@@ -428,5 +403,98 @@
   .ss6-switch,
   .ss6-switch i {
     transition: none;
+  }
+}
+
+/* Missing "Mine" key — red when required, orange when optional */
+.ss6-alert {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  margin: 2px 0 8px;
+  padding: 10px 12px;
+  border: 1px solid;
+  border-radius: 10px;
+  font-size: 12px;
+  line-height: 1.45;
+}
+
+.ss6-alert--bad {
+  color: #c8372a;
+  background: color-mix(in srgb, #c8372a 10%, var(--bg-secondary));
+  border-color: color-mix(in srgb, #c8372a 30%, var(--border-color));
+}
+
+.ss6-alert--warn {
+  color: #b86e00;
+  background: color-mix(in srgb, #cc7a00 10%, var(--bg-secondary));
+  border-color: color-mix(in srgb, #cc7a00 30%, var(--border-color));
+}
+
+.ss6-alert span {
+  flex: 1;
+  color: var(--text-primary);
+}
+
+.ss6-alert .ss6-btn {
+  flex-shrink: 0;
+}
+
+.ss6-arow--bad .ss6-row-v b,
+.ss6-arow--bad .ss6-tico {
+  color: #c8372a;
+}
+
+.ss6-arow--warn .ss6-row-v b,
+.ss6-arow--warn .ss6-tico {
+  color: #b86e00;
+}
+
+/* Confirm for changes that open the app up — inline, not a second modal */
+.ss6-confirm {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  margin-top: 8px;
+  padding: 12px;
+  border: 1px solid rgba(0, 96, 224, 0.18);
+  border-radius: 12px;
+  background: var(--ss6-tint);
+}
+
+.ss6-confirm-txt {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+
+.ss6-confirm-txt b {
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--text-primary);
+}
+
+.ss6-confirm-txt small {
+  font-size: 12px;
+  line-height: 1.45;
+  color: var(--text-secondary);
+}
+
+.ss6-confirm-actions {
+  display: flex;
+  justify-content: flex-end;
+  gap: 8px;
+}
+
+@media (prefers-color-scheme: dark) {
+  .ss6-alert--bad,
+  .ss6-arow--bad .ss6-row-v b,
+  .ss6-arow--bad .ss6-tico {
+    color: #f87171;
+  }
+  .ss6-alert--warn,
+  .ss6-arow--warn .ss6-row-v b,
+  .ss6-arow--warn .ss6-tico {
+    color: #fbbf24;
   }
 }
