@@ -38,6 +38,9 @@
 }
 
 .queued-item__text {
+  /* Same line height as a sent message's paragraphs (MessageItem.css), so the text doesn't
+     grow by ~3.6px a line when the real message lands. */
+  line-height: 1.86;
   color: var(--text-primary);
   white-space: pre-wrap;
   overflow-wrap: anywhere;
@@ -123,6 +126,57 @@
   to { border-color: transparent; }
 }
 
+/* Landing: the status line the queued copy had folds away; gaps ease to the normal message rhythm.
+   Gap goes 4px -> 8px while the meta's top margin goes 2px -> -8px, so the text ends exactly where
+   a normal message's text sits. Nothing else moves. */
+.message-item.message-item--landing .message-content {
+  gap: 4px;
+  animation: queuedLandGap 0.32s var(--ease) 0.2s both;
+}
+
+.message-landing-meta {
+  display: grid;
+  grid-template-rows: 1fr;
+  margin-top: 2px;
+  animation: queuedMetaFold 0.32s var(--ease) 0.2s both;
+}
+
+.message-landing-meta > div {
+  display: flex; /* not inline: a line box would add ~3px over the queued copy's row */
+  align-items: center;
+  min-height: 0;
+  overflow: hidden;
+}
+
+.message-landing-meta .queued-item__status {
+  min-height: 24px;
+  font-size: 12px;
+}
+
+@keyframes queuedLandGap {
+  from { gap: 4px; }
+  to { gap: 8px; }
+}
+
+@keyframes queuedMetaFold {
+  to { grid-template-rows: 0fr; opacity: 0; margin-top: -8px; }
+}
+
+/* Remove / Edit: folds away; what is below slides up. Height is measured at click time. */
+.queued-item--leaving {
+  overflow: hidden;
+  pointer-events: none;
+  animation: queuedOut 0.24s var(--ease) forwards;
+}
+
+@keyframes queuedOut {
+  from { max-height: var(--queued-h, 220px); }
+  to { max-height: 0; opacity: 0; padding-top: 0; padding-bottom: 0; margin-bottom: 0; }
+}
+
+/* Send now: holds its place, actions gone, status stays the same height. */
+.queued-item--sending .queued-item__meta { pointer-events: none; }
+
 @keyframes queuedIn {
   from { opacity: 0; transform: translateY(6px); }
   to { opacity: 1; transform: none; }
@@ -131,4 +185,7 @@
 @media (prefers-reduced-motion: reduce) {
   .queued-item { animation: none; }
   .message-item.message-item--landing::before { display: none; }
+  .queued-item--leaving { animation: none; }
+  .message-item.message-item--landing .message-content { animation: none; gap: 8px; }
+  .message-landing-meta { display: none; }
 }

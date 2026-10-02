@@ -991,13 +991,14 @@ export const ChatContainer: React.FC<ChatContainerProps> = ({ chatId }): React.R
     const queued = messageQueue.find(q => q.id === messageId && q.chatId === chatId);
     if (!queued) return;
 
-    // Remove from queue — interrupt then send so the queued message replaces work in flight.
-    setMessageQueue(prev => prev.filter(q => q.id !== messageId));
-
     queueTransitionInFlightRef.current = true;
     isProcessingQueue.current = true;
     try {
+      // Interrupt first, with the message still in the queue: it stays on screen
+      // as "Sending…" and takes its place in the thread when the real one lands.
+      // (If the interrupt throws, the message is still queued instead of lost.)
       await interruptActiveStream(chatId);
+      setMessageQueue(prev => prev.filter(q => q.id !== messageId));
       markFollowUpLanding(chatId, queued.text);
       await handleSendMessage(
         queued.text,
