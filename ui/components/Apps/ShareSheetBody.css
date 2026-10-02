@@ -143,8 +143,87 @@
   border-left: 2px solid var(--ss6-line);
 }
 
+/* Specific people — sits in the option's text column, flat like the rest. */
 .ss6-people {
-  margin: 0 0 6px 34px;
+  margin: 2px 0 8px 59px;
+}
+
+.ss6-people .people-picker {
+  gap: 8px;
+}
+
+.ss6-people .people-picker__search {
+  height: 32px;
+  border-color: var(--ss6-line);
+  background: var(--ss6-chip);
+}
+
+.ss6-people .people-picker__search:focus-within {
+  border-color: var(--ss6-blue);
+  background: transparent;
+}
+
+.ss6-people .people-picker__input {
+  font-size: 12.5px;
+}
+
+.ss6-people .people-picker__access-title {
+  margin: 2px 0 2px;
+  font-size: 11.5px;
+  font-weight: 500;
+  letter-spacing: 0;
+  text-transform: none;
+  color: var(--text-secondary);
+}
+
+.ss6-people .people-picker__row {
+  gap: 8px;
+  padding: 4px 6px;
+  border-radius: 8px;
+}
+
+.ss6-people .people-picker__row:hover {
+  background: var(--ss6-hover);
+}
+
+.ss6-people .people-picker__name {
+  font-size: 12.5px;
+}
+
+.ss6-people .people-picker__sub,
+.ss6-people .people-picker__badge {
+  font-size: 11.5px;
+}
+
+.ss6-people .people-picker__badge {
+  padding: 1px 7px;
+  border-radius: 999px;
+  background: var(--ss6-chip);
+  color: var(--text-secondary);
+}
+
+.ss6-people .people-picker__remove {
+  opacity: 0;
+  transition: opacity 0.12s ease;
+}
+
+.ss6-people .people-picker__row:hover .people-picker__remove,
+.ss6-people .people-picker__remove:focus-visible {
+  opacity: 1;
+}
+
+.ss6-people .people-picker__hint {
+  margin: 2px 0 0;
+  padding: 0 6px;
+  font-size: 12px;
+  color: var(--text-secondary);
+}
+
+.ss6-people .people-picker__domain-icon {
+  width: 24px;
+  height: 24px;
+  font-size: 12px;
+  background: var(--ss6-chip);
 }
 
 .ss6-code {
@@ -461,4 +540,85 @@
   .ss6-arow--warn .ss6-tico {
     color: #fbbf24;
   }
+}
+
+.ss6-note--flush {
+  margin: 6px 0 2px;
+}
+
+/* Linked apps/data copies won't include — same flat rows as the sheet */
+.ss6-deps {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  margin: 2px 0 4px;
+}
+
+.ss6-deps-lede {
+  margin: 0 0 4px;
+  font-size: 12px;
+  line-height: 1.45;
+  color: var(--text-secondary);
+}
+
+.ss6-dep {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 6px 8px;
+  border-radius: 9px;
+  background: var(--ss6-chip);
+}
+
+.ss6-dep-ico {
+  display: inline-flex;
+  flex-shrink: 0;
+  align-items: center;
+  justify-content: center;
+  width: 24px;
+  height: 24px;
+  border-radius: 7px;
+  background: var(--bg-primary, #fff);
+  color: var(--text-secondary);
+}
+
+.ss6-dep-txt {
+  display: flex;
+  flex: 1;
+  flex-direction: column;
+  min-width: 0;
+}
+
+.ss6-dep-txt b {
+  overflow: hidden;
+  font-size: 12.5px;
+  font-weight: 500;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  color: var(--text-primary);
+}
+
+.ss6-dep-txt small {
+  overflow: hidden;
+  font-size: 11.5px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  color: var(--text-secondary);
+}
+
+.ss6-link-btn {
+  flex-shrink: 0;
+  padding: 3px 8px;
+  border: none;
+  border-radius: 7px;
+  background: transparent;
+  color: var(--ss6-blue);
+  font: inherit;
+  font-size: 12px;
+  font-weight: 500;
+  cursor: pointer;
+}
+
+.ss6-link-btn:hover {
+  background: var(--ss6-tint);
 }

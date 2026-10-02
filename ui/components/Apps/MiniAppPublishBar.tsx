@@ -105,7 +105,7 @@ import {
 } from "../../utils/cloudPublishApi";
 import type { CloudCompatibilityReport } from "../../../src/core/types/cloudAppCompatibility";
 import type { CloudPublishReadinessReport } from "../../../src/core/types/cloudAppDependencies";
-import { CloudPublishDependenciesPanel } from "./CloudPublishDependenciesPanel";
+import { linkedDepItems } from "./ShareLinkedDeps";
 import { PreviewUrlRow } from "./PreviewUrlRow";
 import { PublishBarErrorNotice } from "./PublishBarErrorNotice";
 import "./MiniAppPublishBar.css";
@@ -331,7 +331,7 @@ export function MiniAppPublishBar({
     null,
   );
   const [compatLoading, setCompatLoading] = useState(false);
-  const [readinessLoading, setReadinessLoading] = useState(false);
+  const [, setReadinessLoading] = useState(false);
   const [needsDesktopAck, setNeedsDesktopAck] = useState(false);
   useEffect(() => {
     if (needsDesktopAck) {
@@ -1224,6 +1224,9 @@ export function MiniAppPublishBar({
 
   const handlePublishClick = async () => {
     if (publishBlockedByIntegrity) {
+      cloud.reportError(
+        `Can't publish yet: ${(readiness?.errors ?? []).join("; ") || "the app's manifest points to missing files."}`,
+      );
       return;
     }
     if (!requestPaprCloudFeature("publish_share")) {
@@ -2228,6 +2231,8 @@ export function MiniAppPublishBar({
             onAddMissingKeys={openKeySettings}
             onKeysSaved={() => setKeysCheckToken((n) => n + 1)}
             initialEdit={shareInitialStep}
+            linkedDeps={linkedDepItems(readiness)}
+            onOpenDependencyApp={onOpenDependencyApp}
             notices={
               <>
                 <PaprCloudRequirementsPanel featureId="publish_share" />
@@ -2255,11 +2260,6 @@ export function MiniAppPublishBar({
                     </p>
                   </div>
                 ) : null}
-                <CloudPublishDependenciesPanel
-                  readiness={readiness}
-                  loading={readinessLoading}
-                  onOpenDependencyApp={onOpenDependencyApp}
-                />
                 {needsDesktopAck ? (
                   <div ref={desktopAckRef}>
                     <CloudCompatibilityPanel
