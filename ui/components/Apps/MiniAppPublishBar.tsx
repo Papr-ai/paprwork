@@ -75,8 +75,6 @@ import {
   resolveSharingPatch,
   missingKeysLabel,
   missingKeysTone,
-  sameSharing,
-  sharingConfirmPrompt,
   type ShareStepId,
   type SharingDraft,
   type SharingPatch,
@@ -1264,86 +1262,65 @@ export function MiniAppPublishBar({
     }
   };
 
-  /** v6 Share: narrowing saves the moment it is picked; opening the app up
-   *  waits for one inline confirm (sharingConfirmPrompt). Share is live-only —
-   *  the bar's Publish is how an app gets on the web. */
+  /** v6 Share: answers are walked through (who → what → keys) and saved once
+   *  at the end — see shareEditFlow. Share is live-only; the bar's Publish is
+   *  how an app gets on the web. */
   const sharingDraft: SharingDraft = {
     audience,
     permission,
     requireSignIn,
     perUserIsolation,
   };
-  const savedSharing: SharingDraft = {
-    audience: appliedModel.audience,
-    permission: appliedModel.permission,
-    requireSignIn: appliedRequireSignIn,
-    perUserIsolation: appliedPerUserIsolation,
-  };
-  const reportSharingError = (err: unknown) =>
-    cloud.reportError(publishErrorMessage(err));
   const showSharing = (next: SharingDraft) => {
     setAudience(next.audience);
     setPermission(next.permission);
     setRequireSignIn(next.requireSignIn);
     setPerUserIsolation(next.perUserIsolation);
   };
-  const saveSharing = (next: SharingDraft) => {
-    if (!cloud.live || sameSharing(next, savedSharing)) return;
-    // An empty "Specific people" list would save as the whole workspace —
-    // hold the change until someone is added.
-    if (
-      next.audience === "people" &&
-      !shareAudienceHasPeopleRestriction({
-        allowedUserIds,
-        allowedEmails,
-        allowedEmailDomains,
-      })
-    ) {
-      return;
-    }
-    applySharing(
-      next.audience,
-      next.permission,
-      next.requireSignIn,
-      next.perUserIsolation,
-    ).catch(reportSharingError);
-  };
   const changeSharing = (patch: SharingPatch) => {
     if (shareSheetBusy) return;
     const next = resolveSharingPatch(sharingDraft, patch);
     showSharing(next);
     if (next.audience === "people") void ensureWorkspacePeople();
-    // Compared against what is live, so stepping through options and back
-    // never asks, and the question always describes the real change.
-    if (sharingConfirmPrompt(savedSharing, next)) return;
-    saveSharing(next);
-  };
-  const pendingSharingConfirm = sameSharing(sharingDraft, savedSharing)
-    ? null
-    : sharingConfirmPrompt(savedSharing, sharingDraft);
-  const confirmPendingSharing = () => saveSharing(sharingDraft);
-  const cancelPendingSharing = () => {
-    if (pendingSharingConfirm) showSharing(savedSharing);
   };
   const changePeople = (ids: string[], emails: string[], domains: string[]) => {
     setAllowedUserIds(ids);
     setAllowedEmails(emails);
     setAllowedEmailDomains(domains);
-    const restricted = shareAudienceHasPeopleRestriction({
-      allowedUserIds: ids,
-      allowedEmails: emails,
-      allowedEmailDomains: domains,
+  };
+  const discardSharing = () => {
+    showSharing({
+      audience: appliedModel.audience,
+      permission: appliedModel.permission,
+      requireSignIn: appliedRequireSignIn,
+      perUserIsolation: appliedPerUserIsolation,
     });
-    if (!cloud.live || shareSheetBusy || !restricted) return;
-    applySharing(
-      audience,
-      permission,
-      requireSignIn,
-      perUserIsolation,
-      ids,
-      emails,
-      domains,
-    ).catch(reportSharingError);
+    changePeople(
+      appliedAllowedUserIds,
+      appliedAllowedEmails,
+      appliedAllowedEmailDomains,
+    );
+  };
+  const saveSharing = async (): Promise<boolean> => {
+    // An empty "Specific people" list would save as the whole workspace.
+    if (!cloud.live || !hasSharingDraftChanges || peopleAllowlistEmpty) {
+      return false;
+    }
+    try {
+      await applySharing(
+        audience,
+        permission,
+        requireSignIn,
+        perUserIsolation,
+        allowedUserIds,
+        allowedEmails,
+        allowedEmailDomains,
+      );
+      return true;
+    } catch (err) {
+      cloud.reportError(publishErrorMessage(err));
+      return false;
+    }
   };
   const shareLinkHint =
     cloud.live && (copyUrl || webDisplayUrl) && !shareLinkReady
@@ -2210,7 +2187,7 @@ export function MiniAppPublishBar({
         <ShareSheet
           title="Share"
           onClose={() => {
-            cancelPendingSharing();
+            discardSharing();
             setShareOpen(false);
             setShareInitialStep(null);
           }}
@@ -2244,9 +2221,9 @@ export function MiniAppPublishBar({
             onOpenLink={() => void cloud.openInBrowser(copyUrl ?? webDisplayUrl)}
             busy={shareSheetBusy}
             peopleAllowlistEmpty={peopleAllowlistEmpty}
-            pendingConfirm={pendingSharingConfirm}
-            onConfirmPending={confirmPendingSharing}
-            onCancelPending={cancelPendingSharing}
+            dirty={hasSharingDraftChanges}
+            onSave={saveSharing}
+            onDiscard={discardSharing}
             missingKeys={missingKeys}
             onAddMissingKeys={openKeySettings}
             onKeysSaved={() => setKeysCheckToken((n) => n + 1)}

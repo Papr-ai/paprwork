@@ -6,7 +6,7 @@ import {
   missingOwnerKeys,
   perUserDataAvailable,
   resolveSharingPatch,
-  sharingConfirmPrompt,
+  shareEditFlow,
   summarizeKeys,
   summarizeWhat,
   type SharingDraft,
@@ -65,81 +65,23 @@ describe("shareSheetModel — answers", () => {
   });
 });
 
-describe("shareSheetModel — confirm only when opening up", () => {
-  const confirm = (saved: SharingDraft, patch: Partial<SharingDraft>) =>
-    sharingConfirmPrompt(saved, resolveSharingPatch(saved, patch));
-
-  it("narrowing saves without asking", () => {
-    expect(confirm(base, { audience: "private" })).toBeNull();
-    expect(
-      confirm(
-        { ...base, audience: "public", permission: "edit" },
-        { audience: "team" },
-      ),
-    ).toBeNull();
+describe("shareSheetModel — edit flow", () => {
+  it("changing who walks on to what, then keys when the app has keys", () => {
+    expect(shareEditFlow("who", "link", true)).toEqual(["who", "what", "keys"]);
+    expect(shareEditFlow("who", "team", false)).toEqual(["who", "what"]);
   });
 
-  it("asks before Community, link and workspace", () => {
-    expect(confirm(base, { audience: "public" })?.confirmLabel).toBe(
-      "List in Community",
-    );
-    expect(confirm(base, { audience: "link" })?.confirmLabel).toBe(
-      "Open to link",
-    );
-    expect(
-      confirm(
-        { ...base, audience: "private", permission: "read" },
-        { audience: "team" },
-      )?.confirmLabel,
-    ).toBe("Share with workspace");
+  it("Only me has nothing after who", () => {
+    expect(shareEditFlow("who", "private", true)).toEqual(["who"]);
   });
 
-  it("specific people never asks — the list is the explicit choice", () => {
-    expect(
-      confirm(
-        { ...base, audience: "private", permission: "read" },
-        { audience: "people" },
-      ),
-    ).toBeNull();
+  it("changing what walks on to keys only if there are keys", () => {
+    expect(shareEditFlow("what", "public", true)).toEqual(["what", "keys"]);
+    expect(shareEditFlow("what", "public", false)).toEqual(["what"]);
   });
 
-  it("asks when per-user data changes either way", () => {
-    expect(confirm(base, { perUserIsolation: true })?.confirmLabel).toBe(
-      "Separate data",
-    );
-    expect(
-      confirm({ ...base, perUserIsolation: true }, { perUserIsolation: false })
-        ?.confirmLabel,
-    ).toBe("Share one database");
-  });
-
-  it("asks when sign-in is removed, not when it is added", () => {
-    const link: SharingDraft = {
-      ...base,
-      audience: "link",
-      perUserIsolation: true,
-    };
-    expect(confirm(link, { requireSignIn: false })?.confirmLabel).toBe(
-      "Remove sign-in",
-    );
-    const open: SharingDraft = {
-      ...link,
-      requireSignIn: false,
-      perUserIsolation: false,
-    };
-    // Turning sign-in on also turns on per-user data, which still asks.
-    expect(confirm(open, { requireSignIn: true })?.confirmLabel).toBe(
-      "Separate data",
-    );
-  });
-
-  it("asks before allowing copies of the code", () => {
-    expect(confirm(base, { permission: "edit" })?.confirmLabel).toBe(
-      "Allow copies",
-    );
-    expect(
-      confirm({ ...base, permission: "edit" }, { permission: "write" }),
-    ).toBeNull();
+  it("keys alone is a single step", () => {
+    expect(shareEditFlow("keys", "link", true)).toEqual(["keys"]);
   });
 });
 

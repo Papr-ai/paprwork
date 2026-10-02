@@ -3,8 +3,9 @@
  *
  * Share only exists once an app is live; the bar's Publish gets it there.
  * The link comes first (the thing people open Share for), then the three
- * answers as rows. Clicking a row opens that step. Narrowing saves at once;
- * opening the app up asks once (see sharingConfirmPrompt), inline.
+ * answers as rows. Clicking a row starts an edit: changing who walks on to
+ * what and keys, changing what walks on to keys, and the change is saved once
+ * at the end (shareEditFlow). Keys on their own save in the keys panel.
  * Publishing code stays on the bar — this sheet never says "Update web".
  *
  * Reference: Share Bar Redesign prototype, v6.
@@ -20,11 +21,11 @@ import {
   SHARE_AUDIENCE_ORDER,
   SHARE_STEP_TITLE,
   perUserDataAvailable,
+  shareEditFlow,
   signInIsOptional,
   summarizeKeys,
   summarizeWhat,
   type ShareStepId,
-  type SharingConfirmPrompt,
   type SharingDraft,
   type SharingPatch,
 } from "../../utils/shareSheetModel";
@@ -46,10 +47,12 @@ export interface ShareSheetBodyProps {
   busy: boolean;
   /** Blocks the change that would widen "Specific people" to the whole workspace. */
   peopleAllowlistEmpty: boolean;
-  /** A change that opens the app up, waiting for one explicit confirm. */
-  pendingConfirm: SharingConfirmPrompt | null;
-  onConfirmPending: () => void;
-  onCancelPending: () => void;
+  /** Answers differ from what is live (nothing is saved until onSave). */
+  dirty: boolean;
+  /** Save the walked-through answers; resolves true when saved. */
+  onSave: () => Promise<boolean>;
+  /** Put the answers back to what is live. */
+  onDiscard: () => void;
   /** "Mine" keys not in the owner's keychain (shown in the keys step + row). */
   missingKeys: RequiredKeySpec[];
   onAddMissingKeys: () => void;
@@ -310,36 +313,6 @@ function MissingKeysWarning({ props }: { props: ShareSheetBodyProps }) {
   );
 }
 
-function ConfirmBar({ props }: { props: ShareSheetBodyProps }) {
-  const prompt = props.pendingConfirm;
-  if (!prompt) return null;
-  return (
-    <div className="ss6-confirm" role="alertdialog" aria-label={prompt.title}>
-      <span className="ss6-confirm-txt">
-        <b>{prompt.title}</b>
-        <small>{prompt.body}</small>
-      </span>
-      <span className="ss6-confirm-actions">
-        <button
-          type="button"
-          className="ss6-btn"
-          onClick={props.onCancelPending}
-        >
-          Cancel
-        </button>
-        <button
-          type="button"
-          className="ss6-btn ss6-btn--primary"
-          disabled={props.busy}
-          onClick={props.onConfirmPending}
-        >
-          {prompt.confirmLabel}
-        </button>
-      </span>
-    </div>
-  );
-}
-
 function StepView({
   id,
   props,
@@ -490,10 +463,76 @@ function LiveSummary({
   );
 }
 
+interface EditFlow {
+  start: ShareStepId;
+  at: ShareStepId;
+}
+
+function FlowFooter({
+  props,
+  steps,
+  flow,
+  setFlow,
+}: {
+  props: ShareSheetBodyProps;
+  steps: ShareStepId[];
+  flow: EditFlow;
+  setFlow: (flow: EditFlow | null) => void;
+}) {
+  const idx = Math.max(0, steps.indexOf(flow.at));
+  const last = idx >= steps.length - 1;
+  const keysOnly = flow.start === "keys";
+  const back = () => {
+    if (idx > 0) {
+      setFlow({ ...flow, at: steps[idx - 1] });
+      return;
+    }
+    props.onDiscard();
+    setFlow(null);
+  };
+  const save = async () => {
+    if (await props.onSave()) setFlow(null);
+  };
+  const blocked = props.busy || props.peopleAllowlistEmpty;
+  return (
+    <div className="ss6-foot">
+      <button type="button" className="ss6-btn" onClick={back}>
+        {keysOnly ? "Done" : idx > 0 ? "Back" : "Cancel"}
+      </button>
+      {!keysOnly && steps.length > 1 ? (
+        <span className="ss6-hint">
+          Step {idx + 1} of {steps.length}
+        </span>
+      ) : null}
+      {keysOnly ? null : !last ? (
+        <button
+          type="button"
+          className="ss6-btn ss6-btn--primary"
+          disabled={!props.dirty || blocked}
+          onClick={() => setFlow({ ...flow, at: steps[idx + 1] })}
+        >
+          Next
+        </button>
+      ) : (
+        <button
+          type="button"
+          className="ss6-btn ss6-btn--primary"
+          disabled={!props.dirty || blocked}
+          onClick={() => void save()}
+        >
+          {props.busy ? "Saving…" : "Save changes"}
+        </button>
+      )}
+    </div>
+  );
+}
+
 export function ShareSheetBody(props: ShareSheetBodyProps) {
   const { notices } = props;
-  const [edit, setEdit] = useState<ShareStepId | null>(
-    props.initialEdit ?? null,
+  const [flow, setFlow] = useState<EditFlow | null>(
+    props.initialEdit
+      ? { start: props.initialEdit, at: props.initialEdit }
+      : null,
   );
   const [keysReload, setKeysReload] = useState(0);
   const keySpecs = useKeySpecs(props.appId, keysReload);
@@ -501,40 +540,46 @@ export function ShareSheetBody(props: ShareSheetBodyProps) {
     setKeysReload((n) => n + 1);
     props.onKeysSaved?.();
   };
+  const steps = flow
+    ? shareEditFlow(
+        flow.start,
+        props.draft.audience,
+        (keySpecs?.length ?? 0) > 0,
+      )
+    : [];
+  // "who" → Only me drops the later steps; stay on a step that still exists.
+  const at = flow && steps.includes(flow.at) ? flow.at : steps[0];
 
   return (
     <div className="ss6">
       {notices}
-      {edit ? (
+      {flow && at ? (
         <>
-          <StepView id={edit} props={props} onKeysSaved={onKeysSaved} />
-          {edit === "who" && props.peopleAllowlistEmpty ? (
+          <StepView id={at} props={props} onKeysSaved={onKeysSaved} />
+          {at === "who" && props.peopleAllowlistEmpty ? (
             <p className="ss6-note ss6-note--warn">
-              Add at least one person, email or domain. Until then the current
-              access stays.
+              Add at least one person, email or domain.
             </p>
           ) : null}
-          <ConfirmBar props={props} />
-          <div className="ss6-foot">
-            <button
-              type="button"
-              className="ss6-btn"
-              onClick={() => {
-                props.onCancelPending();
-                setEdit(null);
-              }}
-            >
-              Back
-            </button>
-            <span className="ss6-hint">
-              {props.pendingConfirm
-                ? "Not saved yet"
-                : "Changes apply right away"}
-            </span>
-          </div>
+          {flow.start !== "keys" && at === "keys" ? (
+            <p className="ss6-note">
+              Check these still fit who can open it. Nothing changes until you
+              save.
+            </p>
+          ) : null}
+          <FlowFooter
+            props={props}
+            steps={steps}
+            flow={{ ...flow, at }}
+            setFlow={setFlow}
+          />
         </>
       ) : (
-        <LiveSummary props={props} keySpecs={keySpecs} onEdit={setEdit} />
+        <LiveSummary
+          props={props}
+          keySpecs={keySpecs}
+          onEdit={(id) => setFlow({ start: id, at: id })}
+        />
       )}
     </div>
   );

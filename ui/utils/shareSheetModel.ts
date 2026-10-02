@@ -4,7 +4,8 @@
  * Reference: Share Bar Redesign prototype (v6).
  *
  * Share only exists once an app is live — the bar's Publish is how an app gets
- * there, so this sheet never publishes.
+ * there, so this sheet never publishes. Access changes are walked through
+ * (who → what → keys) and saved once at the end; see shareEditFlow.
  */
 
 import type { ShareAudience, SharePermission } from "./shareAudienceModel";
@@ -108,97 +109,25 @@ export function sameSharing(a: SharingDraft, b: SharingDraft): boolean {
   );
 }
 
-/** How far an audience reaches; used only to tell widening from narrowing. */
-const AUDIENCE_REACH: Record<ShareAudience, number> = {
-  private: 0,
-  people: 1,
-  team: 2,
-  link: 3,
-  public: 4,
-};
-
-export interface SharingConfirmPrompt {
-  title: string;
-  body: string;
-  confirmLabel: string;
-}
-
 /**
- * Narrowing saves instantly. Opening the app up — or changing whose data
- * people see — waits for one explicit confirm, so a stray click on the way to
- * another option never exposes anything. Returns null when no confirm is needed.
+ * The steps an edit walks through before anything is saved.
  *
- * "Specific people" is exempt: the person list is already an explicit choice.
+ * Changing who can open it changes what they can do and whose keys they run
+ * on, so "who" leads into "what" and then "keys" (only if the app has keys).
+ * Changing "what" leads into "keys" when there are any. Keys alone is a
+ * single step that saves on its own. Only me has nothing after "who".
  */
-export function sharingConfirmPrompt(
-  saved: SharingDraft,
-  next: SharingDraft,
-): SharingConfirmPrompt | null {
-  const widens =
-    AUDIENCE_REACH[next.audience] > AUDIENCE_REACH[saved.audience] &&
-    next.audience !== "people";
-  if (widens && next.audience === "public") {
-    return {
-      title: "List it in Community?",
-      body: "Anyone can find it in Community Apps and install their own copy.",
-      confirmLabel: "List in Community",
-    };
-  }
-  if (widens && next.audience === "link") {
-    return {
-      title: "Open it to anyone with the link?",
-      body: next.requireSignIn
-        ? "Anyone who has the link and signs in with Papr can open it."
-        : "Anyone who has the link can open it. No account needed.",
-      confirmLabel: "Open to link",
-    };
-  }
-  if (widens && next.audience === "team") {
-    return {
-      title: "Share with your whole workspace?",
-      body: "Everyone in your Papr workspace will be able to open it.",
-      confirmLabel: "Share with workspace",
-    };
-  }
-  if (
-    next.audience === saved.audience &&
-    saved.requireSignIn &&
-    !next.requireSignIn
-  ) {
-    return {
-      title: "Stop requiring sign-in?",
-      body: "Anyone with the link can open it without an account, and everyone shares one database.",
-      confirmLabel: "Remove sign-in",
-    };
-  }
-  if (
-    next.audience !== "private" &&
-    saved.perUserIsolation !== next.perUserIsolation
-  ) {
-    return next.perUserIsolation
-      ? {
-          title: "Give each person their own data?",
-          body: "Each person starts with an empty private database. What they see today goes away for them; your data stays with you.",
-          confirmLabel: "Separate data",
-        }
-      : {
-          title: "Share one database with everyone?",
-          body: "Everyone who opens it will see and change the same data. Their separate data stops being used.",
-          confirmLabel: "Share one database",
-        };
-  }
-  if (
-    saved.permission !== "edit" &&
-    next.permission === "edit" &&
-    next.audience !== "public"
-  ) {
-    return {
-      title: "Let them install a copy?",
-      body: "They can install their own copy of your app's code. Your data isn't included.",
-      confirmLabel: "Allow copies",
-    };
-  }
-  return null;
+export function shareEditFlow(
+  start: ShareStepId,
+  audience: ShareAudience,
+  hasKeys: boolean,
+): ShareStepId[] {
+  if (start === "keys") return ["keys"];
+  const steps: ShareStepId[] = start === "who" ? ["who"] : [];
+  if (audience === "private") return steps.length ? steps : ["what"];
+  steps.push("what");
+  if (hasKeys) steps.push("keys");
+  return steps;
 }
 
 export function summarizeWhat(draft: SharingDraft): string {
