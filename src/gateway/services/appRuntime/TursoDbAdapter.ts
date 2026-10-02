@@ -246,13 +246,42 @@ export class TursoDbAdapter {
     }
   }
 
+  /**
+   * Plan A replica databases sync through Turso Sync, not the legacy
+   * `_papr_sync_log` CDC path. Installing legacy triggers on their primary
+   * ALTERs every user table (adds `_papr_created_at` / `_papr_updated_at` /
+   * `_papr_row_version`), the columns replicate down to every desktop, and
+   * any positional `INSERT INTO t VALUES (...)` against that table starts
+   * failing ("table t has 17 columns but 14 values"). The triggers also log
+   * every write into `_papr_sync_log`, which nothing on the replica path reads
+   * or prunes.
+   */
+  private isReplicaModeSource(source: AppDataSource | undefined): boolean {
+    if (!source) {
+      return false;
+    }
+    const record = getDatabaseRegistryService().getRecordForSource(source);
+    if (record?.syncMode === "replica") {
+      return true;
+    }
+    return shouldUseTursoReplicaForDb({ syncMode: record?.syncMode });
+  }
+
   /** Install remote CDC triggers so cloud mini-app writes appear in _papr_sync_log. */
   private async ensureRemoteChangeLogReady(
     client: Client,
     cacheKey: string,
     schemaRevision: string | null = null,
+    source?: AppDataSource,
   ): Promise<void> {
     if (this.remoteSyncReady.has(cacheKey)) {
+      return;
+    }
+    if (this.isReplicaModeSource(source)) {
+      // Keep _papr_sync_meta (hasRemoteChanged / bumpSyncVersion use it);
+      // skip the per-table columns + triggers.
+      await ensureRemoteSyncInfrastructure(client);
+      this.remoteSyncReady.add(cacheKey);
       return;
     }
     const inflight = this.remoteChangeLogPrep.get(cacheKey);
@@ -533,7 +562,7 @@ export class TursoDbAdapter {
       source,
     );
 
-    await this.ensureRemoteChangeLogReady(client, cacheKey);
+    await this.ensureRemoteChangeLogReady(client, cacheKey, null, source);
     const result = await client.execute({
       sql: remoteSql,
       args: toLibsqlArgs(input.params),
@@ -684,7 +713,7 @@ export class TursoDbAdapter {
           input.runtimeAuth,
           group[0].source,
         );
-        await this.ensureRemoteChangeLogReady(client, cacheKey);
+        await this.ensureRemoteChangeLogReady(client, cacheKey, null, group[0].source);
         const batchResults = await client.batch(
           group.map((item) => ({
             sql: item.remoteSql,
@@ -876,7 +905,7 @@ export class TursoDbAdapter {
       return { ok: true, source: source.alias };
     }
 
-    await this.ensureRemoteChangeLogReady(client, cacheKey);
+    await this.ensureRemoteChangeLogReady(client, cacheKey, null, source);
     await client.execute(input.sql);
     await this.bumpSyncVersionSafe(client, cacheKey);
     return { ok: true, source: source.alias };
@@ -1031,7 +1060,7 @@ export class TursoDbAdapter {
           actingUserId,
           database,
         );
-        await this.ensureRemoteChangeLogReady(client, cacheKey, schemaRevision);
+        await this.ensureRemoteChangeLogReady(client, cacheKey, schemaRevision, source);
       } catch {
         /* best-effort warm */
       }
