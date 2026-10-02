@@ -42,6 +42,8 @@ describe("pendingStatusText", () => {
   });
   it("says Sending… once the agent is idle", () => {
     expect(pendingStatusText(false, 0)).toBe("Sending…");
+    // The second in line waits its turn even while the first is going out.
+    expect(pendingStatusText(false, 1)).toBe("Queued");
   });
   it("restored ones are Not sent", () => {
     expect(pendingStatusText(true, 0, true)).toBe("Not sent");
