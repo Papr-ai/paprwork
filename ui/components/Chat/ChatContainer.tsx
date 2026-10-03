@@ -997,6 +997,9 @@ export const ChatContainer: React.FC<ChatContainerProps> = ({ chatId }): React.R
     queueTransitionInFlightRef.current = true;
     isProcessingQueue.current = true;
     try {
+      // Same as Stop: record before `interruptActiveStream` awaits so auto-continue
+      // does not resume the turn we are replacing with this queued send.
+      setLastTurnOutcome(chatId, "userStopped");
       await interruptActiveStream(chatId);
       markFollowUpLanding(chatId, queued.text);
       await handleSendMessage(
@@ -1007,7 +1010,14 @@ export const ChatContainer: React.FC<ChatContainerProps> = ({ chatId }): React.R
       isProcessingQueue.current = false;
       queueTransitionInFlightRef.current = false;
     }
-  }, [messageQueue, setMessageQueue, handleSendMessage, interruptActiveStream, chatId]);
+  }, [
+    messageQueue,
+    setMessageQueue,
+    handleSendMessage,
+    interruptActiveStream,
+    setLastTurnOutcome,
+    chatId,
+  ]);
 
   const handleSendFirstQueuedNow = useCallback(async () => {
     const first = currentChatQueue[0];
@@ -1073,7 +1083,11 @@ export const ChatContainer: React.FC<ChatContainerProps> = ({ chatId }): React.R
       !shouldDrainMessageQueue({
         chatId,
         messages,
-        isSending: isSending || isWaitingForAgentSlot,
+        isSending:
+          isSending ||
+          isWaitingForAgentSlot ||
+          isFinishingWork ||
+          !!liveStreamRequestId,
         isWaitingForAgentSlot,
         connectionPaused,
         needsStreamRecovery,
@@ -1090,6 +1104,8 @@ export const ChatContainer: React.FC<ChatContainerProps> = ({ chatId }): React.R
     messages,
     isSending,
     isWaitingForAgentSlot,
+    isFinishingWork,
+    liveStreamRequestId,
     connectionPaused,
     needsStreamRecovery,
     hasSendableQueued,

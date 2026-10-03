@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
 import type { ChatMessage } from "../../types/chat";
+import { useChatStore } from "../../stores/chatStore";
 import {
   finalizeStreamingMessages,
   interruptedTurnNeedsContinue,
@@ -399,6 +400,32 @@ describe("shouldDrainMessageQueue", () => {
       }),
     ).toBe(true);
   });
+
+  it("returns false while the assistant row is finishing wrap-up work", () => {
+    const chatId = "chat-finishing-wrap";
+    useChatStore
+      .getState()
+      .addMessage({ id: "seed", role: "user", content: "seed" }, chatId);
+    useChatStore.getState().setFinishingWork(chatId, true);
+    try {
+      expect(
+        shouldDrainMessageQueue({
+          chatId,
+          messages: [
+            { id: "u1", role: "user", content: "Hi" },
+            { id: "a1", role: "assistant", content: "Hello" },
+          ],
+          isSending: false,
+          isWaitingForAgentSlot: false,
+          connectionPaused: false,
+          needsStreamRecovery: false,
+          queueTransitionInFlight: false,
+        }),
+      ).toBe(false);
+    } finally {
+      useChatStore.getState().setFinishingWork(chatId, false);
+    }
+  });
 });
 
 describe("interruptedTurnNeedsContinue", () => {
@@ -700,6 +727,29 @@ describe("autoContinueInterruptedTurn helpers", () => {
         gatewayReady: true,
       }),
     ).toBe("turnComplete");
+  });
+
+  it("blocks auto-continue after the user stopped or send-now replaced the turn", () => {
+    const messages: ChatMessage[] = [
+      { id: "u1", role: "user", content: "Build it" },
+      {
+        id: "a1",
+        role: "assistant",
+        content: "Partial",
+        interrupted: true,
+      },
+    ];
+    expect(
+      getAutoContinueBlockReason({
+        chatId: "chat-1",
+        messages,
+        isSending: false,
+        connectionPaused: false,
+        needsStreamRecovery: false,
+        gatewayReady: true,
+        lastTurnOutcome: "userStopped",
+      }),
+    ).toBe("userStopped");
   });
 });
 

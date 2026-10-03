@@ -223,6 +223,8 @@ export function shouldDrainMessageQueue(args: {
   if (args.queueTransitionInFlight || args.isSending) return false;
   if (args.isWaitingForAgentSlot) return false;
   if (args.connectionPaused || args.needsStreamRecovery) return false;
+  const chatState = useChatStore.getState().chatStates.get(args.chatId);
+  if (chatState?.isFinishingWork) return false;
   if (chatHasLiveStreamBlockingHistory(args.chatId)) return false;
   if (activeStreamRequests.has(args.chatId)) return false;
   return priorUserTurnSettledForQueue(args.messages);
