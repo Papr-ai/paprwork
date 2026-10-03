@@ -103,19 +103,15 @@ export function usePaprNamespace(): PaprNamespaceContext {
     };
 
     // Namespace/org changes arrive as DOM events (dispatched once by the
-    // preload bridge, with `detail`). Do not also subscribe over IPC: every
-    // hook instance (one per keep-alive app tab) would add an ipcRenderer
-    // listener and receive the same change twice.
-    window.electronAPI.papr.onLoginSuccess(onAuthChanged);
-    window.electronAPI.papr.onLogoutSuccess(onAuthChanged);
+    // preload bridge, with `detail`). Use only DOM listeners, not IPC: every
+    // hook instance (one per keep-alive app tab) would otherwise receive the
+    // same change twice and add extra EventEmitter listeners.
     window.addEventListener("papr-namespace-changed", onNamespaceChanged);
     window.addEventListener("papr-organization-changed", onNamespaceChanged);
     window.addEventListener("papr-auth-success", onAuthChanged);
     window.addEventListener("papr-logout-success", onAuthChanged);
 
     return () => {
-      window.electronAPI.papr.removeLoginSuccessListener(onAuthChanged);
-      window.electronAPI.papr.removeLogoutSuccessListener(onAuthChanged);
       window.removeEventListener("papr-namespace-changed", onNamespaceChanged);
       window.removeEventListener("papr-organization-changed", onNamespaceChanged);
       window.removeEventListener("papr-auth-success", onAuthChanged);

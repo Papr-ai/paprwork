@@ -294,9 +294,14 @@ export function App() {
         namespaceName,
       });
     };
-    window.electronAPI?.papr?.onLoginSuccess(handleLoginSuccess);
+    // Listen via the DOM event the preload fanout dispatches once per login,
+    // instead of adding another IPC subscriber.
+    const onAuthSuccess = () => {
+      void handleLoginSuccess();
+    };
+    window.addEventListener("papr-auth-success", onAuthSuccess);
     return () => {
-      window.electronAPI?.papr?.removeLoginSuccessListener(handleLoginSuccess);
+      window.removeEventListener("papr-auth-success", onAuthSuccess);
     };
   }, []);
 
@@ -440,9 +445,8 @@ export function App() {
       }
     };
 
-    paprApi.onLoginSuccess(handleLoginSuccess);
-    paprApi.onLogoutSuccess(handleLogoutSuccess);
-
+    // Login/logout success arrive as DOM events from the preload fanout.
+    // Subscribe only via DOM listeners, not IPC: the fanout already dispatches both.
     const onAuthSuccess = (event: Event) => {
       const detail = (event as CustomEvent<{ userId?: string }>).detail;
       void handleLoginSuccess(detail);
@@ -451,8 +455,6 @@ export function App() {
     window.addEventListener("papr-logout-success", handleLogoutSuccess);
 
     return () => {
-      paprApi.removeLoginSuccessListener(handleLoginSuccess);
-      paprApi.removeLogoutSuccessListener(handleLogoutSuccess);
       window.removeEventListener("papr-auth-success", onAuthSuccess);
       window.removeEventListener("papr-logout-success", handleLogoutSuccess);
     };

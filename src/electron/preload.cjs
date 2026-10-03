@@ -99,9 +99,6 @@ contextBridge.exposeInMainWorld("electronAPI", {
   // Papr Login API - Authenticate with Papr platform for automatic API key provisioning
   papr: (() => {
     // Always forward login events to DOM so AuthWall works even before onLoginSuccess is registered.
-    ipcRenderer.on("papr:login-success", (_event, data) => {
-      window.dispatchEvent(new CustomEvent("papr-auth-success", { detail: data }));
-    });
     ipcRenderer.on("papr:login-error", (_event, data) => {
       window.dispatchEvent(new CustomEvent("papr-login-error", { detail: data }));
     });
@@ -109,10 +106,10 @@ contextBridge.exposeInMainWorld("electronAPI", {
       window.dispatchEvent(new CustomEvent("papr-setup-required", { detail: data }));
     });
 
-    const loginSuccessListenerMap = new WeakMap();
     const loginErrorListenerMap = new WeakMap();
     const setupRequiredListenerMap = new WeakMap();
-    const logoutSuccessListenerMap = new WeakMap();
+    const workspaceSwitchStartingListenerMap = new WeakMap();
+    const workspaceCacheUpdatedListenerMap = new WeakMap();
     // One shared ipcRenderer listener per channel, fanned out to a Set of
     // subscribers. Registering per-subscriber ipcRenderer listeners made the
     // count scale with mounted components (one per keep-alive app tab) and
@@ -142,10 +139,10 @@ contextBridge.exposeInMainWorld("electronAPI", {
         },
       };
     };
+    const loginSuccessFanout = createFanout("papr:login-success", "papr-auth-success");
+    const logoutSuccessFanout = createFanout("papr:logout-success", "papr-logout-success");
     const namespaceChangedFanout = createFanout("papr:namespace-changed", "papr-namespace-changed");
     const organizationChangedFanout = createFanout("papr:organization-changed", "papr-organization-changed");
-    const workspaceSwitchStartingListenerMap = new WeakMap();
-    const workspaceCacheUpdatedListenerMap = new WeakMap();
 
     return {
       checkLoginStatus: () => ipcRenderer.invoke("papr:check-login-status"),
@@ -161,20 +158,8 @@ contextBridge.exposeInMainWorld("electronAPI", {
       getActiveWorkspace: () => ipcRenderer.invoke("papr:get-active-workspace"),
       
       // Listen for successful login (via deep link callback)
-      onLoginSuccess: (callback) => {
-        const wrapper = (_event, data) => {
-          callback(data);
-        };
-        loginSuccessListenerMap.set(callback, wrapper);
-        ipcRenderer.on("papr:login-success", wrapper);
-      },
-      removeLoginSuccessListener: (callback) => {
-        const wrapper = loginSuccessListenerMap.get(callback);
-        if (wrapper) {
-          ipcRenderer.removeListener("papr:login-success", wrapper);
-          loginSuccessListenerMap.delete(callback);
-        }
-      },
+      onLoginSuccess: (callback) => loginSuccessFanout.subscribe(callback),
+      removeLoginSuccessListener: (callback) => loginSuccessFanout.unsubscribe(callback),
 
       onLoginError: (callback) => {
         const wrapper = (_event, data) => {
@@ -207,21 +192,8 @@ contextBridge.exposeInMainWorld("electronAPI", {
       },
       
       // Listen for successful logout
-      onLogoutSuccess: (callback) => {
-        const wrapper = () => {
-          callback();
-          window.dispatchEvent(new CustomEvent('papr-logout-success'));
-        };
-        logoutSuccessListenerMap.set(callback, wrapper);
-        ipcRenderer.on("papr:logout-success", wrapper);
-      },
-      removeLogoutSuccessListener: (callback) => {
-        const wrapper = logoutSuccessListenerMap.get(callback);
-        if (wrapper) {
-          ipcRenderer.removeListener("papr:logout-success", wrapper);
-          logoutSuccessListenerMap.delete(callback);
-        }
-      },
+      onLogoutSuccess: (callback) => logoutSuccessFanout.subscribe(callback),
+      removeLogoutSuccessListener: (callback) => logoutSuccessFanout.unsubscribe(callback),
       
       listNamespaces: (options) => ipcRenderer.invoke("papr:list-namespaces", options),
       listAllNamespaces: (options) => ipcRenderer.invoke("papr:list-all-namespaces", options),

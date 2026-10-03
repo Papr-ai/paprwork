@@ -168,7 +168,15 @@ async function enrichRequestsWithWorkspaceMembers(
   }
 
   try {
-    const res = await fetch(`${GATEWAY}/api/members`);
+    // /api/members is a mini-app endpoint and 400s without an app identity.
+    // The roster is workspace-wide, so any request's source app will do.
+    const appId = requests.find((r) => r.sourceAppId)?.sourceAppId;
+    if (!appId) {
+      return requests;
+    }
+    const res = await fetch(
+      `${GATEWAY}/api/members?appId=${encodeURIComponent(appId)}`,
+    );
     if (!res.ok) {
       return requests;
     }
