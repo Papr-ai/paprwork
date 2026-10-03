@@ -6,7 +6,7 @@
  * the app's own repo and is fetched via runtime/repo-file like data-sources.json.
  */
 
-import { mkdir, writeFile } from "fs/promises";
+import { mkdir, readFile, writeFile } from "fs/promises";
 import path from "path";
 import type { CloudPublishAppPrefs } from "../cloudPublishPrefs.js";
 import { memoryShareAllowlistBodyFromPrefs } from "../cloudShareAllowlistMemory.js";
@@ -48,6 +48,11 @@ export async function writeSharePeopleAllowlistRepoFile(
   >,
 ): Promise<void> {
   const target = path.join(appDir, SHARE_PEOPLE_ALLOWLIST_REPO_PATH);
+  const next = sharePeopleAllowlistRepoJson(prefs);
+  // Sync change detection is mtime-based: rewriting identical bytes after a
+  // publish would flip the app to "Unpublished changes" with nothing to publish.
+  const current = await readFile(target, "utf8").catch(() => null);
+  if (current === next) return;
   await mkdir(path.dirname(target), { recursive: true });
-  await writeFile(target, sharePeopleAllowlistRepoJson(prefs), "utf8");
+  await writeFile(target, next, "utf8");
 }

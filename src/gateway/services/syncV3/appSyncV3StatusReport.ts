@@ -4,6 +4,7 @@
 
 import type { SyncStateManager } from "../cloudSync/syncState.js";
 import { shouldAutoUploadApp } from "../cloudUploadMode.js";
+import { confirmAppUnchangedSinceUpload } from "./confirmAppUnchangedSinceUpload.js";
 import { listOutboxEntries } from "./SyncOutbox.js";
 import { listRecentWriterConflicts } from "./writerConflict.js";
 import {
@@ -164,7 +165,12 @@ export async function buildAppSyncV3Report(
   const relativePath = `apps/${appId}`;
   const queuedPaths = new Set(options.queuedPaths ?? []);
   const syncedRecord = stateManager.data.syncedItems[relativePath];
-  const hasLocalChanges = stateManager.hasItemChanged(relativePath);
+  // Cheap mtime/size check first; only when it trips, read the files saved
+  // since the last upload and compare to what was uploaded. Identical re-saves
+  // must not show "Unpublished changes" right after a publish.
+  const hasLocalChanges =
+    stateManager.hasItemChanged(relativePath) &&
+    !(await confirmAppUnchangedSinceUpload(paprDir, appId, stateManager));
   const autoUpload = shouldAutoUploadApp(appId, paprDir);
   const manualUploadHold = !autoUpload && hasLocalChanges;
 
