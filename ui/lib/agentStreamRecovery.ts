@@ -397,6 +397,17 @@ function upgradeAssistantFromServer(
  * firstConsumedIndex forward and drops the earlier half of the chat below its
  * own latest message.
  */
+/**
+ * Ids the gateway assigns when it saves a message (`msg-<uuid v4>`). Optimistic
+ * sends use `msg-user-<ms>` / `user-<ms>` until the server id replaces them.
+ */
+const PERSISTED_MESSAGE_ID =
+  /^msg-[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+
+export function isPersistedMessageId(id: string): boolean {
+  return PERSISTED_MESSAGE_ID.test(id);
+}
+
 function findLocalContentDuplicate(
   base: ChatMessage[],
   serverMsg: ChatMessage,
@@ -515,6 +526,18 @@ export function mergeHistoryWithLocal(
     // With nothing consumed there is no window to sit outside of, so keep the
     // original append-at-the-end behaviour rather than guessing.
     if (firstConsumedIndex !== -1 && index < firstConsumedIndex) {
+      beforeWindow.push(localMsg);
+    } else if (
+      firstConsumedIndex !== -1 &&
+      localMsg.role === "user" &&
+      isPersistedMessageId(localMsg.id)
+    ) {
+      // A user message the server already saved, yet missing from the newest-N
+      // window, is OLDER than the window — never an unsent send. (Local order
+      // can disagree with server order: a follow-up typed while a turn streams
+      // sits after that turn locally but before it by timestamp.) Appending it
+      // would plant an old message below the latest reply, and the queue
+      // drain would then wait forever for a reply to it.
       beforeWindow.push(localMsg);
     } else {
       afterWindow.push(localMsg);
