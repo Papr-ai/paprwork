@@ -23,6 +23,8 @@ import {
 import { appNeedsOrderedFlushAsync } from "../cloudSync/pendingLocalUploads.js";
 import { getCloudSyncService } from "../cloudSync/cloudSyncSingleton.js";
 import { computeBlobOidForContent } from "./computeParentHash.js";
+import { mergeFileContents, runGit } from "../cloudSync/threeWayMerge.js";
+import { ephemeralGitEnv } from "../../utils/ephemeralGitEnv.js";
 import { fetchAppRepoHead } from "./AppOpsClient.js";
 import { writeAppRepoCommitCursor, readAppRepoCommitCursors } from "./appRepoCommittedFanout.js";
 import {
@@ -48,6 +50,10 @@ export interface PullAppCodeFromRepoResult {
   registryMigrationsCopied: string[];
   conflictFiles: string[];
   skippedFiles: string[];
+  /** Both sides changed different lines; combined automatically (three-way). */
+  mergedFiles?: string[];
+  /** Everything the update brings, for the status panel's list (hold + dryRun). */
+  incoming?: IncomingFileChange[];
   /** Keep mine: conflicting files where the local version was kept on purpose. */
   keptLocalFiles?: string[];
   /** True when conflicts held the whole update back — nothing was written. */
@@ -66,8 +72,21 @@ export interface PullAppCodeFromRepoResult {
  */
 export type PullConflictResolution = "hold" | "take_theirs" | "keep_mine";
 
+/** Per-file choice for an overlapping file. Overrides `resolution` for that path. */
+export type PullFileResolution = "mine" | "theirs";
+
+export interface IncomingFileChange {
+  path: string;
+  change: "added" | "edited";
+  /** Combined with local edits automatically. */
+  merged?: boolean;
+  /** Overlaps a local edit — needs a choice. */
+  conflict?: boolean;
+}
+
 type PlannedFile =
   | { action: "skip"; filePath: string }
+  | { action: "merge"; filePath: string; content: string; isMigration: false }
   | { action: "conflict"; filePath: string; content: string; isMigration: boolean }
   | { action: "write"; filePath: string; content: string; isMigration: boolean };
 
@@ -98,6 +117,36 @@ function hashContent(content: string): string {
   return fileContentHash(content);
 }
 
+/**
+ * Content of the version both sides started from (the last synced blob).
+ * Partial clones fetch the blob on demand; any failure means "no base", and
+ * the file stays a conflict exactly as before.
+ */
+async function readBaseBlob(repoDir: string, oid: string | null): Promise<string | null> {
+  if (!oid) return null;
+  try {
+    const { stdout } = await runGit(["cat-file", "blob", oid], {
+      cwd: repoDir,
+      env: ephemeralGitEnv(),
+      timeoutMs: 30_000,
+    });
+    return stdout;
+  } catch {
+    return null;
+  }
+}
+
+function toIncoming(plan: PlannedFile[], localFiles: Map<string, string>): IncomingFileChange[] {
+  return plan
+    .filter((f) => f.action !== "skip")
+    .map((f) => ({
+      path: f.filePath,
+      change: localFiles.has(f.filePath) ? ("edited" as const) : ("added" as const),
+      ...(f.action === "merge" ? { merged: true } : {}),
+      ...(f.action === "conflict" ? { conflict: true } : {}),
+    }));
+}
+
 /** Merge remote repo tree into local app dir using OID cache for conflict detection. */
 export async function pullAppCodeFromRepo(
   appId: string,
@@ -107,6 +156,10 @@ export async function pullAppCodeFromRepo(
     /** Manual Get updates / post-approve: cloud wins over stale local-upload fingerprints. */
     preferCloudOverLocal?: boolean;
     resolution?: PullConflictResolution;
+    /** Per-file Mine / Theirs for overlapping files (status panel). */
+    fileResolutions?: Record<string, PullFileResolution>;
+    /** Classify only: report what Get updates would do, write nothing. */
+    dryRun?: boolean;
   },
 ): Promise<PullAppCodeFromRepoResult> {
   const { PhaseTimer } = await import("../../utils/phaseTiming.js");
@@ -212,6 +265,7 @@ export async function pullAppCodeFromRepo(
   }
 
   let sourceDir: string;
+  let cloneRepoDir: string;
   let cleanup: () => Promise<void>;
   try {
     const cloned = await cloneCloudAppSource(
@@ -223,6 +277,7 @@ export async function pullAppCodeFromRepo(
       "papr-app-pull-",
     );
     sourceDir = cloned.sourceDir;
+    cloneRepoDir = cloned.repoDir ?? cloned.sourceDir;
     cleanup = cloned.cleanup;
   } catch (err) {
     timer.mark("gitClone-failed");
@@ -314,6 +369,18 @@ export async function pullAppCodeFromRepo(
         (lastSyncedOid !== null && localOid === lastSyncedOid);
 
       if (!localUnchanged && remoteOid && localOid !== remoteOid) {
+        // Both sides edited: combine line by line against the last synced
+        // version, like git. Only overlapping lines are a real conflict.
+        const base = localContent !== undefined
+          ? await readBaseBlob(cloneRepoDir, lastSyncedOid)
+          : null;
+        if (base !== null && localContent !== undefined) {
+          const merged = await mergeFileContents(localContent, base, upstreamContent);
+          if (merged.clean && merged.content !== undefined) {
+            plan.push({ action: "merge", filePath, content: merged.content, isMigration: false });
+            continue;
+          }
+        }
         plan.push({ action: "conflict", filePath, content: upstreamContent, isMigration: false });
         continue;
       }
@@ -321,28 +388,47 @@ export async function pullAppCodeFromRepo(
     }
 
     const resolution = options.resolution ?? "hold";
+    const fileResolutions = options.fileResolutions ?? {};
     const planned = plan.filter((f) => f.action === "conflict").map((f) => f.filePath);
+    const unresolved = planned.filter((p) => !fileResolutions[p]);
+    const plannedMerged = plan.filter((f) => f.action === "merge").map((f) => f.filePath);
+
+    if (options.dryRun) {
+      return {
+        ...empty,
+        commitSha: head.commitSha,
+        conflictFiles: planned,
+        mergedFiles: plannedMerged,
+        incoming: toIncoming(plan, localFiles),
+      };
+    }
 
     // All-or-nothing: a conflict holds the WHOLE update (code + migrations)
     // so the user never runs half of someone else's change.
-    if (planned.length > 0 && resolution === "hold") {
+    if (unresolved.length > 0 && resolution === "hold") {
       timer.logIfSlow(`PullAppCode held app=${trimmed}`, 200);
       return {
         ...empty,
         commitSha: head.commitSha,
         conflictFiles: planned,
+        mergedFiles: plannedMerged,
+        incoming: toIncoming(plan, localFiles),
         heldForConflicts: true,
       };
     }
 
     // Phase 2 — apply.
     const keptLocalFiles: string[] = [];
+    const mergedFiles: string[] = [];
     for (const item of plan) {
       if (item.action === "skip") {
         skippedFiles.push(item.filePath);
         continue;
       }
-      if (item.action === "conflict" && resolution === "keep_mine") {
+      const choice = item.action === "conflict"
+        ? fileResolutions[item.filePath] ?? (resolution === "keep_mine" ? "mine" : "theirs")
+        : null;
+      if (choice === "mine") {
         keptLocalFiles.push(item.filePath);
         skippedFiles.push(item.filePath);
         continue;
@@ -385,7 +471,7 @@ export async function pullAppCodeFromRepo(
 
       const written = await appService.writeAppFile(trimmed, item.filePath, contentToWrite);
       if (written) {
-        updatedFiles.push(item.filePath);
+        (item.action === "merge" ? mergedFiles : updatedFiles).push(item.filePath);
       } else {
         skippedFiles.push(item.filePath);
       }
@@ -454,6 +540,7 @@ export async function pullAppCodeFromRepo(
       registryMigrationsCopied,
       conflictFiles,
       skippedFiles,
+      ...(mergedFiles.length > 0 ? { mergedFiles } : {}),
       ...(keptLocalFiles.length > 0 ? { keptLocalFiles } : {}),
     };
   } finally {

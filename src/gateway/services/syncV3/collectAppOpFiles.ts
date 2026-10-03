@@ -522,3 +522,50 @@ export async function resolveWriterSyncedLocalPaths(
 
   return paths;
 }
+
+export interface LocalCodeChange {
+  /** Repo-relative: app files at root, jobs/{id}/…, schema files under databases/. */
+  path: string;
+  change: "added" | "edited" | "removed";
+}
+
+/**
+ * What Publish would send, file by file — the status panel's "what changed"
+ * list. Same walk and OID comparison as collectAppOpFiles, without the batch
+ * budget or file content. Removed = an app file the web has that is gone here
+ * (job and schema removals are not reported: the walk can't tell them from
+ * files it skips on purpose).
+ */
+export async function listLocalCodeChanges(
+  paprDir: string,
+  appId: string,
+): Promise<LocalCodeChange[]> {
+  const appDir = path.join(paprDir, "apps", appId);
+  const appPaths = await walkAppFiles(appDir);
+  const candidates: WalkCandidate[] = appPaths.map((repoPath) => ({
+    repoPath,
+    fullPath: path.join(appDir, repoPath),
+  }));
+  candidates.push(...(await collectLinkedJobCandidates(paprDir, appId)));
+  candidates.push(...(await collectSchemaOwnerMigrationCandidates(paprDir, appId)));
+
+  const cachedOids = (await readOidCache()).apps[appId] ?? {};
+  const changes: LocalCodeChange[] = [];
+  for (const candidate of candidates) {
+    const outcome = await candidateToOpFile(candidate, cachedOids);
+    if (outcome.kind !== "op") continue;
+    changes.push({
+      path: candidate.repoPath,
+      change: cachedOids[candidate.repoPath] ? "edited" : "added",
+    });
+  }
+  const present = new Set(appPaths);
+  for (const repoPath of Object.keys(cachedOids)) {
+    const top = repoPath.split("/")[0] ?? "";
+    if (top === "jobs" || top === "databases" || SKIP_DIR_NAMES.has(top)) continue;
+    if (present.has(repoPath) || isNeverTrackRepoPath(repoPath)) continue;
+    const exists = await fs.stat(path.join(appDir, repoPath)).then(() => true, () => false);
+    if (!exists) changes.push({ path: repoPath, change: "removed" });
+  }
+  return changes.sort((a, b) => a.path.localeCompare(b.path));
+}

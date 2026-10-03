@@ -15,13 +15,30 @@ export interface TrackSyncResult {
   mergedFiles?: string[];
   conflictFiles: string[];
   skippedFiles: string[];
+  failedFiles?: string[];
+  /** Overlapping files resolved to the publisher's version on request. */
+  takenTheirsFiles?: string[];
+  /** dryRun only: what Get updates would bring. */
+  incoming?: Array<{ path: string; change: "added" | "edited"; merged?: boolean; conflict?: boolean }>;
   lastSyncedAt: string;
 }
 
-export async function pullTrackUpstream(appId: string): Promise<TrackSyncResult> {
+/**
+ * Pull the publisher's code. `fileResolutions` answers overlapping files one
+ * by one (theirs overwrites, mine keeps); `dryRun` only reports what would
+ * happen — the status panel uses it to list the update before applying.
+ */
+export async function pullTrackUpstream(
+  appId: string,
+  options: { fileResolutions?: Record<string, "mine" | "theirs">; dryRun?: boolean } = {},
+): Promise<TrackSyncResult> {
   const res = await fetch(
     `${GATEWAY}/api/cloud/track-sync/${encodeURIComponent(appId)}`,
-    { method: "POST" },
+    {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(options),
+    },
   );
   const body = (await res.json()) as TrackSyncResult & { error?: string };
   if (!res.ok) {
@@ -136,4 +153,45 @@ export function describeDuplicateError(message: string): string {
     return "Couldn't reach Papr Cloud. Check your connection and try again.";
   }
   return `Couldn't duplicate: ${message.slice(0, 160)}`;
+}
+
+export interface CodeChange {
+  path: string;
+  change: "added" | "edited" | "removed";
+}
+
+/** Files Publish would send (app files, jobs, schema files). */
+export async function fetchLocalCodeChanges(appId: string): Promise<CodeChange[] | null> {
+  try {
+    const res = await fetch(`${GATEWAY}/api/apps/${encodeURIComponent(appId)}/code-changes`);
+    if (!res.ok) return null;
+    const body = (await res.json()) as { changes?: CodeChange[] };
+    return body.changes ?? [];
+  } catch {
+    return null;
+  }
+}
+
+export interface OwnUpdatePreview {
+  incoming: Array<{ path: string; change: "added" | "edited"; merged?: boolean; conflict?: boolean }>;
+  conflictFiles: string[];
+}
+
+/** Dry-run Get updates for my own app's web copy. null = nothing to get / unknown. */
+export async function previewOwnUpdate(appId: string): Promise<OwnUpdatePreview | null> {
+  try {
+    const res = await fetch(`${GATEWAY}/api/apps/${encodeURIComponent(appId)}/sync-from-cloud`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ dryRun: true }),
+    });
+    if (!res.ok) return null;
+    const body = (await res.json()) as {
+      code?: { skipped?: boolean; incoming?: OwnUpdatePreview["incoming"]; conflictFiles?: string[] };
+    };
+    if (!body.code || body.code.skipped) return null;
+    return { incoming: body.code.incoming ?? [], conflictFiles: body.code.conflictFiles ?? [] };
+  } catch {
+    return null;
+  }
 }

@@ -870,6 +870,18 @@ async function startGateway(): Promise<void> {
       }
     });
 
+    // Status panel: the files Publish would send (added / edited / removed).
+    app.get("/api/apps/:appId/code-changes", async (req, res) => {
+      try {
+        const { listLocalCodeChanges } = await import("./services/syncV3/collectAppOpFiles.js");
+        const { getPaprRoot } = await import("../core/utils/paprRoot.js");
+        const changes = await listLocalCodeChanges(getPaprRoot(), req.params.appId);
+        res.json({ changes });
+      } catch (err) {
+        res.status(500).json({ error: (err as Error).message });
+      }
+    });
+
     app.get("/api/apps/:appId/remote-code-status", async (req, res) => {
       try {
         const appId = req.params.appId;
@@ -928,8 +940,15 @@ async function startGateway(): Promise<void> {
         const body = (req.body ?? {}) as {
           wait?: boolean;
           resolution?: string;
+          fileResolutions?: Record<string, string>;
+          dryRun?: boolean;
         };
-        const waitForCompletion = body.wait === true;
+        const waitForCompletion = body.wait === true || body.dryRun === true;
+        // Per-file Mine / Theirs from the status panel; anything else ignored.
+        const fileResolutions: Record<string, "mine" | "theirs"> = {};
+        for (const [file, choice] of Object.entries(body.fileResolutions ?? {})) {
+          if (choice === "mine" || choice === "theirs") fileResolutions[file] = choice;
+        }
         const resolution =
           body.resolution === "take_theirs" || body.resolution === "keep_mine"
             ? body.resolution
@@ -955,6 +974,8 @@ async function startGateway(): Promise<void> {
           allowRecentSkip: false,
           preferCloudOverLocal: true,
           resolution,
+          fileResolutions,
+          dryRun: body.dryRun === true,
         });
         timer.mark("pullAppFromCloud");
         if (result.code.skipped && result.code.reason) {
@@ -2783,12 +2804,18 @@ async function startGateway(): Promise<void> {
 
     app.post("/api/cloud/track-sync/:appId", async (req, res) => {
       try {
-        const discardLocal =
-          (req.body as { discardLocal?: boolean } | undefined)?.discardLocal ===
-          true;
+        const body = (req.body ?? {}) as {
+          discardLocal?: boolean;
+          dryRun?: boolean;
+          fileResolutions?: Record<string, string>;
+        };
+        const fileResolutions: Record<string, "mine" | "theirs"> = {};
+        for (const [file, choice] of Object.entries(body.fileResolutions ?? {})) {
+          if (choice === "mine" || choice === "theirs") fileResolutions[file] = choice;
+        }
         const result = await getCloudAppTrackSyncService().syncTrackApp(
           req.params.appId,
-          { discardLocal },
+          { discardLocal: body.discardLocal === true, dryRun: body.dryRun === true, fileResolutions },
         );
         res.json(result);
       } catch (err) {

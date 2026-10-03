@@ -53,11 +53,14 @@ vi.mock("../src/gateway/services/CloudAppInstallService.js", () => ({
   }),
 }));
 
-const appSvc = vi.hoisted(() => ({ found: true, writeOk: true }));
+const appSvc = vi.hoisted(() => ({ found: true, writeOk: true, writes: [] as string[] }));
 vi.mock("../src/gateway/services/AppService.js", () => ({
   getAppService: () => ({
     getApp: vi.fn(async () => (appSvc.found ? { id: "x" } : null)),
-    writeAppFile: vi.fn(async () => appSvc.writeOk),
+    writeAppFile: vi.fn(async (_id: string, rel: string) => {
+      appSvc.writes.push(rel);
+      return appSvc.writeOk;
+    }),
   }),
 }));
 
@@ -93,6 +96,7 @@ describe("CloudAppTrackSyncService shared database track sync", () => {
     service = new CloudAppTrackSyncService(appsDir);
     appSvc.found = true;
     appSvc.writeOk = true;
+    appSvc.writes = [];
     installCloudAppLinkedResources.mockReset();
     finalizePortableCloudAppResources.mockReset();
     pullTrackSharedAppDatabase.mockReset();
@@ -272,5 +276,49 @@ describe("CloudAppTrackSyncService shared database track sync", () => {
       /isn't available/,
     );
     expect(readLineage().baseCommit).toBe("base-old");
+  });
+
+  /** index.html edited locally and upstream, no base to merge against. */
+  const conflictLineage = (): CloudAppLineageFile => ({
+    ...forkedLineage(),
+    baseCommit: undefined,
+    syncSnapshot: { "index.html": "snap-index" },
+  });
+
+  it("dryRun: lists the update (incl. overlaps) and writes nothing", async () => {
+    writeTrackApp(appsDir, conflictLineage());
+    writeFileSync(join(upstreamAppDir, "chart.ts"), "export {}", "utf8");
+
+    const result = await service.syncTrackApp(APP_ID, { dryRun: true });
+
+    expect(result.conflictFiles).toEqual(["index.html"]);
+    expect(result.incoming).toEqual(
+      expect.arrayContaining([
+        { path: "index.html", change: "edited", conflict: true },
+        { path: "chart.ts", change: "added" },
+      ]),
+    );
+    expect(appSvc.writes).toEqual([]);
+    expect(installCloudAppLinkedResources).not.toHaveBeenCalled();
+    expect(readLineage().syncSnapshot).toEqual({ "index.html": "snap-index" });
+  });
+
+  it("per-file Theirs: the overlapping file takes the publisher's version", async () => {
+    writeTrackApp(appsDir, conflictLineage());
+
+    const result = await service.syncTrackApp(APP_ID, { fileResolutions: { "index.html": "theirs" } });
+
+    expect(result.conflictFiles).toEqual([]);
+    expect(result.takenTheirsFiles).toEqual(["index.html"]);
+    expect(appSvc.writes).toContain("index.html");
+  });
+
+  it("per-file Mine: the overlap keeps the local file and still reports it", async () => {
+    writeTrackApp(appsDir, conflictLineage());
+
+    const result = await service.syncTrackApp(APP_ID, { fileResolutions: { "index.html": "mine" } });
+
+    expect(result.conflictFiles).toEqual(["index.html"]);
+    expect(appSvc.writes).not.toContain("index.html");
   });
 });

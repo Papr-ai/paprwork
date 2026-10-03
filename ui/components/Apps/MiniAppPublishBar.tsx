@@ -82,7 +82,6 @@ import {
 import { PublishBarOverflowMenu } from "./PublishBarOverflowMenu";
 import { AppWorkspacePanelMenu } from "./AppWorkspacePanelMenu";
 import {
-  WebSyncPopover,
   WebSyncStatusDot,
   ShareAudienceIcon,
   buildGenericSyncAgentPrompt,
@@ -105,9 +104,13 @@ import {
 } from "../../utils/cloudPublishApi";
 import type { CloudCompatibilityReport } from "../../../src/core/types/cloudAppCompatibility";
 import type { CloudPublishReadinessReport } from "../../../src/core/types/cloudAppDependencies";
-import { CloudPublishDependenciesPanel } from "./CloudPublishDependenciesPanel";
+import { linkedDepItems } from "./ShareLinkedDeps";
 import { PreviewUrlRow } from "./PreviewUrlRow";
 import { PublishBarErrorNotice } from "./PublishBarErrorNotice";
+import { SyncStatusPanel, type ConflictChoice } from "./SyncStatusPanel";
+import { buildSyncPanel, type PanelAction, type PanelTone, type UpdatePreview } from "../../utils/syncPanelModel";
+import { fetchLocalCodeChanges, previewOwnUpdate, type CodeChange } from "../../utils/cloudTrackSyncApi";
+import { buildMergeAfterUpdateAgentPrompt, buildMergeAllAgentPrompt } from "../../utils/openCloudSyncAgentChat";
 import "./MiniAppPublishBar.css";
 import "./AppWorkspaceMenu.css";
 import "./AppWorkspacePanelMenu.css";
@@ -331,7 +334,7 @@ export function MiniAppPublishBar({
     null,
   );
   const [compatLoading, setCompatLoading] = useState(false);
-  const [readinessLoading, setReadinessLoading] = useState(false);
+  const [, setReadinessLoading] = useState(false);
   const [needsDesktopAck, setNeedsDesktopAck] = useState(false);
   useEffect(() => {
     if (needsDesktopAck) {
@@ -365,11 +368,8 @@ export function MiniAppPublishBar({
     error: webSyncError,
     globalAutoUploadEnabled,
     pushNow: webSyncPushNow,
-    bumpQueue: webSyncBumpQueue,
     pullUpdates: webSyncPullUpdates,
-    applyRemoteUpdates: webSyncApplyRemoteUpdates,
     checkStatus: webSyncCheckStatus,
-    needsStatusCheck: webSyncNeedsStatusCheck,
     lastCheckedAt: webSyncLastCheckedAt,
     publisherUpdatesAvailable: webSyncPublisherUpdatesAvailableRaw,
     refresh: webSyncRefresh,
@@ -386,10 +386,8 @@ export function MiniAppPublishBar({
     await webSyncPushNow();
   }, [webSyncPushNow]);
 
-  const autoUploadEnabled = resolveEffectiveAutoUpload(
-    cloud.uploadMode,
-    globalAutoUploadEnabled,
-  );
+  // Kept for the overflow menu's upload-mode row; the v7 panel doesn't explain it.
+  void resolveEffectiveAutoUpload(cloud.uploadMode, globalAutoUploadEnabled);
 
   // Callout strip: review + failed only. Updates and unpublished local work
   // are shown on the chip and primary button (v2 bar), not a second banner.
@@ -939,10 +937,6 @@ export function MiniAppPublishBar({
         }),
       )
     : null;
-  const webSyncActionNeeded =
-    webSyncStatus != null &&
-    webSyncStatus.overall !== "synced" &&
-    webSyncStatus.overall !== "disabled";
   const webSyncSpinning =
     webSyncPushing ||
     webSyncPulling ||
@@ -1205,6 +1199,32 @@ export function MiniAppPublishBar({
     setWebSyncPopoverOpen((open) => !open);
   };
 
+  // v7 status panel: what differs, loaded when the panel opens.
+  const [panelCodeChanges, setPanelCodeChanges] = useState<CodeChange[] | null>(null);
+  const [panelUpdatePreview, setPanelUpdatePreview] = useState<UpdatePreview | null>(null);
+  const ownUpdateAvailable = !isTrackCollaborator && webSyncStatus?.gitUpdatesAvailable === true;
+  const updateAvailable = webSyncPublisherUpdatesAvailable || ownUpdateAvailable ||
+    (webSyncStatus?.updateConflictFiles?.length ?? 0) > 0;
+  useEffect(() => {
+    if (!webSyncPopoverOpen) return;
+    let cancelled = false;
+    void fetchLocalCodeChanges(appId).then((c) => !cancelled && setPanelCodeChanges(c));
+    if (updateAvailable) {
+      const load = isTrackCollaborator
+        ? pullTrackUpstream(appId, { dryRun: true }).then((r) => ({
+            incoming: r.incoming ?? [],
+            conflictFiles: r.conflictFiles,
+          }))
+        : previewOwnUpdate(appId);
+      void load.then((p) => !cancelled && setPanelUpdatePreview(p)).catch(() => {});
+    } else {
+      setPanelUpdatePreview(null);
+    }
+    return () => {
+      cancelled = true;
+    };
+  }, [appId, webSyncPopoverOpen, updateAvailable, isTrackCollaborator, webSyncLastCheckedAt, collabEditsTick]);
+
   const handlePublishStatusChipClick = () => {
     if (cloudPublishFailed) {
       setPublishErrorDetailOpen(true);
@@ -1224,6 +1244,9 @@ export function MiniAppPublishBar({
 
   const handlePublishClick = async () => {
     if (publishBlockedByIntegrity) {
+      cloud.reportError(
+        `Can't publish yet: ${(readiness?.errors ?? []).join("; ") || "the app's manifest points to missing files."}`,
+      );
       return;
     }
     if (!requestPaprCloudFeature("publish_share")) {
@@ -1550,6 +1573,91 @@ export function MiniAppPublishBar({
     }
   };
 
+  const toPanelTone = (tone: string): PanelTone =>
+    (["ok", "warn", "bad", "info", "idle", "busy"].includes(tone) ? tone : "idle") as PanelTone;
+  const syncPanel = buildSyncPanel({
+    status: webSyncStatus,
+    chip: { label: publishBarChip.label, tone: toPanelTone(String(publishBarChip.tone ?? "idle")) },
+    codeDestination: onTeamData ? "propose" : "publish",
+    codeChanges: panelCodeChanges,
+    update: updateAvailable
+      ? {
+          source: isTrackCollaborator ? cloudLineage?.sourceSlug ?? "the original" : "the web",
+          fromPublisher: isTrackCollaborator,
+          preview: panelUpdatePreview,
+        }
+      : null,
+    pushing: webSyncPushing || Boolean(shareSyncNotice),
+    pulling: webSyncPulling || upstreamPulling,
+    error: webSyncError,
+    live: cloud.live || onTeamData,
+  });
+
+  const runPanelAction = (action: PanelAction) => {
+    switch (action) {
+      case "publish":
+        void handleWebSyncPushOrPublish();
+        return;
+      case "retry_data":
+        void guardedWebSyncPushNow();
+        return;
+      case "propose":
+        setWebSyncPopoverOpen(false);
+        openPropose();
+        return;
+      case "get_updates":
+        void (isTrackCollaborator ? handleUpstreamPull() : webSyncPullUpdates());
+        return;
+      case "apply_update":
+        void applyPanelUpdate({});
+        return;
+      case "ask_agent":
+        if (webSyncStatus) {
+          openCloudSyncAgentChat(buildGenericSyncAgentPrompt({ appId, status: webSyncStatus }));
+        }
+        return;
+    }
+  };
+
+  /** Apply the held update: Mine / Theirs per file; "agent" files are kept
+   *  as mine, then handed to the agent to combine with the incoming version. */
+  const applyPanelUpdate = async (choices: Record<string, ConflictChoice>) => {
+    const fileResolutions: Record<string, "mine" | "theirs"> = {};
+    const forAgent: string[] = [];
+    for (const [file, choice] of Object.entries(choices)) {
+      fileResolutions[file] = choice === "theirs" ? "theirs" : "mine";
+      if (choice === "agent") forAgent.push(file);
+    }
+    let ok = false;
+    if (isTrackCollaborator) {
+      setUpstreamPulling(true);
+      try {
+        const result = await pullTrackUpstream(appId, { fileResolutions });
+        ok = result.failedFiles == null || result.failedFiles.length === 0;
+        setUpstreamNotice({ tone: ok ? "ok" : "warn", message: formatTrackSyncSummary(result) });
+        onTrackPullComplete?.();
+        await webSyncRefresh(true);
+      } catch (err) {
+        setUpstreamNotice({ tone: "bad", message: (err as Error).message.slice(0, 120) });
+      } finally {
+        setUpstreamPulling(false);
+        setCollabEditsTick((n) => n + 1);
+      }
+    } else {
+      ok = await webSyncPullUpdates(undefined, fileResolutions);
+    }
+    setPanelUpdatePreview(null);
+    if (ok && forAgent.length > 0) {
+      openCloudSyncAgentChat(
+        buildMergeAfterUpdateAgentPrompt({
+          appId,
+          files: forAgent,
+          publisherSlug: isTrackCollaborator ? cloudLineage?.sourceSlug : undefined,
+        }),
+      );
+    }
+  };
+
   const handleChipAction = () => {
     if (!publishBarChipAction) return;
     if (publishBarChipAction.kind === "updates") {
@@ -1751,43 +1859,30 @@ export function MiniAppPublishBar({
             </div>
             {webSyncPopoverOpen && webSyncPopoverPos
               ? createPortal(
-                  <WebSyncPopover
+                  <SyncStatusPanel
                     popoverRef={webSyncPopoverRef}
-                    appId={appId}
-                    className="mini-app-publish-bar__sync-popover--portal"
+                    className="sync7--portal"
                     style={{
                       position: "fixed",
                       top: webSyncPopoverPos.top,
                       left: webSyncPopoverPos.left,
                       zIndex: 10000,
                     }}
-                    status={webSyncStatus}
-                    loading={webSyncLoading && !webSyncStatus}
-                    refreshing={webSyncRefreshing}
-                    error={webSyncError}
-                    pushing={webSyncPushing || Boolean(shareSyncNotice)}
-                    pulling={webSyncPulling}
-                    applyingUpdates={webSyncApplyingUpdates}
-                    syncActionNeeded={webSyncActionNeeded}
-                    appLive={cloud.live}
-                    trackCollaborator={isTrackCollaborator}
-                    sourceSlug={cloudLineage?.sourceSlug}
-                    proposalWaiting={
-                      copyBar?.chip.label === "Proposal sent"
-                    }
-                    onViewProposals={() => {
-                      setWebSyncPopoverOpen(false);
-                      openPropose();
-                    }}
-                    autoUploadEnabled={autoUploadEnabled}
-                    onPushNow={() => void handleWebSyncPushOrPublish()}
-                    onBumpQueue={() => void webSyncBumpQueue()}
-                    onPullUpdates={() => void webSyncPullUpdates()}
-                    onApplyRemoteUpdates={() => void webSyncApplyRemoteUpdates()}
-                    onResolveConflict={(resolution) => void webSyncPullUpdates(resolution)}
-                    needsStatusCheck={webSyncNeedsStatusCheck}
+                    panel={syncPanel}
+                    checking={webSyncRefreshing || (webSyncLoading && !webSyncStatus)}
                     lastCheckedAt={webSyncLastCheckedAt}
                     onCheckStatus={() => void webSyncCheckStatus()}
+                    onAction={runPanelAction}
+                    onApplyUpdate={(choices) => void applyPanelUpdate(choices)}
+                    onAskAgentMergeAll={(files) =>
+                      openCloudSyncAgentChat(
+                        buildMergeAllAgentPrompt({
+                          appId,
+                          files,
+                          publisherSlug: isTrackCollaborator ? cloudLineage?.sourceSlug : undefined,
+                        }),
+                      )
+                    }
                   />,
                   document.body,
                 )
@@ -2228,6 +2323,8 @@ export function MiniAppPublishBar({
             onAddMissingKeys={openKeySettings}
             onKeysSaved={() => setKeysCheckToken((n) => n + 1)}
             initialEdit={shareInitialStep}
+            linkedDeps={linkedDepItems(readiness)}
+            onOpenDependencyApp={onOpenDependencyApp}
             notices={
               <>
                 <PaprCloudRequirementsPanel featureId="publish_share" />
@@ -2255,11 +2352,6 @@ export function MiniAppPublishBar({
                     </p>
                   </div>
                 ) : null}
-                <CloudPublishDependenciesPanel
-                  readiness={readiness}
-                  loading={readinessLoading}
-                  onOpenDependencyApp={onOpenDependencyApp}
-                />
                 {needsDesktopAck ? (
                   <div ref={desktopAckRef}>
                     <CloudCompatibilityPanel

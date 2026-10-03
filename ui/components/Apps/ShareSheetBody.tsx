@@ -30,6 +30,11 @@ import {
   type SharingPatch,
 } from "../../utils/shareSheetModel";
 import { CloudAppCredentialsPanel } from "./CloudAppCredentialsPanel";
+import {
+  ShareLinkedDeps,
+  linkedDepsSummary,
+  type LinkedDepItem,
+} from "./ShareLinkedDeps";
 import "./ShareSheetBody.css";
 
 export interface ShareSheetBodyProps {
@@ -58,6 +63,9 @@ export interface ShareSheetBodyProps {
   onAddMissingKeys: () => void;
   /** Bumped by the keys step after a save so the bar chip re-checks. */
   onKeysSaved?: () => void;
+  /** Linked apps/databases copies won't get; shown under "install a copy". */
+  linkedDeps: LinkedDepItem[];
+  onOpenDependencyApp?: (appId: string, title?: string) => void;
   /** Status / errors / dependency panels, rendered above the steps. */
   notices?: React.ReactNode;
   /** Optional deep link into one step (e.g. a missing-key chip). */
@@ -258,7 +266,15 @@ function WhatStep({ props }: { props: ShareSheetBodyProps }) {
         disabled={busy}
         onPick={() => onChange({ permission: "edit" })}
       />
-      {!useOnly ? <p className="ss6-note">{PROPOSALS_NOTE}</p> : null}
+      {!useOnly ? (
+        <div className="ss6-sub">
+          <ShareLinkedDeps
+            items={props.linkedDeps}
+            onOpenApp={props.onOpenDependencyApp}
+          />
+          <p className="ss6-note ss6-note--flush">{PROPOSALS_NOTE}</p>
+        </div>
+      ) : null}
     </div>
   );
 }
@@ -429,7 +445,10 @@ function LiveSummary({
   if (draft.audience !== "private") {
     rows.push({
       id: "what",
-      value: summarizeWhat(draft),
+      value:
+        draft.permission === "edit" && props.linkedDeps.length > 0
+          ? `${summarizeWhat(draft)} · ${linkedDepsSummary(props.linkedDeps.length)}`
+          : summarizeWhat(draft),
       icon: <Glyph d={ICON_PATHS.what} />,
     });
     rows.push({

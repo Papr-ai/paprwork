@@ -57,6 +57,10 @@ export interface TrackSyncResult {
    *  base commit and snapshot do not advance for them — the update is not
    *  counted as applied, so the next Get updates retries. */
   failedFiles?: string[];
+  /** Overlapping files resolved to the publisher's version on request. */
+  takenTheirsFiles?: string[];
+  /** dryRun: everything the update brings (status panel list). Nothing written. */
+  incoming?: Array<{ path: string; change: "added" | "edited"; merged?: boolean; conflict?: boolean }>;
   lastSyncedAt: string;
   upstreamRevision?: string | null;
 }
@@ -313,7 +317,13 @@ export class CloudAppTrackSyncService {
    */
   async syncTrackApp(
     appId: string,
-    options: { discardLocal?: boolean } = {},
+    options: {
+      discardLocal?: boolean;
+      /** Per-file choice for overlapping files: theirs overwrites, mine keeps. */
+      fileResolutions?: Record<string, "mine" | "theirs">;
+      /** Classify only — report what Get updates would do, write nothing. */
+      dryRun?: boolean;
+    } = {},
   ): Promise<TrackSyncResult> {
     const lineage = await readLineageFile(appId, this.appsDir);
     if (!lineage) {
@@ -398,6 +408,11 @@ export class CloudAppTrackSyncService {
           )
         : new Map<string, string>();
       const mergedFiles: string[] = [];
+      const takenTheirsFiles: string[] = [];
+      const incoming: NonNullable<TrackSyncResult["incoming"]> = [];
+      const dryRun = options.dryRun === true;
+      const write = async (rel: string, content: string): Promise<boolean> =>
+        dryRun ? true : Boolean(await appService.writeAppFile(appId, rel, content));
 
       const appService = getAppService();
       // Every write below goes through AppService, which answers false for an
@@ -438,7 +453,7 @@ export class CloudAppTrackSyncService {
             skippedFiles.push(filename);
             continue;
           }
-          const written = await appService.writeAppFile(appId, filename, merged.content);
+          const written = await write(filename, merged.content);
           (written ? updatedFiles : failedFiles).push(filename);
           continue;
         }
@@ -467,7 +482,7 @@ export class CloudAppTrackSyncService {
           if (next === null) {
             skippedFiles.push(filename);
           } else {
-            const written = await appService.writeAppFile(appId, filename, next);
+            const written = await write(filename, next);
             (written ? updatedFiles : failedFiles).push(filename);
           }
           continue;
@@ -486,17 +501,42 @@ export class CloudAppTrackSyncService {
                 skippedFiles.push(filename);
                 continue;
               }
-              const written = await appService.writeAppFile(appId, filename, merged.content);
+              const written = await write(filename, merged.content);
               (written ? mergedFiles : failedFiles).push(filename);
               continue;
             }
+          }
+          if (options.fileResolutions?.[filename] === "theirs") {
+            const written = await write(filename, upstreamContent);
+            (written ? takenTheirsFiles : failedFiles).push(filename);
+            continue;
           }
           conflictFiles.push(filename);
           continue;
         }
 
-        const written = await appService.writeAppFile(appId, filename, upstreamContent);
+        const written = await write(filename, upstreamContent);
         (written ? updatedFiles : failedFiles).push(filename);
+      }
+
+      if (dryRun) {
+        const mark = (list: string[], extra: { merged?: boolean; conflict?: boolean }) => {
+          for (const rel of list) {
+            incoming.push({ path: rel, change: localFiles.has(rel) ? "edited" : "added", ...extra });
+          }
+        };
+        mark(updatedFiles, {});
+        mark(mergedFiles, { merged: true });
+        mark(conflictFiles, { conflict: true });
+        return {
+          appId,
+          updatedFiles,
+          mergedFiles,
+          conflictFiles,
+          skippedFiles,
+          incoming,
+          lastSyncedAt: lineage.lastSyncedAt ?? new Date().toISOString(),
+        };
       }
 
       const nextSnapshot: Record<string, string> = { ...snapshot };
@@ -615,6 +655,7 @@ export class CloudAppTrackSyncService {
         mergedFiles,
         conflictFiles,
         skippedFiles,
+        ...(takenTheirsFiles.length > 0 ? { takenTheirsFiles } : {}),
         ...(failedFiles.length > 0 ? { failedFiles } : {}),
         lastSyncedAt,
         upstreamRevision,

@@ -102,7 +102,8 @@ export function SharePeoplePicker({
   const owner = currentUserId ? byId.get(currentUserId) : undefined;
 
   const granted = useMemo(
-    () => value.map((id) => byId.get(id)).filter(Boolean) as SharePeopleMember[],
+    () =>
+      value.map((id) => byId.get(id)).filter(Boolean) as SharePeopleMember[],
     [value, byId],
   );
 
@@ -227,7 +228,9 @@ export function SharePeoplePicker({
           {loading && menuEntries.length === 0 ? (
             <li className="people-picker__empty">Loading workspace…</li>
           ) : menuEntries.length === 0 ? (
-            <li className="people-picker__empty">No matches — try an email or @domain</li>
+            <li className="people-picker__empty">
+              No matches — try an email or @domain
+            </li>
           ) : (
             menuEntries.map((entry, i) => {
               if (entry.kind === "member") {
@@ -249,11 +252,15 @@ export function SharePeoplePicker({
                         imageUrl={person.imageUrl}
                         displayName={person.displayName}
                         email={person.email}
-                        size={28}
+                        size={24}
                       />
                       <span className="people-picker__person">
-                        <span className="people-picker__name">{person.displayName}</span>
-                        <span className="people-picker__sub">{person.email}</span>
+                        <span className="people-picker__name">
+                          {person.displayName}
+                        </span>
+                        <span className="people-picker__sub">
+                          {person.email}
+                        </span>
                       </span>
                     </button>
                   </li>
@@ -272,7 +279,9 @@ export function SharePeoplePicker({
                     >
                       <DomainGlyph />
                       <span className="people-picker__person">
-                        <span className="people-picker__name">{entry.email}</span>
+                        <span className="people-picker__name">
+                          {entry.email}
+                        </span>
                         <span className="people-picker__sub">
                           Signed-in guest — not in your workspace
                         </span>
@@ -293,7 +302,9 @@ export function SharePeoplePicker({
                   >
                     <DomainGlyph />
                     <span className="people-picker__person">
-                      <span className="people-picker__name">@{entry.domain}</span>
+                      <span className="people-picker__name">
+                        @{entry.domain}
+                      </span>
                       <span className="people-picker__sub">
                         Anyone signed in with this email domain
                       </span>
@@ -307,7 +318,7 @@ export function SharePeoplePicker({
       ) : null}
 
       <div className="people-picker__access">
-        <div className="people-picker__access-title">People with access</div>
+        <div className="people-picker__access-title">Has access</div>
         <ul className="people-picker__access-list">
           {owner ? (
             <li className="people-picker__row">
@@ -315,10 +326,12 @@ export function SharePeoplePicker({
                 imageUrl={owner.imageUrl}
                 displayName={owner.displayName}
                 email={owner.email}
-                size={28}
+                size={24}
               />
               <span className="people-picker__person">
-                <span className="people-picker__name">{owner.displayName} (you)</span>
+                <span className="people-picker__name">
+                  {owner.displayName} (you)
+                </span>
                 <span className="people-picker__sub">{owner.email}</span>
               </span>
               <span className="people-picker__badge">Owner</span>
@@ -331,16 +344,20 @@ export function SharePeoplePicker({
                 imageUrl={person.imageUrl}
                 displayName={person.displayName}
                 email={person.email}
-                size={28}
+                size={24}
               />
               <span className="people-picker__person">
-                <span className="people-picker__name">{person.displayName}</span>
+                <span className="people-picker__name">
+                  {person.displayName}
+                </span>
                 <span className="people-picker__sub">{person.email}</span>
               </span>
               <button
                 type="button"
                 className="people-picker__remove"
-                onClick={() => onChange(value.filter((id) => id !== person.userId))}
+                onClick={() =>
+                  onChange(value.filter((id) => id !== person.userId))
+                }
                 disabled={disabled}
               >
                 Remove
@@ -354,7 +371,9 @@ export function SharePeoplePicker({
                   <DomainGlyph />
                   <span className="people-picker__person">
                     <span className="people-picker__name">{email}</span>
-                    <span className="people-picker__sub">Guest (signed in)</span>
+                    <span className="people-picker__sub">
+                      Guest (signed in)
+                    </span>
                   </span>
                   <button
                     type="button"
@@ -396,8 +415,8 @@ export function SharePeoplePicker({
         {granted.length === 0 && !hasGuests ? (
           <p className="people-picker__hint">
             {externalEnabled
-              ? "No one else yet — add a teammate, an email, or @company.com above."
-              : "No one else yet — add a teammate above, or nobody but you will be able to open this app."}
+              ? "Just you so far. Add a teammate, an email or @company.com."
+              : "Just you so far. Add a teammate to share it."}
           </p>
         ) : null}
       </div>
