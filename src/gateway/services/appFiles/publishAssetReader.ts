@@ -18,6 +18,8 @@ import {
   parseDataSourcesFile,
   resolveDataSourcesForWorkspace,
 } from "../appDataSources.js";
+import { isReplicaManagedDbPath } from "../tursoReplica/tursoReplicaFileGuard.js";
+import { queryLinkedDbViaTursoReplica } from "../tursoReplica/tursoReplicaRouting.js";
 
 /** Absolute paths of every SQLite file linked to an app. */
 export function linkedDbPathsForApp(paprDir: string, appId: string): string[] {
@@ -39,37 +41,55 @@ export function linkedDbPathsForApp(paprDir: string, appId: string): string[] {
   }
 }
 
+const APP_FILES_TABLE_SQL = `SELECT name FROM sqlite_master WHERE type='table' AND name='app_files'`;
+const APP_FILES_ROWS_SQL = `SELECT * FROM app_files WHERE app_id = ?`;
+/** Bounded main-thread wait for non-replica files (better-sqlite3 default is 5000ms). */
+const LOCAL_READ_BUSY_TIMEOUT_MS = 250;
+
+/**
+ * Replica-managed files are held by the turso sync worker; a better-sqlite3 open on
+ * the gateway main thread blocks on SQLite's busy timeout and freezes the gateway.
+ * Read those through the worker; open plain local files with a short timeout.
+ */
+async function readAppFileRowsFromDb(dbPath: string, appId: string): Promise<AppFileRow[]> {
+  if (isReplicaManagedDbPath(dbPath)) {
+    const source = {
+      id: dbPath, type: "sqlite" as const, alias: path.basename(path.dirname(dbPath)),
+      dbPath, tables: [], linkedAt: new Date().toISOString(),
+    };
+    const table = await queryLinkedDbViaTursoReplica(source, APP_FILES_TABLE_SQL, [], { pullBeforeRead: false });
+    if (table.rows.length === 0) return [];
+    const found = await queryLinkedDbViaTursoReplica(source, APP_FILES_ROWS_SQL, [appId], { pullBeforeRead: false });
+    return found.rows as unknown as AppFileRow[];
+  }
+  const db = openDiagnosticDatabase(Database, "services/appFiles/publishAssetReader", dbPath, {
+    readonly: true, fileMustExist: true, timeout: LOCAL_READ_BUSY_TIMEOUT_MS,
+  });
+  try {
+    if (!db.prepare(APP_FILES_TABLE_SQL).get()) return [];
+    return db.prepare(APP_FILES_ROWS_SQL).all(appId) as AppFileRow[];
+  } finally {
+    db.close();
+  }
+}
+
 /**
  * Every `app_files` row belonging to this app, across all linked databases.
  *
  * Read-only and defensive: publishing must not be the thing that discovers a
  * corrupt database, so unreadable sources are skipped rather than thrown.
  */
-export function readAppFileRows(
+export async function readAppFileRows(
   paprDir: string,
   appId: string,
-): AppFileRow[] {
+): Promise<AppFileRow[]> {
   const rows: AppFileRow[] = [];
 
   for (const dbPath of linkedDbPathsForApp(paprDir, appId)) {
-    let db: Database.Database | null = null;
     try {
-      db = openDiagnosticDatabase(Database, "services/appFiles/publishAssetReader", dbPath, { readonly: true, fileMustExist: true });
-      const hasTable = db
-        .prepare(
-          `SELECT name FROM sqlite_master WHERE type='table' AND name='app_files'`,
-        )
-        .get();
-      if (!hasTable) continue;
-
-      const found = db
-        .prepare(`SELECT * FROM app_files WHERE app_id = ?`)
-        .all(appId) as AppFileRow[];
-      rows.push(...found);
+      rows.push(...(await readAppFileRowsFromDb(dbPath, appId)));
     } catch {
       /* unreadable source — skip */
-    } finally {
-      db?.close();
     }
   }
 
