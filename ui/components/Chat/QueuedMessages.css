@@ -16,12 +16,12 @@
   animation: queuedIn 0.2s var(--ease) both;
 }
 
-/* The frame: inset into the row's 24px side padding, so nothing in the row moves. */
+/* Align dashed frame with the composer (.input-bar uses 20px side margin). */
 .queued-item::before,
 .message-item.message-item--landing::before {
   content: "";
   position: absolute;
-  inset: 6px 12px;
+  inset: 6px 20px;
   border: 1.5px dashed var(--queued-dash, color-mix(in srgb, var(--text-secondary) 45%, transparent));
   border-radius: 16px;
   pointer-events: none;
