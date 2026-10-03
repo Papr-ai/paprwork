@@ -507,6 +507,8 @@ export async function pullAppCodeFromRepo(
         trimmed,
         head.files.map((file) => ({ path: file.path, blobOid: file.blobOid })),
       );
+      const { revalidateAppDirty } = await import("./appDirtyState.js");
+      await revalidateAppDirty(getPaprRoot(), trimmed);
     }
 
     if (updatedFiles.length > 0) {

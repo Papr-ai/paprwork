@@ -18,7 +18,6 @@ import { SyncStateManager } from "../src/gateway/services/cloudSync/syncState.js
 import { computeBlobOidForContent } from "../src/gateway/services/syncV3/computeParentHash.js";
 import {
   confirmAppUnchangedSinceUpload,
-  resetConfirmAppUnchangedMemo,
 } from "../src/gateway/services/syncV3/confirmAppUnchangedSinceUpload.js";
 
 const APP = "app-1";
@@ -59,7 +58,6 @@ describe("confirmAppUnchangedSinceUpload", () => {
     paprDir = fs.mkdtempSync(path.join(os.tmpdir(), "unpub-"));
     appDir = path.join(paprDir, REL);
     sm = new SyncStateManager(paprDir);
-    resetConfirmAppUnchangedMemo();
     write("app.ts", "console.info(1)\n", 60_000);
     write("data/share-people-allowlist.json", "{}\n", 60_000);
     await publish({ "app.ts": "console.info(1)\n", "data/share-people-allowlist.json": "{}\n" });
@@ -96,15 +94,6 @@ describe("confirmAppUnchangedSinceUpload", () => {
 
   it("an edit that changes size is decided without reading any file", async () => {
     write("app.ts", "console.info(123456)\n");
-    const spy = vi.spyOn(fsp, "readFile");
-    expect(await check()).toBe(false);
-    expect(spy).not.toHaveBeenCalled();
-    spy.mockRestore();
-  });
-
-  it("a known-changed state is not re-read on the next poll", async () => {
-    write("app.ts", "console.info(9)\n");
-    expect(await check()).toBe(false);
     const spy = vi.spyOn(fsp, "readFile");
     expect(await check()).toBe(false);
     expect(spy).not.toHaveBeenCalled();
