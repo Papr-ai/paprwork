@@ -8,6 +8,7 @@
 import * as fs from "fs";
 import * as path from "path";
 import { isLocalOnlyCloudSyncArtifact, isTooLargeForGitSync } from "./gitSyncLimits.js";
+import { isNeverTrackRepoPath } from "../appRepoWriter/abuseFilter.js";
 
 export const STATE_FILENAME = ".cloud-sync-state.json";
 
@@ -83,6 +84,34 @@ export function shouldExcludePathFromContentHash(relativePath: string): boolean 
   return SQLITE_HASH_IGNORED_SUFFIXES.some((suffix) => baseName.endsWith(suffix));
 }
 
+/**
+ * True when a file inside a synced folder does not count toward its content
+ * hash: ignored dirs, dotfiles, cloud-prep artifacts, and file types publish
+ * never uploads (video/audio/archives/SQLite). Counting files publish skips
+ * meant re-saving a video showed "Unpublished changes" that publishing could
+ * never clear.
+ */
+export function isExcludedFromFolderContentHash(relativePath: string): boolean {
+  const normalized = relativePath.replace(/\\/g, "/");
+  const segments = normalized.split("/");
+  if (segments.some((seg) => seg.startsWith(".") || IGNORED_DIRS.has(seg))) {
+    return true;
+  }
+  return (
+    shouldExcludePathFromContentHash(normalized) ||
+    isNeverTrackRepoPath(normalized)
+  );
+}
+
+/** Newest mtime recorded in a folder content hash (`latest:size:count`), or null. */
+export function parseFolderHashLatestMtime(hash: string | undefined): number | null {
+  if (!hash) return null;
+  const parts = hash.split(":");
+  if (parts.length !== 3) return null;
+  const latest = Number(parts[0]);
+  return Number.isFinite(latest) ? latest : null;
+}
+
 export class SyncStateManager {
   private state: PersistedSyncState = { syncedItems: {}, lastFullSyncAt: null };
   private readonly paprDir: string;
@@ -133,6 +162,19 @@ export class SyncStateManager {
       contentHash: this.computeContentHash(relativePath),
     };
     this.clearDeadLetter(relativePath);
+  }
+
+  /**
+   * Accept `hash` as the published state without touching lastSyncAt — used
+   * when every re-saved file turned out byte-identical to what was uploaded.
+   * No-op if the folder moved on since `hash` was computed.
+   */
+  rebaselineContentHash(relativePath: string, hash: string): boolean {
+    const prev = this.state.syncedItems[relativePath];
+    if (!prev || this.computeContentHash(relativePath) !== hash) return false;
+    this.state.syncedItems[relativePath] = { ...prev, contentHash: hash };
+    this.save();
+    return true;
   }
 
   markFullSyncComplete(): void {
@@ -249,6 +291,7 @@ export class SyncStateManager {
 
         const entryRelative = path.join(relativePrefix, entry.name).replace(/\\/g, "/");
         if (shouldExcludePathFromContentHash(entryRelative)) continue;
+        if (!entry.isDirectory() && isNeverTrackRepoPath(entryRelative)) continue;
 
         const entryPath = path.join(dirPath, entry.name);
         try {
