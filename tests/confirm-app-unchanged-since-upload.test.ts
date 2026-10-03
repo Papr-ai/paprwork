@@ -7,6 +7,7 @@ import * as fs from "fs";
 import * as os from "os";
 import * as path from "path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { promises as fsp } from "fs";
 
 const oids: Record<string, Record<string, string>> = {};
 vi.mock("../src/gateway/services/syncV3/OidCache.js", () => ({
@@ -51,6 +52,9 @@ describe("confirmAppUnchangedSinceUpload", () => {
     sm.markSynced(REL);
   };
 
+  const check = () =>
+    confirmAppUnchangedSinceUpload(paprDir, APP, sm, sm.computeContentHash(REL));
+
   beforeEach(async () => {
     paprDir = fs.mkdtempSync(path.join(os.tmpdir(), "unpub-"));
     appDir = path.join(paprDir, REL);
@@ -65,29 +69,52 @@ describe("confirmAppUnchangedSinceUpload", () => {
   it("identical re-save is not a change, and re-baselines the cheap hash", async () => {
     touch("data/share-people-allowlist.json");
     expect(sm.hasItemChanged(REL)).toBe(true);
-    expect(await confirmAppUnchangedSinceUpload(paprDir, APP, sm)).toBe(true);
+    expect(await check()).toBe(true);
     expect(sm.hasItemChanged(REL)).toBe(false);
   });
 
   it("a real edit is a change", async () => {
     write("app.ts", "console.info(2)\n");
-    expect(await confirmAppUnchangedSinceUpload(paprDir, APP, sm)).toBe(false);
+    expect(await check()).toBe(false);
     expect(sm.hasItemChanged(REL)).toBe(true);
   });
 
   it("a same-size edit is a change", async () => {
     write("app.ts", "console.info(9)\n");
-    expect(await confirmAppUnchangedSinceUpload(paprDir, APP, sm)).toBe(false);
+    expect(await check()).toBe(false);
   });
 
   it("a new file is a change", async () => {
     write("extra.ts", "x\n");
-    expect(await confirmAppUnchangedSinceUpload(paprDir, APP, sm)).toBe(false);
+    expect(await check()).toBe(false);
   });
 
   it("a deleted file is a change", async () => {
     fs.rmSync(path.join(appDir, "app.ts"));
-    expect(await confirmAppUnchangedSinceUpload(paprDir, APP, sm)).toBe(false);
+    expect(await check()).toBe(false);
+  });
+
+  it("an edit that changes size is decided without reading any file", async () => {
+    write("app.ts", "console.info(123456)\n");
+    const spy = vi.spyOn(fsp, "readFile");
+    expect(await check()).toBe(false);
+    expect(spy).not.toHaveBeenCalled();
+    spy.mockRestore();
+  });
+
+  it("a known-changed state is not re-read on the next poll", async () => {
+    write("app.ts", "console.info(9)\n");
+    expect(await check()).toBe(false);
+    const spy = vi.spyOn(fsp, "readFile");
+    expect(await check()).toBe(false);
+    expect(spy).not.toHaveBeenCalled();
+    spy.mockRestore();
+  });
+
+  it("a rename with preserved mtime plus an identical re-save is a change", async () => {
+    fs.renameSync(path.join(appDir, "app.ts"), path.join(appDir, "main.ts"));
+    touch("data/share-people-allowlist.json");
+    expect(await check()).toBe(false);
   });
 
   it("re-saving a video publish never uploads does not trip the cheap check", () => {

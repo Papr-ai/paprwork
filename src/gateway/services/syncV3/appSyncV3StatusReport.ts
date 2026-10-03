@@ -168,9 +168,10 @@ export async function buildAppSyncV3Report(
   // Cheap mtime/size check first; only when it trips, read the files saved
   // since the last upload and compare to what was uploaded. Identical re-saves
   // must not show "Unpublished changes" right after a publish.
+  const currentHash = stateManager.computeContentHash(relativePath);
   const hasLocalChanges =
-    stateManager.hasItemChanged(relativePath) &&
-    !(await confirmAppUnchangedSinceUpload(paprDir, appId, stateManager));
+    (!syncedRecord || currentHash !== syncedRecord.contentHash) &&
+    !(await confirmAppUnchangedSinceUpload(paprDir, appId, stateManager, currentHash));
   const autoUpload = shouldAutoUploadApp(appId, paprDir);
   const manualUploadHold = !autoUpload && hasLocalChanges;
 
