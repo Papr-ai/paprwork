@@ -1180,7 +1180,7 @@ export class CloudAppPublishService {
    */
   private async publishAppFiles(appId: string): Promise<void> {
     const { readAppFileRows } = await import("./appFiles/publishAssetReader.js");
-    const rows = readAppFileRows(this.paprDir, appId);
+    const rows = await readAppFileRows(this.paprDir, appId);
     if (rows.length === 0) return;
 
     const { applyPublishVisibility } = await import(
@@ -1211,7 +1211,7 @@ export class CloudAppPublishService {
       const { readAppFileRows } = await import(
         "./appFiles/publishAssetReader.js"
       );
-      const rows = readAppFileRows(this.paprDir, appId);
+      const rows = await readAppFileRows(this.paprDir, appId);
       if (rows.length === 0) return;
 
       const { revokePublishVisibility } = await import(

@@ -11,10 +11,15 @@ import { discoverTursoLinkedSources } from "../tursoLinkedSources.js";
 import { getDatabaseRegistryService } from "../DatabaseRegistryService.js";
 import { listAppliedMigrationIdsReadOnly } from "../jobs/schemaMigrationsLedger.js";
 import { requiredSchemaVersionFromMigrationIds } from "../jobs/migrationLedgerPolicy.js";
+import { isReplicaManagedDbPath } from "../tursoReplica/tursoReplicaFileGuard.js";
+import { readLocalReplicaMigrationIds } from "../tursoReplica/tursoReplicaMigrationConflict.js";
 import {
   distBundleRevisionHash,
   PAPR_APP_CLOUD_REVISION_PATH,
 } from "./cloudAppRevisionMarker.js";
+
+/** Bounded main-thread wait for non-replica local files (better-sqlite3 default is 5000ms). */
+const LOCAL_READ_BUSY_TIMEOUT_MS = 250;
 
 export const PAPR_APP_META_RELATIVE_PATH = "__papr__/app-meta.json";
 
@@ -31,11 +36,31 @@ export interface CloudAppMetaFile extends CloudAppMetaRevision {
   updatedAt?: string;
 }
 
-function listAppliedMigrationIds(dbPath: string): string[] {
+/**
+ * Never open a replica-managed file with better-sqlite3 here: the turso sync worker
+ * holds it, so a synchronous prepare blocks the gateway's main thread on SQLite's busy
+ * timeout (observed 5.2s freeze during publish). Replica files are read through the
+ * worker; plain local files keep a short-timeout read-only open.
+ */
+async function listAppliedMigrationIds(dbPath: string, dbId?: string): Promise<string[]> {
   if (!fs.existsSync(dbPath)) {
     return [];
   }
-  const db = openDiagnosticDatabase(Database, "services/cloudSync/cloudAppMeta", dbPath, { readonly: true });
+  if (isReplicaManagedDbPath(dbPath)) {
+    return readLocalReplicaMigrationIds({
+      id: dbId ?? dbPath,
+      type: "sqlite",
+      ...(dbId ? { dbId } : {}),
+      alias: path.basename(path.dirname(dbPath)),
+      dbPath,
+      tables: [],
+      linkedAt: new Date().toISOString(),
+    });
+  }
+  const db = openDiagnosticDatabase(Database, "services/cloudSync/cloudAppMeta", dbPath, {
+    readonly: true,
+    timeout: LOCAL_READ_BUSY_TIMEOUT_MS,
+  });
   try {
     return listAppliedMigrationIdsReadOnly(db);
   } finally {
@@ -102,7 +127,7 @@ export async function buildCloudAppMeta(
   const migrationIds: string[] = [];
   const seenDbPaths = new Set<string>();
   for (const source of sources) {
-    migrationIds.push(...listAppliedMigrationIds(source.dbPath));
+    migrationIds.push(...(await listAppliedMigrationIds(source.dbPath, source.dbId)));
     seenDbPaths.add(path.normalize(source.dbPath));
   }
 
@@ -111,7 +136,7 @@ export async function buildCloudAppMeta(
     if (seenDbPaths.has(normalized)) {
       continue;
     }
-    migrationIds.push(...listAppliedMigrationIds(record.localPath));
+    migrationIds.push(...(await listAppliedMigrationIds(record.localPath, record.dbId)));
     seenDbPaths.add(normalized);
   }
 
