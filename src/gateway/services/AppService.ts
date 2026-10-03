@@ -10,6 +10,11 @@ import { existsSync, promises as fs } from "fs";
 import { TreeWatcher } from "./TreeWatcher.js";
 import path from "path";
 import { shouldIgnoreAppWatchPath } from "./appWatchIgnore.js";
+import {
+  isTrackedAppPath,
+  noteAppPathEdited,
+  setAppEditTrackingActive,
+} from "./syncV3/appDirtyState.js";
 import { isCloudPrepGitSyncArtifact } from "./cloudSync/syncState.js";
 import os from "os";
 import { v4 as uuidv4 } from "uuid";
@@ -3401,17 +3406,25 @@ export class AppService {
         roots: [this.appsDir],
         recursive: true,
         settleMs: 200, // was chokidar awaitWriteFinish.stabilityThreshold
-        ignore: shouldIgnoreAppWatchPath,
+        // data/ is skipped for rebuilds but still published, so tracked
+        // data/ files pass through for the unpublished-changes flag only.
+        ignore: (absPath) =>
+          shouldIgnoreAppWatchPath(absPath) && !this.isTrackedDataPath(absPath),
         onEvent: (event) => {
-          // unlink is not routed: the old per-app watcher only subscribed to
-          // add/change, and a rebuild on delete would race the deleteApp rm.
-          if (event.type === "unlink") return;
           const rel = path.relative(this.appsDir, event.path);
           const sep = rel.indexOf(path.sep);
           if (sep <= 0) return;
           const appId = rel.slice(0, sep);
           if (!this.watchedAppIds.has(appId)) return;
-          this.handleFileChange(appId, rel.slice(sep + 1));
+          const appRel = rel.slice(sep + 1);
+          // Every add/change/unlink feeds the dirty flag (compared to the last
+          // upload once the burst settles) — including deletes and data/.
+          noteAppPathEdited(this.paprRootDir, appId, appRel);
+          // unlink is not routed: the old per-app watcher only subscribed to
+          // add/change, and a rebuild on delete would race the deleteApp rm.
+          if (event.type === "unlink") return;
+          if (shouldIgnoreAppWatchPath(event.path)) return;
+          this.handleFileChange(appId, appRel);
         },
         onError: (error) => {
           // Log the message, not the object. Watcher errors carry non-cloneable
@@ -3425,6 +3438,7 @@ export class AppService {
         this.treeWatcher = null;
         return false;
       }
+      setAppEditTrackingActive(true);
       return true;
     } catch (error) {
       console.error("[AppService] Failed to start tree watcher:", (error as Error)?.message);
@@ -3433,7 +3447,18 @@ export class AppService {
     }
   }
 
+  /** A file under apps/{id}/data/ that publish uploads (not SQLite, not media). */
+  private isTrackedDataPath(absPath: string): boolean {
+    const rel = path.relative(this.appsDir, absPath).replace(/\\/g, "/");
+    const sep = rel.indexOf("/");
+    if (sep <= 0) return false;
+    const appRel = rel.slice(sep + 1);
+    if (!appRel.startsWith("data/")) return false;
+    return isTrackedAppPath(rel.slice(0, sep), appRel);
+  }
+
   private async closeTreeWatcher(): Promise<void> {
+    setAppEditTrackingActive(false);
     const watcher = this.treeWatcher;
     this.treeWatcher = null;
     if (watcher) {
