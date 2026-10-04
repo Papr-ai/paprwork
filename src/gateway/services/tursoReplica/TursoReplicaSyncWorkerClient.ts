@@ -412,11 +412,12 @@ export class TursoReplicaSyncWorkerClient {
       const durable = this.durablyParkedPaths.has(options.localPath);
       throw new Error(
         `Turso replica ${options.localPath} is parked${durable ? "" : " for this session"}: ` +
-          `${parked}. Sync is paused for this database; local reads and writes still work. ` +
+          `${parked}. Sync is paused for this database: reads are served from cloud and ` +
+          "writes wait until it is re-seeded. Papr re-seeds it from cloud automatically " +
+          "when online, keeping rows that were never pushed. " +
           (durable
-            ? "It stays parked across restarts until the file changes — for example a " +
-              "re-seed from cloud — or for 24 hours."
-            : "Restart the app to try again."),
+            ? "Until then it stays parked across restarts until the file changes, or for 24 hours."
+            : "If that cannot run, restart the app to try again."),
       );
     }
   }
@@ -462,6 +463,14 @@ export class TursoReplicaSyncWorkerClient {
 
   private parkPath(localPath: string, reason: string): void {
     this.parkedPaths.set(localPath, reason);
+    // Parking stops the crash loop but heals nothing: app writes would fail until a manual
+    // repair or restart. Hand the path to the self-heal (re-seed from cloud, keeping local
+    // rows). Dynamic import: the heal module reaches provision, which imports this client.
+    void import("./tursoReplicaParkHeal.js")
+      .then((m) => m.scheduleParkedReplicaReseed(localPath, reason))
+      .catch(() => {
+        /* heal unavailable — the park itself still stands */
+      });
   }
 
   private noteHealthy(options: SendOptions): void {
