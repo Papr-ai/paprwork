@@ -208,21 +208,3 @@
   line-height: 1.5;
 }
 
-/* Scrollbar */
-.documents-view__content::-webkit-scrollbar {
-  width: 6px;
-}
-
-.documents-view__content::-webkit-scrollbar-track {
-  background: transparent;
-}
-
-.documents-view__content::-webkit-scrollbar-thumb {
-  background: var(--text-tertiary);
-  border-radius: 3px;
-  opacity: 0.3;
-}
-
-.documents-view__content::-webkit-scrollbar-thumb:hover {
-  background: var(--text-secondary);
-}

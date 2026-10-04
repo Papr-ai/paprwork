@@ -78,13 +78,6 @@
   resize: none;
   overflow-y: auto;
   color: var(--text-color);
-  /* Hide scrollbar */
-  scrollbar-width: none;
-  -ms-overflow-style: none;
-}
-
-.input-textarea::-webkit-scrollbar {
-  display: none;
 }
 
 .input-textarea:focus {

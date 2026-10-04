@@ -474,15 +474,6 @@
   scroll-snap-type: x proximity;
 }
 
-.wiki-rail__track::-webkit-scrollbar {
-  height: 6px;
-}
-
-.wiki-rail__track::-webkit-scrollbar-thumb {
-  background: var(--line);
-  border-radius: 999px;
-}
-
 /* Cards */
 .wiki-card {
   flex: 0 0 220px;
