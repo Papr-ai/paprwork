@@ -71,7 +71,8 @@ export async function applyPerUserIsolationForApp(
         const { reseedTursoReplicaFromRemote } = await import(
           "./tursoReplica/tursoReplicaProvision.js"
         );
-        await reseedTursoReplicaFromRemote(record);
+        // Switching primaries: the shared DB's rows must not be replayed into a per-user DB.
+        await reseedTursoReplicaFromRemote(record, { localRows: "discard" });
         reseededDbIds.push(dbId);
       }
     } catch {
