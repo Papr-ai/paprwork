@@ -74,21 +74,3 @@
   font-family: "SF Mono", "Monaco", "Cascadia Code", "Roboto Mono", "Courier New", monospace !important;
 }
 
-/* Scrollbar styling */
-.code-block-wrapper pre::-webkit-scrollbar {
-  height: 8px;
-}
-
-.code-block-wrapper pre::-webkit-scrollbar-track {
-  background: rgba(24, 24, 27, 1);
-  border-radius: 4px;
-}
-
-.code-block-wrapper pre::-webkit-scrollbar-thumb {
-  background: rgba(82, 82, 91, 1);
-  border-radius: 4px;
-}
-
-.code-block-wrapper pre::-webkit-scrollbar-thumb:hover {
-  background: rgba(113, 113, 122, 1);
-}

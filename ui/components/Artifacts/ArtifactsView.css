@@ -274,21 +274,3 @@
   gap: var(--space-2);
 }
 
-/* Scrollbar */
-.artifacts-view__content::-webkit-scrollbar {
-  width: 8px;
-}
-
-.artifacts-view__content::-webkit-scrollbar-track {
-  background: transparent;
-}
-
-.artifacts-view__content::-webkit-scrollbar-thumb {
-  background: var(--text-tertiary);
-  border-radius: var(--r-sm);
-  opacity: 0.3;
-}
-
-.artifacts-view__content::-webkit-scrollbar-thumb:hover {
-  background: var(--text-secondary);
-}

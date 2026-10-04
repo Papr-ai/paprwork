@@ -191,21 +191,3 @@
   }
 }
 
-/* Custom scrollbar */
-.message-list::-webkit-scrollbar {
-  width: 8px;
-}
-
-.message-list::-webkit-scrollbar-track {
-  background: transparent;
-}
-
-.message-list::-webkit-scrollbar-thumb {
-  background: var(--text-tertiary);
-  border-radius: 4px;
-  opacity: 0.3;
-}
-
-.message-list::-webkit-scrollbar-thumb:hover {
-  background: var(--text-secondary);
-}

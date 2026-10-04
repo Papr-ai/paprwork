@@ -145,20 +145,3 @@
   padding-left: 22px; /* Align with title after icon */
 }
 
-/* Scrollbar */
-.context-dropdown-list::-webkit-scrollbar {
-  width: 6px;
-}
-
-.context-dropdown-list::-webkit-scrollbar-track {
-  background: transparent;
-}
-
-.context-dropdown-list::-webkit-scrollbar-thumb {
-  background: var(--border-color);
-  border-radius: 3px;
-}
-
-.context-dropdown-list::-webkit-scrollbar-thumb:hover {
-  background: var(--text-tertiary);
-}
