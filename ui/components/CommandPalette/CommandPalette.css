@@ -93,15 +93,6 @@
   padding: 6px;
 }
 
-.cmd-palette__list::-webkit-scrollbar {
-  width: 4px;
-}
-
-.cmd-palette__list::-webkit-scrollbar-thumb {
-  background: var(--text-tertiary);
-  border-radius: 2px;
-}
-
 .cmd-palette__empty {
   padding: 24px;
   text-align: center;
