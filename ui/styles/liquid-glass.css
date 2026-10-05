@@ -281,22 +281,18 @@ html:has(body.platform-linux) {
   }
 }
 
-/* Scrollbar styling */
-::-webkit-scrollbar {
-  width: 8px;
-  height: 8px;
+/* Scrollbars: hidden app-wide.
+ * Scrolling (trackpad, wheel, keyboard, touch) still works everywhere — we just
+ * don't paint the bars. Visible scrollbars added visual clutter (esp. the
+ * horizontal bar under chat) without adding affordance on macOS-style UIs.
+ * `scrollbar-width: none` covers Chromium 121+ (Electron 40); the webkit
+ * pseudo-element is a fallback for older engines / embedded webviews. */
+* {
+  scrollbar-width: none;
 }
 
-::-webkit-scrollbar-track {
-  background: transparent;
-}
-
-::-webkit-scrollbar-thumb {
-  background: var(--text-tertiary);
-  border-radius: 4px;
-  opacity: 0.3;
-}
-
-::-webkit-scrollbar-thumb:hover {
-  background: var(--text-secondary);
+*::-webkit-scrollbar {
+  display: none;
+  width: 0;
+  height: 0;
 }

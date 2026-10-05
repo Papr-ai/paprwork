@@ -114,11 +114,6 @@
   max-width: min(100%, 560px);
   overflow-x: auto;
   flex-shrink: 1;
-  scrollbar-width: none;
-}
-
-.apps-view__tabs::-webkit-scrollbar {
-  display: none;
 }
 
 .apps-view__tab {
@@ -436,25 +431,6 @@
 .apps-view__empty-community-btn:hover {
   transform: translateY(-1px);
   box-shadow: 0 4px 16px rgba(0, 113, 227, 0.25);
-}
-
-/* Scrollbar */
-.apps-view__content::-webkit-scrollbar {
-  width: 6px;
-}
-
-.apps-view__content::-webkit-scrollbar-track {
-  background: transparent;
-}
-
-.apps-view__content::-webkit-scrollbar-thumb {
-  background: var(--text-tertiary);
-  border-radius: 3px;
-  opacity: 0.3;
-}
-
-.apps-view__content::-webkit-scrollbar-thumb:hover {
-  background: var(--text-secondary);
 }
 
 /* ── Apps redesign: sidebar, page heads, banners, cleanup ─────────────────── */

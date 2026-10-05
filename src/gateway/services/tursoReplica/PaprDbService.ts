@@ -185,7 +185,8 @@ export async function repairCloudSync(options: {
         const { reseedTursoReplicaFromRemote } = await import(
           "./tursoReplicaProvision.js"
         );
-        await reseedTursoReplicaFromRemote(record);
+        // accept_cloud is the explicit "cloud wins, drop local" choice.
+        await reseedTursoReplicaFromRemote(record, { localRows: "discard" });
         await replica.close(source.dbPath);
       } else {
         await replica.close(source.dbPath);

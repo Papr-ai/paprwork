@@ -82,9 +82,6 @@ body:not(.platform-darwin) .tab-bar {
   overflow-y: hidden;
   padding: 12px 4px; /* Add horizontal padding to prevent border cut */
   position: relative; /* For drop indicator positioning */
-  /* Hide scrollbar */
-  scrollbar-width: none;
-  -ms-overflow-style: none;
 }
 
 /* macOS: Allow dragging window from empty tab bar space */
@@ -95,10 +92,6 @@ body.platform-darwin .tab-bar__tabs {
 /* Windows/Linux: Explicitly make tabs area draggable for window movement */
 body:not(.platform-darwin) .tab-bar__tabs {
   -webkit-app-region: drag;
-}
-
-.tab-bar__tabs::-webkit-scrollbar {
-  display: none;
 }
 
 /* Drop indicator */

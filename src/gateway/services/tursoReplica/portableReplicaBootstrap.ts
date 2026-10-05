@@ -223,7 +223,8 @@ export async function rebootstrapPendingPortableReplicas(): Promise<RebootstrapP
         const { reseedTursoReplicaFromRemote } = await import(
           "./tursoReplicaProvision.js"
         );
-        await reseedTursoReplicaFromRemote(record);
+        // Attaching to the publisher's primary: this copy's own rows must not reach the team DB.
+        await reseedTursoReplicaFromRemote(record, { localRows: "discard" });
         result.succeeded += 1;
         console.log(
           `[PortableReplica] Pulled publisher primary for ${record.dbId} (${marker.reason})`,

@@ -12,8 +12,8 @@
  * 2. Same shape only: one stat walk, then read just the files saved after
  *    the last upload, stopping at the first mismatch, capped at
  *    MAX_FILES_TO_VERIFY / MAX_BYTES_TO_VERIFY.
- * 3. A folder state already proven changed is memoized, so polling the same
- *    state never re-reads.
+ * Runs once per app per process (startup / no-watcher reconcile in
+ * appDirtyState) — live edits are tracked by the watcher instead.
  * If everything matches, the folder hash is re-baselined so the next poll
  * is back to the cheap check.
  */
@@ -33,9 +33,6 @@ import { readOidCache } from "./OidCache.js";
 /** Past this, treat it as a real edit session and skip the content check. */
 const MAX_FILES_TO_VERIFY = 50;
 const MAX_BYTES_TO_VERIFY = 2 * 1024 * 1024;
-
-/** appId → folder hash already proven to differ (skip re-reading on every poll). */
-const knownChangedHash = new Map<string, string>();
 
 interface FolderScan {
   /** Every counted file (repo-relative to the app). */
@@ -118,11 +115,7 @@ export async function confirmAppUnchangedSinceUpload(
   const prev = stateManager.data.syncedItems[relativePath];
   const sinceMs = parseFolderHashLatestMtime(prev?.contentHash);
   if (!prev || sinceMs === null) return false;
-  if (knownChangedHash.get(appId) === currentHash) return false;
-  const markChanged = (): false => {
-    knownChangedHash.set(appId, currentHash);
-    return false;
-  };
+  const markChanged = (): false => false;
 
   // 1. O(1): identical re-saves keep total size and file count.
   const prevShape = sizeAndCount(prev.contentHash);
@@ -148,11 +141,5 @@ export async function confirmAppUnchangedSinceUpload(
     }
   }
 
-  knownChangedHash.delete(appId);
   return stateManager.rebaselineContentHash(relativePath, currentHash);
-}
-
-/** Test hook. */
-export function resetConfirmAppUnchangedMemo(): void {
-  knownChangedHash.clear();
 }

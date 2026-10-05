@@ -404,7 +404,17 @@ export async function pushLocalLegacyFileToTursoPrimary(
  */
 export async function reseedTursoReplicaFromRemote(
   record: DatabaseRecord,
-  options?: { minExpectedUserRows?: number },
+  options?: {
+    minExpectedUserRows?: number;
+    /**
+     * `keep` (default): rows written locally that never reached the primary are copied
+     * aside before the delete and replayed through the engine afterwards, so they push on
+     * the next sync. `discard`: the caller is deliberately switching to a *different*
+     * primary (per-user isolation, team attach) or the user chose accept_cloud — local
+     * rows belong to the old database and must not leak into the new one.
+     */
+    localRows?: "keep" | "discard";
+  },
 ): Promise<void> {
   if (record.syncMode !== "replica") {
     throw new Error(`Database ${record.dbId} is not syncMode=replica`);
@@ -422,6 +432,13 @@ export async function reseedTursoReplicaFromRemote(
   await replica.close(record.localPath);
   await shutdownTursoReplicaSyncWorker();
   clearReplicaReadPathDegraded(record.localPath);
+  const { preserveLocalRowsForReseed, replaySalvagedRows } = await import(
+    "./tursoReplicaReseedSalvageIO.js"
+  );
+  // Must run before removeTursoReplicaLocalFiles: that deletes data.db *and* the bootstrap
+  // marker's snapshot, which were the only copies of unpushed rows.
+  const salvagePath =
+    options?.localRows === "discard" ? null : preserveLocalRowsForReseed(record.localPath);
   removeTursoReplicaLocalFiles(record.localPath);
   await provisionTursoReplicaForRecord(record);
 
@@ -442,5 +459,8 @@ export async function reseedTursoReplicaFromRemote(
       `Reseed produced ${rows} user rows on ${record.dbId} but expected at least ${minExpected}. ` +
         "Turso may still be empty — restore from bootstrap-remote backup if needed.",
     );
+  }
+  if (salvagePath) {
+    await replaySalvagedRows(record.localPath, tursoNameForRecord(record), salvagePath);
   }
 }

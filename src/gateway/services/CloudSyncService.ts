@@ -10,6 +10,7 @@
  */
 
 import * as path from "path";
+import { isAppDirtySync, markAppPublished } from "./syncV3/appDirtyState.js";
 import * as fs from "fs";
 import type { TreeWatcher } from "./TreeWatcher.js";
 import { SyncStateManager, type QueueItem } from "./cloudSync/syncState.js";
@@ -91,6 +92,12 @@ import {
 import { classifyRepoSize, measureGitDirBytes } from "./cloudSync/repoHygiene.js";
 
 interface SyncState extends Omit<CloudSyncPublicState, "queueRemaining" | "queueTotal" | "manualFlushErrors"> {}
+
+/** `apps/{id}` → id (app folder itself, not nested paths). */
+function appIdFromRelativePath(relativePath: string): string | null {
+  const parts = relativePath.replace(/\\/g, "/").split("/");
+  return parts.length === 2 && parts[0] === "apps" && parts[1] ? parts[1] : null;
+}
 
 export class CloudSyncService implements CloudSyncInternals {
   watcher: TreeWatcher | null = null;
@@ -455,12 +462,17 @@ export class CloudSyncService implements CloudSyncInternals {
   }
 
   hasRelativePathChanged(relativePath: string): boolean {
+    const appId = appIdFromRelativePath(relativePath);
+    if (appId) return isAppDirtySync(this.paprDir, appId, this.stateManager);
     return this.stateManager.hasItemChanged(relativePath);
   }
 
   markRelativePathSynced(relativePath: string): void {
-    this.stateManager.markSynced(relativePath.replace(/\\/g, "/"));
+    const normalized = relativePath.replace(/\\/g, "/");
+    this.stateManager.markSynced(normalized);
     this.stateManager.save();
+    const appId = appIdFromRelativePath(normalized);
+    if (appId) void markAppPublished(this.paprDir, appId);
   }
 
   getPaprDir(): string {
