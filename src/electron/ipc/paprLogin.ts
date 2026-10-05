@@ -3679,6 +3679,44 @@ async function completePaprAuthCallback(
     workspaceInfo,
   );
 
+  // Parse could not verify org state — do not auto-provision (would risk
+  // repointing a shared workspace). Manual org setup re-runs lookups on submit.
+  if (isProvisioningDeferred(plan)) {
+    console.warn(
+      `[PaprLogin] Provisioning deferred for ${finalObjectId}: ` +
+        "organization state could not be verified — opening manual setup.",
+    );
+    pendingOrgSetup = {
+      parseSessionToken: finalSessionToken,
+      refreshToken: tokens.refresh_token,
+      objectId: finalObjectId,
+      email: email || "",
+      displayName: displayName || "",
+      profileImage,
+      workspaceInfo,
+      needsOrg: true,
+      needsNamespace: true,
+      defaults,
+      completedMode: completedMode ?? "login",
+      completedSource: completedSource ?? "unknown",
+    };
+    trackLoginStep("provisioning_deferred_manual_setup", {
+      workspace_id: workspaceInfo.workspaceId ?? null,
+    });
+    notifySetupRequired({
+      orgName: defaults.orgName,
+      namespaceName: defaults.namespaceName,
+      needsOrg: true,
+      needsNamespace: true,
+    });
+    return {
+      success: true,
+      email: email || "",
+      name: displayName || "",
+      userId: finalObjectId,
+    };
+  }
+
   if (isProvisioningSetupRequired(plan)) {
     pendingOrgSetup = {
       parseSessionToken: finalSessionToken,

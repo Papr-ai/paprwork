@@ -89,6 +89,8 @@ export function AuthFlow({ onComplete, devPreview, resume }: AuthFlowProps) {
   stageRef.current = stage;
   /** Set when the user steps back from recommend → connect. */
   const [returnedToConnect, setReturnedToConnect] = useState(false);
+  /** True once main sends org/namespace setup — blocks signin → connect race. */
+  const orgSetupPendingRef = useRef(false);
 
   // Server-side breadcrumb for resume + funnel drop-off. Not load-bearing for
   // navigation — the stage machine is still driven locally.
@@ -147,7 +149,13 @@ export function AuthFlow({ onComplete, devPreview, resume }: AuthFlowProps) {
         return;
       }
     }
-    setStage((current) => (current === "signin" ? "connect" : current));
+    setStage((current) => {
+      if (current !== "signin") return current;
+      if (orgSetupPendingRef.current || stageRef.current === "org") {
+        return current;
+      }
+      return "connect";
+    });
   }, [devPreview, onComplete]);
 
   const wrapComplete = useCallback(() => {
@@ -159,8 +167,16 @@ export function AuthFlow({ onComplete, devPreview, resume }: AuthFlowProps) {
 
   // Org setup can arrive from either transport; whichever lands first wins
   // and moves us off the sign-in stage.
+  // Stale `org` stage without a pending request — e.g. resumed from localStorage.
+  useEffect(() => {
+    if (stage === "org" && !setupRequest) {
+      setStage("connect");
+    }
+  }, [stage, setupRequest]);
+
   useEffect(() => {
     const receive = (request: OrgNamespaceSetupRequest) => {
+      orgSetupPendingRef.current = true;
       setSetupRequest(request);
       setStage("org");
     };
@@ -185,10 +201,20 @@ export function AuthFlow({ onComplete, devPreview, resume }: AuthFlowProps) {
         request={setupRequest}
         source="auth_wall"
         onComplete={() => {
+          orgSetupPendingRef.current = false;
           setSetupRequest(null);
           setStage("connect");
         }}
       />
+    );
+  }
+
+  if (stage === "org" && !setupRequest) {
+    return (
+      <div className="onboarding-flow onboarding-loading-center">
+        <div className="onboarding-spinner" />
+        <p className="onboarding-muted">Preparing your organization setup…</p>
+      </div>
     );
   }
 
@@ -235,12 +261,6 @@ export function AuthFlow({ onComplete, devPreview, resume }: AuthFlowProps) {
       />
     );
   }
-
-  useEffect(() => {
-    if (stage === "org" && !setupRequest) {
-      setStage("connect");
-    }
-  }, [stage, setupRequest]);
 
   return (
     <AuthWall
