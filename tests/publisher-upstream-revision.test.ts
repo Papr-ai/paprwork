@@ -15,6 +15,7 @@ vi.mock("../src/gateway/services/appRuntime/cloudPreviewRuntimeAuth.js", () => (
   buildCloudPreviewAuthHeaders: vi.fn().mockResolvedValue({}),
 }));
 
+import { publishedAppRevisionsMatch } from "../src/gateway/services/appRuntime/publishedAppRevision.js";
 import { checkPublisherUpstreamRevision } from "../src/gateway/services/syncV3/checkPublisherUpstreamRevision.js";
 
 async function writeLineage(appId: string, lineage: Record<string, unknown>) {
@@ -30,6 +31,35 @@ async function writeLineage(appId: string, lineage: Record<string, unknown>) {
     }),
   );
 }
+
+describe("publishedAppRevisionsMatch", () => {
+  it("matches identical revisions", () => {
+    expect(
+      publishedAppRevisionsMatch(
+        "abc123:deadbeef12345678",
+        "abc123:deadbeef12345678",
+      ),
+    ).toBe(true);
+  });
+
+  it("matches repoHead:hash16 against hash-only snapshot fallback", () => {
+    expect(
+      publishedAppRevisionsMatch(
+        "abc123:deadbeef12345678",
+        "deadbeef12345678",
+      ),
+    ).toBe(true);
+  });
+
+  it("does not match different bundle hashes", () => {
+    expect(
+      publishedAppRevisionsMatch(
+        "abc123:deadbeef12345678",
+        "abc123:0000000000000000",
+      ),
+    ).toBe(false);
+  });
+});
 
 describe("checkPublisherUpstreamRevision", () => {
   beforeEach(async () => {
@@ -51,6 +81,16 @@ describe("checkPublisherUpstreamRevision", () => {
       syncSnapshot: { "dist/app.js": "d94ca5b7986eae8d23c0cb51b1e27b509c443fd3d932f5925bb0f55d2deb553f" },
     });
     const r = await checkPublisherUpstreamRevision("a2");
+    expect(r.publisherUpdatesAvailable).toBe(false);
+  });
+
+  it("collaborator with repoHead:hash upstreamRevision matches live hash-only revision", async () => {
+    await writeLineage("a4", {
+      mode: "track",
+      upstreamRevision: "repo1:d94ca5b7986eae8d",
+      syncSnapshot: { "dist/app.js": "d94ca5b7986eae8d23c0cb51b1e27b509c443fd3d932f5925bb0f55d2deb553f" },
+    });
+    const r = await checkPublisherUpstreamRevision("a4");
     expect(r.publisherUpdatesAvailable).toBe(false);
   });
 

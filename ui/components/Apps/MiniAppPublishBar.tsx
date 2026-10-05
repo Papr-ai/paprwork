@@ -2146,10 +2146,7 @@ export function MiniAppPublishBar({
                 void handleWebSyncPushOrPublish(publishBarAction.pullFirst === true);
               }}
             >
-              {/* Two destinations on one control: say which one this half is. */}
-              {showProposeSplit && publishBarAction.label === "Publish"
-                ? "Publish my version"
-                : publishBarAction.label}
+              {publishBarAction.label}
             </button>
             {showProposeSplit && cloudLineage ? (
               <>

@@ -11,6 +11,24 @@
  * Register BEFORE releasing the gate so the event can't be missed. Falls back
  * after `timeoutMs` so a missed event never swallows the action.
  */
+
+import { isWorkspaceSwitchReloading } from "../lib/workspaceSwitchReload";
+
+const RELOAD_SETTLE_MS = 300;
+const RELOAD_POLL_MS = 50;
+const RELOAD_POLL_MAX = 40;
+
+async function waitForReloadToFinish(): Promise<void> {
+  for (let i = 0; i < RELOAD_POLL_MAX; i += 1) {
+    if (!isWorkspaceSwitchReloading()) {
+      return;
+    }
+    await new Promise<void>((resolve) => {
+      window.setTimeout(resolve, RELOAD_POLL_MS);
+    });
+  }
+}
+
 export function runAfterWorkspaceMount(
   fn: () => void,
   options: { immediate?: boolean; timeoutMs?: number } = {},
@@ -24,11 +42,17 @@ export function runAfterWorkspaceMount(
   const run = () => {
     if (done) return;
     done = true;
-    window.removeEventListener("papr-workspace-switch-complete", run);
+    window.removeEventListener("papr-workspace-switch-complete", onSwitchComplete);
     window.clearTimeout(timer);
-    // Let the restored ContentArea mount before we add tabs / send.
-    window.setTimeout(fn, 300);
+    void (async () => {
+      await waitForReloadToFinish();
+      // Let the restored ContentArea mount before we add tabs / send.
+      window.setTimeout(fn, RELOAD_SETTLE_MS);
+    })();
   };
-  window.addEventListener("papr-workspace-switch-complete", run);
+  const onSwitchComplete = () => {
+    run();
+  };
+  window.addEventListener("papr-workspace-switch-complete", onSwitchComplete);
   const timer = window.setTimeout(run, options.timeoutMs ?? 10_000);
 }

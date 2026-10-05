@@ -22,6 +22,7 @@ import {
   applyPersistedAppStateToTabStore,
   fetchPersistedAppStateFromGateway,
   flushWorkspaceStateToGateway,
+  mergeLocalTabsIntoSnapshot,
   normalizeTabHierarchy,
   type WorkspaceEntityIdSets,
 } from "./persistedAppState";
@@ -232,7 +233,14 @@ async function loadTabsForWorkspaceWithRetry(
       // A declined read yields an empty snapshot that is indistinguishable from
       // an empty workspace, so retry it rather than accepting it as the answer.
       if (snapshot && snapshot.tabsReadOk) {
-        applyPersistedAppStateToTabStore(snapshot, {
+        const { tabs: localTabs, activeTabId: localActiveTabId } =
+          useTabStore.getState();
+        const merged = mergeLocalTabsIntoSnapshot(
+          snapshot,
+          localTabs,
+          localActiveTabId,
+        );
+        applyPersistedAppStateToTabStore(merged, {
           ...entityIds,
           emptyActiveTabFallback: "none",
         });

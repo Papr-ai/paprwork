@@ -10,6 +10,34 @@ export type {
 } from "./cloudCatalogInstall";
 export { buildCloudInstallWelcomeMessage } from "./cloudCatalogInstall";
 
+const SPLIT_RETRY_DELAYS_MS = [800, 2000] as const;
+
+function ensureChatAppSplitView(
+  chatTabId: string,
+  appTabId: string,
+  appId: string,
+  appTitle: string,
+): void {
+  const { createTab, createArtifactFromChat, switchToTab, getTab } =
+    useTabStore.getState();
+
+  if (!getTab(chatTabId)) {
+    const chatEntityId = chatTabId.startsWith("chat-")
+      ? chatTabId.slice("chat-".length)
+      : chatTabId;
+    createTab("chat", chatEntityId, appTitle);
+  }
+  if (!getTab(appTabId)) {
+    createTab("app", appId, appTitle);
+  }
+
+  if (!isAppTabMergedWithChat(chatTabId, appTabId)) {
+    createArtifactFromChat(chatTabId, appTabId, { autoSwitch: true });
+  } else {
+    switchToTab(chatTabId);
+  }
+}
+
 export async function openCloudInstalledAppWithChat(
   createChat: () => Promise<string | null>,
   input: {
@@ -22,23 +50,16 @@ export async function openCloudInstalledAppWithChat(
   const chatId = await createChat();
   if (!chatId) return;
 
-  const { createTab, createArtifactFromChat, switchToTab, getTab } =
-    useTabStore.getState();
-
   const chatTabId = `chat-${chatId}`;
-  if (!getTab(chatTabId)) {
-    createTab("chat", chatId, input.chatTabTitle ?? input.appTitle);
-  }
-
   const appTabId = `app-${input.appId}`;
-  if (!getTab(appTabId)) {
-    createTab("app", input.appId, input.appTitle);
-  }
+  const title = input.chatTabTitle ?? input.appTitle;
 
-  if (!isAppTabMergedWithChat(chatTabId, appTabId)) {
-    createArtifactFromChat(chatTabId, appTabId, { autoSwitch: true });
-  } else {
-    switchToTab(chatTabId);
+  ensureChatAppSplitView(chatTabId, appTabId, input.appId, title);
+
+  for (const delayMs of SPLIT_RETRY_DELAYS_MS) {
+    window.setTimeout(() => {
+      ensureChatAppSplitView(chatTabId, appTabId, input.appId, title);
+    }, delayMs);
   }
 
   window.setTimeout(() => {
