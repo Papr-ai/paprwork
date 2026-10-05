@@ -69,6 +69,8 @@ export interface ShareSheetBodyProps {
   onOpenDependencyApp?: (appId: string, title?: string) => void;
   /** Status / errors / dependency panels, rendered above the steps. */
   notices?: React.ReactNode;
+  /** Muted one-liner on live summary when the app is limited on web (not the publish gate). */
+  webCompatibilityHint?: string | null;
   /** Optional deep link into one step (e.g. a missing-key chip). */
   initialEdit?: ShareStepId | null;
 }
@@ -488,6 +490,9 @@ function LiveSummary({
           </button>
         ))}
       </div>
+      {props.webCompatibilityHint ? (
+        <p className="ss6-note ss6-note--compat-hint">{props.webCompatibilityHint}</p>
+      ) : null}
       <p className="ss6-note">
         Code edits reach them when you Publish from the bar.
       </p>

@@ -62,7 +62,36 @@ function catalogIconToSvg(icon: string): string {
   if (isSvgIcon(icon)) {
     return icon;
   }
+  if (icon.trim().startsWith("data:image/")) {
+    return DEFAULT_PAPR_LOGO_SVG;
+  }
   return emojiIconToSvg(icon);
+}
+
+/** Raw icon string for OG rasterization (SVG, emoji-as-SVG, or catalog JPEG data URI). */
+export async function resolvePreviewIconSource(
+  runtimeAuth: AppRuntimeRouteAuth,
+  canReadRepo: boolean,
+  publishedApp?: PublishedAppResolveResult | null,
+): Promise<string> {
+  if (canReadRepo) {
+    const metadata = await readMetadataFromRepo(runtimeAuth);
+    if (metadata?.icon?.trim()) {
+      return metadata.icon.trim();
+    }
+    const iconSvg = await readIconSvgFromRepo(runtimeAuth);
+    if (iconSvg) {
+      return iconSvg;
+    }
+  }
+
+  const resolved = await loadPublishedApp(runtimeAuth, publishedApp);
+  const catalogIcon = resolved?.catalogIcon?.trim();
+  if (catalogIcon) {
+    return catalogIcon;
+  }
+
+  return DEFAULT_PAPR_LOGO_SVG;
 }
 
 async function loadPublishedApp(

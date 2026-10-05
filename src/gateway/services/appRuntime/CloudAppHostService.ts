@@ -120,8 +120,10 @@ import {
   getCloudAppPublicBaseUrl,
   injectCloudAppPreviewIntoHtml,
   resolveCloudAppPreviewMeta,
+  resolvePreviewIconSource,
   resolvePreviewIconSvg,
 } from "./CloudAppPreviewService.js";
+import { rasterizePreviewIconForOpenGraph } from "../../utils/openGraphIconRaster.js";
 import {
   PAPR_APP_META_RELATIVE_PATH,
   readCloudAppMetaFromContent,
@@ -2599,10 +2601,12 @@ export class CloudAppHostService {
     runtimeAuth: AppRuntimeRouteAuth,
     canReadRepo: boolean,
   ): Promise<void> {
-    const svg = await resolvePreviewIconSvg(runtimeAuth, canReadRepo);
-    res.setHeader("Content-Type", "image/svg+xml; charset=utf-8");
+    const iconSource = await resolvePreviewIconSource(runtimeAuth, canReadRepo);
+    const { body, contentType } =
+      await rasterizePreviewIconForOpenGraph(iconSource);
+    res.setHeader("Content-Type", contentType);
     res.setHeader("Cache-Control", "public, max-age=300");
-    res.send(svg);
+    res.send(body);
   }
 
   private async sendAppFile(

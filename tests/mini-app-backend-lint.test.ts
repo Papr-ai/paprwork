@@ -103,6 +103,16 @@ describe("extractVaultEnvReferences", () => {
     );
     expect([...refs]).toEqual(["LIVE_API_KEY"]);
   });
+
+  it("does not treat PAPR_APP_DIR as a vault key", async () => {
+    const { extractVaultEnvReferences } = await import(
+      "../src/gateway/utils/miniAppBackendLint.js"
+    );
+    const refs = extractVaultEnvReferences(
+      `import os\napp_dir = os.environ.get("PAPR_APP_DIR", "")\nkey = os.environ.get("LIVE_API_KEY")\n`,
+    );
+    expect([...refs]).toEqual(["LIVE_API_KEY"]);
+  });
 });
 
 describe("checkMiniAppBackendFetchPatterns", () => {

@@ -627,66 +627,9 @@
   }
 }
 
-.mini-app-publish-bar__action-callout {
-  display: flex;
-  align-items: center;
-  gap: 10px;
-  padding: 8px 12px;
-  border-bottom: 1px solid rgba(255, 149, 0, 0.35);
-  background: rgba(255, 149, 0, 0.12);
-  color: var(--text-primary);
-  font-size: 13px;
-  flex-shrink: 0;
-}
-
-.mini-app-publish-bar__action-callout-text {
-  flex: 1;
-  line-height: 1.35;
-}
-
-.mini-app-publish-bar__action-callout-btn {
-  flex-shrink: 0;
-  padding: 4px 10px;
-  border: 0;
-  border-radius: 6px;
-  background: var(--accent);
-  color: #fff;
-  font-size: 12px;
-  font-weight: 600;
-  cursor: pointer;
-}
-
-.mini-app-publish-bar__action-callout-btn:hover {
-  filter: brightness(1.05);
-}
-
-.mini-app-publish-bar__action-callout-btn:disabled {
-  opacity: 0.6;
-  cursor: default;
-}
-
-.mini-app-publish-bar__action-callout-btn--secondary {
-  background: transparent;
-  color: var(--accent);
-  border: 1px solid color-mix(in srgb, var(--accent) 45%, transparent);
-}
-
-.mini-app-publish-bar__action-callout-dismiss {
-  flex-shrink: 0;
-  width: 22px;
-  height: 22px;
-  padding: 0;
-  border: 0;
-  border-radius: 4px;
-  background: transparent;
-  color: var(--text-secondary);
-  font-size: 16px;
-  line-height: 1;
-  cursor: pointer;
-}
-
-.mini-app-publish-bar__action-callout-dismiss:hover {
-  background: rgba(0, 0, 0, 0.06);
+.share-sheet__panel--publish-review {
+  max-height: min(70vh, 520px);
+  overflow: auto;
 }
 
 .mini-app-publish-bar__web-sync-dot--loading {
@@ -2584,68 +2527,6 @@ button.cloud-compat-badge--paused:hover {
 .share-sheet__notice--warn {
   border-color: color-mix(in srgb, #f59e0b 35%, var(--border-color));
   background: color-mix(in srgb, #f59e0b 10%, var(--bg-secondary));
-}
-
-.cloud-compat-panel__list-block {
-  margin-top: 10px;
-}
-
-.cloud-compat-panel__list-title {
-  margin: 0 0 6px;
-  font-size: 12px;
-  font-weight: 600;
-  color: var(--text-primary);
-}
-
-.cloud-compat-panel__list {
-  margin: 0;
-  padding-left: 18px;
-  font-size: 12px;
-  color: var(--text-secondary);
-}
-
-.cloud-compat-panel__list li + li {
-  margin-top: 4px;
-}
-
-.cloud-compat-panel__details {
-  margin-top: 10px;
-  font-size: 12px;
-  color: var(--text-secondary);
-}
-
-.cloud-compat-panel__details summary {
-  cursor: pointer;
-  color: var(--text-primary);
-  font-weight: 600;
-}
-
-.cloud-compat-panel__findings {
-  margin: 8px 0 0;
-  padding-left: 18px;
-}
-
-.cloud-compat-panel__findings li {
-  margin-bottom: 6px;
-}
-
-.cloud-compat-panel__finding-file {
-  display: block;
-  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
-  font-size: 11px;
-  color: var(--text-primary);
-}
-
-.cloud-compat-panel__confirm {
-  margin-top: 12px;
-  padding-top: 12px;
-  border-top: 1px solid var(--border-color);
-}
-
-.cloud-compat-panel__confirm p {
-  margin: 0 0 10px;
-  font-size: 13px;
-  color: var(--text-primary);
 }
 
 /* Allowlist for audience "people". Sits directly beneath its own radio row and

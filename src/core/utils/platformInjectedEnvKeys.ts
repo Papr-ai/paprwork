@@ -6,11 +6,14 @@ export const VERIFIED_CALLER_USER_ID_ENV = "PAPR_CALLER_USER_ID";
 export const VERIFIED_CALLER_EMAIL_ENV = "PAPR_CALLER_EMAIL";
 /** Loopback gateway base for job SDK / papr_db on desktop or Cloud App Host subprocess. */
 export const PAPR_GATEWAY_URL_ENV = "PAPR_GATEWAY_URL";
+/** Absolute path of the mini-app folder — set for desktop backend handlers. */
+export const PAPR_APP_DIR_ENV = "PAPR_APP_DIR";
 
 const PLATFORM_INJECTED_ENV_KEYS = new Set<string>([
   VERIFIED_CALLER_USER_ID_ENV,
   VERIFIED_CALLER_EMAIL_ENV,
   PAPR_GATEWAY_URL_ENV,
+  PAPR_APP_DIR_ENV,
   "PAPR_DB_PROXY_URL",
   "PAPR_DB_PROXY_TOKEN",
 ]);

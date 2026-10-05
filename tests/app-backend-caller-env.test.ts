@@ -56,3 +56,10 @@ describe("buildBackendActionEnv caller identity", () => {
     expect(typeof env.PAPR_PARAM_week).toBe("string");
   });
 });
+
+describe("buildBackendActionEnv PAPR_APP_DIR", () => {
+  it("exposes the app folder when appDir is provided", () => {
+    const env = buildBackendActionEnv({ appId: "a1", action: "ping", appDir: "/tmp/apps/a1" });
+    expect(env.PAPR_APP_DIR).toBe("/tmp/apps/a1");
+  });
+});

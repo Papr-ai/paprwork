@@ -42,6 +42,8 @@ export function buildBackendActionEnv(input: {
   vaultEnv?: Record<string, string>;
   databaseEnv?: Record<string, string>;
   paprRoot?: string;
+  /** Absolute app folder (desktop only) — exposed as PAPR_APP_DIR. */
+  appDir?: string;
   /** Server-resolved caller — injected when signed in; overrides client identity params. */
   callerIdentity?: MiniAppCallerIdentity;
   loggedIn?: boolean;
@@ -59,6 +61,7 @@ export function buildBackendActionEnv(input: {
       PAPR_APP_ID: input.appId,
       PAPR_ACTION: input.action,
       ...(input.paprRoot ? { PAPR_ROOT: input.paprRoot } : {}),
+      ...(input.appDir ? { PAPR_APP_DIR: input.appDir } : {}),
       ...(input.vaultEnv ?? {}),
     })) {
       env[key] = String(value);

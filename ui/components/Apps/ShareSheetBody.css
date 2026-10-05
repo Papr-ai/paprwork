@@ -546,6 +546,13 @@
   margin: 6px 0 2px;
 }
 
+.ss6-note--compat-hint {
+  margin-top: 4px;
+  color: var(--text-secondary);
+  font-size: 12px;
+  line-height: 1.4;
+}
+
 /* Linked apps/data copies won't include — same flat rows as the sheet */
 .ss6-deps {
   display: flex;
@@ -621,4 +628,212 @@
 
 .ss6-link-btn:hover {
   background: var(--ss6-tint);
+}
+
+.ss6-hint--flush {
+  margin: 0 0 8px;
+}
+
+/* Cloud compatibility — compact block inside Share sheet v6 notices */
+.ss6-compat {
+  margin: 2px 0 10px;
+}
+
+.ss6-compat__alert {
+  margin: 2px 0 6px;
+}
+
+.ss6-compat__alert .cloud-compat-badge {
+  vertical-align: 0.05em;
+  margin-right: 2px;
+}
+
+.ss6-compat__details {
+  margin: 0 0 4px;
+  padding: 0 8px;
+  font-size: 12px;
+  color: var(--text-secondary);
+}
+
+.ss6-compat__summary {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 8px;
+  padding: 6px 0;
+  cursor: pointer;
+  list-style: none;
+  font-size: 12.5px;
+  font-weight: 500;
+  color: var(--text-primary);
+}
+
+.ss6-compat__summary::-webkit-details-marker {
+  display: none;
+}
+
+.ss6-compat__summary::before {
+  content: "▸ ";
+  color: var(--text-secondary);
+  font-size: 11px;
+}
+
+.ss6-compat__details[open] .ss6-compat__summary::before {
+  content: "▾ ";
+}
+
+.ss6-compat__summary-meta {
+  flex-shrink: 0;
+  font-size: 11px;
+  font-weight: 500;
+  color: var(--text-secondary);
+}
+
+.ss6-compat__split {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  margin: 0 0 6px 12px;
+  padding-left: 8px;
+  border-left: 2px solid var(--ss6-line);
+}
+
+.ss6-compat__group-label {
+  margin: 0 0 2px;
+  font-size: 10px;
+  font-weight: 600;
+  letter-spacing: 0.05em;
+  text-transform: uppercase;
+  color: var(--text-secondary);
+}
+
+.ss6-compat__bullets {
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.ss6-compat__bullets li {
+  position: relative;
+  padding-left: 10px;
+  font-size: 12px;
+  line-height: 1.4;
+  color: var(--text-secondary);
+}
+
+.ss6-compat__bullets li + li {
+  margin-top: 2px;
+}
+
+.ss6-compat__bullets li::before {
+  content: "·";
+  position: absolute;
+  left: 0;
+  color: var(--text-secondary);
+}
+
+.ss6-compat__issues {
+  margin: 0 0 6px 12px;
+  padding: 0;
+  list-style: none;
+}
+
+.ss6-compat__issue {
+  display: flex;
+  flex-direction: column;
+  gap: 1px;
+  padding: 4px 0;
+  border-bottom: 1px solid var(--ss6-line);
+}
+
+.ss6-compat__issue:last-child {
+  border-bottom: none;
+}
+
+.ss6-compat__loc {
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+  font-size: 10.5px;
+  color: var(--text-primary);
+}
+
+.ss6-compat__issue-msg {
+  font-size: 11.5px;
+  line-height: 1.35;
+  color: var(--text-secondary);
+}
+
+.ss6-compat__confirm {
+  margin-top: 8px;
+  padding-top: 8px;
+  border-top: 1px solid var(--ss6-line);
+}
+
+.ss6-compat__confirm-btn {
+  width: 100%;
+  justify-content: center;
+}
+
+.ss6-compat__confirm--modal {
+  margin-top: 12px;
+  padding-top: 12px;
+}
+
+.ss6-compat__confirm-actions {
+  display: flex;
+  gap: 8px;
+  justify-content: flex-end;
+  margin-top: 10px;
+}
+
+.ss6-compat__confirm-actions .ss6-btn {
+  min-width: 0;
+}
+
+.ss6-compat--modal {
+  margin: 0;
+}
+
+/* Publish review — same row/card language as Sync status (sync7), not a popover. */
+.compat7 {
+  --s7-blue: var(--accent, #0060e0);
+  --s7-hover: rgba(15, 23, 42, 0.04);
+  --s7-chip: #f1f4f9;
+  --s7-line: #edf1f6;
+  --s7-ok: var(--success, #1f9d55);
+  --s7-warn: var(--warning, #b7791f);
+  --s7-bad: var(--danger, #d64545);
+  --s7-ok-tint: #eef8f1;
+  --s7-warn-tint: #fdf4e6;
+  --s7-bad-tint: #fdeeec;
+  --s7-info-tint: #ecf5fd;
+  text-align: left;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+
+.compat7 button {
+  font: inherit;
+  cursor: pointer;
+}
+
+.compat7 button:disabled {
+  opacity: 0.45;
+  cursor: default;
+}
+
+@media (prefers-color-scheme: dark) {
+  .compat7 {
+    --s7-hover: rgba(255, 255, 255, 0.05);
+    --s7-chip: rgba(255, 255, 255, 0.07);
+    --s7-line: rgba(255, 255, 255, 0.08);
+    --s7-ok-tint: rgba(31, 157, 85, 0.16);
+    --s7-warn-tint: rgba(183, 121, 31, 0.18);
+    --s7-bad-tint: rgba(214, 69, 69, 0.18);
+    --s7-info-tint: rgba(64, 150, 255, 0.16);
+  }
+}
+
+.compat7-foot {
+  margin-top: 14px;
 }

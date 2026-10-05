@@ -78,6 +78,7 @@ export class AppBackendService {
       vaultEnv: input.vaultEnv,
       databaseEnv: { ...databaseEnv, ...proxyEnv },
       paprRoot: this.paprRoot,
+      appDir: path.join(this.paprRoot, "apps", input.appId),
       callerIdentity: input.callerIdentity,
       loggedIn: input.loggedIn,
     });

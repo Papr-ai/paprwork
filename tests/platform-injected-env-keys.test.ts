@@ -19,6 +19,7 @@ describe("platformInjectedEnvKeys", () => {
     expect(isPlatformInjectedEnvKey("PAPR_CALLER_FOO")).toBe(true);
     expect(isPlatformInjectedEnvKey("PAPR_GATEWAY_URL")).toBe(true);
     expect(isPlatformInjectedEnvKey("PAPR_DB_PROXY_URL")).toBe(true);
+    expect(isPlatformInjectedEnvKey("PAPR_APP_DIR")).toBe(true);
     expect(isPlatformInjectedEnvKey("PAPR_API_KEY")).toBe(false);
     expect(isPlatformInjectedEnvKey("NEON_DB_URL")).toBe(false);
   });
@@ -29,6 +30,7 @@ describe("platformInjectedEnvKeys", () => {
         "PAPR_CALLER_USER_ID",
         "PAPR_CALLER_EMAIL",
         "PAPR_GATEWAY_URL",
+        "PAPR_APP_DIR",
         "PAPR_API_KEY",
       ]),
     ).toEqual(["PAPR_API_KEY"]);

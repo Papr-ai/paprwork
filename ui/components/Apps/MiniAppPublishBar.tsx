@@ -94,6 +94,7 @@ import type { AppWorkspaceMode, AppWorkspacePanel } from "../../hooks/useAppWork
 import {
   CloudCompatibilityBadge,
   CloudCompatibilityPanel,
+  cloudCompatibilityShareHint,
 } from "./CloudCompatibilityPanel";
 import { PaprCloudRequirementsPanel } from "../common/PaprCloudRequirementsPanel";
 import { requestPaprCloudFeature } from "../../stores/paprCloudFeatureStore";
@@ -317,9 +318,7 @@ export function MiniAppPublishBar({
   const [perUserIsolation, setPerUserIsolation] = useState(false);
   const [webSyncPopoverOpen, setWebSyncPopoverOpen] = useState(false);
   const webSyncAnchorRef = useRef<HTMLDivElement>(null);
-  // The desktop-only confirm renders at the bottom of a long, scrolling sheet;
-  // bring it into view so "Publish on Web" doesn't look like a no-op.
-  const desktopAckRef = useRef<HTMLDivElement>(null);
+  const [publishReviewOpen, setPublishReviewOpen] = useState(false);
   const webSyncPopoverRef = useRef<HTMLDivElement>(null);
   const [webSyncPopoverPos, setWebSyncPopoverPos] = useState<{
     top: number;
@@ -337,17 +336,20 @@ export function MiniAppPublishBar({
   const [, setReadinessLoading] = useState(false);
   const [needsDesktopAck, setNeedsDesktopAck] = useState(false);
   useEffect(() => {
-    if (needsDesktopAck) {
-      desktopAckRef.current?.scrollIntoView({ behavior: "smooth", block: "center" });
-    }
-  }, [needsDesktopAck]);
+    if (!publishReviewOpen) return;
+    setCompatLoading(true);
+    void fetchCloudCompatibility(appId)
+      .then(setCompatReport)
+      .catch(() => {
+        if (cloud.compatibility) setCompatReport(cloud.compatibility);
+      })
+      .finally(() => setCompatLoading(false));
+  }, [publishReviewOpen, appId, cloud.compatibility]);
   const [publishErrorDetailOpen, setPublishErrorDetailOpen] = useState(false);
-  const [webSyncActionNotice, setWebSyncActionNotice] = useState<string | null>(
+  /** Post-publish nudge on the Propose ▾ only — no strip under the bar. */
+  const [proposeNudgeMessage, setProposeNudgeMessage] = useState<string | null>(
     null,
   );
-  const [webSyncActionKind, setWebSyncActionKind] = useState<
-    "review" | "failed" | "propose"
-  >("review");
   const prevMergeRequiredRef = useRef(false);
   const [upstreamPulling, setUpstreamPulling] = useState(false);
   /** Result of the last Update — what the pull changed, or why it failed.
@@ -389,47 +391,14 @@ export function MiniAppPublishBar({
   // Kept for the overflow menu's upload-mode row; the v7 panel doesn't explain it.
   void resolveEffectiveAutoUpload(cloud.uploadMode, globalAutoUploadEnabled);
 
-  // Callout strip: review + failed only. Updates and unpublished local work
-  // are shown on the chip and primary button (v2 bar), not a second banner.
-  const prevFailedRef = useRef(false);
-
+  // Review + failed live on the status chip and Sync panel — not a second strip.
   useEffect(() => {
     const mergeRequired = webSyncStatus?.gitRemoteRequiresReview === true;
     if (mergeRequired && !prevMergeRequiredRef.current) {
-      const headline = webSyncStatus?.gitRemoteReviewHeadline?.trim();
-      setWebSyncActionNotice(
-        headline
-          ? `${headline} — review before publishing.`
-          : "The web has changes that need your review before you can upload.",
-      );
-      setWebSyncActionKind("review");
       setWebSyncPopoverOpen(true);
     }
-    if (!mergeRequired && webSyncActionKind === "review") {
-      setWebSyncActionNotice(null);
-    }
     prevMergeRequiredRef.current = mergeRequired;
-  }, [
-    webSyncStatus?.gitRemoteRequiresReview,
-    webSyncStatus?.gitRemoteReviewHeadline,
-  ]); // eslint-disable-line react-hooks/exhaustive-deps
-
-  useEffect(() => {
-    const failed =
-      webSyncStatus?.codeStatus === "failed" ||
-      (webSyncStatus?.uploadStatus === "failed" &&
-        webSyncStatus?.uploadRetryPending !== true);
-    if (failed && !prevFailedRef.current && !webSyncPushing) {
-      setWebSyncActionNotice(
-        "Publish didn't finish — your latest changes aren't on the web yet.",
-      );
-      setWebSyncActionKind("failed");
-    }
-    if (!failed && webSyncActionKind === "failed") {
-      setWebSyncActionNotice(null);
-    }
-    prevFailedRef.current = Boolean(failed);
-  }, [webSyncStatus?.codeStatus, webSyncStatus?.uploadStatus, webSyncStatus?.uploadRetryPending, webSyncPushing]); // eslint-disable-line react-hooks/exhaustive-deps
+  }, [webSyncStatus?.gitRemoteRequiresReview]);
 
   // Post-publish propose offer (shared forks). Right after publishing your copy
   // is when proposing upstream is most likely wanted, and the ▾ is easy to
@@ -448,8 +417,7 @@ export function MiniAppPublishBar({
     if (!finished) return;
     proposeOfferArmedRef.current = false;
     if (!cloudLineage || !isTrackCollaborator) return;
-    setWebSyncActionKind("propose");
-    setWebSyncActionNotice(
+    setProposeNudgeMessage(
       `Published to your copy. Propose these changes to ${cloudLineage.sourceSlug}?`,
     );
   }, [webSyncPushing, webSyncError]); // eslint-disable-line react-hooks/exhaustive-deps
@@ -465,11 +433,11 @@ export function MiniAppPublishBar({
     setShareSyncNotice(null);
     applyingSharingRef.current = false;
     setNeedsDesktopAck(false);
+    setPublishReviewOpen(false);
     setWebSyncPopoverOpen(false);
-    setWebSyncActionNotice(null);
+    setProposeNudgeMessage(null);
     setContributionsOpen(false);
     prevMergeRequiredRef.current = false;
-    prevFailedRef.current = false;
     const model = publishPrefsToAudienceModel(
       cloud.loginAccess,
       cloud.externalLink,
@@ -492,7 +460,6 @@ export function MiniAppPublishBar({
 
   useEffect(() => {
     if (!shareOpen) {
-      setNeedsDesktopAck(false);
       setShareSyncNotice(null);
       setReadiness(null);
       return;
@@ -705,7 +672,7 @@ export function MiniAppPublishBar({
         cloud.clearError();
         setCompatReport(err.compatibility);
         setNeedsDesktopAck(true);
-        setShareOpen(true);
+        setPublishReviewOpen(true);
         return { published: false };
       }
       throw err;
@@ -1243,6 +1210,10 @@ export function MiniAppPublishBar({
   };
 
   const handlePublishClick = async () => {
+    if (needsDesktopAck) {
+      setPublishReviewOpen(true);
+      return;
+    }
     if (publishBlockedByIntegrity) {
       cloud.reportError(
         `Can't publish yet: ${(readiness?.errors ?? []).join("; ") || "the app's manifest points to missing files."}`,
@@ -1275,7 +1246,7 @@ export function MiniAppPublishBar({
         cloud.clearError();
         setCompatReport(err.compatibility);
         setNeedsDesktopAck(true);
-        setShareOpen(true);
+        setPublishReviewOpen(true);
       } else {
         // Previously swallowed: the button looked like it did nothing.
         cloud.reportError(publishErrorMessage(err));
@@ -1374,12 +1345,14 @@ export function MiniAppPublishBar({
           await guardedWebSyncPushNow();
         }
         setNeedsDesktopAck(false);
+        setPublishReviewOpen(false);
       })
       .catch((err: unknown) => {
         if (err instanceof CloudPublishBlockedError) {
           cloud.clearError();
           setCompatReport(err.compatibility);
           setNeedsDesktopAck(true);
+          setPublishReviewOpen(true);
         } else {
           cloud.reportError(publishErrorMessage(err));
         }
@@ -2138,16 +2111,22 @@ export function MiniAppPublishBar({
                   className={`mini-app-publish-bar__button mini-app-publish-bar__button--primary mini-app-publish-bar__split-caret${
                     // Right after a clean publish, Publish has nothing left to
                     // send and Propose is the likely next step: point at it.
-                    webSyncActionKind === "propose" && webSyncActionNotice
+                    proposeNudgeMessage
                       ? " mini-app-publish-bar__split-caret--nudge"
                       : ""
                   }`}
                   aria-haspopup="menu"
                   aria-expanded={proposeMenuOpen}
                   aria-label={`More ways to send changes, including propose to ${cloudLineage.sourceSlug}`}
-                  title={`Propose to ${cloudLineage.sourceSlug}`}
+                  title={
+                    proposeNudgeMessage ??
+                    `Propose to ${cloudLineage.sourceSlug}`
+                  }
                   disabled={cloud.busy || upstreamPulling}
-                  onClick={() => setProposeMenuOpen((v) => !v)}
+                  onClick={() => {
+                    setProposeNudgeMessage(null);
+                    setProposeMenuOpen((v) => !v);
+                  }}
                 >
                   <svg
                     width="11"
@@ -2191,6 +2170,25 @@ export function MiniAppPublishBar({
         </div>
       </div>
 
+      {publishReviewOpen ? (
+        <ShareSheet
+          title="Publish to web"
+          onClose={() => setPublishReviewOpen(false)}
+        >
+          <div className="share-sheet__panel share-sheet__panel--publish-review">
+            <CloudCompatibilityPanel
+              report={compatReport ?? cloud.compatibility}
+              loading={compatLoading}
+              showConfirm={needsDesktopAck}
+              confirmBusy={cloud.busy}
+              variant="modal"
+              onCancel={() => setPublishReviewOpen(false)}
+              onConfirmPublish={handleConfirmDesktopPublish}
+            />
+          </div>
+        </ShareSheet>
+      ) : null}
+
       {showContributionsInbox && contributionsOpen ? (
         <ShareSheet
           wide
@@ -2215,55 +2213,6 @@ export function MiniAppPublishBar({
             />
           </div>
         </ShareSheet>
-      ) : null}
-
-      {workspaceMode === "preview" &&
-      webSyncActionNotice ? (
-        <div
-          className="mini-app-publish-bar__action-callout"
-          // An offer is not an alarm — only review/failed interrupt.
-          role={webSyncActionKind === "propose" ? "status" : "alert"}
-          aria-live="polite"
-        >
-          <span className="mini-app-publish-bar__action-callout-text">
-            {webSyncActionNotice}
-          </span>
-          {/* Review/failed get no action button: the bar's primary already
-              offers it persistently. Propose is the exception — its only other
-              home on a shared fork is the ▾, which is easy to miss. */}
-          {webSyncActionKind === "propose" ? (
-            <button
-              type="button"
-              className="mini-app-publish-bar__action-callout-btn"
-              onClick={() => {
-                setWebSyncActionNotice(null);
-                openPropose();
-              }}
-            >
-              Propose
-            </button>
-          ) : webSyncStatus ? (
-            <button
-              type="button"
-              className="mini-app-publish-bar__action-callout-btn mini-app-publish-bar__action-callout-btn--secondary"
-              onClick={() =>
-                openCloudSyncAgentChat(
-                  buildGenericSyncAgentPrompt({ appId, status: webSyncStatus }),
-                )
-              }
-            >
-              Ask agent
-            </button>
-          ) : null}
-          <button
-            type="button"
-            className="mini-app-publish-bar__action-callout-dismiss"
-            aria-label="Dismiss"
-            onClick={() => setWebSyncActionNotice(null)}
-          >
-            ×
-          </button>
-        </div>
       ) : null}
 
       {proposeOpen && cloudLineage ? (
@@ -2361,18 +2310,12 @@ export function MiniAppPublishBar({
                     </p>
                   </div>
                 ) : null}
-                {needsDesktopAck ? (
-                  <div ref={desktopAckRef}>
-                    <CloudCompatibilityPanel
-                      report={compatReport ?? cloud.compatibility}
-                      loading={compatLoading}
-                      showConfirm={needsDesktopAck}
-                      confirmBusy={cloud.busy}
-                      onConfirmPublish={handleConfirmDesktopPublish}
-                    />
-                  </div>
-                ) : null}
               </>
+            }
+            webCompatibilityHint={
+              cloud.live && !needsDesktopAck
+                ? cloudCompatibilityShareHint(compatReport ?? cloud.compatibility)
+                : null
             }
           />
         </ShareSheet>
