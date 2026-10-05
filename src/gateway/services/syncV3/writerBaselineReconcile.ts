@@ -111,6 +111,8 @@ export async function clearWriterLocalStateForApp(
   }
   clearWriterConflictsForApp(trimmed);
   await removeAppFromOidCache(trimmed, paprHome);
+  const { removeAppFromSyncManifest } = await import("./SyncManifest.js");
+  await removeAppFromSyncManifest(trimmed, paprHome);
   await removeAppRepoCommitCursor(trimmed, paprHome);
   await removeOutboxEntriesForApp(trimmed);
 }

@@ -45,6 +45,8 @@ export async function deleteAppSyncArtifacts(
   const removedRepoRegistry = await removeCachedAppRepoRecord(trimmed, paprHome);
   const removedCommitCursor = await removeAppRepoCommitCursor(trimmed, paprHome);
   const removedOidCache = await removeAppFromOidCache(trimmed, paprHome);
+  const { removeAppFromSyncManifest } = await import("./syncV3/SyncManifest.js");
+  await removeAppFromSyncManifest(trimmed, paprHome);
   const removedOutboxEntries = await removeOutboxEntriesForApp(trimmed);
 
   let tombstonedSchemaOwnerDbs = 0;

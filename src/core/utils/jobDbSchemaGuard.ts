@@ -219,8 +219,8 @@ export function scanSourceForSchemaDdlAntiPattern(content: string): string[] {
       const snippet = match[1]?.trim().slice(0, 80) ?? "";
       warnings.push(
         `Inline schema DDL detected (\`${snippet}...\`). ` +
-          `Move DDL to migrations/000N_description.sql via write_file — ` +
-          `registry DBs: papr_db_apply_migration; job scratch: Jobs/{jobId}/migrations/ + run_job.`,
+          `Move DDL into a migration — registry DBs: papr_db_create_migration({ dbId, name, sql }) (never write_file into migrations/); ` +
+          `job scratch: Jobs/{jobId}/migrations/ + run_job.`,
       );
     }
   }

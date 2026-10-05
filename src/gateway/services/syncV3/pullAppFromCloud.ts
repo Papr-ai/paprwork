@@ -72,6 +72,8 @@ export async function pullAppFromCloud(
     fileResolutions?: Record<string, PullFileResolution>;
     /** Report what Get updates would do; write nothing, pull no rows. */
     dryRun?: boolean;
+    /** The user confirmed an update that removes many files. */
+    confirmDeletes?: boolean;
   },
 ): Promise<PullAppFromCloudResult> {
   const code = await pullAppCodeFromRepo(appId, {
@@ -81,6 +83,7 @@ export async function pullAppFromCloud(
     resolution: options.resolution,
     fileResolutions: options.fileResolutions,
     dryRun: options.dryRun,
+    confirmDeletes: options.confirmDeletes,
   });
   if (options.dryRun) {
     return { appId, code, tursoScheduled: false };

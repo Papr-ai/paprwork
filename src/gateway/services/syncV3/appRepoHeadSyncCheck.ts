@@ -77,6 +77,13 @@ export async function isLocalAppCodeAtRemoteHead(
       return false;
     }
   }
+  // A path we last saw on the web that HEAD no longer has: someone deleted it.
+  const headPaths = new Set(head.files.map((file) => file.path));
+  for (const cachedPath of Object.keys(appCache)) {
+    if (!headPaths.has(cachedPath)) {
+      return false;
+    }
+  }
 
   return true;
 }

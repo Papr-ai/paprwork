@@ -34,6 +34,8 @@ export interface ProposalTree {
    * nor deleted from here.
    */
   skipPrefixes?: string[];
+  /** Migration ids (no .sql) this machine restored from the ledger (restored-migrations.json). */
+  restoredIds?: ReadonlySet<string>;
 }
 
 export interface ProposalChangeSet {
@@ -43,6 +45,10 @@ export interface ProposalChangeSet {
   deletes: string[];
   /** Repo-relative paths that differ only because the platform rewrote them. */
   ignored: string[];
+  /** Migration files that are restorations of already-applied files, not new schema. */
+  restored: string[];
+  /** Existing migrations whose content differs from the publisher's — never proposed. */
+  immutableSkipped: string[];
 }
 
 function joinRepo(dir: string, rel: string): string {
@@ -70,6 +76,8 @@ export function buildProposalChangeSet(trees: ProposalTree[]): ProposalChangeSet
   const writes = new Map<string, string>();
   const deletes: string[] = [];
   const ignored: string[] = [];
+  const restored: string[] = [];
+  const immutableSkipped: string[] = [];
 
   for (const tree of trees) {
     for (const [rel, content] of tree.local) {
@@ -101,6 +109,15 @@ export function buildProposalChangeSet(trees: ProposalTree[]): ProposalChangeSet
       }
 
       if (base !== undefined && same(base, content)) continue;
+      if (tree.kind === "migrations" || /(^|\/)migrations\/[^/]+\.sql$/.test(rel)) {
+        // Applied migrations are immutable: the publisher's copy wins, always.
+        if (base !== undefined) {
+          immutableSkipped.push(repoPath);
+          continue;
+        }
+        const id = rel.split("/").pop()!.replace(/\.sql$/, "");
+        if (tree.restoredIds?.has(id)) restored.push(repoPath);
+      }
       writes.set(repoPath, content);
     }
 
@@ -118,5 +135,11 @@ export function buildProposalChangeSet(trees: ProposalTree[]): ProposalChangeSet
     }
   }
 
-  return { writes, deletes: deletes.sort(), ignored: ignored.sort() };
+  return {
+    writes,
+    deletes: deletes.sort(),
+    ignored: ignored.sort(),
+    restored: restored.sort(),
+    immutableSkipped: immutableSkipped.sort(),
+  };
 }

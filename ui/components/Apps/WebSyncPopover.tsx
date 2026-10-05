@@ -430,10 +430,10 @@ export function WebSyncPopover({
     statusRows.push({
       key: "oversized-files",
       icon: "⚠",
-      label: "Large files skipped",
+      label: "Files not synced",
       detail: shortDetail(
         status.oversizedAppFilesMessage ??
-          `${status.oversizedAppFilesCount} file(s) over 10MB — use App Files`,
+          `${status.oversizedAppFilesCount} file(s) won't sync (${status.oversizedAppFilesSummary ?? "see details"}) — use App Files`,
         120,
       ),
     });

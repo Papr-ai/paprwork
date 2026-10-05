@@ -668,7 +668,13 @@ export async function resolveFileUrl(
   const row = await getFile(db, id);
   if (!row) throw Object.assign(new Error(`File ${id} not found`), { status: 404 });
 
-  const location = resolveLocation(row);
+  // local_path is a path on the machine that uploaded the file. app_files rows
+  // sync to teammates through the shared DB, so on any other desktop that path
+  // does not exist — fall through to the cloud copy instead of a dead path.
+  const { existsSync } = await import("node:fs");
+  const usable =
+    row.local_path && !existsSync(row.local_path) ? { ...row, local_path: null } : row;
+  const location = resolveLocation(usable);
   if (location.kind === "cloud") {
     const { url } = await createReadUrl(row.app_id, row.object_key, {
       download: options.download,

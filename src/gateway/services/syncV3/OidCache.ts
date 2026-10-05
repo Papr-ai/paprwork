@@ -92,6 +92,27 @@ export async function applyAckedBlobOids(
   });
 }
 
+/** Forget paths the cloud no longer has (a delete op was acked). */
+export async function removeCachedPaths(
+  appId: string,
+  repoRelativePaths: readonly string[],
+): Promise<void> {
+  if (repoRelativePaths.length === 0) return;
+  return mutateOidCache(async () => {
+    const cache = await readOidCache();
+    const appCache = cache.apps[appId];
+    if (!appCache) return;
+    let changed = false;
+    for (const repoPath of repoRelativePaths) {
+      if (repoPath in appCache) {
+        delete appCache[repoPath];
+        changed = true;
+      }
+    }
+    if (changed) await writeOidCache(cache);
+  });
+}
+
 export async function invalidateCachedPath(
   appId: string,
   repoRelativePath: string,

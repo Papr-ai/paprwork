@@ -2,7 +2,11 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 
 const acked: Array<{ path: string; blobOid: string }> = [];
 const invalidated: string[] = [];
+const forgotten: string[] = [];
 vi.mock("../src/gateway/services/syncV3/OidCache.js", () => ({
+  removeCachedPaths: vi.fn(async (_a: string, paths: string[]) => {
+    forgotten.push(...paths);
+  }),
   applyAckedBlobOids: vi.fn(async (_a: string, files: Array<{ path: string; blobOid: string }>) => {
     acked.push(...files);
   }),
@@ -67,6 +71,31 @@ describe("postAppOps 409 where cloud already has our bytes", () => {
     expect(calls[1].files.map((f: any) => f.path)).toEqual(["index.html"]);
     expect(acked).toContainEqual({ path: "backend/bundle.json", blobOid: sameOid });
     expect(invalidated).toEqual([]); // not recorded as a conflict
+  });
+
+  it("a delete the cloud already applied is forgotten, not re-sent", async () => {
+    const calls: any[] = [];
+    forgotten.length = 0;
+    vi.stubGlobal("fetch", vi.fn(async (url: string, init: any) => {
+      // Nothing left to send, so the client asks for cloud HEAD instead.
+      if (!init?.body) return json(200, { commitSha: "c1", files: [] });
+      calls.push(JSON.parse(init.body));
+      return json(409, {
+        conflict: true,
+        artifacts: [{ path: "old.ts", expectedParentHash: "stale", actualBlobOid: null }],
+      });
+    }));
+
+    const ack = await postAppOps("app-1", {
+      files: [{ path: "old.ts", content: null, parentHash: "stale" }],
+      author: "a",
+      message: "m",
+      idempotencyKey: "k-del",
+    });
+
+    expect(calls).toHaveLength(1); // nothing left to send
+    expect(ack.files).toEqual([]);
+    expect(forgotten).toEqual(["old.ts"]);
   });
 
   it("still raises a real conflict when cloud holds different bytes", async () => {

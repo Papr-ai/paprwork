@@ -158,22 +158,42 @@ export function describeDuplicateError(message: string): string {
 export interface CodeChange {
   path: string;
   change: "added" | "edited" | "removed";
+  /** A removal held until the user confirms (more than 10 at once). */
+  needsConfirm?: boolean;
+}
+
+export interface CodeChangeSet {
+  changes: CodeChange[];
+  /** On the web, not on this computer, never synced from here. */
+  webOnly: string[];
 }
 
 /** Files Publish would send (app files, jobs, schema files). */
-export async function fetchLocalCodeChanges(appId: string): Promise<CodeChange[] | null> {
+export async function fetchLocalCodeChanges(appId: string): Promise<CodeChangeSet | null> {
   try {
     const res = await fetch(`${GATEWAY}/api/apps/${encodeURIComponent(appId)}/code-changes`);
     if (!res.ok) return null;
-    const body = (await res.json()) as { changes?: CodeChange[] };
-    return body.changes ?? [];
+    const body = (await res.json()) as { changes?: CodeChange[]; webOnly?: string[] };
+    return { changes: body.changes ?? [], webOnly: body.webOnly ?? [] };
   } catch {
     return null;
   }
 }
 
+/** Confirm removing these files from the web; the next Publish deletes them. */
+export async function confirmWebDeletes(appId: string, paths: string[]): Promise<string[]> {
+  const res = await fetch(`${GATEWAY}/api/apps/${encodeURIComponent(appId)}/confirm-web-deletes`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ paths }),
+  });
+  if (!res.ok) throw new Error(`Couldn't confirm removal (${res.status})`);
+  const body = (await res.json()) as { approved?: string[] };
+  return body.approved ?? [];
+}
+
 export interface OwnUpdatePreview {
-  incoming: Array<{ path: string; change: "added" | "edited"; merged?: boolean; conflict?: boolean }>;
+  incoming: Array<{ path: string; change: "added" | "edited" | "removed"; merged?: boolean; conflict?: boolean }>;
   conflictFiles: string[];
 }
 

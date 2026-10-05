@@ -12,6 +12,9 @@ const EXCLUDED_PREFIXES = ["dist/", "__papr__/"];
 const EXCLUDED_FILES = new Set([
   "backend/bundle.json",
   "metadata.json",
+  // Fully generated from data-sources.json (AppService.ensureAppDbTs) and
+  // rebuilt after every pull / link, so it is never an edit and never shipped.
+  "db.ts",
 ]);
 
 export function isProposalExcludedAppPath(relativePath: string): boolean {

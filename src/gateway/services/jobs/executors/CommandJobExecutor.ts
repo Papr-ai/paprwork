@@ -1,4 +1,5 @@
 import { runSetupCommand } from "../../../../core/utils/runSetupCommand.js";
+import { substituteAppIdPlaceholder } from "../appIdPlaceholder.js";
 import { spawn } from "child_process";
 import { existsSync } from "fs";
 import path from "path";
@@ -35,8 +36,11 @@ export class CommandJobExecutor implements IJobExecutor {
       throw new Error("CommandJobExecutor cannot execute agent jobs");
     }
 
-    const command =
+    const rawCommand =
       params.job.command || params.defaultCommandByType[params.job.type];
+    const command = rawCommand
+      ? substituteAppIdPlaceholder(rawCommand, params.job.appIds)
+      : rawCommand;
     if (!command) {
       throw new Error(`Missing command for job type: ${params.job.type}`);
     }

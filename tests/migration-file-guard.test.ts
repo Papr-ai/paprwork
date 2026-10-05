@@ -47,4 +47,9 @@ describe("migration file guard (agent write_file / edit_file / bash)", () => {
     expect(bashMigrationWriteBlockReason(`ls data/databases/b/migrations/`)).toBeNull();
     expect(bashMigrationWriteBlockReason(`cat data/databases/b/migrations/0001_init.sql`)).toBeNull();
   });
+
+  it("blocks the legacy app-folder shadow copy so a second migration folder cannot regrow", () => {
+    const p = path.join(home, "apps", "app-1", "data", "databases", "billing", "migrations", "0026_x.sql");
+    expect(migrationFileBlockReason(p)).toContain("papr_db_create_migration");
+  });
 });

@@ -278,3 +278,23 @@ describe("publish visibility", () => {
     expect(isPublishable(row({ visibility: "private" }))).toBe(false);
   });
 });
+
+describe("resolveFileUrl on a teammate's desktop", () => {
+  it("ignores a local_path that only exists on the uploader's machine", async () => {
+    vi.resetModules();
+    vi.doMock("../src/gateway/services/appFiles/appFilesClient.js", async (orig) => ({
+      ...(await orig<object>()),
+      createReadUrl: vi.fn(async () => ({ url: "https://signed.example/v.mp4", expiresInSeconds: 600 })),
+    }));
+    const { resolveFileUrl } = await import("../src/gateway/services/appFiles/AppFilesService.js");
+    const row = {
+      id: "f1", app_id: "a1", object_key: "namespaces/n/apps/a1/files/x", file_name: "v.mp4",
+      local_path: "/Users/someone-else/Movies/v.mp4", upload_state: "verified", scope: "app", visibility: "inherit",
+    };
+    const db = { all: async () => [row], get: async () => row, run: async () => undefined } as never;
+    const res = await resolveFileUrl(db, "f1");
+    expect(res.location.kind).toBe("cloud");
+    expect(res.url).toBe("https://signed.example/v.mp4");
+    vi.doUnmock("../src/gateway/services/appFiles/appFilesClient.js");
+  });
+});

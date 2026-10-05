@@ -289,14 +289,14 @@ describe("WebSyncPopover", () => {
           summaryLine: "5 of 5 jobs on the web",
           oversizedAppFilesCount: 1,
           oversizedAppFilesMessage:
-            "1 file(s) in this app will not sync to the web:\n  • apps/9e70c06b/data.db (never tracked by git — use App Files)",
+            "1 file(s) in this app will not sync to the web:\n  • apps/9e70c06b/demo.mov (media/archive files are not synced to git)",
         })}
       />,
     );
 
     expect(screen.getByRole("button", { name: /ask agent/i })).toBeTruthy();
     fireEvent.click(screen.getByRole("button", { name: /ask agent/i }));
-    expect(openedMessage).toContain("data.db");
+    expect(openedMessage).toContain("demo.mov");
     expect(openedMessage).toContain(baseProps.appId);
 
     window.removeEventListener("papr-chat-open", listener);

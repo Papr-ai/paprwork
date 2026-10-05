@@ -7,6 +7,7 @@ import type { JobType } from "../types.js";
 import type { Provider } from "../../../../core/types/agents.js";
 import { getAgentService } from "../../AgentService.js";
 import { getJobsService } from "../../JobsService.js";
+import { substituteAppIdPlaceholder } from "../appIdPlaceholder.js";
 import { v4 as uuidv4 } from "uuid";
 import { writeRunMemory } from "../../PaprMemoryWritebackService.js";
 import {
@@ -166,7 +167,12 @@ export class AgentJobExecutor implements IJobExecutor {
 
     const envBlock = await this.buildEnvironmentBlock(params);
 
-    let taskBody = params.job.delegationTask ?? prompt;
+    // {{papr.app_id}} is filled per run, so the stored text is identical in every copy.
+    prompt = substituteAppIdPlaceholder(prompt, params.job.appIds);
+    let taskBody = substituteAppIdPlaceholder(
+      params.job.delegationTask ?? prompt,
+      params.job.appIds,
+    );
     if (params.runtimeParams?.prompt?.trim()) {
       taskBody = params.runtimeParams.prompt.trim();
     }

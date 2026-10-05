@@ -59,7 +59,7 @@ export const createDatabaseTool = createTool({
   id: "create_database",
   description:
     "Create an independent SQLite database (registry entry + local file). " +
-    "Schema: write_file on data/databases/{slug}/migrations/000N_….sql — applied on job run + Turso sync. " +
+    "Schema: papr_db_create_migration({ dbId, name, sql }) — names, writes and applies the migration. Never write_file/bash into migrations/ (blocked; applied migrations are immutable). " +
     "Every synced table MUST have a PRIMARY KEY (INTEGER or TEXT) — required for cloud sync and row versioning. " +
     "Next: attach_database({ appId, dbId, alias }) so the mini-app can read/write via /api/db/* with sourceId. " +
     "Jobs that fill the DB: create_job({ writeDbIds: [dbId] }). " +

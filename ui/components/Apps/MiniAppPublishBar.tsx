@@ -110,7 +110,12 @@ import { PreviewUrlRow } from "./PreviewUrlRow";
 import { PublishBarErrorNotice } from "./PublishBarErrorNotice";
 import { SyncStatusPanel, type ConflictChoice } from "./SyncStatusPanel";
 import { buildSyncPanel, type PanelAction, type PanelTone, type UpdatePreview } from "../../utils/syncPanelModel";
-import { fetchLocalCodeChanges, previewOwnUpdate, type CodeChange } from "../../utils/cloudTrackSyncApi";
+import {
+  confirmWebDeletes,
+  fetchLocalCodeChanges,
+  previewOwnUpdate,
+  type CodeChangeSet,
+} from "../../utils/cloudTrackSyncApi";
 import { buildMergeAfterUpdateAgentPrompt, buildMergeAllAgentPrompt } from "../../utils/openCloudSyncAgentChat";
 import "./MiniAppPublishBar.css";
 import "./AppWorkspaceMenu.css";
@@ -1167,7 +1172,8 @@ export function MiniAppPublishBar({
   };
 
   // v7 status panel: what differs, loaded when the panel opens.
-  const [panelCodeChanges, setPanelCodeChanges] = useState<CodeChange[] | null>(null);
+  const [panelCodeChanges, setPanelCodeChanges] = useState<CodeChangeSet | null>(null);
+  const [panelChangesTick, setPanelChangesTick] = useState(0);
   const [panelUpdatePreview, setPanelUpdatePreview] = useState<UpdatePreview | null>(null);
   const ownUpdateAvailable = !isTrackCollaborator && webSyncStatus?.gitUpdatesAvailable === true;
   const updateAvailable = webSyncPublisherUpdatesAvailable || ownUpdateAvailable ||
@@ -1176,6 +1182,7 @@ export function MiniAppPublishBar({
     if (!webSyncPopoverOpen) return;
     let cancelled = false;
     void fetchLocalCodeChanges(appId).then((c) => !cancelled && setPanelCodeChanges(c));
+    void panelChangesTick;
     if (updateAvailable) {
       const load = isTrackCollaborator
         ? pullTrackUpstream(appId, { dryRun: true }).then((r) => ({
@@ -1190,7 +1197,7 @@ export function MiniAppPublishBar({
     return () => {
       cancelled = true;
     };
-  }, [appId, webSyncPopoverOpen, updateAvailable, isTrackCollaborator, webSyncLastCheckedAt, collabEditsTick]);
+  }, [appId, webSyncPopoverOpen, updateAvailable, isTrackCollaborator, webSyncLastCheckedAt, collabEditsTick, panelChangesTick]);
 
   const handlePublishStatusChipClick = () => {
     if (cloudPublishFailed) {
@@ -1552,7 +1559,11 @@ export function MiniAppPublishBar({
     status: webSyncStatus,
     chip: { label: publishBarChip.label, tone: toPanelTone(String(publishBarChip.tone ?? "idle")) },
     codeDestination: onTeamData ? "propose" : "publish",
-    codeChanges: panelCodeChanges,
+    codeChanges: panelCodeChanges
+      ? panelCodeChanges.changes.filter((c) => !c.needsConfirm)
+      : null,
+    heldDeletes: panelCodeChanges?.changes.filter((c) => c.needsConfirm).map((c) => c.path),
+    webOnly: panelCodeChanges?.webOnly,
     update: updateAvailable
       ? {
           source: isTrackCollaborator ? cloudLineage?.sourceSlug ?? "the original" : "the web",
@@ -1566,8 +1577,50 @@ export function MiniAppPublishBar({
     live: cloud.live || onTeamData,
   });
 
+  /** Two separate confirmations before anything leaves the web in bulk. */
+  const confirmRemoval = (paths: string[], what: string): boolean => {
+    const sample = paths.slice(0, 8).join("\n") + (paths.length > 8 ? `\n…and ${paths.length - 8} more` : "");
+    if (!confirm(`${what}\n\n${sample}`)) return false;
+    return confirm(`Are you sure? ${paths.length} file(s) will be removed. This can't be undone from Paprwork.`);
+  };
+
+  const approveWebRemoval = async (paths: string[], what: string) => {
+    if (paths.length === 0 || !confirmRemoval(paths, what)) return;
+    try {
+      await confirmWebDeletes(appId, paths);
+      setPanelChangesTick((n) => n + 1);
+      await guardedWebSyncPushNow();
+    } catch (err) {
+      cloud.reportError((err as Error).message);
+    }
+  };
+
+  /** Get updates; an update that removes more than 10 files asks twice first. */
+  const getOwnUpdates = async (): Promise<boolean> => {
+    const removing = (panelUpdatePreview?.incoming ?? []).filter((i) => i.change === "removed" && !i.conflict);
+    if (removing.length > 10) {
+      if (!confirmRemoval(removing.map((i) => i.path), `This update removes ${removing.length} files from this computer (deleted on the web).`)) {
+        return false;
+      }
+      return webSyncPullUpdates(undefined, undefined, true);
+    }
+    return webSyncPullUpdates();
+  };
+
   const runPanelAction = (action: PanelAction) => {
     switch (action) {
+      case "confirm_deletes":
+        void approveWebRemoval(
+          panelCodeChanges?.changes.filter((c) => c.needsConfirm).map((c) => c.path) ?? [],
+          "You deleted these files on this computer. Remove them from the web too?",
+        );
+        return;
+      case "remove_web_only":
+        void approveWebRemoval(
+          panelCodeChanges?.webOnly ?? [],
+          "These files are on the web but not on this computer. Remove them from the web?",
+        );
+        return;
       case "publish":
         void handleWebSyncPushOrPublish();
         return;
@@ -1579,7 +1632,7 @@ export function MiniAppPublishBar({
         openPropose();
         return;
       case "get_updates":
-        void (isTrackCollaborator ? handleUpstreamPull() : webSyncPullUpdates());
+        void (isTrackCollaborator ? handleUpstreamPull() : getOwnUpdates());
         return;
       case "apply_update":
         void applyPanelUpdate({});

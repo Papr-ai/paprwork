@@ -14,7 +14,12 @@ import {
   AppRepoOpsSuccessResponseSchema,
 } from "../../../core/types/appRepoWriterOps.js";
 import { getPaprApiKey } from "../../utils/keyResolver.js";
-import { applyAckedBlobOids, seedOidCacheFromHead } from "./OidCache.js";
+import {
+  applyAckedBlobOids,
+  removeCachedPaths,
+  seedOidCacheFromHead,
+} from "./OidCache.js";
+import { updateSyncManifest } from "./SyncManifest.js";
 import { getAppRepoWriterBaseUrl, isLocalAppRepoWriter } from "./writerConfig.js";
 import { incrementSyncV3Metric } from "./syncV3Metrics.js";
 import { invalidateWriterConflictPaths } from "./writerConflict.js";
@@ -175,6 +180,15 @@ export async function postAppOps(
 
   incrementSyncV3Metric("v3_op_count");
   await applyAckedBlobOids(appId, parsed.data.files);
+  // Acks list written blobs only; a deleted path has none, so drop it here or
+  // the status panel keeps reporting it as removed.
+  const deleted = body.files.filter((f) => f.content === null).map((f) => f.path);
+  await removeCachedPaths(appId, deleted);
+  // Both sides now hold exactly these bytes (or neither has the file).
+  await updateSyncManifest(appId, {
+    add: parsed.data.files.map((f) => ({ path: f.path, oid: f.blobOid })),
+    remove: deleted,
+  });
   const { writeAppRepoCommitCursor } = await import("./appRepoCommittedFanout.js");
   await writeAppRepoCommitCursor(appId, parsed.data.commitSha);
   const { rememberOwnAppCommit } = await import("./appRepoPendingUpdate.js");
@@ -224,6 +238,14 @@ async function settleAlreadyAppliedConflicts(
     `[AppOps] ${appId}: ${settledPaths.size} "conflict" path(s) already match cloud HEAD — adopting cloud OIDs`,
   );
   await applyAckedBlobOids(appId, settledFiles);
+  const settledDeletes = body.files
+    .filter((f) => f.content === null && settledPaths.has(f.path))
+    .map((f) => f.path);
+  await removeCachedPaths(appId, settledDeletes);
+  await updateSyncManifest(appId, {
+    add: settledFiles.map((f) => ({ path: f.path, oid: f.blobOid })),
+    remove: settledDeletes,
+  });
   const remaining = body.files.filter((f) => !settledPaths.has(f.path));
   if (remaining.length > 0) {
     const ack = await postAppOps(appId, {

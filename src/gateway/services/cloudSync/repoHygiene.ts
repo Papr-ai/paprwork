@@ -39,6 +39,8 @@ export const NEVER_TRACK_PATHSPECS = [
   "*.db-wal",
   "*.db-shm",
   "*.db-journal",
+  "*.db-changes",
+  "*.db-info",
   "*.sqlite",
   "*.sqlite3",
   "*.bak",

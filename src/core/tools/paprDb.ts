@@ -224,6 +224,60 @@ export const paprDbApplyMigrationCloudTool = createTool({
   },
 });
 
+export const paprDbRestoreMigrationTool = createTool({
+  id: "papr_db_restore_migration",
+  description:
+    "Put back a migration FILE that is recorded as applied but missing on disk (e.g. 0026_interviews exists in the " +
+    "cloud ledger but not in migrations/). Applied migrations are read-only, so never recreate one with write_file — " +
+    "use this. Pass migrationId plus either fromPath (an old app-folder copy) or sql (the owner's copy). The system " +
+    "checks the ledger lists it, the file is absent, and its tables/columns exist in the live schema, then writes it " +
+    "and records provenance in restored-migrations.json so a later proposal labels it 'restored', not 'new'. " +
+    "Call with list: true to see which applied migrations have no file.",
+  inputSchema: z.object({
+    dbId: z.string().min(1),
+    migrationId: z.string().optional().describe("e.g. 0026_interviews (no .sql)"),
+    fromPath: z.string().optional(),
+    sql: z.string().optional(),
+    source: z.string().optional().describe("Provenance label, e.g. owner-repo, app-folder-copy"),
+    list: z.boolean().optional().describe("Only list applied migrations that have no file"),
+  }),
+  execute: async (input) => {
+    const args = unwrapContext(input);
+    const svc = await import("../../gateway/services/tursoReplica/PaprDbService.js");
+    if (args.list || !args.migrationId) {
+      return { success: true, data: await svc.paprDbMissingMigrationFiles({ dbId: args.dbId }) };
+    }
+    const data = await svc.paprDbRestoreMigration({
+      dbId: args.dbId,
+      migrationId: args.migrationId,
+      fromPath: args.fromPath,
+      sql: args.sql,
+      source: args.source,
+    });
+    return { success: true, data };
+  },
+});
+
+export const paprDbConsolidateMigrationsTool = createTool({
+  id: "papr_db_consolidate_migrations",
+  description:
+    "One migrations folder per database. Collapses the legacy copy under apps/{appId}/data/databases/{slug}/migrations " +
+    "into the real data/databases/{slug}/migrations. Identical files are removed; applied files the real folder lacks are " +
+    "moved in (they never re-run); anything unapplied, different, or a .backup/.disabled file goes to _quarantine/ — " +
+    "never deleted, never run. Defaults to dryRun: true (report only); pass dryRun: false to apply.",
+  inputSchema: z.object({
+    appId: z.string().min(1),
+    dryRun: z.boolean().optional(),
+  }),
+  execute: async (input) => {
+    const args = unwrapContext(input);
+    const { paprDbConsolidateMigrationFolders } = await import(
+      "../../gateway/services/tursoReplica/PaprDbService.js"
+    );
+    return { success: true, data: await paprDbConsolidateMigrationFolders(args) };
+  },
+});
+
 export const paprDbMigrationParityTool = createTool({
   id: "papr_db_migration_parity",
   description:
@@ -328,6 +382,8 @@ export const paprDbTools = [
   paprDbApplyMigrationTool,
   paprDbApplyMigrationReplicaTool,
   paprDbApplyMigrationCloudTool,
+  paprDbRestoreMigrationTool,
+  paprDbConsolidateMigrationsTool,
   paprDbMigrationParityTool,
   paprDbReconcileSyncTool,
   repairCloudSyncTool,

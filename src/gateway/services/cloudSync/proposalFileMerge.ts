@@ -79,8 +79,10 @@ export function dataSourcesForProposal(baseRaw: string | undefined, localRaw: st
   if (!local) return null;
   const base = parseSources(baseRaw) ?? { sources: [], extra: {} };
   const known = new Set(base.sources.map(sourceKey));
+  // Job databases are job scratch on the contributor's machine, never shared
+  // app data (registry databases carry a dbId; job scratch only a jobId).
   const added = local.sources
-    .filter((s) => !known.has(sourceKey(s)))
+    .filter((s) => !known.has(sourceKey(s)) && !(s.jobId && !s.dbId))
     .map((s) => ({ ...s, dbPath: "" }));
   if (added.length === 0) return null;
   return JSON.stringify({ ...base.extra, sources: [...base.sources, ...added] }, null, 2);

@@ -759,6 +759,168 @@ export async function paprDbApplyMigrationCloud(options: {
   return result;
 }
 
+/**
+ * Put back a migration file that the ledger says was applied but is missing on
+ * disk. Applied migrations are read-only, so this is the only sanctioned way:
+ * ledger must list it, file must be absent, and the SQL must match the live
+ * schema. Provenance goes to restored-migrations.json for proposal time.
+ */
+export async function paprDbRestoreMigration(options: {
+  dbId: string;
+  migrationId: string;
+  /** Local file to copy from (e.g. an old app-folder copy). */
+  fromPath?: string;
+  /** Or the SQL itself (e.g. read from the owner's repo). */
+  sql?: string;
+  /** Label for provenance, e.g. "owner-repo" or "app-folder-copy". */
+  source?: string;
+}): Promise<{
+  restored: boolean;
+  migrationId: string;
+  path: string;
+  sha256: string;
+  checked: string[];
+}> {
+  await initializeDatabaseRegistry();
+  const source = resolveSource({ dbId: options.dbId });
+  const migrationRoot = resolveMigrationRootFromDbPath(source.dbPath);
+  if (!migrationRoot) {
+    throw new Error(`No migrations/ folder for database ${options.dbId}`);
+  }
+  const id = options.migrationId.replace(/\.sql$/i, "");
+  const R = await import("../jobs/restoredMigrations.js");
+  const { readLocalReplicaMigrationIds } = await import(
+    "./tursoReplicaMigrationConflict.js"
+  );
+  const { queryLinkedDbViaTursoReplica } = await import("./tursoReplicaRouting.js");
+
+  const applied = [...(await readLocalReplicaMigrationIds(source))].map((x) =>
+    String(x).replace(/\.sql$/i, ""),
+  );
+  if (!applied.includes(id)) {
+    throw new Error(
+      `${id} is not recorded as applied on this database — nothing to restore. ` +
+        `For a new schema change use papr_db_create_migration.`,
+    );
+  }
+  const fullPath = path.join(migrationRoot, "migrations", `${id}.sql`);
+  if (await fsPromises.access(fullPath).then(() => true, () => false)) {
+    throw new Error(`${id}.sql already exists — applied migrations are never overwritten.`);
+  }
+  let sql = options.sql;
+  if (sql === undefined && options.fromPath) {
+    sql = await fsPromises.readFile(options.fromPath, "utf8");
+  }
+  if (!sql?.trim()) {
+    throw new Error("Provide sql or fromPath (owner repo copy or old app-folder copy).");
+  }
+
+  const rows = await queryLinkedDbViaTursoReplica(
+    source,
+    "SELECT m.name AS t, p.name AS c FROM sqlite_master m, pragma_table_info(m.name) p WHERE m.type = 'table'",
+    [],
+    { pullBeforeRead: false },
+  );
+  const live = new Map<string, Set<string>>();
+  for (const row of rows.rows) {
+    const t = String(row.t).toLowerCase();
+    if (!live.has(t)) live.set(t, new Set());
+    live.get(t)!.add(String(row.c).toLowerCase());
+  }
+  const check = R.checkSqlAgainstSchema(sql, live);
+  if (check.missing.length > 0) {
+    throw new Error(
+      `This SQL does not match the live schema (missing: ${check.missing.join(", ")}). ` +
+        `It is not the file that was applied — not restoring.`,
+    );
+  }
+  if (check.unverifiable && !options.source) {
+    throw new Error(
+      "This migration creates no tables/columns that can be verified; pass source (e.g. owner-repo) to record where it came from.",
+    );
+  }
+  const written = await R.writeRestoredMigration({
+    migrationRoot,
+    migrationId: id,
+    sql,
+    source: options.source ?? (options.fromPath ? "local-copy" : "provided-sql"),
+  });
+  return {
+    restored: true,
+    migrationId: id,
+    path: written.fullPath,
+    sha256: written.record.sha256,
+    checked: R.expectedSchemaFromSql(sql).map((e) => (e.column ? `${e.table}.${e.column}` : e.table)),
+  };
+}
+
+/**
+ * Collapse legacy apps/{appId}/data/databases/{slug}/migrations copies into the
+ * real registry folder (see consolidateMigrationFolders.ts). Defaults to a dry run.
+ */
+export async function paprDbConsolidateMigrationFolders(options: {
+  appId: string;
+  dryRun?: boolean;
+}): Promise<{
+  dryRun: boolean;
+  results: Array<{ slug: string; dir: string; actions: unknown[] }>;
+}> {
+  await initializeDatabaseRegistry();
+  const dryRun = options.dryRun !== false;
+  const { getPaprAppsRoot } = await import("../../../core/utils/paprRoot.js");
+  const { registrySlugFromLocalPath } = await import("../DatabaseRegistryService.js");
+  const { consolidateShadowDir } = await import("../jobs/consolidateMigrationFolders.js");
+  const { readLocalReplicaMigrationIds } = await import("./tursoReplicaMigrationConflict.js");
+  const registry = getDatabaseRegistryService();
+  const results: Array<{ slug: string; dir: string; actions: unknown[] }> = [];
+
+  for (const record of registry.listBySchemaOwnerApp(options.appId)) {
+    const slug = registrySlugFromLocalPath(record.localPath);
+    const realRoot = resolveMigrationRootFromDbPath(record.localPath);
+    if (!slug || !realRoot) continue;
+    const shadowDir = path.join(getPaprAppsRoot(), options.appId, "data", "databases", slug, "migrations");
+    const applied = new Set(
+      (await readLocalReplicaMigrationIds(resolveSource({ dbId: record.dbId }))).map((id) =>
+        String(id).replace(/\.sql$/i, ""),
+      ),
+    );
+    const res = await consolidateShadowDir({
+      shadowDir,
+      realDir: path.join(realRoot, "migrations"),
+      appliedIds: applied,
+      dryRun,
+    });
+    if (res.actions.length > 0) results.push({ slug, dir: shadowDir, actions: res.actions });
+  }
+  return { dryRun, results };
+}
+
+/** Applied-in-ledger migrations whose file is missing (internal rows excluded). */
+export async function paprDbMissingMigrationFiles(options: {
+  dbId: string;
+}): Promise<{ dbId: string; missing: string[] }> {
+  await initializeDatabaseRegistry();
+  const source = resolveSource({ dbId: options.dbId });
+  const migrationRoot = resolveMigrationRootFromDbPath(source.dbPath);
+  if (!migrationRoot) {
+    throw new Error(`No migrations/ folder for database ${options.dbId}`);
+  }
+  const R = await import("../jobs/restoredMigrations.js");
+  const { readLocalReplicaMigrationIds } = await import(
+    "./tursoReplicaMigrationConflict.js"
+  );
+  let files: string[] = [];
+  try {
+    files = (await fsPromises.readdir(path.join(migrationRoot, "migrations"))).filter((f) =>
+      f.endsWith(".sql"),
+    );
+  } catch {
+    /* no folder yet */
+  }
+  const ids = [...(await readLocalReplicaMigrationIds(source))].map(String);
+  return { dbId: options.dbId, missing: R.appliedWithoutFile(ids, files) };
+}
+
 export async function paprDbMigrationParity(options: {
   dbId: string;
 }): Promise<Awaited<ReturnType<typeof buildMigrationParityReport>>> {

@@ -23,7 +23,11 @@ export function registryMigrationSlugForPath(resolvedPath: string): string | nul
     return null;
   }
   const rel = path.relative(root, resolved).split(path.sep).join("/");
-  if (!/^(data\/databases|apps\/[^/]+\/databases)\/[^/]+\/migrations\/[^/]+$/.test(rel)) {
+  // apps/{id}/data/databases/... is the legacy shadow copy older installs wrote
+  // into; it is blocked too so a second migration folder can never grow back.
+  if (
+    !/^(data\/databases|apps\/[^/]+\/databases|apps\/[^/]+\/data\/databases)\/[^/]+\/migrations\/[^/]+$/.test(rel)
+  ) {
     return null;
   }
   return MIGRATION_SEGMENT.exec(resolved)?.[1] ?? null;

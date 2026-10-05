@@ -158,6 +158,7 @@ async function writeLineageFile(
 export const METADATA_PROPOSAL_KEY = "metadata.json#fields";
 
 const PLATFORM_MANAGED_FILES = new Set([
+  "db.ts",
   "backend/bundle.json",
   "papr-cloud-dependencies.json",
   "linked-databases.json",
@@ -555,6 +556,14 @@ export class CloudAppTrackSyncService {
           incoming,
           lastSyncedAt: lineage.lastSyncedAt ?? new Date().toISOString(),
         };
+      }
+
+      // db.ts is generated from data-sources.json (just merged above) — rebuild
+      // it rather than ever taking the publisher's or keeping a stale local one.
+      try {
+        await appService.ensureAppDbTs(appId);
+      } catch {
+        /* regenerated on the next link / pull */
       }
 
       const nextSnapshot: Record<string, string> = { ...snapshot };

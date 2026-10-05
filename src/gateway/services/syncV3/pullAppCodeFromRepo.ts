@@ -26,6 +26,8 @@ import { computeBlobOidForContent } from "./computeParentHash.js";
 import { mergeFileContents, runGit } from "../cloudSync/threeWayMerge.js";
 import { ephemeralGitEnv } from "../../utils/ephemeralGitEnv.js";
 import { fetchAppRepoHead } from "./AppOpsClient.js";
+import { MASS_DELETE_THRESHOLD, readSyncManifest, updateSyncManifest } from "./SyncManifest.js";
+import { localPathForRepoPath, planRemoteDeletes } from "./syncDeletes.js";
 import { writeAppRepoCommitCursor, readAppRepoCommitCursors } from "./appRepoCommittedFanout.js";
 import {
   isAppCodeRecentlyVerified,
@@ -35,6 +37,7 @@ import { ensureAppRepoRecord, fetchAppRepoReadCredentials, getAppRepoRecord } fr
 import {
   applyAckedBlobOids,
   readOidCache,
+  removeCachedPaths,
 } from "./OidCache.js";
 import {
   applyRegistryMigrationsAfterPull,
@@ -58,6 +61,12 @@ export interface PullAppCodeFromRepoResult {
   keptLocalFiles?: string[];
   /** True when conflicts held the whole update back — nothing was written. */
   heldForConflicts?: boolean;
+  /** Files the update removes here (deleted on the web, unchanged here). */
+  deleteFiles?: string[];
+  /** Files actually removed. */
+  deletedFiles?: string[];
+  /** More than MASS_DELETE_THRESHOLD removals — held until the user confirms. */
+  heldForDeletes?: boolean;
   skipped?: boolean;
   reason?: string;
 }
@@ -77,7 +86,7 @@ export type PullFileResolution = "mine" | "theirs";
 
 export interface IncomingFileChange {
   path: string;
-  change: "added" | "edited";
+  change: "added" | "edited" | "removed";
   /** Combined with local edits automatically. */
   merged?: boolean;
   /** Overlaps a local edit — needs a choice. */
@@ -86,8 +95,19 @@ export interface IncomingFileChange {
 
 type PlannedFile =
   | { action: "skip"; filePath: string }
+  /** Deleted on the web, unchanged here since the last sync. */
+  | { action: "delete"; filePath: string }
   | { action: "merge"; filePath: string; content: string; isMigration: false }
-  | { action: "conflict"; filePath: string; content: string; isMigration: boolean }
+  | {
+      action: "conflict";
+      filePath: string;
+      content: string;
+      isMigration: boolean;
+      /** Deleted on the web, edited here. Theirs = delete; mine = keep (republished). */
+      remoteDeleted?: true;
+      /** Deleted here, edited on the web. Theirs = restore; mine = keep it deleted. */
+      localDeleted?: true;
+    }
   | { action: "write"; filePath: string; content: string; isMigration: boolean };
 
 async function collectTextFiles(rootDir: string): Promise<Map<string, string>> {
@@ -141,10 +161,29 @@ function toIncoming(plan: PlannedFile[], localFiles: Map<string, string>): Incom
     .filter((f) => f.action !== "skip")
     .map((f) => ({
       path: f.filePath,
-      change: localFiles.has(f.filePath) ? ("edited" as const) : ("added" as const),
+      change:
+        f.action === "delete" || (f.action === "conflict" && f.remoteDeleted)
+          ? ("removed" as const)
+          : localFiles.has(f.filePath)
+            ? ("edited" as const)
+            : ("added" as const),
       ...(f.action === "merge" ? { merged: true } : {}),
       ...(f.action === "conflict" ? { conflict: true } : {}),
     }));
+}
+
+/** Remove one synced file (app or job). Never a folder, never outside its root. */
+async function deleteLocalRepoFile(paprDir: string, appId: string, repoPath: string): Promise<boolean> {
+  if (repoPath.split("/").some((part) => part === ".." || part === "")) return false;
+  const full = localPathForRepoPath(paprDir, appId, repoPath);
+  try {
+    const stat = await fs.lstat(full);
+    if (!stat.isFile()) return false;
+    await fs.rm(full);
+    return true;
+  } catch {
+    return false;
+  }
 }
 
 /** Merge remote repo tree into local app dir using OID cache for conflict detection. */
@@ -160,6 +199,8 @@ export async function pullAppCodeFromRepo(
     fileResolutions?: Record<string, PullFileResolution>;
     /** Classify only: report what Get updates would do, write nothing. */
     dryRun?: boolean;
+    /** The user confirmed an update that removes more than MASS_DELETE_THRESHOLD files. */
+    confirmDeletes?: boolean;
   },
 ): Promise<PullAppCodeFromRepoResult> {
   const { PhaseTimer } = await import("../../utils/phaseTiming.js");
@@ -312,6 +353,10 @@ export async function pullAppCodeFromRepo(
 
     const oidCache = await readOidCache();
     const cachedPaths = oidCache.apps[trimmed] ?? {};
+    const paprDir = getPaprRoot();
+    const manifest = await readSyncManifest(trimmed);
+    const existsLocally = (repoPath: string) =>
+      fs.lstat(localPathForRepoPath(paprDir, trimmed, repoPath)).then(() => true, () => false);
 
     const appService = getAppService();
     const updatedFiles: string[] = [];
@@ -364,6 +409,24 @@ export async function pullAppCodeFromRepo(
         continue;
       }
 
+      // In the last sync, gone here now: this computer deleted it.
+      const baseOid = manifest.files.get(filePath);
+      if (localContent === undefined && baseOid && !(await existsLocally(filePath))) {
+        if (!remoteOid || remoteOid === baseOid) {
+          // Unchanged on the web: keep it deleted; the next publish removes it there.
+          plan.push({ action: "skip", filePath });
+        } else {
+          plan.push({
+            action: "conflict",
+            filePath,
+            content: upstreamContent,
+            isMigration: false,
+            localDeleted: true,
+          });
+        }
+        continue;
+      }
+
       const localUnchanged =
         localContent === undefined ||
         (lastSyncedOid !== null && localOid === lastSyncedOid);
@@ -387,6 +450,31 @@ export async function pullAppCodeFromRepo(
       plan.push({ action: "write", filePath, content: upstreamContent, isMigration: false });
     }
 
+    // Deleted on the web since our last sync. An empty HEAD listing is never
+    // read as "everything was deleted".
+    const remotePaths = new Set(head.files.map((file) => file.path));
+    const forgottenPaths: string[] = [];
+    if (head.files.length > 0) {
+      for (const rd of await planRemoteDeletes({ paprDir, appId: trimmed, manifest, remotePaths })) {
+        if (rd.action === "delete") {
+          plan.push({ action: "delete", filePath: rd.filePath });
+        } else if (rd.action === "delete_conflict") {
+          plan.push({
+            action: "conflict",
+            filePath: rd.filePath,
+            content: "",
+            isMigration: false,
+            remoteDeleted: true,
+          });
+        } else {
+          forgottenPaths.push(rd.filePath);
+        }
+      }
+    }
+    const plannedDeletes = plan.filter((f) => f.action === "delete").map((f) => f.filePath);
+    const deletesNeedConfirm =
+      plannedDeletes.length > MASS_DELETE_THRESHOLD && options.confirmDeletes !== true;
+
     const resolution = options.resolution ?? "hold";
     const fileResolutions = options.fileResolutions ?? {};
     const planned = plan.filter((f) => f.action === "conflict").map((f) => f.filePath);
@@ -400,6 +488,21 @@ export async function pullAppCodeFromRepo(
         conflictFiles: planned,
         mergedFiles: plannedMerged,
         incoming: toIncoming(plan, localFiles),
+        ...(plannedDeletes.length > 0 ? { deleteFiles: plannedDeletes } : {}),
+      };
+    }
+
+    // Removing many files at once waits for an explicit confirmation, and
+    // like a conflict it holds the WHOLE update.
+    if (deletesNeedConfirm) {
+      return {
+        ...empty,
+        commitSha: head.commitSha,
+        incoming: toIncoming(plan, localFiles),
+        deleteFiles: plannedDeletes,
+        heldForDeletes: true,
+        skipped: true,
+        reason: `This update removes ${plannedDeletes.length} files — confirm to apply it`,
       };
     }
 
@@ -420,6 +523,9 @@ export async function pullAppCodeFromRepo(
     // Phase 2 — apply.
     const keptLocalFiles: string[] = [];
     const mergedFiles: string[] = [];
+    const deletedFiles: string[] = [];
+    /** Kept deleted over a web edit: the next publish deletes the web's version. */
+    const keepDeletedAt: Array<{ path: string; oid: string }> = [];
     for (const item of plan) {
       if (item.action === "skip") {
         skippedFiles.push(item.filePath);
@@ -431,6 +537,19 @@ export async function pullAppCodeFromRepo(
       if (choice === "mine") {
         keptLocalFiles.push(item.filePath);
         skippedFiles.push(item.filePath);
+        const remoteOid = remoteOidByPath.get(item.filePath);
+        if (item.action === "conflict" && item.localDeleted && remoteOid) {
+          keepDeletedAt.push({ path: item.filePath, oid: remoteOid });
+        }
+        continue;
+      }
+      if (item.action === "delete" || (item.action === "conflict" && item.remoteDeleted)) {
+        if (await deleteLocalRepoFile(paprDir, trimmed, item.filePath)) {
+          deletedFiles.push(item.filePath);
+          updatedFiles.push(item.filePath);
+        } else {
+          skippedFiles.push(item.filePath);
+        }
         continue;
       }
 
@@ -507,6 +626,27 @@ export async function pullAppCodeFromRepo(
         trimmed,
         head.files.map((file) => ({ path: file.path, blobOid: file.blobOid })),
       );
+      if (head.files.length > 0) {
+        // Paths the web no longer has. A file kept over a web delete then has
+        // no cached OID, so the next publish sends it as new.
+        await removeCachedPaths(
+          trimmed,
+          Object.keys(cachedPaths).filter((p) => !remotePaths.has(p)),
+        );
+      }
+      // New merge base: whatever exists on both sides is at the web's version.
+      const agreed: Array<{ path: string; oid: string }> = [];
+      for (const file of head.files) {
+        if (await existsLocally(file.path)) agreed.push({ path: file.path, oid: file.blobOid });
+      }
+      await updateSyncManifest(trimmed, {
+        add: [...agreed, ...keepDeletedAt],
+        remove: head.files.length > 0
+          ? [...manifest.files.keys()].filter(
+              (p) => !remotePaths.has(p),
+            )
+          : [],
+      });
       const { revalidateAppDirty } = await import("./appDirtyState.js");
       await revalidateAppDirty(getPaprRoot(), trimmed);
     }
@@ -528,12 +668,25 @@ export async function pullAppCodeFromRepo(
       await writeAppRepoCommitCursor(trimmed, head.commitSha);
     }
 
+    // db.ts is generated from data-sources.json; rebuild it after every pull so
+    // links the publisher added (or a merged proposal brought) are reflected.
+    try {
+      await appService.ensureAppDbTs(trimmed);
+    } catch {
+      /* regenerated on the next link / pull */
+    }
+
     const hydratedFromAppTree = await hydrateAppFolderSchemaMigrationsToRegistry({
       appId: trimmed,
     });
     for (const registryRelativePath of hydratedFromAppTree.copied) {
       registryMigrationsCopied.push(registryRelativePath);
     }
+
+    if (deletedFiles.length > 0) {
+      console.log(`[PullAppCode] ${trimmed}: removed ${deletedFiles.length} file(s) deleted on the web`);
+    }
+    void forgottenPaths;
 
     return {
       appId: trimmed,
@@ -542,6 +695,7 @@ export async function pullAppCodeFromRepo(
       registryMigrationsCopied,
       conflictFiles,
       skippedFiles,
+      ...(deletedFiles.length > 0 ? { deletedFiles } : {}),
       ...(mergedFiles.length > 0 ? { mergedFiles } : {}),
       ...(keptLocalFiles.length > 0 ? { keptLocalFiles } : {}),
     };

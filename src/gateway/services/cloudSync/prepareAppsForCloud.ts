@@ -82,6 +82,30 @@ export async function prepareAppForCloudGitSync(
 
     await ensureAppRequirementsSyncedWithBackend(paprDir, appId);
 
+    // Agent-job instructions carry the app's own id as literal text. Convert
+    // exactly that id (nothing else) to {{papr.app_id}} so every copy runs with
+    // its own id and nothing has to be rewritten at install or proposal time.
+    try {
+      const { getJobsService } = await import("../JobsService.js");
+      const { portableAppIdInText } = await import("../jobs/appIdPlaceholder.js");
+      const { resolveAppDependentJobIds } = await import("./resolveAppDependentJobs.js");
+      const jobs = getJobsService();
+      for (const jobId of resolveAppDependentJobIds(paprDir, appId)) {
+        const job = await jobs.getJob(jobId);
+        if (!job?.command || !(job.appIds ?? []).includes(appId)) continue;
+        const portable = portableAppIdInText(job.command, appId);
+        if (portable.replaced > 0) {
+          await jobs.updateJob(jobId, { command: portable.text });
+          console.log(`[CloudSync] ${jobId}: ${portable.replaced} app id(s) -> {{papr.app_id}}`);
+        }
+      }
+    } catch (error) {
+      console.warn(
+        `[CloudSync] app-id placeholder skipped for ${appId}:`,
+        (error as Error).message.slice(0, 120),
+      );
+    }
+
     const { buildMiniApp } = await import("../../utils/miniAppBuild.js");
     const dist = await buildMiniApp(appDir);
     if (!dist.legacy && !dist.success) {

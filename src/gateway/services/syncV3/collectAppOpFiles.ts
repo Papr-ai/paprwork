@@ -26,9 +26,10 @@ import {
   type DatabasesRegistryFile,
   registrySlugFromLocalPath,
 } from "../DatabaseRegistryService.js";
-import { parseMonolithicJobJson } from "../jobs/jobRuntimeFields.js";
 import { computeBlobOidForContent } from "./computeParentHash.js";
 import { readOidCache } from "./OidCache.js";
+import { readSyncManifest, updateSyncManifest } from "./SyncManifest.js";
+import { planLocalDeletes, readJobConfigJson, type LocalDeletePlan } from "./syncDeletes.js";
 
 const SKIP_DIR_NAMES = new Set([
   "node_modules",
@@ -167,16 +168,10 @@ async function walkJobFiles(
   return results.sort((a, b) => a.repoPath.localeCompare(b.repoPath));
 }
 
-async function readJobConfigJson(fullPath: string): Promise<string> {
-  const raw = await fs.readFile(fullPath, "utf8");
-  const parsed = JSON.parse(raw) as Record<string, unknown>;
-  const { config } = parseMonolithicJobJson(parsed);
-  return `${JSON.stringify(config, null, 2)}\n`;
-}
-
 async function collectLinkedJobCandidates(
   paprDir: string,
   appId: string,
+  roots?: Set<string>,
 ): Promise<WalkCandidate[]> {
   const jobIds = resolveAppDependentJobIds(paprDir, appId);
   const candidates: WalkCandidate[] = [];
@@ -191,6 +186,7 @@ async function collectLinkedJobCandidates(
     } catch {
       continue;
     }
+    roots?.add(`jobs/${jobId}/`);
     candidates.push(...(await walkJobFiles(jobDir, jobId)));
   }
 
@@ -217,6 +213,7 @@ async function readSchemaOwnerRecords(
 async function collectSchemaOwnerMigrationCandidates(
   paprDir: string,
   appId: string,
+  roots?: Set<string>,
 ): Promise<WalkCandidate[]> {
   const owned = await readSchemaOwnerRecords(paprDir, appId);
   const candidates: WalkCandidate[] = [];
@@ -239,6 +236,7 @@ async function collectSchemaOwnerMigrationCandidates(
     } catch {
       continue;
     }
+    roots?.add(`databases/${slug}/migrations/`);
 
     for (const fileName of entries.sort()) {
       if (fileName.startsWith(".")) {
@@ -266,7 +264,7 @@ async function collectSchemaOwnerMigrationCandidates(
 
 type CandidateOutcome =
   | { kind: "op"; file: AppRepoOpFile; byteLength: number }
-  | { kind: "unchanged" }
+  | { kind: "unchanged"; oid?: string }
   | { kind: "rejected"; reason: string };
 
 async function candidateToOpFile(
@@ -308,7 +306,7 @@ async function candidateToOpFile(
   const currentOid = await computeBlobOidForContent(content);
   const cachedOid = cachedOids[candidate.repoPath] ?? null;
   if (cachedOid === currentOid) {
-    return { kind: "unchanged" };
+    return { kind: "unchanged", oid: currentOid };
   }
 
   return {
@@ -322,12 +320,58 @@ async function candidateToOpFile(
   };
 }
 
+interface AppWalk {
+  candidates: WalkCandidate[];
+  /** Every repo path the walk produced. */
+  present: Set<string>;
+  /** Folders the walk read (see isUnderScannedRoot). */
+  roots: Set<string>;
+}
+
+/** The one walk publish, the panel and delete detection all share. */
+async function walkAppForSync(paprDir: string, appId: string): Promise<AppWalk> {
+  const appDir = path.join(paprDir, "apps", appId);
+  const roots = new Set<string>();
+  const appPaths = await walkAppFiles(appDir);
+  if (appPaths.length > 0) roots.add("app");
+  const candidates: WalkCandidate[] = appPaths.map((repoPath) => ({
+    repoPath,
+    fullPath: path.join(appDir, repoPath),
+  }));
+  candidates.push(...(await collectLinkedJobCandidates(paprDir, appId, roots)));
+  candidates.push(...(await collectSchemaOwnerMigrationCandidates(paprDir, appId, roots)));
+  return { candidates, present: new Set(candidates.map((c) => c.repoPath)), roots };
+}
+
+async function planDeletesFor(
+  paprDir: string,
+  appId: string,
+  walk: AppWalk,
+  cachedOids: Readonly<Record<string, string>>,
+): Promise<LocalDeletePlan> {
+  const manifest = await readSyncManifest(appId);
+  const plan = await planLocalDeletes({
+    paprDir,
+    appId,
+    present: walk.present,
+    roots: walk.roots,
+    cachedOids,
+    manifest,
+  });
+  if (plan.alreadyGone.length > 0) {
+    await updateSyncManifest(appId, { remove: plan.alreadyGone });
+  }
+  return plan;
+}
+
 export interface CollectAppOpFilesResult {
   files: AppRepoOpFile[];
   rejected: Array<{ path: string; reason: string }>;
   skippedUnchanged: number;
   /** Changed files held back by the batch budget; sent on a later flush. */
   deferred: number;
+  /** Deletes over the threshold, waiting for the user's confirmation. */
+  heldDeletes: string[];
 }
 
 /**
@@ -338,18 +382,8 @@ export async function collectAppOpFiles(
   paprDir: string,
   appId: string,
 ): Promise<CollectAppOpFilesResult> {
-  const appDir = path.join(paprDir, "apps", appId);
-  const repoPaths = await walkAppFiles(appDir);
-
-  const candidates: WalkCandidate[] = repoPaths.map((repoPath) => ({
-    repoPath,
-    fullPath: path.join(appDir, repoPath),
-  }));
-
-  candidates.push(...(await collectLinkedJobCandidates(paprDir, appId)));
-  candidates.push(
-    ...(await collectSchemaOwnerMigrationCandidates(paprDir, appId)),
-  );
+  const walk = await walkAppForSync(paprDir, appId);
+  const { candidates } = walk;
 
   // Loaded once per flush. Reading it per file meant parsing the whole cache
   // several hundred times for one app.
@@ -360,6 +394,9 @@ export async function collectAppOpFiles(
   let skippedUnchanged = 0;
   let deferred = 0;
   let batchBytes = 0;
+  // Unchanged files are proof both sides hold the same bytes: they seed the
+  // manifest, so installs that predate it learn their baseline here.
+  const agreed: Array<{ path: string; oid: string }> = [];
 
   for (const candidate of candidates) {
     if (batchBytes >= MAX_OP_BATCH_CONTENT_BYTES) {
@@ -370,6 +407,7 @@ export async function collectAppOpFiles(
     const outcome = await candidateToOpFile(candidate, cachedOids);
     if (outcome.kind === "unchanged") {
       skippedUnchanged += 1;
+      if (outcome.oid) agreed.push({ path: candidate.repoPath, oid: outcome.oid });
       continue;
     }
     if (outcome.kind === "rejected") {
@@ -388,31 +426,65 @@ export async function collectAppOpFiles(
     );
   }
 
+  await updateSyncManifest(appId, { add: agreed });
+
+  // Deletes: files this computer synced before and has since removed. The
+  // parentHash is the version both sides agreed on, so the writer refuses the
+  // delete if someone changed the web copy in the meantime.
+  const deletePlan = await planDeletesFor(paprDir, appId, walk, cachedOids);
+  for (const d of deletePlan.deletes) {
+    opCandidates.push({ path: d.path, content: null, parentHash: d.parentHash });
+  }
+
   const { accepted, rejected } = filterAbusiveOpFiles(opCandidates);
   return {
     files: accepted,
     rejected: [...skipped, ...rejected],
     skippedUnchanged,
     deferred,
+    heldDeletes: deletePlan.held,
   };
+}
+
+export type UnsyncableKind = "oversized" | "untracked-media";
+
+export interface UnsyncableFile {
+  path: string;
+  sizeBytes: number;
+  reason: string;
+  kind: UnsyncableKind;
+}
+
+/**
+ * SQLite databases and their runtime sidecars. They are excluded from git on
+ * purpose (databases sync through the registry, not the app folder), so there
+ * is nothing for the user to act on and they are not reported.
+ */
+const DB_ARTIFACT = /\.(db|sqlite3?|db-wal|db-shm|db-journal|db-changes|db-info)$/i;
+
+export function isDbArtifactPath(repoPath: string): boolean {
+  return DB_ARTIFACT.test(repoPath);
 }
 
 /** Files in an app folder that exceed the git sync size limit (local only — not uploaded). */
 export async function listOversizedAppFiles(
   paprDir: string,
   appId: string,
-): Promise<Array<{ path: string; sizeBytes: number; reason: string }>> {
+): Promise<UnsyncableFile[]> {
   const appDir = path.join(paprDir, "apps", appId);
   return listOversizedFilesInAppDir(appDir);
 }
 
-/** Scan a mini-app directory for files that git sync will skip (oversized or never-track media). */
+/**
+ * Scan a mini-app directory for files the user may expect on the web that git
+ * sync will skip: files over the size limit, and media/archives that are never
+ * tracked. Database files and their sidecars are skipped silently.
+ */
 export async function listOversizedFilesInAppDir(
   appDir: string,
-): Promise<Array<{ path: string; sizeBytes: number; reason: string }>> {
+): Promise<UnsyncableFile[]> {
   const repoPaths = await walkAllAppFilesForReporting(appDir);
-  const unsyncable: Array<{ path: string; sizeBytes: number; reason: string }> =
-    [];
+  const unsyncable: UnsyncableFile[] = [];
 
   for (const repoPath of repoPaths) {
     const fullPath = path.join(appDir, repoPath);
@@ -421,12 +493,7 @@ export async function listOversizedFilesInAppDir(
       if (!stat.isFile()) {
         continue;
       }
-      if (isNeverTrackRepoPath(repoPath)) {
-        unsyncable.push({
-          path: repoPath,
-          sizeBytes: stat.size,
-          reason: "never tracked by git — use App Files",
-        });
+      if (isDbArtifactPath(repoPath)) {
         continue;
       }
       if (isTooLargeForGitSync(stat.size)) {
@@ -434,6 +501,16 @@ export async function listOversizedFilesInAppDir(
           path: repoPath,
           sizeBytes: stat.size,
           reason: `over ${formatGitSyncSizeLimitMb()}`,
+          kind: "oversized",
+        });
+        continue;
+      }
+      if (isNeverTrackRepoPath(repoPath)) {
+        unsyncable.push({
+          path: repoPath,
+          sizeBytes: stat.size,
+          reason: "media/archive files are not synced to git",
+          kind: "untracked-media",
         });
       }
     } catch {
@@ -488,7 +565,14 @@ export async function refreshOpParentHashes(
   for (const file of files) {
     const cachedOid = cachedOids[file.path] ?? null;
     const content = file.content;
-    if (content !== null) {
+    if (content === null) {
+      // A delete's parentHash is the agreed version from the manifest; the
+      // cache may already show someone else's newer web copy, and adopting
+      // that would delete their edit without a conflict.
+      refreshed.push(file);
+      continue;
+    }
+    {
       const oid = await computeBlobOidForContent(content);
       if (cachedOid === oid) {
         continue;
@@ -527,31 +611,29 @@ export interface LocalCodeChange {
   /** Repo-relative: app files at root, jobs/{id}/…, schema files under databases/. */
   path: string;
   change: "added" | "edited" | "removed";
+  /** A removal over the threshold, waiting for the user's confirmation. */
+  needsConfirm?: boolean;
+}
+
+export interface LocalCodeChanges {
+  changes: LocalCodeChange[];
+  /** On the web, not here, and never synced from here — removed only on request. */
+  webOnly: string[];
 }
 
 /**
  * What Publish would send, file by file — the status panel's "what changed"
- * list. Same walk and OID comparison as collectAppOpFiles, without the batch
- * budget or file content. Removed = an app file the web has that is gone here
- * (job and schema removals are not reported: the walk can't tell them from
- * files it skips on purpose).
+ * list. Same walk, OID comparison and delete plan as collectAppOpFiles,
+ * without the batch budget or file content.
  */
 export async function listLocalCodeChanges(
   paprDir: string,
   appId: string,
-): Promise<LocalCodeChange[]> {
-  const appDir = path.join(paprDir, "apps", appId);
-  const appPaths = await walkAppFiles(appDir);
-  const candidates: WalkCandidate[] = appPaths.map((repoPath) => ({
-    repoPath,
-    fullPath: path.join(appDir, repoPath),
-  }));
-  candidates.push(...(await collectLinkedJobCandidates(paprDir, appId)));
-  candidates.push(...(await collectSchemaOwnerMigrationCandidates(paprDir, appId)));
-
+): Promise<LocalCodeChanges> {
+  const walk = await walkAppForSync(paprDir, appId);
   const cachedOids = (await readOidCache()).apps[appId] ?? {};
   const changes: LocalCodeChange[] = [];
-  for (const candidate of candidates) {
+  for (const candidate of walk.candidates) {
     const outcome = await candidateToOpFile(candidate, cachedOids);
     if (outcome.kind !== "op") continue;
     changes.push({
@@ -559,13 +641,27 @@ export async function listLocalCodeChanges(
       change: cachedOids[candidate.repoPath] ? "edited" : "added",
     });
   }
-  const present = new Set(appPaths);
-  for (const repoPath of Object.keys(cachedOids)) {
-    const top = repoPath.split("/")[0] ?? "";
-    if (top === "jobs" || top === "databases" || SKIP_DIR_NAMES.has(top)) continue;
-    if (present.has(repoPath) || isNeverTrackRepoPath(repoPath)) continue;
-    const exists = await fs.stat(path.join(appDir, repoPath)).then(() => true, () => false);
-    if (!exists) changes.push({ path: repoPath, change: "removed" });
+  const plan = await planDeletesFor(paprDir, appId, walk, cachedOids);
+  for (const d of plan.deletes) changes.push({ path: d.path, change: "removed" });
+  for (const p of plan.held) changes.push({ path: p, change: "removed", needsConfirm: true });
+  return {
+    changes: changes.sort((a, b) => a.path.localeCompare(b.path)),
+    webOnly: plan.webOnly,
+  };
+}
+
+/** Paths the user may confirm for removal from the web right now, with the web's OID. */
+export async function listRemovableWebPaths(
+  paprDir: string,
+  appId: string,
+): Promise<Map<string, string>> {
+  const walk = await walkAppForSync(paprDir, appId);
+  const cachedOids = (await readOidCache()).apps[appId] ?? {};
+  const plan = await planDeletesFor(paprDir, appId, walk, cachedOids);
+  const out = new Map<string, string>();
+  for (const p of [...plan.held, ...plan.webOnly]) {
+    const oid = cachedOids[p];
+    if (oid) out.set(p, oid);
   }
-  return changes.sort((a, b) => a.path.localeCompare(b.path));
+  return out;
 }

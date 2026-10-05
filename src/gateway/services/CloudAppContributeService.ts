@@ -85,6 +85,7 @@ interface StagedRepoTree {
   /** Git-relative directory (e.g. apps/{id}, Jobs/{jobId}). */
   repoRelativeDir: string;
   files: Map<string, string>;
+  restoredIds?: ReadonlySet<string>;
 }
 
 async function runCommand(
@@ -257,9 +258,12 @@ async function collectMigrationTrees(
       `registry-migrations-${dbId}`,
     );
     if (files.size > 0) {
+      const { readRestoredManifest } = await import("./jobs/restoredMigrations.js");
+      const restoredIds = new Set((await readRestoredManifest(migrationRoot)).map((r) => r.id));
       trees.push({
         repoRelativeDir: `${repoRelativeDir}/migrations`,
         files,
+        restoredIds,
       });
     }
   }
@@ -342,6 +346,7 @@ interface StagedProposalTree {
   repoRelativeDir: string;
   files: Map<string, string>;
   kind: "app" | "job" | "migrations";
+  restoredIds?: ReadonlySet<string>;
 }
 
 /** Local side of a proposal: app folder, linked Jobs/{id}, registry migrations. */
@@ -365,9 +370,16 @@ async function buildContributeStaging(
     kind: "app",
   });
 
+  const { jobOwnedByApp } = await import("./jobs/appIdPlaceholder.js");
   for (const jobId of resolveAppDependentJobIds(paprDir, forkAppId)) {
     const jobDir = path.join(paprDir, "Jobs", jobId);
     if (!(await pathExists(jobDir))) continue;
+    // A job another app owns (shared job folder) must never ride along with this
+    // copy's proposal — it would re-point the owner's job at a different app.
+    if (!(await jobOwnedByApp(jobDir, forkAppId))) {
+      console.info(`[CloudContribute] skipping job ${jobId}: not owned by ${forkAppId}`);
+      continue;
+    }
     const jobFiles = await stageDirectoryWithRemaps(jobDir, remaps, tempRoot, `job-${jobId}`);
     trees.push({
       repoRelativeDir: linkedJobRepoRelativeDir(repoPath, jobId),
@@ -383,7 +395,7 @@ async function buildContributeStaging(
     if (isAppRepoRootPath(repoPath) && dir.startsWith("data/databases/")) {
       dir = dir.slice("data/".length);
     }
-    trees.push({ repoRelativeDir: dir, files: tree.files, kind: "migrations" });
+    trees.push({ repoRelativeDir: dir, files: tree.files, kind: "migrations", restoredIds: tree.restoredIds });
   }
   return trees;
 }
@@ -487,6 +499,7 @@ async function pushContributeBranch(
         local: tree.files,
         base: await readFilesAtCommit(repoDir, base.sha, tree.repoRelativeDir, env, tree.files),
         kind: tree.kind,
+        ...(tree.restoredIds ? { restoredIds: tree.restoredIds } : {}),
         // The app folder's bundled jobs/ copy is stale once Jobs/{id} exists;
         // the job trees own those paths.
         ...(tree.kind === "app" && hasJobTrees ? { skipPrefixes: ["jobs/"] } : {}),
@@ -497,6 +510,12 @@ async function pushContributeBranch(
       console.info(
         `[CloudContribute] left out platform-rewritten files: ${changes.ignored.join(", ")}`,
       );
+    }
+    if (changes.restored.length > 0) {
+      console.info(`[CloudContribute] restored (already-applied) migrations: ${changes.restored.join(", ")}`);
+    }
+    if (changes.immutableSkipped.length > 0) {
+      console.info(`[CloudContribute] kept publisher's applied migrations: ${changes.immutableSkipped.join(", ")}`);
     }
     mark("diff");
 

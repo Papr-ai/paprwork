@@ -1,7 +1,7 @@
 {
   "version": 1,
-  "generatedAt": "2026-10-05T08:13:40.206Z",
-  "entryCount": 201,
+  "generatedAt": "2026-10-05T21:11:44.241Z",
+  "entryCount": 203,
   "entries": [
     {
       "id": "access-members",
@@ -441,7 +441,7 @@
     {
       "id": "agent-tool-create_database",
       "title": "create_database",
-      "summary": "Create an independent SQLite database (registry entry + local file). Schema: write_file on data/databases/{slug}/migrations/000N_….sql — applied on job run + Turso sync. Every synced table MUST have a PRIMARY KEY (INTEGER or TEXT) — required for cloud sync and row versioning. Next: attach_database({ appId, dbId, alias }) so the mini-app can read/write via /api/db/* with sourceId. Jobs that fill the DB: create_job({ writeDbIds: [dbId] }). isolation: 'shared' (default) or 'per-user' (separate Turso DB per signed-in user). For anonymous public apps use shared DB + owner_session column; for pri...",
+      "summary": "Create an independent SQLite database (registry entry + local file). Schema: papr_db_create_migration({ dbId, name, sql }) — names, writes and applies the migration. Never write_file/bash into migrations/ (blocked; applied migrations are immutable). Every synced table MUST have a PRIMARY KEY (INTEGER or TEXT) — required for cloud sync and row versioning. Next: attach_database({ appId, dbId, alias }) so the mini-app can read/write via /api/db/* with sourceId. Jobs that fill the DB: create_job({ writeDbIds: [dbId] }). isolation: 'shared' (default) or 'per-user' (separate Turso DB per signed-i...",
       "surfaces": [
         "agent-tool"
       ],
@@ -2012,6 +2012,27 @@
       "playbookRef": "preloaded-app-and-jobs-guide"
     },
     {
+      "id": "agent-tool-papr_db_consolidate_migrations",
+      "title": "papr_db_consolidate_migrations",
+      "summary": "One migrations folder per database. Collapses the legacy copy under apps/{appId}/data/databases/{slug}/migrations into the real data/databases/{slug}/migrations. Identical files are removed; applied files the real folder lacks are moved in (they never re-run); anything unapplied, different, or a .backup/.disabled file goes to _quarantine/ — never deleted, never run. Defaults to dryRun: true (report only); pass dryRun: false to apply.",
+      "surfaces": [
+        "agent-tool"
+      ],
+      "runtimes": [
+        "desktop"
+      ],
+      "toolId": "papr_db_consolidate_migrations",
+      "keywords": [
+        "papr_db_consolidate_migrations",
+        "papr",
+        "db",
+        "consolidate",
+        "migrations",
+        "tool",
+        "agent"
+      ]
+    },
+    {
       "id": "agent-tool-papr_db_create_migration",
       "title": "papr_db_create_migration",
       "summary": "Create AND apply a new schema migration on a registry database. Pass a short name + SQL only — the system assigns the filename NNNN_YYYYMMDDHHMMSS_name.sql (next number + UTC timestamp) so collaborators can never produce the same filename. Then applies it like papr_db_apply_migration (once on the replica, then pushed to Turso through sync). Use this for EVERY new schema change; do not write_file migration files or pick numbers yourself. Never edit or rename existing migration files. Never hard-code a user id: write '{{papr.owner_user_id}}' (quoted) for owner/user columns in seed rows or bac...",
@@ -2130,6 +2151,27 @@
         "db",
         "reconcile",
         "sync",
+        "tool",
+        "agent"
+      ]
+    },
+    {
+      "id": "agent-tool-papr_db_restore_migration",
+      "title": "papr_db_restore_migration",
+      "summary": "Put back a migration FILE that is recorded as applied but missing on disk (e.g. 0026_interviews exists in the cloud ledger but not in migrations/). Applied migrations are read-only, so never recreate one with write_file — use this. Pass migrationId plus either fromPath (an old app-folder copy) or sql (the owner's copy). The system checks the ledger lists it, the file is absent, and its tables/columns exist in the live schema, then writes it and records provenance in restored-migrations.json so a later proposal labels it 'restored', not 'new'. Call with list: true to see which applied migrat...",
+      "surfaces": [
+        "agent-tool"
+      ],
+      "runtimes": [
+        "desktop"
+      ],
+      "toolId": "papr_db_restore_migration",
+      "keywords": [
+        "papr_db_restore_migration",
+        "papr",
+        "db",
+        "restore",
+        "migration",
         "tool",
         "agent"
       ]

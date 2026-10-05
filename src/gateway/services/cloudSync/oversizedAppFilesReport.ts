@@ -2,11 +2,30 @@
  * Report unsyncable files in a mini-app folder for agent tools and sync UI.
  */
 
-import { listOversizedAppFiles } from "../syncV3/collectAppOpFiles.js";
+import {
+  listOversizedAppFiles,
+  type UnsyncableFile,
+} from "../syncV3/collectAppOpFiles.js";
 
 export interface OversizedAppFilesReport {
-  paths: Array<{ path: string; sizeBytes: number; reason: string }>;
+  paths: UnsyncableFile[];
   message: string;
+  /** One line naming what is actually wrong, e.g. "2 over 10 MB, 1 media file". */
+  summary: string;
+}
+
+export function summarizeUnsyncable(paths: readonly UnsyncableFile[]): string {
+  const oversized = paths.filter((p) => p.kind === "oversized");
+  const media = paths.filter((p) => p.kind === "untracked-media");
+  const parts: string[] = [];
+  if (oversized.length > 0) {
+    const limit = oversized[0]!.reason.replace(/^over /, "");
+    parts.push(`${oversized.length} over ${limit}`);
+  }
+  if (media.length > 0) {
+    parts.push(`${media.length} media/archive file${media.length === 1 ? "" : "s"}`);
+  }
+  return parts.join(", ");
 }
 
 export async function buildOversizedAppFilesReport(
@@ -32,5 +51,6 @@ export async function buildOversizedAppFilesReport(
   return {
     paths,
     message,
+    summary: summarizeUnsyncable(paths),
   };
 }

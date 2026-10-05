@@ -200,8 +200,9 @@ export interface SyncItemsResponse {
   reason?: string;
   /** Files in the app folder over the git sync limit — use App Files panel instead. */
   oversizedAppFiles?: {
-    paths: Array<{ path: string; sizeBytes: number; reason?: string }>;
+    paths: Array<{ path: string; sizeBytes: number; reason?: string; kind?: string }>;
     message: string;
+    summary?: string;
   } | null;
 }
 

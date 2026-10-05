@@ -30,7 +30,7 @@ describe("productArchitectGate", () => {
     );
     expect(PRODUCT_ARCHITECT_IMPLEMENTATION_CONTRACTS_SECTION).toContain("sql");
     expect(PRODUCT_ARCHITECT_IMPLEMENTATION_CONTRACTS_SECTION).toContain(
-      "papr_db_apply_migration",
+      "papr_db_create_migration",
     );
     expect(CREATE_APP_IMPLEMENTATION_REMINDER).toContain("preloaded-app-and-jobs-guide");
     expect(CREATE_APP_IMPLEMENTATION_REMINDER).toContain("exitCode");

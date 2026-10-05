@@ -209,6 +209,8 @@ export interface AppCloudSyncStatus {
   /** Files in the app folder over 10MB — git sync skips them; use App Files. */
   oversizedAppFilesMessage?: string | null;
   oversizedAppFilesCount?: number;
+  /** What is actually wrong, e.g. "2 over 10 MB, 1 media/archive file". */
+  oversizedAppFilesSummary?: string | null;
   /** Local app source differs from last cloud upload (Sync V3 fingerprint / git). */
   hasLocalChanges?: boolean;
 }
@@ -620,6 +622,7 @@ export function deriveAppCloudSyncStatus(
       gitRemoteReviewHeadline: null,
       oversizedAppFilesMessage: null,
       oversizedAppFilesCount: 0,
+      oversizedAppFilesSummary: null,
       hasLocalChanges: false,
     };
   }
@@ -860,6 +863,7 @@ export function deriveAppCloudSyncStatus(
   const publishLive = items.appContext?.publishLive === true;
   const oversizedAppFilesMessage = items.oversizedAppFiles?.message ?? null;
   const oversizedAppFilesCount = items.oversizedAppFiles?.paths.length ?? 0;
+  const oversizedAppFilesSummary = items.oversizedAppFiles?.summary ?? null;
   const publishedAt = items.appContext?.publishedAt ?? null;
 
   const publishStatus: AppCloudPublishStatus =
@@ -1090,6 +1094,7 @@ export function deriveAppCloudSyncStatus(
     publishLive,
     oversizedAppFilesMessage,
     oversizedAppFilesCount,
+    oversizedAppFilesSummary,
     hasLocalChanges,
   };
 }

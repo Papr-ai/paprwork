@@ -875,8 +875,35 @@ async function startGateway(): Promise<void> {
       try {
         const { listLocalCodeChanges } = await import("./services/syncV3/collectAppOpFiles.js");
         const { getPaprRoot } = await import("../core/utils/paprRoot.js");
-        const changes = await listLocalCodeChanges(getPaprRoot(), req.params.appId);
-        res.json({ changes });
+        const { changes, webOnly } = await listLocalCodeChanges(getPaprRoot(), req.params.appId);
+        res.json({ changes, webOnly });
+      } catch (err) {
+        res.status(500).json({ error: (err as Error).message });
+      }
+    });
+
+    // Status panel: the user confirmed removing these files from the web
+    // (a held mass delete, or files on the web this computer never had).
+    // Only paths the delete plan currently offers are accepted; the next
+    // publish sends them with the web's OID, so a changed web copy conflicts.
+    app.post("/api/apps/:appId/confirm-web-deletes", async (req, res) => {
+      try {
+        const body = (req.body ?? {}) as { paths?: unknown };
+        const requested = Array.isArray(body.paths)
+          ? body.paths.filter((p): p is string => typeof p === "string")
+          : [];
+        const { listRemovableWebPaths } = await import("./services/syncV3/collectAppOpFiles.js");
+        const { approveSyncDeletes } = await import("./services/syncV3/SyncManifest.js");
+        const { getPaprRoot } = await import("../core/utils/paprRoot.js");
+        const removable = await listRemovableWebPaths(getPaprRoot(), req.params.appId);
+        const approved = requested
+          .filter((p) => removable.has(p))
+          .map((p) => ({ path: p, oid: removable.get(p)! }));
+        await approveSyncDeletes(req.params.appId, approved);
+        res.json({
+          approved: approved.map((a) => a.path),
+          ignored: requested.filter((p) => !removable.has(p)),
+        });
       } catch (err) {
         res.status(500).json({ error: (err as Error).message });
       }
@@ -942,6 +969,7 @@ async function startGateway(): Promise<void> {
           resolution?: string;
           fileResolutions?: Record<string, string>;
           dryRun?: boolean;
+          confirmDeletes?: boolean;
         };
         const waitForCompletion = body.wait === true || body.dryRun === true;
         // Per-file Mine / Theirs from the status panel; anything else ignored.
@@ -976,6 +1004,7 @@ async function startGateway(): Promise<void> {
           resolution,
           fileResolutions,
           dryRun: body.dryRun === true,
+          confirmDeletes: body.confirmDeletes === true,
         });
         timer.mark("pullAppFromCloud");
         if (result.code.skipped && result.code.reason) {

@@ -173,7 +173,7 @@ export function buildOversizedFilesAgentPrompt(input: {
   parts.push(
     "Workflow: get_cloud_sync_status → read oversizedAppFiles paths and reasons.",
     "For binary assets (images, PDFs, large JSON): upload via App Files and update the app to use the App Files reference instead of a local path.",
-    "For data.db in the app folder: if it belongs to a job, ensure the database lives under Jobs/ and is linked in Data Sources — not copied into apps/<appId>/.",
+    "Database files (*.db and sidecars) are never reported — they are excluded on purpose.",
     "Remove or relocate skipped paths from the app folder, then verify oversizedAppFiles is clear with get_cloud_sync_status and retry Publish changes if needed.",
   );
   return parts.join(" ");

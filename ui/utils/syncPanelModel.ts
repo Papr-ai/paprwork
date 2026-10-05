@@ -46,7 +46,11 @@ export type PanelAction =
   | "get_updates"
   | "apply_update"
   | "retry_data"
-  | "ask_agent";
+  | "ask_agent"
+  /** Review + double-confirm deletes held back (more than 10 at once). */
+  | "confirm_deletes"
+  /** Remove files that are on the web but were never on this computer. */
+  | "remove_web_only";
 
 export interface PanelRow {
   kind: "conflict" | "update" | "code" | "data" | "issue";
@@ -72,7 +76,7 @@ export interface SyncPanel {
 
 /** Incoming update, from a dry run of Get updates. */
 export interface UpdatePreview {
-  incoming: Array<{ path: string; change: "added" | "edited"; merged?: boolean; conflict?: boolean }>;
+  incoming: Array<{ path: string; change: "added" | "edited" | "removed"; merged?: boolean; conflict?: boolean }>;
   conflictFiles: string[];
 }
 
@@ -83,6 +87,10 @@ export interface SyncPanelInput {
   codeDestination: "publish" | "propose";
   /** Files my Publish / Propose would send. null = not loaded. */
   codeChanges: ChangeItem[] | null;
+  /** Removals held back until confirmed (more than 10 at once). */
+  heldDeletes?: string[];
+  /** On the web, not on this computer, never synced from here. */
+  webOnly?: string[];
   /** A newer version exists. */
   update: {
     /** "the web" for my own app, else the original's slug. */
@@ -296,8 +304,10 @@ function issueRows(status: AppCloudSyncStatus, input: SyncPanelInput): PanelRow[
     const n = status.oversizedAppFilesCount ?? 0;
     rows.push({
       kind: "issue",
-      title: n === 1 ? "1 file is too large for the web" : `${n} files are too large for the web`,
-      value: "Over 10 MB — move to App Files so visitors can load it.",
+      title: n === 1 ? "1 file won't sync to the web" : `${n} files won't sync to the web`,
+      value: status.oversizedAppFilesSummary
+        ? `${status.oversizedAppFilesSummary} — store them with App Files.`
+        : "Store them with App Files so visitors can load them.",
       tone: "warn",
       action: { id: "ask_agent", label: "Ask agent" },
     });
@@ -338,6 +348,36 @@ function issueRows(status: AppCloudSyncStatus, input: SyncPanelInput): PanelRow[
   return rows;
 }
 
+/** Removals that need a decision. Nothing here is ever deleted without one. */
+function deleteRows(input: SyncPanelInput): PanelRow[] {
+  const rows: PanelRow[] = [];
+  const held = input.heldDeletes ?? [];
+  if (held.length > 0) {
+    rows.push({
+      kind: "issue",
+      title: `${held.length} deleted files need your OK`,
+      value: "You removed these here. Confirm to remove them from the web too.",
+      tone: "warn",
+      groups: groupChanges(held.map((path) => ({ path, change: "removed" as const }))),
+      action: { id: "confirm_deletes", label: "Review", disabled: input.pushing },
+    });
+  }
+  const webOnly = input.webOnly ?? [];
+  if (webOnly.length > 0 && input.codeDestination === "publish") {
+    rows.push({
+      kind: "issue",
+      title: webOnly.length === 1
+        ? "1 file is on the web but not on this computer"
+        : `${webOnly.length} files are on the web but not on this computer`,
+      value: "Usually old copies. They stay until you remove them.",
+      tone: "idle",
+      groups: groupChanges(webOnly.map((path) => ({ path, change: "removed" as const, note: "Web only" }))),
+      action: { id: "remove_web_only", label: "Remove from web", disabled: input.pushing || input.pulling },
+    });
+  }
+  return rows;
+}
+
 /** Red rows first; otherwise update → code → data → issues, so "get the
  *  update" always sits above the Publish it blocks. */
 const ORDER: Record<PanelTone, number> = { bad: 0, warn: 1, info: 1, busy: 1, idle: 1, ok: 1 };
@@ -368,6 +408,7 @@ export function buildSyncPanel(input: SyncPanelInput): SyncPanel {
     if (data) rows.push(data);
     rows.push(...issueRows(status, input));
   }
+  rows.push(...deleteRows(input));
 
   // Problems first; within the rest, keep the order above.
   const sorted = rows

@@ -23,12 +23,13 @@ describe("proposal paths", () => {
       "__papr__/app-meta.json",
       "__papr__/platform-catalog.json",
       "dist/app.js",
+      "db.ts", // generated from data-sources.json, rebuilt after every pull
     ]) {
       expect(isProposalExcludedAppPath(rel)).toBe(true);
     }
   });
   it("keeps real source, including backend handlers", () => {
-    for (const rel of ["index.html", "db.ts", "base.css", "backend/ping.py", "backend/manifest.json", "README.md"]) {
+    for (const rel of ["index.html", "utils/db.ts", "base.css", "backend/ping.py", "backend/manifest.json", "README.md"]) {
       expect(isProposalExcludedAppPath(rel)).toBe(false);
     }
   });

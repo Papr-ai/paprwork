@@ -1631,7 +1631,7 @@ export const runJobTool = createTool({
               _schemaDdlWarnings: schemaDdlWarnings,
               _schemaMigrationReminder:
                 `⚠️ DETECTED: Inline SQLite schema DDL in job source. ` +
-                `Use write_file on data/databases/{slug}/migrations/000N_….sql for app tables (writeDbIds), ` +
+                `Use papr_db_create_migration({ dbId, name, sql }) for app tables (writeDbIds); never write_file into migrations/, `  +
                 `not ALTER TABLE in scripts or bash sqlite3. run_job + Turso sync apply migrations locally and on cloud.`,
             }
           : {}),
