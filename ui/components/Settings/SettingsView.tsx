@@ -1164,6 +1164,52 @@ function AboutTab() {
           </div>
         </div>
 
+        {currentVersion === "2.6.25" && (
+          <div className="about-card">
+            <h3>What's New in v2.6.25</h3>
+            <ul className="whats-new-list">
+              <li className="whats-new-list__item">
+                <strong>Cloud sync</strong>
+                <p>
+                  New sync status panel: one row per difference, Get updates with
+                  auto-merge, and Mine / Theirs / Ask agent per file. Clearer
+                  unpublished-changes state after publish.
+                </p>
+              </li>
+              <li className="whats-new-list__item">
+                <strong>Share &amp; publish</strong>
+                <p>
+                  Scoped share links, a guided access walk-through with one Save,
+                  confirm before widening access, and missing-key hints on the bar.
+                  Safer publish while replicas are read through the sync worker.
+                </p>
+              </li>
+              <li className="whats-new-list__item">
+                <strong>Reliability</strong>
+                <p>
+                  Chat queue fixes (phantom turns, send-now), replica re-seed keeps
+                  local rows, migration breaking vs additive warnings, and a lighter
+                  workspace switch overlay.
+                </p>
+              </li>
+              <li className="whats-new-list__item">
+                <strong>UI</strong>
+                <p>
+                  Scrollbars hidden app-wide while scrolling still works.
+                </p>
+              </li>
+            </ul>
+            <a
+              href="https://github.com/Papr-ai/paprwork/releases/tag/v2.6.25"
+              target="_blank"
+              rel="noopener noreferrer"
+              className="about-card__link"
+            >
+              View release notes on GitHub
+            </a>
+          </div>
+        )}
+
         {currentVersion === "2.6.24" && (
           <div className="about-card">
             <h3>What's New in v2.6.24</h3>
