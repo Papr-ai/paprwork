@@ -666,13 +666,14 @@ export async function pushCloudSync(
 
     turso = {
       attempted: pushResults.length,
-      pushed: pushResults.filter((result) => result.ok).length,
+      pushed: pushResults.filter((result) => result.ok && !result.skipped).length,
       pulled: 0,
-      skipped: 0,
+      skipped: pushResults.filter((result) => result.ok && result.skipped).length,
       failed: 0,
       results: pushResults.map((result) => ({
         jobId: result.syncKey,
         error: result.error,
+        ...(result.skipped ? { skipped: true, skipReason: result.skipReason } : {}),
       })),
       databases: pushResults.map((result) => ({
         syncKey: result.syncKey,

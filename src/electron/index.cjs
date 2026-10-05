@@ -2941,7 +2941,7 @@ app.whenReady().then(async () => {
 
   function readPackagedGatewayEnv() {
     if (!app.isPackaged) {
-      return {};
+      return readDevGatewayRolloutDefaults();
     }
 
     /** @type {Record<string, string>} */
@@ -3008,6 +3008,46 @@ app.whenReady().then(async () => {
     }
 
     return merged;
+  }
+
+  /**
+   * Dev builds (`npm run dev`) have no packaged-gateway-env.json, so the Plan A
+   * rollout keys only existed if a developer copied them into `.env`. Without
+   * them `tursoReplicaRolloutMode()` is "off": legacy databases can never cut
+   * over ("cannot push before cutover"), and Publish reports success while the
+   * cloud schema/rows stay frozen. Fall back to the same committed defaults the
+   * packaged app ships so dev and production run the same sync engine. Values
+   * already set in the environment (e.g. PAPR_TURSO_REPLICA_SYNC=off) still win.
+   */
+  function readDevGatewayRolloutDefaults() {
+    const rolloutKeys = [
+      "PAPR_TURSO_REPLICA_SYNC",
+      "PAPR_TURSO_REPLICA_SYNC_ALLOW_PRODUCTION",
+    ];
+    try {
+      const defaultsPath = path.join(
+        __dirname,
+        "../resources/packaged-gateway-env.defaults.json",
+      );
+      if (!require("fs").existsSync(defaultsPath)) {
+        return {};
+      }
+      const parsed = JSON.parse(require("fs").readFileSync(defaultsPath, "utf-8"));
+      /** @type {Record<string, string>} */
+      const out = {};
+      for (const key of rolloutKeys) {
+        if (typeof parsed?.[key] === "string" && parsed[key].trim()) {
+          out[key] = parsed[key].trim();
+        }
+      }
+      return out;
+    } catch (err) {
+      console.warn(
+        "[Electron] Failed to load dev gateway rollout defaults:",
+        err instanceof Error ? err.message : String(err),
+      );
+      return {};
+    }
   }
 
   const packagedGatewayEnv = readPackagedGatewayEnv();
