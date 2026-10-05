@@ -7,6 +7,28 @@
   margin-top: 16px;
 }
 
+/* Marketing consent — quiet, unchecked by default, above Create workspace. */
+.org-namespace-setup__consent {
+  display: flex;
+  align-items: flex-start;
+  gap: 10px;
+  margin: 18px 0 14px;
+  font-size: 13px;
+  line-height: 1.45;
+  color: var(--onb-soft);
+  cursor: pointer;
+  user-select: none;
+}
+
+.org-namespace-setup__consent input {
+  margin: 2px 0 0;
+  width: 15px;
+  height: 15px;
+  flex: none;
+  accent-color: var(--onb-g2);
+  cursor: pointer;
+}
+
 .org-namespace-setup-overlay {
   position: fixed;
   inset: 0;

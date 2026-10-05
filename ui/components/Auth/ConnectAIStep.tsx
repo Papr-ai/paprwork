@@ -306,10 +306,19 @@ export function ConnectAIStep({
       <div className="onboarding-flow onboarding-screen connect-ai--claude-stepper">
         <div className="onboarding-screen-inner onboarding-screen-inner--wide">
           <div className="onboarding-head-row">
-            <AuthProgressDots activeIndex={2} />
-            <button type="button" className="onboarding-skip-btn" onClick={handleSkip}>
-              {confirmSkip ? "Yes — skip for now" : "Skip for now"}
-            </button>
+            <div className="onboarding-head-row__start">
+              <button type="button" className="onboarding-skip-btn" onClick={backToPick}>
+                ← Back
+              </button>
+            </div>
+            <div className="onboarding-head-row__center">
+              <AuthProgressDots activeIndex={2} />
+            </div>
+            <div className="onboarding-head-row__end">
+              <button type="button" className="onboarding-skip-btn" onClick={handleSkip}>
+                {confirmSkip ? "Yes — skip for now" : "Skip for now"}
+              </button>
+            </div>
           </div>
           <h1 className="onboarding-h1 onboarding-h1--small">
             Let&apos;s set up Claude together
@@ -324,28 +333,33 @@ export function ConnectAIStep({
             onPickDifferent={backToPick}
             hideFooterLinks
           />
-          <div className="onboarding-foot">
-            <button type="button" className="onboarding-back-btn" onClick={backToPick}>
-              ← Back
-            </button>
-          </div>
         </div>
       </div>
     );
   }
 
   const name = provider === "openai" ? "ChatGPT" : "Claude";
+  const showBack = stage !== "pick";
 
   return (
-    // Every stage shares the same shell: progress dots top-left, content
-    // left-aligned, Back bottom-left — same as the Claude stepper and recommend.
     <div className="onboarding-flow onboarding-screen">
       <div className="onboarding-screen-inner">
         <div className="onboarding-head-row">
-          <AuthProgressDots activeIndex={2} />
-          <button type="button" className="onboarding-skip-btn" onClick={handleSkip}>
-            {confirmSkip ? "Yes — skip for now" : "Skip for now"}
-          </button>
+          <div className="onboarding-head-row__start">
+            {showBack && (
+              <button type="button" className="onboarding-skip-btn" onClick={backToPick}>
+                ← Back
+              </button>
+            )}
+          </div>
+          <div className="onboarding-head-row__center">
+            <AuthProgressDots activeIndex={2} />
+          </div>
+          <div className="onboarding-head-row__end">
+            <button type="button" className="onboarding-skip-btn" onClick={handleSkip}>
+              {confirmSkip ? "Yes — skip for now" : "Skip for now"}
+            </button>
+          </div>
         </div>
 
         {stage === "pick" && (
@@ -410,22 +424,12 @@ export function ConnectAIStep({
               </button>
             )}
             {checkMsg && <p className="onboarding-check-msg">{checkMsg}</p>}
-            <div className="onboarding-foot onboarding-foot--split">
-              <button type="button" className="onboarding-back-btn" onClick={backToPick}>
-                ← Back
-              </button>
-            </div>
           </>
         )}
 
         {stage === "apikey" && (
           <>
             <ApiKeyStep onSaved={handleApiKeySaved} />
-            <div className="onboarding-foot">
-              <button type="button" className="onboarding-back-btn" onClick={backToPick}>
-                ← Back
-              </button>
-            </div>
           </>
         )}
 
@@ -459,9 +463,6 @@ export function ConnectAIStep({
                 onClick={() => provider && void handleConnect(provider)}
               >
                 Try the browser sign-in again
-              </button>
-              <button type="button" className="onboarding-back-btn" onClick={backToPick}>
-                ← Back
               </button>
             </div>
           </>

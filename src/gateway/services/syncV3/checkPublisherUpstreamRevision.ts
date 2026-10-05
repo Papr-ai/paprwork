@@ -8,6 +8,7 @@ import path from "path";
 import { getPaprAppsRoot } from "../../../core/utils/paprRoot.js";
 import { parseCloudAppLineageFile } from "../../../core/utils/cloudAppLineage.js";
 import { CLOUD_LINEAGE_FILENAME } from "../CloudAppLineageService.js";
+import { publishedAppRevisionsMatch } from "../appRuntime/publishedAppRevision.js";
 import { fetchPublishedAppRevision } from "../cloudSync/trackUpstreamRevision.js";
 import { buildCloudPreviewAuthHeaders } from "../appRuntime/cloudPreviewRuntimeAuth.js";
 
@@ -16,7 +17,7 @@ import { buildCloudPreviewAuthHeaders } from "../appRuntime/cloudPreviewRuntimeA
  * which read as "revision unavailable" and made the chip claim "In sync with
  * publisher" while the publisher had shipped changes. Retry signed in.
  */
-async function fetchPublisherRevisionSignedIn(
+export async function fetchPublisherRevisionSignedIn(
   namespaceId: string,
   slug: string,
 ): Promise<string | null> {
@@ -102,7 +103,10 @@ export async function checkPublisherUpstreamRevision(
     };
   }
 
-  const publisherUpdatesAvailable = liveRevision !== storedUpstreamRevision;
+  const publisherUpdatesAvailable = !publishedAppRevisionsMatch(
+    storedUpstreamRevision,
+    liveRevision,
+  );
   return {
     publisherUpdatesAvailable,
     liveRevision,

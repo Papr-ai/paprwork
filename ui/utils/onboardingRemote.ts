@@ -68,3 +68,10 @@ export async function recordOnboardingComplete(
     // Soft by design.
   }
 }
+
+/** Record marketing consent captured during org/workspace setup. Fire-and-forget. */
+export function recordMarketingOptIn(): void {
+  void window.electronAPI?.papr?.setOnboardingState?.({ marketingOptIn: true }).catch(() => {
+    // Soft by design — org setup still succeeded.
+  });
+}

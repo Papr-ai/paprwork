@@ -497,7 +497,7 @@ export class CloudAppInstallService {
               // Hash what is on disk (after publisher→local ID remap), not the
               // raw upstream files; otherwise remapped files look like local
               // edits and every "Update from publisher" reports them as conflicts.
-              syncSnapshot: await snapshotInstalledFiles(appDir, files),
+              syncSnapshot: await snapshotAppDirHashes(appDir),
               // What this copy's title/description/icon/tags start as (incl.
               // the "_2" suffix) so later edits to them can be proposed.
               ...(await readInstallMetadataBaselines(appDir, files, app)),
@@ -506,10 +506,10 @@ export class CloudAppInstallService {
       };
 
       if (prepare.mode === "track") {
-        const { fetchPublishedAppRevision } = await import(
-          "./cloudSync/trackUpstreamRevision.js"
+        const { fetchPublisherRevisionSignedIn } = await import(
+          "./syncV3/checkPublisherUpstreamRevision.js"
         );
-        const upstreamRevision = await fetchPublishedAppRevision(
+        const upstreamRevision = await fetchPublisherRevisionSignedIn(
           prepare.source.namespaceId,
           prepare.source.slug,
         );
@@ -588,17 +588,33 @@ export function getCloudAppInstallService(): CloudAppInstallService {
   return instance;
 }
 
-async function snapshotInstalledFiles(
-  appDir: string,
-  files: ReadonlyArray<{ filename: string; content: string }>,
-): Promise<Record<string, string>> {
+/** Hash every file on disk after install (post remap + linked resources). */
+async function snapshotAppDirHashes(appDir: string): Promise<Record<string, string>> {
   const out: Record<string, string> = {};
-  for (const file of files) {
-    const rel = file.filename.replace(/\\/g, "/");
-    const content = await fs
-      .readFile(path.join(appDir, rel), "utf8")
-      .catch(() => file.content);
-    out[rel] = createHash("sha256").update(content, "utf8").digest("hex");
+  async function walk(dir: string, base: string): Promise<void> {
+    let entries: import("node:fs").Dirent[];
+    try {
+      entries = await fs.readdir(dir, { withFileTypes: true });
+    } catch {
+      return;
+    }
+    for (const entry of entries) {
+      if (entry.name.startsWith(".")) continue;
+      if (entry.name === "papr-cloud-lineage.json") continue;
+      const full = path.join(dir, entry.name);
+      if (entry.isDirectory()) {
+        await walk(full, base);
+        continue;
+      }
+      const rel = path.relative(base, full).replace(/\\/g, "/");
+      try {
+        const content = await fs.readFile(full, "utf8");
+        out[rel] = createHash("sha256").update(content, "utf8").digest("hex");
+      } catch {
+        /* skip unreadable files */
+      }
+    }
   }
+  await walk(appDir, appDir);
   return out;
 }

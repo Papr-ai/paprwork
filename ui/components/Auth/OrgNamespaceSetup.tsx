@@ -6,6 +6,7 @@
 import React, { useEffect, useRef, useState } from "react";
 import type { PaprLoginSource } from "../../../src/core/telemetry/paprLoginSteps";
 import { trackPaprLoginStep } from "../../lib/paprLoginTelemetry";
+import { recordMarketingOptIn } from "../../utils/onboardingRemote";
 import { AuthProgressDots } from "./AuthProgressDots";
 import { OrgGhostShellPreview } from "./OrgGhostShellPreview";
 import "./onboardingTheme.css";
@@ -41,6 +42,8 @@ export function OrgNamespaceSetup({
   const [isSubmitting, setIsSubmitting] = useState(false);
   const [loadingMessageIndex, setLoadingMessageIndex] = useState(0);
   const [error, setError] = useState<string | null>(null);
+  /** Unchecked by default — pre-ticked boxes are not valid consent (GDPR Art. 7). */
+  const [marketingOptIn, setMarketingOptIn] = useState(false);
   const setupViewedTracked = useRef(false);
   const submitStartedAt = useRef<number | null>(null);
 
@@ -113,6 +116,10 @@ export function OrgNamespaceSetup({
         });
         setError(message);
         return;
+      }
+
+      if (marketingOptIn) {
+        recordMarketingOptIn();
       }
 
       onComplete();
@@ -205,6 +212,15 @@ export function OrgNamespaceSetup({
           <em>Teams usually map to a function — sales, marketing, ops.</em>
         </label>
       )}
+
+      <label className="org-namespace-setup__consent">
+        <input
+          type="checkbox"
+          checked={marketingOptIn}
+          onChange={(event) => setMarketingOptIn(event.target.checked)}
+        />
+        <span>Email me occasional product updates and tips from Papr. Unsubscribe anytime.</span>
+      </label>
 
       <button
         type="submit"

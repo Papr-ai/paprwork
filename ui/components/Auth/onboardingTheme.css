@@ -325,7 +325,7 @@
   display: flex;
   justify-content: center;
   min-height: 100vh;
-  padding: 64px 32px 48px;
+  padding: 64px 32px max(64px, calc(32px + env(safe-area-inset-bottom, 0px)));
 }
 
 .onboarding-screen-inner {
@@ -349,10 +349,10 @@
 }
 
 .onboarding-head-row {
-  display: flex;
+  display: grid;
+  grid-template-columns: 1fr auto 1fr;
   align-items: center;
-  justify-content: space-between;
-  gap: 16px;
+  gap: 12px;
   margin-bottom: 26px;
 }
 
@@ -360,23 +360,18 @@
   margin-bottom: 0;
 }
 
-.onboarding-head-left {
-  display: flex;
-  align-items: center;
-  gap: 16px;
+.onboarding-head-row__start {
+  justify-self: start;
+  min-width: 0;
 }
 
-.onboarding-back-btn {
-  padding: 0;
-  border: none;
-  background: none;
-  color: var(--onb-mid);
-  font-size: 14px;
-  cursor: pointer;
+.onboarding-head-row__center {
+  justify-self: center;
 }
 
-.onboarding-back-btn:hover {
-  color: var(--onb-g1);
+.onboarding-head-row__end {
+  justify-self: end;
+  min-width: 0;
 }
 
 .onboarding-connecting-actions {
@@ -402,6 +397,7 @@
   font-size: 13px;
   font-weight: 500;
   color: var(--onb-mid);
+  white-space: nowrap;
   transition: 0.15s ease;
 }
 
@@ -722,6 +718,7 @@
 
 .onboarding-foot {
   margin-top: 30px;
+  padding-bottom: max(8px, env(safe-area-inset-bottom, 0px));
   display: flex;
   align-items: center;
   gap: 14px;
@@ -985,12 +982,6 @@
 }
 
 /* ---- Round 2: shared shell pieces ---- */
-/* Back lives bottom-left in the footer on every step, never beside the dots. */
-.onboarding-foot .onboarding-back-btn {
-  font-size: 14px;
-  font-weight: 500;
-}
-
 .onboarding-connected-banner {
   display: flex;
   align-items: center;

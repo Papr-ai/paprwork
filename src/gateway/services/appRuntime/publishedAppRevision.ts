@@ -20,6 +20,23 @@ import {
 
 export const PAPR_APP_REVISION_META_NAME = "papr-app-revision";
 
+/** Normalize repoHead:hash16 vs hash16-only (install snapshot fallback). */
+export function publishedAppRevisionsMatch(
+  stored: string | null | undefined,
+  live: string | null | undefined,
+): boolean {
+  const a = stored?.trim().toLowerCase();
+  const b = live?.trim().toLowerCase();
+  if (!a || !b) return false;
+  if (a === b) return true;
+  const shortHash = (rev: string): string => {
+    const colon = rev.lastIndexOf(":");
+    const hashPart = colon >= 0 ? rev.slice(colon + 1) : rev;
+    return hashPart.slice(0, 16);
+  };
+  return shortHash(a) === shortHash(b);
+}
+
 export function formatPublishedAppRevision(
   repoHead: string,
   appJsContent?: string | null,
