@@ -503,6 +503,13 @@ export interface TursoLinkedSourcePushResult {
   backend: "replica" | "legacy";
   ok: boolean;
   error?: string;
+  /**
+   * True when the legacy path declined to push (e.g. replica rollout off,
+   * replica-managed, unchanged). `ok` stays true (nothing failed) but callers
+   * must not report it as "pushed".
+   */
+  skipped?: boolean;
+  skipReason?: string;
 }
 
 export async function shouldSkipTursoPushInFlushForReplicaSource(
@@ -567,6 +574,9 @@ export async function pushLinkedSourceWithReplicaRouting(
     appId: source.appId,
     backend: "legacy",
     ok: true,
+    ...(pushResult.status === "skipped"
+      ? { skipped: true, skipReason: pushResult.reason ?? "skipped" }
+      : {}),
   };
 }
 
@@ -590,10 +600,11 @@ export async function pushTursoSourcesWithReplicaRouting(options: {
   for (const source of explicitTargets) {
     const result = await pushLinkedSourceWithReplicaRouting(source);
     results.push(result);
-    if (result.ok) {
-      pushed += 1;
-    } else {
+    if (!result.ok) {
       failed += 1;
+    } else if (!result.skipped) {
+      // A declined push (skipped) is neither pushed nor failed.
+      pushed += 1;
     }
   }
 
