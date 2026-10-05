@@ -7,6 +7,7 @@ import {
   discoverTursoLinkedSources,
   dedupeLinkedSourcesBySyncKey,
   findLinkedSourceForJob,
+  linkedSourceAsAppDataSource,
   linkedSourceSyncKey,
   type TursoLinkedSource,
 } from "./tursoLinkedSources.js";
@@ -25,6 +26,8 @@ import {
   recordTursoPushSuccess,
 } from "./tursoSyncState.js";
 import type { PushResult } from "./tursoSyncBridgeCore.js";
+import { resolveTursoDatabaseNameForSource } from "./DatabaseRegistryService.js";
+import { noteTursoDatabaseChanged } from "./tursoReplica/creditTursoChangedPing.js";
 import {
   isTursoDatabaseLimitError,
   isTursoLocalDatabaseCorruptError,
@@ -274,6 +277,17 @@ function recordSuccessfulPush(
   recordTursoPushSuccess(stateKey, dbPath, undefined, result.lastPushedLogId);
 }
 
+/** Credits: schedule a Turso usage check for the database we just wrote. */
+function noteLinkedSourceChangedForCredits(linked: TursoLinkedSource): void {
+  try {
+    noteTursoDatabaseChanged(
+      resolveTursoDatabaseNameForSource(linkedSourceAsAppDataSource(linked)),
+    );
+  } catch {
+    // never block a push on metering
+  }
+}
+
 function armMaxWaitTimer(syncKey: string): void {
   if (maxWaitTimers.has(syncKey) || isMaxWaitFlushPending(syncKey)) {
     return;
@@ -439,6 +453,7 @@ async function executePushForJob(
     pushSchedulerStats.pushJobCalls += 1;
     if (pushResult.status === "pushed") {
       recordSuccessfulPush(resolvedSyncKey, linked.dbPath, pushResult);
+      noteLinkedSourceChangedForCredits(linked);
       await finishTursoPushTracking(
         bridge,
         linked,
