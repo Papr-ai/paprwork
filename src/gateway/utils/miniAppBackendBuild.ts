@@ -78,17 +78,31 @@ export async function buildAppBackendBundle(
     return { success: false, wroteBundle: false, errors };
   }
 
+  const bundlePath = path.join(backendDir, "bundle.json");
+  // Same actions as on disk: keep the file byte-identical. A fresh builtAt on
+  // every build made each publish leave a "changed" file, which re-triggered
+  // another publish (~20s loop for apps with a backend).
+  try {
+    const existing = JSON.parse(
+      await fs.readFile(bundlePath, "utf8"),
+    ) as AppBackendBundleManifest;
+    if (
+      existing.version === 1 &&
+      JSON.stringify(existing.actions) === JSON.stringify(actions)
+    ) {
+      return { success: true, wroteBundle: false, errors: [], bundle: existing };
+    }
+  } catch {
+    // missing or unreadable — write a fresh bundle
+  }
+
   const bundle: AppBackendBundleManifest = {
     version: 1,
     builtAt: new Date().toISOString(),
     actions,
   };
 
-  await fs.writeFile(
-    path.join(backendDir, "bundle.json"),
-    `${JSON.stringify(bundle, null, 2)}\n`,
-    "utf8",
-  );
+  await fs.writeFile(bundlePath, `${JSON.stringify(bundle, null, 2)}\n`, "utf8");
 
   return { success: true, wroteBundle: true, errors: [], bundle };
 }

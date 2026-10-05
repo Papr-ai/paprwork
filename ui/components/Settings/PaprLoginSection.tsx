@@ -433,6 +433,7 @@ export function PaprLoginSection({ onApiKeyReceived, profileFields }: PaprLoginS
               : undefined;
 
         await prepareWorkspaceSwitchReload({
+          organizationId: workspaceId,
           organizationName: org.name,
           ...(targetWorkspaceKey ? { targetWorkspaceKey } : {}),
         });
@@ -502,6 +503,11 @@ export function PaprLoginSection({ onApiKeyReceived, profileFields }: PaprLoginS
     setError(null);
     try {
       await prepareWorkspaceSwitchReload({
+        organizationId:
+          organizations.find((o) => o.organizationId === group.organizationId)
+            ?.id ??
+          activeOrganizationId ??
+          undefined,
         organizationName: group.organizationName,
         namespaceName: ns.name,
         targetWorkspaceKey: buildWorkspaceUiCacheKey(

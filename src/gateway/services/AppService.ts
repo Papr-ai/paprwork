@@ -8,6 +8,11 @@ import { openDiagnosticDatabase } from "./databaseDiagnostics/sqlite.js";
 
 import { existsSync, promises as fs } from "fs";
 import { TreeWatcher } from "./TreeWatcher.js";
+import {
+  isAppRequirementsSource,
+  notifyAppRequirementsChanged,
+  startJobKeysWatcher,
+} from "./appRequirementsChanged.js";
 import path from "path";
 import { shouldIgnoreAppWatchPath } from "./appWatchIgnore.js";
 import { isCloudPrepGitSyncArtifact } from "./cloudSync/syncState.js";
@@ -317,6 +322,8 @@ export class AppService {
    */
   private watchedAppIds: Set<string>;
   private treeWatcher: TreeWatcher | null = null;
+  /** Jobs/{id}/job.json — linked jobs' requiredKeys feed the app key catalog. */
+  private jobKeysWatcher: TreeWatcher | null = null;
   private debounceTimers: Map<string, NodeJS.Timeout>;
   private reloadBroadcastTimers: Map<string, NodeJS.Timeout>;
   private buildInFlight: Map<string, Promise<MiniAppBuildResult>>;
@@ -3386,6 +3393,9 @@ export class AppService {
     for (const app of this.apps.values()) {
       await this.watchApp(app.id);
     }
+    if (!this.disposed && !this.jobKeysWatcher) {
+      this.jobKeysWatcher = startJobKeysWatcher(path.join(this.paprRootDir, "Jobs"));
+    }
     console.log(
       `[AppService] Routing file changes for ${this.watchedAppIds.size} app directories (1 tree watcher)`,
     );
@@ -3434,6 +3444,9 @@ export class AppService {
   }
 
   private async closeTreeWatcher(): Promise<void> {
+    const jobKeys = this.jobKeysWatcher;
+    this.jobKeysWatcher = null;
+    if (jobKeys) await jobKeys.close();
     const watcher = this.treeWatcher;
     this.treeWatcher = null;
     if (watcher) {
@@ -3482,6 +3495,12 @@ export class AppService {
    */
   private handleFileChange(appId: string, filename: string): void {
     const normalized = filename.replace(/\\/g, "/");
+
+    // Key catalog inputs: refresh the share bar's missing-key check (also for
+    // requirements.json, which is a cloud-prep artifact and returns below).
+    if (isAppRequirementsSource(normalized)) {
+      notifyAppRequirementsChanged(appId);
+    }
 
     // Cloud-prep outputs (bundle.json, linked-databases.json, …) — no reload or auto flush
     if (isCloudPrepGitSyncArtifact(normalized)) {

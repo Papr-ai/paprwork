@@ -2,6 +2,7 @@
  * Per-source Turso sync status for Settings UI.
  */
 
+import { getReplicaPublishHold } from "./tursoReplica/replicaPublishHold.js";
 import { openDiagnosticDatabase } from "./databaseDiagnostics/sqlite.js";
 
 import * as fs from "fs";
@@ -77,6 +78,8 @@ export interface TursoSourceSyncItem {
   lastReplicaPushError?: string | null;
   cutoverBlocked?: boolean;
   cutoverBlockReason?: string | null;
+  /** Breaking schema change waiting to publish with the app code (sync paused for this DB). */
+  heldForPublish?: { since: string; migrationIds: string[] };
 }
 
 export interface TursoSyncItemsReport {
@@ -179,6 +182,7 @@ export function buildReplicaTursoSyncStatusFromRegistry(
     migrationConflict,
     cutoverBlocked: record?.cutoverBlocked ?? false,
     cutoverBlockReason: record?.cutoverBlockReason ?? null,
+    heldForPublish: heldForPublishStatus(localPath),
     sidecarWedge: detectReplicaSidecarWedge(localPath),
     bootstrapPending: bootstrapMarker !== null,
     bootstrapAttempts: bootstrapMarker?.attempts ?? 0,
@@ -356,6 +360,7 @@ function sourceItem(
           lastReplicaPushError: replica.lastPushError,
           cutoverBlocked: replica.cutoverBlocked || undefined,
           cutoverBlockReason: replica.cutoverBlockReason,
+          heldForPublish: replica.heldForPublish,
         }
       : {}),
   };
@@ -469,6 +474,33 @@ export function inspectLegacyArtifactsForStatus(
   if (replicaManaged) return { tables: [], status: "not-applicable" };
   try { return { tables: inspect(dbPath), status: "checked" }; }
   catch { return { tables: [], status: "unavailable" }; }
+}
+
+/** Turso report limited to the given apps (one scoped report per app, merged). */
+export async function buildTursoSyncItemsReportForApps(
+  appsRootDir: string,
+  appIds: readonly string[],
+  options?: BuildTursoSyncItemsReportOptions,
+  build: typeof buildTursoSyncItemsReport = buildTursoSyncItemsReport,
+): Promise<TursoSyncItemsReport> {
+  const reports: TursoSyncItemsReport[] = [];
+  for (const appId of new Set(appIds)) {
+    reports.push(await build(appsRootDir, appId, options));
+  }
+  const summary = { synced: 0, pending: 0, empty: 0, unavailable: 0, quarantined: 0, total: 0 };
+  for (const r of reports) {
+    for (const k of Object.keys(summary) as (keyof typeof summary)[]) {
+      summary[k] += r.summary[k] ?? 0;
+    }
+  }
+  return {
+    enabled: reports.length === 0 || reports.some((r) => r.enabled),
+    databaseMode: "per-job",
+    lastCheckedAt: new Date().toISOString(),
+    error: reports.find((r) => r.error)?.error ?? null,
+    sources: reports.flatMap((r) => r.sources),
+    summary,
+  };
 }
 
 export async function buildTursoSyncItemsReport(
@@ -609,4 +641,9 @@ export async function buildTursoSyncItemsReport(
     sources: items,
     summary: summarize(items),
   };
+}
+
+function heldForPublishStatus(localPath: string): { since: string; migrationIds: string[] } | undefined {
+  const hold = getReplicaPublishHold(localPath);
+  return hold ? { since: hold.since, migrationIds: hold.migrations.map((m) => m.migrationId) } : undefined;
 }

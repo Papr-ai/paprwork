@@ -1061,6 +1061,12 @@ async function startGateway(): Promise<void> {
             await import("./services/gatewayBackgroundBudget.js")
           ).gatewayBackgroundBudget.stats(),
           recentTasks: getRecentBackgroundTaskTimings(),
+          recentFlushes: (
+            await import("./services/cloudSync/flushConcurrency.js")
+          ).getRecentFlushTimings(),
+          publishWorker: (
+            await import("./services/publishWorker/PublishWorkerClient.js")
+          ).getPublishWorkerStatusIfStarted(),
           eventLoopLagMs: sampleEventLoopLagMs(false),
         });
       },
@@ -2856,6 +2862,10 @@ async function startGateway(): Promise<void> {
           req.params.appId,
           body.requirements as RequiredKeySpec[],
         );
+        const { notifyAppRequirementsChanged } = await import(
+          "./services/appRequirementsChanged.js"
+        );
+        notifyAppRequirementsChanged(req.params.appId);
         res.json({
           requirements: file.requirements,
           updatedAt: file.updatedAt,
@@ -3582,13 +3592,9 @@ async function startGateway(): Promise<void> {
       }
 
       try {
-        const { yieldToInteractiveHotPath } =
-          await import("./services/gatewayBackgroundWork.js");
-        await yieldToInteractiveHotPath("api:sync/items", {
-          minQuietMs: 300,
-          maxWaitMs: 45_000,
-        });
-
+        // Status reads never wait for the chat/agent to go quiet: the share chip
+        // polls this while Pen is working, and a 45s wait froze the chip. The
+        // heavy part (Turso report) is cached; upload progress is in memory.
         let appContext:
           | {
               appId: string;
@@ -4952,6 +4958,15 @@ async function startGateway(): Promise<void> {
         await getPlatformSessionService().shutdown();
       } catch (error) {
         console.error("[Gateway] Failed to stop platform sessions:", error);
+      }
+
+      try {
+        const { stopPublishWorker } = await import(
+          "./services/publishWorker/PublishWorkerClient.js"
+        );
+        stopPublishWorker();
+      } catch {
+        /* worker never started */
       }
 
       getJobsScheduler().stop();

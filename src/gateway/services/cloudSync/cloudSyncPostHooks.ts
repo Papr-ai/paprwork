@@ -8,13 +8,13 @@ export interface CloudSyncPostHooksHost {
   consumeFinalizedAppIds: () => string[];
   getPaprDir: () => string;
   setCloudPublishing: (appIds: string[]) => void;
-  clearCloudPublishing: () => void;
+  clearCloudPublishing: (appIds: string[]) => void;
   tryAutoPublishCloudLinks: (appIds: string[]) => Promise<void>;
 }
 
 export async function runPostSyncHooks(
   host: CloudSyncPostHooksHost,
-  options?: { skipTursoReschedule?: boolean },
+  options?: { skipTursoReschedule?: boolean; appIds?: readonly string[] },
 ): Promise<void> {
   if (host.isStopped() || !host.isWriteContextValid("cloud sync post-hooks")) {
     console.warn(
@@ -22,7 +22,11 @@ export async function runPostSyncHooks(
     );
     return;
   }
-  const syncedAppIds = host.consumeFinalizedAppIds();
+  // Parallel flushes pass their own app — a shared "last finalized" list
+  // would let one flush consume or overwrite another's.
+  const syncedAppIds = options?.appIds
+    ? [...options.appIds]
+    : host.consumeFinalizedAppIds();
 
   const { getSyncCoordinator } = await import("./SyncCoordinator.js");
   const coordinator = getSyncCoordinator();
@@ -70,7 +74,7 @@ export async function runPostSyncHooks(
   try {
     await host.tryAutoPublishCloudLinks(webReadyAppIds);
   } finally {
-    host.clearCloudPublishing();
+    host.clearCloudPublishing(webReadyAppIds);
   }
 
   // Revision cache-bust is handled by appRepoCommittedFanout → appRepoRevisionSubscriber

@@ -85,3 +85,8 @@ __pycache__/
 /:memory:
 /:memory:-info
 .qa/
+.local-host/
+
+# Local UI scratch / capture helpers (not product code)
+ui/_capture.mjs
+ui/_film.html

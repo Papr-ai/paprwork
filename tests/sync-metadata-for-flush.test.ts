@@ -72,34 +72,23 @@ describe("syncMetadataToCloudForFlush", () => {
     expect(mockFlushMetadataOutbox).not.toHaveBeenCalled();
   });
 
-  it("does not throw when direct upload fails — returns warnings and retries outbox", async () => {
+  it("tries once and leaves failures to the background outbox (no in-publish retries)", async () => {
     mockUploadAppDbConfig.mockResolvedValueOnce(false);
     mockSyncDatabasesRegistry.mockResolvedValueOnce({
       uploaded: false,
       skippedDuplicate: false,
       queuedForRetry: true,
     });
-    mockFlushMetadataOutbox.mockResolvedValueOnce({ flushed: 0, failed: 1 });
 
     const result = await syncMetadataToCloudForFlush(paprDir, appId, "sha-1");
 
-    expect(result.warnings.length).toBeGreaterThan(0);
-    expect(mockFlushMetadataOutbox).toHaveBeenCalled();
-  });
-
-  it("clears warnings when outbox recovery succeeds", async () => {
-    mockUploadAppDbConfig.mockResolvedValueOnce(false);
-    mockSyncDatabasesRegistry.mockResolvedValueOnce({
-      uploaded: false,
-      skippedDuplicate: false,
-      queuedForRetry: true,
-    });
-    mockFlushMetadataOutbox.mockResolvedValueOnce({ flushed: 2, failed: 0 });
-
-    const result = await syncMetadataToCloudForFlush(paprDir, appId, "sha-1");
-
-    expect(result.warnings).toEqual([]);
-    expect(result.metadataOutboxRecovered).toBe(true);
+    expect(result.warnings.length).toBe(2);
+    expect(result.appDbConfigUploaded).toBe(false);
+    expect(result.databasesRegistryUploaded).toBe(false);
+    // Regression: each retry waited out a 60s timeout, holding publishes ~4.5 min.
+    expect(mockUploadAppDbConfig).toHaveBeenCalledTimes(1);
+    expect(mockSyncDatabasesRegistry).toHaveBeenCalledTimes(1);
+    expect(mockFlushMetadataOutbox).not.toHaveBeenCalled();
   });
 
   it("includes the server's rejection reason in the registry warning", async () => {

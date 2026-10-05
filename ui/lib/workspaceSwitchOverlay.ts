@@ -9,6 +9,8 @@ export type WorkspaceSwitchOverlayPhase =
 export interface WorkspaceSwitchOverlaySnapshot {
   active: boolean;
   phase: WorkspaceSwitchOverlayPhase;
+  /** Workspace id from `papr:list-organizations` — keys org logo branding. */
+  organizationId?: string;
   organizationName?: string;
   namespaceName?: string;
 }
@@ -36,12 +38,14 @@ export function subscribeWorkspaceSwitchOverlay(listener: () => void): () => voi
 }
 
 export function beginWorkspaceSwitchOverlay(labels?: {
+  organizationId?: string;
   organizationName?: string;
   namespaceName?: string;
 }): void {
   snapshot = {
     active: true,
     phase: "preparing",
+    organizationId: labels?.organizationId,
     organizationName: labels?.organizationName,
     namespaceName: labels?.namespaceName,
   };

@@ -228,6 +228,68 @@ async function main() {
       check("track sync returns appId", sync.appId === localAppId, sync.appId);
       check("track sync sets lastSyncedAt", !!sync.lastSyncedAt, sync.lastSyncedAt);
     }
+    console.log(`\n${BOLD}--- Teammate duplicates as own app (fork of same source) ---${RESET}`);
+    const forkMod = await import(
+      pathToFileURL(join(process.cwd(), "dist/gateway/services/CloudAppInstallService.js")).href
+    );
+    const dup = await forkMod.getCloudAppInstallService().installApp({ namespaceId, slug, mode: "fork" });
+    const dupId = dup.app?.id;
+    check("duplicate install succeeded", !!dupId, JSON.stringify(dup.app));
+    check("duplicate is a separate app", !!dupId && dupId !== localAppId, `${dupId} vs ${localAppId}`);
+    check("duplicate mode=fork", dup.mode === "fork", dup.mode);
+    if (dupId) {
+      const dupLineagePath = join(teammateHome, "apps", dupId, "papr-cloud-lineage.json");
+      const dupLineage = existsSync(dupLineagePath) ? JSON.parse(readFileSync(dupLineagePath, "utf8")) : null;
+      check("duplicate is on its own data", dupLineage?.databasePolicy !== "shared", JSON.stringify(dupLineage?.databasePolicy));
+      const linkedOf = (id) => {
+        const p = join(teammateHome, "apps", id, "data-sources.json");
+        if (!existsSync(p)) return [];
+        const raw = JSON.parse(readFileSync(p, "utf8"));
+        return (raw.sources ?? raw ?? []).map((x) => x.dbId).filter(Boolean);
+      };
+      const trackDbs = new Set(localAppId ? linkedOf(localAppId) : []);
+      const dupDbs = linkedOf(dupId);
+      check(
+        "duplicate databases differ from the linked copy",
+        dupDbs.every((d) => !trackDbs.has(d)),
+        `track=${[...trackDbs]} dup=${dupDbs}`,
+      );
+      const trackStill = localAppId && existsSync(join(teammateHome, "apps", localAppId, "papr-cloud-lineage.json"));
+      check("linked copy untouched after duplicate", !!trackStill);
+    }
+
+    console.log(`\n${BOLD}--- Community-style copy: linked, own data, Get updates ---${RESET}`);
+    const comm = await forkMod
+      .getCloudAppInstallService()
+      .installApp({ namespaceId, slug, mode: "track", installDbPolicy: "fork_empty" });
+    const commId = comm.app?.id;
+    check("community copy installed (track + own data)", !!commId && comm.mode === "track", comm.mode);
+    if (commId) {
+      const dsOf = (id) => {
+        const p = join(teammateHome, "apps", id, "data-sources.json");
+        if (!existsSync(p)) return [];
+        const raw = JSON.parse(readFileSync(p, "utf8"));
+        return (raw.sources ?? raw ?? []).map((x) => x.dbId).filter(Boolean).sort();
+      };
+      const before = dsOf(commId);
+      const pull = await runTrackSync(teammateHome, commId);
+      check("community Get updates ran", !!pull?.appId, JSON.stringify(pull?.conflictFiles ?? []));
+      const after = dsOf(commId);
+      check(
+        "community copy still wired only to its own databases",
+        JSON.stringify(before) === JSON.stringify(after),
+        `before=${before} after=${after}`,
+      );
+      const linkedP = join(teammateHome, "apps", commId, "linked-databases.json");
+      const linkedIds = existsSync(linkedP)
+        ? Object.keys(JSON.parse(readFileSync(linkedP, "utf8")).databases ?? {}).sort()
+        : [];
+      check(
+        "community linked-databases are its own",
+        linkedIds.every((d) => before.includes(d)),
+        `linked=${linkedIds} own=${before}`,
+      );
+    }
   } finally {
     if (!skipCleanup) {
       rmSync(isolatedHome, { recursive: true, force: true });

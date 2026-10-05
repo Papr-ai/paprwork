@@ -89,6 +89,11 @@ export function rememberOwnAppCommit(appId: string, commitSha: string): void {
   if (pending.get(appId)?.commitSha === commitSha) clearPendingAppUpdate(appId);
 }
 
+/** Own commits recorded in this process (the publish worker hands these to the gateway). */
+export function listOwnAppCommits(appId: string): string[] {
+  return [...(ownCommits.get(appId) ?? [])];
+}
+
 export function isOwnAppCommit(appId: string, commitSha: string): boolean {
   return ownCommits.get(appId)?.includes(commitSha) ?? false;
 }

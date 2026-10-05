@@ -43,6 +43,10 @@ export async function drainReplicaDbsOnReconnect(): Promise<void> {
     return;
   }
 
+  void import("./scheduleHeldPublishes.js").then(({ scheduleHeldPublishes }) =>
+    scheduleHeldPublishes("reconnect"),
+  );
+
   drainInFlight = (async () => {
     await initializeDatabaseRegistry();
     const registry = getDatabaseRegistryService();
@@ -50,8 +54,12 @@ export async function drainReplicaDbsOnReconnect(): Promise<void> {
       .listActive()
       .filter((r) => shouldUseTursoReplicaForDb({ syncMode: r.syncMode }));
 
+    const { isReplicaHeld } = await import("./replicaPublishHold.js");
     for (const record of records) {
       const source = recordAsDataSource(record);
+      if (isReplicaHeld(record.localPath)) {
+        continue; // published with its app below, not pushed through sync
+      }
       try {
         const result = await pushLinkedDbViaTursoReplica(source);
         if (result.ok) {

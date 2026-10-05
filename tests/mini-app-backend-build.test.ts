@@ -37,4 +37,24 @@ describe("buildAppBackendBundle", () => {
     expect(result.bundle?.actions.ping?.handler).toBe("ping.py");
     expect(result.bundle?.actions.ping?.sha256).toHaveLength(64);
   });
+
+  it("leaves bundle.json byte-identical when handlers are unchanged (no publish loop)", async () => {
+    tempDir = await mkdtemp(join(tmpdir(), "papr-backend-build-"));
+    const backendDir = join(tempDir, "backend");
+    await mkdir(backendDir);
+    await writeFile(join(backendDir, "manifest.json"), JSON.stringify(DEFAULT_BACKEND_MANIFEST, null, 2));
+    await writeFile(join(backendDir, "ping.py"), DEFAULT_BACKEND_PING_HANDLER);
+
+    await buildAppBackendBundle(tempDir);
+    const { readFile } = await import("fs/promises");
+    const before = await readFile(join(backendDir, "bundle.json"), "utf8");
+    await new Promise((r) => setTimeout(r, 5));
+    const again = await buildAppBackendBundle(tempDir);
+    // Regression: a new builtAt on every build made each publish dirty the app again.
+    expect(again.wroteBundle).toBe(false);
+    expect(await readFile(join(backendDir, "bundle.json"), "utf8")).toBe(before);
+
+    await writeFile(join(backendDir, "ping.py"), DEFAULT_BACKEND_PING_HANDLER + "\n# changed\n");
+    expect((await buildAppBackendBundle(tempDir)).wroteBundle).toBe(true);
+  });
 });

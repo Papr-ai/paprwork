@@ -4,10 +4,39 @@ import { DatabaseConnectionTrace, databaseTracingEnabled, sqlOperationKind } fro
 const connectionFinalizer = new FinalizationRegistry<DatabaseConnectionTrace>(trace => trace.close());
 const cursorFinalizer = new FinalizationRegistry<() => void>(end => end());
 
+let replicaGuard: ((dbPath: string) => boolean) | null = null;
+/** Installed by tursoReplicaFileGuard (avoids an import cycle). */
+export function setReplicaManagedPathGuard(guard: (dbPath: string) => boolean): void {
+  replicaGuard = guard;
+}
+/**
+ * Plan A: a replica file belongs to @tursodatabase/sync. A writable
+ * better-sqlite3 handle truncates the WAL on close and wedges sync, so block it
+ * here — the one opener every gateway better-sqlite3 call goes through.
+ */
+/**
+ * Owners allowed a writable handle on a replica file. Only the cutover/bootstrap
+ * cleanup that strips legacy CDC tables — it runs with the engine handle closed,
+ * before the engine (re)attaches to the file.
+ */
+const REPLICA_WRITE_OWNERS = new Set(["services/legacyCdcArtifacts"]);
+
+function assertNotReplicaWritableOpen(owner: string, filename: string | Buffer | undefined, options?: Database.Options): void {
+  if (typeof filename !== "string" || filename === ":memory:" || options?.readonly) return;
+  if (REPLICA_WRITE_OWNERS.has(owner)) return;
+  if (replicaGuard?.(filename)) {
+    throw new Error(
+      `Plan A replica DB at ${filename} must use @tursodatabase/sync — writable better-sqlite3 open is blocked. ` +
+        "Use papr_db_apply_migration / papr_db_exec / /api/db/* instead.",
+    );
+  }
+}
+
 /** Preserve the native constructor, return values, errors and transaction semantics. */
 export function openDiagnosticDatabase(
   Constructor: typeof Database, owner: string, filename?: string | Buffer, options?: Database.Options,
 ): Database.Database {
+  assertNotReplicaWritableOpen(owner, filename, options);
   if (!databaseTracingEnabled()) return new Constructor(filename, options);
   const trace = new DatabaseConnectionTrace(typeof filename === "string" ? filename : ":memory:", owner, "better-sqlite3");
   const opened = trace.begin("open");

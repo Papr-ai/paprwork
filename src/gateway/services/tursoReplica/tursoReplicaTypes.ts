@@ -49,6 +49,8 @@ export interface TursoReplicaSyncStatus {
   migrationConflict: boolean;
   cutoverBlocked: boolean;
   cutoverBlockReason: string | null;
+  /** Breaking schema change waiting to publish with the app code (sync paused). */
+  heldForPublish?: { since: string; migrationIds: string[] };
   /** True when sync WAL is empty but -info claims progress — pull/push will wedge. */
   sidecarWedge: boolean;
   /** Resolved Turso database short name used for this replica. */

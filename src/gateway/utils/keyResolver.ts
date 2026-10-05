@@ -421,6 +421,22 @@ export async function getPaprApiKey(
 }
 
 /**
+ * Child processes (publish worker) have no IPC channel to Electron main. The
+ * gateway resolves the key over IPC and hands it over; seed it as if it came
+ * from IPC so it gets the same workspace-binding check, not the stricter
+ * untrusted-.env check (which rejects legacy-bound keys).
+ */
+export function seedPaprApiKeyFromParent(apiKey: string): boolean {
+  const trimmed = apiKey.trim();
+  if (!trimmed || !paprApiKeyMatchesBoundActiveWorkspace(trimmed)) {
+    return false;
+  }
+  keyCache.PAPR_API_KEY = trimmed;
+  paprApiKeyUnavailableUntil = 0;
+  return true;
+}
+
+/**
  * Clear the key cache (useful for testing or when keys are updated)
  * @param keyName - Optional specific key to clear, or undefined to clear all
  */

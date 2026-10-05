@@ -99,7 +99,13 @@ async function pushLinkedSourcesForFlush(
   await awaitTursoPushInFlightForSyncKeys(syncKeys);
 
   const sourcesNeedingTursoPush: TursoLinkedSource[] = [];
+  const { isReplicaHeld } = await import("../tursoReplica/replicaPublishHold.js");
   for (const source of pushSources) {
+    if (isReplicaHeld(source.dbPath)) {
+      // Breaking migration waiting: finalizeAppRepoMutation publishes it before the code (option A).
+      console.log(`[CloudSync] flushAppNow: ${source.alias} held for publish — skipping row push`);
+      continue;
+    }
     const appSource = linkedSourceAsAppDataSource(source);
     if (options?.replicaOnly && !shouldUseTursoReplicaForSource(appSource)) {
       continue;
@@ -256,6 +262,9 @@ export async function flushAppNow(
       source: "desktop-flush",
       sync,
       skipCatalog: true,
+      onProgress: (label, detail) => {
+        void reportFlushProgress(appId, { layer: "git", label, detail });
+      },
     });
     writerPushed = finalizeResult.writerPushed;
   } catch (err) {
@@ -267,11 +276,21 @@ export async function flushAppNow(
   }
   await yieldEventLoop();
 
+  await reportFlushProgress(appId, {
+    layer: "git",
+    label: "Checking web readiness…",
+    detail: "Confirming code and database are both live in the cloud.",
+  });
   const ready = await webReady(appId, paprDir);
   let published = false;
   let catalogError: string | undefined;
 
   if (ready.ready) {
+    await reportFlushProgress(appId, {
+      layer: "git",
+      label: "Updating app catalog…",
+      detail: "Refreshing the shared app listing.",
+    });
     const { syncPublishedAppCatalogLayer } = await import(
       "../syncV3/syncPublishedAppCatalogLayer.js"
     );
@@ -285,9 +304,14 @@ export async function flushAppNow(
         `[CloudSync] flushAppNow web-ready but catalog sync failed for ${appId}: ${catalogError}`,
       );
     } else {
-      sync.markAppForPostFlushHooks(appId);
+      await reportFlushProgress(appId, {
+        layer: "git",
+        label: "Refreshing share links…",
+        detail: "Updating links for apps that are shared.",
+      });
       await sync.runPostFlushHooks({
         skipTursoReschedule: options?.skipTursoReschedule ?? true,
+        appIds: [appId],
       });
       published = true;
       console.log(`[CloudSync] flushAppNow verified + web-ready for ${appId}`);

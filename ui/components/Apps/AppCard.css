@@ -488,8 +488,25 @@
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
+  min-width: 0;
 }
 .app-card__status-line--ok { color: var(--success); }
+.app-card__status-line--live,
+.app-card__status-line--running,
+.app-card__status-line--fail {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  /* Halo on the ::before dot paints into this padding; base overflow:hidden clipped it. */
+  padding-left: 4px;
+  box-sizing: border-box;
+}
+.app-card__status-line__label {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
 .app-card__status-line--live { color: var(--accent); }
 .app-card__status-line--running { color: var(--accent); }
 .app-card__status-line--fail { color: var(--error); font-weight: 550; }

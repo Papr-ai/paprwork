@@ -743,3 +743,29 @@ describe("resolvePublishBarStatus", () => {
     ).toBe("synced");
   });
 });
+
+describe("deriveAppCloudSyncStatus — database held for publish", () => {
+  it("blocks the green chip and explains the waiting structure change in plain words", () => {
+    const items = baseItems({
+      appId: "app-1",
+      databases: [{ alias: "main", jobId: "job-1", status: "synced" }],
+    });
+    items.appContext = {
+      appId: "app-1",
+      dependentJobIds: [],
+      publishLive: true,
+      publishedAt: "2026-01-01T00:00:00.000Z",
+    };
+    items.publish = { status: "synced", detail: "Live on the web" };
+    const source = items.turso!.sources[0] as Record<string, unknown>;
+    source.syncMode = "replica";
+    source.heldForPublish = { since: "2026-10-04T15:00:00.000Z", migrationIds: ["0004_rename_price"] };
+
+    const status = deriveAppCloudSyncStatus("app-1", items, "idle");
+    expect(status.overall).not.toBe("synced");
+    const db = status.databases.find((d) => d.alias === "main")!;
+    expect(db.heldForPublish?.migrationIds).toEqual(["0004_rename_price"]);
+    expect(db.detail).toMatch(/waiting to publish with the app/);
+    expect(db.detail).not.toMatch(/turso|replica|migration/i);
+  });
+});

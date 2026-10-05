@@ -42,14 +42,65 @@ function resolvePullNumber(req: CloudAppChangeRequestDetail): number | null {
   return parsePullNumberFromPrUrl(req.prUrl);
 }
 
+/**
+ * Every Papr GitHub call (installs, publishes, proposals, app loads) shares one
+ * GitHub App budget per hour. Reviews re-read the same PR a lot (agent retries,
+ * reopening the sheet), so keep the last answer per URL and revalidate with
+ * If-None-Match — a 304 does not count against the limit.
+ */
+const reviewEtagCache = new Map<string, { etag: string; body: string }>();
+const REVIEW_CACHE_MAX = 200;
+
+export class GitHubRateLimitError extends Error {
+  constructor(readonly retryAfterSec: number) {
+    super(
+      `GitHub is rate-limiting Papr right now (shared hourly limit). ` +
+        `Try again in about ${Math.max(1, Math.ceil(retryAfterSec / 60))} min — nothing is lost.`,
+    );
+    this.name = "GitHubRateLimitError";
+  }
+}
+
+export function githubRateLimitWaitSec(
+  status: number,
+  headers: { get(name: string): string | null },
+  body: string,
+  nowMs = Date.now(),
+): number | null {
+  if (status !== 403 && status !== 429) return null;
+  const retryAfter = headers.get("retry-after");
+  const remaining = headers.get("x-ratelimit-remaining");
+  if (!retryAfter && remaining !== "0" && !/rate limit/i.test(body)) return null;
+  if (retryAfter && /^\d+$/.test(retryAfter)) return Number(retryAfter);
+  const reset = headers.get("x-ratelimit-reset");
+  if (reset && /^\d+$/.test(reset)) return Math.max(0, Number(reset) - Math.floor(nowMs / 1000));
+  return 60;
+}
+
 async function githubJson<T>(
   url: string,
   token: string,
 ): Promise<{ ok: true; data: T } | { ok: false; status: number; body: string }> {
-  const response = await fetch(url, { headers: githubHeaders(token) });
+  const cached = reviewEtagCache.get(url);
+  const headers = githubHeaders(token);
+  if (cached) headers["If-None-Match"] = cached.etag;
+  const response = await fetch(url, { headers });
+  if (response.status === 304 && cached) {
+    return { ok: true, data: JSON.parse(cached.body) as T };
+  }
   const body = await response.text();
   if (!response.ok) {
+    const wait = githubRateLimitWaitSec(response.status, response.headers, body);
+    if (wait !== null) throw new GitHubRateLimitError(wait);
     return { ok: false, status: response.status, body: body.slice(0, 400) };
+  }
+  const etag = response.headers.get("etag");
+  if (etag) {
+    if (reviewEtagCache.size >= REVIEW_CACHE_MAX) {
+      const first = reviewEtagCache.keys().next().value;
+      if (first !== undefined) reviewEtagCache.delete(first);
+    }
+    reviewEtagCache.set(url, { etag, body });
   }
   return { ok: true, data: JSON.parse(body) as T };
 }

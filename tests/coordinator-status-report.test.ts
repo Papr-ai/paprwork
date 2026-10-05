@@ -43,8 +43,12 @@ describe("buildCoordinatorStatusReport", () => {
     } as unknown as CloudSyncService;
 
     const coordinator = new SyncCoordinator(sync);
-    (coordinator as unknown as { activeProgress: { appId: string; startedAt: number } }).activeProgress =
-      { appId: "app-1", startedAt: Date.now() };
+    (coordinator as unknown as { runningFlushes: Map<string, unknown> }).runningFlushes.set("app-1", {
+      appId: "app-1",
+      trigger: "manual",
+      startedAt: Date.now(),
+      syncKeys: new Set<string>(),
+    });
 
     const report = buildCoordinatorStatusReport(coordinator, "app-1");
     expect(report?.status).toBe("uploading");
@@ -60,8 +64,12 @@ describe("buildCoordinatorStatusReport", () => {
     } as unknown as CloudSyncService;
 
     const coordinator = new SyncCoordinator(sync);
-    (coordinator as unknown as { activeProgress: { appId: string; startedAt: number } }).activeProgress =
-      { appId: "other-app", startedAt: Date.now() };
+    (coordinator as unknown as { runningFlushes: Map<string, unknown> }).runningFlushes.set("other-app", {
+      appId: "other-app",
+      trigger: "manual",
+      startedAt: Date.now(),
+      syncKeys: new Set<string>(),
+    });
 
     const report = buildCoordinatorStatusReport(coordinator, "app-1");
     expect(report?.status).toBe("idle");
@@ -197,10 +205,15 @@ describe("buildCoordinatorStatusReport", () => {
     } as unknown as CloudSyncService;
 
     const coordinator = new SyncCoordinator(sync);
-    (coordinator as unknown as { activeProgress: { appId: string; startedAt: number } }).activeProgress =
-      { appId: "other-app", startedAt: Date.now() };
+    (coordinator as unknown as { runningFlushes: Map<string, unknown> }).runningFlushes.set("other-app", {
+      appId: "other-app",
+      trigger: "manual",
+      startedAt: Date.now(),
+      syncKeys: new Set<string>(),
+    });
     vi.spyOn(coordinator, "getStatus").mockReturnValue({
       activeFlush: { appId: "other-app", layer: "git", startedAt: Date.now(), label: "Flush" },
+      activeFlushes: [{ appId: "other-app", layer: "git", startedAt: Date.now(), label: "Flush" }],
       gitDirtyAppIds: [],
       dbDirtySyncKeys: [],
       inFlightAppIds: ["other-app"],

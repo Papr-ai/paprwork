@@ -1,5 +1,5 @@
 /**
- * Workspace switch modal — liquid glass, aligned with CreateAppModal / Settings cards.
+ * Workspace switch modal — compact header + step list, aligned with rail peek panels.
  */
 
 .workspace-switch-overlay {
@@ -24,14 +24,18 @@
 }
 
 .workspace-switch-overlay__panel {
-  width: min(440px, 100%);
-  padding: var(--space-8, 32px) var(--space-6, 24px);
-  border-radius: var(--r-xxl, 24px);
-  border: 1px solid var(--border-color, var(--glass-border));
-  background: var(--popover-bg, #ffffff);
-  color: var(--text-primary);
-  box-shadow: var(--shadow-3, 0 24px 48px rgba(0, 0, 0, 0.18));
-  text-align: center;
+  width: min(320px, 100%);
+  padding: 8px;
+  border-radius: 16px;
+  border: 1px solid rgba(255, 255, 255, 0.7);
+  background: var(--rail-card, var(--popover-bg, #ffffff));
+  backdrop-filter: blur(22px) saturate(1.6);
+  -webkit-backdrop-filter: blur(22px) saturate(1.6);
+  color: var(--rail-ink, var(--text-primary));
+  box-shadow:
+    0 18px 50px rgba(10, 16, 32, 0.16),
+    0 0 0 1px var(--rail-card-line, var(--border-color));
+  text-align: left;
   animation: workspace-switch-panel-in 280ms cubic-bezier(0.2, 0.8, 0.2, 1);
 }
 
@@ -46,74 +50,66 @@
   }
 }
 
-.workspace-switch-overlay__icon {
-  display: inline-flex;
+.workspace-switch-overlay__header {
+  display: flex;
   align-items: center;
-  justify-content: center;
-  width: 56px;
-  height: 56px;
-  margin: 0 auto var(--space-4, 16px);
-  border-radius: var(--r-lg, 12px);
-  color: var(--accent-color, #0071e3);
-  background: color-mix(in srgb, var(--accent-color, #0071e3) 14%, transparent);
-  border: 1px solid color-mix(in srgb, var(--accent-color, #0071e3) 22%, transparent);
+  gap: 10px;
+  padding: 6px 8px 8px;
 }
 
-.workspace-switch-overlay__icon svg {
-  width: 28px;
-  height: 28px;
+.workspace-switch-overlay__mark {
+  flex-shrink: 0;
+}
+
+.workspace-switch-overlay__heading {
+  min-width: 0;
+  flex: 1;
 }
 
 .workspace-switch-overlay__title {
-  margin: 0 0 var(--space-2, 8px);
-  font-family: var(--font-display, var(--font-body));
-  font-size: 20px;
+  margin: 0;
+  font-family: var(--font-body);
+  font-size: 13px;
   font-weight: 600;
-  letter-spacing: -0.02em;
-  color: var(--text-primary);
+  letter-spacing: -0.01em;
+  color: var(--rail-ink, var(--text-primary));
+  line-height: 1.3;
 }
 
 .workspace-switch-overlay__target {
-  margin: 0 0 var(--space-2, 8px);
-  font-size: 14px;
-  font-weight: 500;
-  color: var(--text-primary);
-  line-height: 1.4;
-}
-
-.workspace-switch-overlay__subtitle {
-  margin: 0 0 var(--space-6, 24px);
-  font-size: 13px;
-  line-height: 1.5;
-  color: var(--text-tertiary);
+  margin: 2px 0 0;
+  font-size: 12px;
+  font-weight: 400;
+  color: var(--rail-soft, var(--text-secondary));
+  line-height: 1.35;
 }
 
 .workspace-switch-overlay__steps {
   display: flex;
   flex-direction: column;
-  gap: var(--space-2, 8px);
+  gap: 2px;
   margin: 0;
-  padding: var(--space-4, 16px);
+  padding: 4px 0 2px;
   list-style: none;
   text-align: left;
-  border-radius: var(--r-lg, 12px);
-  border: 1px solid var(--border-color);
-  background: var(--panel-bg, var(--background-secondary));
 }
 
 .workspace-switch-overlay__step {
   display: flex;
   align-items: center;
-  gap: var(--space-3, 12px);
-  min-height: 28px;
+  gap: 10px;
+  min-height: 32px;
+  padding: 4px 8px;
+  border-radius: 10px;
   font-size: 13px;
-  color: var(--text-tertiary);
+  color: var(--rail-soft, var(--text-tertiary));
   transition: color var(--dur-2, 150ms) var(--ease, ease);
 }
 
 .workspace-switch-overlay__step--active {
-  color: var(--text-primary);
+  color: var(--rail-ink, var(--text-primary));
   font-weight: 500;
+  background: color-mix(in srgb, var(--accent-color, #0071e3) 8%, transparent);
 }
 
 .workspace-switch-overlay__step--done {
@@ -187,7 +183,7 @@
   margin-top: 2px;
   font-size: 12px;
   font-weight: 400;
-  color: var(--text-tertiary);
+  color: var(--rail-soft, var(--text-tertiary));
 }
 
 .workspace-switch-overlay__step--active .workspace-switch-overlay__step-detail {
@@ -225,5 +221,9 @@
 @media (prefers-color-scheme: dark) {
   .workspace-switch-overlay {
     background: rgba(0, 0, 0, 0.58);
+  }
+
+  .workspace-switch-overlay__panel {
+    border-color: rgba(255, 255, 255, 0.12);
   }
 }

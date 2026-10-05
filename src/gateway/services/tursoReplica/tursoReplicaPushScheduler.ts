@@ -334,6 +334,13 @@ async function executeReplicaPushForSyncKey(syncKey: string): Promise<void> {
     return;
   }
 
+  const { isSyncKeyHeld } = await import("./replicaPublishHold.js");
+  if (isSyncKeyHeld(syncKey)) {
+    // Held for publish: the publish procedure uploads it (Phase 2). Don't retry here.
+    clearDirtyTracking(syncKey);
+    return;
+  }
+
   const resolved = await resolveReplicaSourceForSyncKey(syncKey);
   if (!resolved) {
     clearDirtyTracking(syncKey);

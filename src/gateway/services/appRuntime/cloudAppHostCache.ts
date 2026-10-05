@@ -13,6 +13,7 @@ import type {
 import { fetchRuntimeRepoFile, fetchRuntimeRepoCredentials } from "./memoryRuntimeClient.js";
 import { isDirectGithubRepoFetchEnabled } from "./cloudAppHostDirectGithub.js";
 import {
+  fetchGithubBranchHeadSha,
   fetchGithubRepoTextFile,
   repoCredentialsCacheTtlMs,
 } from "./githubAppRepoClient.js";
@@ -85,6 +86,23 @@ const revisionInflight = new Map<string, Promise<string>>();
 const accessCache = new Map<string, TimedEntry<AppAccessContext | null>>();
 const repoCredentialsCache = new Map<string, TimedEntry<AppRuntimeRepoCredentials>>();
 const transpileCache = new Map<string, TimedEntry<MiniAppTranspileResult>>();
+/**
+ * Commit SHA each app's files are read at (per namespace:slug). Set from the
+ * publish notify (instant switch-over) or resolved from the GitHub API; reading
+ * by SHA avoids the ~5 min raw.githubusercontent.com branch cache (spike S5).
+ */
+const repoRefCache = new Map<string, TimedEntry<string>>();
+/**
+ * Commit pinned by the latest publish/commit notify. Wins over origin resolution
+ * (incl. bypass refreshes and the deploy-snapshot warm, which runs without reader
+ * credentials and would otherwise resolve "0" and overwrite the pin).
+ */
+const pinnedCommitCache = new Map<string, TimedEntry<string>>();
+const PINNED_COMMIT_TTL_MS = 600_000;
+/** Failed head lookups (e.g. GitHub installation rate limit) — don't retry per request. */
+const headLookupFailedUntil = new Map<string, number>();
+const HEAD_LOOKUP_BACKOFF_MS = 60_000;
+const repoRefInflight = new Map<string, Promise<string | undefined>>();
 
 /** Parsed app db config (Phase 3.3) — keyed by namespace + slug + revision, not per-user auth. */
 export interface AppDbConfigCacheEntry {
@@ -107,7 +125,7 @@ function sweepExpired(): void {
   for (const [key, entry] of appDbConfigCache) {
     if (now > entry.staleUntil) appDbConfigCache.delete(key);
   }
-  for (const cache of [accessCache, transpileCache, repoRevisionCache, repoCredentialsCache]) {
+  for (const cache of [accessCache, transpileCache, repoRevisionCache, repoCredentialsCache, repoRefCache]) {
     for (const [key, entry] of cache) {
       if (now > (entry as TimedEntry<unknown>).expiresAt) {
         cache.delete(key);
@@ -203,6 +221,10 @@ async function getAppCacheRevision(
   bypassRevisionCache: boolean,
 ): Promise<string> {
   const revKey = appCacheScopeKey(auth);
+  const pinned = readTimed(pinnedCommitCache, revKey);
+  if (pinned) {
+    return pinned;
+  }
   if (!bypassRevisionCache) {
     const cached = readTimed(repoRevisionCache, revKey);
     if (cached !== undefined) {
@@ -269,7 +291,8 @@ async function fetchRuntimeRepoFileOrigin(
     }
     if (credentials) {
       try {
-        return await fetchGithubRepoTextFile(credentials, relativePath);
+        const ref = await resolveRepoRef(auth, credentials);
+        return await fetchGithubRepoTextFile(credentials, relativePath, undefined, ref);
       } catch (err) {
         console.warn(
           `[CloudAppHost] Direct GitHub fetch failed for ${relativePath}, ` +
@@ -279,6 +302,57 @@ async function fetchRuntimeRepoFileOrigin(
     }
   }
   return fetchRuntimeRepoFile(auth, relativePath);
+}
+
+async function resolveRepoRef(
+  auth: AppRuntimeRouteAuth,
+  credentials: AppRuntimeRepoCredentials,
+): Promise<string | undefined> {
+  const key = appCacheScopeKey(auth);
+  const pinned = readTimed(pinnedCommitCache, key);
+  if (pinned) {
+    return pinned;
+  }
+  const cached = readTimed(repoRefCache, key);
+  if (cached) {
+    return cached;
+  }
+  if ((headLookupFailedUntil.get(key) ?? 0) > Date.now()) {
+    return undefined;
+  }
+  const inflight = repoRefInflight.get(key);
+  if (inflight) {
+    return inflight;
+  }
+  const pending = fetchGithubBranchHeadSha(credentials)
+    .then((sha) => {
+      writeTimed(repoRefCache, key, sha, REPO_REVISION_TTL_MS);
+      return sha;
+    })
+    .catch((err: Error) => {
+      // Fall back to branch-name reads (old behaviour) rather than failing the page.
+      headLookupFailedUntil.set(key, Date.now() + HEAD_LOOKUP_BACKOFF_MS);
+      console.warn(`[CloudAppHost] Head SHA lookup failed, reading by branch: ${err.message.slice(0, 420)}`);
+      return undefined;
+    })
+    .finally(() => repoRefInflight.delete(key));
+  repoRefInflight.set(key, pending);
+  return pending;
+}
+
+/** Pin an app to a just-published commit so the next request serves it (call after invalidating). */
+export function pinPublishedAppCommit(namespaceId: string, slug: string, commitSha: string): void {
+  const sha = commitSha.trim();
+  if (!/^[0-9a-f]{40}$/i.test(sha)) {
+    return;
+  }
+  writeTimed(repoRefCache, `${namespaceId}:${slug}`, sha, REPO_REVISION_TTL_MS);
+  // Also key the file caches by this SHA. Otherwise the revision is re-resolved
+  // from origin and, if that fails, falls back to "0" — a key that can still hold
+  // the previous commit's files in the shared GCS cache (QA: ~12s of old code
+  // served after the switch).
+  writeTimed(repoRevisionCache, `${namespaceId}:${slug}`, sha, REPO_REVISION_TTL_MS);
+  writeTimed(pinnedCommitCache, `${namespaceId}:${slug}`, sha, PINNED_COMMIT_TTL_MS);
 }
 
 function writeRepoFileEntry(
@@ -560,6 +634,10 @@ export function resetCloudAppHostCachesForTests(): void {
   repoCredentialsCache.clear();
   transpileCache.clear();
   appDbConfigCache.clear();
+  repoRefCache.clear();
+  repoRefInflight.clear();
+  pinnedCommitCache.clear();
+  headLookupFailedUntil.clear();
 }
 
 function invalidateAccessCacheByPrefix(prefix: string): void {
@@ -602,6 +680,13 @@ export function invalidateRepoCacheForPublishedApp(
   for (const key of transpileCache.keys()) {
     if (key.startsWith(prefix)) {
       transpileCache.delete(key);
+    }
+  }
+  pinnedCommitCache.delete(prefix.slice(0, -1));
+  headLookupFailedUntil.delete(prefix.slice(0, -1));
+  for (const key of repoRefCache.keys()) {
+    if (key === prefix.slice(0, -1) || key.startsWith(prefix)) {
+      repoRefCache.delete(key);
     }
   }
   invalidateAppDbConfigCacheByPrefix(prefix);

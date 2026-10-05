@@ -16,6 +16,7 @@ import type { RequiredKeySpec } from "../../../src/core/types/bundles";
 import type { ShareAudience } from "../../utils/shareAudienceModel";
 import { shareAudienceGlyphPath } from "../../utils/shareAudienceGlyphs";
 import { fetchAppRequirements } from "../../utils/cloudAppRequirementsApi";
+import { useRequirementsChangedTick } from "../../hooks/useMissingAppKeys";
 import {
   SHARE_AUDIENCE_COPY,
   SHARE_AUDIENCE_ORDER,
@@ -408,6 +409,7 @@ function useKeySpecs(
   reloadToken: number,
 ): RequiredKeySpec[] | null {
   const [specs, setSpecs] = useState<RequiredKeySpec[] | null>(null);
+  const catalogTick = useRequirementsChangedTick(appId);
   useEffect(() => {
     let cancelled = false;
     fetchAppRequirements(appId)
@@ -416,7 +418,7 @@ function useKeySpecs(
     return () => {
       cancelled = true;
     };
-  }, [appId, reloadToken]);
+  }, [appId, reloadToken, catalogTick]);
   return specs;
 }
 

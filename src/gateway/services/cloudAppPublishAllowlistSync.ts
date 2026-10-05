@@ -17,15 +17,16 @@ export async function persistSharePeopleAllowlistForCloudHost(
     CloudPublishAppPrefs,
     "allowedUserIds" | "allowedEmails" | "allowedEmailDomains"
   >,
-): Promise<void> {
+): Promise<boolean> {
   const appDir = path.join(paprDir, "apps", appId);
   try {
-    await writeSharePeopleAllowlistRepoFile(appDir, prefs);
+    return await writeSharePeopleAllowlistRepoFile(appDir, prefs);
   } catch (error) {
     console.warn(
       `[CloudPublish] share-people-allowlist.json write failed for ${appId}:`,
       error instanceof Error ? error.message.slice(0, 120) : String(error),
     );
+    return false;
   }
 }
 
@@ -51,10 +52,12 @@ export function scheduleCloudAppHostAccessInvalidation(
     "allowedUserIds" | "allowedEmails" | "allowedEmailDomains"
   >,
 ): void {
-  void persistSharePeopleAllowlistForCloudHost(paprDir, appId, prefs);
-
-  void import("./CloudSyncService.js")
-    .then(({ getCloudSyncService }) => {
+  // Push only when the allowlist file actually changed. Pushing on every call
+  // looped: publish → catalog update → push → publish… every ~20s per shared app.
+  void persistSharePeopleAllowlistForCloudHost(paprDir, appId, prefs)
+    .then(async (changed) => {
+      if (!changed) return;
+      const { getCloudSyncService } = await import("./CloudSyncService.js");
       getCloudSyncService()?.pushAppNowInBackground(appId);
     })
     .catch(() => {

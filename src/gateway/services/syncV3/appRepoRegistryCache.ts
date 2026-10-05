@@ -11,6 +11,8 @@ import type {
 } from "../../../core/types/appRepoRegistry.js";
 import { APP_REPO_REGISTRY_CACHE_FILENAME } from "../../../core/types/appRepoRegistry.js";
 import { getPaprRoot } from "../../../core/utils/paprRoot.js";
+import { writeFileAtomic } from "../../../core/utils/atomicJsonWrite.js";
+import { withCrossProcessFileLock } from "../../../core/utils/crossProcessFileLock.js";
 
 function cachePath(): string {
   return path.join(getPaprRoot(), "data", APP_REPO_REGISTRY_CACHE_FILENAME);
@@ -39,44 +41,51 @@ export async function getCachedAppRepoRecord(
 export async function upsertCachedAppRepoRecord(
   record: AppRepoRecord,
 ): Promise<void> {
-  const cache = await readAppRepoRegistryCache();
-  cache.records[record.appId] = record;
-  cache.updatedAt = new Date().toISOString();
-  const filePath = cachePath();
-  await fs.mkdir(path.dirname(filePath), { recursive: true });
-  await fs.writeFile(filePath, JSON.stringify(cache, null, 2), "utf8");
+  return withCrossProcessFileLock(cachePath(), async () => {
+    const cache = await readAppRepoRegistryCache();
+    cache.records[record.appId] = record;
+    cache.updatedAt = new Date().toISOString();
+    const filePath = cachePath();
+    await fs.mkdir(path.dirname(filePath), { recursive: true });
+    await writeFileAtomic(filePath, JSON.stringify(cache, null, 2));
+  });
 }
 
 export async function removeCachedAppRepoRecord(
   appId: string,
   paprHome?: string,
 ): Promise<boolean> {
-  const trimmed = appId.trim();
-  if (!trimmed) {
-    return false;
-  }
-  const filePath = paprHome
+  const lockFile = paprHome
     ? path.join(paprHome, "data", APP_REPO_REGISTRY_CACHE_FILENAME)
     : cachePath();
-  let cache: AppRepoRegistryCacheFile;
-  try {
-    const raw = await fs.readFile(filePath, "utf8");
-    const parsed = JSON.parse(raw) as AppRepoRegistryCacheFile;
-    if (parsed.version !== 1 || typeof parsed.records !== "object") {
+  return withCrossProcessFileLock(lockFile, async () => {
+    const trimmed = appId.trim();
+    if (!trimmed) {
       return false;
     }
-    cache = parsed;
-  } catch {
-    return false;
-  }
-  if (!cache.records[trimmed]) {
-    return false;
-  }
-  delete cache.records[trimmed];
-  cache.updatedAt = new Date().toISOString();
-  await fs.mkdir(path.dirname(filePath), { recursive: true });
-  await fs.writeFile(filePath, JSON.stringify(cache, null, 2), "utf8");
-  return true;
+    const filePath = paprHome
+      ? path.join(paprHome, "data", APP_REPO_REGISTRY_CACHE_FILENAME)
+      : cachePath();
+    let cache: AppRepoRegistryCacheFile;
+    try {
+      const raw = await fs.readFile(filePath, "utf8");
+      const parsed = JSON.parse(raw) as AppRepoRegistryCacheFile;
+      if (parsed.version !== 1 || typeof parsed.records !== "object") {
+        return false;
+      }
+      cache = parsed;
+    } catch {
+      return false;
+    }
+    if (!cache.records[trimmed]) {
+      return false;
+    }
+    delete cache.records[trimmed];
+    cache.updatedAt = new Date().toISOString();
+    await fs.mkdir(path.dirname(filePath), { recursive: true });
+    await writeFileAtomic(filePath, JSON.stringify(cache, null, 2));
+    return true;
+  });
 }
 
 function emptyCache(): AppRepoRegistryCacheFile {

@@ -69,7 +69,7 @@ export async function notifyCloudAppAccessUpdated(
 }
 
 export async function notifyCloudAppRevisionUpdated(
-  input: NotifyCloudAppRevisionInput,
+  input: NotifyCloudAppRevisionInput & { commitSha?: string },
 ): Promise<void> {
   const hostKey = process.env.PAPR_CLOUD_APP_HOST_KEY?.trim();
   if (!hostKey) {

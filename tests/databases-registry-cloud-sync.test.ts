@@ -49,4 +49,26 @@ describe("syncDatabasesRegistryToCloudCoalesced", () => {
 
     expect(mockUpload).toHaveBeenCalledTimes(2);
   });
+
+  it("shares one PUT across parallel publishes of the same snapshot", async () => {
+    let release!: (ok: boolean) => void;
+    mockUpload.mockImplementationOnce(() => new Promise<boolean>((r) => (release = r)));
+    const all = Promise.all(
+      [1, 2, 3].map(() => syncDatabasesRegistryToCloudCoalesced(paprDir, registry)),
+    );
+    await new Promise((r) => setTimeout(r, 0));
+    release(true);
+    const results = await all;
+    expect(results.every((r) => r.uploaded)).toBe(true);
+    expect(mockUpload).toHaveBeenCalledTimes(1);
+  });
+
+  it("does not re-send a snapshot that just failed (already queued for background retry)", async () => {
+    mockUpload.mockResolvedValueOnce(false);
+    const first = await syncDatabasesRegistryToCloudCoalesced(paprDir, registry);
+    const second = await syncDatabasesRegistryToCloudCoalesced(paprDir, registry);
+    expect(first.queuedForRetry).toBe(true);
+    expect(second.queuedForRetry).toBe(true);
+    expect(mockUpload).toHaveBeenCalledTimes(1);
+  });
 });

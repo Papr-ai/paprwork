@@ -863,8 +863,13 @@ export class DatabaseRegistryService {
         existing.status === "tombstone" ||
         incoming.updatedAt > existing.updatedAt
       ) {
+        // Cloud copies of databases.json carry localPath "" (paths are stripped
+        // before upload). Blank is not job scratch — keep syncMode=replica, or the
+        // cloud host treats replica DBs as legacy and installs CDC columns/triggers.
+        const localPath = incoming.localPath?.trim() ?? "";
         const next =
-          !isEligibleRegistryLocalPath(incoming.localPath) &&
+          localPath.length > 0 &&
+          !isEligibleRegistryLocalPath(localPath) &&
           incoming.syncMode === "replica"
             ? (() => {
                 const { syncMode: _drop, ...rest } = incoming;

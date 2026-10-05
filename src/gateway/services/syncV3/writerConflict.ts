@@ -40,6 +40,20 @@ export async function invalidateWriterConflictPaths(
 ): Promise<void> {
   for (const artifact of artifacts) {
     await invalidateCachedPath(appId, artifact.path);
+  }
+  rememberWriterConflicts(appId, artifacts, { persist: true });
+}
+
+/**
+ * Record conflicts in this process's recent list. The publish worker already
+ * invalidated + persisted them; the gateway only needs them for status reads.
+ */
+export function rememberWriterConflicts(
+  appId: string,
+  artifacts: AppRepoOpsConflictResponse["artifacts"],
+  options: { persist?: boolean } = {},
+): void {
+  for (const artifact of artifacts) {
     const event: WriterConflictEvent = {
       appId,
       path: artifact.path,
@@ -48,7 +62,9 @@ export async function invalidateWriterConflictPaths(
       at: new Date().toISOString(),
     };
     recentConflicts.push(event);
-    void persistConflictEvent(event);
+    if (options.persist) {
+      void persistConflictEvent(event);
+    }
   }
   while (recentConflicts.length > MAX_RECENT_CONFLICTS) {
     recentConflicts.shift();

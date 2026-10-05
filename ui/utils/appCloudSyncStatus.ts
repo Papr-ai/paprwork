@@ -77,6 +77,8 @@ export interface AppCloudDatabaseStatus {
   lastReplicaPushError?: string | null;
   cutoverBlocked?: boolean;
   cutoverBlockReason?: string | null;
+  /** Breaking schema change waiting to publish with the app code. */
+  heldForPublish?: { since: string; migrationIds: string[] };
 }
 
 /** Pending DB work that should block the green "Synced" chip. */
@@ -89,8 +91,12 @@ function databaseBlocksOverallSync(input: {
   pendingPush?: boolean;
   migrationConflict?: boolean;
   cutoverBlocked?: boolean;
+  heldForPublish?: boolean;
 }): boolean {
   if (input.status === "quarantined" || input.status === "unavailable") {
+    return true;
+  }
+  if (input.heldForPublish) {
     return true;
   }
   if (input.syncMode === "replica") {
@@ -340,12 +346,17 @@ function databaseDetail(item: {
   lastReplicaPushError?: string | null;
   cutoverBlocked?: boolean;
   cutoverBlockReason?: string | null;
+  heldForPublish?: { since: string; migrationIds: string[] };
 }): string {
   // Primary copy is for non-technical users: no Turso / replica / migration /
   // ledger / cutover / CDC. Raw reasons stay on lastReplicaPushError and
   // cutoverBlockReason for a Details line.
   const pendingCount = item.pendingOps ?? 0;
   const changes = pendingCount === 1 ? "change" : "changes";
+  if (item.heldForPublish) {
+    const n = item.heldForPublish.migrationIds.length;
+    return `Structure change waiting to publish with the app (${n} ${n === 1 ? "change" : "changes"}) — works locally, the web copy updates on the next publish`;
+  }
   if (item.syncMode === "replica") {
     if (item.migrationConflict) {
       return "Your local database and the web version have different structures — ask the agent to reconcile them, then publish again";
@@ -732,6 +743,7 @@ export function deriveAppCloudSyncStatus(
         pendingPush: source.pendingPush,
         migrationConflict: source.migrationConflict,
         cutoverBlocked: source.cutoverBlocked,
+        heldForPublish: !!source.heldForPublish,
       });
       const rowsSyncing =
         !isReplica &&
@@ -760,6 +772,7 @@ export function deriveAppCloudSyncStatus(
           lastReplicaPushError: source.lastReplicaPushError,
           cutoverBlocked: source.cutoverBlocked,
           cutoverBlockReason: source.cutoverBlockReason,
+          heldForPublish: source.heldForPublish,
         }),
         manualUploadHold: source.manualUploadHold,
         schemaDrift: source.schemaDrift,
@@ -772,6 +785,7 @@ export function deriveAppCloudSyncStatus(
         lastReplicaPushError: source.lastReplicaPushError,
         cutoverBlocked: source.cutoverBlocked,
         cutoverBlockReason: source.cutoverBlockReason,
+        heldForPublish: source.heldForPublish,
       };
     });
 
@@ -793,6 +807,7 @@ export function deriveAppCloudSyncStatus(
       pendingPush: source?.pendingPush,
       migrationConflict: source?.migrationConflict,
       cutoverBlocked: source?.cutoverBlocked,
+      heldForPublish: !!source?.heldForPublish,
     });
   }).length;
   const dbRowsSyncing = databases.filter((db) => db.rowsSyncing).length;

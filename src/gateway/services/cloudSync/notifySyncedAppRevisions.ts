@@ -19,6 +19,8 @@ export async function notifySyncedAppRevisions(
 
   const { getCloudAppPublishService } = await import("../CloudAppPublishService.js");
   const publish = getCloudAppPublishService();
+  const { readAppRepoCommitCursors } = await import("../syncV3/appRepoCommittedFanout.js");
+  const cursors = await readAppRepoCommitCursors().catch(() => ({}) as Record<string, { lastCommitSha?: string }>);
 
   for (const appId of syncedAppIds) {
     try {
@@ -30,7 +32,8 @@ export async function notifySyncedAppRevisions(
       if (!route) {
         continue;
       }
-      await notifyCloudAppRevisionUpdated(route);
+      // Pass the just-committed SHA so the host switches to it immediately.
+      await notifyCloudAppRevisionUpdated({ ...route, commitSha: cursors[appId]?.lastCommitSha });
     } catch (error) {
       console.warn(
         `[CloudSync] Skipped revision notify for ${appId}:`,

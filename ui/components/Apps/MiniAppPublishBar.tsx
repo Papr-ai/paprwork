@@ -2120,7 +2120,10 @@ export function MiniAppPublishBar({
                 void handleWebSyncPushOrPublish(publishBarAction.pullFirst === true);
               }}
             >
-              {publishBarAction.label}
+              {/* Two destinations on one control: say which one this half is. */}
+              {showProposeSplit && publishBarAction.label === "Publish"
+                ? "Publish my version"
+                : publishBarAction.label}
             </button>
             {showProposeSplit && cloudLineage ? (
               <>
@@ -2132,7 +2135,13 @@ export function MiniAppPublishBar({
                     Propose sheet does not yet say "nothing to send" either. */}
                 <button
                   type="button"
-                  className="mini-app-publish-bar__button mini-app-publish-bar__button--primary mini-app-publish-bar__split-caret"
+                  className={`mini-app-publish-bar__button mini-app-publish-bar__button--primary mini-app-publish-bar__split-caret${
+                    // Right after a clean publish, Publish has nothing left to
+                    // send and Propose is the likely next step: point at it.
+                    webSyncActionKind === "propose" && webSyncActionNotice
+                      ? " mini-app-publish-bar__split-caret--nudge"
+                      : ""
+                  }`}
                   aria-haspopup="menu"
                   aria-expanded={proposeMenuOpen}
                   aria-label={`More ways to send changes, including propose to ${cloudLineage.sourceSlug}`}
@@ -2168,7 +2177,7 @@ export function MiniAppPublishBar({
                         openPropose();
                       }}
                     >
-                      Propose to {cloudLineage.sourceSlug}
+                      Propose to {cloudLineage.sourceSlug}…
                       <span className="pb-overflow__hint">
                         Send your edits to the publisher for review
                       </span>

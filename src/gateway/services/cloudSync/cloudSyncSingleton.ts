@@ -20,6 +20,11 @@ export function initializeCloudSyncService(opts?: {
   void import("./SyncCoordinator.js").then(({ initializeSyncCoordinator }) => {
     initializeSyncCoordinator(instance!);
     console.log("[CloudSync] SyncCoordinator ready");
+    // Breaking migrations left held by a previous run: publish them now (Phase 3).
+    // Must run after the coordinator exists — cloud sync starts minutes after boot.
+    return import("../tursoReplica/scheduleHeldPublishes.js").then(({ scheduleHeldPublishes }) =>
+      scheduleHeldPublishes("startup"),
+    );
   });
   return instance;
 }

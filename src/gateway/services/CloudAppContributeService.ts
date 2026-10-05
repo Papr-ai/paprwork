@@ -25,6 +25,12 @@ import { resolveMigrationRootFromDbPath } from "./jobs/databaseMigrations.js";
 import { applyIdRemapsToDirectory } from "../utils/applyIdRemaps.js";
 import { mergeContributeDataIndexesIntoRepo } from "./cloudSync/contributeDataIndexMerge.js";
 import { buildProposalChangeSet, type ProposalTree } from "./cloudSync/contributeChangeSet.js";
+import {
+  inferOwnDataDbIdMap,
+  invertDbIdMap,
+  publisherMigrationsDir,
+  remapDbIdsInContent,
+} from "./cloudSync/ownDataDbIdMap.js";
 import { isLocalScratchPath } from "./cloudSync/proposalFileMerge.js";
 import {
   previewMergeConflicts,
@@ -314,6 +320,24 @@ async function applyMetadataFieldProposal(
   return repoRel;
 }
 
+/** local dbId → publisher dbId for a copy on its own data (empty otherwise). */
+async function ownDataDbIdsToPublisher(
+  staged: StagedProposalTree[],
+  lineage: CloudAppLineageFile | null,
+  repoDir: string,
+  baseSha: string,
+  env: NodeJS.ProcessEnv,
+): Promise<Map<string, string>> {
+  if (!lineage) return new Map();
+  const { usesSharedData } = await import("../../core/utils/copyAxes.js");
+  if (usesSharedData(lineage)) return new Map();
+  const app = staged.find((t) => t.kind === "app");
+  const local = app?.files.get("data-sources.json");
+  if (!app || !local) return new Map();
+  const publisherFiles = await readFilesAtCommit(repoDir, baseSha, app.repoRelativeDir, env);
+  return invertDbIdMap(inferOwnDataDbIdMap(local, publisherFiles.get("data-sources.json")));
+}
+
 interface StagedProposalTree {
   repoRelativeDir: string;
   files: Map<string, string>;
@@ -442,6 +466,19 @@ async function pushContributeBranch(
     }
     mark("base");
 
+    // A copy on its own data has fresh database ids; propose in the
+    // publisher's ids, or approving re-wires their app to our databases.
+    const dbToPublisher = await ownDataDbIdsToPublisher(staged, lineage, repoDir, base.sha, env);
+    for (const tree of staged) {
+      if (dbToPublisher.size === 0) break;
+      for (const [rel, content] of tree.files) {
+        tree.files.set(rel, remapDbIdsInContent(content, dbToPublisher));
+      }
+      if (tree.kind === "migrations") {
+        tree.repoRelativeDir = publisherMigrationsDir(tree.repoRelativeDir, dbToPublisher);
+      }
+    }
+
     const hasJobTrees = staged.some((t) => t.kind === "job");
     const trees: ProposalTree[] = [];
     for (const tree of staged) {
@@ -488,6 +525,8 @@ async function pushContributeBranch(
       contributorPaprDir: getPaprRoot(),
       forkAppId,
       targetAppId: prepare.targetAppId,
+      // The copy's own instances of the publisher's databases aren't new ones.
+      skipDbIds: new Set(dbToPublisher.keys()),
     });
 
     const stagePaths = [

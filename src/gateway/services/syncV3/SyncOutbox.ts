@@ -23,6 +23,12 @@ import * as path from "node:path";
 import type { AppRepoOpFile } from "../../../core/types/appRepoWriterOps.js";
 import { SYNC_OUTBOX_FILENAME } from "../../../core/types/appRepoWriterOps.js";
 import { writeFileAtomic } from "../../../core/utils/atomicJsonWrite.js";
+import { withCrossProcessFileLock } from "../../../core/utils/crossProcessFileLock.js";
+
+/** Parallel publishes share the outbox file — serialize every rewrite. */
+function withOutboxLock<T>(fn: () => Promise<T>): Promise<T> {
+  return withCrossProcessFileLock(outboxPath(), fn);
+}
 import { getPaprRoot } from "../../../core/utils/paprRoot.js";
 import {
   compactJsonlDroppingOversized,
@@ -211,46 +217,48 @@ export async function appendOutboxEntry(input: {
   message: string;
   idempotencyKey?: string;
 }): Promise<SyncOutboxEntry> {
-  const now = new Date().toISOString();
-  const entry: SyncOutboxEntry = {
-    id: randomUUID(),
-    appId: input.appId,
-    idempotencyKey: input.idempotencyKey ?? randomUUID(),
-    files: input.files,
-    author: input.author,
-    message: input.message,
-    status: "pending",
-    createdAt: now,
-    updatedAt: now,
-    attempts: 0,
-  };
+  return withOutboxLock(async () => {
+    const now = new Date().toISOString();
+    const entry: SyncOutboxEntry = {
+      id: randomUUID(),
+      appId: input.appId,
+      idempotencyKey: input.idempotencyKey ?? randomUUID(),
+      files: input.files,
+      author: input.author,
+      message: input.message,
+      status: "pending",
+      createdAt: now,
+      updatedAt: now,
+      attempts: 0,
+    };
 
-  const line = `${JSON.stringify(entry)}\n`;
-  const byteLength = Buffer.byteLength(line, "utf8");
-  if (byteLength > MAX_OUTBOX_LINE_BYTES) {
-    throw new OutboxEntryTooLargeError(byteLength, MAX_OUTBOX_LINE_BYTES);
-  }
+    const line = `${JSON.stringify(entry)}\n`;
+    const byteLength = Buffer.byteLength(line, "utf8");
+    if (byteLength > MAX_OUTBOX_LINE_BYTES) {
+      throw new OutboxEntryTooLargeError(byteLength, MAX_OUTBOX_LINE_BYTES);
+    }
 
-  const filePath = outboxPath();
-  await fs.mkdir(path.dirname(filePath), { recursive: true });
+    const filePath = outboxPath();
+    await fs.mkdir(path.dirname(filePath), { recursive: true });
 
-  const existing = await listOutboxEntries();
-  const superseded = supersededPendingIds(
-    existing,
-    input.appId,
-    new Set(input.files.map((file) => file.path)),
-  );
+    const existing = await listOutboxEntries();
+    const superseded = supersededPendingIds(
+      existing,
+      input.appId,
+      new Set(input.files.map((file) => file.path)),
+    );
 
-  if (superseded.size === 0) {
-    await fs.appendFile(filePath, line, "utf8");
+    if (superseded.size === 0) {
+      await fs.appendFile(filePath, line, "utf8");
+      return entry;
+    }
+
+    await writeAllEntries([
+      ...existing.filter((item) => !superseded.has(item.id)),
+      entry,
+    ]);
     return entry;
-  }
-
-  await writeAllEntries([
-    ...existing.filter((item) => !superseded.has(item.id)),
-    entry,
-  ]);
-  return entry;
+  });
 }
 
 async function updateEntry(
@@ -285,14 +293,16 @@ async function updateEntry(
  * at zero attempts forever and blocks the queue head on every launch.
  */
 export async function markOutboxInflight(entryId: string): Promise<void> {
-  const entries = await listOutboxEntries();
-  const entry = entries.find((item) => item.id === entryId);
-  if (!entry) {
-    return;
-  }
-  await updateEntry(entryId, {
-    status: "inflight",
-    attempts: entry.attempts + 1,
+  return withOutboxLock(async () => {
+    const entries = await listOutboxEntries();
+    const entry = entries.find((item) => item.id === entryId);
+    if (!entry) {
+      return;
+    }
+    await updateEntry(entryId, {
+      status: "inflight",
+      attempts: entry.attempts + 1,
+    });
   });
 }
 
@@ -300,16 +310,20 @@ export async function markOutboxAcked(
   entryId: string,
   commitSha: string,
 ): Promise<void> {
-  await updateEntry(entryId, { status: "acked", commitSha });
+  return withOutboxLock(async () => {
+    await updateEntry(entryId, { status: "acked", commitSha });
+  });
 }
 
 export async function markOutboxFailed(
   entryId: string,
   errorMessage: string,
 ): Promise<void> {
-  await updateEntry(entryId, {
-    status: "pending",
-    lastError: errorMessage.slice(0, 500),
+  return withOutboxLock(async () => {
+    await updateEntry(entryId, {
+      status: "pending",
+      lastError: errorMessage.slice(0, 500),
+    });
   });
 }
 
@@ -323,16 +337,18 @@ export async function markOutboxDeadLetter(
   entryId: string,
   errorMessage: string,
 ): Promise<void> {
-  const entries = await listOutboxEntries();
-  const entry = entries.find((item) => item.id === entryId);
-  await updateEntry(entryId, {
-    status: "dead_letter",
-    lastError: errorMessage.slice(0, 500),
-    files: [],
-    droppedFileCount: entry?.droppedFileCount ?? entry?.files.length ?? 0,
-    droppedFilePaths:
-      entry?.droppedFilePaths ??
-      entry?.files.slice(0, 20).map((file) => file.path),
+  return withOutboxLock(async () => {
+    const entries = await listOutboxEntries();
+    const entry = entries.find((item) => item.id === entryId);
+    await updateEntry(entryId, {
+      status: "dead_letter",
+      lastError: errorMessage.slice(0, 500),
+      files: [],
+      droppedFileCount: entry?.droppedFileCount ?? entry?.files.length ?? 0,
+      droppedFilePaths:
+        entry?.droppedFilePaths ??
+        entry?.files.slice(0, 20).map((file) => file.path),
+    });
   });
 }
 
@@ -352,90 +368,133 @@ export async function listDeadLetterOutboxEntries(
 
 /** Remove all queued writer ops for a deleted app. */
 export async function removeOutboxEntriesForApp(appId: string): Promise<number> {
-  const trimmed = appId.trim();
-  if (!trimmed) {
-    return 0;
-  }
-  const entries = await listOutboxEntries();
-  const kept = entries.filter((entry) => entry.appId !== trimmed);
-  const removed = entries.length - kept.length;
-  if (removed > 0) {
-    await writeAllEntries(kept);
-  }
-  return removed;
+  return withOutboxLock(async () => {
+    const trimmed = appId.trim();
+    if (!trimmed) {
+      return 0;
+    }
+    const entries = await listOutboxEntries();
+    const kept = entries.filter((entry) => entry.appId !== trimmed);
+    const removed = entries.length - kept.length;
+    if (removed > 0) {
+      await writeAllEntries(kept);
+    }
+    return removed;
+  });
 }
 
 /** Remove dead-letter rows for an app (stale failures after a successful sync). */
 export async function clearDeadLetterOutboxEntries(appId: string): Promise<number> {
-  const trimmed = appId.trim();
-  if (!trimmed) {
+  return withOutboxLock(async () => {
+    const trimmed = appId.trim();
+    if (!trimmed) {
+      return 0;
+    }
+    const entries = await listOutboxEntries();
+    const kept = entries.filter(
+      (entry) => entry.appId !== trimmed || entry.status !== "dead_letter",
+    );
+    const removed = entries.length - kept.length;
+    if (removed > 0) {
+      await writeAllEntries(kept);
+    }
+    return removed;
+  });
+}
+
+/**
+ * After the publish worker dies mid-push, the `inflight` entries of the apps it
+ * was uploading have no owner
+ * and listPendingOutboxEntries never returns them. Put them back to `pending`
+ * (attempts already advanced on inflight, so a poison entry still dead-letters).
+ */
+export async function requeueOrphanedInflightOutboxEntries(
+  appIds: readonly string[],
+): Promise<number> {
+  const scope = new Set(appIds);
+  if (scope.size === 0) {
     return 0;
   }
-  const entries = await listOutboxEntries();
-  const kept = entries.filter(
-    (entry) => entry.appId !== trimmed || entry.status !== "dead_letter",
-  );
-  const removed = entries.length - kept.length;
-  if (removed > 0) {
-    await writeAllEntries(kept);
-  }
-  return removed;
+  return withOutboxLock(async () => {
+    const entries = await listOutboxEntries();
+    let requeued = 0;
+    const next = entries.map((entry) => {
+      if (entry.status !== "inflight" || !scope.has(entry.appId)) {
+        return entry;
+      }
+      requeued += 1;
+      return {
+        ...entry,
+        status: "pending" as const,
+        lastError: entry.lastError ?? "Publish worker stopped mid-upload",
+        updatedAt: new Date().toISOString(),
+      };
+    });
+    if (requeued > 0) {
+      await writeAllEntries(next);
+    }
+    return requeued;
+  });
 }
 
 /** Manual retry — move dead-letter ops back to pending. */
 export async function requeueDeadLetterOutboxEntries(
   appId: string,
 ): Promise<number> {
-  const trimmed = appId.trim();
-  if (!trimmed) {
-    return 0;
-  }
-  const entries = await listOutboxEntries();
-  let requeued = 0;
-  const next = entries.map((entry) => {
-    if (entry.appId !== trimmed || entry.status !== "dead_letter") {
-      return entry;
+  return withOutboxLock(async () => {
+    const trimmed = appId.trim();
+    if (!trimmed) {
+      return 0;
     }
-    requeued += 1;
-    return {
-      ...entry,
-      status: "pending" as const,
-      attempts: 0,
-      lastError: undefined,
-      updatedAt: new Date().toISOString(),
-    };
+    const entries = await listOutboxEntries();
+    let requeued = 0;
+    const next = entries.map((entry) => {
+      if (entry.appId !== trimmed || entry.status !== "dead_letter") {
+        return entry;
+      }
+      requeued += 1;
+      return {
+        ...entry,
+        status: "pending" as const,
+        attempts: 0,
+        lastError: undefined,
+        updatedAt: new Date().toISOString(),
+      };
+    });
+    if (requeued > 0) {
+      await writeAllEntries(next);
+    }
+    return requeued;
   });
-  if (requeued > 0) {
-    await writeAllEntries(next);
-  }
-  return requeued;
 }
 
 /** Remove dead-letter and failed writer ops for one app (baseline repair). */
 export async function clearWriterOutboxFailureEntries(appId: string): Promise<number> {
-  const trimmed = appId.trim();
-  if (!trimmed) {
-    return 0;
-  }
-  const entries = await listOutboxEntries();
-  const kept = entries.filter((entry) => {
-    if (entry.appId !== trimmed) {
+  return withOutboxLock(async () => {
+    const trimmed = appId.trim();
+    if (!trimmed) {
+      return 0;
+    }
+    const entries = await listOutboxEntries();
+    const kept = entries.filter((entry) => {
+      if (entry.appId !== trimmed) {
+        return true;
+      }
+      if (entry.status === "dead_letter" || entry.status === "failed") {
+        return false;
+      }
+      // Pending rows with lastError are stale failed retries — drop on baseline reset.
+      if (entry.status === "pending" && entry.lastError) {
+        return false;
+      }
       return true;
+    });
+    const removed = entries.length - kept.length;
+    if (removed > 0) {
+      await writeAllEntries(kept);
     }
-    if (entry.status === "dead_letter" || entry.status === "failed") {
-      return false;
-    }
-    // Pending rows with lastError are stale failed retries — drop on baseline reset.
-    if (entry.status === "pending" && entry.lastError) {
-      return false;
-    }
-    return true;
+    return removed;
   });
-  const removed = entries.length - kept.length;
-  if (removed > 0) {
-    await writeAllEntries(kept);
-  }
-  return removed;
 }
 
 /** Test-only — reset outbox file. */

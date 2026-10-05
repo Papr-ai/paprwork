@@ -86,7 +86,11 @@ const reloadWaitForGatewayByGeneration = new Map<number, boolean>();
 const reloadTargetWorkspaceKeyByGeneration = new Map<number, string>();
 const reloadLabelsByGeneration = new Map<
   number,
-  { organizationName?: string; namespaceName?: string }
+  {
+    organizationId?: string;
+    organizationName?: string;
+    namespaceName?: string;
+  }
 >();
 /** Sidebar labels before optimistic switch overlay — restored when IPC fails. */
 let profileSidebarSnapshotBeforeSwitch: ProfileSidebarCache | null = null;
@@ -99,6 +103,8 @@ export interface ReloadWorkspaceSwitchOptions {
   waitForGateway?: boolean;
   /** Target workspace for cache hydration (orgId:namespaceId). */
   targetWorkspaceKey?: string;
+  /** Papr workspace id (`listOrganizations` entry id) for overlay branding. */
+  organizationId?: string;
   organizationName?: string;
   namespaceName?: string;
 }
@@ -656,8 +662,13 @@ export async function reloadUiForWorkspaceSwitch(
   if (options?.targetWorkspaceKey) {
     reloadTargetWorkspaceKeyByGeneration.set(generation, options.targetWorkspaceKey);
   }
-  if (options?.organizationName || options?.namespaceName) {
+  if (
+    options?.organizationId ||
+    options?.organizationName ||
+    options?.namespaceName
+  ) {
     reloadLabelsByGeneration.set(generation, {
+      organizationId: options.organizationId,
       organizationName: options.organizationName,
       namespaceName: options.namespaceName,
     });

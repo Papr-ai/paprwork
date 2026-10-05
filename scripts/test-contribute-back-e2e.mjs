@@ -539,7 +539,9 @@ async function main() {
         check("propose has prUrl", !!proposeResult?.prUrl, proposeResult?.prUrl ?? "missing");
         check(
           "propose staged app path",
-          (proposeResult?.stagedPaths ?? []).some((p) => p.startsWith("apps/")),
+          // Sync V3 per-app repo: paths are repo-root (metadata.json), not apps/{id}/…
+          (proposeResult?.stagedPaths ?? []).some((p) => p === "metadata.json" || p.endsWith("/metadata.json")),
+          JSON.stringify(proposeResult?.stagedPaths ?? []),
         );
 
         const incoming = await gatewayFetch("/api/cloud/apps/changes/incoming");
@@ -632,7 +634,9 @@ async function main() {
           check("propose has prUrl", !!proposeResult?.prUrl, proposeResult?.prUrl ?? "missing");
           check(
             "propose staged app path",
-            (proposeResult?.stagedPaths ?? []).some((p) => p.startsWith("apps/")),
+            // Sync V3 per-app repo: paths are repo-root (metadata.json), not apps/{id}/…
+          (proposeResult?.stagedPaths ?? []).some((p) => p === "metadata.json" || p.endsWith("/metadata.json")),
+          JSON.stringify(proposeResult?.stagedPaths ?? []),
           );
 
           const incoming = await memoryFetch("/v1/cloud/apps/changes/incoming");

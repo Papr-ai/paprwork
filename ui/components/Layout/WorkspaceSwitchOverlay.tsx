@@ -1,46 +1,57 @@
-import type { ReactElement } from "react";
+import { useMemo, type ReactElement } from "react";
 import {
   formatWorkspaceSwitchTarget,
   useWorkspaceSwitchOverlay,
   workspaceSwitchPhaseLabel,
-  type WorkspaceSwitchOverlayPhase,
+  type WorkspaceSwitchOverlaySnapshot,
 } from "../../lib/workspaceSwitchOverlay";
+import { useProfileStore } from "../../stores/profileStore";
+import { OrgMark } from "../Sidebar/OrgMark";
+import {
+  defaultOrgSite,
+  orgLogoSrc,
+  useOrgLogos,
+} from "../Sidebar/orgLogoStore";
+import { useOrgList, type OrgEntry } from "../Sidebar/useOrgList";
+import "../Sidebar/ProfileFooter.css";
 import "./WorkspaceSwitchOverlay.css";
 
-const PHASES: WorkspaceSwitchOverlayPhase[] = [
+const PHASES = [
   "preparing",
   "core",
   "artifacts",
   "services",
-];
+] as const;
 
-const PHASE_STEP_LABELS: Record<WorkspaceSwitchOverlayPhase, string> = {
+type Phase = (typeof PHASES)[number];
+
+const PHASE_STEP_LABELS: Record<Phase, string> = {
   preparing: "Preparing workspace",
   core: "Agents & chats",
   artifacts: "Apps & documents",
   services: "Jobs & plans",
 };
 
-function phaseIndex(phase: WorkspaceSwitchOverlayPhase): number {
+function phaseIndex(phase: Phase): number {
   return PHASES.indexOf(phase);
 }
 
-function WorkspaceSwitchIcon(): ReactElement {
-  return (
-    <svg viewBox="0 0 24 24" fill="none" aria-hidden="true">
-      <path
-        d="M12 3L3 8.5V15.5L12 21L21 15.5V8.5L12 3Z"
-        stroke="currentColor"
-        strokeWidth="1.6"
-        strokeLinejoin="round"
-      />
-      <path
-        d="M12 12L21 8.5M12 12V21M12 12L3 8.5"
-        stroke="currentColor"
-        strokeWidth="1.6"
-        strokeLinejoin="round"
-      />
-    </svg>
+function resolveTargetOrg(
+  overlay: WorkspaceSwitchOverlaySnapshot,
+  orgs: OrgEntry[],
+): OrgEntry | undefined {
+  if (overlay.organizationId) {
+    const byId = orgs.find((o) => o.id === overlay.organizationId);
+    if (byId) {
+      return byId;
+    }
+  }
+  const name = overlay.organizationName?.trim();
+  if (!name) {
+    return undefined;
+  }
+  return orgs.find(
+    (o) => o.name === name || o.organizationName === name,
   );
 }
 
@@ -65,6 +76,37 @@ function StepCheckIcon(): ReactElement {
 
 export function WorkspaceSwitchOverlay(): ReactElement | null {
   const overlay = useWorkspaceSwitchOverlay();
+  const branding = useOrgLogos((s) => s.branding);
+  const email = useProfileStore((s) => s.email);
+  const { orgs } = useOrgList();
+
+  const targetOrg = useMemo(
+    () => resolveTargetOrg(overlay, orgs),
+    [overlay, orgs],
+  );
+
+  const orgDisplayName =
+    overlay.organizationName?.trim() ||
+    targetOrg?.name ||
+    "Workspace";
+
+  const logoSrc = useMemo(() => {
+    const orgId = overlay.organizationId ?? targetOrg?.id;
+    const site =
+      (orgId ? branding[orgId]?.site : undefined) ??
+      defaultOrgSite(
+        [orgDisplayName, targetOrg?.organizationName],
+        email,
+      );
+    return orgLogoSrc(orgId ? branding[orgId] : undefined, site);
+  }, [
+    branding,
+    email,
+    orgDisplayName,
+    overlay.organizationId,
+    targetOrg?.id,
+    targetOrg?.organizationName,
+  ]);
 
   if (!overlay.active) {
     return null;
@@ -84,14 +126,20 @@ export function WorkspaceSwitchOverlay(): ReactElement | null {
       aria-label="Switching workspace"
     >
       <div className="workspace-switch-overlay__panel">
-        <div className="workspace-switch-overlay__icon">
-          <WorkspaceSwitchIcon />
-        </div>
-        <h2 className="workspace-switch-overlay__title">Switching workspace</h2>
-        {targetLabel ? (
-          <p className="workspace-switch-overlay__target">{targetLabel}</p>
-        ) : null}
-        <p className="workspace-switch-overlay__subtitle">{activePhaseLabel}</p>
+        <header className="workspace-switch-overlay__header">
+          <OrgMark
+            name={orgDisplayName}
+            src={logoSrc}
+            className="org-mark--lg workspace-switch-overlay__mark"
+          />
+          <div className="workspace-switch-overlay__heading">
+            <h2 className="workspace-switch-overlay__title">Switching workspace</h2>
+            {targetLabel ? (
+              <p className="workspace-switch-overlay__target">{targetLabel}</p>
+            ) : null}
+          </div>
+        </header>
+
         <ol className="workspace-switch-overlay__steps">
           {PHASES.map((phase, index) => {
             const stepClass =

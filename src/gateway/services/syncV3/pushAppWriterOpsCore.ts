@@ -24,6 +24,7 @@ import {
 import { ensureAppRepoRecord, getAppRepoRecord } from "./AppRepoClient.js";
 import { ensureWriterBaselineBeforePush } from "./writerBaselineReconcile.js";
 import type { PushAppViaWriterResult } from "./pushAppViaWriterOps.js";
+import type { AppRepoCommittedEvent } from "./appRepoCommittedFanout.js";
 
 const MAX_OUTBOX_ATTEMPTS = 5;
 
@@ -36,6 +37,13 @@ export interface PushAppWriterOpsForPaprDirOptions {
   onSynced?: (relativePaths: readonly string[]) => void | Promise<void>;
   /** When true, skip prepareAppForCloudGitSync (caller already prepared). */
   skipPrepare?: boolean;
+  /** Step labels for the share chip / flush timings ("Uploading 3 files…"). */
+  onProgress?: (label: string, detail?: string) => void;
+  /**
+   * Deliver the commit event. Default: in-process fanout. The publish worker
+   * passes a collector so the gateway (which owns the subscribers) fans out.
+   */
+  fanout?: (event: AppRepoCommittedEvent) => Promise<void>;
 }
 
 async function handleOutboxPushFailure(
@@ -72,8 +80,10 @@ export async function pushAppWriterOpsForPaprDir(
     message,
     author = "paprwork-desktop",
     onSynced,
+    onProgress,
   } = options;
 
+  onProgress?.("Checking cloud copy…", "Confirming the app repo and its last upload.");
   await ensureAppRepoRecord(appId);
   await ensureWriterBaselineBeforePush(appId);
 
@@ -87,6 +97,7 @@ export async function pushAppWriterOpsForPaprDir(
       );
       continue;
     }
+    onProgress?.("Retrying a queued upload…", `${entry.files.length} file(s) from an earlier attempt.`);
     await markOutboxInflight(entry.id);
     const files = await refreshOpParentHashes(appId, entry.files);
     if (files.length === 0) {
@@ -113,6 +124,7 @@ export async function pushAppWriterOpsForPaprDir(
     await prepareAppForCloudGitSync(paprDir, appId);
   }
 
+  onProgress?.("Finding changed files…");
   const collected = await collectAppOpFiles(paprDir, appId);
   if (collected.files.length === 0) {
     await markSyncedPaths(paprDir, appId, onSynced);
@@ -149,6 +161,10 @@ export async function pushAppWriterOpsForPaprDir(
   });
 
   await markOutboxInflight(outboxEntry.id);
+  onProgress?.(
+    `Uploading ${collected.files.length} file${collected.files.length === 1 ? "" : "s"}…`,
+    "Waiting for the cloud writer to commit.",
+  );
   try {
     const ack = await postAppOps(appId, {
       files: collected.files,
@@ -161,9 +177,10 @@ export async function pushAppWriterOpsForPaprDir(
 
     const record = await getAppRepoRecord(appId);
     if (record && ack.commitSha) {
-      const { fanoutAppRepoCommitted } =
-        await import("./appRepoCommittedFanout.js");
-      await fanoutAppRepoCommitted({
+      const fanout =
+        options.fanout ??
+        (await import("./appRepoCommittedFanout.js")).fanoutAppRepoCommitted;
+      await fanout({
         appId,
         commitSha: ack.commitSha,
         githubOrg: record.githubOrg,

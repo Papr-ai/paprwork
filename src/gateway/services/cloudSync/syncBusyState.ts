@@ -20,6 +20,8 @@ export interface GatewaySyncBusyState {
   /** Apps waiting in namespace flush queue (excluding active app). */
   queueDepth?: number;
   queuedAppIds?: string[];
+  /** Apps publishing right now (parallel flushes). */
+  runningAppIds?: string[];
 }
 
 function busyStatePath(paprDir?: string): string {

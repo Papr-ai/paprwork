@@ -477,6 +477,7 @@ export class CloudSyncService implements CloudSyncInternals {
 
   async runPostFlushHooks(options?: {
     skipTursoReschedule?: boolean;
+    appIds?: readonly string[];
   }): Promise<void> {
     await this.runPostSyncHooks(options);
   }
@@ -568,6 +569,7 @@ export class CloudSyncService implements CloudSyncInternals {
 
   async runPostSyncHooks(options?: {
     skipTursoReschedule?: boolean;
+    appIds?: readonly string[];
   }): Promise<void> {
     return runPostSyncHooksFn(createPostHooksHost(this.host), options);
   }
@@ -640,10 +642,16 @@ export class CloudSyncService implements CloudSyncInternals {
     syncedAppIds: readonly string[] = [],
   ): Promise<void> {
     try {
+      if (syncedAppIds.length === 0) {
+        return; // "flush" scope only considers the apps that were just synced
+      }
       const github = this.getGitHubSyncItemsReport();
-      const { buildTursoSyncItemsReport } = await import("./tursoSyncStatus.js");
-      const turso = await buildTursoSyncItemsReport(
+      const { buildTursoSyncItemsReportForApps } = await import("./tursoSyncStatus.js");
+      // Only the just-published apps: a namespace-wide report probes every
+      // linked database (4-5 minutes here), holding each publish open.
+      const turso = await buildTursoSyncItemsReportForApps(
         path.join(this.paprDir, "apps"),
+        syncedAppIds,
       );
       const { getCloudAppPublishService } = await import(
         "./CloudAppPublishService.js"

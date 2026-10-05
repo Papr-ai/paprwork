@@ -1057,7 +1057,7 @@ interface CommunityAppCardProps {
   onOpenHover?: () => void;
 }
 
-function CommunityAppCard({
+export function CommunityAppCard({
   entry,
   localAppId = null,
   isInstalled,

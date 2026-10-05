@@ -304,6 +304,22 @@ export async function applyRegistryMigrationSingleRoute(
   const sql = await loadMigrationSql(migrationRoot, migrationFileName);
   const sqlChecksum = computeMigrationSqlChecksum(sql);
   const online = isTursoReplicaOnline();
+  const hold = await import("./replicaPublishHold.js");
+  const { classifyMigrationSql } = await import("../jobs/migrationBreakingClassifier.js");
+  const breaking = classifyMigrationSql(sql).breaking;
+  // Breaking (or anything queued behind a held one): apply locally only, publish carries it to the cloud.
+  const holdForPublish =
+    hold.isBreakingMigrationHoldEnabled() && (breaking || hold.isReplicaHeld(source.dbPath));
+  if (holdForPublish && !hold.isReplicaHeld(source.dbPath) && online) {
+    // Upload rows written before the hold: the publish rebuilds this copy from the
+    // cloud, so anything not yet uploaded (and not journaled) would be lost.
+    const flushed = await pushLinkedDbViaTursoReplica(source);
+    if (!flushed.ok) {
+      throw new Error(
+        `Could not upload pending rows before holding ${migrationId} for publish: ${flushed.error ?? "push failed"}`,
+      );
+    }
+  }
 
   if (online) {
     await pullLinkedDbViaTursoReplica(source);
@@ -345,7 +361,18 @@ export async function applyRegistryMigrationSingleRoute(
   // uploads it (with the same conflict check) on reconnect.
   let pushed = false;
   let pushError: string | null = null;
-  if (online) {
+  if (holdForPublish) {
+    hold.addMigrationToHold({
+      localPath: source.dbPath,
+      dbId: source.dbId,
+      migration: { migrationId, sql, breaking, migrationRoot },
+    });
+    console.log(
+      `[TursoReplica] ${migrationId}: ${breaking ? "breaking" : "queued behind a breaking"} migration ` +
+        "held for publish (applied locally; cloud gets it with the app code)",
+    );
+    pushError = "held for publish";
+  } else if (online) {
     const push = await pushLinkedDbViaTursoReplica(source);
     pushed = push.ok;
     pushError = push.ok ? null : (push.error ?? "replica push failed");

@@ -3,7 +3,8 @@
  * Drives the bar's missing-key chip and the warning in Share → API keys.
  *
  * Re-checks when the window regains focus (the usual way back from Settings),
- * when the keychain store changes, and when `reloadToken` bumps.
+ * when the keychain store changes, when `reloadToken` bumps, and when the
+ * gateway broadcasts app:requirements-changed (catalog edited on disk).
  */
 
 import { useEffect, useState } from "react";
@@ -21,6 +22,27 @@ async function ownedKeyNames(): Promise<string[]> {
   return keys.map((key) => key.name);
 }
 
+/**
+ * Bumps when the gateway says this app's key catalog changed on disk
+ * (requirements.json, backend manifest, or a linked job's requiredKeys).
+ */
+export function useRequirementsChangedTick(appId: string): number {
+  const [tick, setTick] = useState(0);
+  useEffect(() => {
+    const onBroadcast = (event: Event) => {
+      const d = (event as CustomEvent).detail as
+        | { type?: string; data?: { appId?: string } }
+        | undefined;
+      if (d?.type !== "app:requirements-changed") return;
+      if (d.data?.appId && d.data.appId !== appId) return;
+      setTick((n) => n + 1);
+    };
+    window.addEventListener("gateway-broadcast", onBroadcast);
+    return () => window.removeEventListener("gateway-broadcast", onBroadcast);
+  }, [appId]);
+  return tick;
+}
+
 export function useMissingAppKeys(
   appId: string,
   enabled: boolean,
@@ -29,6 +51,8 @@ export function useMissingAppKeys(
   const [missing, setMissing] = useState<RequiredKeySpec[]>([]);
   const [focusTick, setFocusTick] = useState(0);
   const keychainLoadedAt = useCustomKeysStore((state) => state.loadedAt);
+
+  const catalogTick = useRequirementsChangedTick(appId);
 
   useEffect(() => {
     const bump = () => setFocusTick((n) => n + 1);
@@ -53,7 +77,7 @@ export function useMissingAppKeys(
     return () => {
       cancelled = true;
     };
-  }, [appId, enabled, reloadToken, focusTick, keychainLoadedAt]);
+  }, [appId, enabled, reloadToken, focusTick, keychainLoadedAt, catalogTick]);
 
   return missing;
 }

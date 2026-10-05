@@ -45,6 +45,26 @@ import {
 } from "./namespaceFlushQueue.js";
 import { AppOpsConflictError } from "../syncV3/AppOpsClient.js";
 import { isPermanentWriterClientError } from "../syncV3/writerOutboxErrors.js";
+import type { SyncCoordinatorActiveFlush } from "./coordinatorTypes.js";
+import {
+  noteFlushPhase,
+  recordFlushTiming,
+  resolveFlushConcurrency,
+  setFlushLagSampler,
+  takeFlushPhaseTimings,
+  type FlushTimingRecord,
+} from "./flushConcurrency.js";
+
+interface RunningFlush {
+  appId: string;
+  trigger: FlushTrigger;
+  startedAt: number;
+  /** Linked databases — two flushes never share one (single replica writer). */
+  syncKeys: ReadonlySet<string>;
+  layer?: SyncCoordinatorLayer;
+  label?: string;
+  detail?: string;
+}
 
 /** Debounce for auto-upload app code changes (SYNC_CONTRACT §7.1). */
 const APP_AUTO_FLUSH_DEBOUNCE_MS = 35_000;
@@ -81,16 +101,9 @@ export class SyncCoordinator {
   private readonly flushQueue: NamespaceFlushQueueItem[] = [];
   private readonly autoFlushRetry = new Map<string, AutoFlushRetryState>();
   private readonly flushErrors = new Map<string, FlushErrorState>();
-  private flushProcessorRunning = false;
-  private currentFlushAppId: string | null = null;
+  /** Flushes executing right now (bounded by resolveFlushConcurrency). */
+  private readonly runningFlushes = new Map<string, RunningFlush>();
   private namespaceBusyStartedAt: number | null = null;
-  private activeProgress: {
-    appId: string;
-    startedAt: number;
-    layer?: SyncCoordinatorLayer;
-    label?: string;
-    detail?: string;
-  } | null = null;
 
   constructor(sync: CloudSyncService) {
     this.sync = sync;
@@ -219,7 +232,7 @@ export class SyncCoordinator {
       });
       sortFlushQueue(this.flushQueue);
       this.updateGatewayBusyState(trigger);
-      void this.processFlushQueue();
+      this.processFlushQueue();
     });
 
     this.activeFlushes.set(appId, promise);
@@ -229,141 +242,209 @@ export class SyncCoordinator {
     return promise;
   }
 
-  private async processFlushQueue(): Promise<void> {
-    if (this.flushProcessorRunning) {
-      return;
+  /**
+   * Start every queued flush that may run now. Different apps publish in
+   * parallel (bounded); one app never runs twice at once, and two apps that
+   * link the same database never flush together — the replica file has a
+   * single writer.
+   */
+  private processFlushQueue(): void {
+    sortFlushQueue(this.flushQueue);
+    const limit = resolveFlushConcurrency();
+    let index = 0;
+    while (this.runningFlushes.size < limit && index < this.flushQueue.length) {
+      const item = this.flushQueue[index]!;
+      if (this.runningFlushes.has(item.appId)) {
+        index += 1;
+        continue;
+      }
+      const syncKeys = listAppLinkedSyncKeys(item.appId, this.sync.getPaprDir());
+      if (this.syncKeysBusy(syncKeys)) {
+        index += 1;
+        continue;
+      }
+      this.flushQueue.splice(index, 1);
+      // Callers read status right after `await flushNow()` — leave the running
+      // set before their continuation runs, not after.
+      const settle = <A extends unknown[]>(fn: (...args: A) => void) =>
+        (...args: A) => {
+          this.runningFlushes.delete(item.appId);
+          this.updateGatewayBusyState();
+          fn(...args);
+        };
+      item.resolve = settle(item.resolve);
+      item.reject = settle(item.reject);
+      this.runningFlushes.set(item.appId, {
+        appId: item.appId,
+        trigger: item.trigger,
+        startedAt: Date.now(),
+        syncKeys,
+      });
+      this.updateGatewayBusyState(item.trigger);
+      void this.runFlushItem(item).finally(() => {
+        this.runningFlushes.delete(item.appId);
+        this.updateGatewayBusyState();
+        // Yield before starting the next one so a burst of completions never
+        // monopolises a tick.
+        setImmediate(() => this.processFlushQueue());
+      });
     }
-    this.flushProcessorRunning = true;
+    this.updateGatewayBusyState();
+  }
 
+  private syncKeysBusy(syncKeys: ReadonlySet<string>): boolean {
+    if (syncKeys.size === 0) {
+      return false;
+    }
+    for (const running of this.runningFlushes.values()) {
+      for (const key of syncKeys) {
+        if (running.syncKeys.has(key)) {
+          return true;
+        }
+      }
+    }
+    return false;
+  }
+
+  private async runFlushItem(item: NamespaceFlushQueueItem): Promise<void> {
+    const startedAt = Date.now();
+    let outcome: FlushTimingRecord["outcome"] = "ok";
+    let error: string | undefined;
     try {
-      await this.drainFlushQueue();
+      // Auto flushes swallow their errors (resolve, not reject) — the body
+      // returns the message so the timing record still says it failed.
+      error = await this.runFlushItemBody(item);
+      if (error) {
+        outcome = "error";
+      }
+    } catch (err) {
+      outcome = "error";
+      error = (err as Error).message;
+      item.reject(err as Error);
     } finally {
-      this.flushProcessorRunning = false;
-      this.updateGatewayBusyState();
+      recordFlushTiming({
+        appId: item.appId,
+        trigger: item.trigger,
+        queuedMs: startedAt - item.enqueuedAt,
+        durationMs: Date.now() - startedAt,
+        outcome,
+        error: error?.slice(0, 300),
+        phases: takeFlushPhaseTimings(item.appId),
+      });
     }
   }
 
-  private async drainFlushQueue(): Promise<void> {
-    const { yieldEventLoop } = await import("./yieldEventLoop.js");
+  /** Returns the error message when the flush failed but was resolved (auto). */
+  private async runFlushItemBody(
+    item: NamespaceFlushQueueItem,
+  ): Promise<string | undefined> {
 
-    while (this.flushQueue.length > 0) {
-      const item = this.flushQueue.shift();
-      if (!item) {
-        break;
-      }
+    console.log(
+      `[SyncCoordinator] flushNow appId=${item.appId} trigger=${item.trigger}`,
+    );
 
-      this.currentFlushAppId = item.appId;
-      this.activeProgress = { appId: item.appId, startedAt: Date.now() };
-      this.updateGatewayBusyState(item.trigger);
+    const { listDeadLetterOutboxEntries, clearDeadLetterOutboxEntries, requeueDeadLetterOutboxEntries } =
+      await import("../syncV3/SyncOutbox.js");
+    const deadLetterOutbox = await listDeadLetterOutboxEntries(item.appId);
+    const hasDeadLetterOutbox = deadLetterOutbox.length > 0;
 
-      console.log(
-        `[SyncCoordinator] flushNow appId=${item.appId} trigger=${item.trigger}`,
-      );
-
-      const { listDeadLetterOutboxEntries, clearDeadLetterOutboxEntries, requeueDeadLetterOutboxEntries } =
-        await import("../syncV3/SyncOutbox.js");
-      const deadLetterOutbox = await listDeadLetterOutboxEntries(item.appId);
-      const hasDeadLetterOutbox = deadLetterOutbox.length > 0;
-
+    if (
+      !this.sync.getManualFlushError(item.appId) &&
+      !this.flushErrors.has(item.appId)
+    ) {
+      const markerSaysClean = !(await appNeedsOrderedFlushAsync(this.sync, item.appId));
+      const { appHasUnsentCodeByContent } = await import("./pendingLocalUploads.js");
       if (
-        !this.sync.getManualFlushError(item.appId) &&
-        !this.flushErrors.has(item.appId)
+        markerSaysClean &&
+        item.trigger === "manual" &&
+        (await appHasUnsentCodeByContent(this.sync.getPaprDir(), item.appId))
       ) {
-        const markerSaysClean = !(await appNeedsOrderedFlushAsync(this.sync, item.appId));
-        const { appHasUnsentCodeByContent } = await import("./pendingLocalUploads.js");
-        if (
-          markerSaysClean &&
-          item.trigger === "manual" &&
-          (await appHasUnsentCodeByContent(this.sync.getPaprDir(), item.appId))
-        ) {
-          console.warn(
-            `[SyncCoordinator] ${item.appId}: sync marker said up to date but file contents differ from the cloud repo — uploading`,
-          );
-        } else if (markerSaysClean) {
-          if (hasDeadLetterOutbox) {
-            const cleared = await clearDeadLetterOutboxEntries(item.appId);
-            console.log(
-              `[SyncCoordinator] Cleared ${cleared} stale dead-letter writer op(s) for ${item.appId} — app already up to date (${item.trigger})`,
-            );
-          }
-          const ready = await (
-            await import("./webReady.js")
-          ).webReady(item.appId, this.sync.getPaprDir());
-          console.log(
-            `[SyncCoordinator] Upload skipped for ${item.appId} — already up to date (${item.trigger})`,
-          );
-          // Release before resolving: callers awaiting flushNow() read status
-          // next, and the await below would otherwise leave activeFlush and the
-          // busy file set for a stale tick.
-          this.releaseActiveFlush(item.appId);
-          item.resolve({
-            appId: item.appId,
-            localMigrationsApplied: [],
-            tursoPushed: false,
-            webReady: ready.ready,
-            webReadyReason: ready.reason,
-            published: false,
-          });
-          const { notifyCloudSyncItemsStale } = await import(
-            "./cloudSyncBroadcast.js"
-          );
-          notifyCloudSyncItemsStale(item.appId);
-          await yieldEventLoop();
-          continue;
-        }
-      }
-
-      if (item.trigger === "manual" && hasDeadLetterOutbox) {
-        const requeued = await requeueDeadLetterOutboxEntries(item.appId);
-        console.log(
-          `[SyncCoordinator] Requeued ${requeued} dead-letter writer op(s) for manual upload (${item.appId})`,
+        console.warn(
+          `[SyncCoordinator] ${item.appId}: sync marker said up to date but file contents differ from the cloud repo — uploading`,
         );
-      }
-
-      try {
-        const result = await this.executeFlush(item.appId);
-        this.clearAutoFlushFailure(item.appId);
-        item.resolve(result);
+      } else if (markerSaysClean) {
+        if (hasDeadLetterOutbox) {
+          const cleared = await clearDeadLetterOutboxEntries(item.appId);
+          console.log(
+            `[SyncCoordinator] Cleared ${cleared} stale dead-letter writer op(s) for ${item.appId} — app already up to date (${item.trigger})`,
+          );
+        }
+        const ready = await (
+          await import("./webReady.js")
+        ).webReady(item.appId, this.sync.getPaprDir());
+        console.log(
+          `[SyncCoordinator] Upload skipped for ${item.appId} — already up to date (${item.trigger})`,
+        );
+        // Release before resolving: callers awaiting flushNow() read status
+        // next, and the await below would otherwise leave activeFlush and the
+        // busy file set for a stale tick.
+        this.releaseActiveFlush(item.appId);
+        item.resolve({
+          appId: item.appId,
+          localMigrationsApplied: [],
+          tursoPushed: false,
+          webReady: ready.ready,
+          webReadyReason: ready.reason,
+          published: false,
+        });
         const { notifyCloudSyncItemsStale } = await import(
           "./cloudSyncBroadcast.js"
         );
         notifyCloudSyncItemsStale(item.appId);
-      } catch (err) {
-        const error = err as Error;
-        if (item.trigger === "auto") {
-          this.handleAutoFlushFailure(item.appId, error);
-          item.resolve({
-            appId: item.appId,
-            localMigrationsApplied: [],
-            tursoPushed: false,
-            webReady: false,
-            published: false,
-            webReadyReason: error.message.slice(0, 160),
-          });
-          const { notifyCloudSyncItemsStale } = await import(
-            "./cloudSyncBroadcast.js"
-          );
-          notifyCloudSyncItemsStale(item.appId);
-        } else {
-          if (error instanceof AppOpsConflictError) {
-            const conflictPaths = error.artifacts.map((artifact) => artifact.path);
-            this.recordFlushError(item.appId, error, false, "conflict", conflictPaths);
-            this.sync.recordManualFlushError(item.appId, error, {
-              kind: "conflict",
-              conflictPaths,
-            });
-          } else {
-            this.recordFlushError(item.appId, error, false);
-            this.sync.recordManualFlushError(item.appId, error);
-          }
-          item.reject(error);
-        }
-      } finally {
-        this.releaseActiveFlush(item.appId);
+        return;
       }
-
-      await yieldEventLoop();
     }
+
+    if (item.trigger === "manual" && hasDeadLetterOutbox) {
+      const requeued = await requeueDeadLetterOutboxEntries(item.appId);
+      console.log(
+        `[SyncCoordinator] Requeued ${requeued} dead-letter writer op(s) for manual upload (${item.appId})`,
+      );
+    }
+
+    try {
+      const result = await this.executeFlush(item.appId);
+      this.clearAutoFlushFailure(item.appId);
+      item.resolve(result);
+      const { notifyCloudSyncItemsStale } = await import(
+        "./cloudSyncBroadcast.js"
+      );
+      notifyCloudSyncItemsStale(item.appId);
+    } catch (err) {
+      const error = err as Error;
+      if (item.trigger === "auto") {
+        this.handleAutoFlushFailure(item.appId, error);
+        item.resolve({
+          appId: item.appId,
+          localMigrationsApplied: [],
+          tursoPushed: false,
+          webReady: false,
+          published: false,
+          webReadyReason: error.message.slice(0, 160),
+        });
+        const { notifyCloudSyncItemsStale } = await import(
+          "./cloudSyncBroadcast.js"
+        );
+        notifyCloudSyncItemsStale(item.appId);
+      } else {
+        if (error instanceof AppOpsConflictError) {
+          const conflictPaths = error.artifacts.map((artifact) => artifact.path);
+          this.recordFlushError(item.appId, error, false, "conflict", conflictPaths);
+          this.sync.recordManualFlushError(item.appId, error, {
+            kind: "conflict",
+            conflictPaths,
+          });
+        } else {
+          this.recordFlushError(item.appId, error, false);
+          this.sync.recordManualFlushError(item.appId, error);
+        }
+        item.reject(error);
+      }
+      return error.message;
+    } finally {
+      this.releaseActiveFlush(item.appId);
+    }
+    return undefined;
   }
 
   private async executeFlush(appId: string): Promise<CoordinatorFlushResult> {
@@ -512,11 +593,8 @@ export class SyncCoordinator {
 
   /** Clear in-flight flush markers and sync-busy file for one app. */
   private releaseActiveFlush(appId: string): void {
-    if (this.currentFlushAppId === appId) {
-      this.currentFlushAppId = null;
-    }
-    if (this.activeProgress?.appId === appId) {
-      this.activeProgress = null;
+    if (this.runningFlushes.delete(appId)) {
+      setImmediate(() => this.processFlushQueue());
     }
     this.updateGatewayBusyState();
   }
@@ -524,7 +602,8 @@ export class SyncCoordinator {
   private updateGatewayBusyState(trigger?: FlushTrigger): void {
     const paprDir = this.sync.getPaprDir();
     const queuedAppIds = this.flushQueue.map((item) => item.appId);
-    const activeAppId = this.currentFlushAppId;
+    const runningAppIds = [...this.runningFlushes.keys()];
+    const activeAppId = runningAppIds[0] ?? null;
 
     if (activeAppId || queuedAppIds.length > 0) {
       if (this.namespaceBusyStartedAt === null) {
@@ -536,8 +615,9 @@ export class SyncCoordinator {
           operation: "flush",
           startedAtMs: this.namespaceBusyStartedAt,
           trigger,
-          queueDepth: queuedAppIds.length + (activeAppId ? 1 : 0),
+          queueDepth: queuedAppIds.length + runningAppIds.length,
           queuedAppIds,
+          runningAppIds,
         },
         paprDir,
       );
@@ -584,18 +664,14 @@ export class SyncCoordinator {
     appId: string,
     progress: { layer: SyncCoordinatorLayer; label: string; detail?: string },
   ): void {
-    if (this.currentFlushAppId !== appId && this.activeProgress?.appId !== appId) {
+    const running = this.runningFlushes.get(appId);
+    if (!running) {
       return;
     }
-    const startedAt = this.activeProgress?.startedAt ?? Date.now();
-    this.activeProgress = {
-      appId,
-      startedAt,
-      layer: progress.layer,
-      label: progress.label,
-      detail: progress.detail,
-    };
-    this.updateGatewayBusyState();
+    noteFlushPhase(appId, progress.layer, progress.label);
+    running.layer = progress.layer;
+    running.label = progress.label;
+    running.detail = progress.detail;
   }
 
   getStatus(appId?: string): SyncCoordinatorStatus {
@@ -621,32 +697,31 @@ export class SyncCoordinator {
       /* apps dir missing */
     }
 
-    let activeFlush: SyncCoordinatorStatus["activeFlush"] = null;
-    if (this.activeProgress) {
-      activeFlush = {
-        appId: this.activeProgress.appId,
-        layer: this.activeProgress.layer ?? "publish",
-        startedAt: this.activeProgress.startedAt,
-        label: this.activeProgress.label,
-        detail: this.activeProgress.detail,
-      };
-    }
-
-    if (appId && activeFlush && activeFlush.appId !== appId) {
-      activeFlush = null;
-    }
+    const activeFlushes: SyncCoordinatorActiveFlush[] = [
+      ...this.runningFlushes.values(),
+    ]
+      .filter((running) => !appId || running.appId === appId)
+      .map((running) => ({
+        appId: running.appId,
+        layer: running.layer ?? "publish",
+        startedAt: running.startedAt,
+        label: running.label,
+        detail: running.detail,
+      }));
+    const activeFlush = activeFlushes[0] ?? null;
 
     const queuedFlushAppIds = this.flushQueue.map((item) => item.appId);
     const flushErrors = Object.fromEntries(this.flushErrors.entries());
     const inFlightAppIds = [
       ...new Set([
         ...this.activeFlushes.keys(),
-        ...(this.currentFlushAppId ? [this.currentFlushAppId] : []),
+        ...this.runningFlushes.keys(),
       ]),
     ];
 
     return {
       activeFlush,
+      activeFlushes,
       gitDirtyAppIds: appId
         ? gitDirtyAppIds.filter((id) => id === appId)
         : gitDirtyAppIds,
@@ -683,6 +758,7 @@ export class SyncCoordinator {
     }
     this.autoFlushRetry.clear();
     this.flushQueue.length = 0;
+    this.runningFlushes.clear();
     clearGatewaySyncBusy(this.sync.getPaprDir());
     this.namespaceBusyStartedAt = null;
   }
@@ -695,6 +771,13 @@ export function initializeSyncCoordinator(sync: CloudSyncService): SyncCoordinat
     coordinatorInstance.stop();
   }
   coordinatorInstance = new SyncCoordinator(sync);
+  void import("../gatewayEventLoopMonitor.js")
+    .then(({ sampleEventLoopLagMs }) => {
+      setFlushLagSampler(() => sampleEventLoopLagMs(false));
+    })
+    .catch(() => {
+      /* monitor unavailable (tests) — run at the full ceiling */
+    });
   return coordinatorInstance;
 }
 

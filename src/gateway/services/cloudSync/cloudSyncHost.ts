@@ -344,13 +344,19 @@ export function createPostHooksHost(service: CloudSyncHostService): CloudSyncPos
       return ids;
     },
     getPaprDir: () => service.paprDir,
+    // Parallel flushes: add/remove only this flush's apps so one finishing
+    // never clears another app's "publishing" state.
     setCloudPublishing: (appIds) => {
-      service.state.cloudPublishing = true;
-      service.state.cloudPublishingAppIds = [...appIds];
+      const next = new Set([...service.state.cloudPublishingAppIds, ...appIds]);
+      service.state.cloudPublishingAppIds = [...next];
+      service.state.cloudPublishing = next.size > 0;
     },
-    clearCloudPublishing: () => {
-      service.state.cloudPublishing = false;
-      service.state.cloudPublishingAppIds = [];
+    clearCloudPublishing: (appIds) => {
+      const drop = new Set(appIds);
+      service.state.cloudPublishingAppIds = service.state.cloudPublishingAppIds.filter(
+        (id) => !drop.has(id),
+      );
+      service.state.cloudPublishing = service.state.cloudPublishingAppIds.length > 0;
     },
     tryAutoPublishCloudLinks: (appIds) => service.tryAutoPublishCloudLinks(appIds),
   };

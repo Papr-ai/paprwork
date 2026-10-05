@@ -750,23 +750,19 @@
 .app-card__status-line--live::before,
 .app-card__status-line--running::before {
   content: "";
-  display: inline-block;
+  flex: none;
   width: 7px;
   height: 7px;
-  margin-right: 7px;
   border-radius: 50%;
-  vertical-align: 1px;
   background: var(--papr-blue-mid, #00acfa);
   box-shadow: 0 0 0 3px rgba(0, 172, 250, 0.18);
 }
 .app-card__status-line--fail::before {
   content: "";
-  display: inline-block;
+  flex: none;
   width: 7px;
   height: 7px;
-  margin-right: 7px;
   border-radius: 50%;
-  vertical-align: 1px;
   background: #f0a742;
   box-shadow: 0 0 0 3px rgba(240, 167, 66, 0.2);
 }

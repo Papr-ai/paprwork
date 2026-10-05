@@ -35,6 +35,15 @@ function mergeBashEnv(inputEnv?: Record<string, string>): Record<string, string>
   return { ...getJobToolEnv(), ...(inputEnv ?? {}) };
 }
 
+/** Values of job requiredKeys injected into env — redacted from bash output like any other key. */
+function jobSecretValues(): string[] {
+  const env = getJobToolEnv();
+  return (env.PAPR_SECRET_ENV_NAMES ?? "")
+    .split(",")
+    .map((name) => env[name.trim()])
+    .filter((v): v is string => typeof v === "string" && v.length >= 8);
+}
+
 function jobDbSchemaDdlBlockResult(
   command: string,
   env: Record<string, string>,
@@ -613,7 +622,7 @@ export async function executeBashCommand(
     }
 
     // Get API keys for sanitization and substitution
-    const apiKeys = getApiKeysForSanitization();
+    const apiKeys = [...getApiKeysForSanitization(), ...jobSecretValues()];
 
     // Quick check: does the command even use custom keys?
     const hasKeyPattern = /\$\{[A-Z_]+\}/.test(command);
@@ -841,7 +850,7 @@ export async function executeBashCommand(
     };
   } catch (error: unknown) {
     const duration = Date.now() - startTime;
-    const apiKeys = getApiKeysForSanitization();
+    const apiKeys = [...getApiKeysForSanitization(), ...jobSecretValues()];
 
     if (isSpawnResourceError(error)) {
       notifySpawnResourceError(error, "bash tool spawn");
@@ -925,7 +934,7 @@ export async function executeBashCommandStreaming(
   }
 
   // Get API keys for sanitization and substitution
-  const apiKeys = getApiKeysForSanitization();
+  const apiKeys = [...getApiKeysForSanitization(), ...jobSecretValues()];
 
   // Quick check: does the command even use custom keys?
   const hasKeyPattern = /\$\{[A-Z_]+\}/.test(command);

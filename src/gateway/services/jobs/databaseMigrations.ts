@@ -275,8 +275,13 @@ export async function ensureRegistryDatabase(
       db = openDiagnosticDatabase(Database, "services/jobs/databaseMigrations", layout.dbPath);
       applySqlitePerformancePragmas(db);
       ensureSchemaMigrationsTable(db);
-    } catch {
-      await fs.writeFile(layout.dbPath, "", { flag: "a" });
+    } catch (error) {
+      // Never leave an empty placeholder: the migration runner rejects a
+      // zero-byte data.db as corrupt, so the placeholder only turned a real
+      // open error into a misleading "corrupt or empty" one.
+      throw new Error(
+        `Could not open registry database ${layout.dbPath}: ${(error as Error).message}`,
+      );
     } finally {
       db?.close();
     }

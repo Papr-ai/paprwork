@@ -2815,3 +2815,16 @@ button.cloud-compat-badge--paused:hover {
     color: #fbbf24;
   }
 }
+
+/* After publishing a copy: Propose is the next step, so the ▾ pulses once. */
+.mini-app-publish-bar__split-caret--nudge {
+  box-shadow: 0 0 0 2px color-mix(in srgb, var(--accent, #0a84ff) 55%, transparent);
+  animation: pb-caret-nudge 1.6s ease-out 2;
+}
+@keyframes pb-caret-nudge {
+  0% { box-shadow: 0 0 0 0 color-mix(in srgb, var(--accent, #0a84ff) 60%, transparent); }
+  100% { box-shadow: 0 0 0 6px transparent; }
+}
+@media (prefers-reduced-motion: reduce) {
+  .mini-app-publish-bar__split-caret--nudge { animation: none; }
+}

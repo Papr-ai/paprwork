@@ -60,7 +60,7 @@ Returns:
 - workspaceApps — apps in this workspace from local apps.json (what exists on disk)
 - appWriterRepo (when appId set) — per-app GitHub repo URL, last commit, Sync V3 upload status (use this to verify cloud code). appWriterRepo.pendingUpdate = a collaborator's publish that has not been applied locally yet (same as the share bar "Update waiting" / "Update conflicts" chip): reason "local changes pending upload" auto-retries; conflictFiles non-empty needs a user decision
 - github — legacy namespace monorepo (workspace/, Jobs/ only — apps/ rows omitted as misleading)
-- Turso sync per linked database — check syncMode first: legacy = old Papr CDC/log path; replica = Plan A Turso Sync (pendingPush, pendingOps/cdcOperations are normal unpushed DML on replica — NOT legacy CDC). Also: online, migrationConflict, lastReplicaPushError, cutoverBlocked
+- Turso sync per linked database — check syncMode first: legacy = old Papr CDC/log path; replica = Plan A Turso Sync (pendingPush, pendingOps/cdcOperations are normal unpushed DML on replica — NOT legacy CDC). Also: online, migrationConflict, lastReplicaPushError, cutoverBlocked. heldForPublish { since, migrationIds } = a breaking schema change (drop/rename/rebuild) is applied locally and waiting to publish together with the app code; sync for that DB is paused on purpose and local reads/writes still work. Do not push or repair it — publishing the app (end of turn or sync_now) migrates the cloud, verifies, and lifts the hold
 - apps.papr.ai publish link status
 - Desktop heartbeat + pendingCloudRuns (cloud-triggered jobs waiting for desktop)
 - jobs.local — local job status (optionally with log tail)

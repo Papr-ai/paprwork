@@ -64,6 +64,7 @@ export function useOrgList() {
             ? buildWorkspaceUiCacheKey(org.organizationId, org.defaultNamespaceId)
             : undefined;
         await prepareWorkspaceSwitchReload({
+          organizationId: id,
           organizationName: org.name,
           ...(targetWorkspaceKey ? { targetWorkspaceKey } : {}),
         });

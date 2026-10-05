@@ -15,7 +15,10 @@ export interface SyncCoordinatorActiveFlush {
 }
 
 export interface SyncCoordinatorStatus {
+  /** First running flush (kept for single-flush callers). */
   activeFlush: SyncCoordinatorActiveFlush | null;
+  /** Every flush running now — publishes run in parallel. */
+  activeFlushes: SyncCoordinatorActiveFlush[];
   gitDirtyAppIds: string[];
   dbDirtySyncKeys: string[];
   inFlightAppIds: string[];

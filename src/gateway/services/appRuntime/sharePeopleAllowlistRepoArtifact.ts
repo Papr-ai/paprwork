@@ -46,13 +46,14 @@ export async function writeSharePeopleAllowlistRepoFile(
     CloudPublishAppPrefs,
     "allowedUserIds" | "allowedEmails" | "allowedEmailDomains"
   >,
-): Promise<void> {
+): Promise<boolean> {
   const target = path.join(appDir, SHARE_PEOPLE_ALLOWLIST_REPO_PATH);
   const next = sharePeopleAllowlistRepoJson(prefs);
   // Sync change detection is mtime-based: rewriting identical bytes after a
   // publish would flip the app to "Unpublished changes" with nothing to publish.
   const current = await readFile(target, "utf8").catch(() => null);
-  if (current === next) return;
+  if (current === next) return false;
   await mkdir(path.dirname(target), { recursive: true });
   await writeFile(target, next, "utf8");
+  return true;
 }

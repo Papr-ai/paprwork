@@ -7,6 +7,8 @@ import * as path from "node:path";
 
 import { SYNC_OID_CACHE_FILENAME } from "../../../core/types/appRepoWriterOps.js";
 import { getPaprRoot } from "../../../core/utils/paprRoot.js";
+import { writeFileAtomic } from "../../../core/utils/atomicJsonWrite.js";
+import { withCrossProcessFileLock } from "../../../core/utils/crossProcessFileLock.js";
 
 export interface OidCacheFile {
   version: 1;
@@ -40,7 +42,15 @@ async function writeOidCache(cache: OidCacheFile): Promise<void> {
   cache.updatedAt = new Date().toISOString();
   const filePath = cachePath();
   await fs.mkdir(path.dirname(filePath), { recursive: true });
-  await fs.writeFile(filePath, JSON.stringify(cache, null, 2), "utf8");
+  await writeFileAtomic(filePath, JSON.stringify(cache, null, 2));
+}
+
+/**
+ * Parallel publishes share this file. Every read-modify-write goes through one
+ * per-file lock so one app's acked OIDs never overwrite another's.
+ */
+function mutateOidCache<T>(fn: () => Promise<T>, filePath = cachePath()): Promise<T> {
+  return withCrossProcessFileLock(filePath, fn);
 }
 
 export async function getCachedBlobOid(
@@ -56,67 +66,78 @@ export async function setCachedBlobOid(
   repoRelativePath: string,
   blobOid: string,
 ): Promise<void> {
-  const cache = await readOidCache();
-  if (!cache.apps[appId]) {
-    cache.apps[appId] = {};
-  }
-  cache.apps[appId][repoRelativePath] = blobOid;
-  await writeOidCache(cache);
+  return mutateOidCache(async () => {
+    const cache = await readOidCache();
+    if (!cache.apps[appId]) {
+      cache.apps[appId] = {};
+    }
+    cache.apps[appId][repoRelativePath] = blobOid;
+    await writeOidCache(cache);
+  });
 }
 
 export async function applyAckedBlobOids(
   appId: string,
   files: ReadonlyArray<{ path: string; blobOid: string }>,
 ): Promise<void> {
-  const cache = await readOidCache();
-  if (!cache.apps[appId]) {
-    cache.apps[appId] = {};
-  }
-  for (const file of files) {
-    cache.apps[appId][file.path] = file.blobOid;
-  }
-  await writeOidCache(cache);
+  return mutateOidCache(async () => {
+    const cache = await readOidCache();
+    if (!cache.apps[appId]) {
+      cache.apps[appId] = {};
+    }
+    for (const file of files) {
+      cache.apps[appId][file.path] = file.blobOid;
+    }
+    await writeOidCache(cache);
+  });
 }
 
 export async function invalidateCachedPath(
   appId: string,
   repoRelativePath: string,
 ): Promise<void> {
-  const cache = await readOidCache();
-  if (cache.apps[appId]?.[repoRelativePath]) {
-    delete cache.apps[appId][repoRelativePath];
-    await writeOidCache(cache);
-  }
+  return mutateOidCache(async () => {
+    const cache = await readOidCache();
+    if (cache.apps[appId]?.[repoRelativePath]) {
+      delete cache.apps[appId][repoRelativePath];
+      await writeOidCache(cache);
+    }
+  });
 }
 
 export async function removeAppFromOidCache(
   appId: string,
   paprHome?: string,
 ): Promise<boolean> {
-  const trimmed = appId.trim();
-  if (!trimmed) {
-    return false;
-  }
-  const filePath = paprHome
+  const lockPath = paprHome
     ? path.join(paprHome, "data", SYNC_OID_CACHE_FILENAME)
     : cachePath();
-  let cache: OidCacheFile;
-  try {
-    const raw = await fs.readFile(filePath, "utf8");
-    const parsed = JSON.parse(raw) as OidCacheFile;
-    if (parsed.version !== 1 || typeof parsed.apps !== "object") {
+  return mutateOidCache(async () => {
+    const trimmed = appId.trim();
+    if (!trimmed) {
       return false;
     }
-    cache = parsed;
-  } catch {
-    return false;
-  }
-  if (!cache.apps[trimmed]) {
-    return false;
-  }
-  delete cache.apps[trimmed];
-  await writeOidCacheAtPath(filePath, cache);
-  return true;
+    const filePath = paprHome
+      ? path.join(paprHome, "data", SYNC_OID_CACHE_FILENAME)
+      : cachePath();
+    let cache: OidCacheFile;
+    try {
+      const raw = await fs.readFile(filePath, "utf8");
+      const parsed = JSON.parse(raw) as OidCacheFile;
+      if (parsed.version !== 1 || typeof parsed.apps !== "object") {
+        return false;
+      }
+      cache = parsed;
+    } catch {
+      return false;
+    }
+    if (!cache.apps[trimmed]) {
+      return false;
+    }
+    delete cache.apps[trimmed];
+    await writeOidCacheAtPath(filePath, cache);
+    return true;
+  }, lockPath);
 }
 
 async function writeOidCacheAtPath(
@@ -125,23 +146,25 @@ async function writeOidCacheAtPath(
 ): Promise<void> {
   cache.updatedAt = new Date().toISOString();
   await fs.mkdir(path.dirname(filePath), { recursive: true });
-  await fs.writeFile(filePath, JSON.stringify(cache, null, 2), "utf8");
+  await writeFileAtomic(filePath, JSON.stringify(cache, null, 2));
 }
 
 export async function seedOidCacheFromHead(
   appId: string,
   files: ReadonlyArray<{ path: string; blobOid: string }>,
 ): Promise<void> {
-  const cache = await readOidCache();
-  if (!cache.apps[appId]) {
-    cache.apps[appId] = {};
-  }
-  for (const file of files) {
-    if (!cache.apps[appId][file.path]) {
-      cache.apps[appId][file.path] = file.blobOid;
+  return mutateOidCache(async () => {
+    const cache = await readOidCache();
+    if (!cache.apps[appId]) {
+      cache.apps[appId] = {};
     }
-  }
-  await writeOidCache(cache);
+    for (const file of files) {
+      if (!cache.apps[appId][file.path]) {
+        cache.apps[appId][file.path] = file.blobOid;
+      }
+    }
+    await writeOidCache(cache);
+  });
 }
 
 /** Replace an app's OID cache from writer HEAD — used to repair stale publish baselines. */
@@ -149,14 +172,16 @@ export async function overwriteOidCacheFromHead(
   appId: string,
   files: ReadonlyArray<{ path: string; blobOid: string }>,
 ): Promise<number> {
-  const trimmed = appId.trim();
-  const cache = await readOidCache();
-  cache.apps[trimmed] = {};
-  for (const file of files) {
-    cache.apps[trimmed][file.path] = file.blobOid;
-  }
-  await writeOidCache(cache);
-  return files.length;
+  return mutateOidCache(async () => {
+    const trimmed = appId.trim();
+    const cache = await readOidCache();
+    cache.apps[trimmed] = {};
+    for (const file of files) {
+      cache.apps[trimmed][file.path] = file.blobOid;
+    }
+    await writeOidCache(cache);
+    return files.length;
+  });
 }
 
 /** Test-only — reset cache file. */

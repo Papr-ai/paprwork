@@ -10,6 +10,8 @@
 
 import { promises as fs } from "node:fs";
 import * as path from "node:path";
+import { writeFileAtomic } from "../../../core/utils/atomicJsonWrite.js";
+import { withCrossProcessFileLock } from "../../../core/utils/crossProcessFileLock.js";
 
 export type AppRepoCommittedEvent = {
   appId: string;
@@ -194,45 +196,52 @@ export async function writeAppRepoCommitCursor(
   appId: string,
   commitSha: string,
 ): Promise<void> {
-  const file = cursorPath();
-  await fs.mkdir(path.dirname(file), { recursive: true });
-  const all = await readAppRepoCommitCursors();
-  all[appId] = {
-    lastCommitSha: commitSha,
-    updatedAt: new Date().toISOString(),
-  };
-  await fs.writeFile(file, JSON.stringify(all, null, 2), "utf8");
+  return withCrossProcessFileLock(cursorPath(), async () => {
+    const file = cursorPath();
+    await fs.mkdir(path.dirname(file), { recursive: true });
+    const all = await readAppRepoCommitCursors();
+    all[appId] = {
+      lastCommitSha: commitSha,
+      updatedAt: new Date().toISOString(),
+    };
+    await writeFileAtomic(file, JSON.stringify(all, null, 2));
+  });
 }
 
 export async function removeAppRepoCommitCursor(
   appId: string,
   paprHome?: string,
 ): Promise<boolean> {
-  const trimmed = appId.trim();
-  if (!trimmed) {
-    return false;
-  }
-  const file = paprHome
+  const lockFile = paprHome
     ? path.join(paprHome, "data", "app-repo-commit-cursors.json")
     : cursorPath();
-  let all: Record<string, AppRepoCommitCursorStore>;
-  try {
-    const raw = await fs.readFile(file, "utf8");
-    const parsed: unknown = JSON.parse(raw);
-    if (typeof parsed !== "object" || parsed === null) {
+  return withCrossProcessFileLock(lockFile, async () => {
+    const trimmed = appId.trim();
+    if (!trimmed) {
       return false;
     }
-    all = parsed as Record<string, AppRepoCommitCursorStore>;
-  } catch {
-    return false;
-  }
-  if (!all[trimmed]) {
-    return false;
-  }
-  delete all[trimmed];
-  await fs.mkdir(path.dirname(file), { recursive: true });
-  await fs.writeFile(file, JSON.stringify(all, null, 2), "utf8");
-  return true;
+    const file = paprHome
+      ? path.join(paprHome, "data", "app-repo-commit-cursors.json")
+      : cursorPath();
+    let all: Record<string, AppRepoCommitCursorStore>;
+    try {
+      const raw = await fs.readFile(file, "utf8");
+      const parsed: unknown = JSON.parse(raw);
+      if (typeof parsed !== "object" || parsed === null) {
+        return false;
+      }
+      all = parsed as Record<string, AppRepoCommitCursorStore>;
+    } catch {
+      return false;
+    }
+    if (!all[trimmed]) {
+      return false;
+    }
+    delete all[trimmed];
+    await fs.mkdir(path.dirname(file), { recursive: true });
+    await writeFileAtomic(file, JSON.stringify(all, null, 2));
+    return true;
+  });
 }
 
 export async function clearAppRepoCommitCursorsForTests(): Promise<void> {

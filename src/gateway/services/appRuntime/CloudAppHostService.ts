@@ -54,6 +54,7 @@ import {
   getCachedTranspiledTypeScript,
   invalidateAccessCacheForPublishedApp,
   invalidateRepoCacheForPublishedApp,
+  pinPublishedAppCommit,
   invalidateRepoCacheForNamespace,
   validateCachedAccess,
 } from "./cloudAppHostCache.js";
@@ -2246,6 +2247,10 @@ export class CloudAppHostService {
       const slug = await this.resolvePublishSlugForApp(event.appId);
       if (slug) {
         invalidateRepoCacheForPublishedApp(event.namespaceId, slug);
+        // The event carries the new commit: serve it by SHA right away instead of
+        // asking GitHub for the branch head (that lookup 403s from Cloud Run, and
+        // the branch-name fallback is CDN-cached for ~5 min).
+        pinPublishedAppCommit(event.namespaceId, slug, event.commitSha);
         res.json({ ok: true, appId: event.appId, cacheInvalidated: true });
         return;
       }
@@ -2337,7 +2342,7 @@ export class CloudAppHostService {
       return;
     }
 
-    const body = req.body as { namespaceId?: string; slug?: string };
+    const body = req.body as { namespaceId?: string; slug?: string; commitSha?: string };
     const namespaceId = body.namespaceId?.trim();
     const slug = body.slug?.trim();
     if (!namespaceId || !slug) {
@@ -2346,6 +2351,9 @@ export class CloudAppHostService {
     }
 
     invalidateRepoCacheForPublishedApp(namespaceId, slug);
+    if (typeof body.commitSha === "string") {
+      pinPublishedAppCommit(namespaceId, slug, body.commitSha);
+    }
 
     const runtimeAuth: AppRuntimeRouteAuth = { namespaceId, slug };
     void import("./warmDeploySnapshot.js")

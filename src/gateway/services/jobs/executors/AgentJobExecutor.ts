@@ -259,6 +259,10 @@ export class AgentJobExecutor implements IJobExecutor {
           }
         : {}),
       ...runtimeParamsForJobEnv(params.runtimeParams),
+      // requiredKeys -> env, same contract as command jobs. The agent's bash calls
+      // inherit jobEnv, so scripts read os.environ["KEY"] without the agent ever
+      // seeing or passing the value.
+      ...(await this.resolveRequiredKeyEnv(params)),
     };
 
     const { setToolContext } = await import("../../../../core/tools/context.js");
@@ -427,6 +431,53 @@ export class AgentJobExecutor implements IJobExecutor {
    * Build the environment block that tells agents where their own data
    * and dependency data lives. Solves the "cross-job file access" problem.
    */
+  /**
+   * Inject the job's requiredKeys (Settings → API Keys) as env vars for its tools.
+   * "ask" keys go through the same permission prompt as command jobs. Names are
+   * listed in PAPR_SECRET_ENV_NAMES so bash output redacts the values.
+   */
+  private async resolveRequiredKeyEnv(
+    params: ExecutorLaunchParams,
+  ): Promise<Record<string, string>> {
+    const required = [...new Set(params.job.requiredKeys ?? [])];
+    if (required.length === 0) return {};
+    const { getCustomKeysService } = await import("../../CustomKeysService.js");
+    const service = getCustomKeysService();
+    const meta = new Map((await service.listKeys()).map((k) => [k.name, k]));
+    const env: Record<string, string> = {};
+    const ask: string[] = [];
+    for (const name of required) {
+      const permission = (meta.get(name) as { permission?: string } | undefined)?.permission ?? "always";
+      if (permission === "ask") { ask.push(name); continue; }
+      const value = (await service.getKeyByName(name)) || process.env[name];
+      if (value) env[name] = value;
+    }
+    if (ask.length > 0) {
+      if (!params.requestKeyPermission) {
+        throw new Error(
+          `Job "${params.job.name}" needs permission for: ${ask.join(", ")}. ` +
+            `Run it from chat or an app, or set the keys to "Always allow" in Settings → API Keys.`,
+        );
+      }
+      await params.onWaitingPermission?.(ask);
+      for (const name of ask) {
+        const ok = await params.requestKeyPermission(name, { jobId: params.job.id, jobName: params.job.name });
+        if (!ok) throw new Error(`Job "${params.job.name}": permission denied for API key ${name}.`);
+        const value = await service.getKeyByName(name);
+        if (value) env[name] = value;
+      }
+      await params.onResumingAfterPermission?.();
+    }
+    const missing = required.filter((n) => !env[n]);
+    if (missing.length > 0) {
+      throw new Error(
+        `Required API key${missing.length > 1 ? "s" : ""} ${missing.map((m) => `"${m}"`).join(", ")} missing. ` +
+          `Add in Settings → API Keys → Custom API Keys.`,
+      );
+    }
+    return { ...env, PAPR_SECRET_ENV_NAMES: Object.keys(env).join(",") };
+  }
+
   private async buildEnvironmentBlock(
     params: ExecutorLaunchParams,
   ): Promise<string> {

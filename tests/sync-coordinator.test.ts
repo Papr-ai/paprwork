@@ -88,7 +88,8 @@ describe("SyncCoordinator", () => {
     expect(flushAppNow).toHaveBeenCalledTimes(1);
   });
 
-  it("serializes flushes for different apps (namespace queue)", async () => {
+  it("runs flushes for different apps in parallel (bounded)", async () => {
+    process.env.PAPR_FLUSH_CONCURRENCY = "3";
     const coordinator = getSyncCoordinator()!;
     const { flushAppNow } = await import(
       "../src/gateway/services/cloudSync/flushAppNow.js"
@@ -110,16 +111,95 @@ describe("SyncCoordinator", () => {
       };
     });
 
-    await Promise.all([
-      coordinator.flushNow("app-a", { trigger: "auto" }),
-      coordinator.flushNow("app-b", { trigger: "auto" }),
-    ]);
+    const ids = ["app-1", "app-2", "app-3", "app-4", "app-5", "app-6", "app-7"];
+    const results = await Promise.all(
+      ids.map((id) => coordinator.flushNow(id, { trigger: "auto" })),
+    );
 
-    expect(flushAppNow).toHaveBeenCalledTimes(2);
-    expect(maxActive).toBe(1);
+    expect(results.map((r) => r.appId)).toEqual(ids);
+    expect(flushAppNow).toHaveBeenCalledTimes(ids.length);
+    expect(maxActive).toBe(3);
+    expect(coordinator.getStatus().activeFlushes).toEqual([]);
+    delete process.env.PAPR_FLUSH_CONCURRENCY;
+    // ~2.5s alone (first dynamic imports per flush); over 5s in the full suite.
+  }, 20_000);
+
+  it("never runs two apps that share a linked database at the same time", async () => {
+    process.env.PAPR_FLUSH_CONCURRENCY = "4";
+    const linked = await import("../src/gateway/services/tursoLinkedSources.js");
+    const keySpy = vi
+      .spyOn(linked, "listAppLinkedSyncKeys")
+      .mockImplementation((appId: string) =>
+        new Set(appId.startsWith("shared-") ? ["db-shared"] : [`db-${appId}`]),
+      );
+    const coordinator = getSyncCoordinator()!;
+    const { flushAppNow } = await import(
+      "../src/gateway/services/cloudSync/flushAppNow.js"
+    );
+
+    let sharedActive = 0;
+    let maxShared = 0;
+    let active = 0;
+    let maxActive = 0;
+    vi.mocked(flushAppNow).mockImplementation(async (_sync, appId: string) => {
+      active += 1;
+      maxActive = Math.max(maxActive, active);
+      if (appId.startsWith("shared-")) {
+        sharedActive += 1;
+        maxShared = Math.max(maxShared, sharedActive);
+      }
+      await new Promise((resolve) => setTimeout(resolve, 15));
+      if (appId.startsWith("shared-")) {
+        sharedActive -= 1;
+      }
+      active -= 1;
+      return { appId, localMigrationsApplied: [], tursoPushed: true, webReady: true, published: true };
+    });
+
+    await Promise.all(
+      ["shared-a", "shared-b", "solo-c", "shared-d", "solo-e"].map((id) =>
+        coordinator.flushNow(id, { trigger: "auto" }),
+      ),
+    );
+
+    expect(flushAppNow).toHaveBeenCalledTimes(5);
+    expect(maxShared).toBe(1);
+    expect(maxActive).toBeGreaterThan(1);
+    keySpy.mockRestore();
+    delete process.env.PAPR_FLUSH_CONCURRENCY;
+  });
+
+  it("a slow flush does not hold up other apps", async () => {
+    process.env.PAPR_FLUSH_CONCURRENCY = "2";
+    const coordinator = getSyncCoordinator()!;
+    const { flushAppNow } = await import(
+      "../src/gateway/services/cloudSync/flushAppNow.js"
+    );
+    let releaseSlow: (() => void) | undefined;
+    const done: string[] = [];
+    vi.mocked(flushAppNow).mockImplementation(async (_sync, appId: string) => {
+      if (appId === "slow") {
+        await new Promise<void>((resolve) => {
+          releaseSlow = resolve;
+        });
+      }
+      done.push(appId);
+      return { appId, localMigrationsApplied: [], tursoPushed: true, webReady: true, published: true };
+    });
+
+    const slow = coordinator.flushNow("slow", { trigger: "auto" });
+    await Promise.all(
+      ["f1", "f2", "f3"].map((id) => coordinator.flushNow(id, { trigger: "auto" })),
+    );
+    expect(done).toEqual(["f1", "f2", "f3"]);
+    releaseSlow?.();
+    await slow;
+    expect(done).toContain("slow");
+    delete process.env.PAPR_FLUSH_CONCURRENCY;
   });
 
   it("runs manual flush before a later queued auto flush", async () => {
+    process.env.PAPR_FLUSH_CONCURRENCY = "1";
     const coordinator = getSyncCoordinator()!;
     const { flushAppNow } = await import(
       "../src/gateway/services/cloudSync/flushAppNow.js"
@@ -164,6 +244,7 @@ describe("SyncCoordinator", () => {
     await Promise.all([slow, manual, queuedAuto]);
 
     expect(order).toEqual(["slow-app", "fast-app", "queued-app"]);
+    delete process.env.PAPR_FLUSH_CONCURRENCY;
   });
 
   it("resolves auto flush failures without rejecting (no unhandled rejection)", async () => {
@@ -194,12 +275,16 @@ describe("SyncCoordinator", () => {
     );
 
     await vi.advanceTimersByTimeAsync(35_000);
-    expect(flushAppNow).toHaveBeenCalledWith(
-      mockSync,
-      "my-app",
-      expect.objectContaining({ skipTursoReschedule: true }),
-    );
     vi.useRealTimers();
+    // The flush starts after dynamic imports resolve — under a loaded test run
+    // that can land after the fake-timer advance returns.
+    await vi.waitFor(() =>
+      expect(flushAppNow).toHaveBeenCalledWith(
+        mockSync,
+        "my-app",
+        expect.objectContaining({ skipTursoReschedule: true }),
+      ),
+    );
   });
 
   it("markDbDirty sets dirty flag and schedules Turso push", async () => {

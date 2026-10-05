@@ -151,6 +151,10 @@ export async function postAppOps(
     const payload: unknown = await resp.json();
     const parsed = AppRepoOpsConflictResponseSchema.safeParse(payload);
     if (parsed.success) {
+      const settled = await settleAlreadyAppliedConflicts(appId, body, parsed.data);
+      if (settled) {
+        return settled;
+      }
       incrementSyncV3Metric("writer_conflict_count");
       await invalidateWriterConflictPaths(appId, parsed.data.artifacts);
       throw new AppOpsConflictError(appId, parsed.data);
@@ -182,4 +186,54 @@ export async function postAppOps(
     // Non-fatal — ack OIDs + cursor are enough when HEAD is not yet visible.
   }
   return parsed.data;
+}
+
+/**
+ * A "conflict" where cloud HEAD already holds exactly the bytes we are sending
+ * is not a conflict: an earlier upload committed, but its ack was lost (e.g.
+ * the app restarted mid-publish), so our parentHash is stale. Adopt cloud's
+ * blob OIDs and send whatever else is left. Returns null for real conflicts.
+ */
+async function settleAlreadyAppliedConflicts(
+  appId: string,
+  body: AppRepoOpsRequest,
+  conflict: AppRepoOpsConflictResponse,
+): Promise<AppRepoOpsSuccessResponse | null> {
+  const { computeBlobOidForContent } = await import("./computeParentHash.js");
+  const settledPaths = new Set<string>();
+  const settledFiles: Array<{ path: string; blobOid: string }> = [];
+  for (const artifact of conflict.artifacts) {
+    const file = body.files.find((f) => f.path === artifact.path);
+    if (!file) {
+      return null;
+    }
+    if (file.content === null) {
+      if (artifact.actualBlobOid !== null) return null; // still exists on cloud
+      settledPaths.add(file.path);
+      continue;
+    }
+    const oid = await computeBlobOidForContent(file.content);
+    if (oid !== artifact.actualBlobOid) {
+      return null; // cloud really differs
+    }
+    settledPaths.add(file.path);
+    settledFiles.push({ path: file.path, blobOid: oid });
+  }
+
+  console.log(
+    `[AppOps] ${appId}: ${settledPaths.size} "conflict" path(s) already match cloud HEAD — adopting cloud OIDs`,
+  );
+  await applyAckedBlobOids(appId, settledFiles);
+  const remaining = body.files.filter((f) => !settledPaths.has(f.path));
+  if (remaining.length > 0) {
+    const ack = await postAppOps(appId, {
+      ...body,
+      files: remaining,
+      idempotencyKey: `${body.idempotencyKey}:settled`,
+    });
+    return { ...ack, files: [...settledFiles, ...ack.files] };
+  }
+  // Nothing new to commit — cloud HEAD is the commit that already holds our bytes.
+  const head = await fetchAppRepoHead(appId);
+  return { commitSha: head.commitSha, files: settledFiles };
 }

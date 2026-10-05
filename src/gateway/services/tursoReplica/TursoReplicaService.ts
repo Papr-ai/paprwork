@@ -13,6 +13,7 @@
 import * as fs from "fs";
 import * as path from "path";
 import { ensureTursoSyncBridge } from "../TursoSyncBridge.js";
+import { appendHoldJournal, shouldSkipSyncForHold } from "./replicaPublishHold.js";
 import { quoteIdent } from "../tursoSyncBridgeCore.js";
 import type {
   TursoReplicaPushResponse,
@@ -177,6 +178,7 @@ export class TursoReplicaService {
         statements: options.statements.map((s) => ({ sql: s.sql, params: s.params })),
         timeoutMs: REPLICA_QUERY_TIMEOUT_MS,
       });
+      appendHoldJournal(options.localPath, options.statements);
 
       const pendingPush = await this.syncAfterWrite(
         spec,
@@ -236,6 +238,7 @@ export class TursoReplicaService {
         sql,
         timeoutMs: REPLICA_QUERY_TIMEOUT_MS,
       });
+      appendHoldJournal(localPath, [{ sql }]);
       const pendingPush = await this.syncAfterWrite(spec, localPath, pushMode);
       return { pendingPush };
     });
@@ -267,7 +270,7 @@ export class TursoReplicaService {
     localPath: string,
     pushMode: "none" | "sync" | "background",
   ): Promise<boolean> {
-    if (pushMode === "none" || !isTursoReplicaOnline()) {
+    if (pushMode === "none" || !isTursoReplicaOnline() || shouldSkipSyncForHold(localPath)) {
       return true;
     }
     if (pushMode === "background") {
@@ -410,6 +413,16 @@ export class TursoReplicaService {
     spec: OpenSpec,
     op: "pull" | "push" | "pullPush",
   ): Promise<boolean> {
+    if (shouldSkipSyncForHold(spec.localPath)) {
+      // Breaking migration waiting for publish: no uploads (sync engine would drop
+      // renames / half-apply rebuilds) and no downloads (would undo them). S2/S3.
+      if (op !== "pull") {
+        throw new Error(
+          "Database held for publish: a breaking schema change is waiting to publish with the app code",
+        );
+      }
+      return false;
+    }
     const client = getTursoReplicaSyncWorkerClient();
     const run = () =>
       withTursoReplicaSyncBusy(spec.localPath, `replica_${op}`, () =>

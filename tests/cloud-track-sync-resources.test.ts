@@ -160,7 +160,7 @@ describe("CloudAppTrackSyncService shared database track sync", () => {
     expect(bootstrapInstalledAppDatabases).not.toHaveBeenCalled();
   });
 
-  it("runs full database bootstrap for forked track lineage", async () => {
+  it("own-data copy: keeps its databases on update, then bootstraps its own", async () => {
     writeTrackApp(appsDir, {
       schemaVersion: "1.2.0",
       lineageId: "lineage-2",
@@ -179,9 +179,12 @@ describe("CloudAppTrackSyncService shared database track sync", () => {
 
     await service.syncTrackApp(APP_ID);
 
+    // A full resource sync merged the publisher's registry and linked the
+    // copy to the publisher's databases next to its own.
     expect(installCloudAppLinkedResources).toHaveBeenCalledWith(
-      expect.not.objectContaining({
+      expect.objectContaining({
         syncScope: "jobs_and_code",
+        installDbPolicy: "fork_empty",
       }),
     );
     expect(bootstrapInstalledAppDatabases).toHaveBeenCalledWith(APP_ID);

@@ -356,15 +356,27 @@ export class CloudAppTrackSyncService {
       // Install rewrote the publisher's app id to ours; do the same to incoming
       // files so updates compare like-for-like and don't reintroduce their id.
       const publisherAppId = prepare.source?.appId;
+      const rawUpstream = await collectLocalFiles(upstreamDir);
+      const localFiles = await collectLocalFiles(path.join(this.appsDir, appId));
+      // A copy on its own data got fresh database ids at install; translate
+      // them too, or an update re-wires the copy to the publisher's databases.
+      const { usesSharedData: onTeamData } = await import("../../core/utils/copyAxes.js");
+      const ownDb = await import("./cloudSync/ownDataDbIdMap.js");
+      const dbToLocal = onTeamData(lineage)
+        ? new Map<string, string>()
+        : ownDb.inferOwnDataDbIdMap(localFiles.get("data-sources.json"), rawUpstream.get("data-sources.json"));
+      const dbToPublisher = ownDb.invertDbIdMap(dbToLocal);
       const upstreamFiles = new Map(
-        [...(await collectLocalFiles(upstreamDir))].map(([rel, content]) => [
+        [...rawUpstream].map(([rel, content]) => [
           rel,
-          publisherAppId && publisherAppId !== appId
-            ? content.split(publisherAppId).join(appId)
-            : content,
+          ownDb.remapDbIdsInContent(
+            publisherAppId && publisherAppId !== appId
+              ? content.split(publisherAppId).join(appId)
+              : content,
+            dbToLocal,
+          ),
         ]),
       );
-      const localFiles = await collectLocalFiles(path.join(this.appsDir, appId));
       const snapshot = lineage.syncSnapshot ?? {};
 
       // The commit this copy is based on, so files both sides touched can be
@@ -374,13 +386,19 @@ export class CloudAppTrackSyncService {
         .relative(repoDir, upstreamDir)
         .replace(/\\/g, "/");
       const toPublisherIds = (content: string) =>
-        publisherAppId && publisherAppId !== appId
-          ? content.split(appId).join(publisherAppId)
-          : content;
+        ownDb.remapDbIdsInContent(
+          publisherAppId && publisherAppId !== appId
+            ? content.split(appId).join(publisherAppId)
+            : content,
+          dbToPublisher,
+        );
       const toLocalIds = (content: string) =>
-        publisherAppId && publisherAppId !== appId
-          ? content.split(publisherAppId).join(appId)
-          : content;
+        ownDb.remapDbIdsInContent(
+          publisherAppId && publisherAppId !== appId
+            ? content.split(publisherAppId).join(appId)
+            : content,
+          dbToLocal,
+        );
       const base = await resolveBaseCommit(
         repoDir,
         lineage.baseCommit,
@@ -594,13 +612,13 @@ export class CloudAppTrackSyncService {
           publisherAppId: lineage.source.appId,
           localAppId: appId,
           env,
-          ...(sharedDatabase
-            ? {
-                syncScope: "jobs_and_code" as const,
-                skipReplicaPrep: true,
-                installDbPolicy: "shared_primary" as const,
-              }
-            : {}),
+          // Either way the copy keeps the databases it already has: the team's
+          // (shared) or its own (fork_empty). A full resource sync here merged
+          // the publisher's registry and linked the copy to the publisher's
+          // databases next to its own (Community Get updates, 2026-10-05).
+          syncScope: "jobs_and_code" as const,
+          skipReplicaPrep: true,
+          installDbPolicy: sharedDatabase ? ("shared_primary" as const) : ("fork_empty" as const),
         });
         if (linked.copiedJobIds.length > 0) {
           console.log(

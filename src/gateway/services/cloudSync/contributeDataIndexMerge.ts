@@ -21,6 +21,8 @@ export interface ContributeDataIndexMergeInput {
   contributorPaprDir: string;
   forkAppId: string;
   targetAppId: string;
+  /** Copy-local ids of databases the publisher already has (own-data copies). */
+  skipDbIds?: ReadonlySet<string>;
 }
 
 export interface ContributeDataIndexMergeResult {
@@ -166,11 +168,13 @@ export async function mergeContributeDataIndexesIntoRepo(
     input.contributorPaprDir,
     input.forkAppId,
   );
-  const registryDbIds = await resolveContributeRegistryDbIds(
-    input.contributorPaprDir,
-    input.forkAppId,
-    dependentJobIds,
-  );
+  const registryDbIds = (
+    await resolveContributeRegistryDbIds(
+      input.contributorPaprDir,
+      input.forkAppId,
+      dependentJobIds,
+    )
+  ).filter((dbId) => !input.skipDbIds?.has(dbId));
 
   const written: string[] = [];
   const dataDir = path.join(input.repoDir, "data");

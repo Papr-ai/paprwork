@@ -2,7 +2,7 @@
  * Plan A — keep legacy better-sqlite3 CDC off Turso Sync replica files.
  */
 
-import { openDiagnosticDatabase } from "../databaseDiagnostics/sqlite.js";
+import { openDiagnosticDatabase, setReplicaManagedPathGuard } from "../databaseDiagnostics/sqlite.js";
 
 import * as fs from "fs";
 import * as path from "path";
@@ -47,6 +47,14 @@ export function isReplicaManagedDbPath(dbPath: string): boolean {
   }
   return shouldUseTursoReplicaForDb({ syncMode: record.syncMode });
 }
+
+setReplicaManagedPathGuard((dbPath) => {
+  try {
+    return isReplicaManagedDbPath(dbPath);
+  } catch {
+    return false;
+  }
+});
 
 export function isReplicaManagedRecord(record: DatabaseRecord): boolean {
   return (

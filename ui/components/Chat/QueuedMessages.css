@@ -10,22 +10,27 @@
   --queued-dash: color-mix(in srgb, var(--text-secondary) 45%, transparent);
 }
 
-.queued-item {
-  position: relative;
-  margin-bottom: 0.25rem;
+.queued-item.message-item {
+  /* Match .input-bar horizontal margin; padding matches composer inner spacing. */
+  margin: 0 20px 0.25rem;
+  padding: 12px 14px;
   animation: queuedIn 0.2s var(--ease) both;
 }
 
-/* Align dashed frame with the composer (.input-bar uses 20px side margin). */
-.queued-item::before,
-.message-item.message-item--landing::before {
+.queued-item {
+  position: relative;
+}
+
+/* Dashed frame hugs the queued card (same width as the composer). */
+.queued-item::before {
   content: "";
   position: absolute;
-  inset: 6px 20px;
+  inset: 0;
   border: 1.5px dashed var(--queued-dash, color-mix(in srgb, var(--text-secondary) 45%, transparent));
-  border-radius: 16px;
+  border-radius: 18px;
   pointer-events: none;
 }
+
 
 .queued-item__content {
   gap: 6px;
@@ -116,6 +121,12 @@
 }
 
 .message-item.message-item--landing::before {
+  content: "";
+  position: absolute;
+  inset: 6px 20px;
+  border: 1.5px dashed var(--queued-dash, color-mix(in srgb, var(--text-secondary) 45%, transparent));
+  border-radius: 18px;
+  pointer-events: none;
   animation: queuedFrameDissolve 0.5s var(--ease) 0.08s forwards;
 }
 

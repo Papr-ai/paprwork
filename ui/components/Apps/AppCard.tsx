@@ -370,7 +370,7 @@ export function AppCard({
             className={`app-card__status-line app-card__status-line--${statusLine.tone}`}
             title={statusLine.text}
           >
-            {statusLine.text}
+            <span className="app-card__status-line__label">{statusLine.text}</span>
           </span>
         ) : null}
         <div className="app-card__footer">
