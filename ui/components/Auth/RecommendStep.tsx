@@ -8,16 +8,16 @@
  * RELEASE ORDER IS THE WHOLE TRICK. RecommendedApps installs by opening a chat
  * tab + app tab and merging them into split view — but while this component is
  * mounted, App.tsx is rendering the gate INSTEAD of the workspace, so there is
- * no tab UI for them to land in. So we call onComplete() first (unmounting the
- * gate, mounting the workspace) and let the install continue underneath: the
- * install flow drives tabStore via getState() and dispatches its welcome event
- * on a timer, neither of which needs this component to stay alive.
+ * no tab UI for them to land in. Arm runAfterWorkspaceMount BEFORE onComplete()
+ * so the cold-boot tab restore cannot wipe the install tabs; the install flow
+ * drives tabStore via getState() and dispatches its welcome event on a timer,
+ * neither of which needs this component to stay alive.
  *
  * Same reasoning for freeform — `papr-onboarding-send` is only heard by the
  * workspace, so the gate must be gone before it fires.
  */
 
-import { useCallback, useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useState } from "react";
 import { RecommendedApps } from "../Onboarding/RecommendedApps";
 import {
   getOnboardingState,
@@ -61,15 +61,6 @@ export function RecommendStep({ onComplete, previewMode = false, onBack }: Recom
   const [providerLine, setProviderLine] = useState<string | undefined>();
   /** Holding on this screen until the gateway can actually answer a chat. */
   const [preparing, setPreparing] = useState(false);
-  /**
-   * Marketing email consent. UNCHECKED by default — a pre-ticked box is not
-   * valid consent (GDPR Art. 7 / Recital 32). Lives on this stage because it is
-   * the one every new user reaches; read via ref so advancePhase stays stable.
-   */
-  const [marketingOptIn, setMarketingOptIn] = useState(false);
-  const marketingOptInRef = useRef(false);
-  marketingOptInRef.current = marketingOptIn;
-
   /**
    * Release the gate only once the gateway has finished loading. Releasing
    * earlier dropped the user into a chat that sat silent while services
@@ -131,7 +122,7 @@ export function RecommendStep({ onComplete, previewMode = false, onBack }: Recom
       // Durable, per-user record — this is the last gated stage, so reaching
       // any exit means setup is finished. Skipping still counts: the user made
       // a choice and must not be re-gated on their next machine.
-      void recordOnboardingComplete({ marketingOptIn: marketingOptInRef.current });
+      void recordOnboardingComplete();
     },
     [previewMode],
   );
@@ -188,7 +179,11 @@ export function RecommendStep({ onComplete, previewMode = false, onBack }: Recom
       <div className="onboarding-flow onboarding-screen recommend-step">
         <div className="onboarding-screen-inner recommend-step__inner">
           <div className="onboarding-head-row">
-            <AuthProgressDots activeIndex={3} />
+            <div className="onboarding-head-row__start" aria-hidden />
+            <div className="onboarding-head-row__center">
+              <AuthProgressDots activeIndex={3} />
+            </div>
+            <div className="onboarding-head-row__end" aria-hidden />
           </div>
           <h1 className="onboarding-h1">Getting your workspace ready</h1>
           <p className="onboarding-lede">
@@ -208,12 +203,26 @@ export function RecommendStep({ onComplete, previewMode = false, onBack }: Recom
     // like the prototype's stage C: dots → ribbon → headline → lede → tiles.
     <div className="onboarding-flow onboarding-screen recommend-step">
       <div className="onboarding-screen-inner recommend-step__inner">
-        {/* Same head row as the Claude stepper: dots left, Skip right. */}
         <div className="onboarding-head-row">
-          <AuthProgressDots activeIndex={3} />
-          <button type="button" className="onboarding-skip-btn" onClick={handleSkip}>
-            Skip for now
-          </button>
+          <div className="onboarding-head-row__start">
+            {(onBack || freeformOpen) && (
+              <button
+                type="button"
+                className="onboarding-skip-btn"
+                onClick={() => (freeformOpen ? setFreeformOpen(false) : onBack?.())}
+              >
+                ← Back
+              </button>
+            )}
+          </div>
+          <div className="onboarding-head-row__center">
+            <AuthProgressDots activeIndex={3} />
+          </div>
+          <div className="onboarding-head-row__end">
+            <button type="button" className="onboarding-skip-btn" onClick={handleSkip}>
+              Skip for now
+            </button>
+          </div>
         </div>
         {providerLine && <p className="recommend-step__ribbon">{providerLine}</p>}
         {!freeformOpen && (
@@ -235,27 +244,6 @@ export function RecommendStep({ onComplete, previewMode = false, onBack }: Recom
           freeformOpen={freeformOpen}
           onFreeformOpenChange={setFreeformOpen}
         />
-        {!previewMode && (
-          <label className="recommend-step__consent">
-            <input
-              type="checkbox"
-              checked={marketingOptIn}
-              onChange={(event) => setMarketingOptIn(event.target.checked)}
-            />
-            <span>Email me occasional product updates and tips from Papr. Unsubscribe anytime.</span>
-          </label>
-        )}
-        {(onBack || freeformOpen) && (
-          <div className="onboarding-foot">
-            <button
-              type="button"
-              className="onboarding-back-btn"
-              onClick={() => (freeformOpen ? setFreeformOpen(false) : onBack?.())}
-            >
-              ← Back
-            </button>
-          </div>
-        )}
       </div>
     </div>
   );
