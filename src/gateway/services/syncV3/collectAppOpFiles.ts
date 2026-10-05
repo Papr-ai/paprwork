@@ -29,7 +29,12 @@ import {
 import { computeBlobOidForContent } from "./computeParentHash.js";
 import { readOidCache } from "./OidCache.js";
 import { readSyncManifest, updateSyncManifest } from "./SyncManifest.js";
-import { planLocalDeletes, readJobConfigJson, type LocalDeletePlan } from "./syncDeletes.js";
+import {
+  isUnderScannedRoot,
+  planLocalDeletes,
+  readJobConfigJson,
+  type LocalDeletePlan,
+} from "./syncDeletes.js";
 
 const SKIP_DIR_NAMES = new Set([
   "node_modules",
@@ -66,6 +71,30 @@ interface WalkCandidate {
   repoPath: string;
   fullPath: string;
   readContent?: () => Promise<string>;
+}
+
+/**
+ * Would the publish walk produce this repo path if the file existed? Built
+ * from the same rule sets the walkers use, so a delete can only be inferred
+ * for a path the walk would otherwise have sent.
+ */
+export function wouldWalkRepoPath(repoPath: string): boolean {
+  const parts = repoPath.split("/");
+  if (parts.some((p) => p === "" || p === "..") || isNeverTrackRepoPath(repoPath)) return false;
+  const name = parts[parts.length - 1]!;
+  if (parts[0] === "jobs") {
+    if (parts.length < 3) return false;
+    const rel = parts.slice(2);
+    if (rel.some((p) => p.startsWith("."))) return false;
+    if (rel.slice(0, -1).some((d) => JOB_SKIP_DIR_NAMES.has(d))) return false;
+    if (JOB_SKIP_FILE_NAMES.has(name)) return false;
+    return !JOB_SKIP_EXTENSIONS.has(path.extname(name).toLowerCase());
+  }
+  if (parts[0] === "databases") {
+    return parts.length === 4 && parts[2] === "migrations" && !name.startsWith(".");
+  }
+  if (parts.slice(0, -1).some((d) => d.startsWith(".") || SKIP_DIR_NAMES.has(d))) return false;
+  return !name.startsWith(".") || ALLOWED_DOTFILE_NAMES.has(name);
 }
 
 async function walkAppFiles(appDir: string): Promise<string[]> {
@@ -332,14 +361,20 @@ interface AppWalk {
 async function walkAppForSync(paprDir: string, appId: string): Promise<AppWalk> {
   const appDir = path.join(paprDir, "apps", appId);
   const roots = new Set<string>();
-  const appPaths = await walkAppFiles(appDir);
+  const owned = new Set<string>();
+  const jobCandidates = await collectLinkedJobCandidates(paprDir, appId, owned);
+  const schemaCandidates = await collectSchemaOwnerMigrationCandidates(paprDir, appId, owned);
+  // The app folder can hold copies of job and schema files (a pull writes
+  // repo paths there). Jobs/ and the registry are the real ones: a copy under
+  // a folder they own is never read, or a stale copy would overwrite the job.
+  const appPaths = (await walkAppFiles(appDir)).filter((p) => !isUnderScannedRoot(p, owned));
   if (appPaths.length > 0) roots.add("app");
+  for (const r of owned) roots.add(r);
   const candidates: WalkCandidate[] = appPaths.map((repoPath) => ({
     repoPath,
     fullPath: path.join(appDir, repoPath),
   }));
-  candidates.push(...(await collectLinkedJobCandidates(paprDir, appId, roots)));
-  candidates.push(...(await collectSchemaOwnerMigrationCandidates(paprDir, appId, roots)));
+  candidates.push(...jobCandidates, ...schemaCandidates);
   return { candidates, present: new Set(candidates.map((c) => c.repoPath)), roots };
 }
 
@@ -353,6 +388,7 @@ async function planDeletesFor(
   const plan = await planLocalDeletes({
     paprDir,
     appId,
+    wouldWalk: wouldWalkRepoPath,
     present: walk.present,
     roots: walk.roots,
     cachedOids,

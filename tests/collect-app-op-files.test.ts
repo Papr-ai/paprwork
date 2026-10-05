@@ -132,6 +132,21 @@ describe("collectAppOpFiles", () => {
     expect(parsed.id).toBe("job-worker");
   });
 
+  it("a stale copy of a job file in the app folder never overrides the real job", async () => {
+    const paprDir = makePaprDir();
+    fs.mkdirSync(path.join(paprDir, "data"), { recursive: true });
+    seedWorkspace(paprDir);
+    const real = fs.readFileSync(path.join(paprDir, "Jobs", "job-worker", "code", "run.py"), "utf8");
+    const mirror = path.join(paprDir, "apps", appId, "jobs", "job-worker", "code", "run.py");
+    fs.mkdirSync(path.dirname(mirror), { recursive: true });
+    fs.writeFileSync(mirror, "# stale copy from an old pull\n");
+
+    const { files } = await collectAppOpFiles(paprDir, appId);
+    const runPy = files.filter((f) => f.path === "jobs/job-worker/code/run.py");
+    expect(runPy).toHaveLength(1);
+    expect(runPy[0]!.content).toBe(real);
+  });
+
   it("includes .papr-cloud-revision for apps.papr.ai cache busting", async () => {
     const paprDir = makePaprDir();
     fs.mkdirSync(path.join(paprDir, "data"), { recursive: true });

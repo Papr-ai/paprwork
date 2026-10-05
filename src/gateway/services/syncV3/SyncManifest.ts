@@ -36,7 +36,7 @@ interface AppManifestEntry {
 }
 
 interface SyncManifestFile {
-  version: 1;
+  version: 2;
   apps: Record<string, AppManifestEntry>;
 }
 
@@ -51,12 +51,28 @@ function manifestPath(paprHome?: string): string {
 
 async function readManifestFile(filePath: string): Promise<SyncManifestFile> {
   try {
-    const parsed = JSON.parse(await fs.readFile(filePath, "utf8")) as SyncManifestFile;
-    if (parsed.version === 1 && parsed.apps && typeof parsed.apps === "object") return parsed;
+    const parsed = JSON.parse(await fs.readFile(filePath, "utf8")) as {
+      version: number;
+      apps?: Record<string, AppManifestEntry>;
+    };
+    if (parsed.version === 2 && parsed.apps && typeof parsed.apps === "object") {
+      return parsed as SyncManifestFile;
+    }
+    if (parsed.version === 1 && parsed.apps && typeof parsed.apps === "object") {
+      // v1 could seed job/schema paths from stale copies inside the app
+      // folder. Drop them; the real files re-seed them on the next walk.
+      for (const entry of Object.values(parsed.apps)) {
+        for (const p of Object.keys(entry.files ?? {})) {
+          if (p.startsWith("jobs/") || p.startsWith("databases/")) delete entry.files[p];
+        }
+        delete entry.approvedDeletes;
+      }
+      return { version: 2, apps: parsed.apps };
+    }
   } catch {
     // missing or unreadable → empty (no deletes can be inferred from it)
   }
-  return { version: 1, apps: {} };
+  return { version: 2, apps: {} };
 }
 
 /** Read-modify-write under one cross-process lock (publish worker + gateway). */

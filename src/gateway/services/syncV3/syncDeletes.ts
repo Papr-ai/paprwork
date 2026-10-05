@@ -8,6 +8,7 @@
 import { promises as fs } from "node:fs";
 import * as path from "node:path";
 
+import { isNeverTrackRepoPath } from "../appRepoWriter/abuseFilter.js";
 import { parseMonolithicJobJson } from "../jobs/jobRuntimeFields.js";
 import { computeBlobOidForContent } from "./computeParentHash.js";
 import { MASS_DELETE_THRESHOLD, type AppSyncManifest } from "./SyncManifest.js";
@@ -92,15 +93,21 @@ export interface LocalDeletePlan {
 export async function planLocalDeletes(input: {
   paprDir: string;
   appId: string;
+  /** The walk's own inclusion rule (wouldWalkRepoPath). */
+  wouldWalk: (repoPath: string) => boolean;
   present: ReadonlySet<string>;
   roots: ReadonlySet<string>;
   cachedOids: Readonly<Record<string, string>>;
   manifest: AppSyncManifest;
 }): Promise<LocalDeletePlan> {
-  const { paprDir, appId, present, roots, cachedOids, manifest } = input;
+  const { paprDir, appId, wouldWalk, present, roots, cachedOids, manifest } = input;
   const removed: Array<{ path: string; parentHash: string }> = [];
   const alreadyGone: string[] = [];
+  // Never-track paths (db sidecars, media) are invisible to sync in both
+  // directions. The deployed writer rejects a whole op that names one, so a
+  // single stale sidecar delete would block every publish.
   for (const [p, baseOid] of manifest.files) {
+    if (!wouldWalk(p)) continue;
     if (present.has(p) || !isUnderScannedRoot(p, roots)) continue;
     if (!(await isGone(paprDir, appId, p))) continue; // exists but no longer tracked: leave the web copy
     if (!(p in cachedOids)) {
@@ -113,6 +120,7 @@ export async function planLocalDeletes(input: {
   const webOnly: string[] = [];
   for (const p of Object.keys(cachedOids)) {
     if (manifest.files.has(p) || present.has(p) || WRITER_SCAFFOLD.has(p)) continue;
+    if (isNeverTrackRepoPath(p)) continue;
     if (!isUnderScannedRoot(p, roots)) continue;
     if (await isGone(paprDir, appId, p)) webOnly.push(p);
   }

@@ -148,6 +148,15 @@ describe("publish: deletes come from the manifest, not the cache", () => {
     expect(deletesIn(files)).toEqual([{ path: "stale.sql", content: null, parentHash: "web-oid" }]);
   });
 
+  it("db sidecars on the web are never planned as deletes (writer rejects the whole op)", async () => {
+    await synced({ "index.html": "<html/>" });
+    await applyAckedBlobOids(appId, [{ path: "jobs/j1/data/data.db-shm", blobOid: "o" }]);
+    await updateSyncManifest(appId, { add: [{ path: "jobs/j1/data/data.db-shm", oid: "o" }] });
+    const { files } = await collectAppOpFiles(home, appId);
+    expect(deletesIn(files)).toEqual([]);
+    expect((await listLocalCodeChanges(home, appId)).webOnly).toEqual([]);
+  });
+
   it("panel 'removed' list and publish agree", async () => {
     await synced({ "index.html": "<html/>", "a.ts": "a", "b.ts": "b" });
     fs.rmSync(appFile("a.ts"));
