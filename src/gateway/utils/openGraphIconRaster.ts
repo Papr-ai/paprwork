@@ -32,7 +32,7 @@ export async function rasterizePreviewIconForOpenGraph(
     }
   }
 
-  let sharp: typeof import("sharp").default;
+  let sharp: typeof import("sharp");
   try {
     sharp = (await import("sharp")).default;
   } catch {

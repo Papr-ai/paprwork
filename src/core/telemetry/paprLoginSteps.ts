@@ -18,6 +18,7 @@ export type PaprLoginStep =
   | "token_exchanged"
   | "user_claims_decoded"
   | "org_setup_required"
+  | "provisioning_deferred_manual_setup"
   | "org_setup_viewed"
   | "org_setup_submitted"
   | "org_setup_provisioning_started"
