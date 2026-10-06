@@ -54,7 +54,7 @@ function markAppCodeBaselineSynced(appId: string, code: PullAppCodeFromRepoResul
   sync.markRelativePathSynced(`apps/${appId}`);
 }
 
-export async function pullAppFromCloud(
+async function pullAppFromCloudLocked(
   appId: string,
   options: {
     token: string | null;
@@ -141,4 +141,16 @@ export async function pullAppFromCloud(
   const { scheduleTursoPullForAppOpen } = await import("../tursoPullScheduler.js");
   scheduleTursoPullForAppOpen(appId);
   return { appId, code, tursoScheduled: true, registryMigrationsApplied };
+}
+
+/** Get updates. Queued behind any publish of the same app (see appSyncLock). */
+export async function pullAppFromCloud(
+  appId: string,
+  options: Parameters<typeof pullAppFromCloudLocked>[1],
+): Promise<PullAppFromCloudResult> {
+  if (options.dryRun) {
+    return pullAppFromCloudLocked(appId, options);
+  }
+  const { withAppSyncLock } = await import("./appSyncLock.js");
+  return withAppSyncLock(appId, "get-updates", () => pullAppFromCloudLocked(appId, options));
 }

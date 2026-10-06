@@ -2,6 +2,7 @@
  * POST app ops to app-repo-writer (Sync V3 Phase 2).
  */
 
+import { assertGitHubNotPaused, noteGitHubRateLimit } from "../githubRateGate.js";
 import type {
   AppRepoHeadResponse,
   AppRepoOpsConflictResponse,
@@ -67,15 +68,23 @@ async function writerFetch(
     "X-API-Key": apiKey,
   };
 
+  assertGitHubNotPaused();
   const baseUrl = getAppRepoWriterBaseUrl();
   const controller = new AbortController();
   const timer = setTimeout(() => controller.abort(), WRITER_FETCH_TIMEOUT_MS);
   try {
-    return await fetch(`${baseUrl}${route}`, {
+    const resp = await fetch(`${baseUrl}${route}`, {
       ...init,
       headers: { ...headers, ...(init.headers as Record<string, string>) },
       signal: controller.signal,
     });
+    if (resp.status === 429 && resp.headers?.get?.("retry-after")) {
+      // The writer relays GitHub's limit as 429 + Retry-After; pause every
+      // process, not just this one. Headers only — the body stays unread for
+      // the caller's own error handling.
+      noteGitHubRateLimit(resp.status, resp.headers, "", "app-repo-writer");
+    }
+    return resp;
   } catch (err) {
     if (err instanceof Error && err.name === "AbortError") {
       throw new AppOpsClientError(
