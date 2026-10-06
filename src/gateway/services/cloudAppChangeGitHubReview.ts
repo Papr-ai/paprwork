@@ -10,6 +10,8 @@ import {
 } from "./CloudAppChangeRequestService.js";
 import { parseGitHubOwnerRepo } from "./cloudSync/appWriterRepoObservability.js";
 
+import { assertGitHubNotPaused, noteGitHubRateLimit } from "./githubRateGate.js";
+
 const GITHUB_API = "https://api.github.com";
 const DEFAULT_MAX_FILES = 40;
 const DEFAULT_MAX_PATCH_CHARS = 12_000;
@@ -81,6 +83,7 @@ async function githubJson<T>(
   url: string,
   token: string,
 ): Promise<{ ok: true; data: T } | { ok: false; status: number; body: string }> {
+  assertGitHubNotPaused();
   const cached = reviewEtagCache.get(url);
   const headers = githubHeaders(token);
   if (cached) headers["If-None-Match"] = cached.etag;
@@ -90,7 +93,7 @@ async function githubJson<T>(
   }
   const body = await response.text();
   if (!response.ok) {
-    const wait = githubRateLimitWaitSec(response.status, response.headers, body);
+    const wait = noteGitHubRateLimit(response.status, response.headers, body, "review");
     if (wait !== null) throw new GitHubRateLimitError(wait);
     return { ok: false, status: response.status, body: body.slice(0, 400) };
   }

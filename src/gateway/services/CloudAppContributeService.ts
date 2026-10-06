@@ -633,6 +633,11 @@ export class CloudAppContributeService {
     });
     if (!prepareResp.ok) {
       const text = await prepareResp.text();
+      {
+        const { noteGitHubRateLimit, GitHubPausedError } = await import("./githubRateGate.js");
+        const wait = noteGitHubRateLimit(prepareResp.status, prepareResp.headers, text, "propose");
+        if (wait !== null) throw new GitHubPausedError(wait, "propose");
+      }
       throw new Error(
         `Prepare contribute failed (${prepareResp.status}): ${text.slice(0, 200)}`,
       );
@@ -661,6 +666,11 @@ export class CloudAppContributeService {
     );
     if (!submitResp.ok) {
       const text = await submitResp.text();
+      {
+        const { noteGitHubRateLimit, GitHubPausedError } = await import("./githubRateGate.js");
+        const wait = noteGitHubRateLimit(submitResp.status, submitResp.headers, text, "propose");
+        if (wait !== null) throw new GitHubPausedError(wait, "propose");
+      }
       throw new Error(
         `Submit contribute failed (${submitResp.status}): ${text.slice(0, 200)}`,
       );

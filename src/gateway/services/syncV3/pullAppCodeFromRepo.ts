@@ -738,7 +738,10 @@ export async function pullDesktopAppOnRemoteCommit(input: {
 
   // A new commit event means the "recently verified" cursor is stale by
   // definition — always check the remote head.
-  const result = await pullAppCodeFromRepo(input.appId, { token, allowRecentSkip: false });
+  const { withAppSyncLock } = await import("./appSyncLock.js");
+  const result = await withAppSyncLock(input.appId, "remote-commit-pull", () =>
+    pullAppCodeFromRepo(input.appId, { token, allowRecentSkip: false }),
+  );
   if (result.skipped && result.reason) {
     console.log(
       `[AppRepoRevisionSubscriber] Desktop pull skipped for ${input.appId}: ${result.reason.slice(0, 80)}`,

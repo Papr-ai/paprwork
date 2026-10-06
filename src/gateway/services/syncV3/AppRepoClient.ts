@@ -152,6 +152,12 @@ export async function fetchAppRepoReadCredentials(
     timeoutMs: 60_000,
   });
 
+  if (resp.status === 429 || resp.status === 403) {
+    const { noteGitHubRateLimit, GitHubPausedError } = await import("../githubRateGate.js");
+    const text = await resp.clone().text().catch(() => "");
+    const wait = noteGitHubRateLimit(resp.status, resp.headers, text, "read-credentials");
+    if (wait !== null) throw new GitHubPausedError(wait, "read-credentials");
+  }
   if (resp.status === 404 || resp.status === 403) {
     return null;
   }

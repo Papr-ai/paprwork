@@ -19,7 +19,10 @@ function requireEnv(name: string): string {
   return value;
 }
 
+import { assertGitHubNotPaused, noteGitHubRateLimit } from "../githubRateGate.js";
+
 async function fetchInstallationToken(): Promise<string> {
+  assertGitHubNotPaused();
   const appId = requireEnv("GITHUB_APP_ID");
   const privateKey = requireEnv("GITHUB_APP_PRIVATE_KEY").replace(/\\n/g, "\n");
   const installId = requireEnv("GITHUB_APP_INSTALL_ID");
@@ -53,6 +56,7 @@ async function fetchInstallationToken(): Promise<string> {
   );
   if (!resp.ok) {
     const text = await resp.text();
+    noteGitHubRateLimit(resp.status, resp.headers, text, "installation-token");
     throw new Error(`GitHub installation token failed (${resp.status}): ${text.slice(0, 200)}`);
   }
   const body = (await resp.json()) as { token?: string; expires_at?: string };

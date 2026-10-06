@@ -1164,6 +1164,44 @@ function AboutTab() {
           </div>
         </div>
 
+        {currentVersion === "2.6.26" && (
+          <div className="about-card">
+            <h3>What's New in v2.6.26</h3>
+            <ul className="whats-new-list">
+              <li className="whats-new-list__item">
+                <strong>Sync &amp; cloud</strong>
+                <p>
+                  Safer Sync v3 deletes and pulls (Jobs folder is source of truth),
+                  clearer cloud sync UX, shared GitHub rate-limit handling, and
+                  per-app sync locking during pull/push.
+                </p>
+              </li>
+              <li className="whats-new-list__item">
+                <strong>Onboarding &amp; auth</strong>
+                <p>
+                  Fixed blank auth onboarding and deferred provisioning; install
+                  split view and false &quot;publisher update&quot; prompts corrected.
+                </p>
+              </li>
+              <li className="whats-new-list__item">
+                <strong>Share &amp; dev</strong>
+                <p>
+                  Improved cloud share UX and PNG Open Graph icons; dev builds use
+                  the Plan A replica engine with honest push/skip reporting.
+                </p>
+              </li>
+            </ul>
+            <a
+              href="https://github.com/Papr-ai/paprwork/releases/tag/v2.6.26"
+              target="_blank"
+              rel="noopener noreferrer"
+              className="about-card__link"
+            >
+              View release notes on GitHub
+            </a>
+          </div>
+        )}
+
         {currentVersion === "2.6.25" && (
           <div className="about-card">
             <h3>What's New in v2.6.25</h3>

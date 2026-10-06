@@ -190,6 +190,15 @@ export async function flushAppNow(
   appId: string,
   options?: FlushAppNowOptions,
 ): Promise<FlushAppNowResult> {
+  const { withAppSyncLock } = await import("../syncV3/appSyncLock.js");
+  return withAppSyncLock(appId, "publish", () => flushAppNowLocked(sync, appId, options));
+}
+
+async function flushAppNowLocked(
+  sync: CloudSyncService,
+  appId: string,
+  options?: FlushAppNowOptions,
+): Promise<FlushAppNowResult> {
   const paprDir = sync.getPaprDir();
   const appsRoot = path.join(paprDir, "apps");
   const planACutover = shouldRunReplicaCutover();
