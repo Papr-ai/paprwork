@@ -26,6 +26,7 @@ import { readWorkspaceGoals, type WorkspaceGoal } from "./workspaceGoals.js";
 import {
   scoreFocusCandidates,
   goalKeywords,
+  tokenize,
   buildIdf,
   matchScore,
   type ActivityChat,
@@ -98,6 +99,14 @@ async function writeFocusFile(file: FocusFile): Promise<void> {
 
 // ---------- evidence readers (each fails soft to "no signal") ----------
 
+/** Local Monday 00:00 of the week containing `now` (ms). Weekly hours reset here, not on a rolling 7 days. */
+export function startOfWeek(now: number): number {
+  const d = new Date(now);
+  d.setHours(0, 0, 0, 0);
+  d.setDate(d.getDate() - ((d.getDay() + 6) % 7));
+  return d.getTime();
+}
+
 async function readChats(now: number): Promise<{ chats: ActivityChat[]; corpus: string[] }> {
   const file = path.join(resolvePaprUserDataPath(), "chats.db");
   try {
@@ -109,7 +118,7 @@ async function readChats(now: number): Promise<{ chats: ActivityChat[]; corpus: 
   const db = new Database(file, { readonly: true, fileMustExist: true });
   try {
     const since30 = new Date(now - 30 * DAY).toISOString();
-    const since7 = new Date(now - 7 * DAY).toISOString();
+    const since7 = new Date(startOfWeek(now)).toISOString();
     const rows = db
       .prepare(
         `SELECT c.id, c.title, c.summary_topics AS topics, c.summary_short AS summary, c.updated_at AS updatedAt,
@@ -252,9 +261,17 @@ export async function rankFocusCandidates(now = Date.now()): Promise<ScoredActiv
   return scoreFocusCandidates({ goals: active.map(toInput), onboarding, chats, corpus, logs, tasks, apps, now });
 }
 
+export function isSameGoal(edited: string, original: string): boolean {
+  const a = new Set(tokenize(original));
+  return tokenize(edited).some((t) => a.has(t));
+}
+
 function applyPick(pick: FocusPick, byId: Map<string, FocusGoal>): FocusGoal | null {
-  const base = pick.goalId ? byId.get(pick.goalId) : undefined;
+  let base = pick.goalId ? byId.get(pick.goalId) : undefined;
   if (pick.goalId && !base) return null; // goal closed or removed → slot needs a refill
+  // A rewrite that shares no words with the goal it was saved on is a different goal. Don't inherit
+  // that goal's tasks, hours or milestone (G4 "Validate MHAR…" renamed "Distribution via content…").
+  if (base && pick.title && !isSameGoal(pick.title, base.title)) base = undefined;
   if (!base) {
     if (!pick.title) return null;
     return {
