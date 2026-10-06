@@ -14,7 +14,9 @@ export type FocusOrigin = "identity" | "onboarding" | "usecase" | "custom";
 export interface FocusCandidateInput {
   id: string;
   title: string;
-  origin: Exclude<FocusOrigin, "custom">;
+  origin: FocusOrigin;
+  /** Extra words that describe the goal (a user-written goal's done-when). */
+  extraKeywords?: string;
   level?: string;
   status?: string;
   confidence?: string;
@@ -34,6 +36,12 @@ export interface ActivityChat {
   updatedAt: string;
   hours7: number;
   hours30: number;
+  /** This week's turns: each user message + the agent time that followed it. Lets one chat feed several goals. */
+  turns?: ActivityTurn[];
+}
+export interface ActivityTurn {
+  text: string;
+  hours7: number;
 }
 export interface ActivityLog {
   date: string;
@@ -100,7 +108,7 @@ const STOP = new Set(
     "ship build close land grow fix validate validated prevent make get run launch improve reach hit deliver " +
     "finish create set drive keep start goal goals work working plan use using shared across over under " +
     "about after before than then them they have has had will would should could can each every " +
-    "chat chats help please update updates papr paprwork app apps project projects"
+    "chat chats help please update updates papr paprwork app apps project projects daily weekly monthly"
   ).split(" "),
 );
 
@@ -130,9 +138,9 @@ export function tokenize(text: string): string[] {
   return out;
 }
 
-export function goalKeywords(c: Pick<FocusCandidateInput, "title" | "entities">): string[] {
+export function goalKeywords(c: Pick<FocusCandidateInput, "title" | "entities" | "extraKeywords">): string[] {
   const slugs = (c.entities ?? []).map((e) => e.split("/").pop() ?? "").join(" ");
-  return [...new Set(tokenize(`${c.title} ${slugs}`))];
+  return [...new Set(tokenize(`${c.title} ${c.extraKeywords ?? ""} ${slugs}`))];
 }
 
 /** Inverse document frequency over the chat corpus; tokens in >20% of chats are too generic to count. */
@@ -241,27 +249,45 @@ export function scoreFocusCandidates(input: ScoreInput): ScoredActivity {
     cands.map((c) => [c.id, { chats30: 0, hours7: 0, hours30: 0, logDays: 0, openTasks: 0, appsOpened: 0, onboarding: c.onboarding }]),
   );
 
-  // Each chat → its single best goal.
-  const chatGoal = new Map<string, string>();
-  chats.forEach((chat, i) => {
+  const bestGoal = (tokens: Set<string>, text: string, isChat: boolean): string | undefined => {
     let bestId: string | undefined;
     let best = 0;
     for (const c of cands) {
-      const m = matchScore(keywords.get(c.id) ?? [], chatTokens[i], idf);
+      const m = matchScore(keywords.get(c.id) ?? [], tokens, idf);
       const byId =
-        (c.origin === "identity" && idRe(c.id).test(chat.text) ? 5 : 0) + (citedBy(c.chatRefs, chat.text) ? 10 : 0);
+        (c.origin === "identity" && idRe(c.id).test(text) ? 5 : 0) + (isChat && citedBy(c.chatRefs, text) ? 10 : 0);
       const score = m.score + byId;
       if ((byId || matches(m)) && score > best) {
         best = score;
         bestId = c.id;
       }
     }
-    if (!bestId) return;
-    chatGoal.set(chat.id, bestId);
-    const s = sig.get(bestId)!;
-    s.chats30 += 1;
-    s.hours7 += chat.hours7;
-    s.hours30 += chat.hours30;
+    return bestId;
+  };
+
+  // Each chat → its best goal (counts + month hours). This week's hours follow each turn: a message that
+  // clearly names another goal moves the time there until another message moves it again.
+  const chatGoal = new Map<string, string>();
+  const weekSplit = new Map<string, Map<string, number>>();
+  chats.forEach((chat, i) => {
+    const bestId = bestGoal(chatTokens[i], chat.text, true);
+    if (bestId) {
+      chatGoal.set(chat.id, bestId);
+      const s = sig.get(bestId)!;
+      s.chats30 += 1;
+      s.hours30 += chat.hours30;
+    }
+    const split = new Map<string, number>();
+    if (chat.turns?.length) {
+      let cur = bestId;
+      for (const t of chat.turns) {
+        const id = t.text ? bestGoal(new Set(tokenize(t.text)), t.text, false) : undefined;
+        if (id) cur = id;
+        if (cur && t.hours7 > 0) split.set(cur, (split.get(cur) ?? 0) + t.hours7);
+      }
+    } else if (bestId && chat.hours7 > 0) split.set(bestId, chat.hours7);
+    for (const [id, h] of split) sig.get(id)!.hours7 += h;
+    weekSplit.set(chat.id, split);
   });
 
   for (const log of logs) {
@@ -331,6 +357,7 @@ export function scoreFocusCandidates(input: ScoreInput): ScoredActivity {
   const top: FocusGoal[] = [];
   for (const g of ranked) {
     if (top.length >= 3) break;
+    if (g.origin === "custom") continue; // the user's own goals are already picked
     // Three different things: never a goal and its own parent/child.
     if (top.some((t) => t.id === g.parent || t.parent === g.id)) continue;
     top.push(g);
@@ -349,7 +376,9 @@ export function scoreFocusCandidates(input: ScoreInput): ScoredActivity {
     evidence,
     hoursFor(ids: string[]) {
       const want = new Set(ids);
-      return chats.reduce((sum, c) => (want.has(chatGoal.get(c.id) ?? "") ? sum + c.hours7 : sum), 0);
+      let sum = 0;
+      for (const split of weekSplit.values()) for (const [id, h] of split) if (want.has(id)) sum += h;
+      return sum;
     },
   };
 }

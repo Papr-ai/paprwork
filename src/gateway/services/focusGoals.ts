@@ -30,6 +30,7 @@ import {
   buildIdf,
   matchScore,
   type ActivityChat,
+  type ActivityTurn,
   type ActivityApp,
   type ActivityLog,
   type ActivityTask,
@@ -138,6 +139,22 @@ async function readChats(now: number): Promise<{ chats: ActivityChat[]; corpus: 
       ms7: number;
       ms30: number;
     }>;
+    const turnRows = db
+      .prepare(
+        `SELECT m.chat_id AS chatId, m.role, CASE WHEN m.role = 'user' THEN substr(m.content, 1, 1500) END AS text,
+                COALESCE(m.turn_duration_ms, 0) AS ms
+           FROM messages m JOIN chats c ON c.id = m.chat_id
+          WHERE m.timestamp >= @since7 AND c.id NOT LIKE 'job:%' AND c.id NOT LIKE 'delegation:%'
+          ORDER BY m.chat_id, m.timestamp`,
+      )
+      .all({ since7 }) as Array<{ chatId: string; role: string; text: string | null; ms: number }>;
+    const turns = new Map<string, ActivityTurn[]>();
+    for (const r of turnRows) {
+      const list = turns.get(r.chatId) ?? [];
+      if (r.role === "user" || !list.length) list.push({ text: r.text ?? "", hours7: 0 });
+      if (r.role === "assistant") list[list.length - 1].hours7 += r.ms / 3_600_000;
+      turns.set(r.chatId, list);
+    }
     const corpus = (
       db
         .prepare(
@@ -152,6 +169,7 @@ async function readChats(now: number): Promise<{ chats: ActivityChat[]; corpus: 
       updatedAt: r.updatedAt,
       hours7: r.ms7 / 3_600_000,
       hours30: r.ms30 / 3_600_000,
+      turns: turns.get(r.id),
     }));
     return { chats, corpus };
   } finally {
@@ -245,7 +263,11 @@ function toInput(g: WorkspaceGoal): FocusCandidateInput {
 }
 
 /** Rank every candidate against today's evidence without touching focus.json (diagnostics + tests). */
-export async function rankFocusCandidates(now = Date.now()): Promise<ScoredActivity> {
+/** Score id for a user-written pick, so it never collides with the IDENTITY goal it was saved on. */
+const customId = (pickId: string) => `pick:${pickId}`;
+
+/** Rank every candidate (plus the user's own written goals in `picks`) against today's evidence. */
+export async function rankFocusCandidates(now = Date.now(), picks: FocusPick[] = []): Promise<ScoredActivity> {
   const [goalsRes, { chats, corpus }, logs, tasks, apps, onboarding] = await Promise.all([
     readWorkspaceGoals(),
     readChats(now).catch((err) => {
@@ -258,7 +280,17 @@ export async function rankFocusCandidates(now = Date.now()): Promise<ScoredActiv
     readOnboardingGoals(),
   ]);
   const active = goalsRes.goals.filter((g) => g.status !== "done" && g.status !== "dropped");
-  return scoreFocusCandidates({ goals: active.map(toInput), onboarding, chats, corpus, logs, tasks, apps, now });
+  const byGoal = new Map(goalsRes.goals.map((g) => [g.id, g]));
+  const customs: FocusCandidateInput[] = picks
+    .filter((p) => {
+      if (!p.title) return false;
+      if (!p.goalId) return true;
+      const g = byGoal.get(p.goalId);
+      return Boolean(g && !isSameGoal(p.title, g.title));
+    })
+    .map((p) => ({ id: customId(p.id), title: p.title!, origin: "custom", extraKeywords: p.target }));
+  const goals = [...active.map(toInput), ...customs];
+  return scoreFocusCandidates({ goals, onboarding, chats, corpus, logs, tasks, apps, now });
 }
 
 export function isSameGoal(edited: string, original: string): boolean {
@@ -274,6 +306,7 @@ function applyPick(pick: FocusPick, byId: Map<string, FocusGoal>): FocusGoal | n
   if (base && pick.title && !isSameGoal(pick.title, base.title)) base = undefined;
   if (!base) {
     if (!pick.title) return null;
+    const own = byId.get(customId(pick.id));
     return {
       id: pick.id,
       title: pick.title,
@@ -281,9 +314,9 @@ function applyPick(pick: FocusPick, byId: Map<string, FocusGoal>): FocusGoal | n
       due: pick.due,
       repeat: pick.repeat,
       origin: "custom",
-      why: "Written by you",
-      score: 0,
-      signals: { chats30: 0, hours7: 0, hours30: 0, logDays: 0, openTasks: 0, appsOpened: 0 },
+      why: own && own.why !== "From your goals" ? own.why : "Written by you",
+      score: own?.score ?? 0,
+      signals: own?.signals ?? { chats30: 0, hours7: 0, hours30: 0, logDays: 0, openTasks: 0, appsOpened: 0 },
     };
   }
   return {
@@ -300,9 +333,9 @@ function applyPick(pick: FocusPick, byId: Map<string, FocusGoal>): FocusGoal | n
 
 /** Resolve the saved three against today's evidence; first run quietly saves Pen's picks. */
 export async function getFocus(now = Date.now()): Promise<FocusState> {
-  const scored = await rankFocusCandidates(now);
-  const byId = new Map(scored.ranked.map((g) => [g.id, g]));
   let file = await readFocusFile();
+  const scored = await rankFocusCandidates(now, file?.picks);
+  const byId = new Map(scored.ranked.map((g) => [g.id, g]));
   let dirty = false;
   if (!file || file.picks.length === 0) {
     file = {
@@ -326,6 +359,7 @@ export async function getFocus(now = Date.now()): Promise<FocusState> {
   // Refill empty slots (closed/removed goals) from the next best candidates.
   for (const g of scored.top.concat(scored.ranked)) {
     if (three.length >= MAX_PICKS) break;
+    if (g.origin === "custom") continue;
     if (three.some((t) => t.id === g.id || t.id === g.parent || t.parent === g.id)) continue;
     three.push(g);
     keptPicks.push({ id: g.id, goalId: g.id });
@@ -336,8 +370,8 @@ export async function getFocus(now = Date.now()): Promise<FocusState> {
     await writeFocusFile(file).catch((err) => console.warn("[focus] could not save picks:", err));
   }
   const chosen = new Set(three.map((g) => g.id));
-  const candidates = scored.ranked.filter((g) => !chosen.has(g.id)).slice(0, 6);
-  const alignedHours = scored.hoursFor(three.map((g) => g.id));
+  const candidates = scored.ranked.filter((g) => g.origin !== "custom" && !chosen.has(g.id)).slice(0, 6);
+  const alignedHours = scored.hoursFor(three.map((g) => (g.origin === "custom" ? customId(g.id) : g.id)));
   const next = pickNext(three, scored);
   return {
     three,
