@@ -11,7 +11,12 @@
 }
 
 .queued-item.message-item {
-  /* Match .input-bar horizontal margin; padding matches composer inner spacing. */
+  /* Match .input-bar horizontal margin; padding matches composer inner spacing.
+     .message-item sets width: 100%; with side margins that overflows the thread
+     by 40px (frame + Send button clipped past the composer's right edge).
+     width: auto lets the margins inset the card, exactly like .input-bar. */
+  width: auto;
+  min-width: 0;
   margin: 0 20px 0.25rem;
   padding: 12px 14px;
   animation: queuedIn 0.2s var(--ease) both;
