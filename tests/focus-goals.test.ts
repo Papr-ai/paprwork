@@ -191,3 +191,44 @@ describe("isSameGoal", () => {
     expect(isSameGoal("Validate MHAR router by Friday", "Validate MHAR depth-router + file patent claims")).toBe(true);
   });
 });
+
+describe("user-written goals + per-turn hours", () => {
+  const corpus = [
+    ...Array.from({ length: 98 }, (_, i) => `filler${i} word${i}`),
+    "linkedin post ideas",
+    "left navigation redesign sidebar",
+  ];
+  const goals: FocusCandidateInput[] = [
+    { id: "G7", title: "Redesign left navigation sidebar", origin: "identity", status: "on-track" },
+    {
+      id: "pick:G4",
+      title: "Distribution via content creation, build following",
+      origin: "custom",
+      extraKeywords: "1 post on x and linkedIn, comment and engage daily",
+    },
+  ];
+  const chat: ActivityChat = {
+    id: "c1",
+    text: "Help me redesign our left navigation sidebar",
+    updatedAt: "2026-09-28T10:00:00Z",
+    hours7: 4,
+    hours30: 4,
+    turns: [
+      { text: "Help me redesign our left navigation sidebar", hours7: 1 },
+      { text: "Where should I place images in the article I'm going to post on Substack, X and LinkedIn", hours7: 2 },
+      { text: "the fold animation is hard to read, fix it", hours7: 1 },
+    ],
+  };
+
+  it("scores the user's own goal and moves this week's time with each turn", () => {
+    const res = scoreFocusCandidates({ goals, onboarding: [], chats: [chat], corpus, logs: [], tasks: [], apps: [], now: NOW });
+    const own = res.ranked.find((g) => g.id === "pick:G4")!;
+    const nav = res.ranked.find((g) => g.id === "G7")!;
+    expect(own.signals.hours7).toBeCloseTo(3, 5);
+    expect(nav.signals.hours7).toBeCloseTo(1, 5);
+    expect(res.hoursFor(["pick:G4"])).toBeCloseTo(3, 5);
+    expect(res.weekHours).toBeCloseTo(4, 5);
+    // Already picked by the user — never offered back as one of Pen's top three.
+    expect(res.top.some((g) => g.origin === "custom")).toBe(false);
+  });
+});
