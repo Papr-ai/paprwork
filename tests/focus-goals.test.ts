@@ -174,3 +174,20 @@ describe("focus picks: repeating goals", () => {
     expect(once).toMatchObject({ id: "G1", due: "2026-11-30", repeat: undefined });
   });
 });
+
+describe("startOfWeek", () => {
+  it("resets weekly hours on Monday 00:00 local", async () => {
+    const { startOfWeek } = await import("../src/gateway/services/focusGoals");
+    const mon = startOfWeek(new Date(2026, 9, 5, 20, 48).getTime());
+    expect(new Date(mon)).toEqual(new Date(2026, 9, 5, 0, 0));
+    expect(new Date(startOfWeek(new Date(2026, 9, 11, 23, 0).getTime()))).toEqual(new Date(2026, 9, 5, 0, 0));
+  });
+});
+
+describe("isSameGoal", () => {
+  it("detaches a rewrite that shares no words with its goal", async () => {
+    const { isSameGoal } = await import("../src/gateway/services/focusGoals");
+    expect(isSameGoal("Distribution via content creation", "Validate MHAR depth-router + file patent claims")).toBe(false);
+    expect(isSameGoal("Validate MHAR router by Friday", "Validate MHAR depth-router + file patent claims")).toBe(true);
+  });
+});
