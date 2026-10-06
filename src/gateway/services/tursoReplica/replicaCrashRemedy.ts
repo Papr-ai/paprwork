@@ -155,7 +155,7 @@ export function chooseReplicaCrashRemedy(
               "confidence — ",
           }
         : {
-            defects: "data.db page structure (abort raised in the btree/pager layer)",
+            defects: "data.db page structure (abort raised in the btree, pager or page-allocation layer)",
             cause:
               "the abort came from inside data.db's own pages, which neither restarting " +
               "the worker nor resetting the sidecars can change — ",
