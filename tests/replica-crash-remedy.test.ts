@@ -478,3 +478,100 @@ describe("TursoReplicaSyncWorkerClient wiring", () => {
     expect(body).toContain("parkPath");
   });
 });
+
+/**
+ * Verbatim from the 2026-10-05 abort on the Investor Review replica, reproduced in a fresh
+ * Node process against a copy of the file: it opened cleanly, served every read, and
+ * aborted on a 5-byte UPDATE. Same file name as {@link PAGE_CACHE_PANIC}, opposite cause —
+ * here the pager's allocator picked a page number the file already uses, so the state that
+ * disagrees is on disk and a new process meets it again on its first write.
+ */
+const PAGE_CACHE_ALLOCATOR_CONFLICT_PANIC = [
+  "thread '<unnamed>' panicked at core/storage/page_cache.rs:284:21:",
+  "Attempted to insert different page with same key: {key:?}",
+  "note: run with `RUST_BACKTRACE=1` environment variable to display a backtrace",
+].join("\n");
+
+describe("a page_cache.rs panic that is about the file, not the process", () => {
+  it("is not process-local, so a restart is not offered as the cure", () => {
+    // Read as process-local it restarted the worker, the fresh worker aborted on the
+    // same write, and the streak parked the database after three aborts — each one a
+    // crash report, and none of them able to change the outcome.
+    expect(classifyReplicaPanicSubsystem(PAGE_CACHE_ALLOCATOR_CONFLICT_PANIC)).toBeNull();
+  });
+
+  it("is durable-storage evidence", () => {
+    expect(isReplicaPanicInDurableStorage(PAGE_CACHE_ALLOCATOR_CONFLICT_PANIC)).toBe(true);
+  });
+
+  it("leaves the genuinely process-local page_cache panics alone", () => {
+    // The 2026-09-18 invariant is a counter inside the process; a restart cures it, and
+    // parking it would strand a database that was fine.
+    expect(classifyReplicaPanicSubsystem(PAGE_CACHE_PANIC)).toBe("page_cache");
+    expect(isReplicaPanicInDurableStorage(PAGE_CACHE_PANIC)).toBe(false);
+  });
+
+  it("is claimed by exactly one of the two classifiers", () => {
+    // A panic both classifiers claimed would hit `restart_worker` first (it is checked
+    // before the file), so the pair has to partition. Nothing else enforces that.
+    for (const stderr of [
+      PAGE_CACHE_PANIC,
+      PAGE_CACHE_ALLOCATOR_CONFLICT_PANIC,
+      BTREE_PANIC,
+    ]) {
+      const processLocal = classifyReplicaPanicSubsystem(stderr) !== null;
+      const durable = isReplicaPanicInDurableStorage(stderr);
+      expect(processLocal && durable).toBe(false);
+    }
+  });
+
+  it("matches on the panic's own message line, not on those words elsewhere", () => {
+    // A log line or a backtrace carrying the phrase must not turn a process-local panic
+    // into a park. The message is the line after the location, nothing else.
+    const phraseElsewhere = [
+      PAGE_CACHE_PANIC,
+      "WARN earlier panic said: Attempted to insert different page with same key",
+    ].join("\n");
+    expect(classifyReplicaPanicSubsystem(phraseElsewhere)).toBe("page_cache");
+    expect(isReplicaPanicInDurableStorage(phraseElsewhere)).toBe(false);
+  });
+
+  it("still matches once the engine fills in its literal {key:?} placeholder", () => {
+    const fixed = PAGE_CACHE_ALLOCATOR_CONFLICT_PANIC.replace(
+      "{key:?}",
+      "PageCacheKey(284)",
+    );
+    expect(isReplicaPanicInDurableStorage(fixed)).toBe(true);
+  });
+
+  it("follows the last panic when one is raised while handling another", () => {
+    // `panic = abort`: the final location is the one that ended the process, and the
+    // message has to come from that same panic rather than the first.
+    const conflictLast = [PAGE_CACHE_PANIC, PAGE_CACHE_ALLOCATOR_CONFLICT_PANIC].join("\n");
+    expect(isReplicaPanicInDurableStorage(conflictLast)).toBe(true);
+    expect(classifyReplicaPanicSubsystem(conflictLast)).toBeNull();
+
+    const conflictFirst = [PAGE_CACHE_ALLOCATOR_CONFLICT_PANIC, PAGE_CACHE_PANIC].join("\n");
+    expect(isReplicaPanicInDurableStorage(conflictFirst)).toBe(false);
+    expect(classifyReplicaPanicSubsystem(conflictFirst)).toBe("page_cache");
+  });
+
+  it("parks on the first abort and names accept_cloud as the cure", () => {
+    // The end-to-end consequence, built the way the client builds it. Engine tables
+    // inspect clean here — nothing for `repair_engine_tables` to drop — so this is the
+    // case the park exists for: every other remedy leaves the pages where they are.
+    const remedy = chooseReplicaCrashRemedy({
+      localPath: "/tmp/data.db",
+      repairAlreadyAttempted: false,
+      panicSubsystem: classifyReplicaPanicSubsystem(PAGE_CACHE_ALLOCATOR_CONFLICT_PANIC),
+      panicInDurableStorage: isReplicaPanicInDurableStorage(
+        PAGE_CACHE_ALLOCATOR_CONFLICT_PANIC,
+      ),
+      inspect: () => inspected([]),
+    });
+    expect(remedy.kind).toBe("park");
+    if (remedy.kind === "park") {
+      expect(remedy.reason).toContain("accept_cloud");
+    }
+  });
+});

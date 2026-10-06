@@ -213,9 +213,25 @@ export function noteBootstrapAttemptFailed(dbPath: string, error: string): void 
   }
 }
 
+/**
+ * Wall-clock time this process started. Backoff from a previous launch must not block the
+ * first attempt of a new one: the "parked" state that caused those failures is session-only
+ * and is gone after restart, and the park message tells users to restart — so a persisted
+ * 15-minute window made that remedy a no-op and kept every write failing with
+ * "Replica bootstrap backoff active". One attempt per launch is allowed; after it the
+ * persisted attempt count resumes the exponential schedule, so crash loops stay throttled.
+ */
+const PROCESS_STARTED_AT_MS = Date.now() - Math.round(process.uptime() * 1000);
+
 /** Exponential backoff capped at 15min, derived from persisted attempts. */
-export function bootstrapRetryReadyAtMs(marker: BootstrapPendingMarker): number {
+export function bootstrapRetryReadyAtMs(
+  marker: BootstrapPendingMarker,
+  processStartedAtMs: number = PROCESS_STARTED_AT_MS,
+): number {
   if (!marker.lastAttemptMs) {
+    return 0;
+  }
+  if (marker.lastAttemptMs < processStartedAtMs) {
     return 0;
   }
   const delay = Math.min(15 * 60_000, 5_000 * 2 ** Math.min(marker.attempts, 8));
