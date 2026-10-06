@@ -13,6 +13,11 @@
  * itself, and says nothing about `data.db` or the sidecars — so a fresh process, which
  * starts with a fresh cache, is the whole cure.
  *
+ * One invariant in that module is the exception: "Attempted to insert different page with
+ * same key" is the allocator handing out a page number the file already uses, so it is
+ * about `data.db` and repeats on every fresh process. It is read from the panic's message
+ * line and routed to the durable-storage path instead — see `PAGE_CACHE_ALLOCATOR_CONFLICT`.
+ *
  * No imports: this is read from the sync worker as well as the gateway.
  */
 
@@ -53,11 +58,69 @@ function readPanicLocationBasename(stderr: string | undefined): string | null {
   return file.split("/").pop() ?? file;
 }
 
+/**
+ * The text the engine printed on the line after the panic's location.
+ *
+ * Rust prints `thread '<x>' panicked at <file>:<line>:<col>:` and then the message on its
+ * own line. Anchored on that location line for the same reason the file name is: the
+ * words of a message that appear in a backtrace or in unrelated log output say nothing
+ * about what the panic was. The last location wins, matching the file reader, so the two
+ * always describe the same panic.
+ */
+function readPanicMessage(stderr: string | undefined): string | null {
+  if (!stderr) {
+    return null;
+  }
+  let message: string | null = null;
+  const pattern = /panicked at\s+\S+?:\d+:\d+:?[^\S\n]*\n([^\n]*)/g;
+  for (let match = pattern.exec(stderr); match; match = pattern.exec(stderr)) {
+    message = match[1] ?? null;
+  }
+  return message;
+}
+
+/**
+ * `page_cache.rs`'s one invariant that is about the file rather than the process.
+ *
+ * `PageCache::_insert` refuses to cache a second, different page under a key that is
+ * already taken. The page cache is in-memory, but the key is not: it is the page number
+ * `Pager::allocate_page` chose, and the pager chooses it from `data.db`'s own header and
+ * freelist. When those say "page N is free" while page N is already live in the file or
+ * the WAL, the allocator hands out an occupied number and the cache — correctly — aborts.
+ * The accounting that disagrees is the file's, so a fresh process, which re-reads the same
+ * header, aborts on the very first write. That is the failure this exists to tell apart
+ * from the other `page_cache.rs` panics ("mismatched evictable count state", "clock hand
+ * is null during eviction"), which are counters inside the process and *are* cured by a
+ * restart.
+ *
+ * Reproduced outside the app: a replica that aborted this way opened cleanly in a fresh
+ * Node process, served every read, and aborted on a 5-byte UPDATE with this message.
+ *
+ * Matched on a fragment rather than the whole line because the engine prints the format
+ * placeholder literally (`{key:?}`), and a fragment survives that being fixed upstream.
+ */
+const PAGE_CACHE_ALLOCATOR_CONFLICT = /different page with same key/i;
+
+function isPageCacheAllocatorConflict(stderr: string | undefined): boolean {
+  if (readPanicLocationBasename(stderr) !== "page_cache.rs") {
+    return false;
+  }
+  const message = readPanicMessage(stderr);
+  return message !== null && PAGE_CACHE_ALLOCATOR_CONFLICT.test(message);
+}
+
 export function classifyReplicaPanicSubsystem(
   stderr: string | undefined,
 ): ReplicaPanicSubsystem | null {
   const basename = readPanicLocationBasename(stderr);
   if (!basename) {
+    return null;
+  }
+  // The file name alone over-claims for `page_cache.rs`: one of its invariants is the
+  // allocator disagreeing with the file, which a restart cannot touch. Treating it as
+  // process-local sends the worker round the restart loop until the streak parks it —
+  // three aborts and six crash reports for a fault that is the same on every attempt.
+  if (isPageCacheAllocatorConflict(stderr)) {
     return null;
   }
   return SUBSYSTEM_BY_FILE.get(basename) ?? null;
@@ -108,5 +171,9 @@ export function isReplicaPanicInDurableStorage(stderr: string | undefined): bool
   if (!basename) {
     return false;
   }
-  return DURABLE_STORAGE_PANIC_FILES.has(basename);
+  // `page_cache.rs` is not in the file set — most of its panics are process-local — but
+  // its allocator-conflict invariant is raised in the cache while describing the pager's
+  // view of the file. Naming it here is what keeps the pair complementary: exactly one of
+  // this and `classifyReplicaPanicSubsystem` claims any given `page_cache.rs` panic.
+  return DURABLE_STORAGE_PANIC_FILES.has(basename) || isPageCacheAllocatorConflict(stderr);
 }
