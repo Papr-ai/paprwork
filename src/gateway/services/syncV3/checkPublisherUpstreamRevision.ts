@@ -21,17 +21,21 @@ export async function fetchPublisherRevisionSignedIn(
   namespaceId: string,
   slug: string,
 ): Promise<string | null> {
-  const anonymous = await fetchPublishedAppRevision(namespaceId, slug);
-  if (anonymous) return anonymous;
+  // Signed in first: anonymous always 403s on team/private apps, and every
+  // collaborator desktop asks once a minute.
   try {
     const headers = await buildCloudPreviewAuthHeaders(
       { namespaceId, slug },
       { enrichFromSession: true },
     );
-    return await fetchPublishedAppRevision(namespaceId, slug, headers);
+    if (Object.keys(headers).some((h) => /session|api-key|share-token/i.test(h))) {
+      const signedIn = await fetchPublishedAppRevision(namespaceId, slug, headers);
+      if (signedIn) return signedIn;
+    }
   } catch {
-    return null;
+    /* fall back to anonymous (public apps, signed-out desktops) */
   }
+  return fetchPublishedAppRevision(namespaceId, slug);
 }
 
 export interface PublisherUpstreamRevisionStatus {
