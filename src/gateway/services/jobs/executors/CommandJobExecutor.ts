@@ -10,7 +10,7 @@ import type {
   ExecutorLaunchResult,
   IJobExecutor,
 } from "./IJobExecutor.js";
-import { getShellCommand, wrapCommandWithVenv, getVenvPaths } from "../../../../core/utils/platform.js";
+import { getShellCommand, wrapCommandWithVenv } from "../../../../core/utils/platform.js";
 import {
   jobWriteDatabaseEnv,
   requireJobWriteTargets,
@@ -18,6 +18,7 @@ import {
 import { STANDALONE_APP_ID } from "../appIds.js";
 import { jobSdkEnv } from "../jobSdkEnv.js";
 import { leaseJobDbProxyEnv } from "../jobDbProxyEnv.js";
+import { ensureJobRuntime, defaultRuntimesRoot } from "../runtime/jobRuntime.js";
 import { ensurePlatformCdpEnvForJob, jobNeedsPlatformCdp } from "../../../utils/platformCdpBridge.js";
 
 export class CommandJobExecutor implements IJobExecutor {
@@ -45,12 +46,22 @@ export class CommandJobExecutor implements IJobExecutor {
       throw new Error(`Missing command for job type: ${params.job.type}`);
     }
 
-    // ── Auto-setup venv + pip install for Python/Node jobs ────────────────────
-    if (params.job.type === "python") {
-      await this.ensurePythonVenv(params);
-    } else if (params.job.type === "node") {
+    // ── Make the job's declared runtime real (every job type) ─────────────────
+    // requirements.txt / runtime.json -> venv + pip, shared node packages, tool
+    // preflight. Throws MissingDependencyError instead of failing opaquely later.
+    if (params.job.type === "node") {
       await this.ensureNodeModules(params);
     }
+    const runtime = await ensureJobRuntime({
+      jobDir: params.jobDir,
+      jobType: params.job.type,
+      baseEnv: this.getNvmEnv(),
+      appendLog: params.appendLog,
+      signal: params.signal,
+      pythonCommand: () => this.getPythonCommand(params.signal),
+      forcePythonVenv: params.job.type === "python",
+      runtimesRoot: defaultRuntimesRoot(),
+    });
     // ─────────────────────────────────────────────────────────────────────────
 
     params.signal?.throwIfAborted();
@@ -105,6 +116,7 @@ export class CommandJobExecutor implements IJobExecutor {
 
     const env: NodeJS.ProcessEnv = {
       ...nvmEnv,
+      ...runtime.env,
       JOB_DIR: params.jobDir,
       JOB_DB: jobDbPath,
       // `from papr_files import add` without vendoring the helper per job.
@@ -294,126 +306,6 @@ export class CommandJobExecutor implements IJobExecutor {
    */
   private escapeRegex(str: string): string {
     return str.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
-  }
-
-  /**
-   * Ensure a Python venv exists and requirements are installed.
-   * Creates the venv only once; subsequent runs reuse it.
-   * Installs from requirements.txt if present and changed.
-   */
-  private async ensurePythonVenv(params: ExecutorLaunchParams): Promise<void> {
-    const venvDir = path.join(params.jobDir, ".venv");
-    const requirementsFile = path.join(params.jobDir, "requirements.txt");
-    const installedMarker = path.join(
-      params.jobDir,
-      ".venv",
-      ".requirements-installed",
-    );
-
-    // Create venv if it doesn't exist
-    if (!existsSync(venvDir)) {
-      await params.appendLog("Creating Python virtual environment...");
-      try {
-        const pythonCmd = await this.getPythonCommand(params.signal);
-        
-        // Check if Python is actually available
-        const testResult = (await runSetupCommand(`${pythonCmd} --version 2>&1`, {
-          diagnosticName: "python-check",
-          signal: params.signal,
-          timeout: 5000,
-          encoding: 'utf8',
-          env: this.getNvmEnv(),
-        })).trim();
-        
-        await params.appendLog(`Using Python: ${testResult}`);
-        
-        await runSetupCommand(`${pythonCmd} -m venv .venv`, {
-            diagnosticName: "python-venv",
-          cwd: params.jobDir,
-          signal: params.signal,
-          timeout: 30_000,
-          env: this.getNvmEnv(),
-        });
-        await params.appendLog("Virtual environment created.");
-      } catch (error) {
-        const message = error instanceof Error ? error.message : String(error);
-        
-        // Enhanced error message for Windows users
-        if (process.platform === 'win32' && message.includes('not found')) {
-          await params.appendLog(
-            `Failed to create venv: Python not found.\n\n` +
-            `Python will be installed automatically when you restart the app.\n` +
-            `Or install manually from: https://www.python.org/downloads/windows/\n` +
-            `Make sure to check "Add to PATH" during installation.`
-          );
-        } else {
-          await params.appendLog(`Failed to create venv: ${message}`);
-        }
-        // Continue without venv — the job command may still work with system Python
-        return;
-      }
-    }
-
-    // Install requirements if requirements.txt exists and hasn't been installed yet
-    // (or if the file changed since last install)
-    if (existsSync(requirementsFile)) {
-      const needsInstall =
-        !existsSync(installedMarker) ||
-        this.requirementsChanged(requirementsFile, installedMarker);
-
-      if (needsInstall) {
-        await params.appendLog("Installing Python requirements...");
-        try {
-          const { pip } = getVenvPaths(venvDir);
-          const pipOutput = await runSetupCommand(
-            `"${pip}" install -r requirements.txt 2>&1`,
-            {
-              diagnosticName: "pip-install",
-              cwd: params.jobDir,
-              signal: params.signal,
-              timeout: 120_000, // 2 min timeout for pip
-              encoding: "utf8",
-              env: this.getNvmEnv(),
-            },
-          );
-          // Log last few lines of pip output (skip the verbose download lines)
-          const lines = pipOutput.trim().split("\n");
-          const tail = lines.slice(-5).join("\n");
-          await params.appendLog(`pip install output:\n${tail}`);
-
-          // Write marker so we don't re-install on every run
-          const { writeFileSync, readFileSync } = await import("fs");
-          const reqContent = readFileSync(requirementsFile, "utf8");
-          writeFileSync(installedMarker, reqContent, "utf8");
-
-          await params.appendLog("Requirements installed successfully.");
-        } catch (error) {
-          const message =
-            error instanceof Error ? error.message : String(error);
-          await params.appendLog(`pip install failed: ${message}`);
-          // Don't throw — let the job try to run and fail naturally
-        }
-      } else {
-        await params.appendLog("Requirements already installed (unchanged).");
-      }
-    }
-  }
-
-  /**
-   * Check if requirements.txt has changed since last install.
-   */
-  private requirementsChanged(
-    requirementsFile: string,
-    markerFile: string,
-  ): boolean {
-    try {
-      const { readFileSync } = require("fs") as typeof import("fs");
-      const current = readFileSync(requirementsFile, "utf8");
-      const installed = readFileSync(markerFile, "utf8");
-      return current !== installed;
-    } catch {
-      return true; // If we can't read, assume changed
-    }
   }
 
   /**
