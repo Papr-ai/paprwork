@@ -167,6 +167,10 @@ export function startPeriodicPull(host: CloudSyncPeriodicHost): void {
     try {
       const deferPull = await host.shouldDeferGitPull();
       if (deferPull.defer) {
+        // The git pull waits for local uploads, but "has someone published
+        // elsewhere?" is a read-only question — still ask it, or collaborators
+        // with any pending upload never see Update from publisher / Get updates.
+        notifyCloudSyncItemsStale();
         return;
       }
       await host.tryAutoReconcileRemoteGit();

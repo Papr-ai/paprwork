@@ -345,6 +345,9 @@ export function useAppCloudSyncStatus(
     }
   }, [active, appId, previewTabVisible, previewShellLoaded, gitSyncEnabled]);
 
+  const fetchRemoteCodeStatusRef = useRef(fetchRemoteCodeStatus);
+  fetchRemoteCodeStatusRef.current = fetchRemoteCodeStatus;
+
   const refresh = useCallback(
     async (force = false) => {
       if (!active) return;
@@ -576,6 +579,10 @@ export function useAppCloudSyncStatus(
     } else {
       setLiveSyncPending(true);
       setRemoteCodeCheck(null);
+      // Opening the tab must answer "did someone publish elsewhere?" without
+      // a manual Check status. Remote-only and cheap (revision.json / cached
+      // repo head) — the full items refresh stays opt-in.
+      void fetchRemoteCodeStatusRef.current?.();
     }
 
     const timer = setTimeout(() => {
