@@ -28,8 +28,10 @@ import { buildProposalChangeSet, type ProposalTree } from "./cloudSync/contribut
 import {
   inferOwnDataDbIdMap,
   invertDbIdMap,
+  ownInstanceDbIds,
   publisherMigrationsDir,
   remapDbIdsInContent,
+  stripDbIdsFromProposalFile,
 } from "./cloudSync/ownDataDbIdMap.js";
 import { isLocalScratchPath } from "./cloudSync/proposalFileMerge.js";
 import {
@@ -342,6 +344,21 @@ async function ownDataDbIdsToPublisher(
   return invertDbIdMap(inferOwnDataDbIdMap(local, publisherFiles.get("data-sources.json")));
 }
 
+async function ownInstanceIdsForProposal(
+  staged: StagedProposalTree[],
+  lineage: CloudAppLineageFile | null,
+  repoDir: string,
+  baseSha: string,
+  env: NodeJS.ProcessEnv,
+): Promise<Set<string>> {
+  if (!lineage) return new Set();
+  const app = staged.find((t) => t.kind === "app");
+  const local = app?.files.get("data-sources.json");
+  if (!app || !local) return new Set();
+  const publisherFiles = await readFilesAtCommit(repoDir, baseSha, app.repoRelativeDir, env);
+  return ownInstanceDbIds(local, publisherFiles.get("data-sources.json"));
+}
+
 interface StagedProposalTree {
   repoRelativeDir: string;
   files: Map<string, string>;
@@ -481,6 +498,15 @@ async function pushContributeBranch(
     // A copy on its own data has fresh database ids; propose in the
     // publisher's ids, or approving re-wires their app to our databases.
     const dbToPublisher = await ownDataDbIdsToPublisher(staged, lineage, repoDir, base.sha, env);
+    const ownIds = await ownInstanceIdsForProposal(staged, lineage, repoDir, base.sha, env);
+    for (const id of dbToPublisher.keys()) ownIds.delete(id);
+    if (ownIds.size > 0) {
+      const app = staged.find((t) => t.kind === "app");
+      for (const rel of ["data-sources.json", "linked-databases.json"]) {
+        const content = app?.files.get(rel);
+        if (app && content !== undefined) app.files.set(rel, stripDbIdsFromProposalFile(rel, content, ownIds));
+      }
+    }
     for (const tree of staged) {
       if (dbToPublisher.size === 0) break;
       for (const [rel, content] of tree.files) {
@@ -545,7 +571,7 @@ async function pushContributeBranch(
       forkAppId,
       targetAppId: prepare.targetAppId,
       // The copy's own instances of the publisher's databases aren't new ones.
-      skipDbIds: new Set(dbToPublisher.keys()),
+      skipDbIds: new Set([...dbToPublisher.keys(), ...ownIds]),
     });
 
     const stagePaths = [

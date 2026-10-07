@@ -15,6 +15,9 @@ const EXCLUDED_FILES = new Set([
   // Fully generated from data-sources.json (AppService.ensureAppDbTs) and
   // rebuilt after every pull / link, so it is never an edit and never shipped.
   "db.ts",
+  // Cloud-prep markers, rewritten per copy on every publish.
+  ".papr-cloud-revision",
+  "data/cloud-repo-head.txt",
 ]);
 
 export function isProposalExcludedAppPath(relativePath: string): boolean {
