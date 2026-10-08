@@ -34,6 +34,8 @@ export interface KeyPermissionRequest {
     toolName: string;
     command?: string;
   };
+  /** How long to wait for an answer. Default 30s; tool approvals wait longer so the agent can resume. */
+  timeoutMs?: number;
 }
 
 /**

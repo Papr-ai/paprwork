@@ -257,7 +257,7 @@ async function initializeServices(): Promise<void> {
       const { BUILTIN_MCP_SERVERS } = await import("./services/mcp/mcpServerCatalog.js");
       const { getAgentService } = await import("./services/AgentService.js");
       const mcpName = (id: string) => BUILTIN_MCP_SERVERS.find((s) => s.id === id)?.name ?? id;
-      const { createPenGate } = await import("./services/mcp/mcpPenGate.js");
+      const { createPenGate, PEN_APPROVAL_TIMEOUT_MS } = await import("./services/mcp/mcpPenGate.js");
       const { getOrgPolicy } = await import("./services/mcp/mcpOrgPolicy.js");
       const { mcpCredentialKeyName } = await import("./services/mcp/mcpServerCatalog.js");
       const mcp = initializeMcpConnectionService({
@@ -276,6 +276,7 @@ async function initializeServices(): Promise<void> {
                 description: `Pen wants to run "${tool}" on ${name}. It may create, change or send something.`,
                 isEnvKey: false,
                 toolContext: { toolName: tool },
+                timeoutMs: PEN_APPROVAL_TIMEOUT_MS,
               })
             ).approved,
         }),

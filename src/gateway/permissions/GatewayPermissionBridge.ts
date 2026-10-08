@@ -70,7 +70,7 @@ export async function requestPermissionFromMain(
         pendingRequests.delete(requestId);
         pending.reject(new Error("Permission request timed out"));
       }
-    }, 30000);
+    }, request.timeoutMs ?? 30000);
 
     pendingRequests.set(requestId, { resolve, reject, timeout });
   });

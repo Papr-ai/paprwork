@@ -42,11 +42,14 @@ export function decidePenAccess(
 export class PenAccessDeniedError extends Error {
   readonly status = 403;
   readonly code = "pen_access";
-  constructor(server: string, tool: string, why: "read_only" | "declined") {
+  constructor(server: string, tool: string, why: "read_only" | "declined" | "timeout") {
+    // Written for the agent: it reads this as the tool result and carries on in the same turn.
     super(
       why === "read_only"
-        ? `${server} is set to Read only, so Pen can't run "${tool}" (it may change something). Change it in Settings → Connections.`
-        : `You declined "${tool}" on ${server}.`,
+        ? `${server} is set to Read only, so "${tool}" was not run (it may change something). Do not retry. Tell the user, and mention they can change it in Settings → Connections.`
+        : why === "declined"
+          ? `The user declined "${tool}" on ${server}. Nothing was changed. Do not retry it; continue with anything else you can do and ask how they'd like to proceed.`
+          : `No answer to the approval for "${tool}" on ${server} within 10 minutes, so it was not run. Nothing was changed. Tell the user and ask whether to try again.`,
     );
   }
 }

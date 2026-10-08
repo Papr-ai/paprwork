@@ -27,3 +27,22 @@ describe("Pen access", () => {
     expect(effectivePenAccess("bogus", "ask")).toBe("ask");
   });
 });
+
+describe("Pen gate: the agent's tool call resumes after the answer", () => {
+  it("waits for a slow answer, then runs; decline/timeout return guidance for the agent", async () => {
+    const { createPenGate } = await import("./mcpPenGate.js");
+    let answer: "yes" | "no" | "timeout" = "yes";
+    const gate = createPenGate({
+      keyLevel: async () => "ask",
+      orgMax: async () => undefined,
+      serverName: () => "Linear",
+      ask: () =>
+        new Promise((res, rej) => setTimeout(() => (answer === "timeout" ? rej(new Error("timed out")) : res(answer === "yes")), 50)),
+    });
+    await expect(gate("linear", "create_issue", undefined)).resolves.toBeUndefined();
+    answer = "no";
+    await expect(gate("linear", "create_issue", undefined)).rejects.toThrow(/declined.*Do not retry/);
+    answer = "timeout";
+    await expect(gate("linear", "create_issue", undefined)).rejects.toThrow(/No answer.*10 minutes/);
+  });
+});

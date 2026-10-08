@@ -8,6 +8,9 @@ import { decidePenAccess, effectivePenAccess, PenAccessDeniedError } from "./mcp
 export type ToolAnnotations = { readOnlyHint?: boolean; destructiveHint?: boolean } | undefined;
 export type PenGate = (serverId: string, tool: string, annotations: ToolAnnotations) => Promise<void>;
 
+/** Tool approvals wait this long so the agent's tool call resumes in the same turn after the click. */
+export const PEN_APPROVAL_TIMEOUT_MS = 10 * 60_000;
+
 export interface PenGateDeps {
   /** The sign-in's own level (unset for older sign-ins). */
   keyLevel: (serverId: string) => Promise<unknown>;
@@ -25,6 +28,12 @@ export function createPenGate(deps: PenGateDeps): PenGate {
     if (decision === "allow") return;
     const name = await deps.serverName(serverId);
     if (decision === "deny") throw new PenAccessDeniedError(name, tool, "read_only");
-    if (!(await deps.ask(serverId, name, tool))) throw new PenAccessDeniedError(name, tool, "declined");
+    let ok: boolean;
+    try {
+      ok = await deps.ask(serverId, name, tool);
+    } catch {
+      throw new PenAccessDeniedError(name, tool, "timeout");
+    }
+    if (!ok) throw new PenAccessDeniedError(name, tool, "declined");
   };
 }
