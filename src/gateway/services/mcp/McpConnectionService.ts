@@ -34,7 +34,7 @@ import {
   isValidMcpServerId,
   type McpServerDefinition,
 } from "./mcpServerCatalog.js";
-import { buildMcpAgentTool, type McpCallResult, type McpToolDescriptor } from "./mcpToolAdapter.js";
+import { buildMcpAgentTool, mcpAgentToolId, type McpCallResult, type McpToolDescriptor } from "./mcpToolAdapter.js";
 
 export type McpConnectionState = "disconnected" | "connecting" | "awaiting_user" | "connected" | "needs_reauth" | "error";
 
@@ -193,7 +193,9 @@ export class McpConnectionService {
       requiresClientId: Boolean(def.requiresClientId && !def.clientId),
       state: l?.state ?? "disconnected",
       toolCount: l?.tools.length ?? 0,
-      toolNames: l?.agentToolIds ?? [],
+      // From the server's tool list, not the sink: status must be right even
+      // when no agent registry is attached (jobs, tests, scripts).
+      toolNames: (l?.tools ?? []).map((t) => mcpAgentToolId(def.id, t.name)),
       ...(l?.error ? { error: l.error } : {}),
       ...(l?.authUrl && l.state === "awaiting_user" ? { authUrl: l.authUrl } : {}),
     };

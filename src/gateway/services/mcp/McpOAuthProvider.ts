@@ -84,8 +84,11 @@ export class McpOAuthProvider implements OAuthClientProvider {
     return {
       client_name: "Papr Work",
       client_uri: "https://papr.ai",
-      // Shown on consent screens that render client branding (RFC 7591 logo_uri).
-      logo_uri: "https://www.papr.ai/images/papr-logo.svg",
+      // Shown on consent screens (RFC 7591 logo_uri). Must be a square, full-bleed
+      // PNG: the old SVG mark was 105x124 with padding, so it rendered shrunken.
+      // Baked into the dynamic registration: existing clients keep the old logo
+      // until they reconnect.
+      logo_uri: "https://raw.githubusercontent.com/Papr-ai/paprwork/master/build/oauth-logo.png",
       redirect_uris: [this.redirectUrl],
       grant_types: ["authorization_code", "refresh_token"],
       response_types: ["code"],
