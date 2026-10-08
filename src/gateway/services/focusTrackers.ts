@@ -125,11 +125,26 @@ export interface TrackerGoal {
   scope?: string;
 }
 
+/**
+ * How a goal that is not "posting" labels itself on the goal page. Everything is optional; without it the page
+ * falls back to the template labels and the "N of 7 days showed up" chart. Strings are length-capped, numbers finite.
+ */
+export interface MetricsDisplay {
+  /** Plain words under the payoff number, e.g. "points better than the baseline". */
+  label?: string;
+  format?: "number" | "usd" | "pts" | "percent" | "hours";
+  /** What the time bought, after "9h in chats →", e.g. "v72 is 41% trained · $676 spent". */
+  line?: string;
+  /** Replaces the default chart. tone: full = accent, part = soft, off = empty. */
+  chart?: { caption: string; target?: number; bars: Array<{ label: string; value: number; tone?: "full" | "part" | "off"; title?: string }> };
+}
+
 export interface MetricsFile {
   goalId: string;
   template: string;
   updatedAt: string;
   summary: Record<string, number | null>;
+  display?: MetricsDisplay;
   /** profile = who the numbers belong to, so the goal page can show a real face/logo, not a label. */
   sources?: Record<string, { ok: boolean; error?: string; profile?: TrackerProfile }>;
   history?: Array<{ date: string } & Record<string, number | string | null>>;
@@ -137,6 +152,8 @@ export interface MetricsFile {
   items?: Array<{
     source: string; url?: string; text?: string; at?: string; engagement?: number; impressions?: number | null;
     kind?: "post" | "person" | "company" | "event"; image?: string; domain?: string;
+    /** A tile's own number and unit for goals that are not posts, e.g. 2.1 "pts" or 5000 "$". */
+    value?: number | null; unit?: string;
   }>;
 }
 
@@ -152,6 +169,7 @@ export interface TrackerState {
   metrics?: {
     updatedAt: string; summary: Record<string, number | null>; labels: Record<string, string>; sources?: MetricsFile["sources"];
     hero?: string;
+    display?: MetricsDisplay;
     /** Last 30 daily snapshots and the newest evidence — what the goal page charts (progress over time). */
     history?: MetricsFile["history"]; items?: MetricsFile["items"];
   };
@@ -190,6 +208,7 @@ export function resolveTrackerState(input: {
     ? {
         updatedAt: input.metrics.updatedAt, summary: input.metrics.summary, labels, sources: input.metrics.sources,
         hero: t?.hero ?? t?.metrics[0]?.key ?? Object.keys(input.metrics.summary ?? {})[0],
+        display: input.metrics.display,
         history: (input.metrics.history ?? []).slice(-30), items: (input.metrics.items ?? []).slice(0, 30),
       }
     : undefined;
@@ -236,10 +255,38 @@ export async function readMetrics(goalId: string): Promise<MetricsFile | null> {
   return readJson<MetricsFile>(metricsPath(goalId));
 }
 
+const str = (v: unknown, max: number): string | undefined => (typeof v === "string" && v.trim() ? v.trim().slice(0, max) : undefined);
+const num = (v: unknown): number | undefined => (typeof v === "number" && Number.isFinite(v) ? v : undefined);
+
+/** Trackers are untrusted input to the goal page: keep only the known shape, capped. */
+export function cleanDisplay(raw: unknown): MetricsDisplay | undefined {
+  if (!raw || typeof raw !== "object") return undefined;
+  const r = raw as Record<string, unknown>;
+  const out: MetricsDisplay = {};
+  const label = str(r.label, 60);
+  if (label) out.label = label;
+  if (["number", "usd", "pts", "percent", "hours"].includes(r.format as string)) out.format = r.format as MetricsDisplay["format"];
+  const line = str(r.line, 120);
+  if (line) out.line = line;
+  const c = r.chart as Record<string, unknown> | undefined;
+  if (c && Array.isArray(c.bars)) {
+    const bars = c.bars.slice(0, 60).flatMap((b: Record<string, unknown>) => {
+      const value = num(b?.value), label = str(b?.label, 6);
+      if (value === undefined || !label) return [];
+      const tone = ["full", "part", "off"].includes(b.tone as string) ? (b.tone as "full" | "part" | "off") : undefined;
+      return [{ label, value, ...(tone ? { tone } : {}), ...(str(b.title, 80) ? { title: str(b.title, 80) } : {}) }];
+    }).slice(0, 14);
+    const caption = str(c.caption, 90);
+    if (bars.length && caption) out.chart = { caption, ...(num(c.target) !== undefined ? { target: num(c.target) } : {}), bars };
+  }
+  return Object.keys(out).length ? out : undefined;
+}
+
 /** Tracker jobs report here. Keeps 90 days of history (one row per day, last write wins). */
 export async function recordMetrics(input: {
   goalId: string;
   template?: string;
+  display?: unknown;
   summary: Record<string, unknown>;
   sources?: MetricsFile["sources"];
   items?: MetricsFile["items"];
@@ -258,6 +305,7 @@ export async function recordMetrics(input: {
     template: input.template ?? prev?.template ?? "custom",
     updatedAt: new Date().toISOString(),
     summary,
+    display: cleanDisplay(input.display),
     sources: input.sources,
     history: history.slice(-90),
     items: (input.items ?? []).slice(0, 30),
@@ -365,6 +413,7 @@ export const GOAL_PAGE_CONTRACT = [
   `   - Put the ONE number that proves the goal is paying off first in summary (e.g. impressions7, revenue, signed). Summary is snapshotted daily into history, which becomes the progress chart.`,
   `   - "items": the evidence, newest first, max 30: {"source", "url", "text" (<=140 chars), "at" (ISO time — drives the daily chart), "engagement"?, "impressions"?, "kind"?: "post"|"person"|"company"|"event", "image"? (https avatar/thumbnail), "domain"? (company site, e.g. "stripe.com" — the page shows its logo)}.`,
   `   - sources.<name>.profile: {"handle", "name", "avatar" (https profile picture URL from the platform), "url", "followers"} so the page shows the real person or brand, not a label.`,
+  `   - Goals that are not posting (training, fundraising, revenue, hiring): also send "display": {"label": plain words under the number (e.g. "points better than baseline"), "format": "number"|"usd"|"pts"|"percent"|"hours", "line": what the time bought (<=120 chars), "chart": {"caption": the takeaway, "target"?: number, "bars": [{"label": <=6 chars, "value": number, "tone"?: "full"|"part"|"off", "title"?: "tooltip"}] (max 14 bars, the series that shows progress)}}, and give items "value" + "unit" (e.g. 2.1 "pts") so a tile names its own number.`,
   `   - Real images only: platform profile pictures, company domains for logos (look the domain up with web search if you only have a name). Never generate or guess images.`,
 ];
 

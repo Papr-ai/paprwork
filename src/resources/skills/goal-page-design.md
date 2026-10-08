@@ -72,6 +72,30 @@ Tracker jobs POST to `/api/workspace/focus/metrics`:
 - `items[].at` drives the 7-day chart. `image` / `domain` give each tile a face.
 - Use `null` for a number you couldn't read. Never invent values.
 
+## Goals that are not posting (training, fundraising, revenue, hiring)
+
+The default page speaks about posts: "N of 7 days showed up", tiles in "views". A tracker for any other goal sends a `display` block so the same layout speaks its own language. Everything in it is optional.
+
+```json
+"display": {
+  "label": "points better than baseline",
+  "format": "pts",
+  "line": "v72 is 41% trained · $676 spent",
+  "chart": { "caption": "3 of 5 test sets beat the baseline", "target": 0,
+             "bars": [ { "label": "S", "value": 2.1, "tone": "full", "title": "SciFact +2.1 pts" } ] }
+}
+```
+and items carry their own number: `{"text": "SciFact", "value": 2.1, "unit": "pts", "url": "…"}`.
+
+- **`format`** is `number`, `usd`, `pts` (signed, one decimal), `percent` or `hours`. Pick the unit a founder would say out loud.
+- **`label`** says what the big number means in plain words, under it. Never ship the raw metric key.
+- **`line`** finishes the sentence "9h in chats →". The result of the time, not a list of metrics.
+- **`chart`** is the one series that shows progress (max 14 bars, labels up to 6 characters, e.g. "Thu" or "Sent"). `tone` full = accent, part = soft, off = empty. `target` draws the dashed line. The caption states the takeaway, never the axis.
+- **Tiles** (`items`): the 3 things that explain the number. Order them yourself, most important first.
+- A delta against last week is hidden for `pts` (a delta of a delta means nothing).
+- **Decisions beat dashboards.** If the goal has a decision with a date (stop or continue before credits expire), say it in `line` or `caption` in one sentence.
+- A number you cannot read stays `null`. Do not estimate a balance, a commitment or a deadline you were not given.
+
 ## Checklist
 
 - [ ] Payoff number readable in under 2s, effort → result line under it
