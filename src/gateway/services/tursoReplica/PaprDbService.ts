@@ -602,10 +602,18 @@ export async function paprDbCreateMigration(options: {
       ...(note ? { note } : {}),
     };
   }
-  const apply = await paprDbApplyMigration({
-    dbId: options.dbId,
-    migrationId: created.migrationId,
-  });
+  let apply: Awaited<ReturnType<typeof paprDbApplyMigration>>;
+  try {
+    apply = await paprDbApplyMigration({
+      dbId: options.dbId,
+      migrationId: created.migrationId,
+    });
+  } catch (error) {
+    // The migration never ran: remove the file so a retry gets a clean slot
+    // and the failed attempt cannot ride along in a later publish or proposal.
+    await fsPromises.rm(created.fullPath, { force: true }).catch(() => {});
+    throw error;
+  }
   return {
     migrationId: created.migrationId,
     fileName: created.fileName,
