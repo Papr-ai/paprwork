@@ -8,6 +8,7 @@
 
 import { useCallback, useEffect, useMemo, useState } from "react";
 import "./McpConnectionsTab.css";
+import { McpServerSheet } from "./McpServerSheet";
 
 const GATEWAY = "http://localhost:18789";
 const POLL_MS = 2_000;
@@ -60,6 +61,7 @@ export function McpConnectionsTab({ embedded = false }: { embedded?: boolean } =
   const [query, setQuery] = useState("");
   const [busy, setBusy] = useState<string | null>(null);
   const [customUrl, setCustomUrl] = useState("");
+  const [openId, setOpenId] = useState<string | null>(null);
 
   const load = useCallback(async () => {
     try {
@@ -123,11 +125,11 @@ export function McpConnectionsTab({ embedded = false }: { embedded?: boolean } =
     const rest = visible.filter((s) => s.state === "disconnected");
     const byCat = new Map<string, McpServer[]>();
     for (const s of rest) {
-      const cat = s.requiresClientId ? "Coming soon" : (s.category ?? "Other");
+      const cat = s.requiresClientId ? "Needs setup" : (s.category ?? "Other");
       byCat.set(cat, [...(byCat.get(cat) ?? []), s]);
     }
     const ordered = [...byCat.entries()].sort(([a], [b]) =>
-      a === "Coming soon" ? 1 : b === "Coming soon" ? -1 : a.localeCompare(b),
+      a === "Needs setup" ? 1 : b === "Needs setup" ? -1 : a.localeCompare(b),
     );
     return { connected, ordered };
   }, [servers, query]);
@@ -135,8 +137,14 @@ export function McpConnectionsTab({ embedded = false }: { embedded?: boolean } =
   const renderCard = (s: McpServer) => {
     const isBusy = busy === s.id;
     const label = s.state === "connected" ? `${s.toolCount} tools` : STATE_LABEL[s.state];
+    // Connected services open their detail panel; needs-setup services open the setup panel.
+    const opens = s.state === "connected" || s.requiresClientId;
     return (
-      <div key={s.id} className={`mcp-card mcp-card--${s.state}`}>
+      <div
+        key={s.id}
+        className={`mcp-card mcp-card--${s.state}${opens ? " mcp-card--clickable" : ""}`}
+        onClick={opens ? () => setOpenId(s.id) : undefined}
+      >
         <div className="mcp-card__icon" aria-hidden>{initials(s.name)}</div>
         <div className="mcp-card__body">
           <div className="mcp-card__name">{s.name}</div>
@@ -152,9 +160,11 @@ export function McpConnectionsTab({ embedded = false }: { embedded?: boolean } =
         </div>
         <div className="mcp-card__action">
           {s.requiresClientId ? (
-            <span className="mcp-card__soon">Soon</span>
+            <button type="button" className="settings-btn settings-btn--secondary" onClick={(e) => { e.stopPropagation(); setOpenId(s.id); }}>
+              Set up
+            </button>
           ) : s.state === "connected" ? (
-            <button type="button" className="settings-btn settings-btn--ghost" disabled={isBusy} onClick={() => void act(s.id, "disconnect")}>
+            <button type="button" className="settings-btn settings-btn--ghost" disabled={isBusy} onClick={(e) => { e.stopPropagation(); void act(s.id, "disconnect"); }}>
               Disconnect
             </button>
           ) : s.state === "awaiting_user" || s.state === "connecting" ? (
@@ -170,6 +180,8 @@ export function McpConnectionsTab({ embedded = false }: { embedded?: boolean } =
       </div>
     );
   };
+
+  const open = servers.find((s) => s.id === openId) ?? null;
 
   if (loading) return <div className="mcp-tab__empty">Loading connections…</div>;
 
@@ -230,6 +242,16 @@ export function McpConnectionsTab({ embedded = false }: { embedded?: boolean } =
           </button>
         </div>
       </section>
+      {open && (
+        <McpServerSheet
+          server={open}
+          onClose={() => setOpenId(null)}
+          onDisconnect={() => {
+            setOpenId(null);
+            void act(open.id, "disconnect");
+          }}
+        />
+      )}
     </div>
   );
 }

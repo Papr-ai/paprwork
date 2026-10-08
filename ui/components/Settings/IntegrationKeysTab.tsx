@@ -2,7 +2,7 @@
  * IntegrationKeysTab - Non-AI API keys for jobs, automations, and integrations
  */
 
-import React, { useEffect, useMemo, useRef, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { useCustomKeys } from "../../hooks/useCustomKeys";
 import type { CustomKey, CustomKeyInput } from "../../types/settings";
 import type { IntegrationKeyVaultAudience } from "../../constants/integrationKeyVaultAudience";
@@ -186,7 +186,7 @@ export function IntegrationKeysTab({ embedded = false }: { embedded?: boolean } 
       setRefreshingShared(true);
       try {
         await pullSharedVaultKeys();
-        await loadKeys({ force: true });
+        await loadKeys(true);
       } finally {
         setRefreshingShared(false);
       }
@@ -257,7 +257,7 @@ export function IntegrationKeysTab({ embedded = false }: { embedded?: boolean } 
     mode: "delete" | "update";
   }) => {
     const result = await syncVaultKeyChange(input);
-    await loadKeys({ force: true });
+    await loadKeys(true);
     if (!result.success) {
       alert(`Vault sync failed: ${result.error ?? "Unknown error"}`);
       return result;
