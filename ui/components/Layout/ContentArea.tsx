@@ -138,7 +138,16 @@ export function ContentArea() {
     };
   }, [activeTabId, activeLeftTab]);
 
-  if (isParentTab && activeTab.childTabIds.length > 0) {
+  if (
+    isParentTab &&
+    activeTab.chatHidden === true &&
+    activeTab.childTabIds.length === 1
+  ) {
+    // Chat collapsed (chat toggle): the child app/doc fills the view.
+    showSplitView = false;
+    leftPaneTabId = activeTab.childTabIds[0];
+    rightPaneTabId = null;
+  } else if (isParentTab && activeTab.childTabIds.length > 0) {
     showSplitView = true;
     if (activeTab.childTabIds.length === 1) {
       // 1 child: Show parent on left, child on right

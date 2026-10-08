@@ -9,6 +9,7 @@ import { useChat } from "../../hooks/useChat";
 import { useChatStore } from "../../stores/chatStore";
 import { useDismissOnOutsideClick } from "../../hooks/useDismissOnOutsideClick";
 import { Tab } from "./Tab";
+import { getChatToggleInfo } from "../../utils/chatToggle";
 import { ChatHistoryDropdown } from "../Chat/ChatHistoryDropdown";
 import "./TabBar.css";
 
@@ -21,10 +22,14 @@ export function TabBar() {
     tabs,
     getVisibleTabs,
     activeLeftTab,
+    activeTabId,
+    getTab,
     createTab,
     switchToTab,
     closeTab,
     moveTab,
+    createArtifactFromChat,
+    setChatHidden,
   } = useTabs();
   const chats = useChatStore((s) => s.chats);
   const { createChat } = useChat();
@@ -112,6 +117,40 @@ export function TabBar() {
     }
   };
 
+  // Chat toggle (⌘J): pair an app/doc with a chat, or collapse/restore the chat.
+  const chatToggle = getChatToggleInfo(
+    activeTabId ? getTab(activeTabId) : undefined,
+    getTab,
+  );
+  const chatOff = chatToggle?.mode === "create" || chatToggle?.hidden === true;
+  const handleToggleChat = async () => {
+    if (!chatToggle) return;
+    if (chatToggle.mode === "create") {
+      const chatId = await createChat();
+      if (!chatId) return;
+      const chatTabId = createTab(
+        "chat",
+        chatId,
+        "New Chat",
+        {},
+        { forceNew: true },
+      );
+      createArtifactFromChat(chatTabId, chatToggle.appTabId, {
+        autoSwitch: true,
+      });
+    } else {
+      setChatHidden(chatToggle.parentTabId, !chatToggle.hidden);
+    }
+    // Chat is (re)opening: put the cursor in its input so ⌘J, ⌘J round-trips.
+    if (chatOff) {
+      window.setTimeout(() => {
+        document
+          .querySelector<HTMLTextAreaElement>(".content-pane--left textarea")
+          ?.focus();
+      }, 60);
+    }
+  };
+
   // Keyboard shortcuts
   useEffect(() => {
     const handleKeyDown = (e: KeyboardEvent) => {
@@ -124,6 +163,13 @@ export function TabBar() {
       if (e.key === "t" || e.key === "T") {
         e.preventDefault();
         handleNewTab();
+        return;
+      }
+
+      // Cmd/Ctrl+J: Toggle chat beside the active app/doc
+      if ((e.key === "j" || e.key === "J") && !e.shiftKey && !e.altKey) {
+        e.preventDefault();
+        void handleToggleChat();
         return;
       }
 
@@ -173,7 +219,7 @@ export function TabBar() {
 
     window.addEventListener("keydown", handleKeyDown);
     return () => window.removeEventListener("keydown", handleKeyDown);
-  }, [tabs, activeLeftTab, createTab, switchToTab, closeTab, handleNewTab]);
+  }, [tabs, activeLeftTab, createTab, switchToTab, closeTab, handleNewTab, handleToggleChat]);
 
   const { goBack, goForward, canGoBack, canGoForward } = useTabs();
 
@@ -375,6 +421,37 @@ export function TabBar() {
           />
         )}
         </div>
+        {chatToggle && (
+          <button
+            className={`tab-bar__action-btn tab-bar__chat-toggle${
+              chatOff ? " tab-bar__chat-toggle--off" : ""
+            }`}
+            onClick={() => void handleToggleChat()}
+            aria-pressed={!chatOff}
+            aria-label={chatOff ? "Show chat" : "Hide chat"}
+            title={`${chatOff ? "Show" : "Hide"} chat (${modKey}J)`}
+          >
+            <svg width="14" height="14" viewBox="0 0 24 24" fill="none">
+              {!chatOff && (
+                <path
+                  d="M3 7a3 3 0 0 1 3-3h3v16H6a3 3 0 0 1-3-3z"
+                  fill="currentColor"
+                  opacity="0.35"
+                />
+              )}
+              <rect
+                x="3"
+                y="4"
+                width="18"
+                height="16"
+                rx="3"
+                stroke="currentColor"
+                strokeWidth="1.7"
+              />
+              <path d="M9 4v16" stroke="currentColor" strokeWidth="1.7" />
+            </svg>
+          </button>
+        )}
       </div>
     </div>
   );
