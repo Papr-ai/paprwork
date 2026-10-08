@@ -1864,6 +1864,7 @@ export class JobsService {
       command: input.command,
       requiredKeys: input.requiredKeys ?? [],
       requirements: input.requirements,
+      ...(input.platformCdp ? { platformCdp: input.platformCdp } : {}),
       dependsOn: input.dependsOn ?? [],
       retries: input.retries ?? { maxAttempts: 1, backoffMs: 1000 },
       deliver: input.deliver,

@@ -359,6 +359,18 @@ export async function linkTracker(goalId: string, jobId: string, template: strin
   await writeJson(trackersPath(), file);
 }
 
+/**
+ * The user just tapped "Track this", so the first run is explicitly requested work: admit it through
+ * the interactive lane like run_job / startJobRunForApi. Started as plain background work it waited
+ * out the 120s maintenance grace whenever a chat was streaming, so the tracker card sat on
+ * "Waiting for execution capacity" with no numbers. (Active work is still never preempted.)
+ */
+function startNow(run: () => Promise<unknown>, what: string): void {
+  void import("./gatewayBackgroundBudget.js")
+    .then(({ gatewayBackgroundBudget }) => gatewayBackgroundBudget.runInteractive(run))
+    .catch((err) => console.warn(`[focus] ${what} failed:`, err instanceof Error ? err.message : err));
+}
+
 /** One tap from Focus: create (and start) the tracker job for a goal. */
 export async function createTracker(goal: TrackerGoal): Promise<{ jobId: string; kind: "script" | "builder" }> {
   const file = await readTrackers();
@@ -386,6 +398,8 @@ export async function createTracker(goal: TrackerGoal): Promise<{ jobId: string;
       command: `python3 track.py --goal ${JSON.stringify(goal.id)}`,
       requiredKeys,
       requirements: template.requirements,
+      // track.py reports each source separately; no LinkedIn browser must not cost the X numbers.
+      platformCdp: "best-effort",
       schedule: { enabled: true, cron: template.cron },
       retries: { maxAttempts: 2, backoffMs: 30_000 },
     });
@@ -395,7 +409,7 @@ export async function createTracker(goal: TrackerGoal): Promise<{ jobId: string;
     if (!jobDir || !src) throw new Error("Tracker script bundle not found");
     for (const f of await fs.readdir(src)) await fs.copyFile(path.join(src, f), path.join(jobDir, f));
     await linkTracker(goal.id, job.id, template.id);
-    void svc.runJob(job.id).catch((err) => console.warn("[focus] first tracker run failed:", err instanceof Error ? err.message : err));
+    startNow(() => svc.runJob(job.id), "first tracker run");
     return { jobId: job.id, kind: "script" };
   }
 
@@ -409,6 +423,6 @@ export async function createTracker(goal: TrackerGoal): Promise<{ jobId: string;
     maxTurns: 40,
   });
   await linkTracker(goal.id, builder.id, template?.id ?? null);
-  void svc.runJob(builder.id).catch((err) => console.warn("[focus] tracker builder failed:", err instanceof Error ? err.message : err));
+  startNow(() => svc.runJob(builder.id), "tracker builder");
   return { jobId: builder.id, kind: "builder" };
 }

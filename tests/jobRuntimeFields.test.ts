@@ -39,6 +39,12 @@ describe("jobRuntimeFields", () => {
     expect(runtime.scheduleState?.nextRunAt).toBe("2025-06-01T13:00:00.000Z");
   });
 
+  test("platformCdp is job config, so it survives save and reload", () => {
+    const { config, runtime } = splitJobRecord(sampleJob({ platformCdp: "best-effort" }));
+    expect(config.platformCdp).toBe("best-effort");
+    expect(mergeJobConfigAndRuntime(config, runtime).platformCdp).toBe("best-effort");
+  });
+
   test("mergeJobConfigAndRuntime round-trips", () => {
     const job = sampleJob();
     const { config, runtime } = splitJobRecord(job);

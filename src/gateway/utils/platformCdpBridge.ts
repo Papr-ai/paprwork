@@ -151,3 +151,27 @@ export async function ensurePlatformCdpEnvForJob(
 
   return env;
 }
+
+/**
+ * CDP env for one job run. Jobs that don't need a platform browser get {}.
+ * "required" (default) jobs fail before the script starts when setup fails. "best-effort" jobs
+ * (multi-source, e.g. Focus trackers) log the reason and get PAPR_PLATFORM_CDP_ERROR instead, so
+ * a missing LinkedIn browser doesn't cost the sources that never needed it.
+ */
+export async function platformCdpEnvForRun(
+  job: Pick<JobRecord, "requirements" | "platformCdp">,
+  appendLog: (line: string) => Promise<void> | void,
+  ensure: (job: Pick<JobRecord, "requirements">) => Promise<Record<string, string>> = ensurePlatformCdpEnvForJob,
+): Promise<Record<string, string>> {
+  if (!jobNeedsPlatformCdp(job)) return {};
+  try {
+    return await ensure(job);
+  } catch (error) {
+    const message = error instanceof Error ? error.message : String(error);
+    if (job.platformCdp !== "best-effort") {
+      throw new Error(`Platform browser CDP setup failed: ${message}`);
+    }
+    await appendLog(`Platform browser CDP unavailable (best-effort, continuing): ${message}`);
+    return { PAPR_PLATFORM_CDP_ERROR: message.slice(0, 500) };
+  }
+}
