@@ -90,7 +90,7 @@ const ThreeHero = {
       const pic = this.safe(it.image) || this.logo(it.domain || this.domainOf(it.source, it.url), 64);
       const n = own ? it.value : it.impressions ?? it.engagement;
       const unit = own ? it.unit || '' : it.impressions != null ? 'views' : 'engagements';
-      return `<a class="hh-tile" href="${this.safe(it.url) || '#'}" target="_blank" rel="noopener">${this.img(pic, it.image ? 'hh-thumb' : 'hh-logo')}
+      return `<a class="hh-tile" href="${this.safe(it.url) || '#'}" target="_blank" rel="noopener">${this.img(pic, it.image ? (it.kind === 'person' ? 'hh-person' : 'hh-thumb') : 'hh-logo')}
         <p>${Three.esc(it.text || it.source)}</p>${n != null ? `<b>${own && it.unit === 'pts' ? this.fmt(n, 'pts') : ThreeTrack.num(n)}<span>${Three.esc(own && it.unit === 'pts' ? 'pts' : unit)}</span></b>` : ''}</a>`;
     }).join('')}</div>`;
   },
