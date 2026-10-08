@@ -76,7 +76,6 @@ const Three = {
   },
   /** One goal: where it stands, what moves it, and one tap to work on it. */
   detail(g) {
-    const s = g.signals || {};
     const left = this.daysLeft(g.due);
     const done = g.repeat ? this.sub(g)
       : [g.target, g.due ? `${this.fmtDue(g.due)}${left != null ? ` · ${left} days left` : ''}` : ''].filter(Boolean).join(' · ');
@@ -85,7 +84,7 @@ const Three = {
     const want = Array.isArray(g.taskIds) ? new Set(g.taskIds) : null;
     const tasks = ((typeof Tasks !== 'undefined' && Tasks.data?.tasks) || [])
       .filter((t) => t.status === 'open' && (want ? want.has(t.id) : t.goal_id && t.goal_id === g.id));
-    const [pcls, plabel] = this.pace(s);
+    const [pcls, plabel] = this.pace(g.signals || {});
     const mine = this.inThree(g.id);
     const outside = mine ? '' : `<p class="t3outside">Not one of your three right now.</p>`;
     const second = mine
@@ -96,11 +95,10 @@ const Three = {
       <button type="button" class="t3back" data-three="close">${this.BACK}Focus</button>
       <div class="t3dh"><h2 class="hero-title">${this.esc(g.title)}</h2><em class="wrpill is-${pcls}">${plabel}</em></div>
       ${done ? `<p class="t3sub">${this.esc(done)}</p>` : ''}${outside}
-      <section class="t3stat"><div><b>${this.hours(s.hours7)}</b><span>In chats this week</span></div>
-        <div><b>${s.chats30 || 0}</b><span>Chats this month</span></div><div><b>${s.openTasks || 0}</b><span>Open tasks</span></div></section>
-      <p class="t3why">${this.SPARK}${this.esc(g.why)}</p>
-      ${g.scope ? `<p class="t3scope"><span>Counts</span>${this.esc(g.scope)}</p>` : ''}
+      ${typeof ThreeHero !== 'undefined' ? ThreeHero.html(g) : ''}
       ${typeof ThreeTrack !== 'undefined' ? ThreeTrack.html(g) : ''}
+      ${g.why || g.scope ? `<details class="t3about"><summary>Why this goal</summary>${g.why ? `<p class="t3why">${this.SPARK}${this.esc(g.why)}</p>` : ''}
+        ${g.scope ? `<p class="t3scope"><span>Counts</span>${this.esc(g.scope)}</p>` : ''}</details>` : ''}
       ${g.nextStep ? `<section class="hsec"><h4>Next milestone</h4><p class="t3next">${this.esc(g.nextStep)}</p></section>` : ''}
       <section class="hsec"><h4>Moves it <em>${tasks.length}</em></h4>${rows}</section>
       <footer class="t3foot"><button type="button" class="hfocus-primary" data-three="chat" data-gid="${this.esc(g.id)}">Work on it with Pen</button>
@@ -150,6 +148,7 @@ const Three = {
       else if (act === 'edit') this.show('edit', gid);
       else if (act === 'review') this.show('review');
       else if (act === 'promote') { this.show('edit'); ThreeEdit.promote = gid; ThreeEdit.paint(); }
+      else if (act === 'hero-fix' && typeof ThreeHero !== 'undefined') ThreeHero.fix(this.find(gid) || {}, b.dataset.src);
       else if (act.startsWith('track') && typeof ThreeTrack !== 'undefined') ThreeTrack.act(act, this.find(gid) || {}, b);
       else if (act.startsWith('wr-')) WeekReview.act(act);
       else ThreeEdit.act(act, b);

@@ -78,7 +78,13 @@ def find_bird() -> str | None:
     return None
 
 
-def summarize_x(tweets: list[dict], me: str, followers: int | None) -> dict:
+def x_avatar(user: dict) -> str:
+    """Profile picture from an X user result (new `avatar` or legacy field), upsized from 48px."""
+    url = (user.get("avatar") or {}).get("image_url") or (user.get("legacy") or {}).get("profile_image_url_https") or ""
+    return url.replace("_normal.", "_400x400.") if url.startswith("https://") else ""
+
+
+def summarize_x(tweets: list[dict], me: str, followers: int | None, avatar: str = "", name: str = "") -> dict:
     """tweets: normalized {id, at, text, likes, replies, reposts, views, is_rt, is_reply, author}."""
     mine = [t for t in tweets if t["author"].lower() == me.lower() and t["at"] and t["at"] >= WEEK_AGO]
     posts = [t for t in mine if not t["is_rt"] and not t["is_reply"]]
@@ -91,8 +97,11 @@ def summarize_x(tweets: list[dict], me: str, followers: int | None) -> dict:
         "impressions7": sum(views) if views else None,
         "followers": followers,
         "days": sorted({t["at"].date().isoformat() for t in posts}),
+        # Who the numbers belong to — the goal page shows this face instead of a platform label.
+        "profile": {"handle": me, "name": name or me, "url": f"https://x.com/{me}", "followers": followers,
+                    "avatar": avatar or f"https://unavatar.io/x/{me}"},
         "items": [
-            {"source": "x", "url": f"https://x.com/{me}/status/{t['id']}", "text": t["text"][:140],
+            {"source": "x", "kind": "post", "url": f"https://x.com/{me}/status/{t['id']}", "text": t["text"][:140],
              "at": t["at"].isoformat(), "engagement": t["likes"] + t["replies"] + t["reposts"], "impressions": t["views"]}
             for t in posts[:10]
         ],
@@ -106,7 +115,7 @@ def x_via_bird(bird: str, auth: str, ct0: str) -> dict:
     if not me:
         raise RuntimeError(f"bird whoami failed: {(who.stderr or who.stdout)[:160]}")
     tweets: list[dict] = []
-    followers = None
+    followers, avatar, name = None, "", ""
     for cmd in (["user-tweets", me, "-n", "40", "--json-full"], ["search", f"from:{me} filter:replies", "-n", "40", "--json-full"]):
         r = subprocess.run(base + cmd, capture_output=True, text=True, timeout=60)
         try:
@@ -122,6 +131,8 @@ def x_via_bird(bird: str, auth: str, ct0: str) -> dict:
             ul = user.get("legacy") or {}
             if (t.get("author") or {}).get("username", "").lower() == me.lower() and isinstance(ul.get("followers_count"), int):
                 followers = ul["followers_count"]
+                avatar = avatar or x_avatar(user)
+                name = name or (user.get("core") or {}).get("name") or ul.get("name") or ""
             text = t.get("text") or ""
             tweets.append({
                 "id": t.get("id"), "at": x_time(t.get("createdAt") or ""), "text": text,
@@ -136,7 +147,7 @@ def x_via_bird(bird: str, auth: str, ct0: str) -> dict:
         if t["id"] not in seen:
             seen.add(t["id"])
             uniq.append(t)
-    return summarize_x(uniq, me, followers)
+    return summarize_x(uniq, me, followers, avatar, name)
 
 
 async def x_via_playwright(auth: str, ct0: str) -> dict:
@@ -173,7 +184,7 @@ async def x_via_playwright(auth: str, ct0: str) -> dict:
         await page.wait_for_timeout(5000)
         await browser.close()
 
-    tweets, followers = [], None
+    tweets, followers, avatar, pname = [], None, "", ""
 
     def walk(o):
         if isinstance(o, dict):
@@ -192,6 +203,8 @@ async def x_via_playwright(auth: str, ct0: str) -> dict:
             name = (user.get("core") or {}).get("screen_name") or (user.get("legacy") or {}).get("screen_name") or ""
             if name.lower() == me.lower() and isinstance((user.get("legacy") or {}).get("followers_count"), int):
                 followers = user["legacy"]["followers_count"]
+                avatar = avatar or x_avatar(user)
+                pname = pname or (user.get("core") or {}).get("name") or (user.get("legacy") or {}).get("name") or ""
             views = (tw.get("views") or {}).get("count")
             tweets.append({
                 "id": tw.get("rest_id"), "at": x_time(lg.get("created_at", "")), "text": lg.get("full_text", ""),
@@ -200,7 +213,7 @@ async def x_via_playwright(auth: str, ct0: str) -> dict:
                 "is_rt": "retweeted_status_result" in lg, "is_reply": bool(lg.get("in_reply_to_status_id_str")), "author": name,
             })
     uniq = list({t["id"]: t for t in tweets}.values())
-    return summarize_x(uniq, me, followers)
+    return summarize_x(uniq, me, followers, avatar, pname)
 
 
 # ---------------------------------------------------------------- LinkedIn
@@ -213,44 +226,102 @@ VOYAGER_FETCH = r"""async (path) => {
 }"""
 
 
-def summarize_linkedin(feed: dict, followers: int | None, my_urn: str) -> dict:
-    """Tolerant parse of profileUpdatesV2: social counts are keyed by the activity urn."""
-    counts: dict[str, dict] = {}
-    authored: set[str] = set()
-    texts: dict[str, str] = {}
-    for o in feed.get("included", []):
-        urn = o.get("entityUrn") or o.get("urn") or ""
-        act = urn.split("urn:li:activity:")[-1].split(",")[0].rstrip(")") if "urn:li:activity:" in urn else ""
-        if not act.isdigit():
+def li_picture(me_body: dict) -> str:
+    """Largest profile picture in /voyager/api/me (miniProfile.picture vector image), or ''."""
+    for o in me_body.get("included", []) if isinstance(me_body, dict) else []:
+        pic = o.get("picture") or (o.get("profilePicture") or {}).get("displayImageReference") or {}
+        vec = pic.get("com.linkedin.common.VectorImage") or pic.get("vectorImage") or pic
+        root, arts = vec.get("rootUrl"), vec.get("artifacts") or []
+        if root and arts:
+            best = max(arts, key=lambda a: a.get("width") or 0)
+            return root + (best.get("fileIdentifyingUrlPathSegment") or "")
+    return ""
+
+
+# Creator analytics pages are server-rendered (no stable JSON API), so read the numbers LinkedIn shows you.
+# Impressions are only exposed here: the share feed returns numImpressions = null for every post.
+ANALYTICS_JS = r"""() => {
+  const t = document.body.innerText;
+  const num = (re) => { const m = t.match(re); return m ? parseInt(m[1].replace(/,/g, ''), 10) : null; };
+  const posts = {};
+  for (const a of document.querySelectorAll('a[href*="/analytics/post-summary/urn:li:activity:"]')) {
+    const id = (a.href.match(/activity:(\d+)/) || [])[1], s = a.innerText;
+    const imp = (s.match(/([\d,]+)\s+impressions?/) || [])[1], eng = (s.match(/([\d,]+)\s+engagements?/) || [])[1];
+    if (id) posts[id] = { imp: imp ? +imp.replace(/,/g, '') : null, eng: eng ? +eng.replace(/,/g, '') : null };
+  }
+  return { impressions: num(/([\d,]+)\s*Impressions\b/), reached: num(/([\d,]+)\s*Members reached/),
+           engagements: num(/([\d,]+)\s*Social engagements/), followers: num(/([\d,]+)\s*Total followers/), posts };
+}"""
+
+
+async def linkedin_analytics(page, public_id: str = "") -> dict:
+    """7-day totals + per-post numbers from Creator analytics, plus total followers. Empty dict on failure."""
+    out: dict = {}
+    for path in ("/analytics/creator/content/?metricType=IMPRESSIONS&timeRange=past_7_days", "/analytics/creator/audience/"):
+        try:
+            await page.goto(f"https://www.linkedin.com{path}", wait_until="domcontentloaded", timeout=45000)
+            await page.wait_for_timeout(4000)
+            got = await page.evaluate(ANALYTICS_JS)
+            out.update({k: v for k, v in got.items() if v not in (None, {})})
+        except Exception as e:  # noqa: BLE001 — analytics is a bonus; posts still count without it
+            log(f"linkedin: analytics {path.split('?')[0]} unavailable ({str(e)[:100]})")
+    if out.get("followers") is None and public_id:  # audience page can redirect-loop headless; profile shows it too
+        try:
+            await page.goto(f"https://www.linkedin.com/in/{public_id}/", wait_until="domcontentloaded", timeout=45000)
+            await page.wait_for_timeout(3000)
+            n = await page.evaluate(r"""() => { const m = document.body.innerText.match(/([\d,]+)\s+followers/i);
+              return m ? parseInt(m[1].replace(/,/g, ''), 10) : null; }""")
+            if isinstance(n, int):
+                out["followers"] = n
+        except Exception as e:  # noqa: BLE001
+            log(f"linkedin: followers unavailable ({str(e)[:100]})")
+    return out
+
+
+def summarize_linkedin(feed: dict, my_member: str, analytics: dict | None = None) -> dict:
+    """Your own posts from profileUpdatesV2, joined to their social counts and Creator analytics.
+
+    Shape LinkedIn actually returns (verified 2026-10): each UpdateV2 has updateMetadata.urn
+    (urn:li:activity:N), actor (urn:li:member:<you>), and *socialDetail pointing at the ugcPost;
+    SocialActivityCounts are keyed by that ugcPost urn, not the activity. Reposts carry a
+    "<you> reposted this" header or a resharedUpdate and are not your posts.
+    """
+    analytics = analytics or {}
+    inc = feed.get("included", [])
+    counts = {o.get("urn"): o for o in inc if "numLikes" in o or "numComments" in o}
+    per_post = analytics.get("posts") or {}
+    posts, seen = [], set()
+    for o in inc:
+        act = (o.get("updateMetadata") or {}).get("urn") or ""
+        aid = act.rsplit(":", 1)[-1]
+        if not act.startswith("urn:li:activity:") or aid in seen:
             continue
-        if "numLikes" in o or "numComments" in o:
-            counts[act] = o
-        actor = json.dumps(o.get("actor") or {})
-        if my_urn and my_urn in actor and not o.get("resharedUpdate"):
-            authored.add(act)
-        commentary = ((o.get("commentary") or {}).get("text") or {}).get("text")
-        if commentary:
-            texts[act] = commentary
-    posts = []
-    for act in (authored or set(counts)):
-        at = li_activity_time(act)
+        header = json.dumps(o.get("header") or o.get("contextualHeader") or {})
+        if f'"{my_member}"' not in json.dumps(o.get("actor") or {}) or o.get("resharedUpdate") \
+                or o.get("*resharedUpdate") or "reposted this" in header:
+            continue
+        at = li_activity_time(aid)
         if not at or at < WEEK_AGO:
             continue
-        c = counts.get(act, {})
-        eng = int(c.get("numLikes") or 0) + int(c.get("numComments") or 0) + int(c.get("numShares") or 0)
-        imp = c.get("numImpressions")
-        posts.append({"id": act, "at": at, "eng": eng, "imp": imp if isinstance(imp, int) else None})
+        seen.add(aid)
+        c = counts.get((o.get("*socialDetail") or "").replace("urn:li:fs_socialDetail:", "")) or counts.get(act) or {}
+        a = per_post.get(aid) or {}
+        eng = a.get("eng") if a.get("eng") is not None else \
+            int(c.get("numLikes") or 0) + int(c.get("numComments") or 0) + int(c.get("numShares") or 0)
+        text = ((o.get("commentary") or {}).get("text") or {}).get("text") or ""
+        posts.append({"id": aid, "at": at, "eng": eng, "imp": a.get("imp"), "text": text})
     imps = [p["imp"] for p in posts if p["imp"] is not None]
     return {
         "posts7": len(posts),
         "replies7": None,  # LinkedIn comments you wrote aren't in the share feed; not guessed.
-        "engagement7": sum(p["eng"] for p in posts),
-        "impressions7": sum(imps) if imps else None,
-        "followers": followers,
+        # Creator analytics totals are what LinkedIn shows you; per-post sums are the fallback.
+        "engagement7": analytics.get("engagements") if analytics.get("engagements") is not None else sum(p["eng"] for p in posts),
+        "impressions7": analytics.get("impressions") if analytics.get("impressions") is not None else (sum(imps) if imps else None),
+        "followers": analytics.get("followers"),
         "days": sorted({p["at"].date().isoformat() for p in posts}),
         "items": [
-            {"source": "linkedin", "url": f"https://www.linkedin.com/feed/update/urn:li:activity:{p['id']}/",
-             "text": texts.get(p["id"], "")[:140], "at": p["at"].isoformat(), "engagement": p["eng"], "impressions": p["imp"]}
+            {"source": "linkedin", "kind": "post", "url": f"https://www.linkedin.com/feed/update/urn:li:activity:{p['id']}/",
+             "text": p["text"][:140], "at": p["at"].isoformat(), "engagement": p["eng"], "impressions": p["imp"]}
             for p in sorted(posts, key=lambda p: p["at"], reverse=True)[:10]
         ],
     }
@@ -263,6 +334,7 @@ async def linkedin_from_page(page) -> dict:
     prof = next((x for x in me["body"].get("included", []) if "publicIdentifier" in x), {})
     fsd = (prof.get("dashEntityUrn") or prof.get("entityUrn") or "").split(":")[-1]
     public_id = prof.get("publicIdentifier", "")
+    member = prof.get("objectUrn") or ""
     feed = await page.evaluate(
         VOYAGER_FETCH,
         "/voyager/api/identity/profileUpdatesV2?count=40&includeLongTermHistory=true"
@@ -271,9 +343,14 @@ async def linkedin_from_page(page) -> dict:
     )
     if feed["status"] != 200:
         raise RuntimeError(f"LinkedIn share feed HTTP {feed['status']}")
-    net = await page.evaluate(VOYAGER_FETCH, f"/voyager/api/identity/profiles/{public_id}/networkinfo")
-    followers = ((net.get("body") or {}).get("data") or {}).get("followersCount") if net["status"] == 200 else None
-    return summarize_linkedin(feed["body"], followers if isinstance(followers, int) else None, fsd)
+    analytics = await linkedin_analytics(page, public_id)
+    out = summarize_linkedin(feed["body"], member, analytics)
+    if analytics.get("reached") is not None:
+        out["reached7"] = analytics["reached"]
+    name = " ".join(filter(None, [prof.get("firstName"), prof.get("lastName")])) or public_id
+    out["profile"] = {"handle": public_id, "name": name, "url": f"https://www.linkedin.com/in/{public_id}/",
+                      "followers": out["followers"], "avatar": li_picture(me["body"])}
+    return out
 
 
 async def linkedin() -> dict:
@@ -293,9 +370,16 @@ async def linkedin() -> dict:
         except Exception as e:  # noqa: BLE001 — fall through to headless with the reason logged
             log(f"linkedin: Papr Chrome unavailable ({str(e)[:120]}), trying headless cookies")
         browser = await launch_headless(pw)
-        ctx = await browser.new_context()
-        await ctx.add_cookies([{"name": "li_at", "value": env("LINKEDIN_LI_AT"), "domain": ".linkedin.com", "path": "/",
-                                "secure": True, "httpOnly": True}])
+        ctx = await browser.new_context(user_agent=(
+            "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) "
+            "Chrome/141.0.0.0 Safari/537.36"), locale="en-US")
+        cookies = [{"name": "li_at", "value": env("LINKEDIN_LI_AT"), "domain": ".linkedin.com", "path": "/",
+                    "secure": True, "httpOnly": True}]
+        jsid = env("LINKEDIN_JSESSIONID").strip('"')
+        if jsid:  # Voyager reads JSESSIONID as the csrf token; li_at alone redirect-loops.
+            cookies.append({"name": "JSESSIONID", "value": f'"{jsid}"', "domain": ".www.linkedin.com", "path": "/",
+                            "secure": True})
+        await ctx.add_cookies(cookies)
         page = await ctx.new_page()
         await page.goto("https://www.linkedin.com/feed/", wait_until="domcontentloaded", timeout=45000)
         try:
@@ -364,7 +448,7 @@ def main() -> int:
         try:
             bird = find_bird()
             parts["x"] = x_via_bird(bird, x_auth, x_ct0) if bird else asyncio.run(x_via_playwright(x_auth, x_ct0))
-            sources["x"] = {"ok": True}
+            sources["x"] = {"ok": True, "profile": parts["x"].pop("profile", None)}
             log(f"x: {parts['x']['posts7']} posts, {parts['x']['replies7']} replies, {parts['x']['engagement7']} engagement")
         except Exception as e:  # noqa: BLE001
             sources["x"] = {"ok": False, "error": str(e)[:200]}
@@ -375,7 +459,7 @@ def main() -> int:
     if env("LINKEDIN_LI_AT"):
         try:
             parts["linkedin"] = asyncio.run(linkedin())
-            sources["linkedin"] = {"ok": True}
+            sources["linkedin"] = {"ok": True, "profile": parts["linkedin"].pop("profile", None)}
             log(f"linkedin: {parts['linkedin']['posts7']} posts, {parts['linkedin']['engagement7']} engagement")
         except Exception as e:  # noqa: BLE001
             sources["linkedin"] = {"ok": False, "error": str(e)[:200]}

@@ -48,6 +48,10 @@ Less is more. Minimalist, modern, simple. Focus on ONE job-to-be-done. Steve Job
 
 ---
 
+### Goal and progress pages
+
+Pages that show progress on a goal (Focus goal detail, OKRs, tracker dashboards) follow **`preloaded-goal-page-design`**. They're visual first: one payoff number, one chart of progress over time, real faces and logos, and the evidence as tiles. That skill also has the tracker data contract and research sources.
+
 ## Layer 1: Visual Foundations
 
 ### Visual Hierarchy

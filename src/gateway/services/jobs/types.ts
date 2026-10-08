@@ -40,6 +40,13 @@ export interface JobRecord {
   /** Custom API key names from Settings to inject as child-process env vars. */
   requiredKeys?: string[];
   requirements?: string[];
+  /**
+   * Platform browser (CDP) setup for jobs whose requirements need it (e.g. linkedin-api).
+   * "required" (default): a setup failure fails the run before the script starts.
+   * "best-effort": the failure is logged and passed to the script as PAPR_PLATFORM_CDP_ERROR, and the
+   * run continues — for multi-source jobs that report each source separately (Focus trackers).
+   */
+  platformCdp?: "required" | "best-effort";
   dependsOn?: JobDependency[];
   /** Job IDs this job calls at runtime via /api/jobs/run (for visualization only - not enforced) */
   runtimeCalls?: string[];
@@ -106,6 +113,13 @@ export interface CreateJobInput {
   /** Custom API key names from Settings to inject as child-process env vars. */
   requiredKeys?: string[];
   requirements?: string[];
+  /**
+   * Platform browser (CDP) setup for jobs whose requirements need it (e.g. linkedin-api).
+   * "required" (default): a setup failure fails the run before the script starts.
+   * "best-effort": the failure is logged and passed to the script as PAPR_PLATFORM_CDP_ERROR, and the
+   * run continues — for multi-source jobs that report each source separately (Focus trackers).
+   */
+  platformCdp?: "required" | "best-effort";
   dependsOn?: JobDependency[];
   /** Job IDs this job calls at runtime via /api/jobs/run (for visualization - shows dashed arrows in graph) */
   runtimeCalls?: string[];

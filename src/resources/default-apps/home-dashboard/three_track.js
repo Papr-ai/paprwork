@@ -1,38 +1,24 @@
 /* How a goal is measured outside chat. The server picks a tracker (Jev) and checks what you've
-   connected; this card shows the numbers, or one tap to start tracking. Hours in vs. results out
-   sit side by side so time spent on a priority can be weighed against what it produced. */
+   connected; this card is the one tap to start tracking. Once numbers arrive, ThreeHero shows
+   hours in vs. results out at the top of the goal page. */
 const ThreeTrack = {
   busy: false,
   num(n) {
     if (n == null) return '—';
-    return n >= 10000 ? `${Math.round(n / 1000)}k` : n >= 1000 ? `${(n / 1000).toFixed(1)}k` : String(n);
+    const k = (d) => `${(n / 1000).toFixed(d).replace(/\.0$/, '')}k`;
+    return n >= 1e6 ? `${(n / 1e6).toFixed(1).replace(/\.0$/, '')}M` : n >= 1e5 ? k(0) : n >= 1000 ? k(1) : String(n);
   },
   ago(iso) {
     const m = Math.round((Date.now() - new Date(iso).getTime()) / 60000);
     return m < 60 ? `${Math.max(1, m)}m ago` : m < 1440 ? `${Math.round(m / 60)}h ago` : `${Math.round(m / 1440)}d ago`;
-  },
-  /** "4.2h this week → 7 posts · 21 engagements" — the return on the time. */
-  roi(g, s) {
-    const h = g.signals?.hours7 || 0;
-    const out = [s.posts7 != null && `${s.posts7} posts`, s.engagement7 != null && `${this.num(s.engagement7)} engagements`,
-      s.impressions7 != null && `${this.num(s.impressions7)} views`].filter(Boolean);
-    if (!out.length) return '';
-    return `<p class="t3roi"><b>${Three.hours(h)}</b> in chats this week <span>→</span> ${out.join(' · ')}</p>`;
   },
   html(g) {
     const t = g.tracker;
     if (!t) return '';
     const esc = (x) => Three.esc(x);
     const gid = esc(g.id);
-    if (t.status === 'active' && t.metrics) {
-      const s = t.metrics.summary || {};
-      const keys = Object.keys(t.metrics.labels || {}).filter((k) => k in s);
-      const stats = keys.slice(0, 4).map((k) => `<div><b>${this.num(s[k])}</b><span>${esc(t.metrics.labels[k])}</span></div>`).join('');
-      const down = Object.entries(t.metrics.sources || {}).filter(([, v]) => !v.ok && v.error !== 'not connected')
-        .map(([k, v]) => `<li>${esc(k)}: ${esc(v.error || 'unavailable')}</li>`).join('');
-      return `<section class="hsec t3track"><h4>Results <em>${esc(this.ago(t.metrics.updatedAt))}</em></h4>
-        ${this.roi(g, s)}<div class="t3stat t3stat-sm">${stats}</div>${down ? `<ul class="t3warn">${down}</ul>` : ''}</section>`;
-    }
+    // Numbers live in the goal page hero (three_hero.js); this card only covers getting a tracker going.
+    if (t.status === 'active' && t.metrics) return '';
     if (t.status === 'active') {
       return `<section class="hsec t3track"><h4>Results</h4><p class="t3sub">Tracking ${esc(t.title)}. First numbers land after its first run.</p></section>`;
     }

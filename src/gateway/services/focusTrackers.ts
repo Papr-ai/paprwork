@@ -39,7 +39,11 @@ export interface TrackerTemplate {
   /** Jev criterion: which goals this tracker measures. */
   criterion: string;
   sources: TrackerSource[];
+  /** Keys passed to the job when present but not needed to count a source as connected. */
+  optionalKeys?: string[];
   metrics: Array<{ key: string; label: string }>;
+  /** The one number that proves the goal is paying off — the goal page's headline. Defaults to the first metric. */
+  hero?: string;
   /** Bundled script under resources/goal-trackers/<id>/. Absent → an agent builds the job. */
   script?: string;
   requirements?: string[];
@@ -56,13 +60,15 @@ export const TRACKER_TEMPLATES: TrackerTemplate[] = [
       { id: "linkedin", label: "LinkedIn", keys: [["LINKEDIN_LI_AT"]] },
       { id: "x", label: "X", keys: [["TWITTER_AUTH_TOKEN", "TWITTER_CT0"], ["X_AUTH_TOKEN", "X_CT0"]] },
     ],
+    optionalKeys: ["LINKEDIN_JSESSIONID"],
     metrics: [
       { key: "posts7", label: "Posts this week" },
       { key: "replies7", label: "Comments & replies" },
-      { key: "engagement7", label: "Reactions, replies, reposts" },
-      { key: "impressions7", label: "Impressions" },
+      { key: "engagement7", label: "Engagements" },
+      { key: "impressions7", label: "Views this week" },
       { key: "followers", label: "Followers" },
     ],
+    hero: "impressions7",
     script: "track.py",
     requirements: ["playwright", "linkedin-api"],
     cron: "0 21 * * *",
@@ -77,6 +83,7 @@ export const TRACKER_TEMPLATES: TrackerTemplate[] = [
       { key: "customers", label: "Paying customers" },
       { key: "new7", label: "New this week" },
     ],
+    hero: "mrr",
     cron: "0 7 * * *",
   },
   {
@@ -103,6 +110,7 @@ export const TRACKER_TEMPLATES: TrackerTemplate[] = [
       { key: "replies7", label: "Replies" },
       { key: "meetings7", label: "Meetings" },
     ],
+    hero: "meetings7",
     cron: "0 18 * * *",
   },
 ];
@@ -122,10 +130,17 @@ export interface MetricsFile {
   template: string;
   updatedAt: string;
   summary: Record<string, number | null>;
-  sources?: Record<string, { ok: boolean; error?: string }>;
+  /** profile = who the numbers belong to, so the goal page can show a real face/logo, not a label. */
+  sources?: Record<string, { ok: boolean; error?: string; profile?: TrackerProfile }>;
   history?: Array<{ date: string } & Record<string, number | string | null>>;
-  items?: Array<{ source: string; url?: string; text?: string; at?: string; engagement?: number; impressions?: number | null }>;
+  /** The evidence: posts, deals, people, companies. `at` drives the daily chart; image/domain give it a face. */
+  items?: Array<{
+    source: string; url?: string; text?: string; at?: string; engagement?: number; impressions?: number | null;
+    kind?: "post" | "person" | "company" | "event"; image?: string; domain?: string;
+  }>;
 }
+
+export interface TrackerProfile { handle?: string; name?: string; avatar?: string; url?: string; followers?: number | null }
 
 export interface TrackerState {
   status: "active" | "ready" | "needs_connect" | "buildable";
@@ -134,7 +149,12 @@ export interface TrackerState {
   jobId?: string;
   connected?: string[];
   missing?: string[];
-  metrics?: { updatedAt: string; summary: Record<string, number | null>; labels: Record<string, string>; sources?: MetricsFile["sources"] };
+  metrics?: {
+    updatedAt: string; summary: Record<string, number | null>; labels: Record<string, string>; sources?: MetricsFile["sources"];
+    hero?: string;
+    /** Last 30 daily snapshots and the newest evidence — what the goal page charts (progress over time). */
+    history?: MetricsFile["history"]; items?: MetricsFile["items"];
+  };
 }
 
 interface TrackersFile {
@@ -167,7 +187,11 @@ export function resolveTrackerState(input: {
   const t = input.template;
   const labels = Object.fromEntries((t?.metrics ?? []).map((m) => [m.key, m.label]));
   const metrics = input.metrics
-    ? { updatedAt: input.metrics.updatedAt, summary: input.metrics.summary, labels, sources: input.metrics.sources }
+    ? {
+        updatedAt: input.metrics.updatedAt, summary: input.metrics.summary, labels, sources: input.metrics.sources,
+        hero: t?.hero ?? t?.metrics[0]?.key ?? Object.keys(input.metrics.summary ?? {})[0],
+        history: (input.metrics.history ?? []).slice(-30), items: (input.metrics.items ?? []).slice(0, 30),
+      }
     : undefined;
   if (input.link && input.jobExists) {
     return { status: "active", template: t?.id ?? null, title: t?.title ?? "Custom tracker", jobId: input.link.jobId, metrics };
@@ -331,6 +355,19 @@ async function existingJobIds(): Promise<Set<string>> {
   }
 }
 
+/**
+ * The goal page is visual-first (a chart of progress over time, real faces and logos, the evidence as
+ * tiles). It can only draw what trackers send, so every tracker is asked for the same shape. Full design
+ * rationale + citations: src/resources/skills/goal-page-design.md (skill preloaded-goal-page-design).
+ */
+export const GOAL_PAGE_CONTRACT = [
+  `   Also send what the goal page draws (read_skill preloaded-goal-page-design):`,
+  `   - Put the ONE number that proves the goal is paying off first in summary (e.g. impressions7, revenue, signed). Summary is snapshotted daily into history, which becomes the progress chart.`,
+  `   - "items": the evidence, newest first, max 30: {"source", "url", "text" (<=140 chars), "at" (ISO time — drives the daily chart), "engagement"?, "impressions"?, "kind"?: "post"|"person"|"company"|"event", "image"? (https avatar/thumbnail), "domain"? (company site, e.g. "stripe.com" — the page shows its logo)}.`,
+  `   - sources.<name>.profile: {"handle", "name", "avatar" (https profile picture URL from the platform), "url", "followers"} so the page shows the real person or brand, not a label.`,
+  `   - Real images only: platform profile pictures, company domains for logos (look the domain up with web search if you only have a name). Never generate or guess images.`,
+];
+
 /** Prompt for the background agent that builds a tracker when no template script fits. */
 export function builderPrompt(goal: TrackerGoal, template: TrackerTemplate | undefined, gateway: string): string {
   const metrics = template?.metrics.map((m) => `${m.key} (${m.label})`).join(", ");
@@ -347,6 +384,7 @@ export function builderPrompt(goal: TrackerGoal, template: TrackerTemplate | und
     `3. The job must report with one HTTP call: POST ${gateway}/api/workspace/focus/metrics`,
     `   body {"goalId": "${goal.id}", "template": "${template?.id ?? "custom"}", "summary": {<metric>: <number>}, "sources": {<source>: {"ok": true|false, "error"?: "..."}}}`,
     `   Numbers only in summary; use null when a source is unavailable — never invent values.`,
+    ...GOAL_PAGE_CONTRACT,
     `4. Create it with create_job (appIds: ["bbb7e17e-c810-47ef-b9ce-c8a83c0cd16c"], folder "focus-trackers"), run it once, read its logs, and fix it until the POST succeeds.`,
     `5. Finish with POST ${gateway}/api/workspace/focus/tracker/link body {"goalId": "${goal.id}", "jobId": "<the job id>", "template": "${template?.id ?? "custom"}"}.`,
     `If a needed source is not connected, stop and say exactly which one (connect_platform request_connect) instead of guessing.`,
@@ -357,6 +395,18 @@ export async function linkTracker(goalId: string, jobId: string, template: strin
   const file = await readTrackers();
   file.links[goalId] = { template, jobId, createdAt: new Date().toISOString() };
   await writeJson(trackersPath(), file);
+}
+
+/**
+ * The user just tapped "Track this", so the first run is explicitly requested work: admit it through
+ * the interactive lane like run_job / startJobRunForApi. Started as plain background work it waited
+ * out the 120s maintenance grace whenever a chat was streaming, so the tracker card sat on
+ * "Waiting for execution capacity" with no numbers. (Active work is still never preempted.)
+ */
+function startNow(run: () => Promise<unknown>, what: string): void {
+  void import("./gatewayBackgroundBudget.js")
+    .then(({ gatewayBackgroundBudget }) => gatewayBackgroundBudget.runInteractive(run))
+    .catch((err) => console.warn(`[focus] ${what} failed:`, err instanceof Error ? err.message : err));
 }
 
 /** One tap from Focus: create (and start) the tracker job for a goal. */
@@ -377,7 +427,8 @@ export async function createTracker(goal: TrackerGoal): Promise<{ jobId: string;
     const keys = await configuredKeys();
     const conn = connectedSources(template, (k) => keys.has(k));
     if (!conn.size) throw new Error(`Connect ${template.sources.map((s) => s.label).join(" or ")} first`);
-    const requiredKeys = [...new Set([...conn.values()].flat())];
+    const optional = (template.optionalKeys ?? []).filter((k) => keys.has(k));
+    const requiredKeys = [...new Set([...[...conn.values()].flat(), ...optional])];
     const job = await svc.createJob({
       name: `Focus tracker · ${template.title}`,
       type: "python",
@@ -386,6 +437,8 @@ export async function createTracker(goal: TrackerGoal): Promise<{ jobId: string;
       command: `python3 track.py --goal ${JSON.stringify(goal.id)}`,
       requiredKeys,
       requirements: template.requirements,
+      // track.py reports each source separately; no LinkedIn browser must not cost the X numbers.
+      platformCdp: "best-effort",
       schedule: { enabled: true, cron: template.cron },
       retries: { maxAttempts: 2, backoffMs: 30_000 },
     });
@@ -395,7 +448,7 @@ export async function createTracker(goal: TrackerGoal): Promise<{ jobId: string;
     if (!jobDir || !src) throw new Error("Tracker script bundle not found");
     for (const f of await fs.readdir(src)) await fs.copyFile(path.join(src, f), path.join(jobDir, f));
     await linkTracker(goal.id, job.id, template.id);
-    void svc.runJob(job.id).catch((err) => console.warn("[focus] first tracker run failed:", err instanceof Error ? err.message : err));
+    startNow(() => svc.runJob(job.id), "first tracker run");
     return { jobId: job.id, kind: "script" };
   }
 
@@ -409,6 +462,6 @@ export async function createTracker(goal: TrackerGoal): Promise<{ jobId: string;
     maxTurns: 40,
   });
   await linkTracker(goal.id, builder.id, template?.id ?? null);
-  void svc.runJob(builder.id).catch((err) => console.warn("[focus] tracker builder failed:", err instanceof Error ? err.message : err));
+  startNow(() => svc.runJob(builder.id), "tracker builder");
   return { jobId: builder.id, kind: "builder" };
 }

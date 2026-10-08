@@ -12,6 +12,7 @@ export const JOB_CONFIG_FIELD_KEYS = [
   "folder",
   "command",
   "requirements",
+  "platformCdp",
   "requiredKeys",
   "dependsOn",
   "runtimeCalls",
