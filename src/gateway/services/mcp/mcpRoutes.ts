@@ -5,6 +5,7 @@
  *   POST   /api/mcp/servers                 { url, name? } add a custom server
  *   DELETE /api/mcp/servers/:id             remove a custom server
  *   POST   /api/mcp/servers/:id/connect     start OAuth (returns authUrl)
+ *   POST   /api/mcp/servers/:id/cancel      abandon an in-flight sign-in
  *   POST   /api/mcp/servers/:id/disconnect  sign out + delete credentials
  *   GET    /api/mcp/servers/:id/tools       tool list (name, description, schema)
  *   POST   /api/mcp/call                    { server, tool, arguments } — for jobs
@@ -62,6 +63,16 @@ export function registerMcpRoutes(app: Express): void {
     try {
       const { status } = await svc.connect(pid(req));
       res.json({ server: status });
+    } catch (e) {
+      res.status(400).json({ error: msg(e) });
+    }
+  });
+
+  app.post("/api/mcp/servers/:id/cancel", async (req: Request, res: Response) => {
+    const svc = svcOr503(res);
+    if (!svc) return;
+    try {
+      res.json({ server: await svc.cancelSignIn(pid(req)) });
     } catch (e) {
       res.status(400).json({ error: msg(e) });
     }

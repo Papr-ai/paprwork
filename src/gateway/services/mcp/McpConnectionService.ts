@@ -43,6 +43,8 @@ export interface McpServerStatus {
   name: string;
   url: string;
   description?: string;
+  category?: string;
+  verified: boolean;
   custom: boolean;
   requiresClientId: boolean;
   state: McpConnectionState;
@@ -67,6 +69,8 @@ interface Live {
   error?: string;
   authUrl?: string;
   pending?: Promise<McpServerStatus>;
+  /** Abort an in-flight interactive sign-in (frees its loopback port). */
+  cancelSignIn?: () => void;
 }
 
 // Generous: users often have to log in to the service first, then approve.
@@ -189,6 +193,8 @@ export class McpConnectionService {
       name: def.name,
       url: def.url,
       description: def.description,
+      category: def.category ?? (def.custom ? "Custom" : undefined),
+      verified: Boolean(def.verified),
       custom: Boolean(def.custom),
       requiresClientId: Boolean(def.requiresClientId && !def.clientId),
       state: l?.state ?? "disconnected",
@@ -290,6 +296,7 @@ export class McpConnectionService {
     l.error = undefined;
     const state = randomBytes(16).toString("hex");
     const cb = await startLoopbackCallback({ expectedState: state, serviceName: def.name, timeoutMs: SIGN_IN_TIMEOUT_MS });
+    l.cancelSignIn = () => cb.close();
     const provider = this.makeProvider(def, true, cb.redirectUri, state);
     const transport = this.makeTransport(def, provider);
     const client = new Client({ name: "papr-work", version: "2" }, { capabilities: {} });
@@ -322,6 +329,7 @@ export class McpConnectionService {
       } finally {
         cb.close();
         l.pending = undefined;
+        l.cancelSignIn = undefined;
         redirected!();
       }
     })();
@@ -384,10 +392,26 @@ export class McpConnectionService {
     }
   }
 
+  /** Abandon an in-flight sign-in (user closed the browser tab, clicked Cancel). */
+  async cancelSignIn(id: string): Promise<McpServerStatus> {
+    const def = await this.getServer(id);
+    if (!def) throw new Error(`Unknown MCP server "${id}"`);
+    const l = this.entry(id);
+    l.cancelSignIn?.();
+    if (l.pending) await l.pending.catch(() => {});
+    if (l.state !== "connected") {
+      l.state = "disconnected";
+      l.error = undefined;
+      l.authUrl = undefined;
+    }
+    return this.statusOf(def);
+  }
+
   async disconnect(id: string): Promise<McpServerStatus> {
     const def = await this.getServer(id);
     if (!def) throw new Error(`Unknown MCP server "${id}"`);
     const l = this.entry(id);
+    l.cancelSignIn?.();
     await l.client?.close().catch(() => {});
     if (this.sink) for (const tid of l.agentToolIds) this.sink.unregister(tid);
     this.live.set(id, { state: "disconnected", tools: [], agentToolIds: [] });
@@ -396,6 +420,7 @@ export class McpConnectionService {
   }
 
   async shutdown(): Promise<void> {
+    for (const l of this.live.values()) l.cancelSignIn?.();
     await Promise.allSettled([...this.live.values()].map((l) => l.client?.close()));
   }
 }

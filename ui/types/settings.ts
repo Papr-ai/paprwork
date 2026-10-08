@@ -77,6 +77,7 @@ export type SettingsTab =
   | "cloud"
   | "databases"
   | "platforms"
+  | "connections"
   | "profile"
   | "billing"
   | "permissions"
