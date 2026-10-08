@@ -151,7 +151,7 @@ export function shouldUseTursoReplicaForSource(source: AppDataSource): boolean {
   });
 }
 
-function resolveTursoDatabaseForReplicaSource(source: AppDataSource): string {
+export function resolveTursoDatabaseForReplicaSource(source: AppDataSource): string {
   const record = resolveRegistryRecordForSource(source);
   const callerUserId = getPaprUserId();
   const suffixUserId =
