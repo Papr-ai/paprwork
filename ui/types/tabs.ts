@@ -36,6 +36,7 @@ export interface Tab {
   childTabIds: string[]; // If parent: [leftChildId?, rightChildId?] (max 2)
   displayMode: DisplayMode; // 'standalone' | 'parent' | 'child'
   position?: "left" | "right"; // Position within parent (for children only)
+  chatHidden?: boolean; // Parent only: collapse the chat pane so the child (app/doc) fills the view
 
   // Status indicators (for chat tabs)
   isStreaming?: boolean; // Blue pulsing dot — agent actively working
