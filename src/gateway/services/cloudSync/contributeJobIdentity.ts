@@ -17,6 +17,8 @@
  *    actually ran); the collaborator's stale copy under the publisher's id is
  *    left out;
  *  - a duplicate nothing calls is left out.
+ * Only when the app no longer calls the publisher's job: if it calls both,
+ * the same-name job runs alongside and ships as a new job.
  * Jobs with a new name are genuinely new and ship unchanged.
  */
 
@@ -66,12 +68,17 @@ export function planJobFold(input: {
     if (publisherIds.has(job.id)) continue;
     const target = publisherByName.get(normName(job.name));
     if (!target) continue; // genuinely new job
-    if (input.appCode.includes(job.id) && !claimed.has(target)) {
-      remap.set(job.id, target);
-      claimed.add(target);
-    } else {
-      drop.add(job.id);
+    if (!input.appCode.includes(job.id)) {
+      drop.add(job.id); // nothing calls it
+      continue;
     }
+    // The app still calls the publisher's job too: the duplicate runs next to
+    // it, so it is a genuinely new job (same name or not). Ship it as new.
+    if (input.appCode.includes(target) || claimed.has(target)) continue;
+    // The app switched from the publisher's job to the duplicate: it is the
+    // collaborator's edited copy of that job.
+    remap.set(job.id, target);
+    claimed.add(target);
   }
   return { remap, drop };
 }

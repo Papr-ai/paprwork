@@ -58,6 +58,16 @@ describe("planJobFold", () => {
     expect(plan.drop.size).toBe(0);
   });
 
+  it("keeps a same-name job as new when the app still calls the publisher's job too", () => {
+    const plan = planJobFold({
+      localJobs: [{ id: PUB, name: "LinkedIn Search Scraper" }, { id: DUP, name: "LinkedIn Search Scraper" }],
+      publisherJobs,
+      appCode: `export const SCRAPER_JOB = '${PUB}'; export const SALESNAV_JOB = '${DUP}';`,
+    });
+    expect(plan.remap.size).toBe(0);
+    expect(plan.drop.size).toBe(0);
+  });
+
   it("rewrites whole ids in code", () => {
     expect(remapJobIdsInContent(`const J='${DUP}'`, new Map([[DUP, PUB]]))).toBe(`const J='${PUB}'`);
   });
