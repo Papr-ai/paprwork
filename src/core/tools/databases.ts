@@ -41,7 +41,8 @@ const deleteDatabaseSchema = z.object({
     .boolean()
     .optional()
     .describe(
-      "When true and no app references remain, delete Turso replica. Default false. " +
+      "Also delete the cloud (Turso) copy. Default true — a tombstoned database's cloud copy is " +
+        "otherwise orphaned. Pass false to keep the cloud copy. " +
         "Never applies on team track/shared installs (local tombstone only). " +
         "Publisher-only for shared-primary team databases.",
     ),
@@ -188,7 +189,7 @@ export const deleteDatabaseTool = createTool({
     "Tombstone a registry database when no apps reference it. " +
     "On team track/shared installs you are a collaborator on, this removes the local registry row only (no cloud upload, no Turso delete). " +
     "Publisher shared-primary databases cannot be deleted by collaborators — unlink from apps or remove your local app install. " +
-    "Optionally delete Turso replica when deleteTurso=true (publisher-only for shared resources; default false). " +
+    "Also deletes the cloud (Turso) copy unless deleteTurso=false (never for shared installs you collaborate on). " +
     "NEVER use to fix schema drift or cutover — that destroys cloud row data. " +
     "For legacy→replica migration use `npm run cutover:replica -- --db-id=<dbId>` (preserves the existing Turso instance).",
   inputSchema: deleteDatabaseSchema,
@@ -236,7 +237,8 @@ export const deleteDatabaseTool = createTool({
     });
 
     let tursoDeleted = false;
-    const deleteTurso = deleteScope.localOnly ? false : args.deleteTurso === true;
+    const deleteTurso = deleteScope.localOnly ? false : args.deleteTurso !== false;
+    let cloudNote: string | undefined;
     if (deleteTurso) {
       const { getTursoSyncBridge } = await import(
         "../../gateway/services/TursoSyncBridge.js"
@@ -247,6 +249,15 @@ export const deleteDatabaseTool = createTool({
           record.tursoShortName,
         );
       }
+      if (!tursoDeleted) {
+        cloudNote =
+          `Cloud copy ${record.tursoShortName} was not deleted (not signed in, cloud sync off, ` +
+          "or it never existed). Local copy is tombstoned.";
+      }
+    } else {
+      cloudNote = deleteScope.localOnly
+        ? "Shared team database: only your local copy was removed; the publisher's cloud copy is kept."
+        : `Cloud copy ${record.tursoShortName} kept (deleteTurso: false).`;
     }
 
     return {
@@ -256,6 +267,7 @@ export const deleteDatabaseTool = createTool({
         tombstoned: true,
         tursoDeleted,
         localOnly: deleteScope.localOnly || undefined,
+        ...(cloudNote ? { cloudNote } : {}),
       },
     };
   },

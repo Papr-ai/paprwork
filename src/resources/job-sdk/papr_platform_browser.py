@@ -101,6 +101,9 @@ async def connect_platform_browser(playwright: Any, host_fragment: str = "linked
     Do NOT call browser.new_page() — that creates a fresh logged-out session.
     Always reuse the platform tab exposed over CDP.
     """
+    setup_error = os.environ.get("PAPR_PLATFORM_CDP_ERROR", "").strip()
+    if setup_error:  # best-effort job: Papr already tried and failed to prepare the browser
+        raise PaprPlatformBrowserError(f"Papr could not prepare the platform browser: {setup_error}")
     cdp_url = default_cdp_url()
     try:
         browser = await playwright.chromium.connect_over_cdp(cdp_url)

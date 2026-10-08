@@ -3475,6 +3475,51 @@ async function startGateway(): Promise<void> {
       }
     });
 
+    // Goal trackers — one tap from a Focus goal creates the job that measures it (focusTrackers.ts).
+    app.post("/api/workspace/focus/tracker", async (req, res) => {
+      try {
+        const goalId = String((req.body as { goalId?: string })?.goalId ?? "");
+        const { getFocus } = await import("./services/focusGoals.js");
+        const goal = (await getFocus()).three.find((g) => g.id === goalId);
+        if (!goal) {
+          res.status(404).json({ error: "Not one of your three" });
+          return;
+        }
+        const { createTracker } = await import("./services/focusTrackers.js");
+        res.json(await createTracker({ id: goal.id, title: goal.title, target: goal.target, scope: goal.scope }));
+      } catch (error) {
+        const message = error instanceof Error ? error.message : String(error);
+        res.status(message.startsWith("Connect ") ? 409 : 500).json({ error: message });
+      }
+    });
+
+    // A tracker builder agent registers the job it created.
+    app.post("/api/workspace/focus/tracker/link", async (req, res) => {
+      try {
+        const body = (req.body ?? {}) as { goalId?: string; jobId?: string; template?: string | null };
+        if (!body.goalId || !body.jobId) {
+          res.status(400).json({ error: "goalId and jobId are required" });
+          return;
+        }
+        const { linkTracker } = await import("./services/focusTrackers.js");
+        await linkTracker(body.goalId, body.jobId, body.template ?? null);
+        res.json({ ok: true });
+      } catch (error) {
+        res.status(500).json({ error: error instanceof Error ? error.message : String(error) });
+      }
+    });
+
+    // Tracker jobs report their numbers here; Focus shows them beside the hours spent.
+    app.post("/api/workspace/focus/metrics", async (req, res) => {
+      try {
+        const { recordMetrics } = await import("./services/focusTrackers.js");
+        res.json(await recordMetrics((req.body ?? {}) as Parameters<typeof recordMetrics>[0]));
+      } catch (error) {
+        const message = error instanceof Error ? error.message : String(error);
+        res.status(message.includes("required") ? 400 : 500).json({ error: message });
+      }
+    });
+
     // Nudges — at most one sentence a day from your agent, only at a breakpoint the renderer picked.
     // Policy (caps, quiet hours, backoff, mutes) in services/nudgePolicy.ts; jobs may propose, never force.
     app.get("/api/nudge/next", async (_req, res) => {
