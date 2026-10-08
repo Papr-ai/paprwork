@@ -329,23 +329,32 @@ function issueRows(status: AppCloudSyncStatus, input: SyncPanelInput): PanelRow[
       action: { id: "get_updates", label: input.pulling ? "Getting updates…" : "Get updates", disabled: input.pulling },
     });
   }
+  const failure = failureRow(input, status);
+  if (failure && !rows.some((r) => r.tone === "bad")) rows.push(failure);
+  return rows;
+}
+
+/** The last publish failed: say why, offer Publish again (Ask agent is in the foot). */
+function failureRow(input: SyncPanelInput, status: AppCloudSyncStatus | null): PanelRow | null {
   const failure =
     input.error?.trim() ||
-    (status.uploadStatus === "failed" && !status.uploadRetryPending
+    (status?.uploadStatus === "failed" && !status.uploadRetryPending
       ? status.uploadDetail?.trim() || status.uploadLabel?.trim() || "Publish failed"
       : "") ||
-    status.codeLastError?.trim() ||
+    status?.codeLastError?.trim() ||
     "";
-  if (failure && !rows.some((r) => r.tone === "bad")) {
-    rows.push({
-      kind: "issue",
-      title: "Last publish didn't finish",
-      value: failure.length > 120 ? `${failure.slice(0, 119)}…` : failure,
-      tone: "bad",
-      action: { id: "ask_agent", label: "Ask agent" },
-    });
-  }
-  return rows;
+  if (!failure) return null;
+  return {
+    kind: "issue",
+    title: "Last publish didn't finish",
+    value: failure.length > 120 ? `${failure.slice(0, 119)}…` : failure,
+    tone: "bad",
+    action: {
+      id: "publish",
+      label: input.pushing ? "Publishing…" : "Publish again",
+      disabled: input.pushing,
+    },
+  };
 }
 
 /** Removals that need a decision. Nothing here is ever deleted without one. */
@@ -407,6 +416,10 @@ export function buildSyncPanel(input: SyncPanelInput): SyncPanel {
     const data = dataRow(status, input);
     if (data) rows.push(data);
     rows.push(...issueRows(status, input));
+  } else {
+    // Status not loaded (e.g. the publish request itself failed): still explain it.
+    const failure = failureRow(input, null);
+    if (failure) rows.push(failure);
   }
   rows.push(...deleteRows(input));
 

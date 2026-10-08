@@ -111,3 +111,26 @@ describe("syncPanelModel", () => {
     expect(p.note).toMatch(/back online/);
   });
 });
+
+describe("syncPanelModel: failed publish", () => {
+  it("a failed publish request shows the reason with Publish again, even before status loads", () => {
+    const p = buildSyncPanel(base({ status: null, live: true, error: "Couldn't reach Papr Cloud. Check your connection and try again." }));
+    expect(p.rows).toHaveLength(1);
+    expect(p.rows[0].title).toBe("Last publish didn't finish");
+    expect(p.rows[0].value).toContain("Couldn't reach Papr Cloud");
+    expect(p.rows[0].action).toMatchObject({ id: "publish", label: "Publish again" });
+    expect(p.offerAgent).toBe(true);
+  });
+
+  it("Publish again is disabled while the retry is running", () => {
+    const p = buildSyncPanel(base({ error: "fetch failed", pushing: true }));
+    const row = p.rows.find((r) => r.title === "Last publish didn't finish");
+    expect(row?.action).toMatchObject({ id: "publish", label: "Publishing…", disabled: true });
+  });
+
+  it("once the error clears, the card goes back to calm", () => {
+    const p = buildSyncPanel(base({ error: null }));
+    expect(p.rows).toEqual([]);
+    expect(p.offerAgent).toBe(false);
+  });
+});

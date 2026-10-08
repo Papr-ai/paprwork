@@ -107,7 +107,6 @@ import type { CloudCompatibilityReport } from "../../../src/core/types/cloudAppC
 import type { CloudPublishReadinessReport } from "../../../src/core/types/cloudAppDependencies";
 import { linkedDepItems } from "./ShareLinkedDeps";
 import { PreviewUrlRow } from "./PreviewUrlRow";
-import { PublishBarErrorNotice } from "./PublishBarErrorNotice";
 import { SyncStatusPanel, type ConflictChoice } from "./SyncStatusPanel";
 import { buildSyncPanel, type PanelAction, type PanelTone, type UpdatePreview } from "../../utils/syncPanelModel";
 import {
@@ -116,7 +115,11 @@ import {
   previewOwnUpdate,
   type CodeChangeSet,
 } from "../../utils/cloudTrackSyncApi";
-import { buildMergeAfterUpdateAgentPrompt, buildMergeAllAgentPrompt } from "../../utils/openCloudSyncAgentChat";
+import {
+  buildMergeAfterUpdateAgentPrompt,
+  buildMergeAllAgentPrompt,
+  buildUploadFailureAgentPrompt,
+} from "../../utils/openCloudSyncAgentChat";
 import "./MiniAppPublishBar.css";
 import "./AppWorkspaceMenu.css";
 import "./AppWorkspacePanelMenu.css";
@@ -350,7 +353,6 @@ export function MiniAppPublishBar({
       })
       .finally(() => setCompatLoading(false));
   }, [publishReviewOpen, appId, cloud.compatibility]);
-  const [publishErrorDetailOpen, setPublishErrorDetailOpen] = useState(false);
   /** Post-publish nudge on the Propose ▾ only — no strip under the bar. */
   const [proposeNudgeMessage, setProposeNudgeMessage] = useState<string | null>(
     null,
@@ -917,11 +919,6 @@ export function MiniAppPublishBar({
     webSyncState === "syncing";
   const cloudPublishFailed =
     Boolean(cloud.errorDetail) && !needsDesktopAck;
-  useEffect(() => {
-    if (!cloudPublishFailed) {
-      setPublishErrorDetailOpen(false);
-    }
-  }, [cloudPublishFailed]);
 
   const publishBarStatus = resolvePublishBarStatus({
     live: cloud.live,
@@ -1200,8 +1197,10 @@ export function MiniAppPublishBar({
   }, [appId, webSyncPopoverOpen, updateAvailable, isTrackCollaborator, webSyncLastCheckedAt, collabEditsTick, panelChangesTick]);
 
   const handlePublishStatusChipClick = () => {
+    // A failed publish opens the same status card as every other sync problem:
+    // the reason, Publish again and Ask agent — not a separate dialog.
     if (cloudPublishFailed) {
-      setPublishErrorDetailOpen(true);
+      setWebSyncPopoverOpen(true);
       return;
     }
     if (
@@ -1370,6 +1369,10 @@ export function MiniAppPublishBar({
   };
 
   const handleWebSyncPushOrPublish = async (pullFirst = false) => {
+    // A new attempt replaces the last failure. Without this a live app kept
+    // saying "Last publish failed" after a push that went through, because
+    // the push path never touched the publish hook's error.
+    if (cloud.live) cloud.clearError();
     // Team-data copies never publish (their code goes by proposal); push
     // keeps their shared rows flowing. Every other copy publishes itself.
     if (!cloud.live && onTeamData) {
@@ -1573,7 +1576,9 @@ export function MiniAppPublishBar({
       : null,
     pushing: webSyncPushing || Boolean(shareSyncNotice),
     pulling: webSyncPulling || upstreamPulling,
-    error: webSyncError,
+    // A failed Publish (the request itself threw) shows here too, so there is
+    // one card for every failure.
+    error: webSyncError ?? (cloudPublishFailed ? cloud.errorDetail : null),
     live: cloud.live || onTeamData,
   });
 
@@ -1638,7 +1643,9 @@ export function MiniAppPublishBar({
         void applyPanelUpdate({});
         return;
       case "ask_agent":
-        if (webSyncStatus) {
+        if (cloudPublishFailed && cloud.errorDetail) {
+          openCloudSyncAgentChat(buildUploadFailureAgentPrompt({ appId, error: cloud.errorDetail }));
+        } else if (webSyncStatus) {
           openCloudSyncAgentChat(buildGenericSyncAgentPrompt({ appId, status: webSyncStatus }));
         }
         return;
@@ -1883,36 +1890,6 @@ export function MiniAppPublishBar({
                 Web
               </button>
             </div>
-            {webSyncPopoverOpen && webSyncPopoverPos
-              ? createPortal(
-                  <SyncStatusPanel
-                    popoverRef={webSyncPopoverRef}
-                    className="sync7--portal"
-                    style={{
-                      position: "fixed",
-                      top: webSyncPopoverPos.top,
-                      left: webSyncPopoverPos.left,
-                      zIndex: 10000,
-                    }}
-                    panel={syncPanel}
-                    checking={webSyncRefreshing || (webSyncLoading && !webSyncStatus)}
-                    lastCheckedAt={webSyncLastCheckedAt}
-                    onCheckStatus={() => void webSyncCheckStatus()}
-                    onAction={runPanelAction}
-                    onApplyUpdate={(choices) => void applyPanelUpdate(choices)}
-                    onAskAgentMergeAll={(files) =>
-                      openCloudSyncAgentChat(
-                        buildMergeAllAgentPrompt({
-                          appId,
-                          files,
-                          publisherSlug: isTrackCollaborator ? cloudLineage?.sourceSlug : undefined,
-                        }),
-                      )
-                    }
-                  />,
-                  document.body,
-                )
-              : null}
           </div>
         ) : (
           <AppWorkspacePanelMenu
@@ -1921,6 +1898,39 @@ export function MiniAppPublishBar({
             jobCount={linkedJobCount}
           />
         )}
+
+        {/* Status card: opens from the chip in Preview and, after a failed
+            publish, in Files mode too. */}
+        {webSyncPopoverOpen && webSyncPopoverPos
+          ? createPortal(
+              <SyncStatusPanel
+                popoverRef={webSyncPopoverRef}
+                className="sync7--portal"
+                style={{
+                  position: "fixed",
+                  top: webSyncPopoverPos.top,
+                  left: webSyncPopoverPos.left,
+                  zIndex: 10000,
+                }}
+                panel={syncPanel}
+                checking={webSyncRefreshing || (webSyncLoading && !webSyncStatus)}
+                lastCheckedAt={webSyncLastCheckedAt}
+                onCheckStatus={() => void webSyncCheckStatus()}
+                onAction={runPanelAction}
+                onApplyUpdate={(choices) => void applyPanelUpdate(choices)}
+                onAskAgentMergeAll={(files) =>
+                  openCloudSyncAgentChat(
+                    buildMergeAllAgentPrompt({
+                      appId,
+                      files,
+                      publisherSlug: isTrackCollaborator ? cloudLineage?.sourceSlug : undefined,
+                    }),
+                  )
+                }
+              />,
+              document.body,
+            )
+          : null}
 
         {workspaceMode === "preview" && previewDisplayUrl ? (
           <PreviewUrlRow
@@ -1940,16 +1950,6 @@ export function MiniAppPublishBar({
         <div className="mini-app-publish-bar__actions">
           {cloud.toast ? (
             <span className="mini-app-publish-bar__toast">{cloud.toast}</span>
-          ) : null}
-          {cloudPublishFailed && cloud.errorDetail ? (
-            <PublishBarErrorNotice
-              hideInlineTrigger
-              detailOpen={publishErrorDetailOpen}
-              onDetailOpenChange={setPublishErrorDetailOpen}
-              summary="Failed to publish"
-              detail={cloud.errorDetail}
-              onDismiss={cloud.clearError}
-            />
           ) : null}
 
           {/* Files/Preview moved into the overflow: it is a mode switch, not an
