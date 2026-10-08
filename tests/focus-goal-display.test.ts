@@ -95,12 +95,11 @@ test("usd and percent heroes format", () => {
   expect(h.fmt(7, undefined)).toBe("7");
 });
 
-test("a person tile gets a round avatar, a post keeps its thumbnail", () => {
+test("a person tile shows the full photo, cropped toward the face", () => {
   const h = load();
   const person = h.best([{ source: "review", kind: "person", text: "Ada", image: "https://example.com/a.jpg" }]);
   const post = h.best([{ source: "x", kind: "post", text: "hi", image: "https://example.com/p.jpg", impressions: 5 }]);
-  expect(person).toContain("hh-person");
-  expect(person).not.toContain("hh-thumb");
+  expect(person).toContain("hh-thumb hh-photo");
   expect(post).toContain("hh-thumb");
 });
 
