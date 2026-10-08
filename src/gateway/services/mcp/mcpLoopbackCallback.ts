@@ -68,8 +68,9 @@ export async function startLoopbackCallback(opts: {
     } else if (!code) {
       send(400, page(false, "Sign-in didn't finish", "No authorization code came back."));
     } else if (state !== opts.expectedState) {
-      send(400, page(false, "Sign-in didn't finish", "The sign-in response didn't match this request. Try again from Papr Work."));
-      finish(new Error("OAuth state mismatch"));
+      // A stale tab from an earlier attempt landed here. Reject it, but keep
+      // waiting: it must not abort the sign-in the user is doing right now.
+      send(400, page(false, "This sign-in link is out of date", "Close this tab and approve in the most recent sign-in tab."));
     } else {
       send(200, page(true, `${esc(opts.serviceName)} connected`, "Head back to Papr Work. You can close this tab."));
       finish(null, code);

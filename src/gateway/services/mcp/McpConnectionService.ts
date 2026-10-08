@@ -69,7 +69,8 @@ interface Live {
   pending?: Promise<McpServerStatus>;
 }
 
-const SIGN_IN_TIMEOUT_MS = 5 * 60_000;
+// Generous: users often have to log in to the service first, then approve.
+const SIGN_IN_TIMEOUT_MS = 15 * 60_000;
 const CALL_TIMEOUT_MS = 120_000;
 
 export interface McpConnectionServiceOptions {
