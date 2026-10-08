@@ -33,6 +33,9 @@ export function classifyError(error: unknown): ErrorType {
   const msg = toErrorMessage(error).toLowerCase();
   const code = (error as { code?: unknown } | null | undefined)?.code;
 
+  // A declared tool/package that is not installed will not appear on retry.
+  if (code === "missing_dependency") return "permanent";
+
   // Transient (retryable) errors
   if (msg.includes("rate limit") || msg.includes("429")) return "transient";
   if (msg.includes("too many requests")) return "transient";
