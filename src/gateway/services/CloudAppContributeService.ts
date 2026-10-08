@@ -23,6 +23,7 @@ import {
 } from "./cloudSync/resolveAppDependentJobs.js";
 import { resolveMigrationRootFromDbPath } from "./jobs/databaseMigrations.js";
 import { applyIdRemapsToDirectory } from "../utils/applyIdRemaps.js";
+import { isProposalExcludedAppPath } from "./cloudSync/contributeProposalPaths.js";
 import { mergeContributeDataIndexesIntoRepo } from "./cloudSync/contributeDataIndexMerge.js";
 import { buildProposalChangeSet, type ProposalTree } from "./cloudSync/contributeChangeSet.js";
 import {
@@ -509,7 +510,12 @@ async function foldDuplicateJobs(
   const publisherIds = new Set(publisherJobs.map((j) => j.id));
   const app = staged.find((t) => t.kind === "app");
   const appCode = app
-    ? [...app.files].filter(([rel]) => !rel.startsWith("jobs/")).map(([, c]) => c).join("\n")
+    ? [...app.files]
+        // Source only: build outputs (dist/) are stale copies that still
+        // name the job the source stopped calling.
+        .filter(([rel]) => !rel.startsWith("jobs/") && !isProposalExcludedAppPath(rel))
+        .map(([, c]) => c)
+        .join("\n")
     : "";
   const localJobs = jobTrees.map((t) => {
     let name: string | undefined;
