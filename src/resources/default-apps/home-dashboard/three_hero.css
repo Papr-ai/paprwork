@@ -39,6 +39,15 @@
 .hh-bar.is-full { background: var(--hh-accent); }
 .hh-col em { position: absolute; bottom: -18px; font-style: normal; font-size: 11px; color: var(--soft); }
 .hh-col.is-today em { color: var(--ink); font-weight: 600; }
+/* A tracker's own series: a zero line, values on the bars, worse-than-baseline bars hang below in the down tone. */
+.hh-div { display: block; height: 136px; padding: 16px 0 18px; }
+.hh-plot { position: relative; height: 100%; display: grid; grid-auto-flow: column; grid-auto-columns: 1fr; gap: 8px; }
+.hh-div .hh-col { display: block; }
+.hh-div .hh-bar { position: absolute; left: 50%; transform: translateX(-50%); min-height: 0; }
+.hh-bar.is-neg { background: color-mix(in srgb, var(--hh-down) 55%, transparent); }
+.hh-zero { position: absolute; left: 0; right: 0; border-top: 1px solid var(--soft); opacity: .6; pointer-events: none; }
+.hh-val { position: absolute; left: 50%; bottom: calc(100% + 3px); transform: translateX(-50%); font-size: 10.5px; font-weight: 600; color: var(--mid); white-space: nowrap; font-variant-numeric: tabular-nums; }
+.hh-div .hh-col em { bottom: -18px; left: 50%; transform: translateX(-50%); white-space: nowrap; }
 
 /* The evidence as tiles: logo or picture, two lines of text, the number that mattered. */
 .hh-best { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 8px; }

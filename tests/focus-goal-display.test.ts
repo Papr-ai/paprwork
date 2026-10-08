@@ -103,3 +103,10 @@ test("a person tile gets a round avatar, a post keeps its thumbnail", () => {
   expect(person).not.toContain("hh-thumb");
   expect(post).toContain("hh-thumb");
 });
+
+test("cleanDisplay keeps negative bars and the neg tone (points below a baseline)", () => {
+  const d = cleanDisplay({ format: "pts", chart: { caption: "Best score per run vs baseline", bars: [
+    { label: "v67", value: -0.52, tone: "neg" }, { label: "v70", value: 0.87, tone: "full" },
+  ] } });
+  expect(d?.chart?.bars).toEqual([{ label: "v67", value: -0.52, tone: "neg" }, { label: "v70", value: 0.87, tone: "full" }]);
+});

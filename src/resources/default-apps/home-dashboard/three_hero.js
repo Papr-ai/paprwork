@@ -38,11 +38,21 @@ const ThreeHero = {
     return `<div class="hh-bars">${line}${cols.map((c) => `<div class="hh-col${c.today ? ' is-today' : ''}" title="${Three.esc(c.title)}">
       <span class="hh-bar ${c.cls}" style="height:${c.v ? Math.max(8, (c.v / max) * 100) : 0}%"></span><em>${Three.esc(c.label)}</em></div>`).join('')}</div>`;
   },
+  /** A tracker's own series. Each bar names its value; below-zero values (worse than a baseline) hang under a zero line. */
+  diverge(cols) {
+    const hi = Math.max(0, ...cols.map((c) => c.v)), lo = Math.min(0, ...cols.map((c) => c.v)), span = hi - lo || 1, z = (-lo / span) * 100;
+    const bar = (c) => { const h = Math.max(3, (Math.abs(c.v) / span) * 100);
+      return c.v < 0 ? `top:${(100 - z).toFixed(2)}%;height:${h.toFixed(2)}%` : `bottom:${z.toFixed(2)}%;height:${h.toFixed(2)}%`; };
+    const zero = lo < 0 ? `<i class="hh-zero" style="bottom:${z.toFixed(2)}%"></i>` : '';
+    return `<div class="hh-bars hh-div"><div class="hh-plot">${zero}${cols.map((c) => `<div class="hh-col${c.today ? ' is-today' : ''}" title="${Three.esc(c.title)}">
+      <span class="hh-bar ${c.cls}" style="${bar(c)}"><b class="hh-val">${Three.esc(c.tip)}</b></span><em>${Three.esc(c.label)}</em></div>`).join('')}</div></div>`;
+  },
   chart(m, nSrc) {
     const c = m.display?.chart;
     if (c?.bars?.length) {
-      const cols = c.bars.map((x, i) => ({ v: Math.max(0, x.value), today: i === c.bars.length - 1, cls: x.tone === 'full' ? 'is-full' : x.tone === 'part' ? 'is-part' : '', label: x.label, title: x.title || `${x.label} · ${ThreeTrack.num(x.value)}` }));
-      return `<div class="hh-chart"><p class="hh-cap">${Three.esc(c.caption)}</p>${this.bars(cols, c.target || 0)}</div>`;
+      const f = m.display?.format;
+      const cols = c.bars.map((x, i) => ({ v: x.value, today: i === c.bars.length - 1, cls: x.value < 0 || x.tone === 'neg' ? 'is-neg' : x.tone === 'full' ? 'is-full' : x.tone === 'part' ? 'is-part' : '', label: x.label, tip: this.fmt(x.value, f), title: x.title || `${x.label} · ${this.fmt(x.value, f)}` }));
+      return `<div class="hh-chart"><p class="hh-cap">${Three.esc(c.caption)}</p>${this.diverge(cols)}</div>`;
     }
     const items = (m.items || []).filter((i) => i.at);
     if (items.length) {
@@ -82,6 +92,12 @@ const ThreeHero = {
     }).join('');
   },
   /** The evidence as tiles (like Photos): the 3 posts or deals that did the most, each with its logo or face. */
+  /** A tile's number in its unit: "$" leads ($1,194), "pts" is signed (+1.8), anything else trails (27 h left). */
+  tileNum(n, unit) {
+    if (unit === '$') return this.fmt(n, 'usd');
+    if (unit === 'pts') return `${this.fmt(n, 'pts')}<span>pts</span>`;
+    return `${ThreeTrack.num(n)}${unit ? `<span>${Three.esc(unit)}</span>` : ''}`;
+  },
   best(items) {
     const own = items.some((i) => i.value != null);
     const top = own ? items.slice(0, 3) : [...items].sort((a, b) => (b.impressions || 0) - (a.impressions || 0) || (b.engagement || 0) - (a.engagement || 0)).slice(0, 3);
@@ -91,7 +107,7 @@ const ThreeHero = {
       const n = own ? it.value : it.impressions ?? it.engagement;
       const unit = own ? it.unit || '' : it.impressions != null ? 'views' : 'engagements';
       return `<a class="hh-tile" href="${this.safe(it.url) || '#'}" target="_blank" rel="noopener">${this.img(pic, it.image ? (it.kind === 'person' ? 'hh-person' : 'hh-thumb') : 'hh-logo')}
-        <p>${Three.esc(it.text || it.source)}</p>${n != null ? `<b>${own && it.unit === 'pts' ? this.fmt(n, 'pts') : ThreeTrack.num(n)}<span>${Three.esc(own && it.unit === 'pts' ? 'pts' : unit)}</span></b>` : ''}</a>`;
+        <p>${Three.esc(it.text || it.source)}</p>${n != null ? `<b>${this.tileNum(n, unit)}</b>` : ''}</a>`;
     }).join('')}</div>`;
   },
   html(g) {

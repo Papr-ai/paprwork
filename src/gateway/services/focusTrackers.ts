@@ -135,8 +135,8 @@ export interface MetricsDisplay {
   format?: "number" | "usd" | "pts" | "percent" | "hours";
   /** What the time bought, after "9h in chats →", e.g. "v72 is 41% trained · $676 spent". */
   line?: string;
-  /** Replaces the default chart. tone: full = accent, part = soft, off = empty. */
-  chart?: { caption: string; target?: number; bars: Array<{ label: string; value: number; tone?: "full" | "part" | "off"; title?: string }> };
+  /** Replaces the default chart. tone: full = accent, part = soft, off = empty, neg = below the line. Negative values hang below a zero line. */
+  chart?: { caption: string; target?: number; bars: Array<{ label: string; value: number; tone?: "full" | "part" | "off" | "neg"; title?: string }> };
 }
 
 export interface MetricsFile {
@@ -273,7 +273,7 @@ export function cleanDisplay(raw: unknown): MetricsDisplay | undefined {
     const bars = c.bars.slice(0, 60).flatMap((b: Record<string, unknown>) => {
       const value = num(b?.value), label = str(b?.label, 6);
       if (value === undefined || !label) return [];
-      const tone = ["full", "part", "off"].includes(b.tone as string) ? (b.tone as "full" | "part" | "off") : undefined;
+      const tone = ["full", "part", "off", "neg"].includes(b.tone as string) ? (b.tone as "full" | "part" | "off" | "neg") : undefined;
       return [{ label, value, ...(tone ? { tone } : {}), ...(str(b.title, 80) ? { title: str(b.title, 80) } : {}) }];
     }).slice(0, 14);
     const caption = str(c.caption, 90);
@@ -413,7 +413,7 @@ export const GOAL_PAGE_CONTRACT = [
   `   - Put the ONE number that proves the goal is paying off first in summary (e.g. impressions7, revenue, signed). Summary is snapshotted daily into history, which becomes the progress chart.`,
   `   - "items": the evidence, newest first, max 30: {"source", "url", "text" (<=140 chars), "at" (ISO time — drives the daily chart), "engagement"?, "impressions"?, "kind"?: "post"|"person"|"company"|"event", "image"? (https avatar/thumbnail), "domain"? (company site, e.g. "stripe.com" — the page shows its logo)}.`,
   `   - sources.<name>.profile: {"handle", "name", "avatar" (https profile picture URL from the platform), "url", "followers"} so the page shows the real person or brand, not a label.`,
-  `   - Goals that are not posting (training, fundraising, revenue, hiring): also send "display": {"label": plain words under the number (e.g. "points better than baseline"), "format": "number"|"usd"|"pts"|"percent"|"hours", "line": what the time bought (<=120 chars), "chart": {"caption": the takeaway, "target"?: number, "bars": [{"label": <=6 chars, "value": number, "tone"?: "full"|"part"|"off", "title"?: "tooltip"}] (max 14 bars, the series that shows progress)}}, and give items "value" + "unit" (e.g. 2.1 "pts") so a tile names its own number.`,
+  `   - Goals that are not posting (training, fundraising, revenue, hiring): also send "display": {"label": plain words under the number (e.g. "points better than baseline"), "format": "number"|"usd"|"pts"|"percent"|"hours", "line": what the time bought (<=120 chars), "chart": {"caption": the takeaway, "target"?: number, "bars": [{"label": <=6 chars, "value": number, "tone"?: "full"|"part"|"off"|"neg", "title"?: "tooltip"}] (max 14 bars, the series that shows progress; values may be negative, e.g. points vs a baseline, and hang below a zero line)}}, and give items "value" + "unit" (e.g. 2.1 "pts") so a tile names its own number.`,
   `   - Real images only: platform profile pictures, company domains for logos (look the domain up with web search if you only have a name). Never generate or guess images.`,
 ];
 
