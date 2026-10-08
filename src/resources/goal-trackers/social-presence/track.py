@@ -238,44 +238,90 @@ def li_picture(me_body: dict) -> str:
     return ""
 
 
-def summarize_linkedin(feed: dict, followers: int | None, my_urn: str) -> dict:
-    """Tolerant parse of profileUpdatesV2: social counts are keyed by the activity urn."""
-    counts: dict[str, dict] = {}
-    authored: set[str] = set()
-    texts: dict[str, str] = {}
-    for o in feed.get("included", []):
-        urn = o.get("entityUrn") or o.get("urn") or ""
-        act = urn.split("urn:li:activity:")[-1].split(",")[0].rstrip(")") if "urn:li:activity:" in urn else ""
-        if not act.isdigit():
+# Creator analytics pages are server-rendered (no stable JSON API), so read the numbers LinkedIn shows you.
+# Impressions are only exposed here: the share feed returns numImpressions = null for every post.
+ANALYTICS_JS = r"""() => {
+  const t = document.body.innerText;
+  const num = (re) => { const m = t.match(re); return m ? parseInt(m[1].replace(/,/g, ''), 10) : null; };
+  const posts = {};
+  for (const a of document.querySelectorAll('a[href*="/analytics/post-summary/urn:li:activity:"]')) {
+    const id = (a.href.match(/activity:(\d+)/) || [])[1], s = a.innerText;
+    const imp = (s.match(/([\d,]+)\s+impressions?/) || [])[1], eng = (s.match(/([\d,]+)\s+engagements?/) || [])[1];
+    if (id) posts[id] = { imp: imp ? +imp.replace(/,/g, '') : null, eng: eng ? +eng.replace(/,/g, '') : null };
+  }
+  return { impressions: num(/([\d,]+)\s*Impressions\b/), reached: num(/([\d,]+)\s*Members reached/),
+           engagements: num(/([\d,]+)\s*Social engagements/), followers: num(/([\d,]+)\s*Total followers/), posts };
+}"""
+
+
+async def linkedin_analytics(page, public_id: str = "") -> dict:
+    """7-day totals + per-post numbers from Creator analytics, plus total followers. Empty dict on failure."""
+    out: dict = {}
+    for path in ("/analytics/creator/content/?metricType=IMPRESSIONS&timeRange=past_7_days", "/analytics/creator/audience/"):
+        try:
+            await page.goto(f"https://www.linkedin.com{path}", wait_until="domcontentloaded", timeout=45000)
+            await page.wait_for_timeout(4000)
+            got = await page.evaluate(ANALYTICS_JS)
+            out.update({k: v for k, v in got.items() if v not in (None, {})})
+        except Exception as e:  # noqa: BLE001 — analytics is a bonus; posts still count without it
+            log(f"linkedin: analytics {path.split('?')[0]} unavailable ({str(e)[:100]})")
+    if out.get("followers") is None and public_id:  # audience page can redirect-loop headless; profile shows it too
+        try:
+            await page.goto(f"https://www.linkedin.com/in/{public_id}/", wait_until="domcontentloaded", timeout=45000)
+            await page.wait_for_timeout(3000)
+            n = await page.evaluate(r"""() => { const m = document.body.innerText.match(/([\d,]+)\s+followers/i);
+              return m ? parseInt(m[1].replace(/,/g, ''), 10) : null; }""")
+            if isinstance(n, int):
+                out["followers"] = n
+        except Exception as e:  # noqa: BLE001
+            log(f"linkedin: followers unavailable ({str(e)[:100]})")
+    return out
+
+
+def summarize_linkedin(feed: dict, my_member: str, analytics: dict | None = None) -> dict:
+    """Your own posts from profileUpdatesV2, joined to their social counts and Creator analytics.
+
+    Shape LinkedIn actually returns (verified 2026-10): each UpdateV2 has updateMetadata.urn
+    (urn:li:activity:N), actor (urn:li:member:<you>), and *socialDetail pointing at the ugcPost;
+    SocialActivityCounts are keyed by that ugcPost urn, not the activity. Reposts carry a
+    "<you> reposted this" header or a resharedUpdate and are not your posts.
+    """
+    analytics = analytics or {}
+    inc = feed.get("included", [])
+    counts = {o.get("urn"): o for o in inc if "numLikes" in o or "numComments" in o}
+    per_post = analytics.get("posts") or {}
+    posts, seen = [], set()
+    for o in inc:
+        act = (o.get("updateMetadata") or {}).get("urn") or ""
+        aid = act.rsplit(":", 1)[-1]
+        if not act.startswith("urn:li:activity:") or aid in seen:
             continue
-        if "numLikes" in o or "numComments" in o:
-            counts[act] = o
-        actor = json.dumps(o.get("actor") or {})
-        if my_urn and my_urn in actor and not o.get("resharedUpdate"):
-            authored.add(act)
-        commentary = ((o.get("commentary") or {}).get("text") or {}).get("text")
-        if commentary:
-            texts[act] = commentary
-    posts = []
-    for act in (authored or set(counts)):
-        at = li_activity_time(act)
+        header = json.dumps(o.get("header") or o.get("contextualHeader") or {})
+        if f'"{my_member}"' not in json.dumps(o.get("actor") or {}) or o.get("resharedUpdate") \
+                or o.get("*resharedUpdate") or "reposted this" in header:
+            continue
+        at = li_activity_time(aid)
         if not at or at < WEEK_AGO:
             continue
-        c = counts.get(act, {})
-        eng = int(c.get("numLikes") or 0) + int(c.get("numComments") or 0) + int(c.get("numShares") or 0)
-        imp = c.get("numImpressions")
-        posts.append({"id": act, "at": at, "eng": eng, "imp": imp if isinstance(imp, int) else None})
+        seen.add(aid)
+        c = counts.get((o.get("*socialDetail") or "").replace("urn:li:fs_socialDetail:", "")) or counts.get(act) or {}
+        a = per_post.get(aid) or {}
+        eng = a.get("eng") if a.get("eng") is not None else \
+            int(c.get("numLikes") or 0) + int(c.get("numComments") or 0) + int(c.get("numShares") or 0)
+        text = ((o.get("commentary") or {}).get("text") or {}).get("text") or ""
+        posts.append({"id": aid, "at": at, "eng": eng, "imp": a.get("imp"), "text": text})
     imps = [p["imp"] for p in posts if p["imp"] is not None]
     return {
         "posts7": len(posts),
         "replies7": None,  # LinkedIn comments you wrote aren't in the share feed; not guessed.
-        "engagement7": sum(p["eng"] for p in posts),
-        "impressions7": sum(imps) if imps else None,
-        "followers": followers,
+        # Creator analytics totals are what LinkedIn shows you; per-post sums are the fallback.
+        "engagement7": analytics.get("engagements") if analytics.get("engagements") is not None else sum(p["eng"] for p in posts),
+        "impressions7": analytics.get("impressions") if analytics.get("impressions") is not None else (sum(imps) if imps else None),
+        "followers": analytics.get("followers"),
         "days": sorted({p["at"].date().isoformat() for p in posts}),
         "items": [
             {"source": "linkedin", "kind": "post", "url": f"https://www.linkedin.com/feed/update/urn:li:activity:{p['id']}/",
-             "text": texts.get(p["id"], "")[:140], "at": p["at"].isoformat(), "engagement": p["eng"], "impressions": p["imp"]}
+             "text": p["text"][:140], "at": p["at"].isoformat(), "engagement": p["eng"], "impressions": p["imp"]}
             for p in sorted(posts, key=lambda p: p["at"], reverse=True)[:10]
         ],
     }
@@ -288,6 +334,7 @@ async def linkedin_from_page(page) -> dict:
     prof = next((x for x in me["body"].get("included", []) if "publicIdentifier" in x), {})
     fsd = (prof.get("dashEntityUrn") or prof.get("entityUrn") or "").split(":")[-1]
     public_id = prof.get("publicIdentifier", "")
+    member = prof.get("objectUrn") or ""
     feed = await page.evaluate(
         VOYAGER_FETCH,
         "/voyager/api/identity/profileUpdatesV2?count=40&includeLongTermHistory=true"
@@ -296,9 +343,10 @@ async def linkedin_from_page(page) -> dict:
     )
     if feed["status"] != 200:
         raise RuntimeError(f"LinkedIn share feed HTTP {feed['status']}")
-    net = await page.evaluate(VOYAGER_FETCH, f"/voyager/api/identity/profiles/{public_id}/networkinfo")
-    followers = ((net.get("body") or {}).get("data") or {}).get("followersCount") if net["status"] == 200 else None
-    out = summarize_linkedin(feed["body"], followers if isinstance(followers, int) else None, fsd)
+    analytics = await linkedin_analytics(page, public_id)
+    out = summarize_linkedin(feed["body"], member, analytics)
+    if analytics.get("reached") is not None:
+        out["reached7"] = analytics["reached"]
     name = " ".join(filter(None, [prof.get("firstName"), prof.get("lastName")])) or public_id
     out["profile"] = {"handle": public_id, "name": name, "url": f"https://www.linkedin.com/in/{public_id}/",
                       "followers": out["followers"], "avatar": li_picture(me["body"])}
