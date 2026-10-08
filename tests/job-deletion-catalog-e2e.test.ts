@@ -134,9 +134,15 @@ describe("job deletion catalog E2E (local)", () => {
       command: "echo ghost",
     });
 
+    const jobJson = await fs.readFile(
+      path.join(paprHome, "Jobs", job.id, "job.json"),
+      "utf8",
+    );
     await service.deleteJob(job.id, false);
 
-    // Simulate git/metadata merge re-introducing the tombstoned row on disk.
+    // Simulate git/metadata merge re-introducing the tombstoned folder + row on disk.
+    await fs.mkdir(path.join(paprHome, "Jobs", job.id), { recursive: true });
+    await fs.writeFile(path.join(paprHome, "Jobs", job.id, "job.json"), jobJson);
     const jobsPath = path.join(paprHome, "data", "jobs.json");
     const list = JSON.parse(await fs.readFile(jobsPath, "utf8")) as Record<string, unknown>[];
     list.push({

@@ -184,10 +184,17 @@ describe("migrateLegacyHomeDailyBriefJob", () => {
     expect(
       existsSync(path.join(jobsRoot, LEGACY_DEFAULT_HOME_DAILY_BRIEF_JOB_ID)),
     ).toBe(false);
+    // Archived outside Jobs/ so the startup scan can't revive it.
     expect(
       existsSync(
         path.join(jobsRoot, `${LEGACY_DEFAULT_HOME_DAILY_BRIEF_JOB_ID}.migrated`),
       ),
+    ).toBe(false);
+    const archivedDirs = await fs.readdir(
+      path.join(path.dirname(jobsRoot), "backups", "migrated-jobs"),
+    );
+    expect(
+      archivedDirs.some((d) => d.startsWith(LEGACY_DEFAULT_HOME_DAILY_BRIEF_JOB_ID)),
     ).toBe(true);
 
     const jobIdFile = await fs.readFile(

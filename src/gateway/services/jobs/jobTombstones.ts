@@ -49,5 +49,9 @@ export async function addJobTombstones(
     removedJobIds: [...existing].sort(),
     updatedAt: new Date().toISOString(),
   };
-  await fs.writeFile(target, `${JSON.stringify(payload, null, 2)}\n`, "utf8");
+  // Atomic write: a crash mid-write must never leave a truncated file that
+  // readJobTombstones() parses as "no tombstones" and resurrects every deleted job.
+  const tmp = `${target}.tmp-${process.pid}-${Date.now()}`;
+  await fs.writeFile(tmp, `${JSON.stringify(payload, null, 2)}\n`, "utf8");
+  await fs.rename(tmp, target);
 }

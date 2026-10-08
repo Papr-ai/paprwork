@@ -320,12 +320,9 @@ async function archiveLegacyJobFolder(
   if (!existsSync(legacyDir)) {
     return;
   }
-  const archived = path.join(jobsRoot, `${fromJobId}.migrated`);
-  if (existsSync(archived)) {
-    await fs.rm(legacyDir, { recursive: true, force: true });
-    return;
-  }
-  await fs.rename(legacyDir, archived);
+  // Archive outside Jobs/ so the startup folder scan can never revive it.
+  const { moveJobDirToBackups } = await import("./jobs/jobFolderArchive.js");
+  await moveJobDirToBackups(legacyDir, path.dirname(jobsRoot), "migrated-jobs");
 }
 
 export async function migrateLegacyHomeDailyBriefJobIfNeeded(
