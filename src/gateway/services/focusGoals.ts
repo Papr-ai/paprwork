@@ -24,6 +24,13 @@ import { getPaprDataDir, getPaprWorkspaceDir } from "../../core/utils/paprRoot.j
 import { resolvePaprUserDataPath } from "../../core/utils/paprWorkspace.js";
 import { readWorkspaceGoals, type WorkspaceGoal } from "./workspaceGoals.js";
 import {
+  readAttributions,
+  refreshAttributionsInBackground,
+  resolveTaskGoal,
+  type AttributionGoal,
+  type AttributionItem,
+} from "./focusAttribution.js";
+import {
   scoreFocusCandidates,
   goalKeywords,
   tokenize,
@@ -50,6 +57,8 @@ export interface FocusPick {
   target?: string;
   due?: string;
   repeat?: FocusRepeat;
+  /** "Counts as" — what work moves this goal. Drafted by Pen for goals you write, editable by you. */
+  scope?: string;
 }
 
 interface FocusFile {
@@ -188,11 +197,19 @@ async function readDailyLogs(now: number): Promise<ActivityLog[]> {
   }
 }
 
-async function readOpenTasks(): Promise<ActivityTask[]> {
+interface OpenTask {
+  id: string;
+  title: string;
+  due: string | null;
+  goal_id: string | null;
+  goal_source?: string | null;
+  entity_ref: string | null;
+}
+
+async function readOpenTasks(): Promise<OpenTask[]> {
   try {
     const { readWorkspaceTasks } = await import("./workspaceTasks.js");
-    const res = await readWorkspaceTasks({ status: "open" });
-    return res.tasks.map((t) => ({ title: t.title, goalId: t.goal_id ?? undefined, due: t.due ?? undefined }));
+    return (await readWorkspaceTasks({ status: "open" })).tasks as OpenTask[];
   } catch {
     return [];
   }
@@ -262,12 +279,33 @@ function toInput(g: WorkspaceGoal): FocusCandidateInput {
   };
 }
 
-/** Rank every candidate against today's evidence without touching focus.json (diagnostics + tests). */
 /** Score id for a user-written pick, so it never collides with the IDENTITY goal it was saved on. */
-const customId = (pickId: string) => `pick:${pickId}`;
+export const customId = (pickId: string) => `pick:${pickId}`;
+
+/** What an IDENTITY goal covers, from its own fields (no LLM): next milestone + the entities it runs through. */
+export function identityScope(g: Pick<WorkspaceGoal, "nextMilestone" | "entities">): string | undefined {
+  const names = (g.entities ?? []).map((e) => (e.split("/").pop() ?? "").replace(/-/g, " ")).filter(Boolean);
+  const parts = [g.nextMilestone, names.length ? names.slice(0, 6).join(", ") : ""].filter(Boolean);
+  return parts.length ? parts.join("; ").slice(0, 300) : undefined;
+}
+
+/** Picks that are the user's own goal (written from scratch, or rewritten into a different goal). */
+function customPicks(picks: FocusPick[], byGoal: Map<string, WorkspaceGoal>): FocusPick[] {
+  return picks.filter((p) => {
+    if (!p.title) return false;
+    if (!p.goalId) return true;
+    const g = byGoal.get(p.goalId);
+    return Boolean(g && !isSameGoal(p.title, g.title));
+  });
+}
+
+export interface RankedFocus extends ScoredActivity {
+  /** Score goal id → open task ids that move it. */
+  taskIdsByGoal: Map<string, string[]>;
+}
 
 /** Rank every candidate (plus the user's own written goals in `picks`) against today's evidence. */
-export async function rankFocusCandidates(now = Date.now(), picks: FocusPick[] = []): Promise<ScoredActivity> {
+export async function rankFocusCandidates(now = Date.now(), picks: FocusPick[] = []): Promise<RankedFocus> {
   const [goalsRes, { chats, corpus }, logs, tasks, apps, onboarding] = await Promise.all([
     readWorkspaceGoals(),
     readChats(now).catch((err) => {
@@ -281,16 +319,64 @@ export async function rankFocusCandidates(now = Date.now(), picks: FocusPick[] =
   ]);
   const active = goalsRes.goals.filter((g) => g.status !== "done" && g.status !== "dropped");
   const byGoal = new Map(goalsRes.goals.map((g) => [g.id, g]));
-  const customs: FocusCandidateInput[] = picks
-    .filter((p) => {
-      if (!p.title) return false;
-      if (!p.goalId) return true;
-      const g = byGoal.get(p.goalId);
-      return Boolean(g && !isSameGoal(p.title, g.title));
-    })
-    .map((p) => ({ id: customId(p.id), title: p.title!, origin: "custom", extraKeywords: p.target }));
+  const mine = customPicks(picks, byGoal);
+  const customs: FocusCandidateInput[] = mine.map((p) => ({
+    id: customId(p.id),
+    title: p.title!,
+    origin: "custom",
+    extraKeywords: [p.target, p.scope].filter(Boolean).join(" "),
+  }));
   const goals = [...active.map(toInput), ...customs];
-  return scoreFocusCandidates({ goals, onboarding, chats, corpus, logs, tasks, apps, now });
+
+  // Which goal each chat / task serves: explicit tag > Jev (cached) > keywords. See focusAttribution.ts.
+  const pickScope = new Map(picks.filter((p) => p.goalId && p.scope && !mine.includes(p)).map((p) => [p.goalId!, p.scope!]));
+  const attrGoals: AttributionGoal[] = [
+    ...active.map((g) => ({ id: g.id, title: g.title, scope: pickScope.get(g.id) ?? identityScope(g) })),
+    ...mine.map((p) => ({ id: customId(p.id), title: p.title!, scope: p.scope ?? p.target, custom: true })),
+  ];
+  const goalMap = new Map(attrGoals.map((g) => [g.id, g]));
+  const cache = await readAttributions(attrGoals).catch(() => new Map());
+  const activityTasks: ActivityTask[] = tasks.map((t) => ({
+    id: t.id,
+    title: t.title,
+    due: t.due ?? undefined,
+    goalId: resolveTaskGoal(t, cache.get(`task:${t.id}`), goalMap) ?? undefined,
+  }));
+  const chatGoals = new Map<string, string | null>();
+  for (const c of chats) {
+    const a = cache.get(`chat:${c.id}`);
+    if (a) chatGoals.set(c.id, a.goal);
+  }
+  const items: AttributionItem[] = [
+    ...chats.map((c) => ({ key: `chat:${c.id}`, text: c.text.slice(0, 600) })),
+    ...tasks.map((t) => ({ key: `task:${t.id}`, text: `${t.title}${t.entity_ref ? ` (${t.entity_ref})` : ""}` })),
+  ];
+  refreshAttributionsInBackground(attrGoals, items);
+
+  const scored = scoreFocusCandidates({ goals, onboarding, chats, corpus, logs, tasks: activityTasks, apps, chatGoals, now });
+  const taskIdsByGoal = new Map<string, string[]>();
+  for (const t of activityTasks) {
+    if (!t.goalId || !t.id) continue;
+    taskIdsByGoal.set(t.goalId, [...(taskIdsByGoal.get(t.goalId) ?? []), t.id]);
+  }
+  return Object.assign(scored, { taskIdsByGoal });
+}
+
+/**
+ * A pick rewritten into a different goal ("Validate MHAR…" → "Distribution via content…") becomes the
+ * user's own goal with its own id. Keeping `goalId: "G4"` made every surface that matches by id
+ * (task chips, "Moves it") show G4's MHAR tasks under Distribution.
+ */
+export function splitDivergedPicks(picks: FocusPick[], goals: Map<string, Pick<WorkspaceGoal, "title">>, now: number): { picks: FocusPick[]; changed: boolean } {
+  let changed = false;
+  const out = picks.map((p, i) => {
+    const g = p.goalId ? goals.get(p.goalId) : undefined;
+    if (!g || !p.title || isSameGoal(p.title, g.title)) return p;
+    changed = true;
+    const { goalId: _drop, ...rest } = p;
+    return { ...rest, id: p.id.startsWith("F-") ? p.id : `F-${now}-${i}` };
+  });
+  return { picks: out, changed };
 }
 
 export function isSameGoal(edited: string, original: string): boolean {
@@ -313,6 +399,7 @@ function applyPick(pick: FocusPick, byId: Map<string, FocusGoal>): FocusGoal | n
       target: pick.target,
       due: pick.due,
       repeat: pick.repeat,
+      scope: pick.scope,
       origin: "custom",
       why: own && own.why !== "From your goals" ? own.why : "Written by you",
       score: own?.score ?? 0,
@@ -328,15 +415,25 @@ function applyPick(pick: FocusPick, byId: Map<string, FocusGoal>): FocusGoal | n
     // A repeating goal has no finish date, so it never inherits one.
     due: pick.repeat ? undefined : (pick.due ?? base.due),
     repeat: pick.repeat,
+    scope: pick.scope,
   };
 }
 
 /** Resolve the saved three against today's evidence; first run quietly saves Pen's picks. */
 export async function getFocus(now = Date.now()): Promise<FocusState> {
   let file = await readFocusFile();
+  let migrated = false;
+  if (file?.picks.some((p) => p.goalId && p.title)) {
+    const goals = new Map((await readWorkspaceGoals()).goals.map((g) => [g.id, g]));
+    const split = splitDivergedPicks(file.picks, goals, now);
+    if (split.changed) {
+      file = { ...file, picks: split.picks };
+      migrated = true;
+    }
+  }
   const scored = await rankFocusCandidates(now, file?.picks);
   const byId = new Map(scored.ranked.map((g) => [g.id, g]));
-  let dirty = false;
+  let dirty = migrated;
   if (!file || file.picks.length === 0) {
     file = {
       version: 1,
@@ -369,10 +466,15 @@ export async function getFocus(now = Date.now()): Promise<FocusState> {
     file = { ...file, picks: keptPicks };
     await writeFocusFile(file).catch((err) => console.warn("[focus] could not save picks:", err));
   }
+  const scoreIdOf = (g: FocusGoal) => (g.origin === "custom" ? customId(g.id) : g.id);
+  for (const g of three) g.taskIds = scored.taskIdsByGoal.get(scoreIdOf(g)) ?? [];
+  for (const g of three) if (g.origin === "custom") g.signals = { ...g.signals, openTasks: g.taskIds?.length ?? 0 };
+  await attachTrackers(three);
+  draftMissingScopes(file.picks);
   const chosen = new Set(three.map((g) => g.id));
   const candidates = scored.ranked.filter((g) => g.origin !== "custom" && !chosen.has(g.id)).slice(0, 6);
   const alignedHours = scored.hoursFor(three.map((g) => (g.origin === "custom" ? customId(g.id) : g.id)));
-  const next = pickNext(three, scored);
+  const next = pickNext(three, scored, scoreIdOf);
   return {
     three,
     candidates,
@@ -386,11 +488,12 @@ export async function getFocus(now = Date.now()): Promise<FocusState> {
   };
 }
 
-function pickNext(three: FocusGoal[], scored: ScoredActivity): FocusState["next"] {
+function pickNext(three: FocusGoal[], scored: ScoredActivity, scoreIdOf: (g: FocusGoal) => string): FocusState["next"] {
+  const slotOf = new Map(three.map((g) => [scoreIdOf(g), g.id]));
   const tasks = scored.tasks
-    .filter((t) => t.goalId && three.some((g) => g.id === t.goalId))
+    .filter((t) => t.goalId && slotOf.has(t.goalId))
     .sort((a, b) => (a.due ?? "9999").localeCompare(b.due ?? "9999"));
-  if (tasks[0]?.goalId) return { title: tasks[0].title, goalId: tasks[0].goalId, due: tasks[0].due };
+  if (tasks[0]?.goalId) return { title: tasks[0].title, goalId: slotOf.get(tasks[0].goalId)!, due: tasks[0].due };
   const g = three.find((x) => x.nextStep);
   return g?.nextStep ? { title: g.nextStep, goalId: g.id } : null;
 }
@@ -405,6 +508,7 @@ export function normalizePick(p: FocusPick, i: number, now: number): FocusPick {
     target: p.target?.trim().slice(0, 140) || undefined,
     due: repeat ? undefined : p.due?.trim().slice(0, 40) || undefined,
     repeat,
+    scope: p.scope?.trim().slice(0, 300) || undefined,
   };
 }
 
@@ -421,6 +525,11 @@ export async function setFocus(input: SetFocusInput, now = Date.now()): Promise<
     .map((p, i) => normalizePick(p, i, now));
   if (!picks.length) throw new Error("Pick at least one goal");
   const prev = await readFocusFile();
+  // Keep a scope the user didn't touch in this edit (the editor may not send it).
+  for (const p of picks) if (p.scope === undefined) p.scope = prev?.picks.find((x) => x.id === p.id)?.scope;
+  const goals = new Map((await readWorkspaceGoals()).goals.map((g) => [g.id, g]));
+  const split = splitDivergedPicks(picks, goals, now);
+  picks.splice(0, picks.length, ...split.picks);
   await writeFocusFile({
     version: 1,
     source: "user",
@@ -439,3 +548,66 @@ export async function repickFocus(now = Date.now()): Promise<FocusState> {
 
 // Re-exported for tests.
 export { goalKeywords, buildIdf, matchScore };
+
+// ---------- trackers + scope drafting ----------
+
+async function attachTrackers(three: FocusGoal[]): Promise<void> {
+  try {
+    const { trackerStates } = await import("./focusTrackers.js");
+    const states = await trackerStates(three.map((g) => ({ id: g.id, title: g.title, target: g.target, scope: g.scope })));
+    for (const g of three) g.tracker = states[g.id];
+  } catch (err) {
+    console.warn("[focus] tracker state unavailable:", err instanceof Error ? err.message : err);
+  }
+}
+
+let drafting: Promise<unknown> | null = null;
+
+/**
+ * A goal the user wrote has no scope yet: Pen drafts one line of "counts as" from the goal and the
+ * user's recent chat titles, saves it on the pick (user can edit it), and attribution re-runs.
+ */
+function draftMissingScopes(picks: FocusPick[]): void {
+  const todo = picks.filter((p) => p.title && !p.goalId && !p.scope);
+  if (!todo.length || drafting || process.env.VITEST) return;
+  drafting = (async () => {
+    const { generateSimpleText } = await import("../utils/simpleTextGeneration.js");
+    const { chats } = await readChats(Date.now()).catch(() => ({ chats: [] as ActivityChat[] }));
+    const recent = chats
+      .sort((a, b) => b.hours30 - a.hours30)
+      .slice(0, 25)
+      .map((c) => `- ${c.text.split(" \n ")[0].slice(0, 80)}`)
+      .join("\n");
+    const drafts = new Map<string, string>();
+    for (const p of todo) {
+      const text = await generateSimpleText(
+        [
+          "You define what work counts toward a person's goal, so a classifier can sort their chats and tasks under it.",
+          "Reply with ONE line, at most 45 words: the kinds of work that move this goal — channels, artifacts, campaigns, and indirect work like tools, integrations or launches built to serve it.",
+          "Name items from their recent work only when they clearly serve this goal. Concrete nouns, no preamble, no quotes.",
+        ].join("\n"),
+        `Goal: ${p.title}${p.target ? `\nDone when: ${p.target}` : ""}\n\nTheir recent work:\n${recent}`,
+        120,
+        "[FocusScope]",
+      );
+      const line = text?.split("\n").map((l) => l.trim()).find(Boolean)?.replace(/^["']|["']$/g, "").slice(0, 300);
+      if (line) drafts.set(p.id, line);
+    }
+    if (!drafts.size) return;
+    const file = await readFocusFile();
+    if (!file) return;
+    let changed = false;
+    for (const p of file.picks) {
+      const d = drafts.get(p.id);
+      if (d && !p.scope) {
+        p.scope = d;
+        changed = true;
+      }
+    }
+    if (changed) await writeFocusFile(file);
+  })()
+    .catch((err) => console.warn("[focus] scope draft failed:", err instanceof Error ? err.message : err))
+    .finally(() => {
+      drafting = null;
+    });
+}

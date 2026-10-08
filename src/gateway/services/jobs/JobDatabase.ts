@@ -128,6 +128,15 @@ export class JobDatabase {
 
   async applyMigrations(jobDir: string): Promise<string[]> {
     const dbPath = this.getDbPath(jobDir);
+    // Same stand-down as ensureDatabase/withDatabase. This was the one legacy
+    // writer left on the run path: on a job file the sync engine owns, the
+    // writable open below hit the replica guard and every scheduled run died
+    // in under a second ("writable better-sqlite3 open is blocked"), before
+    // the job's own code started. Job scratch migrations are telemetry
+    // tables; the job's real data lives in its registry database.
+    if (shouldSkipLegacyJobScratchWrite(dbPath, "applyMigrations")) {
+      return [];
+    }
     try {
       return await applyDatabaseMigrations(jobDir, dbPath);
     } catch (error) {

@@ -155,6 +155,7 @@ const PROPOSABLE_JOB_FIELDS = [
   "name",
   "command",
   "requirements",
+  "platformCdp",
   "requiredKeys",
   "dependsOn",
   "runtimeCalls",
@@ -173,6 +174,9 @@ const PROPOSABLE_JOB_FIELDS = [
 ] as const;
 
 function stable(value: unknown): string {
+  // An empty list is the same as no list: installers and older builds add
+  // `runtimeCalls: []` / `dependsOn: []`, which is not an edit.
+  if (Array.isArray(value) && value.length === 0) return "null";
   return JSON.stringify(value ?? null);
 }
 

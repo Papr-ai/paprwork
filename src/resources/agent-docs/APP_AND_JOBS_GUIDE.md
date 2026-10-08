@@ -163,7 +163,7 @@ CREATE TABLE invoices (
 
 DML auto-pushes when online. After offline row work, use **Publish changes** or `repair_cloud_sync({ strategy: 'pull' })` before editing again. Job scratch DBs (`$JOB_DB`) stay legacy until cutover.
 
-**Breaking schema changes (drop, rename, table rebuild) publish together with the app code.** When `PAPR_BREAKING_MIGRATION_HOLD` is on, `papr_db_create_migration` with a breaking change applies it locally and **holds** that database: sync for it pauses in both directions, local reads/writes keep working (they're journaled), and the next publish of the app migrates the cloud, verifies the structure, replays the held writes and switches the live app to the new code at the same moment. So:
+**Breaking schema changes (drop, rename, table rebuild) publish together with the app code.** By default (unless `PAPR_BREAKING_MIGRATION_HOLD=0`), `papr_db_create_migration` with a breaking change applies it locally and **holds** that database: sync for it pauses in both directions, local reads/writes keep working (they're journaled), and the next publish of the app migrates the cloud, verifies the structure, replays the held writes and switches the live app to the new code at the same moment. So:
 - Ship the code that uses the new structure in the **same turn** as the migration; the publish at end of turn carries both.
 - `get_cloud_sync_status` shows `heldForPublish` on that database — this is expected. **Don't** `papr_db_push`, `repair_cloud_sync`, or reseed it; just publish the app.
 - Prefer additive changes (new column/table + backfill) when the old live app must keep working before the publish.

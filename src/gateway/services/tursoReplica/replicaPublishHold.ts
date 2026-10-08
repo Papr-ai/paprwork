@@ -91,10 +91,10 @@ function persist(hold: ReplicaPublishHold): void {
   fs.renameSync(tmp, file);
 }
 
-/** Feature flag (Phase 6 turns it on by default). */
+/** On by default; PAPR_BREAKING_MIGRATION_HOLD=0|false|no|off is the kill switch. */
 export function isBreakingMigrationHoldEnabled(): boolean {
   const raw = process.env.PAPR_BREAKING_MIGRATION_HOLD?.trim().toLowerCase();
-  return raw === "1" || raw === "true" || raw === "yes";
+  return !(raw === "0" || raw === "false" || raw === "no" || raw === "off");
 }
 
 export function getReplicaPublishHold(localPath: string): ReplicaPublishHold | undefined {

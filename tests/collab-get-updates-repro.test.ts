@@ -248,10 +248,12 @@ describe("Bug 2 (fixed) — deferred auto-update stays visible and is not lost",
       state.needsFlush = false;
       await vi.advanceTimersByTimeAsync(31_000);
       vi.useRealTimers();
+      // The retry writes app.ts during the pull, then advances the cursor and
+      // clears the pending entry. Waiting only on the file raced that last step.
       await vi.waitFor(async () => {
         expect(await read(appFile("app.ts"))).toBe("render(v2)");
+        expect(getPendingAppUpdate(APP_ID)).toBeNull();
       });
-      expect(getPendingAppUpdate(APP_ID)).toBeNull();
     } finally {
       vi.useRealTimers();
       resetPendingAppUpdatesForTests();

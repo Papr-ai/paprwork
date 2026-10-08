@@ -72,3 +72,51 @@ export function publisherMigrationsDir(dir: string, localToPublisher: ReadonlyMa
   }
   return dir;
 }
+
+/**
+ * Local dbIds that are this copy's own instances of a publisher database:
+ * same alias as a publisher source, different id. They are never proposed as
+ * new databases (even when the publisher's id is also linked locally, which
+ * defeats the id remap).
+ */
+export function ownInstanceDbIds(
+  localDataSourcesRaw: string | undefined,
+  publisherDataSourcesRaw: string | undefined,
+): Set<string> {
+  const publisher = sourcesOf(publisherDataSourcesRaw);
+  const aliases = new Set(publisher.map((s) => s.alias).filter(Boolean) as string[]);
+  const publisherIds = new Set(publisher.map((s) => s.dbId!));
+  const own = new Set<string>();
+  for (const s of sourcesOf(localDataSourcesRaw)) {
+    if (s.alias && aliases.has(s.alias) && !publisherIds.has(s.dbId!)) own.add(s.dbId!);
+  }
+  return own;
+}
+
+/** Drop own-instance dbIds from a staged data-sources.json / linked-databases.json. */
+export function stripDbIdsFromProposalFile(
+  rel: string,
+  content: string,
+  ids: ReadonlySet<string>,
+): string {
+  if (ids.size === 0) return content;
+  try {
+    const parsed = JSON.parse(content) as Record<string, unknown> | unknown[];
+    if (rel === "data-sources.json") {
+      const keep = (s: { dbId?: string }) => !(s?.dbId && ids.has(s.dbId));
+      if (Array.isArray(parsed)) return JSON.stringify(parsed.filter((s) => keep(s as { dbId?: string })), null, 2);
+      const obj = parsed as { sources?: { dbId?: string }[] };
+      if (Array.isArray(obj.sources)) return JSON.stringify({ ...obj, sources: obj.sources.filter(keep) }, null, 2);
+    }
+    if (rel === "linked-databases.json") {
+      const obj = parsed as { databases?: Record<string, unknown> };
+      if (obj.databases && typeof obj.databases === "object") {
+        const databases = Object.fromEntries(Object.entries(obj.databases).filter(([id]) => !ids.has(id)));
+        return `${JSON.stringify({ ...obj, databases }, null, 2)}\n`;
+      }
+    }
+  } catch {
+    /* leave unparseable files to the normal rules */
+  }
+  return content;
+}

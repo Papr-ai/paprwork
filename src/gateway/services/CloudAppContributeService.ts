@@ -23,15 +23,23 @@ import {
 } from "./cloudSync/resolveAppDependentJobs.js";
 import { resolveMigrationRootFromDbPath } from "./jobs/databaseMigrations.js";
 import { applyIdRemapsToDirectory } from "../utils/applyIdRemaps.js";
+import { isProposalExcludedAppPath } from "./cloudSync/contributeProposalPaths.js";
 import { mergeContributeDataIndexesIntoRepo } from "./cloudSync/contributeDataIndexMerge.js";
 import { buildProposalChangeSet, type ProposalTree } from "./cloudSync/contributeChangeSet.js";
 import {
   inferOwnDataDbIdMap,
   invertDbIdMap,
+  ownInstanceDbIds,
   publisherMigrationsDir,
   remapDbIdsInContent,
+  stripDbIdsFromProposalFile,
 } from "./cloudSync/ownDataDbIdMap.js";
 import { isLocalScratchPath } from "./cloudSync/proposalFileMerge.js";
+import {
+  planJobFold,
+  readPublisherJobsAtCommit,
+  remapJobIdsInContent,
+} from "./cloudSync/contributeJobIdentity.js";
 import {
   previewMergeConflicts,
   readFilesAtCommit,
@@ -231,6 +239,51 @@ async function readRegistryFile(paprDir: string): Promise<DatabasesRegistryFile 
 }
 
 /** Registry + job migration folders referenced by the fork (SQL only, no .db). */
+/** dbIds the publisher's app already links at the proposal's base commit. */
+function publisherLinkedDbIds(trees: ProposalTree[]): string[] {
+  const app = trees.find((t) => t.kind === "app");
+  if (!app) return [];
+  const ids = new Set<string>();
+  for (const rel of ["data-sources.json", "linked-databases.json"]) {
+    for (const id of app.base.get(rel)?.match(/db-[0-9a-f]{8}(?![0-9a-f])/g) ?? []) ids.add(id);
+  }
+  return [...ids];
+}
+
+/**
+ * A migration file that never ran on this copy's database is a failed or
+ * abandoned attempt, not schema: shipping it makes every install run it. Keep
+ * only files in the applied ledger. Exception: a teammate on the team's shared
+ * data is not allowed to apply migrations (the publisher does, on approve), so
+ * there a proposed migration is unapplied by design and stays.
+ */
+export async function dropUnappliedMigrations(
+  files: Map<string, string>,
+  dbId: string,
+  dbPath: string,
+): Promise<void> {
+  const { isCollaboratorOnSharedDatabase } = await import("./sharedPrimaryTursoResolve.js");
+  if (isCollaboratorOnSharedDatabase(dbId)) return;
+  const { queryRegistryDatabase } = await import("./jobs/registryDbSchemaReader.js");
+  const ledger = await queryRegistryDatabase({ dbPath, dbId }, "SELECT id FROM schema_migrations");
+  // Unreadable ledger: unknown, not "nothing applied" — leave the set alone.
+  if (!ledger) return;
+  const applied = new Set(
+    ledger.rows.map((row) => String(row.id ?? "").replace(/\.sql$/, "")),
+  );
+  const dropped: string[] = [];
+  for (const rel of [...files.keys()]) {
+    if (!rel.endsWith(".sql") || rel.includes("/")) continue;
+    if (!applied.has(rel.replace(/\.sql$/, ""))) {
+      files.delete(rel);
+      dropped.push(rel);
+    }
+  }
+  if (dropped.length > 0) {
+    console.info(`[CloudContribute] left out never-applied migrations for ${dbId}: ${dropped.join(", ")}`);
+  }
+}
+
 async function collectMigrationTrees(
   paprDir: string,
   forkAppId: string,
@@ -257,6 +310,7 @@ async function collectMigrationTrees(
       tempRoot,
       `registry-migrations-${dbId}`,
     );
+    await dropUnappliedMigrations(files, dbId, record.localPath);
     if (files.size > 0) {
       const { readRestoredManifest } = await import("./jobs/restoredMigrations.js");
       const restoredIds = new Set((await readRestoredManifest(migrationRoot)).map((r) => r.id));
@@ -342,11 +396,30 @@ async function ownDataDbIdsToPublisher(
   return invertDbIdMap(inferOwnDataDbIdMap(local, publisherFiles.get("data-sources.json")));
 }
 
+async function ownInstanceIdsForProposal(
+  staged: StagedProposalTree[],
+  lineage: CloudAppLineageFile | null,
+  repoDir: string,
+  baseSha: string,
+  env: NodeJS.ProcessEnv,
+): Promise<Set<string>> {
+  if (!lineage) return new Set();
+  const app = staged.find((t) => t.kind === "app");
+  const local = app?.files.get("data-sources.json");
+  if (!app || !local) return new Set();
+  const publisherFiles = await readFilesAtCommit(repoDir, baseSha, app.repoRelativeDir, env);
+  return ownInstanceDbIds(local, publisherFiles.get("data-sources.json"));
+}
+
 interface StagedProposalTree {
   repoRelativeDir: string;
   files: Map<string, string>;
   kind: "app" | "job" | "migrations";
   restoredIds?: ReadonlySet<string>;
+  /** Local job id (job trees only). */
+  jobId?: string;
+  /** Duplicate job folded onto the publisher's job: never propose deletions. */
+  folded?: boolean;
 }
 
 /** Local side of a proposal: app folder, linked Jobs/{id}, registry migrations. */
@@ -385,6 +458,7 @@ async function buildContributeStaging(
       repoRelativeDir: linkedJobRepoRelativeDir(repoPath, jobId),
       files: jobFiles,
       kind: "job",
+      jobId,
     });
   }
 
@@ -416,6 +490,79 @@ function localBlobIdsForInference(trees: StagedProposalTree[]): Map<string, stri
     }
   }
   return out;
+}
+
+/**
+ * Propose in the publisher's job ids (see cloudSync/contributeJobIdentity.ts):
+ * a same-name duplicate the app calls is proposed as the publisher's job, an
+ * uncalled one is left out. Mutates `staged` in place.
+ */
+async function foldDuplicateJobs(
+  staged: StagedProposalTree[],
+  repoDir: string,
+  baseSha: string,
+  repoPath: string,
+  env: NodeJS.ProcessEnv,
+): Promise<{ proposalJobIds: string[]; newJobIds: string[] }> {
+  const jobTrees = staged.filter((t) => t.kind === "job" && t.jobId);
+  const jobsRoot = linkedJobRepoRelativeDir(repoPath, "x").split("/").slice(0, -1).join("/");
+  const publisherJobs = await readPublisherJobsAtCommit(repoDir, baseSha, jobsRoot, env);
+  const publisherIds = new Set(publisherJobs.map((j) => j.id));
+  const app = staged.find((t) => t.kind === "app");
+  const appCode = app
+    ? [...app.files]
+        // Source only: build outputs (dist/) are stale copies that still
+        // name the job the source stopped calling.
+        .filter(([rel]) => !rel.startsWith("jobs/") && !isProposalExcludedAppPath(rel))
+        .map(([, c]) => c)
+        .join("\n")
+    : "";
+  const localJobs = jobTrees.map((t) => {
+    let name: string | undefined;
+    try {
+      name = (JSON.parse(t.files.get("job.json") ?? "{}") as { name?: string }).name;
+    } catch {
+      /* unnamed */
+    }
+    return { id: t.jobId!, name };
+  });
+  const plan = planJobFold({ localJobs, publisherJobs, appCode });
+
+  for (const id of plan.drop) {
+    console.info(`[CloudContribute] left out job ${id}: duplicate of a publisher job, not used by the app`);
+  }
+  for (const [dupId, targetId] of plan.remap) {
+    const stale = staged.findIndex((t) => t.kind === "job" && t.jobId === targetId);
+    if (stale >= 0) {
+      console.info(
+        `[CloudContribute] job ${dupId} duplicates publisher job ${targetId} and is the one the app runs; ` +
+          `proposing its files as ${targetId} (local ${targetId} copy left out)`,
+      );
+      staged.splice(stale, 1);
+    }
+    const dup = staged.find((t) => t.kind === "job" && t.jobId === dupId);
+    if (dup) {
+      dup.repoRelativeDir = linkedJobRepoRelativeDir(repoPath, targetId);
+      dup.folded = true;
+    }
+  }
+  for (let i = staged.length - 1; i >= 0; i--) {
+    const tree = staged[i];
+    if (tree.kind === "job" && tree.jobId && plan.drop.has(tree.jobId)) staged.splice(i, 1);
+  }
+  if (plan.remap.size > 0) {
+    for (const tree of staged) {
+      for (const [rel, content] of tree.files) {
+        tree.files.set(rel, remapJobIdsInContent(content, plan.remap));
+      }
+    }
+  }
+
+  const kept = staged.filter((t) => t.kind === "job" && t.jobId).map((t) => t.jobId!);
+  return {
+    proposalJobIds: kept,
+    newJobIds: kept.filter((id) => !publisherIds.has(id) && !plan.remap.has(id)),
+  };
 }
 
 async function pushContributeBranch(
@@ -481,6 +628,15 @@ async function pushContributeBranch(
     // A copy on its own data has fresh database ids; propose in the
     // publisher's ids, or approving re-wires their app to our databases.
     const dbToPublisher = await ownDataDbIdsToPublisher(staged, lineage, repoDir, base.sha, env);
+    const ownIds = await ownInstanceIdsForProposal(staged, lineage, repoDir, base.sha, env);
+    for (const id of dbToPublisher.keys()) ownIds.delete(id);
+    if (ownIds.size > 0) {
+      const app = staged.find((t) => t.kind === "app");
+      for (const rel of ["data-sources.json", "linked-databases.json"]) {
+        const content = app?.files.get(rel);
+        if (app && content !== undefined) app.files.set(rel, stripDbIdsFromProposalFile(rel, content, ownIds));
+      }
+    }
     for (const tree of staged) {
       if (dbToPublisher.size === 0) break;
       for (const [rel, content] of tree.files) {
@@ -491,6 +647,8 @@ async function pushContributeBranch(
       }
     }
 
+    const jobIdentity = await foldDuplicateJobs(staged, repoDir, base.sha, prepare.repoPath, env);
+
     const hasJobTrees = staged.some((t) => t.kind === "job");
     const trees: ProposalTree[] = [];
     for (const tree of staged) {
@@ -500,6 +658,7 @@ async function pushContributeBranch(
         base: await readFilesAtCommit(repoDir, base.sha, tree.repoRelativeDir, env, tree.files),
         kind: tree.kind,
         ...(tree.restoredIds ? { restoredIds: tree.restoredIds } : {}),
+        ...(tree.folded ? { noDeletes: true } : {}),
         // The app folder's bundled jobs/ copy is stale once Jobs/{id} exists;
         // the job trees own those paths.
         ...(tree.kind === "app" && hasJobTrees ? { skipPrefixes: ["jobs/"] } : {}),
@@ -544,8 +703,11 @@ async function pushContributeBranch(
       contributorPaprDir: getPaprRoot(),
       forkAppId,
       targetAppId: prepare.targetAppId,
-      // The copy's own instances of the publisher's databases aren't new ones.
-      skipDbIds: new Set(dbToPublisher.keys()),
+      // The copy's own instances of the publisher's databases aren't new ones,
+      // and databases the publisher already links are theirs to describe.
+      skipDbIds: new Set([...dbToPublisher.keys(), ...ownIds, ...publisherLinkedDbIds(trees)]),
+      proposalJobIds: jobIdentity.proposalJobIds,
+      newJobIds: jobIdentity.newJobIds,
     });
 
     const stagePaths = [
