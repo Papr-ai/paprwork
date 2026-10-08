@@ -13,6 +13,14 @@ const ThreeHero = {
   },
   img(src, cls, alt = '') { return src ? `<img class="${cls}" src="${src}" alt="${Three.esc(alt)}" loading="lazy" referrerpolicy="no-referrer" onerror="this.remove()">` : ''; },
   dayKey(d) { return d.toLocaleDateString('en-CA'); },
+  /** The payoff number in the unit its tracker declared. Plain numbers stay as they were. */
+  fmt(v, f) {
+    if (typeof v !== 'number') return '';
+    if (f === 'usd') return `$${ThreeTrack.num(Math.round(v))}`;
+    if (f === 'pts') return `${v > 0 ? '+' : ''}${(Math.round(v * 10) / 10).toFixed(1)}`;
+    if (f === 'percent') return `${Math.round(v)}%`;
+    return ThreeTrack.num(v);
+  },
   /** The last 7 local days, built from the evidence (items[].at): items, views, and which sources showed up each day. */
   week(items) {
     const days = [...Array(7)].map((_, i) => { const d = new Date(); d.setHours(12, 0, 0, 0); d.setDate(d.getDate() - 6 + i); return { d, n: 0, views: 0, src: new Set() }; });
@@ -30,7 +38,22 @@ const ThreeHero = {
     return `<div class="hh-bars">${line}${cols.map((c) => `<div class="hh-col${c.today ? ' is-today' : ''}" title="${Three.esc(c.title)}">
       <span class="hh-bar ${c.cls}" style="height:${c.v ? Math.max(8, (c.v / max) * 100) : 0}%"></span><em>${Three.esc(c.label)}</em></div>`).join('')}</div>`;
   },
+  /** A tracker's own series. Each bar names its value; below-zero values (worse than a baseline) hang under a zero line. */
+  diverge(cols) {
+    const hi = Math.max(0, ...cols.map((c) => c.v)), lo = Math.min(0, ...cols.map((c) => c.v)), span = hi - lo || 1, z = (-lo / span) * 100;
+    const bar = (c) => { const h = Math.max(3, (Math.abs(c.v) / span) * 100);
+      return c.v < 0 ? `top:${(100 - z).toFixed(2)}%;height:${h.toFixed(2)}%` : `bottom:${z.toFixed(2)}%;height:${h.toFixed(2)}%`; };
+    const zero = lo < 0 ? `<i class="hh-zero" style="bottom:${z.toFixed(2)}%"></i>` : '';
+    return `<div class="hh-bars hh-div"><div class="hh-plot">${zero}${cols.map((c) => `<div class="hh-col${c.today ? ' is-today' : ''}" title="${Three.esc(c.title)}">
+      <span class="hh-bar ${c.cls}" style="${bar(c)}"><b class="hh-val">${Three.esc(c.tip)}</b></span><em>${Three.esc(c.label)}</em></div>`).join('')}</div></div>`;
+  },
   chart(m, nSrc) {
+    const c = m.display?.chart;
+    if (c?.bars?.length) {
+      const f = m.display?.format;
+      const cols = c.bars.map((x, i) => ({ v: x.value, today: i === c.bars.length - 1, cls: x.value < 0 || x.tone === 'neg' ? 'is-neg' : x.tone === 'full' ? 'is-full' : x.tone === 'part' ? 'is-part' : '', label: x.label, tip: this.fmt(x.value, f), title: x.title || `${x.label} · ${this.fmt(x.value, f)}` }));
+      return `<div class="hh-chart"><p class="hh-cap">${Three.esc(c.caption)}</p>${this.diverge(cols)}</div>`;
+    }
     const items = (m.items || []).filter((i) => i.at);
     if (items.length) {
       const days = this.week(items);
@@ -53,13 +76,13 @@ const ThreeHero = {
     const now = m.summary?.[m.hero];
     const cut = new Date(Date.now() - 7 * 864e5).toISOString().slice(0, 10);
     const then = [...(m.history || [])].reverse().find((h) => h.date <= cut && typeof h[m.hero] === 'number')?.[m.hero];
-    if (typeof now !== 'number' || !then) return '';
+    if (m.display?.format === 'pts' || typeof now !== 'number' || !then) return '';
     const pct = Math.round(((now - then) / then) * 100);
     return pct ? `<em class="hh-delta is-${pct > 0 ? 'up' : 'down'}">${pct > 0 ? '↑' : '↓'} ${Math.abs(pct)}% vs last week</em>` : '';
   },
   faces(sources, gid) {
     return Object.entries(sources || {}).map(([k, v]) => {
-      const p = v.profile || {}, dom = this.domainOf(k, p.url), name = this.NAMES[k] || k;
+      const p = v.profile || {}, dom = this.domainOf(k, p.url), name = p.name || this.NAMES[k] || k;
       const tip = v.ok ? [p.handle && `@${p.handle}`, name, p.followers != null && `${ThreeTrack.num(p.followers)} followers`].filter(Boolean).join(' · ')
         : `${name}: ${v.error === 'not connected' ? 'not connected' : 'needs attention. Tap to fix'}`;
       const face = this.safe(p.avatar) ? this.img(this.safe(p.avatar), 'hh-av', name) : `<span class="hh-av hh-initial">${Three.esc((p.name || name)[0] || '?')}</span>`;
@@ -69,14 +92,22 @@ const ThreeHero = {
     }).join('');
   },
   /** The evidence as tiles (like Photos): the 3 posts or deals that did the most, each with its logo or face. */
+  /** A tile's number in its unit: "$" leads ($1,194), "pts" is signed (+1.8), anything else trails (27 h left). */
+  tileNum(n, unit) {
+    if (unit === '$') return this.fmt(n, 'usd');
+    if (unit === 'pts') return `${this.fmt(n, 'pts')}<span>pts</span>`;
+    return `${ThreeTrack.num(n)}${unit ? `<span>${Three.esc(unit)}</span>` : ''}`;
+  },
   best(items) {
-    const top = [...items].sort((a, b) => (b.impressions || 0) - (a.impressions || 0) || (b.engagement || 0) - (a.engagement || 0)).slice(0, 3);
+    const own = items.some((i) => i.value != null);
+    const top = own ? items.slice(0, 3) : [...items].sort((a, b) => (b.impressions || 0) - (a.impressions || 0) || (b.engagement || 0) - (a.engagement || 0)).slice(0, 3);
     if (!top.length) return '';
     return `<div class="hh-best">${top.map((it) => {
       const pic = this.safe(it.image) || this.logo(it.domain || this.domainOf(it.source, it.url), 64);
-      const n = it.impressions ?? it.engagement;
-      return `<a class="hh-tile" href="${this.safe(it.url) || '#'}" target="_blank" rel="noopener">${this.img(pic, it.image ? 'hh-thumb' : 'hh-logo')}
-        <p>${Three.esc(it.text || it.source)}</p>${n != null ? `<b>${ThreeTrack.num(n)}<span>${it.impressions != null ? 'views' : 'engagements'}</span></b>` : ''}</a>`;
+      const n = own ? it.value : it.impressions ?? it.engagement;
+      const unit = own ? it.unit || '' : it.impressions != null ? 'views' : 'engagements';
+      return `<a class="hh-tile" href="${this.safe(it.url) || '#'}" target="_blank" rel="noopener">${this.img(pic, it.image ? (it.kind === 'person' ? 'hh-person' : 'hh-thumb') : 'hh-logo')}
+        <p>${Three.esc(it.text || it.source)}</p>${n != null ? `<b>${this.tileNum(n, unit)}</b>` : ''}</a>`;
     }).join('')}</div>`;
   },
   html(g) {
@@ -90,9 +121,9 @@ const ThreeHero = {
     const out = Object.keys(m.labels || {}).filter((k) => k !== m.hero && /posts|engagement|customers|meetings|signups|new/.test(k) && sum[k] != null).slice(0, 2)
       .map((k) => `${ThreeTrack.num(sum[k])} ${/engagement/.test(k) ? 'engagements' : Three.esc(m.labels[k].replace(/ this week$/i, '').toLowerCase())}`);
     return `<section class="hhero">
-      <div class="hh-top"><div><b class="hh-num">${ThreeTrack.num(sum[m.hero])}</b><span class="hh-lab">${Three.esc(m.labels?.[m.hero] || m.hero)}${this.delta(m)}</span></div>
+      <div class="hh-top"><div><b class="hh-num">${this.fmt(sum[m.hero], m.display?.format)}</b><span class="hh-lab">${Three.esc(m.display?.label || m.labels?.[m.hero] || m.hero)}${this.delta(m)}</span></div>
         <div class="hh-faces">${this.faces(m.sources, g.id)}</div></div>
-      <p class="hh-roi"><b>${Three.hours(s.hours7)}</b> in chats <span aria-hidden="true">→</span> ${out.join(' · ') || 'results'}</p>
+      <p class="hh-roi"><b>${Three.hours(s.hours7)}</b> in chats <span aria-hidden="true">→</span> ${Three.esc(m.display?.line || '') || out.join(' · ') || 'results'}</p>
       ${this.chart(m, live)}${this.best(m.items || [])}
       <p class="hh-foot">Updated ${ThreeTrack.ago(m.updatedAt)}</p></section>`;
   },
