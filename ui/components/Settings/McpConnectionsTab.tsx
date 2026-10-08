@@ -278,6 +278,7 @@ export function McpConnectionsTab({
       {open && (
         <McpServerSheet
           server={open}
+          orgMax={org?.policy?.maxPenAccess}
           onClose={() => setOpenId(null)}
           onDisconnect={() => {
             setOpenId(null);

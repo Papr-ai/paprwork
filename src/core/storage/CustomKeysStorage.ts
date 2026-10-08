@@ -41,6 +41,8 @@ export interface CustomKey {
   name: string;
   description?: string;
   permission: "always" | "ask";
+  /** How much Pen may do with this service's tools (MCP sign-ins). Unset = ask. */
+  penAccess?: "read" | "ask" | "full";
   clientAccess: KeyClientAccess;
   encryptedValue: string;
   createdAt: string;
@@ -75,6 +77,7 @@ export interface CustomKeyInput {
   value: string;
   description?: string;
   permission?: "always" | "ask";
+  penAccess?: "read" | "ask" | "full";
   clientAccess?: KeyClientAccess;
   /** Default: all organizations (shared vault). Use "organization" for one org only. */
   orgScope?: IntegrationKeyOrgScope;
@@ -95,6 +98,7 @@ export interface CustomKeyMetadata {
   name: string;
   description?: string;
   permission: "always" | "ask";
+  penAccess?: "read" | "ask" | "full";
   clientAccess: KeyClientAccess;
   createdAt: string;
   updatedAt: string;
@@ -568,6 +572,7 @@ export class CustomKeysStorage {
       name: key.name,
       description: key.description,
       permission: key.permission,
+      ...(key.penAccess ? { penAccess: key.penAccess } : {}),
       clientAccess: normalizeKeyClientAccess(key.clientAccess),
       createdAt: key.createdAt,
       updatedAt: key.updatedAt,
@@ -698,6 +703,7 @@ export class CustomKeysStorage {
         name: normalizedName,
         description: input.description,
         permission: input.permission ?? "always",
+        ...(input.penAccess ? { penAccess: input.penAccess } : {}),
         clientAccess: normalizeKeyClientAccess(input.clientAccess),
         encryptedValue: this.encryptValue(input.value),
         createdAt: existing?.createdAt ?? now,
@@ -834,6 +840,7 @@ export class CustomKeysStorage {
       name: key.name,
       description: key.description,
       permission: key.permission,
+      ...(key.penAccess ? { penAccess: key.penAccess } : {}),
       clientAccess: normalizeKeyClientAccess(key.clientAccess),
       createdAt: key.createdAt,
       updatedAt: key.updatedAt,
@@ -863,6 +870,7 @@ export class CustomKeysStorage {
         encryptedValue: this.encryptValue(input.value),
         ...(input.description !== undefined && { description: input.description }),
         ...(input.permission && { permission: input.permission }),
+        ...(input.penAccess && { penAccess: input.penAccess }),
         ...(input.clientAccess !== undefined && {
           clientAccess: normalizeKeyClientAccess(input.clientAccess),
         }),
@@ -912,6 +920,7 @@ export class CustomKeysStorage {
       name: input.name,
       description: input.description,
       permission: input.permission || "always",
+      ...(input.penAccess ? { penAccess: input.penAccess } : {}),
       clientAccess: normalizeKeyClientAccess(input.clientAccess),
       encryptedValue: this.encryptValue(input.value),
       createdAt: now,
@@ -988,6 +997,7 @@ export class CustomKeysStorage {
         description: updates.description,
       }),
       ...(updates.permission && { permission: updates.permission }),
+      ...(updates.penAccess && { penAccess: updates.penAccess }),
       ...(updates.clientAccess !== undefined && {
         clientAccess: normalizeKeyClientAccess(updates.clientAccess),
       }),
@@ -1023,6 +1033,7 @@ export class CustomKeysStorage {
         value: preservedValue,
         description: updatedKey.description,
         permission: updatedKey.permission,
+        penAccess: updatedKey.penAccess,
         clientAccess: updatedKey.clientAccess,
         orgScope:
           updates.orgScope ??

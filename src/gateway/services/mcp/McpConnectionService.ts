@@ -81,6 +81,8 @@ export interface McpConnectionServiceOptions {
   store: McpCredentialStore;
   openBrowser?: (url: string) => Promise<void> | void;
   customServersFile?: string;
+  /** Pen access check, run before every tool call. Omitted in tests = allow all. */
+  penGate?: import("./mcpPenGate.js").PenGate;
 }
 
 export function openInSystemBrowser(url: string): void {
@@ -387,6 +389,8 @@ export class McpConnectionService {
       const s = await this.ensure(id);
       if (s.state !== "connected") throw new Error(s.state === "needs_reauth" ? new McpReauthRequiredError(id).message : `MCP server "${id}" is not connected (${s.state}). Use connect_mcp action="connect".`);
     }
+    const annotations = l.tools.find((t) => t.name === toolName)?.annotations;
+    await this.opts.penGate?.(id, toolName, annotations);
     const run = () => l.client!.callTool({ name: toolName, arguments: args }, undefined, { timeout: CALL_TIMEOUT_MS }) as Promise<McpCallResult>;
     try {
       return await run();

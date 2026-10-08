@@ -14,6 +14,7 @@
  * never returned to anyone.
  */
 import { assertOrgAllows, OrgPolicyBlockedError, registerOrgPolicyRoutes } from "./mcpOrgPolicy.js";
+import { PenAccessDeniedError } from "./mcpPenAccess.js";
 import type { Express, Request, Response } from "express";
 import { getMcpConnectionService, type McpConnectionService, type McpServerStatus } from "./McpConnectionService.js";
 import { formatMcpResult } from "./mcpToolAdapter.js";
@@ -36,8 +37,10 @@ const pid = (req: Request): string => String(req.params.id ?? "").trim().toLower
 const msg = (e: unknown) => (e instanceof Error ? e.message : String(e));
 
 function fail(res: Response, e: unknown, fallback = 400): void {
-  const status = e instanceof McpAccessError || e instanceof OrgPolicyBlockedError ? e.status : fallback;
-  res.status(status).json({ error: msg(e), ...(e instanceof OrgPolicyBlockedError ? { code: "org_policy" } : {}) });
+  const pen = e instanceof PenAccessDeniedError;
+  const status = e instanceof McpAccessError || e instanceof OrgPolicyBlockedError || pen ? e.status : fallback;
+  const code = e instanceof OrgPolicyBlockedError ? "org_policy" : pen ? "pen_access" : undefined;
+  res.status(status).json({ error: msg(e), ...(code ? { code } : {}) });
 }
 
 /** Resolve the caller; refuse foreign origins and (optionally) app callers. */

@@ -112,7 +112,7 @@ import {
   initializePermissionBridge,
   requestPermissionFromMain,
 } from "./permissions/GatewayPermissionBridge.js";
-import { setPermissionRequester } from "./permissions/PermissionRequester.js";
+import { requestKeyPermission, setPermissionRequester } from "./permissions/PermissionRequester.js";
 import type { KeyPermissionRequest } from "../core/types/permissions.js";
 import { initializeDbPool } from "./services/DbQueryPool.js";
 import { initializeDbRouter } from "./services/appRuntime/DbRouter.js";
@@ -256,10 +256,29 @@ async function initializeServices(): Promise<void> {
       const { createKeychainMcpCredentialStore } = await import("./services/mcp/mcpCredentialStore.js");
       const { BUILTIN_MCP_SERVERS } = await import("./services/mcp/mcpServerCatalog.js");
       const { getAgentService } = await import("./services/AgentService.js");
+      const mcpName = (id: string) => BUILTIN_MCP_SERVERS.find((s) => s.id === id)?.name ?? id;
+      const { createPenGate } = await import("./services/mcp/mcpPenGate.js");
+      const { getOrgPolicy } = await import("./services/mcp/mcpOrgPolicy.js");
+      const { mcpCredentialKeyName } = await import("./services/mcp/mcpServerCatalog.js");
       const mcp = initializeMcpConnectionService({
-        store: createKeychainMcpCredentialStore(
-          (id) => BUILTIN_MCP_SERVERS.find((s) => s.id === id)?.name ?? id,
-        ),
+        store: createKeychainMcpCredentialStore(mcpName),
+        penGate: createPenGate({
+          keyLevel: async (id) => {
+            const keys = await getCustomKeysService().listKeys();
+            return keys.find((k) => k.name === mcpCredentialKeyName(id))?.penAccess;
+          },
+          orgMax: async () => (await getOrgPolicy()).policy?.maxPenAccess,
+          serverName: mcpName,
+          ask: async (id, name, tool) =>
+            (
+              await requestKeyPermission({
+                keyName: mcpCredentialKeyName(id),
+                description: `Pen wants to run "${tool}" on ${name}. It may create, change or send something.`,
+                isEnvKey: false,
+                toolContext: { toolName: tool },
+              })
+            ).approved,
+        }),
       });
       const registry = getAgentService().getToolRegistry();
       mcp.setToolSink({

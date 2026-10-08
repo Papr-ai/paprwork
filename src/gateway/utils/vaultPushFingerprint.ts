@@ -15,6 +15,7 @@ export function computeVaultPushFingerprint(entry: CloudVaultKeyEntry): string {
     targetOrgId: entry.targetOrgId ?? "",
     permission: entry.permission ?? "always_allow",
     allowedUserIds: [...(entry.allowedUserIds ?? [])].sort(),
+    penAccess: entry.penAccess ?? "",
   };
   return createHash("sha256").update(JSON.stringify(payload)).digest("hex");
 }

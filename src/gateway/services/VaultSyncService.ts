@@ -84,6 +84,7 @@ interface VaultPullSharedKeyResponse {
   clientAccess?: "server" | "client";
   source?: string;
   ownerUserId?: string;
+  penAccess?: "read" | "ask" | "full" | null;
 }
 
 interface VaultPullSharedResponse {
@@ -631,6 +632,7 @@ export class VaultSyncService {
         name: key.name,
         value: key.value,
         permission: mapCloudVaultPermission(key.permission),
+        ...(key.penAccess ? { penAccess: key.penAccess } : {}),
         clientAccess: key.clientAccess ?? "server",
         vaultAudience: key.shareScope,
         sharedOwnerUserId: key.ownerUserId,

@@ -15,6 +15,7 @@ export interface CustomKey {
   name: string;
   description?: string;
   permission: "always" | "ask";
+  penAccess?: "read" | "ask" | "full";
   clientAccess?: "server" | "client";
   createdAt: string;
   updatedAt: string;
@@ -43,6 +44,7 @@ export interface CustomKeyInput {
   value: string;
   description?: string;
   permission?: "always" | "ask";
+  penAccess?: "read" | "ask" | "full";
   clientAccess?: "server" | "client";
   orgScope?: IntegrationKeyOrgScope;
   organizationId?: string;

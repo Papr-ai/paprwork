@@ -8,6 +8,8 @@ export interface SharedVaultKeyInput {
   value: string;
   description?: string;
   permission?: "always" | "ask";
+  /** Owner's Pen access level; this Mac enforces it for the shared sign-in. */
+  penAccess?: "read" | "ask" | "full";
   clientAccess?: "server" | "client";
   vaultAudience: Extract<
     IntegrationKeyVaultAudience,

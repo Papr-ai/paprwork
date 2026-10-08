@@ -140,14 +140,65 @@ function WhoCanUse({ server }: { server: McpSheetServer }) {
   );
 }
 
+const PEN_OPTIONS: { v: "read" | "ask" | "full"; label: string; hint: string }[] = [
+  { v: "read", label: "Read only", hint: "Looks things up. Never changes anything." },
+  { v: "ask", label: "Ask before changes", hint: "Reads freely. Asks you before it creates, edits or sends." },
+  { v: "full", label: "Full access", hint: "Works without asking. Deleting still asks." },
+];
+const PEN_RANK = { read: 0, ask: 1, full: 2 } as const;
+
+/** What Pen may do with this service. Options above the org's maximum are disabled. */
+export function PenAccessPicker({ server, orgMax }: { server: McpSheetServer; orgMax?: "read" | "ask" | "full" }) {
+  const { keys, updateKey, getKeyValue, loadKeys } = useCustomKeys();
+  const key = keys.find((k) => k.name === mcpKeyName(server.id));
+  if (!key) return null;
+  const shared = key.vaultOrigin === "shared";
+  const max = orgMax ?? "full";
+  const raw = key.penAccess ?? "ask";
+  const cur = PEN_RANK[raw] > PEN_RANK[max] ? max : raw;
+  const pick = async (v: "read" | "ask" | "full") => {
+    if (shared || v === cur) return;
+    const value = (await getKeyValue(key.id)) ?? "";
+    if (await updateKey(key.id, { name: key.name, value, penAccess: v })) {
+      await syncVaultKeyChange({ name: key.name, previousAudience: key.vaultAudience ?? "user", nextAudience: key.vaultAudience ?? "user", mode: "update" });
+      await loadKeys(true);
+    }
+  };
+  return (
+    <div className="mcp-sheet__pen" role="radiogroup" aria-label="What Pen may do">
+      {PEN_OPTIONS.map((o) => {
+        const over = PEN_RANK[o.v] > PEN_RANK[max];
+        return (
+          <button
+            key={o.v}
+            type="button"
+            role="radio"
+            aria-checked={cur === o.v}
+            className={`mcp-sheet__penopt${cur === o.v ? " is-on" : ""}`}
+            disabled={shared || over}
+            onClick={() => void pick(o.v)}
+          >
+            <b>{o.label}</b>
+            <span>{over ? "Not allowed by your org" : o.hint}</span>
+          </button>
+        );
+      })}
+      {shared && <p className="mcp-sheet__muted">Set by the teammate who shared it.</p>}
+    </div>
+  );
+}
+
 export function McpServerSheet({
   server,
   onClose,
   onDisconnect,
+  orgMax,
 }: {
   server: McpSheetServer;
   onClose: () => void;
   onDisconnect: () => void;
+  /** Org's maxPenAccess; higher options are shown but disabled. */
+  orgMax?: "read" | "ask" | "full";
 }) {
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => e.key === "Escape" && onClose();
@@ -198,6 +249,10 @@ export function McpServerSheet({
             <section className="mcp-sheet__section">
               <h4>Who can use it</h4>
               <WhoCanUse server={server} />
+            </section>
+            <section className="mcp-sheet__section">
+              <h4>What Pen may do</h4>
+              <PenAccessPicker server={server} orgMax={orgMax} />
             </section>
             <section className="mcp-sheet__section">
               <button type="button" className="settings-btn settings-btn--ghost" onClick={onDisconnect}>
