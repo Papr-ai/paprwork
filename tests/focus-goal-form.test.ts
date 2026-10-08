@@ -26,7 +26,7 @@ it("goal form: repeat switch, date picker, and what gets saved", () => {
   expect(box.dataset.repeat).toBe("daily");
   expect(daily.getAttribute("aria-checked")).toBe("true");
   expect(document.getElementById("te-ml")!.textContent).toBe("Each day");
-  expect(w.ThreeForm.read()).toEqual({ title: "Post daily on X and LinkedIn", target: "1 post on X and LinkedIn", due: "", repeat: "daily" });
+  expect(w.ThreeForm.read()).toEqual({ title: "Post daily on X and LinkedIn", target: "1 post on X and LinkedIn", due: "", repeat: "daily", scope: "" });
   // Save → draft + PUT body carry repeat; the card reads "Every day".
   const save = document.querySelector('[data-three="save"]') as HTMLElement;
   w.ThreeEdit.act("save", save);

@@ -80,7 +80,11 @@ const Three = {
     const left = this.daysLeft(g.due);
     const done = g.repeat ? this.sub(g)
       : [g.target, g.due ? `${this.fmtDue(g.due)}${left != null ? ` · ${left} days left` : ''}` : ''].filter(Boolean).join(' · ');
-    const tasks = ((typeof Tasks !== 'undefined' && Tasks.data?.tasks) || []).filter((t) => t.status === 'open' && t.goal_id && t.goal_id === g.id);
+    // The server says which tasks move this goal (tag, entity or Jev). Matching by id alone leaked
+    // G4's MHAR tasks into a goal the user had rewritten as "Distribution".
+    const want = Array.isArray(g.taskIds) ? new Set(g.taskIds) : null;
+    const tasks = ((typeof Tasks !== 'undefined' && Tasks.data?.tasks) || [])
+      .filter((t) => t.status === 'open' && (want ? want.has(t.id) : t.goal_id && t.goal_id === g.id));
     const [pcls, plabel] = this.pace(s);
     const mine = this.inThree(g.id);
     const outside = mine ? '' : `<p class="t3outside">Not one of your three right now.</p>`;
@@ -95,6 +99,8 @@ const Three = {
       <section class="t3stat"><div><b>${this.hours(s.hours7)}</b><span>In chats this week</span></div>
         <div><b>${s.chats30 || 0}</b><span>Chats this month</span></div><div><b>${s.openTasks || 0}</b><span>Open tasks</span></div></section>
       <p class="t3why">${this.SPARK}${this.esc(g.why)}</p>
+      ${g.scope ? `<p class="t3scope"><span>Counts</span>${this.esc(g.scope)}</p>` : ''}
+      ${typeof ThreeTrack !== 'undefined' ? ThreeTrack.html(g) : ''}
       ${g.nextStep ? `<section class="hsec"><h4>Next milestone</h4><p class="t3next">${this.esc(g.nextStep)}</p></section>` : ''}
       <section class="hsec"><h4>Moves it <em>${tasks.length}</em></h4>${rows}</section>
       <footer class="t3foot"><button type="button" class="hfocus-primary" data-three="chat" data-gid="${this.esc(g.id)}">Work on it with Pen</button>
@@ -144,6 +150,7 @@ const Three = {
       else if (act === 'edit') this.show('edit', gid);
       else if (act === 'review') this.show('review');
       else if (act === 'promote') { this.show('edit'); ThreeEdit.promote = gid; ThreeEdit.paint(); }
+      else if (act.startsWith('track') && typeof ThreeTrack !== 'undefined') ThreeTrack.act(act, this.find(gid) || {}, b);
       else if (act.startsWith('wr-')) WeekReview.act(act);
       else ThreeEdit.act(act, b);
     });
