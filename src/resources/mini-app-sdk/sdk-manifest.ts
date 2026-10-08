@@ -50,13 +50,13 @@ const IIFE_JS_ROUTE = new Set([
 ]);
 
 /** ESM modules that apps import via `.js` URL (bundler convention). */
-const ESM_JS_ROUTE = new Set(["papr-files.ts"]);
+const ESM_JS_ROUTE = new Set(["papr-files.ts", "papr-connect.ts"]);
 
 const AGENT_HINTS: Record<string, Pick<MiniAppSdkModule, "summary" | "exports">> =
   {
     "papr-sdk.ts": {
       summary: "Unified SDK entry — prefer this single import",
-      exports: "papr.dialog.*, papr.jobs.*, papr.files.*, papr.preview.*",
+      exports: "papr.dialog.*, papr.jobs.*, papr.files.*, papr.connect.*, papr.preview.*",
     },
     "papr-dialog.ts": {
       summary: "Modal text input / confirm / alert (legacy direct import)",
@@ -73,6 +73,10 @@ const AGENT_HINTS: Record<string, Pick<MiniAppSdkModule, "summary" | "exports">>
     "papr-files.ts": {
       summary: "Large file upload / list / signed URL / remove",
       exports: "papr.files.* (prefer papr-sdk import)",
+    },
+    "papr-connect.ts": {
+      summary: "Use the user's connected services (Linear, HubSpot, Stripe, Notion…) via one-click OAuth; declare in connections.json",
+      exports: "papr.connect.status/connect/call/callJson/tools/button (prefer papr-sdk import)",
     },
     "papr-agent-chat.ts": {
       summary: "Embedded assistant bubble script (after enable_app_agent_chat)",

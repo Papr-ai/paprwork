@@ -13,6 +13,7 @@
 
 import { askConfirm, askText, showAlert } from "./papr-dialog.ts";
 import { papr as paprFilesModule } from "./papr-files.ts";
+import { papr as paprConnectModule } from "./papr-connect.ts";
 import {
   subscribeJobEvents,
   type SubscribeJobEventsOptions,
@@ -47,6 +48,7 @@ export const papr = {
     subscribeJobEvents,
   },
   files: paprFilesModule.files,
+  connect: paprConnectModule.connect,
   preview: {
     onLifecycle: onPreviewLifecycle,
     onPreviewLifecycle,

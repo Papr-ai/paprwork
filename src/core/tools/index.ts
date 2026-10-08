@@ -22,6 +22,7 @@ import { recipeTools } from "./recipes.js";
 import { keyManagementTools } from "./keyManagement.js";
 import { chatHistoryTools } from "./chatHistory.js";
 import { connectorsTools } from "./connectors.js";
+import { connectMcpTool } from "./mcpConnect.js";
 import { connectPlatformTool } from "./platformConnect.js";
 import { codeIndexTools } from "./codeIndex.js";
 import { cloudPublishTools } from "./cloudPublish.js";
@@ -79,6 +80,7 @@ export const allTools = [
   ...chatHistoryTools,
   ...connectorsTools,
   connectPlatformTool,
+  connectMcpTool,
   ...codeIndexTools,
   ...cloudPublishTools,
   ...cloudInstallTools,
@@ -120,7 +122,7 @@ export const toolsByCategory = {
   keyManagement: keyManagementTools,
   recipes: recipeTools,
   chatHistory: chatHistoryTools,
-  connectors: [...connectorsTools, connectPlatformTool],
+  connectors: [...connectorsTools, connectPlatformTool, connectMcpTool],
   codeIndex: codeIndexTools,
   cloudPublish: cloudPublishTools,
   cloudInstall: cloudInstallTools,

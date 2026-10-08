@@ -3074,6 +3074,11 @@ await papr.files.remove(id);
 - Never \`FileReader.readAsDataURL()\` or \`.arrayBuffer()\` a large file — that pulls the whole thing into memory. Pass the \`File\`/\`Blob\` straight to \`upload()\`.
 - Do not compress video/audio before upload: already-compressed formats gain nothing, and \`Content-Encoding\` breaks range requests (video seeking).
 
+**Connections (user's Linear, HubSpot, Stripe, Notion… via one-click OAuth) — never ask for an API key for these:**
+- Read \`src/resources/agent-docs/CONNECTIONS_GUIDE.md\` before building on one.
+- Mini-app: declare in \`apps/<id>/connections.json\` → \`{"connections":["hubspot"]}\`, then \`papr.connect.button(el, 'hubspot')\` + \`await papr.connect.callJson('hubspot', 'search_contacts', {...})\` from \`/__papr__/papr-sdk.ts\`. Learn tool names/args with \`find_tools\`, don't guess.
+- Job: \`from papr_mcp import call_json\` (on PYTHONPATH). Agent: \`connect_mcp\` + \`<server>__<tool>\` via find_tools.
+
 **Jobs that PRODUCE files (recorders, exporters, scrapers) — register at creation:**
 - A job has a path, not a Blob, so it uses the Python helper rather than the browser SDK. No pip install; it is on \`PYTHONPATH\` already:
 \`\`\`python

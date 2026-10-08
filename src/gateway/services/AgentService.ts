@@ -1711,8 +1711,9 @@ export class AgentService {
         coreToolIds: options?.allowedToolIds
           ? // A sub-agent profile has already narrowed the registry to what it
             // needs, so deferring inside that set would withhold tools the
-            // profile deliberately granted.
-            options.allowedToolIds
+            // profile deliberately granted. Use the expanded set: `mcp:linear`
+            // in the profile becomes the concrete linear__* ids here.
+            Object.keys(registryTools)
           : undefined,
       });
 

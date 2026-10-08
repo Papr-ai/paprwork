@@ -1,0 +1,146 @@
+/* McpConnectionsTab — one-click MCP sign-in grid */
+
+.mcp-tab__search {
+  width: 100%;
+  margin: 4px 0 20px;
+}
+
+.mcp-tab__error {
+  padding: 10px 14px;
+  margin-bottom: 16px;
+  border-radius: 10px;
+  background: color-mix(in srgb, var(--error) 12%, transparent);
+  color: var(--error);
+  font-size: 13px;
+}
+
+.mcp-tab__empty {
+  padding: 32px;
+  text-align: center;
+  color: var(--text-secondary);
+  font-size: 13px;
+}
+
+.mcp-group {
+  margin-bottom: 24px;
+}
+
+.mcp-group__title {
+  margin: 0 0 10px;
+  font-size: 12px;
+  font-weight: 600;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+  color: var(--text-tertiary);
+}
+
+.mcp-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(260px, 1fr));
+  gap: 10px;
+}
+
+.mcp-card {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding: 12px 14px;
+  border: 1px solid var(--border-color);
+  border-radius: 12px;
+  background: var(--background-secondary);
+  transition: border-color 0.15s ease;
+}
+
+.mcp-card:hover {
+  border-color: var(--text-tertiary);
+}
+
+.mcp-card--connected {
+  border-color: color-mix(in srgb, var(--success) 45%, var(--border-color));
+}
+
+.mcp-card--awaiting_user,
+.mcp-card--connecting {
+  border-color: color-mix(in srgb, var(--accent) 55%, var(--border-color));
+}
+
+.mcp-card--needs_reauth,
+.mcp-card--error {
+  border-color: color-mix(in srgb, var(--warning) 55%, var(--border-color));
+}
+
+.mcp-card__icon {
+  flex: none;
+  display: grid;
+  place-items: center;
+  width: 34px;
+  height: 34px;
+  border-radius: 9px;
+  background: var(--background-tertiary);
+  color: var(--text-secondary);
+  font-size: 12px;
+  font-weight: 700;
+}
+
+.mcp-card__body {
+  flex: 1;
+  min-width: 0;
+}
+
+.mcp-card__name {
+  font-size: 14px;
+  font-weight: 600;
+  color: var(--text-primary);
+}
+
+.mcp-card__desc {
+  margin-top: 2px;
+  font-size: 12px;
+  color: var(--text-tertiary);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.mcp-card--connected .mcp-card__desc {
+  color: var(--success);
+}
+
+.mcp-card--awaiting_user .mcp-card__desc {
+  color: var(--accent);
+}
+
+.mcp-card--needs_reauth .mcp-card__desc,
+.mcp-card--error .mcp-card__desc {
+  color: var(--warning);
+  white-space: normal;
+}
+
+.mcp-card__link {
+  display: inline-block;
+  margin-top: 4px;
+  font-size: 12px;
+  color: var(--text-secondary);
+  text-decoration: underline;
+}
+
+.mcp-card__action {
+  flex: none;
+}
+
+.mcp-card__soon {
+  font-size: 11px;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  color: var(--text-tertiary);
+}
+
+.mcp-custom {
+  display: flex;
+  gap: 8px;
+}
+
+.mcp-custom .form-input {
+  flex: 1;
+}

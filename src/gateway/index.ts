@@ -43,6 +43,7 @@ import { fileURLToPath } from "url";
 import { initializeAgentService } from "./services/AgentService.js";
 import { registerAppFilesRoutes } from "./services/appFiles/appFilesRoutes.js";
 import { registerChatgptHistoryRoutes } from "./services/chatgptHistoryRoutes.js";
+import { registerMcpRoutes } from "./services/mcp/mcpRoutes.js";
 import {
   getPaprAppsRoot,
   getPaprRoot,
@@ -247,6 +248,53 @@ async function initializeServices(): Promise<void> {
       }),
     );
     console.log("[Gateway] AgentService initialized");
+
+    // Remote MCP connections (native OAuth). Restore is non-interactive and
+    // off the startup path: a slow or dead MCP server must not delay boot.
+    {
+      const { initializeMcpConnectionService } = await import("./services/mcp/McpConnectionService.js");
+      const { createKeychainMcpCredentialStore } = await import("./services/mcp/mcpCredentialStore.js");
+      const { BUILTIN_MCP_SERVERS } = await import("./services/mcp/mcpServerCatalog.js");
+      const { getAgentService } = await import("./services/AgentService.js");
+      const mcp = initializeMcpConnectionService({
+        store: createKeychainMcpCredentialStore(
+          (id) => BUILTIN_MCP_SERVERS.find((s) => s.id === id)?.name ?? id,
+        ),
+      });
+      const registry = getAgentService().getToolRegistry();
+      mcp.setToolSink({
+        // oxlint-disable-next-line @typescript-eslint/no-explicit-any
+        register: (tool) => registry.register(tool as any),
+        unregister: (id) => registry.unregister(id),
+      });
+      setTimeout(() => {
+        void mcp.restoreAll().catch((err) => console.warn("[MCP] restore failed:", err));
+      }, 3_000);
+
+      // Mini-apps reach connections only for services they declare in
+      // apps/<id>/connections.json, after the user approves app × service.
+      const { McpAppAccess } = await import("./services/mcp/mcpAppAccess.js");
+      const { setMcpAppAccess } = await import("./services/mcp/mcpRoutes.js");
+      const { getPaprRoot } = await import("../core/utils/paprRoot.js");
+      const { getAppService } = await import("./services/AppService.js");
+      setMcpAppAccess(
+        new McpAppAccess({
+          paprRoot: getPaprRoot,
+          appTitle: async (appId) => (await getAppService().getApp(appId))?.title,
+          askUser: async ({ appId, appTitle, serverId, serverName }) => {
+            const { requestKeyPermission } = await import("./permissions/PermissionRequester.js");
+            const { mcpAppGrantKey } = await import("./services/mcp/mcpAppAccess.js");
+            const r = await requestKeyPermission({
+              keyName: mcpAppGrantKey(appId, serverId),
+              description: `${appTitle} wants to use your ${serverName} connection (read and act on your ${serverName} data). Allow?`,
+              isEnvKey: false,
+              toolContext: { toolName: `${appTitle} → ${serverName}` },
+            });
+            return r.approved;
+          },
+        }),
+      );
+    }
 
     // Initialize workspace (creates ~/Papr/workspace/ and templates on first run)
     console.log("[Gateway] Initializing WorkspaceService...");
@@ -1845,6 +1893,7 @@ async function startGateway(): Promise<void> {
     // this is where large assets belong.
     // ─────────────────────────────────────────────────────────────────────────
     registerChatgptHistoryRoutes(app);
+    registerMcpRoutes(app);
     registerAppFilesRoutes(app, {
       resolveSource: (appId, sourceId, sql, operation) =>
         resolveLinkedSource(appId, sourceId, sql, operation),

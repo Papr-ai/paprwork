@@ -107,6 +107,9 @@ export class CommandJobExecutor implements IJobExecutor {
       ...nvmEnv,
       JOB_DIR: params.jobDir,
       JOB_DB: jobDbPath,
+      // papr_files / papr_mcp reach the gateway here; honors a non-default port.
+      PAPR_GATEWAY_URL:
+        process.env.PAPR_GATEWAY_URL ?? `http://127.0.0.1:${process.env.GATEWAY_PORT ?? 18789}`,
       // `from papr_files import add` without vendoring the helper per job.
       ...jobSdkEnv(nvmEnv.PYTHONPATH ?? process.env.PYTHONPATH),
       ...(writeTargets.length > 0
