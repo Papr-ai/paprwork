@@ -14,6 +14,8 @@ export interface SubmitCloudAppChangeInput {
   installedAppId: string;
   title: string;
   description: string;
+  /** Maintainer/Admin: merge into the app now instead of waiting for review. */
+  publishNow?: boolean;
 }
 
 export interface SubmitCloudAppChangeResult {
@@ -23,6 +25,23 @@ export interface SubmitCloudAppChangeResult {
   branch?: string;
   headSha?: string;
   status?: string;
+  publishedDirectly?: boolean;
+  publishNote?: string;
+}
+
+export type SourceAppRole = "viewer" | "contributor" | "maintainer" | "admin" | "none";
+
+/** Your role on the app this copy came from; null when unknown. */
+export async function fetchSourceAppRole(installedAppId: string): Promise<SourceAppRole | null> {
+  try {
+    const res = await fetch(
+      `${GATEWAY}/api/cloud/apps/${encodeURIComponent(installedAppId)}/source-role`,
+    );
+    if (!res.ok) return null;
+    return ((await res.json()) as { role?: SourceAppRole | null }).role ?? null;
+  } catch {
+    return null;
+  }
 }
 
 export async function submitCloudAppChange(
@@ -33,11 +52,32 @@ export async function submitCloudAppChange(
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify(input),
   });
-  const body = (await res.json()) as SubmitCloudAppChangeResult & { error?: string };
+  const body = (await res.json()) as SubmitCloudAppChangeResult & {
+    error?: string;
+    code?: string;
+    conflictFiles?: string[];
+  };
   if (!res.ok) {
+    if (body.code === "needs_update") {
+      throw new ProposeNeedsUpdateError(
+        body.error ?? "Get updates first",
+        body.conflictFiles ?? [],
+      );
+    }
     throw new Error(body.error ?? `Failed (${res.status})`);
   }
   return body;
+}
+
+/** The owner changed files you also edited: resolve with Get updates, then send again. */
+export class ProposeNeedsUpdateError extends Error {
+  constructor(
+    message: string,
+    readonly conflictFiles: string[],
+  ) {
+    super(message);
+    this.name = "ProposeNeedsUpdateError";
+  }
 }
 
 export type SentProposalStatus =

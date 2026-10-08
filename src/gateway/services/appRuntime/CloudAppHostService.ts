@@ -205,6 +205,7 @@ export class MemoryServerPublishResolver implements AppPublishResolver {
       mode: AppAccessContext["mode"];
       canRead: boolean;
       canWrite: boolean;
+      role?: string;
     };
     return {
       orgId: json.orgId,
@@ -214,6 +215,7 @@ export class MemoryServerPublishResolver implements AppPublishResolver {
       mode: json.mode,
       canRead: json.canRead,
       canWrite: json.canWrite,
+      ...(json.role ? { role: json.role } : {}),
     };
   }
 }

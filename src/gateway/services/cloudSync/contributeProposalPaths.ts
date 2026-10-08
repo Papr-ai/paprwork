@@ -26,6 +26,16 @@ export function isProposalExcludedAppPath(relativePath: string): boolean {
   return EXCLUDED_PREFIXES.some((prefix) => rel.startsWith(prefix));
 }
 
+/**
+ * Build outputs a direct publish (Maintainer/Admin) must carry: nobody rebuilds
+ * them on the publisher's side afterwards, unlike an accepted proposal.
+ */
+const BUILD_OUTPUT_FILES = new Set(["backend/bundle.json", "__papr__/app-meta.json"]);
+export function isBuildOutputAppPath(relativePath: string): boolean {
+  const rel = relativePath.replace(/\\/g, "/").replace(/^\.\//, "");
+  return rel.startsWith("dist/") || BUILD_OUTPUT_FILES.has(rel);
+}
+
 /** Drop excluded paths in place; returns the removed paths (sorted). */
 export function stripProposalExcludedAppFiles(files: Map<string, string>): string[] {
   const removed: string[] = [];

@@ -978,7 +978,8 @@ async function assertNotCollaboratorOnSharedDatabase(dbId: string): Promise<void
   if (isCollaboratorOnSharedDatabase(dbId)) {
     throw new Error(
       `Database ${dbId} is the team's shared data and the publisher owns its schema. ` +
-        "Propose the migration with submit_cloud_app_pr, or switch this copy to your own data first.",
+        "Create it with apply: false, then submit_cloud_app_pr (a Maintainer/Admin can pass publishNow: true to " +
+        "apply it to the team's database and publish), or switch this copy to your own data first.",
     );
   }
 }

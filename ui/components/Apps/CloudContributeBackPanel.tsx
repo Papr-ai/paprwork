@@ -8,7 +8,10 @@
 import { useCallback, useEffect, useState } from "react";
 import {
   listSentProposals,
+  ProposeNeedsUpdateError,
+  fetchSourceAppRole,
   submitCloudAppChange,
+  type SourceAppRole,
   type SentProposal,
 } from "../../utils/cloudContributeApi";
 
@@ -56,6 +59,14 @@ export function CloudContributeBackPanel({
   const [sent, setSent] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [proposals, setProposals] = useState<SentProposal[] | null>(null);
+  const [role, setRole] = useState<SourceAppRole | null>(null);
+  const [note, setNote] = useState<string | null>(null);
+  // Maintainers and Admins may publish straight into the app (roles plan).
+  const canPublish = role === "maintainer" || role === "admin";
+
+  useEffect(() => {
+    void fetchSourceAppRole(lineage.installedAppId).then(setRole);
+  }, [lineage.installedAppId]);
 
   const loadProposals = useCallback(async () => {
     try {
@@ -69,7 +80,7 @@ export function CloudContributeBackPanel({
     void loadProposals();
   }, [loadProposals]);
 
-  const submit = async () => {
+  const submit = async (publishNow = false) => {
     if (!description.trim()) {
       setError("Add a short summary of what you changed");
       return;
@@ -77,19 +88,32 @@ export function CloudContributeBackPanel({
     setSubmitting(true);
     setError(null);
     setSent(false);
+    setNote(null);
     try {
-      await submitCloudAppChange({
+      const result = await submitCloudAppChange({
         sourceNamespaceId: lineage.sourceNamespaceId,
         sourceSlug: lineage.sourceSlug,
         installedAppId: lineage.installedAppId,
         title: title.trim(),
         description: description.trim(),
+        publishNow,
       });
+      if (result.publishedDirectly) {
+        setNote("Published to the app.");
+      } else if (result.publishNote) {
+        setNote(result.publishNote);
+      }
       setSent(true);
       setDescription("");
       void loadProposals();
     } catch (err) {
-      setError((err as Error).message.slice(0, 160));
+      if (err instanceof ProposeNeedsUpdateError && err.conflictFiles.length > 0) {
+        const files = err.conflictFiles.slice(0, 3).join(", ");
+        const more = err.conflictFiles.length > 3 ? ` +${err.conflictFiles.length - 3} more` : "";
+        setError(`${err.message} (${files}${more})`);
+      } else {
+        setError((err as Error).message.slice(0, 160));
+      }
     } finally {
       setSubmitting(false);
     }
@@ -98,8 +122,9 @@ export function CloudContributeBackPanel({
   return (
     <div className="share-sheet__section share-sheet__fork">
       <p className="share-sheet__section-desc">
-        Send your edits to the owner. They can accept them into the main app or
-        decline; either way your copy stays as it is.
+        {canPublish
+          ? "Publish your edits straight into the app, or send them for review first. Your copy stays as it is."
+          : "Send your edits to the owner. They can accept them into the main app or decline; either way your copy stays as it is."}
       </p>
 
       <label className="share-sheet__field-label" htmlFor="change-title">
@@ -130,14 +155,25 @@ export function CloudContributeBackPanel({
       />
 
       {error ? <p className="share-sheet__error">{error}</p> : null}
+      {note ? <p className="share-sheet__section-desc">{note}</p> : null}
 
+      {canPublish ? (
+        <button
+          type="button"
+          className="share-sheet__primary-btn"
+          disabled={busy || submitting}
+          onClick={() => void submit(true)}
+        >
+          {submitting ? "Publishing…" : "Publish now"}
+        </button>
+      ) : null}
       <button
         type="button"
-        className="share-sheet__primary-btn"
+        className={canPublish ? "share-sheet__secondary-btn" : "share-sheet__primary-btn"}
         disabled={busy || submitting}
-        onClick={() => void submit()}
+        onClick={() => void submit(false)}
       >
-        {submitting ? "Sending proposal…" : sent ? "Sent ✓" : "Send to owner"}
+        {submitting && !canPublish ? "Sending proposal…" : sent && !note ? "Sent ✓" : canPublish ? "Send for review" : "Send to owner"}
       </button>
 
       {proposals && proposals.length > 0 ? (

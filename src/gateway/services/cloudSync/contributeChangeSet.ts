@@ -8,7 +8,7 @@
  * three-way merge reports genuine overlaps as conflicts.
  */
 
-import { isProposalExcludedAppPath } from "./contributeProposalPaths.js";
+import { isBuildOutputAppPath, isProposalExcludedAppPath } from "./contributeProposalPaths.js";
 import {
   DATA_SOURCES_FILE,
   LINKED_DATABASES_FILE,
@@ -42,6 +42,8 @@ export interface ProposalTree {
    * deleted: propose edits and additions only.
    */
   noDeletes?: boolean;
+  /** Direct publish: ship rebuilt dist/ and backend bundle too (app tree only). */
+  includeBuildOutputs?: boolean;
 }
 
 export interface ProposalChangeSet {
@@ -65,7 +67,9 @@ function skipped(tree: ProposalTree, rel: string): boolean {
   if (tree.skipPrefixes?.some((p) => rel === p.replace(/\/$/, "") || rel.startsWith(p))) return true;
   if (isLocalScratchPath(rel, { job: tree.kind === "job" })) return true;
   if (tree.kind === "app") {
-    if (isProposalExcludedAppPath(rel)) return true;
+    if (isProposalExcludedAppPath(rel) && !(tree.includeBuildOutputs && isBuildOutputAppPath(rel))) {
+      return true;
+    }
     if (REGENERATED_FILES.has(rel) && rel !== LINKED_DATABASES_FILE) return true;
   }
   return false;

@@ -71,6 +71,17 @@ const submitChangeSchema = z.object({
   installedAppId: z.string().uuid().describe("Your local fork app ID"),
   title: z.string().min(1).max(200),
   description: z.string().min(1).max(4000),
+  publishNow: z
+    .boolean()
+    .optional()
+    .describe(
+      "Only when the user is a Maintainer or Admin of the source app and asked to publish (not propose). " +
+        "Merges straight into the live app. A database migration in the change is applied to the team's cloud " +
+        "database first and verified, then the code is published (same order as the publisher's own Publish). " +
+        "If that can't happen (role, offline, own-data or per-user copy, older server, or the app requires review) " +
+        "it is sent for review instead and publishNote says why. On a team-shared copy, create the migration with " +
+        "papr_db_create_migration({ apply: false }) — collaborators can't apply it locally — then publish with publishNow.",
+    ),
 });
 
 const listPrsSchema = z.object({
@@ -289,34 +300,26 @@ Not for editing the owner's app directly. Pulls the publisher's latest first (st
     const startTime = performance.now();
     try {
       await requirePaprCloudLogin();
-      // Same as the Propose button: get the publisher's latest first, and stop
-      // if anything overlaps, so the proposal never carries stale files.
-      const { checkPublisherUpstreamRevision } = await import(
-        "../../gateway/services/syncV3/checkPublisherUpstreamRevision.js"
+      // Same as the Send to owner button: get the publisher's latest first, and
+      // stop if anything overlaps, so the proposal never carries stale files.
+      const { pullPublisherBeforePropose } = await import(
+        "../../gateway/services/cloudSync/proposePullFirst.js"
       );
-      const upstream = await checkPublisherUpstreamRevision(args.installedAppId);
-      if (upstream.publisherUpdatesAvailable) {
-        const { getCloudAppTrackSyncService } = await import(
-          "../../gateway/services/CloudAppTrackSyncService.js"
-        );
-        const pulled = await getCloudAppTrackSyncService().syncTrackApp(args.installedAppId);
-        if (pulled.conflictFiles.length > 0) {
-          return {
-            success: false,
-            data: {
-              proposed: false,
-              needsUserDecision: true,
-              reason:
-                "The publisher changed the same lines you edited. Nothing was proposed. " +
-                "Show the user these files and ask how to resolve them before proposing.",
-              conflictFiles: pulled.conflictFiles,
-              updatedFiles: pulled.updatedFiles,
-              mergedFiles: pulled.mergedFiles ?? [],
-            },
-            duration: performance.now() - startTime,
-            timestamp: new Date().toISOString(),
-          };
-        }
+      const conflict = await pullPublisherBeforePropose(args.installedAppId);
+      if (conflict) {
+        return {
+          success: false,
+          data: {
+            proposed: false,
+            needsUserDecision: true,
+            reason:
+              "The publisher changed the same lines you edited. Nothing was proposed. " +
+              "Show the user these files and ask how to resolve them before proposing.",
+            ...conflict,
+          },
+          duration: performance.now() - startTime,
+          timestamp: new Date().toISOString(),
+        };
       }
       const data = await getCloudAppContributeService().propose({
         sourceNamespaceId: args.sourceNamespaceId,
@@ -324,6 +327,7 @@ Not for editing the owner's app directly. Pulls the publisher's latest first (st
         installedAppId: args.installedAppId,
         title: args.title,
         description: args.description,
+        publishNow: args.publishNow === true,
       });
       return {
         success: true,
