@@ -129,4 +129,32 @@ describe("goal trackers", () => {
     expect(p).toContain("/api/workspace/focus/tracker/link");
     expect(p).toMatch(/Never ask for a key the user already has/);
   });
+
+  it("the goal page gets its payoff number, history and evidence (chart + tiles need them)", () => {
+    const history = Array.from({ length: 40 }, (_, i) => ({ date: `2026-09-${String(i).padStart(2, "0")}`, impressions7: i }));
+    const items = Array.from({ length: 35 }, (_, i) => ({ source: "x", at: "2026-10-08T03:00:00Z", impressions: i }));
+    const active = resolveTrackerState({
+      template: social, link: { jobId: "j1" }, jobExists: true, has: () => true,
+      metrics: { goalId: "F-1", template: "social-presence", updatedAt: "2026-10-08", summary: { impressions7: 9 }, history, items,
+        sources: { x: { ok: true, profile: { handle: "me", avatar: "https://pbs.twimg.com/a.jpg" } } } },
+    });
+    expect(active.metrics?.hero).toBe("impressions7");
+    expect(active.metrics?.history).toHaveLength(30);
+    expect(active.metrics?.history?.at(-1)?.impressions7).toBe(39);
+    expect(active.metrics?.items).toHaveLength(30);
+    expect(active.metrics?.sources?.x.profile?.avatar).toMatch(/^https:/);
+    // A custom tracker's first summary key is its headline.
+    const custom = resolveTrackerState({ template: undefined, link: { jobId: "j2" }, jobExists: true, has: () => true,
+      metrics: { goalId: "F-2", template: "custom", updatedAt: "2026-10-08", summary: { signed: 3, calls: 9 } } });
+    expect(custom.metrics?.hero).toBe("signed");
+  });
+
+  it("custom trackers are asked for the visual goal-page shape: items with time, faces, logos", () => {
+    const p = builderPrompt({ id: "F-1", title: "Land 5 design partners" }, undefined, "http://127.0.0.1:18789");
+    expect(p).toContain("preloaded-goal-page-design");
+    expect(p).toMatch(/"at" \(ISO time/);
+    expect(p).toMatch(/"domain"/);
+    expect(p).toMatch(/profile/);
+    expect(p).toMatch(/Never generate or guess images/);
+  });
 });
