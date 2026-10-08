@@ -718,6 +718,14 @@ export async function mergeDatabaseRegistryForCopy(input: {
   /** Fork install: mint new dbId per linked registry database. */
   forkDbIds?: boolean;
   localAppId?: string;
+  /**
+   * Shared-data install: the publisher's app id and this copy's new id. The
+   * install remaps publisher id → copy id in every app file, which rewrites
+   * linked-databases.json's schemaOwnerAppId too and makes the copy look like
+   * the schema owner. The publisher always owns a shared database's schema.
+   */
+  publisherAppId?: string;
+  installedAppId?: string;
 }): Promise<{ registryDbIds: Set<string>; dbIdRemap: Map<string, string> }> {
   const sourceRegistry = await readDatabasesRegistry(input.sourceRegistryPath);
   const targetRegistry = await readDatabasesRegistry(input.targetRegistryPath);
@@ -737,6 +745,14 @@ export async function mergeDatabaseRegistryForCopy(input: {
   };
   const dbIdRemap = new Map<string, string>();
   const registryDbIds = new Set<string>();
+  const keepPublisherOwner = (rec: DatabaseRecord): DatabaseRecord =>
+    !input.forkDbIds &&
+    input.publisherAppId &&
+    input.installedAppId &&
+    input.publisherAppId !== input.installedAppId &&
+    rec.schemaOwnerAppId === input.installedAppId
+      ? { ...rec, schemaOwnerAppId: input.publisherAppId }
+      : rec;
 
   for (const dbId of dbIds) {
     const record =
@@ -757,7 +773,7 @@ export async function mergeDatabaseRegistryForCopy(input: {
       );
       const existing = liveRecordOrUndefined(merged.databases[dbId]);
       merged.databases[dbId] = {
-        ...(existing ?? record),
+        ...keepPublisherOwner(existing ?? record),
         // An install always (re)provisions this DB — never inherit a tombstone
         // from an earlier failed install/delete, or integrity rolls it back.
         status: "active",
@@ -791,7 +807,7 @@ export async function mergeDatabaseRegistryForCopy(input: {
       });
     }
     const existing = liveRecordOrUndefined(merged.databases[dbId]);
-    const base = stripReplicaSyncFields(existing ?? record);
+    const base = stripReplicaSyncFields(keepPublisherOwner(existing ?? record));
     // Fork keeps no storage mode from the publisher: provisionInstalledDatabases
     // picks one for THIS device (replica / cloud-direct / local) right after merge.
     const { syncMode: _forkOmitSyncMode, ...forkLocalBase } = base;
@@ -1269,6 +1285,8 @@ export async function syncAppDatabaseResourcesToTarget(
     sourceAppDir,
     forkDbIds,
     localAppId: forkDbIds ? input.appId : undefined,
+    publisherAppId: input.sourceAppId,
+    installedAppId: input.appId,
   });
   await applyDbIdRemapToAppFiles(targetAppDir, dbIdRemap);
   await applyDbIdRemapToJobs({
