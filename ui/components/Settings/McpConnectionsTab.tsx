@@ -9,6 +9,7 @@
 import { useCallback, useEffect, useMemo, useState } from "react";
 import "./McpConnectionsTab.css";
 import { McpServerSheet } from "./McpServerSheet";
+import { canConnect, type useOrgConnections } from "../../hooks/useOrgConnections";
 
 const GATEWAY = "http://localhost:18789";
 const POLL_MS = 2_000;
@@ -54,7 +55,14 @@ function initials(name: string): string {
   return name.replace(/[^A-Za-z0-9 ]/g, "").split(" ").map((w) => w[0]).join("").slice(0, 2).toUpperCase();
 }
 
-export function McpConnectionsTab({ embedded = false }: { embedded?: boolean } = {}) {
+export function McpConnectionsTab({
+  embedded = false,
+  org,
+}: {
+  embedded?: boolean;
+  /** Org rules + requests; when a service isn't approved the card offers Request instead of Connect. */
+  org?: ReturnType<typeof useOrgConnections>;
+} = {}) {
   const [servers, setServers] = useState<McpServer[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
@@ -171,6 +179,31 @@ export function McpConnectionsTab({ embedded = false }: { embedded?: boolean } =
             <button type="button" className="settings-btn settings-btn--ghost" disabled={isBusy} onClick={() => void act(s.id, "cancel")}>
               Cancel
             </button>
+          ) : org && !canConnect(org.policy, s.id) ? (
+            (() => {
+              const mine = org.requests.find((r) => r.serverId === s.id);
+              return mine ? (
+                <>
+                  <span className="mcp-card__requested">Requested</span>
+                  <button type="button" className="settings-btn settings-btn--ghost" onClick={(e) => { e.stopPropagation(); void org.cancel(mine.id); }}>
+                    Cancel
+                  </button>
+                </>
+              ) : (
+                <button
+                  type="button"
+                  className="settings-btn settings-btn--secondary"
+                  title="Your organization approves services before members connect them"
+                  onClick={(e) => {
+                    e.stopPropagation();
+                    const note = window.prompt(`Ask your admin to approve ${s.name}. Add a note (optional):`, "");
+                    if (note !== null) void org.request(s.id, s.name, note);
+                  }}
+                >
+                  Request
+                </button>
+              );
+            })()
           ) : (
             <button type="button" className="settings-btn settings-btn--primary" disabled={isBusy} onClick={() => void act(s.id, "connect")}>
               {isBusy ? "Opening…" : s.state === "needs_reauth" || s.state === "error" ? "Reconnect" : "Connect"}

@@ -10,6 +10,9 @@ import { useEffect, useState } from "react";
 import { McpConnectionsTab } from "./McpConnectionsTab";
 import { ConnectedPlatformsTab } from "./ConnectedPlatformsTab";
 import { IntegrationKeysTab } from "./IntegrationKeysTab";
+import { OrgConnectionsPanel } from "./OrgConnectionsPanel";
+import { useOrgConnections } from "../../hooks/useOrgConnections";
+import { CONNECTIONS_REQUESTS_EVENT } from "../../stores/proposalNoticeListener";
 import "./ConnectionsView.css";
 
 export type ConnectionsSubTab = "services" | "keys";
@@ -26,6 +29,15 @@ function readSub(): ConnectionsSubTab {
 
 export function ConnectionsView({ link }: { link?: { sub: ConnectionsSubTab; n: number } | null }) {
   const [sub, setSub] = useState<ConnectionsSubTab>(() => link?.sub ?? readSub());
+  const org = useOrgConnections();
+  const pending = org.isAdmin ? org.requests.length : 0;
+
+  // A request notification lands on Services, where the admin's Requests list lives.
+  useEffect(() => {
+    const toServices = () => setSub("services");
+    window.addEventListener(CONNECTIONS_REQUESTS_EVENT, toServices);
+    return () => window.removeEventListener(CONNECTIONS_REQUESTS_EVENT, toServices);
+  }, []);
 
   // A deep link (e.g. "missing key" → Settings) can switch tabs while mounted; n re-fires repeats.
   useEffect(() => {
@@ -65,13 +77,18 @@ export function ConnectionsView({ link }: { link?: { sub: ConnectionsSubTab; n: 
             onClick={() => setSub(id)}
           >
             {label}
+            {id === "services" && pending > 0 && (
+              <span className="connections-view__badge" aria-label={`${pending} pending requests`}>
+                {pending}
+              </span>
+            )}
           </button>
         ))}
       </div>
 
       {sub === "services" ? (
         <div role="tabpanel" aria-label="Services">
-          <McpConnectionsTab embedded />
+          <McpConnectionsTab embedded org={org} />
           <section className="connections-view__browser">
             <h3 className="connections-view__group">Browser sign-ins</h3>
             <p className="connections-view__note">
@@ -80,6 +97,7 @@ export function ConnectionsView({ link }: { link?: { sub: ConnectionsSubTab; n: 
             </p>
             <ConnectedPlatformsTab embedded />
           </section>
+          <OrgConnectionsPanel org={org} />
         </div>
       ) : (
         <div role="tabpanel" aria-label="API keys">

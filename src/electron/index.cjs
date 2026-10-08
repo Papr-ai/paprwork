@@ -2439,6 +2439,15 @@ function initializeSystemInvokeHandler(mainWindow) {
         body: options.body || '',
         urgency: options.urgency || 'normal'
       });
+      // Optional click-through, e.g. a connection request opens Settings → Connections.
+      if (options.openSettings && typeof options.openSettings === 'string') {
+        notification.on('click', () => {
+          if (!mainWindow || mainWindow.isDestroyed()) return;
+          if (mainWindow.isMinimized()) mainWindow.restore();
+          mainWindow.focus();
+          mainWindow.webContents.send('notification:open-settings', { target: options.openSettings });
+        });
+      }
       notification.show();
       return { success: true };
     },

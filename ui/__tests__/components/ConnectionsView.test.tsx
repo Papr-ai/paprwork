@@ -11,6 +11,12 @@ vi.mock("../../components/Settings/IntegrationKeysTab", () => ({
   IntegrationKeysTab: ({ embedded }: { embedded?: boolean }) => <div>keys{embedded ? ":embedded" : ""}</div>,
 }));
 
+vi.mock("../../hooks/useOrgConnections", () => ({
+  useOrgConnections: () => ({ policy: null, isAdmin: false, requests: [] }),
+}));
+vi.mock("../../components/Settings/OrgConnectionsPanel", () => ({ OrgConnectionsPanel: () => null }));
+vi.mock("../../stores/proposalNoticeListener", () => ({ CONNECTIONS_REQUESTS_EVENT: "papr:connections-show-requests" }));
+
 import { ConnectionsView } from "../../components/Settings/ConnectionsView";
 
 describe("ConnectionsView", () => {

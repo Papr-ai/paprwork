@@ -19,7 +19,10 @@ export type ProposalEventType =
   | "proposal.received"
   | "proposal.accepted"
   | "proposal.declined"
-  | "proposal.needs_update";
+  | "proposal.needs_update"
+  | "connection.requested"
+  | "connection.approved"
+  | "connection.declined";
 
 export interface ProposalEvent {
   id: string;
@@ -40,6 +43,8 @@ export interface ProposalNotice {
   body: string;
   /** App whose share bar / inbox this is about, on this machine. */
   appId?: string;
+  /** Connections notices open Settings → Connections (org requests for admins). */
+  openSettings?: "connections" | "connections-requests";
   requestId?: string;
 }
 
@@ -58,8 +63,24 @@ function quoted(title?: string | null): string {
   return t ? `“${t.length > 60 ? `${t.slice(0, 57)}…` : t}”` : "your proposal";
 }
 
+/** Org connection requests ride the same feed (memory server connection_policy_service). */
+function connectionNotice(e: ProposalEvent): ProposalNotice | null {
+  const name = e.title?.trim() || String(e.detail?.serverId ?? "a service");
+  const reason = typeof e.detail?.reason === "string" && e.detail.reason ? ` "${e.detail.reason}"` : "";
+  switch (e.type) {
+    case "connection.requested":
+      return { title: `${name} requested`, body: `A teammate asked to connect ${name}. Review it in Connections.`, openSettings: "connections-requests" };
+    case "connection.approved":
+      return { title: `${name} approved`, body: `You can connect ${name} now.`, openSettings: "connections" };
+    case "connection.declined":
+      return { title: `${name} not approved`, body: `Your admin declined ${name}.${reason}`, openSettings: "connections" };
+  }
+  return null;
+}
+
 /** Plain-language notice, or null for events not worth interrupting for. */
 export function noticeForEvent(e: ProposalEvent): ProposalNotice | null {
+  if (e.type.startsWith("connection.")) return connectionNotice(e);
   const app = e.sourceSlug ? ` (${e.sourceSlug})` : "";
   const appId =
     (e.role === "owner" ? e.sourceAppId : e.installedAppId) ?? undefined;
@@ -181,6 +202,13 @@ function defaultRefresh(appIds: string[]): void {
   broadcast({ type: "cloud-change-requests:stale", data: {} });
 }
 
+/** Connections UI (requests list, badge, Request button state) refreshes on this. */
+function refreshConnections(events: ProposalEvent[]): void {
+  if (events.some((e) => e.type.startsWith("connection."))) {
+    broadcast({ type: "mcp-org:stale", data: {} });
+  }
+}
+
 function defaultNotify(notices: ProposalNotice[]): void {
   if (notices.length === 0) return;
   broadcast({ type: "cloud-proposal:notify", data: { notices } });
@@ -205,6 +233,7 @@ export async function pollProposalEvents(
     if (!page) return 0;
     if (page.events.length > 0) {
       (deps.onRefresh ?? defaultRefresh)(appIdsToRefresh(page.events));
+      if (!deps.onRefresh) refreshConnections(page.events);
       (deps.onNotify ?? defaultNotify)(summarizeNotices(page.events));
     }
     if (page.cursor && page.cursor !== since) {
