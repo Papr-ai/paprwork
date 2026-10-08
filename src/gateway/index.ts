@@ -43,6 +43,7 @@ import { fileURLToPath } from "url";
 import { initializeAgentService } from "./services/AgentService.js";
 import { registerAppFilesRoutes } from "./services/appFiles/appFilesRoutes.js";
 import { registerChatgptHistoryRoutes } from "./services/chatgptHistoryRoutes.js";
+import { registerMcpRoutes } from "./services/mcp/mcpRoutes.js";
 import {
   getPaprAppsRoot,
   getPaprRoot,
@@ -247,6 +248,29 @@ async function initializeServices(): Promise<void> {
       }),
     );
     console.log("[Gateway] AgentService initialized");
+
+    // Remote MCP connections (native OAuth). Restore is non-interactive and
+    // off the startup path: a slow or dead MCP server must not delay boot.
+    {
+      const { initializeMcpConnectionService } = await import("./services/mcp/McpConnectionService.js");
+      const { createKeychainMcpCredentialStore } = await import("./services/mcp/mcpCredentialStore.js");
+      const { BUILTIN_MCP_SERVERS } = await import("./services/mcp/mcpServerCatalog.js");
+      const { getAgentService } = await import("./services/AgentService.js");
+      const mcp = initializeMcpConnectionService({
+        store: createKeychainMcpCredentialStore(
+          (id) => BUILTIN_MCP_SERVERS.find((s) => s.id === id)?.name ?? id,
+        ),
+      });
+      const registry = getAgentService().getToolRegistry();
+      mcp.setToolSink({
+        // oxlint-disable-next-line @typescript-eslint/no-explicit-any
+        register: (tool) => registry.register(tool as any),
+        unregister: (id) => registry.unregister(id),
+      });
+      setTimeout(() => {
+        void mcp.restoreAll().catch((err) => console.warn("[MCP] restore failed:", err));
+      }, 3_000);
+    }
 
     // Initialize workspace (creates ~/Papr/workspace/ and templates on first run)
     console.log("[Gateway] Initializing WorkspaceService...");
@@ -1845,6 +1869,7 @@ async function startGateway(): Promise<void> {
     // this is where large assets belong.
     // ─────────────────────────────────────────────────────────────────────────
     registerChatgptHistoryRoutes(app);
+    registerMcpRoutes(app);
     registerAppFilesRoutes(app, {
       resolveSource: (appId, sourceId, sql, operation) =>
         resolveLinkedSource(appId, sourceId, sql, operation),
