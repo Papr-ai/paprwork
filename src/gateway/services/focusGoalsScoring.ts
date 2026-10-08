@@ -48,6 +48,7 @@ export interface ActivityLog {
   text: string;
 }
 export interface ActivityTask {
+  id?: string;
   title: string;
   goalId?: string;
   due?: string;
@@ -84,6 +85,12 @@ export interface FocusGoal {
   due?: string;
   /** A habit rather than a finish line ("post on X and LinkedIn every day"). Repeating goals have no due date. */
   repeat?: FocusRepeat;
+  /** "Counts as": the kinds of work that move this goal. What Jev classifies chats and tasks against. */
+  scope?: string;
+  /** Open task ids that move this goal (tag, entity or Jev). The UI lists exactly these — never matches by id. */
+  taskIds?: string[];
+  /** How progress is measured outside chat (tracker job + latest numbers). */
+  tracker?: import("./focusTrackers.js").TrackerState;
   /** Next milestone from IDENTITY.md. */
   nextStep?: string;
   /** One line on why Pen ranked it — evidence, not vibes. */
@@ -218,6 +225,8 @@ export interface ScoreInput {
   apps: ActivityApp[];
   /** Titles + topics of many more chats (months) so IDF knows which words are everyday words. */
   corpus?: string[];
+  /** Jev's chat → goal assignments (null = Jev looked and it serves no goal). Overrides keyword matching. */
+  chatGoals?: Map<string, string | null>;
   now: number;
 }
 
@@ -270,7 +279,9 @@ export function scoreFocusCandidates(input: ScoreInput): ScoredActivity {
   const chatGoal = new Map<string, string>();
   const weekSplit = new Map<string, Map<string, number>>();
   chats.forEach((chat, i) => {
-    const bestId = bestGoal(chatTokens[i], chat.text, true);
+    const jev = input.chatGoals?.has(chat.id) ? input.chatGoals.get(chat.id) : undefined;
+    const picked = jev === undefined ? bestGoal(chatTokens[i], chat.text, true) : (jev ?? undefined);
+    const bestId = picked && sig.has(picked) ? picked : undefined;
     if (bestId) {
       chatGoal.set(chat.id, bestId);
       const s = sig.get(bestId)!;
