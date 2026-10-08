@@ -35,6 +35,11 @@ import {
 } from "./cloudSync/ownDataDbIdMap.js";
 import { isLocalScratchPath } from "./cloudSync/proposalFileMerge.js";
 import {
+  planJobFold,
+  readPublisherJobsAtCommit,
+  remapJobIdsInContent,
+} from "./cloudSync/contributeJobIdentity.js";
+import {
   previewMergeConflicts,
   readFilesAtCommit,
   resolveBaseCommit,
@@ -410,6 +415,10 @@ interface StagedProposalTree {
   files: Map<string, string>;
   kind: "app" | "job" | "migrations";
   restoredIds?: ReadonlySet<string>;
+  /** Local job id (job trees only). */
+  jobId?: string;
+  /** Duplicate job folded onto the publisher's job: never propose deletions. */
+  folded?: boolean;
 }
 
 /** Local side of a proposal: app folder, linked Jobs/{id}, registry migrations. */
@@ -448,6 +457,7 @@ async function buildContributeStaging(
       repoRelativeDir: linkedJobRepoRelativeDir(repoPath, jobId),
       files: jobFiles,
       kind: "job",
+      jobId,
     });
   }
 
@@ -479,6 +489,74 @@ function localBlobIdsForInference(trees: StagedProposalTree[]): Map<string, stri
     }
   }
   return out;
+}
+
+/**
+ * Propose in the publisher's job ids (see cloudSync/contributeJobIdentity.ts):
+ * a same-name duplicate the app calls is proposed as the publisher's job, an
+ * uncalled one is left out. Mutates `staged` in place.
+ */
+async function foldDuplicateJobs(
+  staged: StagedProposalTree[],
+  repoDir: string,
+  baseSha: string,
+  repoPath: string,
+  env: NodeJS.ProcessEnv,
+): Promise<{ proposalJobIds: string[]; newJobIds: string[] }> {
+  const jobTrees = staged.filter((t) => t.kind === "job" && t.jobId);
+  const jobsRoot = linkedJobRepoRelativeDir(repoPath, "x").split("/").slice(0, -1).join("/");
+  const publisherJobs = await readPublisherJobsAtCommit(repoDir, baseSha, jobsRoot, env);
+  const publisherIds = new Set(publisherJobs.map((j) => j.id));
+  const app = staged.find((t) => t.kind === "app");
+  const appCode = app
+    ? [...app.files].filter(([rel]) => !rel.startsWith("jobs/")).map(([, c]) => c).join("\n")
+    : "";
+  const localJobs = jobTrees.map((t) => {
+    let name: string | undefined;
+    try {
+      name = (JSON.parse(t.files.get("job.json") ?? "{}") as { name?: string }).name;
+    } catch {
+      /* unnamed */
+    }
+    return { id: t.jobId!, name };
+  });
+  const plan = planJobFold({ localJobs, publisherJobs, appCode });
+
+  for (const id of plan.drop) {
+    console.info(`[CloudContribute] left out job ${id}: duplicate of a publisher job, not used by the app`);
+  }
+  for (const [dupId, targetId] of plan.remap) {
+    const stale = staged.findIndex((t) => t.kind === "job" && t.jobId === targetId);
+    if (stale >= 0) {
+      console.info(
+        `[CloudContribute] job ${dupId} duplicates publisher job ${targetId} and is the one the app runs; ` +
+          `proposing its files as ${targetId} (local ${targetId} copy left out)`,
+      );
+      staged.splice(stale, 1);
+    }
+    const dup = staged.find((t) => t.kind === "job" && t.jobId === dupId);
+    if (dup) {
+      dup.repoRelativeDir = linkedJobRepoRelativeDir(repoPath, targetId);
+      dup.folded = true;
+    }
+  }
+  for (let i = staged.length - 1; i >= 0; i--) {
+    const tree = staged[i];
+    if (tree.kind === "job" && tree.jobId && plan.drop.has(tree.jobId)) staged.splice(i, 1);
+  }
+  if (plan.remap.size > 0) {
+    for (const tree of staged) {
+      for (const [rel, content] of tree.files) {
+        tree.files.set(rel, remapJobIdsInContent(content, plan.remap));
+      }
+    }
+  }
+
+  const kept = staged.filter((t) => t.kind === "job" && t.jobId).map((t) => t.jobId!);
+  return {
+    proposalJobIds: kept,
+    newJobIds: kept.filter((id) => !publisherIds.has(id) && !plan.remap.has(id)),
+  };
 }
 
 async function pushContributeBranch(
@@ -563,6 +641,8 @@ async function pushContributeBranch(
       }
     }
 
+    const jobIdentity = await foldDuplicateJobs(staged, repoDir, base.sha, prepare.repoPath, env);
+
     const hasJobTrees = staged.some((t) => t.kind === "job");
     const trees: ProposalTree[] = [];
     for (const tree of staged) {
@@ -572,6 +652,7 @@ async function pushContributeBranch(
         base: await readFilesAtCommit(repoDir, base.sha, tree.repoRelativeDir, env, tree.files),
         kind: tree.kind,
         ...(tree.restoredIds ? { restoredIds: tree.restoredIds } : {}),
+        ...(tree.folded ? { noDeletes: true } : {}),
         // The app folder's bundled jobs/ copy is stale once Jobs/{id} exists;
         // the job trees own those paths.
         ...(tree.kind === "app" && hasJobTrees ? { skipPrefixes: ["jobs/"] } : {}),
@@ -619,6 +700,8 @@ async function pushContributeBranch(
       // The copy's own instances of the publisher's databases aren't new ones,
       // and databases the publisher already links are theirs to describe.
       skipDbIds: new Set([...dbToPublisher.keys(), ...ownIds, ...publisherLinkedDbIds(trees)]),
+      proposalJobIds: jobIdentity.proposalJobIds,
+      newJobIds: jobIdentity.newJobIds,
     });
 
     const stagePaths = [

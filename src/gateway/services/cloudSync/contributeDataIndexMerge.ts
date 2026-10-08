@@ -23,6 +23,17 @@ export interface ContributeDataIndexMergeInput {
   targetAppId: string;
   /** Copy-local ids of databases the publisher already has (own-data copies). */
   skipDbIds?: ReadonlySet<string>;
+  /**
+   * Contributor job ids actually in the proposal (after duplicate folding).
+   * Registry entries are only taken from these. Default: every dependent job.
+   */
+  proposalJobIds?: readonly string[];
+  /**
+   * Jobs the publisher does not have. Only these are added to data/jobs.json;
+   * edits to existing jobs travel in their job.json. Empty → jobs.json is not
+   * touched. Default (undefined): every dependent job (legacy behaviour).
+   */
+  newJobIds?: readonly string[];
 }
 
 export interface ContributeDataIndexMergeResult {
@@ -175,10 +186,17 @@ export function mergeDatabasesJsonForContribute(
 export async function mergeContributeDataIndexesIntoRepo(
   input: ContributeDataIndexMergeInput,
 ): Promise<ContributeDataIndexMergeResult> {
-  const dependentJobIds = resolveAppDependentJobIds(
+  const allDependentJobIds = resolveAppDependentJobIds(
     input.contributorPaprDir,
     input.forkAppId,
   );
+  const inProposal = input.proposalJobIds ? new Set(input.proposalJobIds) : null;
+  const dependentJobIds = inProposal
+    ? allDependentJobIds.filter((id) => inProposal.has(id))
+    : allDependentJobIds;
+  const indexJobIds = input.newJobIds
+    ? dependentJobIds.filter((id) => input.newJobIds!.includes(id))
+    : dependentJobIds;
   const registryDbIds = (
     await resolveContributeRegistryDbIds(
       input.contributorPaprDir,
@@ -191,7 +209,7 @@ export async function mergeContributeDataIndexesIntoRepo(
   const dataDir = path.join(input.repoDir, "data");
   await fs.mkdir(dataDir, { recursive: true });
 
-  if (dependentJobIds.length > 0) {
+  if (indexJobIds.length > 0) {
     const ownerJobs = await readJobsFile(path.join(dataDir, "jobs.json"));
     const contributorJobs = await readJobsFile(
       path.join(input.contributorPaprDir, "data", "jobs.json"),
@@ -199,7 +217,7 @@ export async function mergeContributeDataIndexesIntoRepo(
     const merged = mergeJobsJsonForContribute(
       ownerJobs,
       contributorJobs,
-      dependentJobIds,
+      indexJobIds,
       input.forkAppId,
       input.targetAppId,
     );
