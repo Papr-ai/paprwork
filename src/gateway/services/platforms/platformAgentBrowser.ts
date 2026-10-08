@@ -7,6 +7,7 @@
  */
 
 import type { BrowserContext, Cookie, Page } from "playwright";
+import { gotoTolerant } from "./platformSafeGoto.js";
 import { isCloudAgentGatewayMode } from "../../../core/utils/paprRoot.js";
 import { getPlatformConfig, type PlatformConfig, type PlatformId } from "./platformRegistry.js";
 import { isGoogleChromeInstalled } from "./platformChromeEnv.js";
@@ -147,28 +148,19 @@ async function navigateWithLanding(
   const skipLanding = shouldSkipPlatformLandingHop(currentUrl, destination, config);
 
   if (skipLanding && landingUrl !== destination) {
-    await page.goto(destination, {
-      waitUntil: "domcontentloaded",
-      timeout: NAVIGATION_TIMEOUT_MS,
-    });
+    await gotoTolerant(page, destination, { timeout: NAVIGATION_TIMEOUT_MS });
     await waitForPlaywrightPageSettle(page, page.url(), {
       platformId: config.id,
     });
     return;
   }
 
-  await page.goto(landingUrl, {
-    waitUntil: "domcontentloaded",
-    timeout: NAVIGATION_TIMEOUT_MS,
-  });
+  await gotoTolerant(page, landingUrl, { timeout: NAVIGATION_TIMEOUT_MS });
   if (
     destination !== landingUrl &&
     !platformNavigationUrlsMatch(page.url(), destination)
   ) {
-    await page.goto(destination, {
-      waitUntil: "domcontentloaded",
-      timeout: NAVIGATION_TIMEOUT_MS,
-    });
+    await gotoTolerant(page, destination, { timeout: NAVIGATION_TIMEOUT_MS });
   }
 
   await waitForPlaywrightPageSettle(page, page.url(), {
@@ -258,10 +250,7 @@ async function recoverFromRedirectLoop(
   if (skipCookieReimport) {
     await clearLinkedInSiteStorage(page);
     try {
-      await page.goto(destination, {
-        waitUntil: "domcontentloaded",
-        timeout: NAVIGATION_TIMEOUT_MS,
-      });
+      await gotoTolerant(page, destination, { timeout: NAVIGATION_TIMEOUT_MS });
       await waitForPlaywrightPageSettle(page, page.url(), { platformId: config.id });
       return true;
     } catch (retryError) {
@@ -282,10 +271,7 @@ async function recoverFromRedirectLoop(
   await clearLinkedInSiteStorage(page);
 
   try {
-    await page.goto(destination, {
-      waitUntil: "domcontentloaded",
-      timeout: NAVIGATION_TIMEOUT_MS,
-    });
+    await gotoTolerant(page, destination, { timeout: NAVIGATION_TIMEOUT_MS });
     await waitForPlaywrightPageSettle(page, page.url(), { platformId: config.id });
     return true;
   } catch (retryError) {
@@ -439,10 +425,7 @@ export async function openRealChromePlatformWindow(
   }
 
   if (!platformNavigationUrlsMatch(page.url(), url)) {
-    await page.goto(url, {
-      waitUntil: "domcontentloaded",
-      timeout: NAVIGATION_TIMEOUT_MS,
-    });
+    await gotoTolerant(page, url, { timeout: NAVIGATION_TIMEOUT_MS });
   }
 
   console.log(

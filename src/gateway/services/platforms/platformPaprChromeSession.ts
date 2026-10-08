@@ -5,6 +5,7 @@
 import { existsSync } from "node:fs";
 import { mkdir } from "node:fs/promises";
 import type { BrowserContext, Cookie, Page } from "playwright";
+import { gotoTolerant } from "./platformSafeGoto.js";
 import { type PlatformConfig, type PlatformId, getPlatformConfig } from "./platformRegistry.js";
 import {
   buildPlatformCdpUrl,
@@ -295,10 +296,7 @@ async function ensurePlatformTabOnce(
   let page = browser.platformTabs.get(platformId);
   if (page && !page.isClosed()) {
     if (targetUrl && shouldNavigateTab(page, config, targetUrl)) {
-      await page.goto(targetUrl, {
-        waitUntil: "domcontentloaded",
-        timeout: NAVIGATION_TIMEOUT_MS,
-      });
+      await gotoTolerant(page, targetUrl, { timeout: NAVIGATION_TIMEOUT_MS });
     }
     await page.bringToFront();
     browser.activePlatformId = platformId;
@@ -309,10 +307,7 @@ async function ensurePlatformTabOnce(
   if (existing) {
     browser.platformTabs.set(platformId, existing);
     if (targetUrl && shouldNavigateTab(existing, config, targetUrl)) {
-      await existing.goto(targetUrl, {
-        waitUntil: "domcontentloaded",
-        timeout: NAVIGATION_TIMEOUT_MS,
-      });
+      await gotoTolerant(existing, targetUrl, { timeout: NAVIGATION_TIMEOUT_MS });
     }
     await existing.bringToFront();
     browser.activePlatformId = platformId;
@@ -322,10 +317,7 @@ async function ensurePlatformTabOnce(
   page = await browser.context.newPage();
   browser.platformTabs.set(platformId, page);
   if (targetUrl) {
-    await page.goto(targetUrl, {
-      waitUntil: "domcontentloaded",
-      timeout: NAVIGATION_TIMEOUT_MS,
-    });
+    await gotoTolerant(page, targetUrl, { timeout: NAVIGATION_TIMEOUT_MS });
   }
   await page.bringToFront();
   browser.activePlatformId = platformId;
