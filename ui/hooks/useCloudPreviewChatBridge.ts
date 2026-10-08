@@ -10,7 +10,8 @@ export function useCloudPreviewChatBridge(enabled: boolean): void {
       if (event.data?.type !== "papr-open-chat") return;
       const message = event.data.message;
       if (typeof message !== "string" || message.trim().length === 0) return;
-      openCloudSyncAgentChat(message.trim());
+      const title = typeof event.data.title === "string" ? event.data.title.slice(0, 80) : undefined;
+      openCloudSyncAgentChat(message.trim(), { send: event.data.send === true, title });
     };
 
     window.addEventListener("message", handleMessage);

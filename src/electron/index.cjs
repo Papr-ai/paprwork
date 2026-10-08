@@ -2457,6 +2457,8 @@ function initializeSystemInvokeHandler(mainWindow) {
           mode: options?.mode || (options?.subAgentId ? 'app-agent' : 'main'),
           appId: options?.appId || null,
           subAgentId: options?.subAgentId || null,
+          send: options?.send === true,
+          title: typeof options?.title === 'string' ? options.title.slice(0, 80) : null,
         });
         return { success: true };
       }

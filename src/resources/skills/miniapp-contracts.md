@@ -120,7 +120,7 @@ When cloud sync is enabled (default):
 | `/api/jobs/list`, `/api/jobs/status`, `/api/jobs/run`, `/api/jobs/events` (SSE) | `/api/jobs/create` |
 | `/api/app/backend/:action` (vault keys, memory add/search via `/v1/memory`; **`PAPR_CALLER_USER_ID`** / **`PAPR_CALLER_EMAIL`** when signed in) | `/api/memory/*` (does not exist — use backend handlers) |
 
-**"Ask Agent" buttons (desktop):** Use `window.paprAPI.invoke('chat.open', { message })` — sandbox does **not** block this. Do **not** claim mini-apps cannot open chat. App code cannot call `delegate_task`; use `chat.open` for conversational flows or `/api/jobs/run` for silent background work.
+**"Ask Agent" buttons (desktop):** Use `window.paprAPI.invoke('chat.open', { message, send: true, title: 'Set up HubSpot' })` (`send` sends immediately like install flows; omit it to only draft; `title` names the tab) — sandbox does **not** block this. Do **not** claim mini-apps cannot open chat. App code cannot call `delegate_task`; use `chat.open` for conversational flows or `/api/jobs/run` for silent background work.
 
 If an app needs job triggers or paprAPI on cloud later, tell the user those features require Paprwork desktop open, or redesign around `/api/db/*` for cloud-first flows.
 
