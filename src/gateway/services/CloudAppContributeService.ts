@@ -46,6 +46,10 @@ import {
   resolveBaseCommit,
 } from "./cloudSync/threeWayMerge.js";
 import { hashBlobContent } from "./syncV3/computeParentHash.js";
+import {
+  proposalMigrationsFromWrites,
+  type ProposalMigration,
+} from "./cloudSync/publishProposalMigrations.js";
 import { isCollaboratorEditablePath } from "./CloudAppTrackSyncService.js";
 import type { CloudAppLineageFile } from "../../core/types/cloudAppLineage.js";
 import {
@@ -66,6 +70,9 @@ export interface ProposeContributeInput {
   installedAppId: string;
   title: string;
   description: string;
+  /** Maintainer/Admin: merge straight into the app instead of waiting for review. */
+  publishNow?: boolean;
+  onProgress?: (label: string) => void;
 }
 
 export interface ProposeContributeResult {
@@ -76,6 +83,12 @@ export interface ProposeContributeResult {
   headSha: string;
   status: string;
   stagedPaths: string[];
+  /** True when publishNow merged it into the app. */
+  publishedDirectly?: boolean;
+  /** Why publishNow fell back to review (e.g. a database migration). */
+  publishNote?: string;
+  /** The change's migrations were applied to the team's database first. */
+  databasePublished?: boolean;
 }
 
 interface PrepareResponse {
@@ -95,6 +108,9 @@ interface StagedRepoTree {
   files: Map<string, string>;
   restoredIds?: ReadonlySet<string>;
   appliedIds?: ReadonlySet<string> | null;
+  /** Registry migration trees: which database, and its local migration root. */
+  dbId?: string;
+  migrationRoot?: string;
 }
 
 async function runCommand(
@@ -321,6 +337,8 @@ async function collectMigrationTrees(
         files,
         restoredIds,
         appliedIds: await appliedMigrationIdsForProposal(dbId, record.localPath),
+        dbId,
+        migrationRoot,
       });
     }
   }
@@ -420,6 +438,8 @@ interface StagedProposalTree {
   kind: "app" | "job" | "migrations";
   restoredIds?: ReadonlySet<string>;
   appliedIds?: ReadonlySet<string> | null;
+  dbId?: string;
+  migrationRoot?: string;
   /** Local job id (job trees only). */
   jobId?: string;
   /** Duplicate job folded onto the publisher's job: never propose deletions. */
@@ -479,6 +499,8 @@ async function buildContributeStaging(
       kind: "migrations",
       restoredIds: tree.restoredIds,
       ...(tree.appliedIds !== undefined ? { appliedIds: tree.appliedIds } : {}),
+      ...(tree.dbId !== undefined ? { dbId: tree.dbId } : {}),
+      ...(tree.migrationRoot !== undefined ? { migrationRoot: tree.migrationRoot } : {}),
     });
   }
   return trees;
@@ -578,7 +600,13 @@ async function foldDuplicateJobs(
 async function pushContributeBranch(
   prepare: PrepareResponse,
   forkAppId: string,
-): Promise<{ headSha: string; stagedPaths: string[]; baseCommit: string }> {
+  opts: { includeBuildOutputs?: boolean } = {},
+): Promise<{
+  headSha: string;
+  stagedPaths: string[];
+  baseCommit: string;
+  migrations: ProposalMigration[];
+}> {
   const tempRoot = await fs.mkdtemp(path.join(os.tmpdir(), "papr-contrib-"));
   const repoDir = path.join(tempRoot, "repo");
   const env = ephemeralGitEnv();
@@ -673,6 +701,7 @@ async function pushContributeBranch(
         // The app folder's bundled jobs/ copy is stale once Jobs/{id} exists;
         // the job trees own those paths.
         ...(tree.kind === "app" && hasJobTrees ? { skipPrefixes: ["jobs/"] } : {}),
+        ...(tree.kind === "app" && opts.includeBuildOutputs ? { includeBuildOutputs: true } : {}),
       });
     }
     const changes = buildProposalChangeSet(trees);
@@ -776,7 +805,14 @@ async function pushContributeBranch(
     if (!headSha) {
       throw new Error("Failed to resolve commit SHA after push");
     }
-    return { headSha, stagedPaths: stagedNames.split("\n").filter(Boolean), baseCommit: base.sha };
+    return {
+      headSha,
+      stagedPaths: stagedNames.split("\n").filter(Boolean),
+      baseCommit: base.sha,
+      // New migration files this change adds (applied migrations the publisher
+      // already has are never written, see buildProposalChangeSet).
+      migrations: proposalMigrationsFromWrites(changes.writes.keys(), staged),
+    };
   } finally {
     await fs.rm(tempRoot, { recursive: true, force: true }).catch(() => {});
   }
@@ -826,16 +862,45 @@ export class CloudAppContributeService {
       );
     }
 
-    const { headSha, stagedPaths } = await pushContributeBranch(
+    const { headSha, stagedPaths, migrations } = await pushContributeBranch(
       prepare,
       input.installedAppId,
+      { includeBuildOutputs: input.publishNow === true },
     );
+
+    // Publish now with a schema change: same order as the publisher's own
+    // publish — the team's database first (verified), then the code. If the
+    // database can't be done here, it goes to review instead.
+    let databasePublished = false;
+    let databaseNote: string | undefined;
+    if (input.publishNow && migrations.length > 0) {
+      const { publishProposalMigrations, defaultPublishMigrationsDeps } = await import(
+        "./cloudSync/publishProposalMigrations.js"
+      );
+      input.onProgress?.("Updating the team's database…");
+      const db = await publishProposalMigrations(
+        migrations,
+        await defaultPublishMigrationsDeps(prepare.id, stagedPaths),
+      );
+      databasePublished = db.published;
+      databaseNote = db.reason;
+      if (db.published) {
+        console.info(
+          `[CloudContribute] database published before code: ${db.migrated.join(", ") || "already applied"}`,
+        );
+      }
+    }
 
     const submitResp = await cloudApiFetch(
       `/v1/cloud/apps/changes/${encodeURIComponent(prepare.id)}/submit`,
       {
         method: "POST",
-        body: { headSha, stagedPaths },
+        body: {
+          headSha,
+          stagedPaths,
+          ...(input.publishNow ? { mergeNow: true } : {}),
+          ...(databasePublished ? { databasePublished: true } : {}),
+        },
       },
     );
     if (!submitResp.ok) {
@@ -855,6 +920,8 @@ export class CloudAppContributeService {
       prUrl?: string;
       prNumber?: number;
       status: string;
+      publishedDirectly?: boolean;
+      publishNote?: string;
     };
     // Record what was sent so the share bar stops showing "Edits not proposed".
     // Done here (not in the HTTP route) so the agent tool path does it too.
@@ -863,6 +930,16 @@ export class CloudAppContributeService {
         "./CloudAppTrackSyncService.js"
       );
       await getCloudAppTrackSyncService().recordProposed(input.installedAppId);
+      if (submitted.publishedDirectly) {
+        // Our edits are now the app's latest. Catch this copy up to it so the
+        // chip doesn't report the publisher as ahead (nothing to merge).
+        void getCloudAppTrackSyncService()
+          .syncTrackApp(input.installedAppId)
+          .then(() => notifyCloudSyncItemsStale(input.installedAppId))
+          .catch((err: Error) =>
+            console.warn(`[CloudContribute] catch-up after publish failed: ${err.message.slice(0, 120)}`),
+          );
+      }
       // Tell the open share bar to re-read (chip -> "Waiting for review").
       const { notifyCloudSyncItemsStale } = await import(
         "./cloudSync/cloudSyncBroadcast.js"
@@ -879,7 +956,45 @@ export class CloudAppContributeService {
       headSha,
       status: submitted.status,
       stagedPaths,
+      ...(submitted.publishedDirectly ? { publishedDirectly: true } : {}),
+      ...(submitted.publishNote || databaseNote
+        ? { publishNote: databaseNote ?? submitted.publishNote }
+        : {}),
+      ...(databasePublished ? { databasePublished: true } : {}),
     };
+  }
+}
+
+export type SourceAppRole = "viewer" | "contributor" | "maintainer" | "admin" | "none";
+
+/**
+ * This user's role on the app a linked copy came from (roles plan). Null when
+ * unknown: not a linked copy, signed out, or an older server without roles.
+ */
+export async function getSourceAppRole(installedAppId: string): Promise<SourceAppRole | null> {
+  let lineage: CloudAppLineageFile | null = null;
+  try {
+    lineage = parseCloudAppLineageFile(
+      await fs.readFile(path.join(getPaprAppsRoot(), installedAppId, CLOUD_LINEAGE_FILENAME), "utf8"),
+    );
+  } catch {
+    return null;
+  }
+  if (!lineage || lineage.mode !== "track") return null;
+  try {
+    const resp = await cloudApiFetch("/v1/cloud/apps/access/validate", {
+      method: "POST",
+      body: { namespaceId: lineage.source.namespaceId, slug: lineage.source.slug },
+      timeoutMs: 15_000,
+    });
+    if (resp.status === 403 || resp.status === 404) return "none";
+    if (!resp.ok) return null;
+    const role = ((await resp.json()) as { role?: string }).role;
+    return role === "viewer" || role === "contributor" || role === "maintainer" || role === "admin"
+      ? role
+      : null;
+  } catch {
+    return null;
   }
 }
 

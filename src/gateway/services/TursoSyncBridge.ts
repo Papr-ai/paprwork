@@ -7,7 +7,7 @@
 
 import * as fs from "fs";
 import * as path from "path";
-import { mergeCloudActingUserBody } from "../utils/cloudActingUser.js";
+import { cloudActingUserFields, mergeCloudActingUserBody } from "../utils/cloudActingUser.js";
 import {
   canPerformWorkspaceDbWrite,
   getWorkspaceWriteGeneration,
@@ -432,6 +432,14 @@ export class TursoSyncBridge {
 
     const apiKey = await getPaprApiKey();
     if (!apiKey) {
+      return false;
+    }
+    // Deleting is irreversible: without the signed-in user the server would
+    // have to guess whose copy to delete (it now refuses for workspace keys).
+    if (!cloudActingUserFields().external_user_id) {
+      console.warn(
+        `[TursoSyncBridge] Not deleting cloud database ${databaseName}: signed-in user id unknown — sign in to Papr and retry.`,
+      );
       return false;
     }
 

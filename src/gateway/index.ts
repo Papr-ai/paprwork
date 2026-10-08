@@ -3041,6 +3041,7 @@ async function startGateway(): Promise<void> {
           installedAppId?: string;
           title?: string;
           description?: string;
+          publishNow?: boolean;
         };
         if (
           !body.sourceNamespaceId?.trim() ||
@@ -3055,18 +3056,55 @@ async function startGateway(): Promise<void> {
           return;
         }
 
+        // Same as Pen's submit_cloud_app_pr: bring the copy up to date with the
+        // publisher first, and stop if any file was changed on both sides.
+        const { pullPublisherBeforePropose, PROPOSE_CONFLICT_MESSAGE } = await import(
+          "./services/cloudSync/proposePullFirst.js"
+        );
+        const conflict = await pullPublisherBeforePropose(body.installedAppId.trim());
+        if (conflict) {
+          res.status(409).json({
+            error: PROPOSE_CONFLICT_MESSAGE,
+            code: "needs_update",
+            ...conflict,
+          });
+          return;
+        }
+
         const result = await getCloudAppContributeService().propose({
           sourceNamespaceId: body.sourceNamespaceId.trim(),
           sourceSlug: body.sourceSlug.trim(),
           installedAppId: body.installedAppId.trim(),
           title: body.title.trim(),
           description: body.description.trim(),
+          publishNow: body.publishNow === true,
         });
+        if (result.publishedDirectly) {
+          // Live app changed on GitHub without a desktop push: bust the host cache.
+          const { notifyCloudAppRevisionUpdated } = await import(
+            "./services/cloudSync/notifyCloudAppRevision.js"
+          );
+          void notifyCloudAppRevisionUpdated({
+            namespaceId: body.sourceNamespaceId.trim(),
+            slug: body.sourceSlug.trim(),
+          });
+        }
         // Those edits are now "proposed", not "unproposed", in the share bar.
         await getCloudAppTrackSyncService()
           .recordProposed(body.installedAppId.trim())
           .catch(() => undefined);
         res.json(result);
+      } catch (err) {
+        res.status(500).json({ error: (err as Error).message });
+      }
+    });
+
+    // This user's role on the app a linked copy came from: decides whether the
+    // Propose sheet offers "Publish now" (Maintainer/Admin) or review only.
+    app.get("/api/cloud/apps/:appId/source-role", async (req, res) => {
+      try {
+        const { getSourceAppRole } = await import("./services/CloudAppContributeService.js");
+        res.json({ role: await getSourceAppRole(req.params.appId) });
       } catch (err) {
         res.status(500).json({ error: (err as Error).message });
       }

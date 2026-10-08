@@ -615,6 +615,10 @@ export function App() {
 
   if (REQUIRE_PAPR_AUTH && needsAuthFlow) {
     return (
+      <>
+      {/* Onboarding's Recommend step installs apps while gated — show the same
+          install progress modal Team/Community use, or nothing looks like it's happening. */}
+      <CloudAppInstallOverlay />
       <AuthFlow
         resume={authFlowResume}
         onComplete={() => {
@@ -623,6 +627,7 @@ export function App() {
           setAuthFlowResume(undefined);
         }}
       />
+      </>
     );
   }
 

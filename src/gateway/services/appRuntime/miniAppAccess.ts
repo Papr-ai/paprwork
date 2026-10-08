@@ -21,7 +21,7 @@ function resolveIsOwner(
   access: AppAccessContext,
   callerUserId?: string,
 ): boolean {
-  if (access.mode === "owner") {
+  if (access.mode === "owner" || access.role === "admin") {
     return true;
   }
   const caller = callerUserId?.trim();
@@ -57,6 +57,7 @@ export function buildMiniAppAccessResponse(
     canWrite: access.canWrite,
     loggedIn,
     isOwner,
+    ...(access.role ? { role: access.role } : {}),
     appId: access.appId,
     publisherUserId,
   };

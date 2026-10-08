@@ -392,8 +392,18 @@ export function MiniAppPublishBar({
     if (!requestPaprCloudFeature("publish_share")) {
       return;
     }
+    // Pull first (like a git pull before push): if the web copy has changes this
+    // desktop doesn't, bring them in before uploading. Overlapping files stop
+    // the publish and open the Sync panel for Keep mine / Take theirs.
+    if (webSyncStatus?.gitUpdatesAvailable === true) {
+      const clean = await webSyncPullUpdates();
+      if (!clean) {
+        setWebSyncPopoverOpen(true);
+        return;
+      }
+    }
     await webSyncPushNow();
-  }, [webSyncPushNow]);
+  }, [webSyncPushNow, webSyncPullUpdates, webSyncStatus?.gitUpdatesAvailable]);
 
   // Kept for the overflow menu's upload-mode row; the v7 panel doesn't explain it.
   void resolveEffectiveAutoUpload(cloud.uploadMode, globalAutoUploadEnabled);

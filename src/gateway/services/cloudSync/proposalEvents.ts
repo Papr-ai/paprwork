@@ -19,7 +19,9 @@ export type ProposalEventType =
   | "proposal.received"
   | "proposal.accepted"
   | "proposal.declined"
-  | "proposal.needs_update";
+  | "proposal.needs_update"
+  /** A Maintainer/Admin merged into your app (accepted or published directly). */
+  | "proposal.merged";
 
 export interface ProposalEvent {
   id: string;
@@ -90,6 +92,15 @@ export function noticeForEvent(e: ProposalEvent): ProposalNotice | null {
     }
     return null;
   }
+  if (e.role === "owner" && e.type === "proposal.merged") {
+    const direct = e.detail?.publishedDirectly === true;
+    return {
+      title: direct ? "Changes published to your app" : "Proposal accepted by a Maintainer",
+      body: `${quoted(e.title)} is now live${app}. Your Mac is getting the new version.`,
+      appId,
+      requestId,
+    };
+  }
   if (e.role === "owner" && e.type === "proposal.received") {
     return {
       title: "New proposal",
@@ -100,6 +111,15 @@ export function noticeForEvent(e: ProposalEvent): ProposalNotice | null {
   }
   // Owner-side "needs update" only refreshes the inbox; the contributor acts.
   return null;
+}
+
+/** Publisher-side apps a Maintainer/Admin merged into: pull them. */
+export function mergedSourceAppIds(events: ProposalEvent[]): string[] {
+  const ids = new Set<string>();
+  for (const e of events) {
+    if (e.role === "owner" && e.type === "proposal.merged" && e.sourceAppId) ids.add(e.sourceAppId);
+  }
+  return [...ids];
 }
 
 /** Collapse a burst (e.g. first poll after sleep) into at most `max` notices. */
@@ -162,6 +182,8 @@ export interface PollDeps {
   ) => Promise<{ events: ProposalEvent[]; cursor: string } | null>;
   onRefresh?: (appIds: string[]) => void;
   onNotify?: (notices: ProposalNotice[]) => void;
+  /** Pull apps someone else merged into (publisher side). */
+  onMerged?: (sourceAppIds: string[]) => void;
 }
 
 async function defaultFetchEvents(
@@ -186,6 +208,28 @@ function defaultNotify(notices: ProposalNotice[]): void {
   broadcast({ type: "cloud-proposal:notify", data: { notices } });
 }
 
+/**
+ * Same follow-up as accepting a proposal yourself: pull the merged code (held
+ * if it overlaps unpublished local edits, so the chip says Updates on web),
+ * then rebuild outputs. Skips apps that aren't on this machine.
+ */
+function defaultMerged(sourceAppIds: string[]): void {
+  for (const id of sourceAppIds) {
+    void (async () => {
+      const { getPaprAppsRoot } = await import("../../../core/utils/paprRoot.js");
+      try {
+        await fs.access(path.join(getPaprAppsRoot(), id));
+      } catch {
+        return;
+      }
+      const { followUpContributeApprove } = await import("../contributeApproveFollowUp.js");
+      await followUpContributeApprove(id);
+    })().catch((err: Error) => {
+      console.warn(`[CloudSync] Pull after Maintainer merge failed for ${id}:`, err.message.slice(0, 120));
+    });
+  }
+}
+
 let inFlight = false;
 
 /**
@@ -206,6 +250,8 @@ export async function pollProposalEvents(
     if (page.events.length > 0) {
       (deps.onRefresh ?? defaultRefresh)(appIdsToRefresh(page.events));
       (deps.onNotify ?? defaultNotify)(summarizeNotices(page.events));
+      const merged = mergedSourceAppIds(page.events);
+      if (merged.length > 0) (deps.onMerged ?? defaultMerged)(merged);
     }
     if (page.cursor && page.cursor !== since) {
       await writeCursor(paprDir, userKey, page.cursor);

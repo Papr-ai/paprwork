@@ -22,6 +22,8 @@ export interface AppAccessContext {
   mode: AppAccessMode;
   canRead: boolean;
   canWrite: boolean;
+  /** Roles plan: viewer | contributor | maintainer | admin (newer servers only). */
+  role?: string;
 }
 
 /** Read-only GitHub credentials for Cloud App Host direct repo reads (host key only). */
@@ -41,6 +43,8 @@ export interface MiniAppAccessResponse {
   canWrite: boolean;
   loggedIn: boolean;
   isOwner: boolean;
+  /** Caller's role on the app (viewer | contributor | maintainer | admin), when known. */
+  role?: string;
   /** Caller's Parse objectId — present when loggedIn; use for row filters (not publisher). */
   userId?: string;
   /** Same as userId — mirrors cloud API external_user_id naming. */

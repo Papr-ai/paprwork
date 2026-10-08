@@ -390,6 +390,29 @@ export async function applyRegistryMigrationSingleRoute(
     const push = await pushLinkedDbViaTursoReplica(source);
     pushed = push.ok;
     pushError = push.ok ? null : (push.error ?? "replica push failed");
+    if (pushed) {
+      // Sync does not carry triggers/views to the cloud — copy them over.
+      const { mirrorSchemaObjectsToCloud } = await import("./tursoReplicaSchemaObjectMirror.js");
+      const mirror = await mirrorSchemaObjectsToCloud({
+        source,
+        statements: splitSqlStatements(sql),
+      });
+      if (mirror.error) {
+        console.warn(`[TursoReplica] ${migrationId}: triggers/views not copied to the cloud: ${mirror.error}`);
+      }
+      if (mirror.notCopied.length) {
+        console.warn(
+          `[TursoReplica] ${migrationId}: trigger(s) ${mirror.notCopied.join(", ")} kept on this desktop only — ` +
+            "they write rows with plain INSERT (or x = x + …), which would run twice on the cloud copy. " +
+            "Use INSERT OR IGNORE with a deterministic key to make them safe to copy.",
+        );
+      }
+      if (!mirror.error && (mirror.created.length || mirror.dropped.length)) {
+        console.log(
+          `[TursoReplica] ${migrationId}: copied to the cloud: ${[...mirror.created, ...mirror.dropped.map((d) => `drop ${d}`)].join(", ")}`,
+        );
+      }
+    }
   }
 
   let paired = false;

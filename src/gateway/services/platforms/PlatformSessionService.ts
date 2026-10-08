@@ -51,6 +51,7 @@ import {
   allowsEmbeddedPlatformSession,
   allowsPersonalChromeCookieImport,
 } from "./platformConnectPolicy.js";
+import { stripAnsi } from "./platformSafeGoto.js";
 
 const CHROME_COOKIE_POLL_MS = 10_000; // 10s — each read can trigger a macOS keychain prompt
 const CHROME_COOKIE_CACHE_MS = 20_000;
@@ -138,6 +139,18 @@ interface PlatformSessionStore {
 const STORE_VERSION = 1;
 const CONNECT_TIMEOUT_MS = 5 * 60 * 1000; // 5 minutes for user to log in
 const REFRESH_TIMEOUT_MS = 60 * 1000; // 60 seconds for headless refresh (some sites are slow)
+function formatPlatformConnectErrorForDisplay(raw: string, platformName: string): string {
+  const firstLine = stripAnsi(raw).split(/\n|Call log:/)[0]?.trim() ?? "";
+  if (/Timeout .*exceeded/i.test(firstLine)) {
+    return `${platformName} took too long to load in Chrome. Check your connection and try again.`;
+  }
+  if (/net::ERR_/i.test(firstLine)) {
+    const code = firstLine.match(/net::(ERR_[A-Z_]+)/)?.[1] ?? "network error";
+    return `Couldn't open ${platformName} in Chrome (${code}). Check your connection, VPN or firewall, then try again.`;
+  }
+  return firstLine.length > 220 ? `${firstLine.slice(0, 220)}…` : firstLine || `Couldn't connect ${platformName}.`;
+}
+
 const NAVIGATION_TIMEOUT_MS = 60 * 1000; // 60 seconds for page navigation (social sites are slow)
 const LINKEDIN_LIVE_VALIDATE_TTL_MS = 60 * 1000;
 /** Skip aggressive LinkedIn probes right after a successful connect (avoids false logouts). */
@@ -490,8 +503,10 @@ export class PlatformSessionService {
         error: `Google Chrome is required to connect ${config.name}. Papr does not use an embedded browser for sign-in (passkeys and fingerprint login need real Chrome). Chat with Pen to install Chrome and connect ${config.name}. ${formatGoogleChromeInstallHint()}`,
       };
     } catch (error) {
-      const errorMessage = error instanceof Error ? error.message : String(error);
-      console.error(`[PlatformSessionService] Connect failed for ${platformId}:`, errorMessage);
+      const rawMessage = error instanceof Error ? error.message : String(error);
+      console.error(`[PlatformSessionService] Connect failed for ${platformId}:`, rawMessage);
+      // Never show Playwright call logs / ANSI codes in the UI.
+      const errorMessage = formatPlatformConnectErrorForDisplay(rawMessage, config.name);
       this.connectingPlatform = null;
 
       return {

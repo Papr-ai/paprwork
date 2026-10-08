@@ -152,7 +152,7 @@ export function shouldUseTursoReplicaForSource(source: AppDataSource): boolean {
   });
 }
 
-function resolveTursoDatabaseForReplicaSource(source: AppDataSource): string {
+export function resolveTursoDatabaseForReplicaSource(source: AppDataSource): string {
   const record = resolveRegistryRecordForSource(source);
   const callerUserId = getPaprUserId();
   const suffixUserId =
@@ -400,6 +400,13 @@ export async function pushLinkedDbViaTursoReplica(
     if (result.ok) {
       notifyReplicaDbChanged(source);
       noteTursoDatabaseChanged(tursoDatabase);
+      // Web tabs (apps.papr.ai) and other desktops learn about this push.
+      const { noticeDesktopPushDbChanged } = await import("./desktopPushDbChangedNotice.js");
+      noticeDesktopPushDbChanged({
+        ...(source.dbId ? { dbId: source.dbId } : {}),
+        ...(source.jobId ? { jobId: source.jobId } : {}),
+        tursoShortName: tursoDatabase,
+      });
       await drainInboundReplicaCdcIfCaughtUp({ source, tursoDatabase });
       await noteReplicaPushSuccess(source);
     } else if (
