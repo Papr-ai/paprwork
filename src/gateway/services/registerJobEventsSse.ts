@@ -94,11 +94,13 @@ export function registerJobEventsSseRoutes(
     });
 
     const lastPolledStatus = new Map<string, string>();
+    const forbiddenJobs = new Set<string>();
     let pollTimer: ReturnType<typeof setInterval> | undefined;
 
     if (options.pollJobStatus && jobIds.length > 0) {
       const poll = async (): Promise<void> => {
         for (const jobId of jobIds) {
+          if (forbiddenJobs.has(jobId)) continue;
           try {
             const snapshot = await options.pollJobStatus!(jobId, req);
             if (!snapshot) {
@@ -126,8 +128,9 @@ export function registerJobEventsSseRoutes(
                 lastOutput: snapshot.lastOutput,
               },
             });
-          } catch {
-            /* non-fatal poll failure */
+          } catch (err) {
+            // Access denied for this caller: stop polling it on this connection.
+            if ((err as { forbidden?: boolean })?.forbidden) forbiddenJobs.add(jobId);
           }
         }
       };

@@ -147,6 +147,37 @@ export function stripLeadingLineComments(sqlChunk: string): string {
     .trim();
 }
 
+const TRIGGER_START = /^\s*CREATE\s+(?:TEMP(?:ORARY)?\s+)?TRIGGER\b/i;
+
+/**
+ * Is `sql` (comments already dropped) a CREATE TRIGGER whose BEGIN … END body
+ * has not closed yet? CASE … END expressions inside the body are counted so
+ * their END is not mistaken for the body's.
+ */
+function isOpenTriggerBody(sql: string): boolean {
+  if (!TRIGGER_START.test(sql)) {
+    return false;
+  }
+  const words = sql
+    .replace(/'(?:[^']|'')*'|"(?:[^"]|"")*"|`[^`]*`|\[[^\]]*\]/g, " ")
+    .toUpperCase()
+    .match(/\b(?:BEGIN|CASE|END)\b/g) ?? [];
+  let begun = false;
+  let caseDepth = 0;
+  for (const word of words) {
+    if (word === "BEGIN") {
+      begun = true;
+    } else if (word === "CASE") {
+      caseDepth += 1;
+    } else if (caseDepth > 0) {
+      caseDepth -= 1;
+    } else if (begun) {
+      return false;
+    }
+  }
+  return true;
+}
+
 /**
  * Split a migration file into statements.
  *
@@ -208,6 +239,13 @@ export function splitSqlStatements(sql: string): string[] {
     }
 
     if (char === ";") {
+      // Inside a CREATE TRIGGER … BEGIN … END body, ';' ends a body statement,
+      // not the trigger. Splitting there runs fragments ("…BEGIN INSERT …",
+      // "UPDATE …", "END") that are not valid SQL, so no trigger could ever ship.
+      if (isOpenTriggerBody(current)) {
+        current += char;
+        continue;
+      }
       statements.push(current);
       current = "";
       continue;

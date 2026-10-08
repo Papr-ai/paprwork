@@ -37,7 +37,7 @@ import {
 } from "./CloudAppInstallService.js";
 import { getAppService } from "./AppService.js";
 import { decideTrackPullAction } from "./cloudSync/trackPullOnPublishLogic.js";
-import { fetchPublishedAppRevision } from "./cloudSync/trackUpstreamRevision.js";
+import { fetchPublisherRevisionSignedIn } from "./syncV3/checkPublisherUpstreamRevision.js";
 import {
   hasMetadataChanges,
   mergeTrackedMetadata,
@@ -574,7 +574,8 @@ export class CloudAppTrackSyncService {
       }
 
       const lastSyncedAt = new Date().toISOString();
-      const upstreamRevision = await fetchPublishedAppRevision(
+      // Team/private publishers 403 anonymous revision reads — sign in.
+      const upstreamRevision = await fetchPublisherRevisionSignedIn(
         lineage.source.namespaceId,
         lineage.source.slug,
       );
@@ -767,7 +768,8 @@ export class CloudAppTrackSyncService {
         continue;
       }
 
-      const liveRevision = await fetchPublishedAppRevision(
+      // Team/private publishers 403 anonymous revision reads — sign in.
+      const liveRevision = await fetchPublisherRevisionSignedIn(
         lineage.source.namespaceId,
         lineage.source.slug,
       );

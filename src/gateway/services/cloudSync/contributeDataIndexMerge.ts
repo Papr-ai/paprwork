@@ -23,6 +23,17 @@ export interface ContributeDataIndexMergeInput {
   targetAppId: string;
   /** Copy-local ids of databases the publisher already has (own-data copies). */
   skipDbIds?: ReadonlySet<string>;
+  /**
+   * Contributor job ids actually in the proposal (after duplicate folding).
+   * Registry entries are only taken from these. Default: every dependent job.
+   */
+  proposalJobIds?: readonly string[];
+  /**
+   * Jobs the publisher does not have. Only these are added to data/jobs.json;
+   * edits to existing jobs travel in their job.json. Empty → jobs.json is not
+   * touched. Default (undefined): every dependent job (legacy behaviour).
+   */
+  newJobIds?: readonly string[];
 }
 
 export interface ContributeDataIndexMergeResult {
@@ -135,10 +146,17 @@ export function mergeJobsJsonForContribute(
   );
 }
 
-function portableDatabaseRecord(record: DatabaseRecord): DatabaseRecord {
+function portableDatabaseRecord(
+  record: DatabaseRecord,
+  appIds?: { forkAppId: string; targetAppId: string },
+): DatabaseRecord {
   return {
     ...record,
     localPath: "",
+    // A database the contributor adds belongs to the publisher's app once merged.
+    ...(appIds && record.schemaOwnerAppId === appIds.forkAppId
+      ? { schemaOwnerAppId: appIds.targetAppId }
+      : {}),
   };
 }
 
@@ -146,6 +164,7 @@ export function mergeDatabasesJsonForContribute(
   ownerRegistry: DatabasesRegistryFile,
   contributorRegistry: DatabasesRegistryFile,
   registryDbIds: readonly string[],
+  appIds?: { forkAppId: string; targetAppId: string },
 ): DatabasesRegistryFile {
   if (registryDbIds.length === 0) {
     return ownerRegistry;
@@ -153,9 +172,12 @@ export function mergeDatabasesJsonForContribute(
 
   const databases = { ...ownerRegistry.databases };
   for (const dbId of registryDbIds) {
+    // The publisher's record is theirs: a proposal adds databases, it never
+    // rewrites one the publisher already has (owner, isolation, sync mode).
+    if (ownerRegistry.databases[dbId]) continue;
     const record = contributorRegistry.databases[dbId];
     if (!record || record.status === "tombstone") continue;
-    databases[dbId] = portableDatabaseRecord(record);
+    databases[dbId] = portableDatabaseRecord(record, appIds);
   }
 
   return { version: 1, databases };
@@ -164,10 +186,17 @@ export function mergeDatabasesJsonForContribute(
 export async function mergeContributeDataIndexesIntoRepo(
   input: ContributeDataIndexMergeInput,
 ): Promise<ContributeDataIndexMergeResult> {
-  const dependentJobIds = resolveAppDependentJobIds(
+  const allDependentJobIds = resolveAppDependentJobIds(
     input.contributorPaprDir,
     input.forkAppId,
   );
+  const inProposal = input.proposalJobIds ? new Set(input.proposalJobIds) : null;
+  const dependentJobIds = inProposal
+    ? allDependentJobIds.filter((id) => inProposal.has(id))
+    : allDependentJobIds;
+  const indexJobIds = input.newJobIds
+    ? dependentJobIds.filter((id) => input.newJobIds!.includes(id))
+    : dependentJobIds;
   const registryDbIds = (
     await resolveContributeRegistryDbIds(
       input.contributorPaprDir,
@@ -180,7 +209,7 @@ export async function mergeContributeDataIndexesIntoRepo(
   const dataDir = path.join(input.repoDir, "data");
   await fs.mkdir(dataDir, { recursive: true });
 
-  if (dependentJobIds.length > 0) {
+  if (indexJobIds.length > 0) {
     const ownerJobs = await readJobsFile(path.join(dataDir, "jobs.json"));
     const contributorJobs = await readJobsFile(
       path.join(input.contributorPaprDir, "data", "jobs.json"),
@@ -188,7 +217,7 @@ export async function mergeContributeDataIndexesIntoRepo(
     const merged = mergeJobsJsonForContribute(
       ownerJobs,
       contributorJobs,
-      dependentJobIds,
+      indexJobIds,
       input.forkAppId,
       input.targetAppId,
     );
@@ -217,6 +246,7 @@ export async function mergeContributeDataIndexesIntoRepo(
       ownerRegistry,
       contributorRegistry,
       registryDbIds,
+      { forkAppId: input.forkAppId, targetAppId: input.targetAppId },
     );
     const next = `${JSON.stringify(merged, null, 2)}\n`;
     const databasesPath = path.join(dataDir, "databases.json");

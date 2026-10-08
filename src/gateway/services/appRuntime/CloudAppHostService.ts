@@ -302,7 +302,9 @@ export class CloudAppHostService {
     registerJobEventsSseRoutes(app, {
       hub: getJobEventHub(),
       pollJobStatus: async (jobId, req) => {
-        const runtimeAuth = this.buildRuntimeAuth(req);
+        // Same credentials as the page itself (session → namespace key), or
+        // team/private apps 403 every poll.
+        const runtimeAuth = await this.memoryRuntimeAuth(req);
         if (!runtimeAuth) {
           return null;
         }
@@ -318,7 +320,11 @@ export class CloudAppHostService {
             completedAt: job.completedAt,
             lastOutput: job.lastOutput,
           };
-        } catch {
+        } catch (err) {
+          // Denied won't change mid-connection — tell the stream to stop asking.
+          if (/\((401|403)\)/.test((err as Error).message ?? "")) {
+            throw Object.assign(new Error("job status forbidden"), { forbidden: true });
+          }
           return null;
         }
       },
@@ -446,6 +452,13 @@ export class CloudAppHostService {
       cookieHeader: req.headers.cookie,
       headers: req.headers,
     });
+  }
+
+  /** Runtime auth for memory-server calls: cookie session upgraded to the namespace key. */
+  private async memoryRuntimeAuth(req: Request): Promise<AppRuntimeRouteAuth | null> {
+    const base = this.buildRuntimeAuth(req);
+    if (!base) return null;
+    return (await enrichRuntimeAuthWithPaprApiKey(base)) ?? base;
   }
 
   private buildRuntimeAuth(req: Request): AppRuntimeRouteAuth | null {
@@ -2027,7 +2040,7 @@ export class CloudAppHostService {
         return;
       }
 
-      const runtimeAuth = this.buildRuntimeAuth(req);
+      const runtimeAuth = await this.memoryRuntimeAuth(req);
       if (!runtimeAuth) {
         res.status(403).json({ error: "Forbidden — open the app in this browser tab first" });
         return;

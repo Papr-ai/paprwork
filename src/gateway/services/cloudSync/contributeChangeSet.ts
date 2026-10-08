@@ -36,6 +36,12 @@ export interface ProposalTree {
   skipPrefixes?: string[];
   /** Migration ids (no .sql) this machine restored from the ledger (restored-migrations.json). */
   restoredIds?: ReadonlySet<string>;
+  /**
+   * Local files come from a different folder than the base (a duplicate job
+   * folded onto the publisher's id). A file it lacks was never there, not
+   * deleted: propose edits and additions only.
+   */
+  noDeletes?: boolean;
 }
 
 export interface ProposalChangeSet {
@@ -123,6 +129,7 @@ export function buildProposalChangeSet(trees: ProposalTree[]): ProposalChangeSet
 
     // Deletions: the publisher had it at the base, the collaborator removed it.
     for (const rel of tree.base.keys()) {
+      if (tree.noDeletes) break;
       if (tree.local.has(rel)) continue;
       if (skipped(tree, rel)) continue;
       // Platform files are regenerated or merged, never deleted by a proposal.
