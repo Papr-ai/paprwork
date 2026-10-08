@@ -81,3 +81,19 @@ describe("buildUploadFailureAgentPrompt", () => {
     expect(prompt).toContain("repair_cloud_sync");
   });
 });
+
+describe("openCloudSyncAgentChat", () => {
+  it("passes send + title through papr-chat-open", async () => {
+    const { openCloudSyncAgentChat } = await import("../../utils/openCloudSyncAgentChat");
+    const seen: unknown[] = [];
+    const h = (e: Event) => seen.push((e as CustomEvent).detail);
+    window.addEventListener("papr-chat-open", h);
+    openCloudSyncAgentChat("Set up HubSpot", { send: true, title: "Set up HubSpot" });
+    openCloudSyncAgentChat("draft only");
+    window.removeEventListener("papr-chat-open", h);
+    expect(seen).toEqual([
+      { message: "Set up HubSpot", send: true, title: "Set up HubSpot" },
+      { message: "draft only" },
+    ]);
+  });
+});
