@@ -167,8 +167,14 @@ export function isCollaboratorOnSharedDatabase(dbId: string): boolean {
   const appsRoot = getPaprAppsRoot();
   if (owner) {
     try {
-      if (statSync(path.join(appsRoot, owner)).isDirectory()) {
-        return false;
+      const ownerDir = path.join(appsRoot, owner);
+      if (statSync(ownerDir).isDirectory()) {
+        // A shared-data install is never the schema owner, even when an older
+        // install recorded itself as owner (publisher id remapped to copy id).
+        const ownerLineage = readLineageSync(ownerDir);
+        if (!ownerLineage || !lineageUsesSharedPrimaryDatabase(ownerLineage)) {
+          return false;
+        }
       }
     } catch {
       /* owner app not on this desktop */

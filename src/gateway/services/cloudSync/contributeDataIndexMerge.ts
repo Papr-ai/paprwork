@@ -135,10 +135,17 @@ export function mergeJobsJsonForContribute(
   );
 }
 
-function portableDatabaseRecord(record: DatabaseRecord): DatabaseRecord {
+function portableDatabaseRecord(
+  record: DatabaseRecord,
+  appIds?: { forkAppId: string; targetAppId: string },
+): DatabaseRecord {
   return {
     ...record,
     localPath: "",
+    // A database the contributor adds belongs to the publisher's app once merged.
+    ...(appIds && record.schemaOwnerAppId === appIds.forkAppId
+      ? { schemaOwnerAppId: appIds.targetAppId }
+      : {}),
   };
 }
 
@@ -146,6 +153,7 @@ export function mergeDatabasesJsonForContribute(
   ownerRegistry: DatabasesRegistryFile,
   contributorRegistry: DatabasesRegistryFile,
   registryDbIds: readonly string[],
+  appIds?: { forkAppId: string; targetAppId: string },
 ): DatabasesRegistryFile {
   if (registryDbIds.length === 0) {
     return ownerRegistry;
@@ -153,9 +161,12 @@ export function mergeDatabasesJsonForContribute(
 
   const databases = { ...ownerRegistry.databases };
   for (const dbId of registryDbIds) {
+    // The publisher's record is theirs: a proposal adds databases, it never
+    // rewrites one the publisher already has (owner, isolation, sync mode).
+    if (ownerRegistry.databases[dbId]) continue;
     const record = contributorRegistry.databases[dbId];
     if (!record || record.status === "tombstone") continue;
-    databases[dbId] = portableDatabaseRecord(record);
+    databases[dbId] = portableDatabaseRecord(record, appIds);
   }
 
   return { version: 1, databases };
@@ -217,6 +228,7 @@ export async function mergeContributeDataIndexesIntoRepo(
       ownerRegistry,
       contributorRegistry,
       registryDbIds,
+      { forkAppId: input.forkAppId, targetAppId: input.targetAppId },
     );
     const next = `${JSON.stringify(merged, null, 2)}\n`;
     const databasesPath = path.join(dataDir, "databases.json");

@@ -233,6 +233,51 @@ async function readRegistryFile(paprDir: string): Promise<DatabasesRegistryFile 
 }
 
 /** Registry + job migration folders referenced by the fork (SQL only, no .db). */
+/** dbIds the publisher's app already links at the proposal's base commit. */
+function publisherLinkedDbIds(trees: ProposalTree[]): string[] {
+  const app = trees.find((t) => t.kind === "app");
+  if (!app) return [];
+  const ids = new Set<string>();
+  for (const rel of ["data-sources.json", "linked-databases.json"]) {
+    for (const id of app.base.get(rel)?.match(/db-[0-9a-f]{8}(?![0-9a-f])/g) ?? []) ids.add(id);
+  }
+  return [...ids];
+}
+
+/**
+ * A migration file that never ran on this copy's database is a failed or
+ * abandoned attempt, not schema: shipping it makes every install run it. Keep
+ * only files in the applied ledger. Exception: a teammate on the team's shared
+ * data is not allowed to apply migrations (the publisher does, on approve), so
+ * there a proposed migration is unapplied by design and stays.
+ */
+export async function dropUnappliedMigrations(
+  files: Map<string, string>,
+  dbId: string,
+  dbPath: string,
+): Promise<void> {
+  const { isCollaboratorOnSharedDatabase } = await import("./sharedPrimaryTursoResolve.js");
+  if (isCollaboratorOnSharedDatabase(dbId)) return;
+  const { queryRegistryDatabase } = await import("./jobs/registryDbSchemaReader.js");
+  const ledger = await queryRegistryDatabase({ dbPath, dbId }, "SELECT id FROM schema_migrations");
+  // Unreadable ledger: unknown, not "nothing applied" — leave the set alone.
+  if (!ledger) return;
+  const applied = new Set(
+    ledger.rows.map((row) => String(row.id ?? "").replace(/\.sql$/, "")),
+  );
+  const dropped: string[] = [];
+  for (const rel of [...files.keys()]) {
+    if (!rel.endsWith(".sql") || rel.includes("/")) continue;
+    if (!applied.has(rel.replace(/\.sql$/, ""))) {
+      files.delete(rel);
+      dropped.push(rel);
+    }
+  }
+  if (dropped.length > 0) {
+    console.info(`[CloudContribute] left out never-applied migrations for ${dbId}: ${dropped.join(", ")}`);
+  }
+}
+
 async function collectMigrationTrees(
   paprDir: string,
   forkAppId: string,
@@ -259,6 +304,7 @@ async function collectMigrationTrees(
       tempRoot,
       `registry-migrations-${dbId}`,
     );
+    await dropUnappliedMigrations(files, dbId, record.localPath);
     if (files.size > 0) {
       const { readRestoredManifest } = await import("./jobs/restoredMigrations.js");
       const restoredIds = new Set((await readRestoredManifest(migrationRoot)).map((r) => r.id));
@@ -570,8 +616,9 @@ async function pushContributeBranch(
       contributorPaprDir: getPaprRoot(),
       forkAppId,
       targetAppId: prepare.targetAppId,
-      // The copy's own instances of the publisher's databases aren't new ones.
-      skipDbIds: new Set([...dbToPublisher.keys(), ...ownIds]),
+      // The copy's own instances of the publisher's databases aren't new ones,
+      // and databases the publisher already links are theirs to describe.
+      skipDbIds: new Set([...dbToPublisher.keys(), ...ownIds, ...publisherLinkedDbIds(trees)]),
     });
 
     const stagePaths = [
