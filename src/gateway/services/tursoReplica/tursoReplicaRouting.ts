@@ -398,6 +398,13 @@ export async function pushLinkedDbViaTursoReplica(
 
     if (result.ok) {
       notifyReplicaDbChanged(source);
+      // Web tabs (apps.papr.ai) and other desktops learn about this push.
+      const { noticeDesktopPushDbChanged } = await import("./desktopPushDbChangedNotice.js");
+      noticeDesktopPushDbChanged({
+        ...(source.dbId ? { dbId: source.dbId } : {}),
+        ...(source.jobId ? { jobId: source.jobId } : {}),
+        tursoShortName: tursoDatabase,
+      });
       await drainInboundReplicaCdcIfCaughtUp({ source, tursoDatabase });
       await noteReplicaPushSuccess(source);
     } else if (
