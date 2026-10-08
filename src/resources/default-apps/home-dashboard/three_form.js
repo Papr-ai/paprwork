@@ -36,6 +36,7 @@ const ThreeForm = {
       <div class="t3field"><span>How often</span><div class="t3seg" role="radiogroup" aria-label="How often">${seg}</div></div>
       <div class="t3pair"><label><span id="te-ml">${c.done}</span><input id="te-m" value="${v(g.target)}" placeholder="${c.ph}" /></label>
         <label class="t3by"><span>By</span><input id="te-d" type="date" min="${this.ymd(new Date())}" value="${own ? '' : this.isoDate(g.due)}" /></label></div>
+      <label><span>What counts</span><input id="te-s" value="${v(g.scope)}" placeholder="Posts, comments, launch videos, integrations that reach new users" /></label>
       <p class="t3tip" id="te-tip">${esc(c.tip)}</p>
       <div class="t3btns"><button type="button" class="t3save" data-three="save" data-gid="${esc(g.id)}">Save</button>
         <button type="button" class="t3cancel" data-three="cancel">Cancel</button></div></div>`;
@@ -56,6 +57,6 @@ const ThreeForm = {
   read() {
     const val = (id) => (document.getElementById(id)?.value || '').trim();
     const repeat = document.querySelector('.t3edit')?.dataset.repeat || '';
-    return { title: val('te-t'), target: val('te-m'), due: repeat ? '' : val('te-d'), repeat: repeat || undefined };
+    return { title: val('te-t'), target: val('te-m'), due: repeat ? '' : val('te-d'), repeat: repeat || undefined, scope: val('te-s') };
   },
 };

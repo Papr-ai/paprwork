@@ -27,8 +27,8 @@ const ThreeEdit = {
   /** PUT body for a set of goals — custom ones carry their text, Pen's carry the goal id. */
   picksFrom(goals) {
     return goals.filter((g) => g.title).map((g) => g.origin === 'custom'
-      ? { id: g.id, title: g.title, target: g.target, due: g.due, repeat: g.repeat }
-      : { id: g.id, goalId: g.id, title: g.edited || (g.origTitle && g.title !== g.origTitle) ? g.title : undefined, target: g.target, due: g.due, repeat: g.repeat });
+      ? { id: g.id, title: g.title, target: g.target, due: g.due, repeat: g.repeat, scope: g.scope }
+      : { id: g.id, goalId: g.id, title: g.edited || (g.origTitle && g.title !== g.origTitle) ? g.title : undefined, target: g.target, due: g.due, repeat: g.repeat, scope: g.scope });
   },
   firstRun() { return Three.data?.source === 'pen' && !Three.data?.confirmed; },
   editor(g, own) { return ThreeForm.html(g, own, (x) => this.esc(x)); },

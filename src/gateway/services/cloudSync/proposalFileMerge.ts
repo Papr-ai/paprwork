@@ -155,6 +155,7 @@ const PROPOSABLE_JOB_FIELDS = [
   "name",
   "command",
   "requirements",
+  "platformCdp",
   "requiredKeys",
   "dependsOn",
   "runtimeCalls",

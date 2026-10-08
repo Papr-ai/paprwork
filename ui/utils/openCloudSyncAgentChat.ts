@@ -1,8 +1,11 @@
 /** Open main chat with context for cloud git merge / PR review (desktop only). */
-export function openCloudSyncAgentChat(message: string): void {
+export function openCloudSyncAgentChat(
+  message: string,
+  opts: { send?: boolean; title?: string } = {},
+): void {
   window.dispatchEvent(
     new CustomEvent("papr-chat-open", {
-      detail: { message },
+      detail: { message, ...opts },
     }),
   );
 }

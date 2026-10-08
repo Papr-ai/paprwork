@@ -1,6 +1,7 @@
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import {
   jobNeedsPlatformCdp,
+  platformCdpEnvForRun,
   platformIdsFromRequirements,
   resolvePlatformCdpUrl,
 } from "../src/gateway/utils/platformCdpBridge.js";
@@ -35,5 +36,35 @@ describe("platformCdpBridge", () => {
         process.env.LINKEDIN_CHROME_CDP_URL = prev;
       }
     }
+  });
+});
+
+describe("platformCdpEnvForRun", () => {
+  const embedded = () => Promise.reject(new Error("Port 9333 is Paprwork's own DevTools endpoint"));
+
+  it("skips setup for jobs without platform requirements", async () => {
+    const ensure = vi.fn();
+    expect(await platformCdpEnvForRun({ requirements: ["playwright"] }, () => {}, ensure)).toEqual({});
+    expect(ensure).not.toHaveBeenCalled();
+  });
+
+  it("fails the run by default when the browser cannot be prepared", async () => {
+    await expect(platformCdpEnvForRun({ requirements: ["linkedin-api"] }, () => {}, embedded)).rejects.toThrow(
+      "Platform browser CDP setup failed: Port 9333",
+    );
+  });
+
+  it("best-effort jobs continue, log the reason and pass it to the script", async () => {
+    const log = vi.fn();
+    const env = await platformCdpEnvForRun({ requirements: ["linkedin-api"], platformCdp: "best-effort" }, log, embedded);
+    expect(env).toEqual({ PAPR_PLATFORM_CDP_ERROR: "Port 9333 is Paprwork's own DevTools endpoint" });
+    expect(log).toHaveBeenCalledWith(expect.stringContaining("best-effort, continuing"));
+  });
+
+  it("best-effort jobs still get the CDP env when setup works", async () => {
+    const ok = async () => ({ PAPR_PLATFORM_CDP_URL: "http://127.0.0.1:9222" });
+    expect(await platformCdpEnvForRun({ requirements: ["linkedin-api"], platformCdp: "best-effort" }, () => {}, ok)).toEqual({
+      PAPR_PLATFORM_CDP_URL: "http://127.0.0.1:9222",
+    });
   });
 });

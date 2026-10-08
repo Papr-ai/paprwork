@@ -126,3 +126,14 @@
   .t3seg button[aria-checked="true"] { background: rgba(255,255,255,.14); box-shadow: 0 1px 2px rgba(0,0,0,.3); }
   .t3edit input[type="date"] { color-scheme: dark; }
 }
+
+/* What counts toward a goal, and the tracker's results (three_track.js). */
+.t3scope { display: flex; gap: 8px; margin: 2px 0 0; font-size: 12.5px; line-height: 1.45; color: var(--soft); }
+.t3scope span { flex: none; font-weight: 600; color: var(--ink); }
+.t3track .t3sub { margin: 0 0 10px; }
+.t3roi { margin: 0 0 10px; font-size: 13px; color: var(--soft); }
+.t3roi b { color: var(--ink); font-weight: 600; }
+.t3roi span { margin: 0 4px; color: var(--blue); }
+.t3stat-sm { grid-template-columns: repeat(auto-fit, minmax(96px, 1fr)); }
+.t3stat-sm b { font-size: 15px; }
+.t3warn { margin: 8px 0 0; padding-left: 16px; font-size: 11.5px; color: var(--soft); }

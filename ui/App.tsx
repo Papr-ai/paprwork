@@ -74,6 +74,10 @@ type ChatOpenPayload = {
   mode?: "main" | "app-agent";
   appId?: string;
   subAgentId?: string;
+  /** Send `message` immediately (same as install / onboarding), instead of drafting it. */
+  send?: boolean;
+  /** Chat tab title; defaults to "New Chat". */
+  title?: string | null;
 };
 
 // Check if Papr authentication is required (commercial build vs open source)
@@ -562,16 +566,19 @@ export function App() {
 
         const chatId = await createChat();
         if (!chatId) return;
-        const tabId = createTab("chat", chatId, "New Chat");
+        const tabId = createTab("chat", chatId, detail.title?.trim() || "New Chat");
         const msg = detail.message?.trim();
-        if (msg) {
-          useChatStore.getState().setDraftMessage(chatId, msg);
-        }
         const modelId = detail.model?.trim();
         if (modelId) {
           useChatStore.getState().setLastSelectedModel(chatId, modelId);
         }
         switchToTab(tabId);
+        if (msg && detail.send) {
+          // Same path as install/onboarding: wait for ChatContainer to mount, then send.
+          window.setTimeout(() => dispatchPaprOnboardingSend(msg, chatId), 300);
+        } else if (msg) {
+          useChatStore.getState().setDraftMessage(chatId, msg);
+        }
       })();
     };
 
