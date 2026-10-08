@@ -28,6 +28,7 @@ import {
   MIGRATION_CONFLICT_CODE,
 } from "./tursoReplicaMigrationConflict.js";
 import { drainInboundReplicaCdcIfCaughtUp } from "./tursoReplicaInboundDrain.js";
+import { noteTursoDatabaseChanged } from "./creditTursoChangedPing.js";
 import { isReplicaCheckpointWalError } from "./tursoReplicaCheckpointRecovery.js";
 import {
   linkedSourceAsAppDataSource,
@@ -398,6 +399,7 @@ export async function pushLinkedDbViaTursoReplica(
 
     if (result.ok) {
       notifyReplicaDbChanged(source);
+      noteTursoDatabaseChanged(tursoDatabase);
       await drainInboundReplicaCdcIfCaughtUp({ source, tursoDatabase });
       await noteReplicaPushSuccess(source);
     } else if (
