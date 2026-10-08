@@ -31,6 +31,7 @@ export const DESIGN_DIRECTIVE_RULES = [
   "Dark + light: both via prefers-color-scheme + Liquid Glass tokens; WCAG AA contrast on glass in both.",
   "Small (<=640px) + large (>=1280px): mobile-first single column, 44px touch targets, content max-width on wide screens, no horizontal overflow.",
   "Motion 150-250ms, transform/opacity only, respects prefers-reduced-motion; feedback within 100ms of every action.",
+  "Goal / progress / metrics pages are visual-first (Apple Photos, Fitness): one payoff number, one chart of progress over time on a shared baseline with a target line, real profile pictures and company logos (never invented), evidence as tiles — read_skill({ skillId: \"preloaded-goal-page-design\" }).",
 ] as const;
 
 /** Compact form for tool descriptions / reminders. */
