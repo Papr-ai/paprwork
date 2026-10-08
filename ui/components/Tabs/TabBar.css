@@ -160,3 +160,19 @@ body:not(.platform-darwin) .tab-bar__tabs {
   position: relative;
   display: flex;
 }
+
+/* Chat toggle: blue when chat is off ("click to enable"), neutral when on. */
+.tab-bar__chat-toggle--off {
+  color: var(--accent);
+  background: rgba(var(--accent-rgb), 0.1);
+}
+
+.tab-bar__chat-toggle--off:hover {
+  color: var(--accent);
+  background: rgba(var(--accent-rgb), 0.16);
+}
+
+.tab-bar__chat-toggle:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 1px;
+}

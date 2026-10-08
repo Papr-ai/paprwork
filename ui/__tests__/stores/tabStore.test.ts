@@ -1,5 +1,6 @@
 import { describe, it, expect, beforeEach } from "vitest";
 import { useTabStore } from "../../stores/tabStore";
+import { getChatToggleInfo } from "../../utils/chatToggle";
 
 describe("TabStore", () => {
   beforeEach(() => {
@@ -243,6 +244,83 @@ describe("TabStore", () => {
       // Both should be removed
       expect(useTabStore.getState().getTab(parentId)).toBeUndefined();
       expect(useTabStore.getState().getTab(childId)).toBeUndefined();
+      expect(useTabStore.getState().tabs.length).toBe(0);
+    });
+  });
+
+  describe("Chat toggle", () => {
+    const pair = () => {
+      const s = useTabStore.getState();
+      const chatId = s.createTab("chat", "c1", "Chat");
+      const appId = s.createTab("app", "a1", "App");
+      s.createArtifactFromChat(chatId, appId, { autoSwitch: true });
+      return { chatId, appId };
+    };
+
+    it("offers to create a chat for a standalone app or document", () => {
+      const s = useTabStore.getState();
+      const appId = s.createTab("app", "a1", "App");
+      const docId = s.createTab("document", "d1", "Doc");
+      const get = useTabStore.getState().getTab;
+      expect(getChatToggleInfo(get(appId), get)).toEqual({
+        mode: "create",
+        appTabId: appId,
+      });
+      expect(getChatToggleInfo(get(docId), get)).toEqual({
+        mode: "create",
+        appTabId: docId,
+      });
+    });
+
+    it("offers no toggle for chat-only, list or Memory tabs", () => {
+      const s = useTabStore.getState();
+      const ids = [
+        s.createTab("chat", "c1", "Chat"),
+        s.createTab("documents", "all", "Docs"),
+        s.createTab("memory", "m", "Memory"),
+      ];
+      const get = useTabStore.getState().getTab;
+      for (const id of ids) expect(getChatToggleInfo(get(id), get)).toBeNull();
+    });
+
+    it("hides and shows the chat without unmerging the pair", () => {
+      const { chatId, appId } = pair();
+      const get = () => useTabStore.getState().getTab(chatId)!;
+      expect(getChatToggleInfo(get(), useTabStore.getState().getTab)).toEqual({
+        mode: "toggle",
+        parentTabId: chatId,
+        hidden: false,
+      });
+
+      useTabStore.getState().setChatHidden(chatId, true);
+      expect(get().chatHidden).toBe(true);
+      expect(get().childTabIds).toEqual([appId]);
+      expect(useTabStore.getState().getTab(appId)?.parentTabId).toBe(chatId);
+
+      useTabStore.getState().setChatHidden(chatId, false);
+      expect(get().chatHidden).toBe(false);
+      expect(get().childTabIds).toEqual([appId]);
+    });
+
+    it("keeps the per-tab split ratio while the chat is hidden", () => {
+      const { chatId } = pair();
+      useTabStore.getState().setSplitRatio(0.35);
+      const before = useTabStore.getState().getSplitRatio(chatId);
+      useTabStore.getState().setChatHidden(chatId, true);
+      useTabStore.getState().setChatHidden(chatId, false);
+      expect(useTabStore.getState().getSplitRatio(chatId)).toBe(before);
+    });
+
+    it("ignores setChatHidden on tabs that are not parents", () => {
+      const appId = useTabStore.getState().createTab("app", "a1", "App");
+      useTabStore.getState().setChatHidden(appId, true);
+      expect(useTabStore.getState().getTab(appId)?.chatHidden).toBeUndefined();
+    });
+
+    it("closes both tabs when a hidden pair is closed", () => {
+      const { chatId } = pair();
+      useTabStore.getState().setChatHidden(chatId, true);
+      useTabStore.getState().closeTab(chatId);
       expect(useTabStore.getState().tabs.length).toBe(0);
     });
   });

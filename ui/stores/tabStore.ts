@@ -78,6 +78,8 @@ interface TabState {
     options?: { autoSwitch?: boolean },
   ) => void;
 
+  setChatHidden: (parentTabId: string, hidden: boolean) => void;
+
   // Split View
   setSplitRatio: (ratio: number) => void;
   getSplitRatio: (tabId: string | null) => number;
@@ -695,6 +697,16 @@ export const useTabStore = create<TabState>()((set, get) => ({
 
           return { tabs };
         });
+      },
+
+      setChatHidden: (parentTabId, hidden) => {
+        set((state) => ({
+          tabs: state.tabs.map((t) =>
+            t.id === parentTabId && t.displayMode === "parent"
+              ? { ...t, chatHidden: hidden }
+              : t,
+          ),
+        }));
       },
 
       createArtifactFromChat: (chatTabId, artifactTabId, options = {}) => {
