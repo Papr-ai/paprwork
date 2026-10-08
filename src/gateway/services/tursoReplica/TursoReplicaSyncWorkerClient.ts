@@ -37,6 +37,10 @@ import {
   type ReplicaCrashRemedy,
 } from "./replicaCrashRemedy.js";
 import { repairReplicaEngineTables } from "./replicaEngineTableGuard.js";
+import {
+  TursoSyncWorkerRestartedError,
+  isTursoSyncWorkerRestarted,
+} from "./tursoReplicaSyncWorkerRestart.js";
 import { readDurablePark, writeDurablePark } from "./replicaDurablePark.js";
 import {
   markReplicaReadPhase,
@@ -123,6 +127,15 @@ export class TursoReplicaSyncWorkerClient {
   private readonly timingRing: string[] = [];
   private shuttingDown = false;
   private readonly pending = new Map<string, PendingRequest>();
+  /**
+   * Set when *we* SIGKILL the worker because one request timed out. The child's exit then
+   * carries `signal: SIGKILL`, which is indistinguishable from a native abort unless we
+   * remember that we caused it. Without this, every other request that happened to be in
+   * flight on the shared worker — usually on unrelated databases — was reported as an
+   * engine crash on its own path: sidecars reset, crash streak bumped, and after three
+   * such timeouts elsewhere a healthy replica got parked for the session.
+   */
+  private selfKill: { op: TursoSyncWorkerOp; localPath: string } | null = null;
   private readonly crashListeners = new Set<TursoSyncWorkerCrashListener>();
   /** Consecutive engine crashes per replica path, cleared by a successful op. */
   private readonly crashStreaks = new Map<string, number>();
@@ -232,7 +245,7 @@ export class TursoReplicaSyncWorkerClient {
       // when the engine was running. Rethrowing only turned a completed release into a
       // failure for whoever was recovering — e.g. the checkpoint repair inside a pull,
       // which surfaced to a mini-app as a 500 on a plain SELECT.
-      if (isTursoSyncWorkerCrash(error)) {
+      if (isTursoSyncWorkerCrash(error) || isTursoSyncWorkerRestarted(error)) {
         console.warn(
           `[TursoSyncWorker] Worker exited during close on ${localPath}; ` +
             `handle is released: ${error.message}`,
@@ -267,6 +280,16 @@ export class TursoReplicaSyncWorkerClient {
       this.noteHealthy(options);
       return result;
     } catch (error) {
+      if (isTursoSyncWorkerRestarted(error)) {
+        // Collateral of a timeout on another request. Retry once if that is safe; a write
+        // surfaces, because whether it landed before the kill is unknown.
+        if ((options.retryOnCrash ?? "auto") !== "auto" || !IDEMPOTENT_WORKER_OPS.has(options.op)) {
+          throw error;
+        }
+        const result = await this.sendOnce(options);
+        this.noteHealthy(options);
+        return result;
+      }
       if (!isTursoSyncWorkerCrash(error)) {
         throw error;
       }
@@ -509,7 +532,9 @@ export class TursoReplicaSyncWorkerClient {
       const timer = setTimeout(() => {
         this.pending.delete(id);
         // A wedged engine can hang instead of aborting; drop the worker so the next
-        // request starts clean rather than queueing behind it forever.
+        // request starts clean rather than queueing behind it forever. Record that the
+        // kill is ours so the requests it takes down with it are not read as aborts.
+        if (this.child) this.selfKill = { op: options.op, localPath: options.localPath };
         this.killChild("SIGKILL");
         reject(
           new Error(
@@ -741,9 +766,29 @@ export class TursoReplicaSyncWorkerClient {
     this.ownedPaths.clear();
     this.booted = null;
     this.stdoutBuffer = "";
+    const selfKill = this.selfKill;
+    this.selfKill = null;
 
     if (this.shuttingDown || this.pending.size === 0) {
       this.pending.clear();
+      return;
+    }
+
+    // We killed the worker over a timeout. Nothing aborted: the requests still in flight
+    // are collateral, not evidence about their databases. Fail them as a restart (which
+    // send() retries for idempotent ops) — no crash listeners, no remedy, no streak.
+    if (selfKill) {
+      for (const [id, pending] of this.pending.entries()) {
+        clearTimeout(pending.timer);
+        this.pending.delete(id);
+        pending.reject(
+          new TursoSyncWorkerRestartedError({
+            op: pending.op,
+            localPath: pending.localPath,
+            cause: selfKill,
+          }),
+        );
+      }
       return;
     }
 

@@ -201,6 +201,58 @@ describe("TursoReplicaSyncWorkerClient", () => {
     await client.shutdown();
   });
 
+  it("a timeout on one database is not counted as a crash on others in flight", async () => {
+    // One shared worker serves every replica. When a slow op on database A times out, the
+    // client SIGKILLs the worker; a write on database B in flight at that moment used to be
+    // reported as an engine abort on B — sidecar reset, streak bump, and after three such
+    // timeouts B was parked for the session though nothing was wrong with it.
+    const other = path.join(tmpDir, "other.db");
+    fs.writeFileSync(other, "");
+    fs.writeFileSync(`${other}-wal`, "keep");
+    let spawnCount = 0;
+    const client = new TursoReplicaSyncWorkerClient(() => {
+      spawnCount += 1;
+      // A hangs; B never answers either (so it is in flight when A's timer fires).
+      return fakeWorker(`if (spawnCount_ok(req)) reply({ id: req.id, ok: true, result: { pulled: true } });`
+        .replace("spawnCount_ok(req)", spawnCount > 1 ? "true" : "false"))();
+    });
+    const crashes: unknown[] = [];
+    client.onCrash((e) => crashes.push(e));
+
+    for (let i = 0; i < 3; i += 1) {
+      spawnCount = 0;
+      const slow = client.sync({ ...spec(), timeoutMs: 150 }, "pull");
+      const write = client
+        .write({ ...spec(), localPath: other, timeoutMs: 5_000, statements: [{ sql: "insert" }] })
+        .catch((e: unknown) => e);
+      await expect(slow).rejects.toThrow(/timed out after 150ms/);
+      const error = await write;
+      expect(isTursoSyncWorkerCrash(error)).toBe(false);
+      expect((error as Error).message).toMatch(/restarted during write.*was not at fault/);
+    }
+    expect(crashes).toHaveLength(0);
+    // B's sync state was not reset, and B still opens: no park after three timeouts.
+    expect(fs.readFileSync(`${other}-wal`, "utf8")).toBe("keep");
+    spawnCount = 1;
+    await expect(client.sync({ ...spec(), localPath: other }, "pull")).resolves.toBe(true);
+    await client.shutdown();
+  });
+
+  it("retries an idempotent op that was collateral of another database's timeout", async () => {
+    let spawnCount = 0;
+    const client = new TursoReplicaSyncWorkerClient(() => {
+      spawnCount += 1;
+      return fakeWorker(spawnCount === 1 ? `/* hang */` : `reply({ id: req.id, ok: true, result: { rows: [{ a: 1 }] } });`)();
+    });
+    const other = path.join(tmpDir, "other.db");
+    const slow = client.sync({ ...spec(), timeoutMs: 150 }, "pull").catch((e: unknown) => e);
+    const read = client.query({ ...spec(), localPath: other, timeoutMs: 5_000, sql: "select 1" });
+    await expect(read).resolves.toEqual({ rows: [{ a: 1 }] });
+    expect(String(await slow)).toMatch(/timed out/);
+    expect(spawnCount).toBe(2);
+    await client.shutdown();
+  });
+
   it("ignores non-protocol stdout instead of desyncing", async () => {
     const client = new TursoReplicaSyncWorkerClient(
       fakeWorker(`
