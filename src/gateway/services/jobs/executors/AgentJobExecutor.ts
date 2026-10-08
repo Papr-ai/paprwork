@@ -31,6 +31,7 @@ import {
 } from "../../jobAppDatabase.js";
 import { STANDALONE_APP_ID } from "../appIds.js";
 import { jobSdkEnv } from "../jobSdkEnv.js";
+import { ensureJobRuntime, defaultRuntimesRoot } from "../runtime/jobRuntime.js";
 import { leaseJobDbProxyEnv } from "../jobDbProxyEnv.js";
 import { runtimeParamsForJobEnv } from "../../../utils/normalizeRuntimeParams.js";
 import type { IsolatedJobRunDiagnostics } from "../../AgentService.js";
@@ -248,11 +249,24 @@ export class AgentJobExecutor implements IJobExecutor {
     // Agent jobs write their own scripts at runtime, so a raw sqlite3 handle
     // cannot be prevented by fixing job code — the agent regenerates it. Proxy
     // credentials plus papr_db on PYTHONPATH give it a safe path by default.
+    // Declared runtime (requirements.txt / runtime.json): the agent's bash tool
+    // gets the job's venv + tools on PATH, so scripts it runs just work. Resolved
+    // before leasing the DB proxy so a MissingDependencyError cannot leak a lease.
+    const runtime = await ensureJobRuntime({
+      jobDir: params.jobDir,
+      jobType: params.job.type,
+      baseEnv: process.env,
+      appendLog: params.appendLog,
+      signal: params.signal,
+      pythonCommand: async () => (process.platform === "win32" ? "python" : "python3"),
+      runtimesRoot: defaultRuntimesRoot(),
+    });
     const dbProxy = leaseJobDbProxyEnv(writeTargets, linkedAppId);
 
     const jobEnv: Record<string, string> = {
       PAPR_HOME: getPaprRoot(),
       JOB_DIR: params.jobDir,
+      ...runtime.env,
       ...(jobDbPath ? { JOB_DB: jobDbPath } : {}),
       ...(writeTargets.length > 0
         ? jobWriteDatabaseEnv(writeTargets, linkedAppId)
