@@ -79,7 +79,7 @@ export interface TursoSourceSyncItem {
   cutoverBlocked?: boolean;
   cutoverBlockReason?: string | null;
   /** Breaking schema change waiting to publish with the app code (sync paused for this DB). */
-  heldForPublish?: { since: string; migrationIds: string[] };
+  heldForPublish?: { since: string; migrationIds: string[]; purpose?: "publish" | "proposal" };
 }
 
 export interface TursoSyncItemsReport {
@@ -643,7 +643,11 @@ export async function buildTursoSyncItemsReport(
   };
 }
 
-function heldForPublishStatus(localPath: string): { since: string; migrationIds: string[] } | undefined {
+function heldForPublishStatus(
+  localPath: string,
+): { since: string; migrationIds: string[]; purpose: "publish" | "proposal" } | undefined {
   const hold = getReplicaPublishHold(localPath);
-  return hold ? { since: hold.since, migrationIds: hold.migrations.map((m) => m.migrationId) } : undefined;
+  return hold
+    ? { since: hold.since, migrationIds: hold.migrations.map((m) => m.migrationId), purpose: hold.purpose ?? "publish" }
+    : undefined;
 }

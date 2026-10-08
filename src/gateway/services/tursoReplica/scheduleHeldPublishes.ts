@@ -4,13 +4,13 @@
  * already flush the app; the held steps run inside that flush.
  */
 
-import { listReplicaPublishHolds } from "./replicaPublishHold.js";
+import { listPublishableHolds } from "./replicaPublishHold.js";
 
 export type HeldPublishTrigger = "startup" | "reconnect";
 
 /** App ids to publish for the current holds (dbId links + recorded owner). */
 export async function appIdsForHeldDatabases(paprDir: string): Promise<string[]> {
-  const holds = listReplicaPublishHolds();
+  const holds = listPublishableHolds();
   if (holds.length === 0) return [];
   const { listAppIdsLinkingSyncKey } = await import("../tursoLinkedSources.js");
   const ids = new Set<string>();
@@ -27,6 +27,9 @@ export async function scheduleHeldPublishes(trigger: HeldPublishTrigger): Promis
   try {
     const { isTursoReplicaOnline } = await import("../../utils/tursoReplicaEnabled.js");
     if (!isTursoReplicaOnline()) return [];
+    // Teammate proposal holds settle on approve/reject; they are never published.
+    const { settleProposalHolds } = await import("./settleProposalHolds.js");
+    await settleProposalHolds().catch(() => []);
     const { getPaprRoot } = await import("../../../core/utils/paprRoot.js");
     const appIds = await appIdsForHeldDatabases(getPaprRoot());
     if (appIds.length === 0) return [];

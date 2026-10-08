@@ -37,6 +37,13 @@ export interface ProposalTree {
   /** Migration ids (no .sql) this machine restored from the ledger (restored-migrations.json). */
   restoredIds?: ReadonlySet<string>;
   /**
+   * Migration ids (no .sql) that ran on this copy's database: its ledger plus
+   * any held for proposal. A new migration file outside this set never ran and
+   * blocks the proposal (it is reported, never silently dropped). null = the
+   * ledger could not be read, so nothing can be confirmed. Omitted = no check.
+   */
+  appliedIds?: ReadonlySet<string> | null;
+  /**
    * Local files come from a different folder than the base (a duplicate job
    * folded onto the publisher's id). A file it lacks was never there, not
    * deleted: propose edits and additions only.
@@ -55,6 +62,10 @@ export interface ProposalChangeSet {
   restored: string[];
   /** Existing migrations whose content differs from the publisher's — never proposed. */
   immutableSkipped: string[];
+  /** New migration files that never ran on this copy (proposal is blocked). */
+  unapplied: string[];
+  /** New migration files that couldn't be checked (ledger unreadable; proposal is blocked). */
+  unverified: string[];
 }
 
 function joinRepo(dir: string, rel: string): string {
@@ -84,6 +95,8 @@ export function buildProposalChangeSet(trees: ProposalTree[]): ProposalChangeSet
   const ignored: string[] = [];
   const restored: string[] = [];
   const immutableSkipped: string[] = [];
+  const unapplied: string[] = [];
+  const unverified: string[] = [];
 
   for (const tree of trees) {
     for (const [rel, content] of tree.local) {
@@ -123,6 +136,8 @@ export function buildProposalChangeSet(trees: ProposalTree[]): ProposalChangeSet
         }
         const id = rel.split("/").pop()!.replace(/\.sql$/, "");
         if (tree.restoredIds?.has(id)) restored.push(repoPath);
+        else if (tree.appliedIds === null) unverified.push(repoPath);
+        else if (tree.appliedIds && !tree.appliedIds.has(id)) unapplied.push(repoPath);
       }
       writes.set(repoPath, content);
     }
@@ -148,5 +163,7 @@ export function buildProposalChangeSet(trees: ProposalTree[]): ProposalChangeSet
     ignored: ignored.sort(),
     restored: restored.sort(),
     immutableSkipped: immutableSkipped.sort(),
+    unapplied: unapplied.sort(),
+    unverified: unverified.sort(),
   };
 }
