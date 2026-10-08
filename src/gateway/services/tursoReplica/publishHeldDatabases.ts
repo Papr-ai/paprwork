@@ -16,6 +16,7 @@
 import type { AppDataSource } from "../appDataSources.js";
 import {
   getReplicaPublishHold,
+  holdPurpose,
   markHoldReplayPushed,
   readHoldJournal,
   releaseReplicaPublishHold,
@@ -68,6 +69,13 @@ export async function publishHeldDatabase(
     linkedAt: hold.since,
   };
 
+  if (holdPurpose(hold) === "proposal") {
+    // Defense in depth: a teammate's proposal reaches the cloud only through the
+    // publisher's approval, never through this desktop's publish.
+    throw new Error(
+      `Database ${dbId} holds a proposed schema change; it reaches the cloud when the proposal is approved.`,
+    );
+  }
   return withHoldBypass(hold.localPath, async () => {
     // 3. Cloud migration (idempotent per migration id).
     const migrated = await deps.migrateCloud(hold, tursoDatabase);

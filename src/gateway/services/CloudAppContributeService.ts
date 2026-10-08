@@ -94,6 +94,7 @@ interface StagedRepoTree {
   repoRelativeDir: string;
   files: Map<string, string>;
   restoredIds?: ReadonlySet<string>;
+  appliedIds?: ReadonlySet<string> | null;
 }
 
 async function runCommand(
@@ -194,6 +195,8 @@ async function collectTextFiles(
   for (const entry of entries) {
     if (entry.name.startsWith(".")) continue;
     if (entry.name === CLOUD_LINEAGE_FILENAME) continue;
+    // Rejected / quarantined migrations stay on disk for reference, never in a proposal.
+    if (entry.name === "_quarantine") continue;
     if (entry.name.endsWith(".db") || entry.name.endsWith(".db-wal")) continue;
 
     const fullPath = path.join(rootDir, entry.name);
@@ -251,36 +254,36 @@ function publisherLinkedDbIds(trees: ProposalTree[]): string[] {
 }
 
 /**
- * A migration file that never ran on this copy's database is a failed or
- * abandoned attempt, not schema: shipping it makes every install run it. Keep
- * only files in the applied ledger. Exception: a teammate on the team's shared
- * data is not allowed to apply migrations (the publisher does, on approve), so
- * there a proposed migration is unapplied by design and stays.
+ * Migration ids that ran on this copy's database: the local ledger plus any
+ * held for proposal (teammate on shared data). null when the ledger can't be
+ * read — the proposal then refuses rather than guessing.
  */
-export async function dropUnappliedMigrations(
-  files: Map<string, string>,
+export async function appliedMigrationIdsForProposal(
   dbId: string,
   dbPath: string,
-): Promise<void> {
-  const { isCollaboratorOnSharedDatabase } = await import("./sharedPrimaryTursoResolve.js");
-  if (isCollaboratorOnSharedDatabase(dbId)) return;
+): Promise<Set<string> | null> {
   const { queryRegistryDatabase } = await import("./jobs/registryDbSchemaReader.js");
   const ledger = await queryRegistryDatabase({ dbPath, dbId }, "SELECT id FROM schema_migrations");
-  // Unreadable ledger: unknown, not "nothing applied" — leave the set alone.
-  if (!ledger) return;
-  const applied = new Set(
-    ledger.rows.map((row) => String(row.id ?? "").replace(/\.sql$/, "")),
-  );
-  const dropped: string[] = [];
-  for (const rel of [...files.keys()]) {
-    if (!rel.endsWith(".sql") || rel.includes("/")) continue;
-    if (!applied.has(rel.replace(/\.sql$/, ""))) {
-      files.delete(rel);
-      dropped.push(rel);
-    }
+  if (!ledger) return null;
+  const ids = new Set(ledger.rows.map((row) => String(row.id ?? "").replace(/\.sql$/, "")));
+  const { getReplicaPublishHold } = await import("./tursoReplica/replicaPublishHold.js");
+  for (const m of getReplicaPublishHold(dbPath)?.migrations ?? []) ids.add(m.migrationId);
+  return ids;
+}
+
+/** Proposals never carry a migration that didn't run here (it would run untested on approve). */
+export function assertProposalMigrationsApplied(changes: { unapplied: string[]; unverified: string[] }): void {
+  if (changes.unapplied.length > 0) {
+    throw new Error(
+      `These migration files never ran on this copy's database: ${changes.unapplied.join(", ")}. ` +
+        "Apply them (papr_db_apply_migration) and test, or remove them, then propose again.",
+    );
   }
-  if (dropped.length > 0) {
-    console.info(`[CloudContribute] left out never-applied migrations for ${dbId}: ${dropped.join(", ")}`);
+  if (changes.unverified.length > 0) {
+    throw new Error(
+      `Couldn't read this copy's migration ledger to confirm ${changes.unverified.join(", ")} ran. ` +
+        "Check the database with papr_db_sync_status, then propose again.",
+    );
   }
 }
 
@@ -310,7 +313,6 @@ async function collectMigrationTrees(
       tempRoot,
       `registry-migrations-${dbId}`,
     );
-    await dropUnappliedMigrations(files, dbId, record.localPath);
     if (files.size > 0) {
       const { readRestoredManifest } = await import("./jobs/restoredMigrations.js");
       const restoredIds = new Set((await readRestoredManifest(migrationRoot)).map((r) => r.id));
@@ -318,6 +320,7 @@ async function collectMigrationTrees(
         repoRelativeDir: `${repoRelativeDir}/migrations`,
         files,
         restoredIds,
+        appliedIds: await appliedMigrationIdsForProposal(dbId, record.localPath),
       });
     }
   }
@@ -416,6 +419,7 @@ interface StagedProposalTree {
   files: Map<string, string>;
   kind: "app" | "job" | "migrations";
   restoredIds?: ReadonlySet<string>;
+  appliedIds?: ReadonlySet<string> | null;
   /** Local job id (job trees only). */
   jobId?: string;
   /** Duplicate job folded onto the publisher's job: never propose deletions. */
@@ -469,7 +473,13 @@ async function buildContributeStaging(
     if (isAppRepoRootPath(repoPath) && dir.startsWith("data/databases/")) {
       dir = dir.slice("data/".length);
     }
-    trees.push({ repoRelativeDir: dir, files: tree.files, kind: "migrations", restoredIds: tree.restoredIds });
+    trees.push({
+      repoRelativeDir: dir,
+      files: tree.files,
+      kind: "migrations",
+      restoredIds: tree.restoredIds,
+      ...(tree.appliedIds !== undefined ? { appliedIds: tree.appliedIds } : {}),
+    });
   }
   return trees;
 }
@@ -658,6 +668,7 @@ async function pushContributeBranch(
         base: await readFilesAtCommit(repoDir, base.sha, tree.repoRelativeDir, env, tree.files),
         kind: tree.kind,
         ...(tree.restoredIds ? { restoredIds: tree.restoredIds } : {}),
+        ...(tree.appliedIds !== undefined ? { appliedIds: tree.appliedIds } : {}),
         ...(tree.folded ? { noDeletes: true } : {}),
         // The app folder's bundled jobs/ copy is stale once Jobs/{id} exists;
         // the job trees own those paths.
@@ -665,6 +676,7 @@ async function pushContributeBranch(
       });
     }
     const changes = buildProposalChangeSet(trees);
+    assertProposalMigrationsApplied(changes);
     if (changes.ignored.length > 0) {
       console.info(
         `[CloudContribute] left out platform-rewritten files: ${changes.ignored.join(", ")}`,

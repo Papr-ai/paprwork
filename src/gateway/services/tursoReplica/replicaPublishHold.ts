@@ -25,8 +25,18 @@ export interface HeldMigration {
   migrationRoot?: string;
 }
 
+/**
+ * publish  — the owner's breaking migration; the owner's next publish carries it.
+ * proposal — a teammate on the team's shared data: only the publisher (or a
+ *            maintainer) migrates the shared cloud copy, so the change stays on
+ *            this desktop until the proposal is approved or rejected. Never published.
+ */
+export type HoldPurpose = "publish" | "proposal";
+
 export interface ReplicaPublishHold {
   localPath: string;
+  /** Absent on holds written before proposals existed: treat as publish. */
+  purpose?: HoldPurpose;
   dbId?: string;
   appId?: string;
   since: string;
@@ -118,16 +128,27 @@ export function listReplicaPublishHolds(): ReplicaPublishHold[] {
   return [...load().values()];
 }
 
+export function holdPurpose(hold: ReplicaPublishHold): HoldPurpose {
+  return hold.purpose ?? "publish";
+}
+
+/** Holds the owner's publish carries to the cloud. Proposal holds never are. */
+export function listPublishableHolds(): ReplicaPublishHold[] {
+  return listReplicaPublishHolds().filter((h) => holdPurpose(h) === "publish");
+}
+
 /** Place or extend a hold. Migrations are kept in apply order; re-adding an id is a no-op. */
 export function addMigrationToHold(input: {
   localPath: string;
   dbId?: string;
   appId?: string;
+  purpose?: HoldPurpose;
   migration: HeldMigration;
 }): ReplicaPublishHold {
   const existing = getReplicaPublishHold(input.localPath);
   const hold: ReplicaPublishHold = existing ?? {
     localPath: path.resolve(input.localPath),
+    purpose: input.purpose ?? "publish",
     dbId: input.dbId,
     appId: input.appId,
     since: new Date().toISOString(),
@@ -138,6 +159,13 @@ export function addMigrationToHold(input: {
   }
   hold.dbId ??= input.dbId;
   hold.appId ??= input.appId;
+  // A proposal hold never turns into a publish hold (or back) by adding to it.
+  if (existing && input.purpose && holdPurpose(existing) !== input.purpose) {
+    throw new Error(
+      `Database ${hold.dbId ?? hold.localPath} already holds a ${holdPurpose(existing)} change; ` +
+        `finish it before adding a ${input.purpose} change.`,
+    );
+  }
   persist(hold);
   load().set(path.resolve(hold.localPath), hold);
   return hold;

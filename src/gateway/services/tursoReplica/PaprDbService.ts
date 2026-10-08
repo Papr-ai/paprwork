@@ -602,18 +602,10 @@ export async function paprDbCreateMigration(options: {
       ...(note ? { note } : {}),
     };
   }
-  let apply: Awaited<ReturnType<typeof paprDbApplyMigration>>;
-  try {
-    apply = await paprDbApplyMigration({
-      dbId: options.dbId,
-      migrationId: created.migrationId,
-    });
-  } catch (error) {
-    // The migration never ran: remove the file so a retry gets a clean slot
-    // and the failed attempt cannot ride along in a later publish or proposal.
-    await fsPromises.rm(created.fullPath, { force: true }).catch(() => {});
-    throw error;
-  }
+  const apply = await paprDbApplyMigration({
+    dbId: options.dbId,
+    migrationId: created.migrationId,
+  });
   return {
     migrationId: created.migrationId,
     fileName: created.fileName,
@@ -670,7 +662,6 @@ export async function paprDbApplyMigration(options: {
   await ensureReplicaSchemaMigrationsLedger(source);
 
   assertPaprDbMigrationApplyAllowed();
-  await assertNotCollaboratorOnSharedDatabase(options.dbId);
 
   const result = await applyRegistryMigrationSingleRoute(
     source,
@@ -967,18 +958,3 @@ export async function paprDbReconcileSync(options: {
   });
 }
 
-/**
- * A teammate on the team's shared data does not own its schema: the publisher
- * migrates the shared primary (applyRegistryDatabaseMigrations already skips
- * these copies). Applying here would also start a publish hold this copy can
- * never release — its code reaches the team only by proposal.
- */
-async function assertNotCollaboratorOnSharedDatabase(dbId: string): Promise<void> {
-  const { isCollaboratorOnSharedDatabase } = await import("../sharedPrimaryTursoResolve.js");
-  if (isCollaboratorOnSharedDatabase(dbId)) {
-    throw new Error(
-      `Database ${dbId} is the team's shared data and the publisher owns its schema. ` +
-        "Propose the migration with submit_cloud_app_pr, or switch this copy to your own data first.",
-    );
-  }
-}

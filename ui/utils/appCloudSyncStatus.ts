@@ -78,7 +78,7 @@ export interface AppCloudDatabaseStatus {
   cutoverBlocked?: boolean;
   cutoverBlockReason?: string | null;
   /** Breaking schema change waiting to publish with the app code. */
-  heldForPublish?: { since: string; migrationIds: string[] };
+  heldForPublish?: { since: string; migrationIds: string[]; purpose?: "publish" | "proposal" };
 }
 
 /** Pending DB work that should block the green "Synced" chip. */
@@ -348,7 +348,7 @@ function databaseDetail(item: {
   lastReplicaPushError?: string | null;
   cutoverBlocked?: boolean;
   cutoverBlockReason?: string | null;
-  heldForPublish?: { since: string; migrationIds: string[] };
+  heldForPublish?: { since: string; migrationIds: string[]; purpose?: "publish" | "proposal" };
 }): string {
   // Primary copy is for non-technical users: no Turso / replica / migration /
   // ledger / cutover / CDC. Raw reasons stay on lastReplicaPushError and
@@ -357,6 +357,9 @@ function databaseDetail(item: {
   const changes = pendingCount === 1 ? "change" : "changes";
   if (item.heldForPublish) {
     const n = item.heldForPublish.migrationIds.length;
+    if (item.heldForPublish.purpose === "proposal") {
+      return `Structure change on this computer only (${n} ${n === 1 ? "change" : "changes"}) — the team copy updates when the owner approves your proposal; team data is paused here until then`;
+    }
     return `Structure change waiting to publish with the app (${n} ${n === 1 ? "change" : "changes"}) — works locally, the web copy updates on the next publish`;
   }
   if (item.syncMode === "replica") {

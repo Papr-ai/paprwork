@@ -175,6 +175,11 @@ export function startPeriodicPull(host: CloudSyncPeriodicHost): void {
       }
       await host.tryAutoReconcileRemoteGit();
       await host.pull();
+      // Teammate schema changes held for review: settle once the publisher has
+      // approved (cloud ledger has them) or rejected the proposal.
+      await import("../tursoReplica/settleProposalHolds.js")
+        .then(({ settleProposalHolds }) => settleProposalHolds())
+        .catch(() => []);
       // The 5-min tick is the only round trip we make, so anything that needs
       // asking the web rides along with it — including incoming contributions,
       // which the renderer refetches when this lands.

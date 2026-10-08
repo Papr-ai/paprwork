@@ -10,10 +10,11 @@
  * finalizeAppRepoMutation), so new code can't go live ahead of its database.
  */
 
-import { listReplicaPublishHolds, type ReplicaPublishHold } from "../tursoReplica/replicaPublishHold.js";
+import { listPublishableHolds, type ReplicaPublishHold } from "../tursoReplica/replicaPublishHold.js";
 
 export async function heldDatabasesForApp(paprDir: string, appId: string): Promise<ReplicaPublishHold[]> {
-  const holds = listReplicaPublishHolds();
+  // Proposal holds (teammate on shared data) are never published from here.
+  const holds = listPublishableHolds();
   if (holds.length === 0) return [];
   const { listAppLinkedSyncKeys } = await import("../tursoLinkedSources.js");
   const linked = listAppLinkedSyncKeys(appId, paprDir);
