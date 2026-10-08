@@ -54,7 +54,7 @@ test("tapping Track this starts the first run now, not after the 120s maintenanc
   await vi.advanceTimersByTimeAsync(0);
 
   expect(res).toEqual({ jobId: "tracker-1", kind: "script" });
-  expect(created[0]).toMatchObject({ requiredKeys: ["X_AUTH_TOKEN", "X_CT0"], requirements: ["playwright", "linkedin-api"] });
+  expect(created[0]).toMatchObject({ requiredKeys: ["X_AUTH_TOKEN", "X_CT0"], requirements: ["playwright", "linkedin-api"], platformCdp: "best-effort" });
   expect(existsSync(path.join(jobDir, "track.py"))).toBe(true);
   expect(started).toEqual(["tracker-1"]);
   expect(gatewayBackgroundBudget.stats().queued).toEqual([]);

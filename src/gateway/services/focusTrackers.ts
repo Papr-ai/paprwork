@@ -398,6 +398,8 @@ export async function createTracker(goal: TrackerGoal): Promise<{ jobId: string;
       command: `python3 track.py --goal ${JSON.stringify(goal.id)}`,
       requiredKeys,
       requirements: template.requirements,
+      // track.py reports each source separately; no LinkedIn browser must not cost the X numbers.
+      platformCdp: "best-effort",
       schedule: { enabled: true, cron: template.cron },
       retries: { maxAttempts: 2, backoffMs: 30_000 },
     });
