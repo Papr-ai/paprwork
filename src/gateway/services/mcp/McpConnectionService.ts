@@ -369,6 +369,18 @@ export class McpConnectionService {
   }
 
   // ── calls ─────────────────────────────────────────────────────────────────
+  /** Tool names, descriptions and input schemas for a connected server. */
+  async listTools(id: string): Promise<McpToolDescriptor[]> {
+    const s = await this.ensure(id);
+    if (s.state !== "connected") return [];
+    return (this.live.get(id)?.tools ?? []).map((t) => ({
+      name: t.name,
+      description: t.description,
+      inputSchema: t.inputSchema,
+      annotations: t.annotations,
+    }));
+  }
+
   async callTool(id: string, toolName: string, args: Record<string, unknown>): Promise<McpCallResult> {
     const l = this.entry(id);
     if (!l.client) {

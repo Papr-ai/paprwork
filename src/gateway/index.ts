@@ -270,6 +270,30 @@ async function initializeServices(): Promise<void> {
       setTimeout(() => {
         void mcp.restoreAll().catch((err) => console.warn("[MCP] restore failed:", err));
       }, 3_000);
+
+      // Mini-apps reach connections only for services they declare in
+      // apps/<id>/connections.json, after the user approves app × service.
+      const { McpAppAccess } = await import("./services/mcp/mcpAppAccess.js");
+      const { setMcpAppAccess } = await import("./services/mcp/mcpRoutes.js");
+      const { getPaprRoot } = await import("../core/utils/paprRoot.js");
+      const { getAppService } = await import("./services/AppService.js");
+      setMcpAppAccess(
+        new McpAppAccess({
+          paprRoot: getPaprRoot,
+          appTitle: async (appId) => (await getAppService().getApp(appId))?.title,
+          askUser: async ({ appId, appTitle, serverId, serverName }) => {
+            const { requestKeyPermission } = await import("./permissions/PermissionRequester.js");
+            const { mcpAppGrantKey } = await import("./services/mcp/mcpAppAccess.js");
+            const r = await requestKeyPermission({
+              keyName: mcpAppGrantKey(appId, serverId),
+              description: `${appTitle} wants to use your ${serverName} connection (read and act on your ${serverName} data). Allow?`,
+              isEnvKey: false,
+              toolContext: { toolName: `${appTitle} → ${serverName}` },
+            });
+            return r.approved;
+          },
+        }),
+      );
     }
 
     // Initialize workspace (creates ~/Papr/workspace/ and templates on first run)

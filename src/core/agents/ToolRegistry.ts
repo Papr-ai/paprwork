@@ -19,6 +19,9 @@ import { resolveCloudAppPrToolAlias } from "../tools/cloudAppPrToolIds.js";
 // oxlint-disable-next-line @typescript-eslint/no-explicit-any
 export type AnyTool = Tool<any, any, any, any, any, any, any>;
 
+/** Remote MCP tool ids: `<server>__<tool>` (see mcpToolAdapter.mcpAgentToolId). */
+const MCP_TOOL_ID = /^[a-z][a-z0-9_]*__[A-Za-z0-9_-]+$/;
+
 export class ToolRegistry {
   private tools: Map<string, AnyTool>;
   /** Legacy alias tools — available only when explicitly allowlisted (sub-agent profiles). */
@@ -82,10 +85,23 @@ export class ToolRegistry {
       return this.getTools();
     }
     const allowed = new Set(allowedToolIds);
+    // Connected MCP servers register `<server>__<tool>` at runtime, so a fixed
+    // allowlist can't name them. `mcp:linear` grants every Linear tool,
+    // `mcp:*` every connected server's tools.
+    const mcpAll = allowed.has("mcp:*");
+    const mcpPrefixes = allowedToolIds
+      .filter((id) => id.startsWith("mcp:") && id !== "mcp:*")
+      .map((id) => `${id.slice(4).replace(/-/g, "_")}__`);
     const toolsObject: Record<string, AnyTool> = {};
     for (const [id, tool] of this.tools) {
       if (allowed.has(id)) {
         toolsObject[id] = tool;
+        continue;
+      }
+      if ((mcpAll || mcpPrefixes.length > 0) && id.includes("__") && !this.legacyToolIds.has(id)) {
+        if (mcpAll ? MCP_TOOL_ID.test(id) : mcpPrefixes.some((p) => id.startsWith(p))) {
+          toolsObject[id] = tool;
+        }
       }
     }
     for (const requestedId of allowedToolIds) {
