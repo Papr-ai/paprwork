@@ -53,7 +53,7 @@ function initials(name: string): string {
   return name.replace(/[^A-Za-z0-9 ]/g, "").split(" ").map((w) => w[0]).join("").slice(0, 2).toUpperCase();
 }
 
-export function McpConnectionsTab() {
+export function McpConnectionsTab({ embedded = false }: { embedded?: boolean } = {}) {
   const [servers, setServers] = useState<McpServer[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
@@ -175,14 +175,16 @@ export function McpConnectionsTab() {
 
   return (
     <div className="mcp-tab">
-      <div className="settings-section__header">
-        <div>
-          <h2 className="settings-section__title">Connections</h2>
-          <p className="settings-section__description">
-            Sign in once and Pen can use the service's tools. No API keys. Sign-ins stay in your keychain.
-          </p>
+      {!embedded && (
+        <div className="settings-section__header">
+          <div>
+            <h2 className="settings-section__title">Connections</h2>
+            <p className="settings-section__description">
+              Sign in once and Pen can use the service's tools. No API keys. Sign-ins stay in your keychain.
+            </p>
+          </div>
         </div>
-      </div>
+      )}
 
       <input
         className="form-input mcp-tab__search"

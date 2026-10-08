@@ -1,0 +1,59 @@
+/* ConnectionsView — Services / API keys under one Settings page */
+
+.connections-view__head {
+  margin-bottom: 16px;
+}
+
+.connections-view__tabs {
+  display: inline-flex;
+  gap: 2px;
+  padding: 3px;
+  margin-bottom: 20px;
+  border-radius: 10px;
+  background: var(--background-tertiary);
+}
+
+.connections-view__tab {
+  padding: 6px 14px;
+  border: 0;
+  border-radius: 8px;
+  background: transparent;
+  color: var(--text-secondary);
+  font-size: 13px;
+  font-weight: 500;
+  cursor: pointer;
+}
+
+.connections-view__tab:hover {
+  color: var(--text-primary);
+}
+
+.connections-view__tab.is-active {
+  background: var(--background-primary);
+  color: var(--text-primary);
+  box-shadow: 0 1px 2px rgb(0 0 0 / 0.08);
+}
+
+.connections-view__browser {
+  margin-top: 8px;
+}
+
+.connections-view__group {
+  margin: 0 0 4px;
+  font-size: 12px;
+  font-weight: 600;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+  color: var(--text-tertiary);
+}
+
+.connections-view__note {
+  margin: 0 0 12px;
+  font-size: 13px;
+  color: var(--text-secondary);
+}
+
+/* Embedded tabs drop their own page title; keep their action buttons right-aligned. */
+.settings-section__header--embedded {
+  justify-content: flex-end;
+}
