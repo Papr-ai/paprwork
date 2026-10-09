@@ -13,6 +13,8 @@ import type { IntegrationKeyVaultAudience } from "../../constants/integrationKey
 import { syncVaultKeyChange } from "../../utils/vaultPullShared";
 import { IntegrationKeyVaultAudienceSelector } from "./IntegrationKeyVaultAudienceSelector";
 import { IntegrationKeyMemberPicker, type WorkspaceMemberOption } from "./IntegrationKeyMemberPicker";
+import { Btn, Fine, Pills, Sheet } from "./ConnectionsUi";
+import { ServiceLogo } from "./McpServiceRow";
 import "./McpServerSheet.css";
 
 export interface McpSheetServer {
@@ -22,6 +24,7 @@ export interface McpSheetServer {
   state: string;
   toolCount: number;
   requiresClientId: boolean;
+  url?: string;
 }
 
 /** Same naming as the gateway's mcpCredentialKeyName. */
@@ -120,7 +123,7 @@ function ConnectWithAudience({
       )}
       <div className="mcp-sheet__row">
         {status && <span className="mcp-sheet__status">{status}</span>}
-        <button type="button" className="settings-btn settings-btn--primary" disabled={busy} onClick={() => void connect()}>
+        <button type="button" className="cx-btn cx-btn--cta" disabled={busy} onClick={() => void connect()}>
           {busy ? "Opening…" : "Connect"}
         </button>
       </div>
@@ -178,7 +181,7 @@ function WhoCanUse({ server, onReconnect }: { server: McpSheetServer; onReconnec
         </p>
         {onReconnect && (
           <div className="mcp-sheet__row">
-            <button type="button" className="settings-btn settings-btn--ghost" onClick={onReconnect}>
+            <button type="button" className="cx-btn" onClick={onReconnect}>
               Disconnect to change
             </button>
           </div>
@@ -230,7 +233,7 @@ function WhoCanUse({ server, onReconnect }: { server: McpSheetServer; onReconnec
       )}
       <div className="mcp-sheet__row">
         {status && <span className="mcp-sheet__status">{status}</span>}
-        <button type="button" className="settings-btn settings-btn--primary" disabled={!dirty} onClick={() => void save()}>
+        <button type="button" className="cx-btn cx-btn--primary" disabled={!dirty} onClick={() => void save()}>
           Save
         </button>
       </div>
@@ -301,75 +304,96 @@ export function McpServerSheet({
   /** Org's maxPenAccess; higher options are shown but disabled. */
   orgMax?: "read" | "ask" | "full";
 }) {
-  useEffect(() => {
-    const onKey = (e: KeyboardEvent) => e.key === "Escape" && onClose();
-    window.addEventListener("keydown", onKey);
-    return () => window.removeEventListener("keydown", onKey);
-  }, [onClose]);
-
+  const { keys } = useCustomKeys();
+  const shared = keys.find((k) => k.name === mcpKeyName(server.id))?.vaultOrigin === "shared";
   const connected = server.state === "connected";
-  return (
-    <div className="mcp-sheet__scrim" onClick={onClose}>
-      <aside
-        className="mcp-sheet"
-        role="dialog"
-        aria-modal="true"
-        aria-label={server.name}
-        onClick={(e) => e.stopPropagation()}
-      >
-        <header className="mcp-sheet__head">
-          <div>
-            <h3 className="mcp-sheet__title">{server.name}</h3>
-            <p className="mcp-sheet__muted">
-              {server.requiresClientId
-                ? "Needs a one-time setup"
-                : connected
-                  ? `Connected · ${server.toolCount} tools`
-                  : server.description}
-            </p>
-          </div>
-          <button type="button" className="mcp-sheet__close" aria-label="Close" onClick={onClose}>
-            ×
-          </button>
-        </header>
+  const waiting = server.state === "awaiting_user" || server.state === "connecting";
+  const expired = server.state === "needs_reauth" || server.state === "error";
+  const subtitle = [server.description, server.url ? siteOf(server.url) : null].filter(Boolean).join(" · ");
 
-        {server.requiresClientId ? (
-          <section className="mcp-sheet__section">
-            <h4>Needs setup</h4>
-            <p>
-              {server.name} doesn't let apps register themselves, so someone who manages {server.name} for your team
-              creates a one-time OAuth app. That's whoever manages {server.name}, not necessarily your Papr admin. The
-              client ID and secret stay in your team's Key Vault, so after that everyone connects with one click.
-            </p>
-            <button type="button" className="settings-btn settings-btn--primary" onClick={() => openSetupChat(server.name)}>
-              Set up with Pen
-            </button>
-          </section>
-        ) : connected ? (
+  return (
+    <Sheet
+      label={server.name}
+      mark={<ServiceLogo server={{ name: server.name, url: server.url ?? "" }} size="lg" />}
+      title={server.name}
+      subtitle={subtitle || undefined}
+      onClose={onClose}
+      footer={
+        connected ? (
+          shared ? (
+            <span className="cx-grow">Shared with you by a teammate</span>
+          ) : (
+            <>
+              <span className="cx-grow">{server.toolCount} tools</span>
+              <Btn kind="danger" onClick={onDisconnect}>Disconnect</Btn>
+            </>
+          )
+        ) : waiting ? (
           <>
-            <section className="mcp-sheet__section">
-              <h4>Who can use it</h4>
-              <WhoCanUse server={server} onReconnect={onDisconnect} />
-            </section>
-            <section className="mcp-sheet__section">
-              <h4>What Pen may do</h4>
-              <PenAccessPicker server={server} orgMax={orgMax} />
-            </section>
-            <section className="mcp-sheet__section">
-              <button type="button" className="settings-btn settings-btn--ghost" onClick={onDisconnect}>
-                Disconnect
-              </button>
-            </section>
+            <span className="cx-grow">Waiting for you to sign in</span>
+            <Btn onClick={onDisconnect}>Cancel</Btn>
           </>
-        ) : onConnect ? (
-          <section className="mcp-sheet__section">
-            <h4>Who can use it</h4>
-            <ConnectWithAudience server={server} onConnect={onConnect} />
-          </section>
-        ) : (
-          <p className="mcp-sheet__muted">Connect {server.name} to choose who can use it.</p>
-        )}
-      </aside>
-    </div>
+        ) : undefined
+      }
+    >
+      <Pills
+        items={[
+          connected && ["ok", "Connected"],
+          waiting && ["wait", "Waiting for sign-in"],
+          expired && ["warn", "Sign-in expired"],
+          shared && ["team", "Team connection"],
+          server.requiresClientId && !connected && ["plain", "Needs setup"],
+        ]}
+      />
+      {expired && <p className="cx-p cx-p--warn">The sign-in expired, so jobs using {server.name} are paused. Reconnecting takes one click.</p>}
+
+      {server.requiresClientId && !connected ? (
+        <>
+          <h4>Needs setup</h4>
+          <p className="cx-p">
+            {server.name} doesn't let apps register themselves, so someone who manages {server.name} for your team
+            creates a one-time OAuth app. That's whoever manages {server.name}, not necessarily your Papr admin. The
+            client ID and secret stay in your team's Key Vault, so after that everyone connects with one click.
+          </p>
+          <div className="cx-sheet__cta">
+            <Btn kind="cta" onClick={() => openSetupChat(server.name)}>Set up with Pen</Btn>
+          </div>
+        </>
+      ) : connected ? (
+        <>
+          <h4>Who can use it</h4>
+          <WhoCanUse server={server} onReconnect={onDisconnect} />
+          <h4>What Pen may do</h4>
+          <PenAccessPicker server={server} orgMax={orgMax} />
+        </>
+      ) : onConnect ? (
+        <>
+          <h4>How connecting works</h4>
+          <ol className="cx-how">
+            <li>Your browser opens {server.name}'s sign-in page</li>
+            <li>You choose what to allow</li>
+            <li>Pen gets {server.name}'s tools. Nothing to copy or paste</li>
+          </ol>
+          <h4>Who can use it</h4>
+          <ConnectWithAudience server={server} onConnect={onConnect} />
+        </>
+      ) : (
+        <p className="cx-p">Connect {server.name} to choose who can use it.</p>
+      )}
+
+      <Fine>
+        {shared
+          ? "Stored in your team's cloud vault. You can use it but never see it."
+          : "The sign-in is stored in your Mac's keychain and your cloud vault. Disconnect any time."}
+      </Fine>
+    </Sheet>
   );
+}
+
+function siteOf(url: string): string | null {
+  try {
+    return new URL(url).hostname.replace(/^(mcp|api|www)\./, "");
+  } catch {
+    return null;
+  }
 }

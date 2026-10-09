@@ -8,7 +8,24 @@ vi.mock("../../components/Settings/McpServerSheet", () => ({
   mcpKeyName: (id: string) => `MCP_${id.toUpperCase()}_OAUTH`,
 }));
 
+let platforms: Array<Record<string, unknown>> = [];
+const sitesApi = { connect: vi.fn(async () => {}), cancel: vi.fn() };
+vi.mock("../../hooks/usePlatformConnections", () => ({
+  PLATFORM_META: { linkedin: { domain: "linkedin.com", desc: "Posts, messages, profiles" }, reddit: { domain: "reddit.com", desc: "Posts" } },
+  usePlatformConnections: () => ({
+    platforms, loading: false, busy: null, waiting: new Set(), externalChrome: new Set(), error: null, notice: null,
+    needsChromeFor: null, chrome: true, ...sitesApi,
+  }),
+}));
+vi.mock("../../components/Settings/SiteSheet", () => ({
+  SiteSheet: ({ site }: { site: { name: string } }) => <div>site:{site.name}</div>,
+  AddSiteSheet: () => <div>add-site</div>,
+  siteLogoServer: (p: { name: string }) => ({ name: p.name, url: "" }),
+}));
+
 import { McpConnectionsTab } from "../../components/Settings/McpConnectionsTab";
+
+const P = (id: string, name: string, status = "disconnected") => ({ id, name, status: { platformId: id, status } });
 
 const S = (id: string, name: string, state = "disconnected", extra: Record<string, unknown> = {}) => ({
   id, name, url: `https://mcp.${id}.com/mcp`, category: "Projects", description: `${name} things`,
@@ -20,6 +37,7 @@ const calls: Array<{ url: string; method: string; body?: string }> = [];
 
 beforeEach(() => {
   keys = [];
+  platforms = [];
   calls.length = 0;
   vi.stubGlobal("fetch", vi.fn(async (url: string, init?: RequestInit) => {
     calls.push({ url, method: init?.method ?? "GET", body: init?.body as string | undefined });
@@ -76,5 +94,28 @@ describe("McpConnectionsTab (redesign)", () => {
     expect(screen.queryByText("sheet:Linear")).toBeNull();
     fireEvent.click(within(add).getByText("Linear"));
     expect(screen.getByText("sheet:Linear")).toBeTruthy();
+  });
+
+  it("website logins sit in the same list: connected ones under Connected, the rest under Add (Social)", async () => {
+    servers = [S("notion", "Notion", "connected")];
+    platforms = [P("linkedin", "LinkedIn", "connected"), P("reddit", "Reddit"), P("x", "X", "expired")];
+    render(<McpConnectionsTab embedded />);
+    const connected = (await screen.findByText("Connected")).closest("section")!;
+    expect(within(connected).getAllByText(/^(X|Notion|LinkedIn)$/).map((n) => n.textContent)).toEqual(["X", "Notion", "LinkedIn"]);
+    expect(within(connected).getByText("Connected · This Mac only")).toBeTruthy();
+    expect(within(connected).getByRole("button", { name: "Reconnect" })).toBeTruthy();
+    const add = screen.getByText("Add a service").closest("section")!;
+    fireEvent.click(within(add).getByRole("tab", { name: "Social" }));
+    expect(within(add).getByText("Reddit")).toBeTruthy();
+    expect(within(add).getByText("Browser")).toBeTruthy();
+    fireEvent.click(within(add).getByText("Reddit"));
+    expect(screen.getByText("site:Reddit")).toBeTruthy();
+  });
+
+  it("+ Website login opens the add form", async () => {
+    servers = [S("notion", "Notion", "connected")];
+    render(<McpConnectionsTab embedded />);
+    fireEvent.click(await screen.findByRole("button", { name: "+ Website login" }));
+    expect(screen.getByText("add-site")).toBeTruthy();
   });
 });

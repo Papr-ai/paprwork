@@ -1,7 +1,32 @@
 /* Connections → Services: grouped lists (Connections redesign). */
 
 .mcp-tab {
-  max-width: 720px;
+  width: 100%;
+}
+
+.mcp-tab__error {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 10px;
+}
+
+.mcp-tab__error-cta {
+  margin-left: auto;
+}
+
+.svc-hint--below {
+  margin: 8px 4px 0;
+  font-size: 12.5px;
+}
+
+.svc-row__name--key {
+  font-size: 13px;
+  font-weight: 600;
+}
+
+.cx-mono {
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
 }
 
 .mcp-tab__error {
@@ -50,10 +75,10 @@
 /* Grouped list */
 .svc-list {
   overflow: hidden;
-  border: 1px solid var(--border-color);
+  border: 1px solid var(--cx-line);
   border-radius: 12px;
-  background: var(--background-primary);
-  box-shadow: 0 1px 2px rgb(0 0 0 / 0.04);
+  background: var(--cx-card);
+  box-shadow: 0 1px 2px var(--cx-shadow);
 }
 
 .svc-list--pad {
@@ -80,7 +105,7 @@
 
 .svc-row--clickable:hover,
 .svc-row--clickable:focus-visible {
-  background: var(--background-tertiary);
+  background: var(--cx-fill);
   outline: none;
 }
 
@@ -94,7 +119,7 @@
 }
 
 .svc-row--skeleton {
-  background: linear-gradient(90deg, transparent, var(--background-tertiary), transparent);
+  background: linear-gradient(90deg, transparent, var(--cx-fill), transparent);
   background-size: 200% 100%;
   animation: svc-shimmer 1.2s linear infinite;
 }
@@ -179,9 +204,9 @@
   overflow: hidden;
   width: 32px;
   height: 32px;
-  border: 1px solid var(--border-color);
+  border: 1px solid var(--cx-line);
   border-radius: 8px;
-  background: var(--background-tertiary);
+  background: var(--cx-pop);
 }
 
 .svc-logo::before {
@@ -224,17 +249,17 @@
   border-radius: 5px;
   font-size: 11px;
   font-weight: 600;
-  color: var(--text-secondary);
-  background: var(--background-tertiary);
+  color: var(--cx-mid);
+  background: var(--cx-fill);
 }
 
 /* Buttons */
 .svc-btn {
   flex: none;
   padding: 5px 12px;
-  border: 1px solid var(--border-color);
+  border: 1px solid var(--cx-line-strong);
   border-radius: 7px;
-  background: var(--background-primary);
+  background: var(--cx-pop);
   color: var(--text-primary);
   font-size: 12.5px;
   font-weight: 550;
@@ -271,7 +296,7 @@
   padding: 8px 12px;
   border: 1px solid var(--border-color);
   border-radius: 9px;
-  background: var(--background-primary);
+  background: var(--cx-pop);
   color: var(--text-tertiary);
 }
 
@@ -315,10 +340,15 @@
   cursor: pointer;
 }
 
+.svc-chip:hover:not(.is-on) {
+  color: var(--cx-ink);
+}
+
+/* Selected chip: ink fill with its matching on-ink text, so it reads in light and dark. */
 .svc-chip.is-on {
-  border-color: var(--text-primary);
-  background: var(--text-primary);
-  color: var(--background-primary);
+  border-color: var(--cx-ink);
+  background: var(--cx-ink);
+  color: var(--cx-on-ink);
 }
 
 .svc-none {
@@ -352,9 +382,9 @@
 .svc-empty {
   margin-bottom: 30px;
   padding: 34px 24px 30px;
-  border: 1px solid var(--border-color);
+  border: 1px solid var(--cx-line);
   border-radius: 14px;
-  background: var(--background-primary);
+  background: var(--cx-card);
   text-align: center;
 }
 
@@ -392,9 +422,9 @@
   align-items: center;
   gap: 8px;
   padding: 6px 12px 6px 6px;
-  border: 1px solid var(--border-color);
+  border: 1px solid var(--cx-line-strong);
   border-radius: 9px;
-  background: var(--background-primary);
+  background: var(--cx-pop);
   color: var(--text-primary);
   font-size: 13px;
   font-weight: 550;

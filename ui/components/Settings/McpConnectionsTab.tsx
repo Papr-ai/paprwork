@@ -17,15 +17,18 @@ import { McpServerSheet, mcpKeyName, type McpConnectChoice } from "./McpServerSh
 import { RowButton, ServiceLogo, ServiceRow, type McpServer } from "./McpServiceRow";
 import { canConnect, type useOrgConnections } from "../../hooks/useOrgConnections";
 import { useCustomKeys } from "../../hooks/useCustomKeys";
+import { PLATFORM_META, usePlatformConnections, type PlatformInfo } from "../../hooks/usePlatformConnections";
+import { AddSiteSheet, SiteSheet, siteLogoServer } from "./SiteSheet";
 
 const GATEWAY = "http://localhost:18789";
 const POLL_MS = 2_000;
 const QUICK_STARTS = ["notion", "linear", "github", "slack"];
 const POPULAR = ["notion", "linear", "github", "slack", "hubspot", "googledrive", "atlassian", "stripe", "asana", "airtable"];
 const STATE_RANK: Record<string, number> = { needs_reauth: 0, error: 0, awaiting_user: 1, connecting: 1, connected: 2 };
+const SITE_RANK = (p: PlatformInfo, waiting: Set<string>) =>
+  waiting.has(p.id) || p.status.status === "connecting" ? 1 : p.status.status === "connected" ? 2 : 0;
 
-/** Header "Website login" asks the browser sign-ins section to open its add form. */
-export const ADD_WEBSITE_LOGIN_EVENT = "papr:connections-add-site";
+const SOCIAL = "Social";
 
 async function api<T>(path: string, method = "GET", body?: unknown): Promise<T> {
   const res = await fetch(`${GATEWAY}${path}`, {
@@ -60,7 +63,9 @@ export function McpConnectionsTab({
   const [showCustom, setShowCustom] = useState(false);
   const [customUrl, setCustomUrl] = useState("");
   const [openId, setOpenId] = useState<string | null>(null);
+  const [siteId, setSiteId] = useState<string | "new" | null>(null);
   const { keys } = useCustomKeys();
+  const sites = usePlatformConnections();
 
   const load = useCallback(async () => {
     try {
@@ -123,19 +128,32 @@ export function McpConnectionsTab({
     const team = active.filter(isTeam);
     const mine = active.filter((s) => !isTeam(s)).sort((a, b) => (STATE_RANK[a.state] ?? 2) - (STATE_RANK[b.state] ?? 2));
     const free = servers.filter((s) => s.state === "disconnected");
+    // Website logins: anything signed in (or mid sign-in) is "mine"; the rest are addable under Social.
+    const siteActive = (p: PlatformInfo) => p.status.status !== "disconnected" || sites.waiting.has(p.id);
+    const mySites = sites.platforms.filter(siteActive).sort((a, b) => SITE_RANK(a, sites.waiting) - SITE_RANK(b, sites.waiting));
+    const freeSites = sites.platforms.filter((p) => !siteActive(p));
     const q = query.trim().toLowerCase();
-    const cats = [...new Set(free.map((s) => s.category ?? "Other"))].sort();
+    const cats = [...new Set([...free.map((s) => s.category ?? "Other"), ...(freeSites.length ? [SOCIAL] : [])])].sort();
     let add: McpServer[];
-    if (q) add = free.filter((s) => `${s.name} ${s.description ?? ""} ${s.category ?? ""}`.toLowerCase().includes(q));
-    else if (chip === "popular") add = POPULAR.map((id) => free.find((s) => s.id === id)).filter((s): s is McpServer => !!s);
-    else if (chip === "all") add = [...free].sort((a, b) => a.name.localeCompare(b.name));
-    else add = free.filter((s) => (s.category ?? "Other") === chip);
-    return { mine, team, add, cats, freeCount: free.length };
-  }, [servers, keyByName, query, chip]);
+    let addSites: PlatformInfo[] = [];
+    const siteText = (p: PlatformInfo) => `${p.name} ${PLATFORM_META[p.id]?.desc ?? ""} ${SOCIAL} website login`.toLowerCase();
+    if (q) {
+      add = free.filter((s) => `${s.name} ${s.description ?? ""} ${s.category ?? ""}`.toLowerCase().includes(q));
+      addSites = freeSites.filter((p) => siteText(p).includes(q));
+    } else if (chip === "popular") add = POPULAR.map((id) => free.find((s) => s.id === id)).filter((s): s is McpServer => !!s);
+    else if (chip === "all") {
+      add = [...free].sort((a, b) => a.name.localeCompare(b.name));
+      addSites = freeSites;
+    } else {
+      add = free.filter((s) => (s.category ?? "Other") === chip);
+      if (chip === SOCIAL) addSites = freeSites;
+    }
+    return { mine, team, add, addSites, mySites, cats, freeCount: free.length + freeSites.length };
+  }, [servers, keyByName, query, chip, sites.platforms, sites.waiting]);
 
   useEffect(() => {
-    if (!loading) onCount?.(sections.mine.length + sections.team.length);
-  }, [loading, sections.mine.length, sections.team.length, onCount]);
+    if (!loading) onCount?.(sections.mine.length + sections.team.length + sections.mySites.length);
+  }, [loading, sections.mine.length, sections.team.length, sections.mySites.length, onCount]);
 
   const open = servers.find((s) => s.id === openId) ?? null;
   const blocked = (s: McpServer) => Boolean(org && !canConnect(org.policy, s.id));
@@ -146,7 +164,7 @@ export function McpConnectionsTab({
     if (note !== null) void org?.request(s.id, s.name, note);
   };
 
-  if (loading) {
+  if (loading || sites.loading) {
     return (
       <div className="svc-sec" aria-busy="true">
         <div className="svc-list svc-list--skeleton">
@@ -217,7 +235,61 @@ export function McpConnectionsTab({
     );
   };
 
-  const firstVisit = sections.mine.length === 0 && sections.team.length === 0;
+  const siteRow = (p: PlatformInfo) => {
+    const st = p.status.status;
+    const busySite = sites.busy === p.id;
+    const open = () => setSiteId(p.id);
+    if (sites.waiting.has(p.id) || st === "connecting") {
+      return (
+        <ServiceRow
+          key={`site:${p.id}`}
+          server={siteLogoServer(p)}
+          tone="wait"
+          status="Finish signing in in the browser window"
+          onOpen={open}
+          action={<RowButton onClick={() => sites.cancel(p.id)}>Cancel</RowButton>}
+        />
+      );
+    }
+    if (st === "connected") {
+      return <ServiceRow key={`site:${p.id}`} server={siteLogoServer(p)} tone="ok" status="Connected · This Mac only" onOpen={open} />;
+    }
+    return (
+      <ServiceRow
+        key={`site:${p.id}`}
+        server={siteLogoServer(p)}
+        tone="warn"
+        status={`Sign-in expired · Pen can't use ${p.name}`}
+        onOpen={open}
+        action={<RowButton primary disabled={busySite} onClick={() => void sites.connect(p.id)}>Reconnect</RowButton>}
+      />
+    );
+  };
+
+  const addSiteRow = (p: PlatformInfo) => (
+    <ServiceRow
+      key={`site:${p.id}`}
+      server={siteLogoServer(p)}
+      status={PLATFORM_META[p.id]?.desc ?? "Website login"}
+      tag="Browser"
+      onOpen={() => setSiteId(p.id)}
+      action={
+        sites.chrome === false ? (
+          <RowButton onClick={() => sites.setupWithPen(p.id, p.name)}>Set up</RowButton>
+        ) : (
+          <RowButton disabled={sites.busy === p.id || sites.chrome === null} onClick={() => void sites.connect(p.id)}>
+            {sites.busy === p.id ? "Opening…" : "Connect"}
+          </RowButton>
+        )
+      }
+    />
+  );
+
+  const firstVisit = sections.mine.length === 0 && sections.team.length === 0 && sections.mySites.length === 0;
+  const mineRows = [...sections.mine.map((s) => ({ rank: STATE_RANK[s.state] ?? 2, el: connectedRow(s) })), ...sections.mySites.map((p) => ({ rank: SITE_RANK(p, sites.waiting), el: siteRow(p) }))]
+    .sort((a, b) => a.rank - b.rank)
+    .map((r) => r.el);
+  const site = siteId && siteId !== "new" ? sites.platforms.find((p) => p.id === siteId) ?? null : null;
   const quick = QUICK_STARTS.map((id) => servers.find((s) => s.id === id)).filter((s): s is McpServer => !!s && !blocked(s));
   const restricted = org && !org.isAdmin && org.policy && org.policy.mode !== "all";
 
@@ -230,6 +302,21 @@ export function McpConnectionsTab({
       )}
 
       {error && <div className="mcp-tab__error" role="alert">{error}</div>}
+      {!siteId && sites.error && (
+        <div className="mcp-tab__error" role="alert">
+          {sites.error}
+          {sites.needsChromeFor && (
+            <button
+              type="button"
+              className="svc-btn svc-btn--primary mcp-tab__error-cta"
+              onClick={() => sites.setupWithPen(sites.needsChromeFor!, sites.platforms.find((p) => p.id === sites.needsChromeFor)?.name ?? sites.needsChromeFor!)}
+            >
+              Set up with Pen
+            </button>
+          )}
+        </div>
+      )}
+      {sites.notice && <p className="svc-hint">{sites.notice}</p>}
 
       {firstVisit ? (
         <section className="svc-empty">
@@ -252,10 +339,10 @@ export function McpConnectionsTab({
         </section>
       ) : (
         <>
-          {sections.mine.length > 0 && (
+          {mineRows.length > 0 && (
             <section className="svc-sec">
-              <div className="svc-sec__h"><h3>Connected</h3><span>{sections.mine.length}</span></div>
-              <div className="svc-list">{sections.mine.map(connectedRow)}</div>
+              <div className="svc-sec__h"><h3>Connected</h3><span>{mineRows.length}</span></div>
+              <div className="svc-list">{mineRows}</div>
             </section>
           )}
           {sections.team.length > 0 && (
@@ -278,7 +365,7 @@ export function McpConnectionsTab({
         <div className="svc-sec__h">
           <h3>Add a service</h3>
           <span className="svc-sec__links">
-            <button type="button" className="svc-btn" onClick={() => window.dispatchEvent(new CustomEvent(ADD_WEBSITE_LOGIN_EVENT))}>
+            <button type="button" className="svc-btn" onClick={() => setSiteId("new")}>
               + Website login
             </button>
             <button type="button" className="svc-btn" onClick={() => setShowCustom((v) => !v)} aria-expanded={showCustom}>
@@ -346,8 +433,11 @@ export function McpConnectionsTab({
         </div>
 
         <div className="svc-list">
-          {sections.add.length ? (
-            sections.add.map(addRow)
+          {sections.add.length || sections.addSites.length ? (
+            <>
+              {sections.add.map(addRow)}
+              {sections.addSites.map(addSiteRow)}
+            </>
           ) : (
             <div className="svc-none">
               {query ? `No service called "${query}". Add it as a custom MCP server.` : "Everything here is already connected."}
@@ -355,6 +445,9 @@ export function McpConnectionsTab({
           )}
         </div>
       </section>
+
+      {siteId === "new" && <AddSiteSheet sites={sites} onClose={() => setSiteId(null)} onAdded={(id) => setSiteId(id)} />}
+      {site && <SiteSheet site={site} sites={sites} onClose={() => setSiteId(null)} />}
 
       {open && (
         <McpServerSheet

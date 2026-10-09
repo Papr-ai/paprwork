@@ -35,7 +35,7 @@ function siteDomain(url: string): string | null {
   }
 }
 
-export function ServiceLogo({ server, size = "md" }: { server: Pick<McpServer, "name" | "url">; size?: "sm" | "md" }) {
+export function ServiceLogo({ server, size = "md" }: { server: Pick<McpServer, "name" | "url">; size?: "sm" | "md" | "lg" }) {
   const [failed, setFailed] = useState(false);
   const domain = siteDomain(server.url);
   return (
@@ -59,7 +59,7 @@ export function ServiceRow({
   dim,
   footer,
 }: {
-  server: McpServer;
+  server: Pick<McpServer, "name" | "url">;
   status: ReactNode;
   tone?: RowTone;
   tag?: string;
