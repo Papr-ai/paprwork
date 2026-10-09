@@ -241,6 +241,13 @@ export function ConnectedPlatformsTab({ embedded = false }: { embedded?: boolean
     requestAnimationFrame(() => addSiteUrlRef.current?.focus());
   }, []);
 
+  // Connections → "Website login" opens this form from the Add a service header.
+  useEffect(() => {
+    const open = () => handleOpenAddSite();
+    window.addEventListener("papr:connections-add-site", open);
+    return () => window.removeEventListener("papr:connections-add-site", open);
+  }, [handleOpenAddSite]);
+
   const handleCloseAddSite = useCallback(() => {
     setShowAddSite(false);
     setNewSiteUrl("");
