@@ -2653,7 +2653,14 @@ app.whenReady().then(async () => {
     const LOCAL_APP_ORIGIN = "http://localhost:18789";
     const MEDIA_PERMISSIONS = new Set(["media", "audioCapture", "videoCapture"]);
 
-    const isLocalApp = (url) => typeof url === "string" && url.startsWith(LOCAL_APP_ORIGIN);
+    // Published apps open directly on apps.papr.ai in the desktop "Web" view
+    // (after the session seed), so that origin needs the same mic/camera grant.
+    // Exact origin match only — subdomains and lookalike hosts stay denied.
+    const PUBLISHED_APP_ORIGINS = new Set(["https://apps.papr.ai"]);
+    const originOf = (url) => { try { return new URL(url).origin; } catch { return ""; } };
+    const isLocalApp = (url) =>
+      typeof url === "string" &&
+      (url.startsWith(LOCAL_APP_ORIGIN) || PUBLISHED_APP_ORIGINS.has(originOf(url)));
 
     mediaPermissionRequest = (webContents, permission, callback, details) => {
       // Write-only clipboard (navigator.clipboard.writeText). Denying it broke
