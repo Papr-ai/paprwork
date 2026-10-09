@@ -381,9 +381,16 @@ function resolveRegistrySlug(record: DatabaseRecord): string | null {
   return null;
 }
 
-async function uniqueForkRegistryLocalPath(input: {
+/**
+ * Local folders are keyed by database name, but identity is the dbId. Two
+ * different databases with the same label ("LinkedIn Outreach v2") must never
+ * share one data.db — each sync engine would claim the file and the app reads
+ * the other database's rows. Returns `localPath` when it is free (or already
+ * this dbId's), else `{slug}-{dbId8}`.
+ */
+async function uniqueRegistryLocalPathForDbId(input: {
   localPath: string;
-  targetDbId: string;
+  dbId: string;
   targetPaprHome: string;
   registry: DatabasesRegistryFile;
 }): Promise<string> {
@@ -391,16 +398,27 @@ async function uniqueForkRegistryLocalPath(input: {
   if (!slug) {
     return input.localPath;
   }
-  const inUse =
-    (await pathExists(path.dirname(input.localPath))) ||
-    Object.values(input.registry.databases).some(
-      (record) => record.localPath === input.localPath,
-    );
-  if (!inUse) {
+  const normalized = path.normalize(input.localPath);
+  const ownedByOther = Object.entries(input.registry.databases).some(
+    ([otherId, record]) =>
+      otherId !== input.dbId &&
+      record?.status !== "tombstone" &&
+      Boolean(record?.localPath) &&
+      path.normalize(record.localPath) === normalized,
+  );
+  const ownRecord = input.registry.databases[input.dbId];
+  const ownsPath =
+    Boolean(ownRecord?.localPath) &&
+    path.normalize(ownRecord!.localPath) === normalized;
+  // A folder on disk with no registry owner (or a different owner) is
+  // someone else's data until proven otherwise.
+  const orphanFolder =
+    !ownsPath && (await pathExists(path.dirname(input.localPath)));
+  if (!ownedByOther && !orphanFolder) {
     return input.localPath;
   }
   return workspaceRegistryDbPath(
-    `${slug}-${input.targetDbId.replace(/^db-/, "")}`,
+    `${slug}-${input.dbId.replace(/^db-/, "")}`,
     path.join(input.targetPaprHome, "data"),
   );
 }
@@ -790,23 +808,27 @@ export async function mergeDatabaseRegistryForCopy(input: {
       dbIdRemap.set(dbId, targetDbId);
     }
 
-    let localPath = resolveCopiedRegistryLocalPath(
-      record,
-      input.targetPaprHome,
-      input.copiedJobIds,
-    );
-    // A fork must not land in a folder another app already uses (the
-    // publisher's own copy on this machine, or an earlier install), or its
-    // "fresh data" silently becomes shared data.
-    if (targetDbId !== dbId) {
-      localPath = await uniqueForkRegistryLocalPath({
-        localPath,
-        targetDbId,
-        targetPaprHome: input.targetPaprHome,
-        registry: merged,
-      });
-    }
     const existing = liveRecordOrUndefined(merged.databases[dbId]);
+    // Reinstall / track update of the same dbId keeps its folder. Everything
+    // else (fork with a new dbId, first team install of a shared dbId) must
+    // not land in a folder another database already uses — by name collision
+    // the copy would silently read and write that database's rows.
+    const keepExistingPath =
+      targetDbId === dbId && existing?.localPath?.trim()
+        ? existing.localPath
+        : null;
+    const localPath = await uniqueRegistryLocalPathForDbId({
+      localPath:
+        keepExistingPath ??
+        resolveCopiedRegistryLocalPath(
+          record,
+          input.targetPaprHome,
+          input.copiedJobIds,
+        ),
+      dbId: targetDbId,
+      targetPaprHome: input.targetPaprHome,
+      registry: merged,
+    });
     const base = stripReplicaSyncFields(keepPublisherOwner(existing ?? record));
     // Fork keeps no storage mode from the publisher: provisionInstalledDatabases
     // picks one for THIS device (replica / cloud-direct / local) right after merge.

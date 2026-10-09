@@ -81,6 +81,25 @@ export function normalizeDbPath(dbPath: string): string {
 }
 
 /** Slug segment from a registry db path (`data/databases/{slug}/data.db`). */
+/**
+ * Active records that share one local file. Identity is the dbId; two dbIds on
+ * one data.db means two sync engines claim the file and each app reads the
+ * other database's rows. Returns path → dbIds for every collision.
+ */
+export function findRegistryLocalPathCollisions(
+  state: DatabasesRegistryFile,
+): Map<string, string[]> {
+  const byPath = new Map<string, string[]>();
+  for (const [dbId, record] of Object.entries(state.databases)) {
+    if (record?.status !== "active" || !record.localPath?.trim()) {
+      continue;
+    }
+    const key = normalizeDbPath(record.localPath);
+    byPath.set(key, [...(byPath.get(key) ?? []), dbId]);
+  }
+  return new Map([...byPath].filter(([, ids]) => ids.length > 1));
+}
+
 export function registrySlugFromLocalPath(localPath: string): string | null {
   const normalized = localPath.replace(/\\/g, "/");
   const match = normalized.match(/\/data\/databases\/([^/]+)\/data\.db$/);
@@ -170,6 +189,12 @@ export class DatabaseRegistryService {
     this.bindWorkspaceWriteContext();
     this.cache = await this.load();
     await this.backfillFromAppsIfNeeded();
+    for (const [localPath, dbIds] of findRegistryLocalPathCollisions(this.cache)) {
+      console.warn(
+        `[DatabaseRegistry] ${dbIds.length} databases share one local file ${localPath}: ${dbIds.join(", ")}. ` +
+          "Each needs its own folder — reads/writes are mixing databases.",
+      );
+    }
   }
 
   private bindWorkspaceWriteContext(): void {
@@ -291,6 +316,14 @@ export class DatabaseRegistryService {
     const state = this.getState();
     const record = state.databases[dbId];
     if (!record || record.status === "tombstone") {
+      return;
+    }
+    const owner = this.getByPath(localPath);
+    if (owner && owner.dbId !== dbId) {
+      // Path repairs run at startup — never crash, never merge two databases.
+      console.warn(
+        `[DatabaseRegistry] Refusing to point ${dbId} at ${localPath}: that file belongs to ${owner.dbId}.`,
+      );
       return;
     }
     state.databases[dbId] = {
