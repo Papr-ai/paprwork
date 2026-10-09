@@ -162,7 +162,7 @@ export function IntegrationKeysTab({ embedded = false }: { embedded?: boolean } 
               >
                 <KeyMark />
                 <div className="svc-row__text">
-                  <b className="svc-row__name cx-mono svc-row__name--key">{k.name}</b>
+                  <b className="svc-row__name svc-row__name--key">{k.name}</b>
                   <span className="svc-st">{k.description ? `${k.description} · ${line(k)}` : line(k)}</span>
                 </div>
                 {tag(k) && <span className="svc-tag">{tag(k)}</span>}

@@ -167,7 +167,7 @@ export function KeySheet({ keyItem, ctx, onClose }: { keyItem: CustomKey | null;
       title={
         isNew ? (
           <input
-            className="cx-in cx-mono"
+            className="cx-in"
             aria-label="Key name"
             placeholder="KEY_NAME"
             autoFocus
@@ -175,7 +175,7 @@ export function KeySheet({ keyItem, ctx, onClose }: { keyItem: CustomKey | null;
             onChange={(e) => setName(e.target.value.toUpperCase().replace(/[^A-Z0-9_]/g, ""))}
           />
         ) : (
-          <span className="cx-mono">{keyItem.name}</span>
+          <span>{keyItem.name}</span>
         )
       }
       subtitle={!isNew && keyItem.description ? keyItem.description : undefined}

@@ -163,9 +163,9 @@ export function Btn({
 export function KeyMark({ size = "md" }: { size?: "md" | "lg" }) {
   return (
     <span className={`svc-logo svc-logo--${size} cx-kmark`} aria-hidden>
-      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-        <circle cx="7.5" cy="15.5" r="4.5" />
-        <path d="m10.7 12.3 9.3-9.3M16 7l3 3M14 9l2 2" />
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.7" strokeLinecap="round" strokeLinejoin="round">
+        <path d="M2.6 17.4a2 2 0 0 0-.6 1.4V21a1 1 0 0 0 1 1h3a1 1 0 0 0 1-1v-1a1 1 0 0 1 1-1h1a1 1 0 0 0 1-1v-1a1 1 0 0 1 1-1h.2a2 2 0 0 0 1.4-.6l.8-.8a6.5 6.5 0 1 0-4-4z" />
+        <circle cx="16.5" cy="7.5" r="1" fill="currentColor" stroke="none" />
       </svg>
     </span>
   );
@@ -174,7 +174,7 @@ export function KeyMark({ size = "md" }: { size?: "md" | "lg" }) {
 export function GlobeMark({ size = "md" }: { size?: "md" | "lg" }) {
   return (
     <span className={`svc-logo svc-logo--${size} cx-kmark`} aria-hidden>
-      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round">
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.7" strokeLinecap="round">
         <circle cx="12" cy="12" r="9" />
         <path d="M3 12h18M12 3a14 14 0 0 1 0 18M12 3a14 14 0 0 0 0 18" />
       </svg>

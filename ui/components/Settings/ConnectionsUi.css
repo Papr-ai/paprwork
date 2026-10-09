@@ -13,7 +13,8 @@
   --cx-line: var(--border-color);
   --cx-line-strong: rgba(0, 0, 0, 0.16);
   --cx-fill: rgba(0, 0, 0, 0.05);
-  --cx-accent: var(--accent, #0071e3);
+  /* Same blue as the left rail (Sidebar.css --rail-blue) */
+  --cx-accent: var(--papr-blue-deep, #0060e0);
   --cx-ok: var(--success, #3db489);
   --cx-bad: var(--error, #e84c60);
   --cx-warn: var(--warning, #f0a742);
@@ -35,6 +36,7 @@
     --cx-shadow: rgba(0, 0, 0, 0.3);
     --cx-shadow-lg: rgba(0, 0, 0, 0.5);
     --cx-scrim: rgba(0, 0, 0, 0.45);
+    --cx-accent: #4c9dff;
   }
 }
 
@@ -91,13 +93,11 @@
 
 .cx-sheet__ttl h3 {
   margin: 0;
+  font-family: var(--font-display);
   font-size: 18px;
-  font-weight: 650;
+  font-weight: 600;
+  letter-spacing: -0.01em;
   overflow-wrap: anywhere;
-}
-
-.cx-sheet__ttl h3.cx-mono {
-  font-size: 16px;
 }
 
 .cx-sheet__ttl span {
@@ -385,7 +385,7 @@
   background: var(--cx-pop);
   color: var(--cx-ink);
   font-size: 12.5px;
-  font-weight: 550;
+  font-weight: 500;
   cursor: pointer;
 }
 
@@ -441,8 +441,8 @@
 }
 
 .cx-kmark svg {
-  width: 15px;
-  height: 15px;
+  width: 17px;
+  height: 17px;
 }
 
 .svc-logo--lg {

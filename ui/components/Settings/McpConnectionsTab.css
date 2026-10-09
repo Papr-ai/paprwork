@@ -22,7 +22,6 @@
 
 .svc-row__name--key {
   font-size: 13px;
-  font-weight: 600;
 }
 
 .cx-mono {
@@ -138,14 +137,15 @@
 }
 
 .svc-row__name {
-  font-size: 14px;
-  font-weight: 550;
+  font-family: var(--font-body);
+  font-size: 13px;
+  font-weight: 500;
   color: var(--text-primary);
 }
 
 .svc-row__link {
   font-size: 12px;
-  color: var(--accent);
+  color: var(--cx-accent);
 }
 
 /* Status line */
@@ -177,14 +177,14 @@
 }
 
 .svc-st--wait {
-  color: var(--accent);
+  color: var(--cx-accent);
 }
 
 .svc-st > i.svc-st__spin {
   width: 10px;
   height: 10px;
-  border: 1.6px solid color-mix(in srgb, var(--accent) 25%, transparent);
-  border-top-color: var(--accent);
+  border: 1.6px solid color-mix(in srgb, var(--cx-accent) 25%, transparent);
+  border-top-color: var(--cx-accent);
   background: none;
   animation: svc-spin 0.8s linear infinite;
 }
@@ -212,7 +212,7 @@
 .svc-logo::before {
   content: attr(data-ini);
   font-size: 11px;
-  font-weight: 650;
+  font-weight: 600;
   color: var(--text-secondary);
 }
 
@@ -262,13 +262,13 @@
   background: var(--cx-pop);
   color: var(--text-primary);
   font-size: 12.5px;
-  font-weight: 550;
+  font-weight: 500;
   cursor: pointer;
 }
 
 .svc-btn:hover:not(:disabled) {
-  border-color: var(--accent);
-  color: var(--accent);
+  border-color: var(--cx-accent);
+  color: var(--cx-accent);
 }
 
 .svc-btn:disabled {
@@ -277,8 +277,8 @@
 }
 
 .svc-btn--primary {
-  border-color: var(--accent);
-  background: var(--accent);
+  border-color: var(--cx-accent);
+  background: var(--cx-accent);
   color: #fff;
 }
 
@@ -317,8 +317,8 @@
 }
 
 .svc-search:focus-within {
-  border-color: var(--accent);
-  box-shadow: 0 0 0 3px color-mix(in srgb, var(--accent) 18%, transparent);
+  border-color: var(--cx-accent);
+  box-shadow: 0 0 0 3px color-mix(in srgb, var(--cx-accent) 18%, transparent);
 }
 
 .svc-chips {
@@ -398,7 +398,7 @@
 .svc-empty h2 {
   margin: 0 0 6px;
   font-size: 18px;
-  font-weight: 650;
+  font-weight: 600;
   color: var(--text-primary);
 }
 
@@ -427,12 +427,12 @@
   background: var(--cx-pop);
   color: var(--text-primary);
   font-size: 13px;
-  font-weight: 550;
+  font-weight: 500;
   cursor: pointer;
 }
 
 .svc-quick:hover:not(:disabled) {
-  border-color: var(--accent);
+  border-color: var(--cx-accent);
 }
 
 @media (max-width: 520px) {
