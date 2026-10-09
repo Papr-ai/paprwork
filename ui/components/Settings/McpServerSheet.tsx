@@ -71,10 +71,91 @@ function useWorkspaceMembers(): WorkspaceMemberOption[] {
   return members;
 }
 
-function WhoCanUse({ server }: { server: McpSheetServer }) {
+export interface McpConnectChoice {
+  audience: IntegrationKeyVaultAudience;
+  allowedUserIds?: string[];
+}
+
+/** Before connecting: pick who can use the sign-in, then Connect. Wider than "Only me" signs in through Papr cloud. */
+function ConnectWithAudience({
+  server,
+  onConnect,
+}: {
+  server: McpSheetServer;
+  onConnect: (choice: McpConnectChoice) => Promise<void> | void;
+}) {
+  const members = useWorkspaceMembers();
+  const [audience, setAudience] = useState<IntegrationKeyVaultAudience>("user");
+  const [memberIds, setMemberIds] = useState<string[]>([]);
+  const [status, setStatus] = useState<string | null>(null);
+  const [busy, setBusy] = useState(false);
+
+  const connect = async () => {
+    if (audience === "members" && memberIds.length === 0) return setStatus("Pick at least one person.");
+    setStatus(null);
+    setBusy(true);
+    try {
+      await onConnect({ audience, ...(audience === "members" ? { allowedUserIds: memberIds } : {}) });
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  return (
+    <div className="mcp-sheet__who">
+      <IntegrationKeyVaultAudienceSelector idPrefix={`mcp-${server.id}-new-aud`} value={audience} onChange={setAudience} />
+      {audience === "members" && (
+        <IntegrationKeyMemberPicker
+          idPrefix={`mcp-${server.id}-new-members`}
+          members={members}
+          selectedUserIds={memberIds}
+          onChange={setMemberIds}
+        />
+      )}
+      {audience !== "user" && (
+        <p className="mcp-sheet__muted">
+          They'll use your {server.name} sign-in, so Pen acts as you in {server.name} for them. Papr keeps it signed in
+          even when your Mac is off.
+        </p>
+      )}
+      <div className="mcp-sheet__row">
+        {status && <span className="mcp-sheet__status">{status}</span>}
+        <button type="button" className="settings-btn settings-btn--primary" disabled={busy} onClick={() => void connect()}>
+          {busy ? "Opening…" : "Connect"}
+        </button>
+      </div>
+    </div>
+  );
+}
+
+/** Signed in through Papr cloud: the server owns the token, so sharing is chosen at sign-in. */
+function useServerManaged(keyId: string | undefined, getKeyValue: (id: string) => Promise<string | null>): boolean {
+  const [managed, setManaged] = useState(false);
+  useEffect(() => {
+    let live = true;
+    if (!keyId) return setManaged(false);
+    void getKeyValue(keyId)
+      .then((v) => {
+        if (!live) return;
+        try {
+          setManaged(Boolean(v && JSON.parse(v).serverRefresh === true));
+        } catch {
+          setManaged(false);
+        }
+      })
+      .catch(() => live && setManaged(false));
+    return () => {
+      live = false;
+    };
+  }, [keyId, getKeyValue]);
+  return managed;
+}
+
+function WhoCanUse({ server, onReconnect }: { server: McpSheetServer; onReconnect?: () => void }) {
   const { keys, updateKey, getKeyValue, loadKeys } = useCustomKeys();
   const key = useMemo(() => keys.find((k) => k.name === mcpKeyName(server.id)), [keys, server.id]);
   const members = useWorkspaceMembers();
+  const serverManaged = useServerManaged(key?.id, getKeyValue);
   const [audience, setAudience] = useState<IntegrationKeyVaultAudience>(key?.vaultAudience ?? "user");
   const [memberIds, setMemberIds] = useState<string[]>(key?.vaultAudienceMemberIds ?? []);
   const [status, setStatus] = useState<string | null>(null);
@@ -87,6 +168,23 @@ function WhoCanUse({ server }: { server: McpSheetServer }) {
   if (!key) return <p className="mcp-sheet__muted">This sign-in isn't in your vault yet.</p>;
   if (key.vaultOrigin === "shared") {
     return <p className="mcp-sheet__muted">Shared with you by a teammate. Only they can change who can use it.</p>;
+  }
+  if (serverManaged) {
+    return (
+      <div className="mcp-sheet__who">
+        <p className="mcp-sheet__muted">
+          Papr keeps this sign-in on its servers so it works when your Mac is off. To change who can use it, disconnect
+          and connect again with a different choice.
+        </p>
+        {onReconnect && (
+          <div className="mcp-sheet__row">
+            <button type="button" className="settings-btn settings-btn--ghost" onClick={onReconnect}>
+              Disconnect to change
+            </button>
+          </div>
+        )}
+      </div>
+    );
   }
 
   const dirty =
@@ -192,11 +290,14 @@ export function McpServerSheet({
   server,
   onClose,
   onDisconnect,
+  onConnect,
   orgMax,
 }: {
   server: McpSheetServer;
   onClose: () => void;
   onDisconnect: () => void;
+  /** Start sign-in with a sharing choice. Omitted: the panel only explains. */
+  onConnect?: (choice: McpConnectChoice) => Promise<void> | void;
   /** Org's maxPenAccess; higher options are shown but disabled. */
   orgMax?: "read" | "ask" | "full";
 }) {
@@ -248,7 +349,7 @@ export function McpServerSheet({
           <>
             <section className="mcp-sheet__section">
               <h4>Who can use it</h4>
-              <WhoCanUse server={server} />
+              <WhoCanUse server={server} onReconnect={onDisconnect} />
             </section>
             <section className="mcp-sheet__section">
               <h4>What Pen may do</h4>
@@ -260,6 +361,11 @@ export function McpServerSheet({
               </button>
             </section>
           </>
+        ) : onConnect ? (
+          <section className="mcp-sheet__section">
+            <h4>Who can use it</h4>
+            <ConnectWithAudience server={server} onConnect={onConnect} />
+          </section>
         ) : (
           <p className="mcp-sheet__muted">Connect {server.name} to choose who can use it.</p>
         )}

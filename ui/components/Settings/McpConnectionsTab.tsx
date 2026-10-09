@@ -8,7 +8,7 @@
 
 import { useCallback, useEffect, useMemo, useState } from "react";
 import "./McpConnectionsTab.css";
-import { McpServerSheet } from "./McpServerSheet";
+import { McpServerSheet, type McpConnectChoice } from "./McpServerSheet";
 import { canConnect, type useOrgConnections } from "../../hooks/useOrgConnections";
 
 const GATEWAY = "http://localhost:18789";
@@ -94,11 +94,11 @@ export function McpConnectionsTab({
     return () => clearInterval(t);
   }, [pending, load]);
 
-  const act = async (id: string, action: "connect" | "disconnect" | "cancel") => {
+  const act = async (id: string, action: "connect" | "disconnect" | "cancel", choice?: McpConnectChoice) => {
     setBusy(id);
     setError(null);
     try {
-      await api(`/api/mcp/servers/${id}/${action}`, "POST");
+      await api(`/api/mcp/servers/${id}/${action}`, "POST", action === "connect" && choice ? choice : undefined);
     } catch (err) {
       setError(err instanceof Error ? err.message : `Could not ${action}`);
     } finally {
@@ -146,7 +146,8 @@ export function McpConnectionsTab({
     const isBusy = busy === s.id;
     const label = s.state === "connected" ? `${s.toolCount} tools` : STATE_LABEL[s.state];
     // Connected services open their detail panel; needs-setup services open the setup panel.
-    const opens = s.state === "connected" || s.requiresClientId;
+    // Disconnected ones open too, so you can pick who can use it before connecting.
+    const opens = s.state === "connected" || s.state === "disconnected" || s.requiresClientId;
     return (
       <div
         key={s.id}
@@ -205,7 +206,7 @@ export function McpConnectionsTab({
               );
             })()
           ) : (
-            <button type="button" className="settings-btn settings-btn--primary" disabled={isBusy} onClick={() => void act(s.id, "connect")}>
+            <button type="button" className="settings-btn settings-btn--primary" disabled={isBusy} onClick={(e) => { e.stopPropagation(); void act(s.id, "connect"); }}>
               {isBusy ? "Opening…" : s.state === "needs_reauth" || s.state === "error" ? "Reconnect" : "Connect"}
             </button>
           )}
@@ -283,6 +284,10 @@ export function McpConnectionsTab({
           onDisconnect={() => {
             setOpenId(null);
             void act(open.id, "disconnect");
+          }}
+          onConnect={async (choice) => {
+            setOpenId(null);
+            await act(open.id, "connect", choice);
           }}
         />
       )}

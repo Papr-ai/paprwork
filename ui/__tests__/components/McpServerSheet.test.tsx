@@ -2,7 +2,8 @@ import { describe, expect, it, vi, beforeEach } from "vitest";
 import { render, screen, fireEvent, waitFor } from "@testing-library/react";
 
 const updateKey = vi.fn(async () => true);
-const getKeyValue = vi.fn(async () => "{\"tokens\":1}");
+let keyValue = "{\"tokens\":1}";
+const getKeyValue = vi.fn(async () => keyValue);
 const loadKeys = vi.fn(async () => {});
 let keys: Array<Record<string, unknown>> = [];
 
@@ -29,6 +30,7 @@ describe("McpServerSheet", () => {
   beforeEach(() => {
     vi.clearAllMocks();
     keys = [{ id: "k1", name: "MCP_LINEAR_OAUTH", vaultAudience: "user" }];
+    keyValue = "{\"tokens\":1}";
   });
 
   it("names the key the same way as the gateway", () => {
@@ -68,5 +70,27 @@ describe("McpServerSheet", () => {
     window.removeEventListener("papr-chat-open", h);
     expect(seen[0]).toMatchObject({ send: true, title: "Set up HubSpot" });
     expect((seen[0] as { message: string }).message).toContain("https://apps.papr.ai/oauth/callback");
+  });
+
+  it("not connected yet: pick who can use it, then Connect sends that choice", async () => {
+    const onConnect = vi.fn(async () => {});
+    render(
+      <McpServerSheet server={{ ...base, state: "disconnected", toolCount: 0 }} onClose={() => {}} onDisconnect={() => {}} onConnect={onConnect} />,
+    );
+    fireEvent.change(screen.getByLabelText("Who can use it"), { target: { value: "namespace" } });
+    expect(screen.getByText(/Papr keeps it signed in/)).toBeTruthy();
+    fireEvent.click(screen.getByRole("button", { name: "Connect" }));
+    await waitFor(() => expect(onConnect).toHaveBeenCalledWith({ audience: "namespace" }));
+  });
+
+  it("server-managed sign-in: sharing is changed by reconnecting, not edited in place", async () => {
+    keys = [{ id: "k1", name: "MCP_LINEAR_OAUTH", vaultAudience: "org" }];
+    keyValue = JSON.stringify({ tokens: { access_token: "a" }, serverRefresh: true });
+    const onDisconnect = vi.fn();
+    render(<McpServerSheet server={base} onClose={() => {}} onDisconnect={onDisconnect} />);
+    await waitFor(() => expect(screen.getByText(/keeps this sign-in on its servers/)).toBeTruthy());
+    expect(screen.queryByRole("button", { name: "Save" })).toBeNull();
+    fireEvent.click(screen.getByRole("button", { name: "Disconnect to change" }));
+    expect(onDisconnect).toHaveBeenCalled();
   });
 });
