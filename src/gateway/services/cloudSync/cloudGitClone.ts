@@ -12,6 +12,8 @@ export interface CloudGitCloneInput {
   cloneUrl: string;
   token: string;
   repoPath: string;
+  /** Check out this commit instead of HEAD (the publisher's last finished publish). */
+  commit?: string | null;
 }
 
 export interface CloudGitCloneResult {
@@ -97,6 +99,39 @@ async function runCommand(
   });
 }
 
+/**
+ * Move a fresh clone to the published commit. HEAD can be mid-upload (code
+ * pushed, database not yet); the completed commit is what the publisher
+ * verified. If the commit can't be fetched we keep HEAD and say so — an
+ * install must not fail just because the record is ahead of the repo.
+ */
+export async function checkoutPublishedCommit(
+  repoDir: string,
+  commit: string | null | undefined,
+  env: NodeJS.ProcessEnv,
+  shallow: boolean,
+): Promise<void> {
+  const sha = commit?.trim();
+  if (!sha || !/^[0-9a-f]{7,40}$/i.test(sha)) return;
+  try {
+    if (shallow) {
+      await runCommand("git", ["fetch", "--depth", "1", "--filter=blob:none", "origin", sha], {
+        cwd: repoDir,
+        env,
+        timeoutMs: 120_000,
+      });
+      await runCommand("git", ["checkout", "--detach", "FETCH_HEAD"], { cwd: repoDir, env });
+    } else {
+      await runCommand("git", ["checkout", "--detach", sha], { cwd: repoDir, env });
+    }
+  } catch (error) {
+    console.warn(
+      `[CloudInstall] Published commit ${sha.slice(0, 12)} unavailable, using latest: ` +
+        redactGitCloneErrorMessage((error as Error).message).slice(0, 160),
+    );
+  }
+}
+
 export async function cloneCloudAppSource(
   input: CloudGitCloneInput,
   tempPrefix: string,
@@ -112,6 +147,7 @@ export async function cloneCloudAppSource(
       ["clone", "--depth", "1", "--filter=blob:none", cloneUrl, repoDir],
       { env, timeoutMs: 180_000 },
     );
+    await checkoutPublishedCommit(repoDir, input.commit, env, true);
     return {
       sourceDir: repoDir,
       repoDir,
@@ -131,6 +167,7 @@ export async function cloneCloudAppSource(
     ["sparse-checkout", "set", input.repoPath.replace(/\\/g, "/")],
     { cwd: repoDir, env },
   );
+  await checkoutPublishedCommit(repoDir, input.commit, env, false);
 
   return {
     sourceDir: path.join(repoDir, input.repoPath),

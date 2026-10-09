@@ -263,6 +263,7 @@ async function flushAppNowLocked(
   });
 
   let writerPushed = false;
+  let writerCommitSha: string | undefined;
   try {
     const { finalizeAppRepoMutation } = await import(
       "../syncV3/finalizeAppRepoMutation.js"
@@ -276,6 +277,7 @@ async function flushAppNowLocked(
       },
     });
     writerPushed = finalizeResult.writerPushed;
+    writerCommitSha = finalizeResult.commitSha;
   } catch (err) {
     const { AppOpsConflictError } = await import("../syncV3/AppOpsClient.js");
     if (err instanceof AppOpsConflictError) {
@@ -324,6 +326,7 @@ async function flushAppNowLocked(
       });
       published = true;
       console.log(`[CloudSync] flushAppNow verified + web-ready for ${appId}`);
+      await recordPublishCompletion(appId, pushSources, writerCommitSha);
     }
   } else {
     console.warn(
@@ -340,4 +343,40 @@ async function flushAppNowLocked(
     published,
     catalogError,
   };
+}
+
+/**
+ * Web-ready is the only point where code AND data are known to be in the
+ * cloud. Record exactly what landed so installers clone this commit instead
+ * of whatever HEAD is mid-upload. Best-effort: a failure leaves the previous
+ * completed revision in place (installers keep getting that one).
+ */
+async function recordPublishCompletion(
+  appId: string,
+  sources: ReadonlyArray<{ dbId?: string }>,
+  commitSha: string | undefined,
+): Promise<void> {
+  try {
+    const commit = commitSha ?? (await (async () => {
+      const { fetchAppRepoHead } = await import("../syncV3/AppOpsClient.js");
+      return (await fetchAppRepoHead(appId, { seedOidCache: false })).commitSha;
+    })());
+    const { getDatabaseRegistryService, tursoNameForRecord } = await import(
+      "../DatabaseRegistryService.js"
+    );
+    const registry = getDatabaseRegistryService();
+    const { readCloudDbSchema, reportPublishComplete } = await import("./publishCompletion.js");
+    const dbSchema = await readCloudDbSchema(
+      sources.map((source) => {
+        const record = source.dbId ? registry.getById(source.dbId) : undefined;
+        return { dbId: source.dbId, tursoDatabase: record ? tursoNameForRecord(record) : undefined };
+      }),
+    );
+    await reportPublishComplete(appId, { commit, dbSchema });
+    console.log(`[CloudSync] Publish complete for ${appId} @ ${commit.slice(0, 12)}`);
+  } catch (error) {
+    console.warn(
+      `[CloudSync] Publish completion not recorded for ${appId}: ${(error as Error).message.slice(0, 160)}`,
+    );
+  }
 }
