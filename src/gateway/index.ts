@@ -260,8 +260,15 @@ async function initializeServices(): Promise<void> {
       const { createPenGate, PEN_APPROVAL_TIMEOUT_MS } = await import("./services/mcp/mcpPenGate.js");
       const { getOrgPolicy } = await import("./services/mcp/mcpOrgPolicy.js");
       const { mcpCredentialKeyName } = await import("./services/mcp/mcpServerCatalog.js");
+      const { McpServerSignIn, orgClientIdKeyName } = await import("./services/mcp/mcpServerSignIn.js");
+      const { cloudApiFetch } = await import("./utils/cloudApiClient.js");
       const mcp = initializeMcpConnectionService({
         store: createKeychainMcpCredentialStore(mcpName),
+        serverSignIn: new McpServerSignIn({
+          cloud: (p, init) => cloudApiFetch(p, { method: init?.method ?? "GET", ...(init?.body !== undefined ? { body: init.body } : {}), timeoutMs: 20_000 }),
+          redirectUri: process.env.PAPR_OAUTH_REDIRECT_URI,
+          orgClientId: (id) => getCustomKeysService().getKeyByName(orgClientIdKeyName(id)),
+        }),
         penGate: createPenGate({
           keyLevel: async (id) => {
             const keys = await getCustomKeysService().listKeys();

@@ -1,3 +1,4 @@
+import { isServerManagedCredential } from "./mcp/mcpServerSignIn.js";
 import { traceDiagnosticPhase } from "../../core/utils/performanceDiagnostics.js";
 /**
  * Vault Sync Service — syncs local custom keys (macOS Keychain) to cloud vault
@@ -358,6 +359,11 @@ export class VaultSyncService {
     try {
       const value = await customKeys.getKeyByName(meta.name);
       if (!value) {
+        return null;
+      }
+      // Signed in through the server: the vault copy is the source of truth
+      // (server holds the refresh token). Never push this Mac's copy back.
+      if (isServerManagedCredential(value)) {
         return null;
       }
       return mapCustomKeyMetadataToVaultEntry({

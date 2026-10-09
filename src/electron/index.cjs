@@ -2572,6 +2572,19 @@ async function flushPendingDeepLinks() {
       continue;
     }
 
+    // Server sign-in finished (apps.papr.ai/oauth/callback). The gateway is already
+    // polling the session; just bring Papr to the front.
+    if (url.startsWith("papr://connections/")) {
+      if (!mainWindow || mainWindow.isDestroyed()) {
+        return;
+      }
+      pendingDeepLinks.splice(index, 1);
+      if (mainWindow.isMinimized()) mainWindow.restore();
+      mainWindow.show();
+      mainWindow.focus();
+      continue;
+    }
+
     if (url.startsWith("papr://chat/")) {
       if (!mainWindow || mainWindow.isDestroyed()) {
         return;

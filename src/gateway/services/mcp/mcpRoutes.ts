@@ -131,7 +131,12 @@ export function registerMcpRoutes(app: Express): void {
       // or any app could spam browser tabs.
       if (c.kind === "app") await access!.assertGranted(c.appId, id, await serverName(svc, id));
       await assertOrgAllows(id, await serverName(svc, id));
-      const { status } = await svc.connect(id);
+      const audience = ["user", "members", "namespace", "org"].includes(req.body?.audience) ? req.body.audience : undefined;
+      // Apps can only start personal sign-ins; sharing is decided in Connections.
+      const { status } = await svc.connect(id, c.kind === "app" ? {} : {
+        audience,
+        allowedUserIds: Array.isArray(req.body?.allowedUserIds) ? req.body.allowedUserIds.map(String) : undefined,
+      });
       res.json({ server: c.kind === "app" ? appView(status) : status });
     } catch (e) {
       fail(res, e);
