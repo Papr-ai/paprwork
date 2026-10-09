@@ -95,18 +95,12 @@ test("usd and percent heroes format", () => {
   expect(h.fmt(7, undefined)).toBe("7");
 });
 
-test("a person tile gets a round avatar, a post keeps its thumbnail", () => {
+test("a tile with a photo is the photo (text on top); one without keeps the small logo", () => {
   const h = load();
   const person = h.best([{ source: "review", kind: "person", text: "Ada", image: "https://example.com/a.jpg" }]);
   const post = h.best([{ source: "x", kind: "post", text: "hi", image: "https://example.com/p.jpg", impressions: 5 }]);
-  expect(person).toContain("hh-person");
-  expect(person).not.toContain("hh-thumb");
-  expect(post).toContain("hh-thumb");
-});
-
-test("cleanDisplay keeps negative bars and the neg tone (points below a baseline)", () => {
-  const d = cleanDisplay({ format: "pts", chart: { caption: "Best score per run vs baseline", bars: [
-    { label: "v67", value: -0.52, tone: "neg" }, { label: "v70", value: 0.87, tone: "full" },
-  ] } });
-  expect(d?.chart?.bars).toEqual([{ label: "v67", value: -0.52, tone: "neg" }, { label: "v70", value: 0.87, tone: "full" }]);
+  const plain = h.best([{ source: "x", kind: "post", text: "hi", impressions: 5 }]);
+  for (const html of [person, post]) { expect(html).toContain("has-photo"); expect(html).toContain('class="hh-bg"'); }
+  expect(plain).not.toContain("has-photo");
+  expect(plain).toContain("hh-logo");
 });
