@@ -14,6 +14,8 @@ import { ChatContainer } from "../../components/Chat/ChatContainer";
 import { useChatStore, defaultChatState } from "../../stores/chatStore";
 import { useTabStore } from "../../stores/tabStore";
 import type { ChatMessage } from "../../types/chat";
+import { gateway } from "../../src/lib/gateway";
+import { useMessageQueueStore } from "../../stores/messageQueueStore";
 
 // Mock external dependencies (NOT stores - we use real Zustand stores)
 const mockSendMessage = vi.fn();
@@ -428,4 +430,50 @@ describe("ChatContainer", () => {
       });
     });
   });
+
+  describe("Follow-ups while the agent is working", () => {
+    const working: ChatMessage[] = [
+      { id: "msg-u1", role: "user", content: "run Make" },
+      { id: "msg-a1", role: "assistant", content: "Make is running…", isStreaming: true },
+    ];
+    const yieldCalls = () =>
+      vi.mocked(gateway.send).mock.calls.filter(([type]) =>
+        String(type).startsWith("agent:yield"),
+      );
+
+    beforeEach(() => {
+      useMessageQueueStore.getState().setQueue(() => []);
+    });
+
+    it("queues without pausing the agent's turn", async () => {
+      initChatState(working, { isSending: true });
+      render(<ChatContainer chatId={TEST_CHAT_ID} />);
+
+      const input = screen.getByTestId("chat-input");
+      fireEvent.change(input, { target: { value: "also, a new question" } });
+      fireEvent.keyDown(input, { key: "Enter", code: "Enter" });
+
+      await waitFor(() =>
+        expect(
+          useMessageQueueStore.getState().queue.filter((q) => q.chatId === TEST_CHAT_ID),
+        ).toHaveLength(1),
+      );
+      // The agent finishes its work; the follow-up waits for the turn to end.
+      expect(yieldCalls()).toEqual([]);
+      expect(mockSendMessage).not.toHaveBeenCalled();
+      expect(screen.getByText(/Sends when the agent finishes/)).toBeDefined();
+    });
+
+    it("does not pause the agent when reopening a chat with a queued follow-up", () => {
+      useMessageQueueStore.getState().setQueue(() => [
+        { id: "queued-1", text: "later", timestamp: Date.now(), chatId: TEST_CHAT_ID },
+      ]);
+      initChatState(working, { isSending: true });
+      const { unmount } = render(<ChatContainer chatId={TEST_CHAT_ID} />);
+      unmount();
+      expect(yieldCalls()).toEqual([]);
+      expect(mockSendMessage).not.toHaveBeenCalled();
+    });
+  });
 });
+

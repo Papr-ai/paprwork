@@ -358,23 +358,6 @@ export const ChatContainer: React.FC<ChatContainerProps> = ({ chatId }): React.R
   );
   const hasSendableQueued = nextSendableQueued !== undefined;
 
-  // The yield (pause after the current step) only makes sense while someone
-  // is here to deliver the follow-up. Leaving the chat cancels it so the agent
-  // keeps working instead of stalling; coming back asks again. The message
-  // itself stays queued either way.
-  const hasSendableQueuedRef = useRef(hasSendableQueued);
-  hasSendableQueuedRef.current = hasSendableQueued;
-  useEffect(() => {
-    if (hasSendableQueuedRef.current) {
-      void gateway.send("agent:yield", { chatId }).catch(() => {});
-    }
-    return () => {
-      if (hasSendableQueuedRef.current) {
-        void gateway.send("agent:yield-cancel", { chatId }).catch(() => {});
-      }
-    };
-  }, [chatId]);
-
   const syncHistoryFromServer = useCallback(
     (options?: { force?: boolean }) => {
       if (chatHasLiveStreamBlockingHistory(chatId)) return;
@@ -978,13 +961,12 @@ export const ChatContainer: React.FC<ChatContainerProps> = ({ chatId }): React.R
       chatId, // ✅ Scope message to this chat
       ...(context && context.length > 0 ? { contextArtifacts: context } : {}),
     };
+    // Queued = wait. The agent finishes the work it is doing and the follow-up
+    // sends when that turn ends. Pausing it at the next step (agent:yield) cut
+    // multi-step work off mid-task — the new message took over and the
+    // original job was never finished. To redirect right away the user has
+    // "Send now" or double-Enter.
     setMessageQueue(prev => [...prev, queuedMessage]);
-    // Ask the agent to pause after its current step (tools included) so this
-    // follow-up runs next and the reply lands below it — not after the whole
-    // task. Best-effort: an older gateway just keeps the old queue behavior.
-    void gateway.send("agent:yield", { chatId }).catch((error: unknown) => {
-      console.warn("[ChatContainer] agent:yield failed:", error);
-    });
   }, [chatId, setMessageQueue]);
 
   const handleSendQueuedNow = useCallback(async (messageId: string) => {

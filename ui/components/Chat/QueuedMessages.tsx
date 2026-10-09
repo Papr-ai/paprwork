@@ -8,7 +8,7 @@
  *
  * One signal for "not sent yet": a dashed frame around the whole message,
  * avatar included (it sits on the thread's avatar column), plus one status line
- * (clock · "Sends after current step"). Messaging apps teach this already —
+ * (clock · "Sends when the agent finishes"). Messaging apps teach this already —
  * a pending message sits in the thread with a pending mark. We do NOT fade
  * the text: grey reads as failed or disabled.
  *
@@ -44,7 +44,7 @@ interface QueuedMessagesProps {
   onRemove: (messageId: string) => void;
   /** Move the message back into the input box to change it. */
   onEdit?: (messageId: string) => void;
-  /** True while the agent is mid-turn (it will read at the next step). */
+  /** True while the agent is mid-turn (the follow-up waits for it to finish). */
   agentWorking?: boolean;
 }
 
@@ -56,7 +56,7 @@ export function pendingStatusText(
   if (held) return "Not sent";
   // Only the first in line is ever sending; the rest keep their place.
   if (position > 0) return "Queued";
-  return agentWorking ? "Sends after current step" : "Sending…";
+  return agentWorking ? "Sends when the agent finishes" : "Sending…";
 }
 
 const keepFocus = (e: React.MouseEvent) => e.preventDefault();

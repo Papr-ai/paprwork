@@ -35,7 +35,7 @@ afterEach(() => resetFollowUpLandingForTests());
 
 describe("pendingStatusText", () => {
   it("the first one sends after the current step", () => {
-    expect(pendingStatusText(true, 0)).toBe("Sends after current step");
+    expect(pendingStatusText(true, 0)).toBe("Sends when the agent finishes");
   });
   it("later ones are simply queued", () => {
     expect(pendingStatusText(true, 1)).toBe("Queued");
@@ -69,7 +69,7 @@ describe("QueuedMessages (in the thread, dashed until sent)", () => {
     expect(row.getAttribute("style")).toBeNull();
     expect(screen.getByRole("list", { name: "Queued messages" })).toBeTruthy();
     expect(row.textContent).toContain("also check the logs");
-    expect(row.textContent).toContain("Sends after current step");
+    expect(row.textContent).toContain("Sends when the agent finishes");
   });
 
 
