@@ -303,6 +303,18 @@ export function assertProposalMigrationsApplied(changes: { unapplied: string[]; 
   }
 }
 
+async function forkUsesSharedData(forkAppId: string): Promise<boolean> {
+  try {
+    const raw = await fs.readFile(path.join(getPaprAppsRoot(), forkAppId, CLOUD_LINEAGE_FILENAME), "utf8");
+    const lineage = parseCloudAppLineageFile(raw);
+    if (!lineage) return false;
+    const { lineageUsesSharedPrimaryDatabase } = await import("./sharedPrimaryTursoResolve.js");
+    return lineageUsesSharedPrimaryDatabase(lineage);
+  } catch {
+    return false;
+  }
+}
+
 async function collectMigrationTrees(
   paprDir: string,
   forkAppId: string,
@@ -311,6 +323,10 @@ async function collectMigrationTrees(
 ): Promise<StagedRepoTree[]> {
   const trees: StagedRepoTree[] = [];
   const registry = await readRegistryFile(paprDir);
+  // A copy on the team's shared data can't apply migrations locally (the publisher owns
+  // the schema; papr_db_create_migration({ apply: false })). Its new migrations are applied
+  // to the team's database by Publish now, or by the reviewer on approve — not checked here.
+  const sharedData = await forkUsesSharedData(forkAppId);
 
   for (const dbId of readDataSourceRegistryDbIds(paprDir, forkAppId)) {
     const record = registry?.databases?.[dbId];
@@ -336,7 +352,7 @@ async function collectMigrationTrees(
         repoRelativeDir: `${repoRelativeDir}/migrations`,
         files,
         restoredIds,
-        appliedIds: await appliedMigrationIdsForProposal(dbId, record.localPath),
+        ...(sharedData ? {} : { appliedIds: await appliedMigrationIdsForProposal(dbId, record.localPath) }),
         dbId,
         migrationRoot,
       });
@@ -957,8 +973,14 @@ export class CloudAppContributeService {
       status: submitted.status,
       stagedPaths,
       ...(submitted.publishedDirectly ? { publishedDirectly: true } : {}),
-      ...(submitted.publishNote || databaseNote
-        ? { publishNote: databaseNote ?? submitted.publishNote }
+      ...(submitted.publishNote || databaseNote || (input.publishNow && !submitted.publishedDirectly)
+        ? {
+            publishNote:
+              databaseNote ??
+              submitted.publishNote ??
+              // Older server ignores mergeNow: say so instead of silently opening a proposal.
+              "The server doesn't support Publish now yet, so this was sent for review.",
+          }
         : {}),
       ...(databasePublished ? { databasePublished: true } : {}),
     };

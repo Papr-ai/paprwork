@@ -101,6 +101,54 @@ async function postWebhook(event: AppRepoCommittedEvent): Promise<void> {
   }
 }
 
+const ID_TOKEN_TTL_MS = 50 * 60 * 1000;
+const idTokenCache = new Map<string, { token: string; expiresAt: number }>();
+
+/**
+ * Google identity token for Cloud Run service-to-service auth. The agent
+ * gateway is deployed --no-allow-unauthenticated, so Cloud Run IAM rejects
+ * any request without `Authorization: Bearer <id token>` (403) before the
+ * X-Cloud-Agent-Gateway-Key check runs. Returns null off Cloud Run.
+ */
+async function fetchCloudRunIdentityToken(targetUrl: string): Promise<string | null> {
+  if (!process.env.K_SERVICE) {
+    return null;
+  }
+  let audience: string;
+  try {
+    audience = new URL(targetUrl).origin;
+  } catch {
+    return null;
+  }
+  const cached = idTokenCache.get(audience);
+  if (cached && cached.expiresAt > Date.now()) {
+    return cached.token;
+  }
+  try {
+    const resp = await fetch(
+      "http://metadata.google.internal/computeMetadata/v1/instance/service-accounts/default/identity" +
+        `?audience=${encodeURIComponent(audience)}`,
+      { headers: { "Metadata-Flavor": "Google" }, signal: AbortSignal.timeout(5_000) },
+    );
+    if (!resp.ok) {
+      console.warn(`[AppRepoFanout] identity token fetch returned ${resp.status}`);
+      return null;
+    }
+    const token = (await resp.text()).trim();
+    if (!token) {
+      return null;
+    }
+    idTokenCache.set(audience, { token, expiresAt: Date.now() + ID_TOKEN_TTL_MS });
+    return token;
+  } catch (err) {
+    console.warn(
+      "[AppRepoFanout] identity token fetch failed:",
+      (err as Error).message.slice(0, 120),
+    );
+    return null;
+  }
+}
+
 function resolveAppRepoCommittedGatewayWebhookHeaders(): Record<string, string> | null {
   const url = process.env.PAPR_APP_REPO_COMMITTED_GATEWAY_WEBHOOK_URL?.trim();
   if (!url) {
@@ -121,10 +169,14 @@ function resolveAppRepoCommittedGatewayWebhookHeaders(): Record<string, string> 
 
 async function postGatewayWebhook(event: AppRepoCommittedEvent): Promise<void> {
   const url = process.env.PAPR_APP_REPO_COMMITTED_GATEWAY_WEBHOOK_URL?.trim();
-  const headers = resolveAppRepoCommittedGatewayWebhookHeaders();
-  if (!url || !headers) {
+  const baseHeaders = resolveAppRepoCommittedGatewayWebhookHeaders();
+  if (!url || !baseHeaders) {
     return;
   }
+  const idToken = await fetchCloudRunIdentityToken(url);
+  const headers = idToken
+    ? { ...baseHeaders, Authorization: `Bearer ${idToken}` }
+    : baseHeaders;
   try {
     const resp = await fetch(url, {
       method: "POST",
