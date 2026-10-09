@@ -387,15 +387,20 @@ export async function applyRegistryMigrationSingleRoute(
       pushError = "held for publish";
     }
   } else if (online) {
+    // Sync does not carry triggers/views, and its push rewinds the replica to
+    // the cloud state — capture them first, copy to the cloud, then pull back.
+    const { captureReplicaSchemaObjects, mirrorSchemaObjectsToCloud } = await import(
+      "./tursoReplicaSchemaObjectMirror.js"
+    );
+    const replicaObjects = await captureReplicaSchemaObjects(source).catch(() => undefined);
     const push = await pushLinkedDbViaTursoReplica(source);
     pushed = push.ok;
     pushError = push.ok ? null : (push.error ?? "replica push failed");
-    if (pushed) {
-      // Sync does not carry triggers/views to the cloud — copy them over.
-      const { mirrorSchemaObjectsToCloud } = await import("./tursoReplicaSchemaObjectMirror.js");
+    if (pushed && replicaObjects) {
       const mirror = await mirrorSchemaObjectsToCloud({
         source,
         statements: splitSqlStatements(sql),
+        replicaObjects,
       });
       if (mirror.error) {
         console.warn(`[TursoReplica] ${migrationId}: triggers/views not copied to the cloud: ${mirror.error}`);
@@ -411,6 +416,10 @@ export async function applyRegistryMigrationSingleRoute(
         console.log(
           `[TursoReplica] ${migrationId}: copied to the cloud: ${[...mirror.created, ...mirror.dropped.map((d) => `drop ${d}`)].join(", ")}`,
         );
+        // Bring them back down: the push rewound the replica without them.
+        await pullLinkedDbViaTursoReplica(source).catch((error) => {
+          console.warn(`[TursoReplica] ${migrationId}: pull after copying triggers/views failed: ${(error as Error).message}`);
+        });
       }
     }
   }

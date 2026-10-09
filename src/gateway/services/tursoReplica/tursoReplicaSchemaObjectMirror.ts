@@ -127,6 +127,14 @@ export function mirrorStatements(plan: MirrorPlan): string[] {
   return statements;
 }
 
+/** Read the replica's trigger/view definitions (call before a push — see replicaObjects). */
+export async function captureReplicaSchemaObjects(
+  source: AppDataSource,
+): Promise<ReadonlyArray<Record<string, unknown>>> {
+  const { queryLinkedDbViaTursoReplica } = await import("./tursoReplicaRouting.js");
+  return (await queryLinkedDbViaTursoReplica(source, LIST_SQL, [], { pullBeforeRead: false })).rows;
+}
+
 /**
  * Copy the replica's triggers/views to the cloud primary. Best-effort: a
  * failure is reported, never thrown — the migration itself already landed.
@@ -136,13 +144,21 @@ export async function mirrorSchemaObjectsToCloud(options: {
   /** Defaults to the source's mapped Turso name. */
   tursoDatabase?: string;
   statements: readonly string[];
+  /**
+   * Replica triggers/views captured BEFORE the push. Turso Sync's push rewinds
+   * the local WAL and replays the cloud state, which has no triggers/views — so
+   * reading the replica after the push finds nothing to copy.
+   */
+  replicaObjects?: ReadonlyArray<Record<string, unknown>>;
   deps?: {
     readReplica?: () => Promise<ReadonlyArray<Record<string, unknown>>>;
     openCloud?: () => Promise<Pick<Client, "execute" | "batch" | "close">>;
   };
 }): Promise<{ created: string[]; dropped: string[]; notCopied: string[]; error: string | null }> {
   try {
+    const captured = options.replicaObjects;
     const readReplica =
+      (captured ? async () => captured : undefined) ??
       options.deps?.readReplica ??
       (async () => {
         const { queryLinkedDbViaTursoReplica } = await import("./tursoReplicaRouting.js");
