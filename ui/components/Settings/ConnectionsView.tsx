@@ -1,23 +1,26 @@
 /**
  * ConnectionsView — one place for everything Pen can use outside Papr.
  *
- * Services: MCP sign-ins (one click, no keys) and browser sign-ins (sites with
- * no official API, tied to this Mac). API keys: the Key Vault. Same access
+ * Services: MCP sign-ins (one click, no keys) and website logins (sites with
+ * no official API; a browser session on this Mac) in one list. API keys: the Key Vault. Same access
  * model, one switch apart.
  */
 
 import { useCallback, useEffect, useState } from "react";
 import { McpConnectionsTab } from "./McpConnectionsTab";
-import { ConnectedPlatformsTab } from "./ConnectedPlatformsTab";
 import { IntegrationKeysTab } from "./IntegrationKeysTab";
 import { OrgConnectionsPanel } from "./OrgConnectionsPanel";
 import { useOrgConnections } from "../../hooks/useOrgConnections";
+import { useCustomKeys } from "../../hooks/useCustomKeys";
 import { CONNECTIONS_REQUESTS_EVENT } from "../../stores/proposalNoticeListener";
+import "./ConnectionsUi.css";
 import "./ConnectionsView.css";
 
 export type ConnectionsSubTab = "services" | "keys";
 
 const SUB_KEY = "papr-connections-sub-tab";
+/** AI provider keys live under Models; MCP sign-ins under Services. */
+const HIDDEN_KEY = /^(OPENAI_API_KEY|ANTHROPIC_API_KEY|GOOGLE_API_KEY|PAPR_API_KEY|MCP_.+_OAUTH)$/;
 
 function readSub(): ConnectionsSubTab {
   try {
@@ -33,6 +36,8 @@ export function ConnectionsView({ link }: { link?: { sub: ConnectionsSubTab; n: 
   const pending = org.isAdmin ? org.requests.length : 0;
   const [serviceCount, setServiceCount] = useState<number | null>(null);
   const onCount = useCallback((n: number) => setServiceCount(n), []);
+  const { keys } = useCustomKeys();
+  const keyCount = keys.filter((k) => !HIDDEN_KEY.test(k.name)).length;
   const openOrgSettings = () => {
     setSub("services");
     requestAnimationFrame(() =>
@@ -61,17 +66,17 @@ export function ConnectionsView({ link }: { link?: { sub: ConnectionsSubTab; n: 
   }, [sub]);
 
   return (
-    <div className="settings-content settings-content--full-width connections-view">
+    <div className="settings-content connections-view">
       <header className="connections-view__head">
         <div className="connections-view__title-row">
-          <h2 className="settings-section__title">Connections</h2>
+          <h2 className="connections-view__h1">Connections</h2>
           {org.isAdmin && org.policy && (
             <button type="button" className="svc-btn" onClick={openOrgSettings}>
               Org settings
             </button>
           )}
         </div>
-        <p className="settings-section__description">
+        <p className="connections-view__sub">
           Let Pen work in the tools you already use. Sign in once. API keys for your own code live here too.
         </p>
       </header>
@@ -95,6 +100,7 @@ export function ConnectionsView({ link }: { link?: { sub: ConnectionsSubTab; n: 
             {id === "services" && serviceCount !== null && serviceCount > 0 && (
               <span className="connections-view__count">{serviceCount}</span>
             )}
+            {id === "keys" && keyCount > 0 && <span className="connections-view__count">{keyCount}</span>}
             {id === "services" && pending > 0 && (
               <span className="connections-view__badge" aria-label={`${pending} pending requests`}>
                 {pending}
@@ -107,13 +113,6 @@ export function ConnectionsView({ link }: { link?: { sub: ConnectionsSubTab; n: 
       {sub === "services" ? (
         <div role="tabpanel" aria-label="Services">
           <McpConnectionsTab embedded org={org} onCount={onCount} />
-          <section className="connections-view__browser svc-sec">
-            <div className="svc-sec__h">
-              <h3>Website logins</h3>
-              <span className="svc-sec__note">For sites with no direct connection. They stay on this Mac.</span>
-            </div>
-            <ConnectedPlatformsTab embedded />
-          </section>
           <div id="connections-org-settings">
             <OrgConnectionsPanel org={org} />
           </div>

@@ -1,19 +1,47 @@
 /* ConnectionsView — Services / API keys under one Settings page */
 
+/* One centered column, like the rest of Settings and the redesign (680px). */
+.connections-view {
+  width: 100%;
+  max-width: 680px;
+  margin: 0 auto;
+  padding-bottom: 80px;
+  color: var(--cx-ink);
+}
+
 .connections-view__head {
-  margin-bottom: 16px;
+  margin-bottom: 22px;
+}
+
+.connections-view__h1 {
+  margin: 0 0 4px;
+  font-size: 24px;
+  font-weight: 650;
+  letter-spacing: -0.02em;
+  color: var(--cx-ink);
+}
+
+.connections-view__sub {
+  max-width: 64ch;
+  margin: 0;
+  font-size: 14px;
+  line-height: 1.5;
+  color: var(--cx-mid);
 }
 
 .connections-view__tabs {
   display: inline-flex;
   gap: 2px;
   padding: 3px;
-  margin-bottom: 20px;
-  border-radius: 10px;
-  background: var(--background-tertiary);
+  margin-bottom: 22px;
+  border-radius: 9px;
+  background: var(--cx-fill);
 }
 
 .connections-view__tab {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
   padding: 6px 14px;
   border: 0;
   border-radius: 8px;
@@ -29,9 +57,9 @@
 }
 
 .connections-view__tab.is-active {
-  background: var(--background-primary);
-  color: var(--text-primary);
-  box-shadow: 0 1px 2px rgb(0 0 0 / 0.08);
+  background: var(--cx-pop);
+  color: var(--cx-ink);
+  box-shadow: 0 1px 2px var(--cx-shadow);
 }
 
 .connections-view__browser {
@@ -66,9 +94,9 @@
 .org-conn__card {
   padding: 14px 16px;
   margin-bottom: 12px;
-  border: 1px solid var(--border-color);
+  border: 1px solid var(--cx-line);
   border-radius: 12px;
-  background: var(--background-secondary);
+  background: var(--cx-card);
 }
 
 .org-conn__card h4 {
@@ -161,11 +189,19 @@
 .mcp-sheet__pen { display: grid; gap: 6px; }
 .mcp-sheet__penopt {
   display: grid; gap: 2px; text-align: left; padding: 10px 12px; border-radius: 10px;
-  border: 1px solid var(--border-color); background: transparent; color: inherit; cursor: pointer;
+  border: 1px solid var(--cx-line); background: var(--cx-card); color: var(--cx-ink); cursor: pointer;
 }
-.mcp-sheet__penopt span { font-size: 12px; color: var(--text-secondary); }
-.mcp-sheet__penopt.is-on { border-color: var(--accent); background: color-mix(in srgb, var(--accent) 8%, transparent); }
-.mcp-sheet__penopt:disabled { opacity: 0.5; cursor: default; }
+.mcp-sheet__penopt b { font-size: 13.5px; font-weight: 600; }
+.mcp-sheet__penopt span { font-size: 12.5px; color: var(--cx-mid); }
+.mcp-sheet__penopt:hover:not(:disabled) { border-color: var(--cx-line-strong); }
+.mcp-sheet__penopt.is-on { border-color: var(--cx-accent); background: var(--cx-sel-bg); box-shadow: inset 0 0 0 1px var(--cx-accent); }
+.mcp-sheet__penopt:disabled { opacity: 0.5; cursor: not-allowed; }
+.mcp-sheet__penopt.is-on:disabled { opacity: 0.85; }
+.cx-sheet .mcp-sheet__muted { margin: 0; font-size: 13px; line-height: 1.5; color: var(--cx-mid); }
+.cx-sheet .mcp-sheet__who { display: grid; gap: 10px; }
+.cx-sheet .mcp-sheet__row { display: flex; align-items: center; justify-content: flex-end; gap: 10px; }
+.cx-sheet .mcp-sheet__row .cx-btn--cta { flex: 1; }
+.cx-sheet__cta { display: flex; margin-top: 14px; }
 
 .connections-view__title-row {
   display: flex;
@@ -175,11 +211,9 @@
 }
 
 .connections-view__count {
-  margin-left: 6px;
-  font-size: 12px;
-  color: var(--text-tertiary);
+  font-size: 11.5px;
+  font-weight: 500;
+  color: var(--cx-soft);
 }
 
-.connections-view__browser .settings-section__header--embedded {
-  display: none;
-}
+

@@ -4,9 +4,7 @@ import { render, screen, fireEvent } from "@testing-library/react";
 vi.mock("../../components/Settings/McpConnectionsTab", () => ({
   McpConnectionsTab: ({ embedded }: { embedded?: boolean }) => <div>mcp{embedded ? ":embedded" : ""}</div>,
 }));
-vi.mock("../../components/Settings/ConnectedPlatformsTab", () => ({
-  ConnectedPlatformsTab: ({ embedded }: { embedded?: boolean }) => <div>platforms{embedded ? ":embedded" : ""}</div>,
-}));
+vi.mock("../../hooks/useCustomKeys", () => ({ useCustomKeys: () => ({ keys: [] }) }));
 vi.mock("../../components/Settings/IntegrationKeysTab", () => ({
   IntegrationKeysTab: ({ embedded }: { embedded?: boolean }) => <div>keys{embedded ? ":embedded" : ""}</div>,
 }));
@@ -22,11 +20,11 @@ import { ConnectionsView } from "../../components/Settings/ConnectionsView";
 describe("ConnectionsView", () => {
   beforeEach(() => sessionStorage.clear());
 
-  it("defaults to Services: MCP sign-ins plus browser sign-ins, both embedded", () => {
+  it("defaults to Services: one list (website logins live inside it, not a second section)", () => {
     render(<ConnectionsView />);
     expect(screen.getByRole("tab", { name: "Services" }).getAttribute("aria-selected")).toBe("true");
     expect(screen.getByText("mcp:embedded")).toBeTruthy();
-    expect(screen.getByText("platforms:embedded")).toBeTruthy();
+    expect(screen.queryByText("Website logins")).toBeNull();
     expect(screen.queryByText("keys:embedded")).toBeNull();
   });
 
