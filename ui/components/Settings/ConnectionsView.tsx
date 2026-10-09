@@ -6,7 +6,7 @@
  * model, one switch apart.
  */
 
-import { useEffect, useState } from "react";
+import { useCallback, useEffect, useState } from "react";
 import { McpConnectionsTab } from "./McpConnectionsTab";
 import { ConnectedPlatformsTab } from "./ConnectedPlatformsTab";
 import { IntegrationKeysTab } from "./IntegrationKeysTab";
@@ -31,6 +31,14 @@ export function ConnectionsView({ link }: { link?: { sub: ConnectionsSubTab; n: 
   const [sub, setSub] = useState<ConnectionsSubTab>(() => link?.sub ?? readSub());
   const org = useOrgConnections();
   const pending = org.isAdmin ? org.requests.length : 0;
+  const [serviceCount, setServiceCount] = useState<number | null>(null);
+  const onCount = useCallback((n: number) => setServiceCount(n), []);
+  const openOrgSettings = () => {
+    setSub("services");
+    requestAnimationFrame(() =>
+      document.getElementById("connections-org-settings")?.scrollIntoView({ behavior: "smooth", block: "start" }),
+    );
+  };
 
   // A request notification lands on Services, where the admin's Requests list lives.
   useEffect(() => {
@@ -55,7 +63,14 @@ export function ConnectionsView({ link }: { link?: { sub: ConnectionsSubTab; n: 
   return (
     <div className="settings-content settings-content--full-width connections-view">
       <header className="connections-view__head">
-        <h2 className="settings-section__title">Connections</h2>
+        <div className="connections-view__title-row">
+          <h2 className="settings-section__title">Connections</h2>
+          {org.isAdmin && org.policy && (
+            <button type="button" className="svc-btn" onClick={openOrgSettings}>
+              Org settings
+            </button>
+          )}
+        </div>
         <p className="settings-section__description">
           Let Pen work in the tools you already use. Sign in once. API keys for your own code live here too.
         </p>
@@ -77,6 +92,9 @@ export function ConnectionsView({ link }: { link?: { sub: ConnectionsSubTab; n: 
             onClick={() => setSub(id)}
           >
             {label}
+            {id === "services" && serviceCount !== null && serviceCount > 0 && (
+              <span className="connections-view__count">{serviceCount}</span>
+            )}
             {id === "services" && pending > 0 && (
               <span className="connections-view__badge" aria-label={`${pending} pending requests`}>
                 {pending}
@@ -88,16 +106,17 @@ export function ConnectionsView({ link }: { link?: { sub: ConnectionsSubTab; n: 
 
       {sub === "services" ? (
         <div role="tabpanel" aria-label="Services">
-          <McpConnectionsTab embedded org={org} />
-          <section className="connections-view__browser">
-            <h3 className="connections-view__group">Browser sign-ins</h3>
-            <p className="connections-view__note">
-              For sites with no official connection. Pen uses a signed-in browser on this Mac, so these
-              don't follow you to other devices or the web.
-            </p>
+          <McpConnectionsTab embedded org={org} onCount={onCount} />
+          <section className="connections-view__browser svc-sec">
+            <div className="svc-sec__h">
+              <h3>Website logins</h3>
+              <span className="svc-sec__note">For sites with no direct connection. They stay on this Mac.</span>
+            </div>
             <ConnectedPlatformsTab embedded />
           </section>
-          <OrgConnectionsPanel org={org} />
+          <div id="connections-org-settings">
+            <OrgConnectionsPanel org={org} />
+          </div>
         </div>
       ) : (
         <div role="tabpanel" aria-label="API keys">

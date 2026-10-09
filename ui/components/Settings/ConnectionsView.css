@@ -166,3 +166,20 @@
 .mcp-sheet__penopt span { font-size: 12px; color: var(--text-secondary); }
 .mcp-sheet__penopt.is-on { border-color: var(--accent); background: color-mix(in srgb, var(--accent) 8%, transparent); }
 .mcp-sheet__penopt:disabled { opacity: 0.5; cursor: default; }
+
+.connections-view__title-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+}
+
+.connections-view__count {
+  margin-left: 6px;
+  font-size: 12px;
+  color: var(--text-tertiary);
+}
+
+.connections-view__browser .settings-section__header--embedded {
+  display: none;
+}

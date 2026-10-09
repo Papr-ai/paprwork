@@ -1,35 +1,31 @@
 /**
- * McpConnectionsTab — one-click OAuth sign-in to remote MCP servers.
+ * McpConnectionsTab — Connections → Services (Connections redesign).
  *
- * Connect opens the service's consent page in the system browser (the gateway
- * does that; the UI only shows state). While any server is awaiting approval we
- * poll its status every 2s; otherwise the tab is static.
+ *   Connected     what you signed in to; anything that needs you sorts first
+ *   Team          sign-ins a teammate shared with you
+ *   Add a service search + Popular / All / category chips; Connect, Set up or Request
+ *
+ * First visit (nothing connected) shows one sentence of value and four
+ * one-click starts instead of the Connected list. Clicking a row opens the
+ * detail panel (who can use it, Pen access, setup). While a sign-in is waiting
+ * on the browser we poll every 2s; otherwise the list is static.
  */
 
 import { useCallback, useEffect, useMemo, useState } from "react";
 import "./McpConnectionsTab.css";
-import { McpServerSheet, type McpConnectChoice } from "./McpServerSheet";
+import { McpServerSheet, mcpKeyName, type McpConnectChoice } from "./McpServerSheet";
+import { RowButton, ServiceLogo, ServiceRow, type McpServer } from "./McpServiceRow";
 import { canConnect, type useOrgConnections } from "../../hooks/useOrgConnections";
+import { useCustomKeys } from "../../hooks/useCustomKeys";
 
 const GATEWAY = "http://localhost:18789";
 const POLL_MS = 2_000;
+const QUICK_STARTS = ["notion", "linear", "github", "slack"];
+const POPULAR = ["notion", "linear", "github", "slack", "hubspot", "googledrive", "atlassian", "stripe", "asana", "airtable"];
+const STATE_RANK: Record<string, number> = { needs_reauth: 0, error: 0, awaiting_user: 1, connecting: 1, connected: 2 };
 
-type McpState = "disconnected" | "connecting" | "awaiting_user" | "connected" | "needs_reauth" | "error";
-
-interface McpServer {
-  id: string;
-  name: string;
-  url: string;
-  description?: string;
-  category?: string;
-  verified: boolean;
-  custom: boolean;
-  requiresClientId: boolean;
-  state: McpState;
-  toolCount: number;
-  error?: string;
-  authUrl?: string;
-}
+/** Header "Website login" asks the browser sign-ins section to open its add form. */
+export const ADD_WEBSITE_LOGIN_EVENT = "papr:connections-add-site";
 
 async function api<T>(path: string, method = "GET", body?: unknown): Promise<T> {
   const res = await fetch(`${GATEWAY}${path}`, {
@@ -42,34 +38,29 @@ async function api<T>(path: string, method = "GET", body?: unknown): Promise<T> 
   return json as T;
 }
 
-const STATE_LABEL: Record<McpState, string> = {
-  disconnected: "",
-  connecting: "Starting…",
-  awaiting_user: "Approve in your browser",
-  connected: "Connected",
-  needs_reauth: "Sign-in expired",
-  error: "Failed",
-};
-
-function initials(name: string): string {
-  return name.replace(/[^A-Za-z0-9 ]/g, "").split(" ").map((w) => w[0]).join("").slice(0, 2).toUpperCase();
-}
+type Org = ReturnType<typeof useOrgConnections>;
 
 export function McpConnectionsTab({
   embedded = false,
   org,
+  onCount,
 }: {
   embedded?: boolean;
-  /** Org rules + requests; when a service isn't approved the card offers Request instead of Connect. */
-  org?: ReturnType<typeof useOrgConnections>;
+  /** Org rules + requests; when a service isn't approved the row offers Request instead of Connect. */
+  org?: Org;
+  /** Connected + team count, for the Services tab label. */
+  onCount?: (n: number) => void;
 } = {}) {
   const [servers, setServers] = useState<McpServer[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [query, setQuery] = useState("");
+  const [chip, setChip] = useState("popular");
   const [busy, setBusy] = useState<string | null>(null);
+  const [showCustom, setShowCustom] = useState(false);
   const [customUrl, setCustomUrl] = useState("");
   const [openId, setOpenId] = useState<string | null>(null);
+  const { keys } = useCustomKeys();
 
   const load = useCallback(async () => {
     try {
@@ -115,6 +106,7 @@ export function McpConnectionsTab({
     try {
       const { server } = await api<{ server: McpServer }>("/api/mcp/servers", "POST", { url });
       setCustomUrl("");
+      setShowCustom(false);
       await api(`/api/mcp/servers/${server.id}/connect`, "POST");
     } catch (err) {
       setError(err instanceof Error ? err.message : "Could not add server");
@@ -124,158 +116,246 @@ export function McpConnectionsTab({
     }
   };
 
-  const groups = useMemo(() => {
+  const keyByName = useMemo(() => new Map(keys.map((k) => [k.name, k])), [keys]);
+  const sections = useMemo(() => {
+    const active = servers.filter((s) => s.state !== "disconnected");
+    const isTeam = (s: McpServer) => s.state === "connected" && keyByName.get(mcpKeyName(s.id))?.vaultOrigin === "shared";
+    const team = active.filter(isTeam);
+    const mine = active.filter((s) => !isTeam(s)).sort((a, b) => (STATE_RANK[a.state] ?? 2) - (STATE_RANK[b.state] ?? 2));
+    const free = servers.filter((s) => s.state === "disconnected");
     const q = query.trim().toLowerCase();
-    const visible = servers.filter(
-      (s) => !q || `${s.name} ${s.description ?? ""} ${s.category ?? ""}`.toLowerCase().includes(q),
-    );
-    const connected = visible.filter((s) => s.state !== "disconnected");
-    const rest = visible.filter((s) => s.state === "disconnected");
-    const byCat = new Map<string, McpServer[]>();
-    for (const s of rest) {
-      const cat = s.requiresClientId ? "Needs setup" : (s.category ?? "Other");
-      byCat.set(cat, [...(byCat.get(cat) ?? []), s]);
-    }
-    const ordered = [...byCat.entries()].sort(([a], [b]) =>
-      a === "Needs setup" ? 1 : b === "Needs setup" ? -1 : a.localeCompare(b),
-    );
-    return { connected, ordered };
-  }, [servers, query]);
+    const cats = [...new Set(free.map((s) => s.category ?? "Other"))].sort();
+    let add: McpServer[];
+    if (q) add = free.filter((s) => `${s.name} ${s.description ?? ""} ${s.category ?? ""}`.toLowerCase().includes(q));
+    else if (chip === "popular") add = POPULAR.map((id) => free.find((s) => s.id === id)).filter((s): s is McpServer => !!s);
+    else if (chip === "all") add = [...free].sort((a, b) => a.name.localeCompare(b.name));
+    else add = free.filter((s) => (s.category ?? "Other") === chip);
+    return { mine, team, add, cats, freeCount: free.length };
+  }, [servers, keyByName, query, chip]);
 
-  const renderCard = (s: McpServer) => {
-    const isBusy = busy === s.id;
-    const label = s.state === "connected" ? `${s.toolCount} tools` : STATE_LABEL[s.state];
-    // Connected services open their detail panel; needs-setup services open the setup panel.
-    // Disconnected ones open too, so you can pick who can use it before connecting.
-    const opens = s.state === "connected" || s.state === "disconnected" || s.requiresClientId;
+  useEffect(() => {
+    if (!loading) onCount?.(sections.mine.length + sections.team.length);
+  }, [loading, sections.mine.length, sections.team.length, onCount]);
+
+  const open = servers.find((s) => s.id === openId) ?? null;
+  const blocked = (s: McpServer) => Boolean(org && !canConnect(org.policy, s.id));
+  const myRequest = (s: McpServer) => org?.requests.find((r) => r.serverId === s.id);
+
+  const request = (s: McpServer) => {
+    const note = window.prompt(`Ask your admin to approve ${s.name}. Add a note (optional):`, "");
+    if (note !== null) void org?.request(s.id, s.name, note);
+  };
+
+  if (loading) {
     return (
-      <div
-        key={s.id}
-        className={`mcp-card mcp-card--${s.state}${opens ? " mcp-card--clickable" : ""}`}
-        onClick={opens ? () => setOpenId(s.id) : undefined}
-      >
-        <div className="mcp-card__icon" aria-hidden>{initials(s.name)}</div>
-        <div className="mcp-card__body">
-          <div className="mcp-card__name">{s.name}</div>
-          <div className="mcp-card__desc">
-            {s.state === "disconnected" ? s.description : label}
-            {s.state === "error" && s.error ? ` — ${s.error}` : ""}
-          </div>
-          {s.state === "awaiting_user" && s.authUrl && (
-            <a className="mcp-card__link" href={s.authUrl} target="_blank" rel="noreferrer">
-              Browser didn't open? Open sign-in page
-            </a>
-          )}
-        </div>
-        <div className="mcp-card__action">
-          {s.requiresClientId ? (
-            <button type="button" className="settings-btn settings-btn--secondary" onClick={(e) => { e.stopPropagation(); setOpenId(s.id); }}>
-              Set up
-            </button>
-          ) : s.state === "connected" ? (
-            <button type="button" className="settings-btn settings-btn--ghost" disabled={isBusy} onClick={(e) => { e.stopPropagation(); void act(s.id, "disconnect"); }}>
-              Disconnect
-            </button>
-          ) : s.state === "awaiting_user" || s.state === "connecting" ? (
-            <button type="button" className="settings-btn settings-btn--ghost" disabled={isBusy} onClick={() => void act(s.id, "cancel")}>
-              Cancel
-            </button>
-          ) : org && !canConnect(org.policy, s.id) ? (
-            (() => {
-              const mine = org.requests.find((r) => r.serverId === s.id);
-              return mine ? (
-                <>
-                  <span className="mcp-card__requested">Requested</span>
-                  <button type="button" className="settings-btn settings-btn--ghost" onClick={(e) => { e.stopPropagation(); void org.cancel(mine.id); }}>
-                    Cancel
-                  </button>
-                </>
-              ) : (
-                <button
-                  type="button"
-                  className="settings-btn settings-btn--secondary"
-                  title="Your organization approves services before members connect them"
-                  onClick={(e) => {
-                    e.stopPropagation();
-                    const note = window.prompt(`Ask your admin to approve ${s.name}. Add a note (optional):`, "");
-                    if (note !== null) void org.request(s.id, s.name, note);
-                  }}
-                >
-                  Request
-                </button>
-              );
-            })()
-          ) : (
-            <button type="button" className="settings-btn settings-btn--primary" disabled={isBusy} onClick={(e) => { e.stopPropagation(); void act(s.id, "connect"); }}>
-              {isBusy ? "Opening…" : s.state === "needs_reauth" || s.state === "error" ? "Reconnect" : "Connect"}
-            </button>
-          )}
+      <div className="svc-sec" aria-busy="true">
+        <div className="svc-list svc-list--skeleton">
+          {[0, 1, 2].map((i) => <div key={i} className="svc-row svc-row--skeleton" />)}
         </div>
       </div>
     );
+  }
+
+  const connectedRow = (s: McpServer) => {
+    const key = keyByName.get(mcpKeyName(s.id));
+    if (s.state === "connected") {
+      const shared = key && key.vaultAudience && key.vaultAudience !== "user" ? " · Shared with your team" : "";
+      return <ServiceRow key={s.id} server={s} tone="ok" status={`Connected · ${s.toolCount} tools${shared}`} onOpen={() => setOpenId(s.id)} />;
+    }
+    if (s.state === "awaiting_user" || s.state === "connecting") {
+      return (
+        <ServiceRow
+          key={s.id}
+          server={s}
+          tone="wait"
+          status="Finish signing in in your browser"
+          footer={s.authUrl ? (
+            <a className="svc-row__link" href={s.authUrl} target="_blank" rel="noreferrer" onClick={(e) => e.stopPropagation()}>
+              Browser didn't open? Open the sign-in page
+            </a>
+          ) : undefined}
+          action={<RowButton disabled={busy === s.id} onClick={() => void act(s.id, "cancel")}>Cancel</RowButton>}
+        />
+      );
+    }
+    const why = s.state === "needs_reauth" ? `Sign-in expired · Pen can't use ${s.name}` : `Couldn't connect${s.error ? ` · ${s.error}` : ""}`;
+    return (
+      <ServiceRow
+        key={s.id}
+        server={s}
+        tone="warn"
+        status={why}
+        onOpen={() => setOpenId(s.id)}
+        action={<RowButton primary disabled={busy === s.id} onClick={() => void act(s.id, "connect")}>Reconnect</RowButton>}
+      />
+    );
   };
 
-  const open = servers.find((s) => s.id === openId) ?? null;
+  const addRow = (s: McpServer) => {
+    const isBlocked = blocked(s);
+    const asked = isBlocked ? myRequest(s) : undefined;
+    const tag = asked ? "Requested" : isBlocked ? "Not approved" : s.requiresClientId ? "Setup" : undefined;
+    const action = asked ? (
+      <RowButton onClick={() => void org?.cancel(asked.id)}>Cancel request</RowButton>
+    ) : isBlocked ? (
+      <RowButton title="Your org approves services before members connect them" onClick={() => request(s)}>Request</RowButton>
+    ) : s.requiresClientId ? (
+      <RowButton onClick={() => setOpenId(s.id)}>Set up</RowButton>
+    ) : (
+      <RowButton disabled={busy === s.id} onClick={() => void act(s.id, "connect")}>{busy === s.id ? "Opening…" : "Connect"}</RowButton>
+    );
+    return (
+      <ServiceRow
+        key={s.id}
+        server={s}
+        status={s.description ?? s.category ?? ""}
+        tag={tag}
+        dim={isBlocked}
+        action={action}
+        onOpen={isBlocked && !asked ? undefined : () => setOpenId(s.id)}
+      />
+    );
+  };
 
-  if (loading) return <div className="mcp-tab__empty">Loading connections…</div>;
+  const firstVisit = sections.mine.length === 0 && sections.team.length === 0;
+  const quick = QUICK_STARTS.map((id) => servers.find((s) => s.id === id)).filter((s): s is McpServer => !!s && !blocked(s));
+  const restricted = org && !org.isAdmin && org.policy && org.policy.mode !== "all";
 
   return (
     <div className="mcp-tab">
       {!embedded && (
         <div className="settings-section__header">
-          <div>
-            <h2 className="settings-section__title">Connections</h2>
-            <p className="settings-section__description">
-              Sign in once and Pen can use the service's tools. No API keys. Sign-ins stay in your keychain.
-            </p>
-          </div>
+          <h2 className="settings-section__title">Connections</h2>
         </div>
       )}
 
-      <input
-        className="form-input mcp-tab__search"
-        type="search"
-        placeholder={`Search ${servers.length} services`}
-        value={query}
-        onChange={(e) => setQuery(e.target.value)}
-      />
+      {error && <div className="mcp-tab__error" role="alert">{error}</div>}
 
-      {error && <div className="mcp-tab__error">{error}</div>}
-
-      {groups.connected.length > 0 && (
-        <section className="mcp-group">
-          <h3 className="mcp-group__title">Your connections</h3>
-          <div className="mcp-grid">{groups.connected.map(renderCard)}</div>
+      {firstVisit ? (
+        <section className="svc-empty">
+          <div className="svc-empty__marks">
+            {quick.map((s) => <ServiceLogo key={s.id} server={s} />)}
+          </div>
+          <h2>Connect the tools you already use</h2>
+          <p>
+            Pen can then search, report on and update them for you, in chat or on a schedule. You sign in with the
+            service directly; there are no API keys to copy.
+          </p>
+          <div className="svc-empty__quick">
+            {quick.map((s) => (
+              <button key={s.id} type="button" className="svc-quick" disabled={busy === s.id} onClick={() => void act(s.id, "connect")}>
+                <ServiceLogo server={s} size="sm" />
+                {s.name}
+              </button>
+            ))}
+          </div>
         </section>
+      ) : (
+        <>
+          {sections.mine.length > 0 && (
+            <section className="svc-sec">
+              <div className="svc-sec__h"><h3>Connected</h3><span>{sections.mine.length}</span></div>
+              <div className="svc-list">{sections.mine.map(connectedRow)}</div>
+            </section>
+          )}
+          {sections.team.length > 0 && (
+            <section className="svc-sec">
+              <div className="svc-sec__h">
+                <h3>Team</h3><span>{sections.team.length}</span>
+                <span className="svc-sec__note">Shared by a teammate. You use their sign-in.</span>
+              </div>
+              <div className="svc-list">
+                {sections.team.map((s) => (
+                  <ServiceRow key={s.id} server={s} tone="ok" status={`Shared with you · ${s.toolCount} tools`} onOpen={() => setOpenId(s.id)} />
+                ))}
+              </div>
+            </section>
+          )}
+        </>
       )}
 
-      {groups.ordered.map(([cat, list]) => (
-        <section key={cat} className="mcp-group">
-          <h3 className="mcp-group__title">{cat}</h3>
-          <div className="mcp-grid">{list.map(renderCard)}</div>
-        </section>
-      ))}
+      <section className="svc-sec">
+        <div className="svc-sec__h">
+          <h3>Add a service</h3>
+          <span className="svc-sec__links">
+            <button type="button" className="svc-btn" onClick={() => window.dispatchEvent(new CustomEvent(ADD_WEBSITE_LOGIN_EVENT))}>
+              + Website login
+            </button>
+            <button type="button" className="svc-btn" onClick={() => setShowCustom((v) => !v)} aria-expanded={showCustom}>
+              + Custom MCP server
+            </button>
+          </span>
+        </div>
 
-      {groups.connected.length + groups.ordered.length === 0 && (
-        <div className="mcp-tab__empty">No services match “{query}”. Add it by URL below.</div>
-      )}
+        {showCustom && (
+          <div className="svc-list svc-list--pad">
+            <p className="svc-hint">
+              Paste the server URL. If it supports sign-in, your browser opens to approve.
+            </p>
+            <div className="svc-custom">
+              <input
+                className="form-input"
+                type="url"
+                aria-label="MCP server URL"
+                placeholder="https://mcp.example.com/mcp"
+                value={customUrl}
+                autoFocus
+                onChange={(e) => setCustomUrl(e.target.value)}
+                onKeyDown={(e) => e.key === "Enter" && void addCustom()}
+              />
+              <button type="button" className="svc-btn svc-btn--primary" disabled={!customUrl.trim() || busy === "__custom"} onClick={() => void addCustom()}>
+                Connect
+              </button>
+            </div>
+          </div>
+        )}
 
-      <section className="mcp-group">
-        <h3 className="mcp-group__title">Another MCP server</h3>
-        <div className="mcp-custom">
+        {restricted && (
+          <p className="svc-hint">Your org only allows approved services. Request others and your admin gets a notification.</p>
+        )}
+
+        <label className="svc-search">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" aria-hidden>
+            <circle cx="11" cy="11" r="7" /><path d="m20 20-3.5-3.5" />
+          </svg>
           <input
-            className="form-input"
-            type="url"
-            placeholder="https://mcp.example.com/mcp"
-            value={customUrl}
-            onChange={(e) => setCustomUrl(e.target.value)}
-            onKeyDown={(e) => e.key === "Enter" && void addCustom()}
+            type="search"
+            aria-label="Search services"
+            placeholder={`Search ${sections.freeCount} services`}
+            value={query}
+            onChange={(e) => setQuery(e.target.value)}
           />
-          <button type="button" className="settings-btn settings-btn--primary" disabled={!customUrl.trim() || busy === "__custom"} onClick={() => void addCustom()}>
-            Connect
-          </button>
+        </label>
+
+        <div className="svc-chips" role="tablist" aria-label="Filter services">
+          {[["popular", "Popular"], ["all", `All ${sections.freeCount}`], ...sections.cats.map((c) => [c, c])].map(([id, label]) => (
+            <button
+              key={id}
+              type="button"
+              role="tab"
+              aria-selected={!query && chip === id}
+              className={`svc-chip${!query && chip === id ? " is-on" : ""}`}
+              onClick={() => {
+                setQuery("");
+                setChip(id);
+              }}
+            >
+              {label}
+            </button>
+          ))}
+        </div>
+
+        <div className="svc-list">
+          {sections.add.length ? (
+            sections.add.map(addRow)
+          ) : (
+            <div className="svc-none">
+              {query ? `No service called "${query}". Add it as a custom MCP server.` : "Everything here is already connected."}
+            </div>
+          )}
         </div>
       </section>
+
       {open && (
         <McpServerSheet
           server={open}
