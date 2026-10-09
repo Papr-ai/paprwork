@@ -58,12 +58,18 @@ export async function createMigrationFile(input: {
   name: string;
   sql: string;
   now?: Date;
+  /**
+   * Migration ids already in the database's ledger. A teammate's copy of shared
+   * data has the publisher's migrations applied but not their files, so numbering
+   * from files alone collides (e.g. a second 0001 behind the publisher's 0002).
+   */
+  appliedIds?: readonly string[];
 }): Promise<{ fileName: string; migrationId: string; fullPath: string }> {
   const dir = path.join(input.migrationRoot, "migrations");
   await fs.mkdir(dir, { recursive: true });
   const existing = (await fs.readdir(dir)).filter((f) => f.endsWith(".sql"));
   const fileName = buildMigrationFileName({
-    existingFileNames: existing,
+    existingFileNames: [...existing, ...(input.appliedIds ?? []).map((id) => `${id}.sql`)],
     name: input.name,
     now: input.now,
   });

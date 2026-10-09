@@ -186,3 +186,17 @@ describe("proposal migrations must have run", () => {
     expect(c.unverified).toEqual([]);
   });
 });
+
+describe("migration numbering on a teammate's copy", () => {
+  it("numbers after the ledger, not just the files on disk", async () => {
+    const { createMigrationFile } = await import("../src/gateway/services/jobs/migrationFileNaming.js");
+    const r = await createMigrationFile({
+      migrationRoot: root,
+      name: "add col",
+      sql: "SELECT 1",
+      appliedIds: ["0001_baseline", "0002_20261001083352_create_notes"],
+    });
+    expect(r.fileName.startsWith("0003_")).toBe(true);
+  });
+});
+

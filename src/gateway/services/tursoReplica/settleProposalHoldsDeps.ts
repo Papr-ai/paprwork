@@ -5,7 +5,10 @@ import * as path from "node:path";
 import type { SettleDeps } from "./settleProposalHolds.js";
 
 export async function defaultSettleDeps(): Promise<SettleDeps> {
-  const { getDatabaseRegistryService, tursoNameForRecord } = await import("../DatabaseRegistryService.js");
+  const { getDatabaseRegistryService, tursoNameForRecord, initializeDatabaseRegistry } = await import(
+    "../DatabaseRegistryService.js"
+  );
+  await initializeDatabaseRegistry();
   const { openTursoPrimaryClient } = await import("../jobs/jobMigrationTursoSync.js");
   const { REMOTE_SCHEMA_MIGRATIONS_TABLE } = await import("../tursoPlatformSchema.js");
   const { reseedTursoReplicaFromRemote } = await import("./tursoReplicaProvision.js");

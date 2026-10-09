@@ -99,8 +99,15 @@ describe("shared-data install keeps the publisher as schema owner", () => {
   });
 
   it("the publisher's own app (no shared lineage) still owns its schema", async () => {
-    await fs.mkdir(path.join(home, "apps", PUBLISHER), { recursive: true });
+    await write(path.join(home, "apps", PUBLISHER, "metadata.json"), { id: PUBLISHER });
     await write(path.join(home, "data", "databases.json"), { version: 1, databases: { [DB]: record(PUBLISHER) } });
     expect(isCollaboratorOnSharedDatabase(DB)).toBe(false);
+  });
+
+  it("a stray apps/{publisher}/__papr__ folder is not the owner app (teammate stays a teammate)", async () => {
+    // The copy (from beforeEach) is the shared-data install; only a stray folder exists for the publisher.
+    await write(path.join(home, "apps", PUBLISHER, "__papr__", "app-meta.json"), {});
+    await write(path.join(home, "data", "databases.json"), { version: 1, databases: { [DB]: record(PUBLISHER) } });
+    expect(isCollaboratorOnSharedDatabase(DB)).toBe(true);
   });
 });

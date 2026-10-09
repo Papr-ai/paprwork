@@ -584,10 +584,23 @@ export async function paprDbCreateMigration(options: {
       ? portableOwnerIdInSql(options.sql, currentUser)
       : { sql: options.sql, replaced: 0 };
   const { createMigrationFile } = await import("../jobs/migrationFileNaming.js");
+  // Number after everything in the ledger: a teammate's copy of shared data has
+  // the publisher's migrations applied but not their files.
+  const { queryLinkedDbViaTursoReplica } = await import("./tursoReplicaRouting.js");
+  const ledger = await queryLinkedDbViaTursoReplica(source, "SELECT id FROM schema_migrations", [], {
+    pullBeforeRead: false,
+  }).catch((error: unknown) => {
+    console.warn(
+      `[PaprDb] ${options.dbId}: couldn't read the migration ledger; numbering from files only:`,
+      error instanceof Error ? error.message : error,
+    );
+    return null;
+  });
   const created = await createMigrationFile({
     migrationRoot,
     name: options.name,
     sql: portable.sql,
+    appliedIds: (ledger?.rows ?? []).map((r) => String(r.id ?? "").replace(/\.sql$/, "")),
   });
   const note =
     portable.replaced > 0

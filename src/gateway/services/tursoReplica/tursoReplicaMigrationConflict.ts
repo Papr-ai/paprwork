@@ -7,6 +7,7 @@ import { createClient } from "@libsql/client";
 import type { AppDataSource } from "../appDataSources.js";
 import { normalizeMigrationIdList } from "../jobs/migrationIdNormalize.js";
 import { getTursoSyncBridge } from "../TursoSyncBridge.js";
+import { REMOTE_SCHEMA_MIGRATIONS_TABLE } from "../tursoPlatformSchema.js";
 import { queryLinkedDbViaTursoReplica } from "./tursoReplicaRouting.js";
 
 export const MIGRATION_CONFLICT_CODE = "MIGRATION_CONFLICT";
@@ -19,8 +20,17 @@ export interface MigrationPushConflict {
   cloudAheadIds: string[];
 }
 
-const SCHEMA_MIGRATIONS_QUERY =
-  "SELECT id FROM schema_migrations ORDER BY id ASC";
+/**
+ * Both ledgers. A migration applied straight to the cloud primary
+ * (papr_db_apply_migration_cloud, publish, approve) is recorded in
+ * `_papr_schema_migrations`; a replica push carries `schema_migrations`.
+ * Reading only one made a cloud-applied migration look "local only, behind the
+ * cloud head", and every later push failed with MIGRATION_CONFLICT.
+ */
+const LEDGER_QUERIES = [
+  "SELECT id FROM schema_migrations",
+  `SELECT id FROM "${REMOTE_SCHEMA_MIGRATIONS_TABLE}"`,
+] as const;
 
 function migrationIdsFromRows(rows: Record<string, unknown>[]): string[] {
   const raw = rows
@@ -33,17 +43,16 @@ function migrationIdsFromRows(rows: Record<string, unknown>[]): string[] {
 export async function readLocalReplicaMigrationIds(
   source: AppDataSource,
 ): Promise<string[]> {
-  try {
-    const result = await queryLinkedDbViaTursoReplica(
-      source,
-      SCHEMA_MIGRATIONS_QUERY,
-      [],
-      { pullBeforeRead: false },
-    );
-    return migrationIdsFromRows(result.rows);
-  } catch {
-    return [];
+  const rows: Record<string, unknown>[] = [];
+  for (const sql of LEDGER_QUERIES) {
+    try {
+      const result = await queryLinkedDbViaTursoReplica(source, sql, [], { pullBeforeRead: false });
+      rows.push(...result.rows);
+    } catch {
+      /* ledger table not present on this copy */
+    }
   }
+  return migrationIdsFromRows(rows);
 }
 
 /** Read migration ids from Turso primary (HTTP). */
@@ -61,11 +70,17 @@ export async function readRemoteTursoMigrationIds(
     authToken: creds.authToken,
   });
 
+  const rows: Record<string, unknown>[] = [];
   try {
-    const result = await client.execute(SCHEMA_MIGRATIONS_QUERY);
-    return migrationIdsFromRows(result.rows as Record<string, unknown>[]);
-  } catch {
-    return [];
+    for (const sql of LEDGER_QUERIES) {
+      try {
+        const result = await client.execute(sql);
+        rows.push(...(result.rows as Record<string, unknown>[]));
+      } catch {
+        /* ledger table not present on this database */
+      }
+    }
+    return migrationIdsFromRows(rows);
   } finally {
     client.close();
   }

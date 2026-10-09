@@ -168,7 +168,8 @@ export function isCollaboratorOnSharedDatabase(dbId: string): boolean {
   if (owner) {
     try {
       const ownerDir = path.join(appsRoot, owner);
-      if (statSync(ownerDir).isDirectory()) {
+      // A real installed app, not a stray folder (e.g. a leftover __papr__/ write).
+      if (statSync(path.join(ownerDir, "metadata.json")).isFile()) {
         // A shared-data install is never the schema owner, even when an older
         // install recorded itself as owner (publisher id remapped to copy id).
         const ownerLineage = readLineageSync(ownerDir);

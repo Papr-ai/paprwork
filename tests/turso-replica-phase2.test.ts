@@ -557,3 +557,23 @@ describe("tursoReplicaPostMigration", () => {
     expect(writeCloudAppMeta).toHaveBeenCalledWith("/tmp/papr", "app-todo");
   });
 });
+
+describe("migration conflict reads both ledgers", () => {
+  it("a migration applied straight to the cloud (only in _papr_schema_migrations) is not 'local only'", async () => {
+    const { detectMigrationPushConflict } = await import(
+      "../src/gateway/services/tursoReplica/tursoReplicaMigrationConflict.js"
+    );
+    const local = ["0001_baseline", "0001_20261008172536_e2e_a", "0002_20261001083352_create_notes", "0003_x"];
+    // cloud: schema_migrations ∪ _papr_schema_migrations
+    const remote = ["0001_baseline", "0002_20261001083352_create_notes", "0001_20261008172536_e2e_a"];
+    expect(detectMigrationPushConflict(local, remote)).toBeNull();
+    // Reading only schema_migrations reproduces the stuck push.
+    expect(detectMigrationPushConflict(local, remote.slice(0, 2))?.cloudAheadIds).toEqual(["0001_20261008172536_e2e_a"]);
+  });
+  it("source reads both ledger tables", async () => {
+    const fs = await import("node:fs");
+    const src = fs.readFileSync("src/gateway/services/tursoReplica/tursoReplicaMigrationConflict.ts", "utf8");
+    expect(src).toMatch(/REMOTE_SCHEMA_MIGRATIONS_TABLE/);
+    expect(src).not.toMatch(/SCHEMA_MIGRATIONS_QUERY/);
+  });
+});
