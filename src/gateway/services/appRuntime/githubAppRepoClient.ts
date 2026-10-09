@@ -108,6 +108,14 @@ export async function fetchGithubBranchHeadSha(
     },
     signal: AbortSignal.timeout(timeoutMs),
   });
+  
+  const remaining = res.headers.get("x-ratelimit-remaining");
+  const limit = res.headers.get("x-ratelimit-limit");
+  const resource = res.headers.get("x-ratelimit-resource");
+  console.log(
+    `[GitHubAppRepoClient] ${res.status} /commits/${branch} ${credentials.repoName} remaining=${remaining}/${limit} resource=${resource}`,
+  );
+  
   if (!res.ok) {
     // Diagnostics: same token reads files fine but /commits returns 403 from Cloud Run.
     // Log why (rate limit vs IP allow list vs permissions) — body + GitHub headers.

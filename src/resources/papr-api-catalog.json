@@ -1,7 +1,7 @@
 {
   "version": 1,
-  "generatedAt": "2026-10-08T16:08:32.116Z",
-  "entryCount": 203,
+  "generatedAt": "2026-10-09T17:23:18.280Z",
+  "entryCount": 205,
   "entries": [
     {
       "id": "access-members",
@@ -400,6 +400,25 @@
       ]
     },
     {
+      "id": "agent-tool-connect_mcp",
+      "title": "connect_mcp",
+      "summary": "Connect the user's SaaS accounts via remote MCP servers with one-click OAuth (browser consent, no API keys).\n\n~50 built-in one-click servers, incl. linear, notion, atlassian (Jira+Confluence), asana, monday, clickup, airtable, attio, apollo, intercom, stripe, paypal, ramp, mercury, amplitude, mixpanel, sentry, datadog, vercel, supabase, neon, cloudflare, canva, miro, webflow, granola, fireflies, zapier (action=\"status\" lists all ids). github, slack, hubspot, google drive: not yet (need a registered client id). Any other remote MCP server: pass its https:// URL as server.\n\nActions:\n- status:...",
+      "surfaces": [
+        "agent-tool"
+      ],
+      "runtimes": [
+        "desktop"
+      ],
+      "toolId": "connect_mcp",
+      "keywords": [
+        "connect_mcp",
+        "connect",
+        "mcp",
+        "tool",
+        "agent"
+      ]
+    },
+    {
       "id": "agent-tool-connect_platform",
       "title": "connect_platform",
       "summary": "Check status or manage Platform Connections (built-in social sites + user/agent-registered login sites).\n\nUse this to:\n- Register a login-required site: action=\"register\" with url — then request_connect\n- Check if connected: action=\"status\"\n- **Automate with agent browser tools: action=\"prepare_browser\"** (desktop: real Google Chrome required — install via bash if missing; no embedded sign-in)\n- Ask user to connect: action=\"request_connect\"\n- Remove a custom site: action=\"unregister\"\n- Open a visible window for the user: action=\"browse\" (NOT for agent automation)\n\nBuilt-in: linkedin, instag...",
@@ -635,7 +654,7 @@
     {
       "id": "agent-tool-delete_database",
       "title": "delete_database",
-      "summary": "Tombstone a registry database when no apps reference it. On team track/shared installs you are a collaborator on, this removes the local registry row only (no cloud upload, no Turso delete). Publisher shared-primary databases cannot be deleted by collaborators — unlink from apps or remove your local app install. Optionally delete Turso replica when deleteTurso=true (publisher-only for shared resources; default false). NEVER use to fix schema drift or cutover — that destroys cloud row data. For legacy→replica migration use `npm run cutover:replica -- --db-id=<dbId>` (preserves the existing T...",
+      "summary": "Tombstone a registry database when no apps reference it. On team track/shared installs you are a collaborator on, this removes the local registry row only (no cloud upload, no Turso delete). Publisher shared-primary databases cannot be deleted by collaborators — unlink from apps or remove your local app install. Also deletes the cloud (Turso) copy unless deleteTurso=false (never for shared installs you collaborate on). NEVER use to fix schema drift or cutover — that destroys cloud row data. For legacy→replica migration use `npm run cutover:replica -- --db-id=<dbId>` (preserves the existing ...",
       "surfaces": [
         "agent-tool"
       ],
@@ -4117,6 +4136,32 @@
       "playbookRef": "preloaded-miniapp-contracts"
     },
     {
+      "id": "sdk-papr-connect",
+      "title": "papr-connect.ts",
+      "summary": "Use the user's connected services (Linear, HubSpot, Stripe, Notion…) via one-click OAuth; declare in connections.json",
+      "surfaces": [
+        "mini-app-sdk"
+      ],
+      "runtimes": [
+        "desktop",
+        "cloud"
+      ],
+      "sdkRoute": "/__papr__/papr-connect.js",
+      "keywords": [
+        "papr-connect.ts",
+        "/__papr__/papr-connect.js",
+        "papr.connect.status/connect/call/callJson/tools/button",
+        "(prefer",
+        "papr-sdk",
+        "import)",
+        "sdk",
+        "papr",
+        "__papr__"
+      ],
+      "example": "import { papr } from '/__papr__/papr-connect.js';",
+      "playbookRef": "preloaded-miniapp-contracts"
+    },
+    {
       "id": "sdk-papr-dialog",
       "title": "papr-dialog.ts",
       "summary": "Modal text input / confirm / alert (legacy direct import)",
@@ -4315,6 +4360,7 @@
         "papr.dialog.*",
         "papr.jobs.*",
         "papr.files.*",
+        "papr.connect.*",
         "papr.preview.*",
         "sdk",
         "papr",
