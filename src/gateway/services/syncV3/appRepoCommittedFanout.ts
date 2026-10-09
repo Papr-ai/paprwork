@@ -12,8 +12,6 @@ import { promises as fs } from "node:fs";
 import * as path from "node:path";
 import { writeFileAtomic } from "../../../core/utils/atomicJsonWrite.js";
 import { withCrossProcessFileLock } from "../../../core/utils/crossProcessFileLock.js";
-import { getMemoryServerBaseUrl } from "../../utils/cloudApiClient.js";
-import { getPaprApiKey } from "../../utils/keyResolver.js";
 
 export type AppRepoCommittedEvent = {
   appId: string;
@@ -167,40 +165,6 @@ export async function fanoutAppRepoCommitted(
 
   await postWebhook(event);
   await postGatewayWebhook(event);
-  await refreshAppDbConfigInMemory(event);
-}
-
-/** Refresh app db config in memory server to keep Mongo current after commit. */
-async function refreshAppDbConfigInMemory(
-  event: AppRepoCommittedEvent,
-): Promise<void> {
-  try {
-    const apiKey = await getPaprApiKey();
-    if (!apiKey) {
-      return;
-    }
-    const res = await fetch(
-      `${getMemoryServerBaseUrl()}/v1/cloud/metadata/apps/${encodeURIComponent(event.appId)}/repo-refresh`,
-      {
-        method: "POST",
-        headers: {
-          "X-API-Key": apiKey,
-          "Content-Type": "application/json",
-        },
-        body: JSON.stringify({ commitSha: event.commitSha }),
-      },
-    );
-    if (!res.ok) {
-      console.warn(
-        `[AppRepoFanout] Memory server refresh failed (${res.status}) for appId=${event.appId}`,
-      );
-    }
-  } catch (err) {
-    console.warn(
-      `[AppRepoFanout] Memory server refresh error for appId=${event.appId}:`,
-      (err as Error).message.slice(0, 120),
-    );
-  }
 }
 
 export interface AppRepoCommitCursorStore {
