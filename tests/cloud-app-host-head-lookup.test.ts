@@ -14,6 +14,7 @@ vi.mock("../src/gateway/services/appRuntime/memoryRuntimeClient.js", () => ({
 
 import {
   fetchCachedRuntimeRepoFile,
+  pinPublishedAppCommit,
   resetCloudAppHostCachesForTests,
 } from "../src/gateway/services/appRuntime/cloudAppHostCache.js";
 
@@ -168,5 +169,27 @@ describe("head lookups stop while GitHub's budget is zero (#5)", () => {
     gh.reply = ok(SHA_A);
     expect(await read("app3")).toBe(`code@${SHA_A}`);
     expect(gh.api.length).toBe(n + 1);
+  });
+});
+
+describe("publish pins and the last known commit", () => {
+  it("an expired pin during a rate-limit pause serves the pinned commit, not the older head", async () => {
+    const gh = stubGithub(ok(SHA_A));
+    await read("app");                          // head = A
+    pinPublishedAppCommit("ns", "app", SHA_B);  // publish B
+    gh.reply = rateLimited(Math.floor(T0 / 1000) + 3600);
+    await read("other-app");                    // trips the pause
+    advance(11 * 60_000);                       // pin (10 min) expired, still paused
+    expect(await read("app", "late.js")).toBe(`code@${SHA_B}`);
+  });
+
+  it("after a pin, the next lookup is unconditional (no stale ETag)", async () => {
+    const gh = stubGithub(ok(SHA_A));
+    await read("app");
+    pinPublishedAppCommit("ns", "app", SHA_B);
+    advance(11 * 60_000);
+    gh.reply = ok(SHA_B);
+    await read("app", "x.js");
+    expect(gh.api.at(-1)?.ifNoneMatch).toBeUndefined();
   });
 });

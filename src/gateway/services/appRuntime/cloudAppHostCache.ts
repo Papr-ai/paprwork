@@ -386,6 +386,10 @@ export function pinPublishedAppCommit(namespaceId: string, slug: string, commitS
   // served after the switch).
   writeTimed(repoRevisionCache, `${namespaceId}:${slug}`, sha, REPO_REVISION_TTL_MS);
   writeTimed(pinnedCommitCache, `${namespaceId}:${slug}`, sha, PINNED_COMMIT_TTL_MS);
+  // A published commit is newer than any earlier head answer: make it the
+  // fallback too, so an expired pin during a GitHub pause never rolls back.
+  // No ETag: the next lookup is a full one.
+  headLastKnown.set(`${namespaceId}:${slug}`, { sha, at: Date.now() });
 }
 
 function writeRepoFileEntry(
