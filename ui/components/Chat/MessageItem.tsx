@@ -6,6 +6,7 @@
 
 import React, { useEffect } from "react";
 import { isLandingFollowUp } from "../../utils/followUpLanding";
+import { LandingStatus } from "./QueuedMessages";
 import type { ChatMessage } from "../../stores/chatStore";
 import { useChatStore } from "../../stores/chatStore";
 import { UserAvatar } from "../common/UserAvatar";
@@ -1093,6 +1094,9 @@ const MessageItemInner: React.FC<MessageItemProps> = ({
         )}
 
         {showCopyButton && <MessageCopyButton text={copyText} />}
+
+        {/* Same status line the queued message had; it folds away as the message lands. */}
+        {isUser && isLanding && <LandingStatus />}
       </div>
     </div>
   );
