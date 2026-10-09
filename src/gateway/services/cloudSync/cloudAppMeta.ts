@@ -14,7 +14,7 @@ import { requiredSchemaVersionFromMigrationIds } from "../jobs/migrationLedgerPo
 import { isReplicaManagedDbPath } from "../tursoReplica/tursoReplicaFileGuard.js";
 import { readLocalReplicaMigrationIds } from "../tursoReplica/tursoReplicaMigrationConflict.js";
 import {
-  distBundleRevisionHash,
+  appRevisionHash,
   PAPR_APP_CLOUD_REVISION_PATH,
 } from "./cloudAppRevisionMarker.js";
 
@@ -107,10 +107,10 @@ export async function buildCloudAppMeta(
   appId: string,
   appsRootDir: string,
 ): Promise<CloudAppMetaRevision> {
-  const distPath = path.join(appDir, "dist", "app.js");
   let distRevision: string;
-  if (fs.existsSync(distPath)) {
-    distRevision = distBundleRevisionHash(fs.readFileSync(distPath, "utf8"));
+  const appRevision = appRevisionHash(appDir);
+  if (appRevision) {
+    distRevision = appRevision;
   } else if (fs.existsSync(path.join(appDir, PAPR_APP_CLOUD_REVISION_PATH))) {
     distRevision = fs
       .readFileSync(path.join(appDir, PAPR_APP_CLOUD_REVISION_PATH), "utf8")

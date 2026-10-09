@@ -4,6 +4,7 @@ import { join } from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
 import {
   PAPR_APP_CLOUD_REVISION_PATH,
+  appRevisionHash,
   distBundleRevisionHash,
   parseAppCloudRevisionContent,
   writeAppCloudRevisionMarker,
@@ -33,6 +34,34 @@ describe("cloudAppRevisionMarker", () => {
     expect(parseAppCloudRevisionContent(marker)).toBe(
       distBundleRevisionHash("console.log('a');"),
     );
+  });
+
+  it("keeps the plain dist hash when the app has no backend", () => {
+    appDir = mkdtempSync(join(tmpdir(), "papr-app-rev-"));
+    mkdirSync(join(appDir, "dist"), { recursive: true });
+    writeFileSync(join(appDir, "dist", "app.js"), "x", "utf8");
+    expect(appRevisionHash(appDir)).toBe(distBundleRevisionHash("x"));
+  });
+
+  it("changes when only the backend bundle or manifest changes", () => {
+    appDir = mkdtempSync(join(tmpdir(), "papr-app-rev-"));
+    mkdirSync(join(appDir, "dist"), { recursive: true });
+    mkdirSync(join(appDir, "backend"), { recursive: true });
+    writeFileSync(join(appDir, "dist", "app.js"), "same", "utf8");
+    writeFileSync(join(appDir, "backend", "manifest.json"), "{}", "utf8");
+    writeFileSync(join(appDir, "backend", "bundle.json"), '{"h":"a"}', "utf8");
+    const before = appRevisionHash(appDir);
+    expect(before).not.toBe(distBundleRevisionHash("same"));
+
+    writeFileSync(join(appDir, "backend", "bundle.json"), '{"h":"b"}', "utf8");
+    const afterHandler = appRevisionHash(appDir);
+    expect(afterHandler).not.toBe(before);
+
+    writeFileSync(join(appDir, "backend", "manifest.json"), '{"k":1}', "utf8");
+    expect(appRevisionHash(appDir)).not.toBe(afterHandler);
+
+    writeFileSync(join(appDir, "backend", "bundle.json"), '{"h":"b"}', "utf8");
+    expect(appRevisionHash(appDir)).toBe(appRevisionHash(appDir));
   });
 
   it("parseAppCloudRevisionContent normalizes to lowercase", () => {
