@@ -49,6 +49,31 @@ import {
 } from "./replicaReadPhaseTrace.js";
 import type { TursoSyncWorkerOpTiming } from "./tursoReplicaSyncWorkerProtocol.js";
 
+/** Reject when stdin is gone (EPIPE) instead of throwing outside the pending op. */
+export function writeWorkerStdinLine(
+  stdin: NodeJS.WritableStream,
+  line: string,
+): Promise<void> {
+  return new Promise((resolve, reject) => {
+    const onError = (err: Error) => {
+      cleanup();
+      reject(err);
+    };
+    const cleanup = () => {
+      stdin.removeListener("error", onError);
+    };
+    stdin.once("error", onError);
+    stdin.write(line, (writeErr) => {
+      cleanup();
+      if (writeErr) {
+        reject(writeErr);
+        return;
+      }
+      resolve();
+    });
+  });
+}
+
 const WORKER_BOOT_TIMEOUT_MS = 20_000;
 const STDERR_RING_BYTES = 4_000;
 const TIMING_RING_LINES = 400;
@@ -555,13 +580,20 @@ export class TursoReplicaSyncWorkerClient {
         timer,
       });
 
-      try {
-        child.stdin?.write(`${JSON.stringify(request)}\n`);
-      } catch (error) {
+      const stdin = child.stdin;
+      if (!stdin) {
         clearTimeout(timer);
         this.pending.delete(id);
-        reject(error instanceof Error ? error : new Error(String(error)));
+        reject(new Error("Turso sync worker stdin is not available"));
+        return;
       }
+      void writeWorkerStdinLine(stdin, `${JSON.stringify(request)}\n`).catch(
+        (error: unknown) => {
+          clearTimeout(timer);
+          this.pending.delete(id);
+          reject(error instanceof Error ? error : new Error(String(error)));
+        },
+      );
     });
   }
 

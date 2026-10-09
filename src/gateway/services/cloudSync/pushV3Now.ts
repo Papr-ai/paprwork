@@ -6,6 +6,7 @@ import * as fs from "fs";
 import * as path from "path";
 import type { CloudSyncService, PushGitScopedResult } from "../CloudSyncService.js";
 import {
+  canManualUploadApp,
   listAppIdsOwningJob,
   shouldAutoUploadApp,
   shouldAutoUploadJobFolder,
@@ -38,10 +39,13 @@ async function pushAppScope(
   trigger: "manual" | "auto",
 ): Promise<PushGitScopedResult> {
   const paprDir = sync.getPaprDir();
-  if (!shouldAutoUploadApp(appId, paprDir)) {
+  // Manual push IS "Publish changes": upload in manual upload mode too. Only cloud-off apps are skipped.
+  const allowed = trigger === "manual" ? canManualUploadApp(appId, paprDir) : shouldAutoUploadApp(appId, paprDir);
+  if (!allowed) {
     return {
       pushedPaths: [],
       skippedPaths: [path.join("apps", appId)],
+      skippedReason: trigger === "manual" ? "cloud is off for this app" : "manual upload mode (waiting for Publish changes)",
       scope: "app",
       appId,
     };

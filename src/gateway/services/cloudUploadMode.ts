@@ -72,6 +72,11 @@ function isCloudEnabledForApp(prefs: CloudPublishAppPrefs): boolean {
   return true;
 }
 
+/** Explicit "Publish changes" / push_cloud_sync: any app with cloud on, even in manual upload mode. */
+export function canManualUploadApp(appId: string, paprDir?: string): boolean {
+  return isCloudEnabledForApp(getAppPublishPrefs(appId, paprDir));
+}
+
 export function shouldAutoUploadApp(appId: string, paprDir?: string): boolean {
   const prefs = getAppPublishPrefs(appId, paprDir);
   if (!isCloudEnabledForApp(prefs)) {

@@ -2150,6 +2150,11 @@ const UPDATE_RECOVERY_HINT =
 /** @type {import("./updaterStatusCache.cjs").UpdateStatusPayload | null} */
 let cachedUpdateStatusPayload = null;
 
+/** Register before the renderer loads — UpdateBanner calls getStatus on mount. */
+function registerUpdaterIpcHandlers() {
+  ipcMain.handle("updater:get-status", () => cachedUpdateStatusPayload);
+}
+
 function formatUpdateError(rawMessage) {
   const message =
     typeof rawMessage === "string" ? rawMessage : String(rawMessage ?? "Unknown error");
@@ -2325,8 +2330,6 @@ function setupAutoUpdater() {
       sendUpdateStatus("error", formatUpdateError(err.message));
     });
   });
-
-  ipcMain.handle("updater:get-status", () => cachedUpdateStatusPayload);
 
   // Check on launch (after a short delay to not block startup)
   setTimeout(() => {
@@ -2635,6 +2638,8 @@ app.whenReady().then(async () => {
   console.log("[Electron] App starting fresh - PID:", process.pid);
   console.log("[Electron] Start time:", new Date(appStartTime).toISOString());
   console.log("[Electron] ===========================================");
+
+  registerUpdaterIpcHandlers();
 
   // Media permissions for locally-hosted mini-apps.
   //

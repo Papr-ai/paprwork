@@ -2,7 +2,10 @@ import * as fs from "fs";
 import * as os from "os";
 import * as path from "path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { TursoReplicaSyncWorkerClient } from "../src/gateway/services/tursoReplica/TursoReplicaSyncWorkerClient.js";
+import {
+  TursoReplicaSyncWorkerClient,
+  writeWorkerStdinLine,
+} from "../src/gateway/services/tursoReplica/TursoReplicaSyncWorkerClient.js";
 import { isTursoSyncWorkerCrash } from "../src/gateway/services/tursoReplica/tursoReplicaSyncWorkerProtocol.js";
 
 /**
@@ -187,6 +190,27 @@ describe("TursoReplicaSyncWorkerClient", () => {
     expect(isTursoSyncWorkerCrash(error)).toBe(true);
     expect(spawnCount).toBe(2);
     await client.shutdown();
+  });
+
+  it("rejects stdin write failures (EPIPE) on the pending op, not as uncaught", async () => {
+    const epipe = Object.assign(new Error("write EPIPE"), { code: "EPIPE" });
+    const stdin = {
+      once(event: string, fn: (err: Error) => void) {
+        if (event === "error") this.errorListener = fn;
+      },
+      removeListener() {},
+      write(_line: string, cb?: (err?: Error | null) => void) {
+        if (typeof cb === "function") {
+          cb(epipe);
+        }
+        return true;
+      },
+      errorListener: undefined as ((err: Error) => void) | undefined,
+    } as unknown as NodeJS.WritableStream;
+
+    await expect(writeWorkerStdinLine(stdin, '{"id":"1"}\n')).rejects.toMatchObject({
+      code: "EPIPE",
+    });
   });
 
   it("times out and drops a worker that never replies", async () => {

@@ -95,6 +95,11 @@ const REPLICA_DEGRADED_LOCAL_READ_TIMEOUT_MS = readEnvMs(
   "REPLICA_DEGRADED_LOCAL_READ_TIMEOUT_MS",
   5_000,
 );
+/** Remote Turso HTTP reads (no local replica file) must not hang the gateway for minutes. */
+const TURSO_PRIMARY_READ_TIMEOUT_MS = readEnvMs(
+  "TURSO_PRIMARY_READ_TIMEOUT_MS",
+  20_000,
+);
 
 export function isReplicaMiniAppReadTimeoutError(message: string): boolean {
   return /timed out after \d+ms/i.test(message);
@@ -334,8 +339,9 @@ export class DbRouter {
 
     const elapsedMs = Math.round(performance.now() - started);
     if (elapsedMs >= 250) {
+      const sqlHint = sql.replace(/\s+/g, " ").trim().slice(0, 96);
       console.log(
-        `[DbRouter] Slow query ${elapsedMs}ms app=${appId} source=${source.alias ?? source.dbId} backend=${result.backend} rows=${result.count}`,
+        `[DbRouter] Slow query ${elapsedMs}ms app=${appId} source=${source.alias ?? source.dbId} backend=${result.backend} rows=${result.count} sql=${sqlHint}`,
       );
     }
     return result;
@@ -710,10 +716,15 @@ export class DbRouter {
     }
 
     try {
-      const result = await client.execute({
-        sql,
-        args: (params ?? []) as (string | number | bigint | boolean | null)[],
-      });
+      const label = `Turso primary (${source.alias ?? source.dbId ?? "db"})`;
+      const result = await withMiniAppReplicaReadTimeout(
+        client.execute({
+          sql,
+          args: (params ?? []) as (string | number | bigint | boolean | null)[],
+        }),
+        label,
+        TURSO_PRIMARY_READ_TIMEOUT_MS,
+      );
 
       const rows = result.rows.map((row) => ({ ...row })) as Record<
         string,

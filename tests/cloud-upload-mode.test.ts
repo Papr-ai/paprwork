@@ -3,6 +3,7 @@ import * as os from "os";
 import * as path from "path";
 import { afterEach, describe, expect, it } from "vitest";
 import {
+  canManualUploadApp,
   isCloudAutoUploadGloballyEnabled,
   shouldAutoUploadApp,
   shouldAutoUploadJobFolder,
@@ -72,6 +73,23 @@ describe("cloudUploadMode", () => {
     expect(shouldAutoUploadApp("app-manual", paprDir)).toBe(false);
     expect(shouldAutoUploadRelativePath("apps/app-manual", paprDir)).toBe(false);
     expect(shouldAutoUploadJobFolder("job-1", paprDir)).toBe(false);
+  });
+
+  it("manual push (Publish changes) still uploads a manual-mode app; cloud-off is skipped", () => {
+    const paprDir = makePaprDir();
+    saveCloudPublishPrefs(
+      {
+        apps: {
+          "app-manual": { autoPublish: true, accessMode: "private", uploadMode: "manual" },
+          "app-registry": { autoPublish: false, accessMode: "private", cloudEnabled: false },
+        },
+      },
+      paprDir,
+    );
+    expect(shouldAutoUploadApp("app-manual", paprDir)).toBe(false);
+    expect(canManualUploadApp("app-manual", paprDir)).toBe(true);
+    expect(canManualUploadApp("app-registry", paprDir)).toBe(false);
+    expect(canManualUploadApp("app-never-configured", paprDir)).toBe(true);
   });
 
   it("allows auto upload when per-app mode is auto", () => {

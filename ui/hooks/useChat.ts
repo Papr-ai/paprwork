@@ -97,7 +97,15 @@ export function useChat() {
             // Note: No setActiveChat - tabStore manages active state
           }
         } catch (error) {
-          console.error("Failed to load chats:", error);
+          const message = error instanceof Error ? error.message : String(error);
+          // Gateway restart tears down the SQLite read pool mid-request.
+          if (message.includes("Worker terminated")) {
+            console.warn(
+              "[useChat] Chat list request interrupted (gateway restarting); will retry on reconnect",
+            );
+          } else {
+            console.error("Failed to load chats:", error);
+          }
         } finally {
           setLoading(false);
           loadChatsPromise = null;
