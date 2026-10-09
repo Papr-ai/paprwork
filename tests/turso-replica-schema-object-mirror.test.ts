@@ -124,7 +124,8 @@ describe("single-route migration wires the mirror after a successful push", () =
   it("source calls mirrorSchemaObjectsToCloud only when pushed", async () => {
     const fs = await import("node:fs");
     const src = fs.readFileSync("src/gateway/services/tursoReplica/tursoReplicaMigrationDualApply.ts", "utf8");
-    expect(src).toMatch(/if \(pushed\) \{\s*\/\/ Sync does not carry triggers\/views[\s\S]*mirrorSchemaObjectsToCloud/);
+    // Captured before the push (push rewinds the replica), copied only when pushed, then pulled back.
+    expect(src).toMatch(/captureReplicaSchemaObjects\(source\)[\s\S]*pushLinkedDbViaTursoReplica\(source\)[\s\S]*if \(pushed && replicaObjects\) \{[\s\S]*mirrorSchemaObjectsToCloud[\s\S]*pullLinkedDbViaTursoReplica\(source\)/);
   });
 });
 
@@ -134,5 +135,20 @@ describe("delete_database removes the cloud copy by default", () => {
     const src = fs.readFileSync("src/core/tools/databases.ts", "utf8");
     expect(src).toMatch(/args\.deleteTurso !== false/);
     expect(src).toMatch(/cloudNote/);
+  });
+  it("uses objects captured before the push (push rewinds the replica without them)", async () => {
+    const replica = new DatabaseSync(":memory:");
+    const cloud = new DatabaseSync(":memory:");
+    for (const db of [replica, cloud]) db.exec("CREATE TABLE t (id TEXT PRIMARY KEY)");
+    const captured = [{ type: "view", name: "v_t", sql: "CREATE VIEW v_t AS SELECT id FROM t" }];
+    const out = await mirrorSchemaObjectsToCloud({
+      source,
+      tursoDatabase: "d-x",
+      statements: [],
+      replicaObjects: captured,
+      deps: deps(replica, cloud),
+    });
+    expect(out.created).toEqual(["view v_t"]);
+    expect(cloud.prepare("SELECT name FROM sqlite_master WHERE type='view'").all()).toEqual([{ name: "v_t" }]);
   });
 });
