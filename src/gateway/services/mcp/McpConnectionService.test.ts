@@ -104,6 +104,15 @@ beforeAll(async () => {
         { description: "List issues", inputSchema: { team: z.string() }, annotations: { readOnlyHint: true } },
         async ({ team }) => ({ content: [{ type: "text", text: `issues for ${team}: ENG-1, ENG-2` }] }),
       );
+      // No annotations: Pen must treat it as a change.
+      mcp.registerTool("create_issue", { description: "Create an issue", inputSchema: { title: z.string() } }, async ({ title }) => ({
+        content: [{ type: "text", text: `created ${title}` }],
+      }));
+      mcp.registerTool(
+        "delete_issue",
+        { description: "Delete an issue", inputSchema: { id: z.string() }, annotations: { destructiveHint: true } },
+        async ({ id }) => ({ content: [{ type: "text", text: `deleted ${id}` }] }),
+      );
       const transport = new StreamableHTTPServerTransport({ sessionIdGenerator: undefined });
       res.on("close", () => void transport.close());
       await mcp.connect(transport);
@@ -190,6 +199,61 @@ describe("McpConnectionService (native MCP OAuth)", () => {
     const s = await svc3.ensure("fakelinear");
     expect(s.state).toBe("needs_reauth");
     store.data.set("fakelinear", saved);
+  });
+
+  it("enforces Pen access on real tool calls (read / ask / full, org cap)", async () => {
+    const { createPenGate } = await import("./mcpPenGate.js");
+    let level: string | undefined = "read";
+    let orgMax: string | undefined;
+    const asked: string[] = [];
+    let answer = true;
+    const gated = new McpConnectionService({
+      store,
+      openBrowser: () => {
+        throw new Error("must not open browser");
+      },
+      customServersFile: (svc as unknown as { customFile: string }).customFile,
+      penGate: createPenGate({
+        keyLevel: async () => level,
+        orgMax: async () => orgMax,
+        serverName: () => "Fake Linear",
+        ask: async (_id, _n, tool) => (asked.push(tool), answer),
+      }),
+    });
+    (await gated.getServer("fakelinear"))!.url = `${base}/mcp`;
+    expect((await gated.ensure("fakelinear")).state).toBe("connected");
+
+    // Read only: reads run, anything unflagged is refused without asking.
+    expect((await gated.callTool("fakelinear", "list_issues", { team: "A" })).content?.[0]?.text).toContain("A");
+    await expect(gated.callTool("fakelinear", "create_issue", { title: "x" })).rejects.toThrow(/Read only/);
+    expect(asked).toEqual([]);
+
+    // Ask: changes ask first; declining blocks, allowing runs.
+    level = "ask";
+    answer = false;
+    await expect(gated.callTool("fakelinear", "create_issue", { title: "x" })).rejects.toThrow(/declined/);
+    answer = true;
+    expect((await gated.callTool("fakelinear", "create_issue", { title: "y" })).content?.[0]?.text).toBe("created y");
+    expect(asked).toEqual(["create_issue", "create_issue"]);
+
+    // Full: changes run without asking; destructive still asks.
+    level = "full";
+    asked.length = 0;
+    await gated.callTool("fakelinear", "create_issue", { title: "z" });
+    await gated.callTool("fakelinear", "delete_issue", { id: "1" });
+    expect(asked).toEqual(["delete_issue"]);
+
+    // Org cap: key says full, org max is read → refused.
+    orgMax = "read";
+    await expect(gated.callTool("fakelinear", "create_issue", { title: "q" })).rejects.toThrow(/Read only/);
+
+    // Older sign-in with no level behaves as "ask".
+    level = undefined;
+    orgMax = undefined;
+    asked.length = 0;
+    await gated.callTool("fakelinear", "create_issue", { title: "r" });
+    expect(asked).toEqual(["create_issue"]);
+    await gated.shutdown();
   });
 
   it("disconnect removes credentials and tools", async () => {

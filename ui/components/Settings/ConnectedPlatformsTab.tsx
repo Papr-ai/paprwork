@@ -98,7 +98,7 @@ function getStatusLabel(status: PlatformStatus): string {
   }
 }
 
-export function ConnectedPlatformsTab() {
+export function ConnectedPlatformsTab({ embedded = false }: { embedded?: boolean } = {}) {
   const [platforms, setPlatforms] = useState<PlatformInfo[]>([]);
   const [loading, setLoading] = useState(true);
   const [actionLoading, setActionLoading] = useState<string | null>(null);
@@ -475,8 +475,8 @@ export function ConnectedPlatformsTab() {
 
   return (
     <div className="connected-platforms-tab">
-      <div className="settings-section__header connected-platforms-header">
-        <div>
+      <div className={`settings-section__header connected-platforms-header${embedded ? " settings-section__header--embedded" : ""}`}>
+        <div hidden={embedded}>
           <h2 className="settings-section__title">Platform Connections</h2>
           <p className="settings-section__description">
             Connect sites that need login — social platforms and any custom web app.

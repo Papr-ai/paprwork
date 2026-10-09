@@ -31,6 +31,16 @@ export interface McpStoredCredential {
   tokensSavedAt?: string;
   /** PKCE verifier for an in-flight authorization (cleared after exchange). */
   codeVerifier?: string;
+  /** Signed in through the Papr server: only the server refreshes; this Mac claims fresh tokens. */
+  serverRefresh?: boolean;
+}
+
+/** True when a server-managed access token is missing or expires within `skewMs`. */
+export function serverTokenStale(c: McpStoredCredential | null | undefined, skewMs = 60_000): boolean {
+  if (!c?.tokens?.access_token) return true;
+  const ttl = Number(c.tokens.expires_in);
+  if (!c.tokensSavedAt || !Number.isFinite(ttl)) return false;
+  return Date.parse(c.tokensSavedAt) + ttl * 1000 - Date.now() < skewMs;
 }
 
 /** Where provider state is persisted. Production: CustomKeysService; tests: in-memory. */

@@ -25,7 +25,8 @@ import { UnauthorizedError } from "@modelcontextprotocol/sdk/client/auth.js";
 import type { Transport } from "@modelcontextprotocol/sdk/shared/transport.js";
 
 import { getPaprworkBaseDir } from "../../../core/utils/paprWorkspace.js";
-import { McpOAuthProvider, McpReauthRequiredError, type McpCredentialStore } from "./McpOAuthProvider.js";
+import { McpOAuthProvider, McpReauthRequiredError, serverTokenStale, type McpCredentialStore } from "./McpOAuthProvider.js";
+import type { ConnectionAudience, McpServerSignIn } from "./mcpServerSignIn.js";
 import { startLoopbackCallback } from "./mcpLoopbackCallback.js";
 import {
   BUILTIN_MCP_SERVERS,
@@ -81,6 +82,18 @@ export interface McpConnectionServiceOptions {
   store: McpCredentialStore;
   openBrowser?: (url: string) => Promise<void> | void;
   customServersFile?: string;
+  /** Pen access check, run before every tool call. Omitted in tests = allow all. */
+  penGate?: import("./mcpPenGate.js").PenGate;
+  /** Server sign-in (team connections, org client IDs). Omitted = loopback only. */
+  serverSignIn?: McpServerSignIn;
+}
+
+export interface McpConnectOptions {
+  /** Who can use the sign-in. Anything wider than "user" goes through the server. */
+  audience?: ConnectionAudience;
+  allowedUserIds?: string[];
+  /** Force the server flow even for a personal sign-in. */
+  viaServer?: boolean;
 }
 
 export function openInSystemBrowser(url: string): void {
@@ -276,8 +289,15 @@ export class McpConnectionService {
    * Start sign-in. Resolves when the browser consent page has been opened (or
    * the stored tokens were enough). `completion` resolves when fully connected.
    */
-  async connect(ref: string): Promise<{ status: McpServerStatus; completion: Promise<McpServerStatus> }> {
+  async connect(ref: string, opts: McpConnectOptions = {}): Promise<{ status: McpServerStatus; completion: Promise<McpServerStatus> }> {
     const def = await this.resolveServer(ref);
+    const ss = this.opts.serverSignIn;
+    const wide = Boolean(opts.audience && opts.audience !== "user");
+    const needsOrgClient = Boolean(def.requiresClientId && !def.clientId);
+    if (ss && (wide || opts.viaServer || (needsOrgClient && (await ss.hasClientId(def))))) {
+      return this.connectViaServer(def, ss, opts);
+    }
+    if (wide) throw new Error("Sharing a sign-in needs Papr cloud. Sign in to Papr and try again.");
     if (def.requiresClientId && !def.clientId) {
       throw new Error(`${def.name}'s MCP server does not support dynamic client registration yet — it needs a registered Papr Work OAuth client id.`);
     }
@@ -341,12 +361,83 @@ export class McpConnectionService {
     return { status: this.statusOf(def), completion: run };
   }
 
+  /** Sign in through apps.papr.ai/oauth/callback; the server keeps the refresh token. */
+  private async connectViaServer(
+    def: McpServerDefinition,
+    ss: McpServerSignIn,
+    opts: McpConnectOptions,
+  ): Promise<{ status: McpServerStatus; completion: Promise<McpServerStatus> }> {
+    const l = this.entry(def.id);
+    if (l.pending) return { status: this.statusOf(def), completion: l.pending };
+    l.state = "connecting";
+    l.error = undefined;
+    let started: { sessionId: string; authorizeUrl: string };
+    try {
+      started = await ss.start(def, { audience: opts.audience ?? "user", allowedUserIds: opts.allowedUserIds });
+      await this.openBrowser(started.authorizeUrl);
+    } catch (err) {
+      l.state = "error";
+      l.error = err instanceof Error ? err.message : String(err);
+      throw err;
+    }
+    l.state = "awaiting_user";
+    l.authUrl = started.authorizeUrl;
+    const abort = new AbortController();
+    l.cancelSignIn = () => abort.abort();
+    const run = (async (): Promise<McpServerStatus> => {
+      try {
+        await ss.wait(started.sessionId, abort.signal);
+        await this.pickUpServerCredential(def.id, true);
+        await this.attach(def, await this.openClient(def, this.makeProvider(def, false)));
+        return this.statusOf(def);
+      } catch (err) {
+        l.state = abort.signal.aborted ? "disconnected" : "error";
+        l.error = abort.signal.aborted ? undefined : err instanceof Error ? err.message : String(err);
+        throw err;
+      } finally {
+        l.pending = undefined;
+        l.cancelSignIn = undefined;
+      }
+    })();
+    l.pending = run;
+    run.catch(() => {});
+    return { status: this.statusOf(def), completion: run };
+  }
+
+  /**
+   * Fetch a fresh server-managed credential into the keychain. Returns false when
+   * the server has no connection this user may use.
+   */
+  private async pickUpServerCredential(id: string, force = false): Promise<boolean> {
+    const ss = this.opts.serverSignIn;
+    if (!ss) return false;
+    const rejected = force ? (await this.opts.store.load(id))?.tokens?.access_token : undefined;
+    const cred = await ss.claim(id, force, rejected);
+    if (!cred?.tokens?.access_token) return false;
+    await this.opts.store.save(id, cred);
+    return true;
+  }
+
   // ── ensure (non-interactive) ──────────────────────────────────────────────
   async ensure(id: string): Promise<McpServerStatus> {
     const def = await this.getServer(id);
     if (!def) throw new Error(`Unknown MCP server "${id}"`);
     const l = this.entry(id);
     if (l.client && l.state === "connected") return this.statusOf(def);
+    const stored = await this.opts.store.load(id);
+    if (stored?.serverRefresh && serverTokenStale(stored)) {
+      try {
+        if (!(await this.pickUpServerCredential(id))) {
+          l.state = "disconnected";
+          return this.statusOf(def);
+        }
+      } catch (err) {
+        const reauth = (err as { status?: number }).status === 401;
+        l.state = reauth ? "needs_reauth" : "error";
+        l.error = reauth ? "Sign-in expired — reconnect" : err instanceof Error ? err.message : String(err);
+        return this.statusOf(def);
+      }
+    }
     const provider = this.makeProvider(def, false);
     if (!(await provider.hasTokens())) {
       l.state = "disconnected";
@@ -355,6 +446,17 @@ export class McpConnectionService {
     try {
       await this.attach(def, await this.openClient(def, provider));
     } catch (err) {
+      // Server-managed token rejected early (revoked/rotated): claim once and retry.
+      if (stored?.serverRefresh && (err instanceof McpReauthRequiredError || err instanceof UnauthorizedError)) {
+        try {
+          if (await this.pickUpServerCredential(id, true)) {
+            await this.attach(def, await this.openClient(def, this.makeProvider(def, false)));
+            return this.statusOf(def);
+          }
+        } catch {
+          /* fall through to needs_reauth */
+        }
+      }
       const reauth = err instanceof McpReauthRequiredError || err instanceof UnauthorizedError;
       l.state = reauth ? "needs_reauth" : "error";
       l.error = reauth ? "Sign-in expired — reconnect" : err instanceof Error ? err.message : String(err);
@@ -365,7 +467,22 @@ export class McpConnectionService {
   /** Reconnect every server with stored tokens. Safe to call at startup; never opens a browser. */
   async restoreAll(): Promise<void> {
     const servers = await this.listServers();
+    await this.pickUpSharedConnections(servers).catch((err) => console.warn("[MCP] server connections:", err));
     await Promise.allSettled(servers.map((s) => this.ensure(s.id)));
+  }
+
+  /** Team connections someone else set up (server-managed) that this Mac doesn't have yet. */
+  async pickUpSharedConnections(servers?: McpServerDefinition[]): Promise<string[]> {
+    const ss = this.opts.serverSignIn;
+    if (!ss) return [];
+    const known = new Set((servers ?? (await this.listServers())).map((s) => s.id));
+    const picked: string[] = [];
+    for (const c of await ss.list()) {
+      if (!known.has(c.serverId) || c.status !== "ok") continue;
+      if ((await this.opts.store.load(c.serverId))?.tokens?.access_token) continue;
+      if (await this.pickUpServerCredential(c.serverId).catch(() => false)) picked.push(c.serverId);
+    }
+    return picked;
   }
 
   // ── calls ─────────────────────────────────────────────────────────────────
@@ -387,12 +504,19 @@ export class McpConnectionService {
       const s = await this.ensure(id);
       if (s.state !== "connected") throw new Error(s.state === "needs_reauth" ? new McpReauthRequiredError(id).message : `MCP server "${id}" is not connected (${s.state}). Use connect_mcp action="connect".`);
     }
+    const annotations = l.tools.find((t) => t.name === toolName)?.annotations;
+    await this.opts.penGate?.(id, toolName, annotations);
     const run = () => l.client!.callTool({ name: toolName, arguments: args }, undefined, { timeout: CALL_TIMEOUT_MS }) as Promise<McpCallResult>;
     try {
       return await run();
     } catch (err) {
       // Session dropped (server restart, idle timeout): reconnect once.
       if (err instanceof McpReauthRequiredError || err instanceof UnauthorizedError) {
+        if ((await this.opts.store.load(id))?.serverRefresh && (await this.pickUpServerCredential(id, true).catch(() => false))) {
+          l.client = undefined;
+          const s = await this.ensure(id);
+          if (s.state === "connected") return run();
+        }
         l.state = "needs_reauth";
         throw new McpReauthRequiredError(id);
       }

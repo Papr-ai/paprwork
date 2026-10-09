@@ -28,6 +28,7 @@ export interface CloudVaultKeyEntry {
   permission?: string;
   /** Members-scoped audience — Parse user IDs allowed to use this key. */
   allowedUserIds?: string[];
+  penAccess?: "read" | "ask" | "full";
 }
 
 export function buildCloudReposRequestBody(
@@ -52,6 +53,7 @@ export function mapCustomKeyMetadataToVaultEntry(input: {
   meta: {
     name: string;
     permission?: "always" | "ask";
+    penAccess?: "read" | "ask" | "full";
     clientAccess?: "server" | "client";
     vaultAudience?: IntegrationKeyVaultAudience;
     vaultAudienceMemberIds?: string[];
@@ -78,6 +80,7 @@ export function mapCustomKeyMetadataToVaultEntry(input: {
     clientAccess: input.meta.clientAccess ?? "server",
     shareScope,
     permission,
+    ...(input.meta.penAccess ? { penAccess: input.meta.penAccess } : {}),
   };
 
   if (shareScope === "members" && input.meta.vaultAudienceMemberIds?.length) {

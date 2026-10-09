@@ -423,6 +423,10 @@ contextBridge.exposeInMainWorld("electronAPI", {
 
 // Initialize chat IPC listener (forward to DOM event)
 console.log("[Preload] Initializing chat listener");
+ipcRenderer.on("notification:open-settings", (_event, data) => {
+  window.dispatchEvent(new CustomEvent("papr-notification-open-settings", { detail: data }));
+});
+
 ipcRenderer.on("chat:open", (_event, data) => {
   window.dispatchEvent(new CustomEvent('papr-chat-open', { detail: data }));
 });

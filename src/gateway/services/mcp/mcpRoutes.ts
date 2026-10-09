@@ -13,7 +13,8 @@
  * Caller identity and the per-app grant live in mcpAppAccess.ts. Tokens are
  * never returned to anyone.
  */
-
+import { assertOrgAllows, OrgPolicyBlockedError, registerOrgPolicyRoutes } from "./mcpOrgPolicy.js";
+import { PenAccessDeniedError } from "./mcpPenAccess.js";
 import type { Express, Request, Response } from "express";
 import { getMcpConnectionService, type McpConnectionService, type McpServerStatus } from "./McpConnectionService.js";
 import { formatMcpResult } from "./mcpToolAdapter.js";
@@ -36,7 +37,10 @@ const pid = (req: Request): string => String(req.params.id ?? "").trim().toLower
 const msg = (e: unknown) => (e instanceof Error ? e.message : String(e));
 
 function fail(res: Response, e: unknown, fallback = 400): void {
-  res.status(e instanceof McpAccessError ? e.status : fallback).json({ error: msg(e) });
+  const pen = e instanceof PenAccessDeniedError;
+  const status = e instanceof McpAccessError || e instanceof OrgPolicyBlockedError || pen ? e.status : fallback;
+  const code = e instanceof OrgPolicyBlockedError ? "org_policy" : pen ? "pen_access" : undefined;
+  res.status(status).json({ error: msg(e), ...(code ? { code } : {}) });
 }
 
 /** Resolve the caller; refuse foreign origins and (optionally) app callers. */
@@ -79,6 +83,8 @@ function appView(s: McpServerStatus) {
 }
 
 export function registerMcpRoutes(app: Express): void {
+  registerOrgPolicyRoutes(app, (req, res) => Boolean(caller(req, res, { allowApps: false })));
+
   app.get("/api/mcp/servers", async (req: Request, res: Response) => {
     const svc = svcOr503(res);
     if (!svc) return;
@@ -124,7 +130,13 @@ export function registerMcpRoutes(app: Express): void {
       // An app opening consent pages must be something the user agreed to,
       // or any app could spam browser tabs.
       if (c.kind === "app") await access!.assertGranted(c.appId, id, await serverName(svc, id));
-      const { status } = await svc.connect(id);
+      await assertOrgAllows(id, await serverName(svc, id));
+      const audience = ["user", "members", "namespace", "org"].includes(req.body?.audience) ? req.body.audience : undefined;
+      // Apps can only start personal sign-ins; sharing is decided in Connections.
+      const { status } = await svc.connect(id, c.kind === "app" ? {} : {
+        audience,
+        allowedUserIds: Array.isArray(req.body?.allowedUserIds) ? req.body.allowedUserIds.map(String) : undefined,
+      });
       res.json({ server: c.kind === "app" ? appView(status) : status });
     } catch (e) {
       fail(res, e);

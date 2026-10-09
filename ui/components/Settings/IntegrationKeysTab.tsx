@@ -2,7 +2,7 @@
  * IntegrationKeysTab - Non-AI API keys for jobs, automations, and integrations
  */
 
-import React, { useEffect, useMemo, useRef, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { useCustomKeys } from "../../hooks/useCustomKeys";
 import type { CustomKey, CustomKeyInput } from "../../types/settings";
 import type { IntegrationKeyVaultAudience } from "../../constants/integrationKeyVaultAudience";
@@ -57,7 +57,7 @@ function defaultOrgScopeValue(
   return { mode: "all" };
 }
 
-export function IntegrationKeysTab() {
+export function IntegrationKeysTab({ embedded = false }: { embedded?: boolean } = {}) {
   const {
     keys,
     vaultContext,
@@ -186,7 +186,7 @@ export function IntegrationKeysTab() {
       setRefreshingShared(true);
       try {
         await pullSharedVaultKeys();
-        await loadKeys({ force: true });
+        await loadKeys(true);
       } finally {
         setRefreshingShared(false);
       }
@@ -257,7 +257,7 @@ export function IntegrationKeysTab() {
     mode: "delete" | "update";
   }) => {
     const result = await syncVaultKeyChange(input);
-    await loadKeys({ force: true });
+    await loadKeys(true);
     if (!result.success) {
       alert(`Vault sync failed: ${result.error ?? "Unknown error"}`);
       return result;
@@ -446,12 +446,12 @@ export function IntegrationKeysTab() {
   };
 
   return (
-    <div className="settings-content settings-content--full-width">
+    <div className={embedded ? "" : "settings-content settings-content--full-width"}>
       <div className="settings-section">
-        <div className="settings-section__header">
-          <div>
-            <h2 className="settings-section__title">Key Vault</h2>
-            <p className="settings-section__description">
+        <div className={`settings-section__header${embedded ? " settings-section__header--embedded" : ""}`}>
+          <div hidden={embedded && !refreshingShared}>
+            <h2 className="settings-section__title" hidden={embedded}>Key Vault</h2>
+            <p className="settings-section__description" hidden={embedded}>
               API keys for jobs, automations, and third-party services.
               Choose organization scope and who can use each key (only you, team, or organization).
             </p>

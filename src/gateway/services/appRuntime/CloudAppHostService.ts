@@ -3,6 +3,7 @@
  * Deploy standalone via cloud-app-host.ts (apps.papr.ai).
  */
 
+import { proxyOAuthCallback } from "./oauthCallbackProxy.js";
 import type { Express, Request, Response } from "express";
 import path from "path";
 import type {
@@ -335,6 +336,9 @@ export class CloudAppHostService {
     app.get("/health", (_req, res) => {
       res.json({ status: "ok", service: "cloud-app-host" });
     });
+
+    // Connections sign-in: providers redirect here; the memory server does the exchange.
+    app.get("/oauth/callback", (req, res) => void proxyOAuthCallback(req, res));
 
     app.post("/internal/app-revision-updated", (req, res) =>
       void this.handleInternalAppRevisionUpdated(req, res),

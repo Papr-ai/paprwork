@@ -5,10 +5,16 @@
  * inbox refresh themselves from the accompanying stale broadcasts.
  */
 
+import { ensureSettingsTab } from "../lib/ensureSettingsTab";
+
 interface ProposalNotice {
   title: string;
   body: string;
+  openSettings?: "connections" | "connections-requests";
 }
+
+/** "connections-requests" lands admins on the Requests list inside Connections. */
+export const CONNECTIONS_REQUESTS_EVENT = "papr:connections-show-requests";
 
 let initialized = false;
 
@@ -27,7 +33,16 @@ export function initProposalNoticeListener(): void {
       void invoke("notification.show", {
         title: notice.title,
         body: notice.body ?? "",
+        ...(notice.openSettings ? { openSettings: notice.openSettings } : {}),
       }).catch(() => {});
+    }
+  });
+  window.addEventListener("papr-notification-open-settings", (event: Event) => {
+    const target = (event as CustomEvent<{ target?: string }>).detail?.target;
+    if (target !== "connections" && target !== "connections-requests") return;
+    ensureSettingsTab({ section: "connections" });
+    if (target === "connections-requests") {
+      window.setTimeout(() => window.dispatchEvent(new CustomEvent(CONNECTIONS_REQUESTS_EVENT)), 50);
     }
   });
 }

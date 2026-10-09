@@ -2439,6 +2439,15 @@ function initializeSystemInvokeHandler(mainWindow) {
         body: options.body || '',
         urgency: options.urgency || 'normal'
       });
+      // Optional click-through, e.g. a connection request opens Settings → Connections.
+      if (options.openSettings && typeof options.openSettings === 'string') {
+        notification.on('click', () => {
+          if (!mainWindow || mainWindow.isDestroyed()) return;
+          if (mainWindow.isMinimized()) mainWindow.restore();
+          mainWindow.focus();
+          mainWindow.webContents.send('notification:open-settings', { target: options.openSettings });
+        });
+      }
       notification.show();
       return { success: true };
     },
@@ -2562,6 +2571,19 @@ async function flushPendingDeepLinks() {
       } catch (err) {
         console.error("[Electron] Auth deep link handler failed:", err);
       }
+      continue;
+    }
+
+    // Server sign-in finished (apps.papr.ai/oauth/callback). The gateway is already
+    // polling the session; just bring Papr to the front.
+    if (url.startsWith("papr://connections/")) {
+      if (!mainWindow || mainWindow.isDestroyed()) {
+        return;
+      }
+      pendingDeepLinks.splice(index, 1);
+      if (mainWindow.isMinimized()) mainWindow.restore();
+      mainWindow.show();
+      mainWindow.focus();
       continue;
     }
 
