@@ -2,6 +2,8 @@
 export interface PushGitScopedResult {
   pushedPaths: string[];
   skippedPaths: string[];
+  /** Why skippedPaths were not uploaded (shown to the user / agent). */
+  skippedReason?: string;
   scope: "workspace" | "app" | "job";
   appId?: string;
   jobId?: string;

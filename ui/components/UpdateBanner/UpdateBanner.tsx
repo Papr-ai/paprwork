@@ -76,11 +76,16 @@ export function UpdateBanner() {
 
     api.onStatus(handler);
 
-    void api.getStatus?.().then((cached) => {
-      if (cached) {
-        handler(cached);
-      }
-    });
+    void api
+      .getStatus?.()
+      .then((cached) => {
+        if (cached) {
+          handler(cached);
+        }
+      })
+      .catch(() => {
+        /* main may not have registered updater IPC yet in dev */
+      });
 
     return () => api.removeStatusListener(handler);
   }, []);
