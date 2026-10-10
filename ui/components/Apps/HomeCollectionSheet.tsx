@@ -91,7 +91,7 @@ export function HomeCollectionSheet(p: Props) {
             >
               <button type="button" className="ah-cell__open" onClick={() => p.onOpenApp(a)}>
                 <span className="ah-cell__ic">
-                  <AppGlyph app={a} size={60} />
+                  <AppGlyph app={a} size={64} />
                   {p.attention(a) ? <span className="ah-bad">!</span> : null}
                 </span>
                 <AppName
