@@ -48,6 +48,7 @@ import {
 import {
   resolveCatalogLiveWebUrl,
   resolveCatalogPreviewIframeUrl,
+  catalogCoverUrl,
 } from "../../utils/catalogPreviewUrl";
 import { prefetchCloudPreviewSession } from "../../utils/cloudPreviewSession";
 import {
@@ -1169,13 +1170,27 @@ export function CommunityAppCard({
     .filter(Boolean)
     .join(" · ");
   const share = shareGlyphForCatalogEntry(entry);
+  // Owner-approved cover (served by the cloud host); falls back to the icon on 404.
+  const coverUrl = catalogCoverUrl(entry);
+  const [coverFailed, setCoverFailed] = useState(false);
 
   return (
     <div className="community-card">
       <div className="community-card__preview">
-        <div className="community-card__orb">
-          <div className="community-card__orb-inner">{renderIcon()}</div>
-        </div>
+        {coverUrl && !coverFailed ? (
+          <img
+            className="community-card__cover"
+            src={coverUrl}
+            alt=""
+            loading="lazy"
+            draggable={false}
+            onError={() => setCoverFailed(true)}
+          />
+        ) : (
+          <div className="community-card__orb">
+            <div className="community-card__orb-inner">{renderIcon()}</div>
+          </div>
+        )}
       </div>
 
       <div className="community-card__content">

@@ -45,6 +45,9 @@ describe("app covers", () => {
     expect(fs.existsSync(covers.sharedCoverPath(APP))).toBe(false);
     expect(covers.sharePrivateCover(APP)).toBe(true);
     expect(fs.existsSync(covers.sharedCoverPath(APP))).toBe(true);
+    // Text (data URL) so the text-only git sync can carry it, at the app root (not a dotdir).
+    expect(fs.readFileSync(covers.sharedCoverPath(APP), "utf8")).toMatch(/^data:image\/jpeg;base64,/);
+    expect(covers.sharedCoverPath(APP).endsWith(`${APP}/papr-cover.txt`)).toBe(true);
     // A different user (no private cover) sees the shared one.
     fs.rmSync(covers.privateCoverPath(APP));
     expect(covers.resolveCover(APP)?.slot).toBe("shared");

@@ -2539,6 +2539,11 @@ export class CloudAppHostService {
         return;
       }
 
+      if (requestedPath === "papr-cover") {
+        await this.handleSharedCover(res, runtimeAuth, access?.canRead === true);
+        return;
+      }
+
       if (!access?.canRead) {
         if (requestedPath === "index.html") {
           await this.sendShareGatePreview(req, res, runtimeAuth);
@@ -2612,6 +2617,27 @@ export class CloudAppHostService {
       .send(
         buildShareGateLandingHtml(meta, loginUrl, presentation, iconSvg, signupUrl),
       );
+  }
+
+  /** Owner-approved cover (papr-cover.txt data URL) for Community/Team catalog cards. */
+  private async handleSharedCover(
+    res: Response,
+    runtimeAuth: AppRuntimeRouteAuth,
+    canReadRepo: boolean,
+  ): Promise<void> {
+    if (!canReadRepo) {
+      res.status(404).send("Not found");
+      return;
+    }
+    const file = await fetchCachedRuntimeRepoFile(runtimeAuth, "papr-cover.txt").catch(() => null);
+    const m = file ? /^data:(image\/(?:png|jpeg|webp));base64,(.+)$/s.exec(file.content.trim()) : null;
+    if (!m) {
+      res.status(404).send("Not found");
+      return;
+    }
+    res.setHeader("Content-Type", m[1]!);
+    res.setHeader("Cache-Control", "public, max-age=300");
+    res.send(Buffer.from(m[2]!, "base64"));
   }
 
   private async handleOpenGraphIcon(

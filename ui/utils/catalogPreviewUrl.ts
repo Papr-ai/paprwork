@@ -40,3 +40,20 @@ export function resolveCatalogLiveWebUrl(
   }
   return null;
 }
+
+/**
+ * Owner-approved cover for a catalog card, served by the cloud host at
+ * /{ns}/{slug}/papr-cover (proxied through the desktop gateway). 404 → icon.
+ */
+export function catalogCoverUrl(entry: CommunityCatalogEntry): string | null {
+  const live = resolveCatalogLiveWebUrl(entry);
+  if (!live) return null;
+  const preview = buildDesktopCloudPreviewUrl(live) ?? live;
+  try {
+    const url = new URL(preview);
+    url.pathname = `${url.pathname.replace(/\/?$/, "/")}papr-cover`;
+    return url.toString();
+  } catch {
+    return null;
+  }
+}

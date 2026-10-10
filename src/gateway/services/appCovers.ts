@@ -5,8 +5,9 @@
  *  - PRIVATE  <papr>/data/covers/{appId}.img — the newest screenshot from *this*
  *             user (agent validate_app preview, or the open app tab at most once a
  *             day). Shows real data, so it is gitignored and never leaves the machine.
- *  - SHARED   apps/{appId}/.papr/cover.img — only written when the owner explicitly
- *             approves ("Use as shared cover"). Syncs with the app code.
+ *  - SHARED   apps/{appId}/papr-cover.txt (a data URL — git sync is text-only) — only
+ *             written when the owner approves it (publish sheet). Syncs with the code and is
+ *             served to Community/Team viewers by the cloud host at /{ns}/{slug}/papr-cover.
  *
  * Readers get their own private cover first, then the owner's shared one, else none
  * (the card falls back to the icon). Someone else's private cover is never served.
@@ -24,6 +25,8 @@ export const TAB_CAPTURE_INTERVAL_MS = 24 * 60 * 60 * 1000;
 const MIN_COVER_BYTES = 4_000;
 const MAX_COVER_BYTES = 2_000_000;
 
+export const SHARED_COVER_FILE = "papr-cover.txt";
+
 const APP_ID_RE = /^[A-Za-z0-9_-]{1,80}$/;
 
 export function isValidCoverAppId(appId: string): boolean {
@@ -35,10 +38,10 @@ export function privateCoverPath(appId: string): string {
 }
 
 export function sharedCoverPath(appId: string): string {
-  return path.join(getPaprAppsRoot(), appId, ".papr", "cover.img");
+  return path.join(getPaprAppsRoot(), appId, SHARED_COVER_FILE);
 }
 
-function decodeDataUrl(dataUrl: string): Buffer | null {
+export function decodeDataUrl(dataUrl: string): Buffer | null {
   const m = /^data:image\/(png|jpeg|webp);base64,(.+)$/s.exec(dataUrl);
   if (!m) return null;
   try {
@@ -104,12 +107,15 @@ export function privateCoverIsFresh(appId: string): boolean {
 }
 
 /** Own private cover first, then the owner-approved shared one. */
-export function resolveCover(appId: string): { file: string; slot: CoverSlot } | null {
+export function resolveCover(appId: string): { body: Buffer; slot: CoverSlot } | null {
   if (!isValidCoverAppId(appId)) return null;
   const priv = privateCoverPath(appId);
-  if (fs.existsSync(priv)) return { file: priv, slot: "private" };
+  if (fs.existsSync(priv)) return { body: fs.readFileSync(priv), slot: "private" };
   const shared = sharedCoverPath(appId);
-  if (fs.existsSync(shared)) return { file: shared, slot: "shared" };
+  if (fs.existsSync(shared)) {
+    const body = decodeDataUrl(fs.readFileSync(shared, "utf8").trim());
+    if (body) return { body, slot: "shared" };
+  }
   return null;
 }
 
@@ -118,7 +124,9 @@ export function sharePrivateCover(appId: string): boolean {
   if (!isValidCoverAppId(appId)) return false;
   const priv = privateCoverPath(appId);
   if (!fs.existsSync(priv)) return false;
-  writeAtomic(sharedCoverPath(appId), fs.readFileSync(priv));
+  const buf = fs.readFileSync(priv);
+  const dataUrl = `data:${sniffImageType(buf)};base64,${buf.toString("base64")}`;
+  writeAtomic(sharedCoverPath(appId), Buffer.from(dataUrl, "utf8"));
   return true;
 }
 

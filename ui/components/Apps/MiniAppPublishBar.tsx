@@ -107,6 +107,7 @@ import type { CloudCompatibilityReport } from "../../../src/core/types/cloudAppC
 import type { CloudPublishReadinessReport } from "../../../src/core/types/cloudAppDependencies";
 import { linkedDepItems } from "./ShareLinkedDeps";
 import { PreviewUrlRow } from "./PreviewUrlRow";
+import { PublishInfoSheet } from "./PublishInfoSheet";
 import { SyncStatusPanel, type ConflictChoice } from "./SyncStatusPanel";
 import { buildSyncPanel, type PanelAction, type PanelTone, type UpdatePreview } from "../../utils/syncPanelModel";
 import {
@@ -327,6 +328,9 @@ export function MiniAppPublishBar({
   const [webSyncPopoverOpen, setWebSyncPopoverOpen] = useState(false);
   const webSyncAnchorRef = useRef<HTMLDivElement>(null);
   const [publishReviewOpen, setPublishReviewOpen] = useState(false);
+  /** First publish: confirm name, description and cover before going live. */
+  const [publishInfoOpen, setPublishInfoOpen] = useState(false);
+  const publishInfoConfirmedRef = useRef(false);
   const webSyncPopoverRef = useRef<HTMLDivElement>(null);
   const [webSyncPopoverPos, setWebSyncPopoverPos] = useState<{
     top: number;
@@ -1226,6 +1230,10 @@ export function MiniAppPublishBar({
   };
 
   const handlePublishClick = async () => {
+    if (!cloud.live && !publishInfoConfirmedRef.current) {
+      setPublishInfoOpen(true);
+      return;
+    }
     if (needsDesktopAck) {
       setPublishReviewOpen(true);
       return;
@@ -2229,6 +2237,21 @@ export function MiniAppPublishBar({
           ) : null}
         </div>
       </div>
+
+      {publishInfoOpen ? (
+        <ShareSheet title="Publish to web" onClose={() => setPublishInfoOpen(false)}>
+          <PublishInfoSheet
+            appId={appId}
+            initialTitle={appTitle}
+            onCancel={() => setPublishInfoOpen(false)}
+            onConfirmed={() => {
+              publishInfoConfirmedRef.current = true;
+              setPublishInfoOpen(false);
+              void handlePublishClick();
+            }}
+          />
+        </ShareSheet>
+      ) : null}
 
       {publishReviewOpen ? (
         <ShareSheet
