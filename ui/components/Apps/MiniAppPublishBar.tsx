@@ -108,6 +108,7 @@ import type { CloudPublishReadinessReport } from "../../../src/core/types/cloudA
 import { linkedDepItems } from "./ShareLinkedDeps";
 import { PreviewUrlRow } from "./PreviewUrlRow";
 import { PublishInfoSheet } from "./PublishInfoSheet";
+import { APP_COVER_CHANGED_EVENT } from "../../utils/appCover";
 import { SyncStatusPanel, type ConflictChoice } from "./SyncStatusPanel";
 import { buildSyncPanel, type PanelAction, type PanelTone, type UpdatePreview } from "../../utils/syncPanelModel";
 import {
@@ -330,6 +331,8 @@ export function MiniAppPublishBar({
   const [publishReviewOpen, setPublishReviewOpen] = useState(false);
   /** First publish: confirm name, description and cover before going live. */
   const [publishInfoOpen, setPublishInfoOpen] = useState(false);
+  /** More → App info: edit name, description and cover any time. */
+  const [appInfoOpen, setAppInfoOpen] = useState(false);
   const publishInfoConfirmedRef = useRef(false);
   const webSyncPopoverRef = useRef<HTMLDivElement>(null);
   const [webSyncPopoverPos, setWebSyncPopoverPos] = useState<{
@@ -1999,6 +2002,8 @@ export function MiniAppPublishBar({
               isTrackCollaborator && !usesSharedData(cloudLineage) ? () => void handleDetach() : undefined
             }
             onShowInFinder={handleShowInFinder}
+            // Owners only: a team-data collaborator's copy reaches the team by proposal.
+            onAppInfo={isTrackCollaborator ? undefined : () => setAppInfoOpen(true)}
             onCopyToWorkspace={
               papr.isLoggedIn ? () => setCopyToWorkspaceOpen(true) : undefined
             }
@@ -2237,6 +2242,23 @@ export function MiniAppPublishBar({
           ) : null}
         </div>
       </div>
+
+      {appInfoOpen ? (
+        <ShareSheet title="App info" onClose={() => setAppInfoOpen(false)}>
+          <PublishInfoSheet
+            mode="edit"
+            appId={appId}
+            initialTitle={appTitle}
+            onCancel={() => setAppInfoOpen(false)}
+            onConfirmed={() => {
+              setAppInfoOpen(false);
+              window.dispatchEvent(new CustomEvent(APP_COVER_CHANGED_EVENT, { detail: { appId } }));
+              // Live apps: send the new name/description/cover pointer to the web now.
+              if (cloud.live) void guardedWebSyncPushNow();
+            }}
+          />
+        </ShareSheet>
+      ) : null}
 
       {publishInfoOpen ? (
         <ShareSheet title="Publish to web" onClose={() => setPublishInfoOpen(false)}>
