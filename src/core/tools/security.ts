@@ -301,6 +301,13 @@ export function sanitizeToolOutput(data: unknown, apiKeys: string[]): unknown {
 
   if (data && typeof data === "object") {
     const sanitized: Record<string, unknown> = {};
+    // An Error's `name` and `message` are non-enumerable, so copying entries
+    // alone turned a provider error into "{}" — the text the user saw in the
+    // error banner and the only clue to why a turn ended without a reply.
+    if (data instanceof Error) {
+      sanitized.name = data.name;
+      sanitized.message = sanitizeError(data.message, apiKeys);
+    }
     for (const [key, value] of Object.entries(data)) {
       sanitized[key] = sanitizeToolOutput(value, apiKeys);
     }
