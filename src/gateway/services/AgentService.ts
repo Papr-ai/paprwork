@@ -105,6 +105,7 @@ import { getPaprUserId } from "../utils/paprUserId.js";
 import { getAgentFocusContextService } from "./AgentFocusContextService.js";
 import { AGENT_FOCUS_CONTEXT_PREFIX } from "./agent/focusContextFormatter.js";
 import {
+  createChatStreamChunk,
   type ToolCallEvent,
   type ToolResultEvent,
 } from "./agent/streamChunks.js";
@@ -123,6 +124,17 @@ import {
   runPiAiWrapUpContinuation,
   shouldRequestWrapUpSummary,
 } from "./agent/wrapUpContinuation.js";
+import {
+  buildNoReplyFallback,
+  classifyNoReply,
+  needsFinalReplyFallback,
+  runWrapUpWithRetry,
+  withTextFirstStreamTextOptions,
+  WRAP_UP_TEXT_FIRST_RETRY,
+  WRAP_UP_TEXT_FIRST_RETRY_PLAN_INCOMPLETE,
+  type WrapUpOutcome,
+  type WrapUpRetryResult,
+} from "./agent/finalReplyGuarantee.js";
 import { addTurnUsage } from "./agent/turnUsageAccounting.js";
 import { yieldOrReleaseLease } from "./agent/agentStreamConcurrency.js";
 import {
@@ -2105,6 +2117,8 @@ export class AgentService {
             ) => AsyncIterable<unknown>;
             finalModel: unknown;
             streamOpts: Record<string, unknown>;
+            /** Reasoning turned down, for a wrap-up retry that must produce text. */
+            textFirstStreamOpts?: Record<string, unknown>;
           }
         | undefined;
 
@@ -2562,6 +2576,36 @@ export class AgentService {
           { provider: config.provider },
         );
         piWrapUpContext = piContext;
+        // Same credentials and session with reasoning turned down, for a
+        // wrap-up retry that has to produce text (agent/finalReplyGuarantee.ts).
+        let textFirstStreamOpts: PiAiStreamOptions | undefined;
+        try {
+          const textFirstBase = { ...baseStreamOpts, reasoning: "low" as const };
+          if (useCodex) {
+            const { augmentPiAiCodexStreamOptions } =
+              await import("./providers/piAiCodexResponsesLite.js");
+            textFirstStreamOpts = augmentPiAiCodexStreamOptions(
+              piModelId,
+              textFirstBase,
+            );
+          } else {
+            // Adaptive models: thinking on at low effort — the setting that
+            // measured as answering directly. Budget models: thinking off.
+            const { augmentPiAiAnthropicStreamOptions } =
+              await import("./providers/piAiAnthropicAdaptiveThinking.js");
+            textFirstStreamOpts = augmentPiAiAnthropicStreamOptions(
+              piModelId,
+              "low",
+              textFirstBase,
+              anthropicModelUsesAdaptiveThinking(piModelId),
+            );
+          }
+        } catch (textFirstError) {
+          console.warn(
+            `[AgentService] Text-first wrap-up options unavailable for ${piModelId}:`,
+            textFirstError,
+          );
+        }
         piWrapUpDeps = {
           streamSimple: streamSimple as (
             model: unknown,
@@ -2570,6 +2614,9 @@ export class AgentService {
           ) => AsyncIterable<unknown>,
           finalModel,
           streamOpts: streamOpts as unknown as Record<string, unknown>,
+          textFirstStreamOpts: textFirstStreamOpts as unknown as
+            | Record<string, unknown>
+            | undefined,
         };
         timings.streamTextInit = performance.now() - t;
         console.log(
@@ -3060,6 +3107,7 @@ export class AgentService {
           ? WRAP_UP_WITH_PLAN_INCOMPLETE
           : undefined;
 
+      let wrapUpOutcome: WrapUpOutcome = { kind: "not_attempted" };
       if (wrapUpNeeded) {
         console.log(
           `[AgentService] Running wrap-up summary for ${chatId} — tools completed without a user-facing reply` +
@@ -3079,77 +3127,88 @@ export class AgentService {
         committedUsage = tokenUsage;
         cumulativePromptTokens = 0;
 
-        try {
-          let wrapUpState:
-            | {
-                assistantText: string;
-                thinkingText: string;
-              }
-            | null
-            | undefined = null;
-
-          if (usePiAi && piWrapUpContext && piWrapUpDeps) {
-            const wrapUpIterator = runPiAiWrapUpContinuation({
-              piContext: piWrapUpContext,
-              streamSimple: piWrapUpDeps.streamSimple,
-              piModel: piWrapUpDeps.finalModel,
-              streamOpts: piWrapUpDeps.streamOpts,
-              chatId,
-              apiKeys: getApiKeysForSanitization(),
-              abortSignal: abortController.signal,
-              wrapUpMessage,
-            });
-            while (true) {
-              const wrapUpNext = await wrapUpIterator.next();
-              if (wrapUpNext.done) {
-                wrapUpState = wrapUpNext.value;
-                break;
-              }
-              yield wrapUpNext.value;
+        // An empty or failed wrap-up is retried once text-first — reasoning
+        // turned down, stricter instruction — before the turn is allowed to
+        // close (agent/finalReplyGuarantee.ts).
+        const wrapUpIterator = runWrapUpWithRetry({
+          chatId,
+          abortSignal: abortController.signal,
+          onAttemptStart: (mode, attemptNumber) => {
+            if (attemptNumber > 1) {
+              // The retry is another stream; its totals add to the turn too.
+              committedUsage = tokenUsage;
+              cumulativePromptTokens = 0;
+              console.log(
+                `[AgentService] Wrap-up for ${chatId} produced no text — retrying ${mode}`,
+              );
             }
-          } else if (aiSdkStreamResult) {
-            const wrapUpIterator = runAiSdkWrapUpContinuation({
-              aiSdkResult: aiSdkStreamResult,
-              streamTextOptions: streamTextOptions as {
+          },
+          attempt: (mode) => {
+            const textFirst = mode === "text-first";
+            const instruction = textFirst
+              ? wrapUpMessage
+                ? WRAP_UP_TEXT_FIRST_RETRY_PLAN_INCOMPLETE
+                : WRAP_UP_TEXT_FIRST_RETRY
+              : wrapUpMessage;
+            if (usePiAi && piWrapUpContext && piWrapUpDeps) {
+              return runPiAiWrapUpContinuation({
+                piContext: piWrapUpContext,
+                streamSimple: piWrapUpDeps.streamSimple,
+                piModel: piWrapUpDeps.finalModel,
+                streamOpts: textFirst
+                  ? (piWrapUpDeps.textFirstStreamOpts ?? piWrapUpDeps.streamOpts)
+                  : piWrapUpDeps.streamOpts,
+                chatId,
+                apiKeys: getApiKeysForSanitization(),
+                abortSignal: abortController.signal,
+                wrapUpMessage: instruction,
+              });
+            }
+            if (aiSdkStreamResult) {
+              const baseOptions = streamTextOptions as {
                 model: LanguageModel;
                 [key: string]: unknown;
-              },
-              chatId,
-              apiKeys: getApiKeysForSanitization(),
-              provider: config.provider,
-              abortSignal: abortController.signal,
-              wrapUpMessage,
-            });
-            while (true) {
-              const wrapUpNext = await wrapUpIterator.next();
-              if (wrapUpNext.done) {
-                wrapUpState = wrapUpNext.value;
-                break;
-              }
-              yield wrapUpNext.value;
+              };
+              return runAiSdkWrapUpContinuation({
+                aiSdkResult: aiSdkStreamResult,
+                streamTextOptions: textFirst
+                  ? withTextFirstStreamTextOptions(baseOptions, config.model)
+                  : baseOptions,
+                chatId,
+                apiKeys: getApiKeysForSanitization(),
+                provider: config.provider,
+                abortSignal: abortController.signal,
+                wrapUpMessage: instruction,
+              });
             }
+            return null;
+          },
+        });
+        let wrapUpResult: WrapUpRetryResult | undefined;
+        while (true) {
+          const wrapUpNext = await wrapUpIterator.next();
+          if (wrapUpNext.done) {
+            wrapUpResult = wrapUpNext.value;
+            break;
           }
-
-          if (wrapUpState?.assistantText.trim()) {
-            const merged = mergeWrapUpTextIntoState(
-              {
-                assistantText,
-                thinkingText,
-                toolCalls,
-                toolResults,
-                sequence,
-              },
-              wrapUpState.assistantText,
-            );
-            assistantText = merged.assistantText;
-            thinkingText = merged.thinkingText + wrapUpState.thinkingText;
-            sequence = merged.sequence;
-          }
-        } catch (wrapUpError) {
-          console.warn(
-            `[AgentService] Wrap-up summary failed for ${chatId}:`,
-            wrapUpError,
+          yield wrapUpNext.value;
+        }
+        wrapUpOutcome = wrapUpResult?.outcome ?? wrapUpOutcome;
+        const wrapUpState = wrapUpResult?.state;
+        if (wrapUpState?.assistantText.trim()) {
+          const merged = mergeWrapUpTextIntoState(
+            {
+              assistantText,
+              thinkingText,
+              toolCalls,
+              toolResults,
+              sequence,
+            },
+            wrapUpState.assistantText,
           );
+          assistantText = merged.assistantText;
+          thinkingText = merged.thinkingText + wrapUpState.thinkingText;
+          sequence = merged.sequence;
         }
       } else {
         const skip = explainPostStreamWrapUp({
@@ -3259,18 +3318,71 @@ export class AgentService {
       }
 
       if (isEmpty && options?._isSilentRetry) {
-        // Second attempt also empty — give up silently. Don't save an empty
-        // message (would clutter the chat). Just log and return without yielding
-        // "done" (parent will handle that). The next user message will
-        // naturally retry the conversation with healed history.
+        // Second attempt also empty. This used to return without saving or
+        // yielding "done", which left the user with no reply and no reason.
+        // It now falls through: the final-reply guarantee below records a
+        // short note and the turn completes like any other, so the parent
+        // passes a non-empty message to the UI.
         console.warn(
-          `[AgentService] Silent retry also returned empty completion. ` +
-            `Skipping save to keep chat clean. chatId=${chatId}`,
+          `[AgentService] Silent retry also returned empty completion — ` +
+            `closing the turn with a visible note. chatId=${chatId}`,
         );
-        // DON'T yield "done" here - if this is a nested call (compression retry),
-        // the parent would pass it to UI and create an empty message. Just return.
-        this.sessionManager.setStreaming(chatId, false);
-        return;
+      }
+
+      // 4.1. Final-reply guarantee (agent/finalReplyGuarantee.ts): never save a
+      // turn the user cannot read. Tools ran or the model reasoned and no
+      // visible text followed, even after the wrap-up and its text-first
+      // retry, so close with a short note that says why and how to continue.
+      // No model call — it cannot fail the way the model did.
+      if (
+        needsFinalReplyFallback({
+          sequence,
+          assistantText,
+          toolCallCount: toolCalls.length,
+          aborted: abortController.signal.aborted,
+          isWrapUpContinuation: Boolean(options?._isWrapUpContinuation),
+          providerStreamFailed,
+        })
+      ) {
+        const reason = classifyNoReply({
+          yieldedToUser: isYieldRequested(chatId),
+          wrapUp: wrapUpOutcome,
+          toolCallCount: toolCalls.length,
+          thinkingText,
+        });
+        const { pendingSteps } = await this.loadPendingPlanState(chatId);
+        const note = buildNoReplyFallback({
+          reason,
+          toolNames: toolCalls.map((call) => call.toolName),
+          errorMessage:
+            wrapUpOutcome.kind === "error" ? wrapUpOutcome.message : undefined,
+          pendingPlanSteps: pendingSteps,
+        });
+        console.warn(
+          `[TurnEnd:no-reply-fallback] ${JSON.stringify({
+            ts: new Date().toISOString(),
+            chatId,
+            route: usePiAi ? "pi-ai" : "ai-sdk",
+            provider: config.provider,
+            model: config.model,
+            reason,
+            wrapUp: wrapUpOutcome.kind,
+            toolCallCount: toolCalls.length,
+            thinkingChars: thinkingText.length,
+          })}`,
+        );
+        const lead = assistantText.trim() ? "\n\n" : "";
+        const merged = mergeWrapUpTextIntoState(
+          { assistantText, thinkingText, toolCalls, toolResults, sequence },
+          note,
+        );
+        assistantText = merged.assistantText;
+        sequence = merged.sequence;
+        yield createChatStreamChunk(
+          "text-delta",
+          { text: lead + note },
+          chatId,
+        ) as StreamChunk & { chatId: string };
       }
 
       // Grade this turn's memory searches against the answer the agent
