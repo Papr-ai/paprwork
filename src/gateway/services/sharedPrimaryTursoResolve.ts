@@ -199,3 +199,35 @@ export function isCollaboratorOnSharedDatabase(dbId: string): boolean {
   }
   return false;
 }
+
+/**
+ * Publisher of the team copy on this desktop that links `dbId` with shared
+ * data — the user who owns that database. Undefined when no local team copy
+ * links it (this desktop's own database, or a copy on its own data).
+ *
+ * Read from install lineage, not the retired `.shared-primary-turso.json`
+ * store (nothing has written it since installs stopped calling
+ * registerSharedPrimaryTursoEntries), so collaborators who installed later
+ * fell back to their own id for owner placeholders and per-user routing.
+ */
+export function resolveTeamCopyPublisherUserId(dbId: string): string | undefined {
+  const id = dbId.trim();
+  if (!id) return undefined;
+  let appIds: string[];
+  const appsRoot = getPaprAppsRoot();
+  try {
+    appIds = readdirSync(appsRoot);
+  } catch {
+    return undefined;
+  }
+  for (const appId of appIds) {
+    const appDir = path.join(appsRoot, appId);
+    const lineage = readLineageSync(appDir);
+    if (!lineage || !lineageUsesSharedPrimaryDatabase(lineage)) continue;
+    const publisher = lineage.source?.userId?.trim();
+    if (publisher && readRegistryDbIdsSync(appDir).includes(id)) {
+      return publisher;
+    }
+  }
+  return undefined;
+}

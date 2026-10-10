@@ -21,6 +21,11 @@ import {
 import { resolveAppDependentJobIds } from "./cloudSync/resolveAppDependentJobs.js";
 import { mergeJobAppIds } from "./jobs/appIds.js";
 import type { JobRecord } from "./jobs/types.js";
+import {
+  JOB_RUNTIME_FILE_NAME,
+  splitJobRecord,
+  stripRuntimeForGit,
+} from "./jobs/jobRuntimeFields.js";
 import type { DatabasesRegistryFile, DatabaseRecord } from "./DatabaseRegistryService.js";
 import { newDbId } from "./DatabaseRegistryService.js";
 import { dbTursoDatabaseName } from "./tursoDatabaseNaming.js";
@@ -1122,6 +1127,76 @@ async function readJobRecordFromDir(
   }
 }
 
+/** Files in a job folder that belong to this desktop, never the publisher. */
+const JOB_LOCAL_ONLY_TOP = new Set(["logs", ".venv", "node_modules", JOB_RUNTIME_FILE_NAME]);
+
+/**
+ * Track pull for an existing job: overlay the publisher's job files, keeping
+ * this desktop's database, logs, runtime state and per-machine config
+ * (local app id, schedule on/off, report chat). Returns the jobs.json entry.
+ */
+async function applyPublisherJobUpdate(input: {
+  sourceJob: JobRecord;
+  sourceJobDir: string;
+  targetJobDir: string;
+  existing: JobRecord | undefined;
+  appId: string;
+  publisherAppId: string | undefined;
+}): Promise<JobRecord> {
+  async function overlay(relativeDir: string): Promise<void> {
+    const entries = await fs.readdir(path.join(input.sourceJobDir, relativeDir), {
+      withFileTypes: true,
+    });
+    for (const entry of entries) {
+      const rel = relativeDir ? path.join(relativeDir, entry.name) : entry.name;
+      if (!relativeDir && JOB_LOCAL_ONLY_TOP.has(entry.name)) continue;
+      if (!relativeDir && entry.name === "job.json") continue; // merged below
+      if (rel === JOB_LOCAL_DB_REL || rel.startsWith(`${JOB_LOCAL_DB_REL}-`)) continue;
+      const dest = path.join(input.targetJobDir, rel);
+      if (entry.isDirectory()) {
+        await fs.mkdir(dest, { recursive: true });
+        await overlay(rel);
+        continue;
+      }
+      await fs.mkdir(path.dirname(dest), { recursive: true });
+      await fs.copyFile(path.join(input.sourceJobDir, rel), dest);
+    }
+  }
+  await overlay("");
+
+  const publisher = stripRuntimeForGit(input.sourceJob) as JobRecord;
+  const local = input.existing;
+  // Never let the publisher's app id in: the job belongs to the local copy.
+  const localAppIds = (local?.appIds ?? []).filter(
+    (id) => id !== input.publisherAppId,
+  );
+  const config: JobRecord = {
+    ...publisher,
+    appIds: mergeJobAppIds(localAppIds, [input.appId]),
+  };
+  if (publisher.schedule) {
+    config.schedule = {
+      ...publisher.schedule,
+      enabled: local?.schedule ? local.schedule.enabled : false,
+    };
+  }
+  if (local?.reportChatId) config.reportChatId = local.reportChatId;
+  else delete (config as Partial<JobRecord>).reportChatId;
+
+  await fs.writeFile(
+    path.join(input.targetJobDir, "job.json"),
+    JSON.stringify(stripRuntimeForGit(config), null, 2),
+    "utf8",
+  );
+  const runtime = local ? splitJobRecord(local).runtime : {};
+  return {
+    ...runtime,
+    ...config,
+    status: local?.status ?? "pending",
+    updatedAt: new Date().toISOString(),
+  } as JobRecord;
+}
+
 /** Copy linked job folders and jobs.json entries into the target workspace. */
 export async function syncAppJobsToTarget(
   input: SyncAppLinkedResourcesInput,
@@ -1185,6 +1260,24 @@ export async function syncAppJobsToTarget(
       const targetUpdatedMs = existing?.updatedAt
         ? new Date(existing.updatedAt).getTime()
         : 0;
+
+      // Get updates (track pull): git job.json never carries updatedAt (runtime
+      // field, stripped on publish), so the timestamp check below was always
+      // 0 > 0 and the publisher's job changes never arrived. Always take them;
+      // keep what belongs to this desktop.
+      if (sourceJob && input.syncScope === "jobs_and_code") {
+        const updated = await applyPublisherJobUpdate({
+          sourceJob,
+          sourceJobDir,
+          targetJobDir,
+          existing,
+          appId: input.appId,
+          publisherAppId: input.sourceAppId,
+        });
+        copiedJobIds.push(jobId);
+        targetJobById.set(jobId, updated);
+        continue;
+      }
 
       if (sourceJob && sourceUpdatedMs > targetUpdatedMs) {
         await replaceJobDirectoryPreservingDatabase({
