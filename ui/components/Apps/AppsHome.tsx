@@ -39,6 +39,7 @@ import { HomeMenu, type HomeMenuItem } from "./HomeMenu";
 import { HomeCollectionSheet } from "./HomeCollectionSheet";
 import { HomeIcon, type HomeIconName } from "./HomeIcon";
 import type { LibraryCardHandlers } from "./LibraryPane";
+import { appStatusLine } from "../../utils/appStatusLine";
 import "./AppsHome.css";
 
 const SMART: Array<{ id: string; name: string; icon: HomeIconName }> = [
@@ -199,8 +200,14 @@ export function AppsHome(p: AppsHomeProps) {
   };
 
   const status = (a: Artifact) => {
-    if (p.health[a.id]?.state === "failed") return { text: "Automation failing", bad: true };
+    const h = p.health[a.id];
+    const line = appStatusLine(a, { health: h, isPublished: p.publishedIds.has(a.id) });
+    if (h?.state === "failed") {
+      const when = line.text.split(":")[0] ?? "";
+      return { text: when || "Automation failing", bad: true };
+    }
     if (isIdLikeTitle(a.title)) return { text: "Needs a name", bad: true };
+    if (line.text) return { text: line.text, bad: false };
     if (a.status === "draft" && !p.publishedIds.has(a.id)) return { text: "Draft", bad: false };
     return null;
   };
