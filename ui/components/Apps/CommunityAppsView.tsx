@@ -26,6 +26,7 @@ import { CategoryPills, matchesCategory } from "./CategoryPills";
 import "./CommunityAppsView.css";
 import "./AppsHome.css";
 import { DropGlyph } from "./HomeTiles";
+import { HomeMenu, type HomeMenuItem } from "./HomeMenu";
 import { trackEvent } from "../../lib/telemetry";
 import {
   canInstallCloudCatalogEntry,
@@ -113,6 +114,11 @@ export interface CommunityAppsViewProps {
    * Renders nothing when there are no matches.
    */
   resultsHeading?: string;
+  /**
+   * My apps ⋯ actions for an app you have locally (favorite, archive, delete…).
+   * Lets Team / Community cards share the same menu as library cards.
+   */
+  libraryMenuFor?: (appId: string) => HomeMenuItem[];
 }
 
 function defaultLoadingLabel(scope: CommunityCatalogScope): string {
@@ -246,6 +252,7 @@ export function CommunityAppsView({
   refreshToken = 0,
   loadingLabel,
   resultsHeading,
+  libraryMenuFor,
 }: CommunityAppsViewProps) {
   const [catalog, setCatalog] = useState<CommunityCatalog | null>(null);
   const [loading, setLoading] = useState(true);
@@ -274,6 +281,12 @@ export function CommunityAppsView({
 
   const installedAppIds = new Set(
     artifacts.filter((artifact) => artifact.type === "app").map((artifact) => artifact.id),
+  );
+  // Apps on this computer that were made here (not installed from the catalog).
+  const ownLocalAppIds = new Set(
+    artifacts
+      .filter((artifact) => artifact.type === "app" && !artifact.cloudLineage)
+      .map((artifact) => artifact.id),
   );
 
   const loadCatalog = useCallback(
@@ -768,15 +781,42 @@ export function CommunityAppsView({
   const renderCatalogGrid = (entries: CommunityCatalogEntry[]) => (
     <div className="community-apps__grid">
       {entries.map((entry) => {
-        const localAppId = resolveLocalAppIdForCatalogEntry(
-          entry,
+        const mine =
+          entry.isOwned === true || Boolean(entry.appId && ownLocalAppIds.has(entry.appId));
+        const resolved = resolveLocalAppIdForCatalogEntry(
+          mine ? { ...entry, isOwned: true } : entry,
           installedAppIds,
           lineageIndex,
         );
+        // Publisher copy can only be opened if it's actually on this computer.
+        const localAppId =
+          resolved && (installedAppIds.has(resolved) || entry.isOwned === true) ? resolved : null;
+        const cardEntry = mine ? { ...entry, isOwned: true } : entry;
+        const liveUrl = entry.source === "cloud" ? resolveCatalogLiveWebUrl(entry) : null;
+        const canGet = entry.source === "cloud" && canInstallCloudCatalogEntry(cardEntry, localAppId);
+        const menuItems: HomeMenuItem[] = [];
+        if (localAppId) {
+          menuItems.push({ label: "Open", onSelect: () => openLocalApp(localAppId, entry.name) });
+        }
+        if (liveUrl) {
+          menuItems.push({ label: "Open on the web", onSelect: () => openCloudPreview(entry) });
+          menuItems.push({
+            label: "Copy link",
+            onSelect: () => void navigator.clipboard?.writeText(liveUrl).catch(() => undefined),
+          });
+        }
+        if (canGet) menuItems.push({ label: "Get a copy", onSelect: () => startCloudInstall(entry) });
+        const libraryItems = localAppId && libraryMenuFor ? libraryMenuFor(localAppId) : [];
+        if (libraryItems.length) menuItems.push({ label: "—", onSelect: () => undefined }, ...libraryItems);
         return (
           <CommunityAppCard
+            menu={
+              menuItems.length ? (
+                <HomeMenu items={menuItems} moveTargets={[]} onMove={() => undefined} />
+              ) : null
+            }
             key={entry.catalogId}
-            entry={entry}
+            entry={cardEntry}
             localAppId={localAppId}
             isInstalled={
               entry.source === "cloud"
@@ -1058,6 +1098,8 @@ interface CommunityAppCardProps {
   onCloudInstall: () => void;
   onOpen?: () => void;
   onOpenHover?: () => void;
+  /** ⋯ menu (same component as My apps cards). */
+  menu?: ReactNode;
 }
 
 export function CommunityAppCard({
@@ -1070,6 +1112,7 @@ export function CommunityAppCard({
   onCloudInstall,
   onOpen,
   onOpenHover,
+  menu,
 }: CommunityAppCardProps) {
 
   const rawReqs = entry.requirements ?? [];
@@ -1261,6 +1304,7 @@ export function CommunityAppCard({
         <span className="ah-share" title={shareBadge ?? shareAudienceShortLabel(share.audience)}>
           <ShareAudienceIcon audience={share.audience} loginAccess={null} codeAccess={share.codeAccess} />
         </span>
+        {menu}
       </span>
     </div>
   );

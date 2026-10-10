@@ -12,6 +12,7 @@ import { gateway } from "../../src/lib/gateway";
 import { type AppStatus } from "./AppCard";
 import { CommunityAppsView } from "./CommunityAppsView";
 import { AppsHome } from "./AppsHome";
+import type { HomeMenuItem } from "./HomeMenu";
 import { HomeIcon } from "./HomeIcon";
 import { LibraryPane } from "./LibraryPane";
 import { DuplicateCleanupView } from "./DuplicateCleanupView";
@@ -277,6 +278,22 @@ export function AppsView() {
 
   const handleToggleFavorite = async (id: string) => {
     await toggleFavorite(id, "app");
+  };
+
+  /** My apps ⋯ actions, reused on Team / Community cards for apps you have locally. */
+  const libraryMenuFor = (appId: string): HomeMenuItem[] => {
+    const a = sortedApps.find((x) => x.id === appId);
+    if (!a) return [];
+    const items: HomeMenuItem[] = [
+      {
+        label: a.favorite ? "Remove from Favorites" : "Add to Favorites",
+        onSelect: () => void handleToggleFavorite(a.id),
+      },
+    ];
+    if (showCopyAction) items.push({ label: "Copy to workspace…", onSelect: () => setCopyAppTarget(a) });
+    items.push({ label: "Archive", onSelect: () => void handleSetStatus(a.id, "archived") });
+    items.push({ label: "Delete app", danger: true, onSelect: () => void handleDelete(a.id) });
+    return items;
   };
 
   const handleOpen = (app: Artifact) => {
@@ -618,6 +635,7 @@ export function AppsView() {
               />
               {showNamespaceTabs ? (
                 <CommunityAppsView
+                libraryMenuFor={libraryMenuFor}
                   key={`search-${papr.namespaceId ?? "no-namespace"}`}
                   scope="namespace"
                   namespaceId={papr.namespaceId}
@@ -630,6 +648,7 @@ export function AppsView() {
                 />
               ) : null}
               <CommunityAppsView
+                libraryMenuFor={libraryMenuFor}
                 key="search-community"
                 scope="global"
                 searchQuery={searchQuery}
@@ -641,6 +660,7 @@ export function AppsView() {
             </>
           ) : section === "community" ? (
             <CommunityAppsView
+                libraryMenuFor={libraryMenuFor}
               scope="global"
               loadingLabel="Loading community apps..."
               searchQuery=""
@@ -650,6 +670,7 @@ export function AppsView() {
             />
           ) : section === "team" ? (
             <CommunityAppsView
+                libraryMenuFor={libraryMenuFor}
               key={papr.namespaceId ?? "no-namespace"}
               scope="namespace"
               loadingLabel="Loading team apps..."
