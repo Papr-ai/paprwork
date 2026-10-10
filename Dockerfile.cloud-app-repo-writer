@@ -2,7 +2,7 @@
 # Build: docker build -f Dockerfile.cloud-app-repo-writer -t app-repo-writer .
 # Deploy: node scripts/deploy-cloud-app-repo-writer.mjs --project=YOUR_PROJECT
 
-FROM node:24-alpine AS build
+FROM node:24-bookworm-slim AS build
 WORKDIR /app
 COPY package.json package-lock.json ./
 RUN node -e "\
@@ -17,8 +17,16 @@ RUN node -e "\
   fs.writeFileSync('package-lock.json', JSON.stringify(lock,null,2));\
 " && npm install --omit=optional --no-audit --no-fund
 COPY tsconfig.gateway.json tsconfig.mini-app-sdk-node.json tsconfig.json ./
+COPY scripts/build-mini-app-sdk-browser-bundles.mjs scripts/build-mini-app-sdk-browser-bundles.mjs
+COPY scripts/verify-mini-app-sdk-bundles.mjs scripts/verify-mini-app-sdk-bundles.mjs
 COPY src ./src
-RUN npm run build:gateway && npm prune --omit=dev
+# Same build as Dockerfile.cloud-app-host. Not `npm run build:gateway`: that also runs
+# scripts/generate-papr-api-catalog.mjs (not in the image, and it loads the whole tool graph).
+# The catalog is committed under src/resources.
+RUN npx shx rm -rf dist/resources && npx shx mkdir -p dist && npx shx cp -r src/resources dist/ && \
+  npx tsc -p tsconfig.gateway.json && npx tsc -p tsconfig.mini-app-sdk-node.json && \
+  node scripts/build-mini-app-sdk-browser-bundles.mjs && node scripts/verify-mini-app-sdk-bundles.mjs && \
+  npm prune --omit=dev
 
 FROM node:24-bookworm-slim
 WORKDIR /app
