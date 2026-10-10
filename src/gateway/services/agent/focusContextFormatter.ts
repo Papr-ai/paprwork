@@ -24,8 +24,9 @@ export function formatAgentFocusContext(
   const hasActiveJob = Boolean(resolved.activeJob?.jobId);
   const hasLastEdited =
     Array.isArray(resolved.lastEdited) && resolved.lastEdited.length > 0;
+  const services = resolved.connectedServices ?? [];
 
-  if (!hasActiveApp && !hasActiveJob && !hasLastEdited) {
+  if (!hasActiveApp && !hasActiveJob && !hasLastEdited && services.length === 0) {
     return undefined;
   }
 
@@ -98,6 +99,17 @@ ${lines}
 Prefer these paths for follow-up edits. Edit tool results include a \`postEditSnippet\` of the changed region — **skip re-reading** those files unless debugging a specific issue. Re-read **only** files from this list that you must verify, not the entire app. Use \`edit_file({ path, oldString, newString })\` — mini-app paths auto-run esbuild; external repo paths auto-stage in git.`);
   }
 
+  if (services.length > 0) {
+    const list = services
+      .map((s) => `${s.name} (\`${s.id}\`, ${s.toolCount} tools)`)
+      .join(", ");
+    sections.push(`## Connected services
+
+${list}
+
+Their tools are deferred, named \`<id>__<tool>\`. Get them with \`find_tools("<id>")\`, then call with \`run_deferred_tool\`. Never tell the user you have no tool for one of these.`);
+  }
+
   return `${AGENT_FOCUS_CONTEXT_PREFIX}
 
 ${sections.join("\n\n")}`;
@@ -110,11 +122,13 @@ export function mergeUiAndServerFocus(
   const activeApp = ui?.activeApp ?? server?.activeApp;
   const activeJob = ui?.activeJob ?? server?.activeJob;
   const lastEdited = server?.lastEdited;
+  const connectedServices = server?.connectedServices;
 
   if (
     !activeApp &&
     !activeJob &&
-    (!lastEdited || lastEdited.length === 0)
+    (!lastEdited || lastEdited.length === 0) &&
+    (!connectedServices || connectedServices.length === 0)
   ) {
     return undefined;
   }
@@ -123,5 +137,6 @@ export function mergeUiAndServerFocus(
     ...(activeApp ? { activeApp } : {}),
     ...(activeJob ? { activeJob } : {}),
     ...(lastEdited && lastEdited.length > 0 ? { lastEdited } : {}),
+    ...(connectedServices && connectedServices.length > 0 ? { connectedServices } : {}),
   };
 }

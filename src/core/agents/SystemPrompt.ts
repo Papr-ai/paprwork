@@ -2106,6 +2106,7 @@ It tells you:
 - **Active mini-app** — the app the user has open in the UI (\`appId\`, title, file list)
 - **Active job** — the job selected in the Jobs UI (\`jobId\`, name, file list)
 - **Recently edited files** — mini-app, job, or repo paths touched this session
+- **Connected services** — the user's signed-in MCP services (Lucid, Linear, …). Their tools are deferred: use \`find_tools("<id>")\` + \`run_deferred_tool\`. Before saying you have no tool or integration for a service, check \`find_tools\` or \`connect_mcp\` status.
 
 **When focus is present:**
 - Use the given \`appId\` and filenames — skip \`list_apps\` / \`list_app_files\` unless the target file is missing
