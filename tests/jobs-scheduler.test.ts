@@ -344,3 +344,51 @@ describe("JobsScheduler", () => {
     vi.restoreAllMocks();
   });
 });
+
+describe("JobsScheduler overlapping ticks", () => {
+  test("two concurrent ticks launch a due slot once", async () => {
+    vi.spyOn(cloudSchedulerAuthority, "isCloudSchedulerAuthoritative").mockResolvedValue(false);
+    // Memory-side lease is re-entrant for holder "desktop" — both ticks acquire.
+    let releaseAcquire: () => void = () => {};
+    const acquireGate = new Promise<void>((r) => { releaseAcquire = r; });
+    const acquireSpy = vi
+      .spyOn(jobSchedulerRunLease, "tryAcquireSchedulerRunLease")
+      .mockImplementation(async () => {
+        await acquireGate;
+        return { acquired: true, runId: "run-test" };
+      });
+    vi.spyOn(jobSchedulerRunLease, "releaseSchedulerRunLease").mockResolvedValue(undefined);
+    const scheduler = new JobsScheduler();
+    const jobsService = getJobsService();
+    const now = Date.now();
+    const dueJob: JobRecord = {
+      id: "job-overlap-1",
+      name: "Overlap Job",
+      type: "shell",
+      status: "completed",
+      appIds: ["__standalone__"],
+      command: "echo hi",
+      schedule: { enabled: true, intervalMs: 900_000 },
+      scheduleState: { nextRunAt: new Date(now - 600_000).toISOString() },
+      createdAt: new Date(now - 5000).toISOString(),
+      updatedAt: new Date(now - 5000).toISOString(),
+    };
+    vi.spyOn(jobsService, "initialize").mockResolvedValue(undefined);
+    mockSchedulerJobCatalog(jobsService, [dueJob]);
+    vi.spyOn(jobsService, "getJob").mockResolvedValue(dueJob);
+    vi.spyOn(jobsService, "upsertJob").mockResolvedValue(dueJob);
+    const runSpy = vi
+      .spyOn(jobsService, "runJobFromScheduler")
+      .mockResolvedValue({ ...dueJob, status: "completed" });
+
+    const a = scheduler.tickNow();
+    const b = scheduler.tickNow();
+    await new Promise((r) => setTimeout(r, 20));
+    releaseAcquire();
+    await Promise.all([a, b]);
+
+    expect(runSpy).toHaveBeenCalledTimes(1);
+    expect(acquireSpy).toHaveBeenCalledTimes(1);
+    vi.restoreAllMocks();
+  });
+});

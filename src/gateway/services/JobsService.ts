@@ -149,6 +149,14 @@ export class JobsService {
   private legacyJobsRootDir: string;
   private legacyJobsIndexPath: string;
   private attemptControllers = new Map<string, AbortController>();
+  /**
+   * Jobs between "accepted a run" and "attempt controller registered". The
+   * running/attemptControllers check is followed by several awaits before
+   * either map is set, so two concurrent callers (overlapping scheduler ticks
+   * after sleep) both passed it and ran the same slot twice. Claimed
+   * synchronously, before the first await.
+   */
+  private launching = new Set<string>();
   private jobs: Map<string, JobRecord>;
   private running: Map<string, ChildProcess>;
   /** In-flight agent/subagent runs (not backed by ChildProcess). */
@@ -2791,12 +2799,44 @@ export class JobsService {
     if (!job) {
       throw new Error(`Job not found: ${jobId}`);
     }
-    if (this.running.has(jobId) || this.attemptControllers.has(jobId)) {
-      throw new Error("Job is already running");
-    }
     if (stack.has(jobId)) {
       throw new Error(`Dependency cycle detected at job: ${jobId}`);
     }
+    if (this.launching.has(jobId) && scheduledDueAt) {
+      await this.appendLog(
+        jobId,
+        `Skipping duplicate scheduled slot (already active): ${jobId}-${scheduledDueAt}`,
+      );
+      return this.jobs.get(jobId) ?? job;
+    }
+    if (
+      this.running.has(jobId) ||
+      this.attemptControllers.has(jobId) ||
+      this.launching.has(jobId)
+    ) {
+      throw new Error("Job is already running");
+    }
+    this.launching.add(jobId);
+    try {
+      return await this.runJobWithDependenciesClaimed(
+        job,
+        jobId,
+        stack,
+        runtimeParams,
+        scheduledDueAt,
+      );
+    } finally {
+      this.launching.delete(jobId);
+    }
+  }
+
+  private async runJobWithDependenciesClaimed(
+    job: JobRecord,
+    jobId: string,
+    stack: Set<string>,
+    runtimeParams?: Record<string, string>,
+    scheduledDueAt?: string,
+  ): Promise<JobRecord> {
     const architectureIssues = await this.validateJobCandidate(job, jobId);
     const architectureErrors = formatJobArchitectureErrors(architectureIssues);
     if (architectureErrors) {
