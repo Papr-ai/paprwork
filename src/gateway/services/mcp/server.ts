@@ -8,6 +8,7 @@
  *   {slug}_{view}  (model)    one per published card view (appTools.ts). Opens that card.
  *   papr_list_apps (model)    the caller's apps with cards, for discovery / beyond the tool cap.
  *   papr_open_app  (model)    open any published app by link (generic card).
+ *   papr_continue_on_mac (model + app)  one-time papr:// link to pick up in the desktop app.
  *   papr_api       (app-only) the tunnel. Hidden from the model; only our cards call it.
  */
 import type { Express, NextFunction, Request, Response } from "express";
@@ -28,6 +29,8 @@ import { inputSchemaToZodShape, planAppTools, toolResultFor, appTitle } from "./
 import { loadClaudeCatalog, memoryAccessibleApps, type CatalogDeps, type ClaudeApp } from "./catalog.js";
 import { loadMcpEndpointConfig, MCP_PATH, protectedResourceMetadataUrl, type McpEndpointConfig } from "./config.js";
 import { renderSpikeCardHtml } from "./spikeCard.js";
+import { HandoffError, memoryHandoff, type CreateHandoff } from "./handoff.js";
+import { memorySessionExchange, type McpSessionExchange } from "./session.js";
 
 export const SPIKE_CARD_URI = "ui://papr/spike/app-card.html";
 
@@ -53,7 +56,15 @@ export const MCP_INSTRUCTIONS =
   "Papr runs the user's ongoing work as apps (outreach, research, ops). Each app's tools open a live card in the chat; " +
   "changes only happen when the user presses a button on the card. Use papr_list_apps to see which apps the user has.";
 
-export function buildMcpServer(cfg: McpEndpointConfig, caller: McpCaller, apps: ClaudeApp[] = []): McpServer {
+export const FIRST_RUN_NOTE =
+  "Your Papr workspace is ready. Install Papr on your Mac to build apps; they show up here as cards once published.";
+
+export function buildMcpServer(
+  cfg: McpEndpointConfig,
+  caller: McpCaller,
+  apps: ClaudeApp[] = [],
+  deps: { handoff?: CreateHandoff } = {},
+): McpServer {
   const server = new McpServer({ name: "papr", title: "Papr", version: "0.1.0" }, { instructions: MCP_INSTRUCTIONS });
 
   registerAppResource(server, "Papr app card", SPIKE_CARD_URI, { description: "Papr app card (spike)" }, async () => ({
@@ -106,9 +117,12 @@ export function buildMcpServer(cfg: McpEndpointConfig, caller: McpCaller, apps: 
         url: `${cfg.appsBaseUrl}/${app.namespaceId}/${app.slug}`,
         tools: tools.filter((t) => t.app === app).map((t) => t.name),
       }));
+      const firstRun = (caller.provisioned?.length ?? 0) > 0;
       const text = rows.length
         ? rows.map((r) => `- ${r.title}${r.summary ? `: ${r.summary}` : ""} (${r.tools.join(", ") || "too many apps; open by link"})`).join("\n")
-        : "No Papr apps with Claude cards yet. In Papr, turn on Claude for an app and publish it.";
+        : firstRun
+          ? FIRST_RUN_NOTE
+          : "No Papr apps with Claude cards yet. In Papr, turn on Claude for an app and publish it.";
       return { content: [{ type: "text", text }], structuredContent: { apps: rows } };
     },
   );
@@ -180,6 +194,40 @@ export function buildMcpServer(cfg: McpEndpointConfig, caller: McpCaller, apps: 
     },
   );
 
+  const handoff = deps.handoff;
+  if (handoff) {
+    server.registerTool(
+      "papr_continue_on_mac",
+      {
+        title: "Continue in Papr on Mac",
+        description:
+          "Give the user a one-time link that opens Papr on their Mac, signed in, optionally at a specific app. " +
+          "Use when they want to build or edit an app, or run something that needs their Mac. The link works once, for 10 minutes.",
+        inputSchema: {
+          namespaceId: z.string().optional(),
+          slug: z.string().optional().describe("App slug, to open that app"),
+          view: z.string().optional(),
+        },
+        annotations: { readOnlyHint: true, openWorldHint: false },
+      },
+      async (args) => {
+        try {
+          const link = await handoff(caller, {
+            ...(args.namespaceId && args.slug ? { appNamespaceId: args.namespaceId, appSlug: args.slug } : {}),
+            ...(args.view ? { view: args.view } : {}),
+          });
+          return {
+            content: [{ type: "text", text: `Open Papr on your Mac: ${link.url}\n(One-time link, expires in 10 minutes. Don't have Papr? https://papr.ai/download)` }],
+            structuredContent: { ...link, downloadUrl: "https://papr.ai/download" },
+          };
+        } catch (err) {
+          const message = err instanceof HandoffError ? err.message : "Couldn't create a Mac link.";
+          return { isError: true, content: [{ type: "text", text: message }] };
+        }
+      },
+    );
+  }
+
   return server;
 }
 
@@ -194,7 +242,7 @@ export function requestNeedsCatalog(body: unknown): boolean {
     if (method === "tools/list") return true;
     if (method !== "tools/call") return false;
     const name = (m as { params?: { name?: string } }).params?.name;
-    return name !== "papr_api" && name !== "papr_open_app";
+    return name !== "papr_api" && name !== "papr_open_app" && name !== "papr_continue_on_mac";
   });
 }
 
@@ -205,7 +253,13 @@ export function defaultCatalogDeps(cfg: McpEndpointConfig, memoryBaseUrl: string
   };
 }
 
-async function handleMcpPost(cfg: McpEndpointConfig, catalog: CatalogDeps, req: Request, res: Response): Promise<void> {
+async function handleMcpPost(
+  cfg: McpEndpointConfig,
+  catalog: CatalogDeps,
+  handoff: CreateHandoff | undefined,
+  req: Request,
+  res: Response,
+): Promise<void> {
   const caller = callerOf(req.auth);
   let apps: ClaudeApp[] = [];
   if (requestNeedsCatalog(req.body)) {
@@ -216,7 +270,7 @@ async function handleMcpPost(cfg: McpEndpointConfig, catalog: CatalogDeps, req: 
       console.warn("[mcp] app catalog unavailable:", (err as Error).message.slice(0, 160));
     }
   }
-  const server = buildMcpServer(cfg, caller, apps);
+  const server = buildMcpServer(cfg, caller, apps, { handoff });
   const transport = new StreamableHTTPServerTransport({ sessionIdGenerator: undefined, enableJsonResponse: true });
   res.on("close", () => {
     void transport.close();
@@ -228,17 +282,31 @@ async function handleMcpPost(cfg: McpEndpointConfig, catalog: CatalogDeps, req: 
 
 export function registerMcpRoutes(
   app: Express,
-  opts: { port: number; verifier?: OAuthTokenVerifier; config?: McpEndpointConfig; catalog?: CatalogDeps; memoryBaseUrl?: string },
+  opts: {
+    port: number;
+    verifier?: OAuthTokenVerifier;
+    config?: McpEndpointConfig;
+    catalog?: CatalogDeps;
+    memoryBaseUrl?: string;
+    exchange?: McpSessionExchange;
+    /** null disables the Mac handoff tool. */
+    handoff?: CreateHandoff | null;
+  },
 ): McpEndpointConfig {
   const cfg = opts.config ?? loadMcpEndpointConfig(opts.port);
-  const catalog = opts.catalog ?? defaultCatalogDeps(cfg, opts.memoryBaseUrl ?? getMemoryServerBaseUrl());
+  const memoryBaseUrl = opts.memoryBaseUrl ?? getMemoryServerBaseUrl();
+  const catalog = opts.catalog ?? defaultCatalogDeps(cfg, memoryBaseUrl);
+  const exchange = opts.exchange ?? (cfg.serviceKey ? memorySessionExchange(memoryBaseUrl, cfg.serviceKey) : undefined);
+  if (!exchange) console.warn("[mcp] PAPR_MCP_SERVICE_KEY unset: using the Auth0 claims bridge (spike only).");
+  // The handoff needs a memory-minted session; the claims bridge's Parse session works too.
+  const handoff = opts.handoff === null ? undefined : (opts.handoff ?? memoryHandoff(memoryBaseUrl));
   registerProtectedResourceMetadata(app, cfg);
   const bearer = requireBearerAuth({
-    verifier: opts.verifier ?? createAuth0Verifier(cfg),
+    verifier: opts.verifier ?? createAuth0Verifier(cfg, exchange),
     resourceMetadataUrl: protectedResourceMetadataUrl(cfg),
   });
   app.post(MCP_PATH, bearer, (req, res, next: NextFunction) => {
-    handleMcpPost(cfg, catalog, req, res).catch(next);
+    handleMcpPost(cfg, catalog, handoff, req, res).catch(next);
   });
   // Stateless server: no standalone SSE stream and no sessions to delete.
   const notAllowed = (_req: Request, res: Response): void => {

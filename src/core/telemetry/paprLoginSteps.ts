@@ -14,6 +14,8 @@ export type PaprLoginStep =
   | "deep_link_queued"
   | "deep_link_flush_started"
   | "callback_received"
+  | "handoff_received"
+  | "handoff_redeemed"
   | "pkce_validated"
   | "token_exchanged"
   | "user_claims_decoded"
