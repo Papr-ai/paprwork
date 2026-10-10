@@ -412,6 +412,13 @@ export class CustomKeysStorage {
       organizationId: input.organizationId,
       activeOrganizationId: this.activeOrganizationId,
     });
+    // No orgScope resolves to the shared vault. Report it as "shared", the
+    // scope findKeyEntryByName gives it back as; reporting "org" made every
+    // update of such a key throw "already exists with a different org scope"
+    // (MCP sign-in saves its OAuth state twice per connect and hit this).
+    if (organizationId === CustomKeysStorage.SHARED_ORG_ID) {
+      return { scope: "shared", organizationId };
+    }
     return { scope: "org", organizationId };
   }
 
