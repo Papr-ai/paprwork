@@ -646,6 +646,19 @@ export class CloudAppTrackSyncService {
           mergedFiles,
           conflictFiles,
         });
+        if (linked.copiedJobIds.length > 0) {
+          // Job files and jobs.json changed on disk; the running service holds
+          // the old records and would write them back on its next save.
+          try {
+            const { getJobsService } = await import("./JobsService.js");
+            await getJobsService().reloadJobs();
+          } catch (reloadErr) {
+            console.warn(
+              `[CloudTrackSync] Job reload after update failed for ${appId}:`,
+              (reloadErr as Error).message.slice(0, 160),
+            );
+          }
+        }
         const { bootstrapInstalledAppDatabases, pullTrackSharedAppDatabase } =
           await import("./cloudAppInstallBootstrap.js");
         const bootstrap = sharedDatabase

@@ -10,6 +10,7 @@ import {
 } from "../DatabaseRegistryService.js";
 import { getPaprUserId } from "../../utils/paprUserId.js";
 import { resolveTursoSuffixUserIdForSource } from "../appRuntime/tursoRuntimeIdentity.js";
+import { resolveTeamCopyPublisherUserId } from "../sharedPrimaryTursoResolve.js";
 import { getTursoReplicaService } from "./TursoReplicaService.js";
 import type { TursoReplicaPushResponse, TursoReplicaWriteResult, TursoReplicaWriteOptions } from "./tursoReplicaTypes.js";
 import {
@@ -155,10 +156,17 @@ export function shouldUseTursoReplicaForSource(source: AppDataSource): boolean {
 export function resolveTursoDatabaseForReplicaSource(source: AppDataSource): string {
   const record = resolveRegistryRecordForSource(source);
   const callerUserId = getPaprUserId();
+  // Per-user: the publisher keeps the base name, everyone else gets
+  // `-u-{caller}`. The publisher is the team copy's publisher when this
+  // desktop installed the app with shared data — passing the caller as
+  // publisher sent every collaborator to the publisher's own database.
+  const publisherUserId =
+    (record?.dbId ? resolveTeamCopyPublisherUserId(record.dbId) : undefined) ??
+    callerUserId;
   const suffixUserId =
-    record?.isolation === "per-user" && callerUserId
+    record?.isolation === "per-user" && callerUserId && publisherUserId
       ? resolveTursoSuffixUserIdForSource(source, {
-          publisherUserId: callerUserId,
+          publisherUserId,
           callerUserId,
         })
       : undefined;

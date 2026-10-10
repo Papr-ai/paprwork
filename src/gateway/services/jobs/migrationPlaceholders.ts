@@ -34,21 +34,19 @@ async function defaultOwnerResolver(migrationRoot: string): Promise<string | und
   const { getPaprUserId } = await import("../../utils/paprUserId.js");
   const currentUser = getPaprUserId()?.trim() || undefined;
   try {
-    const { getDatabaseRegistryService, tursoNameForRecord } = await import(
-      "../DatabaseRegistryService.js"
-    );
+    const { getDatabaseRegistryService } = await import("../DatabaseRegistryService.js");
     const record = getDatabaseRegistryService().getByPath?.(
       path.join(migrationRoot, "data.db"),
     );
-    if (record) {
-      const { lookupSharedPrimaryTursoEntry } = await import(
-        "../sharedPrimaryTursoStore.js"
+    // Per-user databases: every user owns their own copy.
+    if (record && record.isolation !== "per-user") {
+      const { resolveTeamCopyPublisherUserId } = await import(
+        "../sharedPrimaryTursoResolve.js"
       );
-      // Shared primary entries are keyed by the publisher-suffixed name for
-      // per-user DBs and the plain name otherwise; per-user never shares.
-      const shared = lookupSharedPrimaryTursoEntry(tursoNameForRecord(record));
-      if (shared?.publisherUserId) {
-        return shared.publisherUserId;
+      // Team shared database: the publisher owns it, whoever is signed in.
+      const publisher = resolveTeamCopyPublisherUserId(record.dbId);
+      if (publisher) {
+        return publisher;
       }
     }
   } catch {
