@@ -13,7 +13,7 @@
 import { existsSync, promises as fs } from "fs";
 import path from "path";
 import { fileURLToPath } from "url";
-import type { AppBackendManifest } from "../../../core/types/appBackend.js";
+import type { AppBackendActionSpec, AppBackendManifest } from "../../../core/types/appBackend.js";
 import { parseAppBackendManifest } from "../appRuntime/appBackendManifest.js";
 import { checkViewsAgainstBackend, parseClaudeAppConfig, type ClaudeAppConfig, type ClaudeCardView } from "./cardContract.js";
 
@@ -35,10 +35,38 @@ export interface CardBuildResult {
   cards: BuiltCard[];
 }
 
+/** The backend action a view runs, copied in so the MCP server needn't parse the manifest. */
+export interface CardViewAction {
+  name: string;
+  description?: string;
+  effect?: AppBackendActionSpec["effect"];
+  runsOn?: AppBackendActionSpec["runsOn"];
+  input?: AppBackendActionSpec["input"];
+}
+
+export interface CardsManifestView extends ClaudeCardView {
+  file: string;
+  bytes: number;
+  actionSpec?: CardViewAction;
+}
+
 export interface CardsManifest {
   version: 1;
   summary?: string;
-  views: Record<string, ClaudeCardView & { file: string; bytes: number }>;
+  views: Record<string, CardsManifestView>;
+}
+
+export function viewActionSpec(view: ClaudeCardView, manifest: AppBackendManifest | null): CardViewAction | undefined {
+  const name = view.action;
+  const a = name ? manifest?.actions[name] : undefined;
+  if (!name || !a) return undefined;
+  return {
+    name,
+    ...(a.description ? { description: a.description } : {}),
+    ...(a.effect ? { effect: a.effect } : {}),
+    ...(a.runsOn ? { runsOn: a.runsOn } : {}),
+    ...(a.input ? { input: a.input } : {}),
+  };
 }
 
 function resolveSdkDir(): string {
@@ -175,7 +203,8 @@ export async function buildAppCards(appDir: string, opts: { sdkDir?: string } = 
     const file = `${name}.html`;
     await fs.writeFile(path.join(outDir, file), html);
     const bytes = Buffer.byteLength(html);
-    cardsManifest.views[name] = { ...view, file, bytes };
+    const actionSpec = viewActionSpec(view, manifest);
+    cardsManifest.views[name] = { ...view, file, bytes, ...(actionSpec ? { actionSpec } : {}) };
     result.cards.push({ view: name, file: `dist/cards/${file}`, bytes });
   }
   await fs.writeFile(path.join(outDir, "cards.json"), JSON.stringify(cardsManifest, null, 2) + "\n");

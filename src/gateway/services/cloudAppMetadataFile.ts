@@ -6,6 +6,7 @@ import { promises as fs, readFileSync } from "fs";
 import path from "path";
 import {
   buildDefaultCloudAppDescription,
+  carryAuthorOwnedMetadata,
   serializeCloudAppMetadataFile,
   type CloudAppMetadataFile,
 } from "../../core/utils/cloudAppMetadata.js";
@@ -108,8 +109,18 @@ export async function writeCloudAppMetadataFile(
   const appDir = path.join(paprDir, "apps", appId);
   await fs.mkdir(appDir, { recursive: true });
   const metadataPath = path.join(appDir, "metadata.json");
+  let existing: unknown = null;
+  try {
+    existing = JSON.parse(await fs.readFile(metadataPath, "utf8"));
+  } catch {
+    /* first write, or unreadable: nothing to carry */
+  }
   const tmpPath = `${metadataPath}.tmp-${process.pid}`;
-  await fs.writeFile(tmpPath, serializeCloudAppMetadataFile(metadata), "utf8");
+  await fs.writeFile(
+    tmpPath,
+    serializeCloudAppMetadataFile(carryAuthorOwnedMetadata(metadata, existing)),
+    "utf8",
+  );
   await fs.rename(tmpPath, metadataPath);
   notifyJobOwnershipChanged(paprDir);
 }

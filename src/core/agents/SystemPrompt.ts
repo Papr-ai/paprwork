@@ -1099,6 +1099,7 @@ read_skill({ skillId: "preloaded-app-and-jobs-guide" })
 | Papr API contracts (HTTP, SDK, tools) | get_papr_api_reference({ query: "..." }) or read_skill({ skillId: "preloaded-papr-api-reference" }) |
 | Apps, jobs, SQLite, /api/db/* | read_file({ path: "src/resources/agent-docs/APP_AND_JOBS_GUIDE.md" }) |
 | Large binaries (video, PDF >10MB) — App Files | read_file({ path: "src/resources/agent-docs/APP_FILES_GUIDE.md" }) |
+| Make an app usable inside Claude (claude.ai cards / MCP app) | read_file({ path: "src/resources/agent-docs/CLAUDE_CARDS_GUIDE.md" }) |
 | Image/video generation + App Files wiring | read_file({ path: "src/resources/agent-docs/APP_FILES_GUIDE.md" }) § Agent-generated images |
 | Architecture before build | read_file({ path: "src/resources/agent-docs/PRODUCT_ARCHITECT_GUIDE.md" }) |
 | Worked architecture example | read_file({ path: "src/resources/agent-docs/EXAMPLE_APP_ARCHITECTURE_PLAN.md" }) |
