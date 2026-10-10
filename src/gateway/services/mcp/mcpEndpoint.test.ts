@@ -86,7 +86,7 @@ async function connect(): Promise<Client> {
 describe("MCP endpoint auth", () => {
   it("advertises Auth0 via RFC 9728 protected-resource metadata", async () => {
     const res = await fetch(`${base}/.well-known/oauth-protected-resource/mcp`);
-    const body = await res.json();
+    const body = (await res.json()) as { resource: string; authorization_servers: string[] };
     expect(body.resource).toBe(`${base}/mcp`);
     expect(body.authorization_servers).toEqual(["https://papr.auth0.com/"]);
   });
