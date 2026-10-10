@@ -6,6 +6,31 @@ import {
 } from "../src/gateway/services/agent/focusContextFormatter.js";
 
 describe("formatAgentFocusContext", () => {
+  it("lists connected services so the agent looks up their deferred tools", () => {
+    const text = formatAgentFocusContext({
+      connectedServices: [{ id: "lucid", name: "Lucid", toolCount: 32 }],
+    });
+    expect(text).toContain(AGENT_FOCUS_CONTEXT_PREFIX);
+    expect(text).toContain("## Connected services");
+    expect(text).toContain("Lucid (`lucid`, 32 tools)");
+    expect(text).toContain('find_tools("<id>")');
+  });
+
+  it("omits the connected services section when none are connected", () => {
+    const text = formatAgentFocusContext({
+      activeApp: { appId: "a", title: "A", files: [] },
+      connectedServices: [],
+    });
+    expect(text).not.toContain("Connected services");
+  });
+
+  it("keeps connected services through the UI/server merge", () => {
+    const merged = mergeUiAndServerFocus(undefined, {
+      connectedServices: [{ id: "lucid", name: "Lucid", toolCount: 32 }],
+    });
+    expect(merged?.connectedServices).toHaveLength(1);
+  });
+
   it("returns undefined when no active app or edits", () => {
     expect(formatAgentFocusContext(undefined)).toBeUndefined();
     expect(formatAgentFocusContext({})).toBeUndefined();
