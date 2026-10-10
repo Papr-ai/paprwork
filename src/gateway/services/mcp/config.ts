@@ -18,6 +18,8 @@ export interface McpEndpointConfig {
   appsBaseUrl: string;
   /** Port this process listens on; the api tunnel dispatches to it over loopback. */
   loopbackPort: number;
+  /** Shared secret for memory's /v1/cloud/mcp/session. Unset → claims bridge (spike only). */
+  serviceKey?: string;
 }
 
 export const MCP_PATH = "/mcp";
@@ -31,6 +33,7 @@ export function loadMcpEndpointConfig(loopbackPort: number): McpEndpointConfig {
     audience: process.env.PAPR_MCP_AUDIENCE || resourceUrl,
     appsBaseUrl: (process.env.PAPR_CLOUD_APPS_PUBLIC_URL || "https://apps.papr.ai").replace(/\/$/, ""),
     loopbackPort,
+    serviceKey: process.env.PAPR_MCP_SERVICE_KEY?.trim() || undefined,
   };
 }
 

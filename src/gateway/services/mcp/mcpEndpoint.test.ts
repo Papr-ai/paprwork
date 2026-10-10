@@ -17,7 +17,7 @@ import { RESOURCE_MIME_TYPE } from "@modelcontextprotocol/ext-apps/server";
 import { assertTunnelAllowed, dispatchTunnel, type TunnelRequest } from "./apiTunnel.js";
 import { callerFromClaims, CLAIM_OBJECT_ID, CLAIM_SESSION } from "./auth.js";
 import type { McpEndpointConfig } from "./config.js";
-import { appCardUri, parseAppRef, registerMcpRoutes, requestNeedsCatalog, SPIKE_CARD_URI } from "./server.js";
+import { appCardUri, buildMcpServer, FIRST_RUN_NOTE, parseAppRef, registerMcpRoutes, requestNeedsCatalog, SPIKE_CARD_URI } from "./server.js";
 import { fetchPublishedCardsManifest } from "./apiTunnel.js";
 import { clearCatalogCache, type CatalogDeps } from "./catalog.js";
 import { inlineExtAppsBundle } from "./spikeCard.js";
@@ -115,11 +115,17 @@ beforeAll(async () => {
     },
     loadCardsManifest: (c, ref) => fetchPublishedCardsManifest(port, c, ref),
   };
-  registerMcpRoutes(app, { port, verifier, config, catalog });
+  registerMcpRoutes(app, { port, verifier, config, catalog, handoff: fakeHandoff });
   fakeApi(app);
 });
 
 afterAll(() => new Promise<void>((r) => server.close(() => r())));
+
+const handoffCalls: Array<{ caller: unknown; intent: unknown }> = [];
+async function fakeHandoff(c: unknown, intent: unknown) {
+  handoffCalls.push({ caller: c, intent });
+  return { url: "papr://auth/handoff?code=abc", expiresAt: "2027-01-01T00:00:00Z" };
+}
 
 async function connect(): Promise<Client> {
   const client = new Client({ name: "test-claude", version: "1.0.0" });
@@ -331,5 +337,35 @@ describe("per-app tools", () => {
     expect(requestNeedsCatalog({ method: "tools/call", params: { name: "papr_api" } })).toBe(false);
     expect(requestNeedsCatalog({ method: "resources/read" })).toBe(false);
     expect(requestNeedsCatalog([{ method: "ping" }, { method: "tools/list" }])).toBe(true);
+  });
+});
+
+describe("accounts (PR 3)", () => {
+  it("continue on Mac: one-time papr:// link minted as the caller, no catalog load", async () => {
+    const client = await connect();
+    const before = catalogLoads;
+    const out = await client.callTool({ name: "papr_continue_on_mac", arguments: { namespaceId: "ns1", slug: "linkedin-outreach" } });
+    expect(out.isError).toBeFalsy();
+    expect((out.structuredContent as { url: string }).url).toBe("papr://auth/handoff?code=abc");
+    expect(handoffCalls[handoffCalls.length - 1]).toEqual({ caller: expect.objectContaining({ userId: "user123" }), intent: { appNamespaceId: "ns1", appSlug: "linkedin-outreach" } });
+    expect(catalogLoads).toBe(before);
+    await client.close();
+  });
+
+  it("welcomes a just-provisioned user instead of 'no apps'", async () => {
+    const { InMemoryTransport } = await import("@modelcontextprotocol/sdk/inMemory.js");
+    const server = buildMcpServer(
+      { resourceUrl: "https://x/mcp", issuer: "https://i/", audience: "a", appsBaseUrl: "https://apps.papr.ai", loopbackPort: 1 },
+      { ...caller, provisioned: ["workspace", "organization"] },
+      [],
+    );
+    const [a, b] = InMemoryTransport.createLinkedPair();
+    const client = new Client({ name: "t", version: "1" });
+    await Promise.all([server.connect(a), client.connect(b)]);
+    const out = await client.callTool({ name: "papr_list_apps", arguments: {} });
+    expect((out.content as Array<{ text: string }>)[0].text).toBe(FIRST_RUN_NOTE);
+    const { tools } = await client.listTools();
+    expect(tools.some((t) => t.name === "papr_continue_on_mac")).toBe(false); // no handoff dep → no tool
+    await client.close();
   });
 });
