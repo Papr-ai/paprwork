@@ -17,7 +17,7 @@ import { RESOURCE_MIME_TYPE } from "@modelcontextprotocol/ext-apps/server";
 import { assertTunnelAllowed, dispatchTunnel, type TunnelRequest } from "./apiTunnel.js";
 import { callerFromClaims, CLAIM_OBJECT_ID, CLAIM_SESSION } from "./auth.js";
 import type { McpEndpointConfig } from "./config.js";
-import { parseAppRef, registerMcpRoutes, SPIKE_CARD_URI } from "./server.js";
+import { appCardUri, parseAppRef, registerMcpRoutes, SPIKE_CARD_URI } from "./server.js";
 import { inlineExtAppsBundle } from "./spikeCard.js";
 
 const GOOD = "good-token";
@@ -47,6 +47,11 @@ function fakeApi(app: Express): void {
   app.get("/api/access", (req, res) => {
     record(req);
     res.json({ canRead: req.header("x-papr-slug") !== "private-app", canWrite: false, loggedIn: true });
+  });
+  app.get("/ns1/linkedin-outreach/dist/cards/:file", (req, res) => {
+    record(req);
+    if (req.params.file !== "status.html") return void res.status(404).send("Not found");
+    res.type("html").send("<!doctype html><title>status card</title>");
   });
   app.post("/api/db/query", (req, res) => {
     record(req);
@@ -155,6 +160,26 @@ describe("MCP endpoint tools and card", () => {
     });
     expect(out.isError).toBe(true);
     expect(out.structuredContent).toMatchObject({ status: 403 });
+    await client.close();
+  });
+});
+
+describe("published app cards", () => {
+  it("serves dist/cards/{view}.html as an MCP App resource, read as the caller", async () => {
+    seen.length = 0;
+    const client = await connect();
+    const uri = appCardUri("ns1", "linkedin-outreach", "status");
+    const { contents } = await client.readResource({ uri });
+    expect(contents[0]).toMatchObject({ uri, mimeType: RESOURCE_MIME_TYPE });
+    expect(String((contents[0] as { text?: string }).text)).toContain("status card");
+    expect(seen[0]).toMatchObject({ path: "/ns1/linkedin-outreach/dist/cards/status.html", session: "r:parse-session", user: "user123" });
+    await client.close();
+  });
+
+  it("errors clearly for a view that wasn't published, and rejects bad refs", async () => {
+    const client = await connect();
+    await expect(client.readResource({ uri: appCardUri("ns1", "linkedin-outreach", "inbox") })).rejects.toThrow(/isn't published/);
+    await expect(client.readResource({ uri: appCardUri("ns1", "linkedin-outreach", "..") })).rejects.toThrow();
     await client.close();
   });
 });

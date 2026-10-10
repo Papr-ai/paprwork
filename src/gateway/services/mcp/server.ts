@@ -10,7 +10,7 @@
  */
 import type { Express, NextFunction, Request, Response } from "express";
 import { z } from "zod";
-import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
+import { McpServer, ResourceTemplate } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { StreamableHTTPServerTransport } from "@modelcontextprotocol/sdk/server/streamableHttp.js";
 import { requireBearerAuth } from "@modelcontextprotocol/sdk/server/auth/middleware/bearerAuth.js";
 import type { OAuthTokenVerifier } from "@modelcontextprotocol/sdk/server/auth/provider.js";
@@ -20,11 +20,16 @@ import {
   RESOURCE_MIME_TYPE,
 } from "@modelcontextprotocol/ext-apps/server";
 import { callerOf, createAuth0Verifier, registerProtectedResourceMetadata, type McpCaller } from "./auth.js";
-import { dispatchTunnel, TunnelError, type TunnelMethod } from "./apiTunnel.js";
+import { dispatchTunnel, fetchPublishedCard, TunnelError, type TunnelMethod } from "./apiTunnel.js";
 import { loadMcpEndpointConfig, MCP_PATH, protectedResourceMetadataUrl, type McpEndpointConfig } from "./config.js";
 import { renderSpikeCardHtml } from "./spikeCard.js";
 
 export const SPIKE_CARD_URI = "ui://papr/spike/app-card.html";
+
+/** Published card for one app view (built at publish into dist/cards/{view}.html). */
+export function appCardUri(namespaceId: string, slug: string, view: string): string {
+  return `ui://papr/app/${namespaceId}/${slug}/${view}`;
+}
 
 /** Accepts https://apps.papr.ai/{namespaceId}/{slug}[/...] or explicit ids. */
 export function parseAppRef(input: { url?: string; namespaceId?: string; slug?: string }): {
@@ -48,6 +53,20 @@ export function buildMcpServer(cfg: McpEndpointConfig, caller: McpCaller): McpSe
   registerAppResource(server, "Papr app card", SPIKE_CARD_URI, { description: "Papr app card (spike)" }, async () => ({
     contents: [{ uri: SPIKE_CARD_URI, mimeType: RESOURCE_MIME_TYPE, text: renderSpikeCardHtml() }],
   }));
+
+  // Per-app cards. PR 2 points generated per-app tools at these URIs.
+  server.registerResource(
+    "Papr app card",
+    new ResourceTemplate("ui://papr/app/{namespaceId}/{slug}/{view}", { list: undefined }),
+    { description: "A published Papr app card", mimeType: RESOURCE_MIME_TYPE },
+    async (uri, vars) => {
+      const one = (v: string | string[] | undefined): string => (Array.isArray(v) ? v[0] : v) ?? "";
+      const ref = { namespaceId: one(vars.namespaceId), slug: one(vars.slug) };
+      const html = await fetchPublishedCard(cfg.loopbackPort, caller, ref, one(vars.view));
+      if (html === null) throw new TunnelError("That card isn't published. Republish the app with Claude cards on.", 404);
+      return { contents: [{ uri: uri.href, mimeType: RESOURCE_MIME_TYPE, text: html }] };
+    },
+  );
 
   registerAppTool(
     server,
