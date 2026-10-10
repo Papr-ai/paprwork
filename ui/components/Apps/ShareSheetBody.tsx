@@ -36,6 +36,8 @@ import {
   linkedDepsSummary,
   type LinkedDepItem,
 } from "./ShareLinkedDeps";
+import { ShareAccessPanel } from "./ShareAccessPanel";
+import type { SharePeopleMember } from "./SharePeoplePicker";
 import "./ShareSheetBody.css";
 
 export interface ShareSheetBodyProps {
@@ -73,11 +75,14 @@ export interface ShareSheetBodyProps {
   webCompatibilityHint?: string | null;
   /** Optional deep link into one step (e.g. a missing-key chip). */
   initialEdit?: ShareStepId | null;
+  /** Roles panel ("Who has access"); omitted = row hidden. */
+  access?: { members: SharePeopleMember[]; membersLoading?: boolean; onSaved?: () => void };
 }
 
 const ICON_PATHS = {
   what: "M2.5 8.5 7 4l4.5 4.5M7 4v9.5M11 13.5h3",
   keys: "M10 2.5a3.5 3.5 0 1 1-2.9 5.5L2.5 12.6v1.9h2v-1.5h1.5V11.5h1.5l.9-.9A3.5 3.5 0 0 1 10 2.5Zm1 2.6h.01",
+  roles: "M6 7.5a2.5 2.5 0 1 0 0-5 2.5 2.5 0 0 0 0 5ZM1.5 13.5c0-2.5 2-4 4.5-4s4.5 1.5 4.5 4M11 2.8a2.3 2.3 0 0 1 0 4.4M12.5 9.7c1.3.5 2 1.8 2 3.8",
   copy: "M5.5 5.5V3.2c0-.4.3-.7.7-.7h6.6c.4 0 .7.3.7.7v6.6c0 .4-.3.7-.7.7h-2.3M3.2 5.5h6.6c.4 0 .7.3.7.7v6.6c0 .4-.3.7-.7.7H3.2a.7.7 0 0 1-.7-.7V6.2c0-.4.3-.7.7-.7Z",
   open: "M10.5 2.5h3v3M8.5 7.5 13 3M6.5 3h-3a1 1 0 0 0-1 1v8.5a1 1 0 0 0 1 1H12a1 1 0 0 0 1-1v-3",
   chevron: "m6 3.5 4.5 4.5L6 12.5",
@@ -428,10 +433,12 @@ function LiveSummary({
   props,
   keySpecs,
   onEdit,
+  onOpenAccess,
 }: {
   props: ShareSheetBodyProps;
   keySpecs: RequiredKeySpec[] | null;
   onEdit: (id: ShareStepId) => void;
+  onOpenAccess: () => void;
 }) {
   const { draft } = props;
   const rows: {
@@ -471,6 +478,19 @@ function LiveSummary({
     <>
       <LinkHero props={props} />
       <div className="ss6-summary">
+        {props.access && draft.audience !== "private" ? (
+          <button type="button" className="ss6-arow" onClick={onOpenAccess}>
+            <span className="ss6-tico"><Glyph d={ICON_PATHS.roles} /></span>
+            <span className="ss6-row-v">
+              <small>Who has access</small>
+              <b>Roles: who can publish, propose or just use it</b>
+            </span>
+            <span className="ss6-change">
+              Manage
+              <Glyph d={ICON_PATHS.chevron} size={12} />
+            </span>
+          </button>
+        ) : null}
         {rows.map((row) => (
           <button
             key={row.id}
@@ -590,6 +610,7 @@ export function ShareSheetBody(props: ShareSheetBodyProps) {
       ? { start: props.initialEdit, at: props.initialEdit }
       : null,
   );
+  const [accessOpen, setAccessOpen] = useState(false);
   const [keysReload, setKeysReload] = useState(0);
   const keySpecs = useKeySpecs(props.appId, keysReload);
   const [keysDirty, setKeysDirty] = useState(false);
@@ -616,7 +637,15 @@ export function ShareSheetBody(props: ShareSheetBodyProps) {
   return (
     <div className="ss6">
       {notices}
-      {flow && at ? (
+      {accessOpen && props.access ? (
+        <ShareAccessPanel
+          appId={props.appId}
+          members={props.access.members}
+          membersLoading={props.access.membersLoading}
+          onClose={() => setAccessOpen(false)}
+          onSaved={props.access.onSaved}
+        />
+      ) : flow && at ? (
         <>
           <StepView id={at} props={props} />
           {steps.includes("keys") ? (
@@ -647,6 +676,7 @@ export function ShareSheetBody(props: ShareSheetBodyProps) {
           props={props}
           keySpecs={keySpecs}
           onEdit={(id) => setFlow({ start: id, at: id })}
+          onOpenAccess={() => setAccessOpen(true)}
         />
       )}
     </div>
