@@ -53,6 +53,8 @@ export interface CardsManifestView extends ClaudeCardView {
 export interface CardsManifest {
   version: 1;
   summary?: string;
+  whenToUse?: string;
+  examples?: string[];
   views: Record<string, CardsManifestView>;
 }
 
@@ -198,7 +200,13 @@ export async function buildAppCards(appDir: string, opts: { sdkDir?: string } = 
   // Replace the whole directory so removed views don't linger as reachable cards.
   await fs.rm(outDir, { recursive: true, force: true });
   await fs.mkdir(outDir, { recursive: true });
-  const cardsManifest: CardsManifest = { version: 1, ...(cfg.summary ? { summary: cfg.summary } : {}), views: {} };
+  const cardsManifest: CardsManifest = {
+    version: 1,
+    ...(cfg.summary ? { summary: cfg.summary } : {}),
+    ...(cfg.whenToUse ? { whenToUse: cfg.whenToUse } : {}),
+    ...(cfg.examples ? { examples: cfg.examples } : {}),
+    views: {},
+  };
   for (const { name, view, html } of built) {
     const file = `${name}.html`;
     await fs.writeFile(path.join(outDir, file), html);

@@ -45,7 +45,12 @@ const KINDS = new Set(["status", "action", "approval"]);
 /** Defensive parse: cards.json is app-repo content, so treat it as untrusted. */
 export function parseCardsManifest(raw: unknown): CardsManifest | null {
   if (!raw || typeof raw !== "object") return null;
-  const r = raw as { version?: unknown; summary?: unknown; views?: unknown };
+  const r = raw as { version?: unknown; summary?: unknown; whenToUse?: unknown; examples?: unknown; views?: unknown };
+  const list = (x: unknown, n: number): string[] | undefined => {
+    if (!Array.isArray(x)) return undefined;
+    const out = x.filter((e): e is string => typeof e === "string" && !!e.trim()).map((e) => e.trim().slice(0, 120)).slice(0, n);
+    return out.length ? out : undefined;
+  };
   if (r.version !== 1 || !r.views || typeof r.views !== "object") return null;
   const views: Record<string, CardsManifestView> = {};
   for (const [name, v] of Object.entries(r.views as Record<string, unknown>)) {
@@ -64,12 +69,16 @@ export function parseCardsManifest(raw: unknown): CardsManifest | null {
       ...(str(view.action, 64) ? { action: str(view.action, 64) } : {}),
       ...(str(view.title, 80) ? { title: str(view.title, 80) } : {}),
       ...(str(view.description, 300) ? { description: str(view.description, 300) } : {}),
+      ...(str(view.whenToUse, 280) ? { whenToUse: str(view.whenToUse, 280) } : {}),
+      ...(list(view.examples, 4) ? { examples: list(view.examples, 4) } : {}),
       ...(view.actionSpec && typeof view.actionSpec === "object" ? { actionSpec: view.actionSpec } : {}),
     };
   }
   if (Object.keys(views).length === 0) return null;
   const summary = typeof r.summary === "string" && r.summary.trim() ? r.summary.trim().slice(0, 300) : undefined;
-  return { version: 1, ...(summary ? { summary } : {}), views };
+  const whenToUse = typeof r.whenToUse === "string" && r.whenToUse.trim() ? r.whenToUse.trim().slice(0, 280) : undefined;
+  const examples = list(r.examples, 6);
+  return { version: 1, ...(summary ? { summary } : {}), ...(whenToUse ? { whenToUse } : {}), ...(examples ? { examples } : {}), views };
 }
 
 async function mapLimit<T, R>(items: T[], limit: number, fn: (item: T) => Promise<R>): Promise<R[]> {
