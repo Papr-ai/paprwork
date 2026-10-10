@@ -15,26 +15,30 @@ const SHOW = 6;
 
 export const displayTitle = (a: Artifact) => (isIdLikeTitle(a.title) ? "Untitled app" : a.title);
 
-/** The app's own icon (droplet image, SVG or emoji); a lettered Papr tile otherwise. */
+/**
+ * The app's logo inside the Papr glass droplet (same asset as AppCard's orb).
+ * A full droplet render (PNG) already carries the sphere, so it shows as-is.
+ * Apps with no icon get their first letter inside the droplet.
+ */
 export function AppGlyph({ app, size }: { app: Artifact; size: number }) {
   const icon = app.icon?.trim() ?? "";
-  const box = { width: size, height: size, borderRadius: Math.round(size * 0.28) };
+  const box = { width: size, height: size };
   if (/^(data:image\/|https?:\/\/)/.test(icon)) {
     return <img className="ah-gl ah-gl--img" src={icon} alt="" style={box} draggable={false} />;
   }
   if (icon.startsWith("<")) {
-    return <span className="ah-gl ah-gl--svg" style={box} dangerouslySetInnerHTML={{ __html: icon }} />;
+    return <span className="ah-gl ah-drop" style={box} dangerouslySetInnerHTML={{ __html: icon }} />;
   }
   if (icon && icon.length <= 4 && /\p{Extended_Pictographic}/u.test(icon)) {
     return (
-      <span className="ah-gl ah-gl--emoji" style={{ ...box, fontSize: size * 0.5 }}>
+      <span className="ah-gl ah-drop" style={{ ...box, fontSize: size * 0.42 }}>
         {icon}
       </span>
     );
   }
   const letter = isIdLikeTitle(app.title) ? "?" : (app.title.trim()[0] ?? "?").toUpperCase();
   return (
-    <span className={`ah-gl ah-gl--letter ah-pb-${bannerShade(app.id)}`} style={{ ...box, fontSize: size * 0.42 }}>
+    <span className="ah-gl ah-drop ah-drop--letter" style={{ ...box, fontSize: size * 0.36 }}>
       {letter}
     </span>
   );
@@ -168,7 +172,7 @@ export function CollectionTile(p: CollectionTileProps) {
           >
             <button type="button" className="ah-cell__open" onClick={() => p.onOpenApp(a)} title={a.description || displayTitle(a)}>
               <span className="ah-cell__ic">
-                <AppGlyph app={a} size={44} />
+                <AppGlyph app={a} size={50} />
                 {p.attention(a) ? <span className="ah-bad" title="Needs attention">!</span> : null}
                 <ShareMark share={p.shareById[a.id]} />
               </span>
@@ -240,7 +244,7 @@ export function AppTile(p: AppTileProps) {
             />
           ) : null}
           <span className="ah-solo__ic">
-            <AppGlyph app={p.app} size={52} />
+            <AppGlyph app={p.app} size={64} />
             {p.status?.bad ? <span className="ah-bad">!</span> : null}
           </span>
         </span>

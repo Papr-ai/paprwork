@@ -90,9 +90,15 @@
 
 /* App glyphs */
 .ah-gl { display: grid; place-items: center; flex: none; overflow: hidden; object-fit: cover; }
-.ah-gl--svg svg { width: 62%; height: 62%; }
-.ah-gl--svg, .ah-gl--emoji { background: var(--ah-sel); color: var(--ah-blue); }
-.ah-gl--letter { color: #fff; font-weight: 700; }
+/* Papr glass droplet with the app's logo inside (same asset + ink as AppCard's orb). */
+.ah-drop {
+  border-radius: 50%; background: url("/images/light-drop1.png") center / cover no-repeat;
+  color: rgba(55, 65, 88, 0.78); transition: transform 0.18s;
+}
+.ah-drop svg { width: 46%; height: 46%; }
+.ah-drop--letter { font-weight: 650; }
+.ah-gl--img { border-radius: 50%; }
+.ah-cell__open:hover .ah-gl, .ah-solo__open:hover .ah-gl { transform: scale(1.06); }
 .ah-gl--more { width: 44px; height: 44px; border-radius: 12px; background: var(--ah-sel); color: var(--ah-blue); font-size: 13px; font-weight: 700; }
 .ah-bad {
   position: absolute; top: -4px; right: -4px; width: 16px; height: 16px; border-radius: 50%; display: grid; place-items: center;
@@ -107,13 +113,12 @@
 /* Single app: cover/banner on top, icon overlapping */
 .ah-solo { padding: 16px; }
 .ah-solo__open {
-  display: flex; flex-direction: column; align-items: flex-start; width: 100%; padding: 92px 0 0;
+  display: flex; flex-direction: column; align-items: flex-start; width: 100%; padding: 98px 0 0;
   border: 0; background: none; cursor: pointer; font: inherit; color: var(--text-primary); text-align: left; min-width: 0;
 }
 .ah-solo__art { position: absolute; top: 0; left: 0; right: 0; height: 78px; }
 .ah-solo__cover { position: absolute; inset: 0; width: 100%; height: 100%; object-fit: cover; object-position: top; }
-.ah-solo__ic { position: absolute; left: 16px; bottom: -22px; display: flex; }
-.ah-solo__ic .ah-gl { box-shadow: 0 0 0 3px var(--ah-card); }
+.ah-solo__ic { position: absolute; left: 14px; bottom: -28px; display: flex; }
 .ah-solo__t { max-width: 100%; font-size: 15px; font-weight: 620; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .ah-solo__meta { margin-top: auto; display: flex; align-items: center; gap: 6px; min-height: 26px; font-size: 12px; color: var(--text-tertiary); }
 .ah-solo__meta i { font-style: normal; }
@@ -198,6 +203,7 @@ input.ah-sheet__name:hover, input.ah-sheet__name:focus { background: var(--ah-ho
 .ah-foot em { font-style: normal; color: var(--text-tertiary); }
 
 @media (prefers-color-scheme: dark) {
+  .ah-drop { background-image: url("/images/dark-drop.png"); color: rgba(210, 218, 232, 0.9); }
   .ah-card { box-shadow: 0 0 0 1px var(--ah-line), 0 8px 28px rgba(0, 0, 0, 0.35); }
   .ah-sheet__back { background: rgba(0, 0, 0, 0.45); }
 }

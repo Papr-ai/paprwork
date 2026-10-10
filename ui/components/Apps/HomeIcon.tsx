@@ -27,12 +27,22 @@ export function HomeIcon({ name, size = 16, className }: { name: HomeIconName; s
       viewBox="0 0 24 24"
       fill="none"
       stroke="currentColor"
-      strokeWidth={name === "more" ? 3 : 1.8}
+      strokeWidth={name === "more" ? 3 : name === "grid" ? 1.7 : 1.8}
       strokeLinecap="round"
       strokeLinejoin="round"
       aria-hidden="true"
     >
-      <path d={PATHS[name]} />
+      {name === "grid" ? (
+        // Same glyph as the Apps item in the left rail (railIcons.tsx).
+        <>
+          <rect x="4" y="4" width="6.5" height="6.5" rx="1.8" />
+          <rect x="13.5" y="4" width="6.5" height="6.5" rx="1.8" />
+          <rect x="4" y="13.5" width="6.5" height="6.5" rx="1.8" />
+          <rect x="13.5" y="13.5" width="6.5" height="6.5" rx="1.8" />
+        </>
+      ) : (
+        <path d={PATHS[name]} />
+      )}
     </svg>
   );
 }
