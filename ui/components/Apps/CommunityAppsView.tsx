@@ -24,6 +24,8 @@ import { lookupService } from "../../../src/core/data/knownServices";
 import { useAppCategories } from "../../hooks/useAppCategories";
 import { CategoryPills, matchesCategory } from "./CategoryPills";
 import "./CommunityAppsView.css";
+import "./AppsHome.css";
+import { DropGlyph } from "./HomeTiles";
 import { trackEvent } from "../../lib/telemetry";
 import {
   canInstallCloudCatalogEntry,
@@ -1098,61 +1100,6 @@ export function CommunityAppCard({
       ? !isCrossPlatform
       : requiresDesktop || !isCrossPlatform;
 
-  const renderIcon = () => {
-    if (entry.icon?.trim()) {
-      const trimmed = entry.icon.trim();
-
-      if (trimmed.startsWith("data:image/") || trimmed.startsWith("http")) {
-        return (
-          <img
-            className="community-card__orb-icon community-card__orb-icon--image"
-            src={trimmed}
-            alt={entry.name}
-            draggable={false}
-          />
-        );
-      }
-
-      if (trimmed.startsWith("<")) {
-        return (
-          <span
-            className="community-card__orb-icon"
-            dangerouslySetInnerHTML={{ __html: sanitizeIcon(trimmed) }}
-          />
-        );
-      }
-
-      const isEmoji =
-        trimmed.length <= 4 && /[\p{Emoji}]/u.test(trimmed);
-      if (isEmoji) {
-        return (
-          <span className="community-card__orb-icon">{trimmed}</span>
-        );
-      }
-    }
-
-    return (
-      <svg
-        className="community-card__orb-icon"
-        width="44"
-        height="44"
-        viewBox="0 0 24 24"
-        fill="none"
-      >
-        <defs>
-          <linearGradient id="community-papr-blue-gradient" x1="0%" y1="0%" x2="100%" y2="100%">
-            <stop offset="0%" stopColor="#00D4FF" />
-            <stop offset="100%" stopColor="#0066FF" />
-          </linearGradient>
-        </defs>
-        <rect x="3" y="3" width="7" height="7" rx="2" stroke="url(#community-papr-blue-gradient)" strokeWidth="1.5" />
-        <rect x="14" y="3" width="7" height="7" rx="2" stroke="url(#community-papr-blue-gradient)" strokeWidth="1.5" />
-        <rect x="3" y="14" width="7" height="7" rx="2" stroke="url(#community-papr-blue-gradient)" strokeWidth="1.5" />
-        <rect x="14" y="14" width="7" height="7" rx="2" stroke="url(#community-papr-blue-gradient)" strokeWidth="1.5" />
-      </svg>
-    );
-  };
-
   const showInstall = canInstallCloudCatalogEntry(entry, localAppId);
   /** Prefer local install over slow web preview when source is installable. */
   const showWebOpen = Boolean(onOpen) && (!showInstall || Boolean(localAppId));
@@ -1160,63 +1107,45 @@ export function CommunityAppCard({
   const installs = entry.installCount;
   // Everyone's installs (from Papr Cloud), not just the copies on this machine.
   const updatedAgo = formatCatalogUpdated(entry.updatedAt);
-  const byline = [
-    entry.isOwned ? null : getCatalogByline(entry),
-    updatedAgo ? `Updated ${updatedAgo}` : null,
-    typeof installs === "number" && installs > 0
-      ? `${installs.toLocaleString()} install${installs === 1 ? "" : "s"}`
-      : null,
-  ]
-    .filter(Boolean)
-    .join(" · ");
   const share = shareGlyphForCatalogEntry(entry);
   // Owner-approved cover (served by the cloud host); falls back to the icon on 404.
   const coverUrl = catalogCoverUrl(entry);
   const [coverFailed, setCoverFailed] = useState(false);
 
-  return (
-    <div className="community-card">
-      <div className="community-card__preview">
-        {coverUrl && !coverFailed ? (
-          <img
-            className="community-card__cover"
-            src={coverUrl}
-            alt=""
-            loading="lazy"
-            draggable={false}
-            onError={() => setCoverFailed(true)}
-          />
-        ) : (
-          <div className="community-card__orb">
-            <div className="community-card__orb-inner">{renderIcon()}</div>
-          </div>
-        )}
-      </div>
+  const byline = [
+    entry.isOwned ? null : getCatalogByline(entry),
+    updatedAgo ? `Updated ${updatedAgo}` : null,
+  ]
+    .filter(Boolean)
+    .join(" · ");
+  const installsLabel =
+    typeof installs === "number" && installs > 0
+      ? `${installs.toLocaleString()} install${installs === 1 ? "" : "s"}`
+      : undefined;
 
-      <div className="community-card__content">
-        <div className="community-card__title-row">
-          <h3 className="community-card__title">{entry.name}</h3>
-          {/* Same spot and glyph as library cards: right of the title. */}
-          <span
-            className="community-card__share"
-            title={shareBadge ?? shareAudienceShortLabel(share.audience)}
-          >
-            <ShareAudienceIcon
-              audience={share.audience}
-              loginAccess={null}
-              codeAccess={share.codeAccess}
+  // Same card shell as a single app on My apps: cover/banner, droplet logo,
+  // then description, and one footer row — byline left, Open / Get right.
+  return (
+    <div className="ah ah-card ah-solo ah-cat">
+      <div className="ah-solo__open">
+        <span className="ah-solo__art ah-pb-0">
+          {coverUrl && !coverFailed ? (
+            <img
+              className="ah-solo__cover"
+              src={coverUrl}
+              alt=""
+              loading="lazy"
+              draggable={false}
+              onError={() => setCoverFailed(true)}
             />
-          </span>
-          {entry.source === "opensource" ? (
-            <span className="community-card__badge community-card__badge--share community-card__badge--share-oss">
-              Open source
-            </span>
           ) : null}
-        </div>
-        <p className="community-card__description">{entry.description}</p>
-        {/* One quiet facts list: same icon + text style for schedule, keys
-            and platform, instead of mixed pills and coloured lines. Tags stay
-            searchable but are not shown on the card. */}
+          <span className="ah-solo__ic">
+            <DropGlyph icon={entry.icon?.trim().startsWith("<") ? sanitizeIcon(entry.icon.trim()) : entry.icon} title={entry.name} size={64} />
+          </span>
+        </span>
+        <span className="ah-solo__t" title={entry.name}>{entry.name}</span>
+      </div>
+      <p className="ah-cat__desc" title={entry.description}>{entry.description}</p>
         {(() => {
           const keyServices = Array.from(
             new Set(
@@ -1270,9 +1199,9 @@ export function CommunityAppCard({
           }
           if (facts.length === 0) return null;
           return (
-            <ul className="community-card__facts">
+            <ul className="ah-cat__facts">
               {facts.map((f) => (
-                <li key={f.key} className="community-card__fact" title={f.title ?? f.text}>
+                <li key={f.key} title={f.title ?? f.text}>
                   {f.icon}
                   <span>{f.text}</span>
                 </li>
@@ -1280,69 +1209,59 @@ export function CommunityAppCard({
             </ul>
           );
         })()}
-      </div>
-
-      {/* One footer row, pinned to the bottom of every card: who made it and
-          one compact action. */}
-      <div className="community-card__foot">
-          <div className="community-card__meta community-card__meta--foot">
-            {entry.isOwned ? (
-              <span className="community-card__mine" title="You published this app">
-                <svg viewBox="0 0 16 16" width="12" height="12" fill="none" stroke="currentColor" strokeWidth="2" aria-hidden="true">
-                  <path d="M3.5 8.5l3 3 6-7" strokeLinecap="round" strokeLinejoin="round" />
-                </svg>
-                Yours
-              </span>
+      <span className="ah-solo__meta">
+        {entry.isOwned ? <span className="ah-cat__mine">Yours</span> : null}
+        <span className="ah-cat__by" title={installsLabel ?? byline}>{byline}</span>
+        {entry.source === "cloud" ? (
+          <>
+            {showWebOpen ? (
+              <button
+                type="button"
+                className="ah-open"
+                onClick={onOpen}
+                title={
+                  installedForkCount > 1
+                    ? `${installedForkCount} copies in your library`
+                    : localAppId
+                      ? "Open your copy"
+                      : "Open on the web"
+                }
+                onMouseEnter={onOpenHover}
+                onFocus={onOpenHover}
+              >
+                Open
+              </button>
             ) : null}
-            <span className="community-card__byline">{byline}</span>
-          </div>
-      {entry.source === "cloud" ? (
-          <div className="community-card__actions">
-            <div className="community-card__actions-row">
-              {showWebOpen ? (
-                <button
-                  type="button"
-                  className={`community-card__action-btn${localAppId || entry.isOwned ? "" : " community-card__action-btn--primary"}`}
-                  onClick={onOpen}
-                  title={
-                    installedForkCount > 1
-                      ? `${installedForkCount} copies in your library`
-                      : localAppId
-                        ? "Open your copy"
-                        : undefined
-                  }
-                  onMouseEnter={onOpenHover}
-                  onFocus={onOpenHover}
-                >
-                  {localAppId ? "Open" : "Open in web"}
-                </button>
-              ) : null}
-              {showInstall ? (
-                <button
-                  type="button"
-                  className={`community-card__action-btn${showWebOpen ? "" : " community-card__action-btn--primary"}${isInstalling ? " community-card__action-btn--installing" : ""}`}
-                  onClick={onCloudInstall}
-                  disabled={isInstalling}
-                  aria-busy={isInstalling}
-                >
-                  <CommunityInstallButtonLabel
-                    installing={isInstalling}
-                    idleLabel="Personalize"
-                  />
-                </button>
-              ) : null}
-            </div>
-          </div>
+            {showInstall ? (
+              <button
+                type="button"
+                className="ah-open ah-open--primary"
+                style={showWebOpen ? { marginLeft: 0 } : undefined}
+                onClick={onCloudInstall}
+                disabled={isInstalling}
+                aria-busy={isInstalling}
+                title="Get your own copy"
+              >
+                <CommunityInstallButtonLabel installing={isInstalling} idleLabel="Get" />
+              </button>
+            ) : null}
+          </>
         ) : (
           <button
-            className={`community-card__import-btn ${isInstalled ? "community-card__import-btn--disabled community-card__import-btn--success" : ""}`}
+            type="button"
+            className={`ah-open${isInstalled ? "" : " ah-open--primary"}`}
             onClick={onOssImport}
             disabled={isInstalled}
           >
-            {isInstalled ? "Installed" : "Import"}
+            {isInstalled ? "Installed" : "Get"}
           </button>
         )}
-      </div>
+      </span>
+      <span className="ah-solo__tr">
+        <span className="ah-share" title={shareBadge ?? shareAudienceShortLabel(share.audience)}>
+          <ShareAudienceIcon audience={share.audience} loginAccess={null} codeAccess={share.codeAccess} />
+        </span>
+      </span>
     </div>
   );
 }

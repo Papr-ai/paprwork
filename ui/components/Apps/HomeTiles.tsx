@@ -21,7 +21,12 @@ export const displayTitle = (a: Artifact) => (isIdLikeTitle(a.title) ? "Untitled
  * Apps with no icon get their first letter inside the droplet.
  */
 export function AppGlyph({ app, size }: { app: Artifact; size: number }) {
-  const icon = app.icon?.trim() ?? "";
+  return <DropGlyph icon={app.icon} title={app.title} size={size} />;
+}
+
+/** Any logo (library app or catalog entry) inside the Papr glass droplet. */
+export function DropGlyph({ icon: raw, title, size }: { icon?: string | null; title: string; size: number }) {
+  const icon = raw?.trim() ?? "";
   const box = { width: size, height: size };
   if (/^(data:image\/|https?:\/\/)/.test(icon)) {
     return <img className="ah-gl ah-gl--img" src={icon} alt="" style={box} draggable={false} />;
@@ -36,7 +41,7 @@ export function AppGlyph({ app, size }: { app: Artifact; size: number }) {
       </span>
     );
   }
-  const letter = isIdLikeTitle(app.title) ? "?" : (app.title.trim()[0] ?? "?").toUpperCase();
+  const letter = isIdLikeTitle(title) ? "?" : (title.trim()[0] ?? "?").toUpperCase();
   return (
     <span className="ah-gl ah-drop ah-drop--letter" style={{ ...box, fontSize: size * 0.36 }}>
       {letter}
@@ -269,11 +274,18 @@ export function AppTile(p: AppTileProps) {
           </>
         ) : (
           <>
-            {p.status ? <span className={p.status.bad ? "ah-st ah-st--bad" : "ah-st"}>{p.status.text}</span> : null}
-            {p.status && p.meta ? <i>·</i> : null}
-            {p.meta}
+            {p.status ? (
+              <span className={p.status.bad ? "ah-st ah-st--bad" : "ah-st"} title={p.status.text}>
+                {p.status.text}
+              </span>
+            ) : (
+              <span className="ah-st ah-st--quiet">{p.meta}</span>
+            )}
           </>
         )}
+        <button type="button" className="ah-open" onClick={p.onOpen}>
+          Open
+        </button>
       </span>
       <span className="ah-solo__tr">
         <ShareMark share={p.share} />
