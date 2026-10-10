@@ -220,8 +220,13 @@ export class TursoDbAdapter {
           } finally {
             baseClient.close();
           }
-        } catch {
-          // Best-effort — empty per-user DB is still valid
+        } catch (err) {
+          // Expected for visitors: only the publisher can open the base database.
+          // The memory server seeds a new per-user copy with the base schema when
+          // it issues the token, so this client-side copy is only a fallback.
+          console.warn(
+            `[TursoDbAdapter] per-user schema seed from ${baseName} skipped: ${(err as Error).message?.slice(0, 160)}`,
+          );
         }
       }
     }
