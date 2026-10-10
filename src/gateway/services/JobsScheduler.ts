@@ -228,18 +228,22 @@ export class JobsScheduler {
       }
       const leaseKey = this.getLeaseKey(job.id);
       if (this.runningLeases.has(leaseKey)) {
-        //console.log(`[JobsScheduler] Skipping job ${job.id} (${job.name}) - already has lease`);
         continue;
       }
+      // Reserve before the network await. tick() runs concurrently (backup poll,
+      // wake timer, requestReschedule — and several pile up behind
+      // waitForWorkspaceReady after sleep). Checking has() before the await and
+      // add() after it let two ticks both launch the same slot; the memory-side
+      // lease cannot stop that because it is re-entrant for holder "desktop".
+      this.runningLeases.add(leaseKey);
 
       const runLease = await tryAcquireSchedulerRunLease(job.id, dueAt);
       if (!runLease.acquired) {
+        this.runningLeases.delete(leaseKey);
         skippedRunLease++;
         continue;
       }
-      
-      //console.log(`[JobsScheduler] Launching job ${job.id} (${job.name}) for slot ${dueAt}`);
-      this.runningLeases.add(leaseKey);
+
       launchedCount.value += 1;
       const launch = (async () => {
         const triggeredAt = new Date().toISOString();
