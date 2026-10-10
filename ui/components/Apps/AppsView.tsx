@@ -11,7 +11,8 @@ import { openAppToFix } from "../../utils/openAppToFix";
 import { gateway } from "../../src/lib/gateway";
 import { type AppStatus } from "./AppCard";
 import { CommunityAppsView } from "./CommunityAppsView";
-import { AppsSidebar } from "./AppsSidebar";
+import { AppsHome } from "./AppsHome";
+import { HomeIcon } from "./HomeIcon";
 import { LibraryPane } from "./LibraryPane";
 import { DuplicateCleanupView } from "./DuplicateCleanupView";
 import {
@@ -23,7 +24,6 @@ import { useAppCategories } from "../../hooks/useAppCategories";
 import {
   findDuplicateGroups,
   isLibrarySection,
-  sectionCounts,
   type AppsSection,
   type LibrarySection,
 } from "../../utils/appsLibrary";
@@ -449,10 +449,6 @@ export function AppsView() {
     () => [...allApps].sort((a, b) => lastActivity(b) - lastActivity(a)),
     [allApps],
   );
-  const counts = useMemo(
-    () => sectionCounts(sortedApps, { publishedIds, health }),
-    [sortedApps, publishedIds, health],
-  );
   const duplicateGroups = useMemo(
     () => findDuplicateGroups(sortedApps, lastActivity),
     [sortedApps],
@@ -482,6 +478,13 @@ export function AppsView() {
   );
 
   const librarySection: LibrarySection = isLibrarySection(section) ? section : "recent";
+  const categoryOf = useCallback(
+    (id: string) => categorySnapshot.byKey[`app:${id}`] ?? null,
+    [categorySnapshot.byKey],
+  );
+  const homeKey = `papr-apps-home:${papr.namespaceId ?? "local"}`;
+  const area: "mine" | "team" | "community" =
+    section === "team" ? "team" : section === "community" ? "community" : "mine";
   // One search box covers the library, the team and the community; typing
   // swaps whatever section is showing for a single results page.
   const searching = searchQuery.trim().length > 0;
@@ -506,7 +509,29 @@ export function AppsView() {
   return (
     <div className="apps-view">
       <header className="apps-view__topbar">
-        <h2 className="apps-view__brand">Apps</h2>
+        <nav className="apps-view__areas" aria-label="Apps">
+          {(
+            [
+              ["mine", "My apps", "grid"],
+              ...(showNamespaceTabs ? [["team", "Team apps", "users"]] : []),
+              ["community", "Community apps", "globe"],
+            ] as Array<["mine" | "team" | "community", string, "grid" | "users" | "globe"]>
+          ).map(([id, label, icon]) => (
+            <button
+              key={id}
+              type="button"
+              className={`apps-view__area${area === id && !searching ? " is-on" : ""}`}
+              aria-current={area === id && !searching ? "page" : undefined}
+              onClick={() => {
+                setSearchQuery("");
+                setSection(id === "mine" ? "recent" : id);
+              }}
+            >
+              <HomeIcon name={icon} size={16} />
+              {label}
+            </button>
+          ))}
+        </nav>
         <label className="apps-view__search">
           <svg
             className="apps-view__search-icon"
@@ -552,20 +577,12 @@ export function AppsView() {
           onClick={() => setShowCreateModal(true)}
           className="apps-view__create-btn"
         >
-          + New app
+          <HomeIcon name="plus" size={15} />
+          New app
         </button>
       </header>
 
       <div className="apps-view__body">
-        <AppsSidebar
-          active={searching ? null : section}
-          counts={counts}
-          showTeam={showNamespaceTabs}
-          onSelect={(next) => {
-            setSearchQuery("");
-            setSection(next);
-          }}
-        />
         <div className="apps-view__content">
           {searching ? (
             <>
@@ -684,7 +701,33 @@ export function AppsView() {
               onCancel={() => setCleaningUp(false)}
               onArchive={archiveApps}
             />
+          ) : librarySection === "recent" ? (
+            <AppsHome
+              apps={sortedApps}
+              health={health}
+              publishedIds={publishedIds}
+              shareById={shareById}
+              categoryOf={categoryOf}
+              storageKey={homeKey}
+              showCopyAction={showCopyAction}
+              showTeam={showNamespaceTabs}
+              duplicateExtraCount={duplicateExtraCount}
+              onStartCleanup={() => setCleaningUp(true)}
+              onSelectSection={setSection}
+              onOpen={handleOpen}
+              onDelete={(id) => void handleDelete(id)}
+              onToggleFavorite={(id) => void handleToggleFavorite(id)}
+              onRename={(id, t) => void handleRename(id, t)}
+              onSetStatus={(id, st) => void handleSetStatus(id, st)}
+              onCopy={setCopyAppTarget}
+              onFix={fixApp}
+            />
           ) : (
+            <>
+            <button type="button" className="apps-view__back" onClick={() => setSection("recent")}>
+              <HomeIcon name="back" size={14} />
+              My apps
+            </button>
             <LibraryPane
               section={librarySection}
               apps={sortedApps}
@@ -704,6 +747,7 @@ export function AppsView() {
               onCopy={setCopyAppTarget}
               onFix={fixApp}
             />
+            </>
           )}
         </div>
       </div>
