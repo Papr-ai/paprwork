@@ -22,6 +22,8 @@ export const LOCAL_SYNC_STATE_GITIGNORE_LINES = [
   "data/.turso-convergence-state.json",
   "data/.legacy-home-job-migration.json",
   "data/.gateway-sync-busy.json",
+  // Private app covers show the user's real data — never synced (see appCovers.ts).
+  "data/covers/",
 ] as const;
 
 const JOB_RUNTIME_GITIGNORE_LINES = [

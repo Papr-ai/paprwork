@@ -728,3 +728,20 @@
   padding: 4px 0;
 }
 .app-card__menu-cats .is-current { font-weight: 600; color: var(--accent, var(--text-primary)); }
+
+/* Cover: a picture of the app's first screen across the top of the card.
+   Falls back to the plain card (icon + name) when there is no cover yet. */
+.app-card__cover {
+  display: block;
+  flex: none;
+  height: 112px;
+  margin: -16px -18px 12px;
+  width: calc(100% + 36px);
+  object-fit: cover;
+  object-position: top center;
+  border-bottom: 1px solid var(--border-color, rgba(0, 0, 0, 0.06));
+  background: var(--bg-secondary, rgba(0, 0, 0, 0.03));
+}
+.app-card.app-card--has-cover .app-card__preview { top: 140px; }
+.app-card.app-card--has-cover .app-card__share { top: 146px; }
+.app-card.app-card--has-cover .app-card__menu-wrap { top: 138px; }

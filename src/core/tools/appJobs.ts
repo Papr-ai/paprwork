@@ -4303,6 +4303,16 @@ IMPORTANT: Run this after creating/editing app files to catch issues early!`,
       "../../gateway/utils/miniAppRuntimePreview.js"
     );
     const runtimeCheck = await runPostValidationRuntimeCheck(args.appId);
+    // Keep the screenshot validate already took as this user's private app cover
+    // (it is otherwise thrown away). Never shared — see services/appCovers.ts.
+    if (runtimeCheck.preview.previewScreenshot && runtimeCheck.allErrors.length === 0) {
+      try {
+        const { savePrivateCover } = await import("../../gateway/services/appCovers.js");
+        savePrivateCover(args.appId, runtimeCheck.preview.previewScreenshot, "validate");
+      } catch (err) {
+        console.warn("[validate_app] cover save skipped:", (err as Error).message);
+      }
+    }
 
     const previewLoadIssues = runtimeCheck.loadWarnings.map((message, index) => ({
       file: "preview",

@@ -2801,6 +2801,26 @@ app.whenReady().then(async () => {
   ipcMain.handle("agent-preview:capture-thumbnail", async (_event, webviewId) =>
     captureWebviewThumbnail(webviewId),
   );
+  // App cover: capture the visible app iframe area of the caller's window as a small JPEG.
+  // The page is already painted, so this is a cheap GPU readback (no extra render).
+  ipcMain.handle("app-cover:capture-rect", async (event, rect) => {
+    try {
+      const r = rect && typeof rect === "object" ? rect : null;
+      if (!r || !(r.width > 40) || !(r.height > 40)) return { success: false, error: "bad_rect" };
+      const image = await event.sender.capturePage({
+        x: Math.max(0, Math.round(r.x)),
+        y: Math.max(0, Math.round(r.y)),
+        width: Math.round(r.width),
+        height: Math.round(r.height),
+      });
+      const size = image.getSize();
+      if (size.width <= 0 || size.height <= 0) return { success: false, error: "empty" };
+      const scaled = size.width > 640 ? image.resize({ width: 640, quality: "good" }) : image;
+      return { success: true, dataUrl: `data:image/jpeg;base64,${scaled.toJPEG(72).toString("base64")}` };
+    } catch (err) {
+      return { success: false, error: String(err && err.message ? err.message : err) };
+    }
+  });
 
   registerPlatformBrowserIPC(ipcMain, () => mainWindow);
 

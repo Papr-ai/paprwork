@@ -9,6 +9,7 @@ import "./AppCard.css";
 import type { AppStatusLine } from "../../utils/appStatusLine";
 import type { ShareGlyph } from "../../utils/shareGlyph";
 import { ShareAudienceIcon } from "./WebSyncPopover";
+import { APP_COVER_CHANGED_EVENT, appCoverUrl, setAppCoverShared } from "../../utils/appCover";
 
 export type AppStatus = "draft" | "active" | "archived";
 
@@ -72,6 +73,22 @@ export function AppCard({
   const menuPopRef = useRef<HTMLDivElement>(null);
   // Menu renders in a portal (fixed) so the card's overflow:hidden can't clip it.
   const [menuPos, setMenuPos] = useState<{ top: number; right: number } | null>(null);
+  // Cover = picture of the app's first screen (own private one, else owner-shared).
+  const [coverVersion, setCoverVersion] = useState(() => artifact.updatedAt);
+  const [hasCover, setHasCover] = useState(true);
+  useEffect(() => {
+    const onChanged = (e: Event) => {
+      if ((e as CustomEvent<{ appId?: string }>).detail?.appId !== artifact.id) return;
+      setHasCover(true);
+      setCoverVersion(String(Date.now()));
+    };
+    window.addEventListener(APP_COVER_CHANGED_EVENT, onChanged);
+    return () => window.removeEventListener(APP_COVER_CHANGED_EVENT, onChanged);
+  }, [artifact.id]);
+  useEffect(() => {
+    setHasCover(true);
+    setCoverVersion(artifact.updatedAt);
+  }, [artifact.updatedAt]);
 
   useEffect(() => {
     if (!menuOpen) setPickingCategory(false);
@@ -281,11 +298,21 @@ export function AppCard({
 
   return (
     <div
-      className={`app-card ${featured ? "app-card--featured" : ""} ${compact ? "app-card--compact" : ""}`}
+      className={`app-card ${featured ? "app-card--featured" : ""} ${compact ? "app-card--compact" : ""} ${hasCover && !compact ? "app-card--has-cover" : ""}`}
       onClick={onOpen}
       draggable
       onDragStart={handleDragStart}
     >
+      {hasCover && !compact ? (
+        <img
+          className="app-card__cover"
+          src={appCoverUrl(artifact.id, coverVersion)}
+          alt=""
+          loading="lazy"
+          draggable={false}
+          onError={() => setHasCover(false)}
+        />
+      ) : null}
       <div className="app-card__preview">
         {artifact.preview &&
         /^(data:image\/|https?:\/\/)/.test(artifact.preview) ? (
@@ -564,6 +591,18 @@ export function AppCard({
                   Archive
                 </button>
               </>
+            )}
+            {hasCover && (
+              <button
+                role="menuitem"
+                title="Others see this picture on your app's card. Only shared when you choose."
+                onClick={() => {
+                  setMenuOpen(false);
+                  void setAppCoverShared(artifact.id, true);
+                }}
+              >
+                Use cover when shared
+              </button>
             )}
             {showCopyAction && onCopy && (
               <button

@@ -807,6 +807,11 @@ async function startGateway(): Promise<void> {
     });
 
     /** Public embedded sub-agent chat config for mini-app SDK */
+    {
+      const { registerAppCoverRoutes } = await import("./routes/appCoverRoutes.js");
+      registerAppCoverRoutes(app);
+    }
+
     app.get("/api/apps/:appId/agent-chat", async (req, res) => {
       try {
         const appId = req.params.appId;

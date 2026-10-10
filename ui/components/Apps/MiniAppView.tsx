@@ -22,6 +22,7 @@ import {
 } from "../../utils/cloudDesktopPreview";
 import { prepareCloudPreviewIframe } from "../../utils/cloudPreviewSession";
 import { usePreviewTabLifecycle } from "../../utils/previewIframeLifecycle";
+import { maybeCaptureAppCover } from "../../utils/appCover";
 import { resyncAllPreviewFramePhases } from "../../utils/rendererPerformance";
 import { isBenignPreviewFetchAbortMessage } from "../../utils/previewFetchAbort";
 import { shouldSuppressMiniAppRuntimeBanner } from "../../utils/previewNetworkErrors";
@@ -220,6 +221,16 @@ export function MiniAppView({
   ]);
 
   usePreviewTabLifecycle(iframeRef, previewTabVisible, appId, iframeSrc);
+
+  // Private app cover: once the app has rendered and sat on screen a few seconds,
+  // grab the already-painted frame. Server keeps at most one per app per day.
+  useEffect(() => {
+    if (isPublishedPreview || !previewTabVisible || !previewShellLoaded) return;
+    const timer = window.setTimeout(() => {
+      void maybeCaptureAppCover(appId, iframeRef.current).catch(() => undefined);
+    }, 5000);
+    return () => window.clearTimeout(timer);
+  }, [appId, isPublishedPreview, previewTabVisible, previewShellLoaded, iframeLoadKey]);
 
   useEffect(() => {
     setPreviewShellLoaded(false);
