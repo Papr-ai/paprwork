@@ -262,26 +262,19 @@ export function AppTile(p: AppTileProps) {
         />
       </button>
       <span className="ah-solo__meta">
-        {p.isNew ? (
-          <>
-            <span className="ah-new">New</span>
-            {p.moveTo ? (
-              <button type="button" className="ah-move" onClick={p.onMove}>
-                <HomeIcon name="layers" size={13} />
-                Move to {p.moveTo}
-              </button>
-            ) : null}
-          </>
-        ) : (
-          <>
-            {p.status ? (
-              <span className={p.status.bad ? "ah-st ah-st--bad" : "ah-st"} title={p.status.text}>
-                {p.status.text}
-              </span>
-            ) : (
-              <span className="ah-st ah-st--quiet">{p.meta}</span>
-            )}
-          </>
+        {p.isNew ? <span className="ah-new">New</span> : null}
+        {p.isNew && p.moveTo ? (
+          <button type="button" className="ah-move" onClick={p.onMove}>
+            <HomeIcon name="layers" size={13} />
+            Move to {p.moveTo}
+          </button>
+        ) : null}
+        {p.status ? (
+          <span className={p.status.bad ? "ah-st ah-st--bad" : "ah-st"} title={p.status.text}>
+            {p.status.text}
+          </span>
+        ) : p.isNew ? null : (
+          <span className="ah-st ah-st--quiet">{p.meta}</span>
         )}
         <button type="button" className="ah-open" onClick={p.onOpen}>
           Open

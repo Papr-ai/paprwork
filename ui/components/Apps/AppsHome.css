@@ -161,6 +161,8 @@
   opacity: 0; transition: opacity 0.15s;
 }
 .ah-solo:hover .ah-move, .ah-move:focus-visible { opacity: 1; }
+.ah-move { position: absolute; left: 70px; bottom: 15px; background: var(--ah-card); }
+.ah-solo:hover .ah-move + .ah-st { visibility: hidden; }
 .ah-move:hover { background: var(--ah-hover); }
 .ah-rename {
   width: 100%; font: inherit; font-size: 13px; font-weight: 600; padding: 3px 6px; border-radius: 6px;
