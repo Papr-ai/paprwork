@@ -44,6 +44,7 @@ export const BUILTIN_MCP_SERVERS: readonly McpServerDefinition[] = [
   { id: "todoist", name: "Todoist", url: "https://ai.todoist.net/mcp", transport: "streamable-http", category: "Projects", description: "Tasks and projects" },
   { id: "airtable", name: "Airtable", url: "https://mcp.airtable.com/mcp", transport: "streamable-http", category: "Data", description: "Bases, tables, records" },
   { id: "miro", name: "Miro", url: "https://mcp.miro.com/", transport: "streamable-http", category: "Design", description: "Boards and diagrams" },
+  { id: "lucid", name: "Lucid", url: "https://mcp.lucid.app/mcp", transport: "streamable-http", category: "Design", description: "Lucidchart and Lucidspark documents" },
   { id: "canva", name: "Canva", url: "https://mcp.canva.com/mcp", transport: "streamable-http", category: "Design", description: "Designs, assets, brand kits" },
   { id: "webflow", name: "Webflow", url: "https://mcp.webflow.com/mcp", transport: "streamable-http", category: "Content", description: "Sites, CMS collections" },
   { id: "wix", name: "Wix", url: "https://mcp.wix.com/mcp", transport: "streamable-http", category: "Content", description: "Sites, stores, bookings" },
