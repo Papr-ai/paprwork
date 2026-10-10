@@ -14,27 +14,27 @@ type Org = ReturnType<typeof useOrgConnections>;
 const OPTIONS: { key: keyof OrgConnectionPolicy; label: string; hint: string; values: [string, string][] }[] = [
   {
     key: "mode",
-    label: "Members can connect",
-    hint: "Approved only: members request a service and you approve it here.",
-    values: [["all", "Any service"], ["approved", "Approved only"], ["none", "Nothing (admins only)"]],
+    label: "Services members can connect",
+    hint: "With Approved, members request one and you decide here.",
+    values: [["all", "Any"], ["approved", "Approved"], ["none", "None"]],
   },
   {
     key: "maxShare",
-    label: "Widest a member can share a connection",
-    hint: "Applies to API keys too.",
-    values: [["user", "Only themselves"], ["members", "Selected people"], ["namespace", "Their team"], ["org", "The whole org"]],
+    label: "Widest a member can share",
+    hint: "Connections and API keys alike.",
+    values: [["user", "Only me"], ["members", "People"], ["namespace", "Team"], ["org", "Org"]],
   },
   {
     key: "maxPenAccess",
     label: "Most access Pen can get",
     hint: "Members can choose less, never more.",
-    values: [["read", "Read only"], ["ask", "Ask before changes"], ["full", "Full access"]],
+    values: [["read", "Read"], ["ask", "Ask first"], ["full", "Full"]],
   },
   {
     key: "setupBy",
-    label: "Who can set up services that need setup",
-    hint: "HubSpot, Slack, GitHub and similar need a one-time OAuth app.",
-    values: [["admins", "Admins only"], ["anyone", "Anyone"]],
+    label: "Who can set up services",
+    hint: "HubSpot, Slack, GitHub and similar need a one-time app.",
+    values: [["admins", "Admins"], ["anyone", "Anyone"]],
   },
 ];
 
@@ -44,7 +44,7 @@ function RequestRow({ r, org }: { r: ConnectionRequest; org: Org }) {
   const who = r.requesters.length === 1 ? "1 person" : `${r.requesters.length} people`;
   const notes = r.requesters.map((q) => q.note).filter(Boolean);
   return (
-    <li className="org-conn__req">
+    <li className="svc-row org-conn__req">
       <div className="org-conn__req-main">
         <b>{r.serverName}</b>
         <span className="org-conn__muted">Requested by {who}</span>
@@ -81,6 +81,18 @@ function RequestRow({ r, org }: { r: ConnectionRequest; org: Org }) {
   );
 }
 
+function Seg({ label, value, options, onPick }: { label: string; value: string; options: [string, string][]; onPick: (v: string) => void }) {
+  return (
+    <div className="org-seg" role="radiogroup" aria-label={label}>
+      {options.map(([v, l]) => (
+        <button key={v} type="button" role="radio" aria-checked={value === v} className={value === v ? "is-on" : ""} onClick={() => value !== v && onPick(v)}>
+          {l}
+        </button>
+      ))}
+    </div>
+  );
+}
+
 export function OrgConnectionsPanel({ org }: { org: Org }) {
   const ref = useRef<HTMLElement>(null);
   useEffect(() => {
@@ -94,51 +106,37 @@ export function OrgConnectionsPanel({ org }: { org: Org }) {
 
   return (
     <section className="org-conn" ref={ref} aria-label="Org settings">
-      <h3 className="connections-view__group">Org settings</h3>
-
-      <div className="org-conn__card">
-        <h4>Requests{org.requests.length ? ` (${org.requests.length})` : ""}</h4>
-        {org.requests.length === 0 ? (
-          <p className="org-conn__muted">No pending requests.</p>
-        ) : (
-          <ul className="org-conn__reqs">
+      {org.requests.length > 0 && (
+        <section className="svc-sec">
+          <div className="svc-sec__h"><h3>Requests</h3><span>{org.requests.length}</span></div>
+          <ul className="svc-list org-conn__reqs">
             {org.requests.map((r) => (
               <RequestRow key={r.id} r={r} org={org} />
             ))}
           </ul>
-        )}
-      </div>
+        </section>
+      )}
 
-      <div className="org-conn__card">
-        <h4>Rules</h4>
-        {OPTIONS.map((o) => (
-          <label key={o.key} className="org-conn__rule">
-            <span>
-              {o.label}
-              <small className="org-conn__muted">{o.hint}</small>
-            </span>
-            <select
-              className="form-input"
-              aria-label={o.label}
-              value={String(policy[o.key])}
-              onChange={(e) => void org.updatePolicy({ [o.key]: e.target.value } as Partial<OrgConnectionPolicy>)}
-            >
-              {o.values.map(([v, l]) => (
-                <option key={v} value={v}>
-                  {l}
-                </option>
-              ))}
-            </select>
-          </label>
-        ))}
-        {policy.mode === "approved" && (
-          <p className="org-conn__muted">
-            Approved: {policy.approved.length ? policy.approved.join(", ") : "none yet"}. Connections made before this
-            rule keep working.
-          </p>
-        )}
+      <section className="svc-sec">
+        <div className="svc-sec__h"><h3>Org rules</h3><span className="org-conn__hnote">Apply to everyone in your org</span></div>
+        <div className="svc-list">
+          {OPTIONS.map((o) => (
+            <div key={o.key} className="org-rule">
+              <div className="svc-row__text">
+                <b className="svc-row__name">{o.label}</b>
+                <span className="org-conn__muted">{o.hint}</span>
+              </div>
+              <Seg label={o.label} value={String(policy[o.key])} options={o.values} onPick={(v) => void org.updatePolicy({ [o.key]: v } as Partial<OrgConnectionPolicy>)} />
+            </div>
+          ))}
+          {policy.mode === "approved" && (
+            <p className="org-conn__muted org-conn__foot">
+              Approved: {policy.approved.length ? policy.approved.join(", ") : "none yet"}. Connections made before this rule keep working.
+            </p>
+          )}
+        </div>
         {org.error && <p className="org-conn__error">{org.error}</p>}
-      </div>
+      </section>
     </section>
   );
 }

@@ -88,87 +88,32 @@
   justify-content: flex-end;
 }
 
-/* Org settings (admins) */
-.org-conn {
-  margin-top: 28px;
-}
+/* Org settings (admins): same grouped list as Services */
+.org-conn { margin-top: 8px; }
+.org-conn__hnote { margin-left: auto; }
+.org-conn__muted { font-size: 12.5px; color: var(--cx-mid); }
+.org-conn__error { margin: 8px 4px 0; font-size: 12px; color: var(--error); }
+.org-conn__reqs { margin: 0; padding: 0; list-style: none; }
+.org-conn__req { flex-wrap: wrap; justify-content: space-between; }
+.org-conn__req-main { display: grid; gap: 2px; min-width: 0; flex: 1; }
+.org-conn__note { font-size: 12px; color: var(--cx-mid); }
+.org-conn__req-actions { display: flex; gap: 8px; }
+.org-conn__req-actions .form-input { width: 200px; }
+.org-conn__foot { margin: 0; padding: 10px 14px; border-top: 1px solid var(--border-color); }
 
-.org-conn__card {
-  padding: 14px 16px;
-  margin-bottom: 12px;
-  border: 1px solid var(--cx-line);
-  border-radius: 12px;
-  background: var(--cx-card);
-}
+.org-rule { display: flex; align-items: center; gap: 14px; padding: 12px 14px; }
+.org-rule + .org-rule { border-top: 1px solid var(--border-color); }
 
-.org-conn__card h4 {
-  margin: 0 0 10px;
-  font-size: 13px;
-  font-weight: 600;
+.org-seg { display: inline-flex; flex: none; gap: 2px; padding: 3px; border-radius: 9px; background: var(--cx-fill); }
+.org-seg button {
+  padding: 5px 11px; border: 0; border-radius: 7px; background: transparent;
+  color: var(--cx-mid); font: 500 12.5px var(--font-body); cursor: pointer; white-space: nowrap;
 }
+.org-seg button:hover { color: var(--cx-ink); }
+.org-seg button.is-on { background: var(--cx-pop); color: var(--cx-ink); box-shadow: 0 1px 2px var(--cx-shadow); }
 
-.org-conn__muted {
-  display: block;
-  margin: 2px 0 0;
-  font-size: 12px;
-  color: var(--text-secondary);
-}
-
-.org-conn__error {
-  margin: 8px 0 0;
-  font-size: 12px;
-  color: var(--error);
-}
-
-.org-conn__reqs {
-  margin: 0;
-  padding: 0;
-  list-style: none;
-}
-
-.org-conn__req {
-  display: flex;
-  flex-wrap: wrap;
-  align-items: center;
-  justify-content: space-between;
-  gap: 10px;
-  padding: 10px 0;
-  border-top: 1px solid var(--border-color);
-}
-
-.org-conn__req:first-child {
-  border-top: 0;
-  padding-top: 0;
-}
-
-.org-conn__req-main {
-  display: grid;
-  gap: 2px;
-  min-width: 0;
-}
-
-.org-conn__note {
-  font-size: 12px;
-  color: var(--text-secondary);
-}
-
-.org-conn__req-actions {
-  display: flex;
-  gap: 8px;
-}
-
-.org-conn__rule {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  gap: 16px;
-  padding: 8px 0;
-  font-size: 13px;
-}
-
-.org-conn__rule select {
-  flex: none;
-  min-width: 180px;
+@media (max-width: 560px) {
+  .org-rule { flex-direction: column; align-items: stretch; gap: 8px; }
 }
 
 /* Request states on service cards */

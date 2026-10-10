@@ -60,7 +60,7 @@ describe("OrgConnectionsPanel", () => {
   it("changes a rule", () => {
     const org = makeOrg();
     render(<OrgConnectionsPanel org={org} />);
-    fireEvent.change(screen.getByLabelText("Most access Pen can get"), { target: { value: "ask" } });
+    fireEvent.click(screen.getByRole("radio", { name: "Ask first" }));
     expect((org as { updatePolicy: ReturnType<typeof vi.fn> }).updatePolicy).toHaveBeenCalledWith({ maxPenAccess: "ask" });
   });
 });
