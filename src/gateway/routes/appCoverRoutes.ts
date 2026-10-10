@@ -1,5 +1,4 @@
 /** HTTP routes for app covers (see services/appCovers.ts for the privacy model). */
-import * as fs from "fs";
 import type { Express } from "express";
 import {
   coverStatus,
@@ -19,7 +18,7 @@ export function registerAppCoverRoutes(app: Express): void {
       res.status(404).end();
       return;
     }
-    const buf = fs.readFileSync(found.file);
+    const buf = found.body;
     res.setHeader("Content-Type", sniffImageType(buf));
     res.setHeader("Cache-Control", "no-cache");
     res.setHeader("X-Papr-Cover-Slot", found.slot);
@@ -44,6 +43,26 @@ export function registerAppCoverRoutes(app: Express): void {
       return;
     }
     res.json(savePrivateCover(req.params.appId ?? "", body.dataUrl, source));
+  });
+
+  /** Retake: render the app in the hidden preview window and keep that frame. */
+  app.post("/api/apps/:appId/cover/retake", async (req, res) => {
+    const appId = req.params.appId ?? "";
+    if (!isValidCoverAppId(appId)) {
+      res.status(400).json({ error: "invalid appId" });
+      return;
+    }
+    try {
+      const { runMiniAppRuntimePreview } = await import("../utils/miniAppRuntimePreview.js");
+      const preview = await runMiniAppRuntimePreview(appId);
+      if (!preview.previewScreenshot) {
+        res.json({ saved: false, reason: preview.skippedReason ?? "no_screenshot" });
+        return;
+      }
+      res.json(savePrivateCover(appId, preview.previewScreenshot, "validate"));
+    } catch (err) {
+      res.status(500).json({ error: (err as Error).message });
+    }
   });
 
   /** Owner approval: share (or stop sharing) the current private cover. */

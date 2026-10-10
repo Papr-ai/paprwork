@@ -1,0 +1,31 @@
+.pis { display: flex; flex-direction: column; gap: 14px; padding: 4px 20px 18px; }
+.pis-lead { margin: 0; color: var(--text-secondary); font-size: 13px; }
+.pis-field { display: flex; flex-direction: column; gap: 6px; }
+.pis-label { font-size: 12px; font-weight: 600; color: var(--text-secondary); }
+.pis-input {
+  font: inherit; font-size: 13.5px; color: var(--text-primary); resize: vertical;
+  padding: 8px 10px; border-radius: 9px; border: 1px solid var(--border-color);
+  background: var(--bg-secondary, transparent);
+}
+.pis-input:focus { outline: none; border-color: var(--accent, #0161e0); }
+.pis-covers { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; }
+.pis-cover {
+  display: flex; flex-direction: column; gap: 6px; padding: 6px; cursor: pointer;
+  border-radius: 12px; border: 1.5px solid var(--border-color); background: transparent;
+  color: var(--text-primary); font: inherit;
+}
+.pis-cover.is-on { border-color: var(--accent, #0161e0); box-shadow: 0 0 0 3px rgba(1, 97, 224, 0.15); }
+.pis-cover:disabled { cursor: default; opacity: 0.6; }
+.pis-cover img, .pis-banner, .pis-empty {
+  display: block; width: 100%; aspect-ratio: 16 / 9; border-radius: 8px; object-fit: cover; object-position: top;
+}
+.pis-banner { background: linear-gradient(135deg, #0161e0, #4f46e5); }
+.pis-empty {
+  display: grid; place-items: center; font-size: 12px; color: var(--text-tertiary);
+  background: var(--bg-secondary, rgba(0, 0, 0, 0.04));
+}
+.pis-cap { font-size: 12.5px; font-weight: 500; text-align: center; }
+.pis-row { display: flex; align-items: center; gap: 10px; }
+.pis-hint { font-size: 12px; color: var(--text-tertiary); }
+.pis-error { margin: 0; font-size: 12.5px; color: var(--danger, #d92d20); }
+.pis-foot { display: flex; justify-content: flex-end; gap: 8px; padding-top: 4px; }
