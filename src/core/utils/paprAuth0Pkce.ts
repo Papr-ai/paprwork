@@ -15,7 +15,7 @@ export interface PaprAuth0Config {
 
 const DEFAULT_SCOPE = "openid profile email offline_access";
 
-function normalizeAuth0Domain(domain: string): string {
+export function normalizeAuth0Domain(domain: string): string {
   return domain.replace(/^https?:\/\//, "");
 }
 
