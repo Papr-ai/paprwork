@@ -110,6 +110,26 @@ const AGENT_HINTS: Record<string, Pick<MiniAppSdkModule, "summary" | "exports">>
       summary: "Plan card UI for agent-chat (internal)",
       exports: "(internal)",
     },
+    "papr-card.ts": {
+      summary: "Claude card kit — custom cards/*.ts views (metadata.claude); fetch('/api/*') works unchanged",
+      exports: "card({ primary, render, onResult })",
+    },
+    "papr-card-views.ts": {
+      summary: "Default Claude card views (status / action / approval) — usually generated, not imported",
+      exports: "statusView, actionView, approvalView, renderValue",
+    },
+    "papr-card-style.ts": {
+      summary: "Claude card frame CSS (internal)",
+      exports: "(internal)",
+    },
+    "papr-mcp-bridge.ts": {
+      summary: "MCP Apps host bridge for Claude cards (internal)",
+      exports: "(internal)",
+    },
+    "papr-mcp-transport.ts": {
+      summary: "Routes /api/* through papr_api inside Claude cards (internal)",
+      exports: "(internal)",
+    },
   };
 
 function routeForFile(file: string, format: MiniAppSdkFormat): string {

@@ -126,6 +126,19 @@ export async function prepareAppForCloudGitSync(
       );
     }
 
+    // Claude cards (metadata.claude): dist/cards/*.html. Isolated so a card error never blocks publish.
+    try {
+      const { buildAppCards } = await import("../mcp/cardBuild.js");
+      const cards = await buildAppCards(appDir);
+      if (cards.enabled && !cards.success) {
+        console.warn(`[CloudSync] Claude cards failed for ${appId}:`, cards.errors.slice(0, 2).join("; "));
+      } else if (cards.cards.length > 0) {
+        console.log(`[CloudSync] Built ${cards.cards.length} Claude card(s) for ${appId}`);
+      }
+    } catch (error) {
+      console.warn(`[CloudSync] Claude cards skipped for ${appId}:`, (error as Error).message.slice(0, 120));
+    }
+
     const { writeAppCloudRevisionMarker } = await import(
       "./cloudAppRevisionMarker.js"
     );
