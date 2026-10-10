@@ -1,0 +1,208 @@
+/* My apps home (Apps redesign): collections + single apps as one card type. */
+.ah {
+  --ah-card: var(--apps-card, #fff);
+  --ah-line: var(--apps-card-line, rgba(10, 16, 32, 0.07));
+  --ah-pop: var(--popover-bg, #fff);
+  --ah-sel: var(--apps-sel, rgba(0, 96, 224, 0.09));
+  --ah-hover: var(--apps-sel-hover, rgba(0, 96, 224, 0.07));
+  --ah-blue: var(--accent, #0060e0);
+  --ah-bad: #ff3b30;
+}
+
+/* Papr blue → indigo family for banners and letter tiles. */
+.ah-pb-0 { background: linear-gradient(135deg, #0060e0, #2f7bff); }
+.ah-pb-1 { background: linear-gradient(135deg, #0061e0, #00acfa); }
+.ah-pb-2 { background: linear-gradient(135deg, #1d4ed8, #4f46e5); }
+.ah-pb-3 { background: linear-gradient(135deg, #2563eb, #60a5fa); }
+.ah-pb-4 { background: linear-gradient(135deg, #3730a3, #6366f1); }
+.ah-pb-5 { background: linear-gradient(135deg, #0369a1, #0ea5e9); }
+
+/* Header: title, status pills, Arranged | A–Z */
+.ah-head { display: flex; align-items: center; gap: 12px; margin-bottom: 16px; }
+.ah-title { flex: 1; margin: 0; font-size: 22px; font-weight: 650; letter-spacing: -0.015em; color: var(--text-primary); }
+.ah-pills { display: flex; gap: 6px; }
+.ah-pill {
+  display: inline-flex; align-items: center; gap: 6px; height: 28px; padding: 0 10px; border: 0; border-radius: 14px;
+  font: inherit; font-size: 12.5px; font-weight: 500; color: var(--text-secondary); cursor: pointer;
+  background: var(--ah-card); box-shadow: 0 0 0 1px var(--ah-line);
+}
+.ah-pill:hover { color: var(--text-primary); background: var(--ah-hover); }
+.ah-pill i { width: 7px; height: 7px; border-radius: 50%; background: var(--ah-bad); }
+.ah-pill--bad { color: var(--text-primary); }
+.ah-seg { display: flex; padding: 3px; border-radius: 11px; background: var(--ah-card); box-shadow: 0 0 0 1px var(--ah-line); }
+.ah-seg button {
+  padding: 5px 14px; border: 0; border-radius: 8px; background: none; cursor: pointer;
+  font: inherit; font-size: 13px; font-weight: 500; color: var(--text-secondary);
+}
+.ah-seg button:hover { color: var(--text-primary); }
+.ah-seg button.is-on { color: var(--ah-blue); background: var(--ah-sel); font-weight: 600; }
+
+/* Grid: dense so short cards fill the gaps beside tall collections. */
+.ah-grid {
+  display: grid; grid-template-columns: repeat(auto-fill, minmax(280px, 1fr));
+  grid-auto-rows: 178px; grid-auto-flow: row dense; gap: 14px; min-height: 60px; padding-bottom: 8px;
+}
+
+/* One card for collections and single apps */
+.ah-card {
+  position: relative; box-sizing: border-box; display: flex; flex-direction: column; min-width: 0;
+  padding: 18px 18px 14px; border-radius: 16px; overflow: hidden; cursor: grab;
+  background: var(--ah-card); box-shadow: 0 0 0 1px var(--ah-line), 0 8px 28px rgba(10, 16, 32, 0.05);
+  transition: transform 0.15s, box-shadow 0.15s;
+}
+.ah-card:hover { transform: translateY(-1px); box-shadow: 0 0 0 1px var(--ah-line), 0 14px 36px rgba(10, 16, 32, 0.1); }
+.ah-coll--big { grid-row: span 2; }
+.ah-coll--auto { cursor: default; }
+.ah-card.is-dragging, .ah-cell.is-dragging { opacity: 0.35; }
+.ah-card.ah-drop-into { box-shadow: 0 0 0 2px var(--ah-blue); }
+.ah-drop-before::before, .ah-drop-after::after {
+  content: ""; position: absolute; top: 8px; bottom: 8px; width: 3px; border-radius: 2px; background: var(--ah-blue); z-index: 4;
+}
+.ah-drop-before::before { left: 2px; }
+.ah-drop-after::after { right: 2px; }
+
+/* Collection banner */
+.ah-banner {
+  display: flex; align-items: flex-end; height: 58px; box-sizing: border-box;
+  margin: -18px -18px 10px; padding: 14px 18px 12px;
+}
+.ah-banner__head {
+  display: flex; align-items: center; gap: 7px; margin-left: -6px; padding: 4px 6px; border: 0; border-radius: 8px;
+  background: none; cursor: pointer; font: inherit; font-size: 13.5px; font-weight: 600; color: #fff; min-width: 0;
+}
+.ah-banner__head:hover { background: rgba(255, 255, 255, 0.2); }
+.ah-banner__name { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.ah-banner__head em { font-style: normal; font-weight: 500; color: rgba(255, 255, 255, 0.75); }
+
+.ah-coll__grid { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 6px 8px; margin: 0 -4px; align-content: start; }
+.ah-cell { position: relative; min-width: 0; }
+.ah-cell__open {
+  width: 100%; display: flex; flex-direction: column; align-items: center; gap: 6px; padding: 8px 4px 6px;
+  border: 0; border-radius: 10px; background: none; cursor: pointer; font: inherit; color: inherit;
+}
+.ah-cell__open:hover { background: var(--ah-hover); }
+.ah-cell__ic { position: relative; display: inline-flex; }
+.ah-cell__t {
+  max-width: 100%; min-height: 2.5em; font-size: 12.5px; line-height: 1.25; font-weight: 500; color: var(--text-primary);
+  text-align: center; overflow: hidden; display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; overflow-wrap: anywhere;
+}
+.ah-cell__menu { position: absolute; top: 2px; right: 2px; }
+
+/* App glyphs */
+.ah-gl { display: grid; place-items: center; flex: none; overflow: hidden; object-fit: cover; }
+.ah-gl--svg svg { width: 62%; height: 62%; }
+.ah-gl--svg, .ah-gl--emoji { background: var(--ah-sel); color: var(--ah-blue); }
+.ah-gl--letter { color: #fff; font-weight: 700; }
+.ah-gl--more { width: 44px; height: 44px; border-radius: 12px; background: var(--ah-sel); color: var(--ah-blue); font-size: 13px; font-weight: 700; }
+.ah-bad {
+  position: absolute; top: -4px; right: -4px; width: 16px; height: 16px; border-radius: 50%; display: grid; place-items: center;
+  font-size: 10px; font-weight: 750; color: #fff; background: var(--ah-bad); box-shadow: 0 0 0 2px var(--ah-card);
+}
+.ah-cell__ic .ah-share {
+  position: absolute; top: -3px; left: -3px; width: 17px; height: 17px; border-radius: 50%; display: grid; place-items: center;
+  background: var(--ah-pop); color: var(--text-tertiary); box-shadow: 0 1px 3px rgba(10, 16, 32, 0.15);
+}
+.ah-cell__ic .ah-share svg { width: 10px; height: 10px; }
+
+/* Single app: cover/banner on top, icon overlapping */
+.ah-solo { padding: 16px; }
+.ah-solo__open {
+  display: flex; flex-direction: column; align-items: flex-start; width: 100%; padding: 92px 0 0;
+  border: 0; background: none; cursor: pointer; font: inherit; color: var(--text-primary); text-align: left; min-width: 0;
+}
+.ah-solo__art { position: absolute; top: 0; left: 0; right: 0; height: 78px; }
+.ah-solo__cover { position: absolute; inset: 0; width: 100%; height: 100%; object-fit: cover; object-position: top; }
+.ah-solo__ic { position: absolute; left: 16px; bottom: -22px; display: flex; }
+.ah-solo__ic .ah-gl { box-shadow: 0 0 0 3px var(--ah-card); }
+.ah-solo__t { max-width: 100%; font-size: 15px; font-weight: 620; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.ah-solo__meta { margin-top: auto; display: flex; align-items: center; gap: 6px; min-height: 26px; font-size: 12px; color: var(--text-tertiary); }
+.ah-solo__meta i { font-style: normal; }
+.ah-st { font-weight: 500; }
+.ah-st--bad { color: var(--ah-bad); }
+.ah-solo__tr { position: absolute; top: 10px; right: 10px; display: flex; align-items: center; gap: 4px; z-index: 2; }
+.ah-solo__tr .ah-share {
+  width: 24px; height: 24px; border-radius: 8px; display: grid; place-items: center;
+  background: var(--ah-pop); color: var(--text-tertiary); box-shadow: 0 0 0 1px var(--ah-line);
+}
+.ah-share .mini-app-publish-bar__share-audience { display: inline-flex; color: inherit; }
+.ah-new { padding: 2px 7px; border-radius: 7px; font-size: 11px; font-weight: 600; color: var(--ah-blue); background: var(--ah-sel); }
+.ah-move {
+  display: inline-flex; align-items: center; gap: 5px; height: 26px; padding: 0 9px; border: 0; border-radius: 8px;
+  background: none; cursor: pointer; font: inherit; font-size: 12px; font-weight: 500; color: var(--ah-blue);
+  opacity: 0; transition: opacity 0.15s;
+}
+.ah-solo:hover .ah-move, .ah-move:focus-visible { opacity: 1; }
+.ah-move:hover { background: var(--ah-hover); }
+.ah-rename {
+  width: 100%; font: inherit; font-size: 13px; font-weight: 600; padding: 3px 6px; border-radius: 6px;
+  border: 1px solid var(--ah-blue); background: var(--ah-pop); color: var(--text-primary); outline: none;
+}
+
+/* ⋯ menu */
+.ah-menu { opacity: 0; transition: opacity 0.12s; }
+.ah-solo:hover .ah-menu, .ah-cell:hover .ah-menu, .ah-menu--open, .ah-menu:focus-within { opacity: 1; }
+.ah-menu__btn {
+  width: 26px; height: 26px; border: 0; border-radius: 8px; display: grid; place-items: center; cursor: pointer;
+  color: var(--text-secondary); background: var(--ah-pop); box-shadow: 0 1px 4px rgba(10, 16, 32, 0.12);
+}
+.ah-menu__btn:hover { color: var(--text-primary); }
+.ah-menu__pop {
+  position: fixed; z-index: 1000; min-width: 210px; padding: 5px; border-radius: 12px; display: flex; flex-direction: column;
+  background: var(--ah-pop, var(--popover-bg, #fff)); border: 1px solid var(--apps-card-line, rgba(10, 16, 32, 0.07));
+  box-shadow: 0 12px 36px rgba(10, 16, 32, 0.16);
+}
+.ah-menu__pop button {
+  display: flex; align-items: center; gap: 9px; padding: 8px 10px; border: 0; border-radius: 8px; background: none;
+  cursor: pointer; font: inherit; font-size: 13px; color: var(--text-primary); text-align: left;
+}
+.ah-menu__pop button:hover { background: var(--apps-sel, rgba(0, 96, 224, 0.09)); }
+.ah-menu__pop button.is-danger { color: #e5372b; }
+.ah-menu__label { padding: 6px 10px 4px; font-size: 11px; font-weight: 650; color: var(--text-tertiary); text-transform: uppercase; letter-spacing: 0.05em; }
+.ah-menu__sep { height: 1px; margin: 4px 6px; background: var(--apps-card-line, rgba(10, 16, 32, 0.07)); }
+
+/* Open collection sheet */
+.ah-sheet__back {
+  position: fixed; inset: 0; z-index: 60; background: rgba(10, 16, 32, 0.26);
+  backdrop-filter: blur(16px); -webkit-backdrop-filter: blur(16px);
+}
+.ah-sheet {
+  position: fixed; z-index: 61; left: 50%; top: 50%; transform: translate(-50%, -50%);
+  width: min(600px, calc(100vw - 32px)); max-height: 80vh; overflow: auto; box-sizing: border-box;
+  padding: 18px 22px 16px; border-radius: 26px; background: var(--ah-pop); box-shadow: 0 30px 90px rgba(10, 16, 32, 0.28);
+}
+.ah-sheet__name {
+  display: block; width: 100%; box-sizing: border-box; margin: 0 0 8px; padding: 8px; border: 0; outline: 0; border-radius: 12px;
+  background: transparent; text-align: center; font: inherit; font-size: 22px; font-weight: 650; color: var(--text-primary);
+}
+input.ah-sheet__name:hover, input.ah-sheet__name:focus { background: var(--ah-hover); }
+.ah-sheet__grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(104px, 1fr)); gap: 12px 6px; padding-bottom: 6px; }
+.ah-sheet__grid .ah-cell__t { -webkit-line-clamp: 2; }
+.ah-sheet__foot { display: flex; align-items: center; gap: 12px; margin-top: 6px; }
+.ah-sheet__hint { flex: 1; margin: 0; font-size: 12px; color: var(--text-tertiary); }
+.ah-sheet__foot button {
+  padding: 6px 12px; border: 0; border-radius: 9px; background: var(--ah-hover); color: var(--ah-blue);
+  cursor: pointer; font: inherit; font-size: 12.5px; font-weight: 600;
+}
+
+/* Footer */
+.ah-foot { display: flex; flex-wrap: wrap; align-items: center; gap: 12px 24px; padding-top: 18px; margin-top: 4px; }
+.ah-foot__links, .ah-foot__doors { display: flex; flex-wrap: wrap; align-items: center; gap: 4px; }
+.ah-foot__doors { margin-left: auto; color: var(--text-tertiary); font-size: 13px; }
+.ah-foot__doors span { margin-right: 6px; }
+.ah-foot button {
+  display: inline-flex; align-items: center; gap: 6px; padding: 6px 10px; border: 0; border-radius: 9px; background: none;
+  cursor: pointer; font: inherit; font-size: 13px; color: var(--text-secondary);
+}
+.ah-foot button:hover { background: var(--ah-hover); color: var(--text-primary); }
+.ah-foot__doors button { color: var(--ah-blue); }
+.ah-foot em { font-style: normal; color: var(--text-tertiary); }
+
+@media (prefers-color-scheme: dark) {
+  .ah-card { box-shadow: 0 0 0 1px var(--ah-line), 0 8px 28px rgba(0, 0, 0, 0.35); }
+  .ah-sheet__back { background: rgba(0, 0, 0, 0.45); }
+}
+@media (max-width: 640px) {
+  .ah-grid { grid-template-columns: 1fr; }
+  .ah-head { flex-wrap: wrap; }
+  .ah-pills { order: 3; width: 100%; }
+}

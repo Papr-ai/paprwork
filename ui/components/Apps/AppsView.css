@@ -756,3 +756,33 @@
 .app-card__menu button { border-radius: 9px; }
 .app-card__menu button:hover { background: var(--apps-sel-hover); }
 .create-app-modal__chip.is-on { background: var(--apps-sel); border-color: transparent; }
+
+/* ── Apps redesign v2: My apps / Team / Community in the top bar, compact search ── */
+.apps-view__topbar { position: relative; justify-content: center; gap: 12px; padding: 0 16px; }
+.apps-view__areas { position: absolute; left: 16px; display: flex; align-items: center; gap: 4px; }
+.apps-view__area {
+  display: inline-flex; align-items: center; gap: 7px; height: 34px; padding: 0 12px; border: 0; border-radius: 10px;
+  background: none; cursor: pointer; font: inherit; font-size: 13.5px; font-weight: 600; color: var(--text-primary); opacity: 0.55;
+}
+.apps-view__area:hover, .apps-view__area:focus-visible { opacity: 1; background: var(--apps-sel-hover); }
+.apps-view__area.is-on { opacity: 1; color: var(--accent); background: var(--apps-sel); }
+.apps-view__topbar .apps-view__search { position: relative; width: min(300px, 30vw); min-width: 180px; height: 34px; }
+.apps-view__topbar-grow { display: none; }
+.apps-view__topbar > .apps-view__create-btn {
+  position: absolute; right: 16px; gap: 6px; padding: 0 14px 0 11px; border-radius: 17px;
+}
+.apps-view__back {
+  display: inline-flex; align-items: center; gap: 6px; margin: 0 0 10px -8px; padding: 5px 8px; border: 0; border-radius: 8px;
+  background: none; cursor: pointer; font: inherit; font-size: 13px; color: var(--text-secondary);
+}
+.apps-view__back:hover { background: var(--apps-sel-hover); color: var(--text-primary); }
+@media (max-width: 1100px) {
+  .apps-view__area svg { display: none; }
+  .apps-view__area { padding: 0 9px; }
+}
+@media (max-width: 860px) {
+  .apps-view__topbar { justify-content: flex-start; height: auto; flex-wrap: wrap; padding: 8px 12px; }
+  .apps-view__areas, .apps-view__topbar > .apps-view__create-btn { position: static; }
+  .apps-view__topbar .apps-view__search { order: 3; width: 100%; }
+  .apps-view__topbar > .apps-view__create-btn { margin-left: auto; }
+}
