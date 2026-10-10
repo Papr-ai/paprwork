@@ -601,6 +601,14 @@ export interface ElectronAPI {
     getPathForFile: (file: File) => string;
   };
 
+  appCover?: {
+    captureRect: (rect: { x: number; y: number; width: number; height: number }) => Promise<{
+      success: boolean;
+      dataUrl?: string;
+      error?: string;
+    }>;
+  };
+
   agentPreview: {
     show: (webviewId?: string) => Promise<{
       success: boolean;

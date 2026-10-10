@@ -373,6 +373,10 @@ contextBridge.exposeInMainWorld("electronAPI", {
     },
   },
 
+  appCover: {
+    captureRect: (rect) => ipcRenderer.invoke("app-cover:capture-rect", rect),
+  },
+
   agentPreview: {
     show: (webviewId) => ipcRenderer.invoke("agent-preview:show", webviewId),
     isActive: (webviewId) =>

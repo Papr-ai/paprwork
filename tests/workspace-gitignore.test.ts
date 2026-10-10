@@ -42,6 +42,7 @@ describe("workspaceGitignore", () => {
       ...["data/.db-memory-sync-state.json", "data/.turso-convergence-state.json"],
       "data/.legacy-home-job-migration.json",
       "data/.gateway-sync-busy.json",
+      "data/covers/",
       "Jobs/*/job.runtime.json",
       "data/job-runs.jsonl",
       "**/*.sync-backup-*",
