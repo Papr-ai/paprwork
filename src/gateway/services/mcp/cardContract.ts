@@ -4,6 +4,8 @@
  *   "claude": {
  *     "enabled": true,
  *     "summary": "Find warm leads on LinkedIn and draft outreach",
+ *     "whenToUse": "the user wants to find leads on LinkedIn, draft connection notes or DMs, or check outreach",
+ *     "examples": ["help me run LinkedIn outreach", "draft a DM to the CTO at Acme"],
  *     "views": {
  *       "status":  { "kind": "status", "from": "pipeline-summary" },
  *       "draft":   { "kind": "action", "action": "draft-message" },
@@ -29,13 +31,23 @@ export interface ClaudeCardView {
   action?: string;
   title?: string;
   description?: string;
+  /** Routing: the user requests this view answers ("the user wants to …"). Falls back to the app's. */
+  whenToUse?: string;
+  /** Routing: 1–4 real requests this view should answer. */
+  examples?: string[];
 }
 
 export interface ClaudeAppConfig {
   enabled: boolean;
   summary?: string;
+  /** Routing: what users ask for when this app is the right answer. Claude reads this. */
+  whenToUse?: string;
+  /** Routing: 1–6 real requests, in the user's words. */
+  examples?: string[];
   views: Record<string, ClaudeCardView>;
 }
+
+export const ROUTING_LIMITS = { whenToUse: 280, example: 120, appExamples: 6, viewExamples: 4 } as const;
 
 const VIEW_NAME = /^[a-z][a-z0-9-]{0,40}$/;
 const ENTRY = /^cards\/[A-Za-z0-9_\-/]+\.(ts|tsx|js)$/;
@@ -43,6 +55,26 @@ const KINDS = new Set<CardViewKind>(["status", "action", "approval"]);
 
 const isRecord = (v: unknown): v is Record<string, unknown> => !!v && typeof v === "object" && !Array.isArray(v);
 const str = (v: unknown): string | undefined => (typeof v === "string" && v.trim() ? v.trim() : undefined);
+
+function strList(v: unknown, where: string, max: number): string[] | undefined {
+  if (v === undefined) return undefined;
+  if (!Array.isArray(v) || v.some((x) => typeof x !== "string")) throw new Error(`${where} must be a list of strings`);
+  const list = v.map((x: string) => x.trim()).filter(Boolean);
+  if (list.length > max) throw new Error(`${where}: keep it to ${max} examples or fewer`);
+  const long = list.find((x) => x.length > ROUTING_LIMITS.example);
+  if (long) throw new Error(`${where}: "${long.slice(0, 40)}…" is longer than ${ROUTING_LIMITS.example} characters`);
+  return list.length ? list : undefined;
+}
+
+function whenToUse(v: unknown, where: string): string | undefined {
+  if (v !== undefined && typeof v !== "string") throw new Error(`${where} must be a string`);
+  const s = str(v);
+  if (s && s.length > ROUTING_LIMITS.whenToUse) throw new Error(`${where} is longer than ${ROUTING_LIMITS.whenToUse} characters`);
+  return s;
+}
+
+const optional = <K extends string, V>(k: K, v: V | undefined): Partial<Record<K, V>> =>
+  (v === undefined ? {} : { [k]: v }) as Partial<Record<K, V>>;
 
 /** Returns null when the app hasn't opted in. Throws with an author-facing message on bad config. */
 export function parseClaudeAppConfig(metadata: unknown): ClaudeAppConfig | null {
@@ -72,9 +104,17 @@ export function parseClaudeAppConfig(metadata: unknown): ClaudeAppConfig | null 
       ...(str(v.action) ? { action: str(v.action) } : {}),
       ...(str(v.title) ? { title: str(v.title) } : {}),
       ...(str(v.description) ? { description: str(v.description) } : {}),
+      ...optional("whenToUse", whenToUse(v.whenToUse, `${where}.whenToUse`)),
+      ...optional("examples", strList(v.examples, `${where}.examples`, ROUTING_LIMITS.viewExamples)),
     };
   }
-  return { enabled: true, summary: str(raw.summary), views };
+  return {
+    enabled: true,
+    summary: str(raw.summary),
+    ...optional("whenToUse", whenToUse(raw.whenToUse, "metadata.claude.whenToUse")),
+    ...optional("examples", strList(raw.examples, "metadata.claude.examples", ROUTING_LIMITS.appExamples)),
+    views,
+  };
 }
 
 /** Cross-checks views against backend actions. Returns author-facing errors. */

@@ -9,6 +9,10 @@
  *   papr_list_apps (model)    the caller's apps with cards, for discovery / beyond the tool cap.
  *   papr_open_app  (model)    open any published app by link (generic card).
  *   papr_continue_on_mac (model + app)  one-time papr:// link to pick up in the desktop app.
+ *
+ * Routes: /mcp (all the user's apps) and /mcp/a/{namespaceId}/{slug} (one app, for an
+ * "Add to Claude" button on that app's page). Same sign-in, same audience.
+ * Server instructions list the user's apps so Claude routes to them (routing.ts).
  *   papr_api       (app-only) the tunnel. Hidden from the model; only our cards call it.
  */
 import type { Express, NextFunction, Request, Response } from "express";
@@ -31,6 +35,19 @@ import { loadMcpEndpointConfig, MCP_PATH, protectedResourceMetadataUrl, type Mcp
 import { renderSpikeCardHtml } from "./spikeCard.js";
 import { HandoffError, memoryHandoff, type CreateHandoff } from "./handoff.js";
 import { memorySessionExchange, type McpSessionExchange } from "./session.js";
+import { buildInstructions } from "./routing.js";
+
+export interface AppScope {
+  namespaceId: string;
+  slug: string;
+}
+
+const SCOPE_PART = /^[A-Za-z0-9_-]{1,64}$/;
+
+/** Connector URL that shows only one app in Claude. */
+export function appConnectorUrl(cfg: McpEndpointConfig, namespaceId: string, slug: string): string {
+  return `${cfg.resourceUrl}/a/${encodeURIComponent(namespaceId)}/${encodeURIComponent(slug)}`;
+}
 
 export const SPIKE_CARD_URI = "ui://papr/spike/app-card.html";
 
@@ -65,7 +82,10 @@ export function buildMcpServer(
   apps: ClaudeApp[] = [],
   deps: { handoff?: CreateHandoff } = {},
 ): McpServer {
-  const server = new McpServer({ name: "papr", title: "Papr", version: "0.1.0" }, { instructions: MCP_INSTRUCTIONS });
+  const server = new McpServer(
+    { name: "papr", title: "Papr", version: "0.1.0" },
+    { instructions: buildInstructions(MCP_INSTRUCTIONS, apps, appTitle) },
+  );
 
   registerAppResource(server, "Papr app card", SPIKE_CARD_URI, { description: "Papr app card (spike)" }, async () => ({
     contents: [{ uri: SPIKE_CARD_URI, mimeType: RESOURCE_MIME_TYPE, text: renderSpikeCardHtml() }],
@@ -115,6 +135,7 @@ export function buildMcpServer(
         title: appTitle(app),
         summary: app.cards.summary ?? app.description ?? null,
         url: `${cfg.appsBaseUrl}/${app.namespaceId}/${app.slug}`,
+        connectorUrl: appConnectorUrl(cfg, app.namespaceId, app.slug),
         tools: tools.filter((t) => t.app === app).map((t) => t.name),
       }));
       const firstRun = (caller.provisioned?.length ?? 0) > 0;
@@ -239,7 +260,8 @@ export function requestNeedsCatalog(body: unknown): boolean {
   const msgs = Array.isArray(body) ? body : [body];
   return msgs.some((m) => {
     const method = (m as { method?: string } | null)?.method;
-    if (method === "tools/list") return true;
+    // initialize: instructions name the user's apps. Cached per user, so reconnects are cheap.
+    if (method === "tools/list" || method === "initialize") return true;
     if (method !== "tools/call") return false;
     const name = (m as { params?: { name?: string } }).params?.name;
     return name !== "papr_api" && name !== "papr_open_app" && name !== "papr_continue_on_mac";
@@ -259,10 +281,11 @@ async function handleMcpPost(
   handoff: CreateHandoff | undefined,
   req: Request,
   res: Response,
+  scope?: AppScope,
 ): Promise<void> {
   const caller = callerOf(req.auth);
   let apps: ClaudeApp[] = [];
-  if (requestNeedsCatalog(req.body)) {
+  if (scope || requestNeedsCatalog(req.body)) {
     try {
       apps = await loadClaudeCatalog(caller, catalog);
     } catch (err) {
@@ -270,6 +293,7 @@ async function handleMcpPost(
       console.warn("[mcp] app catalog unavailable:", (err as Error).message.slice(0, 160));
     }
   }
+  if (scope) apps = apps.filter((a) => a.namespaceId === scope.namespaceId && a.slug === scope.slug);
   const server = buildMcpServer(cfg, caller, apps, { handoff });
   const transport = new StreamableHTTPServerTransport({ sessionIdGenerator: undefined, enableJsonResponse: true });
   res.on("close", () => {
@@ -308,12 +332,22 @@ export function registerMcpRoutes(
   app.post(MCP_PATH, bearer, (req, res, next: NextFunction) => {
     handleMcpPost(cfg, catalog, handoff, req, res).catch(next);
   });
+  app.post(`${MCP_PATH}/a/:namespaceId/:slug`, bearer, (req, res, next: NextFunction) => {
+    const { namespaceId, slug } = req.params as Record<string, string>;
+    if (!SCOPE_PART.test(namespaceId) || !SCOPE_PART.test(slug)) {
+      res.status(404).json({ jsonrpc: "2.0", error: { code: -32000, message: "Unknown Papr app" }, id: null });
+      return;
+    }
+    handleMcpPost(cfg, catalog, handoff, req, res, { namespaceId, slug }).catch(next);
+  });
   // Stateless server: no standalone SSE stream and no sessions to delete.
   const notAllowed = (_req: Request, res: Response): void => {
     res.setHeader("Allow", "POST");
     res.status(405).json({ jsonrpc: "2.0", error: { code: -32000, message: "Method not allowed" }, id: null });
   };
-  app.get(MCP_PATH, notAllowed);
-  app.delete(MCP_PATH, notAllowed);
+  for (const p of [MCP_PATH, `${MCP_PATH}/a/:namespaceId/:slug`]) {
+    app.get(p, notAllowed);
+    app.delete(p, notAllowed);
+  }
   return cfg;
 }
