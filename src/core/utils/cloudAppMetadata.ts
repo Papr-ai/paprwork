@@ -21,6 +21,27 @@ export interface CloudAppMetadataFile {
   agentChatJobId?: string;
   /** Topic tags for Community / Team catalog (published as catalogTags). */
   tags?: string[];
+  /** Claude cards (MCP Apps). Authored in the file; see gateway/services/mcp/cardContract.ts. */
+  claude?: Record<string, unknown>;
+}
+
+/**
+ * Keys the app author owns in metadata.json. The registry never stores them, so a
+ * registry-driven rewrite must carry them over from the file on disk or they vanish.
+ */
+export const AUTHOR_OWNED_METADATA_KEYS = ["claude"] as const;
+
+export function carryAuthorOwnedMetadata(
+  next: CloudAppMetadataFile,
+  existing: unknown,
+): CloudAppMetadataFile {
+  if (!existing || typeof existing !== "object") return next;
+  const out: CloudAppMetadataFile = { ...next };
+  for (const key of AUTHOR_OWNED_METADATA_KEYS) {
+    const v = (existing as Record<string, unknown>)[key];
+    if (v && typeof v === "object" && !Array.isArray(v)) out[key] = v as Record<string, unknown>;
+  }
+  return out;
 }
 
 export const DEFAULT_CLOUD_APP_DESCRIPTION =

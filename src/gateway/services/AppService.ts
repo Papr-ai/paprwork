@@ -3941,6 +3941,14 @@ export class AppService {
       console.warn("[AppService] Startup health checks failed:", healthError);
     }
 
+    // Claude cards (metadata.claude): same build publish runs, so errors surface before publish.
+    try {
+      const { claudeCardIssues } = await import("./mcp/cardValidation.js");
+      issues.push(...(await claudeCardIssues(appPath)));
+    } catch (cardError) {
+      console.warn("[AppService] Claude card checks failed:", cardError);
+    }
+
     // Broadcast validation result
     const result: ValidationResult = {
       appId,
