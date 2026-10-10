@@ -2619,7 +2619,10 @@ export class CloudAppHostService {
       );
   }
 
-  /** Owner-approved cover (papr-cover.txt data URL) for Community/Team catalog cards. */
+  /**
+   * Owner-approved cover for Community/Team catalog cards: papr-cover.json points at a
+   * CDN-public App File (redirect); papr-cover.txt is the inline fallback.
+   */
   private async handleSharedCover(
     res: Response,
     runtimeAuth: AppRuntimeRouteAuth,
@@ -2628,6 +2631,19 @@ export class CloudAppHostService {
     if (!canReadRepo) {
       res.status(404).send("Not found");
       return;
+    }
+    const pointerFile = await fetchCachedRuntimeRepoFile(runtimeAuth, "papr-cover.json").catch(() => null);
+    if (pointerFile) {
+      try {
+        const pointer = JSON.parse(pointerFile.content) as { url?: unknown };
+        if (typeof pointer.url === "string" && /^https:\/\//.test(pointer.url)) {
+          res.setHeader("Cache-Control", "public, max-age=300");
+          res.redirect(302, pointer.url);
+          return;
+        }
+      } catch {
+        // fall through to the inline cover
+      }
     }
     const file = await fetchCachedRuntimeRepoFile(runtimeAuth, "papr-cover.txt").catch(() => null);
     const m = file ? /^data:(image\/(?:png|jpeg|webp));base64,(.+)$/s.exec(file.content.trim()) : null;

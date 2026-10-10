@@ -39,11 +39,29 @@ describe("app covers", () => {
     expect(fs.statSync(covers.privateCoverPath(APP)).size).toBeGreaterThan(4000);
   });
 
-  it("only shares when the owner approves, and prefers the viewer's own cover", () => {
-    expect(covers.sharePrivateCover(APP)).toBe(false);
+  it("stores the approved cover as an App File and serves the CDN url", async () => {
+    covers.savePrivateCover(APP, big(), "validate");
+    const upload = vi.fn(async () => ({ id: "f1", objectKey: "apps/x/cover.jpg", url: "https://files.papr.ai/apps/x/cover.jpg" }));
+    expect(await covers.sharePrivateCover(APP, upload)).toEqual({ shared: true, via: "app_files", url: "https://files.papr.ai/apps/x/cover.jpg" });
+    expect(upload).toHaveBeenCalledWith(expect.objectContaining({ appId: APP, mime: "image/jpeg" }));
+    expect(covers.readSharedCoverPointer(APP)?.appFileId).toBe("f1");
+    fs.rmSync(covers.privateCoverPath(APP));
+    expect(covers.resolveCover(APP)).toEqual({ slot: "shared", redirect: "https://files.papr.ai/apps/x/cover.jpg" });
+    expect(covers.removeSharedCover(APP)).toBe(true);
+    expect(covers.resolveCover(APP)).toBeNull();
+  });
+
+  it("falls back to an inline cover when App Files is unavailable", async () => {
+    covers.savePrivateCover(APP, big(), "validate");
+    const upload = vi.fn(async () => { throw new Error("no database linked"); });
+    expect(await covers.sharePrivateCover(APP, upload)).toEqual({ shared: true, via: "inline" });
+  });
+
+  it("only shares when the owner approves, and prefers the viewer's own cover", async () => {
+    expect(await covers.sharePrivateCover(APP)).toEqual({ shared: false, reason: "no_cover" });
     covers.savePrivateCover(APP, big(), "validate");
     expect(fs.existsSync(covers.sharedCoverPath(APP))).toBe(false);
-    expect(covers.sharePrivateCover(APP)).toBe(true);
+    expect((await covers.sharePrivateCover(APP)).shared).toBe(true);
     expect(fs.existsSync(covers.sharedCoverPath(APP))).toBe(true);
     // Text (data URL) so the text-only git sync can carry it, at the app root (not a dotdir).
     expect(fs.readFileSync(covers.sharedCoverPath(APP), "utf8")).toMatch(/^data:image\/jpeg;base64,/);

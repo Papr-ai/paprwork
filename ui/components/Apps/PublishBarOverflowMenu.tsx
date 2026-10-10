@@ -33,6 +33,8 @@ interface PublishBarOverflowMenuProps {
   onDetach?: () => void;
   /** Reveal the app folder in Finder / Explorer. */
   onShowInFinder?: () => void;
+  /** Edit name, description and cover (how the app appears to people). */
+  onAppInfo?: () => void;
   /** Copy into another org or workspace (same dialog as the Apps page card menu). */
   onCopyToWorkspace?: () => void;
 }
@@ -72,6 +74,7 @@ export function PublishBarOverflowMenu({
   onDetach,
   onShowInFinder,
   onCopyToWorkspace,
+  onAppInfo,
 }: PublishBarOverflowMenuProps) {
   const [open, setOpen] = useState(false);
   const wrapRef = useRef<HTMLDivElement>(null);
@@ -126,6 +129,21 @@ export function PublishBarOverflowMenu({
               {isPreview ? "Code, DB, jobs" : "Run the live app"}
             </span>
           </button>
+
+          {onAppInfo ? (
+            <button
+              type="button"
+              role="menuitem"
+              className="pb-overflow__item"
+              onClick={() => {
+                onAppInfo();
+                setOpen(false);
+              }}
+            >
+              App info
+              <span className="pb-overflow__hint">Name, description, cover</span>
+            </button>
+          ) : null}
 
           {/* Forks had an empty menu — the only item was gated on !isFork.
               Propose lives here rather than in the bar because Update and

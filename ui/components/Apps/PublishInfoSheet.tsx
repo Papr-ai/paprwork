@@ -18,11 +18,19 @@ interface PublishInfoSheetProps {
   appId: string;
   initialTitle: string;
   onCancel: () => void;
-  /** Called after name/description/cover are saved; continue publishing. */
+  /** Called after name/description/cover are saved (publish: continue publishing). */
   onConfirmed: () => void;
+  /** "publish" = first Publish step; "edit" = More → App info on a live/draft app. */
+  mode?: "publish" | "edit";
 }
 
-export function PublishInfoSheet({ appId, initialTitle, onCancel, onConfirmed }: PublishInfoSheetProps) {
+export function PublishInfoSheet({
+  appId,
+  initialTitle,
+  onCancel,
+  onConfirmed,
+  mode = "publish",
+}: PublishInfoSheetProps) {
   const [title, setTitle] = useState(initialTitle);
   const [description, setDescription] = useState("");
   const [coverVersion, setCoverVersion] = useState(() => String(Date.now()));
@@ -48,6 +56,17 @@ export function PublishInfoSheet({ appId, initialTitle, onCancel, onConfirmed }:
   useEffect(() => {
     if (!hasCover) setChoice("banner");
   }, [hasCover]);
+
+  // Editing: start from what is shared today (a shared cover, or the banner).
+  useEffect(() => {
+    if (mode !== "edit") return;
+    void fetch(`${getGatewayHttpBase()}/api/apps/${encodeURIComponent(appId)}/cover/status`)
+      .then((r) => (r.ok ? r.json() : null))
+      .then((s: { hasShared?: boolean } | null) => {
+        if (s && !s.hasShared) setChoice("banner");
+      })
+      .catch(() => undefined);
+  }, [appId, mode]);
 
   const retake = async () => {
     setRetaking(true);
@@ -154,7 +173,7 @@ export function PublishInfoSheet({ appId, initialTitle, onCancel, onConfirmed }:
           Cancel
         </button>
         <button type="button" className="ss6-btn ss6-btn--primary" disabled={saving} onClick={() => void confirm()}>
-          {saving ? "Saving…" : "Publish"}
+          {saving ? "Saving…" : mode === "edit" ? "Save" : "Publish"}
         </button>
       </div>
     </div>
