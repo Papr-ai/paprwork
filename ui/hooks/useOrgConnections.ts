@@ -44,18 +44,43 @@ export function canConnect(policy: OrgConnectionPolicy | null, serverId: string)
   return policy.approved.includes(serverId.toLowerCase());
 }
 
+const CACHE_KEY = "papr.orgConnectionPolicy.v1";
+
+function readCached(): { policy: OrgConnectionPolicy | null; isAdmin: boolean } | null {
+  try {
+    const raw = localStorage.getItem(CACHE_KEY);
+    return raw ? (JSON.parse(raw) as { policy: OrgConnectionPolicy | null; isAdmin: boolean }) : null;
+  } catch {
+    return null;
+  }
+}
+
+function writeCached(v: { policy: OrgConnectionPolicy | null; isAdmin: boolean }): void {
+  try {
+    localStorage.setItem(CACHE_KEY, JSON.stringify({ policy: v.policy, isAdmin: v.isAdmin }));
+  } catch {
+    /* storage full or blocked: the live fetch still fills it in */
+  }
+}
+
 export function useOrgConnections() {
-  const [policy, setPolicy] = useState<OrgConnectionPolicy | null>(null);
-  const [isAdmin, setIsAdmin] = useState(false);
+  // Last known rules render immediately; the live fetch replaces them.
+  const [cached] = useState(readCached);
+  const [policy, setPolicy] = useState<OrgConnectionPolicy | null>(cached?.policy ?? null);
+  const [isAdmin, setIsAdmin] = useState(cached?.isAdmin ?? false);
   const [requests, setRequests] = useState<ConnectionRequest[]>([]);
   const [error, setError] = useState<string | null>(null);
 
   const refresh = useCallback(async (force = false) => {
     try {
-      const p = await call<{ policy: OrgConnectionPolicy | null; isAdmin: boolean }>(`/policy${force ? "?force=1" : ""}`);
+      // In parallel: the policy is a cloud round trip (~2s cold); requests used to wait behind it.
+      const [p, r] = await Promise.all([
+        call<{ policy: OrgConnectionPolicy | null; isAdmin: boolean }>(`/policy${force ? "?force=1" : ""}`),
+        call<{ requests: ConnectionRequest[] }>("/requests?status=pending").catch(() => ({ requests: [] as ConnectionRequest[] })),
+      ]);
       setPolicy(p.policy);
       setIsAdmin(p.isAdmin);
-      const r = await call<{ requests: ConnectionRequest[] }>("/requests?status=pending");
+      writeCached(p);
       setRequests(r.requests ?? []);
       setError(null);
     } catch (e) {

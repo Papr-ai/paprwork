@@ -164,7 +164,7 @@ export function McpConnectionsTab({
     if (note !== null) void org?.request(s.id, s.name, note);
   };
 
-  if (loading || sites.loading) {
+  if (loading) {
     return (
       <div className="svc-sec" aria-busy="true">
         <div className="svc-list svc-list--skeleton">
