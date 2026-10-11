@@ -406,3 +406,12 @@ describe("per-app connector URL (PR 3c)", () => {
     expect((await post("/mcp/a/ns1/bad.slug", GOOD)).status).toBe(404);
   });
 });
+
+describe("parseAppRef slug-only", () => {
+  it("resolves a slug from the user's catalog", () => {
+    expect(parseAppRef({ slug: "Scenario" }, [{ namespaceId: "ns1", slug: "scenario" }])).toEqual({ namespaceId: "ns1", slug: "scenario" });
+  });
+  it("still errors on unknown slug", () => {
+    expect(() => parseAppRef({ slug: "nope" }, [])).toThrow();
+  });
+});

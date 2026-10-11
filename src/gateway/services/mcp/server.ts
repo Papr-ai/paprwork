@@ -58,11 +58,19 @@ export function appCardUri(namespaceId: string, slug: string, view: string): str
 }
 
 /** Accepts https://apps.papr.ai/{namespaceId}/{slug}[/...] or explicit ids. */
-export function parseAppRef(input: { url?: string; namespaceId?: string; slug?: string }): {
+export function parseAppRef(
+  input: { url?: string; namespaceId?: string; slug?: string },
+  known: Array<{ namespaceId: string; slug: string }> = [],
+): {
   namespaceId: string;
   slug: string;
 } {
   if (input.namespaceId && input.slug) return { namespaceId: input.namespaceId, slug: input.slug };
+  if (input.slug && !input.url) {
+    const want = input.slug.trim().toLowerCase();
+    const hits = known.filter((a) => a.slug.toLowerCase() === want);
+    if (hits.length === 1) return { namespaceId: hits[0].namespaceId, slug: hits[0].slug };
+  }
   if (input.url) {
     const parts = new URL(input.url).pathname.split("/").filter(Boolean);
     if (parts.length >= 2) return { namespaceId: parts[0], slug: parts[1] };
@@ -155,7 +163,7 @@ export function buildMcpServer(
     {
       title: "Open a Papr app",
       description:
-        "Show a published Papr app from its apps.papr.ai link as a simple card. Prefer the app's own tools (see papr_list_apps) when it has them.",
+        "Show a published Papr app as a simple card, from its apps.papr.ai link or its slug (from papr_list_apps). Prefer the app's own card tools when they are loaded.",
       inputSchema: {
         url: z.string().url().optional().describe("https://apps.papr.ai/{namespaceId}/{slug}"),
         namespaceId: z.string().optional(),
@@ -165,7 +173,7 @@ export function buildMcpServer(
       _meta: { ui: { resourceUri: SPIKE_CARD_URI } },
     },
     async (args) => {
-      const ref = parseAppRef(args);
+      const ref = parseAppRef(args, apps);
       const access = await dispatchTunnel(cfg.loopbackPort, caller, { ...ref, method: "GET", path: "/api/access" });
       const body = (access.body ?? {}) as { canRead?: boolean };
       if (access.status >= 400 || !body.canRead) {
