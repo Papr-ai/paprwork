@@ -10,6 +10,7 @@
  * change when someone publishes.
  */
 import type { McpCaller } from "./auth.js";
+import { createHash } from "node:crypto";
 import { gcsCacheGet, gcsCachePut } from "../appRuntime/gcsSharedCache.js";
 import type { CardsManifest, CardsManifestView } from "./cardBuild.js";
 
@@ -118,6 +119,7 @@ export function clearCatalogCache(): void {
   inflight.clear();
   manifests.clear();
   restored = null;
+  userRestore.clear();
 }
 
 /**
@@ -151,8 +153,35 @@ function withTimeout<T>(p: Promise<T>, ms: number): Promise<T> {
   });
 }
 
+/**
+ * Each user's last catalog also lives in GCS: after a deploy/restart tools/list answers
+ * with it right away (stale-while-revalidate) instead of an empty list while a ~45s build runs.
+ */
+const userKey = (userId: string) => `mcp/catalog-v1/${createHash("sha256").update(userId).digest("hex").slice(0, 32)}.json`;
+const userRestore = new Map<string, Promise<void>>();
+function restoreUserCatalog(userId: string): Promise<void> {
+  let p = userRestore.get(userId);
+  if (!p) {
+    p = withTimeout(gcsCacheGet(userKey(userId)), 2_000)
+      .then((f) => {
+        if (!f || cache.has(userId)) return;
+        const saved = JSON.parse(f.content) as { at: number; apps: ClaudeApp[] };
+        if (Array.isArray(saved.apps)) cache.set(userId, { at: Number(saved.at) || 0, apps: saved.apps });
+        console.log(`[mcp] restored catalog for user (${saved.apps?.length ?? 0} apps)`);
+      })
+      .catch(() => undefined);
+    userRestore.set(userId, p);
+  }
+  return p;
+}
+
 /** One build per user at a time: Claude retries fast, and piled-up builds hit memory rate limits. */
-export function loadClaudeCatalog(caller: McpCaller, deps: CatalogDeps, opts: CatalogOptions = {}): Promise<ClaudeApp[]> {
+export async function loadClaudeCatalog(caller: McpCaller, deps: CatalogDeps, opts: CatalogOptions = {}): Promise<ClaudeApp[]> {
+  if (!cache.has(caller.userId)) await restoreUserCatalog(caller.userId);
+  return loadClaudeCatalogNow(caller, deps, opts);
+}
+
+function loadClaudeCatalogNow(caller: McpCaller, deps: CatalogDeps, opts: CatalogOptions): Promise<ClaudeApp[]> {
   const now = opts.now ?? Date.now;
   const hit = cache.get(caller.userId);
   const age = hit ? now() - hit.at : Infinity;
@@ -228,6 +257,7 @@ async function buildCatalog(caller: McpCaller, deps: CatalogDeps, opts: CatalogO
 
   if (cache.size >= MAX_CACHED_USERS) cache.delete(cache.keys().next().value as string);
   cache.set(caller.userId, { at: now(), apps });
+  gcsCachePut(userKey(caller.userId), { content: JSON.stringify({ at: now(), apps }), contentType: "application/json" }, Date.now() + 365 * 86_400_000);
   return apps;
 }
 
