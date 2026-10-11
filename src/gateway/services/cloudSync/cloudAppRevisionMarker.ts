@@ -6,7 +6,7 @@
  */
 
 import { createHash } from "node:crypto";
-import { existsSync, readFileSync, writeFileSync } from "node:fs";
+import { existsSync, readdirSync, readFileSync, writeFileSync } from "node:fs";
 import * as path from "node:path";
 
 export const PAPR_APP_CLOUD_REVISION_PATH = ".papr-cloud-revision";
@@ -24,12 +24,31 @@ export function distBundleRevisionHash(distAppJsContent: string): string {
   return createHash("sha256").update(distAppJsContent).digest("hex").slice(0, 16);
 }
 
-export function writeAppCloudRevisionMarker(appDir: string): void {
+/**
+ * Revision of everything the cloud host serves from dist/: the bundle plus Claude
+ * cards (dist/cards/*). A card-only edit must bump it, or the host keeps serving the
+ * old card under the unchanged key. Apps without cards hash exactly as before.
+ */
+export function distRevisionHash(appDir: string): string | null {
   const distPath = path.join(appDir, "dist", "app.js");
-  let revision: string;
-  if (existsSync(distPath)) {
-    revision = distBundleRevisionHash(readFileSync(distPath, "utf8"));
-  } else {
+  if (!existsSync(distPath)) return null;
+  const appJs = readFileSync(distPath, "utf8");
+  const cardsDir = path.join(appDir, "dist", "cards");
+  let cards: string[] = [];
+  try {
+    cards = readdirSync(cardsDir).filter((f) => /\.(html|json)$/.test(f)).sort();
+  } catch {
+    cards = [];
+  }
+  if (cards.length === 0) return distBundleRevisionHash(appJs);
+  const h = createHash("sha256").update(appJs);
+  for (const f of cards) h.update(`\0${f}\0`).update(readFileSync(path.join(cardsDir, f)));
+  return h.digest("hex").slice(0, 16);
+}
+
+export function writeAppCloudRevisionMarker(appDir: string): void {
+  let revision = distRevisionHash(appDir);
+  if (!revision) {
     revision = createHash("sha256")
       .update(`no-dist:${Date.now()}`)
       .digest("hex")
