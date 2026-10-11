@@ -30,7 +30,7 @@ import { callerOf, createAuth0Verifier, registerProtectedResourceMetadata, type 
 import { dispatchTunnel, fetchPublishedCard, fetchPublishedCardsManifest, TunnelError, type TunnelMethod } from "./apiTunnel.js";
 import { getMemoryServerBaseUrl } from "../../utils/cloudApiClient.js";
 import { inputSchemaToZodShape, planAppTools, toolResultFor, appTitle } from "./appTools.js";
-import { loadClaudeCatalog, memoryAccessibleApps, type CatalogDeps, type ClaudeApp } from "./catalog.js";
+import { loadClaudeCatalogWithin, memoryAccessibleApps, type CatalogDeps, type ClaudeApp } from "./catalog.js";
 import { loadMcpEndpointConfig, MCP_PATH, protectedResourceMetadataUrl, type McpEndpointConfig } from "./config.js";
 import { renderSpikeCardHtml } from "./spikeCard.js";
 import { HandoffError, memoryHandoff, type CreateHandoff } from "./handoff.js";
@@ -268,6 +268,15 @@ export function requestNeedsCatalog(body: unknown): boolean {
   });
 }
 
+/**
+ * Claude's connect check gives up after ~10s, so initialize never waits long on the app
+ * list (its instructions only name apps). tools/list waits a little longer for per-app tools.
+ */
+export function catalogBudgetMs(body: unknown): number {
+  const msgs = Array.isArray(body) ? body : [body];
+  return msgs.some((m) => (m as { method?: string } | null)?.method === "initialize") ? 2_500 : 7_000;
+}
+
 export function defaultCatalogDeps(cfg: McpEndpointConfig, memoryBaseUrl: string): CatalogDeps {
   return {
     listAccessibleApps: memoryAccessibleApps(memoryBaseUrl),
@@ -287,7 +296,9 @@ async function handleMcpPost(
   let apps: ClaudeApp[] = [];
   if (scope || requestNeedsCatalog(req.body)) {
     try {
-      apps = await loadClaudeCatalog(caller, catalog);
+      const r = await loadClaudeCatalogWithin(caller, catalog, catalogBudgetMs(req.body));
+      apps = r.apps;
+      if (!r.complete) console.warn(`[mcp] app catalog still loading; answered with ${apps.length} cached apps`);
     } catch (err) {
       // Papr's generic tools still work if the app list is down.
       console.warn("[mcp] app catalog unavailable:", (err as Error).message.slice(0, 160));
@@ -296,6 +307,7 @@ async function handleMcpPost(
   if (scope) apps = apps.filter((a) => a.namespaceId === scope.namespaceId && a.slug === scope.slug);
   const server = buildMcpServer(cfg, caller, apps, { handoff });
   const transport = new StreamableHTTPServerTransport({ sessionIdGenerator: undefined, enableJsonResponse: true });
+  transport.onerror = (err) => console.warn(`[mcp] transport rejected request: ${err.message.slice(0, 200)} (protocol header: ${req.headers["mcp-protocol-version"] ?? "none"})`);
   res.on("close", () => {
     void transport.close();
     void server.close();

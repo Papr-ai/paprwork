@@ -36,6 +36,8 @@ export interface CatalogOptions {
   maxApps?: number;
   concurrency?: number;
   ttlMs?: number;
+  /** Per-app cards.json budget; a slow app is skipped, never waited on. */
+  manifestTimeoutMs?: number;
   now?: () => number;
 }
 
@@ -99,25 +101,64 @@ const MAX_CACHED_USERS = 2000;
 
 export function clearCatalogCache(): void {
   cache.clear();
+  inflight.clear();
 }
 
-export async function loadClaudeCatalog(caller: McpCaller, deps: CatalogDeps, opts: CatalogOptions = {}): Promise<ClaudeApp[]> {
-  const now = opts.now ?? Date.now;
-  const ttl = opts.ttlMs ?? 60_000;
-  const hit = cache.get(caller.userId);
-  if (hit && now() - hit.at < ttl) return hit.apps;
+const inflight = new Map<string, Promise<ClaudeApp[]>>();
 
+function withTimeout<T>(p: Promise<T>, ms: number): Promise<T> {
+  return new Promise<T>((resolve, reject) => {
+    const t = setTimeout(() => reject(new Error(`timed out after ${ms}ms`)), ms);
+    p.then((v) => { clearTimeout(t); resolve(v); }, (e) => { clearTimeout(t); reject(e); });
+  });
+}
+
+/** One build per user at a time: Claude retries fast, and piled-up builds hit memory rate limits. */
+export function loadClaudeCatalog(caller: McpCaller, deps: CatalogDeps, opts: CatalogOptions = {}): Promise<ClaudeApp[]> {
+  const now = opts.now ?? Date.now;
+  const hit = cache.get(caller.userId);
+  if (hit && now() - hit.at < (opts.ttlMs ?? 60_000)) return Promise.resolve(hit.apps);
+  const running = inflight.get(caller.userId);
+  if (running) return running;
+  const p = buildCatalog(caller, deps, opts).finally(() => inflight.delete(caller.userId));
+  inflight.set(caller.userId, p);
+  return p;
+}
+
+/**
+ * Catalog for a live request, never slower than budgetMs. If the build is still running,
+ * answer with the last catalog (or none) and let it finish in the background for next time.
+ */
+export async function loadClaudeCatalogWithin(
+  caller: McpCaller,
+  deps: CatalogDeps,
+  budgetMs: number,
+  opts: CatalogOptions = {},
+): Promise<{ apps: ClaudeApp[]; complete: boolean }> {
+  const p = loadClaudeCatalog(caller, deps, opts);
+  try {
+    return { apps: await withTimeout(p, budgetMs), complete: true };
+  } catch (err) {
+    p.catch(() => undefined);
+    if (!(err instanceof Error) || !err.message.startsWith("timed out")) throw err;
+    return { apps: cache.get(caller.userId)?.apps ?? [], complete: false };
+  }
+}
+
+async function buildCatalog(caller: McpCaller, deps: CatalogDeps, opts: CatalogOptions): Promise<ClaudeApp[]> {
+  const now = opts.now ?? Date.now;
   const accessible = (await deps.listAccessibleApps(caller))
     .filter((a) => a.namespaceId && a.slug)
     .sort((a, b) => String(b.updatedAt ?? "").localeCompare(String(a.updatedAt ?? "")))
     .slice(0, opts.maxApps ?? 50);
 
-  const loaded = await mapLimit(accessible, opts.concurrency ?? 8, async (app) => {
+  const manifestMs = opts.manifestTimeoutMs ?? 5_000;
+  const loaded = await mapLimit(accessible, opts.concurrency ?? 4, async (app) => {
     try {
-      const cards = parseCardsManifest(await deps.loadCardsManifest(caller, app));
+      const cards = parseCardsManifest(await withTimeout(deps.loadCardsManifest(caller, app), manifestMs));
       return cards ? { ...app, cards } : null;
     } catch {
-      return null; // one broken or forbidden app never hides the rest
+      return null; // one broken, slow or forbidden app never hides the rest
     }
   });
   const apps = loaded.filter((a): a is ClaudeApp => a !== null);
