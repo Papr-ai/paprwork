@@ -20,6 +20,8 @@ export interface AccessibleApp {
   description?: string;
   author?: string;
   updatedAt?: string;
+  /** Monochrome SVG markup from the app's metadata, when the memory server sends it. */
+  icon?: string;
 }
 
 export interface ClaudeApp extends AccessibleApp {
@@ -101,9 +103,19 @@ async function mapLimit<T, R>(items: T[], limit: number, fn: (item: T) => Promis
 const cache = new Map<string, { at: number; apps: ClaudeApp[] }>();
 const MAX_CACHED_USERS = 2000;
 
+/**
+ * cards.json per published version ("ns/slug@updatedAt" → manifest or null). Only answers
+ * (incl. "no cards") are kept, never errors/timeouts. Each user's list is already access-
+ * filtered by memory, so sharing this across users reveals nothing; it turns every rebuild
+ * after the first into lookups for changed apps only (the cold build hit memory's 120/min limit).
+ */
+const manifests = new Map<string, CardsManifest | null>();
+const MAX_MANIFESTS = 20_000;
+
 export function clearCatalogCache(): void {
   cache.clear();
   inflight.clear();
+  manifests.clear();
 }
 
 const inflight = new Map<string, Promise<ClaudeApp[]>>();
@@ -169,8 +181,16 @@ async function buildCatalog(caller: McpCaller, deps: CatalogDeps, opts: CatalogO
 
   const manifestMs = opts.manifestTimeoutMs ?? 5_000;
   const loaded = await mapLimit(accessible, opts.concurrency ?? 4, async (app) => {
+    const key = app.updatedAt ? `${app.namespaceId}/${app.slug}@${app.updatedAt}` : "";
     try {
-      const cards = parseCardsManifest(await withTimeout(deps.loadCardsManifest(caller, app), manifestMs));
+      let cards = key ? manifests.get(key) : undefined;
+      if (cards === undefined) {
+        cards = parseCardsManifest(await withTimeout(deps.loadCardsManifest(caller, app), manifestMs));
+        if (key) {
+          if (manifests.size >= MAX_MANIFESTS) manifests.delete(manifests.keys().next().value as string);
+          manifests.set(key, cards);
+        }
+      }
       return cards ? { ...app, cards } : null;
     } catch {
       return null; // one broken, slow or forbidden app never hides the rest
@@ -200,6 +220,7 @@ export function memoryAccessibleApps(baseUrl: string, fetchImpl: typeof fetch = 
       description: typeof a.description === "string" ? a.description : undefined,
       author: typeof a.author === "string" ? a.author : undefined,
       updatedAt: typeof a.updatedAt === "string" ? a.updatedAt : undefined,
+      icon: typeof a.icon === "string" && /^\s*<svg[\s>]/i.test(a.icon) && a.icon.length < 8_000 ? a.icon : undefined,
     }));
   };
 }

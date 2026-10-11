@@ -52,6 +52,13 @@ export function appConnectorUrl(cfg: McpEndpointConfig, namespaceId: string, slu
 
 export const SPIKE_CARD_URI = "ui://papr/spike/app-card.html";
 
+/**
+ * Cards may show the app's own images (App Files): published objects come from the
+ * Papr CDN, private ones as short-lived GCS signed URLs from /api/files/url.
+ * Images/media only — cards still make no direct network calls (connect-src stays empty).
+ */
+export const CARD_CSP = { resourceDomains: ["https://files.papr.ai", "https://storage.googleapis.com"] };
+
 /** Published card for one app view (built at publish into dist/cards/{view}.html). */
 export function appCardUri(namespaceId: string, slug: string, view: string): string {
   return `ui://papr/app/${namespaceId}/${slug}/${view}`;
@@ -110,7 +117,7 @@ export function buildMcpServer(
       const ref = { namespaceId: one(vars.namespaceId), slug: one(vars.slug) };
       const html = await fetchPublishedCard(cfg.loopbackPort, caller, ref, one(vars.view));
       if (html === null) throw new TunnelError("That card isn't published. Republish the app with Claude cards on.", 404);
-      return { contents: [{ uri: uri.href, mimeType: RESOURCE_MIME_TYPE, text: html }] };
+      return { contents: [{ uri: uri.href, mimeType: RESOURCE_MIME_TYPE, text: html, _meta: { ui: { csp: CARD_CSP } } }] };
     },
   );
 
@@ -180,9 +187,19 @@ export function buildMcpServer(
         return { isError: true, content: [{ type: "text", text: "You don't have access to that Papr app." }] };
       }
       const openUrl = `${cfg.appsBaseUrl}/${ref.namespaceId}/${ref.slug}`;
+      const known = apps.find((a) => a.namespaceId === ref.namespaceId && a.slug === ref.slug);
+      const title = known ? appTitle(known) : ref.slug;
       return {
-        content: [{ type: "text", text: `Opened ${ref.slug} from Papr.` }],
-        structuredContent: { ...ref, title: ref.slug, openUrl, email: caller.email ?? null },
+        content: [{ type: "text", text: `Opened ${title} from Papr.` }],
+        structuredContent: {
+          ...ref,
+          title,
+          openUrl,
+          ...(known?.cards.summary ?? known?.description ? { summary: known?.cards.summary ?? known?.description } : {}),
+          ...(known?.cards.examples ? { examples: known.cards.examples } : {}),
+          ...(known?.author ? { publisher: known.author } : {}),
+          ...(known?.icon ? { icon: known.icon } : {}),
+        },
       };
     },
   );
