@@ -99,3 +99,37 @@ export async function dispatchTunnel(
   }
   return { status: res.status, body };
 }
+
+const VIEW = /^[a-z][a-z0-9-]{0,40}$/;
+
+/**
+ * Reads a published card (dist/cards/{view}.html) through the host's normal app-file
+ * route, as the caller, so the same per-app access rules decide who can load it.
+ */
+export async function fetchPublishedCard(
+  port: number,
+  caller: McpCaller,
+  ref: { namespaceId: string; slug: string },
+  view: string,
+  fetchImpl: typeof fetch = fetch,
+): Promise<string | null> {
+  if (!SLUG.test(ref.namespaceId) || !SLUG.test(ref.slug) || !VIEW.test(view)) {
+    throw new TunnelError("Invalid card reference");
+  }
+  const res = await fetchImpl(
+    `http://127.0.0.1:${port}/${ref.namespaceId}/${ref.slug}/dist/cards/${view}.html`,
+    {
+      headers: {
+        accept: "text/html",
+        "x-session-token": caller.sessionToken,
+        "x-papr-external-user-id": caller.userId,
+        "x-papr-via": "mcp",
+      },
+      redirect: "manual",
+      signal: AbortSignal.timeout(TIMEOUT_MS),
+    },
+  );
+  if (res.status === 404) return null;
+  if (!res.ok) throw new TunnelError(`Card unavailable (HTTP ${res.status})`, res.status);
+  return res.text();
+}
