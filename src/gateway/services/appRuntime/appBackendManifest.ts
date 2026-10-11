@@ -5,6 +5,8 @@
 import * as path from "path";
 import type {
   AppBackendActionSpec,
+  AppBackendInputField,
+  AppBackendInputSchema,
   AppBackendManifest,
   AppBackendRuntime,
 } from "../../../core/types/appBackend.js";
@@ -94,6 +96,15 @@ function parseActionSpec(
     typeof raw.sourceId === "string" && raw.sourceId.trim()
       ? raw.sourceId.trim()
       : undefined;
+  const input = raw.input === undefined ? undefined : parseInputSchema(actionName, raw.input);
+  const effect = raw.effect;
+  if (effect !== undefined && effect !== "read" && effect !== "write" && effect !== "external") {
+    throw new Error(`backend manifest: actions.${actionName}.effect must be read, write or external`);
+  }
+  const runsOn = raw.runsOn;
+  if (runsOn !== undefined && runsOn !== "cloud" && runsOn !== "mac") {
+    throw new Error(`backend manifest: actions.${actionName}.runsOn must be cloud or mac`);
+  }
   return {
     handler: handler.trim(),
     runtime,
@@ -101,7 +112,36 @@ function parseActionSpec(
     timeoutMs,
     description,
     sourceId,
+    ...(input ? { input } : {}),
+    ...(effect ? { effect } : {}),
+    ...(runsOn ? { runsOn } : {}),
   };
+}
+
+const INPUT_TYPES = new Set(["string", "number", "integer", "boolean"]);
+
+/** Small JSON Schema subset: flat object of scalar fields. Keeps forms and tools predictable. */
+export function parseInputSchema(actionName: string, raw: unknown): AppBackendInputSchema {
+  const where = `backend manifest: actions.${actionName}.input`;
+  if (!isRecord(raw) || raw.type !== "object" || !isRecord(raw.properties)) {
+    throw new Error(`${where} must be { "type": "object", "properties": { … } }`);
+  }
+  const properties: AppBackendInputSchema["properties"] = {};
+  for (const [key, field] of Object.entries(raw.properties)) {
+    if (!/^[A-Za-z_][A-Za-z0-9_]{0,63}$/.test(key)) throw new Error(`${where}: invalid field name "${key}"`);
+    if (!isRecord(field) || typeof field.type !== "string" || !INPUT_TYPES.has(field.type)) {
+      throw new Error(`${where}.properties.${key}.type must be string, number, integer or boolean`);
+    }
+    if (field.enum !== undefined && (!Array.isArray(field.enum) || field.enum.some((v) => typeof v !== "string" && typeof v !== "number"))) {
+      throw new Error(`${where}.properties.${key}.enum must be a list of strings or numbers`);
+    }
+    properties[key] = field as unknown as AppBackendInputField;
+  }
+  const required = raw.required;
+  if (required !== undefined && (!Array.isArray(required) || required.some((r) => typeof r !== "string" || !(r in properties)))) {
+    throw new Error(`${where}.required must list fields from properties`);
+  }
+  return { type: "object", properties, ...(required ? { required: required as string[] } : {}) };
 }
 
 export function parseAppBackendManifest(raw: unknown): AppBackendManifest {

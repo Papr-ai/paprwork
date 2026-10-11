@@ -97,6 +97,7 @@ let resolveActivePaprApiKey;
 let setGatewayRestartAfterWorkspaceSwitch;
 let cleanupPaprLogin;
 let handlePaprAuthCallback;
+let handlePaprHandoffLink;
 let trackPaprLoginDeepLinkQueued;
 let trackPaprLoginDeepLinkFlushStarted;
 let syncProfileToGatewaySettings;
@@ -188,6 +189,7 @@ async function loadESMModules() {
   resolveActivePaprApiKey = paprLoginIpcModule.resolveActivePaprApiKey;
   cleanupPaprLogin = paprLoginIpcModule.cleanupPaprLogin;
   handlePaprAuthCallback = paprLoginIpcModule.handlePaprAuthCallback;
+  handlePaprHandoffLink = paprLoginIpcModule.handlePaprHandoffLink;
   trackPaprLoginDeepLinkQueued = paprLoginIpcModule.trackPaprLoginDeepLinkQueued;
   trackPaprLoginDeepLinkFlushStarted = paprLoginIpcModule.trackPaprLoginDeepLinkFlushStarted;
   syncProfileToGatewaySettings = paprLoginIpcModule.syncProfileToGatewaySettings;
@@ -2561,6 +2563,21 @@ async function flushPendingDeepLinks() {
         await handlePaprAuthCallback(url, customKeysStorage, settingsStorage);
       } catch (err) {
         console.error("[Electron] Auth deep link handler failed:", err);
+      }
+      continue;
+    }
+
+    if (url.startsWith("papr://auth/handoff")) {
+      // Claude "Continue on your Mac" (one-time code). Needs storage like the login callback.
+      if (!authDeepLinksReady || !handlePaprHandoffLink || !customKeysStorage || !settingsStorage) {
+        return;
+      }
+      pendingDeepLinks.splice(index, 1);
+      console.log("[Electron] Flushing Claude handoff deep link");
+      try {
+        await handlePaprHandoffLink(url, customKeysStorage, settingsStorage);
+      } catch (err) {
+        console.error("[Electron] Handoff deep link handler failed:", err);
       }
       continue;
     }

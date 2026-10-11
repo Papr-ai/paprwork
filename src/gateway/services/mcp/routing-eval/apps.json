@@ -1,0 +1,84 @@
+[
+  {
+    "slug": "linkedin-outreach",
+    "name": "LinkedIn Outreach",
+    "description": "Prospecting pipeline",
+    "cards": {
+      "version": 1,
+      "summary": "Find warm leads on LinkedIn and draft outreach",
+      "whenToUse": "the user wants to find leads or prospects on LinkedIn, draft connection notes or DMs, or check how their LinkedIn outreach is going",
+      "examples": ["help me run LinkedIn outreach", "find me 20 fintech CTOs to reach out to", "how many people replied this week?"],
+      "views": {
+        "status": { "kind": "status", "from": "pipeline-summary", "file": "status.html", "bytes": 1, "title": "Pipeline" },
+        "draft": { "kind": "action", "action": "draft-message", "file": "draft.html", "bytes": 1,
+          "whenToUse": "the user wants a LinkedIn connection note or DM written for a specific person",
+          "examples": ["draft a DM to the head of data at Ramp"],
+          "actionSpec": { "name": "draft-message", "description": "Draft a LinkedIn message", "effect": "write",
+            "input": { "type": "object", "properties": { "lead": { "type": "string" }, "tone": { "type": "string", "enum": ["warm", "direct"] } } } } },
+        "send": { "kind": "approval", "action": "send-messages", "file": "send.html", "bytes": 1,
+          "actionSpec": { "name": "send-messages", "description": "Send LinkedIn messages", "effect": "external", "runsOn": "mac",
+            "input": { "type": "object", "properties": { "lead": { "type": "string" }, "message": { "type": "string" } }, "required": ["lead", "message"] } } }
+      }
+    }
+  },
+  {
+    "slug": "papr-books",
+    "name": "Papr Books",
+    "cards": {
+      "version": 1,
+      "summary": "Bookkeeping for a small company",
+      "whenToUse": "the user wants to log a receipt or expense, categorize spending, check burn or cash, or create an invoice for their company",
+      "examples": ["log this $48 Uber receipt", "what did we spend on software last month?", "invoice Acme for 40 hours"],
+      "views": {
+        "status": { "kind": "status", "from": "burn-summary", "file": "status.html", "bytes": 1, "title": "Cash and burn" },
+        "log": { "kind": "action", "action": "log-expense", "file": "log.html", "bytes": 1,
+          "actionSpec": { "name": "log-expense", "description": "Log an expense", "effect": "write",
+            "input": { "type": "object", "properties": { "amount": { "type": "number" }, "vendor": { "type": "string" }, "category": { "type": "string" } } } } },
+        "invoice": { "kind": "approval", "action": "send-invoice", "file": "invoice.html", "bytes": 1,
+          "actionSpec": { "name": "send-invoice", "description": "Send an invoice", "effect": "external",
+            "input": { "type": "object", "properties": { "client": { "type": "string" }, "amount": { "type": "number" } }, "required": ["client", "amount"] } } }
+      }
+    }
+  },
+  {
+    "slug": "meetings-manager",
+    "name": "Meetings Manager",
+    "cards": {
+      "version": 1,
+      "summary": "Prep, record and summarize meetings",
+      "whenToUse": "the user wants prep for an upcoming meeting, notes or action items from a past meeting, or a summary of what was decided in a call",
+      "examples": ["prep me for my 2pm with Acme", "what were the action items from yesterday's standup?"],
+      "views": {
+        "upcoming": { "kind": "status", "from": "upcoming-meetings", "file": "upcoming.html", "bytes": 1, "title": "Upcoming meetings" },
+        "prep": { "kind": "action", "action": "prep-brief", "file": "prep.html", "bytes": 1,
+          "actionSpec": { "name": "prep-brief", "description": "Prepare a meeting brief", "effect": "write",
+            "input": { "type": "object", "properties": { "meeting": { "type": "string" } } } } },
+        "notes": { "kind": "status", "from": "recent-notes", "file": "notes.html", "bytes": 1, "title": "Recent notes and action items" }
+      }
+    }
+  },
+  {
+    "slug": "competitor-watch",
+    "name": "Competitor Watch",
+    "cards": {
+      "version": 1,
+      "summary": "Tracks competitors' launches, pricing and hiring",
+      "whenToUse": "the user wants to know what specific competitors they track have shipped, changed in pricing, or announced recently",
+      "examples": ["what did our competitors ship this week?", "did Mem change their pricing?"],
+      "views": {
+        "digest": { "kind": "status", "from": "weekly-digest", "file": "digest.html", "bytes": 1, "title": "This week's changes" }
+      }
+    }
+  },
+  {
+    "slug": "hiring-pipeline",
+    "name": "Hiring Pipeline",
+    "cards": {
+      "version": 1,
+      "summary": "Candidates and interview loops",
+      "views": {
+        "status": { "kind": "status", "from": "pipeline", "file": "status.html", "bytes": 1, "title": "Candidates by stage" }
+      }
+    }
+  }
+]

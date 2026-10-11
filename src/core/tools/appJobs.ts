@@ -880,6 +880,7 @@ export const createAppTool = createTool({
     "ENFORCED: call architect_triage({ request }) first. Tier lite (simple frontend/report) unlocks create_app directly; " +
     'tier full requires a completed product-architect delegation — delegate_task({ useAgentId: "product-architect", task: "...", context: "..." }). ' +
     "Apps that trigger jobs MUST use subscribeJobEvents (onDbChanged for $APP_DB writes, onStatusChanged for lastOutput) — never poll. " +
+    "To make the app usable inside Claude, add a metadata.json \"claude\" block afterwards (agent-docs/CLAUDE_CARDS_GUIDE.md). " +
     DESIGN_DIRECTIVE_SHORT,
   inputSchema: createAppSchema,
   execute: async (input) => {
