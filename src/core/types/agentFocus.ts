@@ -40,4 +40,12 @@ export interface ResolvedAgentFocusContext {
     files?: string[];
   };
   lastEdited?: LastEditedFileRef[];
+  /** MCP services connected right now — tools are deferred, so name them. */
+  connectedServices?: ConnectedServiceRef[];
+}
+
+export interface ConnectedServiceRef {
+  id: string;
+  name: string;
+  toolCount: number;
 }

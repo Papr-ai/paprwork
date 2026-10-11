@@ -7,6 +7,7 @@ import { getPaprRoot } from "../../core/utils/paprRoot.js";
 import { promises as fs, type Dirent } from "fs";
 import path from "path";
 import type {
+  ConnectedServiceRef,
   LastEditedFileRef,
   ResolvedAgentFocusContext,
   UiAgentFocusContext,
@@ -17,6 +18,20 @@ import {
 } from "./agent/focusContextFormatter.js";
 
 const MAX_TRACKED_EDITS = 12;
+
+/** Connected MCP services, keyed by their tool-id prefix. Never throws. */
+async function listConnectedServices(): Promise<ConnectedServiceRef[]> {
+  try {
+    const { getMcpConnectionService } = await import("./mcp/McpConnectionService.js");
+    const svc = getMcpConnectionService();
+    if (!svc) return [];
+    return (await svc.status())
+      .filter((s) => s.state === "connected" && s.toolCount > 0)
+      .map((s) => ({ id: s.id.replace(/-/g, "_"), name: s.name, toolCount: s.toolCount }));
+  } catch {
+    return [];
+  }
+}
 
 function appsRoot(): string {
   return path.join(getPaprRoot(), "apps");
@@ -217,6 +232,8 @@ export class AgentFocusContextService {
         // Job dir unreadable — still inject jobId/name
       }
     }
+
+    server.connectedServices = await listConnectedServices();
 
     return mergeUiAndServerFocus(ui, server);
   }

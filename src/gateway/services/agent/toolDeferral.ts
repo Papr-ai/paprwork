@@ -98,6 +98,9 @@ export const MEASURED_CORE_TOOL_IDS: readonly string[] = [
   // Hand-placed: architect_triage must be visible before every create_app — the gate
   // accepts a lite triage, and a deferral round-trip would push agents to the full architect.
   "architect_triage",
+  // Hand-placed: lets the agent check what's connected and offer to connect a
+  // service, instead of claiming it has no integration.
+  "connect_mcp",
 ];
 
 /** Discovery and dispatch. Never deferred, or deferred tools are unreachable. */
