@@ -36,6 +36,8 @@ export interface CatalogOptions {
   maxApps?: number;
   concurrency?: number;
   ttlMs?: number;
+  /** How long a stale catalog is still served while a refresh runs. */
+  staleMs?: number;
   /** Per-app cards.json budget; a slow app is skipped, never waited on. */
   manifestTimeoutMs?: number;
   now?: () => number;
@@ -117,12 +119,25 @@ function withTimeout<T>(p: Promise<T>, ms: number): Promise<T> {
 export function loadClaudeCatalog(caller: McpCaller, deps: CatalogDeps, opts: CatalogOptions = {}): Promise<ClaudeApp[]> {
   const now = opts.now ?? Date.now;
   const hit = cache.get(caller.userId);
-  if (hit && now() - hit.at < (opts.ttlMs ?? 60_000)) return Promise.resolve(hit.apps);
-  const running = inflight.get(caller.userId);
-  if (running) return running;
-  const p = buildCatalog(caller, deps, opts).finally(() => inflight.delete(caller.userId));
-  inflight.set(caller.userId, p);
-  return p;
+  const age = hit ? now() - hit.at : Infinity;
+  if (hit && age < (opts.ttlMs ?? 5 * 60_000)) return Promise.resolve(hit.apps);
+  let running = inflight.get(caller.userId);
+  if (!running) {
+    const started = Date.now();
+    running = buildCatalog(caller, deps, opts)
+      .then((apps) => {
+        console.log(`[mcp] app catalog ready: ${apps.length} apps with cards in ${Date.now() - started}ms`);
+        return apps;
+      })
+      .finally(() => inflight.delete(caller.userId));
+    inflight.set(caller.userId, running);
+  }
+  // Stale-while-revalidate: a day-old list beats an empty one; the refresh runs behind it.
+  if (hit && age < (opts.staleMs ?? 24 * 60 * 60_000)) {
+    running.catch(() => undefined);
+    return Promise.resolve(hit.apps);
+  }
+  return running;
 }
 
 /**

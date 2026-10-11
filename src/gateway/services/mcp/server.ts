@@ -30,12 +30,13 @@ import { callerOf, createAuth0Verifier, registerProtectedResourceMetadata, type 
 import { dispatchTunnel, fetchPublishedCard, fetchPublishedCardsManifest, TunnelError, type TunnelMethod } from "./apiTunnel.js";
 import { getMemoryServerBaseUrl } from "../../utils/cloudApiClient.js";
 import { inputSchemaToZodShape, planAppTools, toolResultFor, appTitle } from "./appTools.js";
-import { loadClaudeCatalogWithin, memoryAccessibleApps, type CatalogDeps, type ClaudeApp } from "./catalog.js";
+import { loadClaudeCatalog, loadClaudeCatalogWithin, memoryAccessibleApps, type CatalogDeps, type ClaudeApp } from "./catalog.js";
 import { loadMcpEndpointConfig, MCP_PATH, protectedResourceMetadataUrl, type McpEndpointConfig } from "./config.js";
 import { renderSpikeCardHtml } from "./spikeCard.js";
 import { HandoffError, memoryHandoff, type CreateHandoff } from "./handoff.js";
 import { memorySessionExchange, type McpSessionExchange } from "./session.js";
 import { buildInstructions } from "./routing.js";
+import { paprIcons, registerPaprIconRoutes } from "./paprIcon.js";
 
 export interface AppScope {
   namespaceId: string;
@@ -83,7 +84,7 @@ export function buildMcpServer(
   deps: { handoff?: CreateHandoff } = {},
 ): McpServer {
   const server = new McpServer(
-    { name: "papr", title: "Papr", version: "0.1.0" },
+    { name: "papr", title: "Papr", version: "0.1.0", websiteUrl: "https://papr.ai", icons: paprIcons(cfg.resourceUrl) },
     { instructions: buildInstructions(MCP_INSTRUCTIONS, apps, appTitle) },
   );
 
@@ -277,6 +278,11 @@ export function catalogBudgetMs(body: unknown): number {
   return msgs.some((m) => (m as { method?: string } | null)?.method === "initialize") ? 2_500 : 7_000;
 }
 
+function isConnectNotification(body: unknown): boolean {
+  const msgs = Array.isArray(body) ? body : [body];
+  return msgs.some((m) => (m as { method?: string } | null)?.method === "notifications/initialized");
+}
+
 export function defaultCatalogDeps(cfg: McpEndpointConfig, memoryBaseUrl: string): CatalogDeps {
   return {
     listAccessibleApps: memoryAccessibleApps(memoryBaseUrl),
@@ -294,6 +300,8 @@ async function handleMcpPost(
 ): Promise<void> {
   const caller = callerOf(req.auth);
   let apps: ClaudeApp[] = [];
+  // Warm on connect-time notifications (not card traffic) so tools/list finds the catalog ready.
+  if (!scope && isConnectNotification(req.body)) void loadClaudeCatalog(caller, catalog).catch(() => undefined);
   if (scope || requestNeedsCatalog(req.body)) {
     try {
       const r = await loadClaudeCatalogWithin(caller, catalog, catalogBudgetMs(req.body));
@@ -337,6 +345,7 @@ export function registerMcpRoutes(
   // The handoff needs a memory-minted session; the claims bridge's Parse session works too.
   const handoff = opts.handoff === null ? undefined : (opts.handoff ?? memoryHandoff(memoryBaseUrl));
   registerProtectedResourceMetadata(app, cfg);
+  registerPaprIconRoutes(app);
   const bearer = requireBearerAuth({
     verifier: opts.verifier ?? createAuth0Verifier(cfg, exchange),
     resourceMetadataUrl: protectedResourceMetadataUrl(cfg),

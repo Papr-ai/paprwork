@@ -47,3 +47,19 @@ describe("catalog time budget", () => {
     expect(catalogBudgetMs([{ method: "tools/list" }])).toBe(7_000);
   });
 });
+
+describe("catalog freshness", () => {
+  beforeEach(() => clearCatalogCache());
+
+  it("serves a stale catalog instantly and refreshes it in the background", async () => {
+    let t = 0;
+    let lists = 0;
+    const deps = { listAccessibleApps: async () => (lists++, [app(`a${lists}`)]), loadCardsManifest: async () => cards };
+    const opts = { now: () => t, ttlMs: 100, staleMs: 1_000 };
+    expect((await loadClaudeCatalog(caller, deps, opts)).map((a) => a.slug)).toEqual(["a1"]);
+    t = 500; // stale, not expired
+    expect((await loadClaudeCatalog(caller, deps, opts)).map((a) => a.slug)).toEqual(["a1"]);
+    await sleep(10);
+    expect((await loadClaudeCatalog(caller, deps, opts)).map((a) => a.slug)).toEqual(["a2"]);
+  });
+});
