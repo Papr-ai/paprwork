@@ -9,6 +9,10 @@
  *   papr_list_apps (model)    the caller's apps with cards, for discovery / beyond the tool cap.
  *   papr_open_app  (model)    open any published app by link (generic card).
  *   papr_continue_on_mac (model + app)  one-time papr:// link to pick up in the desktop app.
+ *
+ * Routes: /mcp (all the user's apps) and /mcp/a/{namespaceId}/{slug} (one app, for an
+ * "Add to Claude" button on that app's page). Same sign-in, same audience.
+ * Server instructions list the user's apps so Claude routes to them (routing.ts).
  *   papr_api       (app-only) the tunnel. Hidden from the model; only our cards call it.
  */
 import type { Express, NextFunction, Request, Response } from "express";
@@ -26,11 +30,25 @@ import { callerOf, createAuth0Verifier, registerProtectedResourceMetadata, type 
 import { dispatchTunnel, fetchPublishedCard, fetchPublishedCardsManifest, TunnelError, type TunnelMethod } from "./apiTunnel.js";
 import { getMemoryServerBaseUrl } from "../../utils/cloudApiClient.js";
 import { inputSchemaToZodShape, planAppTools, toolResultFor, appTitle } from "./appTools.js";
-import { loadClaudeCatalog, memoryAccessibleApps, type CatalogDeps, type ClaudeApp } from "./catalog.js";
+import { loadClaudeCatalog, loadClaudeCatalogWithin, memoryAccessibleApps, type CatalogDeps, type ClaudeApp } from "./catalog.js";
 import { loadMcpEndpointConfig, MCP_PATH, protectedResourceMetadataUrl, type McpEndpointConfig } from "./config.js";
 import { renderSpikeCardHtml } from "./spikeCard.js";
 import { HandoffError, memoryHandoff, type CreateHandoff } from "./handoff.js";
 import { memorySessionExchange, type McpSessionExchange } from "./session.js";
+import { buildInstructions } from "./routing.js";
+import { paprIcons, registerPaprIconRoutes } from "./paprIcon.js";
+
+export interface AppScope {
+  namespaceId: string;
+  slug: string;
+}
+
+const SCOPE_PART = /^[A-Za-z0-9_-]{1,64}$/;
+
+/** Connector URL that shows only one app in Claude. */
+export function appConnectorUrl(cfg: McpEndpointConfig, namespaceId: string, slug: string): string {
+  return `${cfg.resourceUrl}/a/${encodeURIComponent(namespaceId)}/${encodeURIComponent(slug)}`;
+}
 
 export const SPIKE_CARD_URI = "ui://papr/spike/app-card.html";
 
@@ -65,7 +83,10 @@ export function buildMcpServer(
   apps: ClaudeApp[] = [],
   deps: { handoff?: CreateHandoff } = {},
 ): McpServer {
-  const server = new McpServer({ name: "papr", title: "Papr", version: "0.1.0" }, { instructions: MCP_INSTRUCTIONS });
+  const server = new McpServer(
+    { name: "papr", title: "Papr", version: "0.1.0", websiteUrl: "https://papr.ai", icons: paprIcons(cfg.resourceUrl) },
+    { instructions: buildInstructions(MCP_INSTRUCTIONS, apps, appTitle) },
+  );
 
   registerAppResource(server, "Papr app card", SPIKE_CARD_URI, { description: "Papr app card (spike)" }, async () => ({
     contents: [{ uri: SPIKE_CARD_URI, mimeType: RESOURCE_MIME_TYPE, text: renderSpikeCardHtml() }],
@@ -115,6 +136,7 @@ export function buildMcpServer(
         title: appTitle(app),
         summary: app.cards.summary ?? app.description ?? null,
         url: `${cfg.appsBaseUrl}/${app.namespaceId}/${app.slug}`,
+        connectorUrl: appConnectorUrl(cfg, app.namespaceId, app.slug),
         tools: tools.filter((t) => t.app === app).map((t) => t.name),
       }));
       const firstRun = (caller.provisioned?.length ?? 0) > 0;
@@ -239,11 +261,26 @@ export function requestNeedsCatalog(body: unknown): boolean {
   const msgs = Array.isArray(body) ? body : [body];
   return msgs.some((m) => {
     const method = (m as { method?: string } | null)?.method;
-    if (method === "tools/list") return true;
+    // initialize: instructions name the user's apps. Cached per user, so reconnects are cheap.
+    if (method === "tools/list" || method === "initialize") return true;
     if (method !== "tools/call") return false;
     const name = (m as { params?: { name?: string } }).params?.name;
     return name !== "papr_api" && name !== "papr_open_app" && name !== "papr_continue_on_mac";
   });
+}
+
+/**
+ * Claude's connect check gives up after ~10s, so initialize never waits long on the app
+ * list (its instructions only name apps). tools/list waits a little longer for per-app tools.
+ */
+export function catalogBudgetMs(body: unknown): number {
+  const msgs = Array.isArray(body) ? body : [body];
+  return msgs.some((m) => (m as { method?: string } | null)?.method === "initialize") ? 2_500 : 7_000;
+}
+
+function isConnectNotification(body: unknown): boolean {
+  const msgs = Array.isArray(body) ? body : [body];
+  return msgs.some((m) => (m as { method?: string } | null)?.method === "notifications/initialized");
 }
 
 export function defaultCatalogDeps(cfg: McpEndpointConfig, memoryBaseUrl: string): CatalogDeps {
@@ -259,19 +296,26 @@ async function handleMcpPost(
   handoff: CreateHandoff | undefined,
   req: Request,
   res: Response,
+  scope?: AppScope,
 ): Promise<void> {
   const caller = callerOf(req.auth);
   let apps: ClaudeApp[] = [];
-  if (requestNeedsCatalog(req.body)) {
+  // Warm on connect-time notifications (not card traffic) so tools/list finds the catalog ready.
+  if (!scope && isConnectNotification(req.body)) void loadClaudeCatalog(caller, catalog).catch(() => undefined);
+  if (scope || requestNeedsCatalog(req.body)) {
     try {
-      apps = await loadClaudeCatalog(caller, catalog);
+      const r = await loadClaudeCatalogWithin(caller, catalog, catalogBudgetMs(req.body));
+      apps = r.apps;
+      if (!r.complete) console.warn(`[mcp] app catalog still loading; answered with ${apps.length} cached apps`);
     } catch (err) {
       // Papr's generic tools still work if the app list is down.
       console.warn("[mcp] app catalog unavailable:", (err as Error).message.slice(0, 160));
     }
   }
+  if (scope) apps = apps.filter((a) => a.namespaceId === scope.namespaceId && a.slug === scope.slug);
   const server = buildMcpServer(cfg, caller, apps, { handoff });
   const transport = new StreamableHTTPServerTransport({ sessionIdGenerator: undefined, enableJsonResponse: true });
+  transport.onerror = (err) => console.warn(`[mcp] transport rejected request: ${err.message.slice(0, 200)} (protocol header: ${req.headers["mcp-protocol-version"] ?? "none"})`);
   res.on("close", () => {
     void transport.close();
     void server.close();
@@ -301,6 +345,7 @@ export function registerMcpRoutes(
   // The handoff needs a memory-minted session; the claims bridge's Parse session works too.
   const handoff = opts.handoff === null ? undefined : (opts.handoff ?? memoryHandoff(memoryBaseUrl));
   registerProtectedResourceMetadata(app, cfg);
+  registerPaprIconRoutes(app);
   const bearer = requireBearerAuth({
     verifier: opts.verifier ?? createAuth0Verifier(cfg, exchange),
     resourceMetadataUrl: protectedResourceMetadataUrl(cfg),
@@ -308,12 +353,22 @@ export function registerMcpRoutes(
   app.post(MCP_PATH, bearer, (req, res, next: NextFunction) => {
     handleMcpPost(cfg, catalog, handoff, req, res).catch(next);
   });
+  app.post(`${MCP_PATH}/a/:namespaceId/:slug`, bearer, (req, res, next: NextFunction) => {
+    const { namespaceId, slug } = req.params as Record<string, string>;
+    if (!SCOPE_PART.test(namespaceId) || !SCOPE_PART.test(slug)) {
+      res.status(404).json({ jsonrpc: "2.0", error: { code: -32000, message: "Unknown Papr app" }, id: null });
+      return;
+    }
+    handleMcpPost(cfg, catalog, handoff, req, res, { namespaceId, slug }).catch(next);
+  });
   // Stateless server: no standalone SSE stream and no sessions to delete.
   const notAllowed = (_req: Request, res: Response): void => {
     res.setHeader("Allow", "POST");
     res.status(405).json({ jsonrpc: "2.0", error: { code: -32000, message: "Method not allowed" }, id: null });
   };
-  app.get(MCP_PATH, notAllowed);
-  app.delete(MCP_PATH, notAllowed);
+  for (const p of [MCP_PATH, `${MCP_PATH}/a/:namespaceId/:slug`]) {
+    app.get(p, notAllowed);
+    app.delete(p, notAllowed);
+  }
   return cfg;
 }

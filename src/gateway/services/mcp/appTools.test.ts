@@ -54,8 +54,8 @@ describe("planAppTools", () => {
       { name: "Outreach" },
     );
     const [draft, inbox] = planAppTools([a]);
-    expect(draft.description).toMatch(/^Open Outreach in Papr, ready to draft a reply\. /);
-    expect(inbox.description).toBe("Open Outreach · Replies from Papr as an interactive card. Replies waiting for you.");
+    expect(draft.description).toMatch(/^Papr · Outreach\. Opens a card ready to draft a reply; /);
+    expect(inbox.description).toBe("Papr · Outreach. Opens Replies as an interactive card. Replies waiting for you.");
     expect(inbox.title).toBe("Outreach · Replies");
   });
 });

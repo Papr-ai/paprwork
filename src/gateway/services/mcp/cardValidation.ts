@@ -2,6 +2,7 @@
  * validate_app checks for Claude cards. Runs the exact build publish runs, so a card
  * that validates is a card that publishes. Silent for apps that haven't opted in.
  */
+import { lintRouting } from "./routing.js";
 import { promises as fs } from "fs";
 import path from "path";
 import { parseAppBackendManifest } from "../appRuntime/appBackendManifest.js";
@@ -17,6 +18,7 @@ export interface CardIssue {
 }
 
 const RULE = "claude-cards";
+/** @deprecated Routing caps tools at MAX_TOOLS_PER_APP (routing.ts); kept for callers. */
 export const MAX_VIEWS_PER_APP = 6;
 
 /** "card \"inbox\": Unknown … (cards/inbox.ts:3)" → file + line, so editors can jump to it. */
@@ -36,7 +38,7 @@ async function readJson(file: string): Promise<unknown | null> {
   }
 }
 
-/** Advice that keeps Claude's tool list useful; never blocks publish. */
+/** Advice that keeps Claude's tool list useful. Only over-broad routing text (lintRouting) blocks publish. */
 async function designWarnings(appDir: string): Promise<CardIssue[]> {
   const out: CardIssue[] = [];
   const cfg = parseClaudeAppConfig(await readJson(path.join(appDir, "metadata.json")));
@@ -50,10 +52,8 @@ async function designWarnings(appDir: string): Promise<CardIssue[]> {
   }
   const views = Object.entries(cfg.views);
   const warn = (file: string, message: string): number => out.push({ file, severity: "warning", rule: RULE, message });
-  if (views.length > MAX_VIEWS_PER_APP) {
-    warn("metadata.json", `metadata.claude has ${views.length} views. Each becomes a Claude tool; keep it to ${MAX_VIEWS_PER_APP} or fewer so Claude picks the right one.`);
-  }
   if (!cfg.summary) warn("metadata.json", "Add metadata.claude.summary (one sentence). Claude reads it to decide when to use this app.");
+  for (const issue of lintRouting(cfg)) out.push({ file: "metadata.json", severity: issue.severity, rule: RULE, message: issue.message });
   for (const [name, view] of views) {
     const action = view.action ? actions[view.action] : undefined;
     if (view.kind === "approval" && action && action.effect !== "external") {

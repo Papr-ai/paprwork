@@ -127,9 +127,9 @@ async function fakeHandoff(c: unknown, intent: unknown) {
   return { url: "papr://auth/handoff?code=abc", expiresAt: "2027-01-01T00:00:00Z" };
 }
 
-async function connect(): Promise<Client> {
+async function connect(pathname = "/mcp"): Promise<Client> {
   const client = new Client({ name: "test-claude", version: "1.0.0" });
-  const transport = new StreamableHTTPClientTransport(new URL(`${base}/mcp`), {
+  const transport = new StreamableHTTPClientTransport(new URL(`${base}${pathname}`), {
     requestInit: { headers: { Authorization: `Bearer ${GOOD}` } },
   });
   await client.connect(transport);
@@ -283,7 +283,7 @@ describe("per-app tools", () => {
     expect(status.annotations?.readOnlyHint).toBe(true);
     expect(status.description).toMatch(/LinkedIn Outreach.*live card.*warm leads/);
     const send = byName["linkedin-outreach_send"];
-    expect(send.description).toMatch(/Nothing happens until they click Approve/);
+    expect(send.description).toMatch(/nothing happens until the user clicks Approve/);
     expect(send.description).toMatch(/Mac/);
     expect(send.inputSchema.required).toEqual(["lead", "message"]);
     // Action tools prefill: nothing required, enum preserved.
@@ -319,10 +319,14 @@ describe("per-app tools", () => {
     await client.close();
   });
 
-  it("skips the catalog for card traffic and caches it per user", async () => {
+  it("loads the catalog on initialize (instructions), skips it for card traffic, caches per user", async () => {
     clearCatalogCache();
     catalogLoads = 0;
     const client = await connect();
+    expect(catalogLoads).toBe(1);
+    expect(client.getInstructions()).toContain("- LinkedIn Outreach");
+    clearCatalogCache();
+    catalogLoads = 0;
     await client.callTool({ name: "papr_api", arguments: { namespaceId: "ns1", slug: "linkedin-outreach", method: "GET", path: "/api/access" } });
     expect(catalogLoads).toBe(0);
     await client.listTools();
@@ -367,5 +371,38 @@ describe("accounts (PR 3)", () => {
     const { tools } = await client.listTools();
     expect(tools.some((t) => t.name === "papr_continue_on_mac")).toBe(false); // no handoff dep → no tool
     await client.close();
+  });
+});
+
+describe("per-app connector URL (PR 3c)", () => {
+  it("serves only that app's tools, with the same sign-in", async () => {
+    clearCatalogCache();
+    const client = await connect("/mcp/a/ns1/linkedin-outreach");
+    const names = (await client.listTools()).tools.map((t) => t.name);
+    expect(names.filter((n) => n.startsWith("linkedin-outreach_")).length).toBeGreaterThan(0);
+    expect(names.every((n) => n.startsWith("linkedin-outreach_") || n.startsWith("papr_"))).toBe(true);
+    const listed = await client.callTool({ name: "papr_list_apps", arguments: {} });
+    const apps = (listed.structuredContent as { apps: Array<{ connectorUrl: string }> }).apps;
+    expect(apps).toHaveLength(1);
+    expect(apps[0].connectorUrl).toBe(`${base}/mcp/a/ns1/linkedin-outreach`);
+    await client.close();
+  });
+
+  it("advertises the shared resource (a path prefix) at the app's well-known URL", async () => {
+    const res = await fetch(`${base}/.well-known/oauth-protected-resource/mcp/a/ns1/linkedin-outreach`);
+    expect(((await res.json()) as { resource: string }).resource).toBe(`${base}/mcp`);
+    const { checkResourceAllowed } = await import("@modelcontextprotocol/sdk/shared/auth-utils.js");
+    expect(checkResourceAllowed({ requestedResource: `${base}/mcp/a/ns1/linkedin-outreach`, configuredResource: `${base}/mcp` })).toBe(true);
+  });
+
+  it("401s without a token and 404s malformed app refs", async () => {
+    const post = (p: string, auth?: string) =>
+      fetch(`${base}${p}`, {
+        method: "POST",
+        headers: { "content-type": "application/json", accept: "application/json, text/event-stream", ...(auth ? { authorization: `Bearer ${auth}` } : {}) },
+        body: JSON.stringify({ jsonrpc: "2.0", id: 1, method: "tools/list" }),
+      });
+    expect((await post("/mcp/a/ns1/linkedin-outreach")).status).toBe(401);
+    expect((await post("/mcp/a/ns1/bad.slug", GOOD)).status).toBe(404);
   });
 });

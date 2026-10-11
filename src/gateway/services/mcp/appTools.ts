@@ -13,8 +13,10 @@ import { z, type ZodTypeAny } from "zod";
 import type { AppBackendInputSchema } from "../../../core/types/appBackend.js";
 import type { CardsManifestView } from "./cardBuild.js";
 import type { ClaudeApp } from "./catalog.js";
+import { MAX_TOOLS_PER_APP, routingLead } from "./routing.js";
 
-export const MAX_APP_TOOLS = 60;
+/** ~15 apps × 3 views. Past this, apps are reachable via papr_list_apps / instructions. */
+export const MAX_APP_TOOLS = 45;
 const RESERVED = new Set(["papr_api", "papr_open_app", "papr_list_apps"]);
 
 export interface AppToolSpec {
@@ -41,21 +43,25 @@ function toolBaseName(slug: string, view: string): string {
   return `${clean(slug, 40) || "app"}_${clean(view, 20) || "view"}`;
 }
 
+/** Intent first (routing.ts), then what the card does. */
 function describe(app: ClaudeApp, view: string, spec: CardsManifestView): string {
   const title = appTitle(app);
+  const primary = Object.keys(app.cards.views)[0] === view;
+  const lead = routingLead(title, app, spec, { primary });
+  const routed = Boolean(spec.whenToUse ?? (primary ? app.cards.whenToUse : undefined));
   const about = spec.description ?? app.cards.summary ?? app.description;
-  const tail = about ? ` ${about.trim().replace(/\.?$/, ".")}` : "";
+  const tail = !routed && about ? ` ${about.trim().replace(/\.?$/, ".")}` : "";
   const what = spec.actionSpec?.description ? lowerFirst(spec.actionSpec.description.replace(/\.$/, "")) : humanize(spec.action ?? view).toLowerCase();
   const mac = spec.actionSpec?.runsOn === "mac" ? " It runs on the publisher's Mac when it's awake." : "";
   switch (spec.kind) {
     case "status":
-      return `Show ${title}'s ${spec.title ? spec.title.toLowerCase() : "current status"} from Papr as a live card.${tail}`;
+      return `${lead} Shows ${spec.title ? spec.title.toLowerCase() : "current status"} as a live card.${tail}`;
     case "action":
-      return `Open ${title} in Papr, ready to ${what}. Arguments prefill the card's form; the user presses the button to run it.${mac}${tail}`;
+      return `${lead} Opens a card ready to ${what}; arguments prefill the form and the user presses the button to run it.${mac}${tail}`;
     case "approval":
-      return `Propose "${what}" in ${title} for the user to review. Nothing happens until they click Approve on the card.${mac}${tail}`;
+      return `${lead} Proposes "${what}" on a card for review; nothing happens until the user clicks Approve.${mac}${tail}`;
     default:
-      return `Open ${title} · ${spec.title ?? humanize(view)} from Papr as an interactive card.${tail}`;
+      return `${lead} Opens ${spec.title ?? humanize(view)} as an interactive card.${tail}`;
   }
 }
 
@@ -64,7 +70,8 @@ export function planAppTools(apps: ClaudeApp[], maxTools = MAX_APP_TOOLS): AppTo
   const used = new Set(RESERVED);
   const out: AppToolSpec[] = [];
   for (const app of apps) {
-    for (const [view, spec] of Object.entries(app.cards.views)) {
+    // Author order: the most-asked-for views come first (validate_app says so).
+    for (const [view, spec] of Object.entries(app.cards.views).slice(0, MAX_TOOLS_PER_APP)) {
       if (out.length >= maxTools) return out;
       const base = toolBaseName(app.slug, view);
       let name = base;

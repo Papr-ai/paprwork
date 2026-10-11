@@ -18,9 +18,13 @@ Each **view** becomes one Claude tool (`{slug}_{view}`) that opens one card.
 "claude": {
   "enabled": true,
   "summary": "One sentence: what this app does for the user.",
+  "whenToUse": "the user wants to find leads on LinkedIn or check how their outreach is going",
+  "examples": ["help me run LinkedIn outreach", "how many people replied this week?"],
   "views": {
     "status": { "kind": "status", "from": "pipeline-summary" },
-    "draft":  { "kind": "action", "action": "draft-message" },
+    "draft":  { "kind": "action", "action": "draft-message",
+                "whenToUse": "the user wants a connection note or DM written for a specific person",
+                "examples": ["draft a DM to the head of data at Ramp"] },
     "send":   { "kind": "approval", "action": "send-messages" }
   }
 }
@@ -30,7 +34,22 @@ Each **view** becomes one Claude tool (`{slug}_{view}`) that opens one card.
    oversized or non-self-contained cards. Fix errors before publishing.
 4. **Publish** (cloud). Cards build into `dist/cards/` and show up in Claude within a minute.
 
-## Picking views (2–4 is right; >6 warns)
+## Getting picked by Claude (whenToUse + examples)
+
+Claude chooses tools by reading their descriptions on every turn. Papr builds each description
+from `whenToUse` and `examples`, and lists the user's apps in the connector instructions.
+
+- **`whenToUse`** (≤280 chars): what the *user* is trying to get done, in plain words.
+  Good: "the user wants to log a receipt, check burn, or invoice a client".
+  Bad: "Bookkeeping app" (what it *is*), "Use for any finance question" (too broad, **blocks publish**),
+  "finance, books, expenses, invoices, tax, cash…" (keyword list, **blocks publish**).
+- **`examples`** (2–4, ≤120 chars each): requests in the user's own words, not feature names.
+- The app-level `whenToUse` describes the **first** view. Give every other view its own
+  `whenToUse`, or Claude can't tell your tools apart. Put the most-asked-for view first.
+- Only the first **3** views become Claude tools.
+- Too broad is worse than too narrow: an app that pops up uninvited gets the whole Papr connector turned off.
+
+## Picking views (2–3 is right; only the first 3 become tools)
 
 | User need | View |
 |---|---|
