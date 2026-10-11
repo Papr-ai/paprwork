@@ -30,8 +30,8 @@ import {
 import { callerOf, createAuth0Verifier, registerProtectedResourceMetadata, type McpCaller } from "./auth.js";
 import { dispatchTunnel, fetchPublishedCard, fetchPublishedCardsManifest, TunnelError, type TunnelMethod } from "./apiTunnel.js";
 import { getMemoryServerBaseUrl } from "../../utils/cloudApiClient.js";
-import { inputSchemaToZodShape, planAppTools, toolResultFor, appTitle } from "./appTools.js";
-import { loadClaudeCatalog, loadClaudeCatalogWithin, memoryAccessibleApps, type CatalogDeps, type ClaudeApp } from "./catalog.js";
+import { inputSchemaToZodShape, planAppTools, toolResultFor, appTitle, type AppToolSpec } from "./appTools.js";
+import { loadClaudeCatalog, loadClaudeCatalogWithin, memoryAccessibleApps, parseCardsManifest, type CatalogDeps, type ClaudeApp } from "./catalog.js";
 import { loadMcpEndpointConfig, MCP_PATH, protectedResourceMetadataUrl, type McpEndpointConfig } from "./config.js";
 import { renderSpikeCardHtml } from "./spikeCard.js";
 import { HandoffError, memoryHandoff, type CreateHandoff } from "./handoff.js";
@@ -110,7 +110,8 @@ export function buildMcpServer(
   );
 
   registerAppResource(server, "Papr app card", SPIKE_CARD_URI, { description: "Papr app card (spike)" }, async () => ({
-    contents: [{ uri: SPIKE_CARD_URI, mimeType: RESOURCE_MIME_TYPE, text: renderSpikeCardHtml() }],
+    // Same CSP as app cards: papr_open_app hosts the app's own card inside this one.
+    contents: [{ uri: SPIKE_CARD_URI, mimeType: RESOURCE_MIME_TYPE, text: renderSpikeCardHtml(), _meta: { ui: { csp: CARD_CSP } } }],
   }));
 
   // Per-app cards. PR 2 points generated per-app tools at these URIs.
@@ -194,19 +195,48 @@ export function buildMcpServer(
       }
       const openUrl = `${cfg.appsBaseUrl}/${ref.namespaceId}/${ref.slug}`;
       const known = apps.find((a) => a.namespaceId === ref.namespaceId && a.slug === ref.slug);
+      // The app's own card when it has one, even if its tools weren't in this conversation's list.
+      const cards = known?.cards ?? parseCardsManifest(await fetchPublishedCardsManifest(cfg.loopbackPort, caller, ref).catch(() => null));
+      const view = cards ? Object.keys(cards.views)[0] : undefined;
+      const app = (known ?? { ...ref, cards }) as ClaudeApp;
       const title = known ? appTitle(known) : ref.slug;
+      const card =
+        cards && view
+          ? { view, result: toolResultFor({ name: "", title: "", description: "", app, view, spec: cards.views[view] } as AppToolSpec, {}, cfg.appsBaseUrl).structuredContent }
+          : undefined;
       return {
-        content: [{ type: "text", text: `Opened ${title} from Papr.` }],
+        content: [{ type: "text", text: card ? `Showing ${title} · ${cards!.views[view!].title ?? view}.` : `Opened ${title} from Papr.` }],
         structuredContent: {
           ...ref,
           title,
           openUrl,
+          ...(card ? { card } : {}),
           ...(known?.cards.summary ?? known?.description ? { summary: known?.cards.summary ?? known?.description } : {}),
           ...(known?.cards.examples ? { examples: known.cards.examples } : {}),
           ...(known?.author ? { publisher: known.author } : {}),
           ...(known?.icon ? { icon: known.icon } : {}),
         },
       };
+    },
+  );
+
+  registerAppTool(
+    server,
+    "papr_card_html",
+    {
+      title: "Papr app card (cards only)",
+      description: "Internal: the published card page papr_open_app hosts. Not for direct use.",
+      inputSchema: { namespaceId: z.string(), slug: z.string(), view: z.string().max(80) },
+      _meta: { ui: { resourceUri: SPIKE_CARD_URI, visibility: ["app"] } },
+    },
+    async (args) => {
+      try {
+        const html = await fetchPublishedCard(cfg.loopbackPort, caller, { namespaceId: args.namespaceId, slug: args.slug }, args.view);
+        if (html === null) return { isError: true, content: [{ type: "text", text: "No card published for that view." }] };
+        return { content: [{ type: "text", text: "card" }], structuredContent: { html } };
+      } catch (e) {
+        return { isError: true, content: [{ type: "text", text: (e as Error).message }] };
+      }
     },
   );
 

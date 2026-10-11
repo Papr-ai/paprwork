@@ -17,7 +17,7 @@ import { MAX_TOOLS_PER_APP, routingLead } from "./routing.js";
 
 /** ~15 apps × 3 views. Past this, apps are reachable via papr_list_apps / instructions. */
 export const MAX_APP_TOOLS = 45;
-const RESERVED = new Set(["papr_api", "papr_open_app", "papr_list_apps"]);
+const RESERVED = new Set(["papr_api", "papr_card_html", "papr_open_app", "papr_list_apps"]);
 
 export interface AppToolSpec {
   name: string;

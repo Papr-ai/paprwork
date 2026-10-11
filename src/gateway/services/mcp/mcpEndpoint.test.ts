@@ -172,8 +172,11 @@ describe("MCP endpoint tools and card", () => {
     const { contents } = await client.readResource({ uri: SPIKE_CARD_URI });
     const html = String((contents[0] as { text?: string }).text);
     expect(contents[0].mimeType).toBe(RESOURCE_MIME_TYPE);
-    expect(html).toContain("globalThis.McpApps=");
+    expect(html).toContain('"ui/initialize"');
+    expect(html).toContain("papr_card_html");
+    expect(html).toContain("Built on");
     expect(html).not.toMatch(/<script[^>]+src=/);
+    expect((contents[0] as { _meta?: { ui?: { csp?: unknown } } })._meta?.ui?.csp).toBeTruthy();
     await client.close();
   });
 

@@ -22,7 +22,7 @@
 
 import { McpHostBridge, windowPort, type BridgePort, type HostContext, type ToolResult } from "./papr-mcp-bridge.ts";
 import { installMcpTransport, tunnelRequest, type AppRef } from "./papr-mcp-transport.ts";
-import { CARD_CSS } from "./papr-card-style.ts";
+import { CARD_CSS, frameHtml } from "./papr-card-style.ts";
 
 export type CardEffect = "read" | "write" | "external";
 
@@ -113,13 +113,6 @@ export function tintFor(key: string): string {
   return `hsl(${[214, 248, 268, 192, 160, 12, 330][h % 7]} 82% 48%)`;
 }
 
-function frameHtml(): string {
-  return `<div class="pc"><header class="pc-h"><span class="pc-tile" id="pc-tile">P</span>
-<div class="pc-t"><b id="pc-title">Papr</b><span class="pc-meta" id="pc-meta"></span></div></header>
-<main class="pc-b" id="pc-body"><p class="pc-mu">Loading…</p></main>
-<footer class="pc-f"><span class="pc-note" id="pc-note"></span><span class="pc-act" id="pc-act"></span>
-<button class="pc-btn" id="pc-open" disabled>Open in Papr</button></footer></div>`;
-}
 
 export async function card(opts: CardOptions, deps: CardDeps = {}): Promise<CardContext> {
   const doc = deps.doc ?? document;
@@ -138,6 +131,11 @@ export async function card(opts: CardOptions, deps: CardDeps = {}): Promise<Card
   installMcpTransport({ callTool, ref: refReady, win });
 
   let primary: CardPrimary | null = opts.primary ?? null;
+  let meta = "";
+  // Footer left: the card's state line (setMeta), plus where the primary action runs.
+  const renderNote = (): void => {
+    $("pc-note").textContent = [meta, primary?.runsOn === "mac" ? "Runs on your Mac when it's awake" : ""].filter(Boolean).join(" · ");
+  };
   let armed = false;
   const ctx: CardContext = {
     app: { namespaceId: "", slug: "" },
@@ -170,7 +168,8 @@ export async function card(opts: CardOptions, deps: CardDeps = {}): Promise<Card
       void bridge.updateModelContext(text).catch(() => {});
     },
     setMeta(text) {
-      $("pc-meta").textContent = text;
+      meta = text;
+      renderNote();
     },
     open(url) {
       void bridge.openLink(url).catch(() => {});
@@ -181,7 +180,7 @@ export async function card(opts: CardOptions, deps: CardDeps = {}): Promise<Card
     const act = $("pc-act");
     // One accent button per card: "Open in {App}" is solid only when the app has no action of its own.
     $("pc-open").classList.toggle("pc-ghost", !!primary);
-    $("pc-note").textContent = primary?.runsOn === "mac" ? "Runs on your Mac when it's awake" : "";
+    renderNote();
     if (!primary) {
       act.innerHTML = "";
       return;
@@ -220,6 +219,7 @@ export async function card(opts: CardOptions, deps: CardDeps = {}): Promise<Card
       armed = false;
       renderPrimary();
       $("pc-note").textContent = (e as Error).message;
+      return;
     }
   }
 
@@ -238,11 +238,11 @@ export async function card(opts: CardOptions, deps: CardDeps = {}): Promise<Card
     resolveRef({ namespaceId: sc.namespaceId, slug: sc.slug });
     const title = sc.title ?? sc.slug;
     const tile = $("pc-tile");
-    tile.style.setProperty("--pc-tint", tintFor(sc.slug));
     if (sc.icon && /^\s*<svg[\s>]/i.test(sc.icon)) {
       tile.innerHTML = `<img alt="" src="data:image/svg+xml;charset=utf-8,${encodeURIComponent(sc.icon)}">`;
     } else tile.textContent = initials(title);
     $("pc-title").textContent = title;
+    $("pc-sub").textContent = sc.publisher ? `by ${sc.publisher}` : "Your Papr app";
     const open = $("pc-open") as HTMLButtonElement;
     open.textContent = `Open in ${title}`;
     open.disabled = !sc.openUrl;
