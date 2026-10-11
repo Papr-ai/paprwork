@@ -39,6 +39,24 @@ describe("planAppTools", () => {
     expect(papr[0].name).not.toBe("papr_api");
   });
 
+  it("custom cards backed by an action take its input and get the args as data", () => {
+    const input = { type: "object" as const, properties: { video: { type: "string" as const } } };
+    const a = app("scenario", {
+      library: { entry: "cards/library.ts", title: "Videos", action: "list-videos", actionSpec: { name: "list-videos", effect: "read", input } },
+      change: { entry: "cards/change.ts", title: "Change a video", action: "change-video", actionSpec: { name: "change-video", effect: "write", runsOn: "mac", input } },
+      plain: { entry: "cards/plain.ts" },
+    });
+    const [lib, change, plain] = planAppTools([a]);
+    expect(lib.input).toEqual(input);
+    expect(lib.description).toMatch(/Arguments choose what it opens on\./);
+    expect(change.description).toMatch(/nothing runs until the user presses the button on the card\. It runs on the publisher's Mac/);
+    expect(plain.input).toBeUndefined();
+    const r = toolResultFor(change, { video: "deck" }, "https://apps.papr.ai");
+    expect(r.structuredContent.data).toEqual({ video: "deck" });
+    expect(r.content[0].text).toMatch(/The user starts it from the card/);
+    expect(toolResultFor(lib, { video: "deck" }, "https://apps.papr.ai").structuredContent.data).toEqual({ video: "deck" });
+  });
+
   it("is deterministic", () => {
     const apps = [app("x", { a: { kind: "status", from: "s" } }), app("y", { b: { kind: "status", from: "s" } })];
     expect(planAppTools(apps).map((t) => t.name)).toEqual(planAppTools(apps).map((t) => t.name));
