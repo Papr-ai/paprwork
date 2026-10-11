@@ -302,13 +302,18 @@ export async function* runPiAiWrapUpContinuation(
   StreamOrchestratorResult | null,
   undefined
 > {
-  args.piContext.messages.push({
-    role: "user",
-    content: args.wrapUpMessage ?? WRAP_UP_AFTER_TOOLS_NO_TEXT,
-  });
-
+  // Built fresh rather than pushed onto the shared context, so a text-first
+  // retry (agent/finalReplyGuarantee.ts) sends one instruction, not two
+  // stacked user turns.
   const contextWithoutTools = {
     ...args.piContext,
+    messages: [
+      ...args.piContext.messages,
+      {
+        role: "user",
+        content: args.wrapUpMessage ?? WRAP_UP_AFTER_TOOLS_NO_TEXT,
+      },
+    ],
     tools: [],
   };
 

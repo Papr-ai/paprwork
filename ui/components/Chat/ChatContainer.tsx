@@ -72,7 +72,10 @@ import {
   shouldDrainMessageQueue,
 } from "../../lib/agentStreamRecovery";
 import { assistantMessageHasVisibleContent } from "../../utils/assistantMessageVisibility";
-import { clearQueuedMessagesForChat } from "../../utils/messageQueue";
+import {
+  clearQueuedMessagesForChat,
+  hasOtherSendableQueued,
+} from "../../utils/messageQueue";
 import { markFollowUpLanding } from "../../utils/followUpLanding";
 import { useMessageQueueStore } from "../../stores/messageQueueStore";
 import { useGatewaySupervisorStatus } from "../../hooks/useGatewaySupervisorStatus";
@@ -1042,17 +1045,32 @@ export const ChatContainer: React.FC<ChatContainerProps> = ({ chatId }): React.R
     [handleSendMessage, stopAgentAndClearQueue],
   );
 
+  /**
+   * Queueing asked the running turn to pause at its next tool boundary. When
+   * the last sendable follow-up leaves the queue without being sent, withdraw
+   * that request — otherwise the turn stops for a message that never arrives
+   * and ends with no reply.
+   */
+  const withdrawYieldIfLastQueued = useCallback((messageId: string) => {
+    const { queue } = useMessageQueueStore.getState();
+    if (!hasOtherSendableQueued(queue, chatId, messageId)) {
+      void gateway.send("agent:yield-cancel", { chatId }).catch(() => {});
+    }
+  }, [chatId]);
+
   const handleRemoveQueued = useCallback((messageId: string) => {
+    withdrawYieldIfLastQueued(messageId);
     setMessageQueue(prev => prev.filter(q => q.id !== messageId));
-  }, [setMessageQueue]);
+  }, [setMessageQueue, withdrawYieldIfLastQueued]);
 
   /** Edit = take it out of the queue and put it back in the composer. */
   const handleEditQueued = useCallback((messageId: string) => {
     const item = useMessageQueueStore.getState().queue.find(q => q.id === messageId);
     if (!item) return;
+    withdrawYieldIfLastQueued(messageId);
     setMessageQueue(prev => prev.filter(q => q.id !== messageId));
     inputBarRef.current?.editText(item.text);
-  }, [setMessageQueue]);
+  }, [setMessageQueue, withdrawYieldIfLastQueued]);
 
   const processNextQueued = useCallback(async () => {
     const nextMessage = nextSendableQueued;

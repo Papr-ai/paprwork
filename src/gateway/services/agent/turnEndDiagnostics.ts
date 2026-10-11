@@ -208,7 +208,7 @@ export function explainPostStreamWrapUp(args: {
   return { requested: true };
 }
 
-function sequenceHasInterruptedTools(
+export function sequenceHasInterruptedTools(
   sequence: Array<{ type: string; data: unknown }>,
 ): boolean {
   return sequence.some((item) => {
