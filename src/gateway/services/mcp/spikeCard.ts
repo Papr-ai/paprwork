@@ -50,7 +50,7 @@ const esc = (s) => String(s ?? "").replace(/[&<>"']/g, (c) => ({ "&": "&amp;", "
 const app = new App({ name: "Papr card", version: "0.1.0" });
 const HUES = [214, 248, 268, 192, 160, 12, 330];
 const tint = (k) => { let h = 0; for (const c of k) h = (h * 31 + c.charCodeAt(0)) >>> 0; return "hsl(" + HUES[h % 7] + " 82% 48%)"; };
-const initials = (t) => { const w = t.replace(/[-_]+/g, " ").trim().split(/\s+/).filter(Boolean); return (w.length > 1 ? w[0][0] + w[1][0] : (w[0] || "P").slice(0, 2)).toUpperCase(); };
+const initials = (t) => { const w = t.replace(/[-_]+/g, " ").trim().split(/\s+/).filter(Boolean); return (w.length > 1 ? w[0][0] + w[1][0] : (w[0] || "P")[0]).toUpperCase(); };
 
 function theme(ctx) {
   const vars = ctx?.styles?.variables ?? {};

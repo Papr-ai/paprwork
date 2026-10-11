@@ -82,7 +82,7 @@ const esc = (s: unknown): string =>
 
 export function initials(title: string): string {
   const words = title.replace(/[-_]+/g, " ").trim().split(/\s+/).filter(Boolean);
-  return (words.length > 1 ? words[0][0] + words[1][0] : (words[0] ?? "P").slice(0, 2)).toUpperCase();
+  return (words.length > 1 ? words[0][0] + words[1][0] : (words[0] ?? "P")[0]).toUpperCase();
 }
 
 /** Runs a backend action and returns its parsed JSON output (or raw stdout). */
