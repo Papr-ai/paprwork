@@ -141,10 +141,10 @@ export function buildMcpServer(
       }));
       const firstRun = (caller.provisioned?.length ?? 0) > 0;
       const text = rows.length
-        ? rows.map((r) => `- ${r.title}${r.summary ? `: ${r.summary}` : ""} (${r.tools.join(", ") || "too many apps; open by link"})`).join("\n")
+        ? rows.map((r) => `- ${r.title}${r.summary ? `: ${r.summary}` : ""}\n  card tools: ${r.tools.join(", ") || "none loaded"}\n  link (for papr_open_app if a card tool is missing): ${r.url}`).join("\n")
         : firstRun
           ? FIRST_RUN_NOTE
-          : "No Papr apps with Claude cards yet. In Papr, turn on Claude for an app and publish it.";
+          : "No Papr apps with Claude cards yet. Ask Pen in Papr to make an app work in Claude, then publish it.";
       return { content: [{ type: "text", text }], structuredContent: { apps: rows } };
     },
   );
