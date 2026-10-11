@@ -1,0 +1,188 @@
+{
+  "_doc": "expect: tool name, a list of acceptable tools, or null (no Papr tool should fire; a distractor or no tool is fine). Prompts are phrased the way users actually ask and are self-contained (the eval is single-turn). We score the FIRST tool call, so the first step of a correct flow counts (e.g. looking up the meeting before prepping it).",
+  "cases": [
+    {
+      "prompt": "help me run outreach on LinkedIn",
+      "expect": [
+        "linkedin-outreach_status",
+        "linkedin-outreach_draft"
+      ]
+    },
+    {
+      "prompt": "how's my linkedin outreach going?",
+      "expect": "linkedin-outreach_status"
+    },
+    {
+      "prompt": "how many people replied to my outreach this week",
+      "expect": "linkedin-outreach_status"
+    },
+    {
+      "prompt": "find me some fintech CTOs I could reach out to",
+      "expect": [
+        "linkedin-outreach_status",
+        "linkedin-outreach_draft"
+      ]
+    },
+    {
+      "prompt": "write a connection note to Priya Shah, VP Eng at Ramp, keep it warm",
+      "expect": "linkedin-outreach_draft"
+    },
+    {
+      "prompt": "draft a DM to the head of data at Plaid",
+      "expect": "linkedin-outreach_draft"
+    },
+    {
+      "prompt": "send Priya Shah this LinkedIn note: 'Hi Priya, loved your post on ledger design, open to a chat?'",
+      "expect": "linkedin-outreach_send"
+    },
+    {
+      "prompt": "ok send the outreach messages we drafted",
+      "expect": [
+        "linkedin-outreach_send",
+        "linkedin-outreach_status"
+      ]
+    },
+    {
+      "prompt": "prospecting update?",
+      "expect": "linkedin-outreach_status"
+    },
+    {
+      "prompt": "log a $48 Uber receipt from yesterday",
+      "expect": "papr-books_log"
+    },
+    {
+      "prompt": "I just paid $1,200 for AWS, add it to the books",
+      "expect": "papr-books_log"
+    },
+    {
+      "prompt": "what's our burn this month?",
+      "expect": "papr-books_status"
+    },
+    {
+      "prompt": "how much cash do we have left",
+      "expect": "papr-books_status"
+    },
+    {
+      "prompt": "what did we spend on software last month?",
+      "expect": "papr-books_status"
+    },
+    {
+      "prompt": "invoice Acme for 40 hours at $150",
+      "expect": "papr-books_invoice"
+    },
+    {
+      "prompt": "bill Globex $5k for the October retainer",
+      "expect": "papr-books_invoice"
+    },
+    {
+      "prompt": "prep me for my 2pm with Acme",
+      "expect": "meetings-manager_prep"
+    },
+    {
+      "prompt": "what meetings do I have today?",
+      "expect": [
+        "meetings-manager_upcoming",
+        "calendar_list_events"
+      ]
+    },
+    {
+      "prompt": "what were the action items from yesterday's standup?",
+      "expect": "meetings-manager_notes"
+    },
+    {
+      "prompt": "summarize what we decided on the pricing call",
+      "expect": "meetings-manager_notes"
+    },
+    {
+      "prompt": "brief me before the investor meeting tomorrow",
+      "expect": [
+        "meetings-manager_prep",
+        "meetings-manager_upcoming"
+      ]
+    },
+    {
+      "prompt": "what did our competitors ship this week?",
+      "expect": "competitor-watch_digest"
+    },
+    {
+      "prompt": "did any of the companies we track change pricing?",
+      "expect": "competitor-watch_digest"
+    },
+    {
+      "prompt": "competitor update please",
+      "expect": "competitor-watch_digest"
+    },
+    {
+      "prompt": "how many candidates are in onsite stage?",
+      "expect": "hiring-pipeline_status"
+    },
+    {
+      "prompt": "where are we on hiring?",
+      "expect": "hiring-pipeline_status"
+    },
+    {
+      "prompt": "what Papr apps do I have?",
+      "expect": "papr_list_apps"
+    },
+    {
+      "prompt": "I want to edit my outreach app on my mac",
+      "expect": "papr_continue_on_mac"
+    },
+    {
+      "prompt": "what's the weather in SF tomorrow?",
+      "expect": null
+    },
+    {
+      "prompt": "write me a haiku about autumn",
+      "expect": null
+    },
+    {
+      "prompt": "explain how transformers attention works",
+      "expect": null
+    },
+    {
+      "prompt": "what's the latest version of Next.js?",
+      "expect": null
+    },
+    {
+      "prompt": "fix this python: def f(x) return x+1",
+      "expect": null
+    },
+    {
+      "prompt": "email Sam that I'm running 10 minutes late",
+      "expect": null
+    },
+    {
+      "prompt": "add lunch with Dana on Friday at noon to my calendar",
+      "expect": null
+    },
+    {
+      "prompt": "how do I write a good LinkedIn headline?",
+      "expect": null
+    },
+    {
+      "prompt": "what is a good burn multiple for a seed stage startup?",
+      "expect": null
+    },
+    {
+      "prompt": "translate 'see you soon' into Spanish",
+      "expect": null
+    },
+    {
+      "prompt": "summarize this article for me: https://example.com/post",
+      "expect": null
+    },
+    {
+      "prompt": "who founded Notion?",
+      "expect": null
+    },
+    {
+      "prompt": "give me tips for running a good standup",
+      "expect": null
+    },
+    {
+      "prompt": "what is MCP?",
+      "expect": null
+    }
+  ]
+}

@@ -14,7 +14,15 @@
  *   7. Store the API key as PAPR_API_KEY in keychain
  */
 
-import { ipcMain, BrowserWindow, shell } from "electron";
+import { ipcMain, BrowserWindow, shell, dialog } from "electron";
+import {
+  decideHandoffAccount,
+  handoffLanding,
+  HandoffRedeemError,
+  isHandoffUrl,
+  parseHandoffCode,
+  redeemHandoffCode,
+} from "./paprHandoff.js";
 import { CustomKeysStorage, SettingsStorage } from "../../core/storage/index.js";
 import { invalidateKeyCache } from "./customKeys.js";
 import {
@@ -3541,6 +3549,129 @@ async function finalizeLoginWithProvisioning(
   };
 }
 
+/**
+ * Everything after we hold a Parse session for a user: workspace lookup, provisioning
+ * plan, manual-setup handoff or finalize. Shared by the Auth0 callback and the Claude
+ * handoff link so both sign-ins behave identically.
+ */
+async function continueLoginWithSession(
+  auth: {
+    parseSessionToken: string;
+    refreshToken?: string;
+    objectId: string;
+    email: string;
+    displayName: string;
+    profileImage?: string;
+    completedMode: PaprAuthMode;
+    completedSource: PaprLoginSource;
+  },
+  customKeysStorage: CustomKeysStorage,
+  settingsStorage: SettingsStorage,
+): Promise<{ success: true; email: string; name: string; userId: string }> {
+  let workspaceInfo: SelectedWorkspaceInfo = {};
+  try {
+    workspaceInfo = await getSelectedWorkspaceInfo(auth.parseSessionToken, auth.objectId);
+  } catch (e) {
+    console.warn("[PaprLogin] Could not fetch workspace info:", e);
+  }
+
+  const { plan, defaults } = await assessProvisioningNeeds(
+    auth.parseSessionToken,
+    auth.objectId,
+    auth.email || "user",
+    auth.displayName,
+    workspaceInfo,
+  );
+
+  // Parse could not verify org state — do not auto-provision (would risk
+  // repointing a shared workspace). Manual org setup re-runs lookups on submit.
+  if (isProvisioningDeferred(plan)) {
+    console.warn(
+      `[PaprLogin] Provisioning deferred for ${auth.objectId}: ` +
+        "organization state could not be verified — opening manual setup.",
+    );
+    pendingOrgSetup = {
+      parseSessionToken: auth.parseSessionToken,
+      refreshToken: auth.refreshToken,
+      objectId: auth.objectId,
+      email: auth.email,
+      displayName: auth.displayName,
+      profileImage: auth.profileImage,
+      workspaceInfo,
+      needsOrg: true,
+      needsNamespace: true,
+      defaults,
+      completedMode: auth.completedMode,
+      completedSource: auth.completedSource,
+    };
+    trackLoginStep("provisioning_deferred_manual_setup", {
+      workspace_id: workspaceInfo.workspaceId ?? null,
+    });
+    notifySetupRequired({
+      orgName: defaults.orgName,
+      namespaceName: defaults.namespaceName,
+      needsOrg: true,
+      needsNamespace: true,
+    });
+    return {
+      success: true,
+      email: auth.email,
+      name: auth.displayName,
+      userId: auth.objectId,
+    };
+  }
+
+  if (isProvisioningSetupRequired(plan)) {
+    pendingOrgSetup = {
+      parseSessionToken: auth.parseSessionToken,
+      refreshToken: auth.refreshToken,
+      objectId: auth.objectId,
+      email: auth.email,
+      displayName: auth.displayName,
+      profileImage: auth.profileImage,
+      workspaceInfo,
+      needsOrg: plan.needsOrg,
+      needsNamespace: plan.needsNamespace,
+      defaults,
+      completedMode: auth.completedMode,
+      completedSource: auth.completedSource,
+    };
+    trackLoginStep("org_setup_required", {
+      needs_org: plan.needsOrg,
+      needs_namespace: plan.needsNamespace,
+    });
+    notifySetupRequired({
+      orgName: defaults.orgName,
+      namespaceName: defaults.namespaceName,
+      needsOrg: plan.needsOrg,
+      needsNamespace: plan.needsNamespace,
+    });
+    return {
+      success: true,
+      email: auth.email,
+      name: auth.displayName,
+      userId: auth.objectId,
+    };
+  }
+
+  return await finalizeLoginWithProvisioning(
+    {
+      parseSessionToken: auth.parseSessionToken,
+      refreshToken: auth.refreshToken,
+      objectId: auth.objectId,
+      email: auth.email,
+      displayName: auth.displayName,
+      profileImage: auth.profileImage,
+      workspaceInfo,
+      completedMode: auth.completedMode,
+      completedSource: auth.completedSource,
+    },
+    defaults,
+    customKeysStorage,
+    settingsStorage,
+  );
+}
+
 async function completePaprAuthCallback(
   code: string | null,
   state: string | null,
@@ -3664,93 +3795,7 @@ async function completePaprAuthCallback(
   console.log(`[PaprLogin] Authenticated user: ${email} (${finalObjectId})`);
   trackLoginStep("user_claims_decoded", { user_id: finalObjectId });
 
-  let workspaceInfo: SelectedWorkspaceInfo = {};
-  try {
-    workspaceInfo = await getSelectedWorkspaceInfo(finalSessionToken, finalObjectId);
-  } catch (e) {
-    console.warn("[PaprLogin] Could not fetch workspace info:", e);
-  }
-
-  const { plan, defaults } = await assessProvisioningNeeds(
-    finalSessionToken,
-    finalObjectId,
-    email || "user",
-    displayName,
-    workspaceInfo,
-  );
-
-  // Parse could not verify org state — do not auto-provision (would risk
-  // repointing a shared workspace). Manual org setup re-runs lookups on submit.
-  if (isProvisioningDeferred(plan)) {
-    console.warn(
-      `[PaprLogin] Provisioning deferred for ${finalObjectId}: ` +
-        "organization state could not be verified — opening manual setup.",
-    );
-    pendingOrgSetup = {
-      parseSessionToken: finalSessionToken,
-      refreshToken: tokens.refresh_token,
-      objectId: finalObjectId,
-      email: email || "",
-      displayName: displayName || "",
-      profileImage,
-      workspaceInfo,
-      needsOrg: true,
-      needsNamespace: true,
-      defaults,
-      completedMode: completedMode ?? "login",
-      completedSource: completedSource ?? "unknown",
-    };
-    trackLoginStep("provisioning_deferred_manual_setup", {
-      workspace_id: workspaceInfo.workspaceId ?? null,
-    });
-    notifySetupRequired({
-      orgName: defaults.orgName,
-      namespaceName: defaults.namespaceName,
-      needsOrg: true,
-      needsNamespace: true,
-    });
-    return {
-      success: true,
-      email: email || "",
-      name: displayName || "",
-      userId: finalObjectId,
-    };
-  }
-
-  if (isProvisioningSetupRequired(plan)) {
-    pendingOrgSetup = {
-      parseSessionToken: finalSessionToken,
-      refreshToken: tokens.refresh_token,
-      objectId: finalObjectId,
-      email: email || "",
-      displayName: displayName || "",
-      profileImage,
-      workspaceInfo,
-      needsOrg: plan.needsOrg,
-      needsNamespace: plan.needsNamespace,
-      defaults,
-      completedMode: completedMode ?? "login",
-      completedSource: completedSource ?? "unknown",
-    };
-    trackLoginStep("org_setup_required", {
-      needs_org: plan.needsOrg,
-      needs_namespace: plan.needsNamespace,
-    });
-    notifySetupRequired({
-      orgName: defaults.orgName,
-      namespaceName: defaults.namespaceName,
-      needsOrg: plan.needsOrg,
-      needsNamespace: plan.needsNamespace,
-    });
-    return {
-      success: true,
-      email: email || "",
-      name: displayName || "",
-      userId: finalObjectId,
-    };
-  }
-
-  return await finalizeLoginWithProvisioning(
+  return await continueLoginWithSession(
     {
       parseSessionToken: finalSessionToken,
       refreshToken: tokens.refresh_token,
@@ -3758,11 +3803,9 @@ async function completePaprAuthCallback(
       email: email || "",
       displayName: displayName || "",
       profileImage,
-      workspaceInfo,
       completedMode: completedMode ?? "login",
       completedSource: completedSource ?? "unknown",
     },
-    defaults,
     customKeysStorage,
     settingsStorage,
   );
@@ -5211,6 +5254,76 @@ export async function handlePaprAuthCallback(
     notifyLoginError(undefined, message);
     clearInMemoryPkceState();
     await clearPersistedPkceState();
+  }
+}
+
+/**
+ * papr://auth/handoff?code=… from Claude's "Continue on your Mac".
+ *
+ * Not signed in → sign in as the Claude user (same provisioning path as Auth0 login).
+ * Same user → just land. Different user → never switch silently; tell them.
+ * Landing = a new chat with a draft about the app (never auto-sent).
+ */
+export async function handlePaprHandoffLink(
+  url: string,
+  customKeysStorage: CustomKeysStorage,
+  settingsStorage: SettingsStorage,
+): Promise<void> {
+  if (!isHandoffUrl(url)) return;
+  const code = parseHandoffCode(url);
+  if (!code) {
+    notifyLoginError(undefined, "That Papr link is malformed. Ask Claude for a new one.");
+    return;
+  }
+  trackLoginStep("handoff_received");
+  try {
+    const current = settingsStorage.getPaprProfile();
+    const result = await redeemHandoffCode(code, { device: process.platform === "darwin" ? "mac" : process.platform });
+    const decision = decideHandoffAccount(current?.sessionToken ? current.userId : undefined, result.userId);
+    trackLoginStep("handoff_redeemed", { decision });
+
+    if (decision === "different_user") {
+      await dialog.showMessageBox({
+        type: "info",
+        message: "This link is for a different Papr account",
+        detail:
+          `Papr on this Mac is signed in as ${current?.email || "another account"}` +
+          `${result.email ? `, but Claude is connected as ${result.email}` : ""}. ` +
+          "Sign out in Settings, then open the link from Claude again.",
+        buttons: ["OK"],
+      });
+      return;
+    }
+
+    if (decision === "sign_in") {
+      await continueLoginWithSession(
+        {
+          parseSessionToken: result.sessionToken,
+          objectId: result.userId,
+          email: result.email ?? "",
+          displayName: result.displayName ?? "",
+          profileImage: result.picture ?? undefined,
+          completedMode: "login",
+          completedSource: "unknown",
+        },
+        customKeysStorage,
+        settingsStorage,
+      );
+    }
+
+    const landing = handoffLanding(result.intent);
+    // After a fresh sign-in the renderer leaves the auth wall first; give it a beat.
+    setTimeout(() => {
+      const win = BrowserWindow.getAllWindows().find((w) => !w.isDestroyed());
+      if (!win) return;
+      if (win.isMinimized()) win.restore();
+      win.focus();
+      if (landing.message) win.webContents.send("chat:open", { title: landing.title, message: landing.message });
+    }, decision === "sign_in" ? 1500 : 0);
+  } catch (err) {
+    console.error("[PaprLogin] Handoff failed:", err);
+    const message = err instanceof HandoffRedeemError ? err.message : "Couldn't open Papr from Claude. Try again.";
+    notifyLoginError(undefined, message);
   }
 }
 
