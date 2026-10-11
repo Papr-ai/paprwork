@@ -7,8 +7,9 @@
  *   must also put it on access tokens for the MCP audience. The api tunnel forwards that
  *   session to the existing /api handlers, so access rules are identical to apps.papr.ai.
  *
- * Spike note: carrying a Parse session inside the access token is a bridge. PR 3 (memory)
- * replaces it by accepting the MCP access token directly and minting a scoped session.
+ * PR 3: when PAPR_MCP_SERVICE_KEY is set, the verifier hands the token to memory
+ * (session.ts), which maps it to the Papr user, provisions first-run accounts and mints an
+ * MCP-only session. The claims bridge below stays only as a fallback for local spikes.
  */
 import type { Express, Request, Response } from "express";
 import { createRemoteJWKSet, jwtVerify, type JWTPayload } from "jose";
@@ -16,6 +17,7 @@ import type { AuthInfo } from "@modelcontextprotocol/sdk/server/auth/types.js";
 import { InvalidTokenError } from "@modelcontextprotocol/sdk/server/auth/errors.js";
 import type { OAuthTokenVerifier } from "@modelcontextprotocol/sdk/server/auth/provider.js";
 import { protectedResourceMetadataUrl, type McpEndpointConfig } from "./config.js";
+import type { McpSessionExchange } from "./session.js";
 
 export const CLAIM_SESSION = "https://papr.scope.com/sessionToken";
 export const CLAIM_OBJECT_ID = "https://papr.scope.com/objectId";
@@ -26,7 +28,14 @@ export interface McpCaller {
   sessionToken: string;
   userId: string;
   email?: string;
+  displayName?: string;
   subject: string;
+  /** Tenant from memory's session exchange (absent on the claims bridge). */
+  organizationId?: string;
+  namespaceId?: string;
+  workspaceId?: string;
+  /** What first sign-in created ("workspace", "organization", "namespace"), if anything. */
+  provisioned?: string[];
 }
 
 export function callerFromClaims(claims: JWTPayload): McpCaller {
@@ -45,7 +54,11 @@ export function callerFromClaims(claims: JWTPayload): McpCaller {
   };
 }
 
-export function createAuth0Verifier(cfg: McpEndpointConfig): OAuthTokenVerifier {
+/**
+ * Verifies the Auth0 token locally (cheap reject of garbage before touching memory), then
+ * resolves the Papr caller: memory exchange when configured, else the claims bridge.
+ */
+export function createAuth0Verifier(cfg: McpEndpointConfig, exchange?: McpSessionExchange): OAuthTokenVerifier {
   const jwks = createRemoteJWKSet(new URL(`${cfg.issuer}.well-known/jwks.json`));
   return {
     async verifyAccessToken(token: string): Promise<AuthInfo> {
@@ -59,7 +72,8 @@ export function createAuth0Verifier(cfg: McpEndpointConfig): OAuthTokenVerifier 
       } catch {
         throw new InvalidTokenError("Invalid or expired Papr token");
       }
-      const caller = callerFromClaims(payload);
+      const subject = String(payload.sub ?? "");
+      const caller = exchange ? { ...(await exchange(token, payload.exp)), subject } : callerFromClaims(payload);
       const scope = typeof payload.scope === "string" ? payload.scope : "";
       return {
         token,
