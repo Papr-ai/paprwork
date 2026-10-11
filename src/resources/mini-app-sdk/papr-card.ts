@@ -10,9 +10,10 @@
  *     },
  *   });
  *
- * The kit owns the frame so every card looks like Papr and stays safe by default:
- *   - header: app tile, name, publisher, "Built on Papr"
- *   - footer: at most one primary action + "Open in Papr"
+ * The kit owns the frame so every card looks like Papr and stays safe by default
+ * (the Prototyper "app card in chat" design):
+ *   - header: squircle app tile, app name, one quiet meta line (ctx.setMeta)
+ *   - footer: at most one primary action + "Open in {App}"
  *   - effect: 'external' → the primary asks for approval before it runs
  *   - runsOn: 'mac'      → says so, since it runs when the user's Mac is awake
  *   - Claude's theme (light/dark + host CSS variables) applied automatically
@@ -21,7 +22,7 @@
 
 import { McpHostBridge, windowPort, type BridgePort, type HostContext, type ToolResult } from "./papr-mcp-bridge.ts";
 import { installMcpTransport, tunnelRequest, type AppRef } from "./papr-mcp-transport.ts";
-import { CARD_CSS } from "./papr-card-style.ts";
+import { CARD_CSS, frameHtml } from "./papr-card-style.ts";
 
 export type CardEffect = "read" | "write" | "external";
 
@@ -41,6 +42,8 @@ export interface CardPrimary {
 export interface CardAppInfo extends AppRef {
   title?: string;
   publisher?: string;
+  /** Monochrome SVG markup for the tile (optional; initials otherwise). */
+  icon?: string;
   openUrl?: string;
   view?: string;
   data?: Record<string, unknown>;
@@ -55,6 +58,10 @@ export interface CardContext {
   run: (action: string, params?: Record<string, string>) => Promise<unknown>;
   refresh: () => Promise<void>;
   setPrimary: (primary: CardPrimary | null) => void;
+  /** Short line in the header, right of the app name (e.g. "Draft · 14 shots · 58s"). */
+  setMeta: (text: string) => void;
+  /** Open a link through the host (the only way out of the sandbox). */
+  open: (url: string) => void;
   tellClaude: (text: string) => void;
 }
 
@@ -75,7 +82,7 @@ const esc = (s: unknown): string =>
 
 export function initials(title: string): string {
   const words = title.replace(/[-_]+/g, " ").trim().split(/\s+/).filter(Boolean);
-  return (words.length > 1 ? words[0][0] + words[1][0] : (words[0] ?? "P").slice(0, 2)).toUpperCase();
+  return (words.length > 1 ? words[0][0] + words[1][0] : (words[0] ?? "P")[0]).toUpperCase();
 }
 
 /** Runs a backend action and returns its parsed JSON output (or raw stdout). */
@@ -99,13 +106,13 @@ function applyTheme(doc: Document, ctx: HostContext): "light" | "dark" {
   return theme;
 }
 
-function frameHtml(): string {
-  return `<div class="pc"><header class="pc-h"><span class="pc-tile" id="pc-tile">P</span>
-<div class="pc-t"><b id="pc-title">Papr</b><em id="pc-pub">Loading…</em></div><span class="pc-by">Built on <b>Papr</b></span></header>
-<main class="pc-b" id="pc-body"><p class="pc-mu">Waiting for Claude…</p></main>
-<footer class="pc-f"><span class="pc-note" id="pc-note"></span><span class="pc-act" id="pc-act"></span>
-<button class="pc-btn pc-ghost" id="pc-open" disabled>Open in Papr</button></footer></div>`;
+/** Stable per-app hue so each app's tile has its own colour (like the Prototyper tiles). */
+export function tintFor(key: string): string {
+  let h = 0;
+  for (const c of key) h = (h * 31 + c.charCodeAt(0)) >>> 0;
+  return `hsl(${[214, 248, 268, 192, 160, 12, 330][h % 7]} 82% 48%)`;
 }
+
 
 export async function card(opts: CardOptions, deps: CardDeps = {}): Promise<CardContext> {
   const doc = deps.doc ?? document;
@@ -124,6 +131,11 @@ export async function card(opts: CardOptions, deps: CardDeps = {}): Promise<Card
   installMcpTransport({ callTool, ref: refReady, win });
 
   let primary: CardPrimary | null = opts.primary ?? null;
+  let meta = "";
+  // Footer left: the card's state line (setMeta), plus where the primary action runs.
+  const renderNote = (): void => {
+    $("pc-note").textContent = [meta, primary?.runsOn === "mac" ? "Runs on your Mac when it's awake" : ""].filter(Boolean).join(" · ");
+  };
   let armed = false;
   const ctx: CardContext = {
     app: { namespaceId: "", slug: "" },
@@ -155,11 +167,20 @@ export async function card(opts: CardOptions, deps: CardDeps = {}): Promise<Card
     tellClaude(text) {
       void bridge.updateModelContext(text).catch(() => {});
     },
+    setMeta(text) {
+      meta = text;
+      renderNote();
+    },
+    open(url) {
+      void bridge.openLink(url).catch(() => {});
+    },
   };
 
   function renderPrimary(): void {
     const act = $("pc-act");
-    $("pc-note").textContent = primary?.runsOn === "mac" ? "Runs on your Mac when it's awake" : "";
+    // One accent button per card: "Open in {App}" is solid only when the app has no action of its own.
+    $("pc-open").classList.toggle("pc-ghost", !!primary);
+    renderNote();
     if (!primary) {
       act.innerHTML = "";
       return;
@@ -198,6 +219,7 @@ export async function card(opts: CardOptions, deps: CardDeps = {}): Promise<Card
       armed = false;
       renderPrimary();
       $("pc-note").textContent = (e as Error).message;
+      return;
     }
   }
 
@@ -215,10 +237,14 @@ export async function card(opts: CardOptions, deps: CardDeps = {}): Promise<Card
     ctx.data = sc.data ?? {};
     resolveRef({ namespaceId: sc.namespaceId, slug: sc.slug });
     const title = sc.title ?? sc.slug;
-    $("pc-tile").textContent = initials(title);
+    const tile = $("pc-tile");
+    if (sc.icon && /^\s*<svg[\s>]/i.test(sc.icon)) {
+      tile.innerHTML = `<img alt="" src="data:image/svg+xml;charset=utf-8,${encodeURIComponent(sc.icon)}">`;
+    } else tile.textContent = initials(title);
     $("pc-title").textContent = title;
-    $("pc-pub").textContent = sc.publisher ? `by ${sc.publisher}` : "Papr app";
+    $("pc-sub").textContent = sc.publisher ? `by ${sc.publisher}` : "Your Papr app";
     const open = $("pc-open") as HTMLButtonElement;
+    open.textContent = `Open in ${title}`;
     open.disabled = !sc.openUrl;
     open.onclick = () => sc.openUrl && void bridge.openLink(sc.openUrl).catch(() => {});
     void ctx.refresh();

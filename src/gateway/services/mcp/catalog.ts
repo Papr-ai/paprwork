@@ -10,6 +10,8 @@
  * change when someone publishes.
  */
 import type { McpCaller } from "./auth.js";
+import { createHash } from "node:crypto";
+import { gcsCacheGet, gcsCachePut } from "../appRuntime/gcsSharedCache.js";
 import type { CardsManifest, CardsManifestView } from "./cardBuild.js";
 
 export interface AccessibleApp {
@@ -20,6 +22,8 @@ export interface AccessibleApp {
   description?: string;
   author?: string;
   updatedAt?: string;
+  /** Monochrome SVG markup from the app's metadata, when the memory server sends it. */
+  icon?: string;
 }
 
 export interface ClaudeApp extends AccessibleApp {
@@ -101,9 +105,43 @@ async function mapLimit<T, R>(items: T[], limit: number, fn: (item: T) => Promis
 const cache = new Map<string, { at: number; apps: ClaudeApp[] }>();
 const MAX_CACHED_USERS = 2000;
 
+/**
+ * cards.json per published version ("ns/slug@updatedAt" → manifest or null). Only answers
+ * (incl. "no cards") are kept, never errors/timeouts. Each user's list is already access-
+ * filtered by memory, so sharing this across users reveals nothing; it turns every rebuild
+ * after the first into lookups for changed apps only (the cold build hit memory's 120/min limit).
+ */
+const manifests = new Map<string, CardsManifest | null>();
+const MAX_MANIFESTS = 20_000;
+
 export function clearCatalogCache(): void {
   cache.clear();
   inflight.clear();
+  manifests.clear();
+  restored = null;
+  userRestore.clear();
+}
+
+/**
+ * The memo survives restarts/deploys in the host's GCS cache bucket, so the first Claude
+ * connect after a deploy is fast too (a cold build is ~40s and Claude stops waiting at ~7s).
+ */
+const MEMO_KEY = "mcp/cards-manifests-v1.json";
+let restored: Promise<void> | null = null;
+function restoreMemo(): Promise<void> {
+  restored ??= withTimeout(gcsCacheGet(MEMO_KEY), 3_000)
+    .then((f) => {
+      if (!f) return;
+      for (const [k, v] of Object.entries(JSON.parse(f.content) as Record<string, unknown>)) {
+        if (!manifests.has(k)) manifests.set(k, v === null ? null : parseCardsManifest(v));
+      }
+      console.log(`[mcp] restored ${manifests.size} card manifests from cache`);
+    })
+    .catch(() => undefined);
+  return restored;
+}
+function saveMemo(): void {
+  gcsCachePut(MEMO_KEY, { content: JSON.stringify(Object.fromEntries(manifests)), contentType: "application/json" }, Date.now() + 365 * 86_400_000);
 }
 
 const inflight = new Map<string, Promise<ClaudeApp[]>>();
@@ -115,8 +153,35 @@ function withTimeout<T>(p: Promise<T>, ms: number): Promise<T> {
   });
 }
 
+/**
+ * Each user's last catalog also lives in GCS: after a deploy/restart tools/list answers
+ * with it right away (stale-while-revalidate) instead of an empty list while a ~45s build runs.
+ */
+const userKey = (userId: string) => `mcp/catalog-v1/${createHash("sha256").update(userId).digest("hex").slice(0, 32)}.json`;
+const userRestore = new Map<string, Promise<void>>();
+function restoreUserCatalog(userId: string): Promise<void> {
+  let p = userRestore.get(userId);
+  if (!p) {
+    p = withTimeout(gcsCacheGet(userKey(userId)), 2_000)
+      .then((f) => {
+        if (!f || cache.has(userId)) return;
+        const saved = JSON.parse(f.content) as { at: number; apps: ClaudeApp[] };
+        if (Array.isArray(saved.apps)) cache.set(userId, { at: Number(saved.at) || 0, apps: saved.apps });
+        console.log(`[mcp] restored catalog for user (${saved.apps?.length ?? 0} apps)`);
+      })
+      .catch(() => undefined);
+    userRestore.set(userId, p);
+  }
+  return p;
+}
+
 /** One build per user at a time: Claude retries fast, and piled-up builds hit memory rate limits. */
-export function loadClaudeCatalog(caller: McpCaller, deps: CatalogDeps, opts: CatalogOptions = {}): Promise<ClaudeApp[]> {
+export async function loadClaudeCatalog(caller: McpCaller, deps: CatalogDeps, opts: CatalogOptions = {}): Promise<ClaudeApp[]> {
+  if (!cache.has(caller.userId)) await restoreUserCatalog(caller.userId);
+  return loadClaudeCatalogNow(caller, deps, opts);
+}
+
+function loadClaudeCatalogNow(caller: McpCaller, deps: CatalogDeps, opts: CatalogOptions): Promise<ClaudeApp[]> {
   const now = opts.now ?? Date.now;
   const hit = cache.get(caller.userId);
   const age = hit ? now() - hit.at : Infinity;
@@ -168,18 +233,31 @@ async function buildCatalog(caller: McpCaller, deps: CatalogDeps, opts: CatalogO
     .slice(0, opts.maxApps ?? 50);
 
   const manifestMs = opts.manifestTimeoutMs ?? 5_000;
+  await restoreMemo();
+  let learned = false;
   const loaded = await mapLimit(accessible, opts.concurrency ?? 4, async (app) => {
+    const key = app.updatedAt ? `${app.namespaceId}/${app.slug}@${app.updatedAt}` : "";
     try {
-      const cards = parseCardsManifest(await withTimeout(deps.loadCardsManifest(caller, app), manifestMs));
+      let cards = key ? manifests.get(key) : undefined;
+      if (cards === undefined) {
+        cards = parseCardsManifest(await withTimeout(deps.loadCardsManifest(caller, app), manifestMs));
+        if (key) {
+          if (manifests.size >= MAX_MANIFESTS) manifests.delete(manifests.keys().next().value as string);
+          manifests.set(key, cards);
+          learned = true;
+        }
+      }
       return cards ? { ...app, cards } : null;
     } catch {
       return null; // one broken, slow or forbidden app never hides the rest
     }
   });
   const apps = loaded.filter((a): a is ClaudeApp => a !== null);
+  if (learned) saveMemo();
 
   if (cache.size >= MAX_CACHED_USERS) cache.delete(cache.keys().next().value as string);
   cache.set(caller.userId, { at: now(), apps });
+  gcsCachePut(userKey(caller.userId), { content: JSON.stringify({ at: now(), apps }), contentType: "application/json" }, Date.now() + 365 * 86_400_000);
   return apps;
 }
 
@@ -200,6 +278,7 @@ export function memoryAccessibleApps(baseUrl: string, fetchImpl: typeof fetch = 
       description: typeof a.description === "string" ? a.description : undefined,
       author: typeof a.author === "string" ? a.author : undefined,
       updatedAt: typeof a.updatedAt === "string" ? a.updatedAt : undefined,
+      icon: typeof a.icon === "string" && /^\s*<svg[\s>]/i.test(a.icon) && a.icon.length < 8_000 ? a.icon : undefined,
     }));
   };
 }

@@ -15,6 +15,7 @@
  * Server instructions list the user's apps so Claude routes to them (routing.ts).
  *   papr_api       (app-only) the tunnel. Hidden from the model; only our cards call it.
  */
+import { createHash } from "node:crypto";
 import type { Express, NextFunction, Request, Response } from "express";
 import { z } from "zod";
 import { McpServer, ResourceTemplate } from "@modelcontextprotocol/sdk/server/mcp.js";
@@ -29,8 +30,8 @@ import {
 import { callerOf, createAuth0Verifier, registerProtectedResourceMetadata, type McpCaller } from "./auth.js";
 import { dispatchTunnel, fetchPublishedCard, fetchPublishedCardsManifest, TunnelError, type TunnelMethod } from "./apiTunnel.js";
 import { getMemoryServerBaseUrl } from "../../utils/cloudApiClient.js";
-import { inputSchemaToZodShape, planAppTools, toolResultFor, appTitle } from "./appTools.js";
-import { loadClaudeCatalog, loadClaudeCatalogWithin, memoryAccessibleApps, type CatalogDeps, type ClaudeApp } from "./catalog.js";
+import { inputSchemaToZodShape, planAppTools, toolResultFor, appTitle, type AppToolSpec } from "./appTools.js";
+import { loadClaudeCatalog, loadClaudeCatalogWithin, memoryAccessibleApps, parseCardsManifest, type CatalogDeps, type ClaudeApp } from "./catalog.js";
 import { loadMcpEndpointConfig, MCP_PATH, protectedResourceMetadataUrl, type McpEndpointConfig } from "./config.js";
 import { renderSpikeCardHtml } from "./spikeCard.js";
 import { HandoffError, memoryHandoff, type CreateHandoff } from "./handoff.js";
@@ -50,19 +51,39 @@ export function appConnectorUrl(cfg: McpEndpointConfig, namespaceId: string, slu
   return `${cfg.resourceUrl}/a/${encodeURIComponent(namespaceId)}/${encodeURIComponent(slug)}`;
 }
 
-export const SPIKE_CARD_URI = "ui://papr/spike/app-card.html";
+/**
+ * Claude caches a ui:// resource by URI (across chats and reconnects), so every URI carries
+ * a version: the generic card's content hash, and each app card's publish version.
+ */
+export const SPIKE_CARD_URI = `ui://papr/card/open-app.${createHash("sha256").update(renderSpikeCardHtml()).digest("hex").slice(0, 10)}.html`;
+
+/**
+ * Cards may show the app's own images (App Files): published objects come from the
+ * Papr CDN, private ones as short-lived GCS signed URLs from /api/files/url.
+ * Images/media only — cards still make no direct network calls (connect-src stays empty).
+ */
+export const CARD_CSP = { resourceDomains: ["https://files.papr.ai", "https://storage.googleapis.com"] };
 
 /** Published card for one app view (built at publish into dist/cards/{view}.html). */
-export function appCardUri(namespaceId: string, slug: string, view: string): string {
-  return `ui://papr/app/${namespaceId}/${slug}/${view}`;
+export function appCardUri(namespaceId: string, slug: string, view: string, rev?: string): string {
+  const v = rev ? `@${createHash("sha256").update(rev).digest("hex").slice(0, 10)}` : "";
+  return `ui://papr/app/${namespaceId}/${slug}/${view}${v}`;
 }
 
 /** Accepts https://apps.papr.ai/{namespaceId}/{slug}[/...] or explicit ids. */
-export function parseAppRef(input: { url?: string; namespaceId?: string; slug?: string }): {
+export function parseAppRef(
+  input: { url?: string; namespaceId?: string; slug?: string },
+  known: Array<{ namespaceId: string; slug: string }> = [],
+): {
   namespaceId: string;
   slug: string;
 } {
   if (input.namespaceId && input.slug) return { namespaceId: input.namespaceId, slug: input.slug };
+  if (input.slug && !input.url) {
+    const want = input.slug.trim().toLowerCase();
+    const hits = known.filter((a) => a.slug.toLowerCase() === want);
+    if (hits.length === 1) return { namespaceId: hits[0].namespaceId, slug: hits[0].slug };
+  }
   if (input.url) {
     const parts = new URL(input.url).pathname.split("/").filter(Boolean);
     if (parts.length >= 2) return { namespaceId: parts[0], slug: parts[1] };
@@ -89,7 +110,8 @@ export function buildMcpServer(
   );
 
   registerAppResource(server, "Papr app card", SPIKE_CARD_URI, { description: "Papr app card (spike)" }, async () => ({
-    contents: [{ uri: SPIKE_CARD_URI, mimeType: RESOURCE_MIME_TYPE, text: renderSpikeCardHtml() }],
+    // Same CSP as app cards: papr_open_app hosts the app's own card inside this one.
+    contents: [{ uri: SPIKE_CARD_URI, mimeType: RESOURCE_MIME_TYPE, text: renderSpikeCardHtml(), _meta: { ui: { csp: CARD_CSP } } }],
   }));
 
   // Per-app cards. PR 2 points generated per-app tools at these URIs.
@@ -100,9 +122,9 @@ export function buildMcpServer(
     async (uri, vars) => {
       const one = (v: string | string[] | undefined): string => (Array.isArray(v) ? v[0] : v) ?? "";
       const ref = { namespaceId: one(vars.namespaceId), slug: one(vars.slug) };
-      const html = await fetchPublishedCard(cfg.loopbackPort, caller, ref, one(vars.view));
+      const html = await fetchPublishedCard(cfg.loopbackPort, caller, ref, one(vars.view).split("@")[0]);
       if (html === null) throw new TunnelError("That card isn't published. Republish the app with Claude cards on.", 404);
-      return { contents: [{ uri: uri.href, mimeType: RESOURCE_MIME_TYPE, text: html }] };
+      return { contents: [{ uri: uri.href, mimeType: RESOURCE_MIME_TYPE, text: html, _meta: { ui: { csp: CARD_CSP } } }] };
     },
   );
 
@@ -117,7 +139,7 @@ export function buildMcpServer(
         inputSchema: inputSchemaToZodShape(tool.input, tool.requireInput),
         // Opening a card changes nothing; actions run from the card itself.
         annotations: { readOnlyHint: true, openWorldHint: false },
-        _meta: { ui: { resourceUri: appCardUri(tool.app.namespaceId, tool.app.slug, tool.view) } },
+        _meta: { ui: { resourceUri: appCardUri(tool.app.namespaceId, tool.app.slug, tool.view, tool.app.updatedAt) } },
       },
       async (args: Record<string, unknown>) => toolResultFor(tool, args, cfg.appsBaseUrl),
     );
@@ -141,10 +163,10 @@ export function buildMcpServer(
       }));
       const firstRun = (caller.provisioned?.length ?? 0) > 0;
       const text = rows.length
-        ? rows.map((r) => `- ${r.title}${r.summary ? `: ${r.summary}` : ""} (${r.tools.join(", ") || "too many apps; open by link"})`).join("\n")
+        ? rows.map((r) => `- ${r.title}${r.summary ? `: ${r.summary}` : ""}\n  card tools: ${r.tools.join(", ") || "none loaded"}\n  link (for papr_open_app if a card tool is missing): ${r.url}`).join("\n")
         : firstRun
           ? FIRST_RUN_NOTE
-          : "No Papr apps with Claude cards yet. In Papr, turn on Claude for an app and publish it.";
+          : "No Papr apps with Claude cards yet. Ask Pen in Papr to make an app work in Claude, then publish it.";
       return { content: [{ type: "text", text }], structuredContent: { apps: rows } };
     },
   );
@@ -155,7 +177,7 @@ export function buildMcpServer(
     {
       title: "Open a Papr app",
       description:
-        "Show a published Papr app from its apps.papr.ai link as a simple card. Prefer the app's own tools (see papr_list_apps) when it has them.",
+        "Show a published Papr app as a simple card, from its apps.papr.ai link or its slug (from papr_list_apps). Prefer the app's own card tools when they are loaded.",
       inputSchema: {
         url: z.string().url().optional().describe("https://apps.papr.ai/{namespaceId}/{slug}"),
         namespaceId: z.string().optional(),
@@ -165,17 +187,56 @@ export function buildMcpServer(
       _meta: { ui: { resourceUri: SPIKE_CARD_URI } },
     },
     async (args) => {
-      const ref = parseAppRef(args);
+      const ref = parseAppRef(args, apps);
       const access = await dispatchTunnel(cfg.loopbackPort, caller, { ...ref, method: "GET", path: "/api/access" });
       const body = (access.body ?? {}) as { canRead?: boolean };
       if (access.status >= 400 || !body.canRead) {
         return { isError: true, content: [{ type: "text", text: "You don't have access to that Papr app." }] };
       }
       const openUrl = `${cfg.appsBaseUrl}/${ref.namespaceId}/${ref.slug}`;
+      const known = apps.find((a) => a.namespaceId === ref.namespaceId && a.slug === ref.slug);
+      // The app's own card when it has one, even if its tools weren't in this conversation's list.
+      const cards = known?.cards ?? parseCardsManifest(await fetchPublishedCardsManifest(cfg.loopbackPort, caller, ref).catch(() => null));
+      const view = cards ? Object.keys(cards.views)[0] : undefined;
+      const app = (known ?? { ...ref, cards }) as ClaudeApp;
+      const title = known ? appTitle(known) : ref.slug;
+      const card =
+        cards && view
+          ? { view, result: toolResultFor({ name: "", title: "", description: "", app, view, spec: cards.views[view] } as AppToolSpec, {}, cfg.appsBaseUrl).structuredContent }
+          : undefined;
       return {
-        content: [{ type: "text", text: `Opened ${ref.slug} from Papr.` }],
-        structuredContent: { ...ref, title: ref.slug, openUrl, email: caller.email ?? null },
+        content: [{ type: "text", text: card ? `Showing ${title} · ${cards!.views[view!].title ?? view}.` : `Opened ${title} from Papr.` }],
+        structuredContent: {
+          ...ref,
+          title,
+          openUrl,
+          ...(card ? { card } : {}),
+          ...(known?.cards.summary ?? known?.description ? { summary: known?.cards.summary ?? known?.description } : {}),
+          ...(known?.cards.examples ? { examples: known.cards.examples } : {}),
+          ...(known?.author ? { publisher: known.author } : {}),
+          ...(known?.icon ? { icon: known.icon } : {}),
+        },
       };
+    },
+  );
+
+  registerAppTool(
+    server,
+    "papr_card_html",
+    {
+      title: "Papr app card (cards only)",
+      description: "Internal: the published card page papr_open_app hosts. Not for direct use.",
+      inputSchema: { namespaceId: z.string(), slug: z.string(), view: z.string().max(80) },
+      _meta: { ui: { resourceUri: SPIKE_CARD_URI, visibility: ["app"] } },
+    },
+    async (args) => {
+      try {
+        const html = await fetchPublishedCard(cfg.loopbackPort, caller, { namespaceId: args.namespaceId, slug: args.slug }, args.view);
+        if (html === null) return { isError: true, content: [{ type: "text", text: "No card published for that view." }] };
+        return { content: [{ type: "text", text: "card" }], structuredContent: { html } };
+      } catch (e) {
+        return { isError: true, content: [{ type: "text", text: (e as Error).message }] };
+      }
     },
   );
 

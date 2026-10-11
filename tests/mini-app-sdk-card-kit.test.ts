@@ -55,7 +55,7 @@ describe("card kit", () => {
     await m.open(APP);
     await vi.waitFor(() => expect(document.getElementById("n")?.textContent).toBe("3 replies"));
     expect($("pc-title").textContent).toBe("LinkedIn Outreach");
-    expect($("pc-pub").textContent).toBe("by Amir");
+    expect($("pc-open").textContent).toBe("Open in LinkedIn Outreach");
     expect($("pc-tile").textContent).toBe("LO");
     expect(m.calls[0]).toMatchObject({ namespaceId: "ns1", slug: "linkedin-outreach", method: "POST", path: "/api/db/query" });
 

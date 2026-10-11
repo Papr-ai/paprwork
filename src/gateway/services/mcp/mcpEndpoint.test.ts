@@ -172,8 +172,11 @@ describe("MCP endpoint tools and card", () => {
     const { contents } = await client.readResource({ uri: SPIKE_CARD_URI });
     const html = String((contents[0] as { text?: string }).text);
     expect(contents[0].mimeType).toBe(RESOURCE_MIME_TYPE);
-    expect(html).toContain("globalThis.McpApps=");
+    expect(html).toContain('"ui/initialize"');
+    expect(html).toContain("papr_card_html");
+    expect(html).toContain("Built on");
     expect(html).not.toMatch(/<script[^>]+src=/);
+    expect((contents[0] as { _meta?: { ui?: { csp?: unknown } } })._meta?.ui?.csp).toBeTruthy();
     await client.close();
   });
 
@@ -221,6 +224,8 @@ describe("published app cards", () => {
     expect(contents[0]).toMatchObject({ uri, mimeType: RESOURCE_MIME_TYPE });
     expect(String((contents[0] as { text?: string }).text)).toContain("status card");
     expect(seen[0]).toMatchObject({ path: "/ns1/linkedin-outreach/dist/cards/status.html", session: "r:parse-session", user: "user123" });
+    const versioned = await client.readResource({ uri: appCardUri("ns1", "linkedin-outreach", "status", "2026-10-11T00:00:00Z") });
+    expect(String((versioned.contents[0] as { text?: string }).text)).toContain("status card");
     await client.close();
   });
 
@@ -279,7 +284,7 @@ describe("per-app tools", () => {
     );
     expect(tools.some((t) => t.name.startsWith("no-cards"))).toBe(false);
     const status = byName["linkedin-outreach_status"];
-    expect((status._meta as { ui: { resourceUri: string } }).ui.resourceUri).toBe(appCardUri("ns1", "linkedin-outreach", "status"));
+    expect((status._meta as { ui: { resourceUri: string } }).ui.resourceUri).toMatch(/^ui:\/\/papr\/app\/ns1\/linkedin-outreach\/status@[0-9a-f]{10}$/);
     expect(status.annotations?.readOnlyHint).toBe(true);
     expect(status.description).toMatch(/LinkedIn Outreach.*live card.*warm leads/);
     const send = byName["linkedin-outreach_send"];
@@ -404,5 +409,14 @@ describe("per-app connector URL (PR 3c)", () => {
       });
     expect((await post("/mcp/a/ns1/linkedin-outreach")).status).toBe(401);
     expect((await post("/mcp/a/ns1/bad.slug", GOOD)).status).toBe(404);
+  });
+});
+
+describe("parseAppRef slug-only", () => {
+  it("resolves a slug from the user's catalog", () => {
+    expect(parseAppRef({ slug: "Scenario" }, [{ namespaceId: "ns1", slug: "scenario" }])).toEqual({ namespaceId: "ns1", slug: "scenario" });
+  });
+  it("still errors on unknown slug", () => {
+    expect(() => parseAppRef({ slug: "nope" }, [])).toThrow();
   });
 });
