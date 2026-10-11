@@ -15,6 +15,10 @@ Read in order:
 Read:
 1. `APP_CARD_GUIDE.md` — update the affected section. **Debugged something non-obvious? Add a line to `## Gotchas`.** That section cannot be regenerated from source; it only exists if you write it down.
 
+### User wants their app in Claude (claude.ai, "MCP app", "use it from Claude")
+Read:
+1. `CLAUDE_CARDS_GUIDE.md` — add `metadata.claude` views, describe actions, validate, publish. No rewrite.
+
 ### User wants external API integration (Amplitude, Stripe, CRM, ads, analytics)
 Read:
 1. `API_KEY_TESTING_PROTOCOL.md` — Test-first protocol with real examples

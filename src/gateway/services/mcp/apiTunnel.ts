@@ -103,9 +103,37 @@ export async function dispatchTunnel(
 const VIEW = /^[a-z][a-z0-9-]{0,40}$/;
 
 /**
- * Reads a published card (dist/cards/{view}.html) through the host's normal app-file
- * route, as the caller, so the same per-app access rules decide who can load it.
+ * Reads a published app file through the host's normal app-file route, as the caller,
+ * so the same per-app access rules decide who can load it. Null when not published.
  */
+async function fetchPublishedAppFile(
+  port: number,
+  caller: McpCaller,
+  ref: { namespaceId: string; slug: string },
+  relPath: string,
+  accept: string,
+  fetchImpl: typeof fetch,
+): Promise<string | null> {
+  const res = await fetchImpl(`http://127.0.0.1:${port}/${ref.namespaceId}/${ref.slug}/${relPath}`, {
+    headers: {
+      accept,
+      "x-session-token": caller.sessionToken,
+      "x-papr-external-user-id": caller.userId,
+      "x-papr-via": "mcp",
+    },
+    redirect: "manual",
+    signal: AbortSignal.timeout(TIMEOUT_MS),
+  });
+  if (res.status === 404) return null;
+  if (!res.ok) throw new TunnelError(`App file unavailable (HTTP ${res.status})`, res.status);
+  return res.text();
+}
+
+function assertRef(ref: { namespaceId: string; slug: string }): void {
+  if (!SLUG.test(ref.namespaceId) || !SLUG.test(ref.slug)) throw new TunnelError("Invalid app reference");
+}
+
+/** dist/cards/{view}.html */
 export async function fetchPublishedCard(
   port: number,
   caller: McpCaller,
@@ -113,23 +141,24 @@ export async function fetchPublishedCard(
   view: string,
   fetchImpl: typeof fetch = fetch,
 ): Promise<string | null> {
-  if (!SLUG.test(ref.namespaceId) || !SLUG.test(ref.slug) || !VIEW.test(view)) {
-    throw new TunnelError("Invalid card reference");
+  assertRef(ref);
+  if (!VIEW.test(view)) throw new TunnelError("Invalid card reference");
+  return fetchPublishedAppFile(port, caller, ref, `dist/cards/${view}.html`, "text/html", fetchImpl);
+}
+
+/** dist/cards/cards.json, parsed. Null when the app has no Claude cards. */
+export async function fetchPublishedCardsManifest(
+  port: number,
+  caller: McpCaller,
+  ref: { namespaceId: string; slug: string },
+  fetchImpl: typeof fetch = fetch,
+): Promise<unknown | null> {
+  assertRef(ref);
+  const text = await fetchPublishedAppFile(port, caller, ref, "dist/cards/cards.json", "application/json", fetchImpl);
+  if (text === null) return null;
+  try {
+    return JSON.parse(text);
+  } catch {
+    return null;
   }
-  const res = await fetchImpl(
-    `http://127.0.0.1:${port}/${ref.namespaceId}/${ref.slug}/dist/cards/${view}.html`,
-    {
-      headers: {
-        accept: "text/html",
-        "x-session-token": caller.sessionToken,
-        "x-papr-external-user-id": caller.userId,
-        "x-papr-via": "mcp",
-      },
-      redirect: "manual",
-      signal: AbortSignal.timeout(TIMEOUT_MS),
-    },
-  );
-  if (res.status === 404) return null;
-  if (!res.ok) throw new TunnelError(`Card unavailable (HTTP ${res.status})`, res.status);
-  return res.text();
 }

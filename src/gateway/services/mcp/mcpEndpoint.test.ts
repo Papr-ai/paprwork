@@ -17,7 +17,9 @@ import { RESOURCE_MIME_TYPE } from "@modelcontextprotocol/ext-apps/server";
 import { assertTunnelAllowed, dispatchTunnel, type TunnelRequest } from "./apiTunnel.js";
 import { callerFromClaims, CLAIM_OBJECT_ID, CLAIM_SESSION } from "./auth.js";
 import type { McpEndpointConfig } from "./config.js";
-import { appCardUri, parseAppRef, registerMcpRoutes, SPIKE_CARD_URI } from "./server.js";
+import { appCardUri, parseAppRef, registerMcpRoutes, requestNeedsCatalog, SPIKE_CARD_URI } from "./server.js";
+import { fetchPublishedCardsManifest } from "./apiTunnel.js";
+import { clearCatalogCache, type CatalogDeps } from "./catalog.js";
 import { inlineExtAppsBundle } from "./spikeCard.js";
 
 const GOOD = "good-token";
@@ -29,6 +31,34 @@ const verifier: OAuthTokenVerifier = {
     return { token, clientId: "claude", scopes: [], expiresAt: Math.floor(Date.now() / 1000) + 600, extra: { caller } };
   },
 };
+
+const CARDS_JSON = {
+  version: 1,
+  summary: "Find warm leads on LinkedIn and draft outreach",
+  views: {
+    status: { kind: "status", from: "pipeline-summary", file: "status.html", bytes: 100 },
+    draft: {
+      kind: "action",
+      action: "draft-message",
+      file: "draft.html",
+      bytes: 100,
+      actionSpec: {
+        name: "draft-message",
+        description: "Draft a message",
+        effect: "write",
+        input: { type: "object", properties: { lead: { type: "string" }, tone: { type: "string", enum: ["warm", "direct"] } }, required: ["lead"] },
+      },
+    },
+    send: {
+      kind: "approval",
+      action: "send-messages",
+      file: "send.html",
+      bytes: 100,
+      actionSpec: { name: "send-messages", effect: "external", runsOn: "mac", input: { type: "object", properties: { lead: { type: "string" }, message: { type: "string" } }, required: ["lead", "message"] } },
+    },
+  },
+};
+let catalogLoads = 0;
 
 let server: Server;
 let base: string;
@@ -50,6 +80,7 @@ function fakeApi(app: Express): void {
   });
   app.get("/ns1/linkedin-outreach/dist/cards/:file", (req, res) => {
     record(req);
+    if (req.params.file === "cards.json") return void res.json(CARDS_JSON);
     if (req.params.file !== "status.html") return void res.status(404).send("Not found");
     res.type("html").send("<!doctype html><title>status card</title>");
   });
@@ -73,7 +104,18 @@ beforeAll(async () => {
     appsBaseUrl: "https://apps.papr.ai",
     loopbackPort: port,
   };
-  registerMcpRoutes(app, { port, verifier, config });
+  // Real loopback for cards.json; only memory's app list is stubbed.
+  const catalog: CatalogDeps = {
+    async listAccessibleApps() {
+      catalogLoads++;
+      return [
+        { appId: "a1", namespaceId: "ns1", slug: "linkedin-outreach", name: "LinkedIn Outreach", author: "Shawkat", updatedAt: "2026-10-01" },
+        { appId: "a2", namespaceId: "ns1", slug: "no-cards", name: "No Cards", updatedAt: "2026-09-01" },
+      ];
+    },
+    loadCardsManifest: (c, ref) => fetchPublishedCardsManifest(port, c, ref),
+  };
+  registerMcpRoutes(app, { port, verifier, config, catalog });
   fakeApi(app);
 });
 
@@ -217,5 +259,77 @@ describe("helpers", () => {
     const out = inlineExtAppsBundle("var a=1,b=2;export{a as App,b as X,c};");
     expect(out).toContain('globalThis.McpApps={"App":a,"X":b,"c":c};');
     expect(out).not.toContain("export{");
+  });
+});
+
+describe("per-app tools", () => {
+  it("lists one tool per published view, each pointing at its card", async () => {
+    clearCatalogCache();
+    const client = await connect();
+    const { tools } = await client.listTools();
+    const byName = Object.fromEntries(tools.map((t) => [t.name, t]));
+    expect(Object.keys(byName)).toEqual(
+      expect.arrayContaining(["linkedin-outreach_status", "linkedin-outreach_draft", "linkedin-outreach_send", "papr_list_apps"]),
+    );
+    expect(tools.some((t) => t.name.startsWith("no-cards"))).toBe(false);
+    const status = byName["linkedin-outreach_status"];
+    expect((status._meta as { ui: { resourceUri: string } }).ui.resourceUri).toBe(appCardUri("ns1", "linkedin-outreach", "status"));
+    expect(status.annotations?.readOnlyHint).toBe(true);
+    expect(status.description).toMatch(/LinkedIn Outreach.*live card.*warm leads/);
+    const send = byName["linkedin-outreach_send"];
+    expect(send.description).toMatch(/Nothing happens until they click Approve/);
+    expect(send.description).toMatch(/Mac/);
+    expect(send.inputSchema.required).toEqual(["lead", "message"]);
+    // Action tools prefill: nothing required, enum preserved.
+    const draft = byName["linkedin-outreach_draft"];
+    expect(draft.inputSchema.required ?? []).toEqual([]);
+    expect((draft.inputSchema.properties as Record<string, { enum?: string[] }>).tone.enum).toEqual(["warm", "direct"]);
+    await client.close();
+  });
+
+  it("opening an approval card proposes without running anything", async () => {
+    const client = await connect();
+    seen.length = 0;
+    const out = await client.callTool({ name: "linkedin-outreach_send", arguments: { lead: "Ada", message: "Hi Ada" } });
+    expect(out.isError).toBeFalsy();
+    expect(out.structuredContent).toMatchObject({
+      namespaceId: "ns1",
+      slug: "linkedin-outreach",
+      title: "LinkedIn Outreach",
+      publisher: "Shawkat",
+      view: "send",
+      data: { proposal: { lead: "Ada", message: "Hi Ada" }, params: { lead: "Ada", message: "Hi Ada" } },
+    });
+    expect(seen.some((r) => r.path?.startsWith("/api/app/backend"))).toBe(false);
+    await client.close();
+  });
+
+  it("lists apps for discovery", async () => {
+    const client = await connect();
+    const out = await client.callTool({ name: "papr_list_apps", arguments: {} });
+    const apps = (out.structuredContent as { apps: Array<{ title: string; tools: string[] }> }).apps;
+    expect(apps).toHaveLength(1);
+    expect(apps[0]).toMatchObject({ title: "LinkedIn Outreach", tools: ["linkedin-outreach_status", "linkedin-outreach_draft", "linkedin-outreach_send"] });
+    await client.close();
+  });
+
+  it("skips the catalog for card traffic and caches it per user", async () => {
+    clearCatalogCache();
+    catalogLoads = 0;
+    const client = await connect();
+    await client.callTool({ name: "papr_api", arguments: { namespaceId: "ns1", slug: "linkedin-outreach", method: "GET", path: "/api/access" } });
+    expect(catalogLoads).toBe(0);
+    await client.listTools();
+    await client.listTools();
+    expect(catalogLoads).toBe(1);
+    await client.close();
+  });
+
+  it("knows which requests need the catalog", () => {
+    expect(requestNeedsCatalog({ method: "tools/list" })).toBe(true);
+    expect(requestNeedsCatalog({ method: "tools/call", params: { name: "x_status" } })).toBe(true);
+    expect(requestNeedsCatalog({ method: "tools/call", params: { name: "papr_api" } })).toBe(false);
+    expect(requestNeedsCatalog({ method: "resources/read" })).toBe(false);
+    expect(requestNeedsCatalog([{ method: "ping" }, { method: "tools/list" }])).toBe(true);
   });
 });

@@ -4,8 +4,10 @@
  * Stateless Streamable HTTP: every POST builds a fresh McpServer bound to the verified
  * caller. No session map to leak across users, and it scales horizontally on Cloud Run.
  *
- * Tools in the spike:
- *   papr_open_app  (model)    open a published Papr app as a card. Carries _meta.ui.resourceUri.
+ * Tools:
+ *   {slug}_{view}  (model)    one per published card view (appTools.ts). Opens that card.
+ *   papr_list_apps (model)    the caller's apps with cards, for discovery / beyond the tool cap.
+ *   papr_open_app  (model)    open any published app by link (generic card).
  *   papr_api       (app-only) the tunnel. Hidden from the model; only our cards call it.
  */
 import type { Express, NextFunction, Request, Response } from "express";
@@ -20,7 +22,10 @@ import {
   RESOURCE_MIME_TYPE,
 } from "@modelcontextprotocol/ext-apps/server";
 import { callerOf, createAuth0Verifier, registerProtectedResourceMetadata, type McpCaller } from "./auth.js";
-import { dispatchTunnel, fetchPublishedCard, TunnelError, type TunnelMethod } from "./apiTunnel.js";
+import { dispatchTunnel, fetchPublishedCard, fetchPublishedCardsManifest, TunnelError, type TunnelMethod } from "./apiTunnel.js";
+import { getMemoryServerBaseUrl } from "../../utils/cloudApiClient.js";
+import { inputSchemaToZodShape, planAppTools, toolResultFor, appTitle } from "./appTools.js";
+import { loadClaudeCatalog, memoryAccessibleApps, type CatalogDeps, type ClaudeApp } from "./catalog.js";
 import { loadMcpEndpointConfig, MCP_PATH, protectedResourceMetadataUrl, type McpEndpointConfig } from "./config.js";
 import { renderSpikeCardHtml } from "./spikeCard.js";
 
@@ -44,11 +49,12 @@ export function parseAppRef(input: { url?: string; namespaceId?: string; slug?: 
   throw new TunnelError("Give the app's apps.papr.ai link, or its namespaceId and slug.");
 }
 
-export function buildMcpServer(cfg: McpEndpointConfig, caller: McpCaller): McpServer {
-  const server = new McpServer(
-    { name: "papr", title: "Papr", version: "0.0.1" },
-    { instructions: "Papr runs ongoing work as apps. Use papr_open_app to show a user's Papr app as a card." },
-  );
+export const MCP_INSTRUCTIONS =
+  "Papr runs the user's ongoing work as apps (outreach, research, ops). Each app's tools open a live card in the chat; " +
+  "changes only happen when the user presses a button on the card. Use papr_list_apps to see which apps the user has.";
+
+export function buildMcpServer(cfg: McpEndpointConfig, caller: McpCaller, apps: ClaudeApp[] = []): McpServer {
+  const server = new McpServer({ name: "papr", title: "Papr", version: "0.1.0" }, { instructions: MCP_INSTRUCTIONS });
 
   registerAppResource(server, "Papr app card", SPIKE_CARD_URI, { description: "Papr app card (spike)" }, async () => ({
     contents: [{ uri: SPIKE_CARD_URI, mimeType: RESOURCE_MIME_TYPE, text: renderSpikeCardHtml() }],
@@ -68,13 +74,52 @@ export function buildMcpServer(cfg: McpEndpointConfig, caller: McpCaller): McpSe
     },
   );
 
+  const tools = planAppTools(apps);
+  for (const tool of tools) {
+    registerAppTool(
+      server,
+      tool.name,
+      {
+        title: tool.title,
+        description: tool.description,
+        inputSchema: inputSchemaToZodShape(tool.input, tool.requireInput),
+        // Opening a card changes nothing; actions run from the card itself.
+        annotations: { readOnlyHint: true, openWorldHint: false },
+        _meta: { ui: { resourceUri: appCardUri(tool.app.namespaceId, tool.app.slug, tool.view) } },
+      },
+      async (args: Record<string, unknown>) => toolResultFor(tool, args, cfg.appsBaseUrl),
+    );
+  }
+
+  server.registerTool(
+    "papr_list_apps",
+    {
+      title: "List Papr apps",
+      description: "List the user's Papr apps that can open as cards in this chat, with the tool for each card.",
+      inputSchema: {},
+      annotations: { readOnlyHint: true, openWorldHint: false },
+    },
+    async () => {
+      const rows = apps.map((app) => ({
+        title: appTitle(app),
+        summary: app.cards.summary ?? app.description ?? null,
+        url: `${cfg.appsBaseUrl}/${app.namespaceId}/${app.slug}`,
+        tools: tools.filter((t) => t.app === app).map((t) => t.name),
+      }));
+      const text = rows.length
+        ? rows.map((r) => `- ${r.title}${r.summary ? `: ${r.summary}` : ""} (${r.tools.join(", ") || "too many apps; open by link"})`).join("\n")
+        : "No Papr apps with Claude cards yet. In Papr, turn on Claude for an app and publish it.";
+      return { content: [{ type: "text", text }], structuredContent: { apps: rows } };
+    },
+  );
+
   registerAppTool(
     server,
     "papr_open_app",
     {
       title: "Open a Papr app",
       description:
-        "Show one of the user's published Papr apps as an interactive card. Pass the app's apps.papr.ai link.",
+        "Show a published Papr app from its apps.papr.ai link as a simple card. Prefer the app's own tools (see papr_list_apps) when it has them.",
       inputSchema: {
         url: z.string().url().optional().describe("https://apps.papr.ai/{namespaceId}/{slug}"),
         namespaceId: z.string().optional(),
@@ -138,9 +183,40 @@ export function buildMcpServer(cfg: McpEndpointConfig, caller: McpCaller): McpSe
   return server;
 }
 
-async function handleMcpPost(cfg: McpEndpointConfig, req: Request, res: Response): Promise<void> {
+/**
+ * Only listing tools or calling a per-app tool needs the catalog. Card traffic
+ * (papr_api, resources/read) skips it, keeping the hot path to one loopback hop.
+ */
+export function requestNeedsCatalog(body: unknown): boolean {
+  const msgs = Array.isArray(body) ? body : [body];
+  return msgs.some((m) => {
+    const method = (m as { method?: string } | null)?.method;
+    if (method === "tools/list") return true;
+    if (method !== "tools/call") return false;
+    const name = (m as { params?: { name?: string } }).params?.name;
+    return name !== "papr_api" && name !== "papr_open_app";
+  });
+}
+
+export function defaultCatalogDeps(cfg: McpEndpointConfig, memoryBaseUrl: string): CatalogDeps {
+  return {
+    listAccessibleApps: memoryAccessibleApps(memoryBaseUrl),
+    loadCardsManifest: (caller, ref) => fetchPublishedCardsManifest(cfg.loopbackPort, caller, ref),
+  };
+}
+
+async function handleMcpPost(cfg: McpEndpointConfig, catalog: CatalogDeps, req: Request, res: Response): Promise<void> {
   const caller = callerOf(req.auth);
-  const server = buildMcpServer(cfg, caller);
+  let apps: ClaudeApp[] = [];
+  if (requestNeedsCatalog(req.body)) {
+    try {
+      apps = await loadClaudeCatalog(caller, catalog);
+    } catch (err) {
+      // Papr's generic tools still work if the app list is down.
+      console.warn("[mcp] app catalog unavailable:", (err as Error).message.slice(0, 160));
+    }
+  }
+  const server = buildMcpServer(cfg, caller, apps);
   const transport = new StreamableHTTPServerTransport({ sessionIdGenerator: undefined, enableJsonResponse: true });
   res.on("close", () => {
     void transport.close();
@@ -152,16 +228,17 @@ async function handleMcpPost(cfg: McpEndpointConfig, req: Request, res: Response
 
 export function registerMcpRoutes(
   app: Express,
-  opts: { port: number; verifier?: OAuthTokenVerifier; config?: McpEndpointConfig },
+  opts: { port: number; verifier?: OAuthTokenVerifier; config?: McpEndpointConfig; catalog?: CatalogDeps; memoryBaseUrl?: string },
 ): McpEndpointConfig {
   const cfg = opts.config ?? loadMcpEndpointConfig(opts.port);
+  const catalog = opts.catalog ?? defaultCatalogDeps(cfg, opts.memoryBaseUrl ?? getMemoryServerBaseUrl());
   registerProtectedResourceMetadata(app, cfg);
   const bearer = requireBearerAuth({
     verifier: opts.verifier ?? createAuth0Verifier(cfg),
     resourceMetadataUrl: protectedResourceMetadataUrl(cfg),
   });
   app.post(MCP_PATH, bearer, (req, res, next: NextFunction) => {
-    handleMcpPost(cfg, req, res).catch(next);
+    handleMcpPost(cfg, catalog, req, res).catch(next);
   });
   // Stateless server: no standalone SSE stream and no sessions to delete.
   const notAllowed = (_req: Request, res: Response): void => {
