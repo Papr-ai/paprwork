@@ -221,6 +221,8 @@ describe("published app cards", () => {
     expect(contents[0]).toMatchObject({ uri, mimeType: RESOURCE_MIME_TYPE });
     expect(String((contents[0] as { text?: string }).text)).toContain("status card");
     expect(seen[0]).toMatchObject({ path: "/ns1/linkedin-outreach/dist/cards/status.html", session: "r:parse-session", user: "user123" });
+    const versioned = await client.readResource({ uri: appCardUri("ns1", "linkedin-outreach", "status", "2026-10-11T00:00:00Z") });
+    expect(String((versioned.contents[0] as { text?: string }).text)).toContain("status card");
     await client.close();
   });
 
@@ -279,7 +281,7 @@ describe("per-app tools", () => {
     );
     expect(tools.some((t) => t.name.startsWith("no-cards"))).toBe(false);
     const status = byName["linkedin-outreach_status"];
-    expect((status._meta as { ui: { resourceUri: string } }).ui.resourceUri).toBe(appCardUri("ns1", "linkedin-outreach", "status"));
+    expect((status._meta as { ui: { resourceUri: string } }).ui.resourceUri).toMatch(/^ui:\/\/papr\/app\/ns1\/linkedin-outreach\/status@[0-9a-f]{10}$/);
     expect(status.annotations?.readOnlyHint).toBe(true);
     expect(status.description).toMatch(/LinkedIn Outreach.*live card.*warm leads/);
     const send = byName["linkedin-outreach_send"];

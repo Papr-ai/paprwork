@@ -10,6 +10,7 @@
  * change when someone publishes.
  */
 import type { McpCaller } from "./auth.js";
+import { gcsCacheGet, gcsCachePut } from "../appRuntime/gcsSharedCache.js";
 import type { CardsManifest, CardsManifestView } from "./cardBuild.js";
 
 export interface AccessibleApp {
@@ -116,6 +117,29 @@ export function clearCatalogCache(): void {
   cache.clear();
   inflight.clear();
   manifests.clear();
+  restored = null;
+}
+
+/**
+ * The memo survives restarts/deploys in the host's GCS cache bucket, so the first Claude
+ * connect after a deploy is fast too (a cold build is ~40s and Claude stops waiting at ~7s).
+ */
+const MEMO_KEY = "mcp/cards-manifests-v1.json";
+let restored: Promise<void> | null = null;
+function restoreMemo(): Promise<void> {
+  restored ??= withTimeout(gcsCacheGet(MEMO_KEY), 3_000)
+    .then((f) => {
+      if (!f) return;
+      for (const [k, v] of Object.entries(JSON.parse(f.content) as Record<string, unknown>)) {
+        if (!manifests.has(k)) manifests.set(k, v === null ? null : parseCardsManifest(v));
+      }
+      console.log(`[mcp] restored ${manifests.size} card manifests from cache`);
+    })
+    .catch(() => undefined);
+  return restored;
+}
+function saveMemo(): void {
+  gcsCachePut(MEMO_KEY, { content: JSON.stringify(Object.fromEntries(manifests)), contentType: "application/json" }, Date.now() + 365 * 86_400_000);
 }
 
 const inflight = new Map<string, Promise<ClaudeApp[]>>();
@@ -180,6 +204,8 @@ async function buildCatalog(caller: McpCaller, deps: CatalogDeps, opts: CatalogO
     .slice(0, opts.maxApps ?? 50);
 
   const manifestMs = opts.manifestTimeoutMs ?? 5_000;
+  await restoreMemo();
+  let learned = false;
   const loaded = await mapLimit(accessible, opts.concurrency ?? 4, async (app) => {
     const key = app.updatedAt ? `${app.namespaceId}/${app.slug}@${app.updatedAt}` : "";
     try {
@@ -189,6 +215,7 @@ async function buildCatalog(caller: McpCaller, deps: CatalogDeps, opts: CatalogO
         if (key) {
           if (manifests.size >= MAX_MANIFESTS) manifests.delete(manifests.keys().next().value as string);
           manifests.set(key, cards);
+          learned = true;
         }
       }
       return cards ? { ...app, cards } : null;
@@ -197,6 +224,7 @@ async function buildCatalog(caller: McpCaller, deps: CatalogDeps, opts: CatalogO
     }
   });
   const apps = loaded.filter((a): a is ClaudeApp => a !== null);
+  if (learned) saveMemo();
 
   if (cache.size >= MAX_CACHED_USERS) cache.delete(cache.keys().next().value as string);
   cache.set(caller.userId, { at: now(), apps });

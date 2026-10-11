@@ -15,6 +15,7 @@
  * Server instructions list the user's apps so Claude routes to them (routing.ts).
  *   papr_api       (app-only) the tunnel. Hidden from the model; only our cards call it.
  */
+import { createHash } from "node:crypto";
 import type { Express, NextFunction, Request, Response } from "express";
 import { z } from "zod";
 import { McpServer, ResourceTemplate } from "@modelcontextprotocol/sdk/server/mcp.js";
@@ -50,7 +51,11 @@ export function appConnectorUrl(cfg: McpEndpointConfig, namespaceId: string, slu
   return `${cfg.resourceUrl}/a/${encodeURIComponent(namespaceId)}/${encodeURIComponent(slug)}`;
 }
 
-export const SPIKE_CARD_URI = "ui://papr/spike/app-card.html";
+/**
+ * Claude caches a ui:// resource by URI (across chats and reconnects), so every URI carries
+ * a version: the generic card's content hash, and each app card's publish version.
+ */
+export const SPIKE_CARD_URI = `ui://papr/card/open-app.${createHash("sha256").update(renderSpikeCardHtml()).digest("hex").slice(0, 10)}.html`;
 
 /**
  * Cards may show the app's own images (App Files): published objects come from the
@@ -60,8 +65,9 @@ export const SPIKE_CARD_URI = "ui://papr/spike/app-card.html";
 export const CARD_CSP = { resourceDomains: ["https://files.papr.ai", "https://storage.googleapis.com"] };
 
 /** Published card for one app view (built at publish into dist/cards/{view}.html). */
-export function appCardUri(namespaceId: string, slug: string, view: string): string {
-  return `ui://papr/app/${namespaceId}/${slug}/${view}`;
+export function appCardUri(namespaceId: string, slug: string, view: string, rev?: string): string {
+  const v = rev ? `@${createHash("sha256").update(rev).digest("hex").slice(0, 10)}` : "";
+  return `ui://papr/app/${namespaceId}/${slug}/${view}${v}`;
 }
 
 /** Accepts https://apps.papr.ai/{namespaceId}/{slug}[/...] or explicit ids. */
@@ -115,7 +121,7 @@ export function buildMcpServer(
     async (uri, vars) => {
       const one = (v: string | string[] | undefined): string => (Array.isArray(v) ? v[0] : v) ?? "";
       const ref = { namespaceId: one(vars.namespaceId), slug: one(vars.slug) };
-      const html = await fetchPublishedCard(cfg.loopbackPort, caller, ref, one(vars.view));
+      const html = await fetchPublishedCard(cfg.loopbackPort, caller, ref, one(vars.view).split("@")[0]);
       if (html === null) throw new TunnelError("That card isn't published. Republish the app with Claude cards on.", 404);
       return { contents: [{ uri: uri.href, mimeType: RESOURCE_MIME_TYPE, text: html, _meta: { ui: { csp: CARD_CSP } } }] };
     },
@@ -132,7 +138,7 @@ export function buildMcpServer(
         inputSchema: inputSchemaToZodShape(tool.input, tool.requireInput),
         // Opening a card changes nothing; actions run from the card itself.
         annotations: { readOnlyHint: true, openWorldHint: false },
-        _meta: { ui: { resourceUri: appCardUri(tool.app.namespaceId, tool.app.slug, tool.view) } },
+        _meta: { ui: { resourceUri: appCardUri(tool.app.namespaceId, tool.app.slug, tool.view, tool.app.updatedAt) } },
       },
       async (args: Record<string, unknown>) => toolResultFor(tool, args, cfg.appsBaseUrl),
     );
