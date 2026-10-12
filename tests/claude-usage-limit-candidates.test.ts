@@ -2,10 +2,13 @@ import { describe, expect, it } from "vitest";
 import { buildClaudeUsageTokenCandidates } from "../src/core/services/claudeUsageLimitCandidates.js";
 
 describe("buildClaudeUsageTokenCandidates", () => {
-  it("uses only Papr stored token when connected in-app", () => {
+  it("tries Papr token first, then the Claude Code login", () => {
     expect(
       buildClaudeUsageTokenCandidates("papr-token", "cli-token"),
-    ).toEqual([{ accessToken: "papr-token", source: "papr_stored" }]);
+    ).toEqual([
+      { accessToken: "papr-token", source: "papr_stored" },
+      { accessToken: "cli-token", source: "claude_code_keychain" },
+    ]);
   });
 
   it("falls back to Claude Code storage when Papr has no token", () => {

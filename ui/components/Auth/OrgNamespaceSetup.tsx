@@ -175,7 +175,7 @@ export function OrgNamespaceSetup({
           className="onboarding-fld-in"
           value={userDisplayName}
           onChange={(event) => setUserDisplayName(event.target.value)}
-          placeholder="Amir Kabbara"
+          placeholder="First and last name"
           autoComplete="name"
         />
       </label>

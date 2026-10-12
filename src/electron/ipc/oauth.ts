@@ -846,14 +846,22 @@ export async function initializeOAuthIPC(
   // a real terminal window with the command, (4) UI shows paste field for
   // user to copy token from terminal and paste it.
 
-  async function openClaudeSetupTokenTerminal(): Promise<boolean> {
+  async function openClaudeSetupTokenTerminal(
+    kind: "setup-token" | "auth-login" = "setup-token",
+  ): Promise<boolean> {
     const { exec: execCb } = await import("child_process");
     const { promisify } = await import("util");
     const execAsync = promisify(execCb);
     try {
       await claudeSetupTokenService!.installClaudeCLI();
-      const scriptPath = await claudeSetupTokenService!.writeSetupTokenLauncherScript();
-      const setupCmd = await claudeSetupTokenService!.getSetupTokenShellCommand();
+      const scriptPath =
+        kind === "auth-login"
+          ? await claudeSetupTokenService!.writeAuthLoginLauncherScript()
+          : await claudeSetupTokenService!.writeSetupTokenLauncherScript();
+      const setupCmd =
+        kind === "auth-login"
+          ? await claudeSetupTokenService!.getAuthLoginShellCommand()
+          : await claudeSetupTokenService!.getSetupTokenShellCommand();
 
       if (process.platform === "darwin") {
         const escapedForAppleScript = scriptPath.replace(/\\/g, "\\\\").replace(/"/g, '\\"');
@@ -984,6 +992,22 @@ export async function initializeOAuthIPC(
       const message = error instanceof Error ? error.message : "Command unavailable";
       return { success: false as const, error: message };
     }
+  });
+
+  /**
+   * Plan usage only: `claude auth login` gives Claude Code a full login the
+   * usage endpoint accepts. Papr itself keeps running on the setup-token.
+   */
+  ipcMain.handle("auth:claude:open-auth-login-terminal", async () => {
+    const command = await claudeSetupTokenService!.getAuthLoginShellCommand();
+    const terminalOpened = await openClaudeSetupTokenTerminal("auth-login");
+    return terminalOpened
+      ? { success: true as const, command }
+      : {
+          success: false as const,
+          error: "Could not open Terminal. Run the command below yourself.",
+          command,
+        };
   });
 
   ipcMain.handle(
@@ -1129,8 +1153,9 @@ export async function initializeOAuthIPC(
       const paprToken = oauthTokenStorage!.getTokenByProvider("anthropic");
       const paprAccessToken = paprToken?.accessToken;
 
+      // Setup-tokens can't read usage, so always look for a Claude Code login too.
       let cliAccessToken: string | undefined;
-      if (!paprAccessToken && claudeSetupTokenService) {
+      if (claudeSetupTokenService) {
         const raw =
           await claudeSetupTokenService.readCredentialsFromCLIStorage();
         if (raw) {
@@ -1151,19 +1176,27 @@ export async function initializeOAuthIPC(
           authStatus?.loggedIn === true
             ? "Claude CLI is signed in but no usable token was found — run claude auth login again."
             : "Connect Claude subscription first, or sign in with claude auth login in Terminal.";
-        return { success: false, error: hint, authStatus };
+        return { success: false, error: hint, authStatus, needsClaudeLogin: true };
       }
 
-      const authStatus =
-        paprAccessToken === undefined
-          ? await readClaudeAuthStatusFromCli()
-          : null;
+      const authStatus = cliAccessToken
+        ? await readClaudeAuthStatusFromCli()
+        : null;
 
-      return await fetchClaudeSubscriptionUsageFromCandidates(unique, {
+      const result = await fetchClaudeSubscriptionUsageFromCandidates(unique, {
         orgUuidHint: authStatus?.orgId ?? undefined,
         subscriptionType: authStatus?.subscriptionType,
         orgName: authStatus?.orgName,
       });
+      if (!result.success) {
+        return {
+          ...result,
+          needsClaudeLogin: true,
+          error: "Usage needs a full Claude login. Run claude auth login once, then refresh.",
+          detail: result.error,
+        };
+      }
+      return result;
     } catch (error) {
       console.error("[OAuth IPC] Failed to fetch Claude usage:", error);
       return {

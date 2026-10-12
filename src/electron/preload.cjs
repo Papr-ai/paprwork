@@ -74,6 +74,8 @@ contextBridge.exposeInMainWorld("electronAPI", {
         ipcRenderer.invoke("auth:claude:try-sync-from-storage", options),
       getToken: () => ipcRenderer.invoke("auth:claude:get-token"),
       getUsageLimits: () => ipcRenderer.invoke("auth:claude:get-usage-limits"),
+      openAuthLoginTerminal: () =>
+        ipcRenderer.invoke("auth:claude:open-auth-login-terminal"),
       onboardingRunCheck: (options) =>
         ipcRenderer.invoke("auth:claude:onboarding-run-check", options),
       onboardingInstallCli: (options) =>
