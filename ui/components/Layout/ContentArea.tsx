@@ -20,7 +20,7 @@ import { AppTabKeepAliveHost, type AppTabKeepAlivePlacement } from "./AppTabKeep
 import { selectMountedAppTabIds } from "../../utils/appPreviewMemoryPolicy";
 import "./AppTabKeepAliveHost.css";
 import { SkillsView } from "../Skills/SkillsView";
-import { AgentsView } from "../Agents/AgentsViewCards";
+import { AgentsView } from "../Agents/AgentsOverviewPage";
 import { ViewsView } from "../Views/ViewsView";
 import { TableView } from "../Views/TableView";
 import { ChatGPTConvHistoryView } from "../ChatGPT/ChatGPTConvHistoryView";

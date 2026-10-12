@@ -54,6 +54,12 @@ import type {
 } from "./turnMetricsStore.js";
 import type { TurnMetricsSummary } from "../agent/turnMetrics.js";
 import {
+  migrateTurnAttributionColumns,
+  storeTurnAttribution,
+  type TurnAttribution,
+} from "./turnAttribution.js";
+import type { AgentsOverview } from "../../../core/types/agentsOverview.js";
+import {
   computeRecentMessageLimit,
   expandRecentMessageLimit,
   RECENT_MESSAGES_WITHOUT_SUMMARY,
@@ -354,6 +360,7 @@ export class LocalStorageProvider implements IStorageProvider {
 
     migrateFootprintColumns(this.db);
     migrateTurnMetricsColumns(this.db);
+    migrateTurnAttributionColumns(this.db);
 
     console.log("[LocalStorage] Database migration complete");
 
@@ -1151,6 +1158,74 @@ export class LocalStorageProvider implements IStorageProvider {
         error instanceof Error ? error.message : error,
       );
     }
+  }
+
+  /** Best-effort, like recordTurnMetrics. */
+  async recordTurnAttribution(
+    messageId: string,
+    attribution: TurnAttribution,
+  ): Promise<void> {
+    try {
+      storeTurnAttribution(this.db, messageId, attribution);
+    } catch (error) {
+      console.warn(
+        "[TurnAttribution] Failed to record:",
+        error instanceof Error ? error.message : error,
+      );
+    }
+  }
+
+  /**
+   * Everything the Agents page shows, from one scan on the read worker.
+   */
+  private agentsOverviewCache = new Map<number, { at: number; value: Promise<AgentsOverview> }>();
+
+  /** 30 days is a ~4s scan; the page reopens often and the numbers move slowly. */
+  async getAgentsOverview(days: number = 30): Promise<AgentsOverview> {
+    const hit = this.agentsOverviewCache.get(days);
+    if (hit && Date.now() - hit.at < 60_000) return hit.value;
+    const value = this.computeAgentsOverview(days);
+    this.agentsOverviewCache.set(days, { at: Date.now(), value });
+    value.catch(() => this.agentsOverviewCache.delete(days));
+    return value;
+  }
+
+  private async computeAgentsOverview(days: number): Promise<AgentsOverview> {
+    const { OVERVIEW_ROWS_SQL, OVERVIEW_CHATS_SQL } = await import(
+      "../agentsOverview/overviewRows.js"
+    );
+    const { aggregateOverview } = await import(
+      "../agentsOverview/aggregateOverview.js"
+    );
+    const { loadWorkTypes, classifyChatsInBackground } = await import(
+      "../agentsOverview/workTypeClassifier.js"
+    );
+    const { getAppService } = await import("../AppService.js");
+    const { getPaprRoot } = await import("../../../core/utils/paprRoot.js");
+
+    const since = new Date(Date.now() - days * 864e5).toISOString();
+    const [rows, chats, apps] = await Promise.all([
+      this.readRows("getAgentsOverview", OVERVIEW_ROWS_SQL, [since]),
+      this.readRows("getAgentsOverviewChats", OVERVIEW_CHATS_SQL, [since]),
+      getAppService().listApps().catch(() => []),
+    ]);
+    const overview = aggregateOverview({
+      rows,
+      chats,
+      days,
+      now: new Date(),
+      appTitles: new Map(apps.map((a) => [a.id.toLowerCase(), a.title])),
+      workTypes: loadWorkTypes(),
+      paprRoot: getPaprRoot(),
+    });
+
+    const summaries = new Map(
+      (chats as Array<{ id: string; summary_short: string | null }>).map((c) => [c.id, c.summary_short]),
+    );
+    classifyChatsInBackground(
+      overview.chats.map((c) => ({ id: c.id, title: c.title, summary: summaries.get(c.id) ?? null, cost: c.cost })),
+    );
+    return overview;
   }
 
   async getTurnUsage(chatId: string): Promise<{

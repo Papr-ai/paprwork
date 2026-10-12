@@ -1094,6 +1094,21 @@ export class AgentService {
             durationMs,
           );
         }
+        if (assistantMessageSaved && storage?.recordTurnAttribution) {
+          const { billingFor, inferTurnTargets, toolCallText } = await import(
+            "./storage/turnAttribution.js"
+          );
+          const { getPaprRoot } = await import("../../core/utils/paprRoot.js");
+          const targets = inferTurnTargets(
+            toolCalls.map((call) => toolCallText({ toolName: call.toolName, args: call.args })),
+            { paprRoot: getPaprRoot(), resolveGit: true },
+          );
+          await storage.recordTurnAttribution(assistantMessageId, {
+            billing: billingFor(config),
+            appId: targets.appId ?? options?.focusContext?.activeApp?.appId ?? null,
+            repo: targets.repo,
+          });
+        }
 
         const { getGatewayTelemetry } = await import("./gatewayTelemetry.js");
         const { TelemetryEvents } = await import(
@@ -5831,6 +5846,12 @@ ${last15.substring(0, 8_000)}`;
     }>;
   }> {
     return this.storageManager.getGlobalCostStats();
+  }
+
+  async getAgentsOverview(
+    days?: number,
+  ): Promise<import("../../core/types/agentsOverview.js").AgentsOverview> {
+    return this.storageManager.getAgentsOverview(days);
   }
 
   async getChatCost(chatId: string): Promise<{

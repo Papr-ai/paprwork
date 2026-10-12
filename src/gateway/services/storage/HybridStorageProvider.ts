@@ -113,6 +113,17 @@ export class HybridStorageProvider implements IStorageProvider {
     return this.local.recordTurnMetrics(messageId, summary, durationMs);
   }
 
+  recordTurnAttribution(
+    messageId: string,
+    attribution: import("./turnAttribution.js").TurnAttribution,
+  ): Promise<void> {
+    return this.local.recordTurnAttribution(messageId, attribution);
+  }
+
+  getAgentsOverview(days?: number) {
+    return this.local.getAgentsOverview(days);
+  }
+
   // ===== Message Operations =====
 
   async updateMessage(

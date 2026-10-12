@@ -198,6 +198,17 @@ export interface IStorageProvider {
     durationMs?: number,
   ): Promise<void>;
 
+  /** Billing source + app/repo for a saved assistant turn (local DB only). */
+  recordTurnAttribution?(
+    messageId: string,
+    attribution: import("./turnAttribution.js").TurnAttribution,
+  ): Promise<void>;
+
+  /** Agents page payload (local DB only). */
+  getAgentsOverview?(
+    days?: number,
+  ): Promise<import("../../../core/types/agentsOverview.js").AgentsOverview>;
+
   // ===== Summary Operations =====
 
   /**

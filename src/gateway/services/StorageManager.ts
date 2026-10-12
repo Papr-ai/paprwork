@@ -306,6 +306,23 @@ export class StorageManager {
     return await provider.getChatStats(chatId);
   }
 
+  async recordTurnAttribution(
+    messageId: string,
+    attribution: import("./storage/turnAttribution.js").TurnAttribution,
+  ): Promise<void> {
+    const provider = this.ensureInitialized();
+    await provider.recordTurnAttribution?.(messageId, attribution);
+  }
+
+  async getAgentsOverview(days?: number) {
+    await this.awaitReady();
+    const provider = this.ensureInitialized();
+    if (!provider.getAgentsOverview) {
+      throw new Error("Agents overview needs local chat storage");
+    }
+    return await provider.getAgentsOverview(days);
+  }
+
   async getTurnUsage(chatId: string) {
     await this.awaitReady();
     const provider = this.ensureInitialized();

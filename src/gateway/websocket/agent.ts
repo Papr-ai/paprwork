@@ -562,6 +562,14 @@ export async function setupAgentHandlers(
         break;
       }
 
+      case "agent:get-overview": {
+        const payload = message.payload as { days?: number } | undefined;
+        const days = Math.min(Math.max(payload?.days ?? 30, 1), 90);
+        const overview = await agentService.getAgentsOverview(days);
+        sendResponse(ws, { id: message.id, success: true, data: overview });
+        break;
+      }
+
       case "agent:get-tool-usage": {
         const usage = agentService.getToolUsageByAgent();
         sendResponse(ws, {
