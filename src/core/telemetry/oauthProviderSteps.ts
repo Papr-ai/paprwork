@@ -24,6 +24,8 @@ export type OAuthProviderStep =
   | "cli_install_started"
   | "cli_install_failed"
   | "terminal_opened"
+  | "guided_setup_required"
+  | "manual_step_marked_done"
   | "manual_setup_clicked"
   | "manual_connection_clicked"
   | "manual_agent_clicked"

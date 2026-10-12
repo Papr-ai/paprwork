@@ -150,6 +150,7 @@ contextBridge.exposeInMainWorld("electronAPI", {
       startLogin: (mode, source) => ipcRenderer.invoke("papr:start-login", mode, source),
       logout: () => ipcRenderer.invoke("papr:logout"),
       verifyManualCode: (code) => ipcRenderer.invoke("papr:verify-manual-code", code),
+      cancelLogin: () => ipcRenderer.invoke("papr:cancel-login"),
       getProfile: () => ipcRenderer.invoke("papr:get-profile"),
       refreshProfile: () => ipcRenderer.invoke("papr:refresh-profile"),
       syncProfile: (input) => ipcRenderer.invoke("papr:sync-profile", input),

@@ -239,6 +239,21 @@ export function AuthWall({ onSignedIn, skipAutoDetect }: AuthWallProps) {
     };
   }, []);
 
+  /**
+   * Back out of "Finishing sign-in" — wrong account, closed the tab, picked
+   * sign-in instead of create account. Previously the only way out was
+   * quitting the app.
+   */
+  const handleBack = () => {
+    trackAuthWallStep("login_cancelled");
+    setIsAuthenticating(false);
+    setShowRefresh(false);
+    setShowManualCode(false);
+    setManualCode("");
+    setError(null);
+    void window.electronAPI.papr.cancelLogin?.();
+  };
+
   const handleRefresh = () => {
     trackAuthWallStep("check_again_clicked");
     setError(null);
@@ -309,6 +324,13 @@ export function AuthWall({ onSignedIn, skipAutoDetect }: AuthWallProps) {
 
           {isAuthenticating ? (
             <div className="auth-wall-waiting">
+              <button
+                type="button"
+                className="auth-wall-back"
+                onClick={handleBack}
+              >
+                ← Back
+              </button>
               <div className="onboarding-spinner" />
               <h1 className="onboarding-h1 onboarding-h1--small">
                 Finishing sign-in in your browser
@@ -318,8 +340,7 @@ export function AuthWall({ onSignedIn, skipAutoDetect }: AuthWallProps) {
                 updates on its own.
               </p>
               <p className="auth-wall-hint">
-                Google, passkeys, and email login work in the browser. You can also use the
-                verification code below if needed.
+                Wrong account or closed the tab? Go back and start again.
               </p>
 
               {showRefresh && (

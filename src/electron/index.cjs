@@ -2600,6 +2600,18 @@ async function flushPendingDeepLinks() {
       continue;
     }
 
+    // "Open Papr Work" button on the browser sign-in success page.
+    if (url.startsWith("papr://focus")) {
+      if (!mainWindow || mainWindow.isDestroyed()) {
+        return;
+      }
+      pendingDeepLinks.splice(index, 1);
+      if (mainWindow.isMinimized()) mainWindow.restore();
+      mainWindow.show();
+      mainWindow.focus();
+      continue;
+    }
+
     console.warn("[Electron] Unknown deep link, dropping:", url.split("?")[0]);
     pendingDeepLinks.splice(index, 1);
   }

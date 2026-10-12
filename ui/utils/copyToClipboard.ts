@@ -43,3 +43,29 @@ export async function copyTextToClipboard(
     return false;
   }
 }
+
+/**
+ * Read clipboard text — Electron main-process clipboard first.
+ * navigator.clipboard.readText() needs the "clipboard-read" permission, which
+ * the main process denies (only sanitized-write is allowed), so the renderer
+ * API alone always fails inside Papr Work.
+ */
+export async function readTextFromClipboard(): Promise<string | null> {
+  try {
+    if (window.electronAPI?.system?.invoke) {
+      const result = (await window.electronAPI.system.invoke("clipboard.readText")) as
+        | { text?: string }
+        | undefined;
+      if (typeof result?.text === "string") {
+        return result.text;
+      }
+    }
+  } catch {
+    // Fall through to renderer clipboard API.
+  }
+  try {
+    return await navigator.clipboard.readText();
+  } catch {
+    return null;
+  }
+}

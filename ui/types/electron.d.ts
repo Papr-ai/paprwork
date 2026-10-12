@@ -196,6 +196,8 @@ export interface ElectronAPI {
       success: boolean;
       error?: string;
     }>;
+    /** Abandon an in-progress browser sign-in so the user can start over. */
+    cancelLogin?: () => Promise<{ success: boolean }>;
     /** Verify a manual authentication code (fallback when callback fails) */
     verifyManualCode: (code: string) => Promise<{
       success: boolean;

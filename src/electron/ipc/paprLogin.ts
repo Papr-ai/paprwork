@@ -4273,6 +4273,16 @@ export function initializePaprLoginIPC(
     }
   });
 
+  // User backed out of the "finishing sign-in" screen (wrong account, closed
+  // the tab, etc.). Drop the pending PKCE flow so the next attempt starts clean.
+  ipcMain.handle("papr:cancel-login", async () => {
+    stopPaprAuthCallbackServer();
+    clearInMemoryPkceState();
+    await clearPersistedPkceState();
+    trackLoginStep("login_cancelled", { source: "auth_wall" });
+    return { success: true };
+  });
+
   // Verify manual code — fallback when automatic callback fails
   ipcMain.handle("papr:verify-manual-code", async (_event, code: string) => {
     try {

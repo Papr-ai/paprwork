@@ -68,13 +68,14 @@ export function verifyCode(code: string): { valid: boolean; sessionData?: unknow
 
 export function buildPaprAuthSuccessHtml(verificationCode?: string): string {
   const formattedCode = verificationCode ? formatVerificationCode(verificationCode) : null;
-  
+
+  // People skim this page. One big instruction, one button, code last.
   return `<!DOCTYPE html>
 <html lang="en">
   <head>
     <meta charset="utf-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1" />
-    <title>Signed in to Papr Work</title>
+    <title>Signed in — go back to Papr Work</title>
     <style>
       * { box-sizing: border-box; }
       body {
@@ -90,96 +91,125 @@ export function buildPaprAuthSuccessHtml(verificationCode?: string): string {
       }
       .card {
         width: 100%;
-        max-width: 420px;
+        max-width: 480px;
         background: #fff;
-        border-radius: 20px;
-        padding: 40px 32px;
+        border-radius: 24px;
+        padding: 44px 36px 36px;
         text-align: center;
         box-shadow: 0 12px 40px rgba(0, 0, 0, 0.08);
       }
       .check {
-        width: 64px;
-        height: 64px;
-        margin: 0 auto 20px;
+        width: 72px;
+        height: 72px;
+        margin: 0 auto 22px;
         border-radius: 50%;
         background: #34c759;
         color: #fff;
-        font-size: 32px;
-        line-height: 64px;
-      }
-      h1 {
-        margin: 0 0 8px;
-        font-size: 24px;
+        font-size: 38px;
+        line-height: 72px;
         font-weight: 700;
       }
-      p {
+      h1 {
         margin: 0;
-        color: #636366;
-        font-size: 16px;
-        line-height: 1.5;
+        font-size: 30px;
+        font-weight: 800;
+        letter-spacing: -0.5px;
+        line-height: 1.2;
       }
-      .hint {
-        margin-top: 20px;
+      h1 .go {
+        display: block;
+        margin-top: 6px;
+        color: #0071e3;
+      }
+      .open-btn {
+        display: inline-block;
+        margin-top: 28px;
+        padding: 15px 30px;
+        border-radius: 14px;
+        background: #0071e3;
+        color: #fff;
+        font-size: 17px;
+        font-weight: 700;
+        text-decoration: none;
+      }
+      .open-btn:hover { background: #0062c4; }
+      .sub {
+        margin: 14px 0 0;
         font-size: 14px;
         color: #8e8e93;
       }
       .code-section {
-        margin-top: 28px;
-        padding-top: 24px;
+        margin-top: 32px;
+        padding-top: 22px;
         border-top: 1px solid #e5e5ea;
       }
       .code-label {
+        margin: 0 0 6px;
         font-size: 13px;
         color: #8e8e93;
-        margin: 0 0 8px;
-        text-transform: uppercase;
-        letter-spacing: 0.5px;
       }
       .code-display {
-        font-size: 32px;
+        margin: 0;
+        font-size: 30px;
         font-weight: 700;
         font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
         letter-spacing: 4px;
-        color: #0080FF;
-        margin: 0 0 12px;
+        color: #1c1c1e;
         user-select: all;
         cursor: pointer;
-      }
-      .code-hint {
-        font-size: 13px;
-        color: #8e8e93;
-        margin: 0;
-        line-height: 1.4;
       }
     </style>
   </head>
   <body>
     <div class="card">
       <div class="check" aria-hidden="true">✓</div>
-      <h1>You&apos;re signed in</h1>
-      <p>Go back to Papr Work on your computer. We&apos;ll connect your account automatically.</p>
-      <p class="hint">You can close this browser tab once Papr Work shows you&apos;re signed in.</p>
+      <h1>You&apos;re signed in.<span class="go">Go back to Papr Work.</span></h1>
+      <a class="open-btn" href="papr://focus">Open Papr Work</a>
+      <p class="sub">You can close this tab.</p>
       ${formattedCode ? `
       <div class="code-section">
-        <p class="code-label">If Papr Work still doesn&apos;t show you as signed in, enter this code there:</p>
+        <p class="code-label">Papr Work didn&apos;t sign in? Enter this code there:</p>
         <p class="code-display" title="Click to copy">${formattedCode}</p>
-        <p class="code-hint">Enter this code in Papr Work to finish signing in.</p>
       </div>
       ` : ""}
     </div>
     <script>
       ${formattedCode ? `
-      // Copy code on click
       document.querySelector('.code-display')?.addEventListener('click', function() {
         navigator.clipboard.writeText('${formattedCode}');
         this.style.color = '#34c759';
-        setTimeout(() => { this.style.color = '#0080FF'; }, 1000);
+        setTimeout(() => { this.style.color = '#1c1c1e'; }, 1000);
       });
       ` : ""}
-      setTimeout(function () { window.close(); }, 5000);
     </script>
   </body>
 </html>`;
+}
+
+/**
+ * Bring Papr Work to the front the moment the browser hands back the code,
+ * so users don't have to find their way back from the browser on their own.
+ */
+async function bringPaprWorkToFront(): Promise<void> {
+  try {
+    const { app, BrowserWindow } = await import("electron");
+    const win = BrowserWindow.getAllWindows().find((w) => !w.isDestroyed());
+    if (!win) return;
+    if (win.isMinimized()) win.restore();
+    win.show();
+    if (process.platform === "darwin") {
+      app.focus({ steal: true });
+    } else {
+      // Windows blocks focus stealing; flash the taskbar as a fallback.
+      win.setAlwaysOnTop(true);
+      win.focus();
+      win.setAlwaysOnTop(false);
+      win.flashFrame(true);
+    }
+    win.focus();
+  } catch (err) {
+    console.warn("[PaprAuthCallback] Could not focus Papr Work:", err);
+  }
 }
 
 let activeServer: OAuthCallbackServer | null = null;
@@ -220,6 +250,7 @@ export async function startPaprAuthCallbackServer(
     maxPortAttempts: 10, // Try ports 18791-18800
     onCallback: (params) => {
       const code = currentVerificationCode!;
+      void bringPaprWorkToFront();
       void Promise.resolve(onCallback(params, code)).finally(() => {
         stopPaprAuthCallbackServer();
       });

@@ -2,6 +2,7 @@ import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import type { OAuthProviderSource } from "../../../src/core/telemetry/oauthProviderSteps";
 import { trackOAuthProviderStep } from "../../lib/oauthProviderTelemetry";
 import { ClaudeSetupTokenTerminalExample } from "../Claude/ClaudeSetupTokenTerminalExample";
+import { readTextFromClipboard } from "../../utils/copyToClipboard";
 import {
   cleanClaudeOAuthToken,
   isValidClaudeOAuthToken,
@@ -108,6 +109,18 @@ export function ClaudeOnboardingTokenStep({
     };
   }, [trySyncFromStorage]);
 
+  const handlePasteFromClipboard = async () => {
+    onStepError(null);
+    const text = await readTextFromClipboard();
+    if (!text || !text.trim()) {
+      onStepError(
+        `Clipboard is empty. Copy the ***REDACTED_SECRET***… line in ${terminalLabel} first, or click the box and press ⌘V / Ctrl+V.`,
+      );
+      return;
+    }
+    setPastedToken(text);
+  };
+
   const handleVerifyToken = async () => {
     onStepError(null);
     if (!tokenLooksValid) {
@@ -142,6 +155,16 @@ export function ClaudeOnboardingTokenStep({
       </p>
       <ClaudeSetupTokenTerminalExample />
 
+      <div className="claude-stepper__token-paste-row">
+        <button
+          type="button"
+          className="onboarding-link claude-stepper__token-auto-btn"
+          onClick={() => void handlePasteFromClipboard()}
+          disabled={running || syncing}
+        >
+          Paste from clipboard
+        </button>
+      </div>
       <input
         className="claude-stepper__token-input"
         value={pastedToken}

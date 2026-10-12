@@ -290,7 +290,16 @@ echo "Copy the full sk-ant-oat01-… line above, then paste it into Papr Work."
         return `'${arg.replace(/'/g, `'\\''`)}'`;
       })
       .join(" ");
-    return `${spec.command} ${argsPart}`.trim();
+    const quotedCommand =
+      process.platform === "win32" ? `"${spec.command}"` : this.shellQuote(spec.command);
+    const envEntries = Object.entries(spec.extraEnv ?? {});
+    const envPrefix =
+      envEntries.length === 0
+        ? ""
+        : process.platform === "win32"
+          ? envEntries.map(([k, v]) => `set "${k}=${v}" && `).join("")
+          : `${envEntries.map(([k, v]) => `${k}=${this.shellQuote(String(v))}`).join(" ")} `;
+    return `${envPrefix}${quotedCommand} ${argsPart}`.trim();
   }
 
   private async resolveNodeExecutable(): Promise<{

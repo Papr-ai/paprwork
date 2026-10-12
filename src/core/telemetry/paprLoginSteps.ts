@@ -37,7 +37,8 @@ export type PaprLoginStep =
   | "manual_code_submitted"
   | "manual_code_success"
   | "manual_code_failed"
-  | "manual_code_error";
+  | "manual_code_error"
+  | "login_cancelled";
 
 export type PaprLoginMode = "login" | "signup";
 export type PaprLoginSource = "auth_wall" | "settings" | "unknown";

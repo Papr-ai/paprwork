@@ -154,7 +154,7 @@ export function useOAuth(
       // If source is "terminal-opened", the backend opened a terminal with
       // `claude setup-token`. Show the paste field so the user can copy the
       // token from the terminal and paste it here.
-      if (result.source === "terminal-opened") {
+      if (result.source === "terminal-opened" || result.source === "guided") {
         setLoading(false);
         setStatus({
           connected: false,
@@ -215,6 +215,19 @@ export function useOAuth(
   useEffect(() => {
     loadStatus();
   }, [loadStatus]);
+
+  // Any connect path (guided stepper paste, Keychain adopt, other windows)
+  // pushes oauth:status from main. Listen always — not only during
+  // startOAuthLogin — so every consumer updates without a page reload.
+  useEffect(() => {
+    const matchProvider = provider === "openai" ? "openai" : "anthropic";
+    const off = window.electronAPI.oauth.onAuthStatus?.((data) => {
+      if (data.provider === matchProvider && data.status === "connected") {
+        void loadStatus();
+      }
+    });
+    return () => off?.();
+  }, [provider, loadStatus]);
 
   // Cleanup on unmount
   useEffect(() => {

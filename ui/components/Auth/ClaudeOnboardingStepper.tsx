@@ -8,6 +8,7 @@ import {
 } from "../../constants/claudeManualConnection";
 import { getClaudeOnboardingSteps } from "../../constants/claudeOnboardingSteps";
 import { ClaudeOnboardingTokenStep } from "./ClaudeOnboardingTokenStep";
+import { trackOAuthProviderStep } from "../../lib/oauthProviderTelemetry";
 
 interface ClaudeOnboardingStepperProps {
   oauthSource: OAuthProviderSource;
@@ -41,6 +42,10 @@ export function ClaudeOnboardingStepper({
   const [copiedCmd, setCopiedCmd] = useState<string | null>(null);
   const [setupTokenCmd, setSetupTokenCmd] = useState<string | null>(null);
   const [terminalSignInReady, setTerminalSignInReady] = useState(false);
+  /** Steps the user chose to run themselves (copied the command). */
+  const [manualSteps, setManualSteps] = useState<Set<number>>(() => new Set());
+  const [copyFailed, setCopyFailed] = useState<string | null>(null);
+  const [allowManualOverride, setAllowManualOverride] = useState(false);
 
   useEffect(() => {
     if (stepIndex !== 2 || stepDone[2]) {
@@ -97,6 +102,7 @@ export function ClaudeOnboardingStepper({
   );
 
   const handleCopyCommand = async (command: string) => {
+    setCopyFailed(null);
     try {
       if (!(await copyTextToClipboard(command))) throw new Error("copy failed");
       setCopiedCmd(command);
@@ -105,6 +111,65 @@ export function ClaudeOnboardingStepper({
       }, 2200);
     } catch {
       setCopiedCmd(null);
+      // Never fail silently: the user is about to switch to Terminal and paste.
+      setCopyFailed(command);
+    }
+  };
+
+  /** "I'd rather run it myself": copy, then offer a way to mark the step done. */
+  const handleRunMyself = async (index: number, command: string) => {
+    await handleCopyCommand(command);
+    setAllowManualOverride(false);
+    setManualSteps((prev) => new Set(prev).add(index));
+  };
+
+  /**
+   * The user ran the command in their own Terminal. Steps 0/1 are re-verified
+   * with the same check Papr uses, so "done" means Claude Code is really there.
+   * Step 2 (setup-token) cannot be verified until they paste, so it just moves on.
+   */
+  const handleManualDone = async (index: number) => {
+    trackOAuthProviderStep("anthropic", "manual_step_marked_done", {
+      source: oauthSource,
+      stage: String(index),
+    } as Parameters<typeof trackOAuthProviderStep>[2]);
+    if (index === 2) {
+      completeStep(2, "You ran sign-in yourself. Token is on screen in Terminal.");
+      return;
+    }
+    if (allowManualOverride) {
+      setAllowManualOverride(false);
+      completeStep(index, "Marked done — you ran it yourself.");
+      return;
+    }
+    setRunning(true);
+    setStepError(null);
+    try {
+      const result = await window.electronAPI.oauth.claude.onboardingRunCheck({
+        source: oauthSource,
+      });
+      if (result.connected) {
+        onConnected();
+        return;
+      }
+      if ("okMessage" in result && result.skipInstallStep) {
+        completeStep(index, "Claude Code is on your PATH.", [
+          { index: 1, okMessage: "Claude Code is on your PATH." },
+        ]);
+        return;
+      }
+      if (index === 0 && "okMessage" in result) {
+        completeStep(0, result.okMessage);
+        return;
+      }
+      setAllowManualOverride(true);
+      setStepError(
+        "Papr can't see `claude` on your PATH yet. If the install finished, open a new Terminal window and run `claude --version`. Click again to continue anyway.",
+      );
+    } catch (error) {
+      setStepError(error instanceof Error ? error.message : "Check failed");
+    } finally {
+      setRunning(false);
     }
   };
 
@@ -251,6 +316,19 @@ export function ClaudeOnboardingStepper({
                   </>
                 )}
 
+                {manualSteps.has(index) && displayedCmd && !(index === 2 && terminalSignInReady) && (
+                  <p className="claude-stepper__manual-hint" role="status">
+                    {copiedCmd === displayedCmd ? "Copied. " : ""}
+                    Paste it into Terminal, press Enter, then come back here.
+                  </p>
+                )}
+
+                {copyFailed === displayedCmd && displayedCmd && (
+                  <p className="claude-stepper__error" role="alert">
+                    Couldn&apos;t copy automatically. Select the command above and press ⌘C / Ctrl+C.
+                  </p>
+                )}
+
                 {index === 2 && terminalSignInReady && (
                   <p className="claude-stepper__st-ok" role="status">
                     Terminal should be open with sign-in running. Finish in Terminal, then continue
@@ -273,6 +351,27 @@ export function ClaudeOnboardingStepper({
                         <span className="claude-stepper__running-dot" aria-hidden />
                         {step.running}…
                       </div>
+                    ) : manualSteps.has(index) && !(index === 2 && terminalSignInReady) ? (
+                      <>
+                        <button
+                          type="button"
+                          className="onboarding-cta onboarding-cta--small"
+                          onClick={() => void handleManualDone(index)}
+                        >
+                          {index === 2
+                            ? "I ran it — paste token"
+                            : allowManualOverride
+                              ? "Continue anyway"
+                              : "I ran it — check again"}
+                        </button>
+                        <button
+                          type="button"
+                          className="onboarding-link claude-stepper__run-self"
+                          onClick={() => void runActiveStep()}
+                        >
+                          {step.mode === "hand" ? `Open ${step.action.replace(/^Open (\S+).*$/, "$1")} for me instead` : "Let Papr do it instead"}
+                        </button>
+                      </>
                     ) : index === 2 && terminalSignInReady ? (
                       <button
                         type="button"
@@ -293,11 +392,15 @@ export function ClaudeOnboardingStepper({
                         {step.action}
                       </button>
                     )}
-                    {step.mode === "run" && displayedCmd && !running && (
+                    {step.mode !== "paste" &&
+                      displayedCmd &&
+                      !running &&
+                      !manualSteps.has(index) &&
+                      !(index === 2 && terminalSignInReady) && (
                       <button
                         type="button"
                         className="onboarding-link claude-stepper__run-self"
-                        onClick={() => void handleCopyCommand(displayedCmd)}
+                        onClick={() => void handleRunMyself(index, displayedCmd)}
                       >
                         I would rather run it myself
                       </button>

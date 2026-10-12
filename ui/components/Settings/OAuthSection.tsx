@@ -102,8 +102,14 @@ export function OAuthSection({
 
   const needsReconnect = connectionState.kind === "needs_signin";
 
+  // Main pushes oauth:status "connected" from persistOAuthConnection, and
+  // useOAuth listens for it — so every card, picker and chat refreshes on its
+  // own. No full reload: it threw away Settings state and any open chats.
   const handleClaudeConnected = () => {
-    window.location.reload();
+    guidedAutoOpenKeyRef.current = null;
+    setGuidedSetupOpen(false);
+    clearAuthRejection(provider);
+    window.dispatchEvent(new Event(PROVIDER_AUTH_CHANGED_EVENT));
   };
 
   const openGuidedSetup = useCallback(() => {
@@ -420,10 +426,10 @@ export function OAuthSection({
                 <button
                   className="settings-btn settings-btn--primary"
                   onClick={handleReconnect}
-                  disabled={loading}
+                  disabled={loading || claudeChecking}
                   style={{ width: "100%", marginBottom: "8px" }}
                 >
-                  {loading ? "Opening sign-in..." : "Sign in again"}
+                  {loading || claudeChecking ? "Opening sign-in..." : "Sign in again"}
                 </button>
               )}
               <div style={{ display: "flex", gap: "8px" }}>
@@ -572,10 +578,10 @@ export function OAuthSection({
                   <button
                     className="settings-btn settings-btn--primary"
                     onClick={() => void handleStartOAuthLogin()}
-                    disabled={loading || launchingAgent}
+                    disabled={loading || claudeChecking || launchingAgent}
                     style={{ width: "100%" }}
                   >
-                    {loading
+                    {loading || claudeChecking
                       ? "Connecting..."
                       : status.error && !status.connected
                         ? "Try Connect again"
@@ -587,7 +593,7 @@ export function OAuthSection({
                       <button
                         className="settings-btn settings-btn--secondary"
                         onClick={() => void handleAskAgent()}
-                        disabled={loading || launchingAgent}
+                        disabled={loading || claudeChecking || launchingAgent}
                         style={{ width: "100%" }}
                       >
                         {launchingAgent ? "Opening agent..." : "Ask an agent"}
@@ -595,7 +601,7 @@ export function OAuthSection({
                       <button
                         className="settings-btn settings-btn--secondary"
                         onClick={handleOpenManualSetup}
-                        disabled={loading || launchingAgent}
+                        disabled={loading || claudeChecking || launchingAgent}
                         style={{ width: "100%" }}
                       >
                         Step-by-step setup

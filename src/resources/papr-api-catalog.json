@@ -1,7 +1,7 @@
 {
   "version": 1,
-  "generatedAt": "2026-10-10T15:21:16.599Z",
-  "entryCount": 205,
+  "generatedAt": "2026-10-12T04:04:47.359Z",
+  "entryCount": 206,
   "entries": [
     {
       "id": "access-members",
@@ -2075,7 +2075,7 @@
     {
       "id": "agent-tool-papr_db_exec",
       "title": "papr_db_exec",
-      "summary": "Execute DML (INSERT/UPDATE/DELETE/REPLACE) on a Plan A registry database. Writes local replica then push() to Turso primary when online. Schema is NOT allowed — use papr_db_create_migration.",
+      "summary": "Execute DML (INSERT/UPDATE/DELETE/REPLACE) on a registry database. Replica: writes the local replica then pushes to cloud. Cloud-direct (web-only): writes the cloud database directly. Returns a change count only — read rows with papr_db_query. Schema is NOT allowed — use papr_db_create_migration.",
       "surfaces": [
         "agent-tool"
       ],
@@ -2149,6 +2149,26 @@
         "papr",
         "db",
         "push",
+        "tool",
+        "agent"
+      ]
+    },
+    {
+      "id": "agent-tool-papr_db_query",
+      "title": "papr_db_query",
+      "summary": "Read rows from a registry database (SELECT / WITH only). Works the same on desktop and in cloud runs, for replica, cloud-direct (web-only, no local file) and local databases. Use this instead of sqlite3, curl to the gateway, or raw Turso credentials. Pair with papr_db_exec for INSERT/UPDATE/DELETE.",
+      "surfaces": [
+        "agent-tool"
+      ],
+      "runtimes": [
+        "desktop"
+      ],
+      "toolId": "papr_db_query",
+      "keywords": [
+        "papr_db_query",
+        "papr",
+        "db",
+        "query",
         "tool",
         "agent"
       ]

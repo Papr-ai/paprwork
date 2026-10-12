@@ -11,6 +11,7 @@ import {
   previewClaudeOAuthToken,
 } from "../../utils/claudeOAuthToken";
 import { ClaudeSetupTokenTerminalExample } from "../Claude/ClaudeSetupTokenTerminalExample";
+import { readTextFromClipboard } from "../../utils/copyToClipboard";
 import "./ClaudeTokenPastePanel.css";
 
 type PasteMode = "terminal" | "manual";
@@ -113,18 +114,18 @@ export function ClaudeTokenPastePanel({
   const handlePasteFromClipboard = async () => {
     setClipboardError(null);
     setPasteError(null);
-    try {
-      const text = await navigator.clipboard.readText();
-      if (!text.trim()) {
-        setClipboardError("Your clipboard is empty. Copy the token from Terminal first.");
-        return;
-      }
-      setPastedToken(text);
-    } catch {
+    const text = await readTextFromClipboard();
+    if (text === null) {
       setClipboardError(
         "Could not read clipboard. Click in the box below and press Cmd+V (Mac) or Ctrl+V (Windows).",
       );
+      return;
     }
+    if (!text.trim()) {
+      setClipboardError("Your clipboard is empty. Copy the token from Terminal first.");
+      return;
+    }
+    setPastedToken(text);
   };
 
   const handleSaveToken = async () => {

@@ -1063,34 +1063,12 @@ export async function initializeOAuthIPC(
         return { success: true, source: "keychain" };
       }
 
-      // Step 1: Ensure Claude CLI is installed (uses shell PATH resolution)
-      const isInstalled = await claudeSetupTokenService!.isClaudeCLIInstalled();
-      if (!isInstalled) {
-        console.log("[OAuth IPC] Claude CLI not found, installing...");
-        trackOAuthStep("anthropic", "cli_install_started", { source: telemetrySource });
-        const installResult = await claudeSetupTokenService!.installClaudeCLI();
-        if (!installResult.success) {
-          console.error("[OAuth IPC] Failed to install Claude CLI:", installResult.error);
-          const message = "Could not install Claude CLI. Use Manual Setup instead.";
-          trackOAuthStep("anthropic", "cli_install_failed", {
-            source: telemetrySource,
-            error: installResult.error,
-          });
-          trackOAuthFailed("anthropic", message, { stage: "start", source: telemetrySource });
-          sendOAuthStatus("anthropic", "error", message);
-          return { success: false, error: "CLI install failed", fallback: "manual" };
-        }
-        console.log("[OAuth IPC] Claude CLI installed");
-      }
-
-      console.log("[OAuth IPC] Opening terminal with claude setup-token...");
-      const terminalOpened = await openClaudeSetupTokenTerminal();
-      trackOAuthStep("anthropic", "terminal_opened", {
-        source: telemetrySource,
-        terminal_opened: terminalOpened,
-      });
-
-      return { success: true, source: "terminal-opened", terminalOpened };
+      // No usable credentials. Do NOT install the CLI or open a Terminal here:
+      // the guided stepper owns install + `claude setup-token` + the paste.
+      // Opening a Terminal here as well gave users two sign-in sessions and
+      // a modal that restarted at step 1 (Settings → Connect bug).
+      trackOAuthStep("anthropic", "guided_setup_required", { source: telemetrySource });
+      return { success: true, source: "guided" };
     } catch (error) {
       console.error("[OAuth IPC] Failed to start Claude OAuth:", error);
       const message = error instanceof Error ? error.message : "Start OAuth failed";

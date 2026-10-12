@@ -541,3 +541,19 @@
     font-size: 15px;
   }
 }
+
+/* Back out of "Finishing sign-in" without quitting the app */
+.auth-wall-back {
+  background: none;
+  border: none;
+  padding: 4px 0;
+  margin-bottom: 4px;
+  color: var(--onb-mid, #636366);
+  font-size: 14px;
+  font-weight: 500;
+  cursor: pointer;
+}
+
+.auth-wall-back:hover {
+  color: var(--onb-ink, #1c1c1e);
+}
