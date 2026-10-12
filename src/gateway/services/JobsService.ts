@@ -2209,6 +2209,9 @@ export class JobsService {
             completedAt: updates.completedAt ?? now,
             lastRunAt: updates.lastRunAt ?? existing.lastRunAt ?? now,
             runSessionStartedAt: undefined,
+            // A successful run must not inherit a previous run's error. Cloud
+            // patches arrive terminal-only (no local "running" write to clear it).
+            ...(status === "completed" ? { error: updates.error } : {}),
             // Clear retry tracking on terminal states (if not overridden by updates)
             currentAttempt: updates.currentAttempt,
             maxAttempts: updates.maxAttempts,
