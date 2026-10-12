@@ -834,6 +834,16 @@ export function CommunityAppsView({
                   ? () => openCloudPreview(entry)
                   : undefined
             }
+            onOpenWeb={
+              entry.source === "cloud" && (entry.liveUrl || (entry.namespaceId && entry.slug))
+                ? () => openCloudPreview(entry)
+                : undefined
+            }
+            onOpenWebHover={
+              entry.source === "cloud" && (entry.liveUrl || (entry.namespaceId && entry.slug))
+                ? () => prefetchCloudPreview(entry, null)
+                : undefined
+            }
             onOpenHover={
               !localAppId && (entry.liveUrl || (entry.namespaceId && entry.slug))
                 ? () => prefetchCloudPreview(entry, localAppId)
@@ -1085,6 +1095,9 @@ interface CommunityAppCardProps {
   onCloudInstall: () => void;
   onOpen?: () => void;
   onOpenHover?: () => void;
+  /** The live web version (shown as "Open web" when you don't have a local copy). */
+  onOpenWeb?: () => void;
+  onOpenWebHover?: () => void;
   /** ⋯ menu (same component as My apps cards). */
   menu?: ReactNode;
 }
@@ -1098,8 +1111,9 @@ export function CommunityAppCard({
   onOssImport,
   onCloudInstall,
   onOpen,
-  onOpenHover,
   menu,
+  onOpenWeb,
+  onOpenWebHover,
 }: CommunityAppCardProps) {
 
   const rawReqs = entry.requirements ?? [];
@@ -1131,8 +1145,9 @@ export function CommunityAppCard({
       : requiresDesktop || !isCrossPlatform;
 
   const showInstall = canInstallCloudCatalogEntry(entry, localAppId);
-  /** Prefer local install over slow web preview when source is installable. */
-  const showWebOpen = Boolean(onOpen) && (!showInstall || Boolean(localAppId));
+  // Open = your copy on this computer. Open web = the live web app. Get = install.
+  const showLocalOpen = Boolean(localAppId) && Boolean(onOpen);
+  const showOpenWeb = !showLocalOpen && Boolean(onOpenWeb);
   const shareBadge = getCatalogShareBadge(entry);
   const installs = entry.installCount;
   // Everyone's installs (from Papr Cloud), not just the copies on this machine.
@@ -1244,29 +1259,33 @@ export function CommunityAppCard({
         <span className="ah-cat__by" title={installsLabel ?? byline}>{byline}</span>
         {entry.source === "cloud" ? (
           <>
-            {showWebOpen ? (
+            {showLocalOpen ? (
               <button
                 type="button"
                 className="ah-open"
                 onClick={onOpen}
-                title={
-                  installedForkCount > 1
-                    ? `${installedForkCount} copies in your library`
-                    : localAppId
-                      ? "Open your copy"
-                      : "Open on the web"
-                }
-                onMouseEnter={onOpenHover}
-                onFocus={onOpenHover}
+                title={installedForkCount > 1 ? `${installedForkCount} copies in your library` : "Open your copy"}
               >
                 Open
+              </button>
+            ) : null}
+            {showOpenWeb ? (
+              <button
+                type="button"
+                className="ah-open"
+                onClick={onOpenWeb}
+                title="Open the live web app"
+                onMouseEnter={onOpenWebHover}
+                onFocus={onOpenWebHover}
+              >
+                Open web
               </button>
             ) : null}
             {showInstall ? (
               <button
                 type="button"
                 className="ah-open ah-open--primary"
-                style={showWebOpen ? { marginLeft: 0 } : undefined}
+                style={showOpenWeb || showLocalOpen ? { marginLeft: 0 } : undefined}
                 onClick={onCloudInstall}
                 disabled={isInstalling}
                 aria-busy={isInstalling}
