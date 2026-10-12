@@ -52,9 +52,18 @@ describe("validateItems", () => {
 });
 
 describe("buildItemMemory / parseHits", () => {
+  it("still reads items written with the first release's separate keys", () => {
+    const [hit] = parseHits([{ id: "m9", content: "Old\nbody", customMetadata: {
+      content_type: APP_ITEM_CONTENT_TYPE, papr_app_ns: "ns", papr_app_slug: "s", papr_item_id: "v1", papr_item_title: "Old",
+      papr_item_view: "library", papr_item_args: '{"video":"v1"}' } }], 5);
+    expect(hit).toMatchObject({ id: "v1", title: "Old", view: "library", args: { video: "v1" } });
+  });
+
   it("round-trips the open info and skips non-app memories and duplicates", () => {
     const m = buildItemMemory(APP, validateItems([VIDEOS[0]])[0]);
     expect(m.customMetadata).toMatchObject({ content_type: APP_ITEM_CONTENT_TYPE, papr_app_slug: "scenario", papr_item_key: "85ZIB7mD1V/scenario/v1" });
+    // Fixed, small key set: every new customMetadata key becomes a vector-store payload index.
+    expect(Object.keys(m.customMetadata).sort()).toEqual(["content_type", "papr_app_ns", "papr_app_slug", "papr_item", "papr_item_key"]);
     const hits = parseHits([{ id: "x", content: "a chat note", customMetadata: {} }, { id: "m1", ...m }, { id: "m2", ...m }], 5);
     expect(hits).toEqual([{
       namespaceId: "85ZIB7mD1V", slug: "scenario", id: "v1", title: "This Was the Deck",
@@ -95,6 +104,19 @@ describe("index / query / remove", () => {
 });
 
 describe("httpMemoryPort", () => {
+  it("treats memory's 404 'No relevant items found' as an empty search, so the first index works", async () => {
+    const fetchImpl = (async (url: string, init: RequestInit) =>
+      String(url).includes("/search")
+        ? new Response(JSON.stringify({ code: 404, status: "error", error: "No relevant items found" }), { status: 404 })
+        : init.method === "DELETE"
+          ? new Response("{}", { status: 404 })
+          : new Response(JSON.stringify({ data: [{ memoryId: "m1" }] }), { status: 200 })) as unknown as typeof fetch;
+    const port = httpMemoryPort("https://memory.example", { sessionToken: "s" }, fetchImpl);
+    expect(await port.search("deck", {}, 10)).toEqual([]);
+    await expect(port.remove("gone")).resolves.toBeUndefined();
+    expect(await indexItems(port, APP, VIDEOS)).toEqual({ indexed: 2, replaced: 0, failed: [] });
+  });
+
   it("calls memory as the caller with the exact-match filter", async () => {
     const calls: Array<{ url: string; init: RequestInit }> = [];
     const fetchImpl = (async (url: string, init: RequestInit) => {

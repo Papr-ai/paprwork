@@ -2,13 +2,15 @@
  * App search: a mini-app's items (videos, leads, docs...) indexed in Papr Memory so Claude
  * and the app itself can find them by meaning, not exact title.
  *
- * Each item is one memory. Exact-match customMetadata ties it to the app and carries what a
- * caller needs to open it: the card view and its arguments, and a deep link.
+ * Each item is one memory. Exact-match customMetadata ties it to the app; one JSON field
+ * carries what a caller needs to open it (id, title, card view + args, deep link).
  *
- *   content_type  papr_app_item           papr_item_id    the app's own id
- *   papr_app_ns   publisher namespace      papr_item_key   ns/slug/id (upsert key)
- *   papr_app_slug published slug           papr_item_view  card view that opens it
- *   papr_item_args JSON args for that view papr_item_url   deep link into the app
+ *   content_type  papr_app_item          papr_item_key  ns/slug/id (upsert key)
+ *   papr_app_ns   publisher namespace     papr_item      JSON {id,title,view,args,url,updatedAt,appId}
+ *   papr_app_slug published slug
+ *
+ * Keep the key set small and fixed: the memory server creates a vector-store payload index
+ * for every distinct customMetadata key it sees.
  *
  * Pure functions only: no network, no SDK. The transports live in appSearchMemory.ts.
  */
@@ -129,18 +131,19 @@ export function appItemFilter(app?: Pick<AppRef, "namespaceId" | "slug">): Recor
 
 export function buildItemMemory(app: AppRef, item: AppSearchItem): { content: string; customMetadata: Record<string, string> } {
   const content = [item.title, app.title ? `In ${app.title}` : "", item.text ?? ""].filter(Boolean).join("\n");
-  const meta: Record<string, string> = {
-    ...appItemFilter(app),
-    papr_item_id: item.id,
-    papr_item_key: itemKey(app, item.id),
-    papr_item_title: item.title,
+  const packed = {
+    id: item.id,
+    title: item.title,
+    ...(item.view ? { view: item.view } : {}),
+    ...(item.args ? { args: item.args } : {}),
+    ...(item.url ? { url: item.url } : {}),
+    ...(item.updatedAt ? { updatedAt: item.updatedAt } : {}),
+    ...(app.appId ? { appId: app.appId } : {}),
   };
-  if (app.appId) meta.papr_app_id = app.appId;
-  if (item.view) meta.papr_item_view = item.view;
-  if (item.args) meta.papr_item_args = JSON.stringify(item.args);
-  if (item.url) meta.papr_item_url = item.url;
-  if (item.updatedAt) meta.papr_item_updated_at = item.updatedAt;
-  return { content, customMetadata: meta };
+  return {
+    content,
+    customMetadata: { ...appItemFilter(app), papr_item_key: itemKey(app, item.id), papr_item: JSON.stringify(packed) },
+  };
 }
 
 export interface MemoryHitLike {
@@ -149,15 +152,17 @@ export interface MemoryHitLike {
   customMetadata?: Record<string, unknown> | null;
 }
 
-const parseArgs = (raw: unknown): Record<string, ArgValue> | undefined => {
+const parseObj = <T extends object>(raw: unknown): T | undefined => {
   if (typeof raw !== "string" || !raw) return undefined;
   try {
     const v = JSON.parse(raw) as unknown;
-    return v && typeof v === "object" && !Array.isArray(v) ? (v as Record<string, ArgValue>) : undefined;
+    return v && typeof v === "object" && !Array.isArray(v) ? (v as T) : undefined;
   } catch {
     return undefined;
   }
 };
+
+interface Packed { id?: string; title?: string; view?: string; args?: Record<string, ArgValue>; url?: string }
 
 /** Memory results (best first) → one hit per item. Non-app memories are ignored. */
 export function parseHits(memories: readonly MemoryHitLike[], limit: number): AppSearchHit[] {
@@ -166,23 +171,31 @@ export function parseHits(memories: readonly MemoryHitLike[], limit: number): Ap
   for (const m of memories) {
     const meta = m.customMetadata ?? {};
     if (meta.content_type !== APP_ITEM_CONTENT_TYPE) continue;
-    const ns = String(meta.papr_app_ns ?? ""), slug = String(meta.papr_app_slug ?? ""), id = String(meta.papr_item_id ?? "");
+    // papr_item (JSON) today; the separate papr_item_* keys from the first release still parse.
+    const p: Packed = parseObj<Packed>(meta.papr_item) ?? {
+      id: meta.papr_item_id as string | undefined,
+      title: meta.papr_item_title as string | undefined,
+      view: meta.papr_item_view as string | undefined,
+      args: parseObj<Record<string, ArgValue>>(meta.papr_item_args),
+      url: meta.papr_item_url as string | undefined,
+    };
+    const ns = String(meta.papr_app_ns ?? ""), slug = String(meta.papr_app_slug ?? ""), id = String(p.id ?? "");
     if (!ns || !slug || !id) continue;
     const key = `${ns}/${slug}/${id}`;
     if (seen.has(key)) continue; // a stale copy mid-reindex, or a chunk of a long item
     seen.add(key);
-    const title = String(meta.papr_item_title ?? "") || (m.content ?? "").split("\n")[0] || id;
+    const title = String(p.title ?? "") || (m.content ?? "").split("\n")[0] || id;
     const body = (m.content ?? "").split("\n").slice(1).filter((l) => !l.startsWith("In ")).join(" ").trim();
-    const args = parseArgs(meta.papr_item_args);
+    const args = p.args && typeof p.args === "object" ? p.args : undefined;
     out.push({
       namespaceId: ns,
       slug,
       id,
       title,
       snippet: body.length > SNIPPET_MAX ? `${body.slice(0, SNIPPET_MAX - 1)}…` : body,
-      ...(typeof meta.papr_item_view === "string" ? { view: meta.papr_item_view } : {}),
+      ...(typeof p.view === "string" ? { view: p.view } : {}),
       ...(args ? { args } : {}),
-      ...(typeof meta.papr_item_url === "string" ? { url: meta.papr_item_url } : {}),
+      ...(typeof p.url === "string" ? { url: p.url } : {}),
       ...(m.id ? { memoryId: m.id } : {}),
     });
     if (out.length >= limit) break;
