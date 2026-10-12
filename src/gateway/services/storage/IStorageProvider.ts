@@ -204,6 +204,9 @@ export interface IStorageProvider {
     attribution: import("./turnAttribution.js").TurnAttribution,
   ): Promise<void>;
 
+  /** Unpack one saved turn's tool calls into turn_facts (local DB only). */
+  recordTurnFacts?(messageId: string): Promise<void>;
+
   /** Agents page payload (local DB only). */
   getAgentsOverview?(
     days?: number,

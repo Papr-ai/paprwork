@@ -8,30 +8,9 @@ import type {
   AgentsOverviewChat,
   AgentsOverviewProject,
 } from "../../../core/types/agentsOverview.js";
-import { inferTurnTargets } from "../storage/turnAttribution.js";
 import type { OverviewChatMeta, OverviewRow } from "./overviewRows.js";
 
-export const BASH_INTENTS: Array<[string, RegExp]> = [
-  ["sqlite", /\bsqlite3\b/],
-  ["curl", /\bcurl\s/],
-  ["git", /(^|[\s;&|(])(git|gh)\s/],
-  ["Build / test", /\b(npm|npx|pnpm|yarn|tsc|vitest|esbuild|jest|pytest)\b/],
-  ["Scripts", /\b(python3?|node|tsx|deno|bun)\s/],
-  ["Search", /(^|[\s;&|(])(rg|grep|find|fd|ag)\s/],
-  ["Read files", /(^|[\s;&|(])(sed -n|cat|head|tail|wc|less)\s/],
-  ["List / navigate", /^\s*(ls|cd|pwd|tree)\b/],
-];
-
-export function bashIntent(command: string): string {
-  const c = command.toLowerCase();
-  for (const [label, re] of BASH_INTENTS) if (re.test(c)) return label;
-  return "Other";
-}
-
-const EDIT_TOOLS = new Set(["edit_file", "write_file", "edit_app_file_lines", "edit_app_file"]);
-const BUILD_TOOLS = new Set(["create_app"]);
-const DATA_TOOLS = new Set(["create_job", "run_job", "update_job", "create_database", "attach_database"]);
-const TEST_RE = /\b(npm|npx|pnpm|tsc|vitest|jest|pytest|esbuild)\b/;
+export { bashIntent } from "./turnFacts.js";
 
 type Split = [number, number, number, number];
 
@@ -75,7 +54,6 @@ export interface AggregateInput {
   appTitles: Map<string, string>;
   /** chatId → Jev work-type label, for chats already classified. */
   workTypes: Map<string, string>;
-  paprRoot?: string;
   chatLimit?: number;
 }
 
@@ -149,17 +127,21 @@ export function aggregateOverview(input: AggregateInput): AgentsOverview {
 
     const names = (r.tools ?? "").split(",").filter(Boolean);
     for (const n of names) toolCounts.set(n, (toolCounts.get(n) ?? 0) + 1);
-    const bashCommands = (r.bash ?? "").split("\u001e").filter(Boolean);
-    for (const cmd of bashCommands) {
-      const k = bashIntent(cmd);
-      bashCounts.set(k, (bashCounts.get(k) ?? 0) + 1);
+    if (r.bash_intents) {
+      try {
+        for (const [k, n] of Object.entries(JSON.parse(r.bash_intents) as Record<string, number>)) {
+          bashCounts.set(k, (bashCounts.get(k) ?? 0) + n);
+        }
+      } catch {
+        /* a malformed fact row only loses its bash split */
+      }
     }
 
-    // Project attribution: recorded columns first, then inference from tool args.
+    // Project attribution: recorded columns first, then the stored inference.
     const recorded = Boolean(r.app_id || r.repo);
     const inferred = recorded
       ? { appId: r.app_id, repo: r.repo }
-      : inferTurnTargets((r.targets ?? "").split("\n"), { paprRoot: input.paprRoot });
+      : { appId: r.fact_app_id, repo: r.fact_repo };
     let { appId, repo } = inferred;
     if (appId && !appTitles.has(appId)) appId = null;
     let discussion = false;
@@ -171,12 +153,12 @@ export function aggregateOverview(input: AggregateInput): AgentsOverview {
     if (recorded) recordedCost += r.cost;
     where[appId && repo ? "both" : appId ? "app" : repo ? "repo" : "none"] += r.cost;
 
-    const hasEdit = names.some((n) => EDIT_TOOLS.has(n));
-    const hasTest = TEST_RE.test(r.bash ?? "");
+    const hasEdit = r.has_edit === 1;
+    const hasTest = r.has_test === 1;
     if (appId) {
       const p = acc(apps, appId, appTitles.get(appId) ?? appId);
-      const slot = discussion ? 3 : names.some((n) => BUILD_TOOLS.has(n)) ? 0
-        : names.some((n) => DATA_TOOLS.has(n)) && !hasEdit ? 2 : 1;
+      const slot = discussion ? 3 : r.has_build === 1 ? 0
+        : r.has_data === 1 && !hasEdit ? 2 : 1;
       p.split[slot] += r.cost; p.tokens += tokens; p.turns += 1; p.chats.add(r.chat_id);
     }
     if (repo) {

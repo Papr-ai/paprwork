@@ -1108,6 +1108,7 @@ export class AgentService {
             appId: targets.appId ?? options?.focusContext?.activeApp?.appId ?? null,
             repo: targets.repo,
           });
+          await storage.recordTurnFacts?.(assistantMessageId);
         }
 
         const { getGatewayTelemetry } = await import("./gatewayTelemetry.js");

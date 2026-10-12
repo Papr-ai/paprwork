@@ -120,6 +120,10 @@ export class HybridStorageProvider implements IStorageProvider {
     return this.local.recordTurnAttribution(messageId, attribution);
   }
 
+  recordTurnFacts(messageId: string): Promise<void> {
+    return this.local.recordTurnFacts(messageId);
+  }
+
   getAgentsOverview(days?: number) {
     return this.local.getAgentsOverview(days);
   }

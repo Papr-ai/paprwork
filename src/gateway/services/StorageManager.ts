@@ -314,6 +314,11 @@ export class StorageManager {
     await provider.recordTurnAttribution?.(messageId, attribution);
   }
 
+  async recordTurnFacts(messageId: string): Promise<void> {
+    const provider = this.ensureInitialized();
+    await provider.recordTurnFacts?.(messageId);
+  }
+
   async getAgentsOverview(days?: number) {
     await this.awaitReady();
     const provider = this.ensureInitialized();

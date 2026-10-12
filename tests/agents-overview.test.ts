@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
 import { aggregateOverview, bashIntent } from "../src/gateway/services/agentsOverview/aggregateOverview.js";
+import { computeTurnFact } from "../src/gateway/services/agentsOverview/turnFacts.js";
 import type { OverviewRow } from "../src/gateway/services/agentsOverview/overviewRows.js";
 import { billingFor, inferTurnTargets } from "../src/gateway/services/storage/turnAttribution.js";
 
@@ -23,8 +24,13 @@ function row(partial: Partial<OverviewRow>): OverviewRow {
     app_id: null,
     repo: null,
     tools: null,
-    targets: null,
-    bash: null,
+    bash_intents: null,
+    fact_app_id: null,
+    fact_repo: null,
+    has_edit: 0,
+    has_test: 0,
+    has_build: 0,
+    has_data: 0,
     ...partial,
   };
 }
@@ -88,8 +94,8 @@ describe("aggregateOverview", () => {
     const o = aggregateOverview({
       ...base,
       rows: [
-        row({ tools: "create_app", targets: `/apps/${APP}/index.html`, cost: 2 }),
-        row({ tools: "edit_file", targets: `/apps/${APP}/app.ts`, cost: 3 }),
+        row({ tools: "create_app", fact_app_id: APP, has_build: 1, cost: 2 }),
+        row({ tools: "edit_file", fact_app_id: APP, has_edit: 1, cost: 3 }),
         row({ cost: 4 }),
       ],
     });
@@ -102,7 +108,7 @@ describe("aggregateOverview", () => {
   it("prefers recorded columns over inference", () => {
     const o = aggregateOverview({
       ...base,
-      rows: [row({ repo: "memory", targets: "/Users/a/Documents/GitHub/paprwork-v2/x.ts" })],
+      rows: [row({ repo: "memory", fact_repo: "paprwork-v2" })],
     });
     expect(o.projects.repos.map((r) => r.name)).toEqual(["memory"]);
     expect(o.projects.recordedShare).toBe(1);
@@ -111,8 +117,29 @@ describe("aggregateOverview", () => {
   it("ignores ids that are not installed apps", () => {
     const o = aggregateOverview({
       ...base,
-      rows: [row({ targets: "/apps/00000000-1111-2222-3333-444444444444/a.ts" })],
+      rows: [row({ fact_app_id: "00000000-1111-2222-3333-444444444444" })],
     });
     expect(o.projects.apps).toEqual([]);
+  });
+});
+
+describe("turn facts", () => {
+  it("reduces a turn's tool calls once into a fact row", () => {
+    const f = computeTurnFact({
+      id: "m1",
+      tools: "bash,edit_file,bash",
+      targets: `/Users/a/Documents/GitHub/paprwork-v2/ui/App.tsx\n/Users/a/Papr/apps/${APP}/x.ts`,
+      bash: ["rg -n foo src", "npx vitest run"].join("\u001e"),
+    });
+    expect(f).toMatchObject({ appId: APP, repo: "paprwork-v2", hasEdit: true, hasTest: true, hasBuild: false });
+    expect(f.bashIntents).toEqual({ Search: 1, "Build / test": 1 });
+  });
+
+  it("sums stored bash intents across turns", () => {
+    const o = aggregateOverview({
+      ...base,
+      rows: [row({ bash_intents: '{"Search":2,"git":1}' }), row({ bash_intents: '{"Search":1}' })],
+    });
+    expect(o.tools.bash).toEqual([["Search", 3], ["git", 1]]);
   });
 });
