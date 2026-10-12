@@ -51,6 +51,7 @@ interface UpdateAppPayload {
   title?: string;
   description?: string;
   icon?: string;
+  headline?: string;
 }
 
 interface DeleteAppPayload {
@@ -291,6 +292,15 @@ export async function setupAppHandlers(
         const payload = message.payload as UpdateAppPayload;
         const { appId, ...updates } = payload;
         const app = await appService.updateApp(appId, updates);
+        if (updates.headline !== undefined) {
+          void (async () => {
+            const { getCloudAppPublishService } = await import("../services/CloudAppPublishService.js");
+            const publish = getCloudAppPublishService();
+            if ((await publish.getCloudPublishStatus(appId)).published) {
+              await publish.updateCatalogMetadata(appId, { preserveCloudSharing: true });
+            }
+          })().catch((err) => console.warn(`[Gateway] headline catalog sync failed for ${appId.slice(0, 8)}…`, err));
+        }
         ws.send(
           JSON.stringify({
             id: message.id,

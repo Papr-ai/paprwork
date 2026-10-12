@@ -140,6 +140,7 @@ function loadAppCatalogMeta(paprDir: string): Map<
     icon?: string;
     createdAt?: string;
     tags?: string[];
+    headline?: string;
   }
 > {
   const meta = new Map<
@@ -150,6 +151,7 @@ function loadAppCatalogMeta(paprDir: string): Map<
       icon?: string;
       createdAt?: string;
       tags?: string[];
+      headline?: string;
     }
   >();
   try {
@@ -162,6 +164,7 @@ function loadAppCatalogMeta(paprDir: string): Map<
           icon?: string;
           createdAt?: string;
           tags?: string[];
+          headline?: string;
         }>
       | Record<
           string,
@@ -172,6 +175,7 @@ function loadAppCatalogMeta(paprDir: string): Map<
             icon?: string;
             createdAt?: string;
             tags?: string[];
+            headline?: string;
           }
         >;
     const list = Array.isArray(parsed) ? parsed : Object.values(parsed);
@@ -183,6 +187,7 @@ function loadAppCatalogMeta(paprDir: string): Map<
           icon: app.icon,
           createdAt: app.createdAt,
           tags: normalizeCatalogTags(app.tags),
+          headline: app.headline?.trim() || "",
         });
       }
     }
@@ -463,6 +468,7 @@ export class CloudAppPublishService {
       catalogDescription: appMeta?.description,
       catalogIcon: catalogIconResult.icon,
       catalogTags: appMeta?.tags,
+      catalogHeadline: appMeta?.headline,
       catalogCategory: publishCategory(appId),
       catalogAutomation,
       shareAllowlist: memoryShareAllowlistBodyFromPrefs(prefs),
@@ -650,6 +656,8 @@ export class CloudAppPublishService {
       catalogIcon?: string;
       catalogTags?: string[];
       catalogCategory?: string;
+      /** "" clears; undefined leaves the published headline as is. */
+      catalogHeadline?: string;
       catalogAutomation?: CatalogAutomation | null;
       shareAllowlist?: ReturnType<typeof memoryShareAllowlistBodyFromPrefs>;
     },
@@ -698,6 +706,7 @@ export class CloudAppPublishService {
           ...(body.catalogIcon ? { catalogIcon: body.catalogIcon } : {}),
           ...(body.catalogTags?.length ? { catalogTags: body.catalogTags } : {}),
           ...(body.catalogCategory ? { catalogCategory: body.catalogCategory } : {}),
+          ...(body.catalogHeadline !== undefined ? { catalogHeadline: body.catalogHeadline } : {}),
           ...(body.catalogPlatform?.length
             ? { catalogPlatform: body.catalogPlatform }
             : {}),
@@ -1092,6 +1101,7 @@ export class CloudAppPublishService {
           catalogDescription: appMeta?.description,
           catalogIcon: catalogIconResult.icon,
           catalogTags: appMeta?.tags,
+          catalogHeadline: appMeta?.headline,
           catalogCategory: publishCategory(appId),
           catalogPlatform: manifestPlatform,
           catalogRequiresDesktop: manifestRequiresDesktop,
