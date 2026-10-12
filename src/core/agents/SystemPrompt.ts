@@ -2282,6 +2282,7 @@ delegate_task({
 
 **Plan A cloud DB (Product Architect must specify when linked DBs + cloud sync):**
 - List each schema change in §2 Shared SQLite. **Create migrations with \`papr_db_create_migration({ dbId, name, sql })\`** — the system assigns the filename (\`NNNN_YYYYMMDDHHMMSS_name.sql\`) and applies it. Never write migration files or pick numbers/timestamps yourself; never rename existing ones. Never hard-code a user id in SQL — use \`'{{papr.owner_user_id}}'\` (filled with the DB owner at apply time).
+- **Never hard-code the app's own id** in app or job code — every install gets a new id, and \`validate_app\` / \`validate_job\` reject it. Frontend \`/api/*\` calls (db, access, backend actions, jobs, client-keys) need no \`appId\`: the platform resolves the calling app. Backend handlers and job scripts read \`PAPR_APP_ID\` (no hard-coded fallback). Job commands and agent-job prompts use \`{{papr.app_id}}\`.
 - Schema path: \`papr_db_create_migration({ dbId, name, sql })\` (re-apply existing files with \`papr_db_apply_migration\`) — replica apply → Turso primary (HTTP) → pull align (never DDL via replica push)
 - Row path: \`/api/db/write\` or job \`$PAPR_DB_*\` — DML only; Publish / Publish changes / \`push_cloud_sync({ appId })\` for git + replica push
 - Schema recovery: \`papr_db_migration_parity\` → \`papr_db_reconcile_sync\` (\`repair_sidecar_wedge\`, \`pull_and_align\`, \`dedupe_migration_ledger\` for legacy \`0001_foo\` + \`0001_foo.sql\` duplicates) or explicit \`papr_db_apply_migration_replica\` + \`papr_db_apply_migration_cloud\`. Row recovery (in order): \`repair_cloud_sync({ strategy: 'pull' })\` → \`papr_db_reconcile_sync({ action: 'repair_sidecar_wedge' })\` (auto full reseed if WAL I/O persists) → \`repair_cloud_sync({ strategy: 'accept_cloud' })\` only when Turso has the rows you need (wipes unpushed local data). **Local has rows, Turso empty** (cross-namespace copy, mistaken \`bootstrap_remote\`, stale sidecars): restore \`data.db\` from \`.pre-replica.bak\` / \`.sync-backup\` if needed → strip replica sidecars → \`papr_db_apply_migration_cloud\` + \`papr_db_push\` — **not** \`bootstrap_remote\` (reseed wipes local when Turso stays empty). **not** \`merge_lww\` (deprecated; only rebases ledger)
@@ -2517,7 +2518,7 @@ con.close()
 // Frontend — optional params.sourceId overrides manifest
 await fetch('/api/app/backend/save-invoice', {
   method: 'POST',
-  body: JSON.stringify({ appId, params: { sourceId: 'billing', amount: '100' } }),
+  body: JSON.stringify({ params: { sourceId: 'billing', amount: '100' } }),
 })
 \`\`\`
 
@@ -2612,7 +2613,6 @@ await fetch('/api/app/backend/claim-passcode', {
   method: 'POST',
   headers: { 'Content-Type': 'application/json' },
   body: JSON.stringify({
-    appId: APP_ID,
     params: { passcode: 'ABC123' },  // business params only — never userId for ACL
   }),
 });
@@ -2950,10 +2950,10 @@ Mini-apps **can** persist to linked job SQLite databases. The gateway splits thi
 
 \`\`\`typescript
 // Read — pass sourceId (alias from attach_database)
-await fetch('/api/db/query', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ appId, sourceId: 'billing', sql: 'SELECT * FROM items WHERE id = ?', params: [id] }) });
+await fetch('/api/db/query', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ sourceId: 'billing', sql: 'SELECT * FROM items WHERE id = ?', params: [id] }) });
 
 // Write — same sourceId, different endpoint
-await fetch('/api/db/write', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ appId, sourceId: 'billing', sql: 'INSERT INTO queue (prompt, created_at) VALUES (?, datetime("now"))', params: [prompt] }) });
+await fetch('/api/db/write', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ sourceId: 'billing', sql: 'INSERT INTO queue (prompt, created_at) VALUES (?, datetime("now"))', params: [prompt] }) });
 \`\`\`
 
 When only one DB is linked, \`sourceId\` may be omitted. With multiple linked DBs, **always** pass \`sourceId\`.
@@ -3214,7 +3214,7 @@ if (!userId) throw new Error("Sign in required");
 
 **Frontend params (REQUIRED shape):**
 \`\`\`typescript
-body: JSON.stringify({ appId, params: { limit: '50' } })  // → PAPR_ACTION_PARAMS JSON
+body: JSON.stringify({ params: { limit: '50' } })  // → PAPR_ACTION_PARAMS JSON
 \`\`\`
 Flat fields in the POST body are **not** passed to the handler — use nested \`params\`.
 
@@ -3223,7 +3223,7 @@ Flat fields in the POST body are **not** passed to the handler — use nested \`
 const res = await fetch('/api/app/backend/fetch-attention-calls', {
   method: 'POST',
   headers: { 'Content-Type': 'application/json' },
-  body: JSON.stringify({ appId, params: { limit: '50' } }),
+  body: JSON.stringify({ params: { limit: '50' } }),
 });
 const { stdout, stderr, exitCode } = await res.json();
 \`\`\`
@@ -3246,7 +3246,7 @@ const { stdout, stderr, exitCode } = await res.json();
 const { keys } = await fetch('/api/credentials/client-keys', {
   method: 'POST',
   headers: { 'Content-Type': 'application/json' },
-  body: JSON.stringify({ appId: APP_ID, names: ['GOOGLE_MAPS_KEY'] }),
+  body: JSON.stringify({ names: ['GOOGLE_MAPS_KEY'] }),
 }).then(r => r.json());
 await fetch(\`https://maps.googleapis.com/...\${keys.GOOGLE_MAPS_KEY}\`);
 \`\`\`

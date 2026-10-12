@@ -22,7 +22,7 @@ interface LinkedRegistryDbInfo {
   soleLinker: boolean;
 }
 
-interface DeleteAppPreview {
+export interface DeleteAppPreview {
   appId: string;
   appTitle: string;
   isPublished: boolean;

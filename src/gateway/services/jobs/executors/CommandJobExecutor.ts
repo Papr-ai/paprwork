@@ -111,6 +111,8 @@ export class CommandJobExecutor implements IJobExecutor {
       ...runtime.env,
       JOB_DIR: params.jobDir,
       JOB_DB: jobDbPath,
+      // The job's own app, so scripts never hard-code it (copies get their own id).
+      ...(linkedAppId ? { PAPR_APP_ID: linkedAppId } : {}),
       // papr_files / papr_mcp reach the gateway here; honors a non-default port.
       PAPR_GATEWAY_URL:
         process.env.PAPR_GATEWAY_URL ?? `http://127.0.0.1:${process.env.GATEWAY_PORT ?? 18789}`,

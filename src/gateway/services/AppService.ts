@@ -2230,7 +2230,7 @@ export class AppService {
     if (!hasDbTs) {
       await fs.writeFile(
         path.join(appPath, "db.ts"),
-        buildAppDbTsContent(app.id, []),
+        buildAppDbTsContent([]),
         "utf8",
       );
     }
@@ -3817,6 +3817,14 @@ export class AppService {
       console.warn("[AppService] Emoji lint failed:", lintError);
     }
     try {
+      // Refresh the generated db.ts first so older apps drop their baked-in id.
+      await this.ensureAppDbTs(appId).catch(() => undefined);
+      const { checkOwnAppIdLiterals } = await import("../utils/ownAppIdLiteralLint.js");
+      issues.push(...(await checkOwnAppIdLiterals(appPath, appId)));
+    } catch (lintError) {
+      console.warn("[AppService] Own app id lint failed:", lintError);
+    }
+    try {
       const { checkMiniAppNativeDialogPatterns } = await import(
         "../utils/miniAppNativeDialogLint.js"
       );
@@ -4793,14 +4801,13 @@ export class AppService {
     const appPath = path.join(this.appsDir, appId);
     const dbTsPath = path.join(appPath, "db.ts");
     const content = buildAppDbTsContent(
-      appId,
       config.sources.map((s) => ({ alias: s.alias })),
     );
 
     try {
       await fs.access(dbTsPath);
       const existing = await fs.readFile(dbTsPath, "utf8");
-      if (existing.includes("APP_ID") && existing.includes(appId) && existing === content) {
+      if (existing === content) {
         return;
       }
     } catch {
