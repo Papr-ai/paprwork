@@ -226,4 +226,11 @@ describe("cards.json carries the action spec", () => {
     const cards = JSON.parse(await readFile(path.join(dir, "dist", "cards", "cards.json"), "utf8"));
     expect(cards.views.draft.actionSpec).toEqual({ name: "draft", description: "Draft a reply", effect: "write", input });
   });
+
+  it("custom-card views declare their action's inputs and hand the args to the card", () => {
+    const [t] = planAppTools([app("x", { lib: { entry: "cards/lib.ts", action: "list", actionSpec: { name: "list", input: { type: "object", properties: { video: { type: "string", description: "Title or id" } } } } } as never })]);
+    expect(Object.keys(inputSchemaToZodShape(t.input, t.requireInput))).toEqual(["video"]);
+    const r = toolResultFor(t, { video: "This Was the Deck" }, "https://apps.example");
+    expect(r.structuredContent.data).toEqual({ video: "This Was the Deck" });
+  });
 });
