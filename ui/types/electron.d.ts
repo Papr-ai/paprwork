@@ -137,8 +137,21 @@ export interface ElectronAPI {
             success: true;
             data: import("../../src/core/services/claudeOAuthUsage").ClaudeUsageLimitsSnapshot;
           }
-        | { success: false; error: string; httpStatus?: number }
+        | {
+            success: false;
+            error: string;
+            httpStatus?: number;
+            /** Setup-token can't read usage; a `claude auth login` would fix it. */
+            needsClaudeLogin?: boolean;
+            detail?: string;
+          }
       >;
+      /** Opens Terminal on `claude auth login` (plan usage only). */
+      openAuthLoginTerminal?: () => Promise<{
+        success: boolean;
+        command?: string;
+        error?: string;
+      }>;
       trySyncFromStorage: (options?: {
         source?: "settings" | "onboarding" | "unknown";
       }) => Promise<{
