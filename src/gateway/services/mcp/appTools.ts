@@ -12,7 +12,7 @@
 import { z, type ZodTypeAny } from "zod";
 import type { AppBackendInputSchema } from "../../../core/types/appBackend.js";
 import type { CardsManifestView } from "./cardBuild.js";
-import type { ClaudeApp } from "./catalog.js";
+import { type ClaudeApp, withSvgNs } from "./catalog.js";
 import { MAX_TOOLS_PER_APP, routingLead } from "./routing.js";
 
 /** ~15 apps × 3 views. Past this, apps are reachable via papr_list_apps / instructions. */
@@ -138,7 +138,7 @@ export function toolResultFor(tool: AppToolSpec, args: Record<string, unknown>, 
       slug: app.slug,
       title,
       ...(app.author ? { publisher: app.author } : {}),
-      ...(app.icon ? { icon: app.icon } : {}),
+      ...(app.icon ? { icon: withSvgNs(app.icon) } : {}),
       openUrl: `${appsBaseUrl}/${app.namespaceId}/${app.slug}`,
       view,
       data,
