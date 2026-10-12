@@ -30,7 +30,7 @@ import {
 } from "../../utils/appsLibrary";
 import { CreateAppModal } from "./CreateAppModal";
 import { CopyAppModal } from "./CopyAppModal";
-import { DeleteAppModal } from "./DeleteAppModal";
+import { DeleteAppModal, type DeleteAppPreview } from "./DeleteAppModal";
 import { usePaprNamespace } from "../../hooks/usePaprNamespace";
 import "./AppsView.css";
 import type { Artifact } from "../../stores/artifactsStore";
@@ -102,14 +102,9 @@ export function AppsView() {
   const [publishRevision, setPublishRevision] = useState(0);
   const [showCreateModal, setShowCreateModal] = useState(false);
   const [copyAppTarget, setCopyAppTarget] = useState<Artifact | null>(null);
-  const [deletePreview, setDeletePreview] = useState<{
-    appId: string;
-    appTitle: string;
-    isPublished: boolean;
-    shareUrl?: string | null;
-    linkedJobs: Array<{ id: string; name: string; type: string; hasTursoDb?: boolean }>;
-    tursoDbCount: number;
-  } | null>(null);
+  const [deletePreview, setDeletePreview] = useState<DeleteAppPreview | null>(
+    null,
+  );
   const [deleteModalError, setDeleteModalError] = useState<string | null>(null);
   const [otherNamespaceCount, setOtherNamespaceCount] = useState(0);
   const [otherOrganizationCount, setOtherOrganizationCount] = useState(0);
@@ -519,9 +514,7 @@ export function AppsView() {
     window.addEventListener("keydown", onKey);
     return () => window.removeEventListener("keydown", onKey);
   }, []);
-  const searchPlaceholder = showNamespaceTabs
-    ? `Search your apps, ${papr.namespaceName?.trim() || "your team"} and the community`
-    : "Search your apps and the community";
+  const searchPlaceholder = "Search apps";
 
   return (
     <div className="apps-view">
