@@ -416,7 +416,6 @@ export function dbHasOnlyBaselineTables(dbPath: string): boolean {
 }
 
 export function buildAppDbTsContent(
-  appId: string,
   sources: ReadonlyArray<{ alias: string }>,
 ): string {
   const aliases = sources.map((s) => s.alias);
@@ -425,8 +424,10 @@ export function buildAppDbTsContent(
       ? `export const DB_SOURCES = ${JSON.stringify(aliases)} as const;\nexport type DbSourceId = (typeof DB_SOURCES)[number];\n`
       : "";
 
-  return `const APP_ID = '${appId}';
-${aliasConst}
+  // No app id in the file: the gateway (desktop) and apps.papr.ai both work
+  // out the calling app from the request, so the same db.ts runs in every
+  // copy and nothing has to be rewritten at install or proposal time.
+  return `${aliasConst}
 export async function query<T>(
   sql: string,
   params: unknown[] = [],
@@ -435,7 +436,7 @@ export async function query<T>(
   const res = await fetch('/api/db/query', {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ appId: APP_ID, sourceId, sql, params }),
+    body: JSON.stringify({ sourceId, sql, params }),
   });
   const json = (await res.json()) as { rows?: T[]; error?: string };
   if (!res.ok) {
@@ -452,7 +453,7 @@ export async function exec(
   const res = await fetch('/api/db/write', {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ appId: APP_ID, sourceId, sql, params }),
+    body: JSON.stringify({ sourceId, sql, params }),
   });
   const json = (await res.json()) as { error?: string };
   if (!res.ok) {

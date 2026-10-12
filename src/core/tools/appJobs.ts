@@ -4180,6 +4180,32 @@ export const validateJobTool = createTool({
         });
       }
     }
+    if (job) {
+      const { primaryAppId } = await import("../../gateway/services/jobs/appIdPlaceholder.js");
+      const {
+        findOwnAppIdLiterals,
+        findOwnAppIdLines,
+        OWN_APP_ID_REMEDIATION,
+        OWN_APP_ID_RULE,
+      } = await import("../../gateway/utils/ownAppIdLiteralLint.js");
+      const ownAppId = primaryAppId(job.appIds);
+      if (ownAppId) {
+        const inCommand = findOwnAppIdLines(job.command ?? "", ownAppId).length > 0;
+        const inScripts = await findOwnAppIdLiterals(await getJobDir(args.jobId), ownAppId);
+        if (inCommand || inScripts.length > 0) {
+          const where = [
+            ...(inCommand ? ["command/prompt"] : []),
+            ...inScripts.map((h) => `${h.file}:${h.line}`),
+          ].join(", ");
+          issues.push({
+            rule: OWN_APP_ID_RULE,
+            severity: "error",
+            message: `Hard-coded app id ${ownAppId} in ${where} — copies of the app get a different id.`,
+            remediation: OWN_APP_ID_REMEDIATION,
+          });
+        }
+      }
+    }
     const errors = issues.filter((issue) => issue.severity === "error");
     return {
       success: errors.length === 0,

@@ -259,7 +259,7 @@ if __name__ == "__main__":
 const res = await fetch('/api/app/backend/students', {
   method: 'POST',
   headers: { 'Content-Type': 'application/json' },
-  body: JSON.stringify({ appId: APP_ID, params: { action: 'list', classId: '1' } }),
+  body: JSON.stringify({ params: { action: 'list', classId: '1' } }),
 });
 ```
 

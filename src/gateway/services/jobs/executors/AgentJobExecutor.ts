@@ -268,6 +268,8 @@ export class AgentJobExecutor implements IJobExecutor {
       JOB_DIR: params.jobDir,
       ...runtime.env,
       ...(jobDbPath ? { JOB_DB: jobDbPath } : {}),
+      // The job's own app, so scripts never hard-code it (copies get their own id).
+      ...(linkedAppId ? { PAPR_APP_ID: linkedAppId } : {}),
       ...(writeTargets.length > 0
         ? jobWriteDatabaseEnv(writeTargets, linkedAppId)
         : {}),

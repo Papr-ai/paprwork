@@ -285,7 +285,6 @@ const { results } = await fetch('/api/db/batch', {
   method: 'POST',
   headers: { 'Content-Type': 'application/json' },
   body: JSON.stringify({
-    appId: APP_ID,
     statements: [
       { sourceId: 'main', sql: 'SELECT COUNT(*) AS n FROM people WHERE active = 1', params: [] },
       { sourceId: 'main', sql: 'SELECT * FROM cycles ORDER BY started_at DESC LIMIT 1', params: [] },
@@ -307,7 +306,6 @@ const { atomic, results } = await fetch('/api/db/write-batch', {
   method: 'POST',
   headers: { 'Content-Type': 'application/json' },
   body: JSON.stringify({
-    appId: APP_ID,
     statements: [
       { sourceId: 'main', sql: 'INSERT INTO log (msg) VALUES (?)', params: ['step 1'] },
       { sourceId: 'main', sql: 'UPDATE counters SET n = n + 1 WHERE id = ?', params: [1] },
@@ -438,7 +436,7 @@ Use **`papr_db.connect()` only** — never `sqlite3.connect(APP_DB)` (cloud has 
 const res = await fetch('/api/app/backend/fetch-attention-calls', {
   method: 'POST',
   headers: { 'Content-Type': 'application/json' },
-  body: JSON.stringify({ appId, params: { limit: '50' } }),
+  body: JSON.stringify({ params: { limit: '50' } }),
 });
 const { stdout, stderr, exitCode } = await res.json();
 ```
@@ -641,8 +639,8 @@ webview_execute({ script: "fetch('/api/jobs/run', ...)" })  // ← DO NOT do thi
 // RIGHT: use the built-in gateway APIs directly in app code
 fetch('/api/jobs/run', { method: 'POST', body: JSON.stringify({ jobId: 'my-job' }) })
 fetch('/api/bash/run', { method: 'POST', body: JSON.stringify({ command: 'sqlite3 ...' }) })
-fetch('/api/db/query', { method: 'POST', body: JSON.stringify({ appId, sql }) })
-fetch('/api/db/write', { method: 'POST', body: JSON.stringify({ appId, sql, params }) })
+fetch('/api/db/query', { method: 'POST', body: JSON.stringify({ sql }) })
+fetch('/api/db/write', { method: 'POST', body: JSON.stringify({ sql, params }) })
 ```
 
 ### ✅ Testing endpoints before wiring them into the app
@@ -779,7 +777,7 @@ This creates `data-sources.json` in the app folder (synced to git). **Required f
 
 ```javascript
 // App or agent can call:
-const res = await fetch('/api/db/schema?appId=APP_ID');
+const res = await fetch('/api/db/schema');
 const { sources } = await res.json();
 // sources[0].tables → [{ table: "threads", columns: [...] }]
 ```
@@ -920,7 +918,7 @@ async function listAudits() {
   return fetch('/api/db/query', {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ appId: APP_ID, sourceId: 'primary', sql, params }),
+    body: JSON.stringify({ sourceId: 'primary', sql, params }),
   }).then(r => r.json());
 }
 
@@ -931,7 +929,6 @@ if (access.isOwner) renderAdminTab();
 
 ```typescript
 // app.ts — reads from linked SQLite job database
-const APP_ID = 'your-app-id-here';
 
 interface Thread { id: number; title: string; score: number; subreddit: string; }
 
@@ -940,7 +937,6 @@ async function fetchThreads(): Promise<Thread[]> {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({
-      appId: APP_ID,
       sql: 'SELECT id, title, score, subreddit FROM threads ORDER BY score DESC LIMIT 100'
     })
   });
