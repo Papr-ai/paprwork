@@ -8,8 +8,21 @@ import { useAppCategories } from "../../hooks/useAppCategories";
 import { CategoryPills, matchesCategory } from "./CategoryPills";
 import type { Artifact } from "../../stores/artifactsStore";
 import type { AppsHealthMap } from "../../../src/core/utils/appsHealth";
-import { AppCard, type AppStatus } from "./AppCard";
-import { appStatusLine } from "../../utils/appStatusLine";
+import type { AppStatus } from "./AppCard";
+import { AppTile, type TileDnd } from "./HomeTiles";
+import { HomeMenu, type HomeMenuItem } from "./HomeMenu";
+import { homeStatus } from "../../utils/homeStatus";
+import { relativeWhen } from "../../utils/appsHome";
+import "./AppsHome.css";
+
+const NO_DND: TileDnd = {
+  dragging: null,
+  hover: null,
+  onDragStart: () => undefined,
+  onDragOver: () => undefined,
+  onDrop: () => undefined,
+  onDragEnd: () => undefined,
+};
 import type { ShareGlyph } from "../../utils/shareGlyph";
 import {
   duplicateKey,
@@ -74,7 +87,7 @@ export function LibraryPane(props: LibraryPaneProps) {
   );
 
   // Broad category pills (Jev-sorted). Reset when the section changes.
-  const { snapshot: cats, sorting, assign: assignCategory } = useAppCategories();
+  const { snapshot: cats, sorting } = useAppCategories();
   const [category, setCategory] = useState<string | null>(null);
   useEffect(() => setCategory(null), [section]);
   const list = useMemo(
@@ -114,39 +127,63 @@ export function LibraryPane(props: LibraryPaneProps) {
       ]
     : HEADINGS[section];
 
+  const [renamingId, setRenamingId] = useState<string | null>(null);
+  const menuFor = (app: Artifact) => {
+    const archived = (app.status ?? "active") === "archived";
+    const items: HomeMenuItem[] = [
+      { label: "Open", onSelect: () => props.onOpen(app) },
+      { label: "Rename", onSelect: () => setRenamingId(app.id) },
+      {
+        label: app.favorite ? "Remove from Favorites" : "Add to Favorites",
+        onSelect: () => props.onToggleFavorite(app.id),
+      },
+    ];
+    if (needsAttention(app, health[app.id])) items.push({ label: "Fix with Pen", onSelect: () => props.onFix(app) });
+    if (props.showCopyAction) items.push({ label: "Copy to workspace…", onSelect: () => props.onCopy(app) });
+    items.push({ label: "—", onSelect: () => undefined });
+    items.push(
+      archived
+        ? { label: "Restore", onSelect: () => props.onSetStatus(app.id, "active") }
+        : { label: "Archive", onSelect: () => props.onSetStatus(app.id, "archived") },
+    );
+    items.push({ label: "Delete app", danger: true, onSelect: () => props.onDelete(app.id) });
+    return <HomeMenu items={items} moveTargets={[]} onMove={() => undefined} />;
+  };
+
+  // Same card as the My apps home (droplet logo, status line, Open, ⋯).
   const renderCard = (app: Artifact) => {
-            const k = duplicateKey(app.title);
-            const copies =
-              stackable && k && !expanded.has(k)
-                ? (stackSize.get(k) ?? 1) - 1
-                : 0;
-            return (
-              <AppCard
-                key={app.id}
-                artifact={app}
-                isPublished={publishedIds.has(app.id)}
-                statusLine={appStatusLine(app, {
-                  health: health[app.id],
-                  isPublished: publishedIds.has(app.id),
-                })}
-                share={props.shareById[app.id]}
-                duplicateCount={copies}
-                onShowDuplicates={() =>
-                  k && setExpanded((s) => new Set(s).add(k))
-                }
-                onOpen={() => props.onOpen(app)}
-                onDelete={() => props.onDelete(app.id)}
-                onToggleFavorite={() => props.onToggleFavorite(app.id)}
-                onRename={(t) => props.onRename(app.id, t)}
-                onSetStatus={(s) => props.onSetStatus(app.id, s)}
-                showCopyAction={props.showCopyAction}
-                onCopy={() => props.onCopy(app)}
-                onFix={() => props.onFix(app)}
-                category={cats.byKey[`app:${app.id}`] ?? null}
-                categoryOptions={cats.categories.map((c) => c.name)}
-                onSetCategory={(c) => assignCategory(`app:${app.id}`, c)}
-              />
-            );
+    const k = duplicateKey(app.title);
+    const copies = stackable && k && !expanded.has(k) ? (stackSize.get(k) ?? 1) - 1 : 0;
+    return (
+      <AppTile
+        key={app.id}
+        app={app}
+        isNew={false}
+        status={homeStatus(app, health[app.id], publishedIds.has(app.id))}
+        meta={`${app.lastOpenedAt ? "Opened" : "Updated"} ${relativeWhen(app.lastOpenedAt ?? app.updatedAt)}`}
+        moveTo={null}
+        share={props.shareById[app.id]}
+        dnd={NO_DND}
+        static
+        renaming={renamingId === app.id}
+        onOpen={() => props.onOpen(app)}
+        onMove={() => undefined}
+        onRename={(t) => props.onRename(app.id, t)}
+        onRenameDone={() => setRenamingId(null)}
+        menu={menuFor(app)}
+        extra={
+          copies > 0 ? (
+            <button
+              type="button"
+              className="ah-copies"
+              onClick={() => k && setExpanded((x) => new Set(x).add(k))}
+            >
+              +{copies} {copies === 1 ? "copy" : "copies"}
+            </button>
+          ) : null
+        }
+      />
+    );
   };
 
   if (props.resultsOnly) {
@@ -155,7 +192,7 @@ export function LibraryPane(props: LibraryPaneProps) {
         <h2 className="apps-view__results-title">
           In your library <em>{visible.length}</em>
         </h2>
-        <div className="apps-view__grid">{visible.map(renderCard)}</div>
+        <div className="ah ah-list">{visible.map(renderCard)}</div>
       </section>
     );
   }
@@ -221,9 +258,7 @@ export function LibraryPane(props: LibraryPaneProps) {
           {searching ? "No apps in your library match." : "Nothing here."}
         </p>
       ) : (
-        <div className="apps-view__grid">
-          {visible.map(renderCard)}
-        </div>
+        <div className="ah ah-list">{visible.map(renderCard)}</div>
       )}
     </>
   );

@@ -221,6 +221,10 @@ export interface AppTileProps {
   onRename: (title: string) => void;
   onRenameDone: () => void;
   menu: ReactNode;
+  /** List pages (Needs attention, Archived…): no drag-to-arrange. */
+  static?: boolean;
+  /** Extra footer control, e.g. "+2 copies". */
+  extra?: ReactNode;
 }
 
 /** A loose app: cover (or banner) across the top, the icon overlapping it. */
@@ -229,8 +233,8 @@ export function AppTile(p: AppTileProps) {
   const id = p.app.id;
   return (
     <div
-      className={`ah-card ah-solo ${dndClass(id, p.dnd)}`}
-      draggable
+      className={`ah-card ah-solo ${p.static ? "ah-solo--static" : dndClass(id, p.dnd)}`}
+      draggable={!p.static}
       onDragStart={(e) => p.dnd.onDragStart(id, e, p.app)}
       onDragOver={(e) => p.dnd.onDragOver(id, e, true)}
       onDrop={(e) => p.dnd.onDrop(id, e)}
@@ -276,6 +280,7 @@ export function AppTile(p: AppTileProps) {
         ) : p.isNew ? null : (
           <span className="ah-st ah-st--quiet">{p.meta}</span>
         )}
+        {p.extra}
         <button type="button" className="ah-open" onClick={p.onOpen}>
           Open
         </button>
