@@ -1023,24 +1023,11 @@ export function CommunityAppsView({
         />
       )}
 
-      {resultsHeading ? null : scope === "namespace" ? (
-        <>
-          {teamEntries.length > 0 ? (
-            <section className="community-apps__section">
-              <h3 className="community-apps__section-title">Shared with team</h3>
-              {renderCatalogGrid(teamEntries)}
-            </section>
-          ) : null}
-          {publicWorkspaceEntries.length > 0 ? (
-            <section className="community-apps__section">
-              <h3 className="community-apps__section-title">Public in workspace</h3>
-              {renderCatalogGrid(publicWorkspaceEntries)}
-            </section>
-          ) : null}
-        </>
-      ) : (
-        renderCatalogGrid(publicWorkspaceEntries)
-      )}
+      {resultsHeading
+        ? null
+        : renderCatalogGrid(
+            scope === "namespace" ? [...teamEntries, ...publicWorkspaceEntries] : publicWorkspaceEntries,
+          )}
 
       {optionalDepsNotice ? (
         <CloudInstallOptionalDepsNotice

@@ -4,6 +4,8 @@
  */
 import { useMemo, useState } from "react";
 import type { Artifact } from "../../stores/artifactsStore";
+import { AppGlyph } from "./HomeTiles";
+import "./AppsHome.css";
 
 interface DuplicateCleanupViewProps {
   groups: Artifact[][];
@@ -70,6 +72,9 @@ export function DuplicateCleanupView({
                     checked={kept}
                     onChange={() => setKeep((k) => ({ ...k, [i]: app.id }))}
                   />
+                  <span className="ah">
+                    <AppGlyph app={app} size={30} />
+                  </span>
                   <span className="apps-cleanup__title">{app.title}</span>
                   <span className="apps-cleanup__when">{formatWhen(app)}</span>
                   <span className="apps-cleanup__tag">
