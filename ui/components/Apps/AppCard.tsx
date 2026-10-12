@@ -9,7 +9,7 @@ import "./AppCard.css";
 import type { AppStatusLine } from "../../utils/appStatusLine";
 import type { ShareGlyph } from "../../utils/shareGlyph";
 import { ShareAudienceIcon } from "./WebSyncPopover";
-import { APP_COVER_CHANGED_EVENT, appCoverUrl, setAppCoverShared } from "../../utils/appCover";
+import { APP_COVER_CHANGED_EVENT, appCoverUrl, setAppCoverShared, useAppHasCover } from "../../utils/appCover";
 
 export type AppStatus = "draft" | "active" | "archived";
 
@@ -75,7 +75,9 @@ export function AppCard({
   const [menuPos, setMenuPos] = useState<{ top: number; right: number } | null>(null);
   // Cover = picture of the app's first screen (own private one, else owner-shared).
   const [coverVersion, setCoverVersion] = useState(() => artifact.updatedAt);
-  const [hasCover, setHasCover] = useState(true);
+  const [coverBroken, setCoverBroken] = useState(false);
+  const hasCover = useAppHasCover(artifact.id) && !coverBroken;
+  const setHasCover = (v: boolean) => setCoverBroken(!v);
   useEffect(() => {
     const onChanged = (e: Event) => {
       if ((e as CustomEvent<{ appId?: string }>).detail?.appId !== artifact.id) return;

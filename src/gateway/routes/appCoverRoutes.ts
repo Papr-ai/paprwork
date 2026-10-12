@@ -1,6 +1,6 @@
 /** HTTP routes for app covers (see services/appCovers.ts for the privacy model). */
 import type { Express } from "express";
-import {
+import { listCoveredAppIds,
   coverStatus,
   isValidCoverAppId,
   removeSharedCover,
@@ -35,6 +35,12 @@ const uploadCoverToAppFiles: CoverUploader = async ({ appId, filePath, fileName,
 };
 
 export function registerAppCoverRoutes(app: Express): void {
+  /** Which apps have a cover — one call for the whole library (cards skip the rest). */
+  app.get("/api/apps/covers", (_req, res) => {
+    res.setHeader("Cache-Control", "no-cache");
+    res.json({ appIds: listCoveredAppIds() });
+  });
+
   app.get("/api/apps/:appId/cover", (req, res) => {
     const found = resolveCover(req.params.appId ?? "");
     if (!found) {

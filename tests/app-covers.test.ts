@@ -75,4 +75,13 @@ describe("app covers", () => {
     expect(covers.savePrivateCover("../etc", big(), "validate")).toEqual({ saved: false, reason: "invalid_app" });
     expect(covers.resolveCover("../../x")).toBeNull();
   });
+  it("lists only apps that have a cover (private or shared)", () => {
+    const B = "b0a164c2-cfe0-415f-88d1-de867d96d337";
+    const C = "a6c9d3f3-fbed-4aaf-84b3-58977fd3a79a";
+    covers.savePrivateCover(APP, big(), "validate");
+    fs.mkdirSync(path.join(root, "apps", B), { recursive: true });
+    fs.writeFileSync(path.join(root, "apps", B, "papr-cover.txt"), big());
+    fs.mkdirSync(path.join(root, "apps", C), { recursive: true });
+    expect(covers.listCoveredAppIds().sort()).toEqual([APP, B].sort());
+  });
 });
