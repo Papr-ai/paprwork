@@ -37,6 +37,7 @@ import {
   type LinkedDepItem,
 } from "./ShareLinkedDeps";
 import { ShareAccessPanel } from "./ShareAccessPanel";
+import { ShareDataCheck } from "./ShareDataCheck";
 import type { SharePeopleMember } from "./SharePeoplePicker";
 import "./ShareSheetBody.css";
 
@@ -510,6 +511,11 @@ function LiveSummary({
           </button>
         ))}
       </div>
+      <ShareDataCheck
+        appId={props.appId}
+        audience={draft.audience}
+        requireSignIn={draft.requireSignIn || draft.perUserIsolation}
+      />
       {props.webCompatibilityHint ? (
         <p className="ss6-note ss6-note--compat-hint">{props.webCompatibilityHint}</p>
       ) : null}

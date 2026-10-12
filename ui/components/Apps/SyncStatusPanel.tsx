@@ -29,6 +29,8 @@ export interface SyncStatusPanelProps {
   onCheckStatus?: () => void;
   checking?: boolean;
   lastCheckedAt?: number | null;
+  /** v9: who last published into this app from another machine. */
+  byline?: string | null;
   popoverRef?: React.RefObject<HTMLDivElement | null>;
   className?: string;
   style?: React.CSSProperties;
@@ -213,6 +215,7 @@ export function SyncStatusPanel(props: SyncStatusPanelProps) {
         </span>
         <span className="sync7-when">{when}</span>
       </div>
+      {props.byline ? <p className="sync7-byline">{props.byline}</p> : null}
       <div className="sync7-body">
         {panel.rows.length > 0 ? (
           panel.rows.map((row) => <Row key={`${row.kind}:${row.title}`} row={row} props={props} />)

@@ -14,6 +14,7 @@ import path from "path";
 import { cloudApiFetch } from "../../utils/cloudApiClient.js";
 import { broadcast } from "../../websocket/index.js";
 import { notifyCloudSyncItemsStale } from "./cloudSyncBroadcast.js";
+import { recordLastMerges, type LastMerge } from "./lastMerge.js";
 
 export type ProposalEventType =
   | "proposal.received"
@@ -36,6 +37,8 @@ export interface ProposalEvent {
   sourceSlug?: string | null;
   installedAppId?: string | null;
   title?: string | null;
+  /** Who caused it (the resolver for merged/accepted, the proposer for received). */
+  actorUserId?: string | null;
   detail?: Record<string, unknown>;
   createdAt: string;
 }
@@ -113,15 +116,9 @@ export function noticeForEvent(e: ProposalEvent): ProposalNotice | null {
     }
     return null;
   }
-  if (e.role === "owner" && e.type === "proposal.merged") {
-    const direct = e.detail?.publishedDirectly === true;
-    return {
-      title: direct ? "Changes published to your app" : "Proposal accepted by a Maintainer",
-      body: `${quoted(e.title)} is now live${app}. Your Mac is getting the new version.`,
-      appId,
-      requestId,
-    };
-  }
+  // v9: no notification for a Maintainer's merge. The copy pulls it and the
+  // chip's status dialog says who published what (see lastMerge.ts).
+  if (e.role === "owner" && e.type === "proposal.merged") return null;
   if (e.role === "owner" && e.type === "proposal.received") {
     return {
       title: "New proposal",
@@ -135,6 +132,22 @@ export function noticeForEvent(e: ProposalEvent): ProposalNotice | null {
 }
 
 /** Publisher-side apps a Maintainer/Admin merged into: pull them. */
+/** Latest merge per source app, for the status dialog's "Published by". */
+export function latestMerges(events: ProposalEvent[]): LastMerge[] {
+  const by = new Map<string, LastMerge>();
+  for (const e of events) {
+    if (e.role !== "owner" || e.type !== "proposal.merged" || !e.sourceAppId) continue;
+    by.set(e.sourceAppId, {
+      appId: e.sourceAppId,
+      actorUserId: e.actorUserId ?? null,
+      title: e.title ?? null,
+      publishedDirectly: e.detail?.publishedDirectly === true,
+      at: e.createdAt,
+    });
+  }
+  return [...by.values()];
+}
+
 export function mergedSourceAppIds(events: ProposalEvent[]): string[] {
   const ids = new Set<string>();
   for (const e of events) {
@@ -205,6 +218,8 @@ export interface PollDeps {
   onNotify?: (notices: ProposalNotice[]) => void;
   /** Pull apps someone else merged into (publisher side). */
   onMerged?: (sourceAppIds: string[]) => void;
+  /** Persist who merged what, for the status dialog. */
+  recordMerges?: (merges: LastMerge[]) => Promise<void>;
 }
 
 async function defaultFetchEvents(
@@ -280,7 +295,12 @@ export async function pollProposalEvents(
       if (!deps.onRefresh) refreshConnections(page.events);
       (deps.onNotify ?? defaultNotify)(summarizeNotices(page.events));
       const merged = mergedSourceAppIds(page.events);
-      if (merged.length > 0) (deps.onMerged ?? defaultMerged)(merged);
+      if (merged.length > 0) {
+        await (deps.recordMerges ?? ((m) => recordLastMerges(paprDir, m)))(
+          latestMerges(page.events),
+        ).catch(() => undefined);
+        (deps.onMerged ?? defaultMerged)(merged);
+      }
     }
     if (page.cursor && page.cursor !== since) {
       await writeCursor(paprDir, userKey, page.cursor);

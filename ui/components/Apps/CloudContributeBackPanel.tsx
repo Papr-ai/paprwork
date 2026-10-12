@@ -14,6 +14,7 @@ import {
   type SourceAppRole,
   type SentProposal,
 } from "../../utils/cloudContributeApi";
+import { draftProposal } from "../../utils/v9CloudApi";
 
 export interface ForkLineageInfo {
   mode: "fork" | "track";
@@ -61,6 +62,7 @@ export function CloudContributeBackPanel({
   const [proposals, setProposals] = useState<SentProposal[] | null>(null);
   const [role, setRole] = useState<SourceAppRole | null>(null);
   const [note, setNote] = useState<string | null>(null);
+  const [drafting, setDrafting] = useState(false);
   // Maintainers and Admins may publish straight into the app (roles plan).
   const canPublish = role === "maintainer" || role === "admin";
 
@@ -79,6 +81,22 @@ export function CloudContributeBackPanel({
   useEffect(() => {
     void loadProposals();
   }, [loadProposals]);
+
+  // Write with AI: the agent reads the edits and drafts title + summary.
+  const writeWithAi = async () => {
+    setDrafting(true);
+    setError(null);
+    try {
+      const draft = await draftProposal(lineage.installedAppId);
+      setTitle(draft.title);
+      setDescription(draft.description);
+      if (sent) setSent(false);
+    } catch (err) {
+      setError((err as Error).message.slice(0, 160));
+    } finally {
+      setDrafting(false);
+    }
+  };
 
   const submit = async (publishNow = false) => {
     if (!description.trim()) {
@@ -138,9 +156,20 @@ export function CloudContributeBackPanel({
         disabled={busy || submitting}
       />
 
-      <label className="share-sheet__field-label" htmlFor="change-desc">
-        What did you change?
-      </label>
+      <div className="share-sheet__field-row">
+        <label className="share-sheet__field-label" htmlFor="change-desc">
+          What did you change?
+        </label>
+        <button
+          type="button"
+          className="share-sheet__link-btn"
+          disabled={busy || submitting || drafting}
+          onClick={() => void writeWithAi()}
+          title="The agent reads your edits and drafts the title and summary"
+        >
+          {drafting ? "Writing…" : "Write with AI"}
+        </button>
+      </div>
       <textarea
         id="change-desc"
         className="share-sheet__textarea"
@@ -151,7 +180,7 @@ export function CloudContributeBackPanel({
           setDescription(e.target.value);
           if (sent) setSent(false);
         }}
-        disabled={busy || submitting}
+        disabled={busy || submitting || drafting}
       />
 
       {error ? <p className="share-sheet__error">{error}</p> : null}

@@ -895,3 +895,104 @@
   font-size: 12px;
   color: var(--text-secondary);
 }
+
+/* v9 data check: one line under the summary; expands to the table list. */
+.ss6-data {
+  margin: 8px 0 0;
+  border-radius: 10px;
+  background: rgba(184, 110, 0, 0.08);
+}
+
+.ss6-data--team {
+  background: var(--ss6-line);
+}
+
+.ss6-data-head {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  width: 100%;
+  padding: 9px 12px;
+  border: 0;
+  background: none;
+  font: inherit;
+  font-size: 13px;
+  color: var(--text-primary);
+  text-align: left;
+  cursor: pointer;
+}
+
+.ss6-data-t {
+  flex: 1;
+}
+
+.ss6-data-chev {
+  font-size: 12px;
+  color: var(--text-secondary);
+}
+
+.ss6-data-dot {
+  flex-shrink: 0;
+  width: 7px;
+  height: 7px;
+  border-radius: 50%;
+  background: #b86e00;
+}
+
+.ss6-data--team .ss6-data-dot {
+  background: var(--text-secondary);
+}
+
+.ss6-data-dot.ss6-data-dot--ok {
+  background: #2e9d5b;
+}
+
+.ss6-data-list {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  padding: 0 12px 10px 27px;
+}
+
+.ss6-data-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-size: 12px;
+}
+
+.ss6-data-row code {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.ss6-data-row small {
+  color: var(--text-secondary);
+}
+
+.ss6-data-fix {
+  align-self: flex-start;
+  margin-top: 4px;
+  padding: 5px 10px;
+  border: 1px solid var(--ss6-line);
+  border-radius: 8px;
+  background: var(--bg-primary, transparent);
+  font: inherit;
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--text-primary);
+  cursor: pointer;
+}
+
+@media (prefers-color-scheme: dark) {
+  .ss6-data {
+    background: rgba(255, 176, 64, 0.1);
+  }
+
+  .ss6-data-dot {
+    background: #ffb040;
+  }
+}

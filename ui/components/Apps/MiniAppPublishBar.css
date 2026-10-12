@@ -2071,6 +2071,30 @@
   color: var(--text-secondary);
 }
 
+/* v9 Write with AI: sits on the "What did you change?" label row. */
+.share-sheet__field-row {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 8px;
+}
+
+.share-sheet__link-btn {
+  padding: 0;
+  border: 0;
+  background: none;
+  font: inherit;
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--accent, #0a84ff);
+  cursor: pointer;
+}
+
+.share-sheet__link-btn:disabled {
+  opacity: 0.55;
+  cursor: default;
+}
+
 .share-sheet__text-input,
 .share-sheet__textarea {
   width: 100%;

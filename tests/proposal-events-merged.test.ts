@@ -2,6 +2,7 @@
 import { describe, expect, it } from "vitest";
 
 import {
+  latestMerges,
   mergedSourceAppIds,
   noticeForEvent,
   pollProposalEvents,
@@ -24,11 +25,19 @@ const merged = (over: Partial<ProposalEvent> = {}): ProposalEvent => ({
 });
 
 describe("proposal.merged", () => {
-  it("notifies the publisher in plain words", () => {
-    const n = noticeForEvent(merged());
-    expect(n?.title).toBe("Changes published to your app");
-    expect(n?.appId).toBe("src-app");
-    expect(noticeForEvent(merged({ detail: {} }))?.title).toBe("Proposal accepted by a Maintainer");
+  it("does not notify (v9: the status dialog says who published)", () => {
+    expect(noticeForEvent(merged())).toBeNull();
+    expect(noticeForEvent(merged({ detail: {} }))).toBeNull();
+  });
+
+  it("keeps the latest merge per app with who did it", () => {
+    const out = latestMerges([
+      merged({ actorUserId: "maya", createdAt: "2026-10-08T00:00:00Z" }),
+      merged({ id: "e2", actorUserId: "shawkat", title: "Newer", createdAt: "2026-10-09T00:00:00Z", detail: {} }),
+    ]);
+    expect(out).toEqual([
+      { appId: "src-app", actorUserId: "shawkat", title: "Newer", publishedDirectly: false, at: "2026-10-09T00:00:00Z" },
+    ]);
   });
 
   it("only owner-side merged events trigger a pull", () => {
@@ -44,6 +53,7 @@ describe("proposal.merged", () => {
       onRefresh: () => undefined,
       onNotify: () => undefined,
       onMerged: (ids) => pulled.push(ids),
+      recordMerges: async () => undefined,
     }).catch(() => -1);
     expect(n).toBe(1);
     expect(pulled).toEqual([["src-app"]]);

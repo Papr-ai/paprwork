@@ -45,6 +45,8 @@ interface CloudChangeRequestsPanelProps {
   loading: boolean;
   error: string | null;
   onReload: () => Promise<void>;
+  /** After an Accept (e.g. a Maintainer's copy pulls the merged app now). */
+  onAccepted?: () => void;
 }
 
 export function CloudChangeRequestsPanel({
@@ -58,6 +60,7 @@ export function CloudChangeRequestsPanel({
   loading,
   error,
   onReload,
+  onAccepted,
 }: CloudChangeRequestsPanelProps) {
   const [resolvingId, setResolvingId] = useState<string | null>(null);
   const [localError, setLocalError] = useState<string | null>(null);
@@ -96,6 +99,7 @@ export function CloudChangeRequestsPanel({
     setSuccessNotice(null);
     try {
       await resolveCloudChangeRequest(req.id, action);
+      if (action === "approve") onAccepted?.();
       setOptimisticResolved((prev) => {
         const next = new Map(prev);
         next.set(req.id, action === "approve" ? "approved" : "rejected");

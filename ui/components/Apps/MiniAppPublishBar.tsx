@@ -31,6 +31,9 @@ import {
   type SourceAppRole,
 } from "../../utils/cloudContributeApi";
 import { ShareAccessPanel } from "./ShareAccessPanel";
+import { fetchWebIsAhead } from "../../utils/cloudFreshCheck";
+import { fetchLastMerge, pullAfterAccept, type LastMerge } from "../../utils/v9CloudApi";
+import { formatMergeByline } from "../../utils/mergeByline";
 import {
   copyAxesFromLineage,
   deriveCopyState,
@@ -409,7 +412,12 @@ export function MiniAppPublishBar({
     // Pull first (like a git pull before push): if the web copy has changes this
     // desktop doesn't, bring them in before uploading. Overlapping files stop
     // the publish and open the Sync panel for Keep mine / Take theirs.
-    if (webSyncStatus?.gitUpdatesAvailable === true) {
+    // Ask the web right now, not the last 5-minute check: another Admin or a
+    // Maintainer's merge may have landed since (roles plan §4 rule 1).
+    const webAhead =
+      webSyncStatus?.gitUpdatesAvailable === true ||
+      (await fetchWebIsAhead(appId, cloudLineage?.mode === "track"));
+    if (webAhead) {
       const clean = await webSyncPullUpdates();
       if (!clean) {
         setWebSyncPopoverOpen(true);
@@ -417,7 +425,7 @@ export function MiniAppPublishBar({
       }
     }
     await webSyncPushNow();
-  }, [webSyncPushNow, webSyncPullUpdates, webSyncStatus?.gitUpdatesAvailable]);
+  }, [webSyncPushNow, webSyncPullUpdates, webSyncStatus?.gitUpdatesAvailable, appId, cloudLineage?.mode]);
 
   // Kept for the overflow menu's upload-mode row; the v7 panel doesn't explain it.
   void resolveEffectiveAutoUpload(cloud.uploadMode, globalAutoUploadEnabled);
@@ -890,6 +898,22 @@ export function MiniAppPublishBar({
       cancelled = true;
     };
   }, [appId, isFork]);
+  // v9: "Published by Shawkat · Fix chart labels" in the status dialog,
+  // replacing the old "Changes published to your app" notification.
+  const [lastMerge, setLastMerge] = useState<LastMerge | null>(null);
+  useEffect(() => {
+    if (!webSyncPopoverOpen) return;
+    let cancelled = false;
+    void fetchLastMerge(appId).then((m) => !cancelled && setLastMerge(m));
+    if (!workspacePeopleLoadedRef.current) void ensureWorkspacePeople();
+    return () => {
+      cancelled = true;
+    };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [appId, webSyncPopoverOpen]);
+  const lastMergeByline = lastMerge
+    ? formatMergeByline(lastMerge, workspacePeople)
+    : null;
   const reviewsAsCopy =
     isFork && (sourceRole === "maintainer" || sourceRole === "admin");
   const showOwnerChangeRequests =
@@ -1960,6 +1984,7 @@ export function MiniAppPublishBar({
                   zIndex: 10000,
                 }}
                 panel={syncPanel}
+                byline={lastMergeByline}
                 checking={webSyncRefreshing || (webSyncLoading && !webSyncStatus)}
                 lastCheckedAt={webSyncLastCheckedAt}
                 onCheckStatus={() => void webSyncCheckStatus()}
@@ -2361,6 +2386,11 @@ export function MiniAppPublishBar({
               loading={incomingChanges.loading}
               error={incomingChanges.error}
               onReload={incomingChanges.reload}
+              onAccepted={
+                reviewsAsCopy
+                  ? () => void pullAfterAccept(appId).then(() => webSyncCheckStatus())
+                  : undefined
+              }
             />
           </div>
         </ShareSheet>

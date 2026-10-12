@@ -834,6 +834,49 @@ export class CloudAppTrackSyncService {
     return results;
   }
 
+  /**
+   * Before/after of every unproposed edit, for Write with AI. "Before" is the
+   * publisher's version this copy is based on (recorded base, else HEAD —
+   * proposing pulls first, so HEAD is the base in practice).
+   */
+  async proposalFileChanges(
+    appId: string,
+  ): Promise<Array<{ path: string; before: string | undefined; after: string | undefined }>> {
+    const edits = await this.localEdits(appId);
+    const paths = edits.unproposed.length > 0 ? edits.unproposed : edits.files;
+    if (!edits.known || paths.length === 0) return [];
+    const lineage = await readLineageFile(appId, this.appsDir);
+    if (!lineage) return [];
+    const prepare = await getCloudAppInstallService().prepareInstall({
+      namespaceId: lineage.source.namespaceId,
+      slug: lineage.source.slug,
+      mode: "track",
+    });
+    const env = ephemeralGitEnv();
+    const { sourceDir, repoDir, cleanup } = await cloneCloudAppSource(
+      { cloneUrl: prepare.cloneUrl, token: prepare.token, repoPath: prepare.repoPath },
+      "papr-propose-draft-",
+    );
+    try {
+      const prefix = path.relative(repoDir, sourceDir).replace(/\\/g, "/") || ".";
+      const sha =
+        (lineage.baseCommit && (await readFilesAtCommit(repoDir, lineage.baseCommit, prefix, env)).size > 0
+          ? lineage.baseCommit
+          : null) ?? (await readHeadCommit(repoDir, env));
+      const base = sha ? await readFilesAtCommit(repoDir, sha, prefix, env) : new Map<string, string>();
+      const publisherAppId = prepare.source?.appId;
+      const toLocal = (c: string) =>
+        publisherAppId && publisherAppId !== appId ? c.split(publisherAppId).join(appId) : c;
+      const local = await collectLocalFiles(path.join(this.appsDir, appId));
+      return paths.map((rel) => {
+        const before = base.get(rel);
+        return { path: rel, before: before === undefined ? undefined : toLocal(before), after: local.get(rel) };
+      });
+    } finally {
+      await cleanup();
+    }
+  }
+
   async syncAllTrackApps(): Promise<TrackSyncResult[]> {
     const index = await getCloudAppLineageService(this.appsDir).buildIndex();
     const results: TrackSyncResult[] = [];

@@ -771,6 +771,37 @@ async function startGateway(): Promise<void> {
       }
     });
 
+    // v9 data check (Share sheet): per table, is it private per person or
+    // visible to everyone who opens the app? Columns only; no rows are read.
+    app.get("/api/apps/:appId/table-scope", async (req, res) => {
+      try {
+        const appId = req.params.appId;
+        const sources = await getAppService().listAppDataSources(appId);
+        const { getDatabaseRegistryService } = await import(
+          "./services/DatabaseRegistryService.js"
+        );
+        const registry = getDatabaseRegistryService();
+        const schemas = await Promise.all(
+          sources.map(async (source) => {
+            try {
+              const schema = await dbRouter.schema(source.dbPath, source);
+              return {
+                alias: source.alias,
+                perUser: registry.getRecordForSource(source)?.isolation === "per-user",
+                tables: schema.tables,
+              };
+            } catch {
+              return null;
+            }
+          }),
+        );
+        const { scopeTables } = await import("../core/utils/tableScope.js");
+        res.json({ tables: scopeTables(schemas.filter((s) => s !== null)) });
+      } catch (err) {
+        res.status(500).json({ error: (err as Error).message });
+      }
+    });
+
     app.get("/api/apps/:appId/data-health", async (req, res) => {
       try {
         const appId = req.params.appId;
@@ -3170,6 +3201,67 @@ async function startGateway(): Promise<void> {
       try {
         const { getSourceAppRole } = await import("./services/CloudAppContributeService.js");
         res.json({ role: await getSourceAppRole(req.params.appId) });
+      } catch (err) {
+        res.status(500).json({ error: (err as Error).message });
+      }
+    });
+
+    // Write with AI (v9): draft the Propose sheet's title + summary from the
+    // copy's edits. Desktop only; the proposal API is unchanged.
+    app.post("/api/cloud/apps/:appId/proposal-draft", async (req, res) => {
+      try {
+        const appId = req.params.appId;
+        const changes = await getCloudAppTrackSyncService().proposalFileChanges(appId);
+        if (changes.length === 0) {
+          res.status(409).json({ error: "No edits to describe yet." });
+          return;
+        }
+        const { buildDraftPrompt, parseDraft, DRAFT_SYSTEM_PROMPT } = await import(
+          "./services/cloudSync/proposalDraft.js"
+        );
+        const { generateSimpleText } = await import("./utils/simpleTextGeneration.js");
+        const title = (await getAppService().getApp(appId))?.title ?? "this app";
+        const text = await generateSimpleText(
+          DRAFT_SYSTEM_PROMPT,
+          buildDraftPrompt(title, changes),
+          300,
+          "[ProposalDraft]",
+        );
+        const draft = text ? parseDraft(text) : null;
+        if (!draft) {
+          res.status(502).json({ error: "Couldn't write a draft. Add an AI provider in Settings, or write it yourself." });
+          return;
+        }
+        res.json({ ...draft, files: changes.length });
+      } catch (err) {
+        res.status(500).json({ error: (err as Error).message.slice(0, 200) });
+      }
+    });
+
+    // Last merge into this app from another machine (v9 status dialog:
+    // "Published by …"). Written by the proposal events poll.
+    app.get("/api/cloud/apps/:appId/last-merge", async (req, res) => {
+      try {
+        const { readLastMerge } = await import("./services/cloudSync/lastMerge.js");
+        res.json({ merge: await readLastMerge(getPaprRoot(), req.params.appId) });
+      } catch (err) {
+        res.status(500).json({ error: (err as Error).message });
+      }
+    });
+
+    // A Maintainer accepted from their copy: bring that copy up to date now
+    // instead of on the next 5-minute check. Held (not forced) on overlaps.
+    app.post("/api/cloud/apps/:appId/pull-after-accept", async (req, res) => {
+      try {
+        const { pullPublisherBeforePropose } = await import(
+          "./services/cloudSync/proposePullFirst.js"
+        );
+        const { notifyCloudSyncItemsStale } = await import(
+          "./services/cloudSync/cloudSyncBroadcast.js"
+        );
+        const conflict = await pullPublisherBeforePropose(req.params.appId);
+        notifyCloudSyncItemsStale(req.params.appId);
+        res.json({ pulled: !conflict, conflictFiles: conflict?.conflictFiles ?? [] });
       } catch (err) {
         res.status(500).json({ error: (err as Error).message });
       }
