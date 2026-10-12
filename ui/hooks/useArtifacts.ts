@@ -11,6 +11,7 @@ import {
   writeWorkspaceUiCache,
 } from "../lib/workspaceUiCache";
 import { normalizeTabHierarchy } from "../lib/persistedAppState";
+import { readAppsListCache, writeAppsListCache } from "../utils/appsListCache";
 import { useTabStore } from "../stores/tabStore";
 import type { Tab } from "../types/tabs";
 
@@ -61,6 +62,7 @@ export function useArtifacts(scope: "all" | "apps" = "all") {
 
   const persistArtifactsToWorkspaceCache = useCallback((apps: Artifact[]) => {
     const key = getActiveWorkspaceUiCacheKey();
+    writeAppsListCache(key, apps);
     if (!key) {
       return;
     }
@@ -94,7 +96,15 @@ export function useArtifacts(scope: "all" | "apps" = "all") {
       return;
     }
 
-    const cached = useArtifactsStore.getState().artifacts;
+    let cached = useArtifactsStore.getState().artifacts;
+    // Cold launch: paint the last-known apps from disk cache, refresh behind it.
+    if (scope === "apps" && !cached.some((item) => item.type === "app")) {
+      const persisted = readAppsListCache(getActiveWorkspaceUiCacheKey());
+      if (persisted) {
+        cached = [...cached, ...persisted];
+        setArtifacts(cached);
+      }
+    }
     const hasCachedApps = cached.some((item) => item.type === "app");
     const blockForLoad = scope === "all" || !hasCachedApps;
     if (blockForLoad) setLoading(true);
