@@ -22,11 +22,21 @@ import * as fs from "fs";
 import Database from "better-sqlite3";
 import { listUserTables } from "./tursoReplicaBootstrapMarker.js";
 import { getTursoReplicaSyncWorkerClient } from "./TursoReplicaSyncWorkerClient.js";
+import {
+  detectSchemaDegradation,
+  type SchemaDegradation,
+} from "./tursoReplicaSchemaDegradation.js";
 
 export interface BootstrapReplayResult {
   tablesReplayed: number;
   rowsReplayed: number;
   skipped: string[];
+  /**
+   * Set when the bootstrapped schema lost keys/types vs the snapshot. Nothing is replayed
+   * (INSERT OR REPLACE without a key would duplicate every row) and the caller must not
+   * clear the marker — the snapshot is the only remaining copy of the real schema.
+   */
+  degraded?: SchemaDegradation[];
 }
 
 /**
@@ -84,6 +94,12 @@ export function replayBootstrapSnapshot(
   try {
     db = openDiagnosticDatabase(Database, "services/tursoReplica/tursoReplicaBootstrapReplay", dbPath);
     db.prepare("ATTACH DATABASE ? AS papr_snapshot").run(snapshotPath);
+
+    const degraded = detectSchemaDegradation(db, "papr_snapshot");
+    if (degraded.length > 0) {
+      result.degraded = degraded;
+      return result;
+    }
 
     const liveTables = new Set(listUserTables(db));
     const snapshotTables = (

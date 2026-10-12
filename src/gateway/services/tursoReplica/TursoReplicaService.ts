@@ -40,6 +40,7 @@ import {
   type BootstrapPendingMarker,
 } from "./tursoReplicaBootstrapMarker.js";
 import { replayBootstrapSnapshot } from "./tursoReplicaBootstrapReplay.js";
+import { describeSchemaDegradation } from "./tursoReplicaSchemaDegradation.js";
 import {
   markTursoReplicaReachable,
   noteTursoReplicaTransportError,
@@ -370,6 +371,15 @@ export class TursoReplicaService {
       // side uses, so the next openSpec re-establishes rather than assuming a live handle.
       await this.close(localPath);
       const replay = replayBootstrapSnapshot(localPath, marker.snapshotPath);
+      if (replay.degraded?.length) {
+        // Adopting this would serve a database whose ids are text and whose keys are gone
+        // (apps read "0" as truthy, `id = 1` matches nothing, inserts get NULL ids). Keep
+        // the marker and the snapshot; the error surfaces in sync status for repair.
+        const message = describeSchemaDegradation(replay.degraded);
+        console.error(`[TursoReplicaService] ${message}: ${localPath}`);
+        noteBootstrapAttemptFailed(localPath, message);
+        return false;
+      }
       if (replay.rowsReplayed > 0 || replay.tablesReplayed > 0) {
         console.log(
           `[TursoReplicaService] Replayed ${replay.rowsReplayed} preserved rows across ` +
