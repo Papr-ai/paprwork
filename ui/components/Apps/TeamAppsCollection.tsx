@@ -132,7 +132,7 @@ export function TeamAppsCollection({
             <div key={e.catalogId} className="ah-cell">
               <button type="button" className="ah-cell__open" onClick={() => setOpen(e)} title={e.description}>
                 <span className="ah-cell__ic">
-                  <DropGlyph icon={clean(e.icon)} title={e.name} size={entries.length > 3 ? 58 : 84} />
+                  <DropGlyph icon={clean(e.icon)} title={e.name} size={58} />
                 </span>
                 <span className="ah-cell__t">{e.name}</span>
                 <span className="ah-cell__get">{flow.installingId === e.catalogId ? "Getting…" : "Get"}</span>
