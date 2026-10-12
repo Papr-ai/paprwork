@@ -227,7 +227,7 @@ export interface AppTileProps {
   extra?: ReactNode;
 }
 
-/** A loose app: cover (or banner) across the top, the icon overlapping it. */
+/** A loose app, App Store style: big cover banner, then droplet · name · status · Open. */
 export function AppTile(p: AppTileProps) {
   const [hasCover, setHasCover] = useState(true);
   const id = p.app.id;
@@ -240,55 +240,61 @@ export function AppTile(p: AppTileProps) {
       onDrop={(e) => p.dnd.onDrop(id, e)}
       onDragEnd={p.dnd.onDragEnd}
     >
-      <button type="button" className="ah-solo__open" onClick={p.onOpen} title={p.app.description || displayTitle(p.app)}>
-        <span className={`ah-solo__art ah-pb-${bannerShade(id)}`}>
-          {hasCover ? (
-            <img
-              className="ah-solo__cover"
-              src={appCoverUrl(id, p.app.updatedAt)}
-              alt=""
-              loading="lazy"
-              draggable={false}
-              onError={() => setHasCover(false)}
-            />
-          ) : null}
-          <span className="ah-solo__ic">
-            <AppGlyph app={p.app} size={64} />
-            {p.status?.bad ? <span className="ah-bad">!</span> : null}
-          </span>
-        </span>
-        <AppName
-          app={p.app}
-          className="ah-solo__t"
-          renaming={p.renaming}
-          onRename={p.onRename}
-          onDone={p.onRenameDone}
-        />
-      </button>
-      <span className="ah-solo__meta">
-        {p.isNew ? <span className="ah-new">New</span> : null}
-        {p.isNew && p.moveTo ? (
-          <button type="button" className="ah-move" onClick={p.onMove}>
-            <HomeIcon name="layers" size={13} />
-            Move to {p.moveTo}
-          </button>
-        ) : null}
-        {p.status ? (
-          <span className={p.status.bad ? "ah-st ah-st--bad" : "ah-st"} title={p.status.text}>
-            {p.status.text}
-          </span>
-        ) : p.isNew ? null : (
-          <span className="ah-st ah-st--quiet">{p.meta}</span>
+      <button type="button" className="ah-solo__art" onClick={p.onOpen} title={p.app.description || displayTitle(p.app)}>
+        {hasCover ? (
+          <img
+            className="ah-solo__cover"
+            src={appCoverUrl(id, p.app.updatedAt)}
+            alt=""
+            loading="lazy"
+            draggable={false}
+            onError={() => setHasCover(false)}
+          />
+        ) : (
+          <span className="ah-solo__hero"><AppGlyph app={p.app} size={84} /></span>
         )}
-        {p.extra}
-        <button type="button" className="ah-open" onClick={p.onOpen}>
-          Open
-        </button>
-      </span>
+      </button>
       <span className="ah-solo__tr">
         <ShareMark share={p.share} />
         {p.menu}
       </span>
+      <div className="ah-solo__row">
+        <span className="ah-solo__ic">
+          <AppGlyph app={p.app} size={42} />
+          {p.status?.bad ? <span className="ah-bad">!</span> : null}
+        </span>
+        <div className="ah-solo__txt">
+          <button type="button" className="ah-solo__open" onClick={p.onOpen}>
+            <AppName
+              app={p.app}
+              className="ah-solo__t"
+              renaming={p.renaming}
+              onRename={p.onRename}
+              onDone={p.onRenameDone}
+            />
+          </button>
+          <span className="ah-solo__meta">
+            {p.isNew ? <span className="ah-new">New</span> : null}
+            {p.status ? (
+              <span className={p.status.bad ? "ah-st ah-st--bad" : "ah-st"} title={p.status.text}>
+                {p.status.text}
+              </span>
+            ) : p.isNew ? null : (
+              <span className="ah-st ah-st--quiet">{p.meta}</span>
+            )}
+            {p.isNew && p.moveTo ? (
+              <button type="button" className="ah-move" onClick={p.onMove}>
+                <HomeIcon name="layers" size={13} />
+                Move to {p.moveTo}
+              </button>
+            ) : null}
+          </span>
+        </div>
+        {p.extra}
+        <button type="button" className="ah-open" onClick={p.onOpen}>
+          Open
+        </button>
+      </div>
     </div>
   );
 }
