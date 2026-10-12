@@ -278,7 +278,16 @@ export function memoryAccessibleApps(baseUrl: string, fetchImpl: typeof fetch = 
       description: typeof a.description === "string" ? a.description : undefined,
       author: typeof a.author === "string" ? a.author : undefined,
       updatedAt: typeof a.updatedAt === "string" ? a.updatedAt : undefined,
-      icon: typeof a.icon === "string" && /^\s*<svg[\s>]/i.test(a.icon) && a.icon.length < 8_000 ? a.icon : undefined,
+      icon: typeof a.icon === "string" && /^\s*<svg[\s>]/i.test(a.icon) && a.icon.length < 8_000 ? withSvgNs(a.icon) : undefined,
     }));
   };
+}
+
+/**
+ * Cards render the icon as <img src="data:image/svg+xml,...">. As a standalone image an SVG
+ * needs xmlns, or the browser shows a broken image (inline <svg> in HTML works without it,
+ * which is why the same icon looks fine in Papr). Many app icons omit it.
+ */
+export function withSvgNs(svg: string): string {
+  return /<svg\b[^>]*\bxmlns\s*=/i.test(svg) ? svg : svg.replace(/<svg\b/i, '<svg xmlns="http://www.w3.org/2000/svg"');
 }

@@ -239,7 +239,7 @@ export async function card(opts: CardOptions, deps: CardDeps = {}): Promise<Card
     const title = sc.title ?? sc.slug;
     const tile = $("pc-tile");
     if (sc.icon && /^\s*<svg[\s>]/i.test(sc.icon)) {
-      tile.innerHTML = `<img alt="" src="data:image/svg+xml;charset=utf-8,${encodeURIComponent(sc.icon)}">`;
+      tile.innerHTML = `<img alt="" src="data:image/svg+xml;charset=utf-8,${encodeURIComponent(/<svg\b[^>]*\bxmlns\s*=/i.test(sc.icon) ? sc.icon : sc.icon.replace(/<svg\b/i, '<svg xmlns="http://www.w3.org/2000/svg"'))}">`;
     } else tile.textContent = initials(title);
     $("pc-title").textContent = title;
     $("pc-sub").textContent = sc.publisher ? `by ${sc.publisher}` : "Your Papr app";

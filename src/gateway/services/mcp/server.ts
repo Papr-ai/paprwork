@@ -31,7 +31,7 @@ import { callerOf, createAuth0Verifier, registerProtectedResourceMetadata, type 
 import { dispatchTunnel, fetchPublishedCard, fetchPublishedCardsManifest, TunnelError, type TunnelMethod } from "./apiTunnel.js";
 import { getMemoryServerBaseUrl } from "../../utils/cloudApiClient.js";
 import { inputSchemaToZodShape, planAppTools, toolResultFor, appTitle, type AppToolSpec } from "./appTools.js";
-import { loadClaudeCatalog, loadClaudeCatalogWithin, memoryAccessibleApps, parseCardsManifest, type CatalogDeps, type ClaudeApp } from "./catalog.js";
+import { loadClaudeCatalog, loadClaudeCatalogWithin, memoryAccessibleApps, parseCardsManifest, type CatalogDeps, type ClaudeApp, withSvgNs } from "./catalog.js";
 import { loadMcpEndpointConfig, MCP_PATH, protectedResourceMetadataUrl, type McpEndpointConfig } from "./config.js";
 import { renderSpikeCardHtml } from "./spikeCard.js";
 import { HandoffError, memoryHandoff, type CreateHandoff } from "./handoff.js";
@@ -214,7 +214,7 @@ export function buildMcpServer(
           ...(known?.cards.summary ?? known?.description ? { summary: known?.cards.summary ?? known?.description } : {}),
           ...(known?.cards.examples ? { examples: known.cards.examples } : {}),
           ...(known?.author ? { publisher: known.author } : {}),
-          ...(known?.icon ? { icon: known.icon } : {}),
+          ...(known?.icon ? { icon: withSvgNs(known.icon) } : {}),
         },
       };
     },
