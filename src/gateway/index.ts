@@ -255,7 +255,6 @@ async function initializeServices(): Promise<void> {
       const { initializeMcpConnectionService } = await import("./services/mcp/McpConnectionService.js");
       const { createKeychainMcpCredentialStore } = await import("./services/mcp/mcpCredentialStore.js");
       const { BUILTIN_MCP_SERVERS } = await import("./services/mcp/mcpServerCatalog.js");
-      const { getAgentService } = await import("./services/AgentService.js");
       const mcpName = (id: string) => BUILTIN_MCP_SERVERS.find((s) => s.id === id)?.name ?? id;
       const { createPenGate, PEN_APPROVAL_TIMEOUT_MS } = await import("./services/mcp/mcpPenGate.js");
       const { getOrgPolicy } = await import("./services/mcp/mcpOrgPolicy.js");
@@ -288,11 +287,16 @@ async function initializeServices(): Promise<void> {
             ).approved,
         }),
       });
-      const registry = getAgentService().getToolRegistry();
-      mcp.setToolSink({
-        // oxlint-disable-next-line @typescript-eslint/no-explicit-any
-        register: (tool) => registry.register(tool as any),
-        unregister: (id) => registry.unregister(id),
+      // Re-attach on every new AgentService: a workspace switch or Papr key
+      // change replaces its ToolRegistry, which would drop all MCP tools.
+      const { onAgentServiceCreated } = await import("./services/AgentService.js");
+      onAgentServiceCreated((svc) => {
+        const registry = svc.getToolRegistry();
+        mcp.setToolSink({
+          // oxlint-disable-next-line @typescript-eslint/no-explicit-any
+          register: (tool) => registry.register(tool as any),
+          unregister: (id) => registry.unregister(id),
+        });
       });
       setTimeout(() => {
         void mcp.restoreAll().catch((err) => console.warn("[MCP] restore failed:", err));

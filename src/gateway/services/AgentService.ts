@@ -6093,9 +6093,29 @@ export function isAnyAgentTurnActive(): boolean {
 /**
  * Get or create AgentService singleton
  */
+const agentServiceCreatedListeners = new Set<(svc: AgentService) => void>();
+
+/**
+ * Run `fn` for every AgentService instance, now and after each reset
+ * (workspace switch, Papr key change). Anything registered into the
+ * ToolRegistry at runtime (e.g. MCP tools) must use this, because a reset
+ * replaces the registry with an empty one.
+ */
+export function onAgentServiceCreated(fn: (svc: AgentService) => void): void {
+  agentServiceCreatedListeners.add(fn);
+  if (agentServiceInstance) fn(agentServiceInstance);
+}
+
 export function getAgentService(): AgentService {
   if (!agentServiceInstance) {
     agentServiceInstance = new AgentService();
+    for (const fn of agentServiceCreatedListeners) {
+      try {
+        fn(agentServiceInstance);
+      } catch (err) {
+        console.warn("[AgentService] created-listener failed:", err);
+      }
+    }
   }
   return agentServiceInstance;
 }
