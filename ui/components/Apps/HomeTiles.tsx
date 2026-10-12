@@ -273,7 +273,7 @@ export function AppTile(p: AppTileProps) {
       </span>
       <div className="ah-solo__row">
         <span className="ah-solo__ic">
-          <AppGlyph app={p.app} size={42} />
+          <AppGlyph app={p.app} size={48} />
           {p.status?.bad ? <span className="ah-bad">!</span> : null}
         </span>
         <div className="ah-solo__txt">
