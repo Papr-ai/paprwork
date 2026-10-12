@@ -25,7 +25,12 @@ import {
   formatTrackSyncSummary,
   pullTrackUpstream,
 } from "../../utils/cloudTrackSyncApi";
-import { listSentProposals } from "../../utils/cloudContributeApi";
+import {
+  fetchSourceAppRole,
+  listSentProposals,
+  type SourceAppRole,
+} from "../../utils/cloudContributeApi";
+import { ShareAccessPanel } from "./ShareAccessPanel";
 import {
   copyAxesFromLineage,
   deriveCopyState,
@@ -282,6 +287,8 @@ export function MiniAppPublishBar({
     };
   }, [proposeMenuOpen]);
   const [contributionsOpen, setContributionsOpen] = useState(false);
+  /** Team-data copies: read-only (or Admin) "Who has access" for the source app. */
+  const [accessOpen, setAccessOpen] = useState(false);
   const [audience, setAudience] = useState<ShareAudience>("private");
   const [permission, setPermission] = useState<SharePermission>("write");
   // Audience "people": the picked allowlist plus the roster it is picked from.
@@ -870,11 +877,30 @@ export function MiniAppPublishBar({
 
   // Inbox follows published prefs (`cloud.codeAccess`), not draft `permission`
   // state — that defaults to "write" and only synced while Share was open.
+  // Roles plan §6: Maintainers and Admins review proposals from their copy too.
+  const [sourceRole, setSourceRole] = useState<SourceAppRole | null>(null);
+  useEffect(() => {
+    if (!isFork) {
+      setSourceRole(null);
+      return;
+    }
+    let cancelled = false;
+    void fetchSourceAppRole(appId).then((r) => !cancelled && setSourceRole(r));
+    return () => {
+      cancelled = true;
+    };
+  }, [appId, isFork]);
+  const reviewsAsCopy =
+    isFork && (sourceRole === "maintainer" || sourceRole === "admin");
   const showOwnerChangeRequests =
-    cloud.live && cloud.codeAccess === "install" && !isFork;
+    (cloud.live && cloud.codeAccess === "install" && !isFork) || reviewsAsCopy;
 
   const incomingChanges = useIncomingCloudChangeRequests(
-    showOwnerChangeRequests ? appId : null,
+    !showOwnerChangeRequests
+      ? null
+      : reviewsAsCopy
+        ? (cloudLineage?.sourceAppId ?? null)
+        : appId,
   );
 
   const contributionKind = contributionAudienceKind(audience, cloud.live);
@@ -2065,9 +2091,9 @@ export function MiniAppPublishBar({
               the app is live. A fork is fully your own app, so it gets the same
               plain Share (the sheet is where you publish it in the first place).
               The fork mark next to the title already says where it came from. */}
-          {/* Collaborators (team or Community) get no Share: the app belongs
-              to the publisher. To share it, use Duplicate as my own app in
-              the menu, then share that copy. */}
+          {/* Team-data copies get Share too (v9): it opens Who has access for
+              the publisher's app — editable for Admins, read-only otherwise.
+              To share your own version, Duplicate as my own app. */}
           {missingTone ? (
             <button
               type="button"
@@ -2095,6 +2121,26 @@ export function MiniAppPublishBar({
                 />
               </svg>
               {missingKeysLabel(missingKeys)}
+            </button>
+          ) : null}
+
+          {onTeamData ? (
+            <button
+              type="button"
+              className="mini-app-publish-bar__button"
+              disabled={cloud.busy}
+              title={`Who has access to ${cloudLineage?.sourceSlug ?? "this app"}`}
+              onClick={() => {
+                void ensureWorkspacePeople();
+                setAccessOpen(true);
+              }}
+            >
+              <ShareAudienceIcon
+                audience="team"
+                loginAccess={cloud.loginAccess}
+                codeAccess={cloud.codeAccess}
+              />
+              Share
             </button>
           ) : null}
 
@@ -2336,6 +2382,19 @@ export function MiniAppPublishBar({
                 installedAppId: appId,
               }}
               busy={cloud.busy}
+            />
+          </div>
+        </ShareSheet>
+      ) : null}
+
+      {accessOpen ? (
+        <ShareSheet title="Who has access" onClose={() => setAccessOpen(false)}>
+          <div className="share-sheet__panel">
+            <ShareAccessPanel
+              appId={appId}
+              members={workspacePeople}
+              membersLoading={workspacePeopleLoading}
+              onClose={() => setAccessOpen(false)}
             />
           </div>
         </ShareSheet>
