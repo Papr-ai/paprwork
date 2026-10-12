@@ -50,6 +50,23 @@ export function setCloudDirectClientFactoryForTests(
   clients.clear();
 }
 
+/**
+ * Credentials handed in by the host instead of fetched via TursoSyncBridge.
+ * The cloud agent sandbox runs without the bridge (TURSO_SYNC_ENABLED=false);
+ * memory already minted per-run creds, so the sandbox entry point registers
+ * them here. Desktop never registers any, so openClient behaves as before.
+ */
+const providedCredentials = new Map<string, { url: string; authToken: string }>();
+
+export function setCloudDirectCredentials(
+  creds: ReadonlyMap<string, { url: string; authToken: string }>,
+): void {
+  for (const [tursoDatabase, value] of creds) {
+    providedCredentials.set(tursoDatabase, value);
+    closeCloudDirectClient(tursoDatabase);
+  }
+}
+
 /** Drop a cached client (database deleted / credentials rotated). */
 export function closeCloudDirectClient(tursoDatabase: string): void {
   const client = clients.get(tursoDatabase);
@@ -94,8 +111,11 @@ async function openClient(tursoDatabase: string): Promise<Client> {
     return cached;
   }
   let client: Client;
+  const provided = providedCredentials.get(tursoDatabase);
   if (clientFactoryOverride) {
     client = await clientFactoryOverride(tursoDatabase);
+  } else if (provided) {
+    client = createClient({ url: provided.url, authToken: provided.authToken });
   } else {
     const { ensureTursoSyncBridge } = await import("../TursoSyncBridge.js");
     const bridge = ensureTursoSyncBridge();

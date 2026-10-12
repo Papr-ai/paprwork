@@ -13,6 +13,7 @@ import {
 } from "./cloneUserRepo.js";
 import { rewritePaprPathForCloudRun } from "./cloudPaprPath.js";
 import { prepareCloudJobEnvironment } from "./prepareCloudJobEnvironment.js";
+import { seedCloudDatabaseRegistry } from "./seedCloudDatabaseRegistry.js";
 import { reinitializeWorkspaceServicesForCloudRun } from "./reinitializeWorkspaceServices.js";
 import { startCloudAgentTursoDebouncedPush } from "./cloudAgentTursoDebouncedPush.js";
 import { startCloudAppWriterDebouncedPush, getCloudAppWriterPushedAppIds } from "./cloudAppWriterDebouncedPush.js";
@@ -441,12 +442,14 @@ export async function beginCloudAgentRun(
   applyVaultKeys(request, envSnapshot);
   applyPaprApiKey(request, envSnapshot);
 
+  // Before services re-init: the registry singleton loads data/databases.json there.
+  const tursoDirect = shouldUseCloudSandboxTursoDirect(paprHome);
+  await seedCloudDatabaseRegistry(request, paprHome, { cloudDirect: tursoDirect });
   await reinitializeWorkspaceServicesForCloudRun({
     paprApiKey: request.paprApiKey,
     userDataPath,
   });
 
-  const tursoDirect = shouldUseCloudSandboxTursoDirect(paprHome);
   await prepareCloudJobEnvironment({
     jobId: request.jobId,
     userId: request.userId,

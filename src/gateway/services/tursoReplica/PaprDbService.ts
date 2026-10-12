@@ -40,6 +40,7 @@ import {
   assertPaprDbExecAllowed,
   assertPaprDbMigrationApplyAllowed,
   assertReplicaDdlAllowed,
+  SCHEMA_VIA_MIGRATION_MSG,
 } from "./replicaSchemaPolicy.js";
 import { MIGRATION_CONFLICT_CODE, checkMigrationPushConflict } from "./tursoReplicaMigrationConflict.js";
 import { rebaseLocalMigrationLedger } from "./tursoReplicaMigrationRebase.js";
@@ -480,6 +481,60 @@ export async function paprDbPull(
   };
 }
 
+/**
+ * Read rows from a registry database (SELECT / WITH only). Routes by storage the
+ * same way /api/db/query does: cloud-direct → Turso primary, replica → sync
+ * engine handle, otherwise a read-only file handle (never checkpoints the WAL).
+ */
+export async function paprDbQuery(options: {
+  dbId?: string;
+  localPath?: string;
+  sql: string;
+  params?: unknown[];
+  limit?: number;
+}): Promise<{
+  rows: Record<string, unknown>[];
+  count: number;
+  truncated: boolean;
+  backend: "cloud-direct" | "turso-replica" | "local";
+}> {
+  await initializeDatabaseRegistry();
+  const source = resolveSource({ dbId: options.dbId, localPath: options.localPath });
+  const { assertReadOnlySql } = await import("../appRuntime/sqlValidation.js");
+  assertReadOnlySql(options.sql);
+  const limit = Math.max(1, Math.min(options.limit ?? 200, 1000));
+  const cap = (rows: Record<string, unknown>[]) => ({
+    rows: rows.slice(0, limit),
+    count: Math.min(rows.length, limit),
+    truncated: rows.length > limit,
+  });
+
+  const { isCloudDirectSource, cloudDirectQuery } = await import("../cloudDirect/cloudDirectDb.js");
+  if (isCloudDirectSource(source)) {
+    const result = await cloudDirectQuery(source, options.sql, options.params);
+    return { ...cap(result.rows), backend: "cloud-direct" };
+  }
+  const { shouldUseTursoReplicaForSource, queryLinkedDbViaTursoReplica } = await import(
+    "./tursoReplicaRouting.js"
+  );
+  if (shouldUseTursoReplicaForSource(source)) {
+    const result = await queryLinkedDbViaTursoReplica(source, options.sql, options.params);
+    return { ...cap(result.rows), backend: "turso-replica" };
+  }
+  const { default: Database } = await import("better-sqlite3");
+  const { openDiagnosticDatabase } = await import("../databaseDiagnostics/sqlite.js");
+  const db = openDiagnosticDatabase(Database, "tools/papr_db_query", source.dbPath, {
+    readonly: true,
+    fileMustExist: true,
+  });
+  try {
+    const rows = db.prepare(options.sql).all(...(options.params ?? [])) as Record<string, unknown>[];
+    return { ...cap(rows), backend: "local" };
+  } finally {
+    db.close();
+  }
+}
+
 export async function paprDbExec(options: {
   dbId?: string;
   localPath?: string;
@@ -489,13 +544,26 @@ export async function paprDbExec(options: {
   changes: number;
   lastInsertRowid: number;
   pendingPush: boolean;
-  backend: "turso-replica" | "legacy-local";
+  backend: "turso-replica" | "legacy-local" | "cloud-direct";
 }> {
   await initializeDatabaseRegistry();
   const source = resolveSource({
     dbId: options.dbId,
     localPath: options.localPath,
   });
+
+  // Cloud-direct: no local file — the Turso primary is the only copy.
+  const { isCloudDirectSource, cloudDirectWrite } = await import(
+    "../cloudDirect/cloudDirectDb.js"
+  );
+  if (isCloudDirectSource(source)) {
+    const { isDdlSql } = await import("./tursoReplicaPrimaryWrite.js");
+    if (isDdlSql(options.sql)) {
+      throw new Error(SCHEMA_VIA_MIGRATION_MSG);
+    }
+    const result = await cloudDirectWrite(source, options.sql, options.params);
+    return { ...result, pendingPush: false, backend: "cloud-direct" };
+  }
 
   if (!isTursoReplicaSyncFeatureEnabled()) {
     throw new Error(
@@ -587,9 +655,14 @@ export async function paprDbCreateMigration(options: {
   // Number after everything in the ledger: a teammate's copy of shared data has
   // the publisher's migrations applied but not their files.
   const { queryLinkedDbViaTursoReplica } = await import("./tursoReplicaRouting.js");
-  const ledger = await queryLinkedDbViaTursoReplica(source, "SELECT id FROM schema_migrations", [], {
-    pullBeforeRead: false,
-  }).catch((error: unknown) => {
+  const { isCloudDirectSource, cloudDirectQuery } = await import("../cloudDirect/cloudDirectDb.js");
+  // Cloud-direct records migrations only in the primary's _papr_schema_migrations ledger.
+  const ledger = await (isCloudDirectSource(source)
+    ? cloudDirectQuery(source, "SELECT id FROM _papr_schema_migrations")
+    : queryLinkedDbViaTursoReplica(source, "SELECT id FROM schema_migrations", [], {
+        pullBeforeRead: false,
+      })
+  ).catch((error: unknown) => {
     console.warn(
       `[PaprDb] ${options.dbId}: couldn't read the migration ledger; numbering from files only:`,
       error instanceof Error ? error.message : error,
@@ -635,7 +708,7 @@ export async function paprDbApplyMigration(options: {
   applied: boolean;
   migrationId: string;
   pendingPush: boolean;
-  backend: "turso-replica" | "legacy-local";
+  backend: "turso-replica" | "legacy-local" | "cloud-direct";
   applyToken?: string;
   replicaApplied?: boolean;
   cloudApplied?: boolean;
@@ -653,6 +726,22 @@ export async function paprDbApplyMigration(options: {
   const migrationFileName = options.migrationId.endsWith(".sql")
     ? options.migrationId
     : `${options.migrationId}.sql`;
+
+  const { isCloudDirectSource } = await import("../cloudDirect/cloudDirectDb.js");
+  if (isCloudDirectSource(source)) {
+    await assertNotCollaboratorOnSharedDatabase(options.dbId);
+    const { applyCloudDirectMigrations } = await import(
+      "../cloudDirect/cloudDirectMigrations.js"
+    );
+    const appliedIds = await applyCloudDirectMigrations(migrationRoot, source.dbPath);
+    const migrationId = migrationFileName.replace(/\.sql$/, "");
+    return {
+      applied: appliedIds.includes(migrationId),
+      migrationId,
+      pendingPush: false,
+      backend: "cloud-direct",
+    };
+  }
 
   if (!isTursoReplicaSyncFeatureEnabled()) {
     const appliedIds = await applyDatabaseMigrations(migrationRoot, source.dbPath);

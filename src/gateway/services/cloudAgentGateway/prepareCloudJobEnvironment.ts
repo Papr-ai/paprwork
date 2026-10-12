@@ -10,10 +10,6 @@ import { getJobsService, initializeJobsService } from "../JobsService.js";
 import { STANDALONE_APP_ID } from "../jobs/appIds.js";
 import { isHomeDailyBriefJob } from "../jobs/dailyBriefVerification.js";
 import { todayBriefDateKey } from "../../../core/utils/briefDateKey.js";
-import {
-  tursoCredsByDbIdFromCloudSources,
-  shouldUseCloudSandboxTursoDirect,
-} from "./cloudSandboxTursoDirect.js";
 import type { CloudTursoSource } from "./types.js";
 
 export interface PrepareCloudJobEnvironmentInput {
@@ -27,8 +23,6 @@ export async function prepareCloudJobEnvironment(
 ): Promise<void> {
   const jobId = typeof input === "string" ? input : input.jobId;
   const userId = typeof input === "string" ? undefined : input.userId;
-  const tursoSources =
-    typeof input === "string" ? undefined : input.tursoSources;
 
   await initializeJobsService();
   const jobsService = getJobsService();
@@ -49,17 +43,10 @@ export async function prepareCloudJobEnvironment(
 
   const writeTargets = await resolveJobWriteTargets(job, {
     actingUserId: userId,
-    tursoCredsByDbId: tursoCredsByDbIdFromCloudSources(tursoSources),
   });
   const linkedAppId = (job.appIds ?? []).find((id) => id !== STANDALONE_APP_ID);
   if (writeTargets.length > 0) {
     Object.assign(process.env, jobWriteDatabaseEnv(writeTargets, linkedAppId));
-    if (shouldUseCloudSandboxTursoDirect()) {
-      console.log(
-        `[CloudAgentRun] Turso direct env for job ${jobId}: ` +
-          `${writeTargets.map((t) => t.dbId).join(", ")}`,
-      );
-    }
   } else {
     delete process.env.APP_DB;
     delete process.env.APP_DB_ALIAS;

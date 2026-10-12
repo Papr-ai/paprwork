@@ -6,7 +6,6 @@
 import path from "path";
 import { getPaprRoot } from "../../../core/utils/paprRoot.js";
 import { isTursoReplicaSyncFeatureEnabled } from "../../utils/tursoReplicaEnabled.js";
-import type { CloudTursoSource } from "./types.js";
 
 export function isCloudRunSandbox(paprHome?: string): boolean {
   const home = paprHome ?? getPaprRoot();
@@ -25,26 +24,4 @@ export function shouldUseCloudSandboxTursoDirect(paprHome?: string): boolean {
     return isCloudRunSandbox(paprHome);
   }
   return isCloudRunSandbox(paprHome) && isTursoReplicaSyncFeatureEnabled();
-}
-
-export interface CloudSandboxTursoCredentials {
-  url: string;
-  authToken: string;
-}
-
-/** Map registry dbId → Turso creds from memory-prepared cloud agent request. */
-export function tursoCredsByDbIdFromCloudSources(
-  sources: readonly CloudTursoSource[] | undefined,
-): Map<string, CloudSandboxTursoCredentials> {
-  const map = new Map<string, CloudSandboxTursoCredentials>();
-  for (const source of sources ?? []) {
-    if (!source.syncKey.startsWith("db-")) {
-      continue;
-    }
-    map.set(source.syncKey, {
-      url: source.databaseUrl,
-      authToken: source.authToken,
-    });
-  }
-  return map;
 }

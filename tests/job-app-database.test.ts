@@ -105,55 +105,6 @@ describe("job write database resolution", () => {
     expect(env.APP_ID).toBe("app-1");
   });
 
-  it("resolves writeDbIds via turso creds in cloud sandbox without local file", async () => {
-    getById.mockReturnValue({
-      dbId: "db-billing",
-      label: "Billing",
-      localPath: "/tmp/missing/billing.db",
-      status: "active",
-    });
-    existsSync.mockReturnValue(false);
-
-    const tempRoot = await fs.mkdtemp(path.join(os.tmpdir(), "papr-turso-direct-"));
-    const paprHome = path.join(tempRoot, "papr-cloud-run", "run1", "Papr");
-    await fs.mkdir(paprHome, { recursive: true });
-
-    const originalPaprHome = process.env.PAPR_HOME;
-    const originalReplicaSync = process.env.PAPR_TURSO_REPLICA_SYNC;
-    process.env.PAPR_HOME = paprHome;
-    process.env.PAPR_TURSO_REPLICA_SYNC = "replica-records";
-
-    try {
-      const targets = await resolveJobWriteTargets(
-        { writeDbIds: ["db-billing"], appIds: ["app-1"] },
-        {
-          tursoCredsByDbId: new Map([
-            [
-              "db-billing",
-              { url: "libsql://billing.turso.io", authToken: "tok" },
-            ],
-          ]),
-        },
-      );
-
-      expect(targets).toEqual([
-        expect.objectContaining({
-          dbId: "db-billing",
-          turso: {
-            url: "libsql://billing.turso.io",
-            authToken: "tok",
-          },
-        }),
-      ]);
-    } finally {
-      if (originalPaprHome === undefined) delete process.env.PAPR_HOME;
-      else process.env.PAPR_HOME = originalPaprHome;
-      if (originalReplicaSync === undefined) delete process.env.PAPR_TURSO_REPLICA_SYNC;
-      else process.env.PAPR_TURSO_REPLICA_SYNC = originalReplicaSync;
-      await fs.rm(tempRoot, { recursive: true, force: true });
-    }
-  });
-
   it("legacy fallback uses job-linked sqlite when primary has jobId but no dbId", async () => {
     getPrimaryDataSource.mockResolvedValue({
       id: "job-abc:Daily Brief Generator (job-abc)",

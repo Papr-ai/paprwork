@@ -12,10 +12,6 @@ import type { DatabaseRecord } from "./DatabaseRegistryService.js";
 import type { DatabaseSyncMode } from "./tursoReplica/tursoReplicaTypes.js";
 import { rewritePaprPathForCloudRun } from "./cloudAgentGateway/cloudPaprPath.js";
 import {
-  shouldUseCloudSandboxTursoDirect,
-  type CloudSandboxTursoCredentials,
-} from "./cloudAgentGateway/cloudSandboxTursoDirect.js";
-import {
   extractDatabaseSlugFromPath,
   workspaceRegistryDbPath,
 } from "./resolveRegistryDbPath.js";
@@ -26,8 +22,6 @@ export interface JobWriteDatabaseTarget {
   dbPath: string;
   /** Env suffix e.g. METRICS → PAPR_DB_METRICS */
   envKey: string;
-  /** Cloud sandbox Turso-direct: jobs use HTTP instead of local SQLite path. */
-  turso?: CloudSandboxTursoCredentials;
   /**
    * "replica" means a Turso sync engine owns this file's WAL. Jobs must not
    * hold a raw write handle on it: SQLite auto-checkpoints when the last
@@ -43,7 +37,6 @@ export interface ResolveJobWriteTargetsOptions {
   actingUserId?: string;
   /** App publisher; defaults to actingUserId (desktop publisher === caller). */
   publisherUserId?: string;
-  tursoCredsByDbId?: ReadonlyMap<string, CloudSandboxTursoCredentials>;
 }
 
 export function databaseEnvKey(
@@ -133,54 +126,10 @@ async function loadRegistryRecord(
   return record;
 }
 
-async function resolveTursoCredsForRegistryRecord(
-  record: DatabaseRecord,
-  options?: ResolveJobWriteTargetsOptions,
-): Promise<CloudSandboxTursoCredentials | null> {
-  const fromRequest = options?.tursoCredsByDbId?.get(record.dbId);
-  if (fromRequest) {
-    return fromRequest;
-  }
-
-  const { getTursoSyncBridge } = await import("./TursoSyncBridge.js");
-  const bridge = getTursoSyncBridge();
-  if (!bridge?.enabled) {
-    return null;
-  }
-
-  const { tursoNameForRecord } = await import("./DatabaseRegistryService.js");
-  const { resolveTursoSuffixUserId } = await import(
-    "./appRuntime/tursoRuntimeIdentity.js"
-  );
-  const publisherUserId =
-    options?.publisherUserId?.trim() ?? options?.actingUserId?.trim() ?? "";
-  const suffixUserId = resolveTursoSuffixUserId(record.isolation, {
-    publisherUserId,
-    callerUserId: options?.actingUserId,
-  });
-  const database = tursoNameForRecord(record, suffixUserId);
-  try {
-    const creds = await bridge.fetchCredentials(database);
-    return { url: creds.tursoUrl, authToken: creds.authToken };
-  } catch {
-    return null;
-  }
-}
-
 async function resolveWriteTargetForRecord(
   record: DatabaseRecord,
-  options?: ResolveJobWriteTargetsOptions,
+  _options?: ResolveJobWriteTargetsOptions,
 ): Promise<JobWriteDatabaseTarget> {
-  if (shouldUseCloudSandboxTursoDirect()) {
-    const turso = await resolveTursoCredsForRegistryRecord(record, options);
-    if (turso) {
-      return {
-        ...targetFromRegistryRecord(record, record.localPath),
-        turso,
-      };
-    }
-  }
-
   if (record.syncMode === "cloud-direct") {
     // No local file by design; the job reaches it through the gateway proxy.
     return targetFromRegistryRecord(record, record.localPath);
@@ -340,15 +289,11 @@ export async function requireJobAppDatabase(
  * See JobWriteDatabaseTarget.syncMode for the WAL-truncation mechanism.
  */
 export function isReplicaManagedTarget(
-  target: Pick<JobWriteDatabaseTarget, "syncMode" | "turso">,
+  target: Pick<JobWriteDatabaseTarget, "syncMode">,
 ): boolean {
-  // Cloud sandbox Turso-direct already writes over HTTP — no local WAL at risk.
   // Cloud-direct has no local file at all: papr_db must route every read and
   // write through the gateway proxy, exactly like a replica.
-  return (
-    !target.turso &&
-    (target.syncMode === "replica" || target.syncMode === "cloud-direct")
-  );
+  return target.syncMode === "replica" || target.syncMode === "cloud-direct";
 }
 
 export function jobWriteDatabaseEnv(
@@ -364,19 +309,11 @@ export function jobWriteDatabaseEnv(
     const prefix = `PAPR_DB_${target.envKey}`;
     env[`${prefix}_ALIAS`] = target.alias;
     env[`${prefix}_ID`] = target.dbId;
-    if (target.turso) {
-      env[`${prefix}_MODE`] = "turso";
-      env[`${prefix}_URL`] = target.turso.url;
-      env[`${prefix}_AUTH_TOKEN`] = target.turso.authToken;
-    } else {
-      // The path stays exported either way: reads are the common case and a
-      // read-only handle never checkpoints. "replica" mode tells papr_db to
-      // open it mode=ro and route writes through the gateway proxy instead.
-      env[prefix] = target.dbPath;
-      env[`${prefix}_MODE`] = isReplicaManagedTarget(target)
-        ? "replica"
-        : "local";
-    }
+    // The path stays exported either way: reads are the common case and a
+    // read-only handle never checkpoints. "replica" mode tells papr_db to
+    // open it mode=ro and route writes through the gateway proxy instead.
+    env[prefix] = target.dbPath;
+    env[`${prefix}_MODE`] = isReplicaManagedTarget(target) ? "replica" : "local";
   }
 
   if (targets.length > 0) {
@@ -384,14 +321,8 @@ export function jobWriteDatabaseEnv(
     const first = targets[0];
     env.APP_DB_ALIAS = first.alias;
     env.APP_DB_ID = first.dbId;
-    if (first.turso) {
-      env.PAPR_DB_MODE = "turso";
-      env.PAPR_DB_URL = first.turso.url;
-      env.PAPR_DB_AUTH_TOKEN = first.turso.authToken;
-    } else {
-      env.APP_DB = first.dbPath;
-      env.PAPR_DB_MODE = isReplicaManagedTarget(first) ? "replica" : "local";
-    }
+    env.APP_DB = first.dbPath;
+    env.PAPR_DB_MODE = isReplicaManagedTarget(first) ? "replica" : "local";
   }
 
   return env;
@@ -429,11 +360,7 @@ export function jobWriteDatabasePromptLines(
   ];
   let hasReplica = false;
   for (const target of targets) {
-    if (target.turso) {
-      lines.push(
-        `  PAPR_DB_${target.envKey}_MODE=turso  (${target.alias}, dbId=${target.dbId})`,
-      );
-    } else if (isReplicaManagedTarget(target)) {
+    if (isReplicaManagedTarget(target)) {
       hasReplica = true;
       lines.push(
         `  PAPR_DB_${target.envKey}="${target.dbPath}"  (${target.alias}, dbId=${target.dbId}) [replica — read-only file]`,
