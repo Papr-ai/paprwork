@@ -1191,12 +1191,31 @@ export class LocalStorageProvider implements IStorageProvider {
   private turnFactsFill: Promise<number> | null = null;
 
   /**
+   * Resolves once no chat or agent job has been mid-turn for IDLE_QUIET_MS.
+   * Polls cheaply (an in-memory session check) and gives up if storage closes.
+   */
+  private async waitForAgentIdle(): Promise<boolean> {
+    const IDLE_QUIET_MS = 15_000;
+    const POLL_MS = 5_000;
+    const { isAnyAgentTurnActive } = await import("../AgentService.js");
+    let lastBusy = isAnyAgentTurnActive() ? Date.now() : 0;
+    while (this.dbReady) {
+      if (isAnyAgentTurnActive()) lastBusy = Date.now();
+      if (Date.now() - lastBusy >= IDLE_QUIET_MS) return true;
+      await new Promise((resolve) => setTimeout(resolve, POLL_MS));
+    }
+    return false;
+  }
+
+  /**
    * Write turn_facts rows for turns that lack a current one, newest first,
    * in small batches so other chat reads interleave on the worker. Safe to
    * call any number of times: one fill runs at a time, and once every turn
    * has a row the anti-join returns nothing and this returns 0 immediately.
    */
-  async fillTurnFacts(options: { sinceDays?: number; batch?: number; maxBatches?: number } = {}): Promise<number> {
+  async fillTurnFacts(
+    options: { sinceDays?: number; batch?: number; maxBatches?: number; whenIdle?: boolean } = {},
+  ): Promise<number> {
     if (this.turnFactsFill) return this.turnFactsFill;
     const since = new Date(Date.now() - (options.sinceDays ?? 3650) * 864e5).toISOString();
     const batch = options.batch ?? 200;
@@ -1206,6 +1225,9 @@ export class LocalStorageProvider implements IStorageProvider {
       const paprRoot = getPaprRoot();
       let written = 0;
       for (let i = 0; i < maxBatches && this.dbReady; i += 1) {
+        // Background catch-up yields to live turns: wait before every batch,
+        // so a chat that starts mid-fill pauses it within one batch (~250ms).
+        if (options.whenIdle && !(await this.waitForAgentIdle())) break;
         const raw = (await this.readRows("fillTurnFacts", MISSING_FACTS_SQL, [since, batch])) as RawTurnCalls[];
         if (raw.length === 0) break;
         storeTurnFacts(this.db, raw.map((r) => computeTurnFact(r, paprRoot)));
@@ -1267,10 +1289,14 @@ export class LocalStorageProvider implements IStorageProvider {
     // let the rest of history fill in the background. Later opens find
     // nothing missing and skip straight to the read.
     const [{ n: missing }] = (await this.readRows("countMissingTurnFacts", COUNT_MISSING_FACTS_SQL, [since])) as Array<{ n: number }>;
-    if (missing > 0) {
+    // Only block the page on a fill when no turn is running; otherwise read
+    // what exists now (unfilled turns just lack tool/project detail) and let
+    // the idle catch-up complete it.
+    const { isAnyAgentTurnActive } = await import("../AgentService.js");
+    if (missing > 0 && !isAnyAgentTurnActive() && !this.turnFactsFill) {
       await this.fillTurnFacts({ sinceDays: days });
     }
-    void this.fillTurnFacts().catch(() => {});
+    void this.fillTurnFacts({ whenIdle: true }).catch(() => {});
     const [rows, chats, apps] = await Promise.all([
       this.readRows("getAgentsOverview", OVERVIEW_ROWS_SQL, [since]),
       this.readRows("getAgentsOverviewChats", OVERVIEW_CHATS_SQL, [since]),

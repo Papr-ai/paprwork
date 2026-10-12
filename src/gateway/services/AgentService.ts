@@ -6082,6 +6082,15 @@ ${last15.substring(0, 8_000)}`;
 let agentServiceInstance: AgentService | null = null;
 
 /**
+ * True while any chat or agent job is mid-turn. Background maintenance
+ * (turn_facts catch-up) checks this so it never competes with a live turn for
+ * the single chat-storage read worker. Never constructs the service.
+ */
+export function isAnyAgentTurnActive(): boolean {
+  return (agentServiceInstance?.getSessionManager().getStreamingSessions().length ?? 0) > 0;
+}
+
+/**
  * Get or create AgentService singleton
  */
 export function getAgentService(): AgentService {
