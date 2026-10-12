@@ -125,14 +125,14 @@ export function TeamAppsCollection({
   const more = entries.length - shown.length;
   const team = namespaceName?.trim() || "your team";
   return (
-    <div className={`ah-card ah-coll ah-coll--auto ${entries.length > 3 ? "ah-coll--big" : ""}`}>
+    <div className={`ah-card ah-coll ah-coll--auto ${entries.length > 3 ? "ah-coll--big" : "ah-coll--one"}`}>
       <div className={`ah-coll__art ah-tint-${bannerShade(ID)}`}>
         <div className="ah-coll__grid">
           {shown.map((e) => (
             <div key={e.catalogId} className="ah-cell">
               <button type="button" className="ah-cell__open" onClick={() => setOpen(e)} title={e.description}>
                 <span className="ah-cell__ic">
-                  <DropGlyph icon={clean(e.icon)} title={e.name} size={50} />
+                  <DropGlyph icon={clean(e.icon)} title={e.name} size={entries.length > 3 ? 58 : 84} />
                 </span>
                 <span className="ah-cell__t">{e.name}</span>
                 <span className="ah-cell__get">{flow.installingId === e.catalogId ? "Getting…" : "Get"}</span>

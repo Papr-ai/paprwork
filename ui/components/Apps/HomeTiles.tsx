@@ -150,7 +150,7 @@ export function CollectionTile(p: CollectionTileProps) {
   const folderId = p.auto ? null : p.id;
   return (
     <div
-      className={`ah-card ah-coll ${big ? "ah-coll--big" : ""} ${p.auto ? "ah-coll--auto" : ""} ${dndClass(p.id, p.dnd)}`}
+      className={`ah-card ah-coll ${big ? "ah-coll--big" : "ah-coll--one"} ${p.auto ? "ah-coll--auto" : ""} ${dndClass(p.id, p.dnd)}`}
       draggable={!p.auto}
       onDragStart={p.auto ? undefined : (e) => p.dnd.onDragStart(p.id, e)}
       onDragOver={p.auto ? undefined : (e) => p.dnd.onDragOver(p.id, e, true)}
@@ -172,7 +172,7 @@ export function CollectionTile(p: CollectionTileProps) {
           >
             <button type="button" className="ah-cell__open" onClick={() => p.onOpenApp(a)} title={a.description || displayTitle(a)}>
               <span className="ah-cell__ic">
-                <AppGlyph app={a} size={50} />
+                <AppGlyph app={a} size={big ? 58 : 84} />
                 {p.attention(a) ? <span className="ah-bad" title="Needs attention">!</span> : null}
                 <ShareMark share={p.shareById[a.id]} />
               </span>
