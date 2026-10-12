@@ -111,11 +111,33 @@ export function OAuthSection({
     setGuidedSetupOpen(true);
   }, []);
 
+  // Claude mirrors onboarding (ConnectAIStep): adopt a live Claude Code token if
+  // one exists, otherwise go straight to the guided stepper. We deliberately do
+  // NOT call startOAuthLogin() here — auth:claude:start-oauth opens a Terminal
+  // running `claude setup-token` and THEN the modal opened at step 1, whose
+  // step 3 opened a second Terminal. Users signed in in the first one and
+  // never reached the paste step, or pasted a token from the wrong session.
+  const [claudeChecking, setClaudeChecking] = useState(false);
   const handleStartOAuthLogin = async () => {
-    if (provider === "anthropic") {
-      guidedAutoOpenKeyRef.current = null;
+    if (provider !== "anthropic") {
+      await startOAuthLogin();
+      return;
     }
-    await startOAuthLogin();
+    guidedAutoOpenKeyRef.current = null;
+    trackOAuthProviderStep(provider, "connect_clicked", { source: oauthSource });
+    setClaudeChecking(true);
+    try {
+      const synced = await window.electronAPI.oauth.claude
+        .trySyncFromStorage({ source: oauthSource })
+        .catch(() => null);
+      if (synced?.success) {
+        handleClaudeConnected();
+        return;
+      }
+    } finally {
+      setClaudeChecking(false);
+    }
+    openGuidedSetup();
   };
 
   const closeGuidedSetup = () => {

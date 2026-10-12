@@ -48,7 +48,7 @@ describe("formatAgentFocusContext", () => {
     expect(text).toContain(AGENT_FOCUS_CONTEXT_PREFIX);
     expect(text).toContain("abc-123");
     expect(text).toContain("index.html");
-    expect(text).toContain("edit_file");
+    expect(text).toContain("edit_app_file");
     expect(text).toContain("Skip `list_apps`");
   });
 
