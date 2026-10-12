@@ -25,6 +25,7 @@ import "./CommunityAppsView.css";
 import "./AppsHome.css";
 import { DropGlyph } from "./HomeTiles";
 import { CatalogAppDetails, CatalogBanner, CatIcon, catalogBy, catalogKeyServices } from "./CatalogAppDetails";
+import { FeaturedBanner, pickFeaturedCatalogEntry } from "./CatalogFeatured";
 import { HomeMenu, type HomeMenuItem } from "./HomeMenu";
 import { trackEvent } from "../../lib/telemetry";
 import {
@@ -775,82 +776,93 @@ export function CommunityAppsView({
       ? categoryEntries.filter((entry) => !isTeamSharedVisibility(entry.visibility))
       : sortCommunityEntriesInstallableFirst(categoryEntries);
 
+  const renderCatalogCard = (entry: CommunityCatalogEntry, variant?: "featured") => {
+    const mine =
+      entry.isOwned === true || Boolean(entry.appId && ownLocalAppIds.has(entry.appId));
+    const resolved = resolveLocalAppIdForCatalogEntry(
+      mine ? { ...entry, isOwned: true } : entry,
+      installedAppIds,
+      lineageIndex,
+    );
+    // Publisher copy can only be opened if it's actually on this computer.
+    const localAppId =
+      resolved && (installedAppIds.has(resolved) || entry.isOwned === true) ? resolved : null;
+    const cardEntry = mine ? { ...entry, isOwned: true } : entry;
+    const liveUrl = entry.source === "cloud" ? resolveCatalogLiveWebUrl(entry) : null;
+    const canGet = entry.source === "cloud" && canInstallCloudCatalogEntry(cardEntry, localAppId);
+    const menuItems: HomeMenuItem[] = [];
+    if (localAppId) {
+      menuItems.push({ label: "Open", onSelect: () => openLocalApp(localAppId, entry.name) });
+    }
+    if (liveUrl) {
+      menuItems.push({ label: "Open on the web", onSelect: () => openCloudPreview(entry) });
+      menuItems.push({
+        label: "Copy link",
+        onSelect: () => void navigator.clipboard?.writeText(liveUrl).catch(() => undefined),
+      });
+    }
+    if (canGet) menuItems.push({ label: "Get a copy", onSelect: () => startCloudInstall(entry) });
+    const libraryItems = localAppId && libraryMenuFor ? libraryMenuFor(localAppId) : [];
+    if (libraryItems.length) menuItems.push({ label: "—", onSelect: () => undefined }, ...libraryItems);
+    return (
+      <CommunityAppCard
+        variant={variant}
+        menu={
+          menuItems.length ? (
+            <HomeMenu items={menuItems} moveTargets={[]} onMove={() => undefined} />
+          ) : null
+        }
+        key={entry.catalogId}
+        entry={cardEntry}
+        localAppId={localAppId}
+        isInstalled={
+          entry.source === "cloud"
+            ? isCloudEntryInstalled(entry, installedAppIds, lineageIndex)
+            : Boolean(entry.bundleId && installedAppIds.has(entry.bundleId))
+        }
+        installedForkCount={installedForkCountForEntry(entry, lineageIndex)}
+        onOssImport={() => handleOssImportClick(entry)}
+        onCloudInstall={() => startCloudInstall(entry)}
+        isInstalling={installingId === entry.catalogId}
+        onOpen={
+          localAppId
+            ? () => openLocalApp(localAppId, entry.name)
+            : entry.liveUrl || (entry.namespaceId && entry.slug)
+              ? () => openCloudPreview(entry)
+              : undefined
+        }
+        onOpenWeb={
+          entry.source === "cloud" && (entry.liveUrl || (entry.namespaceId && entry.slug))
+            ? () => openCloudPreview(entry)
+            : undefined
+        }
+        onOpenWebHover={
+          entry.source === "cloud" && (entry.liveUrl || (entry.namespaceId && entry.slug))
+            ? () => prefetchCloudPreview(entry, null)
+            : undefined
+        }
+        onOpenHover={
+          !localAppId && (entry.liveUrl || (entry.namespaceId && entry.slug))
+            ? () => prefetchCloudPreview(entry, localAppId)
+            : undefined
+        }
+      />
+    );
+  };
+
   const renderCatalogGrid = (entries: CommunityCatalogEntry[]) => (
-    <div className="community-apps__grid">
-      {entries.map((entry) => {
-        const mine =
-          entry.isOwned === true || Boolean(entry.appId && ownLocalAppIds.has(entry.appId));
-        const resolved = resolveLocalAppIdForCatalogEntry(
-          mine ? { ...entry, isOwned: true } : entry,
-          installedAppIds,
-          lineageIndex,
-        );
-        // Publisher copy can only be opened if it's actually on this computer.
-        const localAppId =
-          resolved && (installedAppIds.has(resolved) || entry.isOwned === true) ? resolved : null;
-        const cardEntry = mine ? { ...entry, isOwned: true } : entry;
-        const liveUrl = entry.source === "cloud" ? resolveCatalogLiveWebUrl(entry) : null;
-        const canGet = entry.source === "cloud" && canInstallCloudCatalogEntry(cardEntry, localAppId);
-        const menuItems: HomeMenuItem[] = [];
-        if (localAppId) {
-          menuItems.push({ label: "Open", onSelect: () => openLocalApp(localAppId, entry.name) });
-        }
-        if (liveUrl) {
-          menuItems.push({ label: "Open on the web", onSelect: () => openCloudPreview(entry) });
-          menuItems.push({
-            label: "Copy link",
-            onSelect: () => void navigator.clipboard?.writeText(liveUrl).catch(() => undefined),
-          });
-        }
-        if (canGet) menuItems.push({ label: "Get a copy", onSelect: () => startCloudInstall(entry) });
-        const libraryItems = localAppId && libraryMenuFor ? libraryMenuFor(localAppId) : [];
-        if (libraryItems.length) menuItems.push({ label: "—", onSelect: () => undefined }, ...libraryItems);
-        return (
-          <CommunityAppCard
-            menu={
-              menuItems.length ? (
-                <HomeMenu items={menuItems} moveTargets={[]} onMove={() => undefined} />
-              ) : null
-            }
-            key={entry.catalogId}
-            entry={cardEntry}
-            localAppId={localAppId}
-            isInstalled={
-              entry.source === "cloud"
-                ? isCloudEntryInstalled(entry, installedAppIds, lineageIndex)
-                : Boolean(entry.bundleId && installedAppIds.has(entry.bundleId))
-            }
-            installedForkCount={installedForkCountForEntry(entry, lineageIndex)}
-            onOssImport={() => handleOssImportClick(entry)}
-            onCloudInstall={() => startCloudInstall(entry)}
-            isInstalling={installingId === entry.catalogId}
-            onOpen={
-              localAppId
-                ? () => openLocalApp(localAppId, entry.name)
-                : entry.liveUrl || (entry.namespaceId && entry.slug)
-                  ? () => openCloudPreview(entry)
-                  : undefined
-            }
-            onOpenWeb={
-              entry.source === "cloud" && (entry.liveUrl || (entry.namespaceId && entry.slug))
-                ? () => openCloudPreview(entry)
-                : undefined
-            }
-            onOpenWebHover={
-              entry.source === "cloud" && (entry.liveUrl || (entry.namespaceId && entry.slug))
-                ? () => prefetchCloudPreview(entry, null)
-                : undefined
-            }
-            onOpenHover={
-              !localAppId && (entry.liveUrl || (entry.namespaceId && entry.slug))
-                ? () => prefetchCloudPreview(entry, localAppId)
-                : undefined
-            }
-          />
-        );
-      })}
-    </div>
+    <div className="community-apps__grid">{entries.map((entry) => renderCatalogCard(entry))}</div>
   );
+
+  // Community "Featured": a publisher headline wins, then the most-installed app.
+  const featured =
+    scope === "global" && !resultsHeading && !searchQuery && category === null
+      ? pickFeaturedCatalogEntry(publicWorkspaceEntries)
+      : null;
+  const gridEntries =
+    scope === "namespace"
+      ? [...teamEntries, ...publicWorkspaceEntries]
+      : publicWorkspaceEntries.filter((e) => e !== featured);
 
   const hiddenByPlatform =
     scope === "global"
@@ -1030,11 +1042,9 @@ export function CommunityAppsView({
         />
       )}
 
-      {resultsHeading
-        ? null
-        : renderCatalogGrid(
-            scope === "namespace" ? [...teamEntries, ...publicWorkspaceEntries] : publicWorkspaceEntries,
-          )}
+      {featured ? renderCatalogCard(featured, "featured") : null}
+
+      {resultsHeading ? null : renderCatalogGrid(gridEntries)}
 
       {optionalDepsNotice ? (
         <CloudInstallOptionalDepsNotice
@@ -1097,6 +1107,8 @@ interface CommunityAppCardProps {
   onOpenWebHover?: () => void;
   /** ⋯ menu (same component as My apps cards). */
   menu?: ReactNode;
+  /** "featured" = the big Community banner. */
+  variant?: "featured";
 }
 
 export function CommunityAppCard({
@@ -1111,6 +1123,7 @@ export function CommunityAppCard({
   menu,
   onOpenWeb,
   onOpenWebHover,
+  variant,
 }: CommunityAppCardProps) {
 
   const showInstall = canInstallCloudCatalogEntry(entry, localAppId);
@@ -1157,6 +1170,24 @@ export function CommunityAppCard({
     );
   };
 
+  const detailsModal = details ? (
+    <CatalogAppDetails
+      entry={shown}
+      coverUrl={coverUrl}
+      hasWeb={hasWeb && entry.source === "cloud"}
+      actions={actions(true)}
+      onClose={() => setDetails(false)}
+    />
+  ) : null;
+
+  if (variant === "featured") {
+    return (
+      <FeaturedBanner entry={shown} coverUrl={coverUrl} onOpen={() => setDetails(true)} actions={actions(false)}>
+        {detailsModal}
+      </FeaturedBanner>
+    );
+  }
+
   // App Store–style: big banner, then droplet · name (+ small icons) · "By …" · buttons.
   // Details (schedule, keys, updated, description) live in the modal.
   return (
@@ -1192,15 +1223,7 @@ export function CommunityAppCard({
         </div>
         <span className="cat-acts">{actions(false)}</span>
       </div>
-      {details ? (
-        <CatalogAppDetails
-          entry={shown}
-          coverUrl={coverUrl}
-          hasWeb={hasWeb && entry.source === "cloud"}
-          actions={actions(true)}
-          onClose={() => setDetails(false)}
-        />
-      ) : null}
+      {detailsModal}
     </div>
   );
 }

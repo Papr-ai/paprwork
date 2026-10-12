@@ -70,6 +70,8 @@ export interface CommunityCatalogEntry {
   publisherUserId?: string;
   /** Broad category the publisher's app was sorted into (set at publish). */
   category?: string;
+  /** Editorial headline for the Community featured banner (publisher-set). */
+  headline?: string;
   /** Scheduled job summary (denormalized at publish time) */
   catalogAutomation?: CatalogAutomation;
 }

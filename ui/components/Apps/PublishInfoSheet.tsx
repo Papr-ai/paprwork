@@ -33,6 +33,7 @@ export function PublishInfoSheet({
 }: PublishInfoSheetProps) {
   const [title, setTitle] = useState(initialTitle);
   const [description, setDescription] = useState("");
+  const [headline, setHeadline] = useState("");
   const [coverVersion, setCoverVersion] = useState(() => String(Date.now()));
   const [hasCover, setHasCover] = useState(true);
   const [choice, setChoice] = useState<CoverChoice>("cover");
@@ -43,10 +44,11 @@ export function PublishInfoSheet({
   useEffect(() => {
     let cancelled = false;
     void gateway.send("app:get", { appId }).then((resp) => {
-      const data = resp.data as { title?: string; description?: string } | undefined;
+      const data = resp.data as { title?: string; description?: string; headline?: string } | undefined;
       if (cancelled || !data) return;
       if (data.title) setTitle(data.title);
       setDescription(data.description ?? "");
+      setHeadline(data.headline ?? "");
     });
     return () => {
       cancelled = true;
@@ -102,7 +104,12 @@ export function PublishInfoSheet({
     setSaving(true);
     setError(null);
     try {
-      await gateway.send("app:update", { appId, title: name, description: description.trim() });
+      await gateway.send("app:update", {
+        appId,
+        title: name,
+        description: description.trim(),
+        headline: headline.trim(),
+      });
       await setAppCoverShared(appId, choice === "cover" && hasCover);
       onConfirmed();
     } catch (err) {
@@ -128,6 +135,17 @@ export function PublishInfoSheet({
           placeholder="One or two sentences on what it does."
           onChange={(e) => setDescription(e.target.value)}
         />
+      </label>
+      <label className="pis-field">
+        <span className="pis-label">Headline <em className="pis-opt">optional</em></span>
+        <input
+          className="pis-input"
+          maxLength={120}
+          value={headline}
+          placeholder="Skip the standup meeting. Keep the standup."
+          onChange={(e) => setHeadline(e.target.value)}
+        />
+        <span className="pis-hint">Shown big if the app is featured in Community.</span>
       </label>
       <div className="pis-field">
         <span className="pis-label">Cover</span>

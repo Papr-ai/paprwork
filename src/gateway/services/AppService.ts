@@ -217,6 +217,8 @@ export interface MiniApp {
   agentChat?: AppAgentChatConfig;
   /** Topic tags for Community / Team catalog cards (not API integrations). */
   tags?: string[];
+  /** Short editorial line shown when the app is featured in Community. */
+  headline?: string;
 }
 
 export interface AppFile {

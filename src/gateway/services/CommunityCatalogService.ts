@@ -97,6 +97,7 @@ interface CloudCommunityApiEntry {
   catalogPlatform?: string[];
   catalogRequiresDesktop?: boolean;
   catalogCategory?: string;
+  catalogHeadline?: string;
   catalogAutomation?: {
     scheduleLabel: string;
     scheduledJobCount: number;
@@ -331,6 +332,7 @@ function cloudEntryFromApi(
       : {}),
     ...(entry.updatedAt ? { updatedAt: entry.updatedAt } : {}),
     ...(entry.catalogCategory ? { category: entry.catalogCategory } : {}),
+    ...(entry.catalogHeadline?.trim() ? { headline: entry.catalogHeadline.trim() } : {}),
     catalogAutomation: entry.catalogAutomation
       ? {
           scheduleLabel: sanitizeScheduleLabel(entry.catalogAutomation.scheduleLabel),
