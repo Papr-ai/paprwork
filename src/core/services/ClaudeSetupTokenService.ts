@@ -238,11 +238,42 @@ export class ClaudeSetupTokenService {
    * even when `claude` is not on PATH (Papr's cached CLI + node).
    */
   async writeSetupTokenLauncherScript(): Promise<string> {
-    const spec = await this.resolveSetupTokenSpawn();
+    return this.writeClaudeLauncherScript(
+      ["setup-token"],
+      "setup-token",
+      "Copy the full sk-ant-oat01-… line above, then paste it into Papr Work.",
+    );
+  }
+
+  /**
+   * `claude auth login` — a full Claude Code login. Papr keeps using the
+   * setup-token for inference; this login only exists so the plan-usage
+   * endpoint (which setup-tokens cannot read) has a credential to use.
+   */
+  async writeAuthLoginLauncherScript(): Promise<string> {
+    return this.writeClaudeLauncherScript(
+      ["auth", "login"],
+      "auth-login",
+      "Done. Go back to Papr Work and refresh Plan usage.",
+    );
+  }
+
+  /** Shell command for `claude auth login` (PATH binary or cached cli.js). */
+  async getAuthLoginShellCommand(): Promise<string> {
+    return this.buildClaudeShellCommand(["auth", "login"]);
+  }
+
+  private async writeClaudeLauncherScript(
+    subArgs: string[],
+    slug: string,
+    footer: string,
+  ): Promise<string> {
+    const base = await this.resolveSetupTokenSpawn();
+    const spec = this.withSubcommand(base, subArgs);
     const env = getShellEnv();
     const scriptPath = path.join(
       os.tmpdir(),
-      `paprwork-claude-setup-token-${process.pid}.sh`,
+      `paprwork-claude-${slug}-${process.pid}.sh`,
     );
 
     const pathExport = (env.PATH ?? "").replace(/"/g, '\\"');
@@ -252,7 +283,7 @@ export class ClaudeSetupTokenService {
           .join("\n")
       : "";
 
-    const commandLine = await this.getSetupTokenShellCommand();
+    const commandLine = await this.buildClaudeShellCommand(subArgs);
 
     const script = `#!/bin/bash
 export PATH="${pathExport}"
@@ -262,7 +293,7 @@ echo "Running: ${commandLine.replace(/"/g, '\\"')}"
 echo ""
 ${spec.shell ? commandLine : `${this.shellQuote(spec.command)} ${spec.args.map((a) => this.shellQuote(a)).join(" ")}`}
 echo ""
-echo "Copy the full sk-ant-oat01-… line above, then paste it into Papr Work."
+echo "${footer.replace(/"/g, '\\"')}"
 `;
 
     await fs.writeFile(scriptPath, script, { mode: 0o755 });
@@ -276,11 +307,22 @@ echo "Copy the full sk-ant-oat01-… line above, then paste it into Papr Work."
     return `'${value.replace(/'/g, `'\\''`)}'`;
   }
 
+  /** Swap the trailing `setup-token` arg for another claude subcommand. */
+  private withSubcommand(spec: SetupTokenSpawnSpec, subArgs: string[]): SetupTokenSpawnSpec {
+    const idx = spec.args.lastIndexOf("setup-token");
+    if (idx === -1) return spec;
+    return { ...spec, args: [...spec.args.slice(0, idx), ...subArgs] };
+  }
+
   /** Shell command for `claude setup-token` (PATH binary or cached cli.js). */
   async getSetupTokenShellCommand(): Promise<string> {
-    const spec = await this.resolveSetupTokenSpawn();
+    return this.buildClaudeShellCommand(["setup-token"]);
+  }
+
+  private async buildClaudeShellCommand(subArgs: string[]): Promise<string> {
+    const spec = this.withSubcommand(await this.resolveSetupTokenSpawn(), subArgs);
     if (spec.shell && spec.command === "claude") {
-      return "claude setup-token";
+      return `claude ${subArgs.join(" ")}`;
     }
     const argsPart = spec.args
       .map((arg) => {

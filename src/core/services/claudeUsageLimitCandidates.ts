@@ -6,19 +6,20 @@ export type ClaudeUsageTokenCandidate = {
 };
 
 /**
- * Usage polling should use Papr's stored OAuth token when present. Probing
- * Claude Code Keychain / ~/.claude only applies when the user has not connected
- * in Paprwork yet (or has no stored token).
+ * Papr connects with `claude setup-token`, which is inference-only and cannot
+ * read the plan-usage endpoint. Try Papr's token first, then fall back to a
+ * full Claude Code login (`claude auth login`, Keychain / ~/.claude), which can.
  */
 export function buildClaudeUsageTokenCandidates(
   paprAccessToken: string | undefined | null,
   cliAccessToken: string | undefined | null,
 ): ClaudeUsageTokenCandidate[] {
+  const out: ClaudeUsageTokenCandidate[] = [];
   if (paprAccessToken) {
-    return [{ accessToken: paprAccessToken, source: "papr_stored" }];
+    out.push({ accessToken: paprAccessToken, source: "papr_stored" });
   }
   if (cliAccessToken) {
-    return [{ accessToken: cliAccessToken, source: "claude_code_keychain" }];
+    out.push({ accessToken: cliAccessToken, source: "claude_code_keychain" });
   }
-  return [];
+  return out;
 }

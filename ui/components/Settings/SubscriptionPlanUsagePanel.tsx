@@ -2,6 +2,7 @@ import React, { useCallback, useEffect, useMemo, useState } from "react";
 import type { ClaudeUsageLimitsSnapshot } from "../../../src/core/services/claudeOAuthUsage";
 import type { CodexUsageLimitsSnapshot } from "../../../src/core/services/codexOAuthUsage";
 import { formatClaudeUsageReset } from "../../utils/claudeUsageFormat";
+import { copyTextToClipboard } from "../../utils/copyToClipboard";
 import {
   getPlanUsageHeroLines,
   planUsageBrand,
@@ -17,7 +18,7 @@ type LoadState =
   | { kind: "idle" }
   | { kind: "loading" }
   | { kind: "ready"; data: UsageSnapshot }
-  | { kind: "error"; message: string };
+  | { kind: "error"; message: string; needsClaudeLogin?: boolean };
 
 function severityClass(percent: number): string {
   if (percent >= 90) return "plan-usage-bar__fill--critical";
@@ -53,6 +54,24 @@ export function SubscriptionPlanUsagePanel({
     null,
   );
   const brand = planUsageBrand(provider);
+  const [loginHint, setLoginHint] = useState<string | null>(null);
+
+  /** Open Terminal on `claude auth login`; fall back to copying the command. */
+  const handleClaudeLogin = useCallback(async () => {
+    setLoginHint(null);
+    const result = await window.electronAPI?.oauth?.claude?.openAuthLoginTerminal?.();
+    if (result?.success) {
+      setLoginHint("Finish signing in in Terminal, then click Refresh.");
+      return;
+    }
+    const command = result?.command ?? "claude auth login";
+    const copied = await copyTextToClipboard(command);
+    setLoginHint(
+      copied
+        ? `Copied "${command}". Paste it into Terminal, sign in, then click Refresh.`
+        : `Run "${command}" in Terminal, sign in, then click Refresh.`,
+    );
+  }, []);
 
   const load = useCallback(async () => {
     setState({ kind: "loading" });
@@ -72,6 +91,10 @@ export function SubscriptionPlanUsagePanel({
       setState({
         kind: "error",
         message: result.error ?? "Could not load plan usage",
+        needsClaudeLogin:
+          provider === "anthropic" &&
+          "needsClaudeLogin" in result &&
+          result.needsClaudeLogin === true,
       });
     } catch (err) {
       setState({
@@ -146,7 +169,28 @@ export function SubscriptionPlanUsagePanel({
           <p className="plan-usage-compact__muted">Loading…</p>
         )}
 
-        {state.kind === "error" && (
+        {state.kind === "error" && state.needsClaudeLogin && (
+          <div className="plan-usage-compact__error">
+            <p>See your Claude plan usage by signing in to Claude Code once.</p>
+            <button
+              type="button"
+              className="settings-btn settings-btn--primary plan-usage-compact__retry"
+              onClick={() => void handleClaudeLogin()}
+            >
+              Sign in to see usage
+            </button>{" "}
+            <button
+              type="button"
+              className="settings-btn settings-btn--secondary plan-usage-compact__retry"
+              onClick={() => void load()}
+            >
+              Refresh
+            </button>
+            {loginHint && <p className="plan-usage-compact__muted">{loginHint}</p>}
+          </div>
+        )}
+
+        {state.kind === "error" && !state.needsClaudeLogin && (
           <div className="plan-usage-compact__error">
             <p>{state.message}</p>
             <button
@@ -371,9 +415,9 @@ function PlanUsageDetailsModal({
                 >
                   claude.ai → Usage
                 </a>
-                . Paprwork tries your Claude Code login (Keychain) first, then
-                your pasted Paprwork token. If both fail, run{" "}
-                <code>claude auth login</code> in Terminal and refresh.
+                . Papr runs Claude with your setup-token, which can&apos;t read
+                usage — so usage comes from your Claude Code login. If it&apos;s
+                missing, run <code>claude auth login</code> in Terminal and refresh.
               </>
             )}
           </p>
