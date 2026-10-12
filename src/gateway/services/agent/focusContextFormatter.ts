@@ -33,7 +33,14 @@ export function formatAgentFocusContext(
   const sections: string[] = [];
 
   if (hasActiveApp && resolved.activeApp) {
-    const { appId, title, files } = resolved.activeApp;
+    const { appId, title, files, surface, webUrl, installed } = resolved.activeApp;
+    // Fixed wording per state: the line only changes when the user flips the toggle.
+    const viewLine =
+      surface === "web"
+        ? installed === false
+          ? `- **View:** web version only${webUrl ? ` (${webUrl})` : ""}. Not installed on this desktop, so local file/database tools can't reach it.`
+          : `- **View:** web version${webUrl ? ` (${webUrl})` : ""}. Focus on what the user sees there. This app is also installed locally: local files, papr_db_query/papr_db_exec and jobs work too, and its shared data is the same database the web version uses.`
+        : "- **View:** local preview. Use local files, papr_db_query/papr_db_exec and jobs.";
     const fileLines =
       files && files.length > 0
         ? files
@@ -46,6 +53,7 @@ export function formatAgentFocusContext(
 
 - **Title:** ${title}
 - **appId:** \`${appId}\`
+${viewLine}
 - **Files:**
 ${fileLines}
 
@@ -119,7 +127,10 @@ export function mergeUiAndServerFocus(
   ui: UiAgentFocusContext | undefined,
   server: ResolvedAgentFocusContext | undefined,
 ): ResolvedAgentFocusContext | undefined {
-  const activeApp = ui?.activeApp ?? server?.activeApp;
+  const activeApp =
+    ui?.activeApp || server?.activeApp
+      ? { ...server?.activeApp, ...ui?.activeApp, files: server?.activeApp?.files, installed: server?.activeApp?.installed } as NonNullable<ResolvedAgentFocusContext["activeApp"]>
+      : undefined;
   const activeJob = ui?.activeJob ?? server?.activeJob;
   const lastEdited = server?.lastEdited;
   const connectedServices = server?.connectedServices;

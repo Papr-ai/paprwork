@@ -25,6 +25,7 @@ import { usePreviewTabLifecycle } from "../../utils/previewIframeLifecycle";
 import { maybeCaptureAppCover } from "../../utils/appCover";
 import { resyncAllPreviewFramePhases } from "../../utils/rendererPerformance";
 import { isBenignPreviewFetchAbortMessage } from "../../utils/previewFetchAbort";
+import { useAppViewSurfaceStore } from "../../stores/appViewSurfaceStore";
 import { shouldSuppressMiniAppRuntimeBanner } from "../../utils/previewNetworkErrors";
 import {
   normalizeMiniAppRuntimeErrorMessage,
@@ -157,6 +158,12 @@ export function MiniAppView({
       (cloud.live && !!cloud.publishedWebUrl));
 
   useCloudPreviewChatBridge(isPublishedPreview);
+
+  useEffect(() => {
+    const { setSurface } = useAppViewSurfaceStore.getState();
+    setSurface(appId, isPublishedPreview ? "web" : "local", publishedLiveUrl ?? undefined);
+    return () => setSurface(appId, "local");
+  }, [appId, isPublishedPreview, publishedLiveUrl]);
 
   useEffect(() => {
     if (!isPublishedPreview || !publishedLiveUrl) {

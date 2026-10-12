@@ -8,6 +8,7 @@ import type { Tab } from "../types/tabs";
 import { readCloudCatalogPreviewTabMetadata } from "../types/cloudCatalogPreviewTab";
 import { useTabStore } from "../stores/tabStore";
 import { useJobNavigationStore } from "../stores/jobNavigationStore";
+import { useAppViewSurfaceStore } from "../stores/appViewSurfaceStore";
 
 function isAppTab(tab: Tab | undefined): tab is Tab & { type: "app" } {
   return tab?.type === "app";
@@ -100,9 +101,13 @@ export function resolveAgentFocusContext(
   if (appTab) {
     const catalogPreview = readCloudCatalogPreviewTabMetadata(appTab);
     const focusAppId = catalogPreview?.publisherAppId ?? appTab.entityId;
+    const web = useAppViewSurfaceStore.getState().web[appTab.entityId];
     focus.activeApp = {
       appId: focusAppId,
       title: appTab.title,
+      // Catalog previews are web-only by definition (not installed here).
+      surface: web || catalogPreview ? "web" : "local",
+      ...(web?.webUrl ? { webUrl: web.webUrl } : {}),
     };
   }
 

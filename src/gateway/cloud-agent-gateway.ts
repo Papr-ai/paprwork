@@ -16,6 +16,7 @@ import express, { type NextFunction, type Request, type Response } from "express
 import { getCloudAgentGatewayService } from "./services/cloudAgentGateway/CloudAgentGatewayService.js";
 import { handleCloudAgentAppRepoCommitted } from "./services/cloudAgentGateway/handleAppRepoCommitted.js";
 import { resolveCloudAgentRunId } from "./services/cloudAgentGateway/cloudAgentRunId.js";
+import { startSandboxLocalApi } from "./services/cloudAgentGateway/sandboxLocalApi.js";
 import type { CloudAgentRunRequest } from "./services/cloudAgentGateway/types.js";
 import {
   parseAppRepoCommittedPayload,
@@ -280,6 +281,9 @@ async function main(): Promise<void> {
   app.listen(PORT, "0.0.0.0", () => {
     console.log(`[CloudAgentGateway] Listening on :${PORT}`);
   });
+  // Loopback copy of the desktop app API so `curl localhost:18789/api/app/backend/*`
+  // and /api/db/* behave the same in cloud runs as on desktop.
+  startSandboxLocalApi();
 }
 
 main().catch((error) => {

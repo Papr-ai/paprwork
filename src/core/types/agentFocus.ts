@@ -6,6 +6,9 @@
 export interface UiActiveAppFocus {
   appId: string;
   title: string;
+  /** Which view the user has open: local preview or the published web version. */
+  surface?: "local" | "web";
+  webUrl?: string;
 }
 
 export interface UiActiveJobFocus {
@@ -35,6 +38,8 @@ export interface LastEditedFileRef {
 export interface ResolvedAgentFocusContext {
   activeApp?: UiActiveAppFocus & {
     files?: string[];
+    /** App files exist on this desktop. */
+    installed?: boolean;
   };
   activeJob?: UiActiveJobFocus & {
     files?: string[];
