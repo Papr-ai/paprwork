@@ -107,3 +107,35 @@ export async function writeSchemaSnapshotsForApp(
     }
   }
 }
+
+/**
+ * dbId → newest applied migration id for every database this app owns the
+ * schema for. Sent with the publish-completion record so installers know
+ * which schema the published commit expects. Best effort: unreadable
+ * databases are skipped.
+ */
+export async function appliedSchemaHeadsForApp(appId: string): Promise<Record<string, string>> {
+  const { initializeDatabaseRegistry } = await import("../DatabaseRegistryService.js");
+  const registry = await initializeDatabaseRegistry();
+  const owned = registry.listBySchemaOwnerApp(appId);
+  if (owned.length === 0) {
+    return {};
+  }
+  const { getDbRouter } = await import("../appRuntime/DbRouter.js");
+  const router = getDbRouter();
+  const query: Query = async (source, sql) =>
+    (await router.query(appId, source, sql)).rows;
+  const heads: Record<string, string> = {};
+  for (const record of owned) {
+    try {
+      const ids = [...(await readAppliedIds(query, recordAsSource(record)))].sort();
+      const last = ids[ids.length - 1];
+      if (last) {
+        heads[record.dbId] = last;
+      }
+    } catch {
+      /* unreadable database: leave it out */
+    }
+  }
+  return heads;
+}
