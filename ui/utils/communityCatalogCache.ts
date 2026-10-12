@@ -1,5 +1,6 @@
 /**
- * Instant Team / Community Apps catalog — sessionStorage cache, refreshed from gateway.
+ * Instant Team / Community Apps catalog — localStorage cache (survives relaunch),
+ * refreshed from gateway. Reads older than the TTL are refused unless allowStale.
  */
 
 import type { CommunityCatalog } from "../../src/core/types/communityCatalog.js";
@@ -21,14 +22,15 @@ function cacheKey(scope: "global" | "namespace", namespaceId: string | null): st
 export function readCommunityCatalogCache(
   scope: "global" | "namespace",
   namespaceId: string | null,
+  options?: { allowStale?: boolean },
 ): CommunityCatalog | null {
   try {
-    const raw = sessionStorage.getItem(cacheKey(scope, namespaceId));
+    const raw = localStorage.getItem(cacheKey(scope, namespaceId)) ?? sessionStorage.getItem(cacheKey(scope, namespaceId));
     if (!raw) return null;
     const parsed = JSON.parse(raw) as Partial<CachedCommunityCatalog>;
     if (!parsed.catalog || typeof parsed.updatedAt !== "string") return null;
     const ageMs = Date.now() - Date.parse(parsed.updatedAt);
-    if (!Number.isFinite(ageMs) || ageMs > CACHE_TTL_MS) return null;
+    if (!Number.isFinite(ageMs) || (!options?.allowStale && ageMs > CACHE_TTL_MS)) return null;
     if (
       scope === "namespace" &&
       namespaceId &&
@@ -53,7 +55,7 @@ export function writeCommunityCatalogCache(
       catalog: { ...catalog, fromCache: undefined },
       updatedAt: new Date().toISOString(),
     };
-    sessionStorage.setItem(cacheKey(scope, namespaceId), JSON.stringify(next));
+    localStorage.setItem(cacheKey(scope, namespaceId), JSON.stringify(next));
   } catch {
     /* quota / private mode */
   }

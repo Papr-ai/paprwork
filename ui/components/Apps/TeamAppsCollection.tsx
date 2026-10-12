@@ -55,11 +55,14 @@ export function TeamAppsCollection({
   namespaceName: string | null;
   onSeeAll: () => void;
 }) {
+  // Last-known team list paints at once (any age); the fetch below refreshes it.
+  // My apps never waits on this — the collection appears when it has entries.
   const [catalog, setCatalog] = useState<CommunityCatalog | null>(() =>
-    readCommunityCatalogCache("namespace", namespaceId),
+    readCommunityCatalogCache("namespace", namespaceId, { allowStale: true }),
   );
   useEffect(() => {
     let stale = false;
+    setCatalog(readCommunityCatalogCache("namespace", namespaceId, { allowStale: true }));
     gateway
       .send("bundle:fetch-community-catalog", { scope: "namespace", namespaceId }, { timeoutMs: 60_000 })
       .then((res) => {
@@ -125,7 +128,7 @@ export function TeamAppsCollection({
   const more = entries.length - shown.length;
   const team = namespaceName?.trim() || "your team";
   return (
-    <div className={`ah-card ah-coll ah-coll--auto ${entries.length > 3 ? "ah-coll--big" : "ah-coll--one"}`}>
+    <div className={`ah-card ah-coll ah-coll--auto ah-coll--arrive ${entries.length > 3 ? "ah-coll--big" : "ah-coll--one"}`}>
       <div className={`ah-coll__art ah-tint-${bannerShade(ID)}`}>
         <div className="ah-coll__grid">
           {shown.map((e) => (

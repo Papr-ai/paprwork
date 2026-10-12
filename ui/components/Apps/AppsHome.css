@@ -316,3 +316,7 @@ input.ah-sheet__name:hover, input.ah-sheet__name:focus { background: var(--ah-ho
 /* Bigger app icons in collections; one row (≤3 apps) is centered, same icon size. */
 .ah-coll__art .ah-gl--more { width: 58px; height: 58px; border-radius: 50%; font-size: 15px; }
 .ah-coll--one .ah-coll__art .ah-coll__grid { align-content: center; }
+/* Team collection arrives after My apps has painted — fade it in, don't pop. */
+.ah-coll--arrive { animation: ah-arrive 240ms ease-out both; }
+@keyframes ah-arrive { from { opacity: 0; transform: translateY(4px); } to { opacity: 1; transform: none; } }
+@media (prefers-reduced-motion: reduce) { .ah-coll--arrive { animation: none; } }
