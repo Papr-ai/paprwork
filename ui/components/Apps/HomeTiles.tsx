@@ -172,7 +172,7 @@ export function CollectionTile(p: CollectionTileProps) {
           >
             <button type="button" className="ah-cell__open" onClick={() => p.onOpenApp(a)} title={a.description || displayTitle(a)}>
               <span className="ah-cell__ic">
-                <AppGlyph app={a} size={big ? 58 : 84} />
+                <AppGlyph app={a} size={58} />
                 {p.attention(a) ? <span className="ah-bad" title="Needs attention">!</span> : null}
                 <ShareMark share={p.shareById[a.id]} />
               </span>

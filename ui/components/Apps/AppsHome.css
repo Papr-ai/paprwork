@@ -313,8 +313,6 @@ input.ah-sheet__name:hover, input.ah-sheet__name:focus { background: var(--ah-ho
 @media (max-width: 640px) { .ah-grid, .ah-list { grid-template-columns: 1fr; } }
 /* Two rows of apps: spread across the panel, not packed together. */
 .ah-coll__art .ah-coll__grid { height: 100%; align-content: space-evenly; row-gap: 14px; }
-/* Bigger app icons in collections; one row (≤3 apps) gets large, centered icons. */
+/* Bigger app icons in collections; one row (≤3 apps) is centered, same icon size. */
 .ah-coll__art .ah-gl--more { width: 58px; height: 58px; border-radius: 50%; font-size: 15px; }
 .ah-coll--one .ah-coll__art .ah-coll__grid { align-content: center; }
-.ah-coll--one .ah-coll__art .ah-cell__open { gap: 10px; }
-.ah-coll--one .ah-coll__art .ah-cell__t { font-size: 13.5px; font-weight: 600; }
