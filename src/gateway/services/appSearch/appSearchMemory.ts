@@ -113,6 +113,7 @@ export function httpMemoryPort(
       ...(body === undefined ? {} : { body: JSON.stringify(body) }),
       signal: AbortSignal.timeout(10_000),
     });
+    if (res.status === 404 && (method === "DELETE" || path.startsWith("/v1/memory/search"))) return null;
     if (!res.ok) throw new AppSearchError(`Papr memory ${method} ${path.split("?")[0]} failed (HTTP ${res.status})`, res.status >= 500 ? 502 : res.status);
     return res.status === 204 ? null : res.json().catch(() => null);
   };
@@ -139,7 +140,7 @@ export function httpMemoryPort(
 
 /** Desktop: the Papr SDK with the user's API key and the workspace's memory scope. */
 export async function desktopMemoryPort(): Promise<MemoryPort> {
-  const { getPaprClient } = await import("../../../core/tools/paprClient.js");
+  const { getPaprClient, isPaprNotFoundError } = await import("../../../core/tools/paprClient.js");
   const { paprMemoryScopeSpread, paprMemorySearchScopeSpread } = await import("../../utils/memoryScopeResolver.js");
   const client = await getPaprClient();
   return {
@@ -155,11 +156,17 @@ export async function desktopMemoryPort(): Promise<MemoryPort> {
         rank_results: false,
         metadata: { customMetadata },
         ...(await paprMemorySearchScopeSpread()),
-      } as never);
-      return ((res as SearchJson).data?.memories ?? []) as MemoryHitLike[];
+      } as never).catch((err: unknown) => {
+        // Memory answers 404 "No relevant items found" when nothing matches: that's an empty result.
+        if (isPaprNotFoundError(err)) return null;
+        throw err;
+      });
+      return ((res as SearchJson | null)?.data?.memories ?? []) as MemoryHitLike[];
     },
     async remove(memoryId) {
-      await client.memory.delete(memoryId);
+      await client.memory.delete(memoryId).catch((err: unknown) => {
+        if (!isPaprNotFoundError(err)) throw err;
+      });
     },
   };
 }
