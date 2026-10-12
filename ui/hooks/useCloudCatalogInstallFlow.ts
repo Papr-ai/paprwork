@@ -37,7 +37,7 @@ export function useCloudCatalogInstallFlow() {
     dependencies: CloudAppDependenciesFile;
   } | null>(null);
 
-  const { artifacts, loadArtifacts } = useArtifacts();
+  const { artifacts, loadArtifacts } = useArtifacts("apps", { autoLoad: false });
   const { createChat } = useChat();
   const { createTab, switchToTab } = useTabs();
 
@@ -170,8 +170,8 @@ export function useCloudCatalogInstallFlow() {
           setInstallToast(`${modeLabel} "${title}" into Paprwork`);
         }
 
-        void loadArtifacts();
-        void refreshLineage();
+        void loadArtifacts({ forceRefresh: true });
+        void fetchCloudLineageIndex(true).then((i) => i && setLineageIndex(i));
 
         if (body.app?.id && !needsAgentSetup) {
           await openCloudInstalledAppWithChat(createChat, {

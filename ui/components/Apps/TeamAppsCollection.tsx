@@ -78,7 +78,7 @@ export function TeamAppsCollection({
   }, [namespaceId]);
 
   const flow = useCloudCatalogInstallFlow();
-  const { artifacts } = useArtifacts();
+  const { artifacts } = useArtifacts("apps", { autoLoad: false });
   const { createTab, switchToTab } = useTabs();
   const [open, setOpen] = useState<CommunityCatalogEntry | null>(null);
   const localIds = useMemo(() => new Set(artifacts.filter((a) => a.type === "app").map((a) => a.id)), [artifacts]);

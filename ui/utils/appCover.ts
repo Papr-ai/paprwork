@@ -68,9 +68,12 @@ let covered: Set<string> | null = (() => {
   }
 })();
 let inflight: Promise<void> | null = null;
+let coveredAt = 0;
 const listeners = new Set<() => void>();
 
 function refreshCovered(): Promise<void> {
+  if (Date.now() - coveredAt < 30_000) return Promise.resolve();
+  coveredAt = Date.now();
   inflight ??= fetch(`${getGatewayHttpBase()}/api/apps/covers`)
     .then((r) => (r.ok ? (r.json() as Promise<{ appIds?: string[] }>) : null))
     .then((body) => {

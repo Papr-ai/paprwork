@@ -679,7 +679,7 @@ export function AppsView() {
               refreshToken={catalogRefreshToken}
             />
             </>
-          ) : loading ? (
+          ) : loading && allApps.length === 0 ? (
             <div className="apps-view__empty">
               <p>Loading apps...</p>
             </div>
