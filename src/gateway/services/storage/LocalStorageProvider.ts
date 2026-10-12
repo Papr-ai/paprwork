@@ -54,6 +54,14 @@ import type {
 } from "./turnMetricsStore.js";
 import type { TurnMetricsSummary } from "../agent/turnMetrics.js";
 import {
+  COUNT_MISSING_FACTS_SQL,
+  MISSING_FACTS_SQL,
+  computeTurnFact,
+  migrateTurnFactsTable,
+  storeTurnFacts,
+  type RawTurnCalls,
+} from "../agentsOverview/turnFacts.js";
+import {
   migrateTurnAttributionColumns,
   storeTurnAttribution,
   type TurnAttribution,
@@ -361,6 +369,7 @@ export class LocalStorageProvider implements IStorageProvider {
     migrateFootprintColumns(this.db);
     migrateTurnMetricsColumns(this.db);
     migrateTurnAttributionColumns(this.db);
+    migrateTurnFactsTable(this.db);
 
     console.log("[LocalStorage] Database migration complete");
 
@@ -1179,6 +1188,79 @@ export class LocalStorageProvider implements IStorageProvider {
    * Everything the Agents page shows, from one scan on the read worker.
    */
   private agentsOverviewCache = new Map<number, { at: number; value: Promise<AgentsOverview> }>();
+  private turnFactsFill: Promise<number> | null = null;
+
+  /**
+   * Resolves once no chat or agent job has been mid-turn for IDLE_QUIET_MS.
+   * Polls cheaply (an in-memory session check) and gives up if storage closes.
+   */
+  private async waitForAgentIdle(): Promise<boolean> {
+    const IDLE_QUIET_MS = 15_000;
+    const POLL_MS = 5_000;
+    const { isAnyAgentTurnActive } = await import("../AgentService.js");
+    let lastBusy = isAnyAgentTurnActive() ? Date.now() : 0;
+    while (this.dbReady) {
+      if (isAnyAgentTurnActive()) lastBusy = Date.now();
+      if (Date.now() - lastBusy >= IDLE_QUIET_MS) return true;
+      await new Promise((resolve) => setTimeout(resolve, POLL_MS));
+    }
+    return false;
+  }
+
+  /**
+   * Write turn_facts rows for turns that lack a current one, newest first,
+   * in small batches so other chat reads interleave on the worker. Safe to
+   * call any number of times: one fill runs at a time, and once every turn
+   * has a row the anti-join returns nothing and this returns 0 immediately.
+   */
+  async fillTurnFacts(
+    options: { sinceDays?: number; batch?: number; maxBatches?: number; whenIdle?: boolean } = {},
+  ): Promise<number> {
+    if (this.turnFactsFill) return this.turnFactsFill;
+    const since = new Date(Date.now() - (options.sinceDays ?? 3650) * 864e5).toISOString();
+    const batch = options.batch ?? 200;
+    const maxBatches = options.maxBatches ?? Number.POSITIVE_INFINITY;
+    this.turnFactsFill = (async () => {
+      const { getPaprRoot } = await import("../../../core/utils/paprRoot.js");
+      const paprRoot = getPaprRoot();
+      let written = 0;
+      for (let i = 0; i < maxBatches && this.dbReady; i += 1) {
+        // Background catch-up yields to live turns: wait before every batch,
+        // so a chat that starts mid-fill pauses it within one batch (~250ms).
+        if (options.whenIdle && !(await this.waitForAgentIdle())) break;
+        const raw = (await this.readRows("fillTurnFacts", MISSING_FACTS_SQL, [since, batch])) as RawTurnCalls[];
+        if (raw.length === 0) break;
+        storeTurnFacts(this.db, raw.map((r) => computeTurnFact(r, paprRoot)));
+        written += raw.length;
+        if (raw.length < batch) break;
+        await new Promise((resolve) => setImmediate(resolve));
+      }
+      if (written > 0) {
+        console.log(`[TurnFacts] Filled ${written} turn fact rows`);
+        this.agentsOverviewCache.clear();
+      }
+      return written;
+    })().finally(() => {
+      this.turnFactsFill = null;
+    });
+    return this.turnFactsFill;
+  }
+
+  /** Fact row for one just-saved turn, so it never waits for a fill. */
+  async recordTurnFacts(messageId: string): Promise<void> {
+    try {
+      const raw = (await this.readRows(
+        "recordTurnFacts",
+        MISSING_FACTS_SQL.replace("AND m.timestamp >= ?", "AND m.id = ? AND m.timestamp >= ?"),
+        [messageId, "", 1],
+      )) as RawTurnCalls[];
+      if (raw.length === 0) return;
+      const { getPaprRoot } = await import("../../../core/utils/paprRoot.js");
+      storeTurnFacts(this.db, raw.map((r) => computeTurnFact(r, getPaprRoot())));
+    } catch (error) {
+      console.warn("[TurnFacts] Failed to record:", error instanceof Error ? error.message : error);
+    }
+  }
 
   /** 30 days is a ~4s scan; the page reopens often and the numbers move slowly. */
   async getAgentsOverview(days: number = 30): Promise<AgentsOverview> {
@@ -1201,9 +1283,20 @@ export class LocalStorageProvider implements IStorageProvider {
       "../agentsOverview/workTypeClassifier.js"
     );
     const { getAppService } = await import("../AppService.js");
-    const { getPaprRoot } = await import("../../../core/utils/paprRoot.js");
 
     const since = new Date(Date.now() - days * 864e5).toISOString();
+    // First open after upgrade: make sure the visible window has facts, then
+    // let the rest of history fill in the background. Later opens find
+    // nothing missing and skip straight to the read.
+    const [{ n: missing }] = (await this.readRows("countMissingTurnFacts", COUNT_MISSING_FACTS_SQL, [since])) as Array<{ n: number }>;
+    // Only block the page on a fill when no turn is running; otherwise read
+    // what exists now (unfilled turns just lack tool/project detail) and let
+    // the idle catch-up complete it.
+    const { isAnyAgentTurnActive } = await import("../AgentService.js");
+    if (missing > 0 && !isAnyAgentTurnActive() && !this.turnFactsFill) {
+      await this.fillTurnFacts({ sinceDays: days });
+    }
+    void this.fillTurnFacts({ whenIdle: true }).catch(() => {});
     const [rows, chats, apps] = await Promise.all([
       this.readRows("getAgentsOverview", OVERVIEW_ROWS_SQL, [since]),
       this.readRows("getAgentsOverviewChats", OVERVIEW_CHATS_SQL, [since]),
@@ -1216,7 +1309,6 @@ export class LocalStorageProvider implements IStorageProvider {
       now: new Date(),
       appTitles: new Map(apps.map((a) => [a.id.toLowerCase(), a.title])),
       workTypes: loadWorkTypes(),
-      paprRoot: getPaprRoot(),
     });
 
     const summaries = new Map(

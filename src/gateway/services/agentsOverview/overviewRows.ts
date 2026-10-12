@@ -1,13 +1,8 @@
 /**
- * The one scan behind the Agents page: every billed assistant turn in the
- * window, with its tool calls reduced to the few strings attribution needs.
- *
- * `tool_calls` averages ~130KB a row (args carry whole file bodies), so the
- * reduction happens inside SQLite — 30 days is ~250MB of JSON in, ~7MB out.
- * Runs on the chat-storage read worker, never the gateway thread.
+ * The read behind the Agents page: plain numeric columns from `messages`
+ * joined to the per-turn `turn_facts` row (see turnFacts.ts). No tool-call
+ * JSON is touched here; that was unpacked once when the fact was written.
  */
-
-const SAFE_CALLS = `json_each(CASE WHEN json_valid(m.tool_calls) THEN m.tool_calls ELSE '[]' END)`;
 
 export const OVERVIEW_ROWS_SQL = `
   SELECT m.id, m.chat_id, m.timestamp, m.model,
@@ -22,16 +17,12 @@ export const OVERVIEW_ROWS_SQL = `
          m.turn_billing AS billing,
          m.turn_app_id AS app_id,
          m.turn_repo AS repo,
-         (SELECT group_concat(json_extract(j.value, '$.name'), ',') FROM ${SAFE_CALLS} j) AS tools,
-         (SELECT group_concat(
-            COALESCE(json_extract(j.value, '$.args.path'), '') || ' ' ||
-            COALESCE(json_extract(j.value, '$.args.cwd'), '') || ' ' ||
-            COALESCE(json_extract(j.value, '$.args.appId'), '') || ' ' ||
-            substr(COALESCE(json_extract(j.value, '$.args.command'), ''), 1, 300), char(10))
-          FROM ${SAFE_CALLS} j) AS targets,
-         (SELECT group_concat(substr(json_extract(j.value, '$.args.command'), 1, 160), char(30))
-          FROM ${SAFE_CALLS} j WHERE json_extract(j.value, '$.name') = 'bash') AS bash
+         f.tools, f.bash_intents,
+         f.app_id AS fact_app_id, f.repo AS fact_repo,
+         COALESCE(f.has_edit, 0) AS has_edit, COALESCE(f.has_test, 0) AS has_test,
+         COALESCE(f.has_build, 0) AS has_build, COALESCE(f.has_data, 0) AS has_data
   FROM messages m
+  LEFT JOIN turn_facts f ON f.message_id = m.id
   WHERE m.role = 'assistant' AND COALESCE(m.prompt_tokens, 0) > 0 AND m.timestamp >= ?
   ORDER BY m.timestamp ASC`;
 
@@ -60,8 +51,14 @@ export interface OverviewRow {
   app_id: string | null;
   repo: string | null;
   tools: string | null;
-  targets: string | null;
-  bash: string | null;
+  /** JSON object: bash intent → count. */
+  bash_intents: string | null;
+  fact_app_id: string | null;
+  fact_repo: string | null;
+  has_edit: number;
+  has_test: number;
+  has_build: number;
+  has_data: number;
 }
 
 export interface OverviewChatMeta {
