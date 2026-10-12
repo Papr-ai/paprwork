@@ -19,13 +19,12 @@ import type { CommunityCatalogEntry, CommunityCatalogScope } from "../../../src/
 import { isTeamSharedVisibility } from "../../../src/core/types/communityCatalog";
 import { resolveOneInstallSelection } from "../../../src/core/utils/cloudCatalogInstallPolicy";
 import type { RequirementItem } from "../../../src/core/types/bundles";
-import { normalizeRequirements } from "../../../src/core/types/bundles";
-import { lookupService } from "../../../src/core/data/knownServices";
 import { useAppCategories } from "../../hooks/useAppCategories";
 import { CategoryPills, matchesCategory } from "./CategoryPills";
 import "./CommunityAppsView.css";
 import "./AppsHome.css";
 import { DropGlyph } from "./HomeTiles";
+import { CatalogAppDetails, CatalogBanner, CatIcon, catalogBy, catalogKeyServices } from "./CatalogAppDetails";
 import { HomeMenu, type HomeMenuItem } from "./HomeMenu";
 import { trackEvent } from "../../lib/telemetry";
 import {
@@ -40,8 +39,6 @@ import {
 } from "../../utils/communityCatalogCache";
 import { isWorkspaceSwitchReloading } from "../../lib/workspaceSwitchReload";
 import {
-  formatCatalogUpdated,
-  getCatalogByline,
   getCatalogShareBadge,
 } from "../../utils/communityCatalogDisplay";
 import {
@@ -1116,202 +1113,94 @@ export function CommunityAppCard({
   onOpenWebHover,
 }: CommunityAppCardProps) {
 
-  const rawReqs = entry.requirements ?? [];
-  const requirements = normalizeRequirements(rawReqs);
-
-  const allPlatforms = ["macos", "windows", "linux"];
-  const platforms = entry.platform ?? allPlatforms;
-  const requiresDesktop = entry.requiresDesktopForFullFunctionality ?? false;
-  const isCrossPlatform =
-    platforms.length === allPlatforms.length &&
-    allPlatforms.every((p) => platforms.includes(p)) &&
-    !requiresDesktop;
-
-  const platformLabel = isCrossPlatform
-    ? "All Platforms"
-    : requiresDesktop &&
-        platforms.length === allPlatforms.length &&
-        allPlatforms.every((p) => platforms.includes(p))
-      ? "Desktop required"
-      : platforms
-          .map((p) =>
-            p === "macos" ? "macOS" : p === "windows" ? "Windows" : "Linux",
-          )
-          .join(", ");
-
-  const showPlatformBadge =
-    entry.source === "opensource"
-      ? !isCrossPlatform
-      : requiresDesktop || !isCrossPlatform;
-
   const showInstall = canInstallCloudCatalogEntry(entry, localAppId);
   // Open = your copy on this computer. Open web = the live web app. Get = install.
   const showLocalOpen = Boolean(localAppId) && Boolean(onOpen);
   const showOpenWeb = !showLocalOpen && Boolean(onOpenWeb);
-  const shareBadge = getCatalogShareBadge(entry);
-  const installs = entry.installCount;
-  // Everyone's installs (from Papr Cloud), not just the copies on this machine.
-  const updatedAgo = formatCatalogUpdated(entry.updatedAt);
   const share = shareGlyphForCatalogEntry(entry);
-  // Owner-approved cover (served by the cloud host); falls back to the icon on 404.
+  const shareBadge = getCatalogShareBadge(entry);
+  // Owner-approved cover (served by the cloud host); falls back to a gradient + droplet.
   const coverUrl = catalogCoverUrl(entry);
-  const [coverFailed, setCoverFailed] = useState(false);
+  const icon = entry.icon?.trim().startsWith("<") ? sanitizeIcon(entry.icon.trim()) : entry.icon;
+  const shown = { ...entry, icon };
+  const [details, setDetails] = useState(false);
+  const keys = catalogKeyServices(entry);
+  const hasWeb = Boolean(onOpenWeb) || Boolean(entry.liveUrl);
 
-  const byline = [
-    entry.isOwned ? null : getCatalogByline(entry),
-    updatedAgo ? `Updated ${updatedAgo}` : null,
-  ]
-    .filter(Boolean)
-    .join(" · ");
-  const installsLabel =
-    typeof installs === "number" && installs > 0
-      ? `${installs.toLocaleString()} install${installs === 1 ? "" : "s"}`
-      : undefined;
-
-  // Same card shell as a single app on My apps: cover/banner, droplet logo,
-  // then description, and one footer row — byline left, Open / Get right.
-  return (
-    <div className="ah ah-card ah-solo ah-cat">
-      <div className="ah-solo__open">
-        <span className="ah-solo__art ah-pb-0">
-          {coverUrl && !coverFailed ? (
-            <img
-              className="ah-solo__cover"
-              src={coverUrl}
-              alt=""
-              loading="lazy"
-              draggable={false}
-              onError={() => setCoverFailed(true)}
-            />
-          ) : null}
-          <span className="ah-solo__ic">
-            <DropGlyph icon={entry.icon?.trim().startsWith("<") ? sanitizeIcon(entry.icon.trim()) : entry.icon} title={entry.name} size={64} />
-          </span>
-        </span>
-        <span className="ah-solo__t" title={entry.name}>{entry.name}</span>
-      </div>
-      <p className="ah-cat__desc" title={entry.description}>{entry.description}</p>
-        {(() => {
-          const keyServices = Array.from(
-            new Set(
-              requirements.map((r) => {
-                const svc =
-                  (r as { service?: string }).service ??
-                  lookupService(r.name)?.service;
-                if (svc) return svc;
-                const head = r.name.split("_")[0] ?? r.name;
-                return head.charAt(0) + head.slice(1).toLowerCase();
-              }),
-            ),
-          );
-          const facts: Array<{ key: string; icon: React.ReactNode; text: string; title?: string }> = [];
-          if (entry.catalogAutomation?.cardLine) {
-            facts.push({
-              key: "sched",
-              icon: (
-                <svg viewBox="0 0 16 16" width="13" height="13" fill="none" stroke="currentColor" strokeWidth="1.5" aria-hidden="true">
-                  <circle cx="8" cy="8" r="6" />
-                  <path d="M8 5v3.2l2 1.3" strokeLinecap="round" />
-                </svg>
-              ),
-              text: entry.catalogAutomation.cardLine,
-            });
-          }
-          if (keyServices.length > 0) {
-            facts.push({
-              key: "keys",
-              icon: (
-                <svg viewBox="0 0 16 16" width="13" height="13" fill="none" stroke="currentColor" strokeWidth="1.5" aria-hidden="true">
-                  <circle cx="5.5" cy="10.5" r="3" />
-                  <path d="M7.7 8.3 13.5 2.5M11.5 4.5l1.5 1.5M10 6l1.2 1.2" strokeLinecap="round" />
-                </svg>
-              ),
-              text: `Needs ${keyServices.join(", ")} key${requirements.length === 1 ? "" : "s"}`,
-              title: `You'll be asked for these when you install: ${requirements.map((r) => r.name).join(", ")}`,
-            });
-          }
-          if (showPlatformBadge) {
-            facts.push({
-              key: "platform",
-              icon: (
-                <svg viewBox="0 0 16 16" width="13" height="13" fill="none" stroke="currentColor" strokeWidth="1.5" aria-hidden="true">
-                  <rect x="2" y="3" width="12" height="8" rx="1.5" />
-                  <path d="M6 13.5h4" strokeLinecap="round" />
-                </svg>
-              ),
-              text: platformLabel,
-            });
-          }
-          if (facts.length === 0) return null;
-          return (
-            <ul className="ah-cat__facts">
-              {facts.map((f) => (
-                <li key={f.key} title={f.title ?? f.text}>
-                  {f.icon}
-                  <span>{f.text}</span>
-                </li>
-              ))}
-            </ul>
-          );
-        })()}
-      <span className="ah-solo__meta">
-        {entry.isOwned ? <span className="ah-cat__mine">Yours</span> : null}
-        <span className="ah-cat__by" title={installsLabel ?? byline}>{byline}</span>
-        {entry.source === "cloud" ? (
-          <>
-            {showLocalOpen ? (
-              <button
-                type="button"
-                className="ah-open"
-                onClick={onOpen}
-                title={installedForkCount > 1 ? `${installedForkCount} copies in your library` : "Open your copy"}
-              >
-                Open
-              </button>
-            ) : null}
-            {showOpenWeb ? (
-              <button
-                type="button"
-                className="ah-open"
-                onClick={onOpenWeb}
-                title="Open the live web app"
-                onMouseEnter={onOpenWebHover}
-                onFocus={onOpenWebHover}
-              >
-                Open web
-              </button>
-            ) : null}
-            {showInstall ? (
-              <button
-                type="button"
-                className="ah-open ah-open--primary"
-                style={showOpenWeb || showLocalOpen ? { marginLeft: 0 } : undefined}
-                onClick={onCloudInstall}
-                disabled={isInstalling}
-                aria-busy={isInstalling}
-                title="Get your own copy"
-              >
-                <CommunityInstallButtonLabel installing={isInstalling} idleLabel="Get" />
-              </button>
-            ) : null}
-          </>
-        ) : (
-          <button
-            type="button"
-            className={`ah-open${isInstalled ? "" : " ah-open--primary"}`}
-            onClick={onOssImport}
-            disabled={isInstalled}
-          >
-            {isInstalled ? "Installed" : "Get"}
+  const stop = (fn?: () => void) => (e: React.MouseEvent) => { e.stopPropagation(); fn?.(); };
+  const actions = (lg: boolean) => {
+    const cls = (solid: boolean) => `cat-btn${lg ? " cat-btn--lg" : ""}${solid && lg ? " cat-btn--solid" : ""}`;
+    if (entry.source !== "cloud") {
+      return (
+        <button type="button" className={cls(!isInstalled)} onClick={stop(onOssImport)} disabled={isInstalled}>
+          {isInstalled ? "Installed" : "Get"}
+        </button>
+      );
+    }
+    return (
+      <>
+        {showLocalOpen ? (
+          <button type="button" className={cls(true)} onClick={stop(onOpen)}
+            title={installedForkCount > 1 ? `${installedForkCount} copies in your library` : "Open your copy"}>Open</button>
+        ) : null}
+        {showOpenWeb ? (
+          <button type="button" className={cls(false)} onClick={stop(onOpenWeb)} title="Open the live web app"
+            onMouseEnter={onOpenWebHover} onFocus={onOpenWebHover}>Open web</button>
+        ) : null}
+        {showInstall ? (
+          <button type="button" className={cls(true)} onClick={stop(onCloudInstall)} disabled={isInstalling}
+            aria-busy={isInstalling} title="Get this app">
+            <CommunityInstallButtonLabel installing={isInstalling} idleLabel="Get" />
           </button>
-        )}
-      </span>
-      <span className="ah-solo__tr">
+        ) : null}
+      </>
+    );
+  };
+
+  // App Store–style: big banner, then droplet · name (+ small icons) · "By …" · buttons.
+  // Details (schedule, keys, updated, description) live in the modal.
+  return (
+    <div
+      className="cat-card"
+      role="button"
+      tabIndex={0}
+      onClick={() => setDetails(true)}
+      onKeyDown={(e) => { if (e.key === "Enter" && e.target === e.currentTarget) setDetails(true); }}
+    >
+      <CatalogBanner entry={shown} coverUrl={coverUrl} glyphSize={88} />
+      <span className="cat-card__tr" onClick={(e) => e.stopPropagation()}>
         <span className="ah-share" title={shareBadge ?? shareAudienceShortLabel(share.audience)}>
           <ShareAudienceIcon audience={share.audience} loginAccess={null} codeAccess={share.codeAccess} />
         </span>
         {menu}
       </span>
+      <div className="cat-row">
+        <DropGlyph icon={icon} title={entry.name} size={44} />
+        <div className="cat-row__txt">
+          <h3 className="cat-row__t">
+            <span className="cat-row__name" title={entry.name}>{entry.name}</span>
+            <span className="cat-marks">
+              {entry.isOwned ? <span className="is-mine" title="Yours"><CatIcon name="check" /></span> : null}
+              {entry.catalogAutomation?.cardLine ? (
+                <span title={`Automation · ${entry.catalogAutomation.cardLine}`}><CatIcon name="bolt" /></span>
+              ) : null}
+              {hasWeb && entry.source === "cloud" ? <span title="Works on the web"><CatIcon name="globe" /></span> : null}
+              {keys.length ? <span title={`Needs ${keys.join(", ")} key${keys.length === 1 ? "" : "s"}`}><CatIcon name="key" /></span> : null}
+            </span>
+          </h3>
+          <p className="cat-row__by">{catalogBy(entry)}</p>
+        </div>
+        <span className="cat-acts">{actions(false)}</span>
+      </div>
+      {details ? (
+        <CatalogAppDetails
+          entry={shown}
+          coverUrl={coverUrl}
+          hasWeb={hasWeb && entry.source === "cloud"}
+          actions={actions(true)}
+          onClose={() => setDetails(false)}
+        />
+      ) : null}
     </div>
   );
 }
