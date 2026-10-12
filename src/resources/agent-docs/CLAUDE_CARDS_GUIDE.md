@@ -72,6 +72,24 @@ card({
 });
 ```
 
+## Let Claude find items (papr.search)
+
+Card tools take an item reference (a video, a lead). Claude only knows what the user typed, so exact-title matching misses ("this is the deck" vs "This Was the Deck"). Index items once and Claude's `papr_search` finds them by meaning, then calls your card tool with the exact args:
+
+```ts
+import { papr } from '/__papr__/papr-sdk.ts';
+await papr.search.index(videos.map((v) => ({
+  id: v.id, title: v.title, text: v.transcript,       // what to match on
+  view: 'library', args: { video: v.id },             // which card opens it, with what
+  url: `?video=${v.id}`,                              // deep link in the app
+})));
+```
+
+- Re-index an item whenever it changes (same id replaces it). `papr.search.remove(ids)` when deleted.
+- Jobs and backend actions: `POST http://127.0.0.1:18789/api/search/index` with `{ appId, items }`.
+- The app needs one publish first (results are keyed by its published link).
+- In-app search too: `await papr.search.query('deck video')`.
+
 ## Rules
 
 - Never put secrets, API keys or remote `<script src>` in cards. Cards must be self-contained.
