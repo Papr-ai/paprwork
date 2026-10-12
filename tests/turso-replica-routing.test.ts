@@ -51,6 +51,7 @@ describe("tursoReplicaRouting", () => {
           localPath: "/tmp/data/databases/billing/data.db",
           tursoShortName: "d-test0001",
           isolation: "shared",
+          syncMode: "replica",
           status: "active",
           createdAt: "2026-01-01T00:00:00.000Z",
           updatedAt: "2026-01-01T00:00:00.000Z",
@@ -106,6 +107,11 @@ describe("tursoReplicaRouting", () => {
     };
 
     notifyReplicaDbChanged(source);
+    // publishDbChanged coalesces for 400ms; flush so the event lands now.
+    const { flushAllCoalescedDbChangedForTests } = await import(
+      "../src/gateway/services/jobDbChangedCoalesce.js"
+    );
+    flushAllCoalescedDbChangedForTests();
 
     expect(events).toHaveLength(1);
     expect(events[0]).toMatchObject({

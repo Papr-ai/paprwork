@@ -211,6 +211,7 @@ export class AgentFocusContextService {
         await appService.initialize();
         const appDir = path.join(appsRoot(), ui.activeApp.appId);
         const entries = await fs.readdir(appDir);
+        server.activeApp.installed = entries.length > 0;
         server.activeApp.files = entries.filter(
           (name) =>
             !name.startsWith(".") &&
@@ -219,7 +220,8 @@ export class AgentFocusContextService {
             name !== "dist",
         );
       } catch {
-        // App dir unreadable — still inject appId/title
+        // App dir unreadable (e.g. web-only catalog preview) — still inject appId/title
+        server.activeApp.installed = false;
       }
     }
 

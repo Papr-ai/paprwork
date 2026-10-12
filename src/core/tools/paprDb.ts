@@ -96,6 +96,33 @@ export const paprDbPullTool = createTool({
   },
 });
 
+const paprDbQuerySchema = dbRefSchema.extend({
+  sql: z.string().min(1).describe("SELECT or WITH … SELECT only"),
+  params: z.array(z.unknown()).optional().describe("Bound params"),
+  limit: z.number().int().min(1).max(1000).optional().describe("Max rows returned (default 200)"),
+});
+
+export const paprDbQueryTool = createTool({
+  id: "papr_db_query",
+  description:
+    "Read rows from a registry database (SELECT / WITH only). Works the same on desktop and in " +
+    "cloud runs, for replica, cloud-direct (web-only, no local file) and local databases. " +
+    "Use this instead of sqlite3, curl to the gateway, or raw Turso credentials. " +
+    "Pair with papr_db_exec for INSERT/UPDATE/DELETE.",
+  inputSchema: paprDbQuerySchema,
+  execute: async (input) => {
+    const args = unwrapContext(input);
+    if (!args.dbId && !args.localPath) {
+      throw new Error("dbId or localPath is required");
+    }
+    const { paprDbQuery } = await import(
+      "../../gateway/services/tursoReplica/PaprDbService.js"
+    );
+    const data = await paprDbQuery(args);
+    return { success: true, data };
+  },
+});
+
 const paprDbExecSchema = dbRefSchema.extend({
   sql: z.string().min(1).describe("SQL to execute (DML or DDL)"),
   params: z.array(z.unknown()).optional().describe("Bound params for DML"),
@@ -104,8 +131,9 @@ const paprDbExecSchema = dbRefSchema.extend({
 export const paprDbExecTool = createTool({
   id: "papr_db_exec",
   description:
-    "Execute DML (INSERT/UPDATE/DELETE/REPLACE) on a Plan A registry database. " +
-    "Writes local replica then push() to Turso primary when online. " +
+    "Execute DML (INSERT/UPDATE/DELETE/REPLACE) on a registry database. " +
+    "Replica: writes the local replica then pushes to cloud. Cloud-direct (web-only): writes the cloud database directly. " +
+    "Returns a change count only — read rows with papr_db_query. " +
     "Schema is NOT allowed — use papr_db_create_migration.",
   inputSchema: paprDbExecSchema,
   execute: async (input) => {
@@ -377,6 +405,7 @@ export const paprDbTools = [
   paprDbSyncStatusTool,
   paprDbPushTool,
   paprDbPullTool,
+  paprDbQueryTool,
   paprDbExecTool,
   paprDbCreateMigrationTool,
   paprDbApplyMigrationTool,

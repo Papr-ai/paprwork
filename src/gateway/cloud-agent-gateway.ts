@@ -16,6 +16,7 @@ import express, { type NextFunction, type Request, type Response } from "express
 import { getCloudAgentGatewayService } from "./services/cloudAgentGateway/CloudAgentGatewayService.js";
 import { handleCloudAgentAppRepoCommitted } from "./services/cloudAgentGateway/handleAppRepoCommitted.js";
 import { resolveCloudAgentRunId } from "./services/cloudAgentGateway/cloudAgentRunId.js";
+import { startSandboxLocalApi } from "./services/cloudAgentGateway/sandboxLocalApi.js";
 import type { CloudAgentRunRequest } from "./services/cloudAgentGateway/types.js";
 import {
   parseAppRepoCommittedPayload,
@@ -50,6 +51,28 @@ function requireGatewayAuth(
   next();
 }
 
+/** App-scoped runs (memory sends workspaceScope=app for jobs linked to a mini-app) clone the
+ *  per-app repo via appRepoOwner/appRepoName, so repoCloneUrl is only required for namespace scope. */
+function missingRepoField(body: Partial<CloudAgentRunRequest>): string | null {
+  if (body.workspaceScope === "app") {
+    for (const f of ["appId", "appRepoOwner", "appRepoName"] as const) {
+      if (!body[f]) return f;
+    }
+    return null;
+  }
+  return body.repoCloneUrl ? null : "repoCloneUrl";
+}
+
+function workspaceFields(body: Partial<CloudAgentRunRequest>) {
+  return {
+    workspaceScope: body.workspaceScope,
+    appId: body.appId,
+    appRepoOwner: body.appRepoOwner,
+    appRepoName: body.appRepoName,
+    scaffoldFiles: body.scaffoldFiles,
+  };
+}
+
 function parseCloudAgentRunRequest(
   body: Partial<CloudAgentRunRequest>,
 ): CloudAgentRunRequest | { error: string } {
@@ -58,7 +81,6 @@ function parseCloudAgentRunRequest(
     "userId",
     "jobId",
     "paprApiKey",
-    "repoCloneUrl",
     "repoToken",
     "llmAuth",
   ] as const;
@@ -67,6 +89,10 @@ function parseCloudAgentRunRequest(
     if (!body[field]) {
       return { error: `Missing required field: ${field}` };
     }
+  }
+  const missingRepo = missingRepoField(body);
+  if (missingRepo) {
+    return { error: `Missing required field: ${missingRepo}` };
   }
 
   if (!body.llmAuth?.token || !body.llmAuth?.provider || !body.llmAuth?.authType) {
@@ -94,7 +120,8 @@ function parseCloudAgentRunRequest(
     paprApiKey: body.paprApiKey as string,
     allowedToolIds: body.allowedToolIds,
     maxTurns: body.maxTurns,
-    repoCloneUrl: body.repoCloneUrl as string,
+    repoCloneUrl: body.repoCloneUrl,
+    ...workspaceFields(body),
     repoToken: body.repoToken as string,
     repoBranch: body.repoBranch,
     linkedSources: body.linkedSources,
@@ -116,7 +143,6 @@ function parseCloudAgentSessionBeginRequest(
     "userId",
     "jobId",
     "paprApiKey",
-    "repoCloneUrl",
     "repoToken",
     "workspaceSessionId",
   ] as const;
@@ -125,6 +151,10 @@ function parseCloudAgentSessionBeginRequest(
     if (!body[field]) {
       return { error: `Missing required field: ${field}` };
     }
+  }
+  const missingRepo = missingRepoField(body);
+  if (missingRepo) {
+    return { error: `Missing required field: ${missingRepo}` };
   }
 
   const sessionId = body.workspaceSessionId as string;
@@ -148,7 +178,8 @@ function parseCloudAgentSessionBeginRequest(
     paprApiKey: body.paprApiKey as string,
     allowedToolIds: body.allowedToolIds,
     maxTurns: body.maxTurns,
-    repoCloneUrl: body.repoCloneUrl as string,
+    repoCloneUrl: body.repoCloneUrl,
+    ...workspaceFields(body),
     repoToken: body.repoToken as string,
     repoBranch: body.repoBranch,
     linkedSources: body.linkedSources,
@@ -250,6 +281,9 @@ async function main(): Promise<void> {
   app.listen(PORT, "0.0.0.0", () => {
     console.log(`[CloudAgentGateway] Listening on :${PORT}`);
   });
+  // Loopback copy of the desktop app API so `curl localhost:18789/api/app/backend/*`
+  // and /api/db/* behave the same in cloud runs as on desktop.
+  startSandboxLocalApi();
 }
 
 main().catch((error) => {
