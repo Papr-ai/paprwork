@@ -311,3 +311,5 @@ input.ah-sheet__name:hover, input.ah-sheet__name:focus { background: var(--ah-ho
 .ah-solo__meta, .ah-coll__meta { font-size: 13px; }
 .ah-solo .ah-open, .ah-coll .ah-open { height: 32px; font-size: 14px; font-weight: 650; }
 @media (max-width: 640px) { .ah-grid, .ah-list { grid-template-columns: 1fr; } }
+/* Two rows of apps: spread across the panel, not packed together. */
+.ah-coll__art .ah-coll__grid { height: 100%; align-content: space-evenly; row-gap: 14px; }
