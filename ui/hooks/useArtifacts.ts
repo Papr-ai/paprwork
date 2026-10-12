@@ -41,7 +41,15 @@ function syncAppTabTitlesFromArtifacts(apps: Artifact[]): void {
   }
 }
 
-export function useArtifacts(scope: "all" | "apps" = "all") {
+/**
+ * @param options.autoLoad  false = read the store only (no load on mount). Use in
+ *   components rendered inside the Apps page so mounting them can't restart a load.
+ */
+export function useArtifacts(
+  scope: "all" | "apps" = "all",
+  options?: { autoLoad?: boolean },
+) {
+  const autoLoad = options?.autoLoad !== false;
   const {
     artifacts,
     loading,
@@ -414,8 +422,8 @@ export function useArtifacts(scope: "all" | "apps" = "all") {
 
   // Load artifacts on mount
   useEffect(() => {
-    loadArtifacts();
-  }, [loadArtifacts]);
+    if (autoLoad) loadArtifacts();
+  }, [loadArtifacts, autoLoad]);
 
   // Background refresh after workspace switch (cache already hydrated).
   useEffect(() => {

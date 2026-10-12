@@ -508,14 +508,26 @@ export async function fetchAppFeatureAvailability(appId: string): Promise<
   return (await res.json()) as import("../../src/core/types/cloudAppDependencies").AppFeatureAvailabilityReport;
 }
 
-export async function fetchCloudLineageIndex(): Promise<
-  import("./communityAppLocalOpen").CloudLineageIndex | null
-> {
-  try {
-    const res = await fetch(`${GATEWAY}/api/cloud/lineage`);
-    if (!res.ok) return null;
-    return (await res.json()) as import("./communityAppLocalOpen").CloudLineageIndex;
-  } catch {
-    return null;
-  }
+type LineageIndex = import("./communityAppLocalOpen").CloudLineageIndex;
+let lineageInflight: Promise<LineageIndex | null> | null = null;
+let lineageAt = 0;
+let lineageLast: LineageIndex | null = null;
+
+/** Shared by every catalog view/card: one request in flight, reused for 10s. */
+export async function fetchCloudLineageIndex(force = false): Promise<LineageIndex | null> {
+  if (!force && lineageLast && Date.now() - lineageAt < 10_000) return lineageLast;
+  lineageInflight ??= fetch(`${GATEWAY}/api/cloud/lineage`)
+    .then((res) => (res.ok ? (res.json() as Promise<LineageIndex>) : null))
+    .then((index) => {
+      if (index) {
+        lineageLast = index;
+        lineageAt = Date.now();
+      }
+      return index;
+    })
+    .catch(() => null)
+    .finally(() => {
+      lineageInflight = null;
+    });
+  return lineageInflight;
 }
