@@ -600,7 +600,7 @@
   margin: 0 0 10px;
   font-size: 13px;
   line-height: 1.45;
-  color: var(--onb-text);
+  color: var(--onb-ink);
 }
 
 .claude-stepper__token-instructions code {

@@ -21,11 +21,21 @@
   padding-bottom: 24px;
 }
 
+/* The stepper's theme tokens live on .onboarding-flow, which this modal does
+   not wrap. Every --onb-* var the stepper reads must be defined here, or it
+   resolves to nothing — missing --onb-grad made the primary buttons and the
+   active step number white-on-white. */
 .claude-guided-setup-modal__body.onboarding-connect {
   --onb-ink: #1a1a1a;
   --onb-mid: #666;
+  --onb-soft: #8b99ae;
   --onb-line: #e5e7eb;
+  --onb-bg: #fbfcfe;
+  --onb-card: #fff;
+  --onb-g1: #0060e0;
   --onb-g2: #2563eb;
+  --onb-g3: #0bcdff;
+  --onb-grad: linear-gradient(120deg, #0060e0, #00acfa 60%, #0bcdff);
   --onb-ok: #067647;
 }
 
@@ -33,7 +43,11 @@
   .claude-guided-setup-modal__body.onboarding-connect {
     --onb-ink: #f5f5f7;
     --onb-mid: #a1a1aa;
+    --onb-soft: #71717a;
     --onb-line: #3f3f46;
+    --onb-bg: #18181b;
+    --onb-card: #1f1f23;
+    --onb-g1: #3b82f6;
     --onb-g2: #60a5fa;
     --onb-ok: #6ee7b7;
   }
