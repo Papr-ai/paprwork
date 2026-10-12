@@ -9,6 +9,7 @@
  *   papr_list_apps (model)    the caller's apps with cards, for discovery / beyond the tool cap.
  *   papr_open_app  (model)    open any published app by link (generic card).
  *   papr_continue_on_mac (model + app)  one-time papr:// link to pick up in the desktop app.
+ *   papr_search    (model)    find an item inside the apps by meaning (searchTool.ts).
  *
  * Routes: /mcp (all the user's apps) and /mcp/a/{namespaceId}/{slug} (one app, for an
  * "Add to Claude" button on that app's page). Same sign-in, same audience.
@@ -38,6 +39,7 @@ import { HandoffError, memoryHandoff, type CreateHandoff } from "./handoff.js";
 import { memorySessionExchange, type McpSessionExchange } from "./session.js";
 import { buildInstructions } from "./routing.js";
 import { paprIcons, registerPaprIconRoutes } from "./paprIcon.js";
+import { memoryAppSearch, registerSearchTool, type AppSearchFn } from "./searchTool.js";
 
 export interface AppScope {
   namespaceId: string;
@@ -93,7 +95,8 @@ export function parseAppRef(
 
 export const MCP_INSTRUCTIONS =
   "Papr runs the user's ongoing work as apps (outreach, research, ops). Each app's tools open a live card in the chat; " +
-  "changes only happen when the user presses a button on the card. Use papr_list_apps to see which apps the user has.";
+  "changes only happen when the user presses a button on the card. Use papr_list_apps to see which apps the user has. " +
+  "When the user names one item loosely (a video, a lead), call papr_search first and pass its args to the card tool.";
 
 export const FIRST_RUN_NOTE =
   "Your Papr workspace is ready. Install Papr on your Mac to build apps; they show up here as cards once published.";
@@ -102,7 +105,7 @@ export function buildMcpServer(
   cfg: McpEndpointConfig,
   caller: McpCaller,
   apps: ClaudeApp[] = [],
-  deps: { handoff?: CreateHandoff } = {},
+  deps: { handoff?: CreateHandoff; search?: AppSearchFn } = {},
 ): McpServer {
   const server = new McpServer(
     { name: "papr", title: "Papr", version: "0.1.0", websiteUrl: "https://papr.ai", icons: paprIcons(cfg.resourceUrl) },
@@ -277,6 +280,10 @@ export function buildMcpServer(
     },
   );
 
+  if (deps.search) {
+    registerSearchTool(server, { search: deps.search, apps, tools, appsBaseUrl: cfg.appsBaseUrl, appTitle });
+  }
+
   const handoff = deps.handoff;
   if (handoff) {
     server.registerTool(
@@ -355,6 +362,7 @@ async function handleMcpPost(
   cfg: McpEndpointConfig,
   catalog: CatalogDeps,
   handoff: CreateHandoff | undefined,
+  searchFor: ((caller: McpCaller) => AppSearchFn) | undefined,
   req: Request,
   res: Response,
   scope?: AppScope,
@@ -374,7 +382,7 @@ async function handleMcpPost(
     }
   }
   if (scope) apps = apps.filter((a) => a.namespaceId === scope.namespaceId && a.slug === scope.slug);
-  const server = buildMcpServer(cfg, caller, apps, { handoff });
+  const server = buildMcpServer(cfg, caller, apps, { handoff, ...(searchFor ? { search: searchFor(caller) } : {}) });
   const transport = new StreamableHTTPServerTransport({ sessionIdGenerator: undefined, enableJsonResponse: true });
   transport.onerror = (err) => console.warn(`[mcp] transport rejected request: ${err.message.slice(0, 200)} (protocol header: ${req.headers["mcp-protocol-version"] ?? "none"})`);
   res.on("close", () => {
@@ -396,6 +404,8 @@ export function registerMcpRoutes(
     exchange?: McpSessionExchange;
     /** null disables the Mac handoff tool. */
     handoff?: CreateHandoff | null;
+    /** null disables papr_search. */
+    search?: ((caller: McpCaller) => AppSearchFn) | null;
   },
 ): McpEndpointConfig {
   const cfg = opts.config ?? loadMcpEndpointConfig(opts.port);
@@ -405,6 +415,7 @@ export function registerMcpRoutes(
   if (!exchange) console.warn("[mcp] PAPR_MCP_SERVICE_KEY unset: using the Auth0 claims bridge (spike only).");
   // The handoff needs a memory-minted session; the claims bridge's Parse session works too.
   const handoff = opts.handoff === null ? undefined : (opts.handoff ?? memoryHandoff(memoryBaseUrl));
+  const searchFor = opts.search === null ? undefined : (opts.search ?? ((caller: McpCaller) => memoryAppSearch(memoryBaseUrl, caller)));
   registerProtectedResourceMetadata(app, cfg);
   registerPaprIconRoutes(app);
   const bearer = requireBearerAuth({
@@ -412,7 +423,7 @@ export function registerMcpRoutes(
     resourceMetadataUrl: protectedResourceMetadataUrl(cfg),
   });
   app.post(MCP_PATH, bearer, (req, res, next: NextFunction) => {
-    handleMcpPost(cfg, catalog, handoff, req, res).catch(next);
+    handleMcpPost(cfg, catalog, handoff, searchFor, req, res).catch(next);
   });
   app.post(`${MCP_PATH}/a/:namespaceId/:slug`, bearer, (req, res, next: NextFunction) => {
     const { namespaceId, slug } = req.params as Record<string, string>;
@@ -420,7 +431,7 @@ export function registerMcpRoutes(
       res.status(404).json({ jsonrpc: "2.0", error: { code: -32000, message: "Unknown Papr app" }, id: null });
       return;
     }
-    handleMcpPost(cfg, catalog, handoff, req, res, { namespaceId, slug }).catch(next);
+    handleMcpPost(cfg, catalog, handoff, searchFor, req, res, { namespaceId, slug }).catch(next);
   });
   // Stateless server: no standalone SSE stream and no sessions to delete.
   const notAllowed = (_req: Request, res: Response): void => {
