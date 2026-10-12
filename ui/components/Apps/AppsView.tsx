@@ -495,8 +495,8 @@ export function AppsView() {
     [categorySnapshot.byKey],
   );
   const homeKey = `papr-apps-home:${papr.namespaceId ?? "local"}`;
-  const area: "mine" | "team" | "community" =
-    section === "team" ? "team" : section === "community" ? "community" : "mine";
+  const area: "mine" | "community" =
+    section === "community" ? "community" : "mine";
   // One search box covers the library, the team and the community; typing
   // swaps whatever section is showing for a single results page.
   const searching = searchQuery.trim().length > 0;
@@ -523,9 +523,8 @@ export function AppsView() {
           {(
             [
               ["mine", "My apps", "grid"],
-              ...(showNamespaceTabs ? [["team", "Team apps", "users"]] : []),
               ["community", "Community apps", "globe"],
-            ] as Array<["mine" | "team" | "community", string, "grid" | "users" | "globe"]>
+            ] as Array<["mine" | "community", string, "grid" | "globe"]>
           ).map(([id, label, icon]) => (
             <button
               key={id}
@@ -662,6 +661,11 @@ export function AppsView() {
               refreshToken={catalogRefreshToken}
             />
           ) : section === "team" ? (
+            <>
+            <button type="button" className="apps-view__back" onClick={() => setSection("recent")}>
+              <HomeIcon name="back" size={14} />
+              My apps
+            </button>
             <CommunityAppsView
                 libraryMenuFor={libraryMenuFor}
               key={papr.namespaceId ?? "no-namespace"}
@@ -674,6 +678,7 @@ export function AppsView() {
               hideToolbar
               refreshToken={catalogRefreshToken}
             />
+            </>
           ) : loading ? (
             <div className="apps-view__empty">
               <p>Loading apps...</p>
@@ -725,6 +730,8 @@ export function AppsView() {
               storageKey={homeKey}
               showCopyAction={showCopyAction}
               showTeam={showNamespaceTabs}
+              teamNamespaceId={papr.namespaceId}
+              teamName={papr.namespaceName}
               duplicateExtraCount={duplicateExtraCount}
               onStartCleanup={() => setCleaningUp(true)}
               onSelectSection={setSection}

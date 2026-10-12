@@ -37,6 +37,7 @@ import {
 import { AppTile, CollectionTile, type TileDnd } from "./HomeTiles";
 import { HomeMenu, type HomeMenuItem } from "./HomeMenu";
 import { HomeCollectionSheet } from "./HomeCollectionSheet";
+import { TeamAppsCollection } from "./TeamAppsCollection";
 import { HomeIcon, type HomeIconName } from "./HomeIcon";
 import type { LibraryCardHandlers } from "./LibraryPane";
 import { homeStatus } from "../../utils/homeStatus";
@@ -59,6 +60,9 @@ interface AppsHomeProps extends LibraryCardHandlers {
   storageKey: string;
   showCopyAction: boolean;
   showTeam: boolean;
+  /** Team workspace: shows a "From <team>" collection of team apps you don't have yet. */
+  teamNamespaceId?: string | null;
+  teamName?: string | null;
   duplicateExtraCount: number;
   onStartCleanup: () => void;
   onSelectSection: (s: LibrarySection | "team" | "community") => void;
@@ -349,6 +353,13 @@ export function AppsHome(p: AppsHomeProps) {
         >
           {added.map((id) => byId.get(id)).filter((a): a is Artifact => !!a).map(appTile)}
           {SMART.map((s) => collection(s.id, s.name, smartApps(s.id), s.icon))}
+          {p.showTeam && p.teamNamespaceId ? (
+            <TeamAppsCollection
+              namespaceId={p.teamNamespaceId}
+              namespaceName={p.teamName ?? null}
+              onSeeAll={() => p.onSelectSection("team")}
+            />
+          ) : null}
           {layout.order.map((id) => {
             if (added.includes(id)) return null;
             const f = layout.folders[id];
@@ -381,12 +392,6 @@ export function AppsHome(p: AppsHomeProps) {
         </div>
         <div className="ah-foot__doors">
           <span>Need another app?</span>
-          {p.showTeam ? (
-            <button type="button" onClick={() => p.onSelectSection("team")}>
-              <HomeIcon name="users" size={14} />
-              Team apps
-            </button>
-          ) : null}
           <button type="button" onClick={() => p.onSelectSection("community")}>
             <HomeIcon name="globe" size={14} />
             Community apps

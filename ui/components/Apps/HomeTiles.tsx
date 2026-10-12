@@ -1,6 +1,7 @@
 /**
- * Cards for the My apps home: a collection (Papr-blue banner + up to six apps)
- * and a single app (cover or banner, overlapping icon, one status line).
+ * Cards for the My apps home, App Store style: a big rounded art panel on top
+ * (a cover for an app, the apps themselves for a collection), then one row
+ * with the icon, name, a short line and one button.
  */
 import { useEffect, useRef, useState, type DragEvent, type ReactNode } from "react";
 import type { Artifact } from "../../stores/artifactsStore";
@@ -156,13 +157,7 @@ export function CollectionTile(p: CollectionTileProps) {
       onDrop={p.auto ? undefined : (e) => p.dnd.onDrop(p.id, e)}
       onDragEnd={p.dnd.onDragEnd}
     >
-      <div className={`ah-banner ah-pb-${bannerShade(p.id)}`}>
-        <button type="button" className="ah-banner__head" onClick={p.onOpenCollection}>
-          <HomeIcon name={p.icon} size={15} />
-          <span className="ah-banner__name">{p.name}</span>
-          <em>{p.apps.length}</em>
-        </button>
-      </div>
+      <div className={`ah-coll__art ah-tint-${bannerShade(p.id)}`}>
       <div className="ah-coll__grid">
         {shown.map((a) => (
           <div
@@ -202,6 +197,24 @@ export function CollectionTile(p: CollectionTileProps) {
             </button>
           </div>
         ) : null}
+      </div>
+      </div>
+      <div className="ah-coll__row">
+        <span className={`ah-coll__ic ah-pb-${bannerShade(p.id)}`}>
+          <HomeIcon name={p.icon} size={18} />
+        </span>
+        <div className="ah-coll__txt">
+          <button type="button" className="ah-coll__name" onClick={p.onOpenCollection} title={p.name}>
+            {p.name}
+          </button>
+          <span className="ah-coll__meta">
+            {p.apps.length} app{p.apps.length === 1 ? "" : "s"}
+            {p.auto ? " · fills itself" : ""}
+          </span>
+        </div>
+        <button type="button" className="ah-open" onClick={p.onOpenCollection}>
+          See all
+        </button>
       </div>
     </div>
   );
