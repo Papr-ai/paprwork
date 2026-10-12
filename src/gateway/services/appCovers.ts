@@ -218,3 +218,27 @@ export function coverStatus(appId: string): {
     privateFresh: privateCoverIsFresh(appId),
   };
 }
+
+/**
+ * Every app id that has a cover (own private screenshot, or an owner-shared one).
+ * The library asks once so cards only request covers that exist — no 404 per card.
+ */
+export function listCoveredAppIds(): string[] {
+  const ids = new Set<string>();
+  try {
+    for (const f of fs.readdirSync(path.join(getPaprDataDir(), "covers"))) {
+      if (f.endsWith(".img")) ids.add(f.slice(0, -4));
+    }
+  } catch {
+    /* no covers yet */
+  }
+  try {
+    for (const appId of fs.readdirSync(getPaprAppsRoot())) {
+      if (ids.has(appId) || !isValidCoverAppId(appId)) continue;
+      if (readSharedCoverPointer(appId) || fs.existsSync(sharedCoverPath(appId))) ids.add(appId);
+    }
+  } catch {
+    /* no apps dir */
+  }
+  return [...ids].filter(isValidCoverAppId);
+}

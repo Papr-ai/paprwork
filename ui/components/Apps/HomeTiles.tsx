@@ -8,7 +8,7 @@ import type { Artifact } from "../../stores/artifactsStore";
 import type { ShareGlyph } from "../../utils/shareGlyph";
 import { bannerShade, type DropZone } from "../../utils/appsHome";
 import { isIdLikeTitle } from "../../utils/appsLibrary";
-import { appCoverUrl } from "../../utils/appCover";
+import { appCoverUrl, useAppHasCover } from "../../utils/appCover";
 import { ShareAudienceIcon } from "./WebSyncPopover";
 import { HomeIcon, type HomeIconName } from "./HomeIcon";
 
@@ -242,8 +242,9 @@ export interface AppTileProps {
 
 /** A loose app, App Store style: big cover banner, then droplet · name · status · Open. */
 export function AppTile(p: AppTileProps) {
-  const [hasCover, setHasCover] = useState(true);
+  const [broken, setBroken] = useState(false);
   const id = p.app.id;
+  const hasCover = useAppHasCover(id) && !broken;
   return (
     <div
       className={`ah-card ah-solo ${p.static ? "ah-solo--static" : dndClass(id, p.dnd)}`}
@@ -261,7 +262,7 @@ export function AppTile(p: AppTileProps) {
             alt=""
             loading="lazy"
             draggable={false}
-            onError={() => setHasCover(false)}
+            onError={() => setBroken(true)}
           />
         ) : (
           <span className="ah-solo__hero"><AppGlyph app={p.app} size={84} /></span>
