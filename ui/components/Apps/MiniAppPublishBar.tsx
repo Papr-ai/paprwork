@@ -2386,6 +2386,11 @@ export function MiniAppPublishBar({
             onAddMissingKeys={openKeySettings}
             onKeysSaved={() => setKeysCheckToken((n) => n + 1)}
             initialEdit={shareInitialStep}
+            access={{
+              members: workspacePeople,
+              membersLoading: workspacePeopleLoading,
+              onSaved: () => void cloud.refresh(),
+            }}
             linkedDeps={linkedDepItems(readiness)}
             onOpenDependencyApp={onOpenDependencyApp}
             notices={

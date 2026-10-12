@@ -2950,6 +2950,35 @@ async function startGateway(): Promise<void> {
       }
     });
 
+    // Roles: who has which role on a published app (memory /apps/{id}/access).
+    // A team collaborator's copy manages the original, so resolve to its source.
+    const accessTargetAppId = async (appId: string): Promise<string> => {
+      const lineage = await getCloudAppLineageService().readLineageForApp(appId);
+      return lineage?.mode === "track" && lineage.databasePolicy === "shared"
+        ? lineage.sourceAppId
+        : appId;
+    };
+    const proxyAppAccess = async (
+      req: import("express").Request,
+      res: import("express").Response,
+      method: "GET" | "PUT",
+    ) => {
+      try {
+        const { cloudApiFetch } = await import("./utils/cloudApiClient.js");
+        const target = await accessTargetAppId(String(req.params.appId));
+        const upstream = await cloudApiFetch(
+          `/v1/cloud/apps/${encodeURIComponent(target)}/access`,
+          { method, ...(method === "PUT" ? { body: req.body ?? {} } : {}), timeoutMs: 20_000 },
+        );
+        const text = await upstream.text();
+        res.status(upstream.status).type("application/json").send(text || "{}");
+      } catch (err) {
+        res.status(500).json({ error: (err as Error).message });
+      }
+    };
+    app.get("/api/cloud/apps/:appId/access", (req, res) => void proxyAppAccess(req, res, "GET"));
+    app.put("/api/cloud/apps/:appId/access", (req, res) => void proxyAppAccess(req, res, "PUT"));
+
     app.get("/api/cloud/apps/:appId/requirements", async (req, res) => {
       try {
         const paprDir = getPaprRoot();
