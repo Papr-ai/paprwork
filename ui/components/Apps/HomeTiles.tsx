@@ -9,6 +9,7 @@ import type { ShareGlyph } from "../../utils/shareGlyph";
 import { bannerShade, type DropZone } from "../../utils/appsHome";
 import { isIdLikeTitle } from "../../utils/appsLibrary";
 import { appCoverUrl, useAppHasCover } from "../../utils/appCover";
+import { useAppDemoUrl } from "../../utils/appDemo";
 import { ShareAudienceIcon } from "./WebSyncPopover";
 import { HomeIcon, type HomeIconName } from "./HomeIcon";
 
@@ -245,6 +246,7 @@ export function AppTile(p: AppTileProps) {
   const [broken, setBroken] = useState(false);
   const id = p.app.id;
   const hasCover = useAppHasCover(id) && !broken;
+  const demoUrl = useAppDemoUrl(id);
   return (
     <div
       className={`ah-card ah-solo ${p.static ? "ah-solo--static" : dndClass(id, p.dnd)}`}
@@ -255,7 +257,17 @@ export function AppTile(p: AppTileProps) {
       onDragEnd={p.dnd.onDragEnd}
     >
       <button type="button" className="ah-solo__art" onClick={p.onOpen} title={p.app.description || displayTitle(p.app)}>
-        {hasCover ? (
+        {demoUrl ? (
+          <iframe
+            className="ah-solo__cover app-demo-frame"
+            src={demoUrl}
+            title=""
+            tabIndex={-1}
+            aria-hidden="true"
+            loading="lazy"
+            sandbox="allow-scripts"
+          />
+        ) : hasCover ? (
           <img
             className="ah-solo__cover"
             src={appCoverUrl(id, p.app.updatedAt)}

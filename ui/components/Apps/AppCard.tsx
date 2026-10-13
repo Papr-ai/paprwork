@@ -10,6 +10,7 @@ import type { AppStatusLine } from "../../utils/appStatusLine";
 import type { ShareGlyph } from "../../utils/shareGlyph";
 import { ShareAudienceIcon } from "./WebSyncPopover";
 import { APP_COVER_CHANGED_EVENT, appCoverUrl, setAppCoverShared, useAppHasCover } from "../../utils/appCover";
+import { useAppDemoUrl } from "../../utils/appDemo";
 
 export type AppStatus = "draft" | "active" | "archived";
 
@@ -76,7 +77,8 @@ export function AppCard({
   // Cover = picture of the app's first screen (own private one, else owner-shared).
   const [coverVersion, setCoverVersion] = useState(() => artifact.updatedAt);
   const [coverBroken, setCoverBroken] = useState(false);
-  const hasCover = useAppHasCover(artifact.id) && !coverBroken;
+  const demoUrl = useAppDemoUrl(artifact.id);
+  const hasCover = (useAppHasCover(artifact.id) && !coverBroken) || Boolean(demoUrl);
   const setHasCover = (v: boolean) => setCoverBroken(!v);
   useEffect(() => {
     const onChanged = (e: Event) => {
@@ -305,7 +307,17 @@ export function AppCard({
       draggable
       onDragStart={handleDragStart}
     >
-      {hasCover && !compact ? (
+      {demoUrl && !compact ? (
+        <iframe
+          className="app-card__cover app-demo-frame"
+          src={demoUrl}
+          title=""
+          tabIndex={-1}
+          aria-hidden="true"
+          loading="lazy"
+          sandbox="allow-scripts"
+        />
+      ) : hasCover && !compact ? (
         <img
           className="app-card__cover"
           src={appCoverUrl(artifact.id, coverVersion)}

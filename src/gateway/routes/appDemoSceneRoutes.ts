@@ -9,18 +9,25 @@ import {
   buildDemoScenePrompt,
   hasDemoScene,
   isValidDemoAppId,
+  listDemoAppIds,
   readDemoScene,
   saveDemoScene,
 } from "../services/appDemoScenes.js";
 
 export function registerAppDemoSceneRoutes(app: Express): void {
+  /** Which apps have a preview loop — one call for the whole library. */
+  app.get("/api/apps/demos", (_req, res) => {
+    res.setHeader("Cache-Control", "no-cache");
+    res.json({ appIds: listDemoAppIds() });
+  });
+
   app.get("/api/apps/:appId/demo-scene/status", (req, res) => {
     res.json({ exists: hasDemoScene(req.params.appId ?? "") });
   });
 
   /** The scene HTML. ?play=1 adds the looping player (for iframes). */
   app.get("/api/apps/:appId/demo-scene", (req, res) => {
-    const html = readDemoScene(req.params.appId ?? "", req.query.play === "1");
+    const html = readDemoScene(req.params.appId ?? "", req.query.play === "1", req.query.fit === "cover");
     if (!html) {
       res.status(404).end();
       return;

@@ -9,6 +9,7 @@
 import { useEffect, useState } from "react";
 import { gateway } from "../../src/lib/gateway";
 import { appCoverUrl, setAppCoverShared } from "../../utils/appCover";
+import { APP_DEMO_CHANGED_EVENT } from "../../utils/appDemo";
 import { getGatewayHttpBase } from "../../utils/gatewayHttpBase";
 import "./PublishInfoSheet.css";
 
@@ -66,6 +67,7 @@ export function PublishInfoSheet({
       if (!res.ok || !body.saved) throw new Error(body.error ?? "Couldn't make a preview right now.");
       setHasDemo(true);
       setDemoVersion(String(Date.now()));
+      window.dispatchEvent(new CustomEvent(APP_DEMO_CHANGED_EVENT, { detail: { appId } }));
     } catch (err) {
       setError((err as Error).message);
     } finally {

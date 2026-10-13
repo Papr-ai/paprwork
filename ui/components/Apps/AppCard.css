@@ -745,3 +745,6 @@
 .app-card.app-card--has-cover .app-card__preview { top: 140px; }
 .app-card.app-card--has-cover .app-card__share { top: 146px; }
 .app-card.app-card--has-cover .app-card__menu-wrap { top: 138px; }
+
+/* Preview loop (iframe) stands in for the cover; clicks go to the card. */
+.app-demo-frame { border: 0; pointer-events: none; background: transparent; }

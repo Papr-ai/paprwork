@@ -106,12 +106,25 @@ export function saveDemoScene(appId: string, raw: string): string {
   return html;
 }
 
-/** Player: fit 1920x1080 into the frame and loop __setT on real time. */
-const PLAYER = `<script>(function(){function fit(){document.documentElement.style.zoom=String(Math.min(innerWidth/1920,innerHeight/1080))}fit();addEventListener('resize',fit);var s=performance.now();function f(n){var T=window.__total||4;try{window.__setT&&window.__setT(((n-s)/1000)%T)}catch(e){}requestAnimationFrame(f)}requestAnimationFrame(f)})()</script>`;
+export function listDemoAppIds(): string[] {
+  try {
+    return fs
+      .readdirSync(path.join(getPaprDataDir(), "demos"))
+      .filter((f) => f.endsWith(".html"))
+      .map((f) => f.slice(0, -5))
+      .filter(isValidDemoAppId);
+  } catch {
+    return [];
+  }
+}
 
-export function readDemoScene(appId: string, play: boolean): string | null {
+/** Player: scale the 1920x1080 stage to the frame (contain, or cover for cards) and loop __setT. */
+const PLAYER = (cover: boolean) => `<script>(function(){var b=document.body;document.documentElement.style.overflow='hidden';b.style.margin='0';b.style.width='1920px';b.style.height='1080px';b.style.overflow='hidden';b.style.transformOrigin='0 0';function fit(){var k=Math.${cover ? "max" : "min"}(innerWidth/1920,innerHeight/1080);b.style.transform='translate('+(innerWidth-1920*k)/2+'px,'+(innerHeight-1080*k)/2+'px) scale('+k+')'}fit();addEventListener('resize',fit);var s=performance.now();function f(n){var T=window.__total||4;try{window.__setT&&window.__setT(((n-s)/1000)%T)}catch(e){}requestAnimationFrame(f)}requestAnimationFrame(f)})()</script>`;
+
+export function readDemoScene(appId: string, play: boolean, cover = false): string | null {
   if (!hasDemoScene(appId)) return null;
   const html = fs.readFileSync(demoScenePath(appId), "utf8");
   if (!play) return html;
-  return /<\/body>/i.test(html) ? html.replace(/<\/body>/i, `${PLAYER}</body>`) : html + PLAYER;
+  const player = PLAYER(cover);
+  return /<\/body>/i.test(html) ? html.replace(/<\/body>/i, `${player}</body>`) : html + player;
 }
