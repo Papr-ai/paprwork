@@ -3785,6 +3785,9 @@ export class JobsService {
           jobId,
           "Stale running state cleared: no active process was tracked (completion may not have been saved).",
         );
+        // The attempt is still parked inside the background budget waiting on an exit
+        // event that will never come; abort it so its slot goes back to other jobs.
+        this.attemptControllers.get(jobId)?.abort();
         await this.setJobStatus(jobId, "failed", {
           error:
             "Stale running state — the worker likely finished but Paprwork did not save completion. Check logs, then run again if needed.",
@@ -3811,6 +3814,7 @@ export class JobsService {
           jobId,
           "Stale running state cleared: agent run was not active (may have crashed or failed to save completion).",
         );
+        this.attemptControllers.get(jobId)?.abort();
         await this.setJobStatus(jobId, "failed", {
           error:
             "Stale running state — the agent job was not active. Check logs, then run again if needed.",
