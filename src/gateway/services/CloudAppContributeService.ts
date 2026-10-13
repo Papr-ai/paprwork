@@ -862,7 +862,7 @@ export class CloudAppContributeService {
       );
     }
 
-    const { headSha, stagedPaths, migrations } = await pushContributeBranch(
+    const { headSha, stagedPaths, migrations, baseCommit } = await pushContributeBranch(
       prepare,
       input.installedAppId,
       { includeBuildOutputs: input.publishNow === true },
@@ -880,7 +880,7 @@ export class CloudAppContributeService {
       input.onProgress?.("Updating the team's database…");
       const db = await publishProposalMigrations(
         migrations,
-        await defaultPublishMigrationsDeps(prepare.id, stagedPaths),
+        await defaultPublishMigrationsDeps(prepare.id, stagedPaths, baseCommit),
       );
       databasePublished = db.published;
       databaseNote = db.reason;
@@ -899,6 +899,9 @@ export class CloudAppContributeService {
           headSha,
           stagedPaths,
           ...(input.publishNow ? { mergeNow: true } : {}),
+          // A migration must run on top of the app's latest version: the
+          // server refuses a direct publish when main moved past this base.
+          ...(input.publishNow && migrations.length > 0 ? { baseRevision: baseCommit } : {}),
           ...(databasePublished ? { databasePublished: true } : {}),
         },
       },
