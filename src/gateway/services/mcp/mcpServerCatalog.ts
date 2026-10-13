@@ -29,9 +29,18 @@ export interface McpServerDefinition {
   requiresClientId?: boolean;
   /** Pre-registered public client id (when the server lacks DCR). */
   clientId?: string;
+  /**
+   * Papr-owned confidential client: sign-in always goes through the memory server
+   * (apps.papr.ai/oauth/callback), which holds the client secret and refreshes tokens.
+   * Used for providers like Google that need a secret at token exchange.
+   */
+  serverOAuth?: boolean;
   /** Added by the user/agent rather than shipped. */
   custom?: boolean;
 }
+
+/** Papr's Google OAuth web client (project papr-connectors). Public; the secret lives on the memory server. */
+const GOOGLE_DRIVE_CLIENT_ID = process.env.PAPR_GOOGLEDRIVE_CLIENT_ID || "650055379473-7j2rg39vgc3dusu9fuoich9msajc893d.apps.googleusercontent.com";
 
 export const BUILTIN_MCP_SERVERS: readonly McpServerDefinition[] = [
   // One-click: dynamic client registration accepted a loopback redirect (probed Oct 2026).
@@ -90,7 +99,7 @@ export const BUILTIN_MCP_SERVERS: readonly McpServerDefinition[] = [
   { id: "github", name: "GitHub", url: "https://api.githubcopilot.com/mcp/", transport: "streamable-http", category: "Engineering", description: "Repos, issues, PRs", requiresClientId: true },
   { id: "slack", name: "Slack", url: "https://mcp.slack.com/mcp", transport: "streamable-http", category: "Communication", description: "Channels, messages, search", requiresClientId: true },
   { id: "hubspot", name: "HubSpot", url: "https://mcp.hubspot.com/", transport: "streamable-http", category: "CRM", description: "Contacts, companies, deals", requiresClientId: true },
-  { id: "googledrive", name: "Google Drive", url: "https://drivemcp.googleapis.com/mcp", transport: "streamable-http", category: "Docs", description: "Files and folders", requiresClientId: true },
+  { id: "googledrive", name: "Google Drive", url: "https://drivemcp.googleapis.com/mcp", transport: "streamable-http", category: "Docs", description: "Files and folders", requiresClientId: true, serverOAuth: true, clientId: GOOGLE_DRIVE_CLIENT_ID },
   { id: "box", name: "Box", url: "https://mcp.box.com", transport: "streamable-http", category: "Docs", description: "Files and folders", requiresClientId: true },
   { id: "docusign", name: "DocuSign", url: "https://mcp.docusign.com/mcp", transport: "streamable-http", category: "Docs", description: "Envelopes, agreements", requiresClientId: true },
   { id: "zendesk", name: "Zendesk", url: "https://mcp.zendesk.com/mcp", transport: "streamable-http", category: "Support", description: "Tickets, users", requiresClientId: true },
