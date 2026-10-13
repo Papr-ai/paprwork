@@ -5,10 +5,8 @@ import { listCoveredAppIds,
   isValidCoverAppId,
   removeSharedCover,
   resolveCover,
-  savePrivateCover,
   sharePrivateCover,
   sniffImageType,
-  type CoverSource,
   type CoverUploader,
 } from "../services/appCovers.js";
 
@@ -68,35 +66,19 @@ export function registerAppCoverRoutes(app: Express): void {
     res.json(coverStatus(appId));
   });
 
-  /** Private cover from the open app tab (throttled to once a day server-side). */
-  app.post("/api/apps/:appId/cover", (req, res) => {
-    const body = (req.body ?? {}) as { dataUrl?: unknown; source?: unknown };
-    const source: CoverSource = body.source === "validate" ? "validate" : "tab";
-    if (typeof body.dataUrl !== "string") {
-      res.status(400).json({ error: "dataUrl required" });
-      return;
-    }
-    res.json(savePrivateCover(req.params.appId ?? "", body.dataUrl, source));
+  /** Legacy upload — automatic screenshot covers for library cards are disabled. */
+  app.post("/api/apps/:appId/cover", (_req, res) => {
+    res.json({ saved: false, reason: "cover_screenshots_disabled" });
   });
 
-  /** Retake: render the app in the hidden preview window and keep that frame. */
-  app.post("/api/apps/:appId/cover/retake", async (req, res) => {
+  /** Legacy retake — use preview video in App info instead of screenshot covers. */
+  app.post("/api/apps/:appId/cover/retake", (req, res) => {
     const appId = req.params.appId ?? "";
     if (!isValidCoverAppId(appId)) {
       res.status(400).json({ error: "invalid appId" });
       return;
     }
-    try {
-      const { runMiniAppRuntimePreview } = await import("../utils/miniAppRuntimePreview.js");
-      const preview = await runMiniAppRuntimePreview(appId);
-      if (!preview.previewScreenshot) {
-        res.json({ saved: false, reason: preview.skippedReason ?? "no_screenshot" });
-        return;
-      }
-      res.json(savePrivateCover(appId, preview.previewScreenshot, "validate"));
-    } catch (err) {
-      res.status(500).json({ error: (err as Error).message });
-    }
+    res.json({ saved: false, reason: "cover_screenshots_disabled" });
   });
 
   /** Owner approval: share (or stop sharing) the current private cover. */
