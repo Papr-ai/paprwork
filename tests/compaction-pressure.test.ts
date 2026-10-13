@@ -178,7 +178,7 @@ describe("compactStaleToolResults with a budget", () => {
   test("keeps the last three tool steps fresh before cutting older batches", () => {
     expect(DEFAULT_KEEP_LAST_BATCHES).toBe(3);
 
-    const stalePayload = "s".repeat(8_000);
+    const stalePayload = "s".repeat(14_000);
     const middlePayload = "m".repeat(1_500);
     const recentPayload = "q".repeat(1_500);
     const messages = [

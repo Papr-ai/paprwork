@@ -149,6 +149,7 @@ import {
   recordAutoRoute,
   recordWidthNudge,
   setToolCallCount,
+  finalizeToolTrimHitRate,
   summarizeTurnMetrics,
 } from "./agent/turnMetrics.js";
 import { AUTO_MODEL_ID, routeTurn, type AutoRoutePick } from "./agent/jevTurnRouter.js";
@@ -1091,6 +1092,7 @@ export class AgentService {
       turnMetricsRecorded = true;
       try {
         setToolCallCount(turnMetrics, toolCalls.length);
+        finalizeToolTrimHitRate(turnMetrics, toolCalls);
         const planProgress = await this.loadPendingPlanState(chatId);
         const summary = summarizeTurnMetrics(turnMetrics, planProgress);
         const durationMs = Date.now() - turnStartedAt;
@@ -1516,11 +1518,14 @@ export class AgentService {
         })(),
       });
       recordToolTrimArm(turnMetrics, toolTrimArm);
+      // One registry per turn, shared by the pi tool loop and compactWithMetrics
+      // (AI SDK path), so both paths can apply Jev excerpts.
+      const jevTrimRegistry = createJevTrimRegistry(toolTrimArm, userMessage);
       const piToolContext = {
         chatId,
         turnMetrics,
         shouldYield: () => isYieldRequested(chatId),
-        jevTrim: createJevTrimRegistry(toolTrimArm),
+        jevTrim: jevTrimRegistry,
         userMessage,
         ...(focusAppId ? { activeAppId: focusAppId } : {}),
         ...(Object.keys(mergedJobEnv).length > 0
@@ -1843,7 +1848,11 @@ export class AgentService {
       // Whether compaction ran or the pressure gate declined is the measurement
       // that makes a change to the truncation policy visible, so both are counted.
       const compactWithMetrics = (msgs: unknown[]): void => {
-        const stats = compactStaleToolResults(msgs, { historyTokenBudget });
+        const stats = compactStaleToolResults(msgs, {
+          historyTokenBudget,
+          jevTrim: jevTrimRegistry,
+          turnMetrics,
+        });
         if (stats.skipped) {
           recordCompactionSkipped(turnMetrics);
         } else {

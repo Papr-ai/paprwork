@@ -587,7 +587,7 @@ describe("truncation settings", () => {
       midTurnCompactionEnabled: true,
     });
 
-    const bashOutput = "x".repeat(5000);
+    const bashOutput = "x".repeat(14000);
     const messages = [
       { role: "user", content: "grep" },
       {
@@ -670,7 +670,7 @@ describe("compactStaleToolResults file read retention", () => {
             type: "tool-result",
             toolCallId: "bash-1",
             toolName: "bash",
-            output: { type: "text", value: "x".repeat(5000) },
+            output: { type: "text", value: "x".repeat(14000) },
           },
         ],
       },
@@ -687,7 +687,7 @@ describe("compactStaleToolResults file read retention", () => {
     const bashResult = bashPart.output?.value ?? "";
 
     expect(readResult).toBe(fileContent);
-    expect(bashResult.length).toBeLessThan(5000);
+    expect(bashResult.length).toBeLessThan(14000);
     expect(bashResult.length).toBeGreaterThan(0);
   });
 });

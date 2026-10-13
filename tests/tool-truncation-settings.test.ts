@@ -165,7 +165,7 @@ describe("tool truncation settings wiring", () => {
       midTurnCompactionEnabled: true,
     });
 
-    const bashOutput = "q".repeat(8000);
+    const bashOutput = "q".repeat(14000);
     const messages = [
       { role: "user", content: "one" },
       {

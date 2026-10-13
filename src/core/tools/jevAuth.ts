@@ -61,8 +61,9 @@ async function resolveTypesafeByokKey(): Promise<string | null> {
 async function resolvePaprApiKey(): Promise<string | null> {
   try {
     const { getPaprApiKey } = await import("../../gateway/utils/keyResolver.js");
-    const key = await getPaprApiKey();
-    return key?.trim() ?? null;
+    const key = (await getPaprApiKey())?.trim();
+    // Outside the gateway (scripts, cloud sandbox) the resolver has no login key.
+    return key || process.env.PAPR_API_KEY?.trim() || null;
   } catch {
     const env = process.env.PAPR_API_KEY?.trim();
     return env ?? null;

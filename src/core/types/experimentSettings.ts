@@ -34,7 +34,7 @@ export const EXPERIMENT_REGISTRY: readonly ExperimentDefinition[] = [
     id: "JEV_TOOL_TRIM",
     label: "Smarter tool-result trimming (Jev)",
     description:
-      "When an older shell result is shortened to save context, keep the parts TypeSafe Jev rates relevant to what you asked instead of the first and last lines. Half of turns use it, half keep the current behaviour, so we can compare how often the agent has to fetch the full result again.",
+      "When a large older shell result (over 10K characters, such as logs or dumps) is shortened to save context, keep the parts TypeSafe Jev rates relevant to what you asked instead of the first and last lines. Half of turns use it, half keep the current behaviour, so we can compare how often the agent has to fetch the full result again.",
     treatmentRate: 0.5,
     controlRate: 0.5,
   },

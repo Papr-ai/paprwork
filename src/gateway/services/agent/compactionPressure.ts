@@ -49,7 +49,12 @@ export const COMPACTION_PRESSURE_RATIO = 0.7;
  * This is the threshold ARC (arXiv 2607.25066) describes as keeping short
  * observations inline and replacing only longer observations with citations.
  */
-export const MID_TURN_INLINE_FLOOR_CHARS = 4_000;
+/*
+ * Raised 4K → 10K (Oct 2026). Across 1,464 JEV_TOOL_TRIM turns, 80% of the 560
+ * recovery fetches paged back a result of 4–10K chars (81% bash, 97% within the
+ * same turn): each saved ~1–2K tokens per step and cost a full extra step.
+ */
+export const MID_TURN_INLINE_FLOOR_CHARS = 10_000;
 
 /**
  * Whether stale tool results should be compacted for this model call.

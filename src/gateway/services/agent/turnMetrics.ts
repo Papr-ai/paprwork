@@ -88,6 +88,19 @@ export interface TurnMetrics {
   toolTrimCharsBefore: number;
   toolTrimCharsAfter: number;
   toolTrimJevMs: number;
+  /**
+   * Hit-rate logging for the trim experiment, both arms. A "cut" is a stale
+   * bash result in the Jev-eligible range (10–40K) shortened by either Jev
+   * or head+tail. When the agent recovers one, the identifiers from the full
+   * result that it then uses in its next calls are checked against the
+   * excerpt it had — the direct measure of whether the excerpt kept the right
+   * things. Maps are working state; only the counts are persisted.
+   */
+  toolTrimCuts: Map<string, string>;
+  toolTrimRecovered: Map<string, string>;
+  toolTrimCutRecoveries: number;
+  toolTrimNeededIds: number;
+  toolTrimKeptIds: number;
 }
 
 export function recordAutoRoute(
@@ -135,6 +148,68 @@ export function recordToolTrimApplied(
 
 export function recordToolTrimFallback(metrics: TurnMetrics | null | undefined): void {
   if (metrics) metrics.toolTrimFallbacks += 1;
+}
+
+/** A Jev-eligible stale result was shortened; `excerpt` is what the model now sees. */
+export function recordToolTrimCut(
+  metrics: TurnMetrics | null | undefined,
+  toolCallId: string | undefined,
+  excerpt: string,
+): void {
+  if (!metrics || !toolCallId) return;
+  metrics.toolTrimCuts.set(toolCallId, excerpt);
+}
+
+/** get_full_tool_result fetched a result; counts only if it was a tracked cut. */
+export function recordToolTrimRecovery(
+  metrics: TurnMetrics | null | undefined,
+  toolCallId: string,
+  fullText: string,
+): void {
+  if (!metrics || !metrics.toolTrimCuts.has(toolCallId)) return;
+  if (metrics.toolTrimRecovered.has(toolCallId)) return; // paginated: once per result
+  metrics.toolTrimRecovered.set(toolCallId, fullText);
+  metrics.toolTrimCutRecoveries += 1;
+}
+
+const IDENT_RE = /[A-Za-z_$][\w$]*(?:[./:-][\w$]+)+|[A-Za-z_$]*[a-z][A-Z_][\w$]*|[A-Z][A-Z0-9_]{3,}|\d{3,}/g;
+
+/** Identifier-like tokens: snake/camel case, dotted paths, CONSTANTS, numbers. Plain words are noise. */
+export function extractIdentifiers(text: string): Set<string> {
+  const out = new Set<string>();
+  for (const m of text.match(IDENT_RE) ?? []) if (m.length >= 4) out.add(m);
+  return out;
+}
+
+/**
+ * At turn end: for each recovered cut, identifiers from the full result that
+ * appear in the next 3 tool calls (and not in calls up to the original one)
+ * are "needed"; those also in the excerpt are "kept". kept/needed is the
+ * excerpt hit rate, comparable across arms.
+ */
+export function finalizeToolTrimHitRate(
+  metrics: TurnMetrics | null | undefined,
+  calls: Array<{ toolCallId?: string; toolName: string; args: unknown }>,
+): void {
+  if (!metrics || metrics.toolTrimRecovered.size === 0) return;
+  const argText = calls.map((c) => JSON.stringify(c.args ?? {}));
+  for (const [id, full] of metrics.toolTrimRecovered) {
+    const excerpt = metrics.toolTrimCuts.get(id) ?? "";
+    const srcIdx = calls.findIndex((c) => c.toolCallId === id);
+    const recIdx = calls.findIndex(
+      (c) =>
+        c.toolName === "get_full_tool_result" &&
+        (c.args as { toolCallId?: unknown } | null)?.toolCallId === id,
+    );
+    if (recIdx < 0) continue;
+    const prior = argText.slice(0, Math.max(0, srcIdx + 1)).join("\n");
+    const next = argText.slice(recIdx + 1, recIdx + 4).join("\n");
+    for (const ident of extractIdentifiers(full)) {
+      if (!next.includes(ident) || prior.includes(ident)) continue;
+      metrics.toolTrimNeededIds += 1;
+      if (excerpt.includes(ident)) metrics.toolTrimKeptIds += 1;
+    }
+  }
 }
 
 export function recordCatalogExperiment(
@@ -192,6 +267,11 @@ export function createTurnMetrics(): TurnMetrics {
     toolTrimCharsBefore: 0,
     toolTrimCharsAfter: 0,
     toolTrimJevMs: 0,
+    toolTrimCuts: new Map(),
+    toolTrimRecovered: new Map(),
+    toolTrimCutRecoveries: 0,
+    toolTrimNeededIds: 0,
+    toolTrimKeptIds: 0,
   };
 }
 
@@ -435,6 +515,10 @@ export interface TurnMetricsSummary {
   toolTrimCharsBefore: number;
   toolTrimCharsAfter: number;
   toolTrimJevMs: number;
+  toolTrimCutCount: number;
+  toolTrimCutRecoveries: number;
+  toolTrimNeededIds: number;
+  toolTrimKeptIds: number;
 }
 
 export function summarizeTurnMetrics(
@@ -505,6 +589,10 @@ export function summarizeTurnMetrics(
     toolTrimCharsBefore: metrics.toolTrimCharsBefore,
     toolTrimCharsAfter: metrics.toolTrimCharsAfter,
     toolTrimJevMs: metrics.toolTrimJevMs,
+    toolTrimCutCount: metrics.toolTrimCuts.size,
+    toolTrimCutRecoveries: metrics.toolTrimCutRecoveries,
+    toolTrimNeededIds: metrics.toolTrimNeededIds,
+    toolTrimKeptIds: metrics.toolTrimKeptIds,
   };
 }
 

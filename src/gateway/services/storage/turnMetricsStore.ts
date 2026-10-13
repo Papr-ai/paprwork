@@ -44,6 +44,12 @@ const TURN_METRIC_COLUMNS = [
   { name: "turn_tooltrim_chars_before", sql: "INTEGER" },
   { name: "turn_tooltrim_chars_after", sql: "INTEGER" },
   { name: "turn_tooltrim_jev_ms", sql: "INTEGER" },
+  // Hit-rate logging, both arms: eligible (10–40K bash) stale cuts, how many
+  // were recovered, and identifiers the agent used next vs kept in the excerpt.
+  { name: "turn_tooltrim_cuts", sql: "INTEGER" },
+  { name: "turn_tooltrim_cut_recoveries", sql: "INTEGER" },
+  { name: "turn_tooltrim_needed_ids", sql: "INTEGER" },
+  { name: "turn_tooltrim_kept_ids", sql: "INTEGER" },
   // Auto model routing (Jev). Shadow: logged every turn; applied=1 only when
   // the picker model was `auto`. Compare turn_auto_model to messages.model.
   { name: "turn_auto_tier", sql: "TEXT" },
@@ -102,6 +108,10 @@ export function storeTurnMetrics(
          turn_tooltrim_chars_before = ?,
          turn_tooltrim_chars_after = ?,
          turn_tooltrim_jev_ms = ?,
+         turn_tooltrim_cuts = ?,
+         turn_tooltrim_cut_recoveries = ?,
+         turn_tooltrim_needed_ids = ?,
+         turn_tooltrim_kept_ids = ?,
          turn_auto_tier = ?,
          turn_auto_raw_tier = ?,
          turn_auto_confidence = ?,
@@ -138,6 +148,10 @@ export function storeTurnMetrics(
     summary.toolTrimCharsBefore ?? 0,
     summary.toolTrimCharsAfter ?? 0,
     summary.toolTrimJevMs ?? 0,
+    summary.toolTrimCutCount ?? 0,
+    summary.toolTrimCutRecoveries ?? 0,
+    summary.toolTrimNeededIds ?? 0,
+    summary.toolTrimKeptIds ?? 0,
     summary.autoTier ?? null,
     summary.autoRawTier ?? null,
     summary.autoConfidence ?? null,

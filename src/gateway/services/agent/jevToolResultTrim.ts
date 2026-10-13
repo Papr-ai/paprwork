@@ -6,12 +6,17 @@
  * chars head+tail, which keeps the JSON envelope and the command echo — the
  * two least useful parts — and drops the middle, where the facts were.
  *
- * What: when a bash result lands, strip the envelope, split into ~240-char
- * line chunks and ask Jev two things in one call: (a) per chunk, how useful
- * is it for what the agent was doing, (b) will the agent likely need to look
- * back at this result. Cache the answer on the message. When the result goes
- * stale, compaction assembles the best chunks into the budget the gate chose
- * (2000 if "look back", else 400) instead of head+tail.
+ * What: when a bash result over the 10K inline floor lands, strip the
+ * envelope, split the whole output into ~500-char chunks (long lines split
+ * too) and ask Jev, in parallel ≤20-question calls, how useful each chunk is
+ * for what the agent was doing. When the result goes stale, compaction keeps
+ * the top-scoring chunks plus the last one (exit codes, errors) within
+ * JEV_TRIM_BUDGET chars instead of head+tail.
+ *
+ * Scope (Oct 2026 replay of 80 recovered results): under 10K, Jev excerpts
+ * beat equal-length head+tail by only 3–8 points while recoveries cost about
+ * what the cut saves, so those results stay whole. Only >10K outputs (logs,
+ * dumps) are trimmed, where most of the text is noise.
  *
  * Latency: scoring starts when the tool returns and is awaited only at
  * compaction time, ≥3 model steps later. If it has not resolved by then, the
@@ -19,17 +24,29 @@
  */
 
 import { GOAL_LEVELS } from "../../../core/tools/pageExtract.js";
+import { MID_TURN_INLINE_FLOOR_CHARS } from "./compactionPressure.js";
 
 export const JEV_TOOL_TRIM_EXPERIMENT = "JEV_TOOL_TRIM";
-export const JEV_TRIM_CHUNK_CHARS = 200;
-export const JEV_TRIM_MAX_CHUNKS = 48; // ~11k chars scored; beyond that, tail is dropped
-export const JEV_TRIM_MIN_LEVEL = 1; // GOAL_LEVELS index: "related"
+export const JEV_TRIM_CHUNK_CHARS = 500;
+export const JEV_TRIM_MAX_CHUNKS = 100; // 50K chars — covers the whole 40K max input
+export const JEV_TRIM_MIN_LEVEL = 0; // rank only; budget decides how many survive
 export const JEV_TRIM_LOOKBACK_THRESHOLD = 0.6;
-export const JEV_TRIM_BUDGET_LOOKBACK = 2000;
-export const JEV_TRIM_BUDGET_DEFAULT = 400;
-export const JEV_TRIM_MIN_INPUT_CHARS = 400;
+/** Excerpt size. Replay: 3000 kept 46% of next-step identifiers vs 19% at 1500. */
+export const JEV_TRIM_BUDGET = 3000;
+/** Only results the inline floor would cut. */
+export const JEV_TRIM_MIN_INPUT_CHARS = MID_TURN_INLINE_FLOOR_CHARS;
 export const JEV_TRIM_MAX_INPUT_CHARS = 40_000;
-export const JEV_TRIM_TIMEOUT_MS = 8_000;
+// Scoring runs in the background and is only read ≥3 steps later, so a longer
+// timeout costs no latency. Replay: batched calls take 1–3.5s, tail >8s.
+export const JEV_TRIM_TIMEOUT_MS = 15_000;
+/**
+ * Jev guardrails allow 20 questions per call (JEV_MAX_QUESTIONS). One call
+ * used to carry lookback + up to 48 chunk scores, so every result over ~19
+ * chunks (~4K chars — i.e. every result compaction would actually cut) was
+ * rejected client-side before any request. Batches run in parallel; the
+ * first also carries the lookback question.
+ */
+export const JEV_TRIM_CHUNKS_PER_CALL = 19;
 export const JEV_TRIM_TOOLS = new Set(["bash"]);
 
 export interface JevTrimPlan {
@@ -74,10 +91,19 @@ export function stripBashEnvelope(raw: string): string {
     .trim();
 }
 
+/** Line-aligned chunks of ≤size chars. Lines longer than size (minified JSON) are split. */
 export function chunkByLines(text: string, size = JEV_TRIM_CHUNK_CHARS): string[] {
   const out: string[] = [];
   let cur = "";
-  for (const line of text.split("\n")) {
+  for (let line of text.split("\n")) {
+    while (line.length > size) {
+      if (cur) {
+        out.push(cur);
+        cur = "";
+      }
+      out.push(line.slice(0, size));
+      line = line.slice(size);
+    }
     if (cur.length + line.length + 1 > size && cur) {
       out.push(cur);
       cur = "";
@@ -95,34 +121,45 @@ export function buildTrimGoal(userMessage: string, command: string): string {
   );
 }
 
-/** Default scorer: one Jev call — per-chunk score + lookback noul. */
+const LOOKBACK_QUESTION = {
+  type: "noul",
+  instructions:
+    "The agent has already read this command output and moved on. Will it likely need to look back at specific facts in it later in this task (paths, ids, values, error text it must act on)? No if the output was a one-off check, confirmation, or mostly noise.",
+};
+
+/** Default scorer: chunk scores split into ≤20-question Jev calls, run in parallel. */
 export const jevTrimScorer: TrimScorer = async (goal, chunks) => {
   const { evaluateJevWithAuth } = await import("../../../core/tools/jevAuth.js");
-  const items = Object.fromEntries(chunks.map((c, i) => [`c${i}`, c]));
-  const questions: Record<string, unknown> = {
-    lookback: {
-      type: "noul",
-      instructions:
-        "The agent has already read this command output and moved on. Will it likely need to look back at specific facts in it later in this task (paths, ids, values, error text it must act on)? No if the output was a one-off check, confirmation, or mostly noise.",
-    },
-  };
-  for (const k of Object.keys(items)) {
-    questions[k] = {
-      type: "score",
-      criteria: GOAL_LEVELS,
-      instructions: `How useful is chunk ${k} for the goal — does it hold specific facts the agent would act on? Boilerplate, warnings, headers and command echoes are "irrelevant".`,
-    };
+  const batches: number[][] = [];
+  for (let i = 0; i < chunks.length; i += JEV_TRIM_CHUNKS_PER_CALL) {
+    batches.push(
+      chunks.slice(i, i + JEV_TRIM_CHUNKS_PER_CALL).map((_, j) => i + j),
+    );
   }
-  const res = await evaluateJevWithAuth({
-    state: { goal, output_chunks: items },
-    questions: questions as never,
-    timeoutMs: JEV_TRIM_TIMEOUT_MS,
-  });
+  const results = await Promise.all(
+    batches.map((idx, b) => {
+      const items = Object.fromEntries(idx.map((i) => [`c${i}`, chunks[i]]));
+      const questions: Record<string, unknown> = b === 0 ? { lookback: LOOKBACK_QUESTION } : {};
+      for (const k of Object.keys(items)) {
+        questions[k] = {
+          type: "score",
+          criteria: GOAL_LEVELS,
+          instructions: `Does chunk ${k} contain specific facts (names, paths, ids, values, code, errors) the agent will need for its next action toward the goal? Boilerplate, warnings, headers and command echoes are "irrelevant".`,
+        };
+      }
+      return evaluateJevWithAuth({
+        state: { goal, output_chunks: items },
+        questions: questions as never,
+        timeoutMs: JEV_TRIM_TIMEOUT_MS,
+      });
+    }),
+  );
+  const answers: Record<string, unknown> = Object.assign({}, ...results.map((r) => r.answers));
   const scores = chunks.map((_, i) => {
-    const a = res.answers[`c${i}`] as { score?: number } | undefined;
+    const a = answers[`c${i}`] as { score?: number } | undefined;
     return typeof a?.score === "number" ? a.score : 0;
   });
-  const lb = res.answers.lookback as { noul?: number } | undefined;
+  const lb = answers.lookback as { noul?: number } | undefined;
   return { scores, lookback: typeof lb?.noul === "number" ? lb.noul : 0 };
 };
 
@@ -165,10 +202,17 @@ export interface JevTrimRegistry {
   arm: "treatment" | "control" | null;
   plans: Map<string, Promise<JevTrimPlan | null>>;
   settled: Map<string, JevTrimPlan | null>;
+  /** Goal for results scheduled lazily by compaction (paths without a tool-loop hook). */
+  userMessage?: string;
+  /** toolCallIds already counted as a fallback — compaction revisits every step. */
+  fallbacksCounted: Set<string>;
 }
 
-export function createJevTrimRegistry(arm: "treatment" | "control" | null): JevTrimRegistry {
-  return { arm, plans: new Map(), settled: new Map() };
+export function createJevTrimRegistry(
+  arm: "treatment" | "control" | null,
+  userMessage?: string,
+): JevTrimRegistry {
+  return { arm, plans: new Map(), settled: new Map(), fallbacksCounted: new Set(), userMessage };
 }
 
 export function scheduleJevTrim(
@@ -195,17 +239,14 @@ export function settledJevTrim(
   return reg.settled.get(toolCallId);
 }
 
-export function trimBudgetFor(plan: JevTrimPlan): number {
-  return plan.lookback >= JEV_TRIM_LOOKBACK_THRESHOLD
-    ? JEV_TRIM_BUDGET_LOOKBACK
-    : JEV_TRIM_BUDGET_DEFAULT;
+export function trimBudgetFor(_plan: JevTrimPlan): number {
+  return JEV_TRIM_BUDGET;
 }
 
 /**
- * Best chunks (score ≥ minLevel) in original order, within `budget` chars of
- * body. The recovery suffix is appended on top: it is a fixed pointer cost
- * paid by head+tail too, and at the 400 tier it would otherwise consume
- * nearly half the budget.
+ * The last chunk (exit code, error, final summary) plus the best-scoring
+ * others, in original order, within `budget` chars of body. The recovery
+ * suffix is appended on top: it is a fixed pointer cost head+tail pays too.
  */
 export function assembleJevTrim(
   plan: JevTrimPlan,
@@ -214,16 +255,22 @@ export function assembleJevTrim(
   minLevel = JEV_TRIM_MIN_LEVEL,
 ): string {
   const sep = "\n[…]\n";
-  const room = budget;
-  const ranked = plan.chunks
-    .map((_, i) => i)
-    .filter((i) => (plan.scores[i] ?? 0) >= minLevel)
-    .sort((a, b) => (plan.scores[b] ?? 0) - (plan.scores[a] ?? 0));
+  const n = plan.chunks.length;
+  if (n === 0) return "";
+  const last = n - 1;
   const picked: number[] = [];
   let used = 0;
+  if (plan.chunks[last].length <= budget) {
+    picked.push(last);
+    used = plan.chunks[last].length;
+  }
+  const ranked = plan.chunks
+    .map((_, i) => i)
+    .filter((i) => i !== last && (plan.scores[i] ?? 0) >= minLevel)
+    .sort((a, b) => (plan.scores[b] ?? 0) - (plan.scores[a] ?? 0) || a - b);
   for (const i of ranked) {
     const cost = plan.chunks[i].length + (picked.length ? sep.length : 0);
-    if (used + cost > room) continue;
+    if (used + cost > budget) continue;
     picked.push(i);
     used += cost;
   }

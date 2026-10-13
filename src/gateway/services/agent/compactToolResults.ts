@@ -7,6 +7,9 @@ import {
 import { getToolResultTruncationSettings } from "./toolResultTruncationSettings.js";
 import {
   assembleJevTrim,
+  buildTrimGoal,
+  isJevTrimEligible,
+  scheduleJevTrim,
   settledJevTrim,
   trimBudgetFor,
   JEV_TRIM_LOOKBACK_THRESHOLD,
@@ -14,6 +17,7 @@ import {
 } from "./jevToolResultTrim.js";
 import {
   recordToolTrimApplied,
+  recordToolTrimCut,
   recordToolTrimFallback,
   type TurnMetrics,
 } from "./turnMetrics.js";
@@ -310,30 +314,78 @@ function truncateObjectStrings(
  * false (and records a fallback when the plan failed) when head+tail should
  * run instead. Idempotent: a message already trimmed is left alone.
  */
+/** One fallback per result, not per compaction pass (was inflating 19K×). */
+function countFallbackOnce(reg: JevTrimRegistry, toolCallId: string | undefined, metrics?: TurnMetrics): void {
+  const key = toolCallId ?? "";
+  if (reg.fallbacksCounted?.has(key)) return;
+  reg.fallbacksCounted?.add(key);
+  recordToolTrimFallback(metrics);
+}
+
+/** The single text body of a tool result in either message format, with a setter. */
+function jevTrimTarget(
+  msg: any,
+): { toolCallId?: string; toolName: string; text: string; set: (t: string) => void } | null {
+  if (msg.role === "toolResult" && Array.isArray(msg.content)) {
+    const part = msg.content.find((p: any) => p.type === "text" && typeof p.text === "string");
+    if (!part) return null;
+    return {
+      toolCallId: typeof msg.toolCallId === "string" ? msg.toolCallId : undefined,
+      toolName: typeof msg.toolName === "string" ? msg.toolName : "bash",
+      text: part.text,
+      set: (t) => { part.text = t; },
+    };
+  }
+  if (msg.role === "tool" && Array.isArray(msg.content)) {
+    const parts = msg.content.filter((p: any) => p.type === "tool-result");
+    if (parts.length !== 1) return null;
+    const part = parts[0] as ToolResultPart & { toolCallId?: string; toolName?: string };
+    const text = readToolResultString(part);
+    if (text === undefined) return null;
+    return {
+      toolCallId: part.toolCallId,
+      toolName: part.toolName ?? "unknown",
+      text,
+      set: (t) => writeToolResultString(part, t),
+    };
+  }
+  return null;
+}
+
+/**
+ * Start scoring for a result the tool loop did not schedule (the AI SDK path
+ * has no per-result hook). Compaction sees every result while it is still
+ * fresh, ≥3 steps before it can go stale, so the plan is usually settled by then.
+ */
+function scheduleJevTrimFromMessage(msg: any, reg: JevTrimRegistry): void {
+  if (reg.arm !== "treatment") return;
+  const t = jevTrimTarget(msg);
+  if (!t?.toolCallId || reg.plans.has(t.toolCallId)) return;
+  scheduleJevTrim(reg, t.toolCallId, t.toolName, t.text, buildTrimGoal(reg.userMessage ?? "", ""));
+}
+
 function applyJevTrim(msg: any, reg: JevTrimRegistry, metrics?: TurnMetrics): boolean {
-  if (msg.role !== "toolResult" || !Array.isArray(msg.content)) return false;
   if (msg.__jevTrimmed) return true;
-  const toolCallId = typeof msg.toolCallId === "string" ? msg.toolCallId : undefined;
-  const toolName = typeof msg.toolName === "string" ? msg.toolName : "bash";
+  const t = jevTrimTarget(msg);
+  if (!t) return false;
+  const { toolCallId, toolName } = t;
   const plan = settledJevTrim(reg, toolCallId);
   if (plan === undefined) return false;
   if (plan === null) {
-    recordToolTrimFallback(metrics);
+    countFallbackOnce(reg, toolCallId, metrics);
     return false;
   }
-  const part = msg.content.find((p: any) => p.type === "text" && typeof p.text === "string");
-  if (!part) return false;
-  const before: string = part.text;
+  const before = t.text;
   const budget = trimBudgetFor(plan);
   // Same inline floor as head+tail: short results stay whole either way.
   if (before.length <= resolveStaleLengthAllowance(before.length, budget)) return false;
   const suffix = buildTruncationSuffix(before.length, toolCallId ?? "", toolName);
   const next = assembleJevTrim(plan, budget, suffix);
   if (!next) {
-    recordToolTrimFallback(metrics);
+    countFallbackOnce(reg, toolCallId, metrics);
     return false;
   }
-  part.text = next;
+  t.set(next);
   msg.__jevTrimmed = true;
   recordToolTrimApplied(metrics, {
     charsBefore: before.length,
@@ -593,6 +645,14 @@ export function compactStaleToolResults(
     bytesAfter: bytesBefore,
   };
 
+  // Score results early (idempotent) so plans are settled by the time pressure
+  // makes them stale — including on paths with no per-result tool-loop hook.
+  if (opts.jevTrim?.arm === "treatment") {
+    for (const msg of messages) {
+      if (isToolResultMessage(msg)) scheduleJevTrimFromMessage(msg, opts.jevTrim);
+    }
+  }
+
   if (!truncationSettings.midTurnCompactionEnabled) {
     console.log(`[compactToolResults] skipped (mid-turn compaction off)`);
     return { ...stats, skipped: true };
@@ -663,8 +723,19 @@ export function compactStaleToolResults(
     // they're noise once the model has moved past them.
 
     if (i < freshCutoffIdx) {
+      // Hit-rate logging (both arms): remember what the model sees after an
+      // eligible cut, so a later recovery can be scored against it.
+      const target = o.turnMetrics ? jevTrimTarget(msg) : null;
+      const trackCut =
+        !!target && !msg.__jevTrimmed && isJevTrimEligible(target.toolName, target.text);
+      const noteCut = () => {
+        if (!trackCut) return;
+        const after = jevTrimTarget(msg);
+        if (after) recordToolTrimCut(o.turnMetrics, target!.toolCallId, after.text);
+      };
       if (o.jevTrim && o.forceStaleMaxLen === undefined && applyJevTrim(msg, o.jevTrim, o.turnMetrics)) {
         stats.staleResultsTruncated++;
+        noteCut();
         continue;
       }
       // Stale: aggressive truncation (forceStaleMaxLen overrides per-tool limits)
@@ -676,6 +747,7 @@ export function compactStaleToolResults(
       );
       if (shortened) {
         stats.staleResultsTruncated++;
+        noteCut();
       } else {
         stats.staleResultsLeftInline++;
       }
