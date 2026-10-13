@@ -103,17 +103,17 @@ describe("v9 audiences", () => {
 });
 
 describe("Public access row (link or Community)", () => {
-  it("Community is always Contributor; the link keeps its role", async () => {
+  it("one role follows the row between link and Community", async () => {
     const { publicMode, publicRole, setPublicMode, setPublicRole } = await import("../ui/utils/shareAudiencesModel.js");
     const base = { workspace: "none", link: "none", community: "none", grants: [], requireSignIn: false } as const;
     let d = setPublicMode({ ...base }, "link");
-    expect(publicMode(d)).toBe("link");
-    expect(publicRole(d)).toBe("viewer");
-    d = setPublicRole(d, "contributor");
-    expect(d.link).toBe("contributor");
+    expect([publicMode(d), publicRole(d)]).toEqual(["link", "viewer"]);
     d = setPublicMode(d, "community");
-    expect([d.link, d.community, publicRole(d)]).toEqual(["none", "contributor", "contributor"]);
-    expect(setPublicRole(d, "viewer")).toEqual(d);
+    expect([d.link, d.community, publicRole(d)]).toEqual(["none", "viewer", "viewer"]);
+    d = setPublicRole(d, "contributor");
+    expect(d.community).toBe("contributor");
+    d = setPublicMode(d, "link");
+    expect([d.link, d.community]).toEqual(["contributor", "none"]);
     d = setPublicMode(d, "off");
     expect(publicMode(d)).toBe("off");
   });

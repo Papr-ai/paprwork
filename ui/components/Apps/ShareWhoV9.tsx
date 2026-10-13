@@ -154,7 +154,7 @@ export function ShareWhoV9({ access, draft, onChange, members, membersLoading, w
         <span className="ss9-who"><b>Public access</b>{where}</span>
         {pubOn ? (
           <ShareRoleMenu value={publicRole(draft)} label="Public"
-            options={mode === "community" ? ["contributor"] : opts("link")} readOnly={ro}
+            options={opts("link")} readOnly={ro}
             onChange={(r) => onChange(setPublicRole(draft, r))} onRemove={() => onChange(setPublicMode(draft, "off"))} />
         ) : ro ? <span className="ss9-role">No access</span> : <Plus label="public" onClick={() => onChange(setPublicMode(draft, "link"))} />}
       </div>

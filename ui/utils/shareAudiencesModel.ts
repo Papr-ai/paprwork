@@ -109,7 +109,7 @@ export function signInChoice(d: AudiencesDraft): boolean {
 
 /**
  * "Public access" is one row: off, Anyone with the link, or Listed in Community.
- * Community lists only installable apps, so it is always Contributor.
+ * One role (Viewer or Contributor) follows the row when you switch between them.
  */
 export type PublicMode = "off" | "link" | "community";
 
@@ -120,16 +120,19 @@ export function publicMode(d: Pick<AudiencesDraft, "link" | "community">): Publi
 
 export function publicRole(d: Pick<AudiencesDraft, "link" | "community">): AppRole {
   const m = publicMode(d);
-  return m === "community" ? "contributor" : m === "link" ? d.link : "none";
+  return m === "community" ? d.community : m === "link" ? d.link : "none";
 }
 
-/** Switch the public row; the link keeps its role when you come back to it. */
+/** Switch the public row; the role carries over (Viewer when turning it on). */
 export function setPublicMode(d: AudiencesDraft, mode: PublicMode): AudiencesDraft {
+  const cur = publicRole(d);
+  const role = rank(cur) > 0 ? cur : "viewer";
   if (mode === "off") return { ...d, link: "none", community: "none" };
-  if (mode === "community") return { ...d, link: "none", community: "contributor" };
-  return { ...d, community: "none", link: rank(d.link) > 0 ? d.link : "viewer" };
+  if (mode === "community") return { ...d, link: "none", community: role };
+  return { ...d, community: "none", link: role };
 }
 
 export function setPublicRole(d: AudiencesDraft, role: AppRole): AudiencesDraft {
-  return publicMode(d) === "community" ? d : { ...d, link: role };
+  const m = publicMode(d);
+  return m === "community" ? { ...d, community: role } : m === "link" ? { ...d, link: role } : d;
 }
