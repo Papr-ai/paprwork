@@ -31,6 +31,7 @@ import {
   type SourceAppRole,
 } from "../../utils/cloudContributeApi";
 import { ShareAccessPanel } from "./ShareAccessPanel";
+import { ShareAccessSheet } from "./ShareSheetV9";
 import { fetchWebIsAhead } from "../../utils/cloudFreshCheck";
 import { fetchLastMerge, pullAfterAccept, type LastMerge } from "../../utils/v9CloudApi";
 import { formatMergeByline } from "../../utils/mergeByline";
@@ -2420,11 +2421,19 @@ export function MiniAppPublishBar({
       {accessOpen ? (
         <ShareSheet title="Who has access" onClose={() => setAccessOpen(false)}>
           <div className="share-sheet__panel">
-            <ShareAccessPanel
+            <ShareAccessSheet
               appId={appId}
               members={workspacePeople}
               membersLoading={workspacePeopleLoading}
               onClose={() => setAccessOpen(false)}
+              fallback={
+                <ShareAccessPanel
+                  appId={appId}
+                  members={workspacePeople}
+                  membersLoading={workspacePeopleLoading}
+                  onClose={() => setAccessOpen(false)}
+                />
+              }
             />
           </div>
         </ShareSheet>

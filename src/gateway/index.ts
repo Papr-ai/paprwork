@@ -3004,9 +3004,42 @@ async function startGateway(): Promise<void> {
           { method, ...(method === "PUT" ? { body: req.body ?? {} } : {}), timeoutMs: 20_000 },
         );
         const text = await upstream.text();
+        if (method === "PUT" && upstream.ok) {
+          syncAudiencePrefs(String(req.params.appId), target, text);
+        }
         res.status(upstream.status).type("application/json").send(text || "{}");
       } catch (err) {
         res.status(500).json({ error: (err as Error).message });
+      }
+    };
+    // v9: after a Share sheet save, mirror who can open it into local publish
+    // prefs so the bar's link, icon and next code publish match the server.
+    const syncAudiencePrefs = (appId: string, target: string, body: string) => {
+      try {
+        const a = JSON.parse(body) as {
+          accessModel?: string;
+          visibility?: CloudAccessMode;
+          linkPermission?: "read" | "read_write";
+          requireSignIn?: boolean;
+          audiences?: { workspace: boolean; link: boolean; community: boolean };
+          shareToken?: string;
+        };
+        if (a.accessModel !== "audiences" || !a.audiences || target !== appId) return;
+        const open = a.audiences;
+        const prefs = getAppPublishPrefs(appId);
+        setAppPublishPrefs(appId, {
+          accessMode: a.visibility ?? prefs.accessMode,
+          loginAccess: open.community ? "public" : open.workspace ? "team" : "private",
+          externalLink: open.link ? (a.linkPermission === "read_write" ? "read_write" : "read") : "off",
+          requireSignIn: a.requireSignIn === true,
+          audiencesModel: true,
+          ...(a.shareToken ? { shareToken: a.shareToken } : {}),
+          // People are grants now; the old allowlists were folded in server-side.
+          allowedUserIds: undefined,
+          allowedEmails: undefined,
+        });
+      } catch {
+        /* not JSON: leave prefs alone */
       }
     };
     app.get("/api/cloud/apps/:appId/access", (req, res) => void proxyAppAccess(req, res, "GET"));

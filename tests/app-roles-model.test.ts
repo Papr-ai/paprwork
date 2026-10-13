@@ -65,3 +65,39 @@ describe("appRolesModel", () => {
     expect(summarizeAccess({ ...base, workspaceRole: "none" })).toBe("Only Admins");
   });
 });
+
+import {
+  audiencesDirty,
+  audiencesPatch,
+  draftFromAccess,
+  summarizeAudiences,
+  widestAudience,
+} from "../ui/utils/shareAudiencesModel";
+
+describe("v9 audiences", () => {
+  const base = {
+    appId: "a", visibility: "team", linkPermission: "read", requireSignIn: false,
+    publisherUserId: "pub", grants: [{ userId: "pub", role: "admin" }], workspaceRole: "contributor",
+    linkRole: "none", communityRole: "viewer", approvalRule: "contributors", derived: false,
+    admins: ["pub"], callerRole: "admin", canManage: true,
+    audiences: { workspace: true, link: false, community: false },
+  } as const;
+
+  it("shows only audiences open today (leftover Community role stays off)", () => {
+    const d = draftFromAccess(base as never);
+    expect(d.workspace).toBe("contributor");
+    expect(d.community).toBe("none");
+    expect(summarizeAudiences(d, "pub")).toBe("Workspace: Contributor");
+    expect(widestAudience(d, "pub")).toBe("team");
+  });
+
+  it("first save sends everything with the marker; later only changes", () => {
+    const d = { ...draftFromAccess(base as never), link: "viewer" as const };
+    expect(audiencesDirty(base as never, d)).toBe(true);
+    const first = audiencesPatch(base as never, d);
+    expect(first).toMatchObject({ accessModel: "audiences", workspaceRole: "contributor", linkRole: "viewer", communityRole: "none" });
+    const v9 = { ...base, accessModel: "audiences" } as never;
+    expect(audiencesPatch(v9, d)).toEqual({ linkRole: "viewer" });
+    expect(audiencesDirty(base as never, draftFromAccess(base as never))).toBe(false);
+  });
+});
