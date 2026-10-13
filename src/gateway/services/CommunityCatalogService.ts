@@ -3,6 +3,7 @@
  */
 
 import * as fs from "fs";
+import type { CatalogMediaItem } from "../../core/types/communityCatalog.js";
 import * as path from "path";
 import { getPaprRoot, getPaprAppsRoot } from "../../core/utils/paprRoot.js";
 
@@ -98,8 +99,7 @@ interface CloudCommunityApiEntry {
   catalogRequiresDesktop?: boolean;
   catalogCategory?: string;
   catalogHeadline?: string;
-  catalogCoverUrl?: string;
-  catalogCoverVideoUrl?: string;
+  catalogMedia?: CatalogMediaItem[];
   catalogAutomation?: {
     scheduleLabel: string;
     scheduledJobCount: number;
@@ -216,6 +216,23 @@ function mapCatalogRequirements(
 
 function isHttpsUrl(value: unknown): value is string {
   return typeof value === "string" && /^https:\/\/\S+$/.test(value);
+}
+
+/** Listing media from memory → entry.media plus the card's cover picture / preview loop. */
+export function catalogMediaFields(raw: unknown): Pick<CommunityCatalogEntry, "media" | "coverUrl" | "coverVideoUrl"> {
+  if (!Array.isArray(raw)) return {};
+  const media = raw.filter(
+    (m): m is CatalogMediaItem =>
+      Boolean(m) && (m.kind === "image" || m.kind === "video") && isHttpsUrl(m.url),
+  ).map((m) => ({ ...m, role: m.role === "cover" ? "cover" : "gallery" }) as CatalogMediaItem);
+  if (!media.length) return {};
+  const cover = media.find((m) => m.role === "cover");
+  const poster = cover?.kind === "video" ? cover.posterUrl : cover?.url;
+  return {
+    media,
+    ...(isHttpsUrl(poster) ? { coverUrl: poster } : {}),
+    ...(cover?.kind === "video" ? { coverVideoUrl: cover.url } : {}),
+  };
 }
 
 export function resolveCatalogLiveUrl(input: {
@@ -340,8 +357,7 @@ function cloudEntryFromApi(
     ...(entry.updatedAt ? { updatedAt: entry.updatedAt } : {}),
     ...(entry.catalogCategory ? { category: entry.catalogCategory } : {}),
     ...(entry.catalogHeadline?.trim() ? { headline: entry.catalogHeadline.trim() } : {}),
-    ...(isHttpsUrl(entry.catalogCoverUrl) ? { coverUrl: entry.catalogCoverUrl } : {}),
-    ...(isHttpsUrl(entry.catalogCoverVideoUrl) ? { coverVideoUrl: entry.catalogCoverVideoUrl } : {}),
+    ...catalogMediaFields(entry.catalogMedia),
     catalogAutomation: entry.catalogAutomation
       ? {
           scheduleLabel: sanitizeScheduleLabel(entry.catalogAutomation.scheduleLabel),

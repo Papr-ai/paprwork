@@ -25,6 +25,18 @@ export function isPublicCommunityVisibility(visibility: string | undefined): boo
   return visibility === "public_read";
 }
 
+/** One image or video on a catalog listing. role=cover drives cards; gallery = details page. */
+export interface CatalogMediaItem {
+  kind: "image" | "video";
+  url: string;
+  role: "cover" | "gallery";
+  posterUrl?: string;
+  alt?: string;
+  width?: number;
+  height?: number;
+  durationMs?: number;
+}
+
 export interface CommunityCatalogEntry {
   /** Stable key for React lists */
   catalogId: string;
@@ -72,9 +84,11 @@ export interface CommunityCatalogEntry {
   category?: string;
   /** Editorial headline for the Community featured banner (publisher-set). */
   headline?: string;
-  /** Owner-shared cover image (public CDN URL), stored with the catalog record. */
+  /** Ordered listing media from the catalog record (cover + details gallery). */
+  media?: CatalogMediaItem[];
+  /** Card cover picture (derived from media: image cover, or a video cover's poster). */
   coverUrl?: string;
-  /** Owner-shared preview loop (public CDN MP4), stored with the catalog record. */
+  /** Card preview loop (derived from media: video cover). */
   coverVideoUrl?: string;
   /** Scheduled job summary (denormalized at publish time) */
   catalogAutomation?: CatalogAutomation;

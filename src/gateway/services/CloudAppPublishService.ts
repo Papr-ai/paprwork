@@ -4,6 +4,7 @@
 
 import * as fs from "fs";
 import { readSharedCoverPointer, type SharedCoverPointer } from "./appCovers.js";
+import type { CatalogMediaItem } from "../../core/types/communityCatalog.js";
 import { getPaprRoot } from "../../core/utils/paprRoot.js";
 import * as path from "path";
 import { cloudApiFetch } from "../utils/cloudApiClient.js";
@@ -95,15 +96,20 @@ import { isOnTeamData } from "../../core/utils/copyAxes.js";
 /** A copy on the team's live data ships code only through proposals (v5). */
 
 /**
- * Cover links for the catalog record, from the owner's shared-cover pointer
- * (papr-cover.json). "" clears a previously stored cover once sharing stops.
+ * Listing media for the catalog record. Today: the owner's shared cover (papr-cover.json)
+ * as the single role=cover item; a details-page gallery appends role=gallery items later.
+ * [] clears a previously stored cover once sharing stops (memory replaces the whole list).
  */
-function sharedCoverCatalogFields(appId: string): { catalogCoverUrl: string; catalogCoverVideoUrl: string } {
+export function sharedCoverCatalogFields(appId: string): { catalogMedia: CatalogMediaItem[] } {
   const p = readSharedCoverPointer(appId) as (SharedCoverPointer & { kind?: string; videoUrl?: string }) | null;
-  return {
-    catalogCoverUrl: p?.url ?? "",
-    catalogCoverVideoUrl: p?.kind === "video" && p.videoUrl ? p.videoUrl : "",
-  };
+  const https = (u?: string) => (u && /^https:\/\/\S+$/.test(u) ? u : undefined);
+  const media: CatalogMediaItem[] = [];
+  if (p?.kind === "video" && https(p.videoUrl)) {
+    media.push({ kind: "video", url: p.videoUrl!, role: "cover", ...(https(p.url) ? { posterUrl: p.url } : {}) });
+  } else if (https(p?.url)) {
+    media.push({ kind: "image", url: p!.url, role: "cover" });
+  }
+  return { catalogMedia: media };
 }
 
 export class TeamDataCopyPublishError extends Error {
@@ -673,9 +679,8 @@ export class CloudAppPublishService {
       catalogCategory?: string;
       /** "" clears; undefined leaves the published headline as is. */
       catalogHeadline?: string;
-      /** Owner-shared cover links ("" clears; undefined leaves as is). */
-      catalogCoverUrl?: string;
-      catalogCoverVideoUrl?: string;
+      /** Listing media (cover + gallery). [] clears; undefined leaves as is. */
+      catalogMedia?: CatalogMediaItem[];
       catalogAutomation?: CatalogAutomation | null;
       shareAllowlist?: ReturnType<typeof memoryShareAllowlistBodyFromPrefs>;
     },
@@ -728,8 +733,7 @@ export class CloudAppPublishService {
           ...(body.catalogTags?.length ? { catalogTags: body.catalogTags } : {}),
           ...(body.catalogCategory ? { catalogCategory: body.catalogCategory } : {}),
           ...(body.catalogHeadline !== undefined ? { catalogHeadline: body.catalogHeadline } : {}),
-          ...(body.catalogCoverUrl !== undefined ? { catalogCoverUrl: body.catalogCoverUrl } : {}),
-          ...(body.catalogCoverVideoUrl !== undefined ? { catalogCoverVideoUrl: body.catalogCoverVideoUrl } : {}),
+          ...(body.catalogMedia !== undefined ? { catalogMedia: body.catalogMedia } : {}),
           ...(body.catalogPlatform?.length
             ? { catalogPlatform: body.catalogPlatform }
             : {}),
