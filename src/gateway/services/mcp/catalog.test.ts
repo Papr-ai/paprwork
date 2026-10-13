@@ -63,3 +63,20 @@ describe("catalog freshness", () => {
     expect((await loadClaudeCatalog(caller, deps, opts)).map((a) => a.slug)).toEqual(["a2"]);
   });
 });
+
+describe("catalog keeps an app's last cards when a refetch fails", () => {
+  it("a republished app whose manifest fetch fails (rate limit) stays in the catalog", async () => {
+    clearCatalogCache();
+    let updatedAt = "2026-10-13T04:00:00Z";
+    let fail = false;
+    const deps = {
+      listAccessibleApps: async () => [{ ...app("scenario"), updatedAt }],
+      loadCardsManifest: async () => { if (fail) throw new Error("403 rate limit"); return cards; },
+    };
+    expect((await loadClaudeCatalog(caller, deps, { ttlMs: 0 })).map((a) => a.slug)).toEqual(["scenario"]);
+    updatedAt = "2026-10-13T04:51:00Z"; fail = true;
+    const after = await loadClaudeCatalog(caller, deps, { ttlMs: 0, staleMs: 0 });
+    expect(after.map((a) => a.slug)).toEqual(["scenario"]);
+    expect(after[0].updatedAt).toBe("2026-10-13T04:51:00Z");
+  });
+});
