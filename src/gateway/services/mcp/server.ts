@@ -3,6 +3,8 @@
  *
  * Stateless Streamable HTTP: every POST builds a fresh McpServer bound to the verified
  * caller. No session map to leak across users, and it scales horizontally on Cloud Run.
+ * Serves both protocol eras from one URL (SDK v2 createMcpHandler): 2026-07-28 clients
+ * (per-request _meta envelope, server/discover) and 2025-era clients (initialize).
  *
  * Tools:
  *   {slug}_{view}  (model)    one per published card view (appTools.ts). Opens that card.
@@ -19,11 +21,10 @@
 import { createHash } from "node:crypto";
 import type { Express, NextFunction, Request, Response } from "express";
 import { z } from "zod";
-import { McpServer, ResourceTemplate } from "@modelcontextprotocol/sdk/server/mcp.js";
-import { StreamableHTTPServerTransport } from "@modelcontextprotocol/sdk/server/streamableHttp.js";
-import { downgradeNewerProtocolVersion } from "./protocolVersion.js";
-import { requireBearerAuth } from "@modelcontextprotocol/sdk/server/auth/middleware/bearerAuth.js";
-import type { OAuthTokenVerifier } from "@modelcontextprotocol/sdk/server/auth/provider.js";
+import { createMcpHandler, McpServer, ResourceTemplate, type OAuthTokenVerifier } from "@modelcontextprotocol/server";
+import { toNodeHandler } from "@modelcontextprotocol/node";
+import { requireBearerAuth } from "@modelcontextprotocol/express";
+import { legacyBodyWithModernHeader } from "./protocolVersion.js";
 import {
   registerAppResource,
   registerAppTool,
@@ -140,7 +141,7 @@ export function buildMcpServer(
       {
         title: tool.title,
         description: tool.description,
-        inputSchema: inputSchemaToZodShape(tool.input, tool.requireInput),
+        inputSchema: z.object(inputSchemaToZodShape(tool.input, tool.requireInput)),
         // Opening a card changes nothing; actions run from the card itself.
         annotations: { readOnlyHint: true, openWorldHint: false },
         _meta: { ui: { resourceUri: appCardUri(tool.app.namespaceId, tool.app.slug, tool.view, tool.app.updatedAt) } },
@@ -154,7 +155,7 @@ export function buildMcpServer(
     {
       title: "List Papr apps",
       description: "List the user's Papr apps that can open as cards in this chat, with the tool for each card.",
-      inputSchema: {},
+      inputSchema: z.object({}),
       annotations: { readOnlyHint: true, openWorldHint: false },
     },
     async () => {
@@ -182,11 +183,11 @@ export function buildMcpServer(
       title: "Open a Papr app",
       description:
         "Show a published Papr app as a simple card, from its apps.papr.ai link or its slug (from papr_list_apps). Prefer the app's own card tools when they are loaded.",
-      inputSchema: {
+      inputSchema: z.object({
         url: z.string().url().optional().describe("https://apps.papr.ai/{namespaceId}/{slug}"),
         namespaceId: z.string().optional(),
         slug: z.string().optional(),
-      },
+      }),
       annotations: { readOnlyHint: true },
       _meta: { ui: { resourceUri: SPIKE_CARD_URI } },
     },
@@ -230,7 +231,7 @@ export function buildMcpServer(
     {
       title: "Papr app card (cards only)",
       description: "Internal: the published card page papr_open_app hosts. Not for direct use.",
-      inputSchema: { namespaceId: z.string(), slug: z.string(), view: z.string().max(80) },
+      inputSchema: z.object({ namespaceId: z.string(), slug: z.string(), view: z.string().max(80) }),
       _meta: { ui: { resourceUri: SPIKE_CARD_URI, visibility: ["app"] } },
     },
     async (args) => {
@@ -250,13 +251,13 @@ export function buildMcpServer(
     {
       title: "Papr app API (cards only)",
       description: "Internal transport for Papr cards. Not for direct use.",
-      inputSchema: {
+      inputSchema: z.object({
         namespaceId: z.string(),
         slug: z.string(),
         method: z.enum(["GET", "POST"]),
         path: z.string().max(2200),
         body: z.unknown().optional(),
-      },
+      }),
       _meta: { ui: { resourceUri: SPIKE_CARD_URI, visibility: ["app"] } },
     },
     async (args) => {
@@ -294,11 +295,11 @@ export function buildMcpServer(
         description:
           "Give the user a one-time link that opens Papr on their Mac, signed in, optionally at a specific app. " +
           "Use when they want to build or edit an app, or run something that needs their Mac. The link works once, for 10 minutes.",
-        inputSchema: {
+        inputSchema: z.object({
           namespaceId: z.string().optional(),
           slug: z.string().optional().describe("App slug, to open that app"),
           view: z.string().optional(),
-        },
+        }),
         annotations: { readOnlyHint: true, openWorldHint: false },
       },
       async (args) => {
@@ -330,21 +331,24 @@ export function requestNeedsCatalog(body: unknown): boolean {
   const msgs = Array.isArray(body) ? body : [body];
   return msgs.some((m) => {
     const method = (m as { method?: string } | null)?.method;
-    // initialize: instructions name the user's apps. Cached per user, so reconnects are cheap.
-    if (method === "tools/list" || method === "initialize") return true;
+    // initialize / server/discover (2026-07-28): instructions name the user's apps. Cached per user.
+    if (method === "tools/list" || isOpening(method)) return true;
     if (method !== "tools/call") return false;
     const name = (m as { params?: { name?: string } }).params?.name;
     return name !== "papr_api" && name !== "papr_open_app" && name !== "papr_continue_on_mac";
   });
 }
 
+/** The connect-time request of each protocol era: 2025 initialize, 2026-07-28 server/discover. */
+const isOpening = (method: string | undefined): boolean => method === "initialize" || method === "server/discover";
+
 /**
- * Claude's connect check gives up after ~10s, so initialize never waits long on the app
- * list (its instructions only name apps). tools/list waits a little longer for per-app tools.
+ * Claude's connect check gives up after ~10s, so the opening request never waits long on the
+ * app list (its instructions only name apps). tools/list waits a little longer for per-app tools.
  */
 export function catalogBudgetMs(body: unknown): number {
   const msgs = Array.isArray(body) ? body : [body];
-  return msgs.some((m) => (m as { method?: string } | null)?.method === "initialize") ? 2_500 : 7_000;
+  return msgs.some((m) => isOpening((m as { method?: string } | null)?.method)) ? 2_500 : 7_000;
 }
 
 function isConnectNotification(body: unknown): boolean {
@@ -383,17 +387,16 @@ async function handleMcpPost(
     }
   }
   if (scope) apps = apps.filter((a) => a.namespaceId === scope.namespaceId && a.slug === scope.slug);
-  const server = buildMcpServer(cfg, caller, apps, { handoff, ...(searchFor ? { search: searchFor(caller) } : {}) });
-  const newer = downgradeNewerProtocolVersion(req);
-  if (newer) console.info(`[mcp] client asked for protocol ${newer}; answering as ${req.headers["mcp-protocol-version"]}`);
-  const transport = new StreamableHTTPServerTransport({ sessionIdGenerator: undefined, enableJsonResponse: true });
-  transport.onerror = (err) => console.warn(`[mcp] transport rejected request: ${err.message.slice(0, 200)} (protocol header: ${req.headers["mcp-protocol-version"] ?? "none"})`);
-  res.on("close", () => {
-    void transport.close();
-    void server.close();
+  const deps = { handoff, ...(searchFor ? { search: searchFor(caller) } : {}) };
+  const mismatched = legacyBodyWithModernHeader(req, req.body);
+  if (mismatched) console.info(`[mcp] 2025-style request sent with protocol header ${mismatched}; serving it as ${req.headers["mcp-protocol-version"]}`);
+  // One request, one handler: it classifies the era (2026-07-28 envelope vs 2025) and builds the
+  // server from this factory for whichever era the request belongs to. Holds nothing afterwards.
+  const handler = createMcpHandler(() => buildMcpServer(cfg, caller, apps, deps), {
+    onerror: (err) => console.warn(`[mcp] rejected request: ${err.message.slice(0, 200)} (protocol header: ${req.headers["mcp-protocol-version"] ?? "none"})`),
   });
-  await server.connect(transport);
-  await transport.handleRequest(req, res, req.body);
+  res.on("close", () => void handler.close());
+  await toNodeHandler(handler)(req, res, req.body);
 }
 
 export function registerMcpRoutes(

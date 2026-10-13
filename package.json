@@ -221,8 +221,13 @@
     "@libsql/client": "^0.14.0",
     "@mariozechner/pi-ai": "^0.64.0",
     "@mastra/core": "^1.4.0",
-    "@modelcontextprotocol/ext-apps": "^1.7.5",
+    "@modelcontextprotocol/client": "^2.3.1",
+    "@modelcontextprotocol/core": "^2.3.1",
+    "@modelcontextprotocol/express": "^2.0.2",
+    "@modelcontextprotocol/ext-apps": "^2.0.3",
+    "@modelcontextprotocol/node": "^2.1.1",
     "@modelcontextprotocol/sdk": "^1.29.0",
+    "@modelcontextprotocol/server": "^2.3.1",
     "@papr/memory": "^2.7.0",
     "@tiptap/extension-bubble-menu": "^3.19.0",
     "@tiptap/extension-placeholder": "^3.19.0",
@@ -261,7 +266,7 @@
     "turndown": "^7.2.2",
     "uuid": "^9.0.1",
     "ws": "^8.19.0",
-    "zod": "^4.1.8",
+    "zod": "^4.2.0",
     "zustand": "^4.5.0"
   },
   "overrides": {

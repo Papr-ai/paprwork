@@ -1,5 +1,5 @@
 /** Test helper: connects a card-side BridgePort to the reference MCP Apps host (ext-apps AppBridge). */
-import { InMemoryTransport } from "@modelcontextprotocol/sdk/inMemory.js";
+import { InMemoryTransport } from "@modelcontextprotocol/client";
 import { AppBridge } from "@modelcontextprotocol/ext-apps/app-bridge";
 import type { BridgePort } from "../../src/resources/mini-app-sdk/papr-mcp-bridge.ts";
 
