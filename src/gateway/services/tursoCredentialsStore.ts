@@ -1,6 +1,17 @@
 /**
  * Persist Turso sync credentials per database for offline replica open.
  * File: ~/Papr/data/.turso-credentials.json (workspace-scoped, mode 0o600).
+ *
+ * Entries are keyed by WHO ASKED: `{org}/{namespace}/{user}/{shortName}`
+ * (see `tursoCredentialsScopeKey`). Short names like `sync-index` are reused
+ * in every workspace and resolve to a different Turso database per org /
+ * namespace / user, so a short-name key alone could hand one workspace's
+ * token to another. Keying by the full requester identity makes that
+ * impossible without wiping the store on every launch or workspace switch.
+ *
+ * The stored `tursoUrl` is whatever the memory server returned. For team
+ * shared databases that URL points at the PUBLISHER's segment (the server
+ * resolves it via publish ACL) — never validate it against the caller.
  */
 
 import * as fs from "fs";
@@ -20,6 +31,36 @@ export interface TursoCredentialsRecord {
 
 export interface TursoCredentialsStoreFile {
   databases: Record<string, TursoCredentialsRecord>;
+}
+
+/** Identity of the requester a token was issued to. */
+export interface TursoCredentialsScope {
+  organizationId: string;
+  namespaceId: string;
+  userId: string;
+}
+
+/**
+ * Cache key for one database as seen by one requester. Returns null when any
+ * identity part is unknown — callers must then skip the cache (fail closed).
+ */
+export function tursoCredentialsScopeKey(
+  scope: TursoCredentialsScope | null | undefined,
+  databaseName: string,
+): string | null {
+  const org = scope?.organizationId?.trim();
+  const ns = scope?.namespaceId?.trim();
+  const user = scope?.userId?.trim();
+  const db = databaseName.trim();
+  if (!org || !ns || !user || !db) {
+    return null;
+  }
+  return `${org}/${ns}/${user}/${db}`;
+}
+
+/** Legacy (pre-scope) entries are keyed by bare short name — never trusted. */
+function isScopedKey(key: string): boolean {
+  return key.split("/").length === 4;
 }
 
 function defaultStore(): TursoCredentialsStoreFile {
@@ -59,22 +100,36 @@ export function saveTursoCredentialsStore(
   });
 }
 
+/** Look up by scoped key (`tursoCredentialsScopeKey`). Legacy keys never match. */
 export function getTursoCredentialsEntry(
-  databaseName: string,
+  key: string,
   paprDir?: string,
 ): TursoCredentialsRecord | null {
+  if (!isScopedKey(key)) {
+    return null;
+  }
   const store = loadTursoCredentialsStore(paprDir);
-  return store.databases[databaseName] ?? null;
+  return store.databases[key] ?? null;
 }
 
 export function saveTursoCredentialsEntry(
-  databaseName: string,
+  key: string,
   creds: TursoCredentials,
   expiresAtMs: number,
   paprDir?: string,
 ): void {
+  if (!isScopedKey(key)) {
+    return;
+  }
   const store = loadTursoCredentialsStore(paprDir);
-  store.databases[databaseName] = {
+  // Prune legacy unscoped entries and long-expired tokens as we go.
+  const now = Date.now();
+  for (const [existingKey, record] of Object.entries(store.databases)) {
+    if (!isScopedKey(existingKey) || record.expiresAtMs < now - 7 * 86_400_000) {
+      delete store.databases[existingKey];
+    }
+  }
+  store.databases[key] = {
     tursoUrl: creds.tursoUrl,
     authToken: creds.authToken,
     expiresAtMs,
@@ -84,17 +139,18 @@ export function saveTursoCredentialsEntry(
 }
 
 export function removeTursoCredentialsEntry(
-  databaseName: string,
+  key: string,
   paprDir?: string,
 ): void {
   const store = loadTursoCredentialsStore(paprDir);
-  if (!(databaseName in store.databases)) {
+  if (!(key in store.databases)) {
     return;
   }
-  delete store.databases[databaseName];
+  delete store.databases[key];
   saveTursoCredentialsStore(store, paprDir);
 }
 
+/** Tests / explicit sign-out only — never called on launch or workspace switch. */
 export function clearTursoCredentialsStore(paprDir?: string): void {
   saveTursoCredentialsStore(defaultStore(), paprDir);
 }

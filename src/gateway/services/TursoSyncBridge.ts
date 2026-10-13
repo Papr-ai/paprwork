@@ -33,6 +33,7 @@ import { jobTursoDatabaseName } from "./tursoDatabaseNaming.js";
 import {
   createRemoteClient,
   filterSyncableTables,
+  isTursoAuthError,
   isTursoDatabaseLimitError,
   isTursoLocalDatabaseCorruptError,
   isTursoProvisioningRateLimitError,
@@ -45,12 +46,16 @@ import {
   type TursoCredentials,
 } from "./tursoSyncBridgeCore.js";
 import {
-  clearTursoCredentialsStore,
   getTursoCredentialsEntry,
   removeTursoCredentialsEntry,
   saveTursoCredentialsEntry,
   tursoCredentialsFromRecord,
+  tursoCredentialsScopeKey,
+  type TursoCredentialsScope,
 } from "./tursoCredentialsStore.js";
+import { getActivePaprWorkspacePointer } from "../../core/utils/paprApiKey.js";
+import { readActiveWorkspacePointer } from "../../core/utils/paprWorkspace.js";
+import { getPaprUserId } from "../utils/paprUserId.js";
 import { recordTursoPushQuarantine } from "./tursoSyncState.js";
 import {
   localRemoteSchemaDriftTables,
@@ -248,50 +253,97 @@ export class TursoSyncBridge {
     );
   }
 
+  /**
+   * Who is asking for credentials right now: active org + namespace + signed-in
+   * user. Captured at request start so a fetch that resolves after a workspace
+   * switch is filed under the identity it was issued for, never the new one.
+   * Null when any part is unknown — callers then bypass the cache entirely.
+   */
+  private currentCredentialsScope(): TursoCredentialsScope | null {
+    const pointer =
+      getActivePaprWorkspacePointer() ??
+      (() => {
+        const p = readActiveWorkspacePointer();
+        return p ? { organizationId: p.organizationId, namespaceId: p.namespaceId } : null;
+      })();
+    const userId = getPaprUserId();
+    if (!pointer || !userId) {
+      return null;
+    }
+    return {
+      organizationId: pointer.organizationId,
+      namespaceId: pointer.namespaceId,
+      userId,
+    };
+  }
+
+  private readCachedCredentials(
+    key: string | null,
+    now: number,
+  ): { creds: TursoCredentials; expiresAtMs: number } | null {
+    if (!key) {
+      return null;
+    }
+    const cached = this.credentialsCacheByDb.get(key);
+    if (cached && cached.expiresAt > now) {
+      return { creds: cached.creds, expiresAtMs: cached.expiresAt };
+    }
+    const persisted = getTursoCredentialsEntry(key);
+    if (persisted && persisted.expiresAtMs > now) {
+      this.credentialsCacheByDb.set(key, {
+        creds: tursoCredentialsFromRecord(persisted),
+        expiresAt: persisted.expiresAtMs,
+      });
+      return { creds: tursoCredentialsFromRecord(persisted), expiresAtMs: persisted.expiresAtMs };
+    }
+    return null;
+  }
+
   async fetchCredentials(
     databaseName: string,
     options?: { appId?: string },
   ): Promise<TursoCredentials> {
     const now = Date.now();
-    const cached = this.credentialsCacheByDb.get(databaseName);
-    if (cached && cached.expiresAt > now) {
-      return cached.creds;
+    const scope = this.currentCredentialsScope();
+    const key = tursoCredentialsScopeKey(scope, databaseName);
+
+    const hit = this.readCachedCredentials(key, now);
+    if (hit) {
+      return hit.creds;
     }
 
-    const persisted = getTursoCredentialsEntry(databaseName);
-    if (persisted && persisted.expiresAtMs > now) {
-      this.rememberCredentials(databaseName, tursoCredentialsFromRecord(persisted), persisted.expiresAtMs);
-      return tursoCredentialsFromRecord(persisted);
+    // No identity → no caching, no sharing of in-flight fetches.
+    if (!key) {
+      const bundle = await this.fetchCredentialsUncached(databaseName, options?.appId);
+      return bundle.creds;
     }
 
-    const inFlight = this.credentialsFetchPromises.get(databaseName);
+    const inFlight = this.credentialsFetchPromises.get(key);
     if (inFlight) {
       return inFlight;
     }
 
+    const persisted = getTursoCredentialsEntry(key);
     const promise = this.fetchCredentialsUncached(databaseName, options?.appId)
       .then((bundle) => {
-        this.rememberCredentials(databaseName, bundle.creds, bundle.expiresAtMs);
-        this.credentialsFetchPromises.delete(databaseName);
+        // Filed under the identity captured BEFORE the request — a switch
+        // mid-flight cannot land this token under the new workspace.
+        this.rememberCredentials(key, bundle.creds, bundle.expiresAtMs);
+        this.credentialsFetchPromises.delete(key);
         return bundle.creds;
       })
       .catch((error) => {
-        this.credentialsFetchPromises.delete(databaseName);
+        this.credentialsFetchPromises.delete(key);
         if (persisted) {
           console.warn(
             `[TursoSyncBridge] Token refresh failed for ${databaseName} — using persisted credentials (${(error as Error).message.slice(0, 80)})`,
-          );
-          this.rememberCredentials(
-            databaseName,
-            tursoCredentialsFromRecord(persisted),
-            persisted.expiresAtMs,
           );
           return tursoCredentialsFromRecord(persisted);
         }
         throw error;
       });
 
-    this.credentialsFetchPromises.set(databaseName, promise);
+    this.credentialsFetchPromises.set(key, promise);
     return promise;
   }
 
@@ -304,17 +356,13 @@ export class TursoSyncBridge {
     options: { localReplicaExists: boolean },
   ): Promise<TursoCredentials> {
     const now = Date.now();
-    const cached = this.credentialsCacheByDb.get(databaseName);
-    if (cached && cached.expiresAt > now) {
-      return cached.creds;
+    const key = tursoCredentialsScopeKey(this.currentCredentialsScope(), databaseName);
+    const hit = this.readCachedCredentials(key, now);
+    if (hit) {
+      return hit.creds;
     }
 
-    const persisted = getTursoCredentialsEntry(databaseName);
-    if (persisted && persisted.expiresAtMs > now) {
-      this.rememberCredentials(databaseName, tursoCredentialsFromRecord(persisted), persisted.expiresAtMs);
-      return tursoCredentialsFromRecord(persisted);
-    }
-
+    const persisted = key ? getTursoCredentialsEntry(key) : null;
     try {
       return await this.fetchCredentials(databaseName);
     } catch (error) {
@@ -322,36 +370,55 @@ export class TursoSyncBridge {
         console.warn(
           `[TursoSyncBridge] Opening local replica for ${databaseName} with persisted credentials (offline or refresh failed)`,
         );
-        this.rememberCredentials(
-          databaseName,
-          tursoCredentialsFromRecord(persisted),
-          persisted.expiresAtMs,
-        );
         return tursoCredentialsFromRecord(persisted);
       }
       throw error;
     }
   }
 
+  /**
+   * Drop credentials for ONE database (current requester identity) — after an
+   * auth failure, a deleted database, or a refused token request.
+   *
+   * Called with no argument it only clears the in-memory cache. It never
+   * empties `.turso-credentials.json`: persisted entries are keyed by
+   * org/namespace/user, so they cannot leak across workspaces or users, and
+   * wiping them forced ~80 sequential ~40s token refetches on every launch.
+   */
   invalidateCredentialsCache(databaseName?: string): void {
     if (databaseName) {
-      this.credentialsCacheByDb.delete(databaseName);
-      this.credentialsFetchPromises.delete(databaseName);
-      removeTursoCredentialsEntry(databaseName);
+      const key = tursoCredentialsScopeKey(this.currentCredentialsScope(), databaseName);
+      if (key) {
+        this.credentialsCacheByDb.delete(key);
+        this.credentialsFetchPromises.delete(key);
+        removeTursoCredentialsEntry(key);
+      }
       return;
     }
     this.credentialsCacheByDb.clear();
     this.credentialsFetchPromises.clear();
-    clearTursoCredentialsStore();
+  }
+
+  /** Drop one database's token when Turso rejected it (expired / revoked). */
+  invalidateCredentialsOnAuthError(databaseName: string, error: unknown): boolean {
+    const message = error instanceof Error ? error.message : String(error);
+    if (!isTursoAuthError(message)) {
+      return false;
+    }
+    console.warn(
+      `[TursoSyncBridge] Turso rejected token for ${databaseName} — dropping it (${message.slice(0, 80)})`,
+    );
+    this.invalidateCredentialsCache(databaseName);
+    return true;
   }
 
   private rememberCredentials(
-    databaseName: string,
+    key: string,
     creds: TursoCredentials,
     expiresAtMs: number,
   ): void {
-    this.credentialsCacheByDb.set(databaseName, { creds, expiresAt: expiresAtMs });
-    saveTursoCredentialsEntry(databaseName, creds, expiresAtMs);
+    this.credentialsCacheByDb.set(key, { creds, expiresAt: expiresAtMs });
+    saveTursoCredentialsEntry(key, creds, expiresAtMs);
   }
 
   private resolveCredentialExpiryMs(expiresAt?: string): number {
@@ -1128,7 +1195,9 @@ export class TursoSyncBridge {
           break;
         }
         if (isTursoProvisioningRateLimitError(message)) {
-          this.invalidateCredentialsCache();
+          // Back off only. A provisioning rate limit says nothing about the
+          // validity of tokens we already hold; wiping them caused a refetch
+          // storm that re-triggered the rate limit.
           break;
         }
         if (

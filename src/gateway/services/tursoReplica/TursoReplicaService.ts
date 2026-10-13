@@ -314,6 +314,7 @@ export class TursoReplicaService {
       return { ok: true };
     } catch (error) {
       noteTursoReplicaTransportError(error);
+      ensureTursoSyncBridge().invalidateCredentialsOnAuthError(tursoDatabase, error);
       return { ok: false, error: formatReplicaPushError((error as Error).message) };
     }
   }
@@ -341,6 +342,7 @@ export class TursoReplicaService {
         }
         return synced && !hasBootstrapPendingMarker(localPath);
       } catch (error) {
+        ensureTursoSyncBridge().invalidateCredentialsOnAuthError(tursoDatabase, error);
         if (marker) {
           // Leave the marker in place — an unverified pull must not look like a bootstrap.
           noteBootstrapAttemptFailed(localPath, (error as Error).message);
