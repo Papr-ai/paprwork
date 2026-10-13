@@ -79,6 +79,13 @@ CREATE TABLE IF NOT EXISTS app_file_hashes (
   sha256      TEXT NOT NULL,
   updated_at  INTEGER NOT NULL
 );
+/*
+ * Some app databases got these tables as a cloud-schema copy with no keys
+ * (every column TEXT, no PRIMARY KEY), so CREATE TABLE above is a no-op and the
+ * ON CONFLICT upserts fail. Unique indexes restore what the upserts need.
+ */
+CREATE UNIQUE INDEX IF NOT EXISTS idx_app_file_hashes_path ON app_file_hashes(local_path);
+CREATE UNIQUE INDEX IF NOT EXISTS idx_app_files_id ON app_files(id);
 `;
 
 /**
