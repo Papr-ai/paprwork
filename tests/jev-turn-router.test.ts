@@ -193,3 +193,31 @@ describe("Auto respects the user's enabled + reachable models", () => {
     expect(plan).toEqual({ provider: "anthropic", allowedModels: ["claude-sonnet-5-5"] });
   });
 });
+
+describe("Auto vision guard", () => {
+  const vision = (_p: string, id: string) => id !== "claude-haiku-4-5";
+  it("image turn: basic capability routes to a vision model, not Haiku", async () => {
+    const { visionAwareAllowedModels } = await import(
+      "../src/gateway/services/agent/jevTurnRouter.js"
+    );
+    const allowed = visionAwareAllowedModels("anthropic", undefined, true, vision as any);
+    expect(allowed).not.toContain("claude-haiku-4-5");
+    expect(resolveAutoRung("anthropic", "basic", "low", DEFAULT_AUTO_LADDERS, allowed)?.model).toBe(
+      "claude-sonnet-5-5",
+    );
+  });
+  it("no image: allow-list unchanged (Haiku still fine for basic)", async () => {
+    const { visionAwareAllowedModels } = await import(
+      "../src/gateway/services/agent/jevTurnRouter.js"
+    );
+    const list = ["claude-haiku-4-5", "claude-sonnet-5-5"];
+    expect(visionAwareAllowedModels("anthropic", list, false, vision as any)).toBe(list);
+  });
+  it("only blind models enabled: keeps them rather than failing", async () => {
+    const { visionAwareAllowedModels } = await import(
+      "../src/gateway/services/agent/jevTurnRouter.js"
+    );
+    const list = ["claude-haiku-4-5"];
+    expect(visionAwareAllowedModels("anthropic", list, true, vision as any)).toBe(list);
+  });
+});

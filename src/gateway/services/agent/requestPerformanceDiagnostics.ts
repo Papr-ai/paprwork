@@ -3,6 +3,12 @@ import type { AnyTool } from "../../../core/agents/ToolRegistry.js";
 import { isFailedToolResult } from "../../../core/utils/interruptedToolResult.js";
 import { DiagnosticOperation, diagnosticErrorType, type DiagnosticContext } from "../../../core/utils/performanceDiagnostics.js";
 import { deferredToolNameFromExecuteInput } from "./deferredToolAccess.js";
+import {
+  extractSeeImage,
+  SEE_IMAGE_ATTACHED_NOTE,
+  stripInlineImagesFromValue,
+} from "./stripToolResultImages.js";
+import { modelSupportsVision } from "./attachmentVision.js";
 
 /** Observes the provider response itself, before the SDK executes local tools. */
 export function measureLanguageModel(model: LanguageModel, context: DiagnosticContext): LanguageModel {
@@ -54,7 +60,7 @@ export function measureTools(tools: Record<string, AnyTool>, context: Diagnostic
   return Object.fromEntries(Object.entries(tools).map(([name, tool]) => {
     const execute = tool.execute;
     if (!execute) return [name, tool];
-    return [name, { ...tool, execute: async (...args: Parameters<NonNullable<AnyTool["execute"]>>) => {
+    return [name, { ...tool, toModelOutput: (tool as { toModelOutput?: unknown }).toModelOutput ?? modelOutputFor(context), execute: async (...args: Parameters<NonNullable<AnyTool["execute"]>>) => {
       const innerDeferred = name === "run_deferred_tool"
         ? deferredToolNameFromExecuteInput(args[0])
         : undefined;
@@ -74,3 +80,34 @@ export function measureTools(tools: Record<string, AnyTool>, context: Diagnostic
     } }];
   }));
 }
+
+/**
+ * Model-facing copy of a tool result with inline screenshots removed (see
+ * stripToolResultImages.ts). Mirrors the SDK default: strings → text, else
+ * json. When the tool opted in (webview_snapshot see: true) and the model can
+ * read images, the screenshot rides along as a real media part.
+ */
+function modelOutputFor(context: DiagnosticContext) {
+  const canSee =
+    Boolean(context.provider && context.model) &&
+    modelSupportsVision(context.provider!, context.model!);
+  return ({ output }: { output: unknown }) => {
+    const value = stripInlineImagesFromValue(output);
+    const image = canSee ? extractSeeImage(output) : null;
+    if (image) {
+      const text = typeof value === "string" ? value : JSON.stringify(value);
+      return {
+        type: "content" as const,
+        value: [
+          { type: "text" as const, text: `${text}\n${SEE_IMAGE_ATTACHED_NOTE}` },
+          { type: "media" as const, data: image.data, mediaType: image.mimeType },
+        ],
+      };
+    }
+    if (typeof value === "string") return { type: "text" as const, value };
+    return { type: "json" as const, value: (value ?? null) as never };
+  };
+}
+
+/** Back-compat for tests: strip-only, no vision context. */
+export const modelOutputWithoutImages = modelOutputFor({});

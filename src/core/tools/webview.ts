@@ -50,6 +50,13 @@ const snapshotSchema = z.object({
     .boolean()
     .optional()
     .describe("Capture a PNG thumbnail for chat UI preview"),
+  see: z
+    .boolean()
+    .optional()
+    .describe(
+      "Attach the screenshot as an image YOU can see (vision models only, ~300 image tokens). " +
+        "Use for visual checks: layout, colors, spacing, overlap. Default false — text/elements are usually enough.",
+    ),
 });
 
 const executeSchema = z.object({
@@ -252,12 +259,13 @@ async function extractWebviewPage(webviewId: string | undefined): Promise<RawExt
 export const webviewSnapshotTool = createTool({
   id: "webview_snapshot",
   description:
-    "See the mini-app preview (NOT a screenshot, no vision tokens): readable text grouped under headings, " +
+    "See the mini-app preview: readable text grouped under headings, " +
     "a numbered list of buttons/links/inputs (click with webview_click({ ref })), and visualState. " +
     "Check visualState.userWouldSeeBlankUi and visualState.warnings — DOM can look fine while overlays block the user. " +
     "Pass goal (e.g. 'saved notes list', 'error message') to get only the relevant parts, ranked by Jev. " +
     "format: 'html' returns raw HTML (debug markup/CSS only). " +
-    "Also use webview_get_console and webview_get_network for runtime errors and failed external requests.",
+    "Also use webview_get_console and webview_get_network for runtime errors and failed external requests. " +
+    "The screenshot is shown to the user, not you — pass see: true to actually look at it (layout/visual checks).",
   inputSchema: snapshotSchema,
   execute: async (input) => {
     const args =
@@ -276,7 +284,7 @@ export const webviewSnapshotTool = createTool({
       webviewId: args.webviewId,
       maxHtmlChars: 1,
       maxTextChars: 1,
-      includeScreenshot: args.includeScreenshot ?? true,
+      includeScreenshot: args.see ? true : (args.includeScreenshot ?? true),
     })) as Record<string, unknown> | undefined;
     const { html: _html, text: _text, ...rest } = snap ?? {};
     const raw = await extractWebviewPage(args.webviewId);
@@ -295,6 +303,10 @@ export const webviewSnapshotTool = createTool({
     const sections = buildSections(raw.blocks);
     const pageUrl = typeof rest.url === "string" ? rest.url : "http://localhost/";
     const base = { ...rest, pageStats: { sections: sections.length, elements: raw.elements.length } };
+    // Opt-in: the gateway attaches this screenshot as a real image for vision models.
+    if (args.see && typeof rest.screenshot === "string") {
+      (base as Record<string, unknown>).seeScreenshot = true;
+    }
     if (sections.length === 0) {
       (base as Record<string, unknown>).emptyPage =
         "No visible text in the preview — check webview_get_console for errors and visualState.boot.";

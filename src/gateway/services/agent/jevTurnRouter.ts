@@ -26,6 +26,7 @@ export const AUTO_ROUTE_MIN_CONFIDENCE = 0.6;
 import {
   AUTO_CAPABILITIES,
   DEFAULT_AUTO_LADDERS,
+  ladderModelIds,
   pickLadderModel,
   type AutoCapability,
   type AutoLadder,
@@ -212,4 +213,25 @@ export async function routeTurn(
       allowedModels,
     ),
   };
+}
+
+/**
+ * Narrow Auto's allow-list to models that can read images, for turns that
+ * carry an image. Without this, a short "fix this" + screenshot routes to a
+ * basic rung (Haiku has no vision) and the image is silently dropped.
+ * Returns `allowed` unchanged when no image is attached or when nothing on
+ * the ladder can see — a blind answer beats a hard failure.
+ */
+export function visionAwareAllowedModels(
+  provider: Provider,
+  allowed: readonly string[] | undefined,
+  hasImages: boolean,
+  supportsVision: (provider: Provider, modelId: string) => boolean,
+  ladders: Partial<Record<Provider, AutoLadder>> = DEFAULT_AUTO_LADDERS,
+): readonly string[] | undefined {
+  if (!hasImages) return allowed;
+  const ladder = ladders[provider];
+  const pool = allowed?.length ? allowed : ladder ? ladderModelIds(ladder) : [];
+  const seeing = pool.filter((id) => supportsVision(provider, id));
+  return seeing.length > 0 ? seeing : allowed;
 }

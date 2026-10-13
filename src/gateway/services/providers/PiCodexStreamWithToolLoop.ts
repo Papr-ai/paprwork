@@ -57,6 +57,12 @@ import {
 import { toolRepetitionDedupKey } from "../agent/toolRepetitionKey.js";
 import { truncateToolResultForModelContext } from "../agent/toolResultTruncation.js";
 import {
+  extractSeeImage,
+  SEE_IMAGE_ATTACHED_NOTE,
+  stripInlineImagesFromText,
+} from "../agent/stripToolResultImages.js";
+import { modelSupportsVision } from "../agent/attachmentVision.js";
+import {
   buildTrimGoal,
   scheduleJevTrim,
   type JevTrimRegistry,
@@ -364,6 +370,14 @@ function appendToolTurnToContext(
       text = `[Tool ${tr.toolName} returned empty result - possible timeout or crash]`;
     }
 
+    // Screenshots are for the chat card; as base64 text they are unreadable to
+    // the model and would eat the cap below. Strip before capping.
+    text = stripInlineImagesFromText(text);
+    const seeImage = modelSupportsVision(assistantMessage.provider, assistantMessage.model)
+      ? extractSeeImage(tr.result)
+      : null;
+    if (seeImage) text = `${text}\n${SEE_IMAGE_ATTACHED_NOTE}`;
+
     // Cap pathological results before adding to in-flight context.
     text = truncateToolResultForModelContext(
       text,
@@ -392,7 +406,12 @@ function appendToolTurnToContext(
       role: "toolResult",
       toolCallId: tr.toolCallId,
       toolName: tr.toolName,
-      content: [{ type: "text" as const, text }],
+      content: seeImage
+        ? [
+            { type: "text" as const, text },
+            { type: "image" as const, data: seeImage.data, mimeType: seeImage.mimeType },
+          ]
+        : [{ type: "text" as const, text }],
       isError,
       timestamp: now,
     });

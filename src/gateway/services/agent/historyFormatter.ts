@@ -19,6 +19,7 @@
  */
 
 import { truncateHistoryToolResult } from "./toolResultTruncation.js";
+import { stripInlineImagesFromText } from "./stripToolResultImages.js";
 
 // ---------------------------------------------------------------------------
 // AI SDK compatible content part types
@@ -367,10 +368,11 @@ export function formatHistoryMessagesForModel(
               ? (tc as { result?: { message?: string } }).result?.message ??
                 "[Tool result not persisted — likely the stream was interrupted before this tool finished.]"
               : (tc as { result?: unknown }).result;
-          const resultStr =
+          const resultStr = stripInlineImagesFromText(
             typeof resultValue === "string"
               ? resultValue
-              : JSON.stringify(resultValue);
+              : JSON.stringify(resultValue),
+          );
 
           const truncatedResult = truncateHistoryToolResult({
             toolName,

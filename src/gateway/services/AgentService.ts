@@ -634,6 +634,29 @@ export class AgentService {
     // before getSession because the session is keyed on config.model.
     let autoRoute: AutoRoutePick | null = null;
     const autoRequested = config.model === AUTO_MODEL_ID;
+    if (autoRequested && options?.attachments?.length) {
+      // Image on the turn → only route to models that can see it.
+      const { modelSupportsVision, isVisionEligibleAttachment } = await import(
+        "./agent/attachmentVision.js"
+      );
+      const { visionAwareAllowedModels } = await import("./agent/jevTurnRouter.js");
+      const hasImages = options.attachments.some(isVisionEligibleAttachment);
+      const narrowed = visionAwareAllowedModels(
+        config.provider,
+        config.autoAllowedModels,
+        hasImages,
+        modelSupportsVision,
+      );
+      if (narrowed !== config.autoAllowedModels) {
+        config.autoAllowedModels = [...(narrowed ?? [])];
+        if (
+          config.autoFallbackModelId &&
+          !narrowed?.includes(config.autoFallbackModelId)
+        ) {
+          delete config.autoFallbackModelId;
+        }
+      }
+    }
     if (!options?._isSilentRetry && !options?.isSubAgentTrigger) {
       autoRoute = await routeTurn(
         config.provider,
