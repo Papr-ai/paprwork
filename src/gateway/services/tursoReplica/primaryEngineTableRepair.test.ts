@@ -34,6 +34,9 @@ describe("isPrimaryEngineTableTypeError", () => {
       "sync engine operation failed: database sync engine error: failed to read last_change_id after remote apply: database sync engine error: unexpected source pull_gen type",
     )).toBe(true);
     expect(isPrimaryEngineTableTypeError("unexpected source change_id type")).toBe(true);
+    expect(isPrimaryEngineTableTypeError(
+      'sync engine operation failed: database sync engine error: failed to execute sql: Error { message: "SQLite error: ON CONFLICT clause does not match any PRIMARY KEY or UNIQUE constraint", code: "SQLITE_UNKNOWN" }',
+    )).toBe(true);
     expect(isPrimaryEngineTableTypeError("database is locked")).toBe(false);
   });
 });
