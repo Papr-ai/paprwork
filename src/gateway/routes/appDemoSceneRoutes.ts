@@ -65,8 +65,11 @@ export function registerAppDemoSceneRoutes(app: Express): void {
   /** Owner approval: the preview video becomes the shared cover (Community / Team cards). */
   app.post("/api/apps/:appId/demo/share", async (req, res) => {
     try {
-      const { uploadCoverToAppFiles } = await import("./appCoverRoutes.js");
-      res.json(await shareDemoVideo(req.params.appId ?? "", uploadCoverToAppFiles));
+      const { uploadCoverToAppFiles, syncCoverToCatalog } = await import("./appCoverRoutes.js");
+      const appId = req.params.appId ?? "";
+      const result = await shareDemoVideo(appId, uploadCoverToAppFiles);
+      if (result.shared) syncCoverToCatalog(appId);
+      res.json(result);
     } catch (err) {
       res.status(500).json({ error: (err as Error).message });
     }

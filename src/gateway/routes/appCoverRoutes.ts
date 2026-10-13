@@ -11,26 +11,41 @@ import { listCoveredAppIds,
 } from "../services/appCovers.js";
 
 /**
- * Store the cover through the same App Files path mini-apps use (POST /api/files/upload),
- * then make it CDN-readable so Community/Team cards can load it without signing in.
+ * Upload a cover straight to cloud storage (memory ticket → GCS → commit → public CDN).
+ * Deliberately skips the app's own database: a cover is catalog metadata, not app data,
+ * and a damaged app DB (e.g. keyless app_files copies) must never block sharing it.
  */
 export const uploadCoverToAppFiles: CoverUploader = async ({ appId, filePath, fileName, mime }) => {
-  const port = process.env.GATEWAY_PORT ?? "18789";
-  const base = (process.env.PAPR_GATEWAY_URL ?? `http://127.0.0.1:${port}`).replace(/\/$/, "");
-  const res = await fetch(`${base}/api/files/upload`, {
-    method: "POST",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ appId, filePath, fileName, mime, scope: "app", keepLocal: true }),
-  });
-  const body = (await res.json().catch(() => ({}))) as { id?: string; objectKey?: string; error?: string };
-  if (!res.ok || !body.id || !body.objectKey) {
-    throw new Error(body.error ?? `App Files upload failed (${res.status})`);
-  }
-  const { setVisibility } = await import("../services/appFiles/appFilesClient.js");
+  const { stat } = await import("fs/promises");
+  const { hashFile, uploadResumable } = await import("../services/appFiles/resumableUploader.js");
+  const { requestUploadTicket, commitUpload, setVisibility } = await import("../services/appFiles/appFilesClient.js");
   const { buildCdnUrl } = await import("../services/appFiles/cloudFileUrl.js");
-  const vis = await setVisibility(appId, body.objectKey, true).catch(() => null);
-  return { id: body.id, objectKey: body.objectKey, url: vis?.cdn_url ?? buildCdnUrl(body.objectKey) };
+  const sizeBytes = (await stat(filePath)).size;
+  const sha256 = await hashFile(filePath);
+  const ticket = await requestUploadTicket({ appId, sha256, sizeBytes, fileName, mime, scope: "app" });
+  if (!ticket.already_exists) {
+    if (!ticket.upload_url) throw new Error("Cover upload: server returned no upload URL");
+    await uploadResumable({ sessionUrl: ticket.upload_url, filePath, totalBytes: sizeBytes });
+    const commit = await commitUpload(appId, ticket.object_key, sizeBytes);
+    if (!commit.verified) throw new Error("Cover upload: cloud storage could not verify the file");
+  }
+  const vis = await setVisibility(appId, ticket.object_key, true);
+  return { id: ticket.object_key, objectKey: ticket.object_key, url: vis.cdn_url ?? buildCdnUrl(ticket.object_key) };
 };
+
+/**
+ * Push the shared cover to the catalog record (Mongo, via memory) right away, the same
+ * way a headline edit does, so Community / Team cards don't wait for the next publish.
+ */
+export function syncCoverToCatalog(appId: string): void {
+  void (async () => {
+    const { getCloudAppPublishService } = await import("../services/CloudAppPublishService.js");
+    const publish = getCloudAppPublishService();
+    if ((await publish.getCloudPublishStatus(appId)).published) {
+      await publish.updateCatalogMetadata(appId, { preserveCloudSharing: true });
+    }
+  })().catch((err) => console.warn(`[appCovers] catalog cover sync failed for ${appId.slice(0, 8)}…`, err));
+}
 
 export function registerAppCoverRoutes(app: Express): void {
   /** Which apps have a cover — one call for the whole library (cards skip the rest). */
@@ -84,12 +99,18 @@ export function registerAppCoverRoutes(app: Express): void {
   /** Owner approval: share (or stop sharing) the current private cover. */
   app.post("/api/apps/:appId/cover/share", async (req, res) => {
     try {
-      res.json(await sharePrivateCover(req.params.appId ?? "", uploadCoverToAppFiles));
+      const appId = req.params.appId ?? "";
+      const result = await sharePrivateCover(appId, uploadCoverToAppFiles);
+      if (result.shared) syncCoverToCatalog(appId);
+      res.json(result);
     } catch (err) {
       res.status(500).json({ error: (err as Error).message });
     }
   });
   app.delete("/api/apps/:appId/cover/share", (req, res) => {
-    res.json({ removed: removeSharedCover(req.params.appId ?? "") });
+    const appId = req.params.appId ?? "";
+    const removed = removeSharedCover(appId);
+    if (removed) syncCoverToCatalog(appId);
+    res.json({ removed });
   });
 }

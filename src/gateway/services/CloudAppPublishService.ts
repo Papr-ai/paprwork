@@ -3,6 +3,7 @@
  */
 
 import * as fs from "fs";
+import { readSharedCoverPointer, type SharedCoverPointer } from "./appCovers.js";
 import { getPaprRoot } from "../../core/utils/paprRoot.js";
 import * as path from "path";
 import { cloudApiFetch } from "../utils/cloudApiClient.js";
@@ -92,6 +93,19 @@ import { getCloudAppLineageService } from "./CloudAppLineageService.js";
 import { isOnTeamData } from "../../core/utils/copyAxes.js";
 
 /** A copy on the team's live data ships code only through proposals (v5). */
+
+/**
+ * Cover links for the catalog record, from the owner's shared-cover pointer
+ * (papr-cover.json). "" clears a previously stored cover once sharing stops.
+ */
+function sharedCoverCatalogFields(appId: string): { catalogCoverUrl: string; catalogCoverVideoUrl: string } {
+  const p = readSharedCoverPointer(appId) as (SharedCoverPointer & { kind?: string; videoUrl?: string }) | null;
+  return {
+    catalogCoverUrl: p?.url ?? "",
+    catalogCoverVideoUrl: p?.kind === "video" && p.videoUrl ? p.videoUrl : "",
+  };
+}
+
 export class TeamDataCopyPublishError extends Error {
   constructor(appId: string) {
     super(
@@ -469,6 +483,7 @@ export class CloudAppPublishService {
       catalogIcon: catalogIconResult.icon,
       catalogTags: appMeta?.tags,
       catalogHeadline: appMeta?.headline,
+      ...sharedCoverCatalogFields(appId),
       catalogCategory: publishCategory(appId),
       catalogAutomation,
       shareAllowlist: memoryShareAllowlistBodyFromPrefs(prefs),
@@ -658,6 +673,9 @@ export class CloudAppPublishService {
       catalogCategory?: string;
       /** "" clears; undefined leaves the published headline as is. */
       catalogHeadline?: string;
+      /** Owner-shared cover links ("" clears; undefined leaves as is). */
+      catalogCoverUrl?: string;
+      catalogCoverVideoUrl?: string;
       catalogAutomation?: CatalogAutomation | null;
       shareAllowlist?: ReturnType<typeof memoryShareAllowlistBodyFromPrefs>;
     },
@@ -710,6 +728,8 @@ export class CloudAppPublishService {
           ...(body.catalogTags?.length ? { catalogTags: body.catalogTags } : {}),
           ...(body.catalogCategory ? { catalogCategory: body.catalogCategory } : {}),
           ...(body.catalogHeadline !== undefined ? { catalogHeadline: body.catalogHeadline } : {}),
+          ...(body.catalogCoverUrl !== undefined ? { catalogCoverUrl: body.catalogCoverUrl } : {}),
+          ...(body.catalogCoverVideoUrl !== undefined ? { catalogCoverVideoUrl: body.catalogCoverVideoUrl } : {}),
           ...(body.catalogPlatform?.length
             ? { catalogPlatform: body.catalogPlatform }
             : {}),
@@ -1105,6 +1125,7 @@ export class CloudAppPublishService {
           catalogIcon: catalogIconResult.icon,
           catalogTags: appMeta?.tags,
           catalogHeadline: appMeta?.headline,
+          ...sharedCoverCatalogFields(appId),
           catalogCategory: publishCategory(appId),
           catalogPlatform: manifestPlatform,
           catalogRequiresDesktop: manifestRequiresDesktop,

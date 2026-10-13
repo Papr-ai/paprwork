@@ -72,6 +72,10 @@ export interface CommunityCatalogEntry {
   category?: string;
   /** Editorial headline for the Community featured banner (publisher-set). */
   headline?: string;
+  /** Owner-shared cover image (public CDN URL), stored with the catalog record. */
+  coverUrl?: string;
+  /** Owner-shared preview loop (public CDN MP4), stored with the catalog record. */
+  coverVideoUrl?: string;
   /** Scheduled job summary (denormalized at publish time) */
   catalogAutomation?: CatalogAutomation;
 }

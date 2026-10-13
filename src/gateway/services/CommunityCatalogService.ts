@@ -98,6 +98,8 @@ interface CloudCommunityApiEntry {
   catalogRequiresDesktop?: boolean;
   catalogCategory?: string;
   catalogHeadline?: string;
+  catalogCoverUrl?: string;
+  catalogCoverVideoUrl?: string;
   catalogAutomation?: {
     scheduleLabel: string;
     scheduledJobCount: number;
@@ -211,6 +213,11 @@ function mapCatalogRequirements(
 }
 
 /** Prefer external access link (?t=) over Papr-login app URL when link sharing is on. */
+
+function isHttpsUrl(value: unknown): value is string {
+  return typeof value === "string" && /^https:\/\/\S+$/.test(value);
+}
+
 export function resolveCatalogLiveUrl(input: {
   shareUrl?: string | null;
   shareToken?: string | null;
@@ -333,6 +340,8 @@ function cloudEntryFromApi(
     ...(entry.updatedAt ? { updatedAt: entry.updatedAt } : {}),
     ...(entry.catalogCategory ? { category: entry.catalogCategory } : {}),
     ...(entry.catalogHeadline?.trim() ? { headline: entry.catalogHeadline.trim() } : {}),
+    ...(isHttpsUrl(entry.catalogCoverUrl) ? { coverUrl: entry.catalogCoverUrl } : {}),
+    ...(isHttpsUrl(entry.catalogCoverVideoUrl) ? { coverVideoUrl: entry.catalogCoverVideoUrl } : {}),
     catalogAutomation: entry.catalogAutomation
       ? {
           scheduleLabel: sanitizeScheduleLabel(entry.catalogAutomation.scheduleLabel),

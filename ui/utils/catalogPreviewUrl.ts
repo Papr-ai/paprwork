@@ -46,6 +46,8 @@ export function resolveCatalogLiveWebUrl(
  * /{ns}/{slug}/papr-cover (proxied through the desktop gateway). 404 → icon.
  */
 export function catalogCoverUrl(entry: CommunityCatalogEntry): string | null {
+  // Stored on the catalog record (memory) — no per-card repo fetch + redirect.
+  if (entry.coverUrl) return entry.coverUrl;
   const live = resolveCatalogLiveWebUrl(entry);
   if (!live) return null;
   const preview = buildDesktopCloudPreviewUrl(live) ?? live;
@@ -56,4 +58,11 @@ export function catalogCoverUrl(entry: CommunityCatalogEntry): string | null {
   } catch {
     return null;
   }
+}
+
+/** Owner-shared preview loop: catalog record first, legacy papr-cover-video route otherwise. */
+export function catalogCoverVideoUrl(entry: CommunityCatalogEntry, coverUrl: string | null): string | null {
+  if (entry.coverVideoUrl) return entry.coverVideoUrl;
+  if (entry.coverUrl || !coverUrl) return null; // stored cover with no video → picture only
+  return coverUrl.replace(/\/papr-cover(\?|$)/, "/papr-cover-video$1");
 }

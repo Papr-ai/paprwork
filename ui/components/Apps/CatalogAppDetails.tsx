@@ -12,6 +12,7 @@ import { normalizeRequirements } from "../../../src/core/types/bundles";
 import { lookupService } from "../../../src/core/data/knownServices";
 import { formatCatalogUpdated, getCatalogByline } from "../../utils/communityCatalogDisplay";
 import { DropGlyph } from "./HomeTiles";
+import { catalogCoverVideoUrl } from "../../utils/catalogPreviewUrl";
 import "./CatalogAppDetails.css";
 
 export function catalogKeyNames(entry: CommunityCatalogEntry): string[] {
@@ -51,7 +52,7 @@ export function CatalogBanner({ entry, coverUrl, glyphSize }: { entry: Community
   const [failed, setFailed] = useState(false);
   // Owner-shared preview video lives next to the cover (papr-cover-video); 404 → the picture.
   const [noVideo, setNoVideo] = useState(false);
-  const videoUrl = coverUrl ? coverUrl.replace(/\/papr-cover(\?|$)/, "/papr-cover-video$1") : null;
+  const videoUrl = catalogCoverVideoUrl(entry, coverUrl);
   return (
     <span className="cat-banner">
       {videoUrl && coverUrl && !noVideo && !failed ? (
