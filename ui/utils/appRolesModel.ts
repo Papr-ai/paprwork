@@ -62,10 +62,10 @@ const ORDER: AppRole[] = ["none", "viewer", "contributor", "maintainer", "admin"
 
 export const ROLE_COPY: Record<AppRole, { label: string; sub: string }> = {
   none: { label: "No access", sub: "Can't open it." },
-  viewer: { label: "Viewer", sub: "Use the app" },
-  contributor: { label: "Contributor", sub: "Copy the code and propose changes" },
-  maintainer: { label: "Maintainer", sub: "Publish changes and approve proposals" },
-  admin: { label: "Admin", sub: "Also manage access" },
+  viewer: { label: "Viewer", sub: "Uses the app" },
+  contributor: { label: "Contributor", sub: "Uses it and proposes code changes" },
+  maintainer: { label: "Maintainer", sub: "Approves and publishes changes" },
+  admin: { label: "Admin", sub: "Manages who has access" },
 };
 
 /** Highest role each audience can be given (server enforces the same caps). */

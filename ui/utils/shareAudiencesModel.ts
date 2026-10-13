@@ -106,3 +106,33 @@ export function widestAudience(d: AudiencesDraft, publisherUserId: string): Shar
 export function signInChoice(d: AudiencesDraft): boolean {
   return rank(d.link) > 0 || rank(d.community) > 0;
 }
+
+/**
+ * "Public access" is one row: off, Anyone with the link, or Listed in Community.
+ * One role (Viewer or Contributor) follows the row when you switch between them.
+ */
+export type PublicMode = "off" | "link" | "community";
+
+export function publicMode(d: Pick<AudiencesDraft, "link" | "community">): PublicMode {
+  if (rank(d.community) > 0) return "community";
+  return rank(d.link) > 0 ? "link" : "off";
+}
+
+export function publicRole(d: Pick<AudiencesDraft, "link" | "community">): AppRole {
+  const m = publicMode(d);
+  return m === "community" ? d.community : m === "link" ? d.link : "none";
+}
+
+/** Switch the public row; the role carries over (Viewer when turning it on). */
+export function setPublicMode(d: AudiencesDraft, mode: PublicMode): AudiencesDraft {
+  const cur = publicRole(d);
+  const role = rank(cur) > 0 ? cur : "viewer";
+  if (mode === "off") return { ...d, link: "none", community: "none" };
+  if (mode === "community") return { ...d, link: "none", community: role };
+  return { ...d, community: "none", link: role };
+}
+
+export function setPublicRole(d: AudiencesDraft, role: AppRole): AudiencesDraft {
+  const m = publicMode(d);
+  return m === "community" ? { ...d, community: role } : m === "link" ? { ...d, link: role } : d;
+}
