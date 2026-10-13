@@ -2635,6 +2635,20 @@ async function flushPendingDeepLinks() {
       continue;
     }
 
+    // "Open Papr Work" on the post-checkout page (dashboard /billing/success):
+    // bring Papr forward on Settings -> Billing so the new plan is right there.
+    if (url.startsWith("papr://billing")) {
+      if (!mainWindow || mainWindow.isDestroyed()) {
+        return;
+      }
+      pendingDeepLinks.splice(index, 1);
+      if (mainWindow.isMinimized()) mainWindow.restore();
+      mainWindow.show();
+      mainWindow.focus();
+      mainWindow.webContents.send("notification:open-settings", { target: "billing" });
+      continue;
+    }
+
     // "Open Papr Work" button on the browser sign-in success page.
     if (url.startsWith("papr://focus")) {
       if (!mainWindow || mainWindow.isDestroyed()) {
