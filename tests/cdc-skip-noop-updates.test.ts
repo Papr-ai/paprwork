@@ -37,4 +37,19 @@ describe("rowChangedClause", () => {
     upsert("Dance 4:30", 4);
     expect(logged()).toBe(1);
   });
+  it("two identical orders are two rows and both sync; only same-row no-op updates are skipped", () => {
+    const db = new DatabaseSync(":memory:");
+    const c = cols(["id", "item", "qty", "_papr_row_version"]);
+    db.exec(`CREATE TABLE orders (id INTEGER PRIMARY KEY, item TEXT, qty INTEGER, _papr_row_version INTEGER);
+      CREATE TABLE log (op TEXT, pk TEXT);
+      CREATE TRIGGER ai AFTER INSERT ON orders BEGIN INSERT INTO log VALUES ('insert', NEW.id); END;
+      CREATE TRIGGER au AFTER UPDATE ON orders WHEN OLD._papr_row_version IS NEW._papr_row_version
+        ${rowChangedClause(c)} BEGIN INSERT INTO log VALUES ('update', NEW.id); END;
+      INSERT INTO orders (item, qty, _papr_row_version) VALUES ('Coffee', 1, 1);
+      INSERT INTO orders (item, qty, _papr_row_version) VALUES ('Coffee', 1, 1);
+      UPDATE orders SET qty = 2 WHERE id = 1;
+      UPDATE orders SET qty = 2 WHERE id = 1;`);
+    const ops = db.prepare("SELECT group_concat(op || ':' || pk, ',') AS s FROM log").get() as { s: string };
+    expect(ops.s).toBe("insert:1,insert:2,update:1");
+  });
 });
