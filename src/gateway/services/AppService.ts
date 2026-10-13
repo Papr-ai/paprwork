@@ -140,6 +140,13 @@ const __dirname = path.dirname(__filename);
  */
 const CLOUD_PUBLISH_STATUS_TIMEOUT_MS = 8_000;
 
+/**
+ * Budget for Turso database deletion (job or registry DB). If the Turso
+ * API or memory server hangs, the entire app delete hangs. Use a short
+ * timeout and allow graceful fallback to local deletion only.
+ */
+const TURSO_DELETE_TIMEOUT_MS = 10_000;
+
 /** Reject with a descriptive error if `promise` outlives `ms`. */
 async function withTimeout<T>(
   promise: Promise<T>,
@@ -2711,7 +2718,11 @@ export class AppService {
           // Delete Turso database first (if requested and exists)
           if (safeOptions.deleteTursoDatabases && job.hasTursoDb && tursoSyncBridge) {
             try {
-              const deleted = await tursoSyncBridge.deleteJobTursoDatabase(job.id);
+              const deleted = await withTimeout(
+                tursoSyncBridge.deleteJobTursoDatabase(job.id),
+                TURSO_DELETE_TIMEOUT_MS,
+                `Turso delete for job ${job.id}`,
+              );
               if (deleted) deletedTursoDbCount++;
             } catch (error) {
               console.warn(`[AppService] Could not delete Turso DB for job ${job.id}:`, error);
@@ -2738,10 +2749,14 @@ export class AppService {
         const { deleteSoleLinkerRegistryDatabases } = await import(
           "./deleteAppLinkedDatabases.js"
         );
-        const registryResult = await deleteSoleLinkerRegistryDatabases(
-          id,
-          safeOptions.deleteRegistryDbIds,
-          safeOptions.deleteRegistryTurso,
+        const registryResult = await withTimeout(
+          deleteSoleLinkerRegistryDatabases(
+            id,
+            safeOptions.deleteRegistryDbIds,
+            safeOptions.deleteRegistryTurso,
+          ),
+          TURSO_DELETE_TIMEOUT_MS,
+          `Registry database deletion for app ${id}`,
         );
         deletedRegistryDbCount = registryResult.deletedRegistryDbCount;
         deletedRegistryTursoCount = registryResult.deletedRegistryTursoCount;
