@@ -8,6 +8,8 @@ import { isCloudCatalogLightSyncEnabled } from "../../../core/types/cloudPublish
 export interface SyncPublishedAppCatalogResult {
   catalogSynced: boolean;
   catalogError?: string;
+  /** False when the app has no cloud publish (nothing to mark complete). */
+  published?: boolean;
 }
 
 export async function syncPublishedAppCatalogLayer(
@@ -21,7 +23,7 @@ export async function syncPublishedAppCatalogLayer(
     const publish = getCloudAppPublishService();
     const status = await publish.getCloudPublishStatus(appId);
     if (!status.published) {
-      return { catalogSynced: false };
+      return { catalogSynced: false, published: false };
     }
 
     if (isCloudCatalogLightSyncEnabled()) {
@@ -30,11 +32,11 @@ export async function syncPublishedAppCatalogLayer(
 
     if (options?.afterWriterChange && isCloudCatalogLightSyncEnabled()) {
       await publish.updateCatalogMetadata(appId, { preserveCloudSharing: true });
-      return { catalogSynced: true };
+      return { catalogSynced: true, published: true };
     }
 
     const syncedConfig = await publish.syncCatalogIfDrift(appId);
-    return { catalogSynced: syncedConfig !== null };
+    return { catalogSynced: syncedConfig !== null, published: true };
   } catch (error) {
     const catalogError = (error as Error).message.slice(0, 200);
     console.warn(

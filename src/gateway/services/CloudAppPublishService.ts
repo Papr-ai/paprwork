@@ -691,6 +691,9 @@ export class CloudAppPublishService {
             : {}),
           codeAccess: body.codeAccess,
           intent,
+          // Memory hides a first publish from catalogs until markPublishComplete
+          // reports the commit that landed (older servers ignore the field).
+          ...(intent === "register" ? { trackCompletion: true } : {}),
           skipPlatformScan: body.skipPlatformScan === true,
           ...(body.credentialRequirements && body.credentialRequirements.length > 0
             ? {
@@ -1177,6 +1180,11 @@ export class CloudAppPublishService {
       appId,
       config,
       getAppPublishPrefs(appId, this.paprDir),
+    );
+    // Code may already be live (upload ran before this register call). If not,
+    // flushAppNow records completion once the upload is web-ready.
+    void import("./cloudSync/publishCompletion.js").then(({ markPublishComplete }) =>
+      markPublishComplete(appId, this.paprDir),
     );
     return config;
   }

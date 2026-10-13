@@ -52,6 +52,10 @@ interface MemoryInstallResponse {
   lineageId: string;
   /** Caller's verified access to the source app (owner/team/public_read/link_*). */
   accessMode?: string | null;
+  /** Last publish whose code + database both landed (memory #219). */
+  publishedRevision?: { commit: string; dbSchema?: Record<string, string> } | null;
+  /** First publish still uploading — nothing finished to install yet. */
+  publishPending?: boolean;
 }
 
 export interface CloudAppInstallInput {
@@ -122,6 +126,8 @@ async function cloneAppSource(
       cloneUrl: prepare.cloneUrl,
       token: prepare.token,
       repoPath: prepare.repoPath,
+      // Pin to the last finished publish; none recorded = HEAD (legacy).
+      commit: prepare.publishedRevision?.commit,
     },
     "papr-cloud-install-",
   );

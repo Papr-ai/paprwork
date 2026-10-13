@@ -12,6 +12,8 @@ export interface CloudGitCloneInput {
   cloneUrl: string;
   token: string;
   repoPath: string;
+  /** Check out this commit instead of HEAD (last finished publish). */
+  commit?: string;
 }
 
 export interface CloudGitCloneResult {
@@ -97,6 +99,35 @@ async function runCommand(
   });
 }
 
+/**
+ * Move a fresh clone to the publisher's last finished commit. Falls back to
+ * HEAD (today's behaviour) when the commit can't be fetched — e.g. history
+ * rewritten — so an install never fails because of the pin.
+ */
+export async function checkoutPublishedCommit(
+  repoDir: string,
+  commit: string | undefined,
+  env: NodeJS.ProcessEnv,
+): Promise<void> {
+  const sha = commit?.trim();
+  if (!sha || !/^[0-9a-f]{7,40}$/i.test(sha)) {
+    return;
+  }
+  try {
+    await runCommand("git", ["fetch", "--depth", "1", "origin", sha], {
+      cwd: repoDir,
+      env,
+      timeoutMs: 120_000,
+    });
+    await runCommand("git", ["checkout", "--quiet", "--detach", sha], { cwd: repoDir, env });
+  } catch (error) {
+    console.warn(
+      `[CloudGitClone] Could not pin published commit ${sha.slice(0, 8)} — using HEAD: ` +
+        redactGitCloneErrorMessage((error as Error).message).slice(0, 160),
+    );
+  }
+}
+
 export async function cloneCloudAppSource(
   input: CloudGitCloneInput,
   tempPrefix: string,
@@ -112,6 +143,7 @@ export async function cloneCloudAppSource(
       ["clone", "--depth", "1", "--filter=blob:none", cloneUrl, repoDir],
       { env, timeoutMs: 180_000 },
     );
+    await checkoutPublishedCommit(repoDir, input.commit, env);
     return {
       sourceDir: repoDir,
       repoDir,
@@ -131,6 +163,7 @@ export async function cloneCloudAppSource(
     ["sparse-checkout", "set", input.repoPath.replace(/\\/g, "/")],
     { cwd: repoDir, env },
   );
+  await checkoutPublishedCommit(repoDir, input.commit, env);
 
   return {
     sourceDir: path.join(repoDir, input.repoPath),
