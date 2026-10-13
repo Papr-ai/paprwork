@@ -1,6 +1,6 @@
 /**
  * My apps cards, Discover-row style: droplet · name (+ globe = live, bolt =
- * scheduled, star) · one line about it · "Daily 8:00 · Edited 2h ago" (Draft tag). Your apps have no button (the card opens it; ⋯ on hover);
+ * scheduled, star) · one line about it · "Daily 8:00 · Edited 2h ago" (Draft tag). Your apps get a quiet "Open" (⋯ on hover);
  * team apps you don't have yet get one "Get".
  */
 import type { ReactNode } from "react";
@@ -24,7 +24,7 @@ export interface AppRowProps {
 export function AppRow(p: AppRowProps) {
   const { bad, draft, live, scheduled, text } = p.line;
   return (
-    <div className={`ah-row${bad ? " is-bad" : ""}`}>
+    <div className={`ah-row ah-row--open${bad ? " is-bad" : ""}`}>
       <button type="button" className="ah-row__main" onClick={p.onOpen} title={displayTitle(p.app)}>
         <span className="ah-row__ic">
           <AppGlyph app={p.app} size={48} />
@@ -47,6 +47,7 @@ export function AppRow(p: AppRowProps) {
       <span className="ah-row__act">
         <ShareMark share={p.share} />
         {p.menu}
+        <button type="button" className="ah-row__open" onClick={p.onOpen}>Open</button>
       </span>
     </div>
   );

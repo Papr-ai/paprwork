@@ -367,9 +367,16 @@ input.ah-sheet__name:hover, input.ah-sheet__name:focus { background: var(--ah-ho
   display: -webkit-box; -webkit-line-clamp: 1; -webkit-box-orient: vertical; overflow: hidden; }
 .ah-row__s { font-size: 12.5px; color: var(--text-tertiary, var(--text-secondary)); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .ah-row__s--bad { color: var(--ah-bad); font-weight: 550; }
-.ah-row__act { position: absolute; top: 50%; right: 10px; transform: translateY(-50%); display: flex; align-items: center; gap: 4px;
-  opacity: 0; transition: opacity 0.15s; }
-.ah-row:hover .ah-row__act, .ah-row__act:focus-within, .ah-row__act:has(.ah-menu--open) { opacity: 1; }
+.ah-row__act { position: absolute; top: 50%; right: 10px; transform: translateY(-50%); display: flex; align-items: center; gap: 6px; }
+/* ⋯ shows on hover (Open is always there, like Get / Preview on Discover). */
+.ah-row .ah-menu { opacity: 0; }
+.ah-row:hover .ah-menu, .ah-row:focus-within .ah-menu, .ah-row .ah-menu--open { opacity: 1; }
+.ah-row .ah-menu__btn { width: 30px; height: 30px; background: none; box-shadow: none; }
+.ah-row .ah-menu__btn:hover { background: color-mix(in srgb, var(--text-primary) 7%, transparent); }
+.ah-row--open .ah-row__main { padding-right: 124px; }
+.ah-row__open { height: 30px; padding: 0 16px; border: 0; border-radius: 15px; cursor: pointer; font: inherit;
+  font-size: 13px; font-weight: 650; color: var(--ah-blue); background: color-mix(in srgb, var(--text-primary) 7%, transparent); }
+.ah-row__open:hover { background: color-mix(in srgb, var(--text-primary) 11%, transparent); }
 .ah-row__get { position: absolute; top: 50%; right: 10px; transform: translateY(-50%); height: 30px; padding: 0 16px; border: 0; border-radius: 15px; cursor: pointer;
   font-size: 13px; font-weight: 650; color: #fff; background: var(--ah-blue); }
 .ah-row__get:hover { filter: brightness(1.08); }

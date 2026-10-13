@@ -48,7 +48,7 @@ function DocRow(p: { doc: Artifact; renaming: boolean; onOpen: () => void; onRen
     p.onDone();
   };
   return (
-    <div className="ah-row">
+    <div className="ah-row ah-row--open">
       <button type="button" className="ah-row__main" onClick={p.renaming ? undefined : p.onOpen} title={p.doc.title}>
         <span className="ah-row__ic"><DocIcon /></span>
         <span className="ah-row__txt">
@@ -75,7 +75,10 @@ function DocRow(p: { doc: Artifact; renaming: boolean; onOpen: () => void; onRen
           <span className="ah-row__s">{status}</span>
         </span>
       </button>
-      <span className="ah-row__act">{p.menu}</span>
+      <span className="ah-row__act">
+        {p.menu}
+        <button type="button" className="ah-row__open" onClick={p.onOpen}>Open</button>
+      </span>
     </div>
   );
 }
