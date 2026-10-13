@@ -21,6 +21,7 @@ import type { Express, NextFunction, Request, Response } from "express";
 import { z } from "zod";
 import { McpServer, ResourceTemplate } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { StreamableHTTPServerTransport } from "@modelcontextprotocol/sdk/server/streamableHttp.js";
+import { downgradeNewerProtocolVersion } from "./protocolVersion.js";
 import { requireBearerAuth } from "@modelcontextprotocol/sdk/server/auth/middleware/bearerAuth.js";
 import type { OAuthTokenVerifier } from "@modelcontextprotocol/sdk/server/auth/provider.js";
 import {
@@ -383,6 +384,8 @@ async function handleMcpPost(
   }
   if (scope) apps = apps.filter((a) => a.namespaceId === scope.namespaceId && a.slug === scope.slug);
   const server = buildMcpServer(cfg, caller, apps, { handoff, ...(searchFor ? { search: searchFor(caller) } : {}) });
+  const newer = downgradeNewerProtocolVersion(req);
+  if (newer) console.info(`[mcp] client asked for protocol ${newer}; answering as ${req.headers["mcp-protocol-version"]}`);
   const transport = new StreamableHTTPServerTransport({ sessionIdGenerator: undefined, enableJsonResponse: true });
   transport.onerror = (err) => console.warn(`[mcp] transport rejected request: ${err.message.slice(0, 200)} (protocol header: ${req.headers["mcp-protocol-version"] ?? "none"})`);
   res.on("close", () => {
