@@ -1,23 +1,54 @@
 /**
- * App demo scenes: hand the generation to the Papr agent (AgentService) so the model,
+ * App demo scenes: generation is handed to the Papr agent (AgentService) so the model,
  * auth (OAuth / API key / Papr proxy) and fallbacks match the rest of Paprwork.
+ * See services/appDemoScenes.ts.
  */
 import type { Express } from "express";
+import {
+  DEMO_SCENE_SYSTEM,
+  buildDemoScenePrompt,
+  hasDemoScene,
+  isValidDemoAppId,
+  readDemoScene,
+  saveDemoScene,
+} from "../services/appDemoScenes.js";
 
 export function registerAppDemoSceneRoutes(app: Express): void {
-  app.post("/api/apps/:appId/demo-scene/generate", async (req, res) => {
-    const body = (req.body ?? {}) as { system?: unknown; prompt?: unknown; provider?: unknown; model?: unknown };
-    if (typeof body.prompt !== "string" || !body.prompt.trim()) {
-      res.status(400).json({ error: "prompt required" });
+  app.get("/api/apps/:appId/demo-scene/status", (req, res) => {
+    res.json({ exists: hasDemoScene(req.params.appId ?? "") });
+  });
+
+  /** The scene HTML. ?play=1 adds the looping player (for iframes). */
+  app.get("/api/apps/:appId/demo-scene", (req, res) => {
+    const html = readDemoScene(req.params.appId ?? "", req.query.play === "1");
+    if (!html) {
+      res.status(404).end();
       return;
     }
+    res.setHeader("Content-Type", "text/html; charset=utf-8");
+    res.setHeader("Cache-Control", "no-cache");
+    res.send(html);
+  });
+
+  /** Generate (or regenerate). Body is optional: { feedback?, provider?, model? }. */
+  app.post("/api/apps/:appId/demo-scene/generate", async (req, res) => {
+    const appId = req.params.appId ?? "";
+    if (!isValidDemoAppId(appId)) {
+      res.status(400).json({ error: "invalid appId" });
+      return;
+    }
+    const body = (req.body ?? {}) as { system?: unknown; prompt?: unknown; feedback?: unknown; provider?: unknown; model?: unknown };
     try {
+      const system = typeof body.system === "string" ? body.system : DEMO_SCENE_SYSTEM;
+      let user = typeof body.prompt === "string" && body.prompt.trim() ? body.prompt : buildDemoScenePrompt(appId);
+      if (typeof body.feedback === "string" && body.feedback.trim()) {
+        user += `\n\nYOUR PREVIOUS ATTEMPT HAD PROBLEMS — fix them:\n${body.feedback}`;
+      }
       const { getAgentService } = await import("../services/AgentService.js");
-      const prompt = typeof body.system === "string" ? `${body.system}\n\n---\n\n${body.prompt}` : body.prompt;
       const result = await getAgentService().runStructuredJobSession({
-        jobId: `demo-scene-${req.params.appId}`,
+        jobId: `demo-scene-${appId}`,
         runId: String(Date.now()),
-        prompt,
+        prompt: `${system}\n\n---\n\n${user}`,
         schemaName: "demo_scene",
         schemaDescription: "A self-contained HTML document for the app's animated preview loop.",
         outputSchema: {
@@ -29,12 +60,13 @@ export function registerAppDemoSceneRoutes(app: Express): void {
         ...(typeof body.provider === "string" ? { provider: body.provider as never } : {}),
         ...(typeof body.model === "string" ? { model: body.model } : {}),
       });
-      const html = (result.object as { html?: unknown })?.html;
-      if (typeof html !== "string" || !/<html|<!doctype/i.test(html)) {
-        res.status(502).json({ error: "model returned no HTML" });
+      const raw = (result.object as { html?: unknown })?.html;
+      if (typeof raw !== "string" || !/<html|<!doctype/i.test(raw)) {
+        res.status(502).json({ error: "The model returned no scene." });
         return;
       }
-      res.json({ html });
+      const html = saveDemoScene(appId, raw);
+      res.json({ saved: true, html });
     } catch (err) {
       res.status(500).json({ error: (err as Error).message });
     }

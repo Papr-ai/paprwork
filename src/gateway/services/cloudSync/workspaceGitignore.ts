@@ -24,6 +24,8 @@ export const LOCAL_SYNC_STATE_GITIGNORE_LINES = [
   "data/.gateway-sync-busy.json",
   // Private app covers show the user's real data — never synced (see appCovers.ts).
   "data/covers/",
+  // Private demo scenes (sample data, but per-user drafts) — never synced.
+  "data/demos/",
 ] as const;
 
 const JOB_RUNTIME_GITIGNORE_LINES = [

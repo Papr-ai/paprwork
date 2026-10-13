@@ -40,6 +40,38 @@ export function PublishInfoSheet({
   const [retaking, setRetaking] = useState(false);
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [hasDemo, setHasDemo] = useState(false);
+  const [demoVersion, setDemoVersion] = useState(() => String(Date.now()));
+  const [generating, setGenerating] = useState(false);
+  const demoBase = `${getGatewayHttpBase()}/api/apps/${encodeURIComponent(appId)}/demo-scene`;
+
+  useEffect(() => {
+    void fetch(`${demoBase}/status`)
+      .then((r) => (r.ok ? r.json() : null))
+      .then((s: { exists?: boolean } | null) => setHasDemo(Boolean(s?.exists)))
+      .catch(() => undefined);
+  }, [demoBase]);
+
+  // The Papr agent reads the app's code and writes a 3-5s loop with sample data.
+  const generateDemo = async () => {
+    setGenerating(true);
+    setError(null);
+    try {
+      const res = await fetch(`${demoBase}/generate`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: "{}",
+      });
+      const body = (await res.json().catch(() => ({}))) as { saved?: boolean; error?: string };
+      if (!res.ok || !body.saved) throw new Error(body.error ?? "Couldn't make a preview right now.");
+      setHasDemo(true);
+      setDemoVersion(String(Date.now()));
+    } catch (err) {
+      setError((err as Error).message);
+    } finally {
+      setGenerating(false);
+    }
+  };
 
   useEffect(() => {
     let cancelled = false;
@@ -183,6 +215,27 @@ export function PublishInfoSheet({
           <span className="pis-hint">
             The picture can show your own data. It's only shared if you pick it.
           </span>
+        </div>
+      </div>
+      <div className="pis-field">
+        <span className="pis-label">Preview video</span>
+        <div className="pis-demo">
+          {hasDemo ? (
+            <iframe
+              key={demoVersion}
+              title="App preview"
+              src={`${demoBase}?play=1&v=${demoVersion}`}
+              sandbox="allow-scripts"
+            />
+          ) : (
+            <span className="pis-empty">{generating ? "Making a preview… about a minute" : "No preview yet"}</span>
+          )}
+        </div>
+        <div className="pis-row">
+          <button type="button" className="ss6-btn" disabled={generating} onClick={() => void generateDemo()}>
+            {generating ? "Making preview…" : hasDemo ? "Make a new one" : "Make preview"}
+          </button>
+          <span className="pis-hint">A short loop made from the app's code, with sample data only.</span>
         </div>
       </div>
       {error ? <p className="pis-error">{error}</p> : null}
