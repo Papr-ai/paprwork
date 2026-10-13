@@ -265,12 +265,26 @@ function defaultMerged(sourceAppIds: string[]): void {
       } catch {
         return;
       }
+      // Consent rule (same as any remote commit): with unpublished local
+      // edits nothing is applied; the chip shows Get updates instead.
+      if (await hasUnpublishedLocalEdits(id)) {
+        notifyCloudSyncItemsStale(id);
+        return;
+      }
       const { followUpContributeApprove } = await import("../contributeApproveFollowUp.js");
       await followUpContributeApprove(id);
     })().catch((err: Error) => {
       console.warn(`[CloudSync] Pull after Maintainer merge failed for ${id}:`, err.message.slice(0, 120));
     });
   }
+}
+
+async function hasUnpublishedLocalEdits(appId: string): Promise<boolean> {
+  const { getCloudSyncService } = await import("./cloudSyncSingleton.js");
+  const sync = getCloudSyncService();
+  if (!sync) return true; // can't tell: don't touch the files
+  const { appNeedsOrderedFlushAsync } = await import("./pendingLocalUploads.js");
+  return appNeedsOrderedFlushAsync(sync, appId);
 }
 
 let inFlight = false;

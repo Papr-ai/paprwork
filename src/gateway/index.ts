@@ -3259,6 +3259,14 @@ async function startGateway(): Promise<void> {
         const { notifyCloudSyncItemsStale } = await import(
           "./services/cloudSync/cloudSyncBroadcast.js"
         );
+        // Consent rule: a copy with its own edits is never changed behind the
+        // user's back — the chip shows Update and they choose when.
+        const edits = await getCloudAppTrackSyncService().localEdits(req.params.appId);
+        if (!edits.known || edits.files.length > 0) {
+          notifyCloudSyncItemsStale(req.params.appId);
+          res.json({ pulled: false, waiting: true, conflictFiles: [] });
+          return;
+        }
         const conflict = await pullPublisherBeforePropose(req.params.appId);
         notifyCloudSyncItemsStale(req.params.appId);
         res.json({ pulled: !conflict, conflictFiles: conflict?.conflictFiles ?? [] });

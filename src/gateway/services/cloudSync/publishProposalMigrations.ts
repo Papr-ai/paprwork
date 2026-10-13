@@ -124,6 +124,7 @@ export function proposalMigrationsFromWrites(
 export async function defaultPublishMigrationsDeps(
   requestId: string,
   stagedPaths: string[],
+  baseRevision?: string,
 ): Promise<PublishMigrationsDeps> {
   const { cloudApiFetch } = await import("../../utils/cloudApiClient.js");
   const { getDatabaseRegistryService, tursoNameForRecord } = await import("../DatabaseRegistryService.js");
@@ -150,7 +151,7 @@ export async function defaultPublishMigrationsDeps(
     async checkAllowed() {
       const resp = await cloudApiFetch(
         `/v1/cloud/apps/changes/${encodeURIComponent(requestId)}/publish-check`,
-        { method: "POST", body: { stagedPaths }, timeoutMs: 20_000 },
+        { method: "POST", body: { stagedPaths, ...(baseRevision ? { baseRevision } : {}) }, timeoutMs: 20_000 },
       );
       if (resp.status === 404 || resp.status === 405) {
         return { allowed: false, reason: "The server can't publish database changes directly yet, so it was sent for review." };
