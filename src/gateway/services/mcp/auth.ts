@@ -13,11 +13,14 @@
  */
 import type { Express, Request, Response } from "express";
 import { createRemoteJWKSet, jwtVerify, type JWTPayload } from "jose";
-import type { AuthInfo } from "@modelcontextprotocol/sdk/server/auth/types.js";
-import { InvalidTokenError } from "@modelcontextprotocol/sdk/server/auth/errors.js";
-import type { OAuthTokenVerifier } from "@modelcontextprotocol/sdk/server/auth/provider.js";
+import { OAuthError, OAuthErrorCode, type AuthInfo, type OAuthTokenVerifier } from "@modelcontextprotocol/server";
 import { protectedResourceMetadataUrl, type McpEndpointConfig } from "./config.js";
 import type { McpSessionExchange } from "./session.js";
+
+/** 401 + WWW-Authenticate challenge: Claude re-runs sign-in. */
+export const invalidToken = (message: string): OAuthError => new OAuthError(OAuthErrorCode.InvalidToken, message);
+/** 500 server_error: a Papr-side failure, not a bad token. */
+export const serverError = (message: string): OAuthError => new OAuthError(OAuthErrorCode.ServerError, message);
 
 export const CLAIM_SESSION = "https://papr.scope.com/sessionToken";
 export const CLAIM_OBJECT_ID = "https://papr.scope.com/objectId";
@@ -43,7 +46,7 @@ export function callerFromClaims(claims: JWTPayload): McpCaller {
   const userId = claims[CLAIM_OBJECT_ID];
   if (typeof sessionToken !== "string" || !sessionToken || typeof userId !== "string" || !userId) {
     // Signed in to Auth0, but Papr account provisioning hasn't attached a session yet.
-    throw new InvalidTokenError("Papr account setup isn't finished. Reconnect Papr in Claude.");
+    throw invalidToken("Papr account setup isn't finished. Reconnect Papr in Claude.");
   }
   const email = claims[CLAIM_EMAIL] ?? claims.email;
   return {
@@ -70,7 +73,7 @@ export function createAuth0Verifier(cfg: McpEndpointConfig, exchange?: McpSessio
           algorithms: ["RS256"],
         }));
       } catch {
-        throw new InvalidTokenError("Invalid or expired Papr token");
+        throw invalidToken("Invalid or expired Papr token");
       }
       const subject = String(payload.sub ?? "");
       const caller = exchange ? { ...(await exchange(token, payload.exp)), subject } : callerFromClaims(payload);
@@ -116,6 +119,6 @@ export function registerProtectedResourceMetadata(app: Express, cfg: McpEndpoint
 
 export function callerOf(authInfo: AuthInfo | undefined): McpCaller {
   const caller = authInfo?.extra?.caller as McpCaller | undefined;
-  if (!caller) throw new InvalidTokenError("Missing Papr caller");
+  if (!caller) throw invalidToken("Missing Papr caller");
   return caller;
 }

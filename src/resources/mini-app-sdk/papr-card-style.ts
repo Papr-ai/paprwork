@@ -30,8 +30,8 @@ body{margin:0;padding:2px 2px 14px;font:14px/1.5 var(--font-sans,-apple-system,B
 color:var(--pc-fg);background:transparent;-webkit-font-smoothing:antialiased}
 @keyframes pc-in{from{opacity:0;transform:translateY(6px)}to{opacity:1;transform:none}}
 .pc{border-radius:18px;background:var(--pc-glass);color:var(--pc-fg);border:1px solid var(--pc-bd);backdrop-filter:blur(24px) saturate(1.4);
-overflow:hidden;box-shadow:0 1px 0 rgba(255,255,255,.6) inset,0 12px 32px rgba(1,50,120,.10);animation:pc-in .5s ease both}
-[data-theme=dark] .pc{box-shadow:0 1px 0 rgba(255,255,255,.06) inset,0 12px 32px rgba(0,0,0,.35)}
+overflow:hidden;box-shadow:0 1px 0 rgba(255,255,255,.6) inset,0 1px 2px rgba(10,16,32,.06),0 10px 14px -12px rgba(1,50,120,.28);animation:pc-in .5s ease both}
+[data-theme=dark] .pc{box-shadow:0 1px 0 rgba(255,255,255,.06) inset,0 1px 2px rgba(0,0,0,.3),0 10px 14px -12px rgba(0,0,0,.6)}
 .pc-h{display:flex;align-items:center;gap:12px;padding:12px 16px 13px;border-bottom:1px solid var(--pc-bd);font-size:13px}
 .pt{position:relative;display:inline-grid;place-items:center;flex:none;width:30px;height:30px;border-radius:28%;color:#0a1020;
 background:linear-gradient(160deg,#fff 0%,#eef3fa 100%);box-shadow:inset 0 1px 0 #fff,0 0 0 1px rgba(1,60,140,.1),0 4px 12px rgba(1,50,120,.12)}

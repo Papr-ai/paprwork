@@ -7,7 +7,7 @@
  * signed-in caller and answers with the card tool and the exact args to open each hit.
  */
 import { z } from "zod";
-import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
+import type { McpServer } from "@modelcontextprotocol/server";
 import type { McpCaller } from "./auth.js";
 import type { AppToolSpec } from "./appTools.js";
 import type { ClaudeApp } from "./catalog.js";
@@ -62,11 +62,11 @@ export function registerSearchTool(
       description:
         "Find a specific item inside the user's Papr apps (a video, lead, doc...) by meaning, not exact title. " +
         "Use it before opening a card about one item when you don't have its exact id, then call the returned tool with the returned args.",
-      inputSchema: {
+      inputSchema: z.object({
         query: z.string().min(1).max(500).describe("What the user said, e.g. \"this is the deck video\""),
         app: z.string().max(80).optional().describe("Limit to one app, by name or slug (from papr_list_apps)"),
         limit: z.number().int().min(1).max(20).optional(),
-      },
+      }),
       annotations: { readOnlyHint: true, openWorldHint: false },
     },
     async (args) => {
