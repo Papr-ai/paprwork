@@ -17,6 +17,7 @@ import {
   isSelfServeExpertBuild,
   type PaprCreditPlanId,
   type PaprExpertBuildSize,
+  type PaprPlanTrack,
 } from "../../core/types/paprCreditPlans.js";
 import {
   buildPlanWarnings,
@@ -859,7 +860,7 @@ export function registerPaprBillingHandlers(deps: {
 
   ipcMain.handle(
     "papr:start-credits-checkout",
-    async (_event, input: { plan: PaprCreditPlanId }) => {
+    async (_event, input: { plan: PaprCreditPlanId; track?: PaprPlanTrack }) => {
       try {
         if (!isCreditPlanId(input?.plan)) throw new Error("Unknown plan.");
         const summary = await buildPlanSummary(services);
@@ -867,12 +868,15 @@ export function registerPaprBillingHandlers(deps: {
           throw new Error("Only the workspace owner can change plans.");
         }
         const profile = requireLoggedInProfile(deps.settingsStorage);
-        const members = await fetchWorkspaceMembers(profile.sessionToken!, profile.workspaceId!);
+        // Individual = one person. Team = one seat per workspace member (credits per person).
+        const seats = input.track === "individual"
+          ? 1
+          : Math.max((await fetchWorkspaceMembers(profile.sessionToken!, profile.workspaceId!)).length, 1);
         const url = await createCreditsCheckoutUrl(profile.sessionToken!, {
           workspaceId: profile.workspaceId!,
           kind: "plan",
           plan: input.plan,
-          seats: Math.max(members.length, 1),
+          seats,
         });
         await shell.openExternal(url);
         invalidatePlanSummaryCache();

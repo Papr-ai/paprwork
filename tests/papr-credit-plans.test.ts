@@ -6,7 +6,9 @@ import {
   isCreditPlanId,
   isSelfServeExpertBuild,
   monthlyTotal,
+  planFeatures,
 } from "../src/core/types/paprCreditPlans";
+import { replacedToolsFor, replacedTotal } from "../src/core/types/paprPlanReplaces";
 
 describe("credits plan catalog", () => {
   it("matches the memory server rate card (config/credits.yaml)", () => {
@@ -15,6 +17,17 @@ describe("credits plan catalog", () => {
       ["cloud_plus", 100, 150_000, 5],
       ["cloud_max", 300, 500_000, 15],
     ]);
+  });
+
+  it("card bullets match the Unit Economics pricing page", () => {
+    expect(planFeatures(PAPR_CREDIT_PLANS[1]!)).toEqual([
+      "15 cloud apps & scheduled runs", "Max memory", "Custom domains",
+      "Premium document processing", "Long-running agents", "Everything at 5x", "75 GB of storage",
+    ]);
+    expect(planFeatures(PAPR_CREDIT_PLANS[0]!, "team")).toContain("Team workspace");
+    expect(planFeatures(PAPR_CREDIT_PLANS[0]!, "individual")).not.toContain("Team workspace");
+    expect(replacedTotal(1)).toBe(201);
+    expect(replacedToolsFor(3)).toHaveLength(19);
   });
 
   it("shows the credit grant as a dollar value", () => {

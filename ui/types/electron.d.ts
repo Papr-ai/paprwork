@@ -475,6 +475,7 @@ export interface ElectronAPI {
     }) => Promise<{ success: boolean; error?: string }>;
     startCreditsCheckout: (input: {
       plan: import("../../src/core/types/paprCreditPlans").PaprCreditPlanId;
+      track?: import("../../src/core/types/paprCreditPlans").PaprPlanTrack;
     }) => Promise<{ success: boolean; error?: string }>;
     startExpertBuildCheckout: (input: {
       size: import("../../src/core/types/paprCreditPlans").PaprExpertBuildSize;
