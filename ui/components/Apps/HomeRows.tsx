@@ -1,18 +1,18 @@
 /**
- * My apps cards, connector-list style: droplet · name · one line about it ·
- * one status line. Your apps have no button (the card opens it; ⋯ on hover);
+ * My apps cards, Discover-row style: droplet · name (+ globe = live, bolt =
+ * scheduled, star) · one line about it · "Daily 8:00 · Edited 2h ago" (Draft tag). Your apps have no button (the card opens it; ⋯ on hover);
  * team apps you don't have yet get one "Get".
  */
 import type { ReactNode } from "react";
 import type { Artifact } from "../../stores/artifactsStore";
 import type { ShareGlyph } from "../../utils/shareGlyph";
+import type { RowLine } from "../../utils/homeStatus";
 import { AppGlyph, AppName, DropGlyph, ShareMark, displayTitle } from "./HomeTiles";
 import { HomeIcon } from "./HomeIcon";
 
 export interface AppRowProps {
   app: Artifact;
-  status: { text: string; bad: boolean } | null;
-  meta: string;
+  line: RowLine;
   share?: ShareGlyph;
   renaming: boolean;
   onOpen: () => void;
@@ -22,7 +22,7 @@ export interface AppRowProps {
 }
 
 export function AppRow(p: AppRowProps) {
-  const bad = Boolean(p.status?.bad);
+  const { bad, draft, live, scheduled, text } = p.line;
   return (
     <div className={`ah-row${bad ? " is-bad" : ""}`}>
       <button type="button" className="ah-row__main" onClick={p.onOpen} title={displayTitle(p.app)}>
@@ -33,10 +33,15 @@ export function AppRow(p: AppRowProps) {
         <span className="ah-row__txt">
           <span className="ah-row__t">
             <AppName app={p.app} className="ah-row__name" renaming={p.renaming} onRename={p.onRename} onDone={p.onRenameDone} />
+            {live ? <span className="ah-row__mark" title="Live on the web"><HomeIcon name="globe" size={13} /></span> : null}
+            {scheduled ? <span className="ah-row__mark" title="Runs on a schedule"><HomeIcon name="bolt" size={13} /></span> : null}
             {p.app.favorite ? <HomeIcon name="star" size={13} className="ah-row__pin" /> : null}
           </span>
           {p.app.description ? <span className="ah-row__d">{p.app.description}</span> : null}
-          <span className={`ah-row__s${bad ? " ah-row__s--bad" : ""}`}>{p.status?.text ?? p.meta}</span>
+          <span className={`ah-row__s${bad ? " ah-row__s--bad" : ""}`}>
+            {draft && !bad ? <span className="ah-row__tag">Draft</span> : null}
+            {text}
+          </span>
         </span>
       </button>
       <span className="ah-row__act">

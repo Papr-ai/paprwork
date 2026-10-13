@@ -358,8 +358,11 @@ input.ah-sheet__name:hover, input.ah-sheet__name:focus { background: var(--ah-ho
   background: var(--ah-bad); box-shadow: 0 0 0 2px var(--ah-card); }
 .ah-row__txt { flex: 1; min-width: 0; display: flex; flex-direction: column; gap: 3px; }
 .ah-row__t { display: flex; align-items: center; gap: 6px; min-width: 0; }
-.ah-row__name { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: 15px; font-weight: 600; line-height: 1.3; }
+.ah-row__name { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: 15px; font-weight: 650; line-height: 1.3; }
 .ah-row__pin { flex: none; color: #f0a742; fill: currentColor; }
+.ah-row__mark { flex: none; display: inline-flex; color: var(--text-tertiary, var(--text-secondary)); }
+.ah-row__tag { display: inline-block; margin-right: 6px; padding: 1px 6px; border-radius: 5px; font-size: 11px; font-weight: 600;
+  color: var(--text-secondary); background: color-mix(in srgb, var(--text-primary) 7%, transparent); vertical-align: 1px; }
 .ah-row__d { font-size: 13.5px; line-height: 1.4; color: var(--text-secondary);
   display: -webkit-box; -webkit-line-clamp: 1; -webkit-box-orient: vertical; overflow: hidden; }
 .ah-row__s { font-size: 12.5px; color: var(--text-tertiary, var(--text-secondary)); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }

@@ -13,13 +13,12 @@ import type { Artifact } from "../../stores/artifactsStore";
 import type { AppsHealthMap } from "../../../src/core/utils/appsHealth";
 import type { ShareGlyph } from "../../utils/shareGlyph";
 import { isIdLikeTitle, needsAttention, type LibrarySection } from "../../utils/appsLibrary";
-import { relativeWhen } from "../../utils/appsHome";
 import { HomeMenu, type HomeMenuItem } from "./HomeMenu";
 import { TeamAppsCollection } from "./TeamAppsCollection";
 import { HomeIcon } from "./HomeIcon";
 import { AppRow } from "./HomeRows";
 import type { LibraryCardHandlers } from "./LibraryPane";
-import { homeStatus } from "../../utils/homeStatus";
+import { rowLine } from "../../utils/homeStatus";
 import "./AppsHome.css";
 import { startDemoGeneration, useAppDemoIds } from "../../utils/appDemo";
 
@@ -98,8 +97,7 @@ export function AppsHome(p: AppsHomeProps) {
     <AppRow
       key={a.id}
       app={a}
-      status={homeStatus(a, p.health[a.id], p.publishedIds.has(a.id))}
-      meta={`${a.lastOpenedAt ? "Opened" : "Updated"} ${relativeWhen(lastSeen(a))}`}
+      line={rowLine(a, p.health[a.id], p.publishedIds.has(a.id))}
       share={p.shareById[a.id]}
       renaming={renamingId === a.id}
       onOpen={() => p.onOpen(a)}

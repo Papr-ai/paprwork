@@ -39,3 +39,34 @@ export function homeStatus(a: Artifact, h: AppHealth | undefined, isPublished: b
   if (a.status === "draft" && !isPublished) return { text: "Draft", bad: false };
   return null;
 }
+
+/**
+ * My apps card line (Discover-row style): live/scheduled become marks next to
+ * the name, Draft is a small tag, and the line itself reads
+ * "Daily 8:00 · Edited 2h ago". Problems replace the line in red.
+ */
+export interface RowLine {
+  text: string;
+  bad: boolean;
+  draft: boolean;
+  live: boolean;
+  scheduled: boolean;
+}
+
+export function rowLine(a: Artifact, h: AppHealth | undefined, isPublished: boolean): RowLine {
+  const live = isPublished;
+  const scheduled = Boolean(h?.scheduleLabel);
+  const base = { live, scheduled, draft: false };
+  const s = homeStatus(a, h, isPublished);
+  if (s?.bad) return { ...base, text: s.text, bad: true };
+  if ((a.status ?? "active") === "archived") return { ...base, text: "Archived", bad: false };
+  const when = h?.state === "running"
+    ? "Running now"
+    : h?.scheduleLabel ? h.scheduleLabel[0].toUpperCase() + h.scheduleLabel.slice(1) : "";
+  return {
+    ...base,
+    draft: a.status === "draft" && !isPublished,
+    text: [when, `Edited ${shortAgo(a.updatedAt)}`].filter(Boolean).join(" · "),
+    bad: false,
+  };
+}
