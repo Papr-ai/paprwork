@@ -2,6 +2,7 @@ import type { LanguageModel } from "ai";
 import type { AnyTool } from "../../../core/agents/ToolRegistry.js";
 import { isFailedToolResult } from "../../../core/utils/interruptedToolResult.js";
 import { DiagnosticOperation, diagnosticErrorType, type DiagnosticContext } from "../../../core/utils/performanceDiagnostics.js";
+import { deferredToolNameFromExecuteInput } from "./deferredToolAccess.js";
 
 /** Observes the provider response itself, before the SDK executes local tools. */
 export function measureLanguageModel(model: LanguageModel, context: DiagnosticContext): LanguageModel {
@@ -54,7 +55,11 @@ export function measureTools(tools: Record<string, AnyTool>, context: Diagnostic
     const execute = tool.execute;
     if (!execute) return [name, tool];
     return [name, { ...tool, execute: async (...args: Parameters<NonNullable<AnyTool["execute"]>>) => {
-      const trace = new DiagnosticOperation("tool", name, context);
+      const innerDeferred = name === "run_deferred_tool"
+        ? deferredToolNameFromExecuteInput(args[0])
+        : undefined;
+      const traceLabel = innerDeferred ? `run_deferred_tool→${innerDeferred}` : name;
+      const trace = new DiagnosticOperation("tool", traceLabel, context);
       try {
         const result = await execute.apply(tool, args);
         const failed = isFailedToolResult(result);

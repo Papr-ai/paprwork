@@ -53,6 +53,19 @@ test("tool instrumentation preserves arguments/results and records errors withou
   expect(JSON.stringify(getPerformanceDiagnostics())).not.toContain("SECRET");
 });
 
+test("run_deferred_tool traces use the inner tool name", async () => {
+  const execute = vi.fn(async () => ({ success: true }));
+  const tools = measureTools({
+    run_deferred_tool: { execute } as unknown as AnyTool,
+  }, { chatId: "chat" });
+  await tools.run_deferred_tool.execute!(
+    { tool_name: "push_cloud_sync", arguments: { appId: "abc" } },
+    {} as never,
+  );
+  const record = getPerformanceDiagnostics().recent[0];
+  expect(record.name).toBe("run_deferred_tool→push_cloud_sync");
+});
+
 test("instrumented model works through the actual AI SDK stream pipeline", async () => {
   const { streamText } = await import("ai");
   const { MockLanguageModelV3, simulateReadableStream } = await import("ai/test");

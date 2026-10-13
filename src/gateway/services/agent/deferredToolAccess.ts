@@ -133,6 +133,18 @@ export function createFindToolsTool(deps: DeferredToolAccessDeps): UnknownTool {
   });
 }
 
+/** Read inner tool name from a Mastra execute payload (flat or context-wrapped). */
+export function deferredToolNameFromExecuteInput(
+  inputData: unknown,
+): string | undefined {
+  const args = (inputData as { context?: unknown })?.context ?? inputData;
+  if (!args || typeof args !== "object" || Array.isArray(args)) {
+    return undefined;
+  }
+  const name = (args as { tool_name?: unknown }).tool_name;
+  return typeof name === "string" && name.length > 0 ? name : undefined;
+}
+
 export function createRunDeferredTool(
   deps: DeferredToolAccessDeps,
 ): UnknownTool {
@@ -155,7 +167,9 @@ export function createRunDeferredTool(
       };
       const name = String(args.tool_name ?? "");
       const toolArgs = args.arguments ?? {};
-
+      const startedMs = performance.now();
+      console.log(`[DeferredTool] ${name} starting`);
+      try {
       const tool = deps.getTool(name);
       if (!tool) {
         const deferred = deps.listDeferredToolIds();
@@ -194,6 +208,11 @@ export function createRunDeferredTool(
       }
 
       return await tool.execute(toolArgs);
+      } finally {
+        console.log(
+          `[DeferredTool] ${name} finished in ${Math.round(performance.now() - startedMs)}ms`,
+        );
+      }
     },
   });
 }

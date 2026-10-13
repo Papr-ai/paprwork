@@ -3,6 +3,8 @@
  * Converts tool names and bash commands into user-friendly descriptions (ported from V1).
  */
 
+import { unwrapDeferredToolCall } from "./deferredFromToolCall.js";
+
 export function getDisplayFilename(path: string): string {
   if (!path) return "";
 
@@ -388,6 +390,14 @@ export const TOOL_DESCRIPTIONS: Record<
     running: "Repairing cloud sync",
     complete: "Cloud sync repaired",
   },
+  find_tools: {
+    running: "Looking up tools",
+    complete: "Tools looked up",
+  },
+  run_deferred_tool: {
+    running: "Running deferred tool",
+    complete: "Deferred tool finished",
+  },
   inspect_cloud_repo: {
     running: "Inspecting cloud repo",
     complete: "Cloud repo inspected",
@@ -525,17 +535,24 @@ export const TOOL_DESCRIPTIONS: Record<
  * Get the display label for any tool call, with bash command parsing.
  */
 export function getToolDisplayLabel(toolCall: ToolCallLike): string {
-  const toolName = toolCall.toolName ?? "tool";
-  const isRunning = toolCall.status === "calling";
-  const isError = toolCall.status === "error";
+  const unwrapped = unwrapDeferredToolCall(toolCall);
+  const effectiveCall: ToolCallLike = {
+    ...toolCall,
+    toolName: unwrapped.toolName,
+    args: unwrapped.args,
+  };
 
-  if (toolName === "bash" && typeof toolCall.args?.command === "string") {
-    return getBashCommandDescription(toolCall.args.command, isRunning);
+  const toolName = effectiveCall.toolName ?? "tool";
+  const isRunning = effectiveCall.status === "calling";
+  const isError = effectiveCall.status === "error";
+
+  if (toolName === "bash" && typeof effectiveCall.args?.command === "string") {
+    return getBashCommandDescription(effectiveCall.args.command, isRunning);
   }
 
   // Browser tools - show URL/domain
-  if (toolName === "browser_navigate" && typeof toolCall.args?.url === "string") {
-    const url = toolCall.args.url as string;
+  if (toolName === "browser_navigate" && typeof effectiveCall.args?.url === "string") {
+    const url = effectiveCall.args.url as string;
     try {
       const domain = new URL(url).hostname.replace(/^www\./, "");
       return isRunning ? `Navigating to ${domain}` : `Navigated to ${domain}`;
@@ -550,41 +567,41 @@ export function getToolDisplayLabel(toolCall: ToolCallLike): string {
 
   if (toolName === "webview_launch_app") {
     const mode =
-      toolCall.args?.previewTarget === "published" ? "Web" : "Local";
+      effectiveCall.args?.previewTarget === "published" ? "Web" : "Local";
     return isRunning
       ? `Launching ${mode} app preview`
       : `${mode} app preview ready`;
   }
 
-  if (toolName === "browser_click" && typeof toolCall.args?.ref === "string") {
-    const ref = toolCall.args.ref as string;
+  if (toolName === "browser_click" && typeof effectiveCall.args?.ref === "string") {
+    const ref = effectiveCall.args.ref as string;
     // Extract meaningful text if available (e.g., "ref-123 (Submit)")
     return isRunning ? "Clicking element" : "Clicked element";
   }
 
-  if (toolName === "browser_type" && typeof toolCall.args?.text === "string") {
-    const text = (toolCall.args.text as string).substring(0, 20);
+  if (toolName === "browser_type" && typeof effectiveCall.args?.text === "string") {
+    const text = (effectiveCall.args.text as string).substring(0, 20);
     return isRunning ? `Typing "${text}"${text.length > 20 ? "..." : ""}` : "Text entered";
   }
 
   // Search tools - show what we're searching for
-  if (toolName === "search_files" && typeof toolCall.args?.query === "string") {
-    const query = (toolCall.args.query as string).substring(0, 30);
+  if (toolName === "search_files" && typeof effectiveCall.args?.query === "string") {
+    const query = (effectiveCall.args.query as string).substring(0, 30);
     return isRunning 
       ? `Searching for "${query}"${query.length > 30 ? "..." : ""}`
       : `Searched for "${query}"${query.length > 30 ? "..." : ""}`;
   }
 
-  if (toolName === "search_agent_memory" && typeof toolCall.args?.query === "string") {
-    const query = (toolCall.args.query as string).substring(0, 30);
+  if (toolName === "search_agent_memory" && typeof effectiveCall.args?.query === "string") {
+    const query = (effectiveCall.args.query as string).substring(0, 30);
     return isRunning 
       ? `Searching memory for "${query}"${query.length > 30 ? "..." : ""}`
       : `Found in memory`;
   }
 
   // File operations - show filename
-  if ((toolName === "read_file" || toolName === "write_file") && typeof toolCall.args?.path === "string") {
-    const filename = getDisplayFilename(toolCall.args.path as string);
+  if ((toolName === "read_file" || toolName === "write_file") && typeof effectiveCall.args?.path === "string") {
+    const filename = getDisplayFilename(effectiveCall.args.path as string);
     if (filename) {
       return toolName === "read_file"
         ? (isRunning ? `Reading ${filename}` : `Read ${filename}`)
@@ -594,19 +611,19 @@ export function getToolDisplayLabel(toolCall: ToolCallLike): string {
 
   if (toolName === "generate_media") {
     const modelId =
-      typeof toolCall.args?.modelId === "string" ? toolCall.args.modelId : "";
+      typeof effectiveCall.args?.modelId === "string" ? effectiveCall.args.modelId : "";
     const kindHint = modelId.includes("veo") ? "video" : "image";
     const noun = kindHint === "video" ? "video" : "image";
     return isRunning ? `Generating ${noun}` : `Generated ${noun}`;
   }
 
-  if (toolName === "list_directory" && typeof toolCall.args?.path === "string") {
-    const dirname = getDisplayFilename(toolCall.args.path as string) || "directory";
+  if (toolName === "list_directory" && typeof effectiveCall.args?.path === "string") {
+    const dirname = getDisplayFilename(effectiveCall.args.path as string) || "directory";
     return isRunning ? `Listing ${dirname}` : `Listed ${dirname}`;
   }
 
   if (toolName === "push_cloud_sync") {
-    const args = toolCall.args ?? {};
+    const args = effectiveCall.args ?? {};
     const parts: string[] = [];
     const targets = Array.isArray(args.targets) ? args.targets as string[] : ["github", "turso"];
     if (targets.length === 1) {
