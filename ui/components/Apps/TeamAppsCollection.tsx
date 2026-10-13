@@ -1,7 +1,7 @@
 /**
- * My apps → "From <team>": team-shared apps you don't have yet, as one more
- * collection. Your installed team apps are already in My apps (Open); these
- * show Get / Open web in the details modal. "See all" opens the full team list.
+ * My apps → "From <team>": team-shared apps you don't have yet, as the last
+ * section (the Team tab scrolls here). Get installs; the card opens details
+ * (Get / Open web). Installed team apps are already in your list above.
  */
 import { useEffect, useMemo, useState } from "react";
 import { gateway } from "../../src/lib/gateway";
@@ -15,17 +15,13 @@ import {
   resolveCatalogPreviewIframeUrl,
 } from "../../utils/catalogPreviewUrl";
 import { cloudCatalogPreviewEntityId, type CloudCatalogPreviewTabMetadata } from "../../types/cloudCatalogPreviewTab";
-import { bannerShade } from "../../utils/appsHome";
 import { useCloudCatalogInstallFlow } from "../../hooks/useCloudCatalogInstallFlow";
 import { useArtifacts } from "../../hooks/useArtifacts";
 import { useTabs } from "../../hooks/useTabs";
 import { CatalogAppDetails } from "./CatalogAppDetails";
 import { CloudInstallOptionalDepsNotice } from "./CloudInstallOptionalDepsNotice";
-import { DropGlyph } from "./HomeTiles";
-import { HomeIcon } from "./HomeIcon";
+import { GetRow } from "./HomeRows";
 
-const SHOW = 6;
-const ID = "s:team";
 const clean = (raw?: string) =>
   raw?.trim().startsWith("<")
     ? raw.replace(/<script[\s\S]*?<\/script>/gi, "").replace(/on\w+\s*=/gi, "data-blocked=")
@@ -49,11 +45,9 @@ export function uninstalledTeamEntries(
 export function TeamAppsCollection({
   namespaceId,
   namespaceName,
-  onSeeAll,
 }: {
   namespaceId: string;
   namespaceName: string | null;
-  onSeeAll: () => void;
 }) {
   // Last-known team list paints at once (any age); the fetch below refreshes it.
   // My apps never waits on this — the collection appears when it has entries.
@@ -92,7 +86,13 @@ export function TeamAppsCollection({
     [catalog, localIds, flow],
   );
   if (entries.length === 0) {
-    return flow.optionalDepsNotice ? notice() : null;
+    return (
+      <section className="ah-sec" id="ah-team">
+        <h2 className="ah-sec__h">From {namespaceName?.trim() || "your team"}</h2>
+        <p className="ah-sec__none">You have every app your team shares.</p>
+        {notice()}
+      </section>
+    );
   }
 
   function notice() {
@@ -124,51 +124,25 @@ export function TeamAppsCollection({
     switchToTab(createTab("app", cloudCatalogPreviewEntityId(e.catalogId), e.name, metadata as unknown as Record<string, unknown>));
   };
 
-  const shown = entries.length > SHOW ? entries.slice(0, SHOW - 1) : entries;
-  const more = entries.length - shown.length;
   const team = namespaceName?.trim() || "your team";
   return (
-    <div className={`ah-card ah-coll ah-coll--auto ah-coll--arrive ${entries.length > 3 ? "ah-coll--big" : "ah-coll--one"}`}>
-      <div className={`ah-coll__art ah-tint-${bannerShade(ID)}`}>
-        <div className="ah-coll__grid">
-          {shown.map((e) => (
-            <div key={e.catalogId} className="ah-cell">
-              <button type="button" className="ah-cell__open" onClick={() => setOpen(e)} title={e.description}>
-                <span className="ah-cell__ic">
-                  <DropGlyph icon={clean(e.icon)} title={e.name} size={58} />
-                </span>
-                <span className="ah-cell__t">{e.name}</span>
-                <span className="ah-cell__get">{flow.installingId === e.catalogId ? "Getting…" : "Get"}</span>
-              </button>
-            </div>
-          ))}
-          {more > 0 ? (
-            <div className="ah-cell">
-              <button type="button" className="ah-cell__open" onClick={onSeeAll}>
-                <span className="ah-cell__ic">
-                  <span className="ah-gl ah-gl--more">+{more}</span>
-                </span>
-                <span className="ah-cell__t">See all</span>
-              </button>
-            </div>
-          ) : null}
-        </div>
-      </div>
-      <div className="ah-coll__row">
-        <span className={`ah-coll__ic ah-pb-${bannerShade(ID)}`}>
-          <HomeIcon name="users" size={18} />
-        </span>
-        <div className="ah-coll__txt">
-          <button type="button" className="ah-coll__name" onClick={onSeeAll}>
-            From {team}
-          </button>
-          <span className="ah-coll__meta">
-            {entries.length} you don't have yet
-          </span>
-        </div>
-        <button type="button" className="ah-open" onClick={onSeeAll}>
-          See all
-        </button>
+    <section className="ah-sec" id="ah-team" aria-label={`From ${team}`}>
+      <h2 className="ah-sec__h">
+        From {team} <em>{entries.length}</em>
+      </h2>
+      <div className="ah-rows">
+        {entries.map((e) => (
+          <GetRow
+            key={e.catalogId}
+            name={e.name}
+            icon={clean(e.icon)}
+            description={e.description}
+            by={e.author}
+            busy={flow.installingId === e.catalogId}
+            onDetails={() => setOpen(e)}
+            onGet={() => flow.startCloudInstall(e, { catalogScope: "namespace" })}
+          />
+        ))}
       </div>
       {open ? (
         <CatalogAppDetails
@@ -199,6 +173,6 @@ export function TeamAppsCollection({
         />
       ) : null}
       {notice()}
-    </div>
+    </section>
   );
 }

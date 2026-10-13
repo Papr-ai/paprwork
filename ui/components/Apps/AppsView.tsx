@@ -495,7 +495,7 @@ export function AppsView() {
     [categorySnapshot.byKey],
   );
   const homeKey = `papr-apps-home:${papr.namespaceId ?? "local"}`;
-  const area: "mine" | "community" =
+  const area: "mine" | "team" | "community" =
     section === "community" ? "community" : "mine";
   // One search box covers the library, the team and the community; typing
   // swaps whatever section is showing for a single results page.
@@ -523,8 +523,9 @@ export function AppsView() {
           {(
             [
               ["mine", "My apps", "grid"],
-              ["community", "Community apps", "globe"],
-            ] as Array<["mine" | "community", string, "grid" | "globe"]>
+              ...(showNamespaceTabs ? ([["team", "Team", "users"]] as const) : []),
+              ["community", "Discover", "globe"],
+            ] as Array<["mine" | "team" | "community", string, "grid" | "users" | "globe"]>
           ).map(([id, label, icon]) => (
             <button
               key={id}
@@ -533,6 +534,12 @@ export function AppsView() {
               aria-current={area === id && !searching ? "page" : undefined}
               onClick={() => {
                 setSearchQuery("");
+                // Team is a section of My apps, not its own page: jump down to it.
+                if (id === "team") {
+                  setSection("recent");
+                  setTimeout(() => document.getElementById("ah-team")?.scrollIntoView({ behavior: "smooth", block: "start" }), 80);
+                  return;
+                }
                 setSection(id === "mine" ? "recent" : id);
               }}
             >
@@ -654,7 +661,7 @@ export function AppsView() {
             <CommunityAppsView
                 libraryMenuFor={libraryMenuFor}
               scope="global"
-              loadingLabel="Loading community apps..."
+              loadingLabel="Loading Discover..."
               searchQuery=""
               onSearchQueryChange={setSearchQuery}
               hideToolbar
@@ -705,7 +712,7 @@ export function AppsView() {
                   className="apps-view__empty-community-btn"
                   onClick={() => setSection(showNamespaceTabs ? "team" : "community")}
                 >
-                  {showNamespaceTabs ? "See what your team uses" : "Browse Community apps"}
+                  {showNamespaceTabs ? "See what your team uses" : "Browse Discover"}
                 </button>
               </div>
             </div>

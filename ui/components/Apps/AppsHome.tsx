@@ -1,67 +1,41 @@
 /**
- * My apps home (Apps page redesign): the library as a Home Screen.
+ * My apps home: a launcher, built for finding — not browsing.
  *
- *  - Automatic collections on top (Recent, Favorites, Live on the web) — they
- *    fill themselves and can't be dragged or renamed.
- *  - Then the user's own arrangement: collections (Papr-blue banner, up to six
- *    apps) and single apps (cover or banner, overlapping icon, one status line).
- *  - First run seeds collections from Jev categories with 3+ apps. Nothing is
- *    saved until the user moves something; apps the saved layout has never seen
- *    show first as "New", with a one-click "Move to <category>".
- *  - Drag an app onto another app to make a collection, onto a collection to
- *    file it, between cards to reorder. Arranged / A–Z switch.
+ *  - Narrow page, two columns of connector-style cards: droplet · name · one
+ *    line about it · one status line. The card opens the app; ⋯ on hover.
+ *  - Recent (last 4 opened) → All apps (A–Z) → From <team> (not installed, Get).
+ *  - Chips filter in place: All · Pinned · Needs attention · categories · Live.
+ *  - Covers / preview videos live on Discover and in App info, not here.
  */
-import { useCallback, useEffect, useMemo, useState, type DragEvent } from "react";
+import { useCallback, useMemo, useState } from "react";
 import type { Artifact } from "../../stores/artifactsStore";
 import type { AppsHealthMap } from "../../../src/core/utils/appsHealth";
 import type { ShareGlyph } from "../../utils/shareGlyph";
 import { isIdLikeTitle, needsAttention, type LibrarySection } from "../../utils/appsLibrary";
-import {
-  dropOnItem,
-  fileIntoCategory,
-  fileTargetFor,
-  isFolderId,
-  loadHomeLayout,
-  moveIntoFolder,
-  moveToTopLevel,
-  reconcileLayout,
-  relativeWhen,
-  renameFolder,
-  saveHomeLayout,
-  seedLayout,
-  ungroupFolder,
-  withoutIds,
-  type DropZone,
-  type HomeLayout,
-} from "../../utils/appsHome";
-import { AppTile, CollectionTile, type TileDnd } from "./HomeTiles";
+import { relativeWhen } from "../../utils/appsHome";
 import { HomeMenu, type HomeMenuItem } from "./HomeMenu";
-import { HomeCollectionSheet } from "./HomeCollectionSheet";
 import { TeamAppsCollection } from "./TeamAppsCollection";
-import { HomeIcon, type HomeIconName } from "./HomeIcon";
+import { HomeIcon } from "./HomeIcon";
+import { AppRow } from "./HomeRows";
 import type { LibraryCardHandlers } from "./LibraryPane";
 import { homeStatus } from "../../utils/homeStatus";
 import "./AppsHome.css";
 import { startDemoGeneration, useAppDemoIds } from "../../utils/appDemo";
 
-const SMART: Array<{ id: string; name: string; icon: HomeIconName }> = [
-  { id: "s:recent", name: "Recent", icon: "clock" },
-  { id: "s:fav", name: "Favorites", icon: "star" },
-  { id: "s:live", name: "Live on the web", icon: "globe" },
-];
+const RECENT = 4;
 
 interface AppsHomeProps extends LibraryCardHandlers {
-  /** Library, newest first (archived included; filtered here). */
+  /** Library (archived included; filtered here). */
   apps: Artifact[];
   health: AppsHealthMap;
   publishedIds: ReadonlySet<string>;
   shareById: Readonly<Record<string, ShareGlyph>>;
   categoryOf: (appId: string) => string | null;
-  /** localStorage key for this workspace's arrangement. */
+  /** localStorage key for this workspace (kept for callers; layout is automatic now). */
   storageKey: string;
   showCopyAction: boolean;
   showTeam: boolean;
-  /** Team workspace: shows a "From <team>" collection of team apps you don't have yet. */
+  /** Team workspace: "From <team>" section of team apps you don't have yet. */
   teamNamespaceId?: string | null;
   teamName?: string | null;
   duplicateExtraCount: number;
@@ -70,315 +44,121 @@ interface AppsHomeProps extends LibraryCardHandlers {
 }
 
 const lastSeen = (a: Artifact) => a.lastOpenedAt ?? a.updatedAt;
+const byName = (a: Artifact, b: Artifact) =>
+  Number(isIdLikeTitle(a.title)) - Number(isIdLikeTitle(b.title)) ||
+  a.title.localeCompare(b.title, undefined, { sensitivity: "base" });
+
+type Filter = "all" | "pin" | "bad" | "live" | `cat:${string}`;
 
 export function AppsHome(p: AppsHomeProps) {
   const active = useMemo(() => p.apps.filter((a) => (a.status ?? "active") !== "archived"), [p.apps]);
-  const byId = useMemo(() => new Map(active.map((a) => [a.id, a])), [active]);
   const archivedCount = p.apps.length - active.length;
   const attention = useCallback((a: Artifact) => needsAttention(a, p.health[a.id]), [p.health]);
-
-  const [saved, setSaved] = useState<HomeLayout | null>(() => loadHomeLayout(p.storageKey));
-  useEffect(() => setSaved(loadHomeLayout(p.storageKey)), [p.storageKey]);
-  const [mode, setMode] = useState<"grid" | "az">(() =>
-    localStorage.getItem(`${p.storageKey}:mode`) === "az" ? "az" : "grid",
-  );
-  const [openFolder, setOpenFolder] = useState<{ id: string; fresh: boolean } | null>(null);
+  const [filter, setFilter] = useState<Filter>("all");
   const [renamingId, setRenamingId] = useState<string | null>(null);
   const demoIds = useAppDemoIds();
-  const hasDemo = (id: string) => demoIds.has(id);
-  const [dragging, setDragging] = useState<string | null>(null);
-  const [hover, setHover] = useState<{ id: string; zone: DropZone } | null>(null);
 
-  const ids = useMemo(() => active.map((a) => a.id), [active]);
-  const { layout, added } = useMemo(() => {
-    if (!saved) return { layout: seedLayout(ids, p.categoryOf), added: [] as string[] };
-    return reconcileLayout(saved, ids);
-  }, [saved, ids, p.categoryOf]);
-  const isNew = useCallback((id: string) => added.includes(id), [added]);
+  const cats = useMemo(() => {
+    const n = new Map<string, number>();
+    for (const a of active) {
+      const c = p.categoryOf(a.id);
+      if (c && c !== "Other") n.set(c, (n.get(c) ?? 0) + 1);
+    }
+    return [...n].filter(([, k]) => k >= 2).sort((x, y) => y[1] - x[1]).map(([c]) => c);
+  }, [active, p.categoryOf]);
 
-  /** Save a change. Apps nobody has placed yet stay "New" (they are left out of the saved layout). */
-  const save = useCallback(
-    (next: HomeLayout, placedId?: string) => {
-      const out = withoutIds(next, added.filter((id) => id !== placedId));
-      setSaved(out);
-      saveHomeLayout(p.storageKey, out);
-    },
-    [added, p.storageKey],
-  );
-  const commit = (next: HomeLayout) => save(next);
-  const place = (next: HomeLayout, placedId: string) => save(next, placedId);
-
-  const folders = useMemo(
-    () => Object.entries(layout.folders).map(([id, f]) => ({ id, name: f.name })),
-    [layout.folders],
-  );
-  const folderOfApp = useCallback(
-    (id: string) => Object.keys(layout.folders).find((k) => layout.folders[k]!.ids.includes(id)) ?? null,
-    [layout.folders],
-  );
-
-  const smartApps = useCallback(
-    (id: string): Artifact[] => {
-      if (id === "s:recent") return active.slice(0, 8);
-      if (id === "s:fav") return active.filter((a) => a.favorite);
-      if (id === "s:live") return active.filter((a) => p.publishedIds.has(a.id));
-      return [];
-    },
-    [active, p.publishedIds],
-  );
-
-  // ── Drag and drop ──────────────────────────────────────────────────────────
-  const dnd: TileDnd = {
-    dragging,
-    hover,
-    onDragStart: (id, e, app) => {
-      setDragging(id);
-      e.dataTransfer.effectAllowed = "copyMove";
-      e.dataTransfer.setData("text/plain", id);
-      if (app) {
-        // Same payload as AppCard so an app can still be dropped into a chat.
-        e.dataTransfer.setData(
-          "application/json",
-          JSON.stringify({ id: app.id, type: app.type, title: app.title, ...(app.icon ? { icon: app.icon } : {}) }),
-        );
-      }
-    },
-    onDragOver: (id, e, acceptsInto) => {
-      if (!dragging || dragging === id) return;
-      e.preventDefault();
-      e.stopPropagation();
-      const r = (e.currentTarget as HTMLElement).getBoundingClientRect();
-      const x = (e.clientX - r.left) / r.width;
-      const zone: DropZone =
-        !acceptsInto || isFolderId(dragging) ? (x < 0.5 ? "before" : "after") : x < 0.28 ? "before" : x > 0.72 ? "after" : "into";
-      if (hover?.id !== id || hover.zone !== zone) setHover({ id, zone });
-    },
-    onDrop: (id, e) => {
-      e.preventDefault();
-      e.stopPropagation();
-      if (!dragging || !hover || hover.id !== id) return endDrag();
-      const target = id;
-      const { layout: next, created } = dropOnItem(layout, dragging, target, hover.zone, nameForNewCollection(dragging, target));
-      place(next, dragging);
-      if (created) setOpenFolder({ id: created, fresh: true });
-      endDrag();
-    },
-    onDragEnd: () => endDrag(),
-  };
-  function endDrag() {
-    setDragging(null);
-    setHover(null);
-  }
-  function nameForNewCollection(a: string, b: string): string {
-    const ca = p.categoryOf(a);
-    return ca && ca !== "Other" && ca === p.categoryOf(b) ? ca : "New collection";
-  }
-  const onGridDrop = (e: DragEvent) => {
-    if (!dragging) return;
-    e.preventDefault();
-    place(moveToTopLevel(layout, dragging), dragging);
-    endDrag();
+  const matches = (a: Artifact): boolean => {
+    if (filter === "all") return true;
+    if (filter === "pin") return Boolean(a.favorite);
+    if (filter === "bad") return attention(a);
+    if (filter === "live") return p.publishedIds.has(a.id);
+    return p.categoryOf(a.id) === filter.slice(4);
   };
 
-  // ── Menus ──────────────────────────────────────────────────────────────────
-  const menuFor = (a: Artifact, inFolder: string | null) => {
+  const menuFor = (a: Artifact) => {
     const items: HomeMenuItem[] = [
       { label: "Open", onSelect: () => p.onOpen(a) },
       { label: "Rename", onSelect: () => setRenamingId(a.id) },
-      { label: "Move to collection…", onSelect: () => undefined },
+      { label: a.favorite ? "Remove from Favorites" : "Add to Favorites", onSelect: () => p.onToggleFavorite(a.id) },
     ];
-    if (inFolder) {
-      items.push({ label: "Take out of collection", onSelect: () => place(moveToTopLevel(layout, a.id), a.id) });
-    }
-    items.push({ label: a.favorite ? "Remove from Favorites" : "Add to Favorites", onSelect: () => p.onToggleFavorite(a.id) });
     if (attention(a)) items.push({ label: "Fix with Pen", onSelect: () => p.onFix(a) });
     if (p.showCopyAction) items.push({ label: "Copy to workspace…", onSelect: () => p.onCopy(a) });
     items.push({
-      label: hasDemo(a.id) ? "Make a new preview video" : "Make preview video",
+      label: demoIds.has(a.id) ? "Make a new preview video" : "Make preview video",
       onSelect: () => void startDemoGeneration(a.id).catch(() => undefined),
     });
     items.push({ label: "—", onSelect: () => undefined });
     items.push({ label: "Archive", onSelect: () => p.onSetStatus(a.id, "archived") });
     items.push({ label: "Delete app", danger: true, onSelect: () => p.onDelete(a.id) });
-    const current = inFolder ?? folderOfApp(a.id);
-    return (
-      <HomeMenu
-        items={items}
-        moveTargets={folders.filter((f) => f.id !== current)}
-        onMove={(fid) => place(moveIntoFolder(layout, a.id, fid), a.id)}
-      />
-    );
+    return <HomeMenu items={items} moveTargets={[]} onMove={() => undefined} />;
   };
 
-  const status = (a: Artifact) => homeStatus(a, p.health[a.id], p.publishedIds.has(a.id));
-  const appTile = (a: Artifact) => {
-    const fresh = isNew(a.id);
-    const moveTo = fresh ? fileTargetFor(layout, a.id, p.categoryOf) : null;
-    return (
-      <AppTile
-        key={a.id}
-        app={a}
-        isNew={fresh}
-        status={status(a)}
-        meta={`${a.lastOpenedAt ? "Opened" : "Updated"} ${relativeWhen(lastSeen(a))}`}
-        moveTo={moveTo}
-        share={p.shareById[a.id]}
-        dnd={dnd}
-        renaming={renamingId === a.id}
-        onOpen={() => p.onOpen(a)}
-        onMove={() => {
-          if (!moveTo) return;
-          const next = fileIntoCategory(layout, a.id, moveTo, p.categoryOf);
-          if (next) place(next, a.id);
-        }}
-        onRename={(t) => p.onRename(a.id, t)}
-        onRenameDone={() => setRenamingId(null)}
-        menu={menuFor(a, null)}
-      />
-    );
-  };
-  const collection = (id: string, name: string, apps: Artifact[], auto: HomeIconName | null) =>
+  const row = (a: Artifact) => (
+    <AppRow
+      key={a.id}
+      app={a}
+      status={homeStatus(a, p.health[a.id], p.publishedIds.has(a.id))}
+      meta={`${a.lastOpenedAt ? "Opened" : "Updated"} ${relativeWhen(lastSeen(a))}`}
+      share={p.shareById[a.id]}
+      renaming={renamingId === a.id}
+      onOpen={() => p.onOpen(a)}
+      onRename={(t) => p.onRename(a.id, t)}
+      onRenameDone={() => setRenamingId(null)}
+      menu={menuFor(a)}
+    />
+  );
+  const section = (title: string, apps: Artifact[], count?: number) =>
     apps.length === 0 ? null : (
-      <CollectionTile
-        key={id}
-        id={id}
-        name={name}
-        icon={auto ?? "layers"}
-        apps={apps}
-        auto={auto !== null}
-        dnd={dnd}
-        attention={attention}
-        shareById={p.shareById}
-        renamingId={renamingId}
-        onOpenApp={p.onOpen}
-        onOpenCollection={() => setOpenFolder({ id, fresh: false })}
-        onRename={(a, t) => p.onRename(a.id, t)}
-        onRenameDone={() => setRenamingId(null)}
-        menuFor={menuFor}
-      />
+      <section className="ah-sec" aria-label={title}>
+        <h2 className="ah-sec__h">
+          {title}
+          {count ? <em>{count}</em> : null}
+        </h2>
+        <div className="ah-rows">{apps.map(row)}</div>
+      </section>
     );
 
-  // ── Status pills (replace the two banners) ─────────────────────────────────
+  const shown = active.filter(matches);
+  const byRecent = [...shown].sort((x, y) => lastSeen(y).localeCompare(lastSeen(x)));
+  const recent = filter === "all" && shown.length > RECENT + 2 ? byRecent.slice(0, RECENT) : [];
+  const rest = shown.filter((a) => !recent.includes(a)).sort(byName);
+
   const bad = active.filter(attention).length;
-  const pills = (
-    <div className="ah-pills">
-      {bad > 0 ? (
-        <button type="button" className="ah-pill ah-pill--bad" onClick={() => p.onSelectSection("attention")}>
-          <i />
-          {bad} need{bad === 1 ? "s" : ""} attention
-        </button>
-      ) : null}
-      {p.duplicateExtraCount > 0 ? (
-        <button type="button" className="ah-pill" onClick={p.onStartCleanup}>
-          <HomeIcon name="layers" size={13} />
-          {p.duplicateExtraCount} duplicates
-        </button>
-      ) : null}
-    </div>
+  const pinned = active.filter((a) => a.favorite).length;
+  const chip = (f: Filter, label: React.ReactNode, cls = "") => (
+    <button type="button" key={f} className={`ah-chip${filter === f ? " is-on" : ""} ${cls}`} onClick={() => setFilter(f)}>
+      {label}
+    </button>
   );
 
-  const setView = (m: "grid" | "az") => {
-    setMode(m);
-    try {
-      localStorage.setItem(`${p.storageKey}:mode`, m);
-    } catch {
-      /* noop */
-    }
-  };
-
-  const sheet = (() => {
-    if (!openFolder) return null;
-    const smart = SMART.find((s) => s.id === openFolder.id);
-    const f = layout.folders[openFolder.id];
-    if (!smart && !f) return null;
-    const apps = smart ? smartApps(smart.id) : f!.ids.map((x) => byId.get(x)).filter((a): a is Artifact => !!a);
-    return (
-      <HomeCollectionSheet
-        name={smart ? smart.name : f!.name}
-        readOnly={Boolean(smart)}
-        apps={apps}
-        autoFocusName={openFolder.fresh}
-        dnd={{
-          ...dnd,
-          onDrop: (id, e) => {
-            if (smart) return endDrag();
-            dnd.onDrop(id, e);
-          },
-          onDragOver: (id, e) => (smart ? undefined : dnd.onDragOver(id, e, false)),
-        }}
-        attention={attention}
-        renamingId={renamingId}
-        onRenameFolder={(n) => commit(renameFolder(layout, openFolder.id, n))}
-        onUngroup={() => {
-          commit(ungroupFolder(layout, openFolder.id));
-          setOpenFolder(null);
-        }}
-        onDropOut={() => {
-          if (smart || !dragging) return endDrag();
-          place(moveToTopLevel(layout, dragging), dragging);
-          endDrag();
-        }}
-        onClose={() => setOpenFolder(null)}
-        onOpenApp={(a) => {
-          setOpenFolder(null);
-          p.onOpen(a);
-        }}
-        onRenameApp={(a, t) => p.onRename(a.id, t)}
-        onRenameDone={() => setRenamingId(null)}
-        menuFor={(a) => menuFor(a, smart ? null : openFolder.id)}
-      />
-    );
-  })();
-
-  // Untitled (recovered) apps go last, the rest A–Z.
-  const byName = (a: Artifact, b: Artifact) =>
-    Number(isIdLikeTitle(a.title)) - Number(isIdLikeTitle(b.title)) ||
-    a.title.localeCompare(b.title, undefined, { sensitivity: "base" });
-
   return (
-    <div className="ah">
+    <div className="ah ah--rows">
       <div className="ah-head">
         <h1 className="ah-title">My apps</h1>
-        {pills}
-        <div className="ah-seg" role="tablist" aria-label="Arrange">
-          <button type="button" role="tab" aria-selected={mode === "grid"} className={mode === "grid" ? "is-on" : ""} onClick={() => setView("grid")}>
-            Arranged
+        {p.duplicateExtraCount > 0 ? (
+          <button type="button" className="ah-quiet" onClick={p.onStartCleanup}>
+            <HomeIcon name="layers" size={13} />
+            Clean up {p.duplicateExtraCount} duplicate{p.duplicateExtraCount === 1 ? "" : "s"}
           </button>
-          <button type="button" role="tab" aria-selected={mode === "az"} className={mode === "az" ? "is-on" : ""} onClick={() => setView("az")}>
-            A–Z
-          </button>
-        </div>
+        ) : null}
       </div>
 
-      {mode === "az" ? (
-        <div className="ah-grid">{[...active].sort(byName).map(appTile)}</div>
-      ) : (
-        <div
-          className="ah-grid"
-          onDragOver={(e) => dragging && e.preventDefault()}
-          onDrop={(e) => e.target === e.currentTarget && onGridDrop(e)}
-        >
-          {added.map((id) => byId.get(id)).filter((a): a is Artifact => !!a).map(appTile)}
-          {SMART.map((s) => collection(s.id, s.name, smartApps(s.id), s.icon))}
-          {p.showTeam && p.teamNamespaceId ? (
-            <TeamAppsCollection
-              namespaceId={p.teamNamespaceId}
-              namespaceName={p.teamName ?? null}
-              onSeeAll={() => p.onSelectSection("team")}
-            />
-          ) : null}
-          {layout.order.map((id) => {
-            if (added.includes(id)) return null;
-            const f = layout.folders[id];
-            if (f) {
-              const apps = f.ids.map((x) => byId.get(x)).filter((a): a is Artifact => !!a);
-              return collection(id, f.name, apps, null);
-            }
-            const a = byId.get(id);
-            return a ? appTile(a) : null;
-          })}
-        </div>
-      )}
+      <div className="ah-chips" role="toolbar" aria-label="Filter apps">
+        {chip("all", "All")}
+        {pinned ? chip("pin", <><HomeIcon name="star" size={13} />Favorites</>) : null}
+        {bad ? chip("bad", <><i className="ah-chip__dot" />Needs attention <em>{bad}</em></>, "ah-chip--bad") : null}
+        {cats.length ? <span className="ah-chips__sep" /> : null}
+        {cats.map((c) => chip(`cat:${c}`, c))}
+        {p.publishedIds.size ? <span className="ah-chips__sep" /> : null}
+        {p.publishedIds.size ? chip("live", <><HomeIcon name="globe" size={13} />Live</>) : null}
+      </div>
+
+      {shown.length === 0 ? <p className="ah-sec__none">Nothing here.</p> : null}
+      {section("Recent", recent)}
+      {section(recent.length ? "All apps" : filter === "all" ? "All apps" : "Apps", rest, recent.length ? rest.length : undefined)}
+      {p.showTeam && p.teamNamespaceId && filter === "all" ? (
+        <TeamAppsCollection namespaceId={p.teamNamespaceId} namespaceName={p.teamName ?? null} />
+      ) : null}
 
       <footer className="ah-foot">
         <div className="ah-foot__links">
@@ -392,20 +172,15 @@ export function AppsHome(p: AppsHomeProps) {
             <HomeIcon name="bolt" size={14} />
             Automations
           </button>
-          <button type="button" onClick={() => p.onSelectSection("drafts")}>
-            <HomeIcon name="pencil" size={14} />
-            Drafts
-          </button>
         </div>
         <div className="ah-foot__doors">
           <span>Need another app?</span>
           <button type="button" onClick={() => p.onSelectSection("community")}>
             <HomeIcon name="globe" size={14} />
-            Community apps
+            Discover
           </button>
         </div>
       </footer>
-      {sheet}
     </div>
   );
 }
