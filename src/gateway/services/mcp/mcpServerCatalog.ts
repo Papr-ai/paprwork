@@ -40,7 +40,7 @@ export interface McpServerDefinition {
 }
 
 /** Papr's Google OAuth web client (project papr-connectors). Public; the secret lives on the memory server. */
-const GOOGLE_DRIVE_CLIENT_ID = process.env.PAPR_GOOGLEDRIVE_CLIENT_ID || undefined;
+const GOOGLE_DRIVE_CLIENT_ID = process.env.PAPR_GOOGLEDRIVE_CLIENT_ID || "650055379473-7j2rg39vgc3dusu9fuoich9msajc893d.apps.googleusercontent.com";
 
 export const BUILTIN_MCP_SERVERS: readonly McpServerDefinition[] = [
   // One-click: dynamic client registration accepted a loopback redirect (probed Oct 2026).
