@@ -1,210 +1,33 @@
-/**
- * DocumentsView Styles - Wabi-inspired minimal design with Liquid Glass (mirrors AppsView)
- */
+/* Documents — same launcher as My apps (cards/chips/sections come from Apps/AppsHome.css). */
+.documents-view { height: 100%; width: 100%; overflow-y: auto; background: transparent; }
+.dv { padding: 32px 32px 48px; }
 
-.documents-view {
-  display: flex;
-  flex-direction: column;
-  height: 100%;
-  width: 100%;
-  background: transparent;
-  overflow: hidden;
+.dv-search { display: inline-flex; align-items: center; gap: 7px; height: 32px; padding: 0 11px; border-radius: 16px;
+  width: 240px; color: var(--text-secondary); background: color-mix(in srgb, var(--text-primary) 6%, transparent); }
+.dv-search:focus-within { box-shadow: 0 0 0 2px color-mix(in srgb, var(--ah-blue) 40%, transparent); }
+.dv-search input { flex: 1; min-width: 0; border: 0; outline: 0; background: none; font: inherit; font-size: 13px; color: var(--text-primary); }
+.dv-search input::placeholder { color: var(--text-tertiary, var(--text-secondary)); }
+
+.dv-new { display: inline-flex; align-items: center; gap: 6px; height: 32px; padding: 0 14px; border: 0; border-radius: 16px;
+  cursor: pointer; font: inherit; font-size: 13px; font-weight: 600; color: #fff; background: var(--ah-blue); }
+.dv-new:hover { filter: brightness(1.08); }
+
+.dv-n { font-style: normal; font-size: 11.5px; font-weight: 600; opacity: 0.7; }
+
+/* Document icon in the same 48px slot as an app droplet. */
+.dv-ic { display: grid; place-items: center; width: 48px; height: 48px; border-radius: 13px;
+  color: var(--ah-blue); background: color-mix(in srgb, var(--ah-blue) 9%, transparent); }
+
+.dv-rename { flex: 1; min-width: 0; padding: 0 4px; margin: -1px -4px; border: 0; border-radius: 6px; outline: 0;
+  font: inherit; font-size: 15px; font-weight: 600; color: var(--text-primary);
+  background: var(--ah-card); box-shadow: 0 0 0 2px var(--ah-blue); }
+
+.dv-empty { display: flex; flex-direction: column; align-items: center; gap: 8px; padding: 72px 16px; text-align: center; }
+.dv-empty__t { margin: 0; font-size: 16px; font-weight: 650; color: var(--text-primary); }
+.dv-empty__s { margin: 0 0 8px; max-width: 360px; font-size: 13.5px; line-height: 1.45; color: var(--text-secondary); }
+
+@media (max-width: 760px) {
+  .dv { padding: 20px 16px 40px; }
+  .dv .ah-head { flex-wrap: wrap; }
+  .dv-search { width: 100%; order: 3; }
 }
-
-/* Header */
-.documents-view__header {
-  padding: 24px 32px 0;
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  gap: 16px;
-}
-
-.documents-view__title {
-  font-size: 32px;
-  font-weight: 700;
-  color: var(--text-primary);
-  margin: 0;
-  letter-spacing: -0.02em;
-}
-
-.documents-view__header-actions {
-  display: flex;
-  align-items: center;
-  gap: 8px;
-}
-
-.documents-view__search {
-  width: 220px;
-  padding: 8px 14px;
-  background: var(--glass-bg);
-  border: 1px solid var(--glass-border, var(--border));
-  border-radius: 10px;
-  color: var(--text-primary);
-  font-size: 14px;
-  font-family: var(--font-body);
-  transition: all 160ms var(--ease, cubic-bezier(.2,.8,.2,1));
-}
-
-.documents-view__search:focus {
-  outline: none;
-  border-color: var(--accent);
-  box-shadow: 0 0 0 3px rgba(var(--accent-rgb, 0,113,227), 0.12);
-  width: 280px;
-}
-
-.documents-view__search::placeholder {
-  color: var(--text-tertiary);
-}
-
-/* Create bar */
-.documents-view__create {
-  display: flex;
-  align-items: center;
-  gap: 8px;
-  padding: 16px 32px;
-}
-
-.documents-view__create-input {
-  flex: 1;
-  max-width: 320px;
-  padding: 10px 16px;
-  background: var(--glass-bg);
-  border: 1px solid var(--glass-border, var(--border));
-  border-radius: 12px;
-  color: var(--text-primary);
-  font-size: 15px;
-  font-family: var(--font-body);
-  transition: all 160ms var(--ease, cubic-bezier(.2,.8,.2,1));
-}
-
-.documents-view__create-input:focus {
-  outline: none;
-  border-color: var(--accent);
-  box-shadow: 0 0 0 3px rgba(var(--accent-rgb, 0,113,227), 0.12);
-}
-
-.documents-view__create-input::placeholder {
-  color: var(--text-tertiary);
-}
-
-.documents-view__create-btn {
-  height: 40px;
-  padding: 0 20px;
-  background: linear-gradient(135deg, var(--accent, #0071E3), var(--accent-color, #4f46e5));
-  border: none;
-  border-radius: 12px;
-  color: white;
-  font-size: 14px;
-  font-weight: 600;
-  cursor: pointer;
-  transition: transform 160ms var(--ease, cubic-bezier(.2,.8,.2,1)),
-              box-shadow 160ms var(--ease, cubic-bezier(.2,.8,.2,1)),
-              opacity 160ms ease;
-  white-space: nowrap;
-}
-
-.documents-view__create-btn:hover:not(:disabled) {
-  transform: translateY(-1px);
-  box-shadow: 0 4px 16px rgba(0, 113, 227, 0.25);
-}
-
-.documents-view__create-btn:disabled {
-  opacity: 0.4;
-  cursor: default;
-}
-
-/* Sort controls */
-.documents-view__controls {
-  padding: 0 32px 8px;
-}
-
-.documents-view__sort {
-  display: flex;
-  gap: 4px;
-}
-
-.documents-view__sort-btn {
-  padding: 6px 14px;
-  background: transparent;
-  border: none;
-  border-radius: 8px;
-  color: var(--text-tertiary);
-  font-size: 13px;
-  font-weight: 500;
-  cursor: pointer;
-  transition: all 150ms ease;
-}
-
-.documents-view__sort-btn:hover {
-  color: var(--text-secondary);
-  background: var(--hover);
-}
-
-.documents-view__sort-btn--active {
-  color: var(--text-primary);
-  background: var(--glass-bg);
-}
-
-/* Scrollable content */
-.documents-view__content {
-  flex: 1;
-  overflow-y: auto;
-  padding: 8px 32px 32px;
-}
-
-/* Section labels */
-.documents-view__section-label {
-  display: block;
-  font-size: 13px;
-  font-weight: 600;
-  color: var(--text-tertiary);
-  text-transform: uppercase;
-  letter-spacing: 0.05em;
-  margin-bottom: 12px;
-}
-
-/* Featured section */
-.documents-view__featured {
-  margin-bottom: 32px;
-}
-
-/* Document grid section */
-.documents-view__section {
-  margin-bottom: 32px;
-}
-
-.documents-view__grid {
-  display: grid;
-  grid-template-columns: repeat(auto-fill, minmax(240px, 1fr));
-  gap: 20px;
-}
-
-/* Empty state */
-.documents-view__empty {
-  display: flex;
-  flex-direction: column;
-  align-items: center;
-  justify-content: center;
-  height: 100%;
-  min-height: 300px;
-  color: var(--text-secondary);
-  gap: 12px;
-}
-
-.documents-view__empty-title {
-  font-size: 18px;
-  font-weight: 600;
-  color: var(--text-secondary);
-  margin: 0;
-}
-
-.documents-view__empty-subtitle {
-  font-size: 14px;
-  color: var(--text-tertiary);
-  margin: 0;
-  max-width: 300px;
-  text-align: center;
-  line-height: 1.5;
-}
-
