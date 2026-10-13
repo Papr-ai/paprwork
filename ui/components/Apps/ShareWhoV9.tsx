@@ -1,9 +1,11 @@
 /**
- * v9 Share sheet — "Who has access" (Share Bar Redesign prototype, v9).
+ * v9 Share sheet — "People with access" + "Public access" (Share Bar Redesign prototype, v9).
  *
- * One row per audience; its role dropdown is the switch ("No access" = off).
- * Specific people get a role each. Link and Community add a sign-in toggle.
- * Admins edit; everyone else sees the same rows read-only with their role.
+ * People: the owner first, then "Everyone in <workspace>" (a gray + until given a
+ * role), then named people. Public: a gray + until on; then the line under the
+ * title picks Anyone with the link / Listed in Community, and the role sits on the
+ * right. Every role menu ends with "Remove access" — no × buttons.
+ * Admins edit; everyone else sees the same rows read-only.
  */
 
 import React, { useState } from "react";
@@ -15,21 +17,24 @@ import {
   removeGrant,
   roleOptions,
   setGrantRole,
-  type AccessAudience,
   type AppAccess,
   type AppRole,
 } from "../../utils/appRolesModel";
 import { shareAudienceGlyphPath } from "../../utils/shareAudienceGlyphs";
-import { peopleCount, signInChoice, type AudienceKey, type AudiencesDraft } from "../../utils/shareAudiencesModel";
+import {
+  publicMode,
+  publicRole,
+  setPublicMode,
+  setPublicRole,
+  signInChoice,
+  type AudiencesDraft,
+  type PublicMode,
+} from "../../utils/shareAudiencesModel";
 import type { ShareAudience } from "../../utils/shareAudienceModel";
 import { SharePeoplePicker, type SharePeopleMember } from "./SharePeoplePicker";
+import { ShareRoleMenu } from "./ShareRoleMenu";
 
-const ROWS: { key: AudienceKey | "people"; glyph: ShareAudience; label: string; sub: string }[] = [
-  { key: "workspace", glyph: "team", label: "Your workspace", sub: "Everyone in this workspace" },
-  { key: "people", glyph: "people", label: "Specific people", sub: "Pick a role for each person" },
-  { key: "link", glyph: "link", label: "Anyone with the link", sub: "No Papr account needed unless you ask" },
-  { key: "community", glyph: "public", label: "Community", sub: "Listed for anyone on Papr to find" },
-];
+const opts = (a: "workspace" | "person" | "link") => roleOptions(a).filter((r) => r !== "none");
 
 function Glyph({ audience }: { audience: ShareAudience }) {
   return (
@@ -40,18 +45,9 @@ function Glyph({ audience }: { audience: ShareAudience }) {
   );
 }
 
-function RolePill({ value, audience, off, label, disabled, onChange }: {
-  value: AppRole; audience: AccessAudience; off: boolean; label: string;
-  disabled?: boolean; onChange: (r: AppRole) => void;
-}) {
-  if (disabled) return <span className="ss9-role">{ROLE_COPY[value].label}</span>;
-  const opts = roleOptions(audience).filter((r) => r !== "none");
+function Plus({ label, onClick }: { label: string; onClick: () => void }) {
   return (
-    <select className={`ss9-pill${rank(value) > 0 ? " ss9-pill--on" : ""}`} value={value}
-      aria-label={`${label} access`} onChange={(e) => onChange(e.target.value as AppRole)}>
-      {off ? <option value="none">No access</option> : null}
-      {opts.map((r) => <option key={r} value={r}>{ROLE_COPY[r].label}</option>)}
-    </select>
+    <button type="button" className="ss9-plus" aria-label={`Give ${label} access`} title="Give access" onClick={onClick}>+</button>
   );
 }
 
@@ -71,53 +67,47 @@ export function ShareWhoV9({ access, draft, onChange, members, membersLoading, w
   const [adding, setAdding] = useState(false);
   const pub = access.publisherUserId;
   const others = draft.grants.filter((g) => g.userId !== pub);
-  const n = peopleCount(draft, pub);
   const set = (p: Partial<AudiencesDraft>) => onChange({ ...draft, ...p });
   const nameOf = (id?: string, email?: string) => {
     const m = members.find((x) => x.userId === id);
     return { name: m?.displayName || m?.email || email || id || "", email: m?.email || email || "" };
   };
+  const owner = nameOf(pub);
+  const ws = draft.workspace;
+  const wsOn = rank(ws) > 0;
+  const team = workspaceName ? `Everyone in ${workspaceName}` : "Everyone in your workspace";
+  const mode = publicMode(draft);
+  const pubOn = mode !== "off";
+  const avatar = (name: string) => <span className="ss9-av">{name.slice(0, 2).toUpperCase()}</span>;
 
-  const people = (
-    <div className="ss9-sub">
-      {others.map((g) => {
-        const who = nameOf(g.userId, g.email);
-        return (
-          <div key={grantKey(g)} className="ss9-row ss9-row--person">
-            <span className="ss9-av">{who.name.slice(0, 2).toUpperCase()}</span>
-            <span className="ss9-who"><b>{who.name}</b>{who.email && who.email !== who.name ? <small>{who.email}</small> : null}</span>
-            <RolePill value={g.role} audience="person" off={false} label={who.name} disabled={ro}
-              onChange={(r) => set({ grants: setGrantRole(draft.grants, grantKey(g), r) })} />
-            {ro ? null : (
-              <button type="button" className="ss9-x" aria-label={`Remove ${who.name}`}
-                onClick={() => set({ grants: removeGrant(draft.grants, grantKey(g)) })}>×</button>
-            )}
-          </div>
-        );
-      })}
-      {!ro && adding ? (
-        <SharePeoplePicker
-          members={members}
-          value={others.filter((g) => g.userId).map((g) => g.userId as string)}
-          onChange={(ids) => {
-            let grants = draft.grants.filter((g) => !g.userId || g.userId === pub || ids.includes(g.userId));
-            for (const id of ids) grants = addGrant(grants, { userId: id }, "viewer");
-            set({ grants });
-          }}
-          allowedEmails={others.filter((g) => !g.userId && g.email).map((g) => g.email as string)}
-          onEmailsChange={(emails) => {
-            let grants = draft.grants.filter((g) => g.userId || emails.includes(g.email ?? ""));
-            for (const email of emails) grants = addGrant(grants, { email }, "viewer");
-            set({ grants });
-          }}
-          loading={membersLoading}
-          currentUserId={pub}
-        />
-      ) : null}
-      {!ro && !adding && n > 0 ? (
-        <button type="button" className="ss9-add" onClick={() => setAdding(true)}>+ Add by name or email</button>
-      ) : null}
-    </div>
+  const picker = !ro && adding ? (
+    <SharePeoplePicker
+      members={members}
+      value={others.filter((g) => g.userId).map((g) => g.userId as string)}
+      onChange={(ids) => {
+        let grants = draft.grants.filter((g) => !g.userId || g.userId === pub || ids.includes(g.userId));
+        for (const id of ids) grants = addGrant(grants, { userId: id }, "viewer");
+        set({ grants });
+      }}
+      allowedEmails={others.filter((g) => !g.userId && g.email).map((g) => g.email as string)}
+      onEmailsChange={(emails) => {
+        let grants = draft.grants.filter((g) => g.userId || emails.includes(g.email ?? ""));
+        for (const email of emails) grants = addGrant(grants, { email }, "viewer");
+        set({ grants });
+      }}
+      loading={membersLoading}
+      currentUserId={pub}
+    />
+  ) : null;
+
+  const where = !pubOn ? <small>No access</small> : ro ? (
+    <small>{mode === "community" ? "Listed in Community" : "Anyone with the link"}</small>
+  ) : (
+    <select className="ss9-where" aria-label="Who can open it" value={mode}
+      onChange={(e) => onChange(setPublicMode(draft, e.target.value as PublicMode))}>
+      <option value="link">Anyone with the link</option>
+      <option value="community">Listed in Community</option>
+    </select>
   );
 
   return (
@@ -126,46 +116,53 @@ export function ShareWhoV9({ access, draft, onChange, members, membersLoading, w
         <p className="ss6-note">You're a {ROLE_COPY[access.callerRole].label}. Only Admins can change access.</p>
       ) : null}
       {dataCheck}
-      {ROWS.map((row) => {
-        if (row.key === "people") {
-          const open = n > 0 || adding;
-          return (
-            <div key="people" className={`ss9-aud${open ? " ss9-aud--on" : ""}`}>
-              <div className="ss9-row">
-                <span className="ss9-ico"><Glyph audience={row.glyph} /></span>
-                <span className="ss9-who"><b>{row.label}</b><small>{row.sub}</small></span>
-                {ro ? (
-                  <span className="ss9-role">{n ? `${n} ${n === 1 ? "person" : "people"}` : "None"}</span>
-                ) : (
-                  <button type="button" className={`ss9-pill${n ? " ss9-pill--on" : ""}`} onClick={() => setAdding(true)}>
-                    {n ? `${n} ${n === 1 ? "person" : "people"}` : "+ Add"}
-                  </button>
-                )}
-              </div>
-              {open ? people : null}
-            </div>
-          );
-        }
-        const k = row.key;
-        const role = draft[k];
-        const on = rank(role) > 0;
-        const sub = on ? ROLE_COPY[role].sub : k === "workspace" && workspaceName ? `Everyone in ${workspaceName}` : row.sub;
+
+      <h6 className="ss9-h">People with access</h6>
+      <div className="ss9-row">
+        {avatar(owner.name || "Owner")}
+        <span className="ss9-who"><b>{owner.name || "Owner"}</b><small>Owner</small></span>
+        <span className="ss9-role">Admin</span>
+      </div>
+      <div className={`ss9-row${wsOn ? "" : " ss9-row--off"}`}>
+        <span className="ss9-ico"><Glyph audience="team" /></span>
+        <span className="ss9-who"><b>{team}</b><small>{!wsOn ? "No access" : members.length ? `${members.length} members` : ROLE_COPY[ws].sub}</small></span>
+        {wsOn ? (
+          <ShareRoleMenu value={ws} options={opts("workspace")} label={team} readOnly={ro}
+            onChange={(r) => set({ workspace: r })} onRemove={() => set({ workspace: "none" })} />
+        ) : ro ? <span className="ss9-role">No access</span> : <Plus label={team} onClick={() => set({ workspace: "viewer" })} />}
+      </div>
+      {others.map((g) => {
+        const who = nameOf(g.userId, g.email);
         return (
-          <div key={k} className={`ss9-aud${on ? " ss9-aud--on" : ""}`}>
-            <div className={`ss9-row${on ? "" : " ss9-row--off"}`}>
-              <span className="ss9-ico"><Glyph audience={row.glyph} /></span>
-              <span className="ss9-who"><b>{row.label}</b><small>{sub}</small></span>
-              <RolePill value={role} audience={k} off label={row.label} disabled={ro}
-                onChange={(r) => set({ [k]: r } as Partial<AudiencesDraft>)} />
-            </div>
+          <div key={grantKey(g)} className="ss9-row">
+            {avatar(who.name)}
+            <span className="ss9-who"><b>{who.name}</b>{who.email && who.email !== who.name ? <small>{who.email}</small> : null}</span>
+            <ShareRoleMenu value={g.role} options={opts("person")} label={who.name} readOnly={ro}
+              onChange={(r: AppRole) => set({ grants: setGrantRole(draft.grants, grantKey(g), r) })}
+              onRemove={() => set({ grants: removeGrant(draft.grants, grantKey(g)) })} />
           </div>
         );
       })}
+      {picker}
+      {!ro && !adding ? (
+        <button type="button" className="ss9-add" onClick={() => setAdding(true)}>+ Add people</button>
+      ) : null}
+
+      <h6 className="ss9-h">Public access</h6>
+      <div className={`ss9-row${pubOn ? "" : " ss9-row--off"}`}>
+        <span className="ss9-ico"><Glyph audience={mode === "community" ? "public" : "link"} /></span>
+        <span className="ss9-who"><b>Public access</b>{where}</span>
+        {pubOn ? (
+          <ShareRoleMenu value={publicRole(draft)} label="Public"
+            options={mode === "community" ? ["contributor"] : opts("link")} readOnly={ro}
+            onChange={(r) => onChange(setPublicRole(draft, r))} onRemove={() => onChange(setPublicMode(draft, "off"))} />
+        ) : ro ? <span className="ss9-role">No access</span> : <Plus label="public" onClick={() => onChange(setPublicMode(draft, "link"))} />}
+      </div>
       {signInChoice(draft) ? (
         <button type="button" role="switch" aria-checked={draft.requireSignIn} disabled={ro}
           className={`ss6-tog ss9-sign${draft.requireSignIn ? " ss6-tog--on" : ""}`}
           onClick={() => set({ requireSignIn: !draft.requireSignIn })}>
-          <span className="ss6-opt-text"><b>Require Papr sign-in</b><em>For the link and Community. Know who's using it.</em></span>
+          <span className="ss6-opt-text"><b>Require Papr sign-in</b><em>Know who's using it.</em></span>
           <span className="ss6-switch" aria-hidden><i /></span>
         </button>
       ) : null}

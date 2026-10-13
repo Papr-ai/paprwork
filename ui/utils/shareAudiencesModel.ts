@@ -106,3 +106,30 @@ export function widestAudience(d: AudiencesDraft, publisherUserId: string): Shar
 export function signInChoice(d: AudiencesDraft): boolean {
   return rank(d.link) > 0 || rank(d.community) > 0;
 }
+
+/**
+ * "Public access" is one row: off, Anyone with the link, or Listed in Community.
+ * Community lists only installable apps, so it is always Contributor.
+ */
+export type PublicMode = "off" | "link" | "community";
+
+export function publicMode(d: Pick<AudiencesDraft, "link" | "community">): PublicMode {
+  if (rank(d.community) > 0) return "community";
+  return rank(d.link) > 0 ? "link" : "off";
+}
+
+export function publicRole(d: Pick<AudiencesDraft, "link" | "community">): AppRole {
+  const m = publicMode(d);
+  return m === "community" ? "contributor" : m === "link" ? d.link : "none";
+}
+
+/** Switch the public row; the link keeps its role when you come back to it. */
+export function setPublicMode(d: AudiencesDraft, mode: PublicMode): AudiencesDraft {
+  if (mode === "off") return { ...d, link: "none", community: "none" };
+  if (mode === "community") return { ...d, link: "none", community: "contributor" };
+  return { ...d, community: "none", link: rank(d.link) > 0 ? d.link : "viewer" };
+}
+
+export function setPublicRole(d: AudiencesDraft, role: AppRole): AudiencesDraft {
+  return publicMode(d) === "community" ? d : { ...d, link: role };
+}
