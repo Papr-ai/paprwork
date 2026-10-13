@@ -19,6 +19,7 @@ import { HomeIcon } from "./HomeIcon";
 import { AppRow } from "./HomeRows";
 import type { LibraryCardHandlers } from "./LibraryPane";
 import { rowLine } from "../../utils/homeStatus";
+import { readCommunityCatalogCache } from "../../utils/communityCatalogCache";
 import "./AppsHome.css";
 import { startDemoGeneration, useAppDemoIds } from "../../utils/appDemo";
 
@@ -52,6 +53,14 @@ type Filter = "all" | "pin" | "team" | "bad" | "live" | `cat:${string}`;
 
 export function AppsHome(p: AppsHomeProps) {
   const active = useMemo(() => p.apps.filter((a) => (a.status ?? "active") !== "archived"), [p.apps]);
+  // "by X" for apps installed from Team / Discover: publisher from the cached catalogs, keyed by source app id.
+  const authorBySource = useMemo(() => {
+    const m = new Map<string, string>();
+    const team = p.teamNamespaceId ? readCommunityCatalogCache("namespace", p.teamNamespaceId, { allowStale: true }) : null;
+    const world = readCommunityCatalogCache("global", null, { allowStale: true });
+    for (const c of [world, team]) for (const e of c?.entries ?? []) if (e.appId && e.author) m.set(e.appId, e.author);
+    return m;
+  }, [p.teamNamespaceId, p.apps]);
   const archivedCount = p.apps.length - active.length;
   const attention = useCallback((a: Artifact) => needsAttention(a, p.health[a.id]), [p.health]);
   const [filter, setFilter] = useState<Filter>("all");
@@ -97,7 +106,7 @@ export function AppsHome(p: AppsHomeProps) {
     <AppRow
       key={a.id}
       app={a}
-      line={rowLine(a, p.health[a.id], p.publishedIds.has(a.id))}
+      line={rowLine(a, p.health[a.id], p.publishedIds.has(a.id), a.cloudLineage ? authorBySource.get(a.cloudLineage.sourceAppId) : undefined)}
       share={p.shareById[a.id]}
       renaming={renamingId === a.id}
       onOpen={() => p.onOpen(a)}

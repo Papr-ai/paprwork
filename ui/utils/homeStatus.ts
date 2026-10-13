@@ -53,7 +53,8 @@ export interface RowLine {
   scheduled: boolean;
 }
 
-export function rowLine(a: Artifact, h: AppHealth | undefined, isPublished: boolean): RowLine {
+/** `by` = publisher of an app installed from Team / Discover (yours have none). */
+export function rowLine(a: Artifact, h: AppHealth | undefined, isPublished: boolean, by?: string): RowLine {
   const live = isPublished;
   const scheduled = Boolean(h?.scheduleLabel);
   const base = { live, scheduled, draft: false };
@@ -66,7 +67,7 @@ export function rowLine(a: Artifact, h: AppHealth | undefined, isPublished: bool
   return {
     ...base,
     draft: a.status === "draft" && !isPublished,
-    text: [when, `Edited ${shortAgo(a.updatedAt)}`].filter(Boolean).join(" · "),
+    text: [by ? `by ${by}` : "", when, `Edited ${shortAgo(a.updatedAt)}`].filter(Boolean).join(" · "),
     bad: false,
   };
 }
