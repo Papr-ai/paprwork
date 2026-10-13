@@ -739,7 +739,9 @@ async function createCreditsCheckoutUrl(
   const response = await fetch(`${PAPR_PLATFORM_URL}/api/v1/billing/credits-checkout`, {
     method: "POST",
     headers: { "Content-Type": "application/json", "X-Parse-Session-Token": sessionToken },
-    body: JSON.stringify(body),
+    // source=desktop: after paying, land on the public /billing/success page (the
+    // browser usually has no dashboard session, so the dashboard would bounce to Auth0).
+    body: JSON.stringify({ ...body, source: "desktop" }),
   });
   const data = (await response.json().catch(() => ({}))) as { url?: string; error?: string };
   if (!response.ok || !data.url) {
