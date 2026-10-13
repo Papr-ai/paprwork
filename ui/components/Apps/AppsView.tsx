@@ -495,8 +495,26 @@ export function AppsView() {
     [categorySnapshot.byKey],
   );
   const homeKey = `papr-apps-home:${papr.namespaceId ?? "local"}`;
+  // Team is a section of My apps: the tab is "on" while that section fills the view.
+  const [teamInView, setTeamInView] = useState(false);
+  useEffect(() => {
+    if (section !== "recent" || !showNamespaceTabs) {
+      setTeamInView(false);
+      return;
+    }
+    const check = () => {
+      const el = document.getElementById("ah-team");
+      setTeamInView(Boolean(el && el.getBoundingClientRect().top < window.innerHeight * 0.45));
+    };
+    document.addEventListener("scroll", check, true);
+    const t = setTimeout(check, 300);
+    return () => {
+      document.removeEventListener("scroll", check, true);
+      clearTimeout(t);
+    };
+  }, [section, showNamespaceTabs]);
   const area: "mine" | "team" | "community" =
-    section === "community" ? "community" : "mine";
+    section === "community" ? "community" : teamInView ? "team" : "mine";
   // One search box covers the library, the team and the community; typing
   // swaps whatever section is showing for a single results page.
   const searching = searchQuery.trim().length > 0;
@@ -537,8 +555,13 @@ export function AppsView() {
                 // Team is a section of My apps, not its own page: jump down to it.
                 if (id === "team") {
                   setSection("recent");
+                  setTeamInView(true);
                   setTimeout(() => document.getElementById("ah-team")?.scrollIntoView({ behavior: "smooth", block: "start" }), 80);
                   return;
+                }
+                if (id === "mine") {
+                  setTeamInView(false);
+                  document.querySelector(".ah")?.scrollIntoView({ behavior: "smooth", block: "start" });
                 }
                 setSection(id === "mine" ? "recent" : id);
               }}

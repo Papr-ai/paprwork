@@ -53,9 +53,13 @@ export function GetRow(p: {
   description?: string;
   by?: string;
   busy: boolean;
+  /** "Get" (blue) for apps you can install; "Open" (quiet) for ones you have or that only run on the web. */
+  action?: "Get" | "Open";
+  note?: string;
   onDetails: () => void;
   onGet: () => void;
 }) {
+  const action = p.action ?? "Get";
   return (
     <div className="ah-row ah-row--get">
       <button type="button" className="ah-row__main" onClick={p.onDetails}>
@@ -67,11 +71,18 @@ export function GetRow(p: {
             <span className="ah-row__name">{p.name}</span>
           </span>
           {p.description ? <span className="ah-row__d">{p.description}</span> : null}
-          {p.by ? <span className="ah-row__s">by {p.by}</span> : null}
+          {p.by || p.note ? (
+            <span className="ah-row__s">{[p.by ? `by ${p.by}` : "", p.note ?? ""].filter(Boolean).join(" · ")}</span>
+          ) : null}
         </span>
       </button>
-      <button type="button" className="ah-row__get" disabled={p.busy} onClick={p.onGet}>
-        {p.busy ? "Getting…" : "Get"}
+      <button
+        type="button"
+        className={`ah-row__get${action === "Open" ? " ah-row__get--quiet" : ""}`}
+        disabled={p.busy}
+        onClick={p.onGet}
+      >
+        {p.busy ? "Getting…" : action}
       </button>
     </div>
   );

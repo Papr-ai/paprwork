@@ -1,7 +1,7 @@
 /**
- * My apps → "From <team>": team-shared apps you don't have yet, as the last
- * section (the Team tab scrolls here). Get installs; the card opens details
- * (Get / Open web). Installed team apps are already in your list above.
+ * My apps → "From <team>": everything your team shares (not yours), A–Z, as the
+ * last section (the Team tab scrolls here). One button per card: Open (you have
+ * it), Get (installable), or Open (web-only). The card opens details.
  */
 import { useEffect, useMemo, useState } from "react";
 import { gateway } from "../../src/lib/gateway";
@@ -26,6 +26,13 @@ const clean = (raw?: string) =>
   raw?.trim().startsWith("<")
     ? raw.replace(/<script[\s\S]*?<\/script>/gi, "").replace(/on\w+\s*=/gi, "data-blocked=")
     : raw;
+
+/** Everything shared with the team that isn't yours: installable, already installed, or web-only. */
+export function teamSharedEntries(entries: CommunityCatalogEntry[]): CommunityCatalogEntry[] {
+  return entries
+    .filter((e) => e.source === "cloud" && isTeamSharedVisibility(e.visibility) && !e.isOwned)
+    .sort((a, b) => a.name.localeCompare(b.name, undefined, { sensitivity: "base" }));
+}
 
 /** Team-shared, installable, not yours, and not on this computer yet. */
 export function uninstalledTeamEntries(
@@ -76,20 +83,28 @@ export function TeamAppsCollection({
   const { createTab, switchToTab } = useTabs();
   const [open, setOpen] = useState<CommunityCatalogEntry | null>(null);
   const localIds = useMemo(() => new Set(artifacts.filter((a) => a.type === "app").map((a) => a.id)), [artifacts]);
-  const entries = useMemo(
-    () =>
-      uninstalledTeamEntries(catalog?.entries ?? [], (e) => {
-        if (e.appId && localIds.has(e.appId)) return true;
-        const local = flow.resolveLocalAppId(e);
-        return Boolean(local && localIds.has(local)) || !canInstallCloudCatalogEntry(e, null);
-      }),
-    [catalog, localIds, flow],
-  );
+  const entries = useMemo(() => teamSharedEntries(catalog?.entries ?? []), [catalog]);
+  /** Local copy of a team app (installed fork, or the publisher's app id on this computer). */
+  const localOf = (e: CommunityCatalogEntry): string | null => {
+    if (e.appId && localIds.has(e.appId)) return e.appId;
+    const local = flow.resolveLocalAppId(e);
+    return local && localIds.has(local) ? local : null;
+  };
+  /** What the one button does: Open your copy, Get it, or Open the web version. */
+  const actionOf = (e: CommunityCatalogEntry) => {
+    const local = localOf(e);
+    if (local) return { label: "Open" as const, note: "Installed", run: () => switchToTab(createTab("app", local, e.name)) };
+    if (canInstallCloudCatalogEntry(e, null)) {
+      return { label: "Get" as const, note: "", run: () => flow.startCloudInstall(e, { catalogScope: "namespace" }) };
+    }
+    if (resolveCatalogLiveWebUrl(e)) return { label: "Open" as const, note: "Web app", run: () => openWeb(e) };
+    return null;
+  };
   if (entries.length === 0) {
     return (
       <section className="ah-sec" id="ah-team">
         <h2 className="ah-sec__h">From {namespaceName?.trim() || "your team"}</h2>
-        <p className="ah-sec__none">You have every app your team shares.</p>
+        <p className="ah-sec__none">Nothing shared with your team yet.</p>
         {notice()}
       </section>
     );
@@ -131,18 +146,23 @@ export function TeamAppsCollection({
         From {team} <em>{entries.length}</em>
       </h2>
       <div className="ah-rows">
-        {entries.map((e) => (
-          <GetRow
-            key={e.catalogId}
-            name={e.name}
-            icon={clean(e.icon)}
-            description={e.description}
-            by={e.author}
-            busy={flow.installingId === e.catalogId}
-            onDetails={() => setOpen(e)}
-            onGet={() => flow.startCloudInstall(e, { catalogScope: "namespace" })}
-          />
-        ))}
+        {entries.map((e) => {
+          const act = actionOf(e);
+          return (
+            <GetRow
+              key={e.catalogId}
+              name={e.name}
+              icon={clean(e.icon)}
+              description={e.description}
+              by={e.author}
+              note={act?.note}
+              action={act?.label ?? "Open"}
+              busy={flow.installingId === e.catalogId || !act}
+              onDetails={() => setOpen(e)}
+              onGet={() => act?.run()}
+            />
+          );
+        })}
       </div>
       {open ? (
         <CatalogAppDetails
@@ -157,17 +177,19 @@ export function TeamAppsCollection({
                   Open web
                 </button>
               ) : null}
-              <button
-                type="button"
-                className="cat-btn cat-btn--lg cat-btn--solid"
-                disabled={flow.installingId === open.catalogId}
-                onClick={() => {
-                  flow.startCloudInstall(open, { catalogScope: "namespace" });
-                  setOpen(null);
-                }}
-              >
-                {flow.installingId === open.catalogId ? "Getting…" : "Get"}
-              </button>
+              {localOf(open) || canInstallCloudCatalogEntry(open, null) ? (
+                <button
+                  type="button"
+                  className="cat-btn cat-btn--lg cat-btn--solid"
+                  disabled={flow.installingId === open.catalogId}
+                  onClick={() => {
+                    actionOf(open)?.run();
+                    setOpen(null);
+                  }}
+                >
+                  {localOf(open) ? "Open" : flow.installingId === open.catalogId ? "Getting…" : "Get"}
+                </button>
+              ) : null}
             </>
           }
         />
