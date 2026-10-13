@@ -102,6 +102,12 @@ export interface AgentConfig {
    * the UI; the gateway falls back to the ladder's standard rung without it.
    */
   autoFallbackModelId?: string;
+  /**
+   * When model is `auto`: the models the user has enabled in the picker AND
+   * can reach with their current auth, on the provider Auto routes within.
+   * The router only picks from this set. Absent → the full provider ladder.
+   */
+  autoAllowedModels?: string[];
 }
 
 /**

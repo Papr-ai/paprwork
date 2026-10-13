@@ -113,3 +113,83 @@ describe("Auto in the picker and defaults", () => {
     expect(resolveAutoProvider(undefined)).toBe("anthropic");
   });
 });
+
+describe("Auto respects the user's enabled + reachable models", () => {
+  const status = (p: Partial<Record<"anthropic" | "openai" | "google" | "proxy", boolean>>) =>
+    ({
+      anthropic: { oauth: false, apiKey: Boolean(p.anthropic) },
+      openai: { oauth: Boolean(p.openai), apiKey: false },
+      google: { apiKey: Boolean(p.google) },
+      paprProxy: Boolean(p.proxy),
+    }) as any;
+
+  it("resolveAutoRung only picks from allowedModels, rounding up before down", () => {
+    // Only Sonnet enabled: every capability lands on Sonnet.
+    for (const cap of AUTO_CAPABILITIES) {
+      expect(
+        resolveAutoRung("anthropic", cap, "high", DEFAULT_AUTO_LADDERS, ["claude-sonnet-5-5"])?.model,
+      ).toBe("claude-sonnet-5-5");
+    }
+    // Opus off, basic needed: Haiku. Frontier needed, only Haiku+Sonnet: Sonnet (not Haiku).
+    const hs = ["claude-haiku-4-5", "claude-sonnet-5-5"];
+    expect(resolveAutoRung("anthropic", "frontier", "high", DEFAULT_AUTO_LADDERS, hs)?.model).toBe(
+      "claude-sonnet-5-5",
+    );
+    // Nothing on the ladder allowed → null, never a disabled model.
+    expect(resolveAutoRung("anthropic", "strong", "medium", DEFAULT_AUTO_LADDERS, ["gpt-5-6-sol"])).toBeNull();
+  });
+
+  it("OpenAI ladder routes to the GPT-5.6 / GPT-6 models users actually pin", () => {
+    const pinned = ["gpt-5-6-sol", "gpt-6-astra"];
+    expect(resolveAutoRung("openai", "basic", "low", DEFAULT_AUTO_LADDERS, pinned)?.model).toBe("gpt-5-6-sol");
+    expect(resolveAutoRung("openai", "frontier", "high", DEFAULT_AUTO_LADDERS, pinned)).toEqual({
+      model: "gpt-6-astra",
+      effort: "high",
+    });
+  });
+
+  it("ChatGPT-only user with default picker: Auto runs on OpenAI, never Claude", async () => {
+    const { buildAgentConfig } = await import("../ui/utils/buildAgentConfig.js");
+    const { getModelById } = await import("../ui/constants/models.js");
+    const { PICKER_DEFAULT_MODEL_IDS } = await import("../ui/constants/modelPicker.js");
+    const s = status({ openai: true });
+    const isModelAvailable = (m: any) => m.provider === "openai";
+    const config = buildAgentConfig({
+      model: getModelById("auto")!,
+      settings: {},
+      systemPrompt: "sp",
+      authStatus: s,
+      enabledModelIds: PICKER_DEFAULT_MODEL_IDS,
+      isModelAvailable,
+      autoFallbackModelId: "claude-sonnet-5-5", // stale Claude default must be dropped
+    });
+    expect(config.provider).toBe("openai");
+    expect(config.autoAllowedModels).toEqual(expect.arrayContaining(["gpt-5-6-sol", "gpt-6-astra"]));
+    expect(config.autoAllowedModels?.some((id) => id.startsWith("claude"))).toBe(false);
+    expect(config.autoFallbackModelId).toBeUndefined();
+  });
+
+  it("prefers a provider the user has enabled models on over ladder order", async () => {
+    const { resolveAutoModelPlan } = await import("../ui/utils/autoModelPlan.js");
+    // Has Claude key but turned every Claude model off; pins Gemini.
+    const plan = resolveAutoModelPlan({
+      status: status({ anthropic: true, google: true }),
+      enabledModelIds: ["gemini-3.8-flash", "gemini-3.1-pro-preview"],
+      isModelAvailable: () => true,
+      getModel: () => undefined,
+    });
+    expect(plan.provider).toBe("google");
+    expect(plan.allowedModels).toEqual(["gemini-3.8-flash", "gemini-3.1-pro-preview"]);
+  });
+
+  it("disabled models are excluded even when reachable", async () => {
+    const { resolveAutoModelPlan } = await import("../ui/utils/autoModelPlan.js");
+    const plan = resolveAutoModelPlan({
+      status: status({ anthropic: true }),
+      enabledModelIds: ["claude-sonnet-5-5"], // Opus/Haiku off
+      isModelAvailable: () => true,
+      getModel: () => undefined,
+    });
+    expect(plan).toEqual({ provider: "anthropic", allowedModels: ["claude-sonnet-5-5"] });
+  });
+});

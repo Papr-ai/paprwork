@@ -634,10 +634,16 @@ export class AgentService {
     let autoRoute: AutoRoutePick | null = null;
     const autoRequested = config.model === AUTO_MODEL_ID;
     if (!options?._isSilentRetry && !options?.isSubAgentTrigger) {
-      autoRoute = await routeTurn(config.provider, {
-        userMessage,
-        hasActiveApp: Boolean(options?.focusContext?.activeApp?.appId),
-      });
+      autoRoute = await routeTurn(
+        config.provider,
+        {
+          userMessage,
+          hasActiveApp: Boolean(options?.focusContext?.activeApp?.appId),
+        },
+        undefined,
+        undefined,
+        autoRequested ? config.autoAllowedModels : undefined,
+      );
     }
     if (autoRequested) {
       const rung = autoRoute?.rung;
@@ -652,10 +658,16 @@ export class AgentService {
         delete config.reasoning;
       } else {
         const { resolveAutoRung } = await import("./agent/jevTurnRouter.js");
-        const fallback = resolveAutoRung(config.provider, "strong", "medium");
+        const fallback = resolveAutoRung(
+          config.provider,
+          "strong",
+          "medium",
+          undefined,
+          config.autoAllowedModels,
+        );
         if (!fallback) {
           throw new Error(
-            `Auto routing is not available for provider ${config.provider}. Pick a model explicitly.`,
+            `Auto has no enabled model to route to for ${config.provider}. Enable one in Settings → Models, or pick a model explicitly.`,
           );
         }
         config.model = fallback.model as typeof config.model;

@@ -24,8 +24,8 @@ import {
 } from "../constants/modelControls";
 import type { AuthStatus } from "../hooks/useAuthStatus";
 import type { ChatModelSettings } from "./chatModelSettings";
-import { AUTO_MODEL_ID } from "../constants/modelPicker";
-import type { AuthStatus } from "../hooks/useAuthStatus";
+import { getModelById } from "../constants/models";
+import { resolveAutoModelPlan } from "./autoModelPlan";
 
 export interface ResolvedModelSettings {
   thinking: boolean;
@@ -44,6 +44,10 @@ export interface BuildAgentConfigInput {
   authStatus?: AuthStatus;
   /** Auto only: the next default the user can reach, if Jev cannot decide. */
   autoFallbackModelId?: string;
+  /** Auto only: models pinned in the picker. Auto routes only within these. */
+  enabledModelIds?: Iterable<string>;
+  /** Auto only: whether the user's auth can reach a model. */
+  isModelAvailable?: (model: AIModel) => boolean;
 }
 
 export interface BuiltAgentConfig {
@@ -59,6 +63,8 @@ export interface BuiltAgentConfig {
   speed?: "fast";
   /** Auto only: next default model to run if the router cannot decide. */
   autoFallbackModelId?: string;
+  /** Auto only: enabled + reachable models the router may pick from. */
+  autoAllowedModels?: string[];
 }
 
 /**
@@ -116,15 +122,13 @@ export function resolveModelSettings(
 /**
  * Provider Auto should route within. Best reachable in ladder order; the
  * catalog entry says Anthropic but a Google-only user must not be sent there.
+ * Kept for callers that only have auth; buildAgentConfig uses the full plan,
+ * which also accounts for the models the user has enabled.
  */
 export function resolveAutoProvider(
   status: AuthStatus | undefined,
 ): AIModel["provider"] {
-  if (!status) return "anthropic";
-  if (status.anthropic.oauth || status.anthropic.apiKey) return "anthropic";
-  if (status.openai.oauth || status.openai.apiKey) return "openai";
-  if (status.google.apiKey) return "google";
-  return "anthropic"; // Papr Cloud proxy carries Anthropic models
+  return resolveAutoModelPlan({ status }).provider;
 }
 
 export function buildAgentConfig(
@@ -133,11 +137,18 @@ export function buildAgentConfig(
   const { model, settings, systemPrompt, authType } = input;
   const resolved = resolveModelSettings(model, settings);
 
+  const isAuto = model.id === AUTO_MODEL_ID;
+  const autoPlan = isAuto
+    ? resolveAutoModelPlan({
+        status: input.authStatus,
+        enabledModelIds: input.enabledModelIds,
+        isModelAvailable: input.isModelAvailable,
+        getModel: getModelById,
+      })
+    : undefined;
+
   const config: BuiltAgentConfig = {
-    provider:
-      model.id === AUTO_MODEL_ID
-        ? resolveAutoProvider(input.authStatus)
-        : model.provider,
+    provider: autoPlan ? autoPlan.provider : model.provider,
     model: model.id,
     systemPrompt,
     maxTokens: model.maxTokens,
@@ -148,8 +159,19 @@ export function buildAgentConfig(
     config.reasoning = { effort: resolved.effort };
   }
 
-  if (model.id === AUTO_MODEL_ID && input.autoFallbackModelId) {
-    config.autoFallbackModelId = input.autoFallbackModelId;
+  if (autoPlan?.allowedModels?.length) {
+    config.autoAllowedModels = autoPlan.allowedModels;
+  }
+
+  // The fallback must live on the provider Auto resolved credentials for —
+  // a Claude fallback on an OpenAI-auth turn is exactly the failure to avoid.
+  if (isAuto && input.autoFallbackModelId) {
+    const fallback = getModelById(input.autoFallbackModelId);
+    const sameProvider =
+      fallback &&
+      (fallback.provider === config.provider ||
+        (config.provider === "openai" && fallback.provider === "openai-codex"));
+    if (sameProvider) config.autoFallbackModelId = input.autoFallbackModelId;
   }
 
   // `thinkingBudget: 0` cannot mean "off": Opus 5 and Fable 5.1 ship a default

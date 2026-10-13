@@ -11,7 +11,9 @@
  *    and config.reasoning for this turn only.
  *
  * Routing stays inside the provider the turn already resolved credentials
- * for — switching providers mid-turn would need a different key.
+ * for — switching providers mid-turn would need a different key. Within that
+ * provider it only picks models the user has enabled and can reach
+ * (config.autoAllowedModels, computed by the UI).
  */
 
 import type { Provider, ReasoningEffort } from "../../../core/types/agents.js";
@@ -21,8 +23,16 @@ export const AUTO_ROUTE_TIMEOUT_MS = 2_500;
 /** Below this confidence, round the tier UP: a misroute down is user-visible. */
 export const AUTO_ROUTE_MIN_CONFIDENCE = 0.6;
 
-export const AUTO_CAPABILITIES = ["basic", "strong", "frontier"] as const;
-export type AutoCapability = (typeof AUTO_CAPABILITIES)[number];
+import {
+  AUTO_CAPABILITIES,
+  DEFAULT_AUTO_LADDERS,
+  pickLadderModel,
+  type AutoCapability,
+  type AutoLadder,
+} from "../../../core/agents/autoLadders.js";
+
+export { AUTO_CAPABILITIES, DEFAULT_AUTO_LADDERS };
+export type { AutoCapability, AutoLadder };
 
 export const AUTO_EFFORTS = ["low", "medium", "high"] as const;
 export type AutoEffort = (typeof AUTO_EFFORTS)[number];
@@ -34,45 +44,6 @@ export interface AutoRung {
   model: string;
   effort?: ReasoningEffort;
 }
-
-/**
- * Per-provider capability ladder. Effort is a separate axis: any rung whose
- * model honours a reasoning effort gets Jev's effort pick applied; the rest
- * (Haiku 4.5, Gemini) run without one. So Sonnet and Opus each have
- * low/medium/high, chosen independently of which model is picked.
- */
-export interface AutoLadder {
-  models: Record<AutoCapability, string>;
-  /** Models on this ladder that accept a reasoning effort. */
-  effortModels: ReadonlySet<string>;
-}
-
-export const DEFAULT_AUTO_LADDERS: Partial<Record<Provider, AutoLadder>> = {
-  anthropic: {
-    models: {
-      basic: "claude-haiku-4-5",
-      strong: "claude-sonnet-5-5",
-      frontier: "claude-opus-5-5",
-    },
-    effortModels: new Set(["claude-sonnet-5-5", "claude-opus-5-5"]),
-  },
-  openai: {
-    models: { basic: "gpt-5.4-mini", strong: "gpt-5.5", frontier: "gpt-5.5" },
-    effortModels: new Set(["gpt-5.4-mini", "gpt-5.5"]),
-  },
-  "openai-codex": {
-    models: { basic: "gpt-5.4-mini", strong: "gpt-5.5", frontier: "gpt-5.5" },
-    effortModels: new Set(["gpt-5.4-mini", "gpt-5.5"]),
-  },
-  google: {
-    models: {
-      basic: "gemini-3.5-flash-lite",
-      strong: "gemini-3.8-flash",
-      frontier: "gemini-3.1-pro-preview",
-    },
-    effortModels: new Set(),
-  },
-};
 
 const CAPABILITY_CRITERIA: Record<AutoCapability, string> = {
   basic:
@@ -192,16 +163,23 @@ export const jevAutoRouteEvaluator: AutoRouteEvaluator = async (signals) => {
   }
 };
 
-/** (capability, effort) → rung for this provider. Null when no ladder. */
+/**
+ * (capability, effort) → rung for this provider. `allowedModels` is the set
+ * the user has enabled and can reach (sent by the UI); the rung is taken from
+ * it when present. Null when there is no ladder or nothing on it is allowed.
+ */
 export function resolveAutoRung(
   provider: Provider,
   capability: AutoCapability,
   effort: AutoEffort = "medium",
   ladders: Partial<Record<Provider, AutoLadder>> = DEFAULT_AUTO_LADDERS,
+  allowedModels?: readonly string[],
 ): AutoRung | null {
   const ladder = ladders[provider];
   if (!ladder) return null;
-  const model = ladder.models[capability];
+  const allowed = allowedModels?.length ? new Set(allowedModels) : undefined;
+  const model = pickLadderModel(ladder, capability, allowed);
+  if (!model) return null;
   return ladder.effortModels.has(model) ? { model, effort } : { model };
 }
 
@@ -219,12 +197,19 @@ export async function routeTurn(
   signals: AutoRouteSignals,
   evaluate: AutoRouteEvaluator = jevAutoRouteEvaluator,
   ladders: Partial<Record<Provider, AutoLadder>> = DEFAULT_AUTO_LADDERS,
+  allowedModels?: readonly string[],
 ): Promise<AutoRoutePick | null> {
   if (!ladders[provider]) return null;
   const decision = await evaluate(signals);
   if (!decision) return null;
   return {
     decision,
-    rung: resolveAutoRung(provider, decision.capability, decision.effort, ladders),
+    rung: resolveAutoRung(
+      provider,
+      decision.capability,
+      decision.effort,
+      ladders,
+      allowedModels,
+    ),
   };
 }

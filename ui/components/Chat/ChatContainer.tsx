@@ -233,6 +233,10 @@ export const ChatContainer: React.FC<ChatContainerProps> = ({ chatId }): React.R
     subscribeDownloadProgress: true,
   });
   const { pickerModels } = useModelPickerSettings();
+  const pickerModelIds = useMemo(
+    () => pickerModels.map((m) => m.id),
+    [pickerModels],
+  );
   const fallbackModel =
     CHAT_MODELS.find((m) => m.id === "gemini-3.8-flash") || CHAT_MODELS[0];
 
@@ -324,8 +328,13 @@ export const ChatContainer: React.FC<ChatContainerProps> = ({ chatId }): React.R
         settings: modelSettings,
         systemPrompt,
         authType,
+        // Auto needs both: which providers the user can reach, and which
+        // models they have turned on. Without them it assumed Claude.
+        authStatus,
+        enabledModelIds: pickerModelIds,
+        isModelAvailable,
       }),
-    [selectedModel, modelSettings, authType],
+    [selectedModel, modelSettings, authType, authStatus, pickerModelIds, isModelAvailable],
   );
   const {
     message: gatewaySupervisorMessage,
