@@ -747,4 +747,5 @@
 .app-card.app-card--has-cover .app-card__menu-wrap { top: 138px; }
 
 /* Preview video stands in for the cover; decorative, clicks go to the card. */
-video.app-card__cover, video.ah-solo__cover { pointer-events: none; background: transparent; }
+/* Videos are made 16:10 to match the cover slot; center them rather than top-crop like screenshots. */
+video.app-card__cover, video.ah-solo__cover, video.cat-banner__img { pointer-events: none; background: transparent; object-fit: cover; object-position: center; }

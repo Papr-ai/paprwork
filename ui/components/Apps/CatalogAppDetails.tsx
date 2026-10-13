@@ -4,6 +4,7 @@
  * no "Use it / Make my own copy" choice.
  */
 import { useEffect, useState, type ReactNode } from "react";
+import { DemoVideo } from "./DemoVideo";
 import { createPortal } from "react-dom";
 import type { CommunityCatalogEntry } from "../../../src/core/types/communityCatalog";
 import { isTeamSharedVisibility } from "../../../src/core/types/communityCatalog";
@@ -48,9 +49,14 @@ export function CatIcon({ name, size = 13 }: { name: keyof typeof I; size?: numb
 
 export function CatalogBanner({ entry, coverUrl, glyphSize }: { entry: CommunityCatalogEntry; coverUrl: string | null; glyphSize: number }) {
   const [failed, setFailed] = useState(false);
+  // Owner-shared preview video lives next to the cover (papr-cover-video); 404 → the picture.
+  const [noVideo, setNoVideo] = useState(false);
+  const videoUrl = coverUrl ? coverUrl.replace(/\/papr-cover(\?|$)/, "/papr-cover-video$1") : null;
   return (
     <span className="cat-banner">
-      {coverUrl && !failed ? (
+      {videoUrl && coverUrl && !noVideo && !failed ? (
+        <DemoVideo className="cat-banner__img" src={videoUrl} poster={coverUrl} onError={() => setNoVideo(true)} />
+      ) : coverUrl && !failed ? (
         <img className="cat-banner__img" src={coverUrl} alt="" loading="lazy" draggable={false} onError={() => setFailed(true)} />
       ) : (
         <span className="cat-banner__hero">

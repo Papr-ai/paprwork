@@ -4,7 +4,7 @@
  *
  * Pipeline (one task per app, runs in the background):
  *   1. write   — the Papr agent (AgentService) reads the app's code and writes a scene:
- *                self-contained HTML on a 1280x720 stage, reusing the app's own
+ *                self-contained HTML on a 1280x800 stage, reusing the app's own
  *                components/CSS with invented sample data, driven by window.__setT(t).
  *                Model, auth (OAuth / API key / Papr proxy) and fallbacks are Paprwork's.
  *   2. record  — Electron renders the scene offscreen on a frozen clock and encodes an
@@ -29,7 +29,7 @@ import {
   type SharedCoverPointer,
 } from "./appCovers.js";
 
-export const DEMO_STAGE = { width: 1280, height: 720 } as const;
+export const DEMO_STAGE = { width: 1280, height: 800 } as const;
 const APP_ID_RE = /^[A-Za-z0-9_-]{1,80}$/;
 const SOURCE_BUDGET = 90_000;
 const SKIP = /node_modules|(^|\/)dist\/|__papr__|\.d\.ts$|(^|\/)assets\/|(^|\/)content\//;
@@ -37,11 +37,16 @@ const SKIP = /node_modules|(^|\/)dist\/|__papr__|\.d\.ts$|(^|\/)assets\/|(^|\/)c
 const MAX_SMALL_LABELS = 2;
 
 export const DEMO_SCENE_SYSTEM = `You design App Store-style animated preview loops for small web apps ("mini-apps").
-You get the app's source. Produce ONE self-contained HTML file: a 1280x720 scene that shows what the app does in 3-5 seconds, like an iOS App Store preview. It is shown as a card cover around 460px wide, so it must read at a glance.
+You get the app's source. Produce ONE self-contained HTML file: a 1280x800 scene that shows what the app does in 3-5 seconds, like an iOS App Store preview. It is shown as a card cover around 460px wide, so it must read at a glance.
 
 How it should look:
 - NOT a screen recording or full screenshot. Compose 1-3 floating pieces of the app's real UI (cards, scores, table rows, charts, chips, inputs) on a soft gradient background that fits the app's palette. Generous whitespace, soft large shadows, rounded corners.
 - Reuse the app's own components: copy markup structure and class names from its view code; its CSS is injected for you as <style id="app-css">. Then make everything BIG: every visible label at least 22px, body text 24-30px, key numbers 56-120px. Raise font sizes directly (or scale a wrapper) — the app's own 12-14px sizes are far too small here. Fewer elements, bigger, beats more elements, smaller.
+- Layout must be clean, like a finished product shot:
+  * Lay out with flexbox/grid. Never absolutely position text on top of other text; no two labels may overlap at any moment.
+  * Every label fits inside the shape that holds it. Text inside a ring/circle/pill must be shorter than ~60% of its width — use a short label ("74%" + "margin") or put the label below the shape.
+  * Don't stack or crossfade two different text blocks in the same spot; show one, then replace it only after the first is fully gone.
+  * Lines, charts and dividers never cross text — give charts their own box with padding.
 - Show the app's core job as a tiny story: input -> the app working -> the payoff (score, insight, list, chart, draft...). The payoff is the hero.
 - Invent believable, specific sample data (company names, numbers, quotes). Never lorem ipsum, never real personal data.
 - No captions describing the app, no logos, no cursor, no device frame, no emoji.
@@ -50,7 +55,7 @@ Animation contract (the page is filmed frame by frame on a frozen clock):
 - Define window.__total = <seconds, 3.5..5> and window.__setT = (t) => {...}.
 - __setT(t) sets the ENTIRE visual state for time t purely from t (idempotent, any order). No CSS animations/transitions, no setTimeout/setInterval/requestAnimationFrame, no Date, no Math.random.
 - Motion: eased slide/scale entries (ease-out, slight overshoot), numbers count up, bars/rings fill, highlights sweep, typing reveals text. Stagger entries. Everything settled by ~75% of __total; fade the whole scene out over the last 0.4s so it loops cleanly. Call __setT(0) at the end of your script.
-- html/body exactly 1280x720, margin 0, overflow hidden. Everything stays inside with >=40px margin. No external resources (fonts, images, CDNs); system-ui fonts, inline SVG icons.`;
+- html/body exactly 1280x800, margin 0, overflow hidden. Everything stays inside with >=40px margin. No external resources (fonts, images, CDNs); system-ui fonts, inline SVG icons.`;
 
 export function isValidDemoAppId(appId: string): boolean {
   return APP_ID_RE.test(appId);
@@ -143,9 +148,13 @@ export function normalizeScene(appId: string, raw: string): string {
 }
 
 export interface RenderCheck {
-  /** [label, effective px on the 1280x720 frame] */
+  /** [label, effective px on the 1280x800 frame] */
   small: [string, number][];
   offStage: string[];
+  /** Text wider than the shape that holds it. */
+  spill?: string[];
+  /** Two visible labels on top of each other ("a" on "b"). */
+  overlap?: string[];
 }
 
 export interface RenderResult {
@@ -165,14 +174,20 @@ export function checkFeedback(check: RenderCheck): string | null {
       `${check.small.length} labels are too small to read on a card (min 22px): ${sample}. Make them much bigger, or drop them.`,
     );
   }
+  if (check.overlap?.length) {
+    lines.push(`Text overlaps other text: "${check.overlap.slice(0, 5).join('", "')}". Give each piece its own space (flex/grid), never stack text.`);
+  }
+  if (check.spill?.length) {
+    lines.push(`Text spills out of its shape: ${check.spill.slice(0, 5).map((t) => `"${t}"`).join(", ")}. Shorten it or make the shape bigger.`);
+  }
   if (check.offStage.length) {
-    lines.push(`Content is outside the 1280x720 frame: ${check.offStage.slice(0, 5).map((t) => `"${t}"`).join(", ")}. Keep everything inside with 40px margin.`);
+    lines.push(`Content is outside the 1280x800 frame: ${check.offStage.slice(0, 5).map((t) => `"${t}"`).join(", ")}. Keep everything inside with 40px margin.`);
   }
   return lines.length ? lines.join("\n") : null;
 }
 
 function checkScore(check: RenderCheck): number {
-  return check.small.length + 4 * check.offStage.length;
+  return check.small.length + 4 * check.offStage.length + 4 * (check.overlap?.length ?? 0) + 3 * (check.spill?.length ?? 0);
 }
 
 export type DemoStage = "writing" | "recording" | "polishing";

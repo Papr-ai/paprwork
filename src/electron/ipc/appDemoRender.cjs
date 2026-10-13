@@ -13,13 +13,14 @@ const fs = require("fs");
 const path = require("path");
 const { BrowserWindow, ipcMain, session } = require("electron");
 
-/** Scenes are authored on a 1280x720 stage (older drafts may declare window.__stage = [w, h]). */
+/** Scenes are authored on a 1280x800 (16:10) stage — the shape of every cover slot.
+ *  Older drafts may declare window.__stage = [w, h]. */
 const OUT_W = 1280;
-const OUT_H = 720;
+const OUT_H = 800;
 const FPS = 30;
 const BITRATE = 1_200_000;
 const MAX_SECONDS = 6;
-/** Text must be ≥ this many px on the 1280x720 output (≈ 8px on a 460px-wide card). */
+/** Text must be ≥ this many px on the 1280x800 output (≈ 8px on a 460px-wide card). */
 const MIN_TEXT_PX = 20;
 const PARTITION = "demo-render";
 
@@ -49,27 +50,68 @@ function ask(wc, type, payload) {
   });
 }
 
-/** Runs in the scene page: text a viewer can't read, and content outside the frame. */
+/**
+ * Runs in the scene page. What a viewer would see as broken:
+ *  small    — text too small to read on a card
+ *  offStage — content outside the frame
+ *  spill    — text wider than the shape holding it (a label leaking out of a ring/pill)
+ *  overlap  — two visible pieces of text on top of each other
+ */
 const CHECK_SCRIPT = `(() => {
-  const small = new Map(), off = new Set();
   const W = innerWidth, H = innerHeight, MIN = ${MIN_TEXT_PX};
+  const small = new Map(), off = new Set(), spill = new Set(), boxes = [];
+  const alpha = (el) => {
+    let a = 1;
+    for (let e = el; e && e !== document.documentElement; e = e.parentElement) {
+      const s = getComputedStyle(e);
+      if (s.visibility === 'hidden' || s.display === 'none') return 0;
+      a *= Number(s.opacity);
+    }
+    return a;
+  };
   const walker = document.createTreeWalker(document.body, NodeFilter.SHOW_TEXT);
   let n;
   while ((n = walker.nextNode())) {
     const text = n.textContent.trim().replace(/\\s+/g, ' ');
     const el = n.parentElement;
-    if (!text || !el || !el.offsetWidth) continue;
-    const cs = getComputedStyle(el);
-    if (cs.visibility === 'hidden' || Number(cs.opacity) < 0.05) continue;
+    if (!text || !el || !el.offsetWidth || alpha(el) < 0.15) continue;
+    const range = document.createRange(); range.selectNodeContents(n);
+    const r = range.getBoundingClientRect();
+    if (r.width < 1 || r.height < 1) continue;
     const box = el.getBoundingClientRect();
-    if (box.width < 1 || box.height < 1) continue;
-    // Effective size = font-size x every ancestor scale x page zoom.
-    const px = parseFloat(cs.fontSize) * (box.width / el.offsetWidth);
-    if (px < MIN && !small.has(text)) small.set(text.slice(0, 40), Math.round(px));
-    if (box.left < -2 || box.top < -2 || box.right > W + 2 || box.bottom > H + 2) off.add(text.slice(0, 40));
+    const label = text.slice(0, 40);
+    const px = parseFloat(getComputedStyle(el).fontSize) * (box.width / el.offsetWidth);
+    if (px < MIN && !small.has(label)) small.set(label, Math.round(px));
+    if (r.left < -2 || r.top < -2 || r.right > W + 2 || r.bottom > H + 2) off.add(label);
+    const holder = el.parentElement && el.parentElement !== document.body ? el.parentElement.getBoundingClientRect() : null;
+    if (r.left < box.left - 3 || r.right > box.right + 3 || (holder && (r.left < holder.left - 3 || r.right > holder.right + 3))) spill.add(label);
+    boxes.push({ label, r });
   }
-  return { small: [...small].slice(0, 20), offStage: [...off].slice(0, 10) };
+  const overlap = new Set();
+  for (let i = 0; i < boxes.length; i++) for (let j = i + 1; j < boxes.length; j++) {
+    const a = boxes[i].r, b = boxes[j].r;
+    const w = Math.min(a.right, b.right) - Math.max(a.left, b.left);
+    const h = Math.min(a.bottom, b.bottom) - Math.max(a.top, b.top);
+    if (w > 2 && h > 2 && w * h > 0.2 * Math.min(a.width * a.height, b.width * b.height)) {
+      overlap.add(boxes[i].label + '" on "' + boxes[j].label);
+    }
+  }
+  return { small: [...small].slice(0, 20), offStage: [...off].slice(0, 10), spill: [...spill].slice(0, 10), overlap: [...overlap].slice(0, 10) };
 })()`;
+
+/** Union of two checks (mid-animation + hold), so a clash at either moment counts. */
+function mergeChecks(a, b) {
+  const uniq = (x, y, key) => {
+    const seen = new Set();
+    return [...x, ...y].filter((v) => { const k = key(v); if (seen.has(k)) return false; seen.add(k); return true; });
+  };
+  return {
+    small: uniq(a.small, b.small, (v) => v[0]).slice(0, 20),
+    offStage: uniq(a.offStage, b.offStage, String).slice(0, 10),
+    spill: uniq(a.spill, b.spill, String).slice(0, 10),
+    overlap: uniq(a.overlap, b.overlap, String).slice(0, 10),
+  };
+}
 
 function wait(ms) {
   return new Promise((r) => setTimeout(r, ms));
@@ -127,7 +169,7 @@ async function renderOnce(opts) {
       "({ total: Number(window.__total) || 0, ok: typeof window.__setT === 'function', stage: Array.isArray(window.__stage) ? window.__stage : null })",
     );
     if (!info.ok) throw new Error("Scene has no window.__setT");
-    // Fit the authored stage to the 1280x720 output.
+    // Fit the authored stage to the 1280x800 output.
     const stageW = info.stage && Number(info.stage[0]) > 0 ? Number(info.stage[0]) : OUT_W;
     if (stageW !== OUT_W) wc.setZoomFactor(OUT_W / stageW);
     const seconds = Math.min(MAX_SECONDS, Math.max(2, info.total || 4));
@@ -145,9 +187,11 @@ async function renderOnce(opts) {
       return size.width === OUT_W && size.height === OUT_H ? img : img.resize({ width: OUT_W, height: OUT_H, quality: "best" });
     };
 
-    // Layout check at the hold point (everything on stage, before the loop fade).
+    // Layout check mid-animation and at the hold point (everything on stage, before the fade).
+    await setT(seconds * 0.5);
+    const mid = await wc.executeJavaScript(CHECK_SCRIPT);
     await setT(seconds * 0.72);
-    const check = await wc.executeJavaScript(CHECK_SCRIPT);
+    const check = mergeChecks(mid, await wc.executeJavaScript(CHECK_SCRIPT));
     const poster = await grab();
     fs.mkdirSync(path.dirname(opts.posterPath), { recursive: true });
     fs.writeFileSync(opts.posterPath, poster.toJPEG(82));

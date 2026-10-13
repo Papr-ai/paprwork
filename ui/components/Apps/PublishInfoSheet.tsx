@@ -2,22 +2,19 @@
  * App info — name, description and cover: how the app appears to people (Share Bar
  * Redesign v6). Shown before the first Publish and from More → App info.
  *
- * Cover, three choices (one is shared, only when the user saves):
- *  - Preview video — a 3-5s loop the Papr agent makes from the app's code with sample
- *    data. The default: it explains the app and never shows the user's own data.
- *  - Screenshot   — the user's latest private picture of the app (can show real data).
- *  - Banner       — no picture.
+ * Cover choices (one is shared when the user saves):
+ *  - Preview video — a 3-5s loop from the app's code with sample data (default).
+ *  - Banner — no picture.
  * Making the video runs in the background; the sheet can close and the card updates.
  */
 import { useEffect, useState } from "react";
 import { gateway } from "../../src/lib/gateway";
-import { appCoverUrl, setAppCoverShared } from "../../utils/appCover";
+import { setAppCoverShared } from "../../utils/appCover";
 import { appDemoPosterUrl, appDemoVideoUrl, shareDemoVideo, startDemoGeneration, useDemoStatus } from "../../utils/appDemo";
-import { getGatewayHttpBase } from "../../utils/gatewayHttpBase";
 import { DemoVideo } from "./DemoVideo";
 import "./PublishInfoSheet.css";
 
-type CoverChoice = "video" | "cover" | "banner";
+type CoverChoice = "video" | "banner";
 
 const STAGE_LABEL = { writing: "Writing the scene…", recording: "Recording…", polishing: "Polishing…" } as const;
 
@@ -35,10 +32,7 @@ export function PublishInfoSheet({ appId, initialTitle, onCancel, onConfirmed, m
   const [title, setTitle] = useState(initialTitle);
   const [description, setDescription] = useState("");
   const [headline, setHeadline] = useState("");
-  const [shotVersion, setShotVersion] = useState(() => String(Date.now()));
-  const [hasShot, setHasShot] = useState(true);
   const [choice, setChoice] = useState<CoverChoice | null>(null);
-  const [retaking, setRetaking] = useState(false);
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const demo = useDemoStatus(appId);
@@ -59,10 +53,9 @@ export function PublishInfoSheet({ appId, initialTitle, onCancel, onConfirmed, m
     };
   }, [appId]);
 
-  // Start from what is shared today; otherwise prefer the video (sample data only).
   useEffect(() => {
     if (choice !== null || !demo) return;
-    if (mode === "edit" && demo.sharedKind === "image") setChoice("cover");
+    if (mode === "edit" && demo.sharedKind === "image") setChoice("banner");
     else if (mode === "edit" && demo.sharedKind == null && !hasVideo) setChoice("banner");
     else setChoice("video");
   }, [demo, choice, mode, hasVideo]);
@@ -81,24 +74,6 @@ export function PublishInfoSheet({ appId, initialTitle, onCancel, onConfirmed, m
     }
   };
 
-  const retake = async () => {
-    setRetaking(true);
-    setError(null);
-    try {
-      const res = await fetch(`${getGatewayHttpBase()}/api/apps/${encodeURIComponent(appId)}/cover/retake`, { method: "POST" });
-      const body = (await res.json().catch(() => ({}))) as { saved?: boolean; reason?: string };
-      if (body.saved) {
-        setHasShot(true);
-        setChoice("cover");
-        setShotVersion(String(Date.now()));
-      } else {
-        setError(body.reason === "blank" ? "The app looked empty, so the old picture was kept." : "Couldn't take a new picture right now.");
-      }
-    } finally {
-      setRetaking(false);
-    }
-  };
-
   const confirm = async () => {
     const name = title.trim();
     if (!name) {
@@ -112,7 +87,7 @@ export function PublishInfoSheet({ appId, initialTitle, onCancel, onConfirmed, m
       if (choice === "video" && hasVideo) {
         if (!(await shareDemoVideo(appId))) throw new Error("Couldn't share the preview video.");
       } else {
-        await setAppCoverShared(appId, choice === "cover" && hasShot);
+        await setAppCoverShared(appId, false);
       }
       onConfirmed();
     } catch (err) {
@@ -161,7 +136,7 @@ export function PublishInfoSheet({ appId, initialTitle, onCancel, onConfirmed, m
                 <>
                   <span className="pis-spin" aria-hidden="true" />
                   <b>{STAGE_LABEL[demo?.task?.stage ?? "writing"]}</b>
-                  <span>About a minute. You can close this — the card updates when it's ready.</span>
+                  <span>Takes a few minutes. You can close this — the card updates when it's ready.</span>
                 </>
               ) : (
                 <>
@@ -173,8 +148,6 @@ export function PublishInfoSheet({ appId, initialTitle, onCancel, onConfirmed, m
                 </>
               )}
             </div>
-          ) : choice === "cover" && hasShot ? (
-            <img className="pis-media" src={appCoverUrl(appId, shotVersion)} alt="" onError={() => setHasShot(false)} />
           ) : (
             <span className="pis-banner" />
           )}
@@ -183,9 +156,6 @@ export function PublishInfoSheet({ appId, initialTitle, onCancel, onConfirmed, m
           {tile("video", "Preview video", hasVideo
             ? <img src={appDemoPosterUrl(appId, v)} alt="" />
             : <span className="pis-empty">{making ? "Making…" : "Not made yet"}</span>)}
-          {tile("cover", "Screenshot", hasShot
-            ? <img src={appCoverUrl(appId, shotVersion)} alt="" onError={() => setHasShot(false)} />
-            : <span className="pis-empty">No picture yet</span>, !hasShot)}
           {tile("banner", "Banner", <span className="pis-banner" />)}
         </div>
         <div className="pis-row">
@@ -193,17 +163,11 @@ export function PublishInfoSheet({ appId, initialTitle, onCancel, onConfirmed, m
             <button type="button" className="pis-link" disabled={making} onClick={() => void makeVideo()}>
               {making ? STAGE_LABEL[demo?.task?.stage ?? "writing"] : "Make a new one"}
             </button>
-          ) : choice === "cover" ? (
-            <button type="button" className="pis-link" disabled={retaking} onClick={() => void retake()}>
-              {retaking ? "Taking picture…" : "Retake"}
-            </button>
           ) : null}
           <span className="pis-hint">
-            {choice === "cover"
-              ? "Screenshots can show your own data. Only shared if you pick it."
-              : choice === "video"
-                ? "Sample data only — safe to share."
-                : "A plain banner with the app's icon."}
+            {choice === "video"
+              ? "Sample data only — safe to share."
+              : "A plain banner with the app's icon."}
           </span>
         </div>
       </div>
