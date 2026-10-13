@@ -1,7 +1,7 @@
 /**
  * Team apps in My apps. preview: under Recent, the newest 4 team apps you don't
  * have yet + "Show all". all: the "Team apps" chip — everything your team shares
- * (not yours), A–Z. One button per card: Open (you have it / web-only) or Get.
+ * (not yours), A–Z. One button per card: Open (you have it), Get (installable), Preview (web-only).
  */
 import { useEffect, useMemo, useState } from "react";
 import { gateway } from "../../src/lib/gateway";
@@ -104,7 +104,7 @@ export function TeamAppsCollection({
     if (canInstallCloudCatalogEntry(e, null)) {
       return { label: "Get" as const, note: "", run: () => flow.startCloudInstall(e, { catalogScope: "namespace" }) };
     }
-    if (resolveCatalogLiveWebUrl(e)) return { label: "Open" as const, note: "Web app", run: () => openWeb(e) };
+    if (resolveCatalogLiveWebUrl(e)) return { label: "Preview" as const, note: "Web app", run: () => openWeb(e) };
     return null;
   };
   const fresh = [...entries]
@@ -191,7 +191,7 @@ export function TeamAppsCollection({
             <>
               {resolveCatalogLiveWebUrl(open) ? (
                 <button type="button" className="cat-btn cat-btn--lg" onClick={() => openWeb(open)}>
-                  Open web
+                  Preview
                 </button>
               ) : null}
               {localOf(open) || canInstallCloudCatalogEntry(open, null) ? (

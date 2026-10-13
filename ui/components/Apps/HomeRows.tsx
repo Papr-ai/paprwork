@@ -53,8 +53,8 @@ export function GetRow(p: {
   description?: string;
   by?: string;
   busy: boolean;
-  /** "Get" (blue) for apps you can install; "Open" (quiet) for ones you have or that only run on the web. */
-  action?: "Get" | "Open";
+  /** "Get" (blue) for apps you can install; "Open" / "Preview" (quiet) for ones you have or that only run on the web. */
+  action?: "Get" | "Open" | "Preview";
   note?: string;
   onDetails: () => void;
   onGet: () => void;
@@ -78,7 +78,7 @@ export function GetRow(p: {
       </button>
       <button
         type="button"
-        className={`ah-row__get${action === "Open" ? " ah-row__get--quiet" : ""}`}
+        className={`ah-row__get${action !== "Get" ? " ah-row__get--quiet" : ""}`}
         disabled={p.busy}
         onClick={p.onGet}
       >

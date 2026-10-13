@@ -2,7 +2,7 @@
  * Community "Featured" banner — App Store style: dark full-width card, a big
  * editorial headline (publisher-set `headline`, else the description), the
  * app's cover on the right, and a glass row with the droplet, name, by-line
- * and the same Open / Open web / Get buttons as the card.
+ * and the same Open / Preview / Get buttons as the card.
  */
 import { useState, type ReactNode } from "react";
 import type { CommunityCatalogEntry } from "../../../src/core/types/communityCatalog";

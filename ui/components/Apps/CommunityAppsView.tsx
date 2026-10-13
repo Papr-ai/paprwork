@@ -1102,7 +1102,7 @@ interface CommunityAppCardProps {
   onCloudInstall: () => void;
   onOpen?: () => void;
   onOpenHover?: () => void;
-  /** The live web version (shown as "Open web" when you don't have a local copy). */
+  /** The live web version (shown as "Preview" when you don't have a local copy). */
   onOpenWeb?: () => void;
   onOpenWebHover?: () => void;
   /** ⋯ menu (same component as My apps cards). */
@@ -1127,7 +1127,7 @@ export function CommunityAppCard({
 }: CommunityAppCardProps) {
 
   const showInstall = canInstallCloudCatalogEntry(entry, localAppId);
-  // Open = your copy on this computer. Open web = the live web app. Get = install.
+  // Open = your copy on this computer. Preview = the live web app. Get = install.
   const showLocalOpen = Boolean(localAppId) && Boolean(onOpen);
   const showOpenWeb = !showLocalOpen && Boolean(onOpenWeb);
   const share = shareGlyphForCatalogEntry(entry);
@@ -1158,7 +1158,7 @@ export function CommunityAppCard({
         ) : null}
         {showOpenWeb ? (
           <button type="button" className={cls(false)} onClick={stop(onOpenWeb)} title="Open the live web app"
-            onMouseEnter={onOpenWebHover} onFocus={onOpenWebHover}>Open web</button>
+            onMouseEnter={onOpenWebHover} onFocus={onOpenWebHover}>Preview</button>
         ) : null}
         {showInstall ? (
           <button type="button" className={cls(true)} onClick={stop(onCloudInstall)} disabled={isInstalling}
