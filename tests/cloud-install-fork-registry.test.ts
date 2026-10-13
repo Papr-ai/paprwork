@@ -176,6 +176,88 @@ describe("cloud install fork registry", () => {
     );
   });
 
+  it("shared install never reuses a same-named folder owned by a different dbId", async () => {
+    const targetAppDir = path.join(targetHome, "apps", localAppId);
+    const targetRegistryPath = path.join(targetHome, "data", "databases.json");
+    const mineDbId = "db-aaaa1111";
+    const minePath = path.join(targetHome, "data", "databases", "gtm-metrics", "data.db");
+    await fs.mkdir(path.dirname(minePath), { recursive: true });
+    await fs.writeFile(minePath, "my-own-rows");
+    await fs.writeFile(
+      targetRegistryPath,
+      JSON.stringify({
+        version: 1,
+        databases: {
+          [mineDbId]: {
+            dbId: mineDbId,
+            localPath: minePath,
+            tursoShortName: "d-aaaa1111",
+            label: "GTM Metrics",
+            isolation: "shared",
+            status: "active",
+            createdAt: "2026-01-01T00:00:00.000Z",
+            updatedAt: "2026-01-01T00:00:00.000Z",
+          },
+        },
+      }),
+    );
+
+    const { dbIdRemap } = await mergeDatabaseRegistryForCopy({
+      sourceRegistryPath: path.join(sourceHome, "data", "databases.json"),
+      targetRegistryPath,
+      targetPaprHome: targetHome,
+      copiedJobIds: new Set(),
+      dbIdsFromJobs: new Set(),
+      appDir: targetAppDir,
+    });
+    expect(dbIdRemap.size).toBe(0);
+    const registry = JSON.parse(await fs.readFile(targetRegistryPath, "utf8")) as {
+      databases: Record<string, { localPath: string }>;
+    };
+    expect(registry.databases[mineDbId]!.localPath).toBe(minePath);
+    expect(registry.databases[publisherDbId]!.localPath).toBe(
+      path.join(targetHome, "data", "databases", "gtm-metrics-7c4c3837", "data.db"),
+    );
+    expect(await fs.readFile(minePath, "utf8")).toBe("my-own-rows");
+  });
+
+  it("reinstalling the same shared dbId keeps its existing folder", async () => {
+    const targetAppDir = path.join(targetHome, "apps", localAppId);
+    const targetRegistryPath = path.join(targetHome, "data", "databases.json");
+    const existingPath = path.join(targetHome, "data", "databases", "gtm-metrics", "data.db");
+    await fs.mkdir(path.dirname(existingPath), { recursive: true });
+    await fs.writeFile(
+      targetRegistryPath,
+      JSON.stringify({
+        version: 1,
+        databases: {
+          [publisherDbId]: {
+            dbId: publisherDbId,
+            localPath: existingPath,
+            tursoShortName: "d-7c4c3837",
+            label: "GTM Metrics",
+            isolation: "shared",
+            status: "active",
+            createdAt: "2026-01-01T00:00:00.000Z",
+            updatedAt: "2026-01-01T00:00:00.000Z",
+          },
+        },
+      }),
+    );
+    await mergeDatabaseRegistryForCopy({
+      sourceRegistryPath: path.join(sourceHome, "data", "databases.json"),
+      targetRegistryPath,
+      targetPaprHome: targetHome,
+      copiedJobIds: new Set(),
+      dbIdsFromJobs: new Set(),
+      appDir: targetAppDir,
+    });
+    const registry = JSON.parse(await fs.readFile(targetRegistryPath, "utf8")) as {
+      databases: Record<string, { localPath: string }>;
+    };
+    expect(registry.databases[publisherDbId]!.localPath).toBe(existingPath);
+  });
+
   it("syncAppLinkedResourcesToTarget shared_primary keeps dbId but skips publisher data.db", async () => {
     const result = await syncAppLinkedResourcesToTarget({
       appId: localAppId,

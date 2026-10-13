@@ -5161,6 +5161,24 @@ async function startGateway(): Promise<void> {
               (err as Error).message.slice(0, 120),
             ),
           );
+        // Two databases sharing one data.db (name-collision installs) read each
+        // other's rows. Split them before anything opens the shared file.
+        void import("./services/repairRegistryPathCollisions.js")
+          .then(({ repairRegistryPathCollisions }) => repairRegistryPathCollisions())
+          .then((r) => {
+            if (r.moves.length > 0) {
+              console.log(
+                `[Gateway] Separated ${r.moves.length} database(s) that shared a local file ` +
+                  `(${r.appsRewritten} app data-source file(s) updated)`,
+              );
+            }
+          })
+          .catch((err) =>
+            console.warn(
+              "[Gateway] Registry path collision repair failed (non-fatal):",
+              (err as Error).message.slice(0, 160),
+            ),
+          );
         void import("./services/tursoReplica/cutover/tursoReplicaCutoverOrchestrator.js")
           .then(({ runPendingReplicaCutovers }) =>
             runPendingReplicaCutovers({ fromStartup: true }).then((batch) => {

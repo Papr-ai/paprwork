@@ -324,6 +324,10 @@ async function flushAppNowLocked(
       });
       published = true;
       console.log(`[CloudSync] flushAppNow verified + web-ready for ${appId}`);
+      if (catalogResult.published) {
+        const { markPublishComplete } = await import("./publishCompletion.js");
+        await markPublishComplete(appId, paprDir);
+      }
     }
   } else {
     console.warn(
