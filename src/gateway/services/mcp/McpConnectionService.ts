@@ -294,10 +294,11 @@ export class McpConnectionService {
     const ss = this.opts.serverSignIn;
     const wide = Boolean(opts.audience && opts.audience !== "user");
     const needsOrgClient = Boolean(def.requiresClientId && !def.clientId);
-    if (ss && (wide || opts.viaServer || (needsOrgClient && (await ss.hasClientId(def))))) {
+    if (ss && (wide || opts.viaServer || (def.serverOAuth && def.clientId) || (needsOrgClient && (await ss.hasClientId(def))))) {
       return this.connectViaServer(def, ss, opts);
     }
     if (wide) throw new Error("Sharing a sign-in needs Papr cloud. Sign in to Papr and try again.");
+    if (def.serverOAuth && def.clientId) throw new Error(`Connecting ${def.name} needs Papr cloud. Sign in to Papr and try again.`);
     if (def.requiresClientId && !def.clientId) {
       throw new Error(`${def.name}'s MCP server does not support dynamic client registration yet — it needs a registered Papr Work OAuth client id.`);
     }

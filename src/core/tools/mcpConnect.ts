@@ -27,7 +27,7 @@ export const connectMcpTool = createTool({
   id: "connect_mcp",
   description: `Connect the user's SaaS accounts via remote MCP servers with one-click OAuth (browser consent, no API keys).
 
-~50 built-in one-click servers, incl. linear, notion, atlassian (Jira+Confluence), asana, monday, clickup, airtable, attio, apollo, intercom, stripe, paypal, ramp, mercury, amplitude, mixpanel, sentry, datadog, vercel, supabase, neon, cloudflare, canva, miro, webflow, granola, fireflies, zapier (action="status" lists all ids). github, slack, hubspot, google drive: not yet (need a registered client id). Any other remote MCP server: pass its https:// URL as server.
+~50 built-in one-click servers, incl. linear, notion, atlassian (Jira+Confluence), asana, monday, clickup, airtable, attio, apollo, intercom, stripe, paypal, ramp, mercury, amplitude, mixpanel, sentry, datadog, vercel, supabase, neon, cloudflare, canva, miro, webflow, granola, fireflies, zapier (action="status" lists all ids). google drive: one-click via Papr cloud sign-in. github, slack, hubspot: not yet (need a registered client id). Any other remote MCP server: pass its https:// URL as server.
 
 Actions:
 - status: list servers + connection state (default). Pass server for one.
