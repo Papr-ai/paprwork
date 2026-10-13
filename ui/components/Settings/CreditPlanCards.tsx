@@ -1,24 +1,26 @@
 /**
  * Credits plan picker for Settings → Billing.
  *
- * Same shape as the customer-facing pricing page in the Papr Unit Economics app:
- * Local / Cloud / Cloud Max (one card with a 5x · 20x toggle), price per person, the
- * credit grant shown as a dollar value, a short ticked feature list, and the one-time
- * Expert Builder service tucked into the Max card. Credits are per person, not pooled.
+ * A port of the customer-facing pricing page in the Papr Unit Economics app (Team track):
+ * Cloud / Cloud Max (one card, 5x · 20x toggle, defaults to 5x "From $100") / Enterprise,
+ * price per person, credits shown as a dollar value, apps & scheduled runs, storage, a
+ * collapsible "Replaces $X/mo" strip and the collapsible Expert Builder add-on. The
+ * per-person band explains seats; Local is the free baseline row underneath.
  */
 
 import { useState } from "react";
 import {
   PAPR_CREDIT_PLANS,
-  PAPR_EXPERT_BUILDS,
-  PAPR_EXPERT_BUILD_CONTACT,
+  PAPR_ENTERPRISE_PLAN,
   PAPR_LOCAL_PLAN,
   creditsUsdLabel,
   formatUsd,
+  planFeatures,
   type PaprCreditPlanCard,
   type PaprCreditPlanId,
   type PaprExpertBuildSize,
 } from "../../../src/core/types/paprCreditPlans";
+import { ExpertBuilder, Features, ReplacesStrip } from "./CreditPlanParts";
 import "./CreditPlanCards.css";
 
 export type CreditPlanAction = PaprCreditPlanId | `expert:${PaprExpertBuildSize}` | null;
@@ -35,27 +37,9 @@ interface Props {
   localPending?: boolean;
 }
 
-const Tick = () => (
-  <svg viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="2.2"
-    strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
-    <path d="M3 8.5l3.2 3.2L13 5" />
-  </svg>
-);
-
-function Features({ items }: { items: readonly string[] }) {
-  return (
-    <ul className="cpc-feat">
-      {items.map((t) => (
-        <li key={t}><Tick /><span>{t}</span></li>
-      ))}
-    </ul>
-  );
-}
-
 function PlanButton(props: Props & { plan: PaprCreditPlanCard; solid?: boolean }) {
   const { plan, currentPlan, canManageBilling, pending, onChoosePlan, solid } = props;
   if (currentPlan === plan.id) return <span className="cpc-current">Current plan</span>;
-  const label = plan.variant ? `${plan.name} ${plan.variant}` : plan.name;
   return (
     <button
       type="button"
@@ -64,12 +48,13 @@ function PlanButton(props: Props & { plan: PaprCreditPlanCard; solid?: boolean }
       title={canManageBilling ? undefined : "Only the workspace owner can change plans"}
       onClick={() => onChoosePlan(plan.id)}
     >
-      {pending === plan.id ? "Opening checkout…" : currentPlan ? `Switch to ${label}` : `Start on ${label}`}
+      {pending === plan.id ? "Opening checkout…" : `${currentPlan ? "Switch to" : "Start on"} ${plan.name}`}
     </button>
   );
 }
 
-function PriceBlock({ plan, from }: { plan: PaprCreditPlanCard; from?: boolean }) {
+function PlanBody(props: Props & { plan: PaprCreditPlanCard; prev: string; from?: boolean; solid?: boolean }) {
+  const { plan, prev, from } = props;
   return (
     <>
       <div className="cpc-price">
@@ -77,72 +62,27 @@ function PriceBlock({ plan, from }: { plan: PaprCreditPlanCard; from?: boolean }
         <b>{formatUsd(plan.pricePerSeat)}</b><i>/person/mo</i>
       </div>
       <div className="cpc-cred">{creditsUsdLabel(plan)} worth of credits per person</div>
+      <PlanButton {...props} />
+      <div className="cpc-plus">Everything in {prev}, plus:</div>
+      <Features items={planFeatures(plan)} />
+      <div className="cpc-foot"><ReplacesStrip tier={plan.replacesTier} /></div>
     </>
-  );
-}
-
-function ExpertBuilder(props: Props) {
-  const { pending, onBuyExpertBuild, canManageBilling } = props;
-  return (
-    <details className="cpc-addon">
-      <summary>
-        <span><em>Add-on</em>Expert Builder</span>
-        <b>From $500</b>
-      </summary>
-      <div className="cpc-addon-b">
-        <p>A Papr engineer scopes, builds and hands over your app. One-time; the app runs on your plan's credits.</p>
-        {PAPR_EXPERT_BUILDS.map((b) => (
-          <div className="cpc-addon-r" key={b.size}>
-            <div><u>{b.name}</u><small>{b.description}</small></div>
-            {b.price === null ? (
-              <a className="cpc-mini" href={PAPR_EXPERT_BUILD_CONTACT}>Contact us</a>
-            ) : (
-              <button
-                type="button"
-                className="cpc-mini"
-                disabled={!canManageBilling || pending !== null}
-                onClick={() => onBuyExpertBuild(b.size as PaprExpertBuildSize)}
-              >
-                {pending === `expert:${b.size}` ? "Opening…" : formatUsd(b.price)}
-              </button>
-            )}
-          </div>
-        ))}
-      </div>
-    </details>
   );
 }
 
 export function CreditPlanCards(props: Props) {
   const [cloud, max5, max20] = PAPR_CREDIT_PLANS as [PaprCreditPlanCard, PaprCreditPlanCard, PaprCreditPlanCard];
   const [maxSize, setMaxSize] = useState<PaprCreditPlanCard>(props.currentPlan === "cloud_max" ? max20 : max5);
-  const maxFeatures = [`${maxSize.cloudApps} cloud apps & scheduled runs`, ...maxSize.unlocks, `Everything at ${maxSize.variant}`];
+  const expertPending = props.pending?.startsWith("expert:")
+    ? (props.pending.slice(7) as PaprExpertBuildSize) : null;
 
   return (
     <div className="cpc">
       <div className="cpc-grid">
-        <div className="cpc-card cpc-card--free">
-          <div className="cpc-n">{PAPR_LOCAL_PLAN.name}</div>
-          <p className="cpc-blurb">{PAPR_LOCAL_PLAN.blurb}</p>
-          <div className="cpc-price"><b>$0</b></div>
-          <div className="cpc-cred">{PAPR_LOCAL_PLAN.creditsLine}</div>
-          {props.onActivateLocal ? (
-            <button type="button" className="cpc-btn" disabled={props.localPending || props.pending !== null}
-              onClick={props.onActivateLocal}>
-              {props.localPending ? "Activating…" : "Activate free plan"}
-            </button>
-          ) : null}
-          <div className="cpc-plus">Included:</div>
-          <Features items={PAPR_LOCAL_PLAN.features} />
-        </div>
-
         <div className="cpc-card">
           <div className="cpc-n">{cloud.name}</div>
           <p className="cpc-blurb">{cloud.blurb}</p>
-          <PriceBlock plan={cloud} />
-          <PlanButton {...props} plan={cloud} />
-          <div className="cpc-plus">Everything in Local, plus:</div>
-          <Features items={[`${cloud.cloudApps} cloud app & scheduled runs`, ...cloud.unlocks]} />
+          <PlanBody {...props} plan={cloud} prev="Local" />
         </div>
 
         <div className="cpc-card cpc-card--feat">
@@ -157,18 +97,44 @@ export function CreditPlanCards(props: Props) {
             </div>
           </div>
           <p className="cpc-blurb">{maxSize.blurb}</p>
-          <PriceBlock plan={maxSize} from={maxSize.id === max5.id} />
-          <PlanButton {...props} plan={maxSize} solid />
-          <div className="cpc-plus">Everything in Cloud, plus:</div>
-          <Features items={maxFeatures} />
-          <ExpertBuilder {...props} />
+          <PlanBody {...props} plan={maxSize} prev="Cloud" from={maxSize.id === max5.id} solid />
+          <ExpertBuilder
+            canBuy={props.canManageBilling && props.pending === null}
+            pendingSize={expertPending}
+            onBuy={props.onBuyExpertBuild}
+          />
+        </div>
+
+        <div className="cpc-card">
+          <div className="cpc-n">{PAPR_ENTERPRISE_PLAN.name}</div>
+          <p className="cpc-blurb">{PAPR_ENTERPRISE_PLAN.blurb}</p>
+          <div className="cpc-price"><b>Custom</b></div>
+          <div className="cpc-cred">{PAPR_ENTERPRISE_PLAN.creditsLine}</div>
+          <a className="cpc-btn" href={PAPR_ENTERPRISE_PLAN.contact}>Contact sales</a>
+          <div className="cpc-plus">Everything in Cloud Max, plus:</div>
+          <Features items={PAPR_ENTERPRISE_PLAN.features} />
         </div>
       </div>
-      <p className="cpc-foot">
-        Priced per person &mdash; every builder gets their own credits, not a shared pool. Anyone who
-        just opens what you publish is free. Past your credits it's $1 per 1,000; we warn you before
-        anything stops.
-      </p>
+
+      <div className="cpc-seat">
+        <b>Priced per person<i> / credits per person</i></b>
+        <p>Every teammate gets their own allowance &mdash; not a shared pool. Anyone who just
+          opens what you published is free and unlimited. Past your credits it&rsquo;s $1 per
+          1,000; we tell you before anything stops.</p>
+      </div>
+
+      <div className="cpc-local">
+        <div>
+          <b>{PAPR_LOCAL_PLAN.name} &middot; $0</b>
+          <span>{PAPR_LOCAL_PLAN.blurb}. {PAPR_LOCAL_PLAN.creditsLine}.</span>
+        </div>
+        {props.onActivateLocal ? (
+          <button type="button" className="cpc-mini" disabled={props.localPending || props.pending !== null}
+            onClick={props.onActivateLocal}>
+            {props.localPending ? "Activating…" : "Activate free plan"}
+          </button>
+        ) : null}
+      </div>
     </div>
   );
 }
