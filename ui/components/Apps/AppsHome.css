@@ -373,3 +373,6 @@ input.ah-sheet__name:hover, input.ah-sheet__name:focus { background: var(--ah-ho
 .ah-row__get:disabled { opacity: 0.6; cursor: default; }
 .ah-row__get--quiet { color: var(--ah-blue); background: color-mix(in srgb, var(--text-primary) 7%, transparent); }
 .ah-row__get--quiet:hover { filter: none; background: color-mix(in srgb, var(--text-primary) 11%, transparent); }
+.ah-sec__more { margin-left: auto; border: 0; background: none; padding: 0; cursor: pointer;
+  font-size: 13px; font-weight: 600; color: var(--ah-blue); }
+.ah-sec__more:hover { text-decoration: underline; }

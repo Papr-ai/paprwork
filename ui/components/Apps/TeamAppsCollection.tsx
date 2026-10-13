@@ -1,7 +1,7 @@
 /**
- * My apps → "From <team>": everything your team shares (not yours), A–Z, as the
- * last section (the Team tab scrolls here). One button per card: Open (you have
- * it), Get (installable), or Open (web-only). The card opens details.
+ * Team apps in My apps. preview: under Recent, the newest 4 team apps you don't
+ * have yet + "Show all". all: the "Team apps" chip — everything your team shares
+ * (not yours), A–Z. One button per card: Open (you have it / web-only) or Get.
  */
 import { useEffect, useMemo, useState } from "react";
 import { gateway } from "../../src/lib/gateway";
@@ -49,12 +49,19 @@ export function uninstalledTeamEntries(
   );
 }
 
+const PREVIEW = 4;
+
 export function TeamAppsCollection({
   namespaceId,
   namespaceName,
+  mode = "all",
+  onShowAll,
 }: {
   namespaceId: string;
   namespaceName: string | null;
+  /** preview = newest 4 you don't have yet + "Show all" (My apps home); all = the full team list (Team apps chip). */
+  mode?: "preview" | "all";
+  onShowAll?: () => void;
 }) {
   // Last-known team list paints at once (any age); the fetch below refreshes it.
   // My apps never waits on this — the collection appears when it has entries.
@@ -100,10 +107,15 @@ export function TeamAppsCollection({
     if (resolveCatalogLiveWebUrl(e)) return { label: "Open" as const, note: "Web app", run: () => openWeb(e) };
     return null;
   };
-  if (entries.length === 0) {
+  const fresh = [...entries]
+    .filter((e) => !localOf(e))
+    .sort((x, y) => (y.updatedAt ?? "").localeCompare(x.updatedAt ?? ""))
+    .slice(0, PREVIEW);
+  const shown = mode === "preview" ? fresh : entries;
+  if (shown.length === 0) {
+    if (mode === "preview") return flow.optionalDepsNotice ? notice() : null;
     return (
       <section className="ah-sec" id="ah-team">
-        <h2 className="ah-sec__h">From {namespaceName?.trim() || "your team"}</h2>
         <p className="ah-sec__none">Nothing shared with your team yet.</p>
         {notice()}
       </section>
@@ -141,12 +153,17 @@ export function TeamAppsCollection({
 
   const team = namespaceName?.trim() || "your team";
   return (
-    <section className="ah-sec" id="ah-team" aria-label={`From ${team}`}>
+    <section className="ah-sec" id="ah-team" aria-label={`Team apps from ${team}`}>
       <h2 className="ah-sec__h">
-        From {team} <em>{entries.length}</em>
+        {mode === "preview" ? "New from your team" : "Team apps"} <em>{mode === "preview" ? "" : entries.length}</em>
+        {mode === "preview" && onShowAll && entries.length > shown.length ? (
+          <button type="button" className="ah-sec__more" onClick={onShowAll}>
+            Show all {entries.length}
+          </button>
+        ) : null}
       </h2>
       <div className="ah-rows">
-        {entries.map((e) => {
+        {shown.map((e) => {
           const act = actionOf(e);
           return (
             <GetRow

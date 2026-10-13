@@ -3,8 +3,9 @@
  *
  *  - Narrow page, two columns of connector-style cards: droplet · name · one
  *    line about it · one status line. The card opens the app; ⋯ on hover.
- *  - Recent (last 4 opened) → All apps (A–Z) → From <team> (not installed, Get).
- *  - Chips filter in place: All · Pinned · Needs attention · categories · Live.
+ *  - Recent (last 4 opened) → New from your team → All apps (A–Z).
+ *  - Chips filter in place: All · Favorites · Team apps · Needs attention · categories · Live.
+ *  - Under Recent: the newest 4 team apps you don't have yet + "Show all" (= the Team apps chip).
  *  - Covers / preview videos live on Discover and in App info, not here.
  */
 import { useCallback, useMemo, useState } from "react";
@@ -48,7 +49,7 @@ const byName = (a: Artifact, b: Artifact) =>
   Number(isIdLikeTitle(a.title)) - Number(isIdLikeTitle(b.title)) ||
   a.title.localeCompare(b.title, undefined, { sensitivity: "base" });
 
-type Filter = "all" | "pin" | "bad" | "live" | `cat:${string}`;
+type Filter = "all" | "pin" | "team" | "bad" | "live" | `cat:${string}`;
 
 export function AppsHome(p: AppsHomeProps) {
   const active = useMemo(() => p.apps.filter((a) => (a.status ?? "active") !== "archived"), [p.apps]);
@@ -123,6 +124,16 @@ export function AppsHome(p: AppsHomeProps) {
   const recent = filter === "all" && shown.length > RECENT + 2 ? byRecent.slice(0, RECENT) : [];
   const rest = shown.filter((a) => !recent.includes(a)).sort(byName);
 
+  const hasTeam = Boolean(p.showTeam && p.teamNamespaceId);
+  const teamSection = (mode: "preview" | "all") =>
+    hasTeam ? (
+      <TeamAppsCollection
+        namespaceId={p.teamNamespaceId!}
+        namespaceName={p.teamName ?? null}
+        mode={mode}
+        onShowAll={() => setFilter("team")}
+      />
+    ) : null;
   const bad = active.filter(attention).length;
   const pinned = active.filter((a) => a.favorite).length;
   const chip = (f: Filter, label: React.ReactNode, cls = "") => (
@@ -146,6 +157,7 @@ export function AppsHome(p: AppsHomeProps) {
       <div className="ah-chips" role="toolbar" aria-label="Filter apps">
         {chip("all", "All")}
         {pinned ? chip("pin", <><HomeIcon name="star" size={13} />Favorites</>) : null}
+        {hasTeam ? chip("team", <><HomeIcon name="users" size={13} />Team apps</>) : null}
         {bad ? chip("bad", <><i className="ah-chip__dot" />Needs attention <em>{bad}</em></>, "ah-chip--bad") : null}
         {cats.length ? <span className="ah-chips__sep" /> : null}
         {cats.map((c) => chip(`cat:${c}`, c))}
@@ -153,12 +165,16 @@ export function AppsHome(p: AppsHomeProps) {
         {p.publishedIds.size ? chip("live", <><HomeIcon name="globe" size={13} />Live</>) : null}
       </div>
 
-      {shown.length === 0 ? <p className="ah-sec__none">Nothing here.</p> : null}
-      {section("Recent", recent)}
-      {section(recent.length ? "All apps" : filter === "all" ? "All apps" : "Apps", rest, recent.length ? rest.length : undefined)}
-      {p.showTeam && p.teamNamespaceId && filter === "all" ? (
-        <TeamAppsCollection namespaceId={p.teamNamespaceId} namespaceName={p.teamName ?? null} />
-      ) : null}
+      {filter === "team" ? (
+        teamSection("all")
+      ) : (
+        <>
+          {shown.length === 0 ? <p className="ah-sec__none">Nothing here.</p> : null}
+          {section("Recent", recent)}
+          {filter === "all" ? teamSection("preview") : null}
+          {section(recent.length ? "All apps" : filter === "all" ? "All apps" : "Apps", rest, recent.length ? rest.length : undefined)}
+        </>
+      )}
 
       <footer className="ah-foot">
         <div className="ah-foot__links">
