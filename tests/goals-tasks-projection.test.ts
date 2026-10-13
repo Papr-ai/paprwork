@@ -132,9 +132,8 @@ function fakeDb() {
   };
   const query = async (sql: string) => {
     if (sql.startsWith("SELECT * FROM goals")) return [...goals.values()];
-    if (sql.startsWith("SELECT id, status FROM tasks WHERE status = 'open'"))
-      return [...tasks.values()].filter((t) => t.status === "open");
-    if (sql.startsWith("SELECT id FROM goal_entities")) return [...links.values()];
+    if (sql.startsWith("SELECT * FROM tasks")) return [...tasks.values()];
+    if (sql.includes("FROM goal_entities")) return [...links.values()];
     throw new Error(`fake query: unhandled ${sql}`);
   };
   return { goals, tasks, history, links, exec, query };
@@ -193,6 +192,7 @@ describe("goals + tasks projection (pure)", () => {
     const db = fakeDb();
     const first = await applySnapshot(projectWorkspace(input), db.exec, db.query, "2026-09-04T10:00:00Z");
     expect(first.goalsUpserted).toBe(5);
+    expect(first.tasksUpserted).toBe(6);
     expect(first.historyRows).toBe(5); // one "created" row per goal
     expect(db.tasks.size).toBe(6);
     expect(db.links.size).toBe(3); // G3↔project (both), G3↔justin (both), G1↔project (entity side)
@@ -201,6 +201,9 @@ describe("goals + tasks projection (pure)", () => {
     const second = await applySnapshot(projectWorkspace(input), db.exec, db.query, "2026-09-05T10:00:00Z");
     expect(second.historyRows).toBe(0);
     expect(second.tasksDropped).toBe(0);
+    // An idle run must not touch the DB at all (it used to rewrite every task + its indexes).
+    expect(second.goalsUpserted + second.tasksUpserted).toBe(0);
+    expect(second.skipped).toBeGreaterThan(0);
 
     // User confirms G3 and Justin's first open item is removed from the page.
     const changed = {

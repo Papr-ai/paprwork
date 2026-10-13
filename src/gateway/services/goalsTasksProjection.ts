@@ -397,14 +397,33 @@ async function homeDb(endpoint: "query" | "write", sql: string, params?: unknown
 type Exec = (sql: string, params?: unknown[]) => Promise<unknown>;
 type Query = (sql: string, params?: unknown[]) => Promise<Record<string, unknown>[]>;
 
+const GOAL_COLS = ["title", "level", "parent_id", "status", "confidence", "priority", "period", "opened", "closed", "next_milestone", "owner", "evidence", "mentions", "outcome", "archived", "parent_missing", "source_file"] as const;
+const TASK_COLS = ["title", "status", "owner", "due", "goal_id", "goal_source", "entity_ref", "source", "source_file", "source_line"] as const;
+const LINK_COLS = ["goal_id", "entity_ref", "entity_type", "source"] as const;
+
+/**
+ * True when every derived column already matches the stored row. Each upsert also moves
+ * updated_at, so an unconditional write dirties the table and its indexes (and the sync
+ * change log) even when nothing changed. Skipping identical rows keeps an idle run at zero writes.
+ */
+function sameRow(prev: Record<string, unknown> | undefined, cur: object, cols: readonly string[]): boolean {
+  if (!prev) return false;
+  const c = cur as Record<string, unknown>;
+  const norm = (v: unknown) => (v == null ? null : String(v));
+  return cols.every((k) => norm(prev[k]) === norm(c[k]));
+}
+
 /** Apply a snapshot to the DB. Exposed for tests with in-memory exec/query fakes. */
 export async function applySnapshot(
   snap: ProjectionSnapshot,
   exec: Exec,
   query: Query,
   now = new Date().toISOString(),
-): Promise<{ goalsUpserted: number; historyRows: number; tasksUpserted: number; tasksDropped: number; links: number }> {
+): Promise<{ goalsUpserted: number; historyRows: number; tasksUpserted: number; tasksDropped: number; links: number; skipped: number }> {
   let historyRows = 0;
+  let goalsUpserted = 0;
+  let tasksUpserted = 0;
+  let skipped = 0;
   const existing = new Map<string, Record<string, unknown>>();
   for (const row of await query("SELECT * FROM goals")) existing.set(String(row.id), row);
 
@@ -433,6 +452,11 @@ export async function applySnapshot(
         [`${g.id}:${now}:created`, g.id, now, "status", null, g.status],
       );
     }
+    if (sameRow(prev, g, GOAL_COLS)) {
+      skipped += 1;
+      continue;
+    }
+    goalsUpserted += 1;
     await exec(
       `INSERT INTO goals (id, title, level, parent_id, status, confidence, priority, period, opened, closed, next_milestone, owner, evidence, mentions, outcome, archived, parent_missing, source_file, created_at, updated_at)
        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
@@ -461,11 +485,17 @@ export async function applySnapshot(
 
   // Goal ↔ entity links: replace the set wholesale (small, derived, no history needed).
   const seenLinks = new Set(snap.goalEntities.map((l) => l.id));
-  for (const row of await query("SELECT id FROM goal_entities")) {
+  const existingLinks = new Map<string, Record<string, unknown>>();
+  for (const row of await query("SELECT id, goal_id, entity_ref, entity_type, source FROM goal_entities")) {
     const id = String(row.id);
+    existingLinks.set(id, row);
     if (!seenLinks.has(id)) await exec("DELETE FROM goal_entities WHERE id = ?", [id]);
   }
   for (const l of snap.goalEntities) {
+    if (sameRow(existingLinks.get(l.id), l, LINK_COLS)) {
+      skipped += 1;
+      continue;
+    }
     await exec(
       `INSERT INTO goal_entities (id, goal_id, entity_ref, entity_type, source, updated_at) VALUES (?, ?, ?, ?, ?, ?)
        ON CONFLICT(id) DO UPDATE SET source=excluded.source, updated_at=excluded.updated_at`,
@@ -475,14 +505,20 @@ export async function applySnapshot(
 
   const seenTasks = new Set(snap.tasks.map((t) => t.id));
   let tasksDropped = 0;
-  for (const row of await query("SELECT id, status FROM tasks WHERE status = 'open'")) {
-    const id = String(row.id);
-    if (!seenTasks.has(id)) {
+  const existingTasks = new Map<string, Record<string, unknown>>();
+  for (const row of await query("SELECT * FROM tasks")) existingTasks.set(String(row.id), row);
+  for (const [id, row] of existingTasks) {
+    if (row.status === "open" && !seenTasks.has(id)) {
       tasksDropped += 1;
       await exec("UPDATE tasks SET status = 'dropped', updated_at = ? WHERE id = ?", [now, id]);
     }
   }
   for (const t of snap.tasks) {
+    if (sameRow(existingTasks.get(t.id), t, TASK_COLS)) {
+      skipped += 1;
+      continue;
+    }
+    tasksUpserted += 1;
     await exec(
       `INSERT INTO tasks (id, title, status, owner, due, goal_id, goal_source, entity_ref, source, source_file, source_line, created_at, updated_at, completed_at)
        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
@@ -491,7 +527,7 @@ export async function applySnapshot(
       [t.id, t.title, t.status, t.owner, t.due, t.goal_id, t.goal_source, t.entity_ref, t.source, t.source_file, t.source_line, now, now, t.status === "done" ? now : null],
     );
   }
-  return { goalsUpserted: snap.goals.length, historyRows, tasksUpserted: snap.tasks.length, tasksDropped, links: snap.goalEntities.length };
+  return { goalsUpserted, historyRows, tasksUpserted, tasksDropped, links: snap.goalEntities.length, skipped };
 }
 
 let running: Promise<unknown> | null = null;
@@ -499,7 +535,7 @@ let debounceTimer: NodeJS.Timeout | null = null;
 
 /** Project the live workspace into the Home DB. Coalesces concurrent calls. */
 export async function projectGoalsAndTasks(reason = "manual"): Promise<
-  | { ok: true; goalsUpserted: number; historyRows: number; tasksUpserted: number; tasksDropped: number; links: number }
+  | { ok: true; goalsUpserted: number; historyRows: number; tasksUpserted: number; tasksDropped: number; links: number; skipped: number }
   | { ok: false; error: string }
 > {
   if (running) {
@@ -512,7 +548,7 @@ export async function projectGoalsAndTasks(reason = "manual"): Promise<
     const snap = projectWorkspace(await readWorkspaceInput());
     const res = await applySnapshot(snap, exec, query);
     console.log(
-      `[GoalsTasksProjection] ${reason}: goals=${res.goalsUpserted} history+${res.historyRows} tasks=${res.tasksUpserted} dropped=${res.tasksDropped} links=${res.links}`,
+      `[GoalsTasksProjection] ${reason}: goals written=${res.goalsUpserted} history+${res.historyRows} tasks=${res.tasksUpserted} dropped=${res.tasksDropped} links=${res.links} unchanged=${res.skipped}`,
     );
     return { ok: true as const, ...res };
   })();
