@@ -845,6 +845,8 @@ async function startGateway(): Promise<void> {
     {
       const { registerAppCoverRoutes } = await import("./routes/appCoverRoutes.js");
       registerAppCoverRoutes(app);
+      const { registerAppDemoSceneRoutes } = await import("./routes/appDemoSceneRoutes.js");
+      registerAppDemoSceneRoutes(app);
     }
 
     app.get("/api/apps/:appId/agent-chat", async (req, res) => {
