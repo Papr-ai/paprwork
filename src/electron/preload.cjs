@@ -256,6 +256,10 @@ contextBridge.exposeInMainWorld("electronAPI", {
         ipcRenderer.invoke("papr:open-billing-portal", input),
       openUsageDashboard: () => ipcRenderer.invoke("papr:open-usage-dashboard"),
       startCheckout: (input) => ipcRenderer.invoke("papr:start-checkout", input),
+      startCreditsCheckout: (input) =>
+        ipcRenderer.invoke("papr:start-credits-checkout", input),
+      startExpertBuildCheckout: (input) =>
+        ipcRenderer.invoke("papr:start-expert-build-checkout", input),
       subscribeDeveloperPlan: () =>
         ipcRenderer.invoke("papr:subscribe-developer-plan"),
       setMeteredBilling: (enabled) =>

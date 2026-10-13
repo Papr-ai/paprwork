@@ -13,6 +13,12 @@ import type {
 } from "../../core/types/paprBilling.js";
 import { PAPR_CHECKOUT_PRICE_IDS } from "../../core/types/paprBilling.js";
 import {
+  isCreditPlanId,
+  isSelfServeExpertBuild,
+  type PaprCreditPlanId,
+  type PaprExpertBuildSize,
+} from "../../core/types/paprCreditPlans.js";
+import {
   buildPlanWarnings,
   getPlanLimitsForTier,
   planDisplayName,
@@ -718,6 +724,29 @@ async function createCheckoutUrl(input: {
   return data.url;
 }
 
+/**
+ * Credits plans + Expert Builder checkout. The dashboard resolves the org and Stripe
+ * customer from the workspace the session administers (never from this body) and stamps
+ * subscription.metadata.papr_org_id, which the memory server webhook uses to switch plan.
+ */
+async function createCreditsCheckoutUrl(
+  sessionToken: string,
+  body:
+    | { workspaceId: string; kind: "plan"; plan: PaprCreditPlanId; seats: number }
+    | { workspaceId: string; kind: "expert_build"; size: PaprExpertBuildSize; notes?: string },
+): Promise<string> {
+  const response = await fetch(`${PAPR_PLATFORM_URL}/api/v1/billing/credits-checkout`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json", "X-Parse-Session-Token": sessionToken },
+    body: JSON.stringify(body),
+  });
+  const data = (await response.json().catch(() => ({}))) as { url?: string; error?: string };
+  if (!response.ok || !data.url) {
+    throw new Error(data.error || "Unable to start checkout");
+  }
+  return data.url;
+}
+
 export function registerPaprBillingHandlers(deps: {
   settingsStorage: SettingsStorage;
   runGraphQLWithRefresh: GraphQLRunner;
@@ -816,6 +845,58 @@ export function registerPaprBillingHandlers(deps: {
           customerId: summary.stripeCustomerId,
           priceId,
           quantity: Math.max(members.length, 1),
+        });
+        await shell.openExternal(url);
+        return { success: true };
+      } catch (error) {
+        return {
+          success: false,
+          error: error instanceof Error ? error.message : "Failed to start checkout",
+        };
+      }
+    },
+  );
+
+  ipcMain.handle(
+    "papr:start-credits-checkout",
+    async (_event, input: { plan: PaprCreditPlanId }) => {
+      try {
+        if (!isCreditPlanId(input?.plan)) throw new Error("Unknown plan.");
+        const summary = await buildPlanSummary(services);
+        if (!summary.canManageBilling) {
+          throw new Error("Only the workspace owner can change plans.");
+        }
+        const profile = requireLoggedInProfile(deps.settingsStorage);
+        const members = await fetchWorkspaceMembers(profile.sessionToken!, profile.workspaceId!);
+        const url = await createCreditsCheckoutUrl(profile.sessionToken!, {
+          workspaceId: profile.workspaceId!,
+          kind: "plan",
+          plan: input.plan,
+          seats: Math.max(members.length, 1),
+        });
+        await shell.openExternal(url);
+        invalidatePlanSummaryCache();
+        return { success: true };
+      } catch (error) {
+        return {
+          success: false,
+          error: error instanceof Error ? error.message : "Failed to start checkout",
+        };
+      }
+    },
+  );
+
+  ipcMain.handle(
+    "papr:start-expert-build-checkout",
+    async (_event, input: { size: PaprExpertBuildSize; notes?: string }) => {
+      try {
+        if (!isSelfServeExpertBuild(input?.size)) throw new Error("Unknown build size.");
+        const profile = requireLoggedInProfile(deps.settingsStorage);
+        const url = await createCreditsCheckoutUrl(profile.sessionToken!, {
+          workspaceId: profile.workspaceId!,
+          kind: "expert_build",
+          size: input.size,
+          notes: typeof input.notes === "string" ? input.notes.slice(0, 450) : undefined,
         });
         await shell.openExternal(url);
         return { success: true };
