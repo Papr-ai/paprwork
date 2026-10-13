@@ -96,7 +96,32 @@ function cdcUpdateWhenClause(columns: TableColumn[]): string {
   // IS, not =: `NULL = NULL` is NULL (falsy) in SQLite, so user edits to any
   // row with an uninitialised version were never written to the change log —
   // the edit stayed local forever with nothing reported as failed.
-  return `${mute} AND OLD.${versionCol} IS NEW.${versionCol}`;
+  return `${mute} AND OLD.${versionCol} IS NEW.${versionCol}${rowChangedClause(columns)}`;
+}
+
+/**
+ * "Last touched" stamps that jobs commonly set to now() on every upsert. A change to ONLY
+ * these is not a data change, so it alone does not ship the row (the stamp still goes up
+ * with the next real change to that row).
+ */
+export const TOUCH_ONLY_COLUMNS = new Set(["updated_at", "updatedAt", "last_synced_at", "synced_at", "fetched_at"]);
+
+/**
+ * ` AND (OLD.a IS NOT NEW.a OR …)` over the user columns, so an UPDATE that rewrites a
+ * row with identical values (upsert of unchanged data) is not shipped to the cloud. Each
+ * shipped no-op costs a workspace-log append plus a Turso replay — the dominant write cost
+ * for jobs that re-sync a whole dataset on every run. Platform `_papr_*` columns are
+ * excluded: they only move because of the version-bump trigger.
+ */
+export function rowChangedClause(columns: readonly TableColumn[]): string {
+  const userCols = columns.filter(
+    (col) => !col.name.startsWith("_papr_") && !TOUCH_ONLY_COLUMNS.has(col.name),
+  );
+  if (userCols.length === 0) {
+    return "";
+  }
+  const diffs = userCols.map((col) => `OLD.${quoteIdent(col.name)} IS NOT NEW.${quoteIdent(col.name)}`);
+  return ` AND (${diffs.join(" OR ")})`;
 }
 
 /**
