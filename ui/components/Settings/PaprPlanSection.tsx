@@ -8,8 +8,6 @@ import {
   formatStorageUsage,
   formatSubscriptionStatusLabel,
   hasActivePaprSubscription,
-  planDisplayName,
-  planFeaturesForTier,
   requiresPaymentMethodForMeteredBilling,
   storageLimitToBytes,
   subscriptionStatusTone,
@@ -18,13 +16,12 @@ import {
 import { planNeedsAttention } from "../../utils/cloudMemoryStatus";
 import { refreshPaprBillingStatus } from "../../utils/refreshPaprBillingStatus";
 import { useSettingsNavigationStore } from "../../stores/settingsNavigationStore";
+import { CreditPlanCards, type CreditPlanAction } from "./CreditPlanCards";
+import type {
+  PaprCreditPlanId,
+  PaprExpertBuildSize,
+} from "../../../src/core/types/paprCreditPlans";
 import "./PaprPlanSection.css";
-
-const PLAN_OPTIONS = [
-  { tier: "developer" as const, price: "Free", isDeveloper: true },
-  { tier: "starter" as const, price: "$100/mo", isDeveloper: false },
-  { tier: "growth" as const, price: "$500/mo", isDeveloper: false },
-] as const;
 
 function Spinner() {
   return (
@@ -123,8 +120,9 @@ export function PaprPlanSection() {
   const [meteredSaving, setMeteredSaving] = useState(false);
   const [portalOpening, setPortalOpening] = useState(false);
   const [planActionTier, setPlanActionTier] = useState<
-    "developer" | "starter" | "growth" | null
+    "developer" | null
   >(null);
+  const [creditAction, setCreditAction] = useState<CreditPlanAction>(null);
   const navigationToken = useSettingsNavigationStore((state) => state.token);
   const pendingPlanFocus = useSettingsNavigationStore(
     (state) => state.pendingPlanFocus,
@@ -223,19 +221,35 @@ export function PaprPlanSection() {
     }
   };
 
-  const handleCheckout = async (tier: "starter" | "growth") => {
-    setPlanActionTier(tier);
+
+
+  const handleCreditsCheckout = async (plan: PaprCreditPlanId) => {
+    setCreditAction(plan);
     setActionMessage(null);
     try {
-      const result = await window.electronAPI.papr.startCheckout({
-        tier,
-        billingCycle: "monthly",
-      });
-      if (!result.success) {
-        setActionMessage(result.error || "Could not start checkout");
-      }
+      const result = await window.electronAPI.papr.startCreditsCheckout({ plan });
+      setActionMessage(
+        result.success
+          ? "Checkout opened in your browser. Your plan updates here once payment completes."
+          : result.error || "Could not start checkout",
+      );
     } finally {
-      setPlanActionTier(null);
+      setCreditAction(null);
+    }
+  };
+
+  const handleExpertBuild = async (size: PaprExpertBuildSize) => {
+    setCreditAction(`expert:${size}`);
+    setActionMessage(null);
+    try {
+      const result = await window.electronAPI.papr.startExpertBuildCheckout({ size });
+      setActionMessage(
+        result.success
+          ? "Checkout opened in your browser. A Papr engineer will reach out to scope your build."
+          : result.error || "Could not start checkout",
+      );
+    } finally {
+      setCreditAction(null);
     }
   };
 
@@ -484,7 +498,7 @@ export function PaprPlanSection() {
               <div className="papr-plan__upgrade-section">
                 <div className="papr-plan__upgrade-heading">
                   <span className="papr-plan__upgrade-label">
-                    {summary.canManageBilling ? "Upgrade plan" : "Available plans"}
+                    {summary.canManageBilling ? "Choose a plan" : "Available plans"}
                   </span>
                   {!summary.canManageBilling ? (
                     <span className="papr-plan__upgrade-note">
@@ -492,82 +506,18 @@ export function PaprPlanSection() {
                     </span>
                   ) : null}
                 </div>
-                <div className="papr-plan__upgrade-grid">
-                  {PLAN_OPTIONS.map(({ tier, price, isDeveloper }) => {
-                    const isCurrentPlan = summary.planTier === tier;
-                    const isActiveCurrent =
-                      isCurrentPlan && hasActivePaprSubscription(summary);
-                    const canChooseDeveloper =
-                      isDeveloper &&
-                      summary.canManageBilling &&
-                      !isActiveCurrent &&
-                      (!hasActivePaprSubscription(summary) || isCurrentPlan);
-
-                    return (
-                      <div
-                        key={tier}
-                        className={
-                          isCurrentPlan
-                            ? "papr-plan__upgrade-card papr-plan__upgrade-card--current"
-                            : "papr-plan__upgrade-card"
-                        }
-                      >
-                        <div className="papr-plan__upgrade-card-head">
-                          <div className="papr-plan__upgrade-card-name">
-                            {planDisplayName(tier)}
-                          </div>
-                          {isCurrentPlan && summary.subscriptionStatus ? (
-                            <span
-                              className="papr-plan__status-pill"
-                              data-tone={subscriptionStatusTone(summary.subscriptionStatus)}
-                            >
-                              {formatSubscriptionStatusLabel(summary.subscriptionStatus)}
-                            </span>
-                          ) : null}
-                        </div>
-                        <div className="papr-plan__upgrade-card-price">{price}</div>
-                        <div className="papr-plan__upgrade-card-features">
-                          {planFeaturesForTier(tier)}
-                        </div>
-                        {isActiveCurrent ? (
-                          <span className="papr-plan__upgrade-card-badge">Current plan</span>
-                        ) : canChooseDeveloper ? (
-                          <button
-                            type="button"
-                            className="papr-plan__secondary-btn papr-plan__upgrade-card-btn"
-                            disabled={planActionTier !== null}
-                            onClick={() => void handleSubscribeDeveloper()}
-                          >
-                            {planActionTier === "developer" ? (
-                              <Spinner />
-                            ) : isCurrentPlan ? (
-                              "Activate free plan"
-                            ) : (
-                              "Get started free"
-                            )}
-                          </button>
-                        ) : summary.canManageBilling && !isDeveloper ? (
-                          <button
-                            type="button"
-                            className="papr-plan__secondary-btn papr-plan__upgrade-card-btn"
-                            disabled={planActionTier !== null}
-                            onClick={() => void handleCheckout(tier)}
-                          >
-                            {planActionTier === tier ? (
-                              <Spinner />
-                            ) : isCurrentPlan ? (
-                              "Resubscribe"
-                            ) : (
-                              `Choose ${planDisplayName(tier)}`
-                            )}
-                          </button>
-                        ) : isCurrentPlan ? (
-                          <span className="papr-plan__upgrade-card-badge">Your plan</span>
-                        ) : null}
-                      </div>
-                    );
-                  })}
-                </div>
+                <CreditPlanCards
+                  canManageBilling={summary.canManageBilling}
+                  pending={creditAction}
+                  onChoosePlan={(plan) => void handleCreditsCheckout(plan)}
+                  onBuyExpertBuild={(size) => void handleExpertBuild(size)}
+                  onActivateLocal={
+                    summary.canManageBilling && !hasActivePaprSubscription(summary)
+                      ? () => void handleSubscribeDeveloper()
+                      : undefined
+                  }
+                  localPending={planActionTier === "developer"}
+                />
               </div>
             ) : null}
 

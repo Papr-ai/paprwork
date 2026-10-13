@@ -473,6 +473,13 @@ export interface ElectronAPI {
       tier: "starter" | "growth";
       billingCycle: "monthly" | "yearly";
     }) => Promise<{ success: boolean; error?: string }>;
+    startCreditsCheckout: (input: {
+      plan: import("../../src/core/types/paprCreditPlans").PaprCreditPlanId;
+    }) => Promise<{ success: boolean; error?: string }>;
+    startExpertBuildCheckout: (input: {
+      size: import("../../src/core/types/paprCreditPlans").PaprExpertBuildSize;
+      notes?: string;
+    }) => Promise<{ success: boolean; error?: string }>;
     subscribeDeveloperPlan: () => Promise<{
       success: boolean;
       created?: boolean;
