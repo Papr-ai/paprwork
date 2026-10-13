@@ -39,6 +39,11 @@ export function initProposalNoticeListener(): void {
   });
   window.addEventListener("papr-notification-open-settings", (event: Event) => {
     const target = (event as CustomEvent<{ target?: string }>).detail?.target;
+    // papr://billing deep link (post-checkout page) lands on the plan card.
+    if (target === "billing") {
+      ensureSettingsTab({ section: "billing", focusPlan: true });
+      return;
+    }
     if (target !== "connections" && target !== "connections-requests") return;
     ensureSettingsTab({ section: "connections" });
     if (target === "connections-requests") {
