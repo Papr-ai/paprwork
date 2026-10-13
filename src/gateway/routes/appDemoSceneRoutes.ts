@@ -1,79 +1,101 @@
 /**
- * App demo scenes: generation is handed to the Papr agent (AgentService) so the model,
- * auth (OAuth / API key / Papr proxy) and fallbacks match the rest of Paprwork.
- * See services/appDemoScenes.ts.
+ * App preview videos (see services/appDemoVideos.ts).
+ * The scene is written by the Papr agent (AgentService — Paprwork's model, auth and
+ * fallbacks) and recorded to MP4 by Electron.
  */
+import * as fs from "fs";
 import type { Express } from "express";
 import {
   DEMO_SCENE_SYSTEM,
-  buildDemoScenePrompt,
-  hasDemoScene,
+  demoPaths,
+  demoStatus,
   isValidDemoAppId,
   listDemoAppIds,
-  readDemoScene,
-  saveDemoScene,
-} from "../services/appDemoScenes.js";
+  markRecording,
+  shareDemoVideo,
+  sharedCoverKind,
+  startDemoGeneration,
+  type DemoDeps,
+} from "../services/appDemoVideos.js";
+
+const deps: DemoDeps = {
+  async writeScene(appId, prompt) {
+    const { getAgentService } = await import("../services/AgentService.js");
+    const result = await getAgentService().runStructuredJobSession({
+      jobId: `app-demo-${appId}`,
+      runId: String(Date.now()),
+      prompt: `${DEMO_SCENE_SYSTEM}\n\n---\n\n${prompt}`,
+      schemaName: "demo_scene",
+      schemaDescription: "A self-contained HTML document for the app's animated preview loop.",
+      outputSchema: {
+        type: "object",
+        properties: { html: { type: "string", description: "Full HTML file starting with <!doctype html>" } },
+        required: ["html"],
+        additionalProperties: false,
+      },
+    });
+    const html = (result.object as { html?: unknown })?.html;
+    if (typeof html !== "string") throw new Error("The model returned no scene.");
+    return html;
+  },
+  async render(paths) {
+    markRecording(paths.scenePath.split(/[\\/]/).pop()!.split(".")[0]!);
+    const { requestAppDemoRender } = await import("../utils/appDemoRenderBridge.js");
+    return requestAppDemoRender(paths);
+  },
+};
 
 export function registerAppDemoSceneRoutes(app: Express): void {
-  /** Which apps have a preview loop — one call for the whole library. */
+  /** Which apps have a preview video — one call for the whole library. */
   app.get("/api/apps/demos", (_req, res) => {
     res.setHeader("Cache-Control", "no-cache");
     res.json({ appIds: listDemoAppIds() });
   });
 
-  app.get("/api/apps/:appId/demo-scene/status", (req, res) => {
-    res.json({ exists: hasDemoScene(req.params.appId ?? "") });
-  });
-
-  /** The scene HTML. ?play=1 adds the looping player (for iframes). */
-  app.get("/api/apps/:appId/demo-scene", (req, res) => {
-    const html = readDemoScene(req.params.appId ?? "", req.query.play === "1", req.query.fit === "cover");
-    if (!html) {
-      res.status(404).end();
-      return;
-    }
-    res.setHeader("Content-Type", "text/html; charset=utf-8");
-    res.setHeader("Cache-Control", "no-cache");
-    res.send(html);
-  });
-
-  /** Generate (or regenerate). Body is optional: { feedback?, provider?, model? }. */
-  app.post("/api/apps/:appId/demo-scene/generate", async (req, res) => {
+  app.get("/api/apps/:appId/demo", (req, res) => {
     const appId = req.params.appId ?? "";
     if (!isValidDemoAppId(appId)) {
       res.status(400).json({ error: "invalid appId" });
       return;
     }
-    const body = (req.body ?? {}) as { system?: unknown; prompt?: unknown; feedback?: unknown; provider?: unknown; model?: unknown };
+    res.setHeader("Cache-Control", "no-cache");
+    res.json({ ...demoStatus(appId), sharedKind: sharedCoverKind(appId) });
+  });
+
+  /** Owner approval: the preview video becomes the shared cover (Community / Team cards). */
+  app.post("/api/apps/:appId/demo/share", async (req, res) => {
     try {
-      const system = typeof body.system === "string" ? body.system : DEMO_SCENE_SYSTEM;
-      let user = typeof body.prompt === "string" && body.prompt.trim() ? body.prompt : buildDemoScenePrompt(appId);
-      if (typeof body.feedback === "string" && body.feedback.trim()) {
-        user += `\n\nYOUR PREVIOUS ATTEMPT HAD PROBLEMS — fix them:\n${body.feedback}`;
-      }
-      const { getAgentService } = await import("../services/AgentService.js");
-      const result = await getAgentService().runStructuredJobSession({
-        jobId: `demo-scene-${appId}`,
-        runId: String(Date.now()),
-        prompt: `${system}\n\n---\n\n${user}`,
-        schemaName: "demo_scene",
-        schemaDescription: "A self-contained HTML document for the app's animated preview loop.",
-        outputSchema: {
-          type: "object",
-          properties: { html: { type: "string", description: "Full HTML file starting with <!doctype html>" } },
-          required: ["html"],
-          additionalProperties: false,
-        },
-        ...(typeof body.provider === "string" ? { provider: body.provider as never } : {}),
-        ...(typeof body.model === "string" ? { model: body.model } : {}),
-      });
-      const raw = (result.object as { html?: unknown })?.html;
-      if (typeof raw !== "string" || !/<html|<!doctype/i.test(raw)) {
-        res.status(502).json({ error: "The model returned no scene." });
-        return;
-      }
-      const html = saveDemoScene(appId, raw);
-      res.json({ saved: true, html });
+      const { uploadCoverToAppFiles } = await import("./appCoverRoutes.js");
+      res.json(await shareDemoVideo(req.params.appId ?? "", uploadCoverToAppFiles));
+    } catch (err) {
+      res.status(500).json({ error: (err as Error).message });
+    }
+  });
+
+  const sendDemoFile = (kind: "video" | "poster", type: string) => (req: { params: { appId?: string } }, res: import("express").Response) => {
+    const appId = req.params.appId ?? "";
+    const file = isValidDemoAppId(appId) ? demoPaths(appId)[kind] : "";
+    if (!file || !fs.existsSync(file)) {
+      res.status(404).end();
+      return;
+    }
+    res.setHeader("Content-Type", type);
+    res.setHeader("Cache-Control", "no-cache");
+    res.sendFile(file); // supports Range for <video>
+  };
+  app.get("/api/apps/:appId/demo/video", sendDemoFile("video", "video/mp4"));
+  app.get("/api/apps/:appId/demo/poster", sendDemoFile("poster", "image/jpeg"));
+
+  /** Start making (or remaking) the preview. Returns at once; poll GET /demo for progress. */
+  app.post("/api/apps/:appId/demo/generate", (req, res) => {
+    const appId = req.params.appId ?? "";
+    if (!isValidDemoAppId(appId)) {
+      res.status(400).json({ error: "invalid appId" });
+      return;
+    }
+    try {
+      startDemoGeneration(appId, deps);
+      res.status(202).json(demoStatus(appId));
     } catch (err) {
       res.status(500).json({ error: (err as Error).message });
     }

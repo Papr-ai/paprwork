@@ -10,7 +10,8 @@ import type { AppStatusLine } from "../../utils/appStatusLine";
 import type { ShareGlyph } from "../../utils/shareGlyph";
 import { ShareAudienceIcon } from "./WebSyncPopover";
 import { APP_COVER_CHANGED_EVENT, appCoverUrl, setAppCoverShared, useAppHasCover } from "../../utils/appCover";
-import { useAppDemoUrl } from "../../utils/appDemo";
+import { useAppDemo } from "../../utils/appDemo";
+import { DemoVideo } from "./DemoVideo";
 
 export type AppStatus = "draft" | "active" | "archived";
 
@@ -77,8 +78,11 @@ export function AppCard({
   // Cover = picture of the app's first screen (own private one, else owner-shared).
   const [coverVersion, setCoverVersion] = useState(() => artifact.updatedAt);
   const [coverBroken, setCoverBroken] = useState(false);
-  const demoUrl = useAppDemoUrl(artifact.id);
-  const hasCover = (useAppHasCover(artifact.id) && !coverBroken) || Boolean(demoUrl);
+  // Preview video (made from the app's code) wins over the screenshot.
+  const demo = useAppDemo(artifact.id);
+  const [demoBroken, setDemoBroken] = useState(false);
+  const showDemo = Boolean(demo) && !demoBroken;
+  const hasCover = (useAppHasCover(artifact.id) && !coverBroken) || showDemo;
   const setHasCover = (v: boolean) => setCoverBroken(!v);
   useEffect(() => {
     const onChanged = (e: Event) => {
@@ -307,16 +311,8 @@ export function AppCard({
       draggable
       onDragStart={handleDragStart}
     >
-      {demoUrl && !compact ? (
-        <iframe
-          className="app-card__cover app-demo-frame"
-          src={demoUrl}
-          title=""
-          tabIndex={-1}
-          aria-hidden="true"
-          loading="lazy"
-          sandbox="allow-scripts"
-        />
+      {showDemo && demo && !compact ? (
+        <DemoVideo className="app-card__cover" src={demo.video} poster={demo.poster} onError={() => setDemoBroken(true)} />
       ) : hasCover && !compact ? (
         <img
           className="app-card__cover"

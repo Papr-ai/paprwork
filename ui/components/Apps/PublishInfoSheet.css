@@ -1,4 +1,6 @@
-.pis { display: flex; flex-direction: column; gap: 14px; padding: 4px 20px 18px; }
+/* App info sheet. Scrolls inside the share sheet so the footer never falls off-screen. */
+.pis { display: flex; flex-direction: column; flex: 1; min-height: 0; }
+.pis-body { display: flex; flex-direction: column; gap: 14px; padding: 4px 20px 16px; overflow-y: auto; min-height: 0; }
 .pis-lead { margin: 0; color: var(--text-secondary); font-size: 13px; }
 .pis-field { display: flex; flex-direction: column; gap: 6px; }
 .pis-label { font-size: 12px; font-weight: 600; color: var(--text-secondary); }
@@ -8,28 +10,58 @@
   background: var(--bg-secondary, transparent);
 }
 .pis-input:focus { outline: none; border-color: var(--accent, #0161e0); }
-.pis-covers { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; }
-.pis-cover {
-  display: flex; flex-direction: column; gap: 6px; padding: 6px; cursor: pointer;
-  border-radius: 12px; border: 1.5px solid var(--border-color); background: transparent;
-  color: var(--text-primary); font: inherit;
-}
-.pis-cover.is-on { border-color: var(--accent, #0161e0); box-shadow: 0 0 0 3px rgba(1, 97, 224, 0.15); }
-.pis-cover:disabled { cursor: default; opacity: 0.6; }
-.pis-cover img, .pis-banner, .pis-empty {
-  display: block; width: 100%; aspect-ratio: 16 / 9; border-radius: 8px; object-fit: cover; object-position: top;
-}
-.pis-banner { background: linear-gradient(135deg, #0161e0, #4f46e5); }
-.pis-empty {
-  display: grid; place-items: center; font-size: 12px; color: var(--text-tertiary);
-  background: var(--bg-secondary, rgba(0, 0, 0, 0.04));
-}
-.pis-cap { font-size: 12.5px; font-weight: 500; text-align: center; }
-.pis-row { display: flex; align-items: center; gap: 10px; }
+.pis-opt { font-style: normal; font-weight: 400; color: var(--text-tertiary); margin-left: 4px; }
 .pis-hint { font-size: 12px; color: var(--text-tertiary); }
 .pis-error { margin: 0; font-size: 12.5px; color: var(--danger, #d92d20); }
-.pis-foot { display: flex; justify-content: flex-end; gap: 8px; padding-top: 4px; }
-.pis-opt { font-style: normal; font-weight: 400; color: var(--text-tertiary); margin-left: 4px; }
-.pis-demo { width: 100%; aspect-ratio: 16 / 9; border-radius: 10px; overflow: hidden; border: 1px solid var(--border-color); background: var(--bg-secondary, rgba(0, 0, 0, 0.04)); }
-.pis-demo iframe { display: block; width: 100%; height: 100%; border: 0; }
-.pis-demo .pis-empty { height: 100%; aspect-ratio: auto; border-radius: 0; }
+.pis-foot {
+  flex: none; display: flex; justify-content: flex-end; gap: 8px;
+  padding: 12px 20px 16px; border-top: 1px solid var(--border-color);
+}
+
+/* Cover: one large preview of the selected choice, then three small choices. */
+.pis-hero {
+  position: relative; aspect-ratio: 16 / 9; border-radius: 12px; overflow: hidden;
+  background: var(--bg-secondary, rgba(0, 0, 0, 0.04)); box-shadow: inset 0 0 0 1px var(--border-color);
+}
+.pis-media { display: block; width: 100%; height: 100%; object-fit: cover; }
+.pis-hero .pis-banner { position: absolute; inset: 0; }
+.pis-make {
+  position: absolute; inset: 0; display: flex; flex-direction: column; align-items: center; justify-content: center;
+  gap: 6px; padding: 20px 28px; text-align: center;
+  background: radial-gradient(120% 90% at 50% 0%, rgba(1, 97, 224, 0.10), transparent 70%);
+}
+.pis-make b { font-size: 14px; font-weight: 600; color: var(--text-primary); }
+.pis-make span { font-size: 12.5px; line-height: 1.4; color: var(--text-secondary); max-width: 300px; }
+.pis-make .ss6-btn { margin-top: 8px; }
+.pis-spin {
+  width: 22px; height: 22px; margin-bottom: 4px; border-radius: 50%;
+  border: 2px solid rgba(1, 97, 224, 0.2); border-top-color: var(--accent, #0161e0);
+  animation: pis-spin 0.9s linear infinite;
+}
+@keyframes pis-spin { to { transform: rotate(360deg); } }
+.pis-make.is-busy { background: radial-gradient(120% 90% at 50% 0%, rgba(1, 97, 224, 0.14), transparent 70%); }
+
+.pis-covers { display: grid; grid-template-columns: repeat(3, 1fr); gap: 8px; }
+.pis-cover {
+  display: flex; flex-direction: column; gap: 5px; padding: 4px; cursor: pointer;
+  border-radius: 10px; border: 1.5px solid transparent; background: transparent;
+  color: var(--text-secondary); font: inherit;
+}
+.pis-cover:hover:not(:disabled) { background: var(--ss6-hover, rgba(15, 23, 42, 0.04)); }
+.pis-cover.is-on { border-color: var(--accent, #0161e0); color: var(--text-primary); }
+.pis-cover:disabled { cursor: default; opacity: 0.5; }
+.pis-art { display: block; aspect-ratio: 16 / 9; border-radius: 6px; overflow: hidden; box-shadow: inset 0 0 0 1px var(--border-color); }
+.pis-art img { display: block; width: 100%; height: 100%; object-fit: cover; object-position: top; }
+.pis-banner { display: block; width: 100%; height: 100%; background: linear-gradient(135deg, #0161e0, #4f46e5); }
+.pis-empty {
+  display: grid; place-items: center; width: 100%; height: 100%; font-size: 11px; color: var(--text-tertiary);
+  background: var(--bg-secondary, rgba(0, 0, 0, 0.04));
+}
+.pis-cap { font-size: 12px; font-weight: 500; text-align: center; }
+.pis-row { display: flex; align-items: center; gap: 10px; min-height: 22px; }
+.pis-link {
+  flex: none; padding: 0; border: 0; background: none; font: inherit; font-size: 12.5px; font-weight: 500;
+  color: var(--accent, #0161e0); cursor: pointer;
+}
+.pis-link:disabled { color: var(--text-tertiary); cursor: default; }
+@media (prefers-reduced-motion: reduce) { .pis-spin { animation: none; } }

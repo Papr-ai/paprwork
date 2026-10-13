@@ -16,7 +16,7 @@ import { listCoveredAppIds,
  * Store the cover through the same App Files path mini-apps use (POST /api/files/upload),
  * then make it CDN-readable so Community/Team cards can load it without signing in.
  */
-const uploadCoverToAppFiles: CoverUploader = async ({ appId, filePath, fileName, mime }) => {
+export const uploadCoverToAppFiles: CoverUploader = async ({ appId, filePath, fileName, mime }) => {
   const port = process.env.GATEWAY_PORT ?? "18789";
   const base = (process.env.PAPR_GATEWAY_URL ?? `http://127.0.0.1:${port}`).replace(/\/$/, "");
   const res = await fetch(`${base}/api/files/upload`, {

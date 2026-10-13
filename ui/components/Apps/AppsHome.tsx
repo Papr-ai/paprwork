@@ -42,6 +42,7 @@ import { HomeIcon, type HomeIconName } from "./HomeIcon";
 import type { LibraryCardHandlers } from "./LibraryPane";
 import { homeStatus } from "../../utils/homeStatus";
 import "./AppsHome.css";
+import { startDemoGeneration, useAppDemoIds } from "../../utils/appDemo";
 
 const SMART: Array<{ id: string; name: string; icon: HomeIconName }> = [
   { id: "s:recent", name: "Recent", icon: "clock" },
@@ -83,6 +84,8 @@ export function AppsHome(p: AppsHomeProps) {
   );
   const [openFolder, setOpenFolder] = useState<{ id: string; fresh: boolean } | null>(null);
   const [renamingId, setRenamingId] = useState<string | null>(null);
+  const demoIds = useAppDemoIds();
+  const hasDemo = (id: string) => demoIds.has(id);
   const [dragging, setDragging] = useState<string | null>(null);
   const [hover, setHover] = useState<{ id: string; zone: DropZone } | null>(null);
 
@@ -190,6 +193,10 @@ export function AppsHome(p: AppsHomeProps) {
     items.push({ label: a.favorite ? "Remove from Favorites" : "Add to Favorites", onSelect: () => p.onToggleFavorite(a.id) });
     if (attention(a)) items.push({ label: "Fix with Pen", onSelect: () => p.onFix(a) });
     if (p.showCopyAction) items.push({ label: "Copy to workspace…", onSelect: () => p.onCopy(a) });
+    items.push({
+      label: hasDemo(a.id) ? "Make a new preview video" : "Make preview video",
+      onSelect: () => void startDemoGeneration(a.id).catch(() => undefined),
+    });
     items.push({ label: "—", onSelect: () => undefined });
     items.push({ label: "Archive", onSelect: () => p.onSetStatus(a.id, "archived") });
     items.push({ label: "Delete app", danger: true, onSelect: () => p.onDelete(a.id) });

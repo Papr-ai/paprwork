@@ -2539,8 +2539,8 @@ export class CloudAppHostService {
         return;
       }
 
-      if (requestedPath === "papr-cover") {
-        await this.handleSharedCover(res, runtimeAuth, access?.canRead === true);
+      if (requestedPath === "papr-cover" || requestedPath === "papr-cover-video") {
+        await this.handleSharedCover(res, runtimeAuth, access?.canRead === true, requestedPath === "papr-cover-video");
         return;
       }
 
@@ -2627,6 +2627,7 @@ export class CloudAppHostService {
     res: Response,
     runtimeAuth: AppRuntimeRouteAuth,
     canReadRepo: boolean,
+    video = false,
   ): Promise<void> {
     if (!canReadRepo) {
       res.status(404).send("Not found");
@@ -2635,7 +2636,17 @@ export class CloudAppHostService {
     const pointerFile = await fetchCachedRuntimeRepoFile(runtimeAuth, "papr-cover.json").catch(() => null);
     if (pointerFile) {
       try {
-        const pointer = JSON.parse(pointerFile.content) as { url?: unknown };
+        const pointer = JSON.parse(pointerFile.content) as { url?: unknown; videoUrl?: unknown };
+        // papr-cover-video: the owner-shared preview loop (MP4), when there is one.
+        if (video) {
+          if (typeof pointer.videoUrl === "string" && /^https:\/\//.test(pointer.videoUrl)) {
+            res.setHeader("Cache-Control", "public, max-age=300");
+            res.redirect(302, pointer.videoUrl);
+          } else {
+            res.status(404).send("Not found");
+          }
+          return;
+        }
         if (typeof pointer.url === "string" && /^https:\/\//.test(pointer.url)) {
           res.setHeader("Cache-Control", "public, max-age=300");
           res.redirect(302, pointer.url);
@@ -2644,6 +2655,10 @@ export class CloudAppHostService {
       } catch {
         // fall through to the inline cover
       }
+    }
+    if (video) {
+      res.status(404).send("Not found");
+      return;
     }
     const file = await fetchCachedRuntimeRepoFile(runtimeAuth, "papr-cover.txt").catch(() => null);
     const m = file ? /^data:(image\/(?:png|jpeg|webp));base64,(.+)$/s.exec(file.content.trim()) : null;

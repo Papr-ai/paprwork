@@ -26,6 +26,7 @@ const {
 let mediaPermissionRequest = null;
 let mediaPermissionCheck = null;
 const { registerCloudPreviewSessionIPC } = require("./ipc/cloudPreviewSession.cjs");
+const { renderAppDemoVideo } = require("./ipc/appDemoRender.cjs");
 const {
   registerPlatformBrowserIPC,
   handlePlatformBrowserRequest,
@@ -1648,6 +1649,23 @@ class GatewayProcessSupervisor {
               response: { success: false, error: error instanceof Error ? error.message : String(error) },
             });
           }
+        }
+      } else if (msg && msg.type === "REQUEST_APP_DEMO_RENDER" && typeof msg.requestId === "string") {
+        // App preview video: record the agent-written scene to MP4 (offscreen + WebCodecs).
+        let response;
+        try {
+          const r = msg.request || {};
+          const demos = path.resolve(path.dirname(String(r.videoPath || "")));
+          const ok = [r.scenePath, r.videoPath, r.posterPath].every(
+            (f) => typeof f === "string" && path.resolve(path.dirname(f)) === demos && path.basename(demos) === "demos",
+          );
+          if (!ok) throw new Error("invalid demo paths");
+          response = { success: true, data: await renderAppDemoVideo(r) };
+        } catch (error) {
+          response = { success: false, error: error instanceof Error ? error.message : String(error) };
+        }
+        if (proc === this.process) {
+          proc.send({ type: "APP_DEMO_RENDER_RESPONSE", requestId: msg.requestId, response });
         }
       } else if (isRequestPlatformBrowserMessage(msg)) {
         try {
