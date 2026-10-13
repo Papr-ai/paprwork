@@ -112,7 +112,7 @@ describe("QueuedMessages motion (same as the Prototyper)", () => {
       expect(rows[0].textContent).toContain("first");
       // The ghost has no live actions, and the survivor is now first in line.
       expect(rows[0].querySelector("button")).toBeNull();
-      expect(rows[1].textContent).toContain("Sends after current step");
+      expect(rows[1].textContent).toContain("Sends when the agent finishes");
       act(() => { vi.advanceTimersByTime(QUEUED_FOLD_MS + 10); });
       expect(screen.getAllByTestId("queued-follow-up")).toHaveLength(1);
       expect(screen.queryByText("first")).toBeNull();
