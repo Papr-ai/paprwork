@@ -22,10 +22,17 @@ export const LAST_CHANGE_ID_TABLE = "turso_sync_last_change_id";
 export const CANONICAL_LAST_CHANGE_ID_SQL =
   "CREATE TABLE turso_sync_last_change_id (client_id TEXT PRIMARY KEY, pull_gen INTEGER, change_id INTEGER)";
 
-/** The engine's catchable error when the primary holds the degraded table. */
+/**
+ * The engine's catchable errors when the primary holds the degraded table.
+ * Typed-but-keyless is the push-side symptom: the engine upserts its counter row with
+ * ON CONFLICT(client_id), which SQLite rejects when client_id is not a key. The same
+ * message can come from an app table, so the caller only retries when the repair
+ * actually found (and fixed) a defect; a healthy table means "not ours, rethrow".
+ */
 export function isPrimaryEngineTableTypeError(message: string): boolean {
   return /unexpected source (pull_gen|change_id) type/i.test(message) ||
-    /unexpected MAX\(change_id\) column type/i.test(message);
+    /unexpected MAX\(change_id\) column type/i.test(message) ||
+    /ON CONFLICT clause does not match any PRIMARY KEY or UNIQUE constraint/i.test(message);
 }
 
 type Remote = Pick<Client, "execute" | "batch">;
