@@ -446,12 +446,15 @@ export function mergeHistoryWithLocal(
 
   const merged: ChatMessage[] = [];
   const consumedLocalIds = new Set<string>();
+  /** Local id → index in `merged`, for consumed locals (ids may be rewritten). */
+  const mergedIndexByLocalId = new Map<string, number>();
   const windowStartIndex = Math.max(0, base.length - serverMessages.length);
 
   // Server list is chronological — walk it so missing middle turns land in order.
   for (const serverMsg of serverMessages) {
     const localById = base.find((m) => m.id === serverMsg.id);
     if (localById) {
+      mergedIndexByLocalId.set(localById.id, merged.length);
       merged.push(
         localById.role === "assistant"
           ? upgradeAssistantFromServer(localById, serverMsg)
@@ -470,6 +473,7 @@ export function mergeHistoryWithLocal(
         windowStartIndex,
       );
       if (localDup) {
+        mergedIndexByLocalId.set(localDup.id, merged.length);
         merged.push({
           ...localDup,
           id: serverMsg.id,
@@ -491,6 +495,7 @@ export function mergeHistoryWithLocal(
         windowStartIndex,
       );
       if (localDup) {
+        mergedIndexByLocalId.set(localDup.id, merged.length);
         merged.push(upgradeAssistantFromServer(localDup, serverMsg));
         consumedLocalIds.add(localDup.id);
         continue;
@@ -521,8 +526,24 @@ export function mergeHistoryWithLocal(
 
   const beforeWindow: ChatMessage[] = [];
   const afterWindow: ChatMessage[] = [];
+  /** merged index → stale unsent user messages that belong right before it. */
+  const staleBefore = new Map<number, ChatMessage[]>();
   base.forEach((localMsg, index) => {
     if (consumedLocalIds.has(localMsg.id)) return;
+    const staleAnchor =
+      firstConsumedIndex !== -1 && index > firstConsumedIndex
+        ? staleUnsentUserAnchor(base, index, localMsg, mergedIndexByLocalId)
+        : undefined;
+    if (staleAnchor !== undefined) {
+      // A send that never saved, yet the server has already confirmed a
+      // message the user sent AFTER it — so it is not in flight any more.
+      // Appending it would plant an old message below the newest reply on
+      // every reload; keep it where it was typed instead.
+      const list = staleBefore.get(staleAnchor) ?? [];
+      list.push(localMsg);
+      staleBefore.set(staleAnchor, list);
+      return;
+    }
     // With nothing consumed there is no window to sit outside of, so keep the
     // original append-at-the-end behaviour rather than guessing.
     if (firstConsumedIndex !== -1 && index < firstConsumedIndex) {
@@ -544,7 +565,37 @@ export function mergeHistoryWithLocal(
     }
   });
 
-  return dedupeChatMessages([...beforeWindow, ...merged, ...afterWindow]);
+  const middle: ChatMessage[] = [];
+  merged.forEach((msg, i) => {
+    const stale = staleBefore.get(i);
+    if (stale) middle.push(...stale);
+    middle.push(msg);
+  });
+
+  return dedupeChatMessages([...beforeWindow, ...middle, ...afterWindow]);
+}
+
+/**
+ * For an unsaved optimistic user send (`msg-user-<ms>`) that the server window
+ * did not account for: if a LATER local message was confirmed by the server,
+ * return that message's index in `merged` (the send is stale — it failed or
+ * was dropped, and the user has moved on). Otherwise undefined: it may still
+ * be in flight and belongs at the tail.
+ */
+function staleUnsentUserAnchor(
+  base: ChatMessage[],
+  index: number,
+  localMsg: ChatMessage,
+  mergedIndexByLocalId: Map<string, number>,
+): number | undefined {
+  if (localMsg.role !== "user" || isPersistedMessageId(localMsg.id)) {
+    return undefined;
+  }
+  for (let j = index + 1; j < base.length; j++) {
+    const at = mergedIndexByLocalId.get(base[j].id);
+    if (at !== undefined) return at;
+  }
+  return undefined;
 }
 
 /**

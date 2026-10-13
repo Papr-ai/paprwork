@@ -6,7 +6,7 @@
  */
 
 import { createHash } from "node:crypto";
-import { existsSync, readFileSync, writeFileSync } from "node:fs";
+import { existsSync, readdirSync, readFileSync, writeFileSync } from "node:fs";
 import * as path from "node:path";
 
 export const PAPR_APP_CLOUD_REVISION_PATH = ".papr-cloud-revision";
@@ -25,27 +25,43 @@ export function distBundleRevisionHash(distAppJsContent: string): string {
 }
 
 /**
- * Revision for a whole app: dist/app.js plus the backend files Cloud App Host caches
- * under it (manifest + bundle.json, which carries every handler's sha256).
- *
- * Hashing dist/app.js alone meant a backend-only edit left the revision unchanged, so
- * the host kept serving the old handlers from its revision-keyed cache.
- * Apps without a backend keep the plain dist hash, so their revision does not change.
+ * Revision for a whole app. Cloud App Host caches every published file under this
+ * marker, so anything it serves must move it:
+ * - dist/app.js
+ * - backend manifest + bundle.json (carries every handler's sha256) — a backend-only
+ *   edit must not keep serving old handlers
+ * - Claude cards (dist/cards/*) — a card-only change must not keep serving the old card
+ * Apps with neither backend nor cards keep the plain dist hash, so their revision is stable.
  */
 export function appRevisionHash(appDir: string): string | null {
   const distPath = path.join(appDir, "dist", "app.js");
   if (!existsSync(distPath)) {
     return null;
   }
-  const dist = readFileSync(distPath, "utf8");
+  return appCloudRevisionHash(appDir, readFileSync(distPath, "utf8"));
+}
+
+export function appCloudRevisionHash(appDir: string, distAppJsContent: string): string {
   const backendParts = ["manifest.json", "bundle.json"]
     .map((name) => path.join(appDir, "backend", name))
     .filter((file) => existsSync(file))
     .map((file) => `${path.basename(file)}\n${readFileSync(file, "utf8")}`);
-  if (backendParts.length === 0) {
-    return distBundleRevisionHash(dist);
+  const cardsDir = path.join(appDir, "dist", "cards");
+  const cards = existsSync(cardsDir)
+    ? readdirSync(cardsDir, { withFileTypes: true }).filter((e) => e.isFile()).map((e) => e.name).sort()
+    : [];
+  if (backendParts.length === 0 && cards.length === 0) {
+    return distBundleRevisionHash(distAppJsContent);
   }
-  return distBundleRevisionHash([dist, ...backendParts].join("\n--backend--\n"));
+  // Same backend-only hash as before cards existed (no needless revision churn).
+  const base =
+    backendParts.length === 0
+      ? distAppJsContent
+      : [distAppJsContent, ...backendParts].join("\n--backend--\n");
+  if (cards.length === 0) return distBundleRevisionHash(base);
+  const h = createHash("sha256").update(base);
+  for (const name of cards) h.update(`\0cards/${name}\0`).update(readFileSync(path.join(cardsDir, name)));
+  return h.digest("hex").slice(0, 16);
 }
 
 export function writeAppCloudRevisionMarker(appDir: string): void {

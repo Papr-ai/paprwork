@@ -137,3 +137,15 @@ test("cancelled interactive waiters do not run and aged maintenance is not starv
   expect(order).toEqual(["maintenance", "new-request"]);
   expect(cancelledWork).not.toHaveBeenCalled();
 });
+test("an aborted job releases its slot even when its work never settles", async () => {
+  const budget = new BackgroundBudget(() => 1, () => false);
+  const ctrl = new AbortController(); const started: string[] = [];
+  const stuck = budget.run("stuck", () => new Promise<void>(() => undefined), ctrl.signal);
+  const next = budget.run("next", async () => { started.push("next"); });
+  await Promise.resolve(); expect(budget.stats().active).toEqual(["stuck"]);
+  ctrl.abort();
+  await expect(stuck).rejects.toThrow("Background work cancelled");
+  await next;
+  expect(started).toEqual(["next"]);
+  expect(budget.stats().active).toEqual([]);
+});

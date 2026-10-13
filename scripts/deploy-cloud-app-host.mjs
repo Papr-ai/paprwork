@@ -236,8 +236,8 @@ const deployCmd = [
   "--min-instances=1",
   "--max-instances=20",
   "--timeout=120",
-  `--set-secrets=PAPR_CLOUD_APP_HOST_KEY=${secretName}:latest`,
-  `--set-env-vars=PAPR_MEMORY_SERVER_URL=${memoryUrl},PAPR_CLOUD_APP_PUBLIC_URL=${publicUrl},CLOUD_APP_HOST_MEMORY_TIMEOUT_MS=90000,CLOUD_APP_HOST_GCS_BUCKET=${gcsCacheBucket},AUTH0_DOMAIN=papr.auth0.com,AUTH0_CLIENT_ID=asVGkVRkRAxYvtQadqivntIRjB4D1Iur,NODE_ENV=production,PAPR_TURSO_REPLICA_SYNC=replica-records`,
+  `--update-secrets=PAPR_CLOUD_APP_HOST_KEY=${secretName}:latest`,
+  `--update-env-vars=PAPR_MEMORY_SERVER_URL=${memoryUrl},PAPR_CLOUD_APP_PUBLIC_URL=${publicUrl},CLOUD_APP_HOST_MEMORY_TIMEOUT_MS=90000,CLOUD_APP_HOST_GCS_BUCKET=${gcsCacheBucket},AUTH0_DOMAIN=papr.auth0.com,AUTH0_CLIENT_ID=asVGkVRkRAxYvtQadqivntIRjB4D1Iur,NODE_ENV=production,PAPR_TURSO_REPLICA_SYNC=replica-records`,
 ].join(" ");
 
 run(deployCmd);

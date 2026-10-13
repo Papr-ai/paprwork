@@ -50,13 +50,13 @@ const IIFE_JS_ROUTE = new Set([
 ]);
 
 /** ESM modules that apps import via `.js` URL (bundler convention). */
-const ESM_JS_ROUTE = new Set(["papr-files.ts", "papr-connect.ts"]);
+const ESM_JS_ROUTE = new Set(["papr-files.ts", "papr-connect.ts", "papr-search.ts"]);
 
 const AGENT_HINTS: Record<string, Pick<MiniAppSdkModule, "summary" | "exports">> =
   {
     "papr-sdk.ts": {
       summary: "Unified SDK entry — prefer this single import",
-      exports: "papr.dialog.*, papr.jobs.*, papr.files.*, papr.connect.*, papr.preview.*",
+      exports: "papr.dialog.*, papr.jobs.*, papr.files.*, papr.connect.*, papr.search.*, papr.preview.*",
     },
     "papr-dialog.ts": {
       summary: "Modal text input / confirm / alert (legacy direct import)",
@@ -77,6 +77,10 @@ const AGENT_HINTS: Record<string, Pick<MiniAppSdkModule, "summary" | "exports">>
     "papr-connect.ts": {
       summary: "Use the user's connected services (Linear, HubSpot, Stripe, Notion…) via one-click OAuth; declare in connections.json",
       exports: "papr.connect.status/connect/call/callJson/tools/button (prefer papr-sdk import)",
+    },
+    "papr-search.ts": {
+      summary: "Index app items in Papr Memory and search them by meaning (Claude finds them via papr_search)",
+      exports: "papr.search.index / query / remove (prefer papr-sdk import)",
     },
     "papr-agent-chat.ts": {
       summary: "Embedded assistant bubble script (after enable_app_agent_chat)",
@@ -112,6 +116,26 @@ const AGENT_HINTS: Record<string, Pick<MiniAppSdkModule, "summary" | "exports">>
     },
     "papr-agent-chat-plan.ts": {
       summary: "Plan card UI for agent-chat (internal)",
+      exports: "(internal)",
+    },
+    "papr-card.ts": {
+      summary: "Claude card kit — custom cards/*.ts views (metadata.claude); fetch('/api/*') works unchanged",
+      exports: "card({ primary, render, onResult })",
+    },
+    "papr-card-views.ts": {
+      summary: "Default Claude card views (status / action / approval) — usually generated, not imported",
+      exports: "statusView, actionView, approvalView, renderValue",
+    },
+    "papr-card-style.ts": {
+      summary: "Claude card frame CSS (internal)",
+      exports: "(internal)",
+    },
+    "papr-mcp-bridge.ts": {
+      summary: "MCP Apps host bridge for Claude cards (internal)",
+      exports: "(internal)",
+    },
+    "papr-mcp-transport.ts": {
+      summary: "Routes /api/* through papr_api inside Claude cards (internal)",
       exports: "(internal)",
     },
   };

@@ -873,4 +873,38 @@ describe("mergeHistoryWithLocal — saved messages outside the window (stuck que
       "msg-user-1790880085911",
     );
   });
+
+  it("does not re-pin a send that never saved below newer turns", () => {
+    // "video" was sent but never reached the server. The user's next message
+    // did save and got a reply. Every reload used to append "video" after
+    // that reply, so an old message looked like the newest one each send.
+    const stale = "msg-user-1791560900000";
+    const next = "msg-user-1791561000000";
+    const u3 = "msg-7d1f0a52-3b8e-4c5a-9e0f-1a2b3c4d5e6f";
+    const a3 = "msg-0e9d8c7b-6a5f-4e3d-8c2b-1a0f9e8d7c6b";
+    const local: ChatMessage[] = [
+      { id: u2, role: "user", content: "when I try to login" },
+      { id: a2, role: "assistant", content: "Did Chrome reach You're connected?" },
+      { id: stale, role: "user", content: "can u make sure the video is in" },
+      { id: next, role: "user", content: "new question" },
+    ];
+    const server: ChatMessage[] = [
+      { id: u2, role: "user", content: "when I try to login" },
+      { id: a2, role: "assistant", content: "Did Chrome reach You're connected?" },
+      { id: u3, role: "user", content: "new question" },
+      { id: a3, role: "assistant", content: "Answer" },
+    ];
+
+    const merged = mergeHistoryWithLocal(local, server);
+
+    expect(merged.map((m) => m.id)).toEqual([u2, a2, stale, u3, a3]);
+    expect(merged[merged.length - 1]?.id).toBe(a3);
+    expect(priorUserTurnSettledForQueue(merged)).toBe(true);
+
+    // And it stays put on the next reload instead of drifting to the tail.
+    expect(mergeHistoryWithLocal(merged, server).map((m) => m.id)).toEqual([
+      u2, a2, stale, u3, a3,
+    ]);
+  });
 });
+

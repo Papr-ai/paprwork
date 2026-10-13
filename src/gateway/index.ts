@@ -42,6 +42,7 @@ import path from "path";
 import { fileURLToPath } from "url";
 import { initializeAgentService } from "./services/AgentService.js";
 import { registerAppFilesRoutes } from "./services/appFiles/appFilesRoutes.js";
+import { registerAppSearchRoutes } from "./services/appSearch/appSearchRoutes.js";
 import { registerChatgptHistoryRoutes } from "./services/chatgptHistoryRoutes.js";
 import { registerMcpRoutes } from "./services/mcp/mcpRoutes.js";
 import {
@@ -1963,6 +1964,8 @@ async function startGateway(): Promise<void> {
     // ─────────────────────────────────────────────────────────────────────────
     registerChatgptHistoryRoutes(app);
     registerMcpRoutes(app);
+    // App search: a mini-app's items in Papr Memory, found by meaning (papr.search.*).
+    registerAppSearchRoutes(app, { resolveAppId: (req, appId) => resolveRequestAppId(req, appId) });
     registerAppFilesRoutes(app, {
       resolveSource: (appId, sourceId, sql, operation) =>
         resolveLinkedSource(appId, sourceId, sql, operation),

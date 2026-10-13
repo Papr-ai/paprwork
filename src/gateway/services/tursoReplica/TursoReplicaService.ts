@@ -78,6 +78,12 @@ import { TursoReplicaPathScheduler } from "./tursoReplicaPathScheduler.js";
 import { computeReplicaPendingPush } from "./replicaPendingPush.js";
 import { scheduleTursoReplicaPushForSyncKey } from "./tursoReplicaPushScheduler.js";
 import { withTursoReplicaSyncBusy } from "./gatewayTursoSyncBusy.js";
+import { createClient } from "@libsql/client";
+import {
+  isPrimaryEngineTableTypeError,
+  LAST_CHANGE_ID_TABLE,
+  repairPrimaryLastChangeIdTable,
+} from "./primaryEngineTableRepair.js";
 
 const REPLICA_STATUS_TIMEOUT_MS = 12_000;
 const REPLICA_SYNC_TIMEOUT_MS = 15_000;
@@ -447,6 +453,14 @@ export class TursoReplicaService {
       markTursoReplicaReachable();
       return pulled;
     } catch (error) {
+      if (isPrimaryEngineTableTypeError((error as Error).message)) {
+        // The bad table lives on the primary; the replica re-downloads it on every pull,
+        // so no local repair can stick. Rebuild it there (counters kept) and retry once.
+        if (!(await this.repairPrimaryEngineTable(spec))) throw error;
+        const pulled = await run();
+        markTursoReplicaReachable();
+        return pulled;
+      }
       if (!isReplicaCheckpointWalError((error as Error).message)) {
         throw error;
       }
@@ -459,6 +473,27 @@ export class TursoReplicaService {
       const pulled = await run();
       markTursoReplicaReachable();
       return pulled;
+    }
+  }
+
+  private async repairPrimaryEngineTable(spec: OpenSpec): Promise<boolean> {
+    const remote = createClient({ url: spec.tursoUrl, authToken: spec.authToken });
+    try {
+      const out = await repairPrimaryLastChangeIdTable(remote);
+      if (out.repaired) {
+        console.warn(
+          `[TursoReplicaService] Rebuilt ${LAST_CHANGE_ID_TABLE} on the Turso primary for ${spec.localPath} ` +
+            `(${out.defects.join("; ")}); kept ${out.keptRows} client row(s), dropped ${out.droppedRows}.`,
+        );
+      }
+      return out.repaired;
+    } catch (repairError) {
+      console.warn(
+        `[TursoReplicaService] Primary engine-table repair failed for ${spec.localPath}: ${(repairError as Error).message}`,
+      );
+      return false;
+    } finally {
+      remote.close();
     }
   }
 

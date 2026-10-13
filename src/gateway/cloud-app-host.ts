@@ -20,6 +20,8 @@ import {
   MemoryServerTursoCredentials,
 } from "./services/appRuntime/CloudAppHostService.js";
 import { shutdownBackendPythonWorker } from "./services/appRuntime/appBackendPythonWorker.js";
+import { isMcpEndpointEnabled } from "./services/mcp/config.js";
+import { registerMcpRoutes } from "./services/mcp/server.js";
 
 // `.env.local` before `.env`: dotenv never overwrites an already-set
 // variable, so the first file to define a key wins. Both are gitignored, so
@@ -46,6 +48,11 @@ async function main(): Promise<void> {
     tursoCredentials: new MemoryServerTursoCredentials(),
     publishResolver: new MemoryServerPublishResolver(),
   });
+  // Claude-facing MCP endpoint (PR 0 spike). Mounted before app routes; off unless enabled.
+  if (isMcpEndpointEnabled()) {
+    const mcp = registerMcpRoutes(app, { port: PORT });
+    console.log(`[CloudAppHost] MCP endpoint enabled: ${mcp.resourceUrl}`);
+  }
   host.registerRoutes(app);
 
   app.listen(PORT, "0.0.0.0", () => {
