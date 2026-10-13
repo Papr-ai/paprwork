@@ -22,7 +22,7 @@ const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
 
 export const SLEEP_JOB_NAMES = ["Papr Sleep Cycle", "papr-sleep"] as const;
-export const SLEEP_PROMPT_VERSION = 24;
+export const SLEEP_PROMPT_VERSION = 25;
 
 export const SLEEP_JOB_DEFAULTS = {
   provider: "anthropic" as const,

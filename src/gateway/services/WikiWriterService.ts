@@ -27,7 +27,7 @@ export const WIKI_WRITER_JOB_NAMES = [
   "Wiki Writer",
   "wiki-writer",
 ] as const;
-export const WIKI_WRITER_PROMPT_VERSION = 11;
+export const WIKI_WRITER_PROMPT_VERSION = 12;
 
 export const WIKI_WRITER_JOB_DEFAULTS = {
   provider: "anthropic" as const,

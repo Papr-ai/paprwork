@@ -410,6 +410,9 @@ export async function applySnapshot(
 
   for (const g of snap.goals) {
     const prev = existing.get(g.id);
+    // A hand edit with an unmappable Status (typo, prose) must not wipe a good
+    // status the goal API wrote — keep the DB value until the markdown is valid.
+    if (g.status === "unknown" && prev?.status && prev.status !== "unknown") g.status = String(prev.status);
     if (prev) {
       const cur = g as unknown as Record<string, unknown>;
       for (const f of HISTORY_FIELDS) {
@@ -436,6 +439,24 @@ export async function applySnapshot(
        ON CONFLICT(id) DO UPDATE SET title=excluded.title, level=excluded.level, parent_id=excluded.parent_id, status=excluded.status, confidence=excluded.confidence, priority=excluded.priority, period=excluded.period, opened=excluded.opened, closed=excluded.closed, next_milestone=excluded.next_milestone, owner=excluded.owner, evidence=excluded.evidence, mentions=excluded.mentions, outcome=excluded.outcome, archived=excluded.archived, parent_missing=excluded.parent_missing, source_file=excluded.source_file, updated_at=excluded.updated_at`,
       [g.id, g.title, g.level, g.parent_id, g.status, g.confidence, g.priority, g.period, g.opened, g.closed, g.next_milestone, g.owner, g.evidence, g.mentions, g.outcome, g.archived, g.parent_missing, g.source_file, now, now],
     );
+  }
+
+  // Goals whose block vanished from IDENTITY.md + archive (rejected, hand-deleted) leave the
+  // active set: archive them as dropped instead of letting a stale row linger as a live root.
+  // Guarded so an unreadable/empty IDENTITY.md never mass-archives.
+  if (snap.goals.length > 0) {
+    const seenGoals = new Set(snap.goals.map((g) => g.id));
+    for (const [id, prev] of existing) {
+      if (seenGoals.has(id) || Number(prev.archived) === 1) continue;
+      const closed = prev.status === "done" || prev.status === "dropped";
+      await exec("INSERT OR REPLACE INTO goal_history (id, goal_id, changed_at, field, old_value, new_value) VALUES (?, ?, ?, ?, ?, ?)", [
+        `${id}:${now}:removed`, id, now, "archived", "0", "1",
+      ]);
+      await exec(`UPDATE goals SET archived = 1, status = ?, outcome = COALESCE(outcome, 'Removed from IDENTITY.md'), updated_at = ? WHERE id = ?`, [
+        closed ? prev.status : "dropped", now, id,
+      ]);
+      historyRows += 1;
+    }
   }
 
   // Goal ↔ entity links: replace the set wholesale (small, derived, no history needed).

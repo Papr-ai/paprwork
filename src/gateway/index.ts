@@ -3648,15 +3648,54 @@ async function startGateway(): Promise<void> {
 
     // Structured view of IDENTITY.md → ## Goals for the Home app (read-only;
     // goals are edited through chat so the agent keeps IDENTITY.md canonical).
+    // Goals now live in the Home DB `goals` table (goalsStore.ts); reads come from
+    // there and fall back to parsing IDENTITY.md before the first projection.
     app.get("/api/workspace/goals", async (_req, res) => {
       try {
+        const { readGoalsFromDb } = await import("./services/goalsStore.js");
+        const fromDb = await readGoalsFromDb();
+        if (fromDb) return void res.json({ ...fromDb, source: "db" });
         const { readWorkspaceGoals } =
           await import("./services/workspaceGoals.js");
-        res.json(await readWorkspaceGoals());
+        res.json({ ...(await readWorkspaceGoals()), source: "markdown" });
       } catch (error) {
         res.status(500).json({
           error: error instanceof Error ? error.message : String(error),
         });
+      }
+    });
+
+    // Validated goal writes: DB first (+ goal_history), then mirrored into
+    // IDENTITY.md ## Goals so agent context stays in sync. Use these instead of
+    // editing the markdown — bad statuses ("completed", typos) are normalised or rejected.
+    const goalWriteError = (res: import("express").Response, error: unknown) => {
+      const status = (error as { status?: number })?.status ?? 500;
+      res.status(status).json({ error: error instanceof Error ? error.message : String(error) });
+    };
+    app.patch("/api/workspace/goals/:goalId", async (req, res) => {
+      try {
+        const { updateGoal } = await import("./services/goalsStore.js");
+        const actor = typeof req.headers["x-papr-actor"] === "string" ? req.headers["x-papr-actor"] : "api";
+        res.json({ ok: true, goal: await updateGoal(String(req.params.goalId), req.body ?? {}, actor) });
+      } catch (error) {
+        goalWriteError(res, error);
+      }
+    });
+    app.post("/api/workspace/goals", async (req, res) => {
+      try {
+        const { createGoal } = await import("./services/goalsStore.js");
+        const actor = typeof req.headers["x-papr-actor"] === "string" ? req.headers["x-papr-actor"] : "api";
+        res.json({ ok: true, goal: await createGoal(req.body ?? {}, actor) });
+      } catch (error) {
+        goalWriteError(res, error);
+      }
+    });
+    app.get("/api/workspace/goals/:goalId/history", async (req, res) => {
+      try {
+        const { readGoalHistory } = await import("./services/goalsStore.js");
+        res.json({ history: await readGoalHistory(String(req.params.goalId)) });
+      } catch (error) {
+        goalWriteError(res, error);
       }
     });
 

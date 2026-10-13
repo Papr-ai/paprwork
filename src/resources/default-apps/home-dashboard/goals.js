@@ -30,7 +30,7 @@ const Goals = {
     return `<div class="goal-entities">${refs.map(r => { const [type, slug] = r.split('/'); return `<a class="goal-entity ${this.esc(type)}" href="#" data-entity="${this.esc(r)}" title="${this.esc(r)}">${this.esc(slug.replace(/-/g, ' '))}</a>`; }).join('')}</div>`;
   },
   actions(g) {
-    if (g.status === 'done' || g.status === 'dropped') return `<div class="goal-outcome">${g.status === 'done' ? '✓' : '✗'} ${this.esc(g.outcome || (g.status === 'done' ? 'Achieved' : 'Dropped'))}${g.closed ? ` · ${this.esc(g.closed)}` : ''}</div>`;
+    if (g.status === 'done' || g.status === 'dropped') return `<div class="goal-outcome">${g.status === 'done' ? '✓' : '✗'} ${this.esc(g.outcome || (g.status === 'done' ? 'Achieved' : 'Dropped'))}${g.closed ? ` · ${this.esc(g.closed)}` : ''}<button class="goals-btn tiny ghost goal-hover" data-goals="reopen" data-gid="${this.esc(g.id)}">Reopen</button></div>`;
     if (g.status !== 'proposed') return `<div class="goal-confirm goal-hover"><button class="goals-btn tiny ghost" data-goals="edit-one" data-gid="${this.esc(g.id)}">Edit</button><button class="goals-btn tiny ghost" data-goals="close" data-gid="${this.esc(g.id)}">Close</button></div>`;
     return `<div class="goal-confirm"><button class="goals-btn tiny" data-goals="confirm" data-gid="${this.esc(g.id)}">Confirm</button><button class="goals-btn tiny ghost" data-goals="edit-one" data-gid="${this.esc(g.id)}">Edit</button><button class="goals-btn tiny ghost" data-goals="reject" data-gid="${this.esc(g.id)}">Not a goal</button></div>`;
   },
@@ -61,8 +61,11 @@ const Goals = {
       </section>`;
     }
     const drafts = d.proposedCount ? `<span class="goals-drafts">${d.proposedCount} draft${d.proposedCount > 1 ? 's' : ''} to confirm</span>` : '';
-    const roots = (d.tree && d.tree.length) ? d.tree : d.goals.map(g => ({ ...g, children: [] }));
-    const past = (d.archive || []);
+    // Closed roots go straight to "Past goals" — don't wait for Sleep's 7-day archive move.
+    const closed = g => g.status === 'done' || g.status === 'dropped';
+    const allRoots = (d.tree && d.tree.length) ? d.tree : d.goals.map(g => ({ ...g, children: [] }));
+    const roots = allRoots.filter(g => !closed(g));
+    const past = [...allRoots.filter(closed), ...(d.archive || [])];
     const byPeriod = past.reduce((m, g) => ((m[g.period || '—'] ||= []).push(g), m), {});
     const pastHtml = past.length ? `<details class="goals-past"><summary>Past goals (${past.length})</summary>${Object.entries(byPeriod).map(([p, gs]) => `<div class="goals-past-period"><h3>${this.esc(p)}</h3>${gs.map(g => `<div class="goal past ${g.level} ${g.status}"><div class="goal-head">${typeof Three !== 'undefined' && Three.find(g.id)
         ? `<button type="button" class="goal-title goal-open" data-three="open" data-gid="${this.esc(g.id)}">${this.esc(g.title)}</button>`
@@ -120,6 +123,7 @@ const Goals = {
       // First run stays on Home: Pen shows its picks (or a blank slot) instead of opening a chat.
       if (btn.dataset.goals === 'draft' && typeof FocusStart !== 'undefined') { FocusStart.draft(btn); return; }
       if (btn.dataset.goals === 'set' && typeof FocusStart !== 'undefined') { FocusStart.write(); return; }
+      if (typeof GoalsApi !== 'undefined' && GoalsApi.handle(btn)) return;
       if (window.paprAPI?.invoke) window.paprAPI.invoke('chat.open', { message: this.prompt(btn.dataset.goals, btn.dataset.gid) });
       else alert('Open Paprwork on desktop to manage goals with the agent.');
     });

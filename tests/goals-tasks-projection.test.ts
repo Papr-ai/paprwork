@@ -296,3 +296,22 @@ describe("Home migration + contract", () => {
     expect(reviews).toMatch(/task_id = excluded\.task_id/);
   });
 });
+
+describe("vanished goals", () => {
+  it("archives rows whose block left IDENTITY.md as dropped, but never on an empty parse", async () => {
+    const rows = new Map<string, Record<string, unknown>>([
+      ["G5", { id: "G5", status: "confirmed", archived: 0 }],
+      ["G1", { id: "G1", status: "on-track", archived: 0 }],
+    ]);
+    const writes: [string, unknown[]][] = [];
+    const exec = async (sql: string, params: unknown[] = []) => { writes.push([sql, params]); };
+    const query = async (sql: string) => (sql.startsWith("SELECT * FROM goals") ? [...rows.values()] : []);
+    const snap = projectWorkspace({ identity: "## Goals\n\n### G1 — A\n- Level: L1\n- Status: on-track\n", archive: null, entities: {} });
+    await applySnapshot(snap, exec, query, "2026-10-13T00:00:00Z");
+    const upd = writes.find(([sql]) => sql.startsWith("UPDATE goals SET archived = 1"));
+    expect(upd?.[1]).toEqual(["dropped", "2026-10-13T00:00:00Z", "G5"]);
+    writes.length = 0;
+    await applySnapshot(projectWorkspace({ identity: null, archive: null, entities: {} }), exec, query);
+    expect(writes.some(([sql]) => sql.startsWith("UPDATE goals SET archived = 1"))).toBe(false);
+  });
+});

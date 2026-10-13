@@ -191,3 +191,16 @@ describe("workspaceGoals parser (L1/L2/L3 + confidence + priority)", () => {
     expect(tree[0].children.map((n) => n.id)).toEqual(["G2", "G4"]);
   });
 });
+
+describe("status synonyms", () => {
+  it("maps completed/cancelled/in progress to canonical statuses", async () => {
+    const { parseGoals } = await import("../src/gateway/services/workspaceGoals");
+    const body = [
+      "### G1 — A", "- Level: L1", "- Status: completed", "",
+      "### G2 — B", "- Level: L1", "- Status: Cancelled", "",
+      "### G3 — C", "- Level: L1", "- Status: in progress", "",
+      "### G4 — D", "- Level: L1", "- Status: **done**", "",
+    ].join("\n");
+    expect(parseGoals(body).map((g) => g.status)).toEqual(["done", "dropped", "on-track", "done"]);
+  });
+});

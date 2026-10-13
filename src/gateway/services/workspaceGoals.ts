@@ -145,10 +145,24 @@ export function extractGoalsSection(identity: string): string | null {
   return next < 0 ? rest : rest.slice(0, next);
 }
 
+// Agents (Sleep, chat) write natural synonyms — "completed", "in progress", "cancelled".
+// Map them to the canonical set instead of falling through to "unknown", which made
+// closed goals render as live in Home.
+const STATUS_SYNONYMS: Record<string, GoalStatus> = {
+  completed: "done", complete: "done", achieved: "done", closed: "done", shipped: "done", finished: "done",
+  cancelled: "dropped", canceled: "dropped", abandoned: "dropped", rejected: "dropped",
+  "in-progress": "on-track", active: "on-track", ontrack: "on-track", "on-hold": "blocked",
+  risk: "at-risk", draft: "proposed",
+};
+
 function normalizeStatus(raw: string | undefined): GoalStatus {
-  const v = raw?.trim().toLowerCase().replace(/\s+/g, "-");
-  return v && STATUS_VALUES.has(v) ? (v as GoalStatus) : "unknown";
+  const v = raw?.trim().toLowerCase().replace(/[*`.]/g, "").replace(/[\s_]+/g, "-");
+  if (!v) return "unknown";
+  if (STATUS_VALUES.has(v)) return v as GoalStatus;
+  return STATUS_SYNONYMS[v] ?? "unknown";
 }
+/** Canonical status for free text ("completed" → done, "in progress" → on-track); "unknown" when unmappable. */
+export const normalizeGoalStatus = normalizeStatus;
 
 function normalizeConfidence(raw: string | undefined): GoalConfidence {
   const v = raw?.trim().toLowerCase();

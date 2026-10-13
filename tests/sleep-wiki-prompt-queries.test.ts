@@ -26,10 +26,10 @@ describe("Sleep/Wiki prompt templates", () => {
   it("bumps version constants match template headers", () => {
     const sleep = readTemplate("SLEEP.md");
     const wiki = readTemplate("WIKI_WRITER.md");
-    expect(sleep).toMatch(/sleep-prompt-version:\s*24/);
-    expect(wiki).toMatch(/wiki-writer-prompt-version:\s*11/);
-    expect(SLEEP_PROMPT_VERSION).toBe(24);
-    expect(WIKI_WRITER_PROMPT_VERSION).toBe(11);
+    expect(sleep).toMatch(/sleep-prompt-version:\s*25/);
+    expect(wiki).toMatch(/wiki-writer-prompt-version:\s*12/);
+    expect(SLEEP_PROMPT_VERSION).toBe(25);
+    expect(WIKI_WRITER_PROMPT_VERSION).toBe(12);
   });
 
   it("does not prescribe known-broken GraphQL patterns in query strings", () => {
