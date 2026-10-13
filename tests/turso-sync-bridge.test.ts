@@ -360,7 +360,7 @@ describe("tursoLinkedSources", () => {
 
   it("discovers primary linked sources and skips scratch", async () => {
     const root = path.join(workspace.paprHome, "apps");
-    const jobADb = path.join(workspace.paprHome, "Jobs", "job-a", "data", "data.db");
+    const jobADb = path.join(workspace.paprHome, "data", "databases", "a", "data.db");
     const jobBDb = path.join(workspace.paprHome, "Jobs", "job-b", "data", "data.db");
     const jobCDb = path.join(workspace.paprHome, "Jobs", "job-c", "data", "data.db");
     for (const dbPath of [jobADb, jobBDb, jobCDb]) {
@@ -375,9 +375,9 @@ describe("tursoLinkedSources", () => {
         primary: "main",
         sources: [
           {
-            id: "job-a:main",
+            id: "db-a:main",
             type: "sqlite",
-            jobId: "job-a",
+            dbId: "db-a",
             alias: "main",
             dbPath: jobADb,
             tables: [],
@@ -400,7 +400,7 @@ describe("tursoLinkedSources", () => {
 
     const sources = await discoverTursoLinkedSources(root);
     expect(sources).toHaveLength(1);
-    expect(sources[0]?.jobId).toBe("job-a");
+    expect(sources[0]?.dbId).toBe("db-a");
     expect(sources[0]?.role).toBe("primary");
 
     const app2Dir = path.join(root, "app-2");
@@ -420,7 +420,8 @@ describe("tursoLinkedSources", () => {
       ]),
     );
     const all = await discoverTursoLinkedSources(root);
-    expect(all.map((s) => s.jobId).sort()).toEqual(["job-a", "job-c"]);
+    // Legacy Jobs/{id}/data/data.db links are local scratch — never synced.
+    expect(all.map((s) => s.dbId ?? s.jobId)).toEqual(["db-a"]);
   });
 
   it("returns one entry per app when multiple apps link the same registry db", async () => {
@@ -472,7 +473,7 @@ describe("tursoLinkedSources", () => {
     expect(pushTargets[0]?.dbId).toBe(dbId);
   });
 
-  it("listLinkedJobIdsForTursoSync only returns jobs with existing db files", async () => {
+  it("listLinkedJobIdsForTursoSync skips legacy job scratch DBs", async () => {
     const appsRoot = path.join(workspace.paprHome, "apps");
     const jobsRoot = path.join(workspace.paprHome, "Jobs");
     const jobId = "linked-job";
@@ -498,6 +499,6 @@ describe("tursoLinkedSources", () => {
     );
 
     const jobIds = await listLinkedJobIdsForTursoSync(appsRoot);
-    expect(jobIds).toEqual([jobId]);
+    expect(jobIds).toEqual([]);
   });
 });

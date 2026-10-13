@@ -48,6 +48,7 @@ import {
   type AgentJobSessionInput,
 } from "../jobs/executors/AgentJobExecutor.js";
 import type { JobType } from "../jobs/types.js";
+import { isJobScratchDatabasePath } from "../jobs/jobScratchDatabasePath.js";
 import { normalizeRuntimeParams } from "../../utils/normalizeRuntimeParams.js";
 
 export interface CloudRunHandle {
@@ -116,7 +117,8 @@ export function resolveTursoBookendTargets(
   const addSource = (source: CloudTursoSource): void => {
     const dbPath = rewritePaprPathForCloudRun(source.dbPath, paprHome);
     const syncKey = source.syncKey;
-    if (!syncKey || byKey.has(syncKey)) {
+    // Job scratch (Jobs/{id}/data/data.db) is local-only — never Turso.
+    if (!syncKey || byKey.has(syncKey) || isJobScratchDatabasePath(dbPath)) {
       return;
     }
     const linked = linkedByKey.get(syncKey);
@@ -134,18 +136,9 @@ export function resolveTursoBookendTargets(
     for (const source of request.tursoSources) {
       addSource(source);
     }
-  } else if (request.turso) {
-    const jobDbPath = path.join(paprHome, "Jobs", request.turso.jobId, "data", "data.db");
-    const linked = linkedByKey.get(request.turso.jobId);
-    byKey.set(request.turso.jobId, {
-      syncKey: request.turso.jobId,
-      dbPath: jobDbPath,
-      tursoUrl: request.turso.databaseUrl,
-      authToken: request.turso.authToken,
-      ...dbEventIdsForSyncKey(request.turso.jobId, linked),
-      jobId: request.jobId,
-    });
   }
+  // Legacy request.turso always targeted Jobs/{id}/data/data.db (job scratch),
+  // which is no longer synced to Turso — ignore it.
 
   return [...byKey.values()];
 }

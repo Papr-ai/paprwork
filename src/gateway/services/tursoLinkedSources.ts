@@ -17,6 +17,7 @@ import { resolveLinkedSourceDbPath } from "./portableDataSources.js";
 import { getDatabaseRegistryService } from "./DatabaseRegistryService.js";
 import { jobTursoDatabaseName } from "./tursoDatabaseNaming.js";
 import { isTursoStateDbPathInWorkspace } from "./tursoSyncState.js";
+import { isJobScratchDatabasePath } from "./jobs/jobScratchDatabasePath.js";
 
 export interface TursoLinkedSource {
   appId: string;
@@ -127,6 +128,13 @@ export async function discoverTursoLinkedSources(
       }
 
       if (!isTursoStateDbPathInWorkspace(resolvedDbPath)) {
+        continue;
+      }
+
+      // Jobs/{id}/data/data.db is local job scratch. Never sync it to Turso,
+      // including legacy links made before registry DBs — those were ~80% of
+      // fleet Turso writes. App-read data belongs in a registry DB.
+      if (isJobScratchDatabasePath(resolvedDbPath)) {
         continue;
       }
 
