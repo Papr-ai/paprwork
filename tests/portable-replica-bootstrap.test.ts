@@ -100,4 +100,21 @@ describe("portableReplicaBootstrap", () => {
     expect(existsSync(bootstrapMarkerPath(dbPath))).toBe(true);
     expect(existsSync(`${dbPath}-info`)).toBe(false);
   });
+
+  test("team attach marks a shared DB for pull even when no local file exists yet", () => {
+    const dbPath = path.join(workspace.paprHome, "data", "databases", "fresh-team", "data.db");
+    expect(existsSync(dbPath)).toBe(false);
+    expect(
+      prepareReplicaForPortableTransfer(dbPath, "team_collaborate_attach", workspace.paprHome),
+    ).toBe(true);
+    expect(readBootstrapPendingMarker(dbPath)?.reason).toBe("team_collaborate_attach");
+  });
+
+  test("non-team transfers still skip a missing local file", () => {
+    const dbPath = path.join(workspace.paprHome, "data", "databases", "absent", "data.db");
+    expect(
+      prepareReplicaForPortableTransfer(dbPath, "portable_install", workspace.paprHome),
+    ).toBe(false);
+    expect(existsSync(bootstrapMarkerPath(dbPath))).toBe(false);
+  });
 });

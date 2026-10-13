@@ -476,6 +476,44 @@ export async function bootstrapInstalledAppDatabases(
     }
   }
 
+  // Pull/reseed portable replicas BEFORE the per-source readiness check:
+  // a team install's local file only exists after the publisher's primary is
+  // pulled here. Checking first reported "not reachable" and the reseed then
+  // replaced the file under any connection the check opened.
+  if (!localOnly && !options?.tursoPullOnly) {
+    try {
+      const { rebootstrapPendingPortableReplicas } = await import(
+        "./tursoReplica/portableReplicaBootstrap.js"
+      );
+      const replicaBootstrap = await rebootstrapPendingPortableReplicas();
+      if (replicaBootstrap.attempted > 0) {
+        console.log(
+          `[CloudInstall] Portable replica bootstrap: ${replicaBootstrap.succeeded}/${replicaBootstrap.attempted} succeeded`,
+        );
+      }
+    } catch (error) {
+      warnings.push(
+        `Portable replica bootstrap skipped: ${(error as Error).message.slice(0, 120)}`,
+      );
+    }
+  } else if (!localOnly) {
+    try {
+      const { rebootstrapPendingPortableReplicas } = await import(
+        "./tursoReplica/portableReplicaBootstrap.js"
+      );
+      const replicaBootstrap = await rebootstrapPendingPortableReplicas();
+      if (replicaBootstrap.succeeded > 0) {
+        console.log(
+          `[CloudTrackSync] Shared DB pull: ${replicaBootstrap.succeeded}/${replicaBootstrap.attempted} replica(s) refreshed`,
+        );
+      }
+    } catch (error) {
+      warnings.push(
+        `Shared DB replica pull skipped: ${(error as Error).message.slice(0, 120)}`,
+      );
+    }
+  }
+
   for (const source of sources) {
     if (source.type !== "sqlite") {
       continue;
@@ -523,38 +561,6 @@ export async function bootstrapInstalledAppDatabases(
     } catch (error) {
       warnings.push(
         `Fork portable replica bootstrap skipped: ${(error as Error).message.slice(0, 120)}`,
-      );
-    }
-  } else if (!options?.tursoPullOnly) {
-    try {
-      const { rebootstrapPendingPortableReplicas } = await import(
-        "./tursoReplica/portableReplicaBootstrap.js"
-      );
-      const replicaBootstrap = await rebootstrapPendingPortableReplicas();
-      if (replicaBootstrap.attempted > 0) {
-        console.log(
-          `[CloudInstall] Portable replica bootstrap: ${replicaBootstrap.succeeded}/${replicaBootstrap.attempted} succeeded`,
-        );
-      }
-    } catch (error) {
-      warnings.push(
-        `Portable replica bootstrap skipped: ${(error as Error).message.slice(0, 120)}`,
-      );
-    }
-  } else {
-    try {
-      const { rebootstrapPendingPortableReplicas } = await import(
-        "./tursoReplica/portableReplicaBootstrap.js"
-      );
-      const replicaBootstrap = await rebootstrapPendingPortableReplicas();
-      if (replicaBootstrap.succeeded > 0) {
-        console.log(
-          `[CloudTrackSync] Shared DB pull: ${replicaBootstrap.succeeded}/${replicaBootstrap.attempted} replica(s) refreshed`,
-        );
-      }
-    } catch (error) {
-      warnings.push(
-        `Shared DB replica pull skipped: ${(error as Error).message.slice(0, 120)}`,
       );
     }
   }

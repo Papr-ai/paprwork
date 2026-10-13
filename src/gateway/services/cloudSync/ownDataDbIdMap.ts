@@ -57,7 +57,7 @@ export function remapDbIdsInContent(content: string, map: ReadonlyMap<string, st
 
 /**
  * A fork's registry folder is `{slug}-{8hex}` when the publisher's `{slug}`
- * was taken locally (uniqueForkRegistryLocalPath). Proposals must land in the
+ * was taken locally (uniqueRegistryLocalPathForDbId). Proposals must land in the
  * publisher's `{slug}` folder.
  */
 export function publisherMigrationsDir(dir: string, localToPublisher: ReadonlyMap<string, string>): string {

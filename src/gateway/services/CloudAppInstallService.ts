@@ -52,9 +52,9 @@ interface MemoryInstallResponse {
   lineageId: string;
   /** Caller's verified access to the source app (owner/team/public_read/link_*). */
   accessMode?: string | null;
-  /** Last publish whose code + database both landed (memory #219). */
-  publishedRevision?: { commit: string; dbSchema?: Record<string, string> } | null;
-  /** First publish still uploading — nothing finished to install yet. */
+  /** Last publish whose code + database both landed (memory server). */
+  publishedRevision?: import("./cloudSync/publishCompletion.js").PublishedRevision | null;
+  /** First publish still uploading — nothing safe to install yet. */
   publishPending?: boolean;
 }
 
@@ -121,13 +121,20 @@ async function collectAppFiles(
 async function cloneAppSource(
   prepare: MemoryInstallResponse,
 ): Promise<{ sourceDir: string; repoDir: string; cleanup: () => Promise<void> }> {
+  const { installCommitFor } = await import("./cloudSync/publishCompletion.js");
+  const target = installCommitFor(prepare);
+  if (target.blocked) {
+    throw new Error(
+      "This app is still being published — its code or data hasn't finished uploading. Try again in a minute.",
+    );
+  }
   return cloneCloudAppSource(
     {
       cloneUrl: prepare.cloneUrl,
       token: prepare.token,
       repoPath: prepare.repoPath,
       // Pin to the last finished publish; none recorded = HEAD (legacy).
-      commit: prepare.publishedRevision?.commit,
+      commit: target.commit ?? undefined,
     },
     "papr-cloud-install-",
   );

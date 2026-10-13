@@ -303,6 +303,12 @@ export function assertProposalMigrationsApplied(changes: { unapplied: string[]; 
   }
 }
 
+/** `data/databases/foo-59e5ad02` → `data/databases/foo` for dbId db-59e5ad02. */
+export function stripDbIdFolderSuffix(dir: string, dbId: string): string {
+  const suffix = `-${dbId.replace(/^db-/, "")}`;
+  return dir.endsWith(suffix) && !dir.endsWith(`/${suffix}`) ? dir.slice(0, -suffix.length) : dir;
+}
+
 async function collectMigrationTrees(
   paprDir: string,
   forkAppId: string,
@@ -320,9 +326,12 @@ async function collectMigrationTrees(
     const migrationsDir = path.join(migrationRoot, "migrations");
     if (!(await pathExists(migrationsDir))) continue;
 
-    const repoRelativeDir = path
-      .relative(paprDir, migrationRoot)
-      .replace(/\\/g, "/");
+    // A same-named database already on this machine puts ours in
+    // {slug}-{dbId8}; the publisher's repo only knows {slug}.
+    const repoRelativeDir = stripDbIdFolderSuffix(
+      path.relative(paprDir, migrationRoot).replace(/\\/g, "/"),
+      dbId,
+    );
     const files = await stageDirectoryWithRemaps(
       migrationsDir,
       remaps,

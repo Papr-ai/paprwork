@@ -60,3 +60,35 @@ export async function markPublishComplete(
     return { recorded: false, reason };
   }
 }
+
+export interface PublishedRevision {
+  commit: string;
+  dbSchema?: Record<string, string>;
+  completedAt?: string;
+}
+
+/**
+ * Which commit an installer should check out.
+ * - finished publish → its commit
+ * - first publish still uploading → refuse (caller shows "still publishing")
+ * - legacy publish (no record either way) → HEAD, as before
+ */
+export function installCommitFor(prepare: {
+  publishedRevision?: PublishedRevision | null;
+  publishPending?: boolean;
+}): { commit: string | null; blocked: boolean } {
+  const commit = prepare.publishedRevision?.commit?.trim() || null;
+  if (commit) return { commit, blocked: false };
+  return { commit: null, blocked: prepare.publishPending === true };
+}
+
+/** dbIds whose cloud schema is behind what the publisher's completed publish recorded. */
+export function schemaBehindPublish(
+  expected: Record<string, string> | undefined,
+  actual: Record<string, string>,
+): string[] {
+  if (!expected) return [];
+  return Object.entries(expected)
+    .filter(([dbId, migration]) => actual[dbId] !== undefined && actual[dbId]! < migration)
+    .map(([dbId]) => dbId);
+}

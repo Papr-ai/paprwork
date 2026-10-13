@@ -4,7 +4,7 @@
  * reset; the target namespace Turso DB is empty and must be seeded on first use.
  */
 
-import { existsSync } from "fs";
+import { existsSync, mkdirSync } from "fs";
 import { readFile } from "fs/promises";
 import path from "path";
 import type {
@@ -72,7 +72,13 @@ export function prepareReplicaForPortableTransfer(
     return false;
   }
   if (!existsSync(dbPath)) {
-    return false;
+    // Team attach to the publisher's primary has nothing local to preserve —
+    // a first install has no data.db yet. Without the marker nothing ever
+    // pulls the shared database and setup reports it "not reachable".
+    if (reason !== "team_collaborate_attach") {
+      return false;
+    }
+    mkdirSync(path.dirname(dbPath), { recursive: true });
   }
 
   writeBootstrapPendingMarker(dbPath, reason);
@@ -133,10 +139,14 @@ export async function preparePortableReplicaDatabases(
       continue;
     }
 
-    const localPath = resolveReadableRegistryDbPath({
-      dbPath: record.localPath,
-      dataDir,
-    });
+    const localPath =
+      resolveReadableRegistryDbPath({
+        dbPath: record.localPath,
+        dataDir,
+      }) ??
+      (input.reason === "team_collaborate_attach" && record.localPath?.trim()
+        ? record.localPath
+        : null);
     if (!localPath) {
       continue;
     }
