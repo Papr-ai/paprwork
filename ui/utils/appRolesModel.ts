@@ -38,6 +38,10 @@ export interface AppAccess {
   canManage: boolean;
   /** Only on the PUT that first made an invite link. */
   shareToken?: string;
+  /** v9 server: "audiences" once saved from the v9 sheet (roles decide who can open it). */
+  accessModel?: "visibility" | "audiences";
+  /** v9 server: which audiences can open it now. Missing = older server. */
+  audiences?: { workspace: boolean; link: boolean; community: boolean };
 }
 
 export type AccessPatch = Partial<
@@ -50,6 +54,7 @@ export type AccessPatch = Partial<
     | "approvalRule"
     | "visibility"
     | "requireSignIn"
+    | "accessModel"
   >
 >;
 

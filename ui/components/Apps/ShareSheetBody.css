@@ -996,3 +996,172 @@
     background: #ffb040;
   }
 }
+
+/* v9 Who has access: one row per audience, the role pill is the switch. */
+.ss9 {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+
+.ss9-aud {
+  border-radius: 10px;
+}
+
+.ss9-aud--on {
+  background: var(--ss6-tint);
+}
+
+.ss9-row {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  min-height: 44px;
+  padding: 6px 8px;
+}
+
+.ss9-row--off .ss9-who b {
+  color: var(--text-secondary);
+  font-weight: 500;
+}
+
+.ss9-ico {
+  flex-shrink: 0;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 28px;
+  height: 28px;
+  border-radius: 8px;
+  background: var(--ss6-chip);
+  color: var(--text-secondary);
+}
+
+.ss9-aud--on .ss9-ico {
+  color: var(--ss6-blue);
+}
+
+.ss9-who {
+  display: flex;
+  flex: 1;
+  flex-direction: column;
+  gap: 1px;
+  min-width: 0;
+}
+
+.ss9-who b {
+  font-size: 13px;
+  font-weight: 600;
+}
+
+.ss9-who small {
+  overflow: hidden;
+  font-size: 12px;
+  color: var(--text-secondary);
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.ss9-pill {
+  flex-shrink: 0;
+  max-width: 150px;
+  padding: 5px 10px;
+  border: 1px solid var(--ss6-line);
+  border-radius: 999px;
+  background: var(--bg-primary, transparent);
+  color: var(--text-secondary);
+  font: inherit;
+  font-size: 12px;
+  font-weight: 600;
+  cursor: pointer;
+}
+
+.ss9-pill--on {
+  border-color: transparent;
+  background: var(--ss6-blue);
+  color: #fff;
+}
+
+.ss9-pill:focus-visible,
+.ss9-add:focus-visible,
+.ss9-x:focus-visible {
+  outline: 2px solid var(--ss6-blue);
+  outline-offset: 1px;
+}
+
+.ss9-role {
+  flex-shrink: 0;
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--text-secondary);
+}
+
+.ss9-sub {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  padding: 0 8px 8px 46px;
+}
+
+.ss9-row--person {
+  min-height: 36px;
+  padding: 2px 0;
+}
+
+.ss9-row--person .ss9-pill {
+  background: var(--bg-primary, transparent);
+  color: var(--text-primary);
+  border-color: var(--ss6-line);
+}
+
+.ss9-av {
+  flex-shrink: 0;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 24px;
+  height: 24px;
+  border-radius: 50%;
+  background: var(--ss6-chip);
+  font-size: 10px;
+  font-weight: 700;
+  color: var(--text-secondary);
+}
+
+.ss9-x {
+  flex-shrink: 0;
+  width: 22px;
+  height: 22px;
+  padding: 0;
+  border: none;
+  border-radius: 6px;
+  background: transparent;
+  color: var(--text-secondary);
+  font-size: 15px;
+  line-height: 1;
+  cursor: pointer;
+}
+
+.ss9-x:hover {
+  background: var(--ss6-hover);
+}
+
+.ss9-add {
+  align-self: flex-start;
+  padding: 4px 0;
+  border: none;
+  background: none;
+  color: var(--ss6-blue);
+  font: inherit;
+  font-size: 12px;
+  font-weight: 600;
+  cursor: pointer;
+}
+
+.ss9-sign {
+  margin-top: 6px;
+}
+
+.ss9 .ss6-data {
+  margin: 0 0 8px;
+}

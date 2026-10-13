@@ -356,6 +356,10 @@ export function resolveShareTokenForConfig(
   if (memory?.shareToken) {
     return memory.shareToken;
   }
+  // v9: several audiences can be on, so the single visibility can't drift-check.
+  if (prefs.audiencesModel && prefs.externalLink && prefs.externalLink !== "off") {
+    return prefs.shareToken ?? null;
+  }
   const drift = detectPublishDrift({ memory, prefs, expectedSlug });
   if (drift.length > 0) {
     return null;

@@ -38,6 +38,9 @@ import {
 } from "./ShareLinkedDeps";
 import { ShareAccessPanel } from "./ShareAccessPanel";
 import { ShareDataCheck } from "./ShareDataCheck";
+import { ShareSheetV9 } from "./ShareSheetV9";
+import { useAppAccess } from "../../hooks/useAppAccess";
+import { supportsAudiences } from "../../utils/shareAudiencesModel";
 import type { SharePeopleMember } from "./SharePeoplePicker";
 import "./ShareSheetBody.css";
 
@@ -80,7 +83,7 @@ export interface ShareSheetBodyProps {
   access?: { members: SharePeopleMember[]; membersLoading?: boolean; onSaved?: () => void };
 }
 
-const ICON_PATHS = {
+export const ICON_PATHS = {
   what: "M2.5 8.5 7 4l4.5 4.5M7 4v9.5M11 13.5h3",
   keys: "M10 2.5a3.5 3.5 0 1 1-2.9 5.5L2.5 12.6v1.9h2v-1.5h1.5V11.5h1.5l.9-.9A3.5 3.5 0 0 1 10 2.5Zm1 2.6h.01",
   roles: "M6 7.5a2.5 2.5 0 1 0 0-5 2.5 2.5 0 0 0 0 5ZM1.5 13.5c0-2.5 2-4 4.5-4s4.5 1.5 4.5 4M11 2.8a2.3 2.3 0 0 1 0 4.4M12.5 9.7c1.3.5 2 1.8 2 3.8",
@@ -90,7 +93,7 @@ const ICON_PATHS = {
   code: "M6 4.5 2.5 8 6 11.5M10 4.5 13.5 8 10 11.5",
 };
 
-function Glyph({ d, size = 15 }: { d: string; size?: number }) {
+export function Glyph({ d, size = 15 }: { d: string; size?: number }) {
   return (
     <svg
       viewBox="0 0 16 16"
@@ -288,7 +291,7 @@ function WhatStep({ props }: { props: ShareSheetBodyProps }) {
   );
 }
 
-interface KeysDraft {
+export interface KeysDraft {
   dirty: boolean;
   setDirty: (dirty: boolean) => void;
   saveRef: React.MutableRefObject<(() => Promise<boolean>) | null>;
@@ -296,7 +299,7 @@ interface KeysDraft {
 }
 
 /** Stays mounted for the whole edit (hidden off-step) so Back/Next keep edits. */
-function KeysStep({
+export function KeysStep({
   props,
   keys,
   hidden,
@@ -412,7 +415,7 @@ function LinkHero({ props }: { props: ShareSheetBodyProps }) {
   );
 }
 
-function useKeySpecs(
+export function useKeySpecs(
   appId: string,
   reloadToken: number,
 ): RequiredKeySpec[] | null {
@@ -639,6 +642,25 @@ export function ShareSheetBody(props: ShareSheetBodyProps) {
     : [];
   // "who" → Only me drops the later steps; stay on a step that still exists.
   const at = flow && steps.includes(flow.at) ? flow.at : steps[0];
+
+  // v9: when the server can open several audiences at once, the whole sheet
+  // is the new one (Who has access → API keys). Older servers keep this one.
+  const v9 = useAppAccess(props.access ? props.appId : null);
+  if (v9.loading && props.access) {
+    return <div className="ss6">{notices}<p className="ss6-note">Loading…</p></div>;
+  }
+  if (supportsAudiences(v9.access)) {
+    return (
+      <ShareSheetV9
+        body={props}
+        access={v9.access}
+        onAccessSaved={(a) => {
+          v9.setAccess(a);
+          props.access?.onSaved?.();
+        }}
+      />
+    );
+  }
 
   return (
     <div className="ss6">

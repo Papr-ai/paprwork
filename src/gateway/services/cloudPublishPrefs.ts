@@ -37,6 +37,11 @@ export interface CloudPublishAppPrefs {
   externalLink?: CloudExternalLink;
   /** Cached from last publish — memory GET often omits shareToken. */
   shareToken?: string;
+  /**
+   * v9: saved from the new Share sheet. The server decides who can open it
+   * from per-audience roles; local sharing fields are a mirror, not a source.
+   */
+  audiencesModel?: boolean;
   /** Allow others to install/sync app source into Paprwork (stored locally until server ACL). */
   codeAccess?: CodeAccess;
   /** @deprecated Record only — never used to override computed ACL. */
