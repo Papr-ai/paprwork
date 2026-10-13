@@ -13,8 +13,9 @@ import type {
 import { fetchRuntimeRepoFile, fetchRuntimeRepoCredentials } from "./memoryRuntimeClient.js";
 import { isDirectGithubRepoFetchEnabled } from "./cloudAppHostDirectGithub.js";
 import {
-  fetchGithubBranchHeadSha,
+  fetchGithubBranchHead,
   fetchGithubRepoTextFile,
+  GithubRateLimitError,
   repoCredentialsCacheTtlMs,
 } from "./githubAppRepoClient.js";
 import {
@@ -102,6 +103,16 @@ const PINNED_COMMIT_TTL_MS = 600_000;
 /** Failed head lookups (e.g. GitHub installation rate limit) — don't retry per request. */
 const headLookupFailedUntil = new Map<string, number>();
 const HEAD_LOOKUP_BACKOFF_MS = 60_000;
+/**
+ * Last head answer per app, kept after the 60s freshness window so the next
+ * lookup can be conditional (If-None-Match → 304, free against the rate limit)
+ * and so a rate-limited host can keep serving the last known commit.
+ */
+const headLastKnown = new Map<string, { sha: string; etag?: string; at: number }>();
+const HEAD_LAST_KNOWN_MAX_AGE_MS = 24 * 60 * 60 * 1000;
+/** Installation-wide: once GitHub says the budget is 0, no app asks again until reset. */
+let headRateLimitedUntil = 0;
+const HEAD_RATE_LIMIT_MAX_PAUSE_MS = 60 * 60 * 1000;
 const repoRefInflight = new Map<string, Promise<string | undefined>>();
 
 /** Parsed app db config (Phase 3.3) — keyed by namespace + slug + revision, not per-user auth. */
@@ -317,23 +328,45 @@ async function resolveRepoRef(
   if (cached) {
     return cached;
   }
-  if ((headLookupFailedUntil.get(key) ?? 0) > Date.now()) {
-    return undefined;
+  const now = Date.now();
+  const lastKnown = headLastKnown.get(key);
+  const usableLastKnown =
+    lastKnown && now - lastKnown.at < HEAD_LAST_KNOWN_MAX_AGE_MS ? lastKnown : undefined;
+  if (headRateLimitedUntil > now) {
+    // Budget is gone: last known commit beats a doomed call (and beats branch reads).
+    return usableLastKnown?.sha;
+  }
+  if ((headLookupFailedUntil.get(key) ?? 0) > now) {
+    return usableLastKnown?.sha;
   }
   const inflight = repoRefInflight.get(key);
   if (inflight) {
     return inflight;
   }
-  const pending = fetchGithubBranchHeadSha(credentials)
-    .then((sha) => {
+  const pending = fetchGithubBranchHead(credentials, { etag: usableLastKnown?.etag })
+    .then((result) => {
+      const sha = result.notModified ? usableLastKnown!.sha : result.sha;
+      const etag = result.notModified ? usableLastKnown!.etag : result.etag;
+      headLastKnown.set(key, { sha, etag, at: Date.now() });
       writeTimed(repoRefCache, key, sha, REPO_REVISION_TTL_MS);
       return sha;
     })
     .catch((err: Error) => {
-      // Fall back to branch-name reads (old behaviour) rather than failing the page.
+      if (err instanceof GithubRateLimitError) {
+        const until = Math.min(err.resetAt, Date.now() + HEAD_RATE_LIMIT_MAX_PAUSE_MS);
+        if (until > headRateLimitedUntil) {
+          headRateLimitedUntil = until;
+          console.warn(
+            `[CloudAppHost] GitHub rate limit hit — pausing head lookups for ` +
+              `${Math.round((until - Date.now()) / 1000)}s`,
+          );
+        }
+        return usableLastKnown?.sha;
+      }
+      // Fall back to the last known commit, else branch-name reads (old behaviour).
       headLookupFailedUntil.set(key, Date.now() + HEAD_LOOKUP_BACKOFF_MS);
       console.warn(`[CloudAppHost] Head SHA lookup failed, reading by branch: ${err.message.slice(0, 420)}`);
-      return undefined;
+      return usableLastKnown?.sha;
     })
     .finally(() => repoRefInflight.delete(key));
   repoRefInflight.set(key, pending);
@@ -353,6 +386,10 @@ export function pinPublishedAppCommit(namespaceId: string, slug: string, commitS
   // served after the switch).
   writeTimed(repoRevisionCache, `${namespaceId}:${slug}`, sha, REPO_REVISION_TTL_MS);
   writeTimed(pinnedCommitCache, `${namespaceId}:${slug}`, sha, PINNED_COMMIT_TTL_MS);
+  // A published commit is newer than any earlier head answer: make it the
+  // fallback too, so an expired pin during a GitHub pause never rolls back.
+  // No ETag: the next lookup is a full one.
+  headLastKnown.set(`${namespaceId}:${slug}`, { sha, at: Date.now() });
 }
 
 function writeRepoFileEntry(
@@ -638,6 +675,8 @@ export function resetCloudAppHostCachesForTests(): void {
   repoRefInflight.clear();
   pinnedCommitCache.clear();
   headLookupFailedUntil.clear();
+  headLastKnown.clear();
+  headRateLimitedUntil = 0;
 }
 
 function invalidateAccessCacheByPrefix(prefix: string): void {
