@@ -20,6 +20,7 @@ import { CreditPlanCards, type CreditPlanAction } from "./CreditPlanCards";
 import type {
   PaprCreditPlanId,
   PaprExpertBuildSize,
+  PaprPlanTrack,
 } from "../../../src/core/types/paprCreditPlans";
 import "./PaprPlanSection.css";
 
@@ -223,11 +224,11 @@ export function PaprPlanSection() {
 
 
 
-  const handleCreditsCheckout = async (plan: PaprCreditPlanId) => {
+  const handleCreditsCheckout = async (plan: PaprCreditPlanId, track: PaprPlanTrack) => {
     setCreditAction(plan);
     setActionMessage(null);
     try {
-      const result = await window.electronAPI.papr.startCreditsCheckout({ plan });
+      const result = await window.electronAPI.papr.startCreditsCheckout({ plan, track });
       setActionMessage(
         result.success
           ? "Checkout opened in your browser. Your plan updates here once payment completes."
@@ -509,7 +510,7 @@ export function PaprPlanSection() {
                 <CreditPlanCards
                   canManageBilling={summary.canManageBilling}
                   pending={creditAction}
-                  onChoosePlan={(plan) => void handleCreditsCheckout(plan)}
+                  onChoosePlan={(plan, track) => void handleCreditsCheckout(plan, track)}
                   onBuyExpertBuild={(size) => void handleExpertBuild(size)}
                   onActivateLocal={
                     summary.canManageBilling && !hasActivePaprSubscription(summary)

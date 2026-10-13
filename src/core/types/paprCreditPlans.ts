@@ -143,10 +143,17 @@ export function formatUsd(n: number): string {
 }
 
 /** Card bullets, in the same order as the Unit Economics pricing page. */
-export function planFeatures(plan: PaprCreditPlanCard): string[] {
+export type PaprPlanTrack = "individual" | "team";
+
+export function isPlanTrack(value: unknown): value is PaprPlanTrack {
+  return value === "individual" || value === "team";
+}
+
+/** "Team workspace" only shows on the Team track — an individual plan is one person. */
+export function planFeatures(plan: PaprCreditPlanCard, track: PaprPlanTrack = "team"): string[] {
   return [
     `${plan.cloudApps + plan.scheduledRuns} cloud apps & scheduled runs`,
-    ...plan.unlocks,
+    ...plan.unlocks.filter((u) => track === "team" || u !== "Team workspace"),
     `${plan.storageGb} GB of storage`,
   ];
 }

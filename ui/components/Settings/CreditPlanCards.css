@@ -16,6 +16,11 @@
   margin-top: 6px;
 }
 
+.cpc-track { display: flex; justify-content: center; margin: 2px 0 8px; }
+.cpc-seg--lg { padding: 3px; }
+.cpc-seg--lg button { font-size: 12.5px; padding: 5px 16px; }
+.cpc-card--free { background: #fbfdff; box-shadow: none; border-style: dashed; }
+
 .cpc-grid {
   display: grid;
   grid-template-columns: repeat(3, minmax(0, 1fr));
@@ -164,12 +169,6 @@
 .cpc-seat p { margin: 0; font-size: 13px; line-height: 1.55; color: var(--mid); }
 @media (max-width: 900px) { .cpc-seat { flex-direction: column; align-items: flex-start; gap: 8px; } }
 
-.cpc-local {
-  display: flex; align-items: center; justify-content: space-between; gap: 12px; margin-top: 12px;
-  padding: 12px 22px; border-radius: 14px; border: 1px dashed var(--line); color: var(--ink);
-}
-.cpc-local b { display: block; font-size: 13.5px; font-weight: 600; }
-.cpc-local span { display: block; font-size: 12.5px; color: var(--mid); }
 
 @media (prefers-color-scheme: dark) {
   .cpc {
@@ -177,6 +176,7 @@
     --addon: rgba(74, 168, 255, 0.08);
   }
   .cpc-card, .cpc-seat { box-shadow: none; }
+  .cpc-card--free { background: transparent; }
   .cpc-seg { background: rgba(255, 255, 255, 0.06); }
   .cpc-seg button.on { background: var(--bg-primary, #2c2c2e); }
   .cpc-btn { border-color: var(--line); }

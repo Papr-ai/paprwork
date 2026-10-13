@@ -24,6 +24,8 @@ describe("credits plan catalog", () => {
       "15 cloud apps & scheduled runs", "Max memory", "Custom domains",
       "Premium document processing", "Long-running agents", "Everything at 5x", "75 GB of storage",
     ]);
+    expect(planFeatures(PAPR_CREDIT_PLANS[0]!, "team")).toContain("Team workspace");
+    expect(planFeatures(PAPR_CREDIT_PLANS[0]!, "individual")).not.toContain("Team workspace");
     expect(replacedTotal(1)).toBe(201);
     expect(replacedToolsFor(3)).toHaveLength(19);
   });
