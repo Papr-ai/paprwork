@@ -138,7 +138,7 @@ describe("status line", () => {
     expect(line.tone).toBe("ok");
   });
 
-  it("falls back to provenance, live, then draft", () => {
+  it("leaves live, draft and fork to the card icons (no sentence)", () => {
     const fork = app("X", {
       cloudLineage: {
         mode: "fork",
@@ -148,15 +148,11 @@ describe("status line", () => {
         installedAt: "2026-01-01T00:00:00Z",
       },
     });
-    expect(appStatusLine(fork, { isPublished: false }).text).toBe(
-      "Your copy of Deck Studio",
-    );
-    expect(appStatusLine(app("X"), { isPublished: true }).text).toBe(
-      "Live on the web",
-    );
+    expect(appStatusLine(fork, { isPublished: false }).text).toBe("");
+    expect(appStatusLine(app("X"), { isPublished: true }).text).toBe("");
     expect(
       appStatusLine(app("X", { status: "draft" }), { isPublished: false }).text,
-    ).toBe("Draft · only you can see it");
+    ).toBe("");
   });
 
   it("asks to name id-titled apps and restore archived ones", () => {
