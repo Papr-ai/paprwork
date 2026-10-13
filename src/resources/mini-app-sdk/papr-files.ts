@@ -230,9 +230,18 @@ export const papr = {
         if (options.signal?.aborted) throw uploadErr;
         // GCS may have the full object even when the browser blocked reading the
         // final PUT response (CORS). Probe before giving up.
-        offset = await probe(ticket.uploadUrl, total);
-        if (offset < total) throw uploadErr;
+        // The probe of a finished upload can be CORS-blocked too (the final
+        // 200 carries no CORS headers). When we can't tell, fall through to
+        // commit: the server checks stored size and MD5, so an incomplete
+        // upload still fails there with a real error.
+        try {
+          offset = await probe(ticket.uploadUrl, total);
+          if (offset < total) throw uploadErr;
+        } catch (probeErr) {
+          if (probeErr === uploadErr) throw uploadErr;
+        }
       }
+      options.onProgress?.({ uploadedBytes: total, totalBytes: total, bytesPerSecond: 0, etaSeconds: 0 });
 
       // The server verifies stored size and MD5 before trusting the bytes —
       // the client's word is never enough to mark a file verified.
