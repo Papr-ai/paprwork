@@ -23,6 +23,7 @@ import { createHash } from "crypto";
 import { promises as fs } from "fs";
 import path from "path";
 import { migrationWritesRows, splitSqlStatements } from "./migrationSqlHelpers.js";
+import { platformOwnedTarget } from "./platformOwnedTables.js";
 
 export const SCHEMA_SNAPSHOT_FILE = "snapshot.json";
 export const SCHEMA_SNAPSHOT_FORMAT = 1;
@@ -230,6 +231,11 @@ function extractRowWrites(
 ): SchemaSnapshotRowWrite[] | null {
   const rows: SchemaSnapshotRowWrite[] = [];
   for (const statement of splitSqlStatements(raw)) {
+    // Installs skip platform-table statements on replay (they never run on a
+    // fresh database), so the snapshot neither carries nor rejects them.
+    if (platformOwnedTarget(statement)) {
+      continue;
+    }
     if (reshapedTables(statement).some((table) => seededTables.has(table))) {
       return null;
     }

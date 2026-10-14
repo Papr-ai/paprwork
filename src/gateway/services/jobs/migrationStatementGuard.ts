@@ -26,6 +26,7 @@ import {
   parseDropStatement,
   parseRenameTableStatement,
 } from "./migrationSqlHelpers.js";
+import { platformOwnedSkipReason, platformOwnedTarget } from "./platformOwnedTables.js";
 
 /** Read-only view of the schema, as seen inside the migration transaction. */
 export interface SchemaInspector {
@@ -119,6 +120,14 @@ export async function guardStatement(
 
   if (isTransactionControlStatement(sql)) {
     return { action: "skip", reason: "transaction control (migration already runs in one transaction)" };
+  }
+
+  // Platform tables (app_files, _papr_*, turso_*) are created and upgraded by
+  // Papr. A copy of their DDL inside an app migration fails on fresh installs
+  // ("no such table: app_files") — see platformOwnedTables.ts.
+  const platformTable = platformOwnedTarget(sql);
+  if (platformTable) {
+    return { action: "skip", reason: platformOwnedSkipReason(platformTable) };
   }
 
   const renameColumn = /\bRENAME\s+TO\b/i.test(sql) ? null : parseRenameColumnStatement(sql);
