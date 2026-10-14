@@ -28,7 +28,11 @@ export function isPublicCommunityVisibility(visibility: string | undefined): boo
 /** One image or video on a catalog listing. role=cover drives cards; gallery = details page. */
 export interface CatalogMediaItem {
   kind: "image" | "video";
-  url: string;
+  /** Resolved by memory on read (a stable link that signs per viewer). Optional when publishing a reference. */
+  url?: string;
+  /** App Files reference. Preferred over url: access follows the app's sharing, nothing is made public. */
+  objectKey?: string;
+  posterObjectKey?: string;
   role: "cover" | "gallery";
   posterUrl?: string;
   alt?: string;

@@ -132,6 +132,32 @@ export async function fetchRuntimeDbToken(
   return { tursoUrl: json.tursoUrl, authToken: json.authToken, expiresAt: json.expiresAt };
 }
 
+/**
+ * Signed read URL for an app file, authorized by the APP's sharing rules.
+ * Same shape as fetchRuntimeDbToken: the host proves itself with its shared
+ * secret and memory mints the link, so a Community or logged-out visitor
+ * needs no key in the owner's namespace and nothing is ever made public.
+ */
+export async function fetchRuntimeFileUrl(
+  auth: AppRuntimeRouteAuth,
+  objectKey: string,
+): Promise<{ url: string; expiresInSeconds: number }> {
+  const res = await runtimeFetch(
+    `${getMemoryServerBaseUrl()}/v1/cloud/apps/runtime/file-url`,
+    {
+      method: "POST",
+      headers: runtimeHeaders(auth),
+      body: JSON.stringify({ ...runtimeAuthPayload(auth), objectKey }),
+    },
+  );
+  if (!res.ok) {
+    throw new Error(
+      `Runtime file-url failed (${res.status}): ${(await res.text()).slice(0, 200)}`,
+    );
+  }
+  return (await res.json()) as { url: string; expiresInSeconds: number };
+}
+
 export async function fetchRuntimeRepoCredentials(
   auth: AppRuntimeRouteAuth,
 ): Promise<AppRuntimeRepoCredentials> {

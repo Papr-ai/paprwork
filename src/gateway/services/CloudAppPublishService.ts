@@ -101,13 +101,16 @@ import { isOnTeamData } from "../../core/utils/copyAxes.js";
  * [] clears a previously stored cover once sharing stops (memory replaces the whole list).
  */
 export function sharedCoverCatalogFields(appId: string): { catalogMedia: CatalogMediaItem[] } {
-  const p = readSharedCoverPointer(appId) as (SharedCoverPointer & { kind?: string; videoUrl?: string }) | null;
-  const https = (u?: string) => (u && /^https:\/\/\S+$/.test(u) ? u : undefined);
+  const p = readSharedCoverPointer(appId) as
+    | (SharedCoverPointer & { kind?: string; videoUrl?: string; videoObjectKey?: string })
+    | null;
   const media: CatalogMediaItem[] = [];
-  if (p?.kind === "video" && https(p.videoUrl)) {
-    media.push({ kind: "video", url: p.videoUrl!, role: "cover", ...(https(p.url) ? { posterUrl: p.url } : {}) });
-  } else if (https(p?.url)) {
-    media.push({ kind: "image", url: p!.url, role: "cover" });
+  // References, not links: memory serves them under the app's own access rules, so private and
+  // team apps keep their media private and nothing public has to be minted.
+  if (p?.kind === "video" && p.videoObjectKey && p.objectKey) {
+    media.push({ kind: "video", role: "cover", objectKey: p.videoObjectKey, posterObjectKey: p.objectKey });
+  } else if (p?.objectKey) {
+    media.push({ kind: "image", role: "cover", objectKey: p.objectKey });
   }
   return { catalogMedia: media };
 }

@@ -11,14 +11,14 @@ import { listCoveredAppIds,
 } from "../services/appCovers.js";
 
 /**
- * Upload a cover straight to cloud storage (memory ticket → GCS → commit → public CDN).
+ * Upload a cover straight to cloud storage (memory ticket → GCS → commit; stays private).
  * Deliberately skips the app's own database: a cover is catalog metadata, not app data,
  * and a damaged app DB (e.g. keyless app_files copies) must never block sharing it.
  */
 export const uploadCoverToAppFiles: CoverUploader = async ({ appId, filePath, fileName, mime }) => {
   const { stat } = await import("fs/promises");
   const { hashFile, uploadResumable } = await import("../services/appFiles/resumableUploader.js");
-  const { requestUploadTicket, commitUpload, setVisibility } = await import("../services/appFiles/appFilesClient.js");
+  const { requestUploadTicket, commitUpload } = await import("../services/appFiles/appFilesClient.js");
   const { buildCdnUrl } = await import("../services/appFiles/cloudFileUrl.js");
   const sizeBytes = (await stat(filePath)).size;
   const sha256 = await hashFile(filePath);
@@ -29,8 +29,9 @@ export const uploadCoverToAppFiles: CoverUploader = async ({ appId, filePath, fi
     const commit = await commitUpload(appId, ticket.object_key, sizeBytes);
     if (!commit.verified) throw new Error("Cover upload: cloud storage could not verify the file");
   }
-  const vis = await setVisibility(appId, ticket.object_key, true);
-  return { id: ticket.object_key, objectKey: ticket.object_key, url: vis.cdn_url ?? buildCdnUrl(ticket.object_key) };
+  // Stored as a reference. The bucket stays private; catalog + app pages resolve it per viewer
+  // under the app's own sharing rules, so there is no public-flip step to fail.
+  return { id: ticket.object_key, objectKey: ticket.object_key, url: buildCdnUrl(ticket.object_key) };
 };
 
 /**
