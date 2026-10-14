@@ -208,19 +208,28 @@ export function scanMiniAppCloudCompatibility(
     findings.push(...scanDesktopOnlyPaprApi(content, filename));
   }
 
+  // A local dbPath is normal: registry databases (dbId) and job databases
+  // (jobId) sync to Turso and resolve by id on the web. Only a source with
+  // nothing but a machine path is stuck on this computer.
   if (dataSourcesRaw) {
-    findings.push(
-      ...scanContentWithPatterns(dataSourcesRaw, "data-sources.json", [
-        {
-          category: "absolute-path",
-          severity: "warning",
-          pattern: /"dbPath"\s*:\s*"[^"]*(?:\/Users\/|~\/)/,
-          message: "data-sources.json uses a local absolute dbPath.",
-          remediation:
-            "Cloud apps read Turso via linked job IDs — republish after Cloud Sync links databases.",
-        },
-      ]),
-    );
+    let sources: Array<{ dbPath?: string; dbId?: string; jobId?: string; alias?: string }> = [];
+    try {
+      const parsed = JSON.parse(dataSourcesRaw);
+      sources = Array.isArray(parsed?.sources) ? parsed.sources : [];
+    } catch {
+      sources = [];
+    }
+    for (const src of sources) {
+      if (src.dbId || src.jobId) continue;
+      if (!/^(?:\/Users\/|~\/)/.test(src.dbPath ?? "")) continue;
+      findings.push({
+        category: "absolute-path",
+        severity: "warning",
+        file: "data-sources.json",
+        message: `Database "${src.alias ?? "data"}" only exists on this computer.`,
+        remediation: "Link it as a Papr database so it syncs to the web.",
+      });
+    }
   }
 
   return dedupeFindings(findings);
