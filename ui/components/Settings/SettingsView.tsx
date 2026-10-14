@@ -354,12 +354,13 @@ function ProfileTab() {
       if (data?.profile) {
         setName(data.profile.name ?? paprResponse.profile.displayName ?? "");
         setEmail(data.profile.email ?? paprResponse.profile.email ?? "");
-        setImageUrl(resolvedImage);
       } else {
         setName(paprResponse.profile.displayName ?? "");
         setEmail(paprResponse.profile.email ?? "");
-        setImageUrl(resolvedImage);
       }
+      setImageUrl(resolvedImage);
+      // Sidebar avatar reads the store — publish the same resolved photo so both never drift.
+      useProfileStore.getState().setProfile({ imageUrl: resolvedImage });
       return;
     }
 
@@ -367,8 +368,16 @@ function ProfileTab() {
       setName(data.profile.name ?? "");
       setEmail(data.profile.email ?? "");
       setImageUrl(data.profile.imageUrl ?? "");
+      useProfileStore.getState().setProfile({ imageUrl: data.profile.imageUrl ?? "" });
     }
   };
+
+  // Single source of truth: if the store's photo changes (sidebar refresh, workspace
+  // reload), the Profile tab follows it.
+  const storeImageUrl = profileStore.imageUrl;
+  useEffect(() => {
+    if (loaded) setImageUrl(storeImageUrl);
+  }, [storeImageUrl, loaded]);
 
   // Load profile on mount
   useEffect(() => {
