@@ -99,6 +99,22 @@ const CHECK_SCRIPT = `(() => {
   return { small: [...small].slice(0, 20), offStage: [...off].slice(0, 10), spill: [...spill].slice(0, 10), overlap: [...overlap].slice(0, 10) };
 })()`;
 
+const MAX_STILLS = 8;
+
+/** What the viewer sees at (x, y) in 0..1: the element, its text and its nearest labelled parents. */
+const PROBE_SCRIPT = `(x, y) => {
+  const el = document.elementFromPoint(x * innerWidth, y * innerHeight);
+  if (!el) return null;
+  const name = (e) => e.tagName.toLowerCase() + (e.id ? '#' + e.id : '') +
+    (typeof e.className === 'string' && e.className.trim() ? '.' + e.className.trim().split(/\\s+/).slice(0, 3).join('.') : '');
+  const text = (e) => (e.innerText || e.textContent || '').trim().replace(/\\s+/g, ' ').slice(0, 80);
+  const path = [];
+  for (let e = el; e && e !== document.body && path.length < 4; e = e.parentElement) path.push(name(e));
+  const r = el.getBoundingClientRect();
+  return { element: name(el), text: text(el), path: path.join(' < '),
+    box: [Math.round(r.left), Math.round(r.top), Math.round(r.width), Math.round(r.height)] };
+}`;
+
 /** Union of two checks (mid-animation + hold), so a clash at either moment counts. */
 function mergeChecks(a, b) {
   const uniq = (x, y, key) => {
@@ -186,6 +202,21 @@ async function renderOnce(opts) {
       const size = img.getSize();
       return size.width === OUT_W && size.height === OUT_H ? img : img.resize({ width: OUT_W, height: OUT_H, quality: "best" });
     };
+
+    // Stills mode: frames at chosen moments (for review / notes), plus what sits under a pin.
+    if (Array.isArray(opts.stills)) {
+      const stills = [];
+      for (const s of opts.stills.slice(0, MAX_STILLS)) {
+        const t = Math.min(seconds, Math.max(0, Number(s.t) || 0));
+        await setT(t);
+        fs.writeFileSync(s.path, (await grab()).toJPEG(80));
+        const probe = s.probe
+          ? await wc.executeJavaScript(`(${PROBE_SCRIPT})(${Number(s.probe.x) || 0}, ${Number(s.probe.y) || 0})`)
+          : undefined;
+        stills.push({ t, path: s.path, probe });
+      }
+      return { seconds, frames: 0, codec: "", bytes: 0, check: { small: [], offStage: [] }, stills };
+    }
 
     // Layout check mid-animation and at the hold point (everything on stage, before the fade).
     await setT(seconds * 0.5);

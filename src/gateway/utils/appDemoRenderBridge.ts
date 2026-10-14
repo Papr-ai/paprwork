@@ -22,6 +22,8 @@ export function requestAppDemoRender(request: {
   scenePath: string;
   videoPath: string;
   posterPath: string;
+  /** Stills mode: capture these moments instead of a video. */
+  stills?: { t: number; path: string; probe?: { x: number; y: number } }[];
 }): Promise<RenderResult> {
   if (!process.send) {
     return Promise.reject(new Error("Preview videos are recorded by the Paprwork desktop app."));

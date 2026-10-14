@@ -13,14 +13,39 @@
  *                off the frame, the agent gets one retry with that feedback; the better
  *                take wins.
  *
- * Files live privately in <papr>/data/demos/ (gitignored, never synced):
- *   {appId}.html (scene, kept for re-rendering), {appId}.mp4, {appId}.jpg (poster).
+ *   4. review  — a vision model looks at three rendered frames next to a screenshot of the
+ *                real app and scores fidelity + polish (appDemoQuality.ts); problems become
+ *                the polish feedback. Polish edits the scene, it doesn't rewrite it.
+ * Revise: the owner leaves timestamped notes (optionally pinned on the frame); one run
+ * edits the current scene to address them all and becomes the next version.
+ *
+ * Files, versions and notes live privately in <papr>/data/demos/ (appDemoStore.ts).
  * Sample data only, so — unlike screenshots — the video is safe to share by default;
  * sharing still goes through the owner's App info choice (appCovers.sharePrivateCover).
  */
 import * as fs from "fs";
 import * as path from "path";
-import { getPaprAppsRoot, getPaprDataDir } from "../../core/utils/paprRoot.js";
+import { getPaprAppsRoot } from "../../core/utils/paprRoot.js";
+import {
+  addVersion,
+  demoDir,
+  demoPaths,
+  isValidDemoAppId,
+  openNotes,
+  readManifest,
+  stillPath,
+  type DemoManifest,
+  type DemoNote,
+} from "./appDemoStore.js";
+import {
+  REVIEW_AT,
+  normalizeReview,
+  referenceImage,
+  reviewFeedback,
+  reviewPrompt,
+  reviewScore,
+  type SceneReview,
+} from "./appDemoQuality.js";
 import {
   readSharedCoverPointer,
   sharedCoverPath,
@@ -30,7 +55,6 @@ import {
 } from "./appCovers.js";
 
 export const DEMO_STAGE = { width: 1280, height: 800 } as const;
-const APP_ID_RE = /^[A-Za-z0-9_-]{1,80}$/;
 const SOURCE_BUDGET = 90_000;
 const SKIP = /node_modules|(^|\/)dist\/|__papr__|\.d\.ts$|(^|\/)assets\/|(^|\/)content\//;
 /** More than this many unreadable labels triggers the one polish retry. */
@@ -41,7 +65,7 @@ You get the app's source. Produce ONE self-contained HTML file: a 1280x800 scene
 
 How it should look:
 - NOT a screen recording or full screenshot. Compose 1-3 floating pieces of the app's real UI (cards, scores, table rows, charts, chips, inputs) on a soft gradient background that fits the app's palette. Generous whitespace, soft large shadows, rounded corners.
-- Reuse the app's own components: copy markup structure and class names from its view code; its CSS is injected for you as <style id="app-css">. Then make everything BIG: every visible label at least 22px, body text 24-30px, key numbers 56-120px. Raise font sizes directly (or scale a wrapper) — the app's own 12-14px sizes are far too small here. Fewer elements, bigger, beats more elements, smaller.
+- It must feel like THIS app, not a generic template: reuse its own components — copy markup structure, class names, icons and the exact wording of its headings, buttons and labels from its view code; its CSS is injected for you as <style id="app-css">. Keep its palette, fonts, radii and card style. Only the data is invented. Then make everything BIG: every visible label at least 22px, body text 24-30px, key numbers 56-120px. Raise font sizes directly (or scale a wrapper) — the app's own 12-14px sizes are far too small here. Fewer elements, bigger, beats more elements, smaller.
 - Layout must be clean, like a finished product shot:
   * Lay out with flexbox/grid. Never absolutely position text on top of other text; no two labels may overlap at any moment.
   * Every label fits inside the shape that holds it. Text inside a ring/circle/pill must be shorter than ~60% of its width — use a short label ("74%" + "margin") or put the label below the shape.
@@ -57,35 +81,13 @@ Animation contract (the page is filmed frame by frame on a frozen clock):
 - Motion: eased slide/scale entries (ease-out, slight overshoot), numbers count up, bars/rings fill, highlights sweep, typing reveals text. Stagger entries. Everything settled by ~75% of __total; fade the whole scene out over the last 0.4s so it loops cleanly. Call __setT(0) at the end of your script.
 - html/body exactly 1280x800, margin 0, overflow hidden. Everything stays inside with >=40px margin. No external resources (fonts, images, CDNs); system-ui fonts, inline SVG icons.`;
 
-export function isValidDemoAppId(appId: string): boolean {
-  return APP_ID_RE.test(appId);
-}
-
-export function demoDir(): string {
-  return path.join(getPaprDataDir(), "demos");
-}
-
-export function demoPaths(appId: string, take = "") {
-  const base = path.join(demoDir(), `${appId}${take ? `.${take}` : ""}`);
-  return { scene: `${base}.html`, video: `${base}.mp4`, poster: `${base}.jpg` };
-}
-
-export function hasDemoVideo(appId: string): boolean {
-  return isValidDemoAppId(appId) && fs.existsSync(demoPaths(appId).video);
-}
-
-/** Every app with a finished preview video (one call for the whole library). */
-export function listDemoAppIds(): string[] {
-  try {
-    return fs
-      .readdirSync(demoDir())
-      .filter((f) => /^[A-Za-z0-9_-]+\.mp4$/.test(f))
-      .map((f) => f.slice(0, -4))
-      .filter(isValidDemoAppId);
-  } catch {
-    return [];
-  }
-}
+export {
+  demoDir,
+  demoPaths,
+  hasDemoVideo,
+  isValidDemoAppId,
+  listDemoAppIds,
+} from "./appDemoStore.js";
 
 function appDir(appId: string): string {
   return path.join(getPaprAppsRoot(), appId);
@@ -163,6 +165,8 @@ export interface RenderResult {
   codec: string;
   bytes: number;
   check: RenderCheck;
+  /** Stills mode only. */
+  stills?: DemoStill[];
 }
 
 /** Feedback for the polish retry, or null when the take is good. */
@@ -190,118 +194,244 @@ function checkScore(check: RenderCheck): number {
   return check.small.length + 4 * check.offStage.length + 4 * (check.overlap?.length ?? 0) + 3 * (check.spill?.length ?? 0);
 }
 
-export type DemoStage = "writing" | "recording" | "polishing";
+export type DemoStage = "writing" | "recording" | "reviewing" | "polishing" | "revising";
 
 export interface DemoTask {
   state: "running" | "done" | "failed";
+  kind: "create" | "revise";
   stage?: DemoStage;
   startedAt: number;
   finishedAt?: number;
   error?: string;
+  /** Version this run made. */
+  version?: number;
+}
+
+export interface DemoStill {
+  t: number;
+  path: string;
+  /** What sits under a pinned note: element, its text and parents. */
+  probe?: { element: string; text: string; path: string } | null;
 }
 
 export interface DemoDeps {
-  /** Ask the Papr agent for scene HTML. */
-  writeScene: (appId: string, prompt: string) => Promise<string>;
+  /** Ask the Papr agent for scene HTML. Images (rendered frames) are shown to the model. */
+  writeScene: (appId: string, prompt: string, images?: string[]) => Promise<string>;
   /** Record the scene to MP4 + poster (Electron). */
   render: (paths: { scenePath: string; videoPath: string; posterPath: string }) => Promise<RenderResult>;
+  /** Frames at chosen moments (+ what sits under a pin). Optional: no review without it. */
+  stills?: (scenePath: string, stills: { t: number; path: string; probe?: { x: number; y: number } }[]) => Promise<DemoStill[]>;
+  /** Vision review of the frames (and a screenshot of the real app). Returns raw JSON. */
+  review?: (prompt: string, images: string[]) => Promise<unknown>;
   /** Called after a new video is in place (e.g. notify the UI). */
   onDone?: (appId: string) => void;
 }
 
 const tasks = new Map<string, DemoTask>();
 
-export function demoStatus(appId: string): { exists: boolean; updatedAt: number | null; task: DemoTask | null } {
+export function demoStatus(appId: string): {
+  exists: boolean;
+  updatedAt: number | null;
+  task: DemoTask | null;
+} & DemoManifest {
   let updatedAt: number | null = null;
   try {
     updatedAt = fs.statSync(demoPaths(appId).video).mtimeMs;
   } catch {
     /* none yet */
   }
-  return { exists: updatedAt !== null, updatedAt, task: tasks.get(appId) ?? null };
+  const m = isValidDemoAppId(appId) ? readManifest(appId) : { current: 0, versions: [], notes: [] };
+  return { exists: updatedAt !== null, updatedAt, task: tasks.get(appId) ?? null, ...m };
+}
+
+function begin(appId: string, kind: DemoTask["kind"], run: (task: DemoTask) => Promise<number>, deps: DemoDeps): DemoTask {
+  if (!isValidDemoAppId(appId)) throw new Error("invalid appId");
+  const current = tasks.get(appId);
+  if (current?.state === "running") return current;
+  const task: DemoTask = { state: "running", kind, stage: kind === "revise" ? "revising" : "writing", startedAt: Date.now() };
+  tasks.set(appId, task);
+  fs.mkdirSync(demoDir(), { recursive: true });
+  void run(task)
+    .then((v) => {
+      task.version = v;
+      task.state = "done";
+      deps.onDone?.(appId);
+    })
+    .catch((err: Error) => {
+      task.state = "failed";
+      task.error = err.message || "Couldn't make a preview video.";
+    })
+    .finally(() => {
+      task.stage = undefined;
+      task.finishedAt = Date.now();
+      cleanScratch(appId);
+    });
+  return task;
 }
 
 /** Start (or join) the background generation for one app. */
 export function startDemoGeneration(appId: string, deps: DemoDeps): DemoTask {
-  if (!isValidDemoAppId(appId)) throw new Error("invalid appId");
-  const current = tasks.get(appId);
-  if (current?.state === "running") return current;
-  const task: DemoTask = { state: "running", stage: "writing", startedAt: Date.now() };
-  tasks.set(appId, task);
-  void runGeneration(appId, deps, task);
-  return task;
+  return begin(appId, "create", (task) => runCreate(appId, deps, task), deps);
 }
 
-function removeTake(appId: string, take: string): void {
-  for (const f of Object.values(demoPaths(appId, take))) fs.rmSync(f, { force: true });
+/** Make the next version from the owner's open notes (all of them, in one run). */
+export function startDemoRevision(appId: string, deps: DemoDeps): DemoTask {
+  const m = isValidDemoAppId(appId) ? readManifest(appId) : null;
+  if (!m?.current) throw new Error("Make the preview video first.");
+  if (!openNotes(appId).length) throw new Error("Add a note first: what should change?");
+  return begin(appId, "revise", (task) => runRevise(appId, deps, task), deps);
 }
 
-async function takeOnce(
-  appId: string,
-  deps: DemoDeps,
-  take: string,
-  prompt: string,
-): Promise<RenderResult> {
-  const html = normalizeScene(appId, await deps.writeScene(appId, prompt));
+function cleanScratch(appId: string): void {
+  for (const take of ["a", "b"]) for (const f of Object.values(demoPaths(appId, take))) fs.rmSync(f, { force: true });
+  try {
+    for (const f of fs.readdirSync(demoDir())) {
+      if (f.startsWith(`${appId}.still-`) || f.startsWith(`${appId}.ref.`)) fs.rmSync(path.join(demoDir(), f), { force: true });
+    }
+  } catch {
+    /* dir gone */
+  }
+}
+
+/** The scene as the model wrote it (the injected app CSS is re-added on save). */
+export function stripInjectedCss(html: string): string {
+  return html.replace(/<style id="app-css">[\s\S]*?<\/style>/i, "");
+}
+
+function editPrompt(appPrompt: string, scene: string, requests: string): string {
+  return `${appPrompt}
+
+---
+
+CURRENT SCENE (edit this one; do not start over):
+${stripInjectedCss(scene)}
+
+CHANGE REQUESTS:
+${requests}
+
+Return the full edited HTML. Make the smallest change that addresses each request and keep everything else as it is (story, timing, layout, data) unless a request asks for it. Keep the animation contract.`;
+}
+
+async function writeTake(appId: string, deps: DemoDeps, take: string, prompt: string, images?: string[]): Promise<RenderResult> {
+  const html = normalizeScene(appId, await deps.writeScene(appId, prompt, images));
   const p = demoPaths(appId, take);
   fs.writeFileSync(p.scene, html);
   return deps.render({ scenePath: p.scene, videoPath: p.video, posterPath: p.poster });
 }
 
-async function runGeneration(appId: string, deps: DemoDeps, task: DemoTask): Promise<void> {
-  fs.mkdirSync(demoDir(), { recursive: true });
-  const prompt = buildDemoScenePromptSafe(appId);
+/** Look at three frames (next to the real app when we have a screenshot of it). */
+async function reviewTake(
+  appId: string,
+  deps: DemoDeps,
+  take: string,
+  seconds: number,
+  ref: string | null,
+): Promise<{ review: SceneReview | null; times: number[] }> {
+  const times = REVIEW_AT.map((f) => Math.round(f * seconds * 10) / 10);
+  if (!deps.stills || !deps.review) return { review: null, times };
   try {
-    if (prompt instanceof Error) throw prompt;
-    task.stage = "writing";
-    const first = await takeOnce(appId, deps, "a", prompt);
-    let winner = "a";
-    const feedback = checkFeedback(first.check);
-    if (feedback) {
-      task.stage = "polishing";
-      try {
-        const second = await takeOnce(
-          appId,
-          deps,
-          "b",
-          `${prompt}\n\nYOUR PREVIOUS ATTEMPT HAD PROBLEMS — fix them:\n${feedback}`,
-        );
-        if (checkScore(second.check) < checkScore(first.check)) winner = "b";
-      } catch (err) {
-        // Keep the first take; a failed polish is not a failed video.
-        console.warn(`[appDemoVideos] polish retry failed for ${appId}:`, (err as Error).message);
-      }
-    }
-    const from = demoPaths(appId, winner);
-    const to = demoPaths(appId);
-    fs.renameSync(from.scene, to.scene);
-    fs.renameSync(from.poster, to.poster);
-    fs.renameSync(from.video, to.video); // last: the .mp4 is what marks a finished video
-    task.state = "done";
-    deps.onDone?.(appId);
+    const shots = await deps.stills(
+      demoPaths(appId, take).scene,
+      times.map((t, i) => ({ t, path: stillPath(appId, `${take}${i}`) })),
+    );
+    const raw = await deps.review(reviewPrompt(appTitle(appId), Boolean(ref), times), [
+      ...(ref ? [ref] : []),
+      ...shots.map((s) => s.path),
+    ]);
+    return { review: normalizeReview(raw), times };
   } catch (err) {
-    task.state = "failed";
-    task.error = (err as Error).message || "Couldn't make a preview video.";
-  } finally {
-    task.stage = undefined;
-    task.finishedAt = Date.now();
-    removeTake(appId, "a");
-    removeTake(appId, "b");
+    console.warn(`[appDemoVideos] review failed for ${appId}:`, (err as Error).message);
+    return { review: null, times };
+  }
+}
+
+async function runCreate(appId: string, deps: DemoDeps, task: DemoTask): Promise<number> {
+  const prompt = buildDemoScenePrompt(appId);
+  const ref = referenceImage(appId);
+  task.stage = "writing";
+  const first = await writeTake(appId, deps, "a", prompt);
+  task.stage = "reviewing";
+  const r1 = await reviewTake(appId, deps, "a", first.seconds, ref);
+  let winner = "a";
+  let review = r1.review;
+  const feedback = [checkFeedback(first.check), reviewFeedback(r1.review, r1.times)].filter(Boolean).join("\n");
+  if (feedback) {
+    task.stage = "polishing";
+    try {
+      const scene = fs.readFileSync(demoPaths(appId, "a").scene, "utf8");
+      const second = await writeTake(appId, deps, "b", editPrompt(prompt, scene, feedback));
+      const r2 = await reviewTake(appId, deps, "b", second.seconds, ref);
+      const score = (c: RenderCheck, r: SceneReview | null) => checkScore(c) + reviewScore(r);
+      if (score(second.check, r2.review) < score(first.check, r1.review)) {
+        winner = "b";
+        review = r2.review;
+      }
+    } catch (err) {
+      // Keep the first take; a failed polish is not a failed video.
+      console.warn(`[appDemoVideos] polish failed for ${appId}:`, (err as Error).message);
+    }
+  }
+  return addVersion(appId, winner, "create", [], review ? { fidelity: review.fidelity, polish: review.polish } : undefined);
+}
+
+function noteLine(n: DemoNote, i: number, still: DemoStill | undefined): string {
+  const where = n.x != null && n.y != null
+    ? ` pinned at x=${Math.round(n.x * 100)}%, y=${Math.round(n.y * 100)}%${still?.probe ? ` on ${still.probe.path}${still.probe.text ? ` ("${still.probe.text}")` : ""}` : ""}`
+    : "";
+  return `${i + 1}. At ${n.t.toFixed(1)}s (image ${i + 1})${where}: ${n.body}`;
+}
+
+async function runRevise(appId: string, deps: DemoDeps, task: DemoTask): Promise<number> {
+  const m = readManifest(appId);
+  const notes = openNotes(appId);
+  const scene = fs.readFileSync(demoPaths(appId, `v${m.current}`).scene, "utf8");
+  const shown = notes.slice(0, 6);
+  let stills: DemoStill[] = [];
+  if (deps.stills) {
+    try {
+      stills = await deps.stills(
+        demoPaths(appId, `v${m.current}`).scene,
+        shown.map((n, i) => ({
+          t: n.t,
+          path: stillPath(appId, `n${i}`),
+          ...(n.x != null && n.y != null ? { probe: { x: n.x, y: n.y } } : {}),
+        })),
+      );
+    } catch (err) {
+      console.warn(`[appDemoVideos] note frames failed for ${appId}:`, (err as Error).message);
+    }
+  }
+  const requests = notes.map((n, i) => noteLine(n, i, stills[i])).join("\n");
+  const prompt = editPrompt(buildDemoScenePrompt(appId), scene, `The owner watched v${m.current} and left these notes${stills.length ? " (the attached images are the frames they refer to, in order)" : ""}:\n${requests}`);
+  task.stage = "revising";
+  const take = await writeTake(appId, deps, "a", prompt, stills.map((s) => s.path));
+  const dom = checkFeedback(take.check);
+  let winner = "a";
+  if (dom) {
+    task.stage = "polishing";
+    try {
+      const edited = fs.readFileSync(demoPaths(appId, "a").scene, "utf8");
+      const second = await writeTake(appId, deps, "b", editPrompt(buildDemoScenePrompt(appId), edited, `Keep the owner's changes. Fix only these layout problems:\n${dom}`));
+      if (checkScore(second.check) < checkScore(take.check)) winner = "b";
+    } catch (err) {
+      console.warn(`[appDemoVideos] revise polish failed for ${appId}:`, (err as Error).message);
+    }
+  }
+  return addVersion(appId, winner, "revise", notes.map((n) => n.id));
+}
+
+function appTitle(appId: string): string {
+  try {
+    return (JSON.parse(fs.readFileSync(path.join(appDir(appId), "metadata.json"), "utf8")) as { title?: string }).title ?? appId;
+  } catch {
+    return appId;
   }
 }
 
 // Recording happens after writing; expose the stage switch for the default render dep.
 export function markRecording(appId: string): void {
   const t = tasks.get(appId);
-  if (t?.state === "running" && t.stage !== "polishing") t.stage = "recording";
-}
-
-function buildDemoScenePromptSafe(appId: string): string | Error {
-  try {
-    return buildDemoScenePrompt(appId);
-  } catch (err) {
-    return err as Error;
-  }
+  if (t?.state === "running" && (t.stage === "writing" || t.stage === "revising")) t.stage = "recording";
 }
 
 /** Test hook. */

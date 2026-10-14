@@ -11,12 +11,19 @@ import { useEffect, useState } from "react";
 import { gateway } from "../../src/lib/gateway";
 import { setAppCoverShared } from "../../utils/appCover";
 import { appDemoPosterUrl, appDemoVideoUrl, shareDemoVideo, startDemoGeneration, useDemoStatus } from "../../utils/appDemo";
+import { DemoNotes } from "./DemoNotes";
 import { DemoVideo } from "./DemoVideo";
 import "./PublishInfoSheet.css";
 
 type CoverChoice = "video" | "banner";
 
-const STAGE_LABEL = { writing: "Writing the scene…", recording: "Recording…", polishing: "Polishing…" } as const;
+const STAGE_LABEL = {
+  writing: "Writing the scene…",
+  recording: "Recording…",
+  reviewing: "Checking how it looks…",
+  polishing: "Polishing…",
+  revising: "Applying your notes…",
+} as const;
 
 interface PublishInfoSheetProps {
   appId: string;
@@ -36,8 +43,12 @@ export function PublishInfoSheet({ appId, initialTitle, onCancel, onConfirmed, m
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const demo = useDemoStatus(appId);
-  const making = demo?.task?.state === "running";
+  const running = demo?.task?.state === "running";
+  // A revision keeps the current video on screen (notes view); only a fresh make shows the spinner.
+  const making = running && demo?.task?.kind !== "revise";
   const hasVideo = Boolean(demo?.exists);
+  const [notesOpen, setNotesOpen] = useState(false);
+  const openNoteCount = (demo?.notes ?? []).filter((n) => !n.fixedIn).length;
 
   useEffect(() => {
     let cancelled = false;
@@ -127,8 +138,9 @@ export function PublishInfoSheet({ appId, initialTitle, onCancel, onConfirmed, m
 
       <div className="pis-field">
         <span className="pis-label">Cover</span>
-        <div className="pis-hero">
-          {choice === "video" && hasVideo && !making ? (
+        {choice === "video" && hasVideo && !making && notesOpen && demo ? <DemoNotes appId={appId} demo={demo} /> : null}
+        <div className="pis-hero" hidden={choice === "video" && hasVideo && !making && notesOpen}>
+          {choice === "video" && hasVideo && !making && notesOpen && demo ? null : choice === "video" && hasVideo && !making ? (
             <DemoVideo className="pis-media" src={appDemoVideoUrl(appId, v)} poster={appDemoPosterUrl(appId, v)} />
           ) : choice === "video" ? (
             <div className={`pis-make ${making ? "is-busy" : ""}`}>
@@ -160,9 +172,16 @@ export function PublishInfoSheet({ appId, initialTitle, onCancel, onConfirmed, m
         </div>
         <div className="pis-row">
           {choice === "video" && hasVideo ? (
-            <button type="button" className="pis-link" disabled={making} onClick={() => void makeVideo()}>
-              {making ? STAGE_LABEL[demo?.task?.stage ?? "writing"] : "Make a new one"}
-            </button>
+            <>
+              <button type="button" className="pis-link" disabled={making} onClick={() => setNotesOpen((o) => !o)}>
+                {notesOpen ? "Done" : openNoteCount ? `Notes (${openNoteCount})` : "Notes & versions"}
+              </button>
+              {!notesOpen ? (
+                <button type="button" className="pis-link" disabled={running} onClick={() => void makeVideo()}>
+                  {running ? STAGE_LABEL[demo?.task?.stage ?? "writing"] : "Start over"}
+                </button>
+              ) : null}
+            </>
           ) : null}
           <span className="pis-hint">
             {choice === "video"

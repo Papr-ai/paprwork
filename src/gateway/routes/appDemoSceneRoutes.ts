@@ -15,16 +15,20 @@ import {
   shareDemoVideo,
   sharedCoverKind,
   startDemoGeneration,
+  startDemoRevision,
   type DemoDeps,
 } from "../services/appDemoVideos.js";
+import { REVIEW_SCHEMA } from "../services/appDemoQuality.js";
+import { addNote, deleteNote, readManifest, setCurrentVersion, versionTake } from "../services/appDemoStore.js";
 
 const deps: DemoDeps = {
-  async writeScene(appId, prompt) {
+  async writeScene(appId, prompt, images) {
     const { getAgentService } = await import("../services/AgentService.js");
     const result = await getAgentService().runStructuredJobSession({
       jobId: `app-demo-${appId}`,
       runId: String(Date.now()),
       prompt: `${DEMO_SCENE_SYSTEM}\n\n---\n\n${prompt}`,
+      ...(images?.length ? { images } : {}),
       schemaName: "demo_scene",
       schemaDescription: "A self-contained HTML document for the app's animated preview loop.",
       outputSchema: {
@@ -43,6 +47,33 @@ const deps: DemoDeps = {
     const { requestAppDemoRender } = await import("../utils/appDemoRenderBridge.js");
     return requestAppDemoRender(paths);
   },
+  async stills(scenePath, stills) {
+    const { requestAppDemoRender } = await import("../utils/appDemoRenderBridge.js");
+    // video/poster paths are unused in stills mode but must sit in the demos folder.
+    const base = scenePath.replace(/\.html$/, "");
+    const r = await requestAppDemoRender({ scenePath, videoPath: `${base}.mp4`, posterPath: `${base}.jpg`, stills });
+    return r.stills ?? [];
+  },
+  async review(prompt, images) {
+    const { getAgentService } = await import("../services/AgentService.js");
+    const result = await getAgentService().runStructuredJobSession({
+      jobId: "app-demo-review",
+      runId: String(Date.now()),
+      prompt,
+      images,
+      schemaName: "demo_review",
+      schemaDescription: "QA review of an app preview video's frames.",
+      outputSchema: REVIEW_SCHEMA as unknown as Record<string, unknown>,
+    });
+    return result.object;
+  },
+};
+
+const ownAppId = (req: { params: { appId?: string } }, res: import("express").Response): string | null => {
+  const appId = req.params.appId ?? "";
+  if (isValidDemoAppId(appId)) return appId;
+  res.status(400).json({ error: "invalid appId" });
+  return null;
 };
 
 export function registerAppDemoSceneRoutes(app: Express): void {
@@ -75,9 +106,12 @@ export function registerAppDemoSceneRoutes(app: Express): void {
     }
   });
 
-  const sendDemoFile = (kind: "video" | "poster", type: string) => (req: { params: { appId?: string } }, res: import("express").Response) => {
+  const sendDemoFile = (kind: "video" | "poster", type: string) => (req: { params: { appId?: string }; query: Record<string, unknown> }, res: import("express").Response) => {
     const appId = req.params.appId ?? "";
-    const file = isValidDemoAppId(appId) ? demoPaths(appId)[kind] : "";
+    // ?ver=N plays one saved version; no ?ver is the version in use.
+    const ver = Number(req.query.ver);
+    const take = Number.isInteger(ver) && ver > 0 ? versionTake(ver) : "";
+    const file = isValidDemoAppId(appId) ? demoPaths(appId, take)[kind] : "";
     if (!file || !fs.existsSync(file)) {
       res.status(404).end();
       return;
@@ -88,6 +122,48 @@ export function registerAppDemoSceneRoutes(app: Express): void {
   };
   app.get("/api/apps/:appId/demo/video", sendDemoFile("video", "video/mp4"));
   app.get("/api/apps/:appId/demo/poster", sendDemoFile("poster", "image/jpeg"));
+
+  /** Notes: a moment (t), optional spot (x, y in 0..1), and what should change. Owner only, private. */
+  app.post("/api/apps/:appId/demo/notes", (req, res) => {
+    const appId = ownAppId(req, res);
+    if (!appId) return;
+    try {
+      res.json({ note: addNote(appId, req.body ?? {}), ...readManifest(appId) });
+    } catch (err) {
+      res.status(400).json({ error: (err as Error).message });
+    }
+  });
+
+  app.delete("/api/apps/:appId/demo/notes/:noteId", (req, res) => {
+    const appId = ownAppId(req, res);
+    if (!appId) return;
+    const ok = deleteNote(appId, req.params.noteId ?? "");
+    res.status(ok ? 200 : 404).json(readManifest(appId));
+  });
+
+  /** One run fixes every open note and makes the next version. Poll GET /demo. */
+  app.post("/api/apps/:appId/demo/revise", (req, res) => {
+    const appId = ownAppId(req, res);
+    if (!appId) return;
+    try {
+      startDemoRevision(appId, deps);
+      res.status(202).json(demoStatus(appId));
+    } catch (err) {
+      res.status(400).json({ error: (err as Error).message });
+    }
+  });
+
+  /** Use a saved version as the preview (cards). Sharing still goes through App info → Save. */
+  app.post("/api/apps/:appId/demo/current", (req, res) => {
+    const appId = ownAppId(req, res);
+    if (!appId) return;
+    try {
+      setCurrentVersion(appId, Number((req.body as { version?: unknown })?.version));
+      res.json(demoStatus(appId));
+    } catch (err) {
+      res.status(400).json({ error: (err as Error).message });
+    }
+  });
 
   /** Start making (or remaking) the preview. Returns at once; poll GET /demo for progress. */
   app.post("/api/apps/:appId/demo/generate", (req, res) => {

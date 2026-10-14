@@ -10,18 +10,48 @@ import { getGatewayHttpBase } from "./gatewayHttpBase";
 
 export const APP_DEMO_CHANGED_EVENT = "papr:app-demo-changed";
 
-export type DemoStage = "writing" | "recording" | "polishing";
+export type DemoStage = "writing" | "recording" | "reviewing" | "polishing" | "revising";
+export interface DemoVersion {
+  v: number;
+  createdAt: number;
+  kind: "create" | "revise";
+  notes?: number;
+}
+export interface DemoNote {
+  id: string;
+  v: number;
+  t: number;
+  x?: number;
+  y?: number;
+  body: string;
+  createdAt: number;
+  fixedIn?: number;
+}
 export interface DemoStatus {
   exists: boolean;
   updatedAt: number | null;
   sharedKind?: "video" | "image" | null;
-  task: { state: "running" | "done" | "failed"; stage?: DemoStage; startedAt: number; error?: string } | null;
+  task: {
+    state: "running" | "done" | "failed";
+    kind?: "create" | "revise";
+    stage?: DemoStage;
+    startedAt: number;
+    error?: string;
+    version?: number;
+  } | null;
+  current?: number;
+  versions?: DemoVersion[];
+  notes?: DemoNote[];
 }
 
 const base = (appId: string) => `${getGatewayHttpBase()}/api/apps/${encodeURIComponent(appId)}/demo`;
 
 export function appDemoVideoUrl(appId: string, version?: number | string | null): string {
   return `${base(appId)}/video${version ? `?v=${version}` : ""}`;
+}
+/** One saved version (v1, v2…), not the one in use. */
+export function appDemoVersionUrl(appId: string, ver: number, kind: "video" | "poster" = "video"): string {
+  return `${base(appId)}/${kind}?ver=${ver}`;
 }
 export function appDemoPosterUrl(appId: string, version?: number | string | null): string {
   return `${base(appId)}/poster${version ? `?v=${version}` : ""}`;
@@ -87,6 +117,41 @@ export function useDemoStatus(appId: string): DemoStatus | null {
     };
   }, [appId]);
   return status;
+}
+
+async function send(appId: string, pathName: string, method: string, body?: unknown): Promise<DemoStatus> {
+  const r = await fetch(`${base(appId)}${pathName}`, {
+    method,
+    headers: body ? { "Content-Type": "application/json" } : undefined,
+    body: body ? JSON.stringify(body) : undefined,
+  });
+  const out = (await r.json().catch(() => ({}))) as DemoStatus & { error?: string };
+  if (!r.ok) throw new Error(out.error ?? "Something went wrong.");
+  return out;
+}
+
+/** Notes refresh every follower so the sheet shows them at once. */
+async function sendAndRefresh(appId: string, pathName: string, method: string, body?: unknown): Promise<void> {
+  await send(appId, pathName, method, body);
+  const s = await fetchDemoStatus(appId);
+  if (s) followers.get(appId)?.forEach((f) => f(s));
+}
+
+export function addDemoNote(appId: string, note: { t: number; body: string; x?: number; y?: number }): Promise<void> {
+  return sendAndRefresh(appId, "/notes", "POST", note);
+}
+export function deleteDemoNote(appId: string, noteId: string): Promise<void> {
+  return sendAndRefresh(appId, `/notes/${encodeURIComponent(noteId)}`, "DELETE");
+}
+/** Use a saved version as the preview (cards update). */
+export async function useDemoVersion(appId: string, version: number): Promise<void> {
+  await sendAndRefresh(appId, "/current", "POST", { version });
+  window.dispatchEvent(new CustomEvent(APP_DEMO_CHANGED_EVENT, { detail: { appId, version: Date.now() } }));
+}
+/** One run fixes every open note → next version. */
+export async function reviseDemo(appId: string): Promise<void> {
+  await send(appId, "/revise", "POST");
+  follow(appId);
 }
 
 export async function shareDemoVideo(appId: string): Promise<boolean> {
