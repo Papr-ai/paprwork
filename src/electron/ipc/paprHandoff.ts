@@ -90,12 +90,18 @@ export function handoffLanding(
   intent: HandoffRedeemResult["intent"],
   appsBaseUrl = "https://apps.papr.ai",
 ): { title: string; message: string } {
+  // "web" = the "Open in Papr Work" card on apps.papr.ai (a job that needs this Mac).
+  const fromWeb = intent.source === "web";
+  const title = fromWeb ? "From the web" : "From Claude";
   if (intent.appNamespaceId && intent.appSlug) {
     const link = `${appsBaseUrl}/${intent.appNamespaceId}/${intent.appSlug}`;
     const view = intent.view ? ` (${intent.view})` : "";
-    return { title: "From Claude", message: `Let's keep working on ${intent.appSlug}${view} from Claude: ${link}` };
+    const message = fromWeb
+      ? `Run ${intent.appSlug}${view} here — it needs Papr Work desktop: ${link}`
+      : `Let's keep working on ${intent.appSlug}${view} from Claude: ${link}`;
+    return { title, message };
   }
-  return { title: "From Claude", message: "" };
+  return { title, message: "" };
 }
 
 export type HandoffAccountDecision = "sign_in" | "same_user" | "different_user";

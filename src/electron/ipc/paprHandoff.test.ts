@@ -66,3 +66,11 @@ describe("landing and account decision", () => {
     expect(decideHandoffAccount("u2", "u1")).toBe("different_user");
   });
 });
+
+describe("handoffLanding from the web card", () => {
+  it("explains the desktop run instead of crediting Claude", () => {
+    const landing = handoffLanding({ appNamespaceId: "n1", appSlug: "linkedin-outreach", source: "web" });
+    expect(landing.title).toBe("From the web");
+    expect(landing.message).toContain("needs Papr Work desktop");
+  });
+});
