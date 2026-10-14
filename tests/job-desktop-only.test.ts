@@ -168,3 +168,25 @@ describe("decideDesktopOnly", () => {
     expect(d.patch).toBeNull();
   });
 });
+
+describe("python docstrings", () => {
+  test("prose inside a module docstring is ignored, code after it is not", () => {
+    const src = [
+      '"""LinkedIn warm paths.',
+      "",
+      "Runs in the local Chrome (CDP :9222).",
+      "Work dir: ~/Documents/Launch Post Studio/work/<id>/",
+      '"""',
+      "import os",
+      'OUT = Path.home() / "Desktop" / "x"',
+    ].join("\n");
+    const hits = detectJobDesktopOnly({ type: "python", files: files({ "code/a.py": src }) });
+    expect(hits.map((h) => [h.kind, h.line])).toEqual([["home-files", 7]]);
+  });
+
+  test("one-line docstring is ignored", () => {
+    expect(
+      kinds({ type: "python", files: files({ "code/a.py": '"""Reads ~/Documents/x on the Mac."""\nprint(1)' }) }),
+    ).toEqual([]);
+  });
+});

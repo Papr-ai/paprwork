@@ -93,10 +93,25 @@ const JOB_REF = /Jobs\/([0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]
 const USES_BROWSER_HELPER =
   /connect_platform_browser|from papr_platform_browser|import papr_platform_browser/;
 
+/** Count of Python triple-quote delimiters on a line (docstrings / block strings). */
+function tripleQuotes(line: string): number {
+  return (line.match(/"""|\'\'\'/g) ?? []).length;
+}
+
 function scanText(text: string, file: string, hits: DesktopOnlyHit[]): void {
   const lines = text.split("\n");
+  const isPython = /\.py$/i.test(file);
+  let inDocstring = false;
   for (let i = 0; i < lines.length; i++) {
     const line = lines[i];
+    if (isPython) {
+      const quotes = tripleQuotes(line);
+      // Inside a docstring, or a line that opens/closes one: prose, not code.
+      if (inDocstring || quotes > 0) {
+        if (quotes % 2 === 1) inDocstring = !inDocstring;
+        if (/^\s*[rRbBuUfF]?("""|\'\'\')/.test(line) || inDocstring || quotes > 0 && !/=\s*[rRbBuUfF]?("""|\'\'\')/.test(line)) continue;
+      }
+    }
     if (COMMENT_LINE.test(line)) continue;
     for (const rule of RULES) {
       if (!rule.pattern.test(line)) continue;
