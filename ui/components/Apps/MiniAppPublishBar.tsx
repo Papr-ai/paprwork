@@ -499,6 +499,9 @@ export function MiniAppPublishBar({
   }, [appId]); // eslint-disable-line react-hooks/exhaustive-deps -- cloud.* read only on app switch
 
   useEffect(() => {
+    // v9 rows show names for the owner and every person, so load the roster
+    // whenever the sheet opens (the older sheet only needed it for "Specific people").
+    if (shareOpen) void ensureWorkspacePeople();
     if (!shareOpen) {
       setShareSyncNotice(null);
       setReadiness(null);
@@ -2487,6 +2490,7 @@ export function MiniAppPublishBar({
             access={{
               members: workspacePeople,
               membersLoading: workspacePeopleLoading,
+              workspaceName: papr.workspaceName ?? papr.namespaceName ?? undefined,
               onSaved: () => void cloud.refresh(),
             }}
             linkedDeps={linkedDepItems(readiness)}

@@ -70,9 +70,10 @@ export function ShareWhoV9({ access, draft, onChange, members, membersLoading, w
   const set = (p: Partial<AudiencesDraft>) => onChange({ ...draft, ...p });
   const nameOf = (id?: string, email?: string) => {
     const m = members.find((x) => x.userId === id);
-    return { name: m?.displayName || m?.email || email || id || "", email: m?.email || email || "" };
+    return { name: m?.displayName || m?.email || email || (membersLoading ? "Loading…" : "Workspace member"), email: m?.email || email || "" };
   };
-  const owner = nameOf(pub);
+  // Until the roster loads, never show a raw user id.
+  const owner = members.some((m) => m.userId === pub) ? nameOf(pub) : { name: membersLoading ? "Loading…" : "App owner", email: "" };
   const ws = draft.workspace;
   const wsOn = rank(ws) > 0;
   const team = workspaceName ? `Everyone in ${workspaceName}` : "Everyone in your workspace";
@@ -97,6 +98,8 @@ export function ShareWhoV9({ access, draft, onChange, members, membersLoading, w
       }}
       loading={membersLoading}
       currentUserId={pub}
+      searchOnly
+      autoFocus
     />
   ) : null;
 

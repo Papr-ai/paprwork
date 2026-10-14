@@ -37,6 +37,9 @@ interface SharePeoplePickerProps {
   disabled?: boolean;
   /** Publisher — always retains access, shown as a non-removable owner row. */
   currentUserId?: string | null;
+  /** Search field only — the caller renders who has access (v9 Share sheet). */
+  searchOnly?: boolean;
+  autoFocus?: boolean;
 }
 
 function SearchGlyph() {
@@ -72,13 +75,16 @@ export function SharePeoplePicker({
   loading = false,
   disabled = false,
   currentUserId = null,
+  searchOnly = false,
+  autoFocus = false,
 }: SharePeoplePickerProps) {
   const [query, setQuery] = useState("");
   const [activeIndex, setActiveIndex] = useState(0);
   const inputRef = useRef<HTMLInputElement>(null);
 
-  const externalEnabled =
-    onEmailsChange !== undefined && onDomainsChange !== undefined;
+  // Guest emails need only onEmailsChange; @domain entries also need onDomainsChange.
+  const externalEnabled = onEmailsChange !== undefined;
+  const domainsEnabled = externalEnabled && onDomainsChange !== undefined;
 
   const emails = useMemo(
     () => normalizeAllowedEmails(allowedEmails),
@@ -140,8 +146,9 @@ export function SharePeoplePicker({
       allowedEmailDomains: domains,
       memberMatches,
       currentUserId,
-    });
+    }).filter((e) => domainsEnabled || e.kind !== "domain");
   }, [
+    domainsEnabled,
     query,
     externalEnabled,
     memberMatches,
@@ -194,7 +201,7 @@ export function SharePeoplePicker({
     }
   };
 
-  const placeholder = externalEnabled
+  const placeholder = domainsEnabled
     ? "Add people by name, email, or company domain"
     : "Add people by name or email";
 
@@ -218,6 +225,7 @@ export function SharePeoplePicker({
           placeholder={placeholder}
           disabled={disabled}
           aria-label={placeholder}
+          autoFocus={autoFocus}
           autoComplete="off"
           spellCheck={false}
         />
@@ -229,7 +237,7 @@ export function SharePeoplePicker({
             <li className="people-picker__empty">Loading workspace…</li>
           ) : menuEntries.length === 0 ? (
             <li className="people-picker__empty">
-              No matches — try an email or @domain
+              {domainsEnabled ? "No matches — try an email or @domain" : "No matches — type their email"}
             </li>
           ) : (
             menuEntries.map((entry, i) => {
@@ -317,7 +325,7 @@ export function SharePeoplePicker({
         </ul>
       ) : null}
 
-      <div className="people-picker__access">
+      {searchOnly ? null : <div className="people-picker__access">
         <div className="people-picker__access-title">Has access</div>
         <ul className="people-picker__access-list">
           {owner ? (
@@ -419,7 +427,7 @@ export function SharePeoplePicker({
               : "Just you so far. Add a teammate to share it."}
           </p>
         ) : null}
-      </div>
+      </div>}
     </div>
   );
 }

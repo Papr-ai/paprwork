@@ -93,7 +93,7 @@ export function ShareSheetV9({ body, access, onAccessSaved, hideLink }: ShareShe
         {body.notices}
         {hideLink ? null : <Hero body={body} audience={widestAudience(live, pub)} summary={summarizeAudiences(live, pub)} />}
         <ShareWhoV9 access={access} draft={live} onChange={() => undefined} members={members}
-          membersLoading={body.access?.membersLoading} dataCheck={dataCheck} />
+          membersLoading={body.access?.membersLoading} workspaceName={body.access?.workspaceName} dataCheck={dataCheck} />
       </div>
     );
   }
@@ -106,7 +106,7 @@ export function ShareSheetV9({ body, access, onAccessSaved, hideLink }: ShareShe
         <div hidden={step !== "who"}>
           <h6 className="ss6-h">Who has access{hasKeys ? <span className="ss6-hint"> · Step 1 of 2</span> : null}</h6>
           <ShareWhoV9 access={access} draft={draft} onChange={setDraft} members={members}
-            membersLoading={body.access?.membersLoading} dataCheck={dataCheck} />
+            membersLoading={body.access?.membersLoading} workspaceName={body.access?.workspaceName} dataCheck={dataCheck} />
         </div>
         {hasKeys ? <KeysStep props={body} keys={keys} hidden={step !== "keys"} /> : null}
         {error ? <p className="ss6-note ss6-note--warn">{error}</p> : null}
