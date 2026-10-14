@@ -50,6 +50,8 @@ import {
   type PublishDriftInput,
 } from "./cloudPublishDrift.js";
 import {
+  linkedCopyPublishSlug,
+  personalSlugHandle,
   publishSlugRetryCandidates,
   resolveUniquePublishSlug,
   type PublishSlugCatalogEntry,
@@ -89,6 +91,7 @@ import {
 } from "./syncV3/platformCatalogManifest.js";
 import { withPublishInFlight } from "./cloudPublishInFlight.js";
 import { getCloudAppLineageService } from "./CloudAppLineageService.js";
+import { getGatewayPaprProfile } from "../utils/paprGatewayProfile.js";
 import { isOnTeamData } from "../../core/utils/copyAxes.js";
 
 /** A copy on the team's live data ships code only through proposals (v5). */
@@ -828,9 +831,16 @@ export class CloudAppPublishService {
       this.paprDir,
       (targetAppId) => this.fetchMemoryPublishResponse(targetAppId),
     );
+    // A linked copy never takes the original's link (same namespace → 409 every time);
+    // it publishes as "<slug>-<your name>" instead.
+    const lineage = await getCloudAppLineageService().readLineageForApp(appId).catch(() => null);
     const resolvedSlug =
       options?.slug ??
-      resolveUniquePublishSlug(appId, slugCatalog);
+      linkedCopyPublishSlug(
+        resolveUniquePublishSlug(appId, slugCatalog),
+        lineage?.sourceSlug,
+        personalSlugHandle(getGatewayPaprProfile()),
+      );
     const slugCandidates = options?.slug
       ? [options.slug]
       : publishSlugRetryCandidates(resolvedSlug);
@@ -1109,8 +1119,14 @@ export class CloudAppPublishService {
         const isNameCollision =
           lastError.includes("409") &&
           lastError.includes("already published in this namespace");
-        if (!isNameCollision || slug === slugCandidates.at(-1)) {
+        if (!isNameCollision) {
           throw error;
+        }
+        if (slug === slugCandidates[slugCandidates.length - 1]) {
+          throw new Error(
+            `Couldn't find a free link for "${appMeta?.title ?? appId}" in this workspace ` +
+              `(tried ${slugCandidates.join(", ")}). Rename the app and publish again.`,
+          );
         }
         console.warn(
           `[CloudPublish] Slug ${slug} taken for ${appId}, retrying with next candidate`,
