@@ -72,11 +72,14 @@ const RULES: Array<{ kind: DesktopOnlyKind; pattern: RegExp }> = [
   { kind: "desktop-gateway", pattern: /(?:localhost|127\.0\.0\.1):18789/ },
   {
     kind: "macos",
-    pattern: /\bosascript\b|\bEventKit\b|\bicalBuddy\b|\bscreencapture\b|\bpbcopy\b|\bopen -a\b/,
+    pattern:
+      /\bosascript\b|\bEventKit\b|\bicalBuddy\b|\bscreencapture\b|\bpbcopy\b|\bopen -a\b|-f\s+avfoundation\b|\bScreenCaptureKit\b|\bimport\s+(?:AVFoundation|Quartz|AppKit)\b|\bfrom\s+(?:AVFoundation|Quartz|AppKit)\s+import\b/,
   },
   { kind: "ollama", pattern: /(?:localhost|127\.0\.0\.1):11434/ },
   // Literal /Users/<name>/… path in a string.
   { kind: "home-files", pattern: /["'`]\/Users\/[A-Za-z0-9._-]+\// },
+  // ~/Papr/… — the desktop workspace itself (cloud runs get their own PAPR_HOME).
+  { kind: "home-files", pattern: /(?:~|\$HOME|\$\{HOME\}|Path\.home\(\)\s*\/\s*["'`])\/?Papr\// },
   // ~/Documents, $HOME/Desktop, Path.home() / "Downloads", os.path.join(HOME, "Documents") …
   {
     kind: "home-files",

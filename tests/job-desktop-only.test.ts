@@ -190,3 +190,17 @@ describe("python docstrings", () => {
     ).toEqual([]);
   });
 });
+
+describe("macOS media + local workspace", () => {
+  test("ffmpeg avfoundation capture is macOS-only", () => {
+    expect(kinds({ type: "bash", command: "ffmpeg -f avfoundation -list_devices true -i ''", files: files({}) })).toEqual(["macos"]);
+  });
+  test("pyobjc frameworks are macOS-only", () => {
+    expect(kinds({ type: "python", files: files({ "code/a.py": "import AVFoundation\n" }) })).toEqual(["macos"]);
+    expect(kinds({ type: "python", files: files({ "code/a.py": "from Quartz import CGWindowListCopyWindowInfo\n" }) })).toEqual(["macos"]);
+  });
+  test("literal ~/Papr workspace path needs the Mac; $PAPR_HOME does not", () => {
+    expect(kinds({ type: "bash", command: 'for db in ~/Papr/jobs/*/data/data.db; do echo $db; done', files: files({}) })).toEqual(["home-files"]);
+    expect(kinds({ type: "bash", command: 'ls "$PAPR_HOME/Jobs"', files: files({}) })).toEqual([]);
+  });
+});
