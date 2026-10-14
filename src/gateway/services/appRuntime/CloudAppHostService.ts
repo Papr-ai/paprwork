@@ -36,6 +36,7 @@ import { resolveDbEventTarget } from "../../utils/resolveDbEventTarget.js";
 import { getMemoryServerBaseUrl } from "../../utils/cloudApiClient.js";
 import {
   fetchRuntimeDbToken,
+  fetchRuntimeFileUrl,
   getCloudAppHostKey,
   getRuntimeJobStatus,
   listRuntimeJobs,
@@ -821,6 +822,17 @@ export class CloudAppHostService {
       if (decision.kind === "deny") {
         res.status(decision.status).json({ error: decision.reason });
         return;
+      }
+
+      // Memory signs the link under the app's own access rules (like db-token),
+      // so logged-out and Community visitors work without a public bucket.
+      // Falls through to the old paths only if an older memory server lacks it.
+      try {
+        const { url } = await fetchRuntimeFileUrl(runtimeAuth, decision.objectKey);
+        res.json({ location: { kind: "cloud" }, url });
+        return;
+      } catch (err) {
+        if (decision.kind !== "cdn" && !runtimeAuth.paprApiKey) throw err;
       }
 
       if (decision.kind === "cdn") {

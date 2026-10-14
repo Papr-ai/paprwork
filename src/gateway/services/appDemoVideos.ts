@@ -319,6 +319,7 @@ export interface SharedVideoPointer extends SharedCoverPointer {
   kind: "video";
   videoUrl: string;
   videoFileId: string;
+  videoObjectKey?: string;
 }
 
 export function sharedCoverKind(appId: string): "video" | "image" | null {
@@ -348,6 +349,7 @@ export async function shareDemoVideo(
     objectKey: i.objectKey,
     url: i.url,
     videoFileId: v.id,
+    videoObjectKey: v.objectKey,
     videoUrl: v.url,
   };
   fs.writeFileSync(sharedCoverPointerPath(appId), `${JSON.stringify(pointer, null, 2)}\n`);
