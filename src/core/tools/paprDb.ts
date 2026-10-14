@@ -140,7 +140,8 @@ export const paprDbCreateMigrationTool = createTool({
     "Never hard-code a user id: write '{{papr.owner_user_id}}' (quoted) for owner/user columns in " +
     "seed rows or backfills — it is filled with the database owner when the migration runs " +
     "(publisher for a team shared DB, the installer on forks/copies). A literal copy of your own id " +
-    "is converted automatically.",
+    "is converted automatically. Only migrate the app's own tables: app_files, app_file_hashes, " +
+    "_papr_* and turso_* belong to Papr (it creates and upgrades them) and are rejected here.",
   inputSchema: z.object({
     dbId: z.string().min(1),
     name: z.string().min(1).describe("Short description, e.g. add_notes_column"),
