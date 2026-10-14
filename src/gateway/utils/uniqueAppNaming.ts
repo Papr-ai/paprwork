@@ -99,14 +99,45 @@ export function resolveUniquePublishSlug(
   return candidate;
 }
 
-/** Slug variants to try when the memory server rejects a name collision. */
+/**
+ * Short, URL-safe handle for the person publishing ("shawkat"), from their Papr
+ * profile name or email. Used to name a linked copy's own link.
+ */
+export function personalSlugHandle(profile: { name?: string; email?: string } | undefined): string | undefined {
+  const first = profile?.name?.trim().split(/\s+/)[0] || profile?.email?.split("@")[0] || "";
+  const handle = slugifyPublishTitle(first).slice(0, 20).replace(/-+$/, "");
+  return handle || undefined;
+}
+
+/**
+ * A linked copy (installed from a published app) must never take the original's
+ * link. "linkedin-outreach" stays the publisher's; the copy publishes as
+ * "linkedin-outreach-shawkat". Returns the slug unchanged when it isn't the source's.
+ */
+export function linkedCopyPublishSlug(
+  resolvedSlug: string,
+  sourceSlug: string | undefined,
+  handle: string | undefined,
+): string {
+  if (!sourceSlug || resolvedSlug !== sourceSlug) return resolvedSlug;
+  return `${resolvedSlug}-${handle || "copy"}`;
+}
+
+/**
+ * Slug variants to try when the memory server rejects a name collision. The
+ * local catalog can't see teammates' published apps, so numbered guesses can all
+ * be taken; the last candidate carries a random suffix so a publish never fails
+ * on the name alone.
+ */
 export function publishSlugRetryCandidates(
   baseSlug: string,
   maxAttempts = 5,
+  random: () => string = () => Math.random().toString(36).slice(2, 8),
 ): string[] {
   const candidates = [baseSlug];
   for (let n = 1; n < maxAttempts; n += 1) {
     candidates.push(`${baseSlug}-${n}`);
   }
+  candidates.push(`${baseSlug}-${random()}`);
   return candidates;
 }
