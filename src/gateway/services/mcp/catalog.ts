@@ -234,6 +234,11 @@ async function buildCatalog(caller: McpCaller, deps: CatalogDeps, opts: CatalogO
 
   const manifestMs = opts.manifestTimeoutMs ?? 5_000;
   await restoreMemo();
+  // Last cards we knew per app: a failed fetch (GitHub rate limit, timeout) keeps them
+  // instead of dropping the app — a republish changes updatedAt and forces a refetch.
+  const known = new Map<string, CardsManifest>();
+  for (const [k, v] of manifests) if (v) known.set(k.slice(0, k.lastIndexOf("@")), v);
+  for (const a of cache.get(caller.userId)?.apps ?? []) known.set(`${a.namespaceId}/${a.slug}`, a.cards);
   let learned = false;
   const loaded = await mapLimit(accessible, opts.concurrency ?? 4, async (app) => {
     const key = app.updatedAt ? `${app.namespaceId}/${app.slug}@${app.updatedAt}` : "";
@@ -249,7 +254,9 @@ async function buildCatalog(caller: McpCaller, deps: CatalogDeps, opts: CatalogO
       }
       return cards ? { ...app, cards } : null;
     } catch {
-      return null; // one broken, slow or forbidden app never hides the rest
+      // One broken, slow or forbidden app never hides the rest; a transient failure keeps its last cards.
+      const last = known.get(`${app.namespaceId}/${app.slug}`);
+      return last ? { ...app, cards: last } : null;
     }
   });
   const apps = loaded.filter((a): a is ClaudeApp => a !== null);

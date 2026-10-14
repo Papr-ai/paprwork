@@ -114,6 +114,7 @@ export function registerProtectedResourceMetadata(app: Express, cfg: McpEndpoint
   // Per-app connector URLs (/mcp/a/{ns}/{slug}) share the resource: it is a path prefix of
   // theirs (RFC 8707 / MCP SDK checkResourceAllowed), so one Auth0 audience covers every app.
   app.get(`${suffixed}/a/:namespaceId/:slug`, send);
+  app.get(`${suffixed}/listed`, send);
   app.get("/.well-known/oauth-protected-resource", send);
 }
 
