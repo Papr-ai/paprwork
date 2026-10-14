@@ -337,8 +337,16 @@ async function searchPaprMemoryForCode(
       customMetadata.project_id = projectId;
     }
 
+    // Same user/ACL scope as search_agent_memory and the CodeIndexer writes —
+    // without it the search runs against a different (empty) scope.
+    const { paprMemorySearchScopeSpread } = await import(
+      "../../gateway/utils/memoryScopeResolver.js"
+    );
+    const scopeSpread = await paprMemorySearchScopeSpread();
+
     const response = await client.memory.search({
       query,
+      ...scopeSpread,
       max_memories: 10,
       max_nodes: 10,
       enable_agentic_graph: true,
@@ -374,7 +382,12 @@ async function searchPaprMemoryForCode(
     return output;
     
   } catch (error) {
-    console.warn('[Bash Tool] Memory search failed:', error);
+    // Papr returns HTTP 404 "No relevant items found" for zero hits — that's an empty result, not a failure.
+    const err = error as { status?: number; message?: string };
+    if (err?.status === 404 && /no relevant items/i.test(err.message ?? "")) {
+      return null;
+    }
+    console.warn('[Bash Tool] Memory search failed:', err?.message ?? error);
     return null; // Fail gracefully
   }
 }
