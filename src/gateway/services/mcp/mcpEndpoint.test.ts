@@ -115,7 +115,7 @@ beforeAll(async () => {
     },
     loadCardsManifest: (c, ref) => fetchPublishedCardsManifest(port, c, ref),
   };
-  registerMcpRoutes(app, { port, verifier, config, catalog, handoff: fakeHandoff });
+  registerMcpRoutes(app, { port, verifier, config, catalog, handoff: fakeHandoff, listing: { reviewed: new Set(["ns1/reviewed-app"]) } });
   fakeApi(app);
 });
 
@@ -418,5 +418,50 @@ describe("parseAppRef slug-only", () => {
   });
   it("still errors on unknown slug", () => {
     expect(() => parseAppRef({ slug: "nope" }, [])).toThrow();
+  });
+});
+
+describe("listed (directory) connector", () => {
+  it("hides apps Papr hasn't reviewed and tells the user where they are", async () => {
+    clearCatalogCache();
+    const client = await connect("/mcp/listed");
+    const names = (await client.listTools()).tools.map((t) => t.name);
+    expect(names.some((n) => n.startsWith("linkedin-outreach_"))).toBe(false);
+    expect(names).toContain("papr_list_apps");
+    const listed = await client.callTool({ name: "papr_list_apps", arguments: {} });
+    const sc = listed.structuredContent as { connector: string; apps: unknown[]; personalOnly: Array<{ title: string }>; personalConnectorUrl: string };
+    expect(sc.connector).toBe("listed");
+    expect(sc.apps).toHaveLength(0);
+    expect(sc.personalOnly.map((a) => a.title)).toContain("LinkedIn Outreach");
+    expect(sc.personalConnectorUrl).toBe(`${base}/mcp`);
+    expect((listed.content as Array<{ text: string }>)[0].text).toContain("Add custom connector");
+    await client.close();
+  });
+
+  it("won't open or tunnel for an unreviewed app", async () => {
+    const client = await connect("/mcp/listed");
+    const opened = await client.callTool({ name: "papr_open_app", arguments: { namespaceId: "ns1", slug: "linkedin-outreach" } });
+    expect(opened.isError).toBeFalsy();
+    expect((opened.content as Array<{ text: string }>)[0].text).toContain("personal Papr connector");
+    const before = seen.length;
+    const api = await client.callTool({ name: "papr_api", arguments: { namespaceId: "ns1", slug: "linkedin-outreach", method: "POST", path: "/api/db/query", body: { sql: "select 1" } } });
+    expect(api.isError).toBe(true);
+    expect((api.structuredContent as { status: number }).status).toBe(403);
+    expect(seen.length).toBe(before); // never reached the app
+    await client.close();
+  });
+
+  it("the personal connector still shows everything", async () => {
+    const client = await connect("/mcp");
+    const names = (await client.listTools()).tools.map((t) => t.name);
+    expect(names.some((n) => n.startsWith("linkedin-outreach_"))).toBe(true);
+    const listed = await client.callTool({ name: "papr_list_apps", arguments: {} });
+    expect((listed.structuredContent as { connector: string }).connector).toBe("personal");
+    await client.close();
+  });
+
+  it("serves protected-resource metadata at the listed path", async () => {
+    const res = await fetch(`${base}/.well-known/oauth-protected-resource/mcp/listed`);
+    expect(res.status).toBe(200);
   });
 });
