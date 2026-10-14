@@ -80,3 +80,12 @@ describe("catalog keeps an app's last cards when a refetch fails", () => {
     expect(after[0].updatedAt).toBe("2026-10-13T04:51:00Z");
   });
 });
+
+describe("withSvgNs", () => {
+  it("adds xmlns so a data: URL <img> renders (many app icons omit it)", async () => {
+    const { withSvgNs } = await import("./catalog.js");
+    expect(withSvgNs('<svg viewBox="0 0 48 48"><path/></svg>')).toBe('<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 48 48"><path/></svg>');
+    const ok = '<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1 1"/>';
+    expect(withSvgNs(ok)).toBe(ok);
+  });
+});

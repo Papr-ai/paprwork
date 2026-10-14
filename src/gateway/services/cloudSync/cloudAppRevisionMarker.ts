@@ -25,30 +25,27 @@ export function distBundleRevisionHash(distAppJsContent: string): string {
 }
 
 /**
- * Revision of everything the cloud host serves from dist/: the bundle plus Claude
- * cards (dist/cards/*). A card-only edit must bump it, or the host keeps serving the
- * old card under the unchanged key. Apps without cards hash exactly as before.
+ * Claude cards (dist/cards/*) are published files too. The host caches every published file
+ * under this marker, so a card-only change (new card, same dist/app.js) must move it or the
+ * host keeps serving the old card. Apps without cards keep the plain app.js hash.
  */
-export function distRevisionHash(appDir: string): string | null {
-  const distPath = path.join(appDir, "dist", "app.js");
-  if (!existsSync(distPath)) return null;
-  const appJs = readFileSync(distPath, "utf8");
+export function appCloudRevisionHash(appDir: string, distAppJsContent: string): string {
   const cardsDir = path.join(appDir, "dist", "cards");
-  let cards: string[] = [];
-  try {
-    cards = readdirSync(cardsDir).filter((f) => /\.(html|json)$/.test(f)).sort();
-  } catch {
-    cards = [];
-  }
-  if (cards.length === 0) return distBundleRevisionHash(appJs);
-  const h = createHash("sha256").update(appJs);
-  for (const f of cards) h.update(`\0${f}\0`).update(readFileSync(path.join(cardsDir, f)));
+  const cards = existsSync(cardsDir)
+    ? readdirSync(cardsDir, { withFileTypes: true }).filter((e) => e.isFile()).map((e) => e.name).sort()
+    : [];
+  if (cards.length === 0) return distBundleRevisionHash(distAppJsContent);
+  const h = createHash("sha256").update(distAppJsContent);
+  for (const name of cards) h.update(`\0cards/${name}\0`).update(readFileSync(path.join(cardsDir, name)));
   return h.digest("hex").slice(0, 16);
 }
 
 export function writeAppCloudRevisionMarker(appDir: string): void {
-  let revision = distRevisionHash(appDir);
-  if (!revision) {
+  const distPath = path.join(appDir, "dist", "app.js");
+  let revision: string;
+  if (existsSync(distPath)) {
+    revision = appCloudRevisionHash(appDir, readFileSync(distPath, "utf8"));
+  } else {
     revision = createHash("sha256")
       .update(`no-dist:${Date.now()}`)
       .digest("hex")

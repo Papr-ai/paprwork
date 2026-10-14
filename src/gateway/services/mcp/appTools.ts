@@ -12,7 +12,7 @@
 import { z, type ZodTypeAny } from "zod";
 import type { AppBackendInputSchema } from "../../../core/types/appBackend.js";
 import type { CardsManifestView } from "./cardBuild.js";
-import type { ClaudeApp } from "./catalog.js";
+import { type ClaudeApp, withSvgNs } from "./catalog.js";
 import { MAX_TOOLS_PER_APP, routingLead } from "./routing.js";
 
 /** ~15 apps × 3 views. Past this, apps are reachable via papr_list_apps / instructions. */
@@ -84,7 +84,8 @@ export function planAppTools(apps: ClaudeApp[], maxTools = MAX_APP_TOOLS): AppTo
       let name = base;
       for (let i = 2; used.has(name); i++) name = `${base.slice(0, 60)}-${i}`;
       used.add(name);
-      const input = spec.kind === "action" || spec.kind === "approval" || (!spec.kind && spec.entry) ? spec.actionSpec?.input : undefined;
+      // Any view that names an action declares its inputs (custom cards too), so Claude can say which video / what change.
+      const input = spec.kind === "status" ? undefined : spec.actionSpec?.input;
       out.push({
         name,
         title: `${appTitle(app)} · ${spec.title ?? humanize(view)}`,
@@ -130,8 +131,8 @@ export function argsToParams(args: Record<string, unknown>): Record<string, stri
 export function toolResultFor(tool: AppToolSpec, args: Record<string, unknown>, appsBaseUrl: string) {
   const { app, view, spec } = tool;
   const title = appTitle(app);
-  const data =
-    spec.kind === "approval" ? { proposal: args, params: argsToParams(args) } : spec.kind === "action" || !spec.kind ? args : {};
+  // Status cards take no args; every other card (default or custom) gets what Claude passed as ctx.data.
+  const data = spec.kind === "approval" ? { proposal: args, params: argsToParams(args) } : spec.kind === "status" ? {} : args;
   const text =
     spec.kind === "approval"
       ? `Proposed in ${title}. Waiting for the user to approve on the card.`
@@ -147,7 +148,7 @@ export function toolResultFor(tool: AppToolSpec, args: Record<string, unknown>, 
       slug: app.slug,
       title,
       ...(app.author ? { publisher: app.author } : {}),
-      ...(app.icon ? { icon: app.icon } : {}),
+      ...(app.icon ? { icon: withSvgNs(app.icon) } : {}),
       openUrl: `${appsBaseUrl}/${app.namespaceId}/${app.slug}`,
       view,
       data,

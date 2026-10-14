@@ -1,5 +1,9 @@
 import { describe, expect, it, vi } from "vitest";
-import { InvalidTokenError, ServerError } from "@modelcontextprotocol/sdk/server/auth/errors.js";
+import { OAuthErrorCode } from "@modelcontextprotocol/server";
+
+/** 401 path (Claude re-runs sign-in) vs 500 path (Papr-side failure). */
+const InvalidTokenError = { code: OAuthErrorCode.InvalidToken };
+const ServerError = { code: OAuthErrorCode.ServerError };
 import { memorySessionExchange } from "./session.js";
 import { memoryHandoff, HandoffError } from "./handoff.js";
 
@@ -70,8 +74,8 @@ describe("memorySessionExchange", () => {
   });
 
   it("401 and account_not_ready → InvalidTokenError (Claude re-runs sign-in)", async () => {
-    await expect(setup([err(401, "invalid_token")]).exchange("t")).rejects.toBeInstanceOf(InvalidTokenError);
-    await expect(setup([err(403, "account_not_ready")]).exchange("t")).rejects.toBeInstanceOf(InvalidTokenError);
+    await expect(setup([err(401, "invalid_token")]).exchange("t")).rejects.toMatchObject(InvalidTokenError);
+    await expect(setup([err(403, "account_not_ready")]).exchange("t")).rejects.toMatchObject(InvalidTokenError);
   });
 
   it("waits out first-run setup, then succeeds", async () => {
@@ -90,11 +94,11 @@ describe("memorySessionExchange", () => {
   it("deferred, misconfigured, network and 5xx → ServerError, not cached", async () => {
     for (const r of [err(409, "setup_deferred"), err(403, "forbidden"), err(503, "mcp_not_configured"), err(502, "setup_failed"), new Error("ECONNRESET")]) {
       const spy = vi.spyOn(console, "error").mockImplementation(() => {});
-      await expect(setup([r]).exchange("t")).rejects.toBeInstanceOf(ServerError);
+      await expect(setup([r]).exchange("t")).rejects.toMatchObject(ServerError);
       spy.mockRestore();
     }
     const { exchange, fetchImpl } = setup([err(502, "setup_failed"), ok()]);
-    await expect(exchange("t")).rejects.toBeInstanceOf(ServerError);
+    await expect(exchange("t")).rejects.toMatchObject(ServerError);
     expect((await exchange("t")).userId).toBe("u1");
     expect(fetchImpl).toHaveBeenCalledTimes(2);
   });

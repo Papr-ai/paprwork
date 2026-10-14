@@ -10,6 +10,20 @@ export type BackgroundBudgetBlockReason =
   | "at_capacity"
   | "awaiting_drain";
 
+/** Resolve with `work`, or reject the moment `signal` aborts (the work itself keeps running). */
+export function settleOrAbort<T>(work: Promise<T>, signal?: AbortSignal): Promise<T> {
+  if (!signal) return work;
+  if (signal.aborted) return Promise.reject(new Error("Background work cancelled"));
+  return new Promise<T>((resolve, reject) => {
+    const onAbort = (): void => reject(new Error("Background work cancelled"));
+    signal.addEventListener("abort", onAbort, { once: true });
+    work.then(
+      (v) => { signal.removeEventListener("abort", onAbort); resolve(v); },
+      (e) => { signal.removeEventListener("abort", onAbort); reject(e); },
+    );
+  });
+}
+
 interface Waiting {
   label: string; queuedAt: number; interactive: boolean; signal?: AbortSignal;
   resolve: (release: () => void) => void; reject: (error: Error) => void;
@@ -84,7 +98,10 @@ export class BackgroundBudget {
       release = await this.acquire(label, token, signal);
       trace.start();
       signal?.throwIfAborted();
-      const result = await this.context.run(token, () => withDiagnosticContext({ parentId: trace.id }, work));
+      // An aborted job must hand its slot back even if its work never settles (a lost
+      // process-exit event once held the only slot for hours and starved every job).
+      const result = await this.context.run(token, () =>
+        withDiagnosticContext({ parentId: trace.id }, () => settleOrAbort(work(), signal)));
       trace.finish("completed");
       return result;
     } catch (error) {

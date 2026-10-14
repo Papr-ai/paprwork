@@ -12,8 +12,7 @@
  * in-flight de-duplication so a burst of card calls makes one memory request.
  */
 import { createHash } from "node:crypto";
-import { InvalidTokenError, ServerError } from "@modelcontextprotocol/sdk/server/auth/errors.js";
-import type { McpCaller } from "./auth.js";
+import { invalidToken, serverError, type McpCaller } from "./auth.js";
 
 export type McpSessionExchange = (token: string, tokenExpiresAt?: number) => Promise<McpCaller>;
 
@@ -71,11 +70,11 @@ export function memorySessionExchange(baseUrl: string, serviceKey: string, opts:
           signal: AbortSignal.timeout(20_000),
         });
       } catch {
-        throw new ServerError("Papr is unreachable right now. Try again in a moment.");
+        throw serverError("Papr is unreachable right now. Try again in a moment.");
       }
       if (res.ok) {
         const b = (await res.json()) as SessionBody;
-        if (!b.sessionToken || !b.userId) throw new ServerError("Papr returned an incomplete session.");
+        if (!b.sessionToken || !b.userId) throw serverError("Papr returned an incomplete session.");
         const caller: McpCaller = {
           sessionToken: b.sessionToken,
           userId: b.userId,
@@ -93,20 +92,20 @@ export function memorySessionExchange(baseUrl: string, serviceKey: string, opts:
       const { code, message } = await errorCode(res);
       if (res.status === 401 || code === "account_not_ready") {
         // 401 from the bearer middleware makes Claude re-run sign-in.
-        throw new InvalidTokenError(message || "Your Papr sign-in expired. Reconnect Papr in Claude.");
+        throw invalidToken(message || "Your Papr sign-in expired. Reconnect Papr in Claude.");
       }
       if (code === "setup_in_progress" && attempt < SETUP_RETRIES) {
         const after = Number(res.headers.get("retry-after")) || 2;
         await sleep(Math.min(after, 3) * 1000);
         continue;
       }
-      if (code === "setup_in_progress") throw new ServerError("Papr is still setting up your workspace. Try again in a moment.");
-      if (code === "setup_deferred") throw new ServerError(message || "Papr couldn't check your workspace yet. Try again in a moment.");
+      if (code === "setup_in_progress") throw serverError("Papr is still setting up your workspace. Try again in a moment.");
+      if (code === "setup_deferred") throw serverError(message || "Papr couldn't check your workspace yet. Try again in a moment.");
       if (code === "mcp_not_configured" || code === "forbidden") {
         console.error(`[mcp] memory rejected the host (${code}). Check PAPR_MCP_SERVICE_KEY on both sides.`);
-        throw new ServerError("Papr's Claude connection is misconfigured. We've been notified.");
+        throw serverError("Papr's Claude connection is misconfigured. We've been notified.");
       }
-      throw new ServerError(message || `Papr sign-in failed (HTTP ${res.status}). Try again.`);
+      throw serverError(message || `Papr sign-in failed (HTTP ${res.status}). Try again.`);
     }
   }
 
