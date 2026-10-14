@@ -80,7 +80,7 @@ export interface ShareSheetBodyProps {
   /** Optional deep link into one step (e.g. a missing-key chip). */
   initialEdit?: ShareStepId | null;
   /** Roles panel ("Who has access"); omitted = row hidden. */
-  access?: { members: SharePeopleMember[]; membersLoading?: boolean; onSaved?: () => void };
+  access?: { members: SharePeopleMember[]; membersLoading?: boolean; workspaceName?: string; onSaved?: () => void };
 }
 
 export const ICON_PATHS = {
