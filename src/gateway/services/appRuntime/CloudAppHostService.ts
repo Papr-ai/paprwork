@@ -39,6 +39,8 @@ import {
   fetchRuntimeFileUrl,
   getCloudAppHostKey,
   getRuntimeJobStatus,
+  createDesktopHandoff,
+  RuntimeDesktopRequiredError,
   listRuntimeJobs,
   recordRuntimeTursoDbChanged,
   runRuntimeJob,
@@ -389,6 +391,7 @@ export class CloudAppHostService {
       void this.handleJobStatus(req, res),
     );
     app.post("/api/jobs/run", (req, res) => void this.handleJobRun(req, res));
+    app.post("/api/desktop-handoff", (req, res) => void this.handleDesktopHandoff(req, res));
     app.post("/api/credentials/client-keys", (req, res) =>
       void this.handleClientKeys(req, res),
     );
@@ -2115,6 +2118,24 @@ export class CloudAppHostService {
     });
   }
 
+  /** "Open in Papr Work": one-time papr:// link for a signed-in visitor (null → download page). */
+  private async handleDesktopHandoff(req: Request, res: Response): Promise<void> {
+    const downloadUrl = "https://papr.ai/download";
+    try {
+      const runtimeAuth = this.buildRuntimeAuth(req);
+      if (!runtimeAuth) {
+        res.status(403).json({ error: "Forbidden — open the app in this browser tab first" });
+        return;
+      }
+      const view = typeof req.body?.view === "string" ? req.body.view.slice(0, 120) : undefined;
+      const link = await createDesktopHandoff(runtimeAuth, view);
+      res.setHeader("Cache-Control", "no-store");
+      res.json({ url: link?.url ?? null, expiresAt: link?.expiresAt ?? null, downloadUrl });
+    } catch {
+      res.json({ url: null, downloadUrl });
+    }
+  }
+
   private runRuntimeJobInBackground(
     runtimeAuth: AppRuntimeRouteAuth,
     input: {
@@ -2133,6 +2154,10 @@ export class CloudAppHostService {
         this.publishRuntimeJobResult(result);
       })
       .catch((err: unknown) => {
+        if (err instanceof RuntimeDesktopRequiredError) {
+          publishJobStatusChanged({ jobId: input.jobId, status: "failed", error: err.body.message });
+          return;
+        }
         const message = err instanceof Error ? err.message : String(err);
         console.error(
           `[CloudAppHost] /api/jobs/run background error for ${input.jobId}:`,
@@ -2208,6 +2233,22 @@ export class CloudAppHostService {
       // Default: fire-and-forget (matches desktop gateway). Agent jobs can run
       // many minutes — Cloud Run request timeout is 60s, so blocking here 504s.
       if (body.wait !== true) {
+        // Fire-and-forget would return "running" before memory's 409, so check
+        // placement first and answer "needs Papr Work desktop" synchronously.
+        const summary = await getRuntimeJobStatus(runtimeAuth, body.jobId).catch(() => null);
+        if (summary?.executionCapability === "local-only") {
+          const name = summary.name || "This job";
+          const reason = summary.localOnlyReason?.trim();
+          res.status(409).json({
+            error: "desktop_required",
+            message: `${name} only runs in Papr Work desktop${reason ? ` — ${reason[0].toLowerCase()}${reason.slice(1)}` : ""}.`,
+            jobId: body.jobId,
+            jobName: name,
+            reason: reason ?? null,
+            downloadUrl: "https://papr.ai/download",
+          });
+          return;
+        }
         this.runRuntimeJobInBackground(runtimeAuth, jobInput);
         res.json({ jobId: body.jobId, status: "running" });
         return;
@@ -2230,6 +2271,10 @@ export class CloudAppHostService {
         tier: result.tier,
       });
     } catch (err) {
+      if (err instanceof RuntimeDesktopRequiredError) {
+        res.status(409).json(err.body);
+        return;
+      }
       const message = (err as Error).message;
       if (message.includes("(422)")) {
         res.status(422).json({ error: message });

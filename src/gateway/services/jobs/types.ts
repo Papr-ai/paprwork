@@ -73,6 +73,13 @@ export interface JobRecord {
    * Default (unset): local-preferred — desktop when awake, cloud when asleep.
    */
   executionCapability?: JobExecutionCapability;
+  /**
+   * Why this job only runs on desktop (e.g. "Uses your Chrome"). Shown on the
+   * cloud "Open in Papr Work" card and to agents. Set by desktopOnlyAssessment.
+   */
+  localOnlyReason?: string;
+  /** True when local-only was set automatically from the code (not chosen by a person). */
+  localOnlyAuto?: boolean;
   /** Execution recipe configuration — enables quality evaluation of runs */
   recipe?: RecipeConfig;
   createdAt: string;

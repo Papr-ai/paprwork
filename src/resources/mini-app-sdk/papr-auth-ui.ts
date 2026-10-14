@@ -317,3 +317,41 @@ export function buildPaprAuthOverlayMarkup(params: PaprAuthOverlayParams): {
 </div>`,
   };
 }
+
+export interface PaprDesktopRequiredParams {
+  message: string;
+  downloadUrl: string;
+}
+
+/**
+ * "Needs Papr Work desktop" card: shown when a cloud app tries to run a job that only
+ * runs on desktop (the user's Chrome, macOS, local files…). Same overlay shell as sign-in.
+ */
+export function buildPaprDesktopRequiredMarkup(params: PaprDesktopRequiredParams): {
+  overlayClass: string;
+  html: string;
+} {
+  return {
+    overlayClass: "papr-auth-overlay",
+    html: `<style>${PAPR_AUTH_OVERLAY_STYLES}
+  .papr-auth-overlay__download { display:block; margin-top:12px; font-size:13px; color:#667085; text-align:center; }
+  .papr-auth-overlay__download a { color:${PAPR_BRAND_BLUE}; font-weight:600; text-decoration:none; }</style>
+<div class="papr-auth-overlay__shell">
+  <div class="papr-auth-overlay__left">
+    <div class="papr-auth-overlay__form">
+      <h2 class="papr-auth-overlay__title">Open in Papr Work</h2>
+      <p class="papr-auth-overlay__message">${escapePaprAuthHtml(params.message)}</p>
+      <button type="button" class="papr-auth-overlay__btn" data-papr-open-desktop>Open in Papr Work</button>
+      <span class="papr-auth-overlay__download">Don't have it? <a href="${escapePaprAuthHtmlAttribute(params.downloadUrl)}" target="_blank" rel="noopener">Download Papr Work</a></span>
+      <button type="button" class="papr-auth-overlay__dismiss" data-papr-auth-dismiss>Not now</button>
+    </div>
+  </div>
+  <div class="papr-auth-overlay__right">
+    <div class="papr-auth-overlay__brand">
+      <div class="papr-auth__logo-row">${PAPR_LOGO_MARK_SVG}<span class="papr-auth__wordmark">Papr</span></div>
+      <div class="papr-auth-overlay__fold">${PAPR_FOLD_SVG}</div>
+    </div>
+  </div>
+</div>`,
+  };
+}
