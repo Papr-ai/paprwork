@@ -18,6 +18,8 @@ export interface BackendRevisionArtifacts {
   bundleContent: string | null;
   bundle: AppBackendBundleManifest | null;
   handlers: Map<string, string>;
+  /** backend/X.py → source, or null when the repo has no such file (cached miss). */
+  modules: Map<string, string | null>;
 }
 
 const artifactCache = new Map<string, BackendRevisionArtifacts>();
@@ -64,6 +66,7 @@ export async function loadBackendRevisionArtifacts(
     bundleContent: bundleFile?.content ?? null,
     bundle,
     handlers: new Map(),
+    modules: new Map(),
   };
   artifactCache.set(key, entry);
   return entry;
@@ -115,4 +118,21 @@ export function invalidateBackendArtifactCacheForNamespace(
 /** Reset caches (unit tests). */
 export function resetBackendArtifactCacheForTests(): void {
   artifactCache.clear();
+}
+
+/** One repo fetch per module per revision; misses (stdlib / third-party names) are cached too. */
+export async function loadBackendModuleContent(
+  auth: AppRuntimeRouteAuth,
+  repoPath: string,
+  artifacts: BackendRevisionArtifacts,
+  opts?: { bypassFresh?: boolean },
+): Promise<string | null> {
+  if (artifacts.modules.has(repoPath)) {
+    return artifacts.modules.get(repoPath) ?? null;
+  }
+  const cacheOpts = opts?.bypassFresh ? { bypassFresh: true as const } : undefined;
+  const file = await fetchCachedRuntimeRepoFile(auth, repoPath, cacheOpts).catch(() => null);
+  const content = file?.content ?? null;
+  artifacts.modules.set(repoPath, content);
+  return content;
 }

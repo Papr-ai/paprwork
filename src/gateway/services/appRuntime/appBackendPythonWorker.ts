@@ -15,6 +15,7 @@ interface WorkerRequest {
   id: string;
   handlerSource: string;
   dbHelperSource: string;
+  extraFiles?: Record<string, string>;
   env: Record<string, string>;
   timeoutMs: number;
 }
@@ -35,6 +36,7 @@ type WorkerResponse = WorkerSuccessResponse | WorkerErrorResponse;
 
 const PYTHON_WORKER_SCRIPT = String.raw`import json
 import os
+import re
 import shutil
 import subprocess
 import sys
@@ -49,6 +51,13 @@ def run_request(req):
             f.write(req["handlerSource"])
         with open(helper_path, "w", encoding="utf-8") as f:
             f.write(req["dbHelperSource"])
+        for rel, content in (req.get("extraFiles") or {}).items():
+            if not re.fullmatch(r"(lib/)?[A-Za-z_][A-Za-z0-9_]*[.]py", rel):
+                continue
+            dest = os.path.join(tmpdir, rel)
+            os.makedirs(os.path.dirname(dest), exist_ok=True)
+            with open(dest, "w", encoding="utf-8") as f:
+                f.write(content)
         env = {**os.environ, **{str(k): str(v) for k, v in req.get("env", {}).items()}}
         timeout_sec = max(1.0, float(req.get("timeoutMs", 30000)) / 1000.0)
         proc = subprocess.run(
@@ -240,6 +249,7 @@ async function ensureWorkerReady(): Promise<void> {
 export async function runPythonHandlerViaWorker(input: {
   handlerSource: string;
   dbHelperSource: string;
+  extraFiles?: Record<string, string>;
   env: Record<string, string>;
   timeoutMs: number;
 }): Promise<AppBackendRunResult> {
@@ -257,6 +267,7 @@ export async function runPythonHandlerViaWorker(input: {
     id,
     handlerSource: input.handlerSource,
     dbHelperSource: input.dbHelperSource,
+    extraFiles: input.extraFiles ?? {},
     env: stringEnv,
     timeoutMs: input.timeoutMs,
   };
