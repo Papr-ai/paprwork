@@ -56,6 +56,20 @@ function setupPath(namespaceId: string, slug: string): string {
   return `${appRootPath(namespaceId, slug)}credentials/setup`;
 }
 
+/**
+ * Files the credential setup redirect must never answer for.
+ *
+ * dist/cards/* is what Claude loads (cards.json to list the app, {view}.html to show it).
+ * They're static build output, not the app's UI, and the MCP server reads them with
+ * redirect: "manual": a 302 to credentials/setup made it drop the app from Claude without
+ * a trace (any app with a per-user key, e.g. LinkedIn Outreach's LINKEDIN_LI_AT). Read
+ * access is still checked before this; actions a card runs keep their own credential
+ * check (ensureCredentialsForApi → 422 with setupUrl), so a card can say what's missing.
+ */
+export function isCredentialGateExemptPath(requestedPath: string): boolean {
+  return requestedPath.startsWith("dist/cards/") && !requestedPath.includes("..");
+}
+
 async function missingUserCredentialNames(
   runtimeAuth: AppRuntimeRouteAuth,
   requirements: RequiredKeySpec[],
@@ -245,6 +259,10 @@ export class CloudAppHostCredentialService {
     canRead: boolean,
   ): Promise<boolean> {
     if (!canRead) {
+      return true;
+    }
+
+    if (isCredentialGateExemptPath(requestedPath)) {
       return true;
     }
 
