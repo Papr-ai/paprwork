@@ -16,6 +16,7 @@ import {
 import {
   loadBackendHandlerContent,
   loadBackendRevisionArtifacts,
+  loadBackendModuleContent,
 } from "./backendArtifactCache.js";
 import {
   buildBackendActionEnv,
@@ -24,6 +25,7 @@ import {
   type MiniAppCallerIdentity,
 } from "./appBackendRunner.js";
 import { fetchCachedRuntimeRepoFile } from "./cloudAppHostCache.js";
+import { resolveBackendPythonModules } from "./backendPythonImports.js";
 import {
   fetchRuntimeDbToken,
   resolveRuntimeVaultEnv,
@@ -166,10 +168,23 @@ export class CloudAppBackendService {
     runEnv[PAPR_GATEWAY_URL_ENV] =
       `http://127.0.0.1:${CLOUD_APP_HOST_PORT}`;
 
+    // Handlers run from a temp dir in the cloud — bring along the local modules they
+    // import (backend/X.py, backend/lib/X.py) so `from caller import ...` resolves
+    // like it does on the desktop.
+    const extraFiles =
+      spec.runtime === "python"
+        ? await resolveBackendPythonModules(
+            handlerContent,
+            (repoPath) => loadBackendModuleContent(auth, repoPath, artifacts, cacheOpts),
+            spec.handler,
+          )
+        : undefined;
+
     try {
       const result = await runBackendHandler({
         spec,
         handlerSource: handlerContent,
+        extraFiles,
         env: runEnv,
         timeoutMs,
       });

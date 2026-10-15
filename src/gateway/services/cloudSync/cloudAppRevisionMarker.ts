@@ -34,9 +34,15 @@ export function appCloudRevisionHash(appDir: string, distAppJsContent: string): 
   const cards = existsSync(cardsDir)
     ? readdirSync(cardsDir, { withFileTypes: true }).filter((e) => e.isFile()).map((e) => e.name).sort()
     : [];
-  if (cards.length === 0) return distBundleRevisionHash(distAppJsContent);
+  // requirements.json drives the host's credential gate and is cached under this marker
+  // like any published file: editing it alone (e.g. making a key optional) left the host
+  // gating on the old copy until dist/app.js happened to change.
+  const requirementsPath = path.join(appDir, "requirements.json");
+  const requirements = existsSync(requirementsPath) ? readFileSync(requirementsPath) : null;
+  if (cards.length === 0 && !requirements) return distBundleRevisionHash(distAppJsContent);
   const h = createHash("sha256").update(distAppJsContent);
   for (const name of cards) h.update(`\0cards/${name}\0`).update(readFileSync(path.join(cardsDir, name)));
+  if (requirements) h.update("\0requirements.json\0").update(requirements);
   return h.digest("hex").slice(0, 16);
 }
 

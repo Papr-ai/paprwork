@@ -21,6 +21,7 @@ import {
   isBackendPythonWorkerEnabled,
   runPythonHandlerViaWorker,
 } from "./appBackendPythonWorker.js";
+import { isSafeBackendModulePath } from "./backendPythonImports.js";
 
 export type { MiniAppCallerIdentity };
 
@@ -250,11 +251,17 @@ export async function runPythonHandlerFromSource(
   handlerSource: string,
   env: Record<string, string>,
   timeoutMs: number,
+  /** Local modules the handler imports, keyed "X.py" / "lib/X.py" (see backendPythonImports). */
+  extraFiles: Record<string, string> = {},
 ): Promise<AppBackendRunResult> {
+  const modules = Object.fromEntries(
+    Object.entries(extraFiles).filter(([rel]) => isSafeBackendModulePath(rel)),
+  );
   if (isBackendPythonWorkerEnabled()) {
     return runPythonHandlerViaWorker({
       handlerSource,
       dbHelperSource: await loadBackendDbHelperPy(),
+      extraFiles: modules,
       env,
       timeoutMs,
     });
@@ -263,6 +270,10 @@ export async function runPythonHandlerFromSource(
   const tmpdir = await fs.mkdtemp(path.join(os.tmpdir(), "papr-backend-"));
   const handlerPath = path.join(tmpdir, "handler.py");
   try {
+    for (const [rel, content] of Object.entries(modules)) {
+      await fs.mkdir(path.dirname(path.join(tmpdir, rel)), { recursive: true });
+      await fs.writeFile(path.join(tmpdir, rel), content, "utf8");
+    }
     await fs.writeFile(handlerPath, handlerSource, "utf8");
     await fs.writeFile(
       path.join(tmpdir, "papr_db.py"),
@@ -279,6 +290,8 @@ export async function runBackendHandler(input: {
   spec: AppBackendActionSpec;
   handlerPath?: string;
   handlerSource?: string;
+  /** Python only, with handlerSource: local modules to place beside handler.py. */
+  extraFiles?: Record<string, string>;
   env: Record<string, string>;
   timeoutMs: number;
 }): Promise<AppBackendRunResult> {
@@ -289,7 +302,7 @@ export async function runBackendHandler(input: {
       return runPythonHandlerAtPath(input.handlerPath, env, timeoutMs);
     }
     if (input.handlerSource !== undefined) {
-      return runPythonHandlerFromSource(input.handlerSource, env, timeoutMs);
+      return runPythonHandlerFromSource(input.handlerSource, env, timeoutMs, input.extraFiles);
     }
     throw new Error("Backend handler path or source required");
   }
