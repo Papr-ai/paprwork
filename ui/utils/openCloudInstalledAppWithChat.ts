@@ -3,6 +3,7 @@
  */
 
 import { useTabStore } from "../stores/tabStore";
+import { useChatStore } from "../stores/chatStore";
 import { isAppTabMergedWithChat } from "./appTabMerge";
 
 export type {
@@ -69,4 +70,24 @@ export async function openCloudInstalledAppWithChat(
       }),
     );
   }, 300);
+}
+
+/**
+ * Hand-off from Claude ("Open in Papr" on a card): the app on the right, a new chat on the
+ * left with a draft the user sends when ready (never auto-sent).
+ */
+export async function openAppWithDraftChat(
+  createChat: () => Promise<string | null>,
+  input: { appId: string; appTitle: string; draft: string; chatTabTitle?: string },
+): Promise<void> {
+  const chatId = await createChat();
+  if (!chatId) return;
+  const chatTabId = `chat-${chatId}`;
+  const appTabId = `app-${input.appId}`;
+  const title = input.chatTabTitle ?? input.appTitle;
+  ensureChatAppSplitView(chatTabId, appTabId, input.appId, title);
+  for (const delayMs of SPLIT_RETRY_DELAYS_MS) {
+    window.setTimeout(() => ensureChatAppSplitView(chatTabId, appTabId, input.appId, title), delayMs);
+  }
+  if (input.draft.trim()) useChatStore.getState().setDraftMessage(chatId, input.draft.trim());
 }

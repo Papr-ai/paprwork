@@ -9,6 +9,8 @@ import path from "node:path";
 import { fileURLToPath } from "node:url";
 
 const PLIST_BUDDY = "/usr/libexec/PlistBuddy";
+const LSREGISTER =
+  "/System/Library/Frameworks/CoreServices.framework/Frameworks/LaunchServices.framework/Support/lsregister";
 
 /** Keep in sync with electron-builder.json mac.extendInfo */
 const DEV_PLIST_KEYS = {
@@ -57,6 +59,32 @@ function upsertPlistString(plistPath, key, value) {
   return true;
 }
 
+/**
+ * Declare papr:// on the dev Electron.app. Without it macOS routes papr:// links (login callback,
+ * "Open in Papr" from Claude) to an installed Papr Work.app instead of the build you're running,
+ * and setAsDefaultProtocolClient("papr") can't claim a scheme the bundle doesn't declare.
+ */
+function ensurePaprUrlScheme(plistPath) {
+  const current = runPlistBuddy(["-c", "Print :CFBundleURLTypes:0:CFBundleURLSchemes:0", plistPath]);
+  if (current.status === 0 && current.stdout.trim() === "papr") return false;
+  runPlistBuddy(["-c", "Delete :CFBundleURLTypes", plistPath]);
+  for (const cmd of [
+    "Add :CFBundleURLTypes array",
+    "Add :CFBundleURLTypes:0 dict",
+    "Add :CFBundleURLTypes:0:CFBundleURLName string com.paprwork.dev",
+    "Add :CFBundleURLTypes:0:CFBundleURLSchemes array",
+    "Add :CFBundleURLTypes:0:CFBundleURLSchemes:0 string papr",
+  ]) {
+    if (runPlistBuddy(["-c", cmd, plistPath]).status !== 0) {
+      console.warn(`[patch-electron-dev-plist] Failed: ${cmd}`);
+      return false;
+    }
+  }
+  // Re-read the bundle so LaunchServices sees the new scheme before Electron claims it.
+  spawnSync(LSREGISTER, ["-f", path.dirname(path.dirname(plistPath))], { stdio: "ignore" });
+  return true;
+}
+
 function main() {
   if (process.platform !== "darwin") {
     process.exit(0);
@@ -83,6 +111,10 @@ function main() {
     if (upsertPlistString(plistPath, key, value)) {
       changed += 1;
     }
+  }
+
+  if (ensurePaprUrlScheme(plistPath)) {
+    console.log("[patch-electron-dev-plist] Declared papr:// on the dev Electron.app");
   }
 
   if (changed > 0) {
