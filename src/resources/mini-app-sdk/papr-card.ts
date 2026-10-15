@@ -62,6 +62,8 @@ export interface CardContext {
   setMeta: (text: string) => void;
   /** Open a link through the host (the only way out of the sandbox). */
   open: (url: string) => void;
+  /** Call a Papr MCP tool through the host, e.g. papr_continue_on_mac for the "Open in Papr" hand-off. */
+  callTool: (name: string, args: Record<string, unknown>) => Promise<ToolResult>;
   tellClaude: (text: string) => void;
 }
 
@@ -174,6 +176,7 @@ export async function card(opts: CardOptions, deps: CardDeps = {}): Promise<Card
     open(url) {
       void bridge.openLink(url).catch(() => {});
     },
+    callTool,
   };
 
   function renderPrimary(): void {

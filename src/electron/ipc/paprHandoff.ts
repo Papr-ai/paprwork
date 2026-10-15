@@ -85,17 +85,60 @@ export async function redeemHandoffCode(
   };
 }
 
-/** What to show after landing: a new chat with a draft (never auto-sent). */
+/**
+ * The local app behind {namespaceId, slug}: memory's accessible-apps list carries the appId the
+ * app was published from, which is the folder under apps/ on the publisher's Mac. null when the
+ * app isn't the caller's own (e.g. a community app not installed here) or memory is unreachable.
+ */
+export async function resolveHandoffApp(
+  intent: HandoffRedeemResult["intent"],
+  sessionToken: string,
+  opts: { baseUrl?: string; fetchImpl?: typeof fetch } = {},
+): Promise<{ appId: string; name?: string } | null> {
+  if (!intent.appNamespaceId || !intent.appSlug || !sessionToken) return null;
+  try {
+    const res = await (opts.fetchImpl ?? fetch)(`${opts.baseUrl ?? memoryBaseUrl()}/v1/cloud/apps/accessible`, {
+      headers: { accept: "application/json", "X-Session-Token": sessionToken },
+      signal: AbortSignal.timeout(10_000),
+    });
+    if (!res.ok) return null;
+    const { apps } = (await res.json()) as { apps?: Array<{ appId?: unknown; namespaceId?: unknown; slug?: unknown; name?: unknown }> };
+    const hit = (apps ?? []).find((a) => a.namespaceId === intent.appNamespaceId && a.slug === intent.appSlug);
+    const appId = typeof hit?.appId === "string" ? hit.appId : "";
+    if (!/^[A-Za-z0-9_-]{1,80}$/.test(appId)) return null;
+    return { appId, ...(typeof hit?.name === "string" ? { name: hit.name } : {}) };
+  } catch {
+    return null;
+  }
+}
+
+export interface HandoffLanding {
+  title: string;
+  message: string;
+  /** Local app to open beside the chat (split view), when we found it on this Mac. */
+  appId?: string;
+}
+
+/** What to show after landing: the app (when it's here) beside a new chat with a draft (never auto-sent). */
 export function handoffLanding(
   intent: HandoffRedeemResult["intent"],
   appsBaseUrl = "https://apps.papr.ai",
-): { title: string; message: string } {
+  local?: { appId: string; name?: string } | null,
+): HandoffLanding {
   if (intent.appNamespaceId && intent.appSlug) {
+    const name = local?.name || intent.appSlug;
+    if (local?.appId) {
+      return {
+        title: "Continued from Claude",
+        message: `I just started this in ${name} from Claude. Help me finish setting it up here.`,
+        appId: local.appId,
+      };
+    }
     const link = `${appsBaseUrl}/${intent.appNamespaceId}/${intent.appSlug}`;
     const view = intent.view ? ` (${intent.view})` : "";
-    return { title: "From Claude", message: `Let's keep working on ${intent.appSlug}${view} from Claude: ${link}` };
+    return { title: "Continued from Claude", message: `Let's keep working on ${intent.appSlug}${view} from Claude: ${link}` };
   }
-  return { title: "From Claude", message: "" };
+  return { title: "Continued from Claude", message: "" };
 }
 
 export type HandoffAccountDecision = "sign_in" | "same_user" | "different_user";

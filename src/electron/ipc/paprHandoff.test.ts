@@ -7,6 +7,7 @@ import {
   memoryBaseUrl,
   parseHandoffCode,
   redeemHandoffCode,
+  resolveHandoffApp,
 } from "./paprHandoff.js";
 
 const CODE = "AbC_dEf-1234567890abcdefghijklmnopqrstuvwxy"; // token_urlsafe(32) shape
@@ -66,3 +67,39 @@ describe("landing and account decision", () => {
     expect(decideHandoffAccount("u2", "u1")).toBe("different_user");
   });
 });
+
+describe("landing on the app itself", () => {
+  const intent = { appNamespaceId: "85ZIB7mD1V", appSlug: "linkedin-outreach-shawkat", view: "outreach" };
+  const apps = (list: unknown[]) =>
+    vi.fn(async () => new Response(JSON.stringify({ apps: list }), { status: 200 })) as unknown as typeof fetch;
+
+  it("finds the local appId behind namespace + slug, as the Claude user", async () => {
+    const fetchImpl = apps([
+      { appId: "6b0a8fa3", namespaceId: "85ZIB7mD1V", slug: "linkedin-outreach", name: "LinkedIn Outreach" },
+      { appId: "08369ded-3d7f", namespaceId: "85ZIB7mD1V", slug: "linkedin-outreach-shawkat", name: "LinkedIn Outreach" },
+    ]);
+    expect(await resolveHandoffApp(intent, "tok", { baseUrl: "https://m", fetchImpl })).toEqual({
+      appId: "08369ded-3d7f",
+      name: "LinkedIn Outreach",
+    });
+    const [url, init] = (fetchImpl as unknown as ReturnType<typeof vi.fn>).mock.calls[0];
+    expect(url).toBe("https://m/v1/cloud/apps/accessible");
+    expect((init as RequestInit).headers).toMatchObject({ "X-Session-Token": "tok" });
+  });
+
+  it("is null when the app isn't listed, the id looks wrong, or memory fails", async () => {
+    expect(await resolveHandoffApp(intent, "tok", { fetchImpl: apps([]) })).toBeNull();
+    expect(await resolveHandoffApp(intent, "tok", { fetchImpl: apps([{ ...intent, appId: "../x", namespaceId: "85ZIB7mD1V", slug: intent.appSlug }]) })).toBeNull();
+    const down = vi.fn(async () => new Response("", { status: 503 })) as unknown as typeof fetch;
+    expect(await resolveHandoffApp(intent, "tok", { fetchImpl: down })).toBeNull();
+    expect(await resolveHandoffApp({}, "tok", { fetchImpl: down })).toBeNull();
+  });
+
+  it("opens the app beside a drafted chat when it's here, else the old web-link draft", () => {
+    const here = handoffLanding(intent, undefined, { appId: "08369ded", name: "LinkedIn Outreach" });
+    expect(here).toMatchObject({ appId: "08369ded", title: "Continued from Claude" });
+    expect(here.message).toContain("LinkedIn Outreach");
+    expect(handoffLanding(intent, undefined, null).appId).toBeUndefined();
+  });
+});
+

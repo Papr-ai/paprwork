@@ -18,6 +18,7 @@ import { ipcMain, BrowserWindow, shell, dialog } from "electron";
 import {
   decideHandoffAccount,
   handoffLanding,
+  resolveHandoffApp,
   HandoffRedeemError,
   isHandoffUrl,
   parseHandoffCode,
@@ -5311,14 +5312,23 @@ export async function handlePaprHandoffLink(
       );
     }
 
-    const landing = handoffLanding(result.intent);
+    // Open the app itself when it lives on this Mac (the publisher's own copy), beside the chat.
+    const local = await resolveHandoffApp(result.intent, result.sessionToken);
+    const landing = handoffLanding(result.intent, undefined, local);
     // After a fresh sign-in the renderer leaves the auth wall first; give it a beat.
     setTimeout(() => {
       const win = BrowserWindow.getAllWindows().find((w) => !w.isDestroyed());
       if (!win) return;
       if (win.isMinimized()) win.restore();
+      win.show();
       win.focus();
-      if (landing.message) win.webContents.send("chat:open", { title: landing.title, message: landing.message });
+      if (landing.message || landing.appId) {
+        win.webContents.send("chat:open", {
+          title: landing.title,
+          message: landing.message,
+          ...(landing.appId ? { appId: landing.appId, mode: "handoff" } : {}),
+        });
+      }
     }, decision === "sign_in" ? 1500 : 0);
   } catch (err) {
     console.error("[PaprLogin] Handoff failed:", err);
