@@ -79,6 +79,8 @@ export interface ShareSheetBodyProps {
   webCompatibilityHint?: string | null;
   /** Optional deep link into one step (e.g. a missing-key chip). */
   initialEdit?: ShareStepId | null;
+  /** v9: reopen a Community listing waiting on its gallery at the Gallery step (status chip). */
+  initialGallery?: boolean;
   /** Roles panel ("Who has access"); omitted = row hidden. */
   access?: { members: SharePeopleMember[]; membersLoading?: boolean; workspaceName?: string; onSaved?: () => void };
 }
@@ -303,14 +305,17 @@ export function KeysStep({
   props,
   keys,
   hidden,
+  step,
 }: {
   props: ShareSheetBodyProps;
   keys: KeysDraft;
   hidden: boolean;
+  /** v9: "· Step 2 of 3" after the title. */
+  step?: React.ReactNode;
 }) {
   return (
     <div hidden={hidden}>
-      <h6 className="ss6-h">Whose API keys it runs on</h6>
+      <h6 className="ss6-h">Whose API keys it runs on{step}</h6>
       <MissingKeysWarning props={props} />
       <CloudAppCredentialsPanel
         appId={props.appId}

@@ -1,9 +1,10 @@
 /**
- * App info — how the app appears to people (Share Bar Redesign v10). Two steps, like Share:
- *  1. Details — name, headline, description.
- *  2. Gallery — the preview video and five screens in one row (DemoGallery).
- * Shown before the first Publish and from More → App info / the status chip's "Review gallery".
- * The gallery is made in the background; Save shares it, or a plain banner when there is none.
+ * App info — how the app appears to people (Share Bar Redesign v10).
+ *  - First Publish: Details only (name, headline, description). The app goes live with the
+ *    default Papr-blue cover; a gallery is only asked for when it is listed in Community
+ *    (Share → Community adds a required Gallery step).
+ *  - More → App info: 1. Details, 2. Gallery (optional). Save approves the gallery if there
+ *    is one; without one the default cover stays.
  */
 import { useEffect, useState } from "react";
 import { gateway } from "../../src/lib/gateway";
@@ -25,7 +26,8 @@ interface PublishInfoSheetProps {
 }
 
 export function PublishInfoSheet({ appId, initialTitle, onCancel, onConfirmed, mode = "publish", initialStep = 1 }: PublishInfoSheetProps) {
-  const [step, setStep] = useState<1 | 2>(initialStep);
+  const publish = mode === "publish";
+  const [step, setStep] = useState<1 | 2>(publish ? 1 : initialStep);
   const [title, setTitle] = useState(initialTitle);
   const [description, setDescription] = useState("");
   const [headline, setHeadline] = useState("");
@@ -63,7 +65,8 @@ export function PublishInfoSheet({ appId, initialTitle, onCancel, onConfirmed, m
       return;
     }
     setError(null);
-    setStep(2);
+    if (publish) void confirm();
+    else setStep(2);
   };
 
   const confirm = async () => {
@@ -77,9 +80,9 @@ export function PublishInfoSheet({ appId, initialTitle, onCancel, onConfirmed, m
     setError(null);
     try {
       await gateway.send("app:update", { appId, title: name, description: description.trim(), headline: headline.trim() });
-      if (hasVideo) {
+      if (hasVideo && !publish) {
         if (!(await shareDemoVideo(appId))) throw new Error("Couldn't share the gallery.");
-      } else if (mode === "publish" || demo?.sharedKind == null) {
+      } else if (publish ? demo?.sharedKind !== "video" : demo?.sharedKind == null) {
         await setAppCoverShared(appId, false);
       }
       onConfirmed();
@@ -92,9 +95,11 @@ export function PublishInfoSheet({ appId, initialTitle, onCancel, onConfirmed, m
   return (
     <div className={`pis ${step === 2 ? "pis--gallery" : ""}`}>
       <div className="pis-body">
-        <p className="pis-step">
-          <b>{step === 1 ? "Details" : "Gallery"}</b> · Step {step} of 2{step === 2 ? " · Optional, required to list in Community" : ""}
-        </p>
+        {publish ? null : (
+          <p className="pis-step">
+            <b>{step === 1 ? "Details" : "Gallery"}</b> · Step {step} of 2{step === 2 ? " · Optional" : ""}
+          </p>
+        )}
         {step === 1 ? (
           <>
             <label className="pis-field">
@@ -113,7 +118,7 @@ export function PublishInfoSheet({ appId, initialTitle, onCancel, onConfirmed, m
             </label>
           </>
         ) : demo ? (
-          <DemoGallery appId={appId} demo={demo} onMake={make} />
+          <DemoGallery appId={appId} appName={title.trim() || initialTitle} demo={demo} onMake={make} />
         ) : null}
         {error ? <p className="pis-error">{error}</p> : null}
       </div>
@@ -121,13 +126,15 @@ export function PublishInfoSheet({ appId, initialTitle, onCancel, onConfirmed, m
         {step === 1 ? (
           <>
             <button type="button" className="ss6-btn" onClick={onCancel}>Cancel</button>
-            <button type="button" className="ss6-btn ss6-btn--primary" onClick={next}>Next</button>
+            <button type="button" className="ss6-btn ss6-btn--primary" disabled={saving} onClick={next}>
+              {publish ? (saving ? "Publishing…" : "Publish") : "Next"}
+            </button>
           </>
         ) : (
           <>
             <button type="button" className="ss6-btn" onClick={() => setStep(1)}>Back</button>
             <button type="button" className="ss6-btn ss6-btn--primary" disabled={saving} onClick={() => void confirm()}>
-              {saving ? "Saving…" : mode === "edit" ? "Save" : "Publish"}
+              {saving ? "Saving…" : "Save"}
             </button>
           </>
         )}

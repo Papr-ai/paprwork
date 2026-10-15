@@ -1,5 +1,5 @@
 /**
- * Gallery comments: write one on the selected slide (a video moment or a screen, optionally
+ * Gallery comments: write one on the open slide (a video moment or a screen, optionally
  * pinned to a spot), see the open ones, then one Revise makes the next version of the video
  * and the screens. Same model as Launch Video Studio. Owner-only and private.
  */
@@ -26,14 +26,18 @@ export function DemoComments(props: {
   setPin: (p: Pin | null) => void;
   setPinning: (p: boolean) => void;
   onSeek: (on: number, t: number) => void;
+  /** The comment button is on: show the box. Otherwise only the list. */
+  composing: boolean;
+  /** After adding (or Cancel): close the box. */
+  onDone: () => void;
 }) {
-  const { appId, demo, item, at, screens, pin, pinning, setPin, setPinning, onSeek } = props;
+  const { appId, demo, item, at, screens, pin, pinning, setPin, setPinning, onSeek, composing, onDone } = props;
   const [draft, setDraft] = useState("");
   const [error, setError] = useState<string | null>(null);
   const busy = demo.task?.state === "running";
   const open = (demo.notes ?? []).filter((n) => !n.fixedIn).sort((a, b) => (a.on ?? 0) - (b.on ?? 0) || a.t - b.t);
   const fixed = (demo.notes ?? []).filter((n) => n.fixedIn);
-  const label = item ? screens[item - 1]?.caption ?? `Screen ${item}` : `the video at ${at.toFixed(1)}s`;
+  const label = item ? `Screen ${item}` : `the video at ${at.toFixed(1)}s`;
 
   const run = (p: Promise<void>, after?: () => void) => {
     setError(null);
@@ -45,12 +49,13 @@ export function DemoComments(props: {
     run(addDemoNote(appId, { t: item ? 0 : at, body, ...(item ? { on: item } : {}), ...pin }), () => {
       setDraft("");
       setPin(null);
+      onDone();
     });
   };
 
   return (
     <div className="dn">
-      <div className="dn-compose">
+      {composing ? <div className="dn-compose">
         <textarea className="pis-input" rows={1} value={draft} maxLength={1000} autoFocus
           placeholder={`What should change on ${label}?`} aria-label="New comment"
           onChange={(e) => setDraft(e.target.value)}
@@ -60,9 +65,10 @@ export function DemoComments(props: {
           <button type="button" className={`pis-link ${pin ? "is-set" : ""}`} onClick={() => (pin ? setPin(null) : setPinning(!pinning))}>
             {pin ? "Remove point" : pinning ? "Click the spot" : "Point at something"}
           </button>
-          <button type="button" className="ss6-btn" disabled={!draft.trim()} onClick={add}>Add comment</button>
+          <button type="button" className="pis-link dn-cancel" onClick={onDone}>Cancel</button>
+          <button type="button" className="ss6-btn" disabled={!draft.trim()} onClick={add}>Comment</button>
         </div>
-      </div>
+      </div> : null}
 
       {open.length ? (
         <ul className="dn-list">
@@ -74,9 +80,7 @@ export function DemoComments(props: {
             </li>
           ))}
         </ul>
-      ) : (
-        <p className="pis-hint">Pick the video or a screen and say what should change. One Revise fixes them all.</p>
-      )}
+      ) : null}
 
       {open.length ? (
         <div className="dn-foot">

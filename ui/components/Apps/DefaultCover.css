@@ -1,0 +1,14 @@
+/* Default cover: Papr blue, the app name in white. Scales with its box (cards to the Gallery frame). */
+.dcover {
+  position: absolute; inset: 0; container-type: inline-size; display: grid; place-items: center; overflow: hidden;
+  background: radial-gradient(90% 120% at 15% 0%, #3d8bff 0%, transparent 60%), linear-gradient(135deg, #0060e0, #0047a8);
+}
+.dcover__in { display: flex; flex-direction: column; align-items: center; gap: 14px; max-width: 86%; text-align: center; }
+.dcover__name {
+  font-size: clamp(15px, 5.2cqw, 30px); font-weight: 700; letter-spacing: -0.02em; line-height: 1.15; color: #fff;
+  overflow: hidden; display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical;
+}
+.dcover__tag {
+  position: absolute; top: 10px; left: 10px; padding: 2px 8px; border-radius: 999px;
+  font-size: 11px; font-weight: 500; color: rgba(255, 255, 255, 0.9); background: rgba(255, 255, 255, 0.16);
+}
