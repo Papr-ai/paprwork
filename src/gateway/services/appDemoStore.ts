@@ -20,6 +20,27 @@ const APP_ID_RE = /^[A-Za-z0-9_-]{1,80}$/;
 /** Older versions beyond this are deleted (never the one in use). */
 const MAX_VERSIONS = 20;
 const MAX_NOTE_CHARS = 1000;
+export const MAX_SCREENS = 5;
+/** The owner can leave screens out, but not below this many. */
+export const MIN_SCREENS = 4;
+
+/** Region of a frame, fractions 0..1 from the top-left. */
+export interface DemoCrop {
+  x: number;
+  y: number;
+  w: number;
+  h: number;
+}
+
+/** One gallery screen: a cropped moment of the preview under a short caption. */
+export interface DemoScreen {
+  t: number;
+  crop: DemoCrop;
+  caption: string;
+  why?: string;
+  /** Left out of the gallery by the owner. */
+  hidden?: boolean;
+}
 
 export interface DemoVersion {
   v: number;
@@ -30,6 +51,8 @@ export interface DemoVersion {
   /** Reviewer scores when the take was judged (1-5). */
   fidelity?: number;
   polish?: number;
+  /** Gallery screens made from this version (files: {appId}.v{n}.s{k}.jpg). */
+  screens?: DemoScreen[];
 }
 
 export interface DemoNote {
@@ -38,6 +61,8 @@ export interface DemoNote {
   v: number;
   /** Seconds into the loop. */
   t: number;
+  /** Screen it is about (1-based); absent = the video. */
+  on?: number;
   /** Spot on the frame, 0..1 from top-left. */
   x?: number;
   y?: number;
@@ -50,6 +75,8 @@ export interface DemoNote {
 export interface DemoManifest {
   /** Version in use (0 = none yet). */
   current: number;
+  /** Last version the owner opened in the Gallery (current > seen = "Review gallery"). */
+  seen: number;
   versions: DemoVersion[];
   notes: DemoNote[];
 }
@@ -71,6 +98,10 @@ export const versionTake = (v: number) => `v${v}`;
 
 export function stillPath(appId: string, name: string): string {
   return path.join(demoDir(), `${appId}.still-${name}.jpg`);
+}
+
+export function screenPath(appId: string, v: number, k: number): string {
+  return path.join(demoDir(), `${appId}.v${v}.s${k}.jpg`);
 }
 
 export function hasDemoVideo(appId: string): boolean {
@@ -96,18 +127,20 @@ const manifestPath = (appId: string) => path.join(demoDir(), `${appId}.json`);
 export function readManifest(appId: string): DemoManifest {
   try {
     const raw = JSON.parse(fs.readFileSync(manifestPath(appId), "utf8")) as Partial<DemoManifest>;
-    return { current: raw.current ?? 0, versions: raw.versions ?? [], notes: raw.notes ?? [] };
+    // Manifests from before the Gallery count as seen.
+    return { current: raw.current ?? 0, seen: raw.seen ?? raw.current ?? 0, versions: raw.versions ?? [], notes: raw.notes ?? [] };
   } catch {
     /* none yet */
   }
   const cur = demoPaths(appId);
-  if (!fs.existsSync(cur.video)) return { current: 0, versions: [], notes: [] };
+  if (!fs.existsSync(cur.video)) return { current: 0, seen: 0, versions: [], notes: [] };
   const v1 = demoPaths(appId, versionTake(1));
   for (const k of ["scene", "poster", "video"] as const) {
     if (fs.existsSync(cur[k])) fs.copyFileSync(cur[k], v1[k]);
   }
   const m: DemoManifest = {
     current: 1,
+    seen: 1,
     versions: [{ v: 1, createdAt: fs.statSync(cur.video).mtimeMs, kind: "create" }],
     notes: [],
   };
@@ -169,6 +202,7 @@ function prune(appId: string, m: DemoManifest): void {
     if (i < 0) return;
     const [old] = m.versions.splice(i, 1);
     for (const f of Object.values(demoPaths(appId, versionTake(old!.v)))) fs.rmSync(f, { force: true });
+    for (let k = 1; k <= MAX_SCREENS; k++) fs.rmSync(screenPath(appId, old!.v, k), { force: true });
   }
 }
 
@@ -183,18 +217,20 @@ export function setCurrentVersion(appId: string, v: number): DemoManifest {
 
 const unit = (n: unknown) => (typeof n === "number" && Number.isFinite(n) ? Math.min(1, Math.max(0, n)) : undefined);
 
-export function addNote(appId: string, input: { t?: unknown; x?: unknown; y?: unknown; body?: unknown }): DemoNote {
+export function addNote(appId: string, input: { t?: unknown; x?: unknown; y?: unknown; body?: unknown; on?: unknown }): DemoNote {
   const body = typeof input.body === "string" ? input.body.trim().slice(0, MAX_NOTE_CHARS) : "";
   if (!body) throw new Error("Write what should change.");
   const m = readManifest(appId);
   if (!m.current) throw new Error("Make the preview video first.");
   const t = typeof input.t === "number" && Number.isFinite(input.t) ? Math.max(0, Math.round(input.t * 10) / 10) : 0;
+  const on = Number.isInteger(input.on) && (input.on as number) >= 1 && (input.on as number) <= MAX_SCREENS ? (input.on as number) : undefined;
   const x = unit(input.x);
   const y = unit(input.y);
   const note: DemoNote = {
     id: randomUUID(),
     v: m.current,
-    t,
+    t: on ? 0 : t,
+    ...(on ? { on } : {}),
     ...(x !== undefined && y !== undefined ? { x: Math.round(x * 1000) / 1000, y: Math.round(y * 1000) / 1000 } : {}),
     body,
     createdAt: Date.now(),
@@ -216,4 +252,48 @@ export function deleteNote(appId: string, id: string): boolean {
 
 export function openNotes(appId: string): DemoNote[] {
   return readManifest(appId).notes.filter((n) => !n.fixedIn).sort((a, b) => a.t - b.t);
+}
+
+/** 2 to 5 words is the guidance; this only trims, drops end punctuation and caps the length. */
+export function cleanCaption(raw: string): string {
+  return raw.trim().replace(/\s+/g, " ").replace(/[.!?;:,]+$/, "").slice(0, 40).trim();
+}
+
+export function setScreens(appId: string, v: number, screens: DemoScreen[]): void {
+  const m = readManifest(appId);
+  const ver = m.versions.find((x) => x.v === v);
+  if (!ver) return;
+  ver.screens = screens;
+  writeManifest(appId, m);
+}
+
+/** Edit a screen of the version in use: its caption, or leave it out / put it back. */
+export function updateScreen(appId: string, k: number, patch: { caption?: unknown; hidden?: unknown }): DemoManifest {
+  const m = readManifest(appId);
+  const ver = m.versions.find((x) => x.v === m.current);
+  const screen = ver?.screens?.[k - 1];
+  if (!ver?.screens || !screen) throw new Error("No such screen");
+  if (typeof patch.caption === "string") {
+    const caption = cleanCaption(patch.caption);
+    if (!caption) throw new Error("Write a caption.");
+    screen.caption = caption;
+  }
+  if (patch.hidden === true && !screen.hidden) {
+    if (ver.screens.filter((s) => !s.hidden).length <= MIN_SCREENS) throw new Error(`Keep at least ${MIN_SCREENS} screens.`);
+    screen.hidden = true;
+  } else if (patch.hidden === false) {
+    delete screen.hidden;
+  }
+  writeManifest(appId, m);
+  return m;
+}
+
+/** The owner opened the Gallery: the bar stops asking them to review it. */
+export function markSeen(appId: string): DemoManifest {
+  const m = readManifest(appId);
+  if (m.seen !== m.current) {
+    m.seen = m.current;
+    writeManifest(appId, m);
+  }
+  return m;
 }

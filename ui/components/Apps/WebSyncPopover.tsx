@@ -1051,6 +1051,11 @@ interface WebSyncStatusDotProps {
     verb: string;
     onRun: () => void;
   };
+  /**
+   * Background work about the published app (the gallery), always spelled out:
+   * "Gallery 2 of 4" with a spinner, then "Review gallery". Yields to action/refresh.
+   */
+  tail?: { label: string; busy: boolean; onRun: () => void };
 }
 
 /** Pull it down. */
@@ -1199,6 +1204,7 @@ export function WebSyncStatusDot({
   tone,
   onRefresh,
   action,
+  tail,
 }: WebSyncStatusDotProps) {
   const chip = Boolean(label);
   const className = `mini-app-publish-bar__web-sync-dot mini-app-publish-bar__web-sync-dot--${state}${
@@ -1269,6 +1275,20 @@ export function WebSyncStatusDot({
             <span className="mini-app-publish-bar__web-sync-chip-act-verb">
               {action.verb}
             </span>
+          </button>
+        ) : tail ? (
+          <button
+            type="button"
+            className={`mini-app-publish-bar__web-sync-chip-act mini-app-publish-bar__web-sync-chip-tail${
+              tail.busy ? "" : " mini-app-publish-bar__web-sync-chip-tail--ready"
+            }`}
+            onClick={(event) => {
+              event.stopPropagation();
+              tail.onRun();
+            }}
+          >
+            {tail.busy ? <WebSyncSpinner /> : null}
+            <span>{tail.label}</span>
           </button>
         ) : onRefresh ? (
           <button

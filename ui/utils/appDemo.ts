@@ -10,17 +10,26 @@ import { getGatewayHttpBase } from "./gatewayHttpBase";
 
 export const APP_DEMO_CHANGED_EVENT = "papr:app-demo-changed";
 
-export type DemoStage = "writing" | "recording" | "reviewing" | "polishing" | "revising";
+export type DemoStage = "writing" | "recording" | "reviewing" | "polishing" | "revising" | "screens";
+export interface DemoScreen {
+  t: number;
+  crop: { x: number; y: number; w: number; h: number };
+  caption: string;
+  hidden?: boolean;
+}
 export interface DemoVersion {
   v: number;
   createdAt: number;
   kind: "create" | "revise";
   notes?: number;
+  screens?: DemoScreen[];
 }
 export interface DemoNote {
   id: string;
   v: number;
   t: number;
+  /** Gallery screen it is about (1-based); absent = the video. */
+  on?: number;
   x?: number;
   y?: number;
   body: string;
@@ -40,6 +49,8 @@ export interface DemoStatus {
     version?: number;
   } | null;
   current?: number;
+  /** Last version opened in the Gallery; current > seen means "Review gallery". */
+  seen?: number;
   versions?: DemoVersion[];
   notes?: DemoNote[];
 }
@@ -55,6 +66,25 @@ export function appDemoVersionUrl(appId: string, ver: number, kind: "video" | "p
 }
 export function appDemoPosterUrl(appId: string, version?: number | string | null): string {
   return `${base(appId)}/poster${version ? `?v=${version}` : ""}`;
+}
+
+/** One gallery screen (k is 1-based) of the version in use, or of version ver. */
+export function appDemoScreenUrl(appId: string, k: number, ver?: number, bust?: number | null): string {
+  const q = [ver ? `ver=${ver}` : "", bust ? `b=${bust}` : ""].filter(Boolean).join("&");
+  return `${base(appId)}/screens/${k}${q ? `?${q}` : ""}`;
+}
+
+/** Gallery progress as the bar shows it: four steps for a first make, the version for a revise. */
+export function galleryProgress(s: DemoStatus | null): { label: string; busy: boolean } | null {
+  if (s?.task?.state === "running") {
+    if (s.task.kind === "revise" && s.task.stage !== "screens") {
+      return { label: `Making v${Math.max(0, ...(s.versions ?? []).map((v) => v.v)) + 1}`, busy: true };
+    }
+    const step = { writing: 1, recording: 2, reviewing: 3, polishing: 3, revising: 3, screens: 4 }[s.task.stage ?? "writing"];
+    return { label: `Gallery ${step} of 4`, busy: true };
+  }
+  if ((s?.current ?? 0) > (s?.seen ?? 0)) return { label: "Review gallery", busy: false };
+  return null;
 }
 
 export async function fetchDemoStatus(appId: string): Promise<DemoStatus | null> {
@@ -137,11 +167,23 @@ async function sendAndRefresh(appId: string, pathName: string, method: string, b
   if (s) followers.get(appId)?.forEach((f) => f(s));
 }
 
-export function addDemoNote(appId: string, note: { t: number; body: string; x?: number; y?: number }): Promise<void> {
+export function addDemoNote(appId: string, note: { t: number; body: string; on?: number; x?: number; y?: number }): Promise<void> {
   return sendAndRefresh(appId, "/notes", "POST", note);
 }
 export function deleteDemoNote(appId: string, noteId: string): Promise<void> {
   return sendAndRefresh(appId, `/notes/${encodeURIComponent(noteId)}`, "DELETE");
+}
+export function updateDemoScreen(appId: string, k: number, patch: { caption?: string; hidden?: boolean }): Promise<void> {
+  return sendAndRefresh(appId, `/screens/${k}`, "PATCH", patch);
+}
+/** The owner opened the Gallery. */
+export function markGallerySeen(appId: string): Promise<void> {
+  return sendAndRefresh(appId, "/seen", "POST");
+}
+/** Copies the video and kept screens to ~/Downloads; returns the folder. */
+export async function downloadGallery(appId: string): Promise<string> {
+  const out = (await send(appId, "/download", "POST")) as unknown as { folder?: string };
+  return out.folder ?? "";
 }
 /** Use a saved version as the preview (cards update). */
 export async function useDemoVersion(appId: string, version: number): Promise<void> {

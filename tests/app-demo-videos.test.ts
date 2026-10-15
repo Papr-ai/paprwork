@@ -200,4 +200,82 @@ describe("app demo videos", () => {
     expect(store.deleteNote(APP, n.id)).toBe(true);
     expect(store.deleteNote(APP, n.id)).toBe(false);
   });
+
+  it("makes five captioned, cropped screens after the video and keeps them per version", async () => {
+    const stills = vi.fn(async (_scene: string, s: { t: number; path: string; crop?: unknown }[]) => {
+      s.forEach((x) => fs.writeFileSync(x.path, x.crop ? "crop" : "jpg"));
+      return s.map((x) => ({ t: x.t, path: x.path }));
+    });
+    const pickScreens = vi.fn(async () => ({
+      screens: [1, 3, 5, 7, 8, 2].map((frame, i) => ({
+        frame,
+        crop: { x: 0.9, y: 0, w: 0.1, h: 0.5 },
+        caption: i === 0 ? "  Every check at a glance.  " : `Screen ${i + 1}`,
+        why: "",
+      })),
+    }));
+    demos.startDemoGeneration(APP, { writeScene: async () => SCENE, render: fakeRender([good]), stills, pickScreens });
+    await settle();
+    const st = demos.demoStatus(APP);
+    expect(st.task).toMatchObject({ state: "done", version: 1 });
+    const screens = st.versions[0]!.screens!;
+    expect(screens).toHaveLength(5);
+    expect(screens[0]).toMatchObject({ caption: "Every check at a glance", t: 0.5 });
+    // Too-narrow crops are widened and kept inside the frame.
+    expect(screens[0]!.crop.w).toBeGreaterThanOrEqual(0.25);
+    expect(screens[0]!.crop.x + screens[0]!.crop.w).toBeLessThanOrEqual(1);
+    expect(fs.readFileSync(store.screenPath(APP, 1, 5), "utf8")).toBe("crop");
+    expect((pickScreens.mock.calls[0] as unknown as [string, string[]])[1]).toHaveLength(8);
+    // New gallery = not reviewed yet; opening it clears that.
+    expect(st.seen).toBe(0);
+    expect(store.markSeen(APP).seen).toBe(1);
+  });
+
+  it("screen comments drive the next version; at least four screens stay in", async () => {
+    const stills = vi.fn(async (_scene: string, s: { t: number; path: string }[]) => {
+      s.forEach((x) => fs.writeFileSync(x.path, "jpg"));
+      return s.map((x) => ({ t: x.t, path: x.path }));
+    });
+    const pickScreens = vi.fn(async () => ({
+      screens: [1, 2, 3, 4, 5].map((frame) => ({ frame, crop: { x: 0, y: 0, w: 0.5, h: 0.5 }, caption: `Cap ${frame}`, why: "" })),
+    }));
+    const deps = { writeScene: vi.fn(async () => SCENE), render: fakeRender([good]), stills, pickScreens };
+    demos.startDemoGeneration(APP, deps);
+    await settle();
+    expect(store.updateScreen(APP, 2, { hidden: true }).versions[0]!.screens![1]!.hidden).toBe(true);
+    expect(() => store.updateScreen(APP, 3, { hidden: true })).toThrow(/at least 4/);
+    expect(store.updateScreen(APP, 1, { caption: "Send a fix to your team." }).versions[0]!.screens![0]!.caption).toBe("Send a fix to your team");
+    expect(store.addNote(APP, { t: 3, on: 2, body: "Crop tighter on the list" })).toMatchObject({ on: 2, t: 0 });
+    demos.startDemoRevision(APP, deps);
+    await settle();
+    const prompt = deps.writeScene.mock.calls[1] as unknown as [string, string];
+    expect(prompt[1]).toMatch(/On gallery screen 2 "Cap 2" \(image 1, at 1\.0s/);
+    expect((pickScreens.mock.calls[1] as unknown as [string])[0]).toMatch(/Screen 2: Crop tighter on the list/);
+    expect(demos.demoStatus(APP).versions[1]!.screens).toHaveLength(5);
+  });
+
+  it("a failed screen pick never fails the video", async () => {
+    const stills = vi.fn(async () => { throw new Error("no window"); });
+    demos.startDemoGeneration(APP, { writeScene: async () => SCENE, render: fakeRender([good]), stills, pickScreens: async () => ({}) });
+    await settle();
+    expect(demos.demoStatus(APP)).toMatchObject({ exists: true, task: { state: "done" }, current: 1 });
+    expect(demos.demoStatus(APP).versions[0]!.screens).toBeUndefined();
+  });
+
+  it("Download all copies the video and the kept screens, numbered", async () => {
+    const { exportGallery } = await import("../src/gateway/services/appDemoExport.js");
+    const stills = vi.fn(async (_scene: string, s: { t: number; path: string }[]) => {
+      s.forEach((x) => fs.writeFileSync(x.path, "jpg"));
+      return s.map((x) => ({ t: x.t, path: x.path }));
+    });
+    const pickScreens = async () => ({
+      screens: [1, 2, 3, 4, 5].map((frame) => ({ frame, crop: { x: 0, y: 0, w: 0.5, h: 0.5 }, caption: `Cap/${frame}`, why: "" })),
+    });
+    demos.startDemoGeneration(APP, { writeScene: async () => SCENE, render: fakeRender([good]), stills, pickScreens });
+    await settle();
+    store.updateScreen(APP, 3, { hidden: true });
+    const out = exportGallery(APP, path.join(root, "dl"));
+    expect(out.folder).toBe(path.join(root, "dl", "SEO Audit gallery"));
+    expect(out.files).toEqual(["0 Preview.mp4", "1 Cap 1.jpg", "2 Cap 2.jpg", "3 Cap 4.jpg", "4 Cap 5.jpg"]);
+  });
 });

@@ -33,10 +33,14 @@ import {
   isValidDemoAppId,
   openNotes,
   readManifest,
+  screenPath,
   stillPath,
+  type DemoCrop,
   type DemoManifest,
   type DemoNote,
+  type DemoScreen,
 } from "./appDemoStore.js";
+import { makeScreens } from "./appDemoScreens.js";
 import {
   REVIEW_AT,
   normalizeReview,
@@ -194,7 +198,7 @@ function checkScore(check: RenderCheck): number {
   return check.small.length + 4 * check.offStage.length + 4 * (check.overlap?.length ?? 0) + 3 * (check.spill?.length ?? 0);
 }
 
-export type DemoStage = "writing" | "recording" | "reviewing" | "polishing" | "revising";
+export type DemoStage = "writing" | "recording" | "reviewing" | "polishing" | "revising" | "screens";
 
 export interface DemoTask {
   state: "running" | "done" | "failed";
@@ -219,8 +223,13 @@ export interface DemoDeps {
   writeScene: (appId: string, prompt: string, images?: string[]) => Promise<string>;
   /** Record the scene to MP4 + poster (Electron). */
   render: (paths: { scenePath: string; videoPath: string; posterPath: string }) => Promise<RenderResult>;
-  /** Frames at chosen moments (+ what sits under a pin). Optional: no review without it. */
-  stills?: (scenePath: string, stills: { t: number; path: string; probe?: { x: number; y: number } }[]) => Promise<DemoStill[]>;
+  /** Frames at chosen moments (+ what sits under a pin, or cropped). Optional: no review without it. */
+  stills?: (
+    scenePath: string,
+    stills: { t: number; path: string; probe?: { x: number; y: number }; crop?: DemoCrop }[],
+  ) => Promise<DemoStill[]>;
+  /** Vision pick of the gallery screens from a contact sheet. Optional: no screens without it. */
+  pickScreens?: (prompt: string, images: string[]) => Promise<unknown>;
   /** Vision review of the frames (and a screenshot of the real app). Returns raw JSON. */
   review?: (prompt: string, images: string[]) => Promise<unknown>;
   /** Called after a new video is in place (e.g. notify the UI). */
@@ -240,7 +249,7 @@ export function demoStatus(appId: string): {
   } catch {
     /* none yet */
   }
-  const m = isValidDemoAppId(appId) ? readManifest(appId) : { current: 0, versions: [], notes: [] };
+  const m = isValidDemoAppId(appId) ? readManifest(appId) : { current: 0, seen: 0, versions: [], notes: [] };
   return { exists: updatedAt !== null, updatedAt, task: tasks.get(appId) ?? null, ...m };
 }
 
@@ -371,10 +380,29 @@ async function runCreate(appId: string, deps: DemoDeps, task: DemoTask): Promise
       console.warn(`[appDemoVideos] polish failed for ${appId}:`, (err as Error).message);
     }
   }
-  return addVersion(appId, winner, "create", [], review ? { fidelity: review.fidelity, polish: review.polish } : undefined);
+  const v = addVersion(appId, winner, "create", [], review ? { fidelity: review.fidelity, polish: review.polish } : undefined);
+  await screensFor(appId, deps, task, v, first.seconds);
+  return v;
 }
 
-function noteLine(n: DemoNote, i: number, still: DemoStill | undefined): string {
+/** Gallery screens from the new version's scene. Never fails the run. */
+async function screensFor(appId: string, deps: DemoDeps, task: DemoTask, v: number, seconds: number, notes = ""): Promise<void> {
+  if (!deps.stills || !deps.pickScreens) return;
+  task.stage = "screens";
+  await makeScreens(appId, v, seconds, { stills: deps.stills, pick: deps.pickScreens }, notes);
+}
+
+/** A note on a gallery screen points at that screen's moment and region. */
+function noteMoment(n: DemoNote, screens: DemoScreen[] | undefined): { t: number; screen?: DemoScreen } {
+  const screen = n.on ? screens?.[n.on - 1] : undefined;
+  return screen ? { t: screen.t, screen } : { t: n.t };
+}
+
+function noteLine(n: DemoNote, i: number, still: DemoStill | undefined, screen?: DemoScreen): string {
+  if (screen) {
+    const c = screen.crop;
+    return `${i + 1}. On gallery screen ${n.on} "${screen.caption}" (image ${i + 1}, at ${screen.t.toFixed(1)}s, region x=${Math.round(c.x * 100)}% y=${Math.round(c.y * 100)}% w=${Math.round(c.w * 100)}% h=${Math.round(c.h * 100)}%): ${n.body}`;
+  }
   const where = n.x != null && n.y != null
     ? ` pinned at x=${Math.round(n.x * 100)}%, y=${Math.round(n.y * 100)}%${still?.probe ? ` on ${still.probe.path}${still.probe.text ? ` ("${still.probe.text}")` : ""}` : ""}`
     : "";
@@ -385,6 +413,8 @@ async function runRevise(appId: string, deps: DemoDeps, task: DemoTask): Promise
   const m = readManifest(appId);
   const notes = openNotes(appId);
   const scene = fs.readFileSync(demoPaths(appId, `v${m.current}`).scene, "utf8");
+  const screens = m.versions.find((x) => x.v === m.current)?.screens;
+  const moments = notes.map((n) => noteMoment(n, screens));
   const shown = notes.slice(0, 6);
   let stills: DemoStill[] = [];
   if (deps.stills) {
@@ -392,16 +422,16 @@ async function runRevise(appId: string, deps: DemoDeps, task: DemoTask): Promise
       stills = await deps.stills(
         demoPaths(appId, `v${m.current}`).scene,
         shown.map((n, i) => ({
-          t: n.t,
+          t: moments[i]!.t,
           path: stillPath(appId, `n${i}`),
-          ...(n.x != null && n.y != null ? { probe: { x: n.x, y: n.y } } : {}),
+          ...(!n.on && n.x != null && n.y != null ? { probe: { x: n.x, y: n.y } } : {}),
         })),
       );
     } catch (err) {
       console.warn(`[appDemoVideos] note frames failed for ${appId}:`, (err as Error).message);
     }
   }
-  const requests = notes.map((n, i) => noteLine(n, i, stills[i])).join("\n");
+  const requests = notes.map((n, i) => noteLine(n, i, stills[i], moments[i]!.screen)).join("\n");
   const prompt = editPrompt(buildDemoScenePrompt(appId), scene, `The owner watched v${m.current} and left these notes${stills.length ? " (the attached images are the frames they refer to, in order)" : ""}:\n${requests}`);
   task.stage = "revising";
   const take = await writeTake(appId, deps, "a", prompt, stills.map((s) => s.path));
@@ -417,7 +447,10 @@ async function runRevise(appId: string, deps: DemoDeps, task: DemoTask): Promise
       console.warn(`[appDemoVideos] revise polish failed for ${appId}:`, (err as Error).message);
     }
   }
-  return addVersion(appId, winner, "revise", notes.map((n) => n.id));
+  const v = addVersion(appId, winner, "revise", notes.map((n) => n.id));
+  const screenNotes = notes.filter((n) => n.on).map((n) => `- Screen ${n.on}: ${n.body}`).join("\n");
+  await screensFor(appId, deps, task, v, take.seconds, screenNotes);
+  return v;
 }
 
 function appTitle(appId: string): string {
@@ -445,11 +478,20 @@ export function _resetDemoTasks(): void {
 // (image consumers keep working), `videoUrl` the loop. Text only, so git sync carries it.
 
 
+export interface SharedGalleryItem {
+  appFileId: string;
+  objectKey: string;
+  url: string;
+  caption: string;
+}
+
 export interface SharedVideoPointer extends SharedCoverPointer {
   kind: "video";
   videoUrl: string;
   videoFileId: string;
   videoObjectKey?: string;
+  /** Gallery screens the owner kept, in order (details page). */
+  gallery?: SharedGalleryItem[];
 }
 
 export function sharedCoverKind(appId: string): "video" | "image" | null {
@@ -473,6 +515,17 @@ export async function shareDemoVideo(
   fs.copyFileSync(p.poster, poster);
   const v = await upload({ appId, filePath: video, fileName: "preview.mp4", mime: "video/mp4" });
   const i = await upload({ appId, filePath: poster, fileName: "preview.jpg", mime: "image/jpeg" });
+  const gallery: SharedGalleryItem[] = [];
+  const m = readManifest(appId);
+  const screens = m.versions.find((x) => x.v === m.current)?.screens ?? [];
+  for (const [k, s] of screens.entries()) {
+    const file = screenPath(appId, m.current, k + 1);
+    if (s.hidden || !fs.existsSync(file)) continue;
+    const copy = path.join(demoDir(), `${appId}.shared.s${k + 1}.jpg`);
+    fs.copyFileSync(file, copy);
+    const up = await upload({ appId, filePath: copy, fileName: `screen-${gallery.length + 1}.jpg`, mime: "image/jpeg" });
+    gallery.push({ appFileId: up.id, objectKey: up.objectKey, url: up.url, caption: s.caption });
+  }
   const pointer: SharedVideoPointer = {
     kind: "video",
     appFileId: i.id,
@@ -481,6 +534,7 @@ export async function shareDemoVideo(
     videoFileId: v.id,
     videoObjectKey: v.objectKey,
     videoUrl: v.url,
+    ...(gallery.length ? { gallery } : {}),
   };
   fs.writeFileSync(sharedCoverPointerPath(appId), `${JSON.stringify(pointer, null, 2)}\n`);
   fs.rmSync(sharedCoverPath(appId), { force: true });

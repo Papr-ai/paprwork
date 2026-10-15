@@ -65,3 +65,8 @@
 }
 .pis-link:disabled { color: var(--text-tertiary); cursor: default; }
 @media (prefers-reduced-motion: reduce) { .pis-spin { animation: none; } }
+
+/* v10: two steps. The Gallery step widens the sheet so the row shows a card and a half. */
+.pis-step { margin: 0; font-size: 12.5px; color: var(--text-tertiary); }
+.pis-step b { font-weight: 600; color: var(--text-primary); }
+.share-sheet:has(.pis--gallery) { width: min(1040px, calc(100vw - 48px)); max-height: min(90vh, 820px); }

@@ -115,6 +115,18 @@ const PROBE_SCRIPT = `(x, y) => {
     box: [Math.round(r.left), Math.round(r.top), Math.round(r.width), Math.round(r.height)] };
 }`;
 
+/** Gallery screen: cut one region (fractions 0..1) and scale it to the card's 2x width. */
+const SCREEN_W = 1120;
+function cropStill(img, c) {
+  const f = (n) => Math.min(1, Math.max(0, Number(n) || 0));
+  const w = Math.max(64, Math.round(f(c.w) * OUT_W));
+  const h = Math.max(40, Math.round(f(c.h) * OUT_H));
+  const x = Math.min(OUT_W - w, Math.round(f(c.x) * OUT_W));
+  const y = Math.min(OUT_H - h, Math.round(f(c.y) * OUT_H));
+  const cut = img.crop({ x, y, width: w, height: h });
+  return w === SCREEN_W ? cut : cut.resize({ width: SCREEN_W, quality: "best" });
+}
+
 /** Union of two checks (mid-animation + hold), so a clash at either moment counts. */
 function mergeChecks(a, b) {
   const uniq = (x, y, key) => {
@@ -209,7 +221,8 @@ async function renderOnce(opts) {
       for (const s of opts.stills.slice(0, MAX_STILLS)) {
         const t = Math.min(seconds, Math.max(0, Number(s.t) || 0));
         await setT(t);
-        fs.writeFileSync(s.path, (await grab()).toJPEG(80));
+        const frame = await grab();
+        fs.writeFileSync(s.path, (s.crop ? cropStill(frame, s.crop) : frame).toJPEG(s.crop ? 88 : 80));
         const probe = s.probe
           ? await wc.executeJavaScript(`(${PROBE_SCRIPT})(${Number(s.probe.x) || 0}, ${Number(s.probe.y) || 0})`)
           : undefined;
