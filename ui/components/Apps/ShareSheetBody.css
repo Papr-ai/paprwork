@@ -1250,3 +1250,10 @@
 .ss9-mi--rm b {
   color: #d93025;
 }
+
+/* v10: Share → Community → Gallery (required). Same Gallery as App info, one fixed width. */
+.ss6-gallery { display: flex; flex-direction: column; gap: 8px; padding: 0 4px; }
+.ss6-pending {
+  display: block; width: calc(100% - 16px); padding: 0; border: 0; background: none; text-align: left; cursor: pointer; font: inherit; font-size: 12px;
+}
+.ss6-pending b { color: var(--ss6-blue); font-weight: 600; }

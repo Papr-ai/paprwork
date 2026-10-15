@@ -117,6 +117,7 @@ import type { CloudPublishReadinessReport } from "../../../src/core/types/cloudA
 import { linkedDepItems } from "./ShareLinkedDeps";
 import { PreviewUrlRow } from "./PreviewUrlRow";
 import { PublishInfoSheet } from "./PublishInfoSheet";
+import { pendingCommunity } from "../../utils/galleryGate";
 import { galleryProgress, useDemoStatus } from "../../utils/appDemo";
 import { APP_COVER_CHANGED_EVENT } from "../../utils/appCover";
 import { SyncStatusPanel, type ConflictChoice } from "./SyncStatusPanel";
@@ -265,6 +266,8 @@ export function MiniAppPublishBar({
   const [shareOpen, setShareOpen] = useState(false);
   /** Lets the missing-key chip open Share straight on the keys step. */
   const [shareInitialStep, setShareInitialStep] = useState<ShareStepId | null>(null);
+  /** Open Share at the Community listing's Gallery step (from the status chip). */
+  const [shareGallery, setShareGallery] = useState(false);
   const [keysCheckToken, setKeysCheckToken] = useState(0);
   /** Propose has its own sheet. It used to open Share and scroll to the
    *  contribute form, but Share opens on "1. Who can access your copy" with a
@@ -1886,7 +1889,11 @@ export function MiniAppPublishBar({
                   tone={publishBarChip.tone}
                   tail={
                     galleryTail && cloud.live && !isTrackCollaborator && !copyChipWins
-                      ? { ...galleryTail, onRun: () => setAppInfoOpen("gallery") }
+                      ? {
+                          ...galleryTail,
+                          // A Community listing waiting on its gallery reopens Share at that step.
+                          onRun: () => (pendingCommunity(appId) ? (setShareGallery(true), setShareOpen(true)) : setAppInfoOpen("gallery")),
+                        }
                       : undefined
                   }
                   onRefresh={
@@ -2463,6 +2470,7 @@ export function MiniAppPublishBar({
             discardSharing();
             setShareOpen(false);
             setShareInitialStep(null);
+            setShareGallery(false);
           }}
         >
           <ShareSheetBody
@@ -2501,6 +2509,7 @@ export function MiniAppPublishBar({
             onAddMissingKeys={openKeySettings}
             onKeysSaved={() => setKeysCheckToken((n) => n + 1)}
             initialEdit={shareInitialStep}
+            initialGallery={shareGallery}
             access={{
               members: workspacePeople,
               membersLoading: workspacePeopleLoading,
