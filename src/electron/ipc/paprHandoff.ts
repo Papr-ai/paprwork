@@ -128,9 +128,13 @@ export function handoffLanding(
   if (intent.appNamespaceId && intent.appSlug) {
     const name = local?.name || intent.appSlug;
     if (local?.appId) {
+      // view "outreach:c_123" = the card already created this (e.g. a campaign): pick it up, don't redo it.
+      const started = /^[\w-]+:[\w-]{3,80}$/.test(intent.view ?? "");
       return {
         title: "Continued from Claude",
-        message: `I just started this in ${name} from Claude. Help me finish setting it up here.`,
+        message: started
+          ? `I started this in ${name} from Claude and it's set to run from this Mac. Check it's ready to go and tell me if anything needs me.`
+          : `Let's keep working on ${name} from Claude.`,
         appId: local.appId,
       };
     }

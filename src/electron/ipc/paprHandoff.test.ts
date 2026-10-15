@@ -98,7 +98,10 @@ describe("landing on the app itself", () => {
   it("opens the app beside a drafted chat when it's here, else the old web-link draft", () => {
     const here = handoffLanding(intent, undefined, { appId: "08369ded", name: "LinkedIn Outreach" });
     expect(here).toMatchObject({ appId: "08369ded", title: "Continued from Claude" });
-    expect(here.message).toContain("LinkedIn Outreach");
+    expect(here.message).toBe("Let's keep working on LinkedIn Outreach from Claude.");
+    const picked = handoffLanding({ ...intent, view: "outreach:c_1a13e12fb3deb2073" }, undefined, { appId: "08369ded", name: "LinkedIn Outreach" });
+    expect(picked.message).toContain("set to run from this Mac");
+    expect(picked.message).not.toMatch(/set(ting)? it up/);
     expect(handoffLanding(intent, undefined, null).appId).toBeUndefined();
   });
 });

@@ -568,6 +568,8 @@ export function App() {
 
         if (detail.mode === "handoff" && detail.appId) {
           try {
+            // The card just wrote rows in the cloud (e.g. the campaign): pull them before the app opens.
+            await gateway.send("app:pull-data", { appId: detail.appId }).catch(() => undefined);
             const appResp = await gateway.send("app:get", { appId: detail.appId });
             const appTitle = (appResp.data as { title?: string } | undefined)?.title?.trim();
             if (appTitle) {
