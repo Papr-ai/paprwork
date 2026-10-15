@@ -117,6 +117,7 @@ import type { CloudPublishReadinessReport } from "../../../src/core/types/cloudA
 import { linkedDepItems } from "./ShareLinkedDeps";
 import { PreviewUrlRow } from "./PreviewUrlRow";
 import { PublishInfoSheet } from "./PublishInfoSheet";
+import { galleryProgress, useDemoStatus } from "../../utils/appDemo";
 import { APP_COVER_CHANGED_EVENT } from "../../utils/appCover";
 import { SyncStatusPanel, type ConflictChoice } from "./SyncStatusPanel";
 import { buildSyncPanel, type PanelAction, type PanelTone, type UpdatePreview } from "../../utils/syncPanelModel";
@@ -343,7 +344,9 @@ export function MiniAppPublishBar({
   /** First publish: confirm name, description and cover before going live. */
   const [publishInfoOpen, setPublishInfoOpen] = useState(false);
   /** More → App info: edit name, description and cover any time. */
-  const [appInfoOpen, setAppInfoOpen] = useState(false);
+  const [appInfoOpen, setAppInfoOpen] = useState<false | "details" | "gallery">(false);
+  // Gallery progress rides on the status chip (no toast): "Gallery 2 of 4", then "Review gallery".
+  const galleryTail = galleryProgress(useDemoStatus(appId));
   const publishInfoConfirmedRef = useRef(false);
   const webSyncPopoverRef = useRef<HTMLDivElement>(null);
   const [webSyncPopoverPos, setWebSyncPopoverPos] = useState<{
@@ -1286,23 +1289,23 @@ export function MiniAppPublishBar({
     handleWebSyncDotClick();
   };
 
-  const handlePublishClick = async () => {
+  const handlePublishClick = async (): Promise<boolean> => {
     if (!cloud.live && !publishInfoConfirmedRef.current) {
       setPublishInfoOpen(true);
-      return;
+      return false;
     }
     if (needsDesktopAck) {
       setPublishReviewOpen(true);
-      return;
+      return false;
     }
     if (publishBlockedByIntegrity) {
       cloud.reportError(
         `Can't publish yet: ${(readiness?.errors ?? []).join("; ") || "the app's manifest points to missing files."}`,
       );
-      return;
+      return false;
     }
     if (!requestPaprCloudFeature("publish_share")) {
-      return;
+      return false;
     }
     setShareSyncNotice("Publishing to the web…");
     try {
@@ -1322,6 +1325,7 @@ export function MiniAppPublishBar({
         setShareSyncNotice("Publishing app code and databases to the web…");
         await guardedWebSyncPushNow();
       }
+      return true;
     } catch (err) {
       if (err instanceof CloudPublishBlockedError) {
         cloud.clearError();
@@ -1332,6 +1336,7 @@ export function MiniAppPublishBar({
         // Previously swallowed: the button looked like it did nothing.
         cloud.reportError(publishErrorMessage(err));
       }
+      return false;
     } finally {
       setShareSyncNotice(null);
     }
@@ -1879,6 +1884,11 @@ export function MiniAppPublishBar({
                   onClick={handlePublishStatusChipClick}
                   label={publishBarChip.label}
                   tone={publishBarChip.tone}
+                  tail={
+                    galleryTail && cloud.live && !isTrackCollaborator && !copyChipWins
+                      ? { ...galleryTail, onRun: () => setAppInfoOpen("gallery") }
+                      : undefined
+                  }
                   onRefresh={
                     publishBarChip.showRefresh
                       ? () => void webSyncCheckStatus()
@@ -2058,7 +2068,7 @@ export function MiniAppPublishBar({
             }
             onShowInFinder={handleShowInFinder}
             // Owners only: a team-data collaborator's copy reaches the team by proposal.
-            onAppInfo={isTrackCollaborator ? undefined : () => setAppInfoOpen(true)}
+            onAppInfo={isTrackCollaborator ? undefined : () => setAppInfoOpen("details")}
             onCopyToWorkspace={
               papr.isLoggedIn ? () => setCopyToWorkspaceOpen(true) : undefined
             }
@@ -2322,6 +2332,7 @@ export function MiniAppPublishBar({
         <ShareSheet title="App info" onClose={() => setAppInfoOpen(false)}>
           <PublishInfoSheet
             mode="edit"
+            initialStep={appInfoOpen === "gallery" ? 2 : 1}
             appId={appId}
             initialTitle={appTitle}
             onCancel={() => setAppInfoOpen(false)}
@@ -2344,7 +2355,10 @@ export function MiniAppPublishBar({
             onConfirmed={() => {
               publishInfoConfirmedRef.current = true;
               setPublishInfoOpen(false);
-              void handlePublishClick();
+              // First publish lands in Share (starts at Only you): who gets it is the next decision.
+              void handlePublishClick().then((ok) => {
+                if (ok) setShareOpen(true);
+              });
             }}
           />
         </ShareSheet>

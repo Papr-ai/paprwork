@@ -2733,3 +2733,17 @@ button.cloud-compat-badge--paused:hover {
 @media (prefers-reduced-motion: reduce) {
   .mini-app-publish-bar__split-caret--nudge { animation: none; }
 }
+
+/* Gallery tail on the status chip: always spelled out (not a hover verb).
+   Busy is quiet; "Review gallery" is the one accent until it's opened. */
+.mini-app-publish-bar__web-sync-chip-tail {
+  gap: 5px;
+  padding: 0 9px;
+  color: var(--text-secondary);
+}
+.mini-app-publish-bar__web-sync-chip-tail--ready,
+.mini-app-publish-bar__web-sync-chip-tail--ready:hover {
+  color: #fff;
+  background: var(--accent, #0161e0);
+  box-shadow: none;
+}

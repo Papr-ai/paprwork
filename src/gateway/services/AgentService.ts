@@ -14,6 +14,8 @@ import { measureLanguageModel, measureTools } from "./agent/requestPerformanceDi
 
 import { resolvePaprUserDataPath } from "../../core/utils/paprWorkspace.js";
 import { v4 as uuidv4 } from "uuid";
+import * as fs from "fs";
+import * as path from "path";
 import { streamText, generateObject, jsonSchema } from "ai";
 import type { LanguageModel, ModelMessage, ToolSet, StepResult } from "ai";
 import { ToolRegistry } from "../../core/agents/ToolRegistry.js";
@@ -5297,6 +5299,8 @@ ${last15.substring(0, 8_000)}`;
     schemaDescription?: string;
     provider?: Provider;
     model?: string;
+    /** Local image files (JPEG/PNG) the model should look at, e.g. rendered frames. */
+    images?: string[];
   }): Promise<{ chatId: string; object: unknown }> {
     if (!this.initialized) {
       throw new Error("AgentService not initialized");
@@ -5333,6 +5337,13 @@ ${last15.substring(0, 8_000)}`;
     modelId = modelId ?? defaultModelByProvider[provider];
 
     const chatId = `job:${input.jobId}:${input.runId}`;
+    const imageAttachments = (input.images ?? []).map((filePath, i) => ({
+      id: `${chatId}-img-${i}`,
+      name: path.basename(filePath),
+      kind: "file" as const,
+      mimeType: /\.png$/i.test(filePath) ? "image/png" : "image/jpeg",
+      filePath,
+    }));
 
     const sessionAuth = await (
       await import("../utils/resolveJobSessionAuth.js")
@@ -5374,6 +5385,7 @@ ${last15.substring(0, 8_000)}`;
       try {
         for await (const chunk of this.streamAgent(chatId, jsonPrompt, config, {
           maxSteps: 10,
+          ...(imageAttachments.length ? { attachments: imageAttachments } : {}),
         })) {
           if (chunk.type === "error") {
             const errMsg =
@@ -5438,7 +5450,7 @@ ${last15.substring(0, 8_000)}`;
             `${chatId}-retry`,
             jsonPrompt,
             retryConfig,
-            { maxSteps: 10 },
+            { maxSteps: 10, ...(imageAttachments.length ? { attachments: imageAttachments } : {}) },
           )) {
             if (chunk.type === "error") {
               const errMsg =
@@ -5483,12 +5495,25 @@ ${last15.substring(0, 8_000)}`;
     await this.setProviderAuth(provider, apiKey);
     const model = await this.createLanguageModel(provider, modelId);
 
+    const imageParts = (input.images ?? []).flatMap((filePath) => {
+      try {
+        return [{
+          type: "image" as const,
+          image: fs.readFileSync(filePath),
+          mediaType: /\.png$/i.test(filePath) ? "image/png" : "image/jpeg",
+        }];
+      } catch {
+        return [];
+      }
+    });
     const result = await generateObject({
       model,
       schema: jsonSchema(input.outputSchema),
       schemaName: input.schemaName,
       schemaDescription: input.schemaDescription,
-      prompt: input.prompt,
+      ...(imageParts.length
+        ? { messages: [{ role: "user" as const, content: [{ type: "text" as const, text: input.prompt }, ...imageParts] }] }
+        : { prompt: input.prompt }),
       system: `${this.systemPrompt}\n\n# Structured Output Job\n- Session: ${chatId}\n- Return data matching the requested schema exactly.`,
     });
 
