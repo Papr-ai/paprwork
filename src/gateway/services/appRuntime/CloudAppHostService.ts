@@ -95,6 +95,7 @@ import { configHasPerUserLinkedSources } from "./cloudAppPerUserAccess.js";
 import { applyPeopleAllowlist } from "./cloudAppPeopleAccess.js";
 import {
   invalidateMemoryShareAllowlistCache,
+  invalidateRuntimeShareAllowlistCache,
   loadSharePeopleAllowlistForCloudHost,
 } from "./cloudAppSharePeopleAllowlistLoader.js";
 import {
@@ -2354,6 +2355,7 @@ export class CloudAppHostService {
     });
 
     invalidateAccessCacheForPublishedApp(namespaceId, slug);
+    invalidateRuntimeShareAllowlistCache();
     if (body.appId?.trim()) {
       invalidateMemoryShareAllowlistCache(body.appId.trim());
     } else {
