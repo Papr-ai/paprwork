@@ -4,6 +4,7 @@ import fs from "fs/promises";
 import os from "os";
 import path from "path";
 import { promisify } from "util";
+import { writeProposalBaseline } from "./appAgentProposal.js";
 
 import {
   appRepoCacheKey,
@@ -151,6 +152,11 @@ export async function materializeAppWorkspaceToPaprHome(input: {
   } catch {
     /* agent jobs may not have a jobs/{id} folder in the app repo */
   }
+
+  // Baseline for contributor proposals (cheap: hashes the app folder once).
+  await writeProposalBaseline(input.targetPaprHome, input.appId, remoteHead ?? null).catch((err: unknown) => {
+    console.warn("[CloudAgentClone] proposal baseline failed:", (err as Error).message);
+  });
 
   if (input.scaffoldFiles) {
     for (const [relativePath, contents] of Object.entries(input.scaffoldFiles)) {

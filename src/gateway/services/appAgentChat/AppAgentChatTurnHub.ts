@@ -100,7 +100,14 @@ export function getAppAgentChatTurnHub(): AppAgentChatTurnHub {
   return hub;
 }
 
+function sseClosed(res: import("express").Response): boolean {
+  return res.writableEnded || res.destroyed;
+}
+
 function writeSse(res: import("express").Response, event: AppAgentChatSseEvent): void {
+  // A write after end() throws asynchronously and, unhandled, kills the whole
+  // host process (seen when the gateway emits a second terminal event).
+  if (sseClosed(res)) return;
   res.write(`event: ${event.type}\n`);
   res.write(`data: ${JSON.stringify(event.data)}\n\n`);
 }
@@ -117,18 +124,34 @@ export function streamTurnEvents(
   res.flushHeaders();
   res.write(": connected\n\n");
 
-  const unsubscribe = hubInstance.subscribe(turnId, (event) => {
+  let keepAlive: ReturnType<typeof setInterval> | undefined;
+  let unsubscribe: () => void = () => {};
+  let finished = false;
+  const finish = (): void => {
+    if (finished) return;
+    finished = true;
+    unsubscribe();
+    if (keepAlive) clearInterval(keepAlive);
+    if (!sseClosed(res)) res.end();
+  };
+  res.on("error", () => finish());
+  res.on("close", () => finish());
+
+  unsubscribe = hubInstance.subscribe(turnId, (event) => {
+    if (finished) return;
     writeSse(res, event);
     if (event.type === "app-agent:turn-done" || event.type === "app-agent:error") {
-      res.end();
+      finish();
     }
   });
+  if (finished) unsubscribe(); // replayed a terminal event during subscribe
 
-  const keepAlive = setInterval(() => {
-    if (!hubInstance.isDone(turnId)) {
+  keepAlive = setInterval(() => {
+    if (!hubInstance.isDone(turnId) && !sseClosed(res)) {
       res.write(": keepalive\n\n");
     }
   }, 25_000);
+  if (finished) clearInterval(keepAlive);
 
   return () => {
     unsubscribe();

@@ -7,7 +7,8 @@
  * they are left out and the merged branch keeps the owner's versions.
  */
 
-const EXCLUDED_PREFIXES = ["dist/", "__papr__/"];
+// .versions/ = local edit-history snapshots (never synced, see workspaceGitignore).
+const EXCLUDED_PREFIXES = ["dist/", "__papr__/", ".versions/"];
 
 const EXCLUDED_FILES = new Set([
   "backend/bundle.json",
@@ -17,6 +18,8 @@ const EXCLUDED_FILES = new Set([
   "db.ts",
   // Cloud-prep markers, rewritten per copy on every publish.
   ".papr-cloud-revision",
+  // Platform DB helper, rewritten by the build on every save/link.
+  "backend/papr_db.py",
   "data/cloud-repo-head.txt",
 ]);
 

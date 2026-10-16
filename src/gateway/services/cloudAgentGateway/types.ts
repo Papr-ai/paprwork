@@ -79,6 +79,16 @@ export interface CloudAgentRunRequest {
    * When set, disk path uses /tmp/papr-cloud-session/{id}/ instead of per-runId.
    */
   workspaceSessionId?: string;
+  /**
+   * Where app code edits from this run may go (set by memory from the caller's
+   * role, already resolved by validate_access — no extra lookup here).
+   *   main     — Maintainer / Admin: debounced push to the live app (default)
+   *   proposal — Contributor: edits stay in the sandbox; never pushed to main
+   *   none     — Viewer: code-editing tools are already removed
+   * Undefined (older memory servers) = main.
+   */
+  appCodePush?: "main" | "proposal" | "none";
+  callerRole?: string;
   /** After stream completes, keep cloned workspace on disk for follow-up turns. */
   keepWorkspaceWarm?: boolean;
 }

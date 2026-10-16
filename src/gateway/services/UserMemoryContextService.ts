@@ -38,6 +38,8 @@ import {
 } from "./syncTiersClient.js";
 import { shouldQueueMemoryPreviewRefresh } from "./MemoryPreviewCache.js";
 
+const DEFERRED_BOOTSTRAP_WAIT_MS = 1500;
+
 export const IDLE_THRESHOLD_MS = 2 * 60 * 60 * 1000;
 export const MAX_TIER0 = 20;
 export const MAX_TIER1 = 25;
@@ -357,6 +359,13 @@ export class UserMemoryContextService {
   ): Promise<string[]> {
     const mode = options?.mode ?? "stream";
 
+    // Embedded app assistant (cloud, app scope): the sandbox runs as the
+    // publisher, but the person chatting may be anyone. Never inject the
+    // acting user's personal memory / goals / wiki into that conversation.
+    if (process.env.PAPR_SKIP_USER_MEMORY_CONTEXT === "1") {
+      return [];
+    }
+
     if (shouldBootstrapUserMemory(history)) {
       return this.handleBootstrapTriggerTurn(chatId, userMessage, mode);
     }
@@ -637,7 +646,20 @@ export class UserMemoryContextService {
       return state.blocks;
     }
     if (state.fetchPromise) {
-      return state.fetchPromise;
+      // Deferred context is best-effort: never let a slow or stuck Papr fetch
+      // hold the user's turn (an unbounded await hung turn 2 indefinitely).
+      let timer: ReturnType<typeof setTimeout> | undefined;
+      const timeout = new Promise<string[]>((resolve) => {
+        timer = setTimeout(() => {
+          console.warn("[UserMemoryContext] Deferred bootstrap not ready — continuing without it");
+          resolve([]);
+        }, DEFERRED_BOOTSTRAP_WAIT_MS);
+      });
+      try {
+        return await Promise.race([state.fetchPromise, timeout]);
+      } finally {
+        if (timer) clearTimeout(timer);
+      }
     }
     return [];
   }

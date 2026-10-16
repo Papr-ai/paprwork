@@ -166,6 +166,26 @@ async function loadSessionMessages(sessionId: string): Promise<ChatMessage[]> {
   }
 }
 
+const ASSISTANT_USE_KEY = "papr-agent-chat:used:";
+const ASSISTANT_RECENT_MS = 14 * 24 * 60 * 60 * 1000;
+
+function rememberAssistantUse(appId: string): void {
+  try {
+    localStorage.setItem(ASSISTANT_USE_KEY + appId, String(Date.now()));
+  } catch {
+    /* storage blocked */
+  }
+}
+
+function hasUsedAssistantRecently(appId: string): boolean {
+  try {
+    const at = Number(localStorage.getItem(ASSISTANT_USE_KEY + appId));
+    return Number.isFinite(at) && at > 0 && Date.now() - at < ASSISTANT_RECENT_MS;
+  } catch {
+    return false;
+  }
+}
+
 type WarmStatus = "idle" | "warming" | "ready" | "unavailable" | "failed";
 
 async function warmSession(sessionId: string): Promise<{ status: WarmStatus; message?: string }> {
@@ -1366,8 +1386,27 @@ function mountWidget(
       openDesktopChat(appId, config);
       return;
     }
+    rememberAssistantUse(appId);
     setOpen(!open);
   });
+
+  // Start the (20-40s) workspace warm-up before the click: on hover/focus/touch
+  // of the bubble, and on page idle for people who have used this assistant
+  // before. Warm workspaces are billed, so first-time visitors are not
+  // pre-warmed just for loading the page.
+  const warmOnIntent = (): void => {
+    if (!open) startWarmOnIntent();
+  };
+  bubble.addEventListener("pointerenter", warmOnIntent, { once: true });
+  bubble.addEventListener("focus", warmOnIntent, { once: true });
+  bubble.addEventListener("touchstart", warmOnIntent, { once: true, passive: true });
+  if (hasUsedAssistantRecently(appId)) {
+    const idle = (window as Window & {
+      requestIdleCallback?: (cb: () => void, opts?: { timeout: number }) => number;
+    }).requestIdleCallback;
+    if (idle) idle(warmOnIntent, { timeout: 3000 });
+    else setTimeout(warmOnIntent, 1500);
+  }
 
   closeBtn?.addEventListener("click", () => setOpen(false));
   sendBtn.addEventListener("click", () => {

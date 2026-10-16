@@ -1280,9 +1280,16 @@ export class AppService {
     await this.backfillAppAgentChatFromDisk(); // Sidecar + registry from metadata/registry
     await this.backfillAppWorkspaceScope(); // Stamp org/ns only for truly unassigned apps
     await this.repairRecoveredAppEntries(); // Fix legacy "Recovered" labels from metadata.json
-    await this.syncBundledDefaultAppRegistry(); // Keep prebuilt apps (Home) in sync with bundled metadata
+    // Cloud sandbox: the workspace comes from the cloud repos. Installing the
+    // bundled Home there made the sandbox push a fresh Home over the real one.
+    const cloudSandbox = process.env.GATEWAY_MODE === "cloud_agent";
+    if (!cloudSandbox) {
+      await this.syncBundledDefaultAppRegistry(); // Keep prebuilt apps (Home) in sync with bundled metadata
+    }
     await this.pruneStaleAppEntries(); // Index entries whose folders were removed (e.g. bash rm)
-    await this.installDefaultApps(); // Then install defaults (won't overwrite existing)
+    if (!cloudSandbox) {
+      await this.installDefaultApps(); // Then install defaults (won't overwrite existing)
+    }
     const { initializeDatabaseRegistry } = await import(
       "./DatabaseRegistryService.js"
     );

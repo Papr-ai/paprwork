@@ -9,6 +9,7 @@ import type {
   AppRepoOpsSuccessResponse,
 } from "../../../core/types/appRepoWriterOps.js";
 import { AppRepoOpsRequestSchema } from "../../../core/types/appRepoWriterOps.js";
+import { createHash } from "node:crypto";
 import { getMemoryServerBaseUrl } from "../../utils/cloudApiClient.js";
 import { filterAbusiveOpFiles } from "./abuseFilter.js";
 import { applyAppRepoOps, readAppRepoHead } from "./githubWorktree.js";
@@ -31,6 +32,33 @@ export class WriterRepoNotFoundError extends Error {
     super(`App repo not found for appId=${appId}`);
     this.name = "WriterRepoNotFoundError";
   }
+}
+
+/**
+ * Repo record + caller's main-write right, reused for 60s per (app, key).
+ * Memory caches the role too and clears it on any access change; this only
+ * saves the hop on burst pushes (debounced flushes, batch-budget requeues).
+ */
+const RECORD_TTL_MS = 60_000;
+const recordCache = new Map<string, { value: AppRepoRecord; expiresAt: number }>();
+
+function recordCacheKey(appId: string, apiKey: string): string {
+  return `${appId}:${createHash("sha256").update(apiKey).digest("hex").slice(0, 32)}`;
+}
+
+async function fetchAppRepoRecordCached(appId: string, apiKey: string): Promise<AppRepoRecord> {
+  const key = recordCacheKey(appId, apiKey);
+  const hit = recordCache.get(key);
+  if (hit && hit.expiresAt > Date.now()) return hit.value;
+  const value = await fetchAppRepoRecord(appId, apiKey);
+  if (recordCache.size > 2000) recordCache.clear();
+  recordCache.set(key, { value, expiresAt: Date.now() + RECORD_TTL_MS });
+  return value;
+}
+
+/** Reset the record cache (unit tests). */
+export function resetAppRepoRecordCacheForTests(): void {
+  recordCache.clear();
 }
 
 async function fetchAppRepoRecord(
@@ -112,7 +140,21 @@ export class AppRepoWriterService {
       };
     }
 
-    const record = await fetchAppRepoRecord(appId, apiKey);
+    const record = await fetchAppRepoRecordCached(appId, apiKey);
+    // main is the live app: only Maintainers / Admins push there. Everyone
+    // else proposes (contribute branch + PR), which never goes through here.
+    if (record.callerCanWriteMain === false) {
+      return {
+        ok: false,
+        status: 403,
+        body: {
+          error:
+            "Your role on this app can't change the live version. Propose the change instead.",
+          code: "role_cannot_publish",
+          role: record.callerRole ?? null,
+        },
+      };
+    }
 
     try {
       const result = await withDistributedAppRepoLock(appId, apiKey, () =>

@@ -29,7 +29,8 @@ import { createDesktopBackendDbProxyRouter } from "../appRuntime/backendDbProxy.
 import { assertReadOnlySql, assertWriteSql } from "../appRuntime/sqlValidation.js";
 import { httpStatusForDbRouteError } from "../tursoReplica/replicaSchemaQueryErrorMessage.js";
 
-export const SANDBOX_LOCAL_API_PORT = 18789;
+/** 18789 in the sandbox; override for local runs next to a desktop gateway. */
+export const SANDBOX_LOCAL_API_PORT = Number(process.env.SANDBOX_LOCAL_API_PORT) || 18789;
 
 async function resolveSource(
   appId: string,

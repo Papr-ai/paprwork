@@ -130,9 +130,20 @@ function parseCloudAgentRunRequest(
     turso: body.turso,
     llmAuth: body.llmAuth,
     vaultKeys: body.vaultKeys,
+    appCodePush: parseAppCodePush(body.appCodePush),
+    callerRole: typeof body.callerRole === "string" ? body.callerRole : undefined,
     workspaceSessionId: body.workspaceSessionId,
     keepWorkspaceWarm: body.keepWorkspaceWarm,
   };
+}
+
+/**
+ * Who may change the live app on this run. Memory decides (from the caller's
+ * role); anything missing or unknown means "none" — never default to pushing
+ * to main, or a dropped field silently publishes a contributor's edits.
+ */
+function parseAppCodePush(value: unknown): "main" | "proposal" | "none" {
+  return value === "main" || value === "proposal" ? value : "none";
 }
 
 function parseCloudAgentSessionBeginRequest(
@@ -188,6 +199,8 @@ function parseCloudAgentSessionBeginRequest(
     turso: body.turso,
     llmAuth,
     vaultKeys: body.vaultKeys,
+    appCodePush: parseAppCodePush(body.appCodePush),
+    callerRole: typeof body.callerRole === "string" ? body.callerRole : undefined,
     workspaceSessionId: sessionId,
     keepWorkspaceWarm: true,
   };
