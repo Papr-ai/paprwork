@@ -465,6 +465,8 @@ async function refreshTursoForWorkspaceSwitch(): Promise<void> {
     return;
   }
 
+  // In-memory only. Persisted tokens are keyed by org/namespace/user, so the
+  // new workspace can never read the old one's — no need to delete them.
   bridge.invalidateCredentialsCache();
   bridge.invalidateLinkedSourcesCache();
   resetDbRouterTursoCache();
@@ -493,6 +495,14 @@ async function refreshVaultForWorkspaceSwitch(): Promise<void> {
   console.log("[WorkspaceSwitch] Vault re-sync scheduled for active workspace");
 }
 
+/** Last key fully applied (storage + agent reinit) in this gateway process. */
+let lastAppliedPaprApiKey: string | null = null;
+
+/** Test hook. */
+export function resetLastAppliedPaprApiKeyForTests(): void {
+  lastAppliedPaprApiKey = null;
+}
+
 /** Update Papr API key in gateway env/cache and reinitialize memory storage. */
 export async function applyGatewayPaprApiKey(apiKey: string): Promise<void> {
   const pointer = readActiveWorkspacePointer();
@@ -509,6 +519,19 @@ export async function applyGatewayPaprApiKey(apiKey: string): Promise<void> {
     );
   }
 
+  // Startup and every login sync re-send the same key. Re-applying it changes
+  // nothing, but used to abort agent streams, rebuild storage + agent service
+  // and wipe every cached Turso token (~80 x 40s refetches per launch).
+  // The workspace-match check above still runs on every call.
+  // Compare against the key last APPLIED in this process, not env: the gateway
+  // boots in local mode even when PAPR_API_KEY is in env, and the first apply
+  // is what upgrades storage/agent to hybrid.
+  if (lastAppliedPaprApiKey && lastAppliedPaprApiKey === apiKey.trim()) {
+    clearKeyCache("PAPR_API_KEY");
+    invalidatePaprUserIdCache();
+    return;
+  }
+
   // Stop in-flight streams before closing SQLite — otherwise checkpoint timers on
   // the old AgentService instance keep writing to a disposed StorageManager.
   await abortAllActiveAgentStreams();
@@ -518,6 +541,9 @@ export async function applyGatewayPaprApiKey(apiKey: string): Promise<void> {
   invalidatePaprUserIdCache();
   getCustomKeysService().invalidateCache();
 
+  // Key rotated within the same workspace. Turso tokens belong to databases,
+  // not to the API key, and are keyed by org/namespace/user — keep them.
+  // Clear only the in-memory map so the next read re-checks identity.
   const bridge = getTursoSyncBridge();
   if (bridge) {
     bridge.invalidateCredentialsCache();
@@ -529,6 +555,7 @@ export async function applyGatewayPaprApiKey(apiKey: string): Promise<void> {
     mode: "hybrid",
     paprApiKey: apiKey,
   });
+  lastAppliedPaprApiKey = apiKey.trim();
 
   const { ensureIndexingStarted } = await import("./CodeIndexingService.js");
   void ensureIndexingStarted(apiKey).catch((error: unknown) => {

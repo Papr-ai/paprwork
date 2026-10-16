@@ -217,6 +217,24 @@ export function isTursoDatabaseLimitError(message: string): boolean {
   );
 }
 
+/**
+ * Turso rejected the database auth token itself (expired, revoked, or minted
+ * for another database). Only the one database's cached token should be
+ * dropped — never the whole credential store.
+ */
+export function isTursoAuthError(message: string): boolean {
+  const lower = message.toLowerCase();
+  return (
+    lower.includes("401") ||
+    lower.includes("unauthorized") ||
+    lower.includes("unauthenticated") ||
+    lower.includes("invalid token") ||
+    lower.includes("token expired") ||
+    lower.includes("jwt expired") ||
+    lower.includes("authentication failed")
+  );
+}
+
 /** Turso/memory-server provisioning overload (many concurrent token requests). */
 export function isTursoProvisioningRateLimitError(message: string): boolean {
   const lower = message.toLowerCase();

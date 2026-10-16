@@ -595,7 +595,8 @@ async function processTursoPushQueue(): Promise<void> {
           break;
         }
         if (isTursoProvisioningRateLimitError(message)) {
-          bridge.invalidateCredentialsCache();
+          // Back off only — cached tokens are still valid; wiping them here
+          // turned one rate limit into ~80 token refetches (and more 429s).
           pushQueue.unshift(jobId);
           queuedJobIds.add(jobId);
           rateLimitUntilMs = Date.now() + rateLimitBackoffMs;
