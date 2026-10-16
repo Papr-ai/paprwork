@@ -634,6 +634,28 @@ export function PaprLoginSection({ onApiKeyReceived, profileFields }: PaprLoginS
     };
   }, [loadNamespaceGroups]);
 
+  // An org/namespace switch started elsewhere (e.g. the sidebar avatar menu)
+  // must refresh everything this page shows. Fires once the switch has fully
+  // landed, so the refetches use the new org's credentials.
+  useEffect(() => {
+    if (!isLoggedIn) return;
+    const refreshForWorkspace = () => {
+      if (switchingOrganizationRef.current) return; // in-page switch handles itself
+      setWorkspaceMembers([]);
+      setWorkspaceName(null);
+      setInviteMessage(null);
+      setSchemas([]);
+      void loadOrganizations();
+      void loadWorkspaceMembers();
+      void loadSchemas();
+      const workspaceId = activeOrganizationIdRef.current;
+      if (workspaceId) void loadNamespaceGroups(workspaceId, true);
+    };
+    window.addEventListener("papr-workspace-switch-complete", refreshForWorkspace);
+    return () =>
+      window.removeEventListener("papr-workspace-switch-complete", refreshForWorkspace);
+  }, [isLoggedIn, loadWorkspaceMembers, loadSchemas, loadNamespaceGroups]);
+
   useEffect(() => {
     const loginCb = handleLoginSuccessRef.current;
     const nsCb = handleNamespaceChangedRef.current;

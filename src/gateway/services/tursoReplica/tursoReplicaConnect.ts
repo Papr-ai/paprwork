@@ -13,6 +13,25 @@ import { isTursoHostNotReadyError } from "./tursoReplicaErrors.js";
 
 const RETRY_DELAYS_MS = [0, 1500, 3000, 5000, 8000] as const;
 
+/**
+ * Cap on CDC operations per push HTTP batch. Without it the engine sends the whole
+ * pending change set in one request, so once a backlog builds (offline for a few days,
+ * a job rewriting hundreds of rows daily) every push hits the sync timeout and the
+ * backlog can never drain. Batches split on transaction boundaries only, so a single
+ * transaction is never split. Override with PAPR_TURSO_PUSH_OPS_THRESHOLD (0 = off).
+ */
+const DEFAULT_PUSH_OPERATIONS_THRESHOLD = 500;
+
+export function resolvePushOperationsThreshold(
+  raw: string | undefined = process.env.PAPR_TURSO_PUSH_OPS_THRESHOLD,
+): number | undefined {
+  const trimmed = raw?.trim();
+  if (!trimmed) return DEFAULT_PUSH_OPERATIONS_THRESHOLD;
+  const parsed = Number(trimmed);
+  if (!Number.isFinite(parsed) || parsed < 0) return DEFAULT_PUSH_OPERATIONS_THRESHOLD;
+  return parsed === 0 ? undefined : Math.floor(parsed);
+}
+
 export type PaprTursoSyncConnectOpts = DatabaseOpts & {
   bootstrapIfEmpty?: boolean;
 };
@@ -56,6 +75,7 @@ export async function connectTursoReplica(
     clientName: options.clientName ?? "paprwork-desktop",
     bootstrapIfEmpty: options.bootstrapIfEmpty ?? true,
     remoteWritesExperimental: options.remoteWritesExperimental ?? false,
+    pushOperationsThreshold: resolvePushOperationsThreshold(),
     fetch: retryTransientTursoStatus,
   };
 
