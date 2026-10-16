@@ -196,7 +196,6 @@ export function ShareSheetV9({ body, access, onAccessSaved, hideLink }: ShareShe
       ) : null}
       {dataCheck}
       {body.webCompatibilityHint ? <p className="ss6-note ss6-note--compat-hint">{body.webCompatibilityHint}</p> : null}
-      <p className="ss6-note">Code edits reach them when you Publish from the bar.</p>
     </div>
   );
 }

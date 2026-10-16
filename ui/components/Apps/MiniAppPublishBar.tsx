@@ -1216,18 +1216,8 @@ export function MiniAppPublishBar({
         message: "Publishing app code and databases to the web…",
       };
     }
-    if (
-      cloud.live &&
-      (webSyncStatus?.overall === "needs_sync" ||
-        webSyncStatus?.publishStatus === "not_web_ready")
-    ) {
-      return {
-        tone: "warn" as const,
-        message:
-          webSyncStatus?.publishDetail?.trim() ??
-          "Sharing is saved, but the live link won't work until upload finishes.",
-      };
-    }
+    // Upload progress and sync problems live in the status dot by the
+    // Publish button, not here — the Share sheet is about who has access.
     // No success banner. The link sitting in the header already proves the app
     // is live, and a banner saying so pushes the actual controls down to
     // announce the absence of a problem. Banners are for exceptions.

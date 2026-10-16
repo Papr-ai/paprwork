@@ -39,7 +39,9 @@ export function cloudCompatibilityShareHint(
   report: CloudCompatibilityReport | null,
 ): string | null {
   if (!report || report.level === "cloud-ready") return null;
-  return `${cloudCompatibilityLabel(report.level)} on web — ${compatibilityDetailText(report.summary)}`;
+  return report.level === "hybrid"
+    ? "Some features only work while your Paprwork desktop is open."
+    : "Most features only work in Paprwork desktop, not on the web.";
 }
 
 const CLOUD_BULLET_SHORT: Record<string, string> = {

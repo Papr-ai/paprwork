@@ -88,3 +88,13 @@ describe("scanJobCloudCompatibility", () => {
     expect(report.findings.some((f) => f.category === "chrome-automation")).toBe(true);
   });
 });
+
+describe("data-sources dbPath", () => {
+  it("a synced registry or job database is cloud-ready; a path-only source is not", async () => {
+    const { scanMiniAppCloudCompatibility } = await import("../src/gateway/utils/miniAppCloudCompatibility.js");
+    const synced = JSON.stringify({ sources: [{ dbId: "db-1", alias: "sync", dbPath: "/Users/me/Papr/data/databases/x/data.db" }] });
+    expect(scanMiniAppCloudCompatibility(new Map(), synced)).toEqual([]);
+    const local = JSON.stringify({ sources: [{ alias: "notes", dbPath: "/Users/me/notes.db" }] });
+    expect(scanMiniAppCloudCompatibility(new Map(), local).map((f) => f.category)).toEqual(["absolute-path"]);
+  });
+});
