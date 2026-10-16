@@ -17,7 +17,7 @@ export interface MiniAppCallerIdentity {
   email?: string;
 }
 
-function resolveIsOwner(
+export function resolveIsOwner(
   access: AppAccessContext,
   callerUserId?: string,
 ): boolean {

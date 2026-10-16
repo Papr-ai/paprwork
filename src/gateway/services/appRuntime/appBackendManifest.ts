@@ -11,6 +11,7 @@ import type {
   AppBackendRuntime,
 } from "../../../core/types/appBackend.js";
 import { filterVaultKeyNames } from "../../../core/utils/platformInjectedEnvKeys.js";
+import { parseActionAcl } from "./actionAcl.js";
 
 const ALLOWED_RUNTIMES: ReadonlySet<AppBackendRuntime> = new Set([
   "python",
@@ -105,6 +106,7 @@ function parseActionSpec(
   if (runsOn !== undefined && runsOn !== "cloud" && runsOn !== "mac") {
     throw new Error(`backend manifest: actions.${actionName}.runsOn must be cloud or mac`);
   }
+  const acl = parseActionAcl(actionName, raw.acl);
   return {
     handler: handler.trim(),
     runtime,
@@ -115,6 +117,7 @@ function parseActionSpec(
     ...(input ? { input } : {}),
     ...(effect ? { effect } : {}),
     ...(runsOn ? { runsOn } : {}),
+    ...(acl ? { acl } : {}),
   };
 }
 

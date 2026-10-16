@@ -9,6 +9,7 @@ import { Router as createRouter } from "express";
 import type { AppDataSource } from "../appDataSources.js";
 import type { AppRuntimeRouteAuth } from "./types.js";
 import { assertReadOnlySql, assertWriteSql } from "./sqlValidation.js";
+import { bindCallerId } from "./actionAcl.js";
 
 export interface BackendDbProxySession {
   appId: string;
@@ -263,7 +264,9 @@ export function createCloudBackendDbProxyRouter(
 
       assertReadOnlySql(sql);
       const resolvedSourceId = sourceId?.trim() || session.sourceId;
-      const result = await deps.query(session, sql, params, resolvedSourceId);
+      // :caller_id comes from the verified sign-in, never from the handler.
+      const bound = bindCallerId(sql, params, session.cloud.callerUserId) as unknown[] | undefined;
+      const result = await deps.query(session, sql, bound, resolvedSourceId);
       res.json({ rows: result.rows, count: result.count });
     } catch (err) {
       const e = err as Error & { status?: number };
@@ -291,7 +294,8 @@ export function createCloudBackendDbProxyRouter(
 
       assertWriteSql(sql);
       const resolvedSourceId = sourceId?.trim() || session.sourceId;
-      const result = await deps.write(session, sql, params, resolvedSourceId);
+      const bound = bindCallerId(sql, params, session.cloud.callerUserId) as unknown[] | undefined;
+      const result = await deps.write(session, sql, bound, resolvedSourceId);
       res.json({
         changes: result.changes,
         lastInsertRowid: result.lastInsertRowid,

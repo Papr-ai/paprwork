@@ -24,6 +24,13 @@ export interface VerifiedCaller {
   email?: string;
   /** Header claimed an id that did not match the verified one. */
   rejectedClaim?: boolean;
+  /**
+   * API-key caller (no session) that named an acting user. NOT trusted here:
+   * it is only forwarded to memory as external_user_id/user_id, which accepts it
+   * only for the key's own user or a member of the key's workspace, and echoes
+   * the resolved id back as `callerUserId`. Identity comes from that echo.
+   */
+  apiKeyClaim?: string;
 }
 
 type Validator = (token: string) => Promise<{ objectId: string; email?: string } | null>;
@@ -74,6 +81,9 @@ export async function resolveVerifiedCaller(
     }
   }
 
+  if (claimed && !proven.userId && hasApiKey(req.headers)) {
+    return { apiKeyClaim: claimed };
+  }
   if (claimed && claimed !== proven.userId) {
     return { ...proven, rejectedClaim: true };
   }
@@ -81,6 +91,13 @@ export async function resolveVerifiedCaller(
 }
 
 const VERIFIED = Symbol.for("papr.verifiedCaller");
+
+function hasApiKey(headers: Request["headers"]): boolean {
+  const key = headers["x-api-key"];
+  if (typeof key === "string" && key.trim()) return true;
+  const authz = headers.authorization;
+  return typeof authz === "string" && authz.startsWith("Bearer ");
+}
 
 export function getVerifiedCaller(req: Request): VerifiedCaller | undefined {
   return (req as unknown as Record<symbol, VerifiedCaller | undefined>)[VERIFIED];

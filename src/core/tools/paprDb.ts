@@ -401,6 +401,29 @@ export const repairCloudSyncTool = createTool({
   },
 });
 
+export const paprDbSetTableAccessTool = createTool({
+  id: "papr_db_set_table_access",
+  description:
+    "Make one table private or public. Private = the browser can't query it on the web (non-owners get 403); " +
+    "rows are read through backend actions filtered by the `_acl` column (papr_db.acl_read_filter / acl_for_caller). " +
+    "Making a table private first lints every linked app: if any frontend code queries the table, or a backend action " +
+    "reads it without an _acl filter, NOTHING changes and you get { ok:false, error:{ code:'table_private_blocked', sites[], " +
+    "backendStarter } } — move those call sites, then retry. On success it adds `_acl TEXT` + index via a migration when " +
+    "missing. Existing rows keep _acl NULL (= public); write a migration to backfill them only if the user asks. " +
+    "Publish to apply on the web.",
+  inputSchema: z.object({
+    dbId: z.string().min(1),
+    table: z.string().min(1),
+    access: z.enum(["private", "public"]),
+  }),
+  execute: async (input) => {
+    const args = unwrapContext(input);
+    const { setTableAccess } = await import("../../gateway/services/tableAccessService.js");
+    const data = await setTableAccess(args);
+    return { success: data.ok, data };
+  },
+});
+
 export const paprDbTools = [
   paprDbSyncStatusTool,
   paprDbPushTool,
@@ -408,6 +431,7 @@ export const paprDbTools = [
   paprDbQueryTool,
   paprDbExecTool,
   paprDbCreateMigrationTool,
+  paprDbSetTableAccessTool,
   paprDbApplyMigrationTool,
   paprDbApplyMigrationReplicaTool,
   paprDbApplyMigrationCloudTool,

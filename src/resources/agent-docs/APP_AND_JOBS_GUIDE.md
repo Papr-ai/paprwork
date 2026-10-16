@@ -890,6 +890,30 @@ Jobs should use these for authorization — never trust a user id passed in the 
 
 **Verified identity in backend actions:** `POST /api/app/backend/:action` injects the same env vars when signed in (desktop + cloud). Handlers use `os.environ["PAPR_CALLER_USER_ID"]` (Python) or `process.env.PAPR_CALLER_USER_ID` (Node/TS) for ACL — ignore client `params.userId`. Optional for public/ping handlers that do not need caller context.
 
+### Private tables + row `_acl` (shared databases on the web)
+
+Every table is **public** by default: the published page can query it with `/api/db/*`. For data that some signed-in users must not see (notes, HR, per-person records) make the table **private**:
+
+```
+papr_db_set_table_access({ dbId, table: "notes", access: "private" })
+```
+
+- **What private means:** on apps.papr.ai the browser can't run SQL against it (non-owners get 403 `table_private`). Rows are read and written only through **backend actions**, which filter by the verified caller.
+- **Row permissions:** each row has an `_acl` TEXT column (JSON, Parse-style): `{"<userId>":{"read":true,"write":true},"*":{"read":true}}`. `NULL` = public read. The switch adds the column + index via a migration; **existing rows stay NULL (public)**. Backfill them with a migration only if the user asks, e.g. `UPDATE notes SET _acl = json_object('{{papr.owner_user_id}}', json_object('read',1,'write',1)) WHERE _acl IS NULL`.
+- **Handler helpers** (`papr_db`, backend/*.py):
+  ```python
+  from papr_db import connect, query, write, acl_read_filter, acl_write_filter, acl_for_caller
+  w, a = acl_read_filter()                       # own + shared + public rows
+  rows = query(con, f"SELECT * FROM notes WHERE {w}", a).rows
+  w, a = acl_write_filter()                      # rows the caller may change
+  write(con, f"UPDATE notes SET body=? WHERE id=? AND {w}", [body, nid, *a])
+  write(con, "INSERT INTO notes(body,_acl) VALUES(?,?)", [body, acl_for_caller(share_with=[uid2])])
+  ```
+  Returning every row on purpose (admin report)? Add `# acl: all-rows` to the handler.
+- **Checks:** `validate_app` reports an **error** for frontend SQL on a private table and for backend reads without an `_acl` filter. The switch tool and Publish both refuse until those are fixed (`code: table_private_blocked` / `private_table_violation`, with `file:line` sites). Fix the sites, or switch the table back to `public`.
+- Internal tables (`_papr_*`, `turso_*`, `libsql_*`) are never readable from the page by non-owners.
+- Read-only links: actions with `"effect": "write"` or `"external"` return 403. Declare `effect` on every action.
+
 **Pick an isolation pattern when designing schema:**
 
 | Pattern | Use when | Schema | Visitor data | Owner admin |

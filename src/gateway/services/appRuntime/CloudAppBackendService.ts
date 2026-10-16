@@ -29,7 +29,8 @@ import {
   resolveRuntimeVaultEnv,
   type RuntimeVaultResolveResult,
 } from "./memoryRuntimeClient.js";
-import type { AppRuntimeRouteAuth } from "./types.js";
+import type { AppAccessContext, AppRuntimeRouteAuth } from "./types.js";
+import { assertActionAclAllowed } from "./actionAcl.js";
 import {
   collectBackendDatabaseSecrets,
   resolveCloudAppBackendDatabaseEnv,
@@ -47,6 +48,46 @@ const CLOUD_APP_HOST_PORT = Number(
 
 function sha256(content: string): string {
   return createHash("sha256").update(content, "utf8").digest("hex");
+}
+
+/**
+ * Actions that declare `effect: "write"` or `"external"` change data or reach
+ * outside Papr — refuse them up front for callers without write access (same
+ * rule as /api/db/write). Undeclared actions are still safe: every DB write
+ * they make goes through the backend DB proxy, which enforces canWrite.
+ */
+export function assertActionEffectAllowed(
+  actionName: string,
+  effect: string | undefined,
+  access: { canWrite: boolean } | undefined,
+): void {
+  if (!access || access.canWrite) return;
+  if (effect === "write" || effect === "external") {
+    throw Object.assign(
+      new Error(
+        `Action "${actionName}" ${effect === "write" ? "changes data" : "acts outside Papr"}; ` +
+          "this link is read-only.",
+      ),
+      { status: 403 },
+    );
+  }
+}
+
+/**
+ * Read-only callers get the backend DB proxy only (it enforces canWrite).
+ * Direct Turso URL/token pairs would let a handler write around it — the
+ * memory-minted token is not read-only today.
+ */
+export function stripDirectDbCredentials(env: Record<string, string>): Record<string, string> {
+  const out: Record<string, string> = {};
+  for (const [key, value] of Object.entries(env)) {
+    if (key === "PAPR_DB_URL" || key === "PAPR_DB_AUTH_TOKEN") continue;
+    if (key.startsWith("PAPR_DB_") && (key.endsWith("_URL") || key.endsWith("_AUTH_TOKEN"))) continue;
+    if (key === "PAPR_DB_MODE" && value === "turso") continue;
+    if (key.startsWith("PAPR_DB_") && key.endsWith("_MODE") && value === "turso") continue;
+    out[key] = value;
+  }
+  return out;
 }
 
 export class CloudAppBackendService {
@@ -70,6 +111,8 @@ export class CloudAppBackendService {
         userId: string;
         canRead: boolean;
         canWrite: boolean;
+        /** Access mode (team / people / link …) for `members` action ACLs. */
+        mode?: AppAccessContext["mode"];
       };
     },
   ): Promise<AppBackendRunResult & { action: string }> {
@@ -81,6 +124,15 @@ export class CloudAppBackendService {
     const spec = manifest.actions[actionName];
     if (!spec) {
       throw new Error(`Unknown backend action: ${actionName}`);
+    }
+    assertActionEffectAllowed(actionName, spec.effect, input.cloudAccess);
+    if (input.cloudAccess) {
+      assertActionAclAllowed(
+        actionName,
+        spec.acl,
+        { mode: input.cloudAccess.mode ?? "link_read", userId: input.cloudAccess.userId },
+        input.loggedIn ? input.callerIdentity?.userId : undefined,
+      );
     }
 
     const handlerPath = `backend/${spec.handler}`;
@@ -159,7 +211,12 @@ export class CloudAppBackendService {
       action: actionName,
       params: input.params,
       vaultEnv,
-      databaseEnv: { ...databaseEnv, ...proxyEnv },
+      databaseEnv: {
+        ...(input.cloudAccess && !input.cloudAccess.canWrite
+          ? stripDirectDbCredentials(databaseEnv)
+          : databaseEnv),
+        ...proxyEnv,
+      },
       callerIdentity: input.callerIdentity,
       loggedIn: input.loggedIn,
     });

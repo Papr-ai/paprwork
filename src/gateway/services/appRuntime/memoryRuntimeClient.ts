@@ -5,7 +5,11 @@
  * and returns Turso/repo credentials for the app owner — not the host key identity.
  */
 
-import type { AppRuntimeRouteAuth, AppRuntimeRepoCredentials } from "./types.js";
+import type {
+  AppRuntimeRouteAuth,
+  AppRuntimeRepoCredentials,
+  ClientTokenScope,
+} from "./types.js";
 import type {
   WorkspaceLogAppendBatchRequest,
   WorkspaceLogAppendBatchResponse,
@@ -81,7 +85,10 @@ export function runtimeAuthPayload(
   if (auth.paprApiKey) payload.paprApiKey = auth.paprApiKey;
   if (auth.shareToken) payload.shareToken = auth.shareToken;
   if (auth.sessionToken) payload.sessionToken = auth.sessionToken;
-  if (auth.externalUserId) payload.external_user_id = auth.externalUserId;
+  if (auth.externalUserId) {
+    payload.external_user_id = auth.externalUserId;
+    payload.user_id = auth.externalUserId;
+  }
   return payload;
 }
 
@@ -95,8 +102,11 @@ import {
 export async function fetchRuntimeDbToken(
   auth: AppRuntimeRouteAuth,
   database: string,
+  clientScope?: ClientTokenScope,
 ): Promise<{ tursoUrl: string; authToken: string; expiresAt?: string }> {
-  const cacheKey = dbTokenCacheKey(auth, database);
+  const cacheKey =
+    dbTokenCacheKey(auth, database) +
+    (clientScope ? `|client:${clientScope.mode}:${clientScope.tables.join(",")}` : "");
   const now = Date.now();
   const cached = readDbTokenCache(cacheKey, now);
   if (cached) {
@@ -111,6 +121,9 @@ export async function fetchRuntimeDbToken(
       body: JSON.stringify({
         ...runtimeAuthPayload(auth),
         database,
+        ...(clientScope
+          ? { clientTables: clientScope.tables, clientMode: clientScope.mode }
+          : {}),
       }),
     },
   );

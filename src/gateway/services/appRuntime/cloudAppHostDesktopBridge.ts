@@ -7,10 +7,7 @@
  */
 
 import type { Request, Response } from "express";
-import {
-  headerExternalUserId,
-  headerSessionToken,
-} from "./cloudAppHostContext.js";
+import { headerSessionToken } from "./cloudAppHostContext.js";
 import {
   buildSessionCookieForEmbeddedPreview,
   buildShareTokenCookie,
@@ -124,7 +121,8 @@ export async function handleCloudAppHostDesktopBridge(
   }
 
   const secure = requestIsSecure(req);
-  const externalUserId = headerExternalUserId(req.headers) ?? user.objectId;
+  // Identity comes from the validated Parse session only — never a header claim.
+  const externalUserId = user.objectId;
   const shareToken = headerShareToken(req.headers);
   const { namespaceId, slug } = namespaceSlugFromReturnTo(returnTo);
 

@@ -7,7 +7,7 @@ from pathlib import Path
 
 HELPER = Path(__file__).resolve().parents[3] / "src/gateway/services/appRuntime/backendDbHelper.py"
 spec = importlib.util.spec_from_file_location("papr_db", HELPER)
-pdb = importlib.util.module_from_spec(spec); spec.loader.exec_module(pdb)
+pdb = importlib.util.module_from_spec(spec); sys.modules["papr_db"] = pdb; spec.loader.exec_module(pdb)
 
 con = sqlite3.connect(":memory:")
 con.execute("CREATE TABLE notes(id INTEGER PRIMARY KEY, body TEXT, _acl TEXT)")

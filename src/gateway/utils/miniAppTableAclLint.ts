@@ -1,8 +1,8 @@
 /**
  * Lint: private tables (declared in the database registry, `privateTables`).
  *
- * The cloud host refuses raw /api/db/* SQL on private tables for everyone but
- * the app owner, so:
+ * Browser SQL on the cloud host runs with a Turso token that excludes private
+ * tables (for everyone, owner included), so:
  *   - frontend code that queries a private table breaks on the web  → ERROR
  *   - a backend action that reads a private table without an `_acl`
  *     filter returns every user's rows                              → ERROR
@@ -18,7 +18,7 @@ export const TABLE_ACL_FRONTEND_RULE = "table-acl-frontend";
 export const TABLE_ACL_UNFILTERED_RULE = "table-acl-unfiltered";
 
 const ACL_SCOPED_RE =
-  /acl_read_filter\s*\(|acl_write_filter\s*\(|acl_for_caller\s*\(|\b_acl\b/;
+  /acl_read_filter\s*\(|acl_write_filter\s*\(|acl_for_caller\s*\(|\b_acl\b|:caller_id\b/;
 const ALL_ROWS_MARKER_RE = /(?:#|\/\/)\s*acl:\s*all-rows\b/i;
 
 export interface TableAclIssue extends ValidationIssue {

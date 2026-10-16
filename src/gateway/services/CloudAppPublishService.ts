@@ -583,6 +583,11 @@ export class CloudAppPublishService {
       }
     }
 
+    {
+      const { assertPrivateTablesPublishable } = await import("./privateTablePublishGate.js");
+      await assertPrivateTablesPublishable(path.join(this.paprDir, "apps", appId));
+    }
+
     const data = await this.postPublishToMemory(appId, memory.slug ?? expectedSlug, {
       intent: "sharing",
       skipPlatformScan: true,
@@ -974,6 +979,11 @@ export class CloudAppPublishService {
       if (!validation.ok) {
         throw new Error(validation.error);
       }
+    }
+
+    {
+      const { assertPrivateTablesPublishable } = await import("./privateTablePublishGate.js");
+      await assertPrivateTablesPublishable(path.join(this.paprDir, "apps", appId));
     }
 
     const {

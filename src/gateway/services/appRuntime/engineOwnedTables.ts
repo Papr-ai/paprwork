@@ -35,7 +35,7 @@ const RESERVED_TABLE_PREFIXES = [
 ] as const;
 
 /** Strip one layer of SQL identifier quoting: "x", `x`, [x], 'x'. */
-function unquoteIdentifier(raw: string): string {
+export function unquoteIdentifier(raw: string): string {
   const trimmed = raw.trim();
   if (trimmed.length < 2) {
     return trimmed;
@@ -63,21 +63,25 @@ export function isEngineOwnedTableName(name: string): boolean {
  * Remove comments and string literals so a reserved name appearing inside app *data*
  * (`INSERT INTO notes(body) VALUES ('see turso_cdc')`) is not mistaken for a reference.
  */
-function stripLiteralsAndComments(sql: string): string {
+export function stripLiteralsAndComments(sql: string): string {
   let out = "";
   let i = 0;
   while (i < sql.length) {
     const ch = sql[i];
     const next = sql[i + 1];
 
+    // SQLite treats a comment as whitespace: emit a space so `FROM/**/t`
+    // still splits into two tokens (otherwise it scans as "FROMt" and slips by).
     if (ch === "-" && next === "-") {
       while (i < sql.length && sql[i] !== "\n") i += 1;
+      out += " ";
       continue;
     }
     if (ch === "/" && next === "*") {
       i += 2;
       while (i < sql.length && !(sql[i] === "*" && sql[i + 1] === "/")) i += 1;
       i += 2;
+      out += " ";
       continue;
     }
     // Single quotes delimit string literals in SQLite; '' is an escaped quote.
@@ -112,7 +116,7 @@ function stripLiteralsAndComments(sql: string): string {
  * name reachable through a subquery, a CTE, or an `UPDATE ... FROM` is caught the same
  * way the obvious case is.
  */
-function referencedIdentifiers(sql: string): string[] {
+export function referencedIdentifiers(sql: string): string[] {
   const scrubbed = stripLiteralsAndComments(sql);
   const matches = scrubbed.match(/"[^"]*"|`[^`]*`|\[[^\]]*\]|[A-Za-z_][A-Za-z0-9_$]*/g);
   return matches ? matches.map(unquoteIdentifier) : [];

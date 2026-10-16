@@ -153,10 +153,16 @@ async function readLineageForPublishTool(appId: string) {
 }
 
 function toolError(error: unknown, startTime: number): never {
+  // Structured publish blockers (private tables) keep their detail so the
+  // agent gets { code, tables[{ table, rule, sites[] }] } — not just text.
+  const detail = (error as { code?: string; detail?: unknown }).code === "private_table_violation"
+    ? (error as { detail?: unknown }).detail
+    : undefined;
   throw new Error(
     JSON.stringify({
       success: false,
       error: (error as Error).message,
+      ...(detail ? { code: "private_table_violation", detail } : {}),
       duration: performance.now() - startTime,
       timestamp: new Date().toISOString(),
     }),
@@ -187,6 +193,12 @@ If Cloud Sync is off, the tool returns an error — use export_app_bundle instea
 
       const publishService = getCloudAppPublishService();
       const config = await publishService.getPublishConfig(args.appId);
+      // per-user → shared: tell the agent which tables everyone can now see.
+      const { takeSharedExposure } = await import(
+        "../../gateway/services/cloudAppPerUserIsolation.js"
+      );
+      const sharedExposure = takeSharedExposure(args.appId);
+
       const prefs = getAppPublishPrefs(args.appId);
       const sharing = resolveSharingSettings({
         loginAccess: config.loginAccess,
@@ -197,13 +209,25 @@ If Cloud Sync is off, the tool returns an error — use export_app_bundle instea
       const lineage = await readLineageForPublishTool(args.appId);
       return {
         success: true,
-        data: appendLineageToPublishData(
-          formatPublishResult(args.appId, config, sharing, codeAccess, {
-            requireSignIn: prefs.requireSignIn,
-            perUserIsolation: prefs.perUserIsolation,
-          }),
-          lineage,
-        ),
+        data: {
+          ...appendLineageToPublishData(
+            formatPublishResult(args.appId, config, sharing, codeAccess, {
+              requireSignIn: prefs.requireSignIn,
+              perUserIsolation: prefs.perUserIsolation,
+            }),
+            lineage,
+          ),
+          ...(sharedExposure
+            ? {
+                sharedExposure,
+                sharedExposureNote:
+                  "Per-user data is now ONE shared database: every signed-in user can read these tables. " +
+                  "Other users' old per-user copies were not merged. Tell the user, and for tables with personal " +
+                  "data call papr_db_set_table_access({ dbId, table, access: 'private' }); backfill old rows " +
+                  "with a migration only if they ask.",
+              }
+            : {}),
+        },
         duration: performance.now() - startTime,
         timestamp: new Date().toISOString(),
       };

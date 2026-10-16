@@ -810,7 +810,7 @@ Record: decisions, user preferences, project milestones, mistakes to avoid`);
           has("pull_cloud_app_updates") ||
           has("pull_publisher_updates"),
         details:
-          "get_cloud_sync_status (GitHub + Turso + jobs + heartbeat) — query_cloud_turso — papr_db_push/pull/sync_status/apply_migration — inspect_cloud_repo — push_cloud_sync (git + Turso ordered flush, like Publish / Publish changes in the app tab) — reset_writer_baseline_and_publish (writer 409 baseline repair) — pull_cloud_app_updates (web copy → local code, chip Get updates) — pull_publisher_updates (publisher → installed copy; check before submit_cloud_app_pr); NOT Memory API",
+          "get_cloud_sync_status (GitHub + Turso + jobs + heartbeat) — query_cloud_turso — papr_db_push/pull/sync_status/apply_migration — inspect_cloud_repo — push_cloud_sync (git + Turso ordered flush, like Publish / Publish changes in the app tab) — reset_writer_baseline_and_publish (writer 409 baseline repair) — pull_cloud_app_updates (web copy → local code, chip Get updates) — pull_publisher_updates (publisher → installed copy; check before submit_cloud_app_pr); NOT Memory API — papr_db_set_table_access (private tables: browser SQL blocked on the web, rows via backend actions + `_acl` filter; see APP_AND_JOBS_GUIDE section Private tables)",
       },
       {
         area: "Platform feedback",

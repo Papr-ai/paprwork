@@ -41,7 +41,8 @@ from typing import Any, Union
 #   1 = pre-proxy (writes directly to the SQLite file — wedges replica sync)
 #   2 = proxy support (PAPR_DB_MODE=proxy), query()/write(), _ProxyConnection
 #   3 = proxy passes sourceId (required when app has 2+ linked databases)
-PAPR_DB_HELPER_VERSION = 3
+#   4 = row ACL helpers: caller_id(), acl_read_filter(), acl_write_filter(), acl_for_caller()
+PAPR_DB_HELPER_VERSION = 4
 
 
 @dataclass(frozen=True)
@@ -598,3 +599,77 @@ def _http_url(libsql_url: str) -> str:
     if libsql_url.startswith("http://"):
         return libsql_url
     return "https://" + libsql_url
+
+
+# ── Row ACL (private tables) ───────────────────────────────────────────────
+# Tables the app declares private cannot be queried from the browser (the
+# cloud host refuses raw /api/db/* SQL on them for everyone but the owner).
+# Backend actions are the only path. Each row carries an `_acl` JSON column,
+# Parse-style:
+#
+#   {"*": {"read": true}, "<userId>": {"read": true, "write": true}}
+#
+# NULL `_acl` = public read (legacy rows / default). Use the helpers:
+#
+#   where, args = acl_read_filter()          # acl_read_filter("n") for an alias
+#   rows = query(con, f"SELECT * FROM notes WHERE {where}", args).rows
+#   w, wa = acl_write_filter()
+#   write(con, f"UPDATE notes SET body=? WHERE id=? AND {w}", [body, note_id, *wa])
+#   write(con, "INSERT INTO notes(body, _acl) VALUES (?, ?)", [body, acl_for_caller()])
+#
+# Reading every row on purpose (admin report, aggregate)? Put the marker
+#   # acl: all-rows
+# in the handler so validate_app knows it is intentional.
+
+import json as _json
+import re as _re
+
+_USER_ID_RE = _re.compile(r"^[A-Za-z0-9_-]{1,64}$")
+
+
+def caller_id() -> str:
+    """Verified signed-in caller (server-injected). Empty string when anonymous."""
+    uid = os.environ.get("PAPR_CALLER_USER_ID", "").strip()
+    return uid if _USER_ID_RE.match(uid) else ""
+
+
+def _acl_path(uid: str, perm: str) -> str:
+    return f'$."{uid}".{perm}'
+
+
+def acl_read_filter(alias: str = "") -> tuple[str, list[Any]]:
+    """WHERE fragment: rows the caller may read (own/granted + public)."""
+    p = f"{alias}." if alias else ""
+    parts = [f"{p}_acl IS NULL", f"json_extract({p}_acl, '$.\"*\".read') = 1"]
+    args: list[Any] = []
+    uid = caller_id()
+    if uid:
+        parts.append(f"json_extract({p}_acl, ?) = 1")
+        args.append(_acl_path(uid, "read"))
+    return "(" + " OR ".join(parts) + ")", args
+
+
+def acl_write_filter(alias: str = "") -> tuple[str, list[Any]]:
+    """WHERE fragment: rows the caller may update/delete. Anonymous → none."""
+    p = f"{alias}." if alias else ""
+    uid = caller_id()
+    if not uid:
+        return "0", []
+    return (
+        f"(json_extract({p}_acl, ?) = 1 OR json_extract({p}_acl, '$.\"*\".write') = 1)",
+        [_acl_path(uid, "write")],
+    )
+
+
+def acl_for_caller(public_read: bool = False, share_with: list[str] | None = None) -> str:
+    """`_acl` JSON for a new row owned by the caller. Raises when anonymous."""
+    uid = caller_id()
+    if not uid:
+        raise PermissionError("Sign-in required to create rows in a private table")
+    acl: dict[str, dict[str, bool]] = {uid: {"read": True, "write": True}}
+    for other in share_with or []:
+        if _USER_ID_RE.match(other or ""):
+            acl.setdefault(other, {})["read"] = True
+    if public_read:
+        acl["*"] = {"read": True}
+    return _json.dumps(acl, separators=(",", ":"), sort_keys=True)

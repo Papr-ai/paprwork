@@ -24,6 +24,8 @@ export interface AppAccessContext {
   canWrite: boolean;
   /** Roles plan: viewer | contributor | maintainer | admin (newer servers only). */
   role?: string;
+  /** Acting caller memory resolved from session / API key + external_user_id. */
+  callerUserId?: string;
 }
 
 /** Read-only GitHub credentials for Cloud App Host direct repo reads (host key only). */
@@ -129,6 +131,12 @@ export interface AppRuntimeRouteAuth {
   externalUserId?: string;
 }
 
+/** Browser-SQL token request: only `tables` are reachable (Turso-enforced). */
+export interface ClientTokenScope {
+  tables: string[];
+  mode: "read" | "write" | "ddl";
+}
+
 export interface TursoCredentialsProvider {
   getUserDatabaseToken(
     orgId: string,
@@ -136,6 +144,7 @@ export interface TursoCredentialsProvider {
     userId: string,
     runtimeAuth: AppRuntimeRouteAuth,
     database: string,
+    clientScope?: ClientTokenScope,
   ): Promise<{ tursoUrl: string; authToken: string; expiresAt?: string }>;
 }
 

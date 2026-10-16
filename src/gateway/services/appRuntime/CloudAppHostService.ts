@@ -11,6 +11,7 @@ import type {
   AppPublishResolver,
   AppRuntimeRouteAuth,
   TursoCredentialsProvider,
+  ClientTokenScope,
 } from "./types.js";
 import type { AppFileRow } from "../appFiles/appFilesSchema.js";
 import type { FilesDb } from "../appFiles/AppFilesService.js";
@@ -95,6 +96,7 @@ import { configHasPerUserLinkedSources } from "./cloudAppPerUserAccess.js";
 import { applyPeopleAllowlist } from "./cloudAppPeopleAccess.js";
 import {
   invalidateMemoryShareAllowlistCache,
+  invalidateRuntimeShareAllowlistCache,
   loadSharePeopleAllowlistForCloudHost,
 } from "./cloudAppSharePeopleAllowlistLoader.js";
 import {
@@ -155,8 +157,9 @@ export class MemoryServerTursoCredentials implements TursoCredentialsProvider {
     _userId: string,
     runtimeAuth: AppRuntimeRouteAuth,
     database: string,
-  ): Promise<{ tursoUrl: string; authToken: string }> {
-    return fetchRuntimeDbToken(runtimeAuth, database);
+    clientScope?: ClientTokenScope,
+  ): Promise<{ tursoUrl: string; authToken: string; expiresAt?: string }> {
+    return fetchRuntimeDbToken(runtimeAuth, database, clientScope);
   }
 }
 
@@ -189,7 +192,9 @@ export class MemoryServerPublishResolver implements AppPublishResolver {
         paprApiKey: input.paprApiKey,
         shareToken: input.shareToken,
         ...(input.sessionToken ? { sessionToken: input.sessionToken } : {}),
-        ...(input.externalUserId ? { external_user_id: input.externalUserId } : {}),
+        ...(input.externalUserId
+          ? { external_user_id: input.externalUserId, user_id: input.externalUserId }
+          : {}),
         ...(input.callerEmail ? { callerEmail: input.callerEmail } : {}),
       }),
     });
@@ -208,6 +213,7 @@ export class MemoryServerPublishResolver implements AppPublishResolver {
       canRead: boolean;
       canWrite: boolean;
       role?: string;
+      callerUserId?: string;
     };
     return {
       orgId: json.orgId,
@@ -218,6 +224,7 @@ export class MemoryServerPublishResolver implements AppPublishResolver {
       canRead: json.canRead,
       canWrite: json.canWrite,
       ...(json.role ? { role: json.role } : {}),
+      ...(json.callerUserId ? { callerUserId: json.callerUserId } : {}),
     };
   }
 }
@@ -477,8 +484,28 @@ export class CloudAppHostService {
       paprApiKey: getRequestPaprApiKey(req),
       sessionToken: this.auth.getSessionToken(req),
       shareToken: getShareToken(req, ctx.namespaceId, ctx.slug),
-      externalUserId: this.auth.getExternalUserId(req),
+      externalUserId:
+        this.auth.getExternalUserId(req) ?? this.auth.getApiKeyUserClaim(req),
     };
+  }
+
+  /**
+   * Who is calling, for backend actions / jobs / /api/access. Session callers:
+   * the verified session id. API-key callers: the id memory resolved and echoed
+   * back (never the raw header claim).
+   */
+  private callerFor(
+    req: Request,
+    runtimeAuth: AppRuntimeRouteAuth,
+    access: AppAccessContext | null,
+  ): { loggedIn: boolean; userId?: string } {
+    if (this.auth.getSessionToken(req)) {
+      return { loggedIn: true, userId: this.auth.getExternalUserId(req) };
+    }
+    if (runtimeAuth.paprApiKey && access?.callerUserId) {
+      return { loggedIn: true, userId: access.callerUserId };
+    }
+    return { loggedIn: false };
   }
 
   /**
@@ -492,6 +519,16 @@ export class CloudAppHostService {
       userId: access.userId,
       callerUserId: runtimeAuth.externalUserId,
     };
+  }
+
+  /**
+   * Result-cache scope: per-user databases return different rows per caller,
+   * so their cache entries must never be shared across callers.
+   */
+  private dbCacheCaller(config: AppDataSourcesFile, runtimeAuth: AppRuntimeRouteAuth, access: AppAccessContext): string {
+    return configHasPerUserLinkedSources(config)
+      ? `u:${access.callerUserId ?? runtimeAuth.externalUserId ?? "anon"}`
+      : "";
   }
 
   private backendDbProxyAccess(session: BackendDbProxySession): AppAccessContext {
@@ -1300,9 +1337,10 @@ export class CloudAppHostService {
 
       const trimmedAppId = requestedAppId?.trim() || undefined;
       const access = await this.resolveAccess(req, trimmedAppId);
-      const loggedIn = Boolean(this.auth.getSessionToken(req));
+      const caller = this.callerFor(req, runtimeAuth, access);
+      const loggedIn = caller.loggedIn;
       const appId = trimmedAppId ?? access?.appId;
-      const callerUserId = runtimeAuth.externalUserId;
+      const callerUserId = caller.userId;
       const email = loggedIn ? this.auth.getSessionEmail(req) : undefined;
 
       res.json(
@@ -1432,11 +1470,12 @@ export class CloudAppHostService {
       }
 
       // Micro-cache: collapse polling apps and concurrent viewers into
-      // ~1 Turso read per TTL window. Checked only after access control.
+      // ~1 Turso read per TTL window. Only rows a client token could read
+      // are ever cached here (private tables fail at Turso, never cached).
       const cacheKey = buildDbCacheKey({
         namespaceId: runtimeAuth.namespaceId,
         slug: runtimeAuth.slug,
-        appId,
+        appId: appId + this.dbCacheCaller(config, runtimeAuth, access),
         sourceId,
         sql,
         params,
@@ -1481,6 +1520,7 @@ export class CloudAppHostService {
         orgId: access.orgId,
         namespaceId: access.namespaceId,
         ...this.tursoDbRequest(access, runtimeAuth),
+        clientScope: "read",
         runtimeAuth,
         config,
         sourceId,
@@ -1600,7 +1640,7 @@ export class CloudAppHostService {
           const cacheKey = buildDbCacheKey({
             namespaceId: runtimeAuth.namespaceId,
             slug: runtimeAuth.slug,
-            appId,
+            appId: appId + this.dbCacheCaller(config, runtimeAuth, access),
             sourceId: effectiveSourceId,
             sql: stmt.sql as string,
             params: stmt.params,
@@ -1615,6 +1655,7 @@ export class CloudAppHostService {
             orgId: access.orgId,
             namespaceId: access.namespaceId,
             ...this.tursoDbRequest(access, runtimeAuth),
+            clientScope: "read",
             runtimeAuth,
             config,
             sourceId: effectiveSourceId,
@@ -1687,12 +1728,12 @@ export class CloudAppHostService {
       const configStarted = performance.now();
       const config = await this.loadDataSources(runtimeAuth);
       configMs = performance.now() - configStarted;
-
       const writeStartedMs = performance.now();
       const result = await this.turso.write({
         orgId: access.orgId,
         namespaceId: access.namespaceId,
         ...this.tursoDbRequest(access, runtimeAuth),
+        clientScope: "write",
         runtimeAuth,
         config,
         appId,
@@ -1779,12 +1820,12 @@ export class CloudAppHostService {
       const configStarted = performance.now();
       const config = await this.loadDataSources(runtimeAuth);
       configMs = performance.now() - configStarted;
-
       const writeStartedMs = performance.now();
       const batchResult = await this.turso.writeBatch({
         orgId: access.orgId,
         namespaceId: access.namespaceId,
         ...this.tursoDbRequest(access, runtimeAuth),
+        clientScope: "write",
         runtimeAuth,
         config,
         appId,
@@ -1860,6 +1901,7 @@ export class CloudAppHostService {
         orgId: access.orgId,
         namespaceId: access.namespaceId,
         ...this.tursoDbRequest(access, runtimeAuth),
+        clientScope: "ddl",
         runtimeAuth,
         config,
         appId,
@@ -1982,11 +2024,12 @@ export class CloudAppHostService {
 
       const backend = new CloudAppBackendService();
 
-      const loggedIn = Boolean(this.auth.getSessionToken(req));
+      const caller = this.callerFor(req, runtimeAuth, access);
+      const loggedIn = caller.loggedIn;
       const callerEmail = loggedIn ? this.auth.getSessionEmail(req) : undefined;
       const callerIdentity = loggedIn
         ? {
-            userId: runtimeAuth.externalUserId,
+            userId: caller.userId,
             ...(callerEmail ? { email: callerEmail } : {}),
           }
         : undefined;
@@ -2007,12 +2050,17 @@ export class CloudAppHostService {
           userId: access.userId,
           canRead: access.canRead,
           canWrite: access.canWrite,
+          mode: access.mode,
         },
       });
 
       res.json(result);
     } catch (err) {
       const message = (err as Error).message;
+      if ((err as { status?: number }).status === 403) {
+        res.status(403).json({ error: message });
+        return;
+      }
       if (message.includes("(404)")) {
         res.status(404).json({ error: message });
         return;
@@ -2189,9 +2237,9 @@ export class CloudAppHostService {
         jobId: body.jobId,
         params: mergeVerifiedCallerJobParams(
           body.params,
-          Boolean(this.auth.getSessionToken(req)),
+          this.callerFor(req, runtimeAuth, access).loggedIn,
           {
-            userId: runtimeAuth.externalUserId,
+            userId: this.callerFor(req, runtimeAuth, access).userId,
             email: this.auth.getSessionEmail(req),
           },
         ),
@@ -2354,6 +2402,7 @@ export class CloudAppHostService {
     });
 
     invalidateAccessCacheForPublishedApp(namespaceId, slug);
+    invalidateRuntimeShareAllowlistCache();
     if (body.appId?.trim()) {
       invalidateMemoryShareAllowlistCache(body.appId.trim());
     } else {

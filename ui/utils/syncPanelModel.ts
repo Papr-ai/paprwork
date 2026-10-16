@@ -344,10 +344,13 @@ function failureRow(input: SyncPanelInput, status: AppCloudSyncStatus | null): P
     status?.codeLastError?.trim() ||
     "";
   if (!failure) return null;
+  // Multi-line errors (e.g. private-table check) carry a plain first line for
+  // people; the rest (file:line list) goes to Ask agent via the full error.
+  const shown = failure.split("\n")[0]!.trim();
   return {
     kind: "issue",
     title: "Last publish didn't finish",
-    value: failure.length > 120 ? `${failure.slice(0, 119)}…` : failure,
+    value: shown.length > 120 ? `${shown.slice(0, 119)}…` : shown,
     tone: "bad",
     action: {
       id: "publish",

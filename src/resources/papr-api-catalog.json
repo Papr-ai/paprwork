@@ -1,7 +1,7 @@
 {
   "version": 1,
-  "generatedAt": "2026-10-13T02:06:02.043Z",
-  "entryCount": 206,
+  "generatedAt": "2026-10-16T01:35:00.808Z",
+  "entryCount": 213,
   "entries": [
     {
       "id": "access-members",
@@ -402,7 +402,7 @@
     {
       "id": "agent-tool-connect_mcp",
       "title": "connect_mcp",
-      "summary": "Connect the user's SaaS accounts via remote MCP servers with one-click OAuth (browser consent, no API keys).\n\n~50 built-in one-click servers, incl. linear, notion, atlassian (Jira+Confluence), asana, monday, clickup, airtable, attio, apollo, intercom, stripe, paypal, ramp, mercury, amplitude, mixpanel, sentry, datadog, vercel, supabase, neon, cloudflare, canva, miro, webflow, granola, fireflies, zapier (action=\"status\" lists all ids). github, slack, hubspot, google drive: not yet (need a registered client id). Any other remote MCP server: pass its https:// URL as server.\n\nActions:\n- status:...",
+      "summary": "Connect the user's SaaS accounts via remote MCP servers with one-click OAuth (browser consent, no API keys).\n\n~50 built-in one-click servers, incl. linear, notion, atlassian (Jira+Confluence), asana, monday, clickup, airtable, attio, apollo, intercom, stripe, paypal, ramp, mercury, amplitude, mixpanel, sentry, datadog, vercel, supabase, neon, cloudflare, canva, miro, webflow, granola, fireflies, zapier (action=\"status\" lists all ids). google drive: one-click via Papr cloud sign-in. github, slack, hubspot: not yet (need a registered client id). Any other remote MCP server: pass its https:// ...",
       "surfaces": [
         "agent-tool"
       ],
@@ -440,7 +440,7 @@
     {
       "id": "agent-tool-create_app",
       "title": "create_app",
-      "summary": "Create a mini-app artifact with one or more files. Uses TypeScript (.ts) and Liquid Glass design system by default. ENFORCED: call architect_triage({ request }) first. Tier lite (simple frontend/report) unlocks create_app directly; tier full requires a completed product-architect delegation — delegate_task({ useAgentId: \"product-architect\", task: \"...\", context: \"...\" }). Apps that trigger jobs MUST use subscribeJobEvents (onDbChanged for $APP_DB writes, onStatusChanged for lastOutput) — never poll. DESIGN DIRECTIVE: Use the Papr Liquid Glass design skill. Less is more: minimalist, modern, ...",
+      "summary": "Create a mini-app artifact with one or more files. Uses TypeScript (.ts) and Liquid Glass design system by default. ENFORCED: call architect_triage({ request }) first. Tier lite (simple frontend/report) unlocks create_app directly; tier full requires a completed product-architect delegation — delegate_task({ useAgentId: \"product-architect\", task: \"...\", context: \"...\" }). Apps that trigger jobs MUST use subscribeJobEvents (onDbChanged for $APP_DB writes, onStatusChanged for lastOutput) — never poll. To make the app usable inside Claude, add a metadata.json \"claude\" block afterwards (agent-d...",
       "surfaces": [
         "agent-tool"
       ],
@@ -2216,6 +2216,28 @@
       ]
     },
     {
+      "id": "agent-tool-papr_db_set_table_access",
+      "title": "papr_db_set_table_access",
+      "summary": "Make one table private or public. Private = the browser can't query it on the web (non-owners get 403); rows are read through backend actions filtered by the `_acl` column (papr_db.acl_read_filter / acl_for_caller). Making a table private first lints every linked app: if any frontend code queries the table, or a backend action reads it without an _acl filter, NOTHING changes and you get { ok:false, error:{ code:'table_private_blocked', sites[], backendStarter } } — move those call sites, then retry. On success it adds `_acl TEXT` + index via a migration when missing. Existing rows keep _acl...",
+      "surfaces": [
+        "agent-tool"
+      ],
+      "runtimes": [
+        "desktop"
+      ],
+      "toolId": "papr_db_set_table_access",
+      "keywords": [
+        "papr_db_set_table_access",
+        "papr",
+        "db",
+        "set",
+        "table",
+        "access",
+        "tool",
+        "agent"
+      ]
+    },
+    {
       "id": "agent-tool-papr_db_sync_status",
       "title": "papr_db_sync_status",
       "summary": "Plan A sync status for a registry database. Two tiers only: **replica** (embedded @tursodatabase/sync handle on desktop) and **cloud** (Turso primary). Returns online, syncMode, pendingPush, pendingOps, sidecarWedge, cutoverBlocked, lastPushError. pendingOps/cdcOperations on syncMode=replica is normal Turso Sync pending push — NOT legacy CDC; check syncMode first. sidecarWedge means the recorded WAL watermark names a frame the WAL does not hold. Connecting now resets those sidecars automatically, so this is normally false; if it stays true the replica could not be opened at all and needs re...",
@@ -3318,7 +3340,7 @@
     {
       "id": "agent-tool-webview_snapshot",
       "title": "webview_snapshot",
-      "summary": "See the mini-app preview (NOT a screenshot, no vision tokens): readable text grouped under headings, a numbered list of buttons/links/inputs (click with webview_click({ ref })), and visualState. Check visualState.userWouldSeeBlankUi and visualState.warnings — DOM can look fine while overlays block the user. Pass goal (e.g. 'saved notes list', 'error message') to get only the relevant parts, ranked by Jev. format: 'html' returns raw HTML (debug markup/CSS only). Also use webview_get_console and webview_get_network for runtime errors and failed external requests.",
+      "summary": "See the mini-app preview: readable text grouped under headings, a numbered list of buttons/links/inputs (click with webview_click({ ref })), and visualState. Check visualState.userWouldSeeBlankUi and visualState.warnings — DOM can look fine while overlays block the user. Pass goal (e.g. 'saved notes list', 'error message') to get only the relevant parts, ranked by Jev. format: 'html' returns raw HTML (debug markup/CSS only). Also use webview_get_console and webview_get_network for runtime errors and failed external requests. The screenshot is shown to the user, not you — pass see: true to a...",
       "surfaces": [
         "agent-tool"
       ],
@@ -4156,6 +4178,82 @@
       "playbookRef": "preloaded-miniapp-contracts"
     },
     {
+      "id": "sdk-papr-card",
+      "title": "papr-card.ts",
+      "summary": "Claude card kit — custom cards/*.ts views (metadata.claude); fetch('/api/*') works unchanged",
+      "surfaces": [
+        "mini-app-sdk"
+      ],
+      "runtimes": [
+        "desktop",
+        "cloud"
+      ],
+      "sdkRoute": "/__papr__/papr-card.ts",
+      "keywords": [
+        "papr-card.ts",
+        "/__papr__/papr-card.ts",
+        "card({",
+        "primary",
+        "render",
+        "onResult",
+        "})",
+        "sdk",
+        "papr",
+        "__papr__"
+      ],
+      "example": "import { papr } from '/__papr__/papr-card.ts';",
+      "playbookRef": "preloaded-miniapp-contracts"
+    },
+    {
+      "id": "sdk-papr-card-style",
+      "title": "papr-card-style.ts",
+      "summary": "Claude card frame CSS (internal)",
+      "surfaces": [
+        "mini-app-sdk"
+      ],
+      "runtimes": [
+        "desktop",
+        "cloud"
+      ],
+      "sdkRoute": "/__papr__/papr-card-style.ts",
+      "keywords": [
+        "papr-card-style.ts",
+        "/__papr__/papr-card-style.ts",
+        "(internal)",
+        "sdk",
+        "papr",
+        "__papr__"
+      ],
+      "example": "import { papr } from '/__papr__/papr-card-style.ts';",
+      "playbookRef": "preloaded-miniapp-contracts"
+    },
+    {
+      "id": "sdk-papr-card-views",
+      "title": "papr-card-views.ts",
+      "summary": "Default Claude card views (status / action / approval) — usually generated, not imported",
+      "surfaces": [
+        "mini-app-sdk"
+      ],
+      "runtimes": [
+        "desktop",
+        "cloud"
+      ],
+      "sdkRoute": "/__papr__/papr-card-views.ts",
+      "keywords": [
+        "papr-card-views.ts",
+        "/__papr__/papr-card-views.ts",
+        "statusView",
+        "actionView",
+        "approvalView",
+        "renderValue",
+        "sdk",
+        "papr",
+        "__papr__"
+      ],
+      "example": "import { papr } from '/__papr__/papr-card-views.ts';",
+      "playbookRef": "preloaded-miniapp-contracts"
+    },
+    {
       "id": "sdk-papr-connect",
       "title": "papr-connect.ts",
       "summary": "Use the user's connected services (Linear, HubSpot, Stripe, Notion…) via one-click OAuth; declare in connections.json",
@@ -4281,6 +4379,52 @@
       "playbookRef": "preloaded-miniapp-contracts"
     },
     {
+      "id": "sdk-papr-mcp-bridge",
+      "title": "papr-mcp-bridge.ts",
+      "summary": "MCP Apps host bridge for Claude cards (internal)",
+      "surfaces": [
+        "mini-app-sdk"
+      ],
+      "runtimes": [
+        "desktop",
+        "cloud"
+      ],
+      "sdkRoute": "/__papr__/papr-mcp-bridge.ts",
+      "keywords": [
+        "papr-mcp-bridge.ts",
+        "/__papr__/papr-mcp-bridge.ts",
+        "(internal)",
+        "sdk",
+        "papr",
+        "__papr__"
+      ],
+      "example": "import { papr } from '/__papr__/papr-mcp-bridge.ts';",
+      "playbookRef": "preloaded-miniapp-contracts"
+    },
+    {
+      "id": "sdk-papr-mcp-transport",
+      "title": "papr-mcp-transport.ts",
+      "summary": "Routes /api/* through papr_api inside Claude cards (internal)",
+      "surfaces": [
+        "mini-app-sdk"
+      ],
+      "runtimes": [
+        "desktop",
+        "cloud"
+      ],
+      "sdkRoute": "/__papr__/papr-mcp-transport.ts",
+      "keywords": [
+        "papr-mcp-transport.ts",
+        "/__papr__/papr-mcp-transport.ts",
+        "(internal)",
+        "sdk",
+        "papr",
+        "__papr__"
+      ],
+      "example": "import { papr } from '/__papr__/papr-mcp-transport.ts';",
+      "playbookRef": "preloaded-miniapp-contracts"
+    },
+    {
       "id": "sdk-papr-native-dialog-shim",
       "title": "papr-native-dialog-shim.ts",
       "summary": "Auto-injected legacy prompt/confirm/alert polyfill",
@@ -4381,12 +4525,43 @@
         "papr.jobs.*",
         "papr.files.*",
         "papr.connect.*",
+        "papr.search.*",
         "papr.preview.*",
         "sdk",
         "papr",
         "__papr__"
       ],
       "example": "import { papr } from '/__papr__/papr-sdk.ts';",
+      "playbookRef": "preloaded-miniapp-contracts"
+    },
+    {
+      "id": "sdk-papr-search",
+      "title": "papr-search.ts",
+      "summary": "Index app items in Papr Memory and search them by meaning (Claude finds them via papr_search)",
+      "surfaces": [
+        "mini-app-sdk"
+      ],
+      "runtimes": [
+        "desktop",
+        "cloud"
+      ],
+      "sdkRoute": "/__papr__/papr-search.js",
+      "keywords": [
+        "papr-search.ts",
+        "/__papr__/papr-search.js",
+        "papr.search.index",
+        "/",
+        "query",
+        "/",
+        "remove",
+        "(prefer",
+        "papr-sdk",
+        "import)",
+        "sdk",
+        "papr",
+        "__papr__"
+      ],
+      "example": "import { papr } from '/__papr__/papr-search.js';",
       "playbookRef": "preloaded-miniapp-contracts"
     },
     {

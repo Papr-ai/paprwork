@@ -24,10 +24,16 @@ function unwrapContext<T>(input: T | { context?: T }): T {
 }
 
 function toolError(error: unknown, startTime: number): never {
+  // Structured publish blockers (private tables) keep their detail so the
+  // agent gets { code, tables[{ table, rule, sites[] }] } — not just text.
+  const detail = (error as { code?: string; detail?: unknown }).code === "private_table_violation"
+    ? (error as { detail?: unknown }).detail
+    : undefined;
   throw new Error(
     JSON.stringify({
       success: false,
       error: (error as Error).message,
+      ...(detail ? { code: "private_table_violation", detail } : {}),
       duration: performance.now() - startTime,
       timestamp: new Date().toISOString(),
     }),

@@ -25,6 +25,12 @@ export interface AppBackendActionSpec {
   effect?: AppBackendEffect;
   /** Where it runs. `mac` actions start when the publisher's Mac is awake. Default `cloud`. */
   runsOn?: AppBackendRunsOn;
+  /**
+   * Who may run it (checked by the host before the handler starts):
+   * "public" (default) | "members" | "caller" | user-id list. With "caller",
+   * SQL scopes rows via `:caller_id`, which the host binds from the sign-in.
+   */
+  acl?: "public" | "members" | "caller" | string[];
 }
 
 export type AppBackendEffect = "read" | "write" | "external";

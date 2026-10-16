@@ -124,6 +124,16 @@ export function buildUploadFailureAgentPrompt(input: {
   if (errorText) {
     parts.push(`Last upload error: ${errorText}.`);
   }
+  if (errorText?.includes("private_table_violation")) {
+    parts.push(
+      "This is the private-table check, not a sync fault. For each listed site:",
+      "frontend file → move the query into a backend action (backend/*.py, filter with papr_db.acl_read_filter(), set _acl with acl_for_caller() on insert) and call it with papr.backend.run();",
+      "backend file → add acl_read_filter()/acl_write_filter() to the query, or a `# acl: all-rows` comment if returning every row is intended.",
+      "If the user would rather keep the table public, call papr_db_set_table_access({ dbId, table, access: 'public' }).",
+      "Then run validate_app and publish again.",
+    );
+    return parts.join(" ");
+  }
   if (input.databases?.length) {
     const dbLines = input.databases
       .map((db) => {

@@ -213,6 +213,11 @@ async function flushAppNowLocked(
   const pushSources = dedupeLinkedSourcesBySyncKey(appSources);
   const syncKeys = pushSources.map((source) => linkedSourceSyncKey(source));
 
+  // Private tables: refuse before anything leaves this machine, so a broken
+  // frontend never goes live against a table the host would refuse.
+  const { assertPrivateTablesPublishable } = await import("../privateTablePublishGate.js");
+  await assertPrivateTablesPublishable(path.join(appsRoot, appId));
+
   let localMigrationsApplied: string[] = [];
   let tursoPushed = false;
 

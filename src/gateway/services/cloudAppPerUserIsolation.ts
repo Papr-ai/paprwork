@@ -18,6 +18,40 @@ export interface ApplyPerUserIsolationResult {
   skippedJobOnlySources: number;
   missingDbIds: string[];
   reseededDbIds: string[];
+  /**
+   * per-user → shared: tables that every signed-in user will now see.
+   * Nothing is rewritten automatically (rows keep `_acl` NULL = public); the
+   * agent decides with the user which to make private via
+   * papr_db_set_table_access and an optional backfill migration.
+   */
+  sharedExposure?: Array<{ dbId: string; publicTables: string[] }>;
+}
+
+const lastSharedExposure = new Map<string, Array<{ dbId: string; publicTables: string[] }>>();
+
+/** Read-once: exposure report from the most recent per-user → shared switch for an app. */
+export function takeSharedExposure(
+  appId: string,
+): Array<{ dbId: string; publicTables: string[] }> | undefined {
+  const v = lastSharedExposure.get(appId);
+  lastSharedExposure.delete(appId);
+  return v;
+}
+
+/** User tables that stay public after a DB becomes shared (sync/engine tables excluded). */
+export function publicTablesAfterShare(
+  allTables: ReadonlyArray<string>,
+  privateTables: ReadonlySet<string>,
+): string[] {
+  return allTables
+    .map((t) => t.toLowerCase())
+    .filter(
+      (t) =>
+        !privateTables.has(t) &&
+        !/^(_papr_|__papr|turso_|libsql_|sqlite_|_litestream)/.test(t) &&
+        t !== "schema_migrations",
+    )
+    .sort();
 }
 
 export async function applyPerUserIsolationForApp(
@@ -48,6 +82,7 @@ export async function applyPerUserIsolationForApp(
   const missingDbIds: string[] = [];
   const reseededDbIds: string[] = [];
   let skippedJobOnlySources = 0;
+  const sharedExposure: Array<{ dbId: string; publicTables: string[] }> = [];
 
   const seenDbIds = new Set<string>();
   for (const source of config.sources) {
@@ -64,7 +99,27 @@ export async function applyPerUserIsolationForApp(
     seenDbIds.add(dbId);
 
     try {
+      const wasPerUser = registry.getById(dbId)?.isolation === "per-user";
       const record = await registry.setIsolation(dbId, isolation);
+      if (!enabled && wasPerUser) {
+        // The owner's base DB becomes the shared one; other users' per-user
+        // copies are not merged in. Report what becomes visible to everyone.
+        try {
+          const { paprDbQuery } = await import("./tursoReplica/PaprDbService.js");
+          const { privateTablesOf } = await import("./DatabaseRegistryService.js");
+          const rows = await paprDbQuery({
+            dbId,
+            sql: "SELECT name FROM sqlite_master WHERE type='table'",
+          });
+          const publicTables = publicTablesAfterShare(
+            rows.rows.map((r) => String(r.name ?? "")),
+            privateTablesOf(record),
+          );
+          if (publicTables.length) sharedExposure.push({ dbId, publicTables });
+        } catch {
+          /* best effort — never block the isolation change */
+        }
+      }
       updatedDbIds.push(dbId);
 
       if (shouldUseTursoReplicaForDb({ syncMode: record.syncMode })) {
@@ -84,7 +139,14 @@ export async function applyPerUserIsolationForApp(
     await writeLinkedDatabasesForApp(root, appId);
   }
 
-  return { updatedDbIds, skippedJobOnlySources, missingDbIds, reseededDbIds };
+  if (sharedExposure.length) lastSharedExposure.set(appId, sharedExposure);
+  return {
+    updatedDbIds,
+    skippedJobOnlySources,
+    missingDbIds,
+    reseededDbIds,
+    ...(sharedExposure.length ? { sharedExposure } : {}),
+  };
 }
 
 /**

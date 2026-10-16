@@ -20,7 +20,8 @@ import {
   buildPaprAuthCallbackPageHtml,
   humanizeAppSlug,
 } from "../../../resources/mini-app-sdk/papr-auth-ui.js";
-import { parseCookieHeader, headerSessionToken, headerExternalUserId } from "./cloudAppHostContext.js";
+import { parseCookieHeader, headerSessionToken } from "./cloudAppHostContext.js";
+import { getVerifiedCaller, verifiedCallerMiddleware } from "./verifiedCallerIdentity.js";
 import {
   buildAuthPendingCookie,
   buildSessionCookie,
@@ -55,6 +56,8 @@ function resolveReturnToFromRequest(req: Request, candidate?: string): string {
 
 export class CloudAppHostAuthService {
   registerRoutes(app: Express): void {
+    // Must be first: every route below reads caller identity.
+    app.use(verifiedCallerMiddleware());
     app.get("/auth/login", (req, res) => this.handleLogin(req, res));
     app.get("/auth/callback", (req, res) => void this.handleCallback(req, res));
     app.get("/auth/logout", (req, res) => this.handleLogout(req, res));
@@ -69,21 +72,39 @@ export class CloudAppHostAuthService {
     );
   }
 
+  /**
+   * Session token for memory calls. Prefers the verified caller (cookie or a
+   * Parse-validated header); falls back to the raw header only before the
+   * verification middleware ran — memory validates the token itself anyway.
+   */
   getSessionToken(req: Request): string | undefined {
+    const verified = getVerifiedCaller(req);
+    if (verified) return verified.sessionToken;
     return (
       readCloudAppSessionFromCookie(req.headers.cookie)?.sessionToken ??
       headerSessionToken(req.headers)
     );
   }
 
+  /**
+   * Caller user id — ONLY from a verified source. The x-papr-external-user-id
+   * header is never trusted on its own (it decides per-user DB routing,
+   * owner checks and row ACLs).
+   */
   getExternalUserId(req: Request): string | undefined {
-    return (
-      readCloudAppSessionFromCookie(req.headers.cookie)?.externalUserId ??
-      headerExternalUserId(req.headers)
-    );
+    const verified = getVerifiedCaller(req);
+    if (verified) return verified.userId;
+    return readCloudAppSessionFromCookie(req.headers.cookie)?.externalUserId;
+  }
+
+  /** Unverified acting-user id from an API-key caller — forward to memory only. */
+  getApiKeyUserClaim(req: Request): string | undefined {
+    return getVerifiedCaller(req)?.apiKeyClaim;
   }
 
   getSessionEmail(req: Request): string | undefined {
+    const verified = getVerifiedCaller(req);
+    if (verified) return verified.email;
     return readCloudAppSessionFromCookie(req.headers.cookie)?.email;
   }
 

@@ -35,6 +35,31 @@ export const DATABASES_REGISTRY_FILENAME = "databases.json";
 export type DatabaseIsolation = "shared" | "per-user";
 export type DatabaseStatus = "active" | "tombstone";
 
+export type TableAccess = "private" | "public";
+
+export function normalizeTableName(table: string): string {
+  const name = table.trim().replace(/^["'`[]|["'`\]]$/g, "").toLowerCase();
+  if (!/^[a-z_][a-z0-9_$]*$/.test(name)) {
+    throw new Error(`Invalid table name: ${table}`);
+  }
+  return name;
+}
+
+/** Private tables declared on a registry record (lower-case). */
+export function privateTablesOf(
+  record: Pick<DatabaseRecord, "privateTables"> | undefined,
+): Set<string> {
+  const out = new Set<string>();
+  for (const t of record?.privateTables ?? []) {
+    try {
+      out.add(normalizeTableName(t));
+    } catch {
+      /* skip malformed */
+    }
+  }
+  return out;
+}
+
 export interface DatabaseRecord {
   dbId: string;
   localPath: string;
@@ -44,6 +69,14 @@ export interface DatabaseRecord {
   /** App whose repo ships migrations/ for this dbId (one owner per shared db). */
   schemaOwnerAppId?: string;
   isolation: DatabaseIsolation;
+  /**
+   * Tables declared private (lower-case names). Raw /api/db/* SQL from the
+   * browser is refused on these for non-owners; rows are read through backend
+   * actions filtered by `_acl`. Ships with app code via linked-databases.json,
+   * so the switch goes live in the same publish as the frontend fix.
+   * Omitted / empty = every table public (default).
+   */
+  privateTables?: string[];
   status: DatabaseStatus;
   /** legacy = CDC/log path; replica = Turso Sync (@tursodatabase/sync). */
   syncMode?: DatabaseSyncMode;
@@ -633,6 +666,28 @@ export class DatabaseRegistryService {
     record.updatedAt = new Date().toISOString();
     await this.save(state);
     return record;
+  }
+
+  /** Declare one table private or public. Returns the updated private list. */
+  async setTableAccess(
+    dbId: string,
+    table: string,
+    access: TableAccess,
+  ): Promise<string[]> {
+    const state = this.getState();
+    const record = state.databases[dbId];
+    if (!record || record.status !== "active") {
+      throw new Error(`Database not found: ${dbId}`);
+    }
+    const name = normalizeTableName(table);
+    const next = new Set((record.privateTables ?? []).map(normalizeTableName));
+    if (access === "private") next.add(name);
+    else next.delete(name);
+    record.privateTables = [...next].sort();
+    if (record.privateTables.length === 0) delete record.privateTables;
+    record.updatedAt = new Date().toISOString();
+    await this.save(state);
+    return record.privateTables ?? [];
   }
 
   async tombstone(

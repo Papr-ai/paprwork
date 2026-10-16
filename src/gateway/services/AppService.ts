@@ -3874,6 +3874,14 @@ export class AppService {
       console.warn("[AppService] Cloud read lint failed:", lintError);
     }
     try {
+      const { checkMiniAppTableAcl } = await import("../utils/miniAppTableAclLint.js");
+      const { resolveAppPrivateTables } = await import("./appPrivateTables.js");
+      const { tables } = await resolveAppPrivateTables(appPath);
+      issues.push(...checkMiniAppTableAcl(fileContents, tables));
+    } catch (lintError) {
+      console.warn("[AppService] Table ACL lint failed:", lintError);
+    }
+    try {
       const { checkMiniAppLoadEfficiencyPatterns } = await import(
         "../utils/miniAppLoadEfficiencyLint.js"
       );

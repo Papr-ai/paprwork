@@ -22,6 +22,7 @@ import { jobTursoDatabaseName } from "../tursoDatabaseNaming.js";
 import { shouldSkipMigrationForRemoteLedger } from "../jobs/migrationLedgerPolicy.js";
 import {
   getDatabaseRegistryService,
+  privateTablesOf,
   tursoNameForRecord,
 } from "../DatabaseRegistryService.js";
 import {
@@ -38,8 +39,18 @@ import type {
   DbWriteBatchStatement,
   DbWriteResult,
   TursoCredentialsProvider,
+  ClientTokenScope,
 } from "./types.js";
 import { rewriteSqlForTurso } from "./rewriteSqlForTurso.js";
+import {
+  CLIENT_SCOPE_SCHEMA_SQL,
+  clientDeniedError,
+  deniedTableFromError,
+  guessDeniedTable,
+  publicTablesFromSchema,
+  tokenHasTablePermissions,
+  type ClientScopeMode,
+} from "./clientTableScope.js";
 import {
   resolveTursoActingUserIdForSource,
   resolveTursoSuffixUserIdForSource,
@@ -53,7 +64,16 @@ import { refreshAppDataSourcesConfig } from "./cloudDatabaseRegistry.js";
 type TursoDbActorInput = {
   userId: string;
   callerUserId?: string;
+  /**
+   * Set for SQL that came from the browser. The statement then runs on a
+   * Turso token that lists only the database's public tables, so private
+   * tables, views over them and sync tables are refused by Turso itself.
+   * Omitted = host-internal call (bookkeeping, backend DB proxy) → owner token.
+   */
+  clientScope?: ClientScopeMode;
 };
+
+const PUBLIC_TABLES_TTL_MS = Number(process.env["CLOUD_DB_PUBLIC_TABLES_TTL_MS"] ?? 30_000);
 
 function toLibsqlArgs(params: unknown[] | undefined): InArgs {
   return (params ?? []) as InArgs;
@@ -75,6 +95,8 @@ interface SyncVersionMemo {
 
 export class TursoDbAdapter {
   private clientCache = new Map<string, { client: Client; tokenExpiresAt: number }>();
+  /** Public-table list per database (schema read with the owner token). */
+  private publicTablesCache = new Map<string, { tables: string[]; expiresAt: number }>();
   /** Last observed _papr_sync_meta version per client key. */
   private syncVersionMemo = new Map<string, SyncVersionMemo>();
   /** Remote changelog triggers installed per client key. */
@@ -137,6 +159,133 @@ export class TursoDbAdapter {
       return jobTursoDatabaseName(source.jobId);
     }
     throw new Error(`Cannot resolve Turso database for source ${source.alias}`);
+  }
+
+  /** Private tables declared for this source (lower-case). */
+  private privateTablesFor(source: AppDataSource): Set<string> {
+    return privateTablesOf(getDatabaseRegistryService().getRecordForSource(source));
+  }
+
+  /** Drop cached public-table lists (after CREATE TABLE / schema change). */
+  invalidatePublicTables(runtimeAuth: AppRuntimeRouteAuth): void {
+    const prefix = `${runtimeAuth.namespaceId}:${runtimeAuth.slug}:`;
+    for (const k of this.publicTablesCache.keys()) if (k.startsWith(prefix)) this.publicTablesCache.delete(k);
+    for (const [k, v] of this.clientCache) {
+      if (k.startsWith(prefix) && k.includes("|client:")) {
+        try { v.client.close(); } catch { /* best-effort */ }
+        this.clientCache.delete(k);
+      }
+    }
+  }
+
+  private async publicTablesForSource(
+    orgId: string,
+    namespaceId: string,
+    actors: TursoDbActors,
+    runtimeAuth: AppRuntimeRouteAuth,
+    source: AppDataSource,
+    database: string,
+    actingUserId: string,
+  ): Promise<string[]> {
+    const key = `${this.clientKey(runtimeAuth, actingUserId, database)}|${[...this.privateTablesFor(source)].sort().join(",")}`;
+    const hit = this.publicTablesCache.get(key);
+    if (hit && hit.expiresAt > Date.now()) return hit.tables;
+    const owner = await this.getClientForSource(orgId, namespaceId, actors, runtimeAuth, source);
+    const schema = await owner.execute(CLIENT_SCOPE_SCHEMA_SQL);
+    const tables = publicTablesFromSchema(
+      schema.rows.map((r) => ({ ...r })) as Record<string, unknown>[],
+      this.privateTablesFor(source),
+    );
+    if (this.publicTablesCache.size > 5_000) this.publicTablesCache.clear();
+    this.publicTablesCache.set(key, { tables, expiresAt: Date.now() + PUBLIC_TABLES_TTL_MS });
+    return tables;
+  }
+
+  /**
+   * Client for browser SQL: a Turso token whose fine-grained permissions list
+   * only public tables. Fails closed — if memory returns a token without table
+   * permissions (older server), the request is refused rather than run with
+   * owner rights.
+   */
+  private async getScopedClientForSource(
+    orgId: string,
+    namespaceId: string,
+    actors: TursoDbActors,
+    runtimeAuth: AppRuntimeRouteAuth,
+    source: AppDataSource,
+    mode: ClientScopeMode,
+  ): Promise<Client> {
+    const actingUserId = resolveTursoActingUserIdForSource(source, actors);
+    const database = await this.resolveTursoDatabaseName(source, actors);
+    const tables = await this.publicTablesForSource(
+      orgId, namespaceId, actors, runtimeAuth, source, database, actingUserId,
+    );
+    const scope: ClientTokenScope = { tables, mode };
+    const cacheKey = `${this.clientKey(runtimeAuth, actingUserId, database)}|client:${mode}:${tables.join(",")}`;
+    const now = Date.now();
+    const cached = this.clientCache.get(cacheKey);
+    if (cached && cached.tokenExpiresAt > now) return cached.client;
+    if (cached) {
+      try { cached.client.close(); } catch { /* best-effort */ }
+      this.clientCache.delete(cacheKey);
+    }
+    const bundle = await this.credentials.getUserDatabaseToken(
+      orgId, namespaceId, actingUserId, runtimeAuth, database, scope,
+    );
+    if (!tokenHasTablePermissions(bundle.authToken)) {
+      throw Object.assign(
+        new Error("Table-scoped database access is unavailable (server not updated); refusing browser SQL with owner rights."),
+        { status: 503 },
+      );
+    }
+    const client = createClient({ url: bundle.tursoUrl, authToken: bundle.authToken });
+    const tokenExpiresAt = bundle.expiresAt
+      ? Math.max(now + 60_000, new Date(bundle.expiresAt).getTime() - 60_000)
+      : now + 50 * 60 * 1000;
+    this.clientCache.set(cacheKey, { client, tokenExpiresAt });
+    return client;
+  }
+
+  /** Owner client, or the table-scoped client when the SQL came from the browser. */
+  private async clientFor(
+    input: TursoDbActorInput & { orgId: string; namespaceId: string; runtimeAuth: AppRuntimeRouteAuth },
+    actors: TursoDbActors,
+    source: AppDataSource,
+  ): Promise<Client> {
+    return input.clientScope
+      ? this.getScopedClientForSource(input.orgId, input.namespaceId, actors, input.runtimeAuth, source, input.clientScope)
+      : this.getClientForSource(input.orgId, input.namespaceId, actors, input.runtimeAuth, source);
+  }
+
+  /**
+   * Legacy sources apply writes through memory's workspace log (owner rights),
+   * so browser SQL is first planned with the table-scoped token: Turso checks
+   * permissions on EXPLAIN without running it. Refused → 403, nothing appended.
+   */
+  private async preflightScoped(
+    input: TursoDbActorInput & { orgId: string; namespaceId: string; runtimeAuth: AppRuntimeRouteAuth },
+    actors: TursoDbActors,
+    source: AppDataSource,
+    sql: string,
+    params?: unknown[],
+  ): Promise<void> {
+    if (!input.clientScope) return;
+    const client = await this.clientFor(input, actors, source);
+    await client
+      .execute({ sql: `EXPLAIN ${sql}`, args: toLibsqlArgs(params) })
+      .catch((err: unknown) => this.rethrowClientDenied(err, input, source, sql));
+  }
+
+  /** Turn a Turso SQLITE_AUTH refusal on browser SQL into a plain 403. */
+  private rethrowClientDenied(err: unknown, input: TursoDbActorInput, source: AppDataSource, sql?: string): never {
+    if (input.clientScope) {
+      const { denied, table } = deniedTableFromError(err);
+      if (denied) {
+        const priv = this.privateTablesFor(source);
+        throw clientDeniedError(table ?? (sql ? guessDeniedTable(sql, priv) : undefined), priv, input.clientScope);
+      }
+    }
+    throw err;
   }
 
   private async getClientForSource(
@@ -232,6 +381,21 @@ export class TursoDbAdapter {
     }
 
     return client;
+  }
+
+  /** Sync-version bump with the owner client (the meta table is never on a client token). */
+  private async bumpOwnerSyncVersion(
+    input: TursoDbActorInput & { orgId: string; namespaceId: string; runtimeAuth: AppRuntimeRouteAuth },
+    actors: TursoDbActors,
+    source: AppDataSource,
+    cacheKey: string,
+  ): Promise<void> {
+    try {
+      const owner = await this.getClientForSource(input.orgId, input.namespaceId, actors, input.runtimeAuth, source);
+      await this.bumpSyncVersionSafe(owner, cacheKey);
+    } catch {
+      /* best-effort — same as bumpSyncVersionSafe */
+    }
   }
 
   /**
@@ -472,19 +636,12 @@ export class TursoDbAdapter {
       runtimeAuth: input.runtimeAuth,
     });
 
-    const client = await this.getClientForSource(
-      input.orgId,
-      input.namespaceId,
-      actors,
-      input.runtimeAuth,
-      source,
-    );
+    const client = await this.clientFor(input, actors, source);
     // Row cap: outer LIMIT keeps a single unbounded SELECT from billing
     // an entire large table's rows on Turso.
-    const result = await client.execute({
-      sql: capReadSql(remoteSql),
-      args: toLibsqlArgs(input.params),
-    });
+    const result = await client
+      .execute({ sql: capReadSql(remoteSql), args: toLibsqlArgs(input.params) })
+      .catch((err: unknown) => this.rethrowClientDenied(err, input, source, remoteSql));
     const allRows = result.rows.map((row) => ({ ...row })) as Record<string, unknown>[];
     const { rows, truncated } = capRows(allRows, MAX_READ_ROWS);
     const columns = rows.length > 0 ? Object.keys(rows[0]) : [];
@@ -524,6 +681,7 @@ export class TursoDbAdapter {
     const cacheKey = this.clientKey(input.runtimeAuth, actingUserId, database);
 
     if (this.usesWorkspaceLogAuthorityForSource(source)) {
+      await this.preflightScoped(input, actors, source, remoteSql, input.params);
       const { appendRuntimeWorkspaceLogEntry } = await import(
         "./memoryRuntimeClient.js"
       );
@@ -559,26 +717,16 @@ export class TursoDbAdapter {
       };
     }
 
-    const client = await this.getClientForSource(
-      input.orgId,
-      input.namespaceId,
-      actors,
-      input.runtimeAuth,
-      source,
-    );
+    const client = await this.clientFor(input, actors, source);
 
-    await this.ensureRemoteChangeLogReady(client, cacheKey, null, source);
-    const result = await client.execute({
-      sql: remoteSql,
-      args: toLibsqlArgs(input.params),
-    });
+    if (!input.clientScope) await this.ensureRemoteChangeLogReady(client, cacheKey, null, source);
+    const result = await client
+      .execute({ sql: remoteSql, args: toLibsqlArgs(input.params) })
+      .catch((err: unknown) => this.rethrowClientDenied(err, input, source, remoteSql));
 
     // Bump _papr_sync_meta so desktop version-checked pulls (and other host
     // instances' version-gated caches) see this write.
-    await this.bumpSyncVersionSafe(
-      client,
-      cacheKey,
-    );
+    await this.bumpOwnerSyncVersion(input, actors, source, cacheKey);
 
     return {
       changes: result.rowsAffected,
@@ -659,6 +807,9 @@ export class TursoDbAdapter {
       const cacheKey = this.clientKey(input.runtimeAuth, actingUserId, database);
 
       if (this.usesWorkspaceLogAuthorityForSource(group[0].source)) {
+        for (const item of group) {
+          await this.preflightScoped(input, actors, item.source, item.remoteSql, item.params);
+        }
         const { appendRuntimeWorkspaceLogBatch } = await import(
           "./memoryRuntimeClient.js"
         );
@@ -711,21 +862,16 @@ export class TursoDbAdapter {
       }
 
       try {
-        const client = await this.getClientForSource(
-          input.orgId,
-          input.namespaceId,
-          actors,
-          input.runtimeAuth,
-          group[0].source,
-        );
-        await this.ensureRemoteChangeLogReady(client, cacheKey, null, group[0].source);
-        const batchResults = await client.batch(
-          group.map((item) => ({
-            sql: item.remoteSql,
-            args: toLibsqlArgs(item.params),
-          })),
-        );
-        await this.bumpSyncVersionSafe(client, cacheKey);
+        const client = await this.clientFor(input, actors, group[0].source);
+        if (!input.clientScope) {
+          await this.ensureRemoteChangeLogReady(client, cacheKey, null, group[0].source);
+        }
+        const batchResults = await client
+          .batch(group.map((item) => ({ sql: item.remoteSql, args: toLibsqlArgs(item.params) })))
+          .catch((err: unknown) =>
+            this.rethrowClientDenied(err, input, group[0].source, group.map((g) => g.remoteSql).join("\n")),
+          );
+        await this.bumpOwnerSyncVersion(input, actors, group[0].source, cacheKey);
         for (let i = 0; i < group.length; i++) {
           const item = group[i];
           const row = batchResults[i];
@@ -755,6 +901,9 @@ export class TursoDbAdapter {
       this.usesWorkspaceLogAuthorityForSource(item.source),
     );
     if (allLegacyWorkspaceLog) {
+      for (const item of resolved) {
+        await this.preflightScoped(input, actors, item.source, item.remoteSql, item.params);
+      }
       const groups = new Map<string, ResolvedStmt[]>();
       for (const item of resolved) {
         const group = groups.get(item.database) ?? [];
@@ -835,6 +984,7 @@ export class TursoDbAdapter {
           namespaceId: input.namespaceId,
           userId: input.userId,
           callerUserId: input.callerUserId,
+          clientScope: input.clientScope,
           runtimeAuth: input.runtimeAuth,
           config: input.config,
           appId: input.appId,
@@ -877,18 +1027,13 @@ export class TursoDbAdapter {
       runtimeAuth: input.runtimeAuth,
     });
 
-    const client = await this.getClientForSource(
-      input.orgId,
-      input.namespaceId,
-      actors,
-      input.runtimeAuth,
-      source,
-    );
+    const client = await this.clientFor(input, actors, source);
     const database = await this.resolveTursoDatabaseName(source, actors);
     const actingUserId = resolveTursoActingUserIdForSource(source, actors);
     const cacheKey = this.clientKey(input.runtimeAuth, actingUserId, database);
 
     if (this.usesWorkspaceLogAuthorityForSource(source)) {
+      await this.preflightScoped(input, actors, source, input.sql);
       const { appendRuntimeWorkspaceLogEntry } = await import(
         "./memoryRuntimeClient.js"
       );
@@ -910,9 +1055,10 @@ export class TursoDbAdapter {
       return { ok: true, source: source.alias };
     }
 
-    await this.ensureRemoteChangeLogReady(client, cacheKey, null, source);
-    await client.execute(input.sql);
-    await this.bumpSyncVersionSafe(client, cacheKey);
+    if (!input.clientScope) await this.ensureRemoteChangeLogReady(client, cacheKey, null, source);
+    await client.execute(input.sql).catch((err: unknown) => this.rethrowClientDenied(err, input, source, input.sql));
+    this.invalidatePublicTables(input.runtimeAuth);
+    await this.bumpOwnerSyncVersion(input, actors, source, cacheKey);
     return { ok: true, source: source.alias };
   }
 
