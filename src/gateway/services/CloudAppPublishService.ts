@@ -102,7 +102,12 @@ import { isOnTeamData } from "../../core/utils/copyAxes.js";
  */
 export function sharedCoverCatalogFields(appId: string): { catalogMedia: CatalogMediaItem[] } {
   const p = readSharedCoverPointer(appId) as
-    | (SharedCoverPointer & { kind?: string; videoUrl?: string; videoObjectKey?: string })
+    | (SharedCoverPointer & {
+        kind?: string;
+        videoUrl?: string;
+        videoObjectKey?: string;
+        gallery?: { objectKey?: string; caption?: string }[];
+      })
     | null;
   const media: CatalogMediaItem[] = [];
   // References, not links: memory serves them under the app's own access rules, so private and
@@ -111,6 +116,9 @@ export function sharedCoverCatalogFields(appId: string): { catalogMedia: Catalog
     media.push({ kind: "video", role: "cover", objectKey: p.videoObjectKey, posterObjectKey: p.objectKey });
   } else if (p?.objectKey) {
     media.push({ kind: "image", role: "cover", objectKey: p.objectKey });
+  }
+  for (const g of p?.kind === "video" && Array.isArray(p.gallery) ? p.gallery : []) {
+    if (g?.objectKey) media.push({ kind: "image", role: "gallery", objectKey: g.objectKey, ...(g.caption ? { alt: g.caption } : {}) });
   }
   return { catalogMedia: media };
 }

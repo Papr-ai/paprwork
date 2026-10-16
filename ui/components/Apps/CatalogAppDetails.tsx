@@ -12,6 +12,7 @@ import { normalizeRequirements } from "../../../src/core/types/bundles";
 import { lookupService } from "../../../src/core/data/knownServices";
 import { formatCatalogUpdated, getCatalogByline } from "../../utils/communityCatalogDisplay";
 import { DropGlyph } from "./HomeTiles";
+import { DefaultCover } from "./DefaultCover";
 import { catalogCoverVideoUrl } from "../../utils/catalogPreviewUrl";
 import "./CatalogAppDetails.css";
 
@@ -48,7 +49,7 @@ export function CatIcon({ name, size = 13 }: { name: keyof typeof I; size?: numb
   );
 }
 
-export function CatalogBanner({ entry, coverUrl, glyphSize }: { entry: CommunityCatalogEntry; coverUrl: string | null; glyphSize: number }) {
+export function CatalogBanner({ entry, coverUrl }: { entry: CommunityCatalogEntry; coverUrl: string | null; glyphSize?: number }) {
   const [failed, setFailed] = useState(false);
   // Owner-shared preview video lives next to the cover (papr-cover-video); 404 → the picture.
   const [noVideo, setNoVideo] = useState(false);
@@ -60,9 +61,8 @@ export function CatalogBanner({ entry, coverUrl, glyphSize }: { entry: Community
       ) : coverUrl && !failed ? (
         <img className="cat-banner__img" src={coverUrl} alt="" loading="lazy" draggable={false} onError={() => setFailed(true)} />
       ) : (
-        <span className="cat-banner__hero">
-          <DropGlyph icon={entry.icon} title={entry.name} size={glyphSize} />
-        </span>
+        // No approved gallery: the default Papr-blue cover with the app's name.
+        <DefaultCover name={entry.name} />
       )}
     </span>
   );

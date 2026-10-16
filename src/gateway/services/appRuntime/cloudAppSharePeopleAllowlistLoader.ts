@@ -64,14 +64,17 @@ const RUNTIME_ALLOWLIST_FRESH_MS = 60_000;
 const RUNTIME_ALLOWLIST_STALE_MS = 15 * 60_000;
 const runtimeAllowlistCache = new Map<
   string,
-  { allowlist: SharePeopleAllowlist | undefined; freshUntil: number; staleUntil: number }
+  { result: RuntimeAllowlistResult; freshUntil: number; staleUntil: number }
 >();
-const runtimeAllowlistInflight = new Map<string, Promise<SharePeopleAllowlist | undefined>>();
+const runtimeAllowlistInflight = new Map<string, Promise<RuntimeAllowlistResult>>();
+
+/** definitive = memory answered 200, so "no allowlist" is final (skip the publish-record fallback). */
+type RuntimeAllowlistResult = { definitive: boolean; allowlist: SharePeopleAllowlist | undefined };
 
 async function fetchShareAllowlistFromMemoryRuntime(
   runtimeAuth: AppRuntimeRouteAuth,
   appId: string,
-): Promise<SharePeopleAllowlist | undefined> {
+): Promise<RuntimeAllowlistResult> {
   const key = `${runtimeAuth.namespaceId}:${runtimeAuth.slug}:${appId}`;
   const now = Date.now();
   const hit = runtimeAllowlistCache.get(key);
@@ -80,25 +83,26 @@ async function fetchShareAllowlistFromMemoryRuntime(
     if (!p) {
       p = fetchShareAllowlistFromMemoryRuntimeUncached(runtimeAuth, appId)
         .then((r) => {
+          const result = { definitive: r.definitive, allowlist: r.allowlist };
           if (r.ok) {
             const t = Date.now();
             runtimeAllowlistCache.set(key, {
-              allowlist: r.allowlist,
+              result,
               freshUntil: t + RUNTIME_ALLOWLIST_FRESH_MS,
               staleUntil: t + RUNTIME_ALLOWLIST_STALE_MS,
             });
           }
-          return r.allowlist;
+          return result;
         })
         .finally(() => runtimeAllowlistInflight.delete(key));
       runtimeAllowlistInflight.set(key, p);
     }
     return p;
   };
-  if (hit && hit.freshUntil > now) return hit.allowlist;
+  if (hit && hit.freshUntil > now) return hit.result;
   if (hit && hit.staleUntil > now) {
     void refresh().catch(() => undefined);
-    return hit.allowlist;
+    return hit.result;
   }
   return refresh();
 }
@@ -110,7 +114,7 @@ export function invalidateRuntimeShareAllowlistCache(): void {
 async function fetchShareAllowlistFromMemoryRuntimeUncached(
   runtimeAuth: AppRuntimeRouteAuth,
   appId: string,
-): Promise<{ ok: boolean; allowlist: SharePeopleAllowlist | undefined }> {
+): Promise<{ ok: boolean; definitive: boolean; allowlist: SharePeopleAllowlist | undefined }> {
   try {
     const resp = await runtimeFetch(
       `${getMemoryServerBaseUrl()}/v1/cloud/apps/runtime/share-people-allowlist`,
@@ -129,10 +133,10 @@ async function fetchShareAllowlistFromMemoryRuntimeUncached(
       15_000,
     );
     if (resp.status === 404) {
-      return { ok: true, allowlist: undefined };
+      return { ok: true, definitive: false, allowlist: undefined };
     }
     if (!resp.ok) {
-      return { ok: false, allowlist: undefined };
+      return { ok: false, definitive: false, allowlist: undefined };
     }
     const payload = (await resp.json()) as {
       shareAllowlist?: Pick<
@@ -145,12 +149,13 @@ async function fetchShareAllowlistFromMemoryRuntimeUncached(
     };
     return {
       ok: true,
+      definitive: true,
       allowlist:
         sharePeopleAllowlistFromFields(payload.shareAllowlist) ??
         sharePeopleAllowlistFromFields(payload),
     };
   } catch {
-    return { ok: false, allowlist: undefined };
+    return { ok: false, definitive: false, allowlist: undefined };
   }
 }
 
@@ -260,8 +265,8 @@ export async function loadSharePeopleAllowlistForCloudHost(
   }
 
   const fromRuntime = await fetchShareAllowlistFromMemoryRuntime(runtimeAuth, appId);
-  if (fromRuntime) {
-    return fromRuntime;
+  if (fromRuntime.allowlist || fromRuntime.definitive) {
+    return fromRuntime.allowlist;
   }
 
   return fetchShareAllowlistFromMemoryPublish(appId);

@@ -3002,6 +3002,20 @@ async function startGateway(): Promise<void> {
       try {
         const { cloudApiFetch } = await import("./utils/cloudApiClient.js");
         const target = await accessTargetAppId(String(req.params.appId));
+        // Community listings need an approved gallery; already-listed apps are left alone.
+        if (method === "PUT") {
+          const gate = await import("./services/communityGalleryGate.js");
+          const patch = (req.body ?? {}) as import("./services/communityGalleryGate.js").AccessPatchLike;
+          const { sharedCoverKind } = await import("./services/appDemoVideos.js");
+          if (gate.blocksCommunityListing(patch, {}, sharedCoverKind(String(req.params.appId)) === "video")) {
+            const cur = await cloudApiFetch(`/v1/cloud/apps/${encodeURIComponent(target)}/access`, { method: "GET", timeoutMs: 20_000 });
+            const current = cur.ok ? ((await cur.json().catch(() => null)) as import("./services/communityGalleryGate.js").AccessStateLike | null) : null;
+            if (gate.blocksCommunityListing(patch, current, false)) {
+              res.status(409).json({ error: gate.COMMUNITY_NEEDS_GALLERY, code: "community_needs_gallery" });
+              return;
+            }
+          }
+        }
         const upstream = await cloudApiFetch(
           `/v1/cloud/apps/${encodeURIComponent(target)}/access`,
           { method, ...(method === "PUT" ? { body: req.body ?? {} } : {}), timeoutMs: 20_000 },

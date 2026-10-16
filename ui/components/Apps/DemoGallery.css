@@ -1,0 +1,85 @@
+/* Gallery: one big view, six thumbnails below (video first). Flat; the accent marks only the open thumbnail. */
+.dg { display: flex; flex-direction: column; gap: 10px; min-width: 0; }
+.dg-tools { display: flex; align-items: center; gap: 4px; min-height: 30px; }
+.dg-ibs { margin-left: auto; display: inline-flex; gap: 6px; }
+.dg-ib {
+  position: relative; display: inline-grid; place-items: center; width: 30px; height: 30px; padding: 0;
+  border: 1px solid var(--border-color); border-radius: 9px; background: transparent; color: var(--text-secondary); cursor: pointer;
+}
+.dg-ib:hover { background: var(--ss6-hover, rgba(15, 23, 42, 0.04)); }
+.dg-ib.is-on { color: #fff; background: var(--accent, #0161e0); border-color: var(--accent, #0161e0); }
+.dg-ib b, .dg-thn {
+  position: absolute; top: -6px; right: -6px; min-width: 16px; height: 16px; padding: 0 4px; border-radius: 999px;
+  font-size: 10px; font-weight: 600; line-height: 16px; color: #fff; background: #f59e0b;
+}
+
+.dg-box {
+  position: relative; aspect-ratio: 16 / 10; border-radius: 12px; overflow: hidden;
+  background: var(--bg-secondary, rgba(0, 0, 0, 0.04)); box-shadow: inset 0 0 0 1px var(--border-color);
+}
+.dg-box .dn-video { display: block; width: 100%; height: 100%; object-fit: cover; }
+.dg-box.is-pinning { cursor: crosshair; }
+
+/* Player: big play button until started; controls along the bottom, faded while playing unless hovered. */
+.dg-bigplay {
+  position: absolute; left: 50%; top: 50%; z-index: 3; width: 64px; height: 64px; margin: -32px 0 0 -32px; padding: 0;
+  border: 0; border-radius: 50%; background: rgba(15, 23, 42, 0.62); cursor: pointer; backdrop-filter: blur(8px);
+}
+.dg-bigplay::after { content: ""; position: absolute; left: 25px; top: 20px; border-left: 19px solid #fff; border-top: 12px solid transparent; border-bottom: 12px solid transparent; }
+.dg-ctrl {
+  position: absolute; left: 0; right: 0; bottom: 0; z-index: 2; display: flex; align-items: center; gap: 10px;
+  padding: 18px 12px 9px; background: linear-gradient(transparent, rgba(15, 23, 42, 0.55)); transition: opacity 0.2s;
+}
+.dg-player.is-playing:not(:hover) .dg-ctrl { opacity: 0; }
+.dg-pp { position: relative; flex: none; width: 26px; height: 26px; padding: 0; border: 0; border-radius: 50%; background: rgba(255, 255, 255, 0.92); cursor: pointer; }
+.dg-pp::before, .dg-pp::after { content: ""; position: absolute; top: 8px; width: 3px; height: 10px; background: #0f172a; border-radius: 1px; }
+.dg-pp::before { left: 9px; } .dg-pp::after { left: 14px; }
+.dg-pp.is-paused::after { display: none; }
+.dg-pp.is-paused::before { left: 10px; top: 7px; width: 0; height: 0; background: none; border-radius: 0; border-left: 9px solid #0f172a; border-top: 6px solid transparent; border-bottom: 6px solid transparent; }
+.dg-track { position: relative; flex: 1; display: flex; align-items: center; }
+.dg-scrub { width: 100%; accent-color: #fff; }
+.dg-tick {
+  position: absolute; top: -11px; width: 9px; height: 9px; margin-left: -4.5px; padding: 0; border: 2px solid #fff;
+  border-radius: 50%; background: #f59e0b; box-shadow: 0 1px 3px rgba(0, 0, 0, 0.25); cursor: pointer;
+}
+.dg-time { flex: none; font-size: 12px; color: #fff; font-variant-numeric: tabular-nums; }
+
+/* A screen: soft tint, caption top-left inside the card, the crop below it. */
+.dg-shot { display: flex; flex-direction: column; padding: 22px 0 0 26px; background: linear-gradient(160deg, #eef4ff, #f6f1ff); }
+.dg-cap {
+  position: relative; z-index: 1; width: calc(100% - 120px); margin-left: -4px; padding: 2px 4px; border: 0; border-radius: 6px;
+  background: none; font: inherit; font-size: 22px; font-weight: 650; letter-spacing: -0.02em; line-height: 1.2; color: #0f172a;
+}
+.dg-cap:hover:not(:disabled) { background: rgba(255, 255, 255, 0.55); }
+.dg-cap:focus { outline: 2px solid rgba(1, 97, 224, 0.3); background: #fff; }
+.dg-shot > img {
+  flex: 1; min-height: 0; margin-top: 16px; border-radius: 14px 0 0 0; object-fit: cover; object-position: top left;
+  box-shadow: 0 10px 30px rgba(15, 23, 42, 0.1), 0 0 0 1px rgba(15, 23, 42, 0.05);
+}
+.dg-shot.is-off > img, .dg-shot.is-off .dg-cap { opacity: 0.35; }
+.dg-x {
+  position: absolute; top: 10px; right: 10px; height: 26px; padding: 0 10px; border: 0; border-radius: 999px;
+  font: inherit; font-size: 12px; font-weight: 500; color: #334155; background: rgba(255, 255, 255, 0.92);
+  box-shadow: 0 1px 4px rgba(15, 23, 42, 0.15); cursor: pointer;
+}
+.dg-x.is-back { color: var(--accent, #0161e0); }
+
+/* Thumbnails: fixed six, so nothing reflows when a gallery arrives. */
+.dg-minis { display: grid; grid-template-columns: repeat(6, 1fr); gap: 6px; }
+.dg-mini {
+  position: relative; display: block; aspect-ratio: 16 / 10; padding: 0; border: 0; border-radius: 7px; overflow: visible;
+  background: var(--bg-secondary, rgba(0, 0, 0, 0.04)); box-shadow: inset 0 0 0 1px var(--border-color); cursor: pointer;
+}
+.dg-mini > img { display: block; width: 100%; height: 100%; border-radius: 7px; object-fit: cover; object-position: top left; }
+.dg-mini.is-on { box-shadow: 0 0 0 2px var(--accent, #0161e0); }
+.dg-mini.is-off > img { opacity: 0.35; }
+.dg-mini.is-slot { cursor: default; box-shadow: none; }
+.dg-mini .dg-thn { top: -5px; right: -5px; transform: scale(0.9); }
+.dg-thplay { position: absolute; left: 50%; top: 50%; width: 20px; height: 20px; margin: -10px 0 0 -10px; border-radius: 50%; background: rgba(15, 23, 42, 0.62); }
+.dg-thplay::after { content: ""; position: absolute; left: 7px; top: 5px; border-left: 7px solid #fff; border-top: 5px solid transparent; border-bottom: 5px solid transparent; }
+
+.dg-making { display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 6px; text-align: center; }
+.dg-making b { font-size: 14px; font-weight: 600; color: var(--text-primary); }
+.dg-making span { font-size: 12.5px; color: var(--text-secondary); max-width: 320px; }
+.dg-gen { display: inline-flex; align-items: center; gap: 6px; color: #0047a8; background: #fff; border-color: #fff; font-weight: 600; }
+.dg-gen:hover { background: #eef4ff; }

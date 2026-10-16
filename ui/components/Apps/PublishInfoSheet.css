@@ -65,3 +65,8 @@
 }
 .pis-link:disabled { color: var(--text-tertiary); cursor: default; }
 @media (prefers-reduced-motion: reduce) { .pis-spin { animation: none; } }
+
+/* v10: the Gallery (App info step 2, Share's Community step) is one fixed width, so nothing jumps. */
+.pis-step { margin: 0; font-size: 12.5px; color: var(--text-tertiary); }
+.pis-step b { font-weight: 600; color: var(--text-primary); }
+.share-sheet:has(.pis--gallery), .share-sheet:has(.ss6--gallery) { width: min(640px, calc(100vw - 48px)); max-height: min(92vh, 860px); }

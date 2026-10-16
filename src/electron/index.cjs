@@ -1658,7 +1658,8 @@ class GatewayProcessSupervisor {
         try {
           const r = msg.request || {};
           const demos = path.resolve(path.dirname(String(r.videoPath || "")));
-          const ok = [r.scenePath, r.videoPath, r.posterPath].every(
+          const stillPaths = Array.isArray(r.stills) ? r.stills.map((x) => x && x.path) : [];
+          const ok = [r.scenePath, r.videoPath, r.posterPath, ...stillPaths].every(
             (f) => typeof f === "string" && path.resolve(path.dirname(f)) === demos && path.basename(demos) === "demos",
           );
           if (!ok) throw new Error("invalid demo paths");
