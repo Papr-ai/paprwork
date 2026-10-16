@@ -45,6 +45,7 @@ import {
   setTelemetryPaprUserId,
 } from "./lib/telemetry";
 import { gateway } from "./src/lib/gateway";
+import { openAppWithDraftChat } from "./utils/openCloudInstalledAppWithChat";
 import { ensureGatewayRecoveryRegistered } from "./lib/agentStreamRecovery";
 import {
   appAgentMainChatTabTitle,
@@ -71,7 +72,8 @@ type ChatOpenPayload = {
   welcomeMessage?: string;
   model?: string | null;
   provider?: string | null;
-  mode?: "main" | "app-agent";
+  /** "handoff": opened from Claude — show `appId` beside the new chat. */
+  mode?: "main" | "app-agent" | "handoff";
   appId?: string;
   subAgentId?: string;
   /** Send `message` immediately (same as install / onboarding), instead of drafting it. */
@@ -562,6 +564,26 @@ export function App() {
             console.error("[App] Failed to open app agent chat:", err);
           }
           return;
+        }
+
+        if (detail.mode === "handoff" && detail.appId) {
+          try {
+            // The card just wrote rows in the cloud (e.g. the campaign): pull them before the app opens.
+            await gateway.send("app:pull-data", { appId: detail.appId }).catch(() => undefined);
+            const appResp = await gateway.send("app:get", { appId: detail.appId });
+            const appTitle = (appResp.data as { title?: string } | undefined)?.title?.trim();
+            if (appTitle) {
+              await openAppWithDraftChat(createChat, {
+                appId: detail.appId,
+                appTitle,
+                draft: detail.message ?? "",
+                chatTabTitle: detail.title?.trim() || appTitle,
+              });
+              return;
+            }
+          } catch (err) {
+            console.warn("[App] Handoff app not on this Mac, opening a plain chat:", err);
+          }
         }
 
         const chatId = await createChat();

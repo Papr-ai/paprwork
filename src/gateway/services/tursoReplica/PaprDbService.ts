@@ -638,6 +638,20 @@ export async function paprDbCreateMigration(options: {
   if (!options.sql.trim()) {
     throw new Error("sql is required");
   }
+  // Platform tables are Papr's, not the app's: a migration that rebuilds
+  // app_files or a _papr_* table works here and breaks every fresh install.
+  const { splitSqlStatements } = await import("../jobs/migrationSqlHelpers.js");
+  const { platformOwnedStatements } = await import("../jobs/platformOwnedTables.js");
+  const platformHits = platformOwnedStatements(splitSqlStatements(options.sql));
+  if (platformHits.length > 0) {
+    const tables = [...new Set(platformHits.map((hit) => hit.table))].join(", ");
+    throw new Error(
+      `This migration changes Papr platform tables (${tables}). Papr creates and upgrades ` +
+        "those itself (App Files, sync bookkeeping); an app migration that rebuilds them fails " +
+        "on fresh installs with \"no such table\". Remove those statements and migrate only " +
+        "the app's own tables.",
+    );
+  }
   // Portable by default: the current user's literal id becomes
   // {{papr.owner_user_id}} when they own this database, so forks/copies get
   // their own id instead of the author's. Same result on this machine.

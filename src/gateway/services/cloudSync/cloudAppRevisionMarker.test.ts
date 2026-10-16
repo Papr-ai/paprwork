@@ -37,4 +37,14 @@ describe("writeAppCloudRevisionMarker", () => {
     writeAppCloudRevisionMarker(app);
     expect(marker()).toBe(a);
   });
+
+  it("moves when only requirements.json changes, so the host's credential gate sees the edit", () => {
+    put("requirements.json", '{"requirements":[{"name":"K","required":true}]}');
+    writeAppCloudRevisionMarker(app);
+    const before = marker();
+    expect(before).not.toBe(distBundleRevisionHash("console.info(1)"));
+    put("requirements.json", '{"requirements":[{"name":"K","required":false}]}');
+    writeAppCloudRevisionMarker(app);
+    expect(marker()).not.toBe(before);
+  });
 });

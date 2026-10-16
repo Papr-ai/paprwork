@@ -288,6 +288,32 @@ export async function setupAppHandlers(
         break;
       }
 
+      case "app:pull-data": {
+        // Hand-off from Claude: a card may have just written rows in the cloud (e.g. a campaign
+        // from "Run on my Mac"). Pull the app's linked replicas before it opens so they're here.
+        const { appId } = message.payload as { appId?: string };
+        const pulled: Array<{ dbId: string; pulled: boolean }> = [];
+        if (appId && /^[A-Za-z0-9_-]{1,80}$/.test(appId)) {
+          const [{ readFile }, path, { parseDataSourcesFile }, { paprDbPull }] = await Promise.all([
+            import("node:fs/promises"),
+            import("node:path"),
+            import("../services/appDataSources.js"),
+            import("../services/tursoReplica/PaprDbService.js"),
+          ]);
+          const raw = await readFile(path.join(appService.getAppsRootPath(), appId, "data-sources.json"), "utf8").catch(() => "");
+          const dbIds = raw ? [...new Set(parseDataSourcesFile(raw).sources.map((s) => s.dbId).filter((d): d is string => !!d))] : [];
+          const cap = (ms: number) => new Promise<never>((_, reject) => setTimeout(() => reject(new Error("timeout")), ms));
+          await Promise.allSettled(
+            dbIds.map(async (dbId) => {
+              const r = await Promise.race([paprDbPull({ dbId }), cap(8_000)]).catch(() => null);
+              pulled.push({ dbId, pulled: !!r?.pulled });
+            }),
+          );
+        }
+        ws.send(JSON.stringify({ id: message.id, type: "app:pull-data:response", success: true, data: { pulled } }));
+        break;
+      }
+
       case "app:update": {
         const payload = message.payload as UpdateAppPayload;
         const { appId, ...updates } = payload;

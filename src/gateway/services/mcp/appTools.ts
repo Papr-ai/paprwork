@@ -60,8 +60,15 @@ function describe(app: ClaudeApp, view: string, spec: CardsManifestView): string
       return `${lead} Opens a card ready to ${what}; arguments prefill the form and the user presses the button to run it.${mac}${tail}`;
     case "approval":
       return `${lead} Proposes "${what}" on a card for review; nothing happens until the user clicks Approve.${mac}${tail}`;
-    default:
-      return `${lead} Opens ${spec.title ?? humanize(view)} as an interactive card.${tail}`;
+    default: {
+      // Custom cards backed by an action take its input: a read picks what the card opens on,
+      // a write prefills it and still waits for the user's click on the card.
+      const writes = spec.actionSpec?.effect && spec.actionSpec.effect !== "read";
+      const args = !spec.actionSpec?.input ? "" : writes
+        ? ` Arguments prefill it; nothing runs until the user presses the button on the card.${mac}`
+        : " Arguments choose what it opens on.";
+      return `${lead} Opens ${spec.title ?? humanize(view)} as an interactive card.${args}${tail}`;
+    }
   }
 }
 
@@ -131,7 +138,9 @@ export function toolResultFor(tool: AppToolSpec, args: Record<string, unknown>, 
       ? `Proposed in ${title}. Waiting for the user to approve on the card.`
       : spec.kind === "action"
         ? `Opened ${title} with the form filled in. The user runs it from the card.`
-        : `Showing ${title} · ${spec.title ?? humanize(view)}.`;
+        : !spec.kind && spec.actionSpec?.effect && spec.actionSpec.effect !== "read"
+          ? `Opened ${title} · ${spec.title ?? humanize(view)} with the request filled in. The user starts it from the card.`
+          : `Showing ${title} · ${spec.title ?? humanize(view)}.`;
   return {
     content: [{ type: "text" as const, text }],
     structuredContent: {

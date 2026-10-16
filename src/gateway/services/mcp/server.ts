@@ -13,8 +13,10 @@
  *   papr_continue_on_mac (model + app)  one-time papr:// link to pick up in the desktop app.
  *   papr_search    (model)    find an item inside the apps by meaning (searchTool.ts).
  *
- * Routes: /mcp (all the user's apps) and /mcp/a/{namespaceId}/{slug} (one app, for an
- * "Add to Claude" button on that app's page). Same sign-in, same audience.
+ * Routes: /mcp (all the user's apps: the personal, custom connector), /mcp/listed (the
+ * connector in Anthropic's directory: only apps Papr reviewed, see listing.ts) and
+ * /mcp/a/{namespaceId}/{slug} (one app, for an "Add to Claude" button on that app's page).
+ * Same sign-in, same audience.
  * Server instructions list the user's apps so Claude routes to them (routing.ts).
  *   papr_api       (app-only) the tunnel. Hidden from the model; only our cards call it.
  */
@@ -41,6 +43,7 @@ import { HandoffError, memoryHandoff, type CreateHandoff } from "./handoff.js";
 import { memorySessionExchange, type McpSessionExchange } from "./session.js";
 import { buildInstructions } from "./routing.js";
 import { paprIcons, registerPaprIconRoutes } from "./paprIcon.js";
+import { allowedIn, LISTED_SUFFIX, loadListingPolicy, personalConnectorNote, splitForConnector, type ConnectorMode, type ListingPolicy } from "./listing.js";
 import { memoryAppSearch, registerSearchTool, type AppSearchFn } from "./searchTool.js";
 
 export interface AppScope {
@@ -103,15 +106,31 @@ export const MCP_INSTRUCTIONS =
 export const FIRST_RUN_NOTE =
   "Your Papr workspace is ready. Install Papr on your Mac to build apps; they show up here as cards once published.";
 
+export interface BuildDeps {
+  handoff?: CreateHandoff;
+  /** personal (default): every app. listed: the directory connector, reviewed apps only. */
+  mode?: ConnectorMode;
+  policy?: ListingPolicy;
+  /** Listed mode: the user's apps that only the personal connector shows (named, never opened). */
+  personalOnly?: ClaudeApp[];
+  search?: AppSearchFn;
+}
+
 export function buildMcpServer(
   cfg: McpEndpointConfig,
   caller: McpCaller,
   apps: ClaudeApp[] = [],
-  deps: { handoff?: CreateHandoff; search?: AppSearchFn } = {},
+  deps: BuildDeps = {},
 ): McpServer {
+  const mode = deps.mode ?? "personal";
+  const policy = deps.policy ?? { reviewed: new Set<string>() };
+  const allowed = (ref: { namespaceId: string; slug: string }): boolean => allowedIn(mode, policy, ref);
+  const personalNote = personalConnectorNote(cfg.resourceUrl, (deps.personalOnly ?? []).map(appTitle));
+  const notHere = (title: string): string =>
+    personalConnectorNote(cfg.resourceUrl, [title]) || `${title} isn't available in this connector.`;
   const server = new McpServer(
     { name: "papr", title: "Papr", version: "0.1.0", websiteUrl: "https://papr.ai", icons: paprIcons(cfg.resourceUrl) },
-    { instructions: buildInstructions(MCP_INSTRUCTIONS, apps, appTitle) },
+    { instructions: [buildInstructions(MCP_INSTRUCTIONS, apps, appTitle), personalNote].filter(Boolean).join("\n\n") },
   );
 
   registerAppResource(server, "Papr app card", SPIKE_CARD_URI, { description: "Papr app card (spike)" }, async () => ({
@@ -127,6 +146,7 @@ export function buildMcpServer(
     async (uri, vars) => {
       const one = (v: string | string[] | undefined): string => (Array.isArray(v) ? v[0] : v) ?? "";
       const ref = { namespaceId: one(vars.namespaceId), slug: one(vars.slug) };
+      if (!allowed(ref)) throw new TunnelError("That app isn't available in this connector.", 404);
       const html = await fetchPublishedCard(cfg.loopbackPort, caller, ref, one(vars.view).split("@")[0]);
       if (html === null) throw new TunnelError("That card isn't published. Republish the app with Claude cards on.", 404);
       return { contents: [{ uri: uri.href, mimeType: RESOURCE_MIME_TYPE, text: html, _meta: { ui: { csp: CARD_CSP } } }] };
@@ -167,12 +187,19 @@ export function buildMcpServer(
         tools: tools.filter((t) => t.app === app).map((t) => t.name),
       }));
       const firstRun = (caller.provisioned?.length ?? 0) > 0;
-      const text = rows.length
+      const list = rows.length
         ? rows.map((r) => `- ${r.title}${r.summary ? `: ${r.summary}` : ""}\n  card tools: ${r.tools.join(", ") || "none loaded"}\n  link (for papr_open_app if a card tool is missing): ${r.url}`).join("\n")
         : firstRun
           ? FIRST_RUN_NOTE
-          : "No Papr apps with Claude cards yet. Ask Pen in Papr to make an app work in Claude, then publish it.";
-      return { content: [{ type: "text", text }], structuredContent: { apps: rows } };
+          : personalNote
+            ? ""
+            : "No Papr apps with Claude cards yet. Ask Pen in Papr to make an app work in Claude, then publish it.";
+      const text = [list, personalNote].filter(Boolean).join("\n\n");
+      const personalOnly = (deps.personalOnly ?? []).map((a) => ({ title: appTitle(a), url: `${cfg.appsBaseUrl}/${a.namespaceId}/${a.slug}` }));
+      return {
+        content: [{ type: "text", text }],
+        structuredContent: { connector: mode, apps: rows, ...(personalOnly.length ? { personalOnly, personalConnectorUrl: cfg.resourceUrl } : {}) },
+      };
     },
   );
 
@@ -192,7 +219,11 @@ export function buildMcpServer(
       _meta: { ui: { resourceUri: SPIKE_CARD_URI } },
     },
     async (args) => {
-      const ref = parseAppRef(args, apps);
+      const ref = parseAppRef(args, [...apps, ...(deps.personalOnly ?? [])]);
+      if (!allowed(ref)) {
+        const other = deps.personalOnly?.find((a) => a.namespaceId === ref.namespaceId && a.slug === ref.slug);
+        return { content: [{ type: "text", text: notHere(other ? appTitle(other) : ref.slug) }] };
+      }
       const access = await dispatchTunnel(cfg.loopbackPort, caller, { ...ref, method: "GET", path: "/api/access" });
       const body = (access.body ?? {}) as { canRead?: boolean };
       if (access.status >= 400 || !body.canRead) {
@@ -235,6 +266,7 @@ export function buildMcpServer(
       _meta: { ui: { resourceUri: SPIKE_CARD_URI, visibility: ["app"] } },
     },
     async (args) => {
+      if (!allowed(args)) return { isError: true, content: [{ type: "text", text: "That app isn't available in this connector." }] };
       try {
         const html = await fetchPublishedCard(cfg.loopbackPort, caller, { namespaceId: args.namespaceId, slug: args.slug }, args.view);
         if (html === null) return { isError: true, content: [{ type: "text", text: "No card published for that view." }] };
@@ -261,6 +293,10 @@ export function buildMcpServer(
       _meta: { ui: { resourceUri: SPIKE_CARD_URI, visibility: ["app"] } },
     },
     async (args) => {
+      // Cards from apps this connector doesn't show can't reach their API through it either.
+      if (!allowed(args)) {
+        return { isError: true, content: [{ type: "text", text: "HTTP 403" }], structuredContent: { status: 403, body: { error: "This app isn't available in this connector." } } };
+      }
       try {
         const out = await dispatchTunnel(cfg.loopbackPort, caller, {
           namespaceId: args.namespaceId,
@@ -371,6 +407,7 @@ async function handleMcpPost(
   req: Request,
   res: Response,
   scope?: AppScope,
+  listing: { mode: ConnectorMode; policy: ListingPolicy } = { mode: "personal", policy: { reviewed: new Set() } },
 ): Promise<void> {
   const caller = callerOf(req.auth);
   let apps: ClaudeApp[] = [];
@@ -387,12 +424,13 @@ async function handleMcpPost(
     }
   }
   if (scope) apps = apps.filter((a) => a.namespaceId === scope.namespaceId && a.slug === scope.slug);
-  const deps = { handoff, ...(searchFor ? { search: searchFor(caller) } : {}) };
+  const { shown, personalOnly } = splitForConnector(listing.mode, listing.policy, apps);
+  const deps: BuildDeps = { handoff, ...listing, personalOnly, ...(searchFor ? { search: searchFor(caller) } : {}) };
   const mismatched = legacyBodyWithModernHeader(req, req.body);
   if (mismatched) console.info(`[mcp] 2025-style request sent with protocol header ${mismatched}; serving it as ${req.headers["mcp-protocol-version"]}`);
   // One request, one handler: it classifies the era (2026-07-28 envelope vs 2025) and builds the
   // server from this factory for whichever era the request belongs to. Holds nothing afterwards.
-  const handler = createMcpHandler(() => buildMcpServer(cfg, caller, apps, deps), {
+  const handler = createMcpHandler(() => buildMcpServer(cfg, caller, shown, deps), {
     onerror: (err) => console.warn(`[mcp] rejected request: ${err.message.slice(0, 200)} (protocol header: ${req.headers["mcp-protocol-version"] ?? "none"})`),
   });
   res.on("close", () => void handler.close());
@@ -410,10 +448,13 @@ export function registerMcpRoutes(
     exchange?: McpSessionExchange;
     /** null disables the Mac handoff tool. */
     handoff?: CreateHandoff | null;
+    /** Apps the listed (directory) connector may show. Defaults to PAPR_MCP_LISTED_APPS. */
+    listing?: ListingPolicy;
     /** null disables papr_search. */
     search?: ((caller: McpCaller) => AppSearchFn) | null;
   },
 ): McpEndpointConfig {
+  const policy = opts.listing ?? loadListingPolicy();
   const cfg = opts.config ?? loadMcpEndpointConfig(opts.port);
   const memoryBaseUrl = opts.memoryBaseUrl ?? getMemoryServerBaseUrl();
   const catalog = opts.catalog ?? defaultCatalogDeps(cfg, memoryBaseUrl);
@@ -431,6 +472,9 @@ export function registerMcpRoutes(
   app.post(MCP_PATH, bearer, (req, res, next: NextFunction) => {
     handleMcpPost(cfg, catalog, handoff, searchFor, req, res).catch(next);
   });
+  app.post(`${MCP_PATH}${LISTED_SUFFIX}`, bearer, (req, res, next: NextFunction) => {
+    handleMcpPost(cfg, catalog, handoff, searchFor, req, res, undefined, { mode: "listed", policy }).catch(next);
+  });
   app.post(`${MCP_PATH}/a/:namespaceId/:slug`, bearer, (req, res, next: NextFunction) => {
     const { namespaceId, slug } = req.params as Record<string, string>;
     if (!SCOPE_PART.test(namespaceId) || !SCOPE_PART.test(slug)) {
@@ -444,7 +488,7 @@ export function registerMcpRoutes(
     res.setHeader("Allow", "POST");
     res.status(405).json({ jsonrpc: "2.0", error: { code: -32000, message: "Method not allowed" }, id: null });
   };
-  for (const p of [MCP_PATH, `${MCP_PATH}/a/:namespaceId/:slug`]) {
+  for (const p of [MCP_PATH, `${MCP_PATH}${LISTED_SUFFIX}`, `${MCP_PATH}/a/:namespaceId/:slug`]) {
     app.get(p, notAllowed);
     app.delete(p, notAllowed);
   }

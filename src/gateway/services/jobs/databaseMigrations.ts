@@ -36,6 +36,7 @@ import {
 } from "./jobMigrationManifest.js";
 import { isReplicaManagedDbPath } from "../tursoReplica/tursoReplicaFileGuard.js";
 import { isCloudDirectDbPath } from "../cloudDirect/cloudDirectDb.js";
+import { platformOwnedTarget } from "./platformOwnedTables.js";
 export type PersistedDatabaseKind = "registry" | "job";
 
 export interface PersistedDatabaseLayout {
@@ -170,6 +171,11 @@ function localColumnExistsCi(db: Database.Database, table: string, column: strin
 function localStatementAlreadyApplied(db: Database.Database, statement: string): boolean {
   const sql = statement.replace(/\s+/g, " ").trim();
   if (isTransactionControlStatement(sql)) {
+    return true;
+  }
+  // Platform-owned tables: Papr manages them, app migrations never replay
+  // against them (see platformOwnedTables.ts).
+  if (platformOwnedTarget(sql)) {
     return true;
   }
   const renameColumn = /\bRENAME\s+TO\b/i.test(sql) ? null : parseRenameColumnStatement(sql);
