@@ -108,12 +108,17 @@ export async function openAppWithDraftChat(
 ): Promise<void> {
   const chatId = await createChat();
   if (!chatId) return;
-  const chatTabId = `chat-${chatId}`;
-  const appTabId = `app-${input.appId}`;
-  const title = input.chatTabTitle ?? input.appTitle;
-  ensureChatAppSplitView(chatTabId, appTabId, input.appId, title);
+  const state: SplitState = {
+    chatTabId: `chat-${chatId}`,
+    chatEntityId: chatId,
+    appTabId: `app-${input.appId}`,
+    appId: input.appId,
+    appTitle: input.appTitle,
+    chatTitle: input.chatTabTitle ?? input.appTitle,
+  };
+  ensureChatAppSplitView(state, true);
   for (const delayMs of SPLIT_RETRY_DELAYS_MS) {
-    window.setTimeout(() => ensureChatAppSplitView(chatTabId, appTabId, input.appId, title), delayMs);
+    window.setTimeout(() => ensureChatAppSplitView(state, false), delayMs);
   }
   if (input.draft.trim()) useChatStore.getState().setDraftMessage(chatId, input.draft.trim());
 }
