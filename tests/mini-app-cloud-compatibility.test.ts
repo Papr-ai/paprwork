@@ -98,3 +98,19 @@ describe("data-sources dbPath", () => {
     expect(scanMiniAppCloudCompatibility(new Map(), local).map((f) => f.category)).toEqual(["absolute-path"]);
   });
 });
+
+import { desktopJobFinding, mergeCloudCompatibilityFindings } from "../src/gateway/utils/miniAppCloudCompatibility.js";
+
+describe("desktop-only jobs in the publish report", () => {
+  it("makes the app hybrid and names the job and reason", () => {
+    const report = mergeCloudCompatibilityFindings([
+      [],
+      [desktopJobFinding("j1", "LinkedIn Sender", "Uses your Chrome", { file: "code/send.py", line: 51 })],
+    ]);
+    expect(report.level).toBe("hybrid");
+    expect(report.requiresAcknowledgement).toBe(false);
+    expect(report.desktopOnly).toContain("LinkedIn Sender only runs in Papr Work desktop — uses your Chrome.");
+    expect(report.summary).toContain("1 job only runs in Papr Work desktop");
+    expect(report.desktopOnly.join(" ")).not.toContain("/api/bash/run");
+  });
+});

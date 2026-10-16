@@ -42,3 +42,18 @@ describe("buildPaprAuthCallbackPageHtml", () => {
     expect(html).toContain("Open app");
   });
 });
+
+import { buildPaprDesktopRequiredMarkup } from "../src/resources/mini-app-sdk/papr-auth-ui.js";
+
+describe("desktop-required card", () => {
+  it("escapes message and links the download page", () => {
+    const { html } = buildPaprDesktopRequiredMarkup({
+      message: "LinkedIn <Sender> only runs in Papr Work desktop — uses your Chrome.",
+      downloadUrl: "https://papr.ai/download",
+    });
+    expect(html).toContain("Open in Papr Work");
+    expect(html).toContain("data-papr-open-desktop");
+    expect(html).toContain("LinkedIn &lt;Sender&gt;");
+    expect(html).toContain('href="https://papr.ai/download"');
+  });
+});

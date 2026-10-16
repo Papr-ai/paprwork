@@ -21,7 +21,29 @@ const DESKTOP_ONLY_CATEGORIES = new Set<CloudCompatibilityCategory>([
 const HYBRID_CATEGORIES = new Set<CloudCompatibilityCategory>([
   "bash-run",
   "absolute-path",
+  "desktop-job",
 ]);
+
+/**
+ * One finding per desktop-only job (shared rules: utils/jobDesktopOnly.ts).
+ * The app still works on the web; running this job asks the user to open Papr Work.
+ */
+export function desktopJobFinding(
+  jobId: string,
+  jobName: string,
+  reason: string,
+  where?: { file: string; line?: number },
+): CloudCompatibilityFinding {
+  return {
+    category: "desktop-job",
+    severity: "warning",
+    file: where ? `job:${jobId}/${where.file}` : `job:${jobId}`,
+    ...(where?.line ? { line: where.line } : {}),
+    message: `${jobName} only runs in Papr Work desktop — ${reason.charAt(0).toLowerCase()}${reason.slice(1)}.`,
+    remediation:
+      "Web users are asked to open Papr Work when they run it. To run it in the cloud, remove the desktop dependency (e.g. headless Playwright + vault cookies instead of your Chrome, $APP_DB instead of localhost:18789).",
+  };
+}
 
 interface PatternRule {
   category: CloudCompatibilityCategory;
@@ -303,11 +325,15 @@ export function buildCloudCompatibilityReport(
   if (level === "cloud-ready") {
     cloudWorks.push("Core UI should work on apps.papr.ai without Paprwork desktop");
   }
+  const desktopJobs = findings.filter((f) => f.category === "desktop-job");
   if (level === "hybrid") {
     cloudWorks.push("Viewing linked database data on apps.papr.ai (when Turso is synced)");
     cloudWorks.push("Synced jobs via /api/jobs/run (cloud sandbox)");
-    desktopOnly.push("Direct /api/bash/run from the mini-app iframe (use jobs or backend instead)");
+    if (findings.some((f) => f.category === "bash-run")) {
+      desktopOnly.push("Direct /api/bash/run from the mini-app iframe (use jobs or backend instead)");
+    }
   }
+  for (const f of desktopJobs) desktopOnly.push(f.message);
   if (level === "desktop-only") {
     if (findings.some((f) => f.category === "papr-api")) {
       desktopOnly.push(
@@ -331,7 +357,9 @@ export function buildCloudCompatibilityReport(
     level === "cloud-ready"
       ? "This app looks cloud-ready — it should work on apps.papr.ai."
       : level === "hybrid"
-        ? "Hybrid app — dashboard works on the web; automation needs Paprwork desktop."
+        ? desktopJobs.length > 0
+          ? `Hybrid app — works on the web; ${desktopJobs.length === 1 ? "1 job only runs" : `${desktopJobs.length} jobs only run`} in Papr Work desktop, and web users are asked to open it.`
+          : "Hybrid app — dashboard works on the web; automation needs Paprwork desktop."
         : "Desktop-only app — publishing is allowed, but key features will not work on apps.papr.ai.";
 
   return {

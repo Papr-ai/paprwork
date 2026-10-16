@@ -1025,6 +1025,27 @@ export const createAppTool = createTool({
   },
 });
 
+/** Agent-facing note when a job's code needs the desktop (auto local-only or a conflict). */
+async function desktopOnlyReminderFor(jobId: string): Promise<string | undefined> {
+  try {
+    const { getJobsService } = await import("../../gateway/services/JobsService.js");
+    const decision = await getJobsService().reassessDesktopOnly(jobId);
+    if (!decision || decision.hits.length === 0) return undefined;
+    const { explainDesktopOnlyForAgent } = await import("../../gateway/utils/jobDesktopOnly.js");
+    if (decision.conflictsWithChoice) {
+      const hit = decision.hits[0];
+      return (
+        `⚠️ This job's code needs the desktop (${hit.reason.toLowerCase()}, ${hit.file}` +
+        `${hit.line ? `:${hit.line}` : ""}) but its placement allows cloud runs, so cloud runs will fail. ` +
+        `Make the code cloud-safe, or update_job({ executionCapability: "local-only" }).`
+      );
+    }
+    return explainDesktopOnlyForAgent(decision.hits);
+  } catch {
+    return undefined;
+  }
+}
+
 export const createJobTool = createTool({
   id: "create_job",
   description:
@@ -1215,11 +1236,14 @@ export const createJobTool = createTool({
     } catch {
       // Discovery is advisory — never fail job creation because of it.
     }
+    // createJob already ran the check; this re-reads the decision for the agent.
+    const desktopOnlyReminder = await desktopOnlyReminderFor(job.id);
 
     return {
       success: true,
-      data: job,
+      data: (await jobsService.getJob(job.id)) ?? job,
       _architectReminder: PRODUCT_ARCHITECT_REMINDER,
+      ...(desktopOnlyReminder ? { _desktopOnlyReminder: desktopOnlyReminder } : {}),
       ...(keyReminder ? { _keyPatternReminder: keyReminder } : {}),
       ...(publishCatalogReminder
         ? { _publishCatalogReminder: publishCatalogReminder }
@@ -1998,6 +2022,13 @@ const updateJobSchema = z.object({
     .describe(
       "Update provider for agent/subagent jobs. Example: 'openai', 'anthropic', 'ollama'",
     ),
+  executionCapability: z
+    .enum(["local-only", "local-preferred", "cloud-preferred"])
+    .optional()
+    .describe(
+      "Where scheduled/cloud runs go. local-only = Papr Work desktop only (needs your Chrome, macOS, home-folder files…). " +
+        "Jobs whose code needs the desktop are set to local-only automatically; pass this only to override.",
+    ),
   model: z
     .enum([
       // Anthropic
@@ -2681,6 +2712,7 @@ export async function runEditJobFile(args: EditJobFileArgs): Promise<{
   success: boolean;
   data: Record<string, unknown>;
   _verifyReminder: string;
+  _desktopOnlyReminder?: string;
 }> {
   const { getJobsService } = await import("../../gateway/services/JobsService.js");
   const jobsService = getJobsService();
@@ -2760,6 +2792,7 @@ export async function runEditJobFile(args: EditJobFileArgs): Promise<{
   const postEditFields = buildPostEditSnippet(newContent, {
     focusText: args.newString,
   });
+  const desktopOnlyReminder = await desktopOnlyReminderFor(args.jobId);
 
   return {
     success: true,
@@ -2774,6 +2807,7 @@ export async function runEditJobFile(args: EditJobFileArgs): Promise<{
       snippetTruncated: postEditFields.snippetTruncated,
     },
     _verifyReminder: JOB_VERIFY_AFTER_EDIT_REMINDER,
+    ...(desktopOnlyReminder ? { _desktopOnlyReminder: desktopOnlyReminder } : {}),
   };
 }
 
@@ -2846,15 +2880,17 @@ Common use cases:
       job.command,
       job.writeDbIds ?? [],
     );
+    const desktopOnlyReminder = await desktopOnlyReminderFor(jobId);
 
     return {
       success: true,
-      data: job,
+      data: (await jobsService.getJob(jobId)) ?? job,
       ...(agentJobReminder ? { _agentJobReminder: agentJobReminder } : {}),
       ...(scriptPathReminder ? { _scriptPathReminder: scriptPathReminder } : {}),
       ...(hardcodedDbIdReminder
         ? { _hardcodedDbIdReminder: hardcodedDbIdReminder }
         : {}),
+      ...(desktopOnlyReminder ? { _desktopOnlyReminder: desktopOnlyReminder } : {}),
     };
   },
 });

@@ -26,6 +26,7 @@ const DESKTOP_ONLY_CATEGORIES = new Set([
   "papr-api",
   "localhost-gateway",
   "chrome-automation",
+  "desktop-job",
 ]);
 
 export interface CommunityPlatformReport {

@@ -106,3 +106,10 @@ describe("landing on the app itself", () => {
   });
 });
 
+describe("handoffLanding from the web card", () => {
+  it("explains the desktop run instead of crediting Claude", () => {
+    const landing = handoffLanding({ appNamespaceId: "n1", appSlug: "linkedin-outreach", source: "web" });
+    expect(landing.title).toBe("From the web");
+    expect(landing.message).toContain("needs Papr Work desktop");
+  });
+});

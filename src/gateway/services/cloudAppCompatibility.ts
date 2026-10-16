@@ -6,9 +6,10 @@ import * as fs from "fs/promises";
 import * as path from "path";
 import type { CloudCompatibilityReport } from "../../core/types/cloudAppCompatibility.js";
 import { getPaprAppsRoot } from "../../core/utils/paprRoot.js";
+import type { CloudCompatibilityFinding } from "../../core/types/cloudAppCompatibility.js";
 import {
+  desktopJobFinding,
   mergeCloudCompatibilityFindings,
-  scanJobCloudCompatibility,
   scanMiniAppCloudCompatibility,
 } from "../utils/miniAppCloudCompatibility.js";
 import { deriveCommunityPlatform } from "../utils/communityPlatformDetection.js";
@@ -24,8 +25,6 @@ const SCAN_EXTENSIONS = new Set([
   ".tsx",
   ".jsx",
 ]);
-
-const JOB_FILE_EXTENSIONS = new Set([".js", ".ts", ".mjs", ".cjs", ".py", ".sh"]);
 
 const JOB_ID_IN_APP =
   /(?:triggerJob|runLinkedInJob|AUTH_JOB_ID|KEEPALIVE_JOB_ID|SENDER_JOB_ID|jobId\s*[:=]\s*['"`])([0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12})/gi;
@@ -79,46 +78,6 @@ function extractJobIdsFromApp(fileContents: Map<string, string>): Set<string> {
   return jobIds;
 }
 
-async function collectJobScriptFiles(
-  jobDir: string,
-  command: string,
-): Promise<Map<string, string>> {
-  const files = new Map<string, string>();
-  const commandMatch = command.match(/(?:node|python3?)\s+(\S+)/);
-  if (commandMatch) {
-    const scriptRel = commandMatch[1].replace(/^\.\//, "");
-    const scriptPath = path.join(jobDir, scriptRel);
-    try {
-      files.set(scriptRel, await fs.readFile(scriptPath, "utf8"));
-    } catch {
-      // main script missing
-    }
-  }
-
-  let entries;
-  try {
-    entries = await fs.readdir(jobDir, { withFileTypes: true });
-  } catch {
-    return files;
-  }
-
-  for (const entry of entries) {
-    if (!entry.isFile()) continue;
-    const ext = path.extname(entry.name).toLowerCase();
-    if (!JOB_FILE_EXTENSIONS.has(ext)) continue;
-    if (files.has(entry.name)) continue;
-    try {
-      const content = await fs.readFile(path.join(jobDir, entry.name), "utf8");
-      if (/puppeteer|9222|chrome-manager|linkedin-chrome|connectOverCDP/i.test(content)) {
-        files.set(entry.name, content);
-      }
-    } catch {
-      // skip
-    }
-  }
-
-  return files;
-}
 
 export async function scanAppCloudCompatibility(
   appId: string,
@@ -158,16 +117,22 @@ export async function scanAppCloudCompatibility(
     jobIds.add(job.id.toLowerCase());
   }
 
-  const jobFindingGroups = [];
+  // Jobs: same rules the Jobs service uses to set local-only (utils/jobDesktopOnly.ts).
+  // A placement someone chose wins: local-only → desktop job; otherwise trust the code.
+  const { assessJobDesktopOnly } = await import("./jobs/desktopOnlyAssessment.js");
+  const jobFindingGroups: CloudCompatibilityFinding[][] = [];
   for (const jobId of jobIds) {
     const job = await jobsService.getJob(jobId);
     if (!job) continue;
     const jobDir = await jobsService.getJobPath(jobId);
     if (!jobDir) continue;
-    const extraFiles = await collectJobScriptFiles(jobDir, job.command ?? "");
-    jobFindingGroups.push(
-      scanJobCloudCompatibility(jobId, job.name ?? jobId, job.command ?? "", extraFiles),
-    );
+    const name = job.name ?? jobId;
+    const hits = await assessJobDesktopOnly(job, jobDir, () => undefined);
+    if (hits.length > 0) {
+      jobFindingGroups.push([desktopJobFinding(jobId, name, hits[0].reason, hits[0])]);
+    } else if (job.executionCapability === "local-only" && job.localOnlyReason) {
+      jobFindingGroups.push([desktopJobFinding(jobId, name, job.localOnlyReason)]);
+    }
   }
 
   return mergeCloudCompatibilityFindings([appFindings, ...jobFindingGroups]);

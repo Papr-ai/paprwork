@@ -672,6 +672,7 @@ export class JobsService {
       await this.backfillJobAppIds();
       logJobsStartupStep("Maintenance", "migrate unlinked jobs");
       await this.migrateUnlinkedJobsToLocalOnly();
+      void this.reassessAllDesktopOnly();
 
       // The misfire policy has to run again here, because the pass during core
       // init happens before any of this loaded a real scheduleState. jobs.json
@@ -1506,6 +1507,54 @@ export class JobsService {
     return path.join(this.jobsRootDir, jobId);
   }
 
+  /**
+   * Re-check whether a job's code needs the desktop and keep executionCapability /
+   * localOnlyReason in step (see jobs/desktopOnlyAssessment.ts). Never overrides a
+   * placement someone chose. Safe to call repeatedly; returns the decision so tools
+   * can explain it to the agent.
+   */
+  async reassessDesktopOnly(
+    jobId: string,
+  ): Promise<import("./jobs/desktopOnlyAssessment.js").DesktopOnlyDecision | null> {
+    const job = this.jobs.get(jobId);
+    if (!job || job.status === "running") return null;
+    try {
+      const { assessJobDesktopOnly, decideDesktopOnly } = await import(
+        "./jobs/desktopOnlyAssessment.js"
+      );
+      const hits = await assessJobDesktopOnly(job, this.getJobDir(jobId), (id) => this.jobs.get(id));
+      const decision = decideDesktopOnly(job, hits);
+      if (decision.patch) {
+        const current = this.jobs.get(jobId);
+        if (!current || current.status === "running") return decision;
+        const updated: JobRecord = { ...current, ...decision.patch };
+        for (const key of ["executionCapability", "localOnlyReason", "localOnlyAuto"] as const) {
+          if (updated[key] === undefined) delete updated[key];
+        }
+        this.setJobInMemory(updated);
+        await this.persistJobRecord(updated);
+        await this.saveJobs();
+      }
+      return decision;
+    } catch (err) {
+      console.warn(`[JobsService] desktop-only check failed for ${jobId}:`, (err as Error).message);
+      return null;
+    }
+  }
+
+  /** Background pass: pin existing desktop-only jobs that nobody has placed yet. */
+  private async reassessAllDesktopOnly(): Promise<void> {
+    let pinned = 0;
+    for (const job of Array.from(this.jobs.values())) {
+      if (job.executionCapability !== undefined && !job.localOnlyAuto && job.localOnlyReason) continue;
+      const decision = await this.reassessDesktopOnly(job.id);
+      if (decision?.patch?.executionCapability === "local-only") pinned += 1;
+    }
+    if (pinned > 0) {
+      console.log(`[JobsService] Desktop-only check: ${pinned} job(s) set to local-only`);
+    }
+  }
+
   getJobsRootPath(): string {
     return this.jobsRootDir;
   }
@@ -1972,7 +2021,8 @@ export class JobsService {
       is_agent: isAgentJobType(input.type),
     });
 
-    return job;
+    await this.reassessDesktopOnly(id);
+    return this.jobs.get(id) ?? job;
   }
 
   /**
@@ -3527,6 +3577,11 @@ export class JobsService {
     }
 
     const candidate = { ...job, ...updates };
+    if (updates.executionCapability !== undefined) {
+      // A placement passed here was chosen (UI or update_job) — never auto-revert it.
+      delete candidate.localOnlyAuto;
+      if (updates.executionCapability !== "local-only") delete candidate.localOnlyReason;
+    }
     const architectureIssues = await this.validateJobCandidate(candidate, jobId);
     const architectureErrors = formatJobArchitectureErrors(architectureIssues);
     if (architectureErrors) {
@@ -3597,7 +3652,14 @@ export class JobsService {
       changed_fields: Object.keys(updates).join(","),
     });
 
-    return updated;
+    if (
+      updates.command !== undefined ||
+      updates.provider !== undefined ||
+      updates.executionCapability !== undefined
+    ) {
+      await this.reassessDesktopOnly(jobId);
+    }
+    return this.jobs.get(jobId) ?? updated;
   }
 
   async deleteJob(
@@ -4230,6 +4292,7 @@ export class JobsService {
     const dir = path.dirname(resolvedPath);
     await fs.mkdir(dir, { recursive: true });
     await fs.writeFile(resolvedPath, content, { flush: true });
+    void this.reassessDesktopOnly(jobId);
     return true;
   }
 

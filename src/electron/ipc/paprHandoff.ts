@@ -125,13 +125,19 @@ export function handoffLanding(
   appsBaseUrl = "https://apps.papr.ai",
   local?: { appId: string; name?: string } | null,
 ): HandoffLanding {
+  // "web" = the "Open in Papr Work" card on apps.papr.ai (a job that needs this Mac).
+  const fromWeb = intent.source === "web";
+  const title = fromWeb ? "From the web" : "Continued from Claude";
   if (intent.appNamespaceId && intent.appSlug) {
     const name = local?.name || intent.appSlug;
     if (local?.appId) {
       // view "outreach:c_123" = the card already created this (e.g. a campaign): pick it up, don't redo it.
       const started = /^[\w-]+:[\w-]{3,80}$/.test(intent.view ?? "");
+      if (fromWeb) {
+        return { title, message: `Run ${name} here — it needs Papr Work desktop.`, appId: local.appId };
+      }
       return {
-        title: "Continued from Claude",
+        title,
         message: started
           ? `I started this in ${name} from Claude and it's set to run from this Mac. Check it's ready to go and tell me if anything needs me.`
           : `Let's keep working on ${name} from Claude.`,
@@ -140,9 +146,12 @@ export function handoffLanding(
     }
     const link = `${appsBaseUrl}/${intent.appNamespaceId}/${intent.appSlug}`;
     const view = intent.view ? ` (${intent.view})` : "";
-    return { title: "Continued from Claude", message: `Let's keep working on ${intent.appSlug}${view} from Claude: ${link}` };
+    const message = fromWeb
+      ? `Run ${intent.appSlug}${view} here — it needs Papr Work desktop: ${link}`
+      : `Let's keep working on ${intent.appSlug}${view} from Claude: ${link}`;
+    return { title, message };
   }
-  return { title: "Continued from Claude", message: "" };
+  return { title, message: "" };
 }
 
 export type HandoffAccountDecision = "sign_in" | "same_user" | "different_user";

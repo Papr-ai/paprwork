@@ -32,6 +32,8 @@ export const JOB_CONFIG_FIELD_KEYS = [
   "provider",
   "model",
   "executionCapability",
+  "localOnlyReason",
+  "localOnlyAuto",
   "recipe",
   "createdAt",
 ] as const satisfies readonly (keyof JobRecord)[];

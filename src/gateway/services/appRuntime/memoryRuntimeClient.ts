@@ -409,6 +409,69 @@ export interface RuntimeJobSummary {
   lastRunAt?: string;
   completedAt?: string;
   lastOutput?: string;
+  /** "local-only" → the cloud refuses to run it; show "Open in Papr Work". */
+  executionCapability?: string | null;
+  localOnlyReason?: string | null;
+}
+
+/** Memory refused a cloud run because the job only runs in Papr Work desktop (409). */
+export interface DesktopRequiredBody {
+  error: "desktop_required";
+  message: string;
+  jobId?: string;
+  jobName?: string;
+  reason?: string | null;
+  downloadUrl: string;
+}
+
+export class RuntimeDesktopRequiredError extends Error {
+  constructor(readonly body: DesktopRequiredBody) {
+    super(body.message);
+    this.name = "RuntimeDesktopRequiredError";
+  }
+}
+
+export function parseDesktopRequired(text: string): DesktopRequiredBody | null {
+  try {
+    const parsed = JSON.parse(text) as { detail?: unknown };
+    const detail = (parsed.detail ?? parsed) as Partial<DesktopRequiredBody>;
+    if (detail?.error !== "desktop_required") return null;
+    return {
+      error: "desktop_required",
+      message: String(detail.message ?? "This job only runs in Papr Work desktop."),
+      jobId: detail.jobId,
+      jobName: detail.jobName,
+      reason: detail.reason ?? null,
+      downloadUrl: String(detail.downloadUrl ?? "https://papr.ai/download"),
+    };
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * One-time papr:// link that opens Papr Work signed in at this app (same primitive
+ * as Claude's "Continue on your Mac"). Needs a signed-in session.
+ */
+export async function createDesktopHandoff(
+  auth: AppRuntimeRouteAuth,
+  view?: string,
+): Promise<{ url: string; expiresAt: string } | null> {
+  if (!auth.sessionToken) return null;
+  const res = await runtimeFetch(`${getMemoryServerBaseUrl()}/v1/cloud/handoff/codes`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json", "X-Session-Token": auth.sessionToken },
+    body: JSON.stringify({
+      appNamespaceId: auth.namespaceId,
+      appSlug: auth.slug,
+      ...(view ? { view } : {}),
+      source: "web",
+    }),
+  });
+  if (!res.ok) return null;
+  const body = (await res.json()) as { url?: string; expiresAt?: string };
+  if (!body.url?.startsWith("papr://")) return null;
+  return { url: body.url, expiresAt: String(body.expiresAt ?? "") };
 }
 
 /** Run a synced job in cloud sandbox (GKE or process fallback on memory server). */
@@ -437,9 +500,12 @@ export async function runRuntimeJob(
     Math.max(DEFAULT_RUNTIME_FETCH_TIMEOUT_MS, (input.timeoutMs ?? 60_000) + 5_000),
   );
   if (!res.ok) {
-    throw new Error(
-      `Runtime job-run failed (${res.status}): ${(await res.text()).slice(0, 200)}`,
-    );
+    const text = await res.text();
+    if (res.status === 409) {
+      const desktopRequired = parseDesktopRequired(text);
+      if (desktopRequired) throw new RuntimeDesktopRequiredError(desktopRequired);
+    }
+    throw new Error(`Runtime job-run failed (${res.status}): ${text.slice(0, 200)}`);
   }
   return (await res.json()) as RuntimeJobRunResult;
 }

@@ -7,7 +7,7 @@
  * Works for any app that calls fetch('/api/jobs/run', …) — no button attributes needed.
  */
 
-import { buildPaprAuthOverlayMarkup } from "./papr-auth-ui.js";
+import { buildPaprAuthOverlayMarkup, buildPaprDesktopRequiredMarkup } from "./papr-auth-ui.js";
 
 const API_PREFIX = "/api/";
 const OVERLAY_ID = "__papr_auth_overlay__";
@@ -32,13 +32,27 @@ interface AuthStatusBody {
 
 interface JobSummary {
   id: string;
+  name?: string;
   type?: string;
+  executionCapability?: string | null;
+  localOnlyReason?: string | null;
 }
+
+interface DesktopRequiredBody {
+  error?: string;
+  message?: string;
+  jobName?: string;
+  downloadUrl?: string;
+}
+
+const DESKTOP_CARD_ID = "__papr_desktop_required__";
+const DOWNLOAD_URL = "https://papr.ai/download";
 
 type AuthErrorKind = "sign_in" | "no_access" | "key_missing";
 
 let loggedIn = false;
 let agentJobIds = new Set<string>();
+let desktopOnlyJobs = new Map<string, JobSummary>();
 let jobsCatalogLoaded = false;
 let accessDeniedDismissedAt = 0;
 
@@ -308,6 +322,70 @@ function isJobRunRequest(url: string, init?: RequestInit): boolean {
 
 const _originalFetch = window.fetch;
 
+function desktopRequiredMessage(job: JobSummary): string {
+  const name = job.name || "This job";
+  const reason = job.localOnlyReason?.trim();
+  return `${name} only runs in Papr Work desktop${reason ? ` — ${reason[0].toLowerCase()}${reason.slice(1)}` : ""}.`;
+}
+
+/**
+ * "Open in Papr Work": one-time papr:// handoff link (signed in, opens this app) when
+ * we can mint one; otherwise papr://. If nothing opens within ~1.8s, go to download.
+ * Embedded (e.g. inside Claude or another site) papr:// is blocked in the iframe, so
+ * open it in a new top-level tab instead.
+ */
+async function openInPaprWork(downloadUrl: string): Promise<void> {
+  const embedded = window.parent !== window;
+  let target = "papr://";
+  try {
+    const scoped = applyCloudContextToFetch("/api/desktop-handoff", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({}),
+    });
+    const res = await _originalFetch.call(window, scoped.input, scoped.init);
+    if (res.ok) {
+      const body = (await res.json()) as { url?: string | null };
+      if (body.url) target = body.url;
+    }
+  } catch {
+    /* fall back to plain papr:// */
+  }
+  const fallback = window.setTimeout(() => {
+    if (embedded) window.open(downloadUrl, "_blank", "noopener");
+    else window.location.href = downloadUrl;
+  }, 1800);
+  const cancel = () => window.clearTimeout(fallback);
+  window.addEventListener("blur", cancel, { once: true });
+  document.addEventListener("visibilitychange", () => document.hidden && cancel(), { once: true });
+  if (embedded) {
+    window.open(target, "_blank", "noopener");
+    return;
+  }
+  window.location.href = target;
+}
+
+function showDesktopRequiredCard(message: string, downloadUrl = DOWNLOAD_URL): void {
+  if (document.getElementById(DESKTOP_CARD_ID)) return;
+  const card = document.createElement("div");
+  card.id = DESKTOP_CARD_ID;
+  const markup = buildPaprDesktopRequiredMarkup({ message, downloadUrl });
+  card.className = markup.overlayClass;
+  card.innerHTML = markup.html;
+  card.querySelector("[data-papr-open-desktop]")?.addEventListener("click", () => {
+    void openInPaprWork(downloadUrl);
+  });
+  card.querySelector("[data-papr-auth-dismiss]")?.addEventListener("click", () => card.remove());
+  document.body.appendChild(card);
+}
+
+function desktopRequiredResponse(body: DesktopRequiredBody): Response {
+  return new Response(JSON.stringify({ downloadUrl: DOWNLOAD_URL, ...body, error: "desktop_required" }), {
+    status: 409,
+    headers: { "Content-Type": "application/json" },
+  });
+}
+
 async function refreshPlatformAuthState(): Promise<void> {
   try {
     const statusScoped = applyCloudContextToFetch("/auth/status");
@@ -327,6 +405,11 @@ async function refreshPlatformAuthState(): Promise<void> {
           .filter((job) => job.type && AGENT_JOB_TYPES.has(job.type))
           .map((job) => job.id),
       );
+      desktopOnlyJobs = new Map(
+        (data.jobs ?? [])
+          .filter((job) => job.executionCapability === "local-only")
+          .map((job) => [job.id, job]),
+      );
       jobsCatalogLoaded = true;
     }
   } catch {
@@ -343,6 +426,12 @@ window.fetch = async function paprPlatformGuardFetch(
 
   if (url.includes(API_PREFIX) && isJobRunRequest(url, scoped.init)) {
     const jobId = parseJobRunBody(scoped.init);
+    const desktopOnly = jobId ? desktopOnlyJobs.get(jobId) : undefined;
+    if (desktopOnly) {
+      const message = desktopRequiredMessage(desktopOnly);
+      showDesktopRequiredCard(message);
+      return desktopRequiredResponse({ message, jobName: desktopOnly.name });
+    }
     if (jobId && requiresSignInForJob(jobId)) {
       showAgentJobSignInOverlay();
       return jobRunSignInResponse();
@@ -352,6 +441,20 @@ window.fetch = async function paprPlatformGuardFetch(
   const response = await _originalFetch.call(window, scoped.input, scoped.init);
 
   if (!url.includes(API_PREFIX)) return response;
+  if (response.status === 409) {
+    try {
+      const body = (await response.clone().json()) as DesktopRequiredBody;
+      if (body.error === "desktop_required") {
+        showDesktopRequiredCard(
+          body.message ?? "This only runs in Papr Work desktop.",
+          body.downloadUrl ?? DOWNLOAD_URL,
+        );
+      }
+    } catch {
+      /* not JSON — leave it to the app */
+    }
+    return response;
+  }
   if (response.status !== 401 && response.status !== 403) return response;
 
   const clone = response.clone();
