@@ -1546,8 +1546,12 @@ export class CloudAppHostService {
       });
       res.json(result);
     } catch (err) {
-      const e = err as Error & { status?: number };
-      res.status(e.status ?? 500).json({ error: e.message });
+      const e = err as Error & { status?: number; code?: string; table?: string };
+      res.status(e.status ?? 500).json({
+        error: e.message,
+        ...(e.code ? { code: e.code } : {}),
+        ...(e.table ? { table: e.table } : {}),
+      });
     } finally {
       const totalMs = Math.round(performance.now() - queryStarted);
       if (process.env.CLOUD_DB_QUERY_TIMING !== "0") {
@@ -1678,8 +1682,12 @@ export class CloudAppHostService {
       }
       res.json({ results });
     } catch (err) {
-      const e = err as Error & { status?: number };
-      res.status(e.status ?? 500).json({ error: e.message });
+      const e = err as Error & { status?: number; code?: string; table?: string };
+      res.status(e.status ?? 500).json({
+        error: e.message,
+        ...(e.code ? { code: e.code } : {}),
+        ...(e.table ? { table: e.table } : {}),
+      });
     } finally {
       const totalMs = Math.round(performance.now() - queryStarted);
       if (process.env.CLOUD_DB_QUERY_TIMING !== "0") {
@@ -1758,8 +1766,12 @@ export class CloudAppHostService {
       });
       res.json(result);
     } catch (err) {
-      const e = err as Error & { status?: number };
-      res.status(e.status ?? 500).json({ error: e.message });
+      const e = err as Error & { status?: number; code?: string; table?: string };
+      res.status(e.status ?? 500).json({
+        error: e.message,
+        ...(e.code ? { code: e.code } : {}),
+        ...(e.table ? { table: e.table } : {}),
+      });
     } finally {
       const totalMs = Math.round(performance.now() - writeStarted);
       if (process.env.CLOUD_DB_WRITE_TIMING !== "0") {
@@ -1857,8 +1869,12 @@ export class CloudAppHostService {
       });
       res.json({ atomic: atomic === true, ...batchResult });
     } catch (err) {
-      const e = err as Error & { status?: number };
-      res.status(e.status ?? 500).json({ error: e.message });
+      const e = err as Error & { status?: number; code?: string; table?: string };
+      res.status(e.status ?? 500).json({
+        error: e.message,
+        ...(e.code ? { code: e.code } : {}),
+        ...(e.table ? { table: e.table } : {}),
+      });
     } finally {
       const totalMs = Math.round(performance.now() - writeStarted);
       if (process.env.CLOUD_DB_WRITE_TIMING !== "0") {
@@ -1917,8 +1933,12 @@ export class CloudAppHostService {
       this.publishDbChangedForSource(config, sourceId, appId, runtimeAuth);
       res.json(result);
     } catch (err) {
-      const e = err as Error & { status?: number };
-      res.status(e.status ?? 500).json({ error: e.message });
+      const e = err as Error & { status?: number; code?: string; table?: string };
+      res.status(e.status ?? 500).json({
+        error: e.message,
+        ...(e.code ? { code: e.code } : {}),
+        ...(e.table ? { table: e.table } : {}),
+      });
     }
   }
 
