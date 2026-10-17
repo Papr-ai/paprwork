@@ -59,6 +59,7 @@ import {
 import type { WorkspaceLogHostScope } from "../../../core/types/workspaceLog.js";
 import { shouldUseTursoReplicaForDb } from "../../utils/tursoReplicaEnabled.js";
 import { refreshAppDataSourcesConfig } from "./cloudDatabaseRegistry.js";
+import { getServiceSecret } from "../../../core/utils/serviceSecrets.js";
 
 /** Cloud host request: `userId` = publisher; optional session visitor for per-user DBs. */
 type TursoDbActorInput = {
@@ -1064,7 +1065,7 @@ export class TursoDbAdapter {
 
   /** Legacy linked sources use workspace log; replica-mode sources use Turso direct. */
   private usesWorkspaceLogAuthorityForSource(source: AppDataSource): boolean {
-    if (!process.env.PAPR_CLOUD_APP_HOST_KEY?.trim()) {
+    if (!getServiceSecret("PAPR_CLOUD_APP_HOST_KEY")) {
       return false;
     }
     const registry = getDatabaseRegistryService();

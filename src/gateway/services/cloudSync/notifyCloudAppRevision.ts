@@ -2,6 +2,7 @@
  * Tell apps.papr.ai to invalidate repo caches after a successful git sync push.
  * Open browser tabs refresh manually (F5) — same model as Vercel/static hosting.
  */
+import { getServiceSecret } from "../../../core/utils/serviceSecrets.js";
 
 export interface NotifyCloudAppRevisionInput {
   namespaceId: string;
@@ -36,7 +37,7 @@ export function resolvePublishRouteForNotify(input: {
 export async function notifyCloudAppAccessUpdated(
   input: NotifyCloudAppAccessUpdatedInput,
 ): Promise<void> {
-  const hostKey = process.env.PAPR_CLOUD_APP_HOST_KEY?.trim();
+  const hostKey = getServiceSecret("PAPR_CLOUD_APP_HOST_KEY");
   if (!hostKey) {
     return;
   }
@@ -69,10 +70,13 @@ export async function notifyCloudAppAccessUpdated(
 }
 
 export async function notifyCloudAppRevisionUpdated(
-  input: NotifyCloudAppRevisionInput & { commitSha?: string },
+  input: NotifyCloudAppRevisionInput & { commitSha?: string; appId?: string },
 ): Promise<void> {
-  const hostKey = process.env.PAPR_CLOUD_APP_HOST_KEY?.trim();
+  const hostKey = getServiceSecret("PAPR_CLOUD_APP_HOST_KEY");
   if (!hostKey) {
+    // Desktop: no shared host key in builds any more. Ask memory, signed in as
+    // the publisher; memory checks the app is ours and tells apps.papr.ai.
+    if (input.appId) await notifyRevisionViaMemory(input.appId, input.commitSha);
     return;
   }
 
@@ -99,6 +103,24 @@ export async function notifyCloudAppRevisionUpdated(
   } catch (error) {
     console.warn(
       `[CloudSync] App revision notify error for ${input.namespaceId}/${input.slug}:`,
+      (error as Error).message.slice(0, 120),
+    );
+  }
+}
+
+async function notifyRevisionViaMemory(appId: string, commitSha?: string): Promise<void> {
+  try {
+    const { cloudApiFetch } = await import("../../utils/cloudApiClient.js");
+    const res = await cloudApiFetch(
+      `/v1/cloud/apps/publish/${encodeURIComponent(appId)}/revision-notify`,
+      { method: "POST", timeoutMs: 15_000, body: commitSha ? { commitSha } : {} },
+    );
+    if (!res.ok) {
+      console.warn(`[CloudSync] Revision notify via memory failed (${res.status}) for ${appId}`);
+    }
+  } catch (error) {
+    console.warn(
+      `[CloudSync] Revision notify via memory error for ${appId}:`,
       (error as Error).message.slice(0, 120),
     );
   }

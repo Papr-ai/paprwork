@@ -66,6 +66,6 @@ export async function switchHostToCommit(
   const status = await getCloudAppPublishService().getCloudPublishStatus(appId);
   const route = status.published ? parsePublishedAppRoute(status.shareUrl) : null;
   if (route) {
-    await notifyCloudAppRevisionUpdated({ ...route, commitSha });
+    await notifyCloudAppRevisionUpdated({ ...route, appId, commitSha });
   }
 }

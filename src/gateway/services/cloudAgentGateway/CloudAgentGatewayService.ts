@@ -6,6 +6,7 @@ import {
   withCloudAgentRunContext,
 } from "./cloudAgentRunContext.js";
 import { getCloudAgentSessionCache } from "./cloudAgentSessionCache.js";
+import { collectAppProposalChanges } from "./appAgentProposal.js";
 import type {
   CloudAgentRunRequest,
   CloudAgentRunResponse,
@@ -131,6 +132,7 @@ export class CloudAgentGatewayService {
     try {
       handle = await beginCloudAgentRun(request);
       exitCode = yield* this.yieldAgentStreamChunks(request);
+      yield* this.yieldAppProposal(request, handle.paprHome);
     } catch (error) {
       exitCode = 1;
       yield { type: "error", message: (error as Error).message, chatId };
@@ -181,6 +183,7 @@ export class CloudAgentGatewayService {
     try {
       handle = await cache.acquireForTurn(request);
       exitCode = yield* this.yieldAgentStreamChunks(request);
+      yield* this.yieldAppProposal(request, handle.paprHome);
     } catch (error) {
       exitCode = 1;
       yield { type: "error", message: (error as Error).message, chatId };
@@ -201,6 +204,23 @@ export class CloudAgentGatewayService {
     }
 
     yield { type: "done", exitCode, chatId };
+  }
+
+  /**
+   * Contributor run: hand the turn's cumulative app edits to memory, which
+   * turns them into a proposal (memory strips this event before the browser).
+   */
+  private async *yieldAppProposal(
+    request: CloudAgentRunRequest,
+    paprHome: string,
+  ): AsyncGenerator<Record<string, unknown>> {
+    if (request.appCodePush !== "proposal" || !request.appId) return;
+    try {
+      const changes = await collectAppProposalChanges(paprHome, request.appId);
+      if (changes) yield { type: "app-code-proposal", ...changes };
+    } catch (error) {
+      console.warn("[CloudAgentGateway] proposal diff failed:", (error as Error).message);
+    }
   }
 
   private async *yieldAgentStreamChunks(

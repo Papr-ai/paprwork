@@ -48,6 +48,7 @@ import {
   timeReplicaReadPhase,
 } from "./replicaReadPhaseTrace.js";
 import type { TursoSyncWorkerOpTiming } from "./tursoReplicaSyncWorkerProtocol.js";
+import { serviceSecretsEnv } from "../../../core/utils/serviceSecrets.js";
 
 /** Reject when stdin is gone (EPIPE) instead of throwing outside the pending op. */
 export function writeWorkerStdinLine(
@@ -631,7 +632,7 @@ export class TursoReplicaSyncWorkerClient {
       const { command, args } = this.resolveCommand();
       const child = spawn(command, args, {
         stdio: ["pipe", "pipe", "pipe"],
-        env: { ...process.env, ELECTRON_RUN_AS_NODE: "1" },
+        env: { ...process.env, ...serviceSecretsEnv(), ELECTRON_RUN_AS_NODE: "1" },
       });
       this.child = child;
       this.stdoutBuffer = "";

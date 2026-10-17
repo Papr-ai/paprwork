@@ -16,6 +16,9 @@ import {
   type TursoSyncWorkerLine,
   type TursoSyncWorkerRequest,
 } from "./tursoReplicaSyncWorkerProtocol.js";
+import { captureServiceSecrets } from "../../../core/utils/serviceSecrets.js";
+// Worker is Papr code: keep its copy, but nothing it spawns inherits it.
+captureServiceSecrets();
 
 function emit(line: TursoSyncWorkerLine): void {
   process.stdout.write(`${JSON.stringify(line)}\n`);

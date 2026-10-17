@@ -16,7 +16,11 @@ import { prepareCloudJobEnvironment } from "./prepareCloudJobEnvironment.js";
 import { seedCloudDatabaseRegistry } from "./seedCloudDatabaseRegistry.js";
 import { reinitializeWorkspaceServicesForCloudRun } from "./reinitializeWorkspaceServices.js";
 import { startCloudAgentTursoDebouncedPush } from "./cloudAgentTursoDebouncedPush.js";
-import { startCloudAppWriterDebouncedPush, getCloudAppWriterPushedAppIds } from "./cloudAppWriterDebouncedPush.js";
+import {
+  disableCloudAppWriterForRun,
+  getCloudAppWriterPushedAppIds,
+  startCloudAppWriterDebouncedPush,
+} from "./cloudAppWriterDebouncedPush.js";
 import {
   isSkippedEmptyTursoTarget,
   notifyCloudDbChangedForTarget,
@@ -30,7 +34,7 @@ import {
   type TursoBookendTarget,
 } from "./syncJobTursoBookends.js";
 import { reconcileCloudProviderAuth } from "./resolveCloudProviderAuth.js";
-import { clearKeyCache } from "../../utils/keyResolver.js";
+import { clearKeyCache, seedPaprApiKeyFromParent } from "../../utils/keyResolver.js";
 import { invalidatePaprUserIdCache } from "../../utils/paprUserId.js";
 import { hydrateSubAgentsRegistryForCloudRun, applySubAgentsHydrationFromMongo } from "./hydrateSubAgentsRegistryForCloudRun.js";
 import { fetchSubAgentsIndexFromCloudDirect } from "../syncV3/MetadataRegistryClient.js";
@@ -186,6 +190,13 @@ function applyPaprApiKey(
   snapshot.previousPaprApiKey = process.env.PAPR_API_KEY;
   process.env.PAPR_API_KEY = key;
   clearKeyCache("PAPR_API_KEY");
+  // Memory already authenticated this key for request.namespaceId, so it is
+  // namespace-bound like a vault slot — not an untrusted .env value. Without
+  // this, legacy-format keys (no embedded namespace) are rejected by the
+  // resolver and the run silently loses chat sync / Papr memory.
+  if (!seedPaprApiKeyFromParent(key)) {
+    console.warn("[CloudAgentRun] request PAPR_API_KEY not bound to the run workspace — not seeded");
+  }
 }
 
 async function restoreCloudRunEnv(snapshot: CloudRunEnvSnapshot): Promise<void> {
@@ -199,6 +210,7 @@ async function restoreCloudRunEnv(snapshot: CloudRunEnvSnapshot): Promise<void> 
   else process.env.PAPR_NAMESPACE_ID = snapshot.previousPaprNamespaceId;
   if (snapshot.previousPaprApiKey === undefined) delete process.env.PAPR_API_KEY;
   else process.env.PAPR_API_KEY = snapshot.previousPaprApiKey;
+  clearKeyCache("PAPR_API_KEY");
   if (snapshot.previousHome === undefined) delete process.env.HOME;
   else process.env.HOME = snapshot.previousHome;
   if (snapshot.previousJobDir === undefined) delete process.env.JOB_DIR;
@@ -223,6 +235,38 @@ async function restoreCloudRunEnv(snapshot: CloudRunEnvSnapshot): Promise<void> 
     if (previousValue === undefined) delete process.env[keyName];
     else process.env[keyName] = previousValue;
   }
+}
+
+function applyWorkspaceProcessEnv(
+  request: CloudAgentRunRequest,
+  paprHome: string,
+  userDataPath: string,
+  runRoot: string,
+  envSnapshot: CloudRunEnvSnapshot,
+): void {
+  process.env.PAPR_HOME = paprHome;
+  process.env.PAPR_USER_DATA = userDataPath;
+  if (request.orgId) {
+    process.env.PAPR_ORG_ID = request.orgId;
+  }
+  if (request.namespaceId) {
+    process.env.PAPR_NAMESPACE_ID = request.namespaceId;
+  }
+  const actingUserId = request.userId?.trim();
+  if (actingUserId) {
+    process.env.PAPRWORK_TELEMETRY_PAPR_USER_ID = actingUserId;
+    invalidatePaprUserIdCache();
+  }
+  process.env.HOME = runRoot;
+  // App-scope runs serve the app's visitors: no personal memory injection.
+  envSnapshot.previousVaultEnv.set(
+    "PAPR_SKIP_USER_MEMORY_CONTEXT",
+    process.env.PAPR_SKIP_USER_MEMORY_CONTEXT,
+  );
+  if (request.workspaceScope === "app") process.env.PAPR_SKIP_USER_MEMORY_CONTEXT = "1";
+  else delete process.env.PAPR_SKIP_USER_MEMORY_CONTEXT;
+  applyVaultKeys(request, envSnapshot);
+  applyPaprApiKey(request, envSnapshot);
 }
 
 async function ensureTursoLocalFiles(tursoTargets: TursoBookendTarget[]): Promise<void> {
@@ -292,6 +336,57 @@ export interface BeginCloudAgentRunOptions {
   runRoot?: string;
   /** Warm-only: clone + hydrate on disk; skip job env, Turso bookends, and sync push on finish. */
   prepOnly?: boolean;
+  /**
+   * Turn in a warm session whose workspace was verified fresh moments ago:
+   * skip the git ls-remote HEAD check and the sub-agent re-hydrate (both were
+   * done at warm; publishes invalidate the session separately).
+   */
+  trustWarmWorkspace?: boolean;
+  /**
+   * prepOnly: also bind workspace services to this workspace now, so the first
+   * turn finds them ready instead of paying the re-init after the user hits send.
+   */
+  prebindServices?: boolean;
+}
+
+/**
+ * Workspace singletons (jobs, apps, agent, registry) are path-bound. The
+ * gateway runs one request at a time (Cloud Run concurrency=1), so when the
+ * next turn is for the same warm workspace and identity they are still bound
+ * to it — re-initialising them again was the bulk of every turn's setup.
+ */
+let boundWorkspaceKey: string | null = null;
+
+export function resetBoundCloudWorkspaceForTests(): void {
+  boundWorkspaceKey = null;
+}
+
+/** Workspace on disk was removed or replaced — services must rebind next run. */
+export function forgetBoundCloudWorkspace(runRoot?: string): void {
+  if (!runRoot || (boundWorkspaceKey && boundWorkspaceKey.startsWith(runRoot))) {
+    boundWorkspaceKey = null;
+  }
+}
+
+export function isCloudWorkspaceBoundForTests(
+  request: CloudAgentRunRequest,
+  paprHome: string,
+): boolean {
+  return boundWorkspaceKey === workspaceBindingKey(request, paprHome);
+}
+
+function workspaceBindingKey(request: CloudAgentRunRequest, paprHome: string): string {
+  return [paprHome, request.userId ?? "", request.orgId ?? "", request.namespaceId ?? "",
+    request.paprApiKey?.slice(-12) ?? ""].join("|");
+}
+
+async function timed<T>(label: string, timings: string[], fn: () => Promise<T>): Promise<T> {
+  const started = Date.now();
+  try {
+    return await fn();
+  } finally {
+    timings.push(`${label}=${Date.now() - started}ms`);
+  }
 }
 
 export async function beginCloudAgentRun(
@@ -312,6 +407,8 @@ export async function beginCloudAgentRun(
       : path.join(runRoot, "Papr");
   const envSnapshot = captureCloudRunEnv();
   const tursoTargets = resolveTursoBookendTargets(request, paprHome);
+  const runStarted = Date.now();
+  const timings: string[] = [];
 
   const prepOnly = options.prepOnly === true;
   let skipClone = options.skipClone === true;
@@ -326,6 +423,7 @@ export async function beginCloudAgentRun(
     }
 
     if (
+      options.trustWarmWorkspace !== true &&
       request.workspaceScope === "app" &&
       request.appRepoOwner &&
       request.appRepoName
@@ -352,6 +450,7 @@ export async function beginCloudAgentRun(
     : fetchSubAgentsIndexFromCloudDirect(request.paprApiKey).catch(() => null);
 
   if (!skipClone) {
+    forgetBoundCloudWorkspace(runRoot);
     if (
       request.workspaceScope === "app" &&
       request.appId &&
@@ -392,7 +491,7 @@ export async function beginCloudAgentRun(
       if (mongoEntries !== null) {
         await applySubAgentsHydrationFromMongo(paprHome, mongoEntries);
       }
-    } else {
+    } else if (options.trustWarmWorkspace !== true) {
       await hydrateSubAgentsRegistryForCloudRun({
         paprHome,
         paprApiKey: request.paprApiKey,
@@ -405,6 +504,33 @@ export async function beginCloudAgentRun(
     );
   }
 
+  if (prepOnly && options.prebindServices) {
+    try {
+      await timed("prebindServices", timings, async () => {
+        applyWorkspaceProcessEnv(request, paprHome, userDataPath, runRoot, envSnapshot);
+        const tursoDirect = shouldUseCloudSandboxTursoDirect(paprHome);
+        await seedCloudDatabaseRegistry(request, paprHome, { cloudDirect: tursoDirect });
+        boundWorkspaceKey = null;
+        await reinitializeWorkspaceServicesForCloudRun({
+          paprApiKey: request.paprApiKey,
+          userDataPath,
+        });
+        boundWorkspaceKey = workspaceBindingKey(request, paprHome);
+      });
+    } catch (err) {
+      boundWorkspaceKey = null;
+      console.warn(
+        "[CloudAgentRun] Warm prebind failed (first turn will bind):",
+        (err as Error).message.slice(0, 160),
+      );
+    } finally {
+      await restoreCloudRunEnv(envSnapshot);
+    }
+    console.log(
+      `[CloudAgentRun] warm setup ${Date.now() - runStarted}ms (skipClone=${skipClone}) ${timings.join(" ")}`,
+    );
+  }
+
   if (prepOnly) {
     return {
       runRoot,
@@ -412,42 +538,46 @@ export async function beginCloudAgentRun(
       tursoTargets,
       finish: async (finishOptions?: { deleteWorkspace?: boolean; prepOnly?: boolean }) => {
         if (finishOptions?.deleteWorkspace) {
-          await fs.rm(runRoot, { recursive: true, force: true }).catch(() => undefined);
+          forgetBoundCloudWorkspace(runRoot);
+          forgetBoundCloudWorkspace(runRoot);
+        await fs.rm(runRoot, { recursive: true, force: true }).catch(() => undefined);
         }
       },
     };
   }
 
-  process.env.PAPR_HOME = paprHome;
-  process.env.PAPR_USER_DATA = userDataPath;
-  if (request.orgId) {
-    process.env.PAPR_ORG_ID = request.orgId;
-  }
-  if (request.namespaceId) {
-    process.env.PAPR_NAMESPACE_ID = request.namespaceId;
-  }
-  const actingUserId = request.userId?.trim();
-  if (actingUserId) {
-    process.env.PAPRWORK_TELEMETRY_PAPR_USER_ID = actingUserId;
-    invalidatePaprUserIdCache();
-  }
-  process.env.HOME = runRoot;
-  applyVaultKeys(request, envSnapshot);
-  applyPaprApiKey(request, envSnapshot);
+  applyWorkspaceProcessEnv(request, paprHome, userDataPath, runRoot, envSnapshot);
 
   // Before services re-init: the registry singleton loads data/databases.json there.
   const tursoDirect = shouldUseCloudSandboxTursoDirect(paprHome);
-  await seedCloudDatabaseRegistry(request, paprHome, { cloudDirect: tursoDirect });
-  await reinitializeWorkspaceServicesForCloudRun({
-    paprApiKey: request.paprApiKey,
-    userDataPath,
-  });
+  const seeded = await timed("seedRegistry", timings, () =>
+    seedCloudDatabaseRegistry(request, paprHome, { cloudDirect: tursoDirect }),
+  );
+  const bindingKey = workspaceBindingKey(request, paprHome);
+  // Replica mode seeds new registry entries on disk that the registry
+  // singleton only reads at init — rebind in that case.
+  const canReuseServices =
+    boundWorkspaceKey === bindingKey && (tursoDirect || seeded.length === 0);
+  if (canReuseServices) {
+    timings.push("reinitServices=reused");
+  } else {
+    boundWorkspaceKey = null;
+    await timed("reinitServices", timings, () =>
+      reinitializeWorkspaceServicesForCloudRun({
+        paprApiKey: request.paprApiKey,
+        userDataPath,
+      }),
+    );
+    boundWorkspaceKey = bindingKey;
+  }
 
-  await prepareCloudJobEnvironment({
-    jobId: request.jobId,
-    userId: request.userId,
-    tursoSources: request.tursoSources,
-  });
+  await timed("jobEnv", timings, () =>
+    prepareCloudJobEnvironment({
+      jobId: request.jobId,
+      userId: request.userId,
+      tursoSources: request.tursoSources,
+    }),
+  );
 
   let tursoDebouncedPush: Awaited<
     ReturnType<typeof startCloudAgentTursoDebouncedPush>
@@ -457,10 +587,22 @@ export async function beginCloudAgentRun(
       "[CloudAgentRun] Turso direct mode — skipping pull/push bookends and debounced SQLite watcher",
     );
   } else {
-    await pullTursoTargets(tursoTargets);
+    await timed("tursoPull", timings, () => pullTursoTargets(tursoTargets));
     tursoDebouncedPush = await startCloudAgentTursoDebouncedPush(tursoTargets);
   }
-  const writerDebouncedPush = await startCloudAppWriterDebouncedPush();
+  // Only Maintainers / Admins change the live app. Anyone else's edits stay in
+  // this sandbox (the writer would refuse them anyway — skipping avoids a
+  // failed run and a wasted round trip).
+  const canPushAppCode = request.appCodePush === "main"; // fail closed
+  const writerDebouncedPush = canPushAppCode
+    ? await startCloudAppWriterDebouncedPush(
+        request.workspaceScope === "app" && request.appId ? { onlyAppId: request.appId } : {},
+      )
+    : (disableCloudAppWriterForRun(request.callerRole), null);
+  console.log(
+    `[CloudAgentRun] setup ${Date.now() - runStarted}ms ` +
+      `(skipClone=${skipClone} trusted=${options.trustWarmWorkspace === true}) ${timings.join(" ")}`,
+  );
 
   return {
     runRoot,
@@ -470,7 +612,9 @@ export async function beginCloudAgentRun(
       if (finishOptions?.prepOnly) {
         await restoreCloudRunEnv(envSnapshot);
         if (finishOptions.deleteWorkspace) {
-          await fs.rm(runRoot, { recursive: true, force: true }).catch(() => undefined);
+          forgetBoundCloudWorkspace(runRoot);
+          forgetBoundCloudWorkspace(runRoot);
+        await fs.rm(runRoot, { recursive: true, force: true }).catch(() => undefined);
         }
         return;
       }
@@ -551,7 +695,9 @@ export async function beginCloudAgentRun(
           return;
         }
         if (syncSucceeded) {
-          await fs.rm(runRoot, { recursive: true, force: true }).catch(() => undefined);
+          forgetBoundCloudWorkspace(runRoot);
+          forgetBoundCloudWorkspace(runRoot);
+        await fs.rm(runRoot, { recursive: true, force: true }).catch(() => undefined);
           return;
         }
         if (retainSandbox) {
@@ -563,6 +709,7 @@ export async function beginCloudAgentRun(
         console.log(
           `[CloudAgentRun] No local DB data to recover — deleting sandbox at ${runRoot}`,
         );
+        forgetBoundCloudWorkspace(runRoot);
         await fs.rm(runRoot, { recursive: true, force: true }).catch(() => undefined);
       }
     },

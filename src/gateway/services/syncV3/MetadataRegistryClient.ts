@@ -7,7 +7,10 @@ import {
   cloudApiFetch,
   getMemoryServerBaseUrl,
 } from "../../utils/cloudApiClient.js";
-import { appendCloudActingUserQuery } from "../../utils/cloudActingUser.js";
+import {
+  appendCloudActingUserQuery,
+  mergeCloudActingUserBody,
+} from "../../utils/cloudActingUser.js";
 import { getPaprApiKey } from "../../utils/keyResolver.js";
 import type { CloudAppMetaFile } from "../cloudSync/cloudAppMeta.js";
 import type { DatabasesRegistryFile } from "../DatabaseRegistryService.js";
@@ -242,7 +245,14 @@ async function metadataRegistryFetchWithKey(
     };
     if (opts.body !== undefined && method !== "GET" && method !== "HEAD") {
       headers["Content-Type"] = "application/json";
-      init.body = JSON.stringify(opts.body);
+      // Without external_user_id the server falls back to the API key's user,
+      // so a namespace key filed every desktop's index under one user and the
+      // publisher's Mongo row never existed (cloud runs then hit GitHub).
+      const body =
+        typeof opts.body === "object" && opts.body !== null && !Array.isArray(opts.body)
+          ? mergeCloudActingUserBody(opts.body as Record<string, unknown>)
+          : opts.body;
+      init.body = JSON.stringify(body);
     }
     return await fetch(`${getMemoryServerBaseUrl()}${pathWithActingUser}`, init);
   } finally {

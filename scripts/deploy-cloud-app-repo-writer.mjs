@@ -206,13 +206,28 @@ function createOrRefreshSecret(secretName, envVar) {
   return true;
 }
 
+const writerSaName = getArg("service-account-name", "papr-app-repo-writer");
+const writerSa = `${writerSaName}@${project}.iam.gserviceaccount.com`;
+
 function grantComputeSecretAccess(secretNames) {
   if (dryRun || secretNames.length === 0) return;
   const projectNumber = execSync(
     `gcloud projects describe ${project} --format='value(projectNumber)'`,
     { encoding: "utf8" },
   ).trim();
-  const computeSa = `${projectNumber}-compute@developer.gserviceaccount.com`;
+  void projectNumber;
+  // Dedicated identity (was the default compute SA = project Editor). Needs its
+  // secrets, Pub/Sub publish (if a topic is set) and invoking the gateway.
+  const computeSa = writerSa;
+  const saCheck = spawnSync("gcloud", ["iam", "service-accounts", "describe", writerSa, `--project=${project}`], { encoding: "utf8" });
+  if (saCheck.status !== 0) {
+    run(`gcloud iam service-accounts create ${writerSaName} --project=${project} --display-name="Papr app repo writer (least privilege)"`);
+  }
+  run(`gcloud run services add-iam-policy-binding papr-cloud-agent-gateway --region=${region} --project=${project} --member=serviceAccount:${writerSa} --role=roles/run.invoker --quiet`);
+  const topic = process.env.PAPR_APP_REPO_COMMITTED_TOPIC?.trim();
+  if (topic) {
+    run(`gcloud pubsub topics add-iam-policy-binding ${topic} --project=${project} --member=serviceAccount:${writerSa} --role=roles/pubsub.publisher --quiet`);
+  }
   for (const secretName of secretNames) {
     run(
       `gcloud secrets add-iam-policy-binding ${secretName} --project=${project} --member=serviceAccount:${computeSa} --role=roles/secretmanager.secretAccessor --quiet`,
@@ -354,6 +369,7 @@ run(
     --timeout=300 \
     --concurrency=1 \
     --max-instances=1 \
+    --service-account=${writerSa} \
     --set-env-vars=${envVars.join(",")} \
     --set-secrets=${secretBindings}`,
 );

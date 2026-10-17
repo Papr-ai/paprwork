@@ -62,6 +62,10 @@ let moduleMaxWaitTimer: NodeJS.Timeout | null = null;
 let moduleFirstDirtyAtMs: number | null = null;
 let moduleFlushInFlight: Promise<CloudAppWriterFlushResult> | null = null;
 let moduleStopped = false;
+/** This run's caller can't change the live app (role below Maintainer). */
+let moduleDisabled = false;
+/** App-scope run: the only app this run may push (others are scaffolding). */
+let moduleOnlyAppId: string | null = null;
 /** Apps successfully pushed during this run (includes mid-run debounced flushes). */
 let modulePushedAppIds = new Set<string>();
 
@@ -244,14 +248,34 @@ export function getCloudAppWriterPushedAppIds(): string[] {
 
 /** Hook from AppService when GATEWAY_MODE=cloud_agent (no desktop SyncCoordinator). */
 export function notifyCloudSandboxAppSave(appId: string): void {
-  if (process.env.GATEWAY_MODE !== "cloud_agent") {
+  if (process.env.GATEWAY_MODE !== "cloud_agent" || moduleDisabled) {
+    return;
+  }
+  if (moduleOnlyAppId && appId !== moduleOnlyAppId) {
+    console.log(`[CloudAppWriterDebouncedPush] Ignoring save for ${appId} — run is scoped to ${moduleOnlyAppId}`);
     return;
   }
   moduleDirtyApps.add(appId);
   scheduleModuleFlush();
 }
 
-export async function startCloudAppWriterDebouncedPush(): Promise<CloudAppWriterDebouncedPushHandle> {
+/** Run for someone who can't publish: app saves stay local, nothing is pushed. */
+export function disableCloudAppWriterForRun(role?: string): void {
+  moduleDisabled = true;
+  moduleStopped = true;
+  clearModuleTimers();
+  moduleDirtyApps.clear();
+  modulePushedAppIds.clear();
+  console.log(
+    `[CloudAppWriterDebouncedPush] Disabled for this run (role=${role ?? "unknown"}) — edits stay in the sandbox`,
+  );
+}
+
+export async function startCloudAppWriterDebouncedPush(
+  options: { onlyAppId?: string } = {},
+): Promise<CloudAppWriterDebouncedPushHandle> {
+  moduleOnlyAppId = options.onlyAppId?.trim() || null;
+  moduleDisabled = false;
   moduleStopped = false;
   modulePushedAppIds.clear();
   console.log(
@@ -290,6 +314,7 @@ export async function startCloudAppWriterDebouncedPush(): Promise<CloudAppWriter
 
 /** Reset module state between tests. */
 export function resetCloudAppWriterDebouncedPushForTests(): void {
+  moduleDisabled = false;
   moduleStopped = true;
   clearModuleTimers();
   moduleDirtyApps.clear();

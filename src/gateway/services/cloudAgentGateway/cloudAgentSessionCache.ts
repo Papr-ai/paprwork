@@ -6,6 +6,7 @@ import fs from "fs/promises";
 import { isWarmWorkspaceFresh } from "./appRepoCloneCache.js";
 import {
   beginCloudAgentRun,
+  forgetBoundCloudWorkspace,
   resolveCloudRunRoot,
   type CloudRunHandle,
 } from "./cloudAgentRunContext.js";
@@ -27,10 +28,15 @@ interface CachedCloudAgentSession {
   orgId: string;
   request: CloudAgentRunRequest;
   expiresAt: number;
+  /** When the on-disk workspace was last checked against the remote HEAD. */
+  verifiedAt?: number;
   warming?: Promise<CloudAgentSessionBeginResponse>;
 }
 
 let sharedCache: CloudAgentSessionCache | undefined;
+
+/** Skip the per-turn remote HEAD check when the workspace was verified this recently. */
+const WARM_WORKSPACE_TRUST_MS = 2 * 60_000;
 
 export class CloudAgentSessionCache {
   private readonly entries = new Map<string, CachedCloudAgentSession>();
@@ -100,10 +106,17 @@ export class CloudAgentSessionCache {
     entry.paprHome = paprHome;
     entry.expiresAt = Date.now() + CLOUD_AGENT_SESSION_TTL_MS;
 
+    // Publishes end the session (handleAppRepoCommitted), so a workspace
+    // verified recently doesn't need another git ls-remote before this turn.
+    const trustWarmWorkspace =
+      entry.verifiedAt !== undefined &&
+      Date.now() - entry.verifiedAt < WARM_WORKSPACE_TRUST_MS;
     const handle = await beginCloudAgentRun(request, {
       skipClone: true,
       runRoot,
+      trustWarmWorkspace,
     });
+    entry.verifiedAt = Date.now();
 
     return {
       runRoot: handle.runRoot,
@@ -144,6 +157,7 @@ export class CloudAgentSessionCache {
       return;
     }
     this.entries.delete(sessionId);
+    forgetBoundCloudWorkspace(entry.runRoot);
     await fs.rm(entry.runRoot, { recursive: true, force: true }).catch(() => undefined);
   }
 
@@ -190,7 +204,12 @@ export class CloudAgentSessionCache {
       skipClone = false;
     }
 
-    const handle = await beginCloudAgentRun(request, { skipClone, runRoot, prepOnly: true });
+    const handle = await beginCloudAgentRun(request, {
+      skipClone,
+      runRoot,
+      prepOnly: true,
+      prebindServices: true,
+    });
     await handle.finish({ deleteWorkspace: false, prepOnly: true });
 
     const entry = this.entries.get(sessionId);
@@ -198,6 +217,7 @@ export class CloudAgentSessionCache {
       entry.paprHome = paprHome;
       entry.runRoot = runRoot;
       entry.request = request;
+      entry.verifiedAt = Date.now();
       entry.expiresAt = Date.now() + CLOUD_AGENT_SESSION_TTL_MS;
       entry.warming = undefined;
     } else {

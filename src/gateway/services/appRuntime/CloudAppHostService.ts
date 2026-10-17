@@ -146,6 +146,7 @@ import {
   resolvePublishedAppRevision,
 } from "./publishedAppRevision.js";
 import { loadAppDataSourcesConfig } from "./cloudDatabaseRegistry.js";
+import { getServiceSecret } from "../../../core/utils/serviceSecrets.js";
 
 export interface CloudAppHostDeps {
   tursoCredentials: TursoCredentialsProvider;
@@ -2506,9 +2507,13 @@ export class CloudAppHostService {
   }
 
   private verifyCloudAppHostInternalKey(req: Request, res: Response): boolean {
-    const configuredKey = process.env.PAPR_CLOUD_APP_HOST_KEY?.trim();
+    // _PREVIOUS is set only during a key rotation (see docs/security/host-key-rotation.md).
+    const accepted = [
+      getServiceSecret("PAPR_CLOUD_APP_HOST_KEY"),
+      process.env.PAPR_CLOUD_APP_HOST_KEY_PREVIOUS?.trim(),
+    ].filter((k): k is string => Boolean(k));
     const providedKey = String(req.headers["x-cloud-app-host-key"] ?? "").trim();
-    if (!configuredKey || providedKey !== configuredKey) {
+    if (accepted.length === 0 || !providedKey || !accepted.includes(providedKey)) {
       res.status(401).json({ error: "Unauthorized" });
       return false;
     }

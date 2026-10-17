@@ -6,6 +6,7 @@ import {
   notifyCloudAppRevisionUpdated,
   parsePublishedAppRoute,
 } from "./notifyCloudAppRevision.js";
+import { getServiceSecret } from "../../../core/utils/serviceSecrets.js";
 
 export async function notifySyncedAppRevisions(
   syncedAppIds: readonly string[],
@@ -13,7 +14,7 @@ export async function notifySyncedAppRevisions(
   if (syncedAppIds.length === 0) {
     return;
   }
-  if (!process.env.PAPR_CLOUD_APP_HOST_KEY?.trim()) {
+  if (!getServiceSecret("PAPR_CLOUD_APP_HOST_KEY")) {
     return;
   }
 
@@ -33,7 +34,7 @@ export async function notifySyncedAppRevisions(
         continue;
       }
       // Pass the just-committed SHA so the host switches to it immediately.
-      await notifyCloudAppRevisionUpdated({ ...route, commitSha: cursors[appId]?.lastCommitSha });
+      await notifyCloudAppRevisionUpdated({ ...route, appId, commitSha: cursors[appId]?.lastCommitSha });
     } catch (error) {
       console.warn(
         `[CloudSync] Skipped revision notify for ${appId}:`,

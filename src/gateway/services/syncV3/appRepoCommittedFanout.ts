@@ -12,6 +12,7 @@ import { promises as fs } from "node:fs";
 import * as path from "node:path";
 import { writeFileAtomic } from "../../../core/utils/atomicJsonWrite.js";
 import { withCrossProcessFileLock } from "../../../core/utils/crossProcessFileLock.js";
+import { getServiceSecret } from "../../../core/utils/serviceSecrets.js";
 
 export type AppRepoCommittedEvent = {
   appId: string;
@@ -63,7 +64,7 @@ function resolveAppRepoCommittedWebhookHeaders(): Record<string, string> | null 
   if (!url) {
     return null;
   }
-  const hostKey = process.env.PAPR_CLOUD_APP_HOST_KEY?.trim();
+  const hostKey = getServiceSecret("PAPR_CLOUD_APP_HOST_KEY");
   if (!hostKey) {
     console.warn(
       "[AppRepoFanout] PAPR_APP_REPO_COMMITTED_WEBHOOK_URL set but PAPR_CLOUD_APP_HOST_KEY missing — skipping webhook",
@@ -156,7 +157,7 @@ function resolveAppRepoCommittedGatewayWebhookHeaders(): Record<string, string> 
   if (!url) {
     return null;
   }
-  const gatewayKey = process.env.PAPR_CLOUD_AGENT_GATEWAY_KEY?.trim();
+  const gatewayKey = getServiceSecret("PAPR_CLOUD_AGENT_GATEWAY_KEY");
   if (!gatewayKey) {
     console.warn(
       "[AppRepoFanout] PAPR_APP_REPO_COMMITTED_GATEWAY_WEBHOOK_URL set but PAPR_CLOUD_AGENT_GATEWAY_KEY missing — skipping gateway webhook",

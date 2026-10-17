@@ -18,6 +18,13 @@ export interface AppRepoRecord {
   createdAt: string;
   /** Set when migrated from namespace monorepo. */
   legacyNamespaceRepo?: string;
+  /**
+   * May the caller (whose key fetched this record) push straight to main?
+   * false = role below Maintainer on a published app — writer refuses ops.
+   * Undefined on older servers (treated as allowed).
+   */
+  callerCanWriteMain?: boolean;
+  callerRole?: string;
 }
 
 const AppRepoRecordSchema = z
@@ -40,6 +47,8 @@ const AppRepoRecordSchema = z
     createdAt: z.string().min(1).optional(),
     legacy_namespace_repo: z.string().optional(),
     legacyNamespaceRepo: z.string().optional(),
+    callerCanWriteMain: z.boolean().nullish(),
+    callerRole: z.string().nullish(),
   })
   .transform((raw): AppRepoRecord => {
     const appId = raw.appId ?? raw.app_id;
@@ -79,6 +88,10 @@ const AppRepoRecordSchema = z
               raw.legacyNamespaceRepo ?? raw.legacy_namespace_repo,
           }
         : {}),
+      ...(typeof raw.callerCanWriteMain === "boolean"
+        ? { callerCanWriteMain: raw.callerCanWriteMain }
+        : {}),
+      ...(raw.callerRole ? { callerRole: raw.callerRole } : {}),
     };
   });
 
