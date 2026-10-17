@@ -6,7 +6,6 @@ import {
   notifyCloudAppRevisionUpdated,
   parsePublishedAppRoute,
 } from "./notifyCloudAppRevision.js";
-import { getServiceSecret } from "../../../core/utils/serviceSecrets.js";
 
 export async function notifySyncedAppRevisions(
   syncedAppIds: readonly string[],
@@ -14,10 +13,6 @@ export async function notifySyncedAppRevisions(
   if (syncedAppIds.length === 0) {
     return;
   }
-  if (!getServiceSecret("PAPR_CLOUD_APP_HOST_KEY")) {
-    return;
-  }
-
   const { getCloudAppPublishService } = await import("../CloudAppPublishService.js");
   const publish = getCloudAppPublishService();
   const { readAppRepoCommitCursors } = await import("../syncV3/appRepoCommittedFanout.js");
