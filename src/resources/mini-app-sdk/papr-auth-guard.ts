@@ -164,6 +164,8 @@ function normalizeServerLoginUrl(serverLoginUrl: string | undefined): string | u
   }
 }
 
+const TABLE_SCOPE_CODES = new Set(["table_private", "table_internal", "table_denied"]);
+
 function classifyAuthError(
   status: number,
   body: AuthErrorBody,
@@ -176,6 +178,9 @@ function classifyAuthError(
     };
   }
   if (status === 403) {
+    // A table the page can't use (private / internal): the app's own error to
+    // show — signing in again would not change it.
+    if (typeof body.code === "string" && TABLE_SCOPE_CODES.has(body.code)) return null;
     if (body.code === "job_run_sign_in_required") {
       return {
         kind: "sign_in",
