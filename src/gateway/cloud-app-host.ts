@@ -22,6 +22,7 @@ import {
 import { shutdownBackendPythonWorker } from "./services/appRuntime/appBackendPythonWorker.js";
 import { isMcpEndpointEnabled } from "./services/mcp/config.js";
 import { registerMcpRoutes } from "./services/mcp/server.js";
+import { captureServiceSecrets, getServiceSecret } from "../core/utils/serviceSecrets.js";
 
 // `.env.local` before `.env`: dotenv never overwrites an already-set
 // variable, so the first file to define a key wins. Both are gitignored, so
@@ -31,8 +32,11 @@ dotenv.config({ path: resolve(process.cwd(), ".env") });
 
 const PORT = Number(process.env.PORT ?? process.env.CLOUD_APP_HOST_PORT ?? 8787);
 
+// Read once, then removed from process.env so app backends never inherit it.
+captureServiceSecrets();
+
 async function main(): Promise<void> {
-  if (!process.env.PAPR_CLOUD_APP_HOST_KEY) {
+  if (!getServiceSecret("PAPR_CLOUD_APP_HOST_KEY")) {
     console.error(
       "[CloudAppHost] PAPR_CLOUD_APP_HOST_KEY is required (must match memory server)",
     );

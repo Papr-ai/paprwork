@@ -3,6 +3,7 @@
  * Desktop uses in-process JobEventHub via TursoLinkedDbWatcher; cloud agent runs on a
  * separate Cloud Run service and must call Cloud App Host over HTTP.
  */
+import { getServiceSecret } from "../../../core/utils/serviceSecrets.js";
 
 export interface NotifyCloudDbChangedInput {
   jobId?: string;
@@ -13,7 +14,7 @@ export interface NotifyCloudDbChangedInput {
 export async function notifyCloudDbChanged(
   input: NotifyCloudDbChangedInput,
 ): Promise<void> {
-  const hostKey = process.env.PAPR_CLOUD_APP_HOST_KEY?.trim();
+  const hostKey = getServiceSecret("PAPR_CLOUD_APP_HOST_KEY");
   if (!hostKey) {
     return;
   }

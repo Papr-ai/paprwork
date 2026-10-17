@@ -21,6 +21,7 @@ import type { CloudAgentRunRequest } from "./services/cloudAgentGateway/types.js
 import {
   parseAppRepoCommittedPayload,
 } from "./services/syncV3/appRepoCommittedInbound.js";
+import { captureServiceSecrets, getServiceSecret } from "../core/utils/serviceSecrets.js";
 
 // `.env.local` before `.env`: dotenv never overwrites an already-set
 // variable, so the first file to define a key wins. Both are gitignored, so
@@ -32,7 +33,9 @@ process.env.GATEWAY_MODE = process.env.GATEWAY_MODE ?? "cloud_agent";
 process.env.CLOUD_SYNC_ENABLED = process.env.CLOUD_SYNC_ENABLED ?? "false";
 
 const PORT = Number(process.env.PORT ?? process.env.CLOUD_AGENT_GATEWAY_PORT ?? 8788);
-const GATEWAY_KEY = process.env.PAPR_CLOUD_AGENT_GATEWAY_KEY ?? "";
+// Read once, then removed from process.env so agent bash/jobs never inherit it.
+captureServiceSecrets();
+const GATEWAY_KEY = getServiceSecret("PAPR_CLOUD_AGENT_GATEWAY_KEY") ?? "";
 
 function requireGatewayAuth(
   req: Request,

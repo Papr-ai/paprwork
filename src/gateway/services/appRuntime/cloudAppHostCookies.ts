@@ -7,6 +7,7 @@ import {
   ensurePublishedAppRootTrailingSlash,
   publishedAppBaseHref,
 } from "../../../core/utils/cloudAppPath.js";
+import { getServiceSecret } from "../../../core/utils/serviceSecrets.js";
 
 const NON_BROWSABLE_RETURN_TO_PREFIXES = ["/api/", "/auth/", "/__papr__/"] as const;
 
@@ -19,7 +20,7 @@ const PENDING_MAX_AGE_SEC = 60 * 10;
 const SHARE_MAX_AGE_SEC = 60 * 60 * 24 * 30;
 
 export function getCookieSigningSecret(): string {
-  const secret = process.env.PAPR_CLOUD_APP_HOST_KEY?.trim();
+  const secret = getServiceSecret("PAPR_CLOUD_APP_HOST_KEY");
   if (!secret) {
     throw new Error("PAPR_CLOUD_APP_HOST_KEY is required for cookie signing");
   }

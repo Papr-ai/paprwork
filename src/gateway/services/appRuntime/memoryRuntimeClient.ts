@@ -25,7 +25,7 @@ import {
 } from "./runtimeVaultKeyScopes.js";
 
 export function getCloudAppHostKey(): string {
-  const key = process.env.PAPR_CLOUD_APP_HOST_KEY;
+  const key = getServiceSecret("PAPR_CLOUD_APP_HOST_KEY");
   if (!key) {
     throw new Error(
       "PAPR_CLOUD_APP_HOST_KEY is required for Cloud App Host runtime calls",
@@ -609,6 +609,7 @@ export async function runRuntimeBash(
 
 import { parseRuntimeSseStream } from "../appAgentChat/parseRuntimeSseStream.js";
 import type { GatewayStreamRawEvent } from "../appAgentChat/mapGatewayStreamToAppAgentEvents.js";
+import { getServiceSecret } from "../../../core/utils/serviceSecrets.js";
 
 export type RuntimeAppAgentWarmResult =
   | { status: "ready" | "warming"; expiresAt?: string }

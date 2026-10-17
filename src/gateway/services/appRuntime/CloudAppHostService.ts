@@ -146,6 +146,7 @@ import {
   resolvePublishedAppRevision,
 } from "./publishedAppRevision.js";
 import { loadAppDataSourcesConfig } from "./cloudDatabaseRegistry.js";
+import { getServiceSecret } from "../../../core/utils/serviceSecrets.js";
 
 export interface CloudAppHostDeps {
   tursoCredentials: TursoCredentialsProvider;
@@ -2506,7 +2507,7 @@ export class CloudAppHostService {
   }
 
   private verifyCloudAppHostInternalKey(req: Request, res: Response): boolean {
-    const configuredKey = process.env.PAPR_CLOUD_APP_HOST_KEY?.trim();
+    const configuredKey = getServiceSecret("PAPR_CLOUD_APP_HOST_KEY");
     const providedKey = String(req.headers["x-cloud-app-host-key"] ?? "").trim();
     if (!configuredKey || providedKey !== configuredKey) {
       res.status(401).json({ error: "Unauthorized" });

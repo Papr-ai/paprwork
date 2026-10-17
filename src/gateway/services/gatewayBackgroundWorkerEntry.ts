@@ -9,6 +9,9 @@ import type {
   GatewayBackgroundRpcMethod,
 } from "./gatewayBackgroundWorkerProtocol.js";
 import { runBackgroundTaskInChild } from "./gatewayBackgroundWorkerHandlers.js";
+import { captureServiceSecrets } from "../../core/utils/serviceSecrets.js";
+// Worker is Papr code: keep its copy, but nothing it spawns inherits it.
+captureServiceSecrets();
 
 const pendingRpc = new Map<
   string,

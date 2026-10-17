@@ -21,6 +21,8 @@ import dotenv from "dotenv";
 import { resolve } from "path";
 dotenv.config({ path: resolve(process.cwd(), ".env.local") });
 dotenv.config({ path: resolve(process.cwd(), ".env") });
+// Desktop gets the host key from the packaged build; keep it out of user jobs/bash.
+captureServiceSecrets();
 
 import { logTursoReplicaStartupGuard } from "./utils/tursoReplicaEnabled.js";
 logTursoReplicaStartupGuard();
@@ -183,6 +185,7 @@ import {
   getVaultSyncService,
 } from "./services/VaultSyncService.js";
 import { getCustomKeysService } from "./services/CustomKeysService.js";
+import { captureServiceSecrets } from "../core/utils/serviceSecrets.js";
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);

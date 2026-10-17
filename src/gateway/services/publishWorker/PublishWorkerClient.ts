@@ -18,6 +18,7 @@ import type {
   PublishWorkerLine,
   PublishWorkerPushRequest,
 } from "./publishWorkerProtocol.js";
+import { serviceSecretsEnv } from "../../../core/utils/serviceSecrets.js";
 
 type OkLine = Extract<PublishWorkerLine, { ok: true }>;
 
@@ -131,7 +132,7 @@ export class PublishWorkerClient {
       const { command, args } = this.resolveCommand();
       const child = spawn(command, args, {
         stdio: ["pipe", "pipe", "pipe"],
-        env: { ...process.env, ELECTRON_RUN_AS_NODE: "1" },
+        env: { ...process.env, ...serviceSecretsEnv(), ELECTRON_RUN_AS_NODE: "1" },
       });
       this.child = child;
       this.stdoutBuffer = "";

@@ -17,6 +17,7 @@ import {
   isGatewayBackgroundProcessEnabled,
 } from "./gatewayBackgroundConcurrency.js";
 import { getVaultSyncService } from "./VaultSyncService.js";
+import { serviceSecretsEnv } from "../../core/utils/serviceSecrets.js";
 
 const BOOT_TIMEOUT_MS = 15_000;
 const TASK_TIMEOUT_MS = 600_000;
@@ -70,7 +71,7 @@ export class GatewayBackgroundWorkerClient {
       const entry = workerEntryPath();
       const child = fork(entry, [], {
         execPath: process.execPath,
-        env: { ...process.env, ELECTRON_RUN_AS_NODE: "1" },
+        env: { ...process.env, ...serviceSecretsEnv(), ELECTRON_RUN_AS_NODE: "1" },
         stdio: ["pipe", "pipe", "pipe", "ipc"],
       });
 

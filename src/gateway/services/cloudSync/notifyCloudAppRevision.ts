@@ -2,6 +2,7 @@
  * Tell apps.papr.ai to invalidate repo caches after a successful git sync push.
  * Open browser tabs refresh manually (F5) — same model as Vercel/static hosting.
  */
+import { getServiceSecret } from "../../../core/utils/serviceSecrets.js";
 
 export interface NotifyCloudAppRevisionInput {
   namespaceId: string;
@@ -36,7 +37,7 @@ export function resolvePublishRouteForNotify(input: {
 export async function notifyCloudAppAccessUpdated(
   input: NotifyCloudAppAccessUpdatedInput,
 ): Promise<void> {
-  const hostKey = process.env.PAPR_CLOUD_APP_HOST_KEY?.trim();
+  const hostKey = getServiceSecret("PAPR_CLOUD_APP_HOST_KEY");
   if (!hostKey) {
     return;
   }
@@ -71,7 +72,7 @@ export async function notifyCloudAppAccessUpdated(
 export async function notifyCloudAppRevisionUpdated(
   input: NotifyCloudAppRevisionInput & { commitSha?: string },
 ): Promise<void> {
-  const hostKey = process.env.PAPR_CLOUD_APP_HOST_KEY?.trim();
+  const hostKey = getServiceSecret("PAPR_CLOUD_APP_HOST_KEY");
   if (!hostKey) {
     return;
   }
