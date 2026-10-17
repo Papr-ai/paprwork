@@ -1,11 +1,19 @@
 /**
- * Key Request Card
- *
- * Inline card that appears in chat when agent requests an API key.
- * User can enter the key value directly without leaving the conversation.
+ * Key Request Card — inline card when the agent asks for an API key.
+ * Looks like the rail's org peek (glass card, uppercase group labels, org rows) and saves the key
+ * into the requesting chat's scope: active org + the chat's audience (Only me / Team / Organization).
  */
 
-import { useState } from "react";
+import { useMemo, useState } from "react";
+import { useChatStore } from "../../stores/chatStore";
+import { useProfileStore } from "../../stores/profileStore";
+import { OrgMark } from "../Sidebar/OrgMark";
+import { defaultOrgSite, orgLogoSrc, useOrgLogos } from "../Sidebar/orgLogoStore";
+import { useOrgList } from "../Sidebar/useOrgList";
+import { VAULT_AUDIENCE_LABELS } from "../../constants/integrationKeyVaultAudience";
+import type { IntegrationKeyVaultAudience } from "../../types/settings";
+import "../Sidebar/Sidebar.css";
+import "../Sidebar/ProfileFooter.css";
 import "./KeyRequestCard.css";
 
 export interface KeyRequestData {
@@ -19,327 +27,156 @@ export interface KeyRequestData {
   message: string;
 }
 
+export type KeyAudience = Extract<IntegrationKeyVaultAudience, "user" | "namespace" | "org">;
+
+export interface KeySubmitScope {
+  vaultAudience: KeyAudience;
+  orgScope: "organization";
+  organizationId?: string;
+}
+
 interface Props {
   data: KeyRequestData;
-  onSubmit: (
-    keyName: string,
-    keyValue: string,
-    permission: "always" | "ask",
-  ) => void;
+  chatId?: string;
+  onSubmit: (keyName: string, keyValue: string, permission: "always" | "ask", scope: KeySubmitScope) => void | Promise<void>;
   onCancel: () => void;
 }
 
-export function KeyRequestCard({ data, onSubmit, onCancel }: Props) {
-  const [keyValue, setKeyValue] = useState("");
-  const [permission, setPermission] = useState<"always" | "ask">(
-    data.suggestedPermission,
-  );
-  const [showValue, setShowValue] = useState(false);
-  const [isSubmitting, setIsSubmitting] = useState(false);
-  const [localStatus, setLocalStatus] = useState<KeyRequestData["status"]>(data.status);
+const AUDIENCES: KeyAudience[] = ["user", "namespace", "org"];
 
-  const handleSubmit = async () => {
-    console.log("[KeyRequestCard] handleSubmit called", {
-      hasKeyValue: !!keyValue.trim(),
-      keyName: data.name,
-      permission,
-    });
-
-    if (!keyValue.trim()) {
-      console.warn("[KeyRequestCard] No key value provided, aborting");
-      return;
-    }
-
-    setIsSubmitting(true);
-    try {
-      console.log("[KeyRequestCard] Calling onSubmit...");
-      await onSubmit(data.name, keyValue.trim(), permission);
-      console.log("[KeyRequestCard] onSubmit completed successfully");
-      // Update local status to show success immediately
-      setLocalStatus("submitted");
-    } catch (error) {
-      console.error("[KeyRequestCard] onSubmit failed:", error);
-    } finally {
-      setIsSubmitting(false);
-    }
-  };
-
-  const handleCancel = () => {
-    setKeyValue("");
-    setLocalStatus("cancelled");
-    onCancel();
-  };
-
-  // Use local status if it's been updated, otherwise use data.status
-  const currentStatus = localStatus !== data.status ? localStatus : data.status;
-
-  if (currentStatus === "submitted") {
-    return (
-      <div className="key-request-card key-request-card-success">
-        <div className="key-request-icon">
-          <svg width="16" height="16" viewBox="0 0 24 24" fill="none">
-            <path
-              d="M20 6L9 17l-5-5"
-              stroke="currentColor"
-              strokeWidth="1.5"
-              strokeLinecap="round"
-              strokeLinejoin="round"
-            />
-          </svg>
-        </div>
-        <div className="key-request-content">
-          <h3 className="key-request-title">Key Added Successfully</h3>
-          <p className="key-request-description">
-            {data.name} has been securely stored and is ready to use.
-          </p>
-        </div>
-      </div>
-    );
+/** JSON-looking values must parse; multi-line values (PEM, JSON) keep their newlines. */
+export function checkKeyValue(raw: string): { value: string; error?: string; kind?: string } {
+  const value = raw.trim();
+  if (!value.startsWith("{") && !value.startsWith("[")) return { value };
+  try {
+    const parsed = JSON.parse(value);
+    return { value, kind: parsed?.type === "service_account" ? `Service account · ${parsed.client_email ?? ""}` : "Valid JSON" };
+  } catch (e) {
+    return { value, error: `Not valid JSON: ${(e as Error).message}` };
   }
+}
 
-  if (currentStatus === "cancelled") {
+export function KeyRequestCard({ data, chatId, onSubmit, onCancel }: Props) {
+  const chatScope = useChatStore((s) => (chatId ? s.getChatMemoryScope(chatId) : "user"));
+  const [audience, setAudience] = useState<KeyAudience>(chatScope);
+  const [raw, setRaw] = useState("");
+  const [permission, setPermission] = useState(data.suggestedPermission);
+  const [busy, setBusy] = useState(false);
+  const [failed, setFailed] = useState<string | null>(null);
+  const [status, setStatus] = useState(data.status);
+
+  const { orgs, activeId } = useOrgList();
+  const branding = useOrgLogos((s) => s.branding);
+  const { organizationName, workspaceName, email } = useProfileStore();
+  const org = orgs.find((o) => o.id === activeId);
+  const orgName = org?.name || organizationName || workspaceName || "This org";
+  const orgLogo = org ? orgLogoSrc(branding[org.id], branding[org.id]?.site ?? defaultOrgSite([org.name, org.organizationName], email))
+    : orgLogoSrc(undefined, defaultOrgSite([organizationName, workspaceName], email));
+
+  const check = useMemo(() => checkKeyValue(raw), [raw]);
+  const multiline = raw.includes("\n") || check.kind !== undefined || check.error !== undefined;
+  const canSave = !!check.value && !check.error && !busy;
+
+  const save = async () => {
+    if (!canSave) return;
+    setBusy(true);
+    setFailed(null);
+    try {
+      await onSubmit(data.name, check.value, permission, { vaultAudience: audience, orgScope: "organization", organizationId: org?.id });
+      setRaw("");
+      setStatus("submitted");
+    } catch (e) {
+      setFailed((e as Error)?.message || "Could not save the key");
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  if (status !== "awaiting_user_input") {
+    const ok = status === "submitted";
     return (
-      <div className="key-request-card key-request-card-cancelled">
-        <div className="key-request-icon">
-          <svg width="16" height="16" viewBox="0 0 24 24" fill="none">
-            <path
-              d="M18 6L6 18M6 6l12 12"
-              stroke="currentColor"
-              strokeWidth="1.5"
-              strokeLinecap="round"
-              strokeLinejoin="round"
-            />
-          </svg>
-        </div>
-        <div className="key-request-content">
-          <h3 className="key-request-title">Request Cancelled</h3>
-          <p className="key-request-description">
-            You can add {data.name} later in Settings → API Keys.
-          </p>
-        </div>
+      <div className="rail-scope key-card key-card--done">
+        <OrgMark name={orgName} src={orgLogo} className="key-card__mark" />
+        <span><b>{data.name}</b> {ok ? `saved · ${orgName} · ${VAULT_AUDIENCE_LABELS[audience].label}` : "not added — add it later in Settings → API Keys"}</span>
       </div>
     );
   }
 
   return (
-    <div className="key-request-card">
-      <div className="key-request-icon">
-        <svg width="16" height="16" viewBox="0 0 24 24" fill="none">
-          <rect
-            x="5"
-            y="11"
-            width="14"
-            height="10"
-            rx="2"
-            stroke="currentColor"
-            strokeWidth="1.5"
-          />
-          <path
-            d="M12 15v2"
-            stroke="currentColor"
-            strokeWidth="1.5"
-            strokeLinecap="round"
-          />
-          <path
-            d="M7 11V7a5 5 0 0110 0v4"
-            stroke="currentColor"
-            strokeWidth="1.5"
-            strokeLinecap="round"
-          />
-        </svg>
+    <div className="rail-scope key-card">
+      <div className="rail-peek__header key-card__header">
+        <b>{data.name}</b>
+        <span>API key</span>
+      </div>
+      {data.description && <p className="key-card__desc">{data.description}</p>}
+      {data.sourceUrl && (
+        <a className="key-card__link" href={`https://${data.sourceUrl.replace(/^https?:\/\//, "")}`} target="_blank" rel="noopener noreferrer">
+          Get it from {data.sourceUrl}
+        </a>
+      )}
+
+      <div className="rail-peek__group">
+        <h6>Value</h6>
+        {multiline ? (
+          <textarea className="key-card__input key-card__input--area" value={raw} spellCheck={false} autoFocus
+            onChange={(e) => setRaw(e.target.value)} disabled={busy} aria-label={`${data.name} value`} />
+        ) : (
+          <input className="key-card__input" type="password" value={raw} placeholder="Paste key" spellCheck={false} autoFocus
+            autoComplete="off" onChange={(e) => setRaw(e.target.value)} disabled={busy} aria-label={`${data.name} value`}
+            onPaste={(e) => { const t = e.clipboardData.getData("text"); if (t.includes("\n")) { e.preventDefault(); setRaw(t); } }}
+            onKeyDown={(e) => e.key === "Enter" && save()} />
+        )}
+        {(check.error || check.kind) && <small className={`key-card__hint${check.error ? " is-error" : ""}`}>{check.error ?? check.kind}</small>}
       </div>
 
-      <div className="key-request-content">
-        <h3 className="key-request-title">API Key Required</h3>
-        <p className="key-request-description">{data.description}</p>
-
-        {data.sourceUrl && (
-          <div className="key-request-source">
-            <span className="key-request-label">Get key from:</span>
-            <a
-              href={`https://${data.sourceUrl}`}
-              target="_blank"
-              rel="noopener noreferrer"
-              className="key-request-link"
-            >
-              {data.sourceUrl}
-            </a>
-          </div>
-        )}
-
-        {data.requiredScopes && data.requiredScopes.length > 0 && (
-          <div className="key-request-scopes">
-            <span className="key-request-label">Required permissions:</span>
-            <div className="key-request-scopes-list">
-              {data.requiredScopes.map((scope) => (
-                <code key={scope} className="key-request-scope">
-                  {scope}
-                </code>
-              ))}
-            </div>
-          </div>
-        )}
-
-        <div className="key-request-input-group">
-          <label
-            htmlFor={`key-input-${data.name}`}
-            className="key-request-label"
-          >
-            {data.name}
-          </label>
-          <div className="key-request-input-wrapper">
-            <input
-              id={`key-input-${data.name}`}
-              type={showValue ? "text" : "password"}
-              className="key-request-input"
-              placeholder="Enter your API key"
-              value={keyValue}
-              onChange={(e) => setKeyValue(e.target.value)}
-              onKeyDown={(e) => {
-                if (e.key === "Enter" && !e.shiftKey) {
-                  e.preventDefault();
-                  handleSubmit();
-                }
-              }}
-              disabled={isSubmitting}
-              autoFocus
-            />
-            <button
-              type="button"
-              className="key-request-toggle-visibility"
-              onClick={() => setShowValue(!showValue)}
-              aria-label={showValue ? "Hide key" : "Show key"}
-            >
-              {showValue ? (
-                <svg width="16" height="16" viewBox="0 0 24 24" fill="none">
-                  <path
-                    d="M1 12s4-8 11-8 11 8 11 8-4 8-11 8-11-8-11-8z"
-                    stroke="currentColor"
-                    strokeWidth="1.5"
-                    strokeLinecap="round"
-                    strokeLinejoin="round"
-                  />
-                  <circle
-                    cx="12"
-                    cy="12"
-                    r="3"
-                    stroke="currentColor"
-                    strokeWidth="1.5"
-                    strokeLinecap="round"
-                    strokeLinejoin="round"
-                  />
-                </svg>
-              ) : (
-                <svg width="16" height="16" viewBox="0 0 24 24" fill="none">
-                  <path
-                    d="M17.94 17.94A10.07 10.07 0 0112 20c-7 0-11-8-11-8a18.45 18.45 0 015.06-5.94M9.9 4.24A9.12 9.12 0 0112 4c7 0 11 8 11 8a18.5 18.5 0 01-2.16 3.19m-6.72-1.07a3 3 0 11-4.24-4.24"
-                    stroke="currentColor"
-                    strokeWidth="1.5"
-                    strokeLinecap="round"
-                    strokeLinejoin="round"
-                  />
-                  <line
-                    x1="1"
-                    y1="1"
-                    x2="23"
-                    y2="23"
-                    stroke="currentColor"
-                    strokeWidth="1.5"
-                    strokeLinecap="round"
-                    strokeLinejoin="round"
-                  />
-                </svg>
-              )}
+      <div className="rail-peek__group">
+        <h6>Save to</h6>
+        <div className="rail-orgs">
+          {AUDIENCES.map((a) => (
+            <button key={a} type="button" className={`rail-org${a === audience ? " is-active" : ""}`} onClick={() => setAudience(a)} disabled={busy}>
+              <OrgMark name={orgName} src={orgLogo} />
+              <span className="rail-org__name">
+                <b>{a === "user" ? "Only me" : a === "namespace" ? "Team" : orgName}</b>{" "}
+                <small>{a === chatScope ? "· this chat" : a === "org" ? "· everyone in org" : ""}</small>
+              </span>
+              {a === audience && <span className="key-card__check" aria-hidden="true">✓</span>}
             </button>
-          </div>
-        </div>
-
-        <div className="key-request-permission">
-          <label className="key-request-checkbox">
-            <input
-              type="radio"
-              name={`permission-${data.name}`}
-              checked={permission === "always"}
-              onChange={() => setPermission("always")}
-              disabled={isSubmitting}
-            />
-            <span>Always allow (for automation)</span>
-          </label>
-          <label className="key-request-checkbox">
-            <input
-              type="radio"
-              name={`permission-${data.name}`}
-              checked={permission === "ask"}
-              onChange={() => setPermission("ask")}
-              disabled={isSubmitting}
-            />
-            <span>Ask each time (more secure)</span>
-          </label>
+          ))}
         </div>
       </div>
 
-      <div className="key-request-actions">
-        <button
-          className="btn btn-secondary"
-          onClick={handleCancel}
-          disabled={isSubmitting}
-        >
-          Cancel
-        </button>
-        <button
-          className="btn btn-primary"
-          onClick={(e) => {
-            console.log("[KeyRequestCard] Button clicked!", {
-              event: e,
-              keyValue: keyValue.trim(),
-              isSubmitting,
-            });
-            handleSubmit();
-          }}
-          disabled={!keyValue.trim() || isSubmitting}
-          type="button"
-        >
-          {isSubmitting ? "Adding..." : "Add Key"}
-        </button>
-      </div>
+      <label className="key-card__ask">
+        <input type="checkbox" checked={permission === "ask"} onChange={(e) => setPermission(e.target.checked ? "ask" : "always")} disabled={busy} />
+        Ask before each use
+      </label>
 
-      <div className="key-request-security-note">
-        🔒 Your key will be encrypted and stored securely in your system
-        keychain
+      {failed && <small className="key-card__hint is-error">{failed}</small>}
+      <div className="key-card__actions">
+        <button type="button" className="key-card__btn" onClick={() => { setStatus("cancelled"); onCancel(); }} disabled={busy}>Not now</button>
+        <button type="button" className="key-card__btn key-card__btn--primary" onClick={save} disabled={!canSave}>{busy ? "Saving…" : "Save key"}</button>
       </div>
     </div>
   );
 }
 
-/**
- * Parse key request data from request_key tool result
- * Similar to parsePlanFromToolResult and parseJobStatusFromToolResult
- */
-export function parseKeyRequestFromToolResult(
-  toolName: string,
-  result: string | unknown,
-): KeyRequestData | null {
+/** Parse key request data from a request_key tool result. */
+export function parseKeyRequestFromToolResult(toolName: string, result: string | unknown): KeyRequestData | null {
   if (toolName !== "request_key") return null;
-
   try {
     const parsed = typeof result === "string" ? JSON.parse(result) : result;
-    const data = parsed.data || parsed;
-
-    if (data.type === "key_request") {
-      return {
-        type: "key_request",
-        name: data.name,
-        description: data.description,
-        sourceUrl: data.sourceUrl,
-        requiredScopes: data.requiredScopes,
-        suggestedPermission: data.suggestedPermission || "ask",
-        status: data.status || "awaiting_user_input",
-        message: data.message || `Waiting for user to provide ${data.name}...`,
-      };
-    }
-  } catch (e) {
-    // Not a key request result
+    const data = (parsed as { data?: Record<string, unknown> }).data || (parsed as Record<string, unknown>);
+    if (data.type !== "key_request") return null;
+    return {
+      type: "key_request",
+      name: String(data.name),
+      description: String(data.description ?? ""),
+      sourceUrl: data.sourceUrl as string | undefined,
+      requiredScopes: data.requiredScopes as string[] | undefined,
+      suggestedPermission: (data.suggestedPermission as "always" | "ask") || "ask",
+      status: (data.status as KeyRequestData["status"]) || "awaiting_user_input",
+      message: String(data.message || `Waiting for user to provide ${data.name}...`),
+    };
+  } catch {
+    return null;
   }
-
-  return null;
 }
