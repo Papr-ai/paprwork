@@ -166,6 +166,24 @@ if (secretCheck.status !== 0) {
   console.log(`Secret ${secretName} exists — ensure value matches memory Cloud Run`);
 }
 
+const hostSaName = getArg("service-account-name", "papr-cloud-app-host");
+const hostSa = `${hostSaName}@${project}.iam.gserviceaccount.com`;
+if (!dryRun) {
+  const saCheck = spawnSync("gcloud", ["iam", "service-accounts", "describe", hostSa, `--project=${project}`], { encoding: "utf8" });
+  if (saCheck.status !== 0) {
+    run(`gcloud iam service-accounts create ${hostSaName} --project=${project} --display-name="Papr cloud app host (least privilege)"`);
+  }
+  for (const name of [secretName, "papr-cloud-app-cookie-secret"]) {
+    const exists = spawnSync("gcloud", ["secrets", "describe", name, `--project=${project}`], { encoding: "utf8" });
+    if (exists.status === 0) {
+      run(`gcloud secrets add-iam-policy-binding ${name} --project=${project} --member=serviceAccount:${hostSa} --role=roles/secretmanager.secretAccessor --quiet`);
+    }
+  }
+}
+const cookieSecretExists =
+  !dryRun &&
+  spawnSync("gcloud", ["secrets", "describe", "papr-cloud-app-cookie-secret", `--project=${project}`], { encoding: "utf8" }).status === 0;
+
 const gcsCacheBucket =
   getArg("gcs-cache-bucket", process.env.CLOUD_APP_HOST_GCS_BUCKET) ??
   `${project}-cloud-app-host-cache`;
@@ -192,7 +210,11 @@ if (!dryRun) {
   const projectNumber = runCapture(
     `gcloud projects describe ${project} --format='value(projectNumber)'`,
   );
-  const runSa = `${projectNumber}-compute@developer.gserviceaccount.com`;
+  // Dedicated identity: the host runs app Python backends, so it must not hold
+  // the project-wide Editor role of the default compute account. It needs the
+  // cache bucket and its secrets only.
+  void projectNumber;
+  const runSa = hostSa;
   run(
     `gcloud storage buckets add-iam-policy-binding ${bucketUri} --member=serviceAccount:${runSa} --role=roles/storage.objectAdmin --project=${project}`,
   );
@@ -236,7 +258,8 @@ const deployCmd = [
   "--min-instances=1",
   "--max-instances=20",
   "--timeout=120",
-  `--update-secrets=PAPR_CLOUD_APP_HOST_KEY=${secretName}:latest`,
+  `--service-account=${hostSa}`,
+  `--update-secrets=PAPR_CLOUD_APP_HOST_KEY=${secretName}:latest${cookieSecretExists ? ",PAPR_CLOUD_APP_COOKIE_SECRET=papr-cloud-app-cookie-secret:latest" : ""}`,
   `--update-env-vars=PAPR_MEMORY_SERVER_URL=${memoryUrl},PAPR_CLOUD_APP_PUBLIC_URL=${publicUrl},CLOUD_APP_HOST_MEMORY_TIMEOUT_MS=90000,CLOUD_APP_HOST_GCS_BUCKET=${gcsCacheBucket},AUTH0_DOMAIN=papr.auth0.com,AUTH0_CLIENT_ID=asVGkVRkRAxYvtQadqivntIRjB4D1Iur,NODE_ENV=production,PAPR_TURSO_REPLICA_SYNC=replica-records`,
 ].join(" ");
 

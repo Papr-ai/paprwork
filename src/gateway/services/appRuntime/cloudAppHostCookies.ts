@@ -19,10 +19,16 @@ const SESSION_MAX_AGE_SEC = 60 * 60 * 24 * 7;
 const PENDING_MAX_AGE_SEC = 60 * 10;
 const SHARE_MAX_AGE_SEC = 60 * 60 * 24 * 30;
 
+/**
+ * Session cookies carry the signed-in user id, so the signing secret must be
+ * known only to apps.papr.ai. It used to be the host key, which also shipped in
+ * desktop builds. Falls back to the host key until the cookie secret is set.
+ */
 export function getCookieSigningSecret(): string {
-  const secret = getServiceSecret("PAPR_CLOUD_APP_HOST_KEY");
+  const secret =
+    getServiceSecret("PAPR_CLOUD_APP_COOKIE_SECRET") ?? getServiceSecret("PAPR_CLOUD_APP_HOST_KEY");
   if (!secret) {
-    throw new Error("PAPR_CLOUD_APP_HOST_KEY is required for cookie signing");
+    throw new Error("PAPR_CLOUD_APP_COOKIE_SECRET (or PAPR_CLOUD_APP_HOST_KEY) is required for cookie signing");
   }
   return secret;
 }

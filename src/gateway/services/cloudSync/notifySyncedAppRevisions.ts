@@ -34,7 +34,7 @@ export async function notifySyncedAppRevisions(
         continue;
       }
       // Pass the just-committed SHA so the host switches to it immediately.
-      await notifyCloudAppRevisionUpdated({ ...route, commitSha: cursors[appId]?.lastCommitSha });
+      await notifyCloudAppRevisionUpdated({ ...route, appId, commitSha: cursors[appId]?.lastCommitSha });
     } catch (error) {
       console.warn(
         `[CloudSync] Skipped revision notify for ${appId}:`,

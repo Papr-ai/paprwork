@@ -10,6 +10,7 @@
 export const SERVICE_SECRET_NAMES = [
   "PAPR_CLOUD_AGENT_GATEWAY_KEY",
   "PAPR_CLOUD_APP_HOST_KEY",
+  "PAPR_CLOUD_APP_COOKIE_SECRET",
 ] as const;
 
 export type ServiceSecretName = (typeof SERVICE_SECRET_NAMES)[number];

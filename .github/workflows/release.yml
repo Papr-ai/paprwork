@@ -82,7 +82,6 @@ jobs:
         run: node scripts/generate-packaged-gateway-env.mjs
         env:
           RELEASE_BUILD: "1"
-          PAPR_CLOUD_APP_HOST_KEY: ${{ secrets.PAPR_CLOUD_APP_HOST_KEY }}
           PAPR_APP_REPO_WRITER_URL: ${{ secrets.PAPR_APP_REPO_WRITER_URL }}
           PAPR_MEMORY_SERVER_URL: ${{ secrets.PAPR_MEMORY_SERVER_URL }}
 
@@ -148,7 +147,6 @@ jobs:
         run: node scripts/generate-packaged-gateway-env.mjs
         env:
           RELEASE_BUILD: "1"
-          PAPR_CLOUD_APP_HOST_KEY: ${{ secrets.PAPR_CLOUD_APP_HOST_KEY }}
           PAPR_APP_REPO_WRITER_URL: ${{ secrets.PAPR_APP_REPO_WRITER_URL }}
           PAPR_MEMORY_SERVER_URL: ${{ secrets.PAPR_MEMORY_SERVER_URL }}
 
@@ -196,7 +194,6 @@ jobs:
         run: node scripts/generate-packaged-gateway-env.mjs
         env:
           RELEASE_BUILD: "1"
-          PAPR_CLOUD_APP_HOST_KEY: ${{ secrets.PAPR_CLOUD_APP_HOST_KEY }}
           PAPR_APP_REPO_WRITER_URL: ${{ secrets.PAPR_APP_REPO_WRITER_URL }}
           PAPR_MEMORY_SERVER_URL: ${{ secrets.PAPR_MEMORY_SERVER_URL }}
 

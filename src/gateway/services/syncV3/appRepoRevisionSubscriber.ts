@@ -75,7 +75,7 @@ async function handleCommittedEvent(event: AppRepoCommittedEvent): Promise<void>
     const { notifyCloudAppRevisionUpdated } = await import(
       "../cloudSync/notifyCloudAppRevision.js"
     );
-    await notifyCloudAppRevisionUpdated({ ...route, commitSha: event.commitSha });
+    await notifyCloudAppRevisionUpdated({ ...route, appId: event.appId, commitSha: event.commitSha });
   } catch (err) {
     console.warn(
       `[AppRepoRevisionSubscriber] Skipped revision notify for ${event.appId}:`,
