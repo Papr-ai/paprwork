@@ -173,7 +173,9 @@ if (!dryRun) {
   if (saCheck.status !== 0) {
     run(`gcloud iam service-accounts create ${hostSaName} --project=${project} --display-name="Papr cloud app host (least privilege)"`);
   }
-  for (const name of [secretName, "papr-cloud-app-cookie-secret"]) {
+  // papr-mcp-service-key: the MCP variant (--service=papr-cloud-app-host-mcp) runs
+  // the same image and shares this identity.
+  for (const name of [secretName, "papr-cloud-app-cookie-secret", "papr-mcp-service-key"]) {
     const exists = spawnSync("gcloud", ["secrets", "describe", name, `--project=${project}`], { encoding: "utf8" });
     if (exists.status === 0) {
       run(`gcloud secrets add-iam-policy-binding ${name} --project=${project} --member=serviceAccount:${hostSa} --role=roles/secretmanager.secretAccessor --quiet`);

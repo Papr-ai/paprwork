@@ -23,7 +23,9 @@ baked into every desktop build, so anyone with the app could extract it.
 2. Create `papr-cloud-app-cookie-secret` (`openssl rand -base64 32`).
 3. memory: set `PAPR_CLOUD_APP_HOST_KEY` = new, `PAPR_CLOUD_APP_HOST_KEY_PREVIOUS` = old. Deploy.
 4. Deploy app host (picks up new key + cookie secret; everyone signs in again once),
-   app-repo-writer, agent gateway.
+   app-repo-writer, agent gateway, and the MCP host
+   (`node scripts/deploy-cloud-app-host.mjs --service=papr-cloud-app-host-mcp`;
+   `--update-*` flags keep its MCP env/secrets).
 5. After ~10 min with no 401s in memory logs: remove `_PREVIOUS` from memory. Done.
 6. Update `.env.local` copies used by e2e scripts; delete the GitHub secret
    `PAPR_CLOUD_APP_HOST_KEY` (no longer used by release CI).
