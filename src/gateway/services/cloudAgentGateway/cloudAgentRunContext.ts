@@ -54,6 +54,7 @@ import {
 import type { JobType } from "../jobs/types.js";
 import { isJobScratchDatabasePath } from "../jobs/jobScratchDatabasePath.js";
 import { normalizeRuntimeParams } from "../../utils/normalizeRuntimeParams.js";
+import { clearUserProvidedEnvKeys, markUserProvidedEnvKeys } from "../../../core/utils/childProcessEnv.js";
 
 export interface CloudRunHandle {
   runRoot: string;
@@ -177,6 +178,8 @@ function applyVaultKeys(
     snapshot.previousVaultEnv.set(keyName, process.env[keyName]);
     process.env[keyName] = value;
   }
+  // User's own vault values reach child processes even on cloud services.
+  markUserProvidedEnvKeys(Object.keys(request.vaultKeys).filter((k) => request.vaultKeys?.[k]));
 }
 
 function applyPaprApiKey(
@@ -231,6 +234,7 @@ async function restoreCloudRunEnv(snapshot: CloudRunEnvSnapshot): Promise<void> 
   }
   invalidatePaprUserIdCache();
 
+  clearUserProvidedEnvKeys();
   for (const [keyName, previousValue] of snapshot.previousVaultEnv.entries()) {
     if (previousValue === undefined) delete process.env[keyName];
     else process.env[keyName] = previousValue;

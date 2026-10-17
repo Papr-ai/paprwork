@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, it } from "vitest";
-import { childProcessEnv } from "./childProcessEnv.js";
+import { childProcessEnv, clearUserProvidedEnvKeys, markUserProvidedEnvKeys } from "./childProcessEnv.js";
 import { execShellCommand } from "./shellExec.js";
 
 const SET = ["PAPR_CLOUD_AGENT_GATEWAY_KEY", "PAPR_CLOUD_APP_HOST_KEY", "GOOGLE_APPLICATION_CREDENTIALS"];
@@ -9,6 +9,7 @@ describe("childProcessEnv", () => {
     for (const k of SET) delete process.env[k];
     delete process.env.STRIPE_KEY;
     delete process.env.GATEWAY_MODE;
+    clearUserProvidedEnvKeys();
   });
 
   it("drops platform service secrets but keeps vault/user env", () => {
@@ -27,6 +28,16 @@ describe("childProcessEnv", () => {
     expect(childProcessEnv().GOOGLE_APPLICATION_CREDENTIALS).toBe("/home/me/sa.json");
     process.env.GATEWAY_MODE = "cloud_agent";
     expect(childProcessEnv().GOOGLE_APPLICATION_CREDENTIALS).toBeUndefined();
+  });
+
+  it("cloud keeps a user's own vault GOOGLE_APPLICATION_CREDENTIALS", () => {
+    process.env.GATEWAY_MODE = "cloud_agent";
+    process.env.GOOGLE_APPLICATION_CREDENTIALS = "/vault/user-sa.json";
+    markUserProvidedEnvKeys(["GOOGLE_APPLICATION_CREDENTIALS", "PAPR_CLOUD_APP_HOST_KEY"]);
+    process.env.PAPR_CLOUD_APP_HOST_KEY = "svc";
+    const env = childProcessEnv();
+    expect(env.GOOGLE_APPLICATION_CREDENTIALS).toBe("/vault/user-sa.json");
+    expect(env.PAPR_CLOUD_APP_HOST_KEY).toBeUndefined(); // Papr service key: never
   });
 
   it("extra env cannot re-inject a platform secret", () => {

@@ -30,10 +30,28 @@ export function isPaprCloudService(): boolean {
   return process.env.GATEWAY_MODE === "cloud_agent" || Boolean(process.env.K_SERVICE);
 }
 
+/**
+ * Names the current run got from the user's own vault (keychain → cloud
+ * vault). A user who stores GOOGLE_APPLICATION_CREDENTIALS / a GitHub App key
+ * in their vault must still get it in the sandbox; only a value the service
+ * itself holds is withheld. Papr service keys are never user-provided.
+ */
+const userProvidedEnvKeys = new Set<string>();
+
+export function markUserProvidedEnvKeys(names: Iterable<string>): void {
+  for (const name of names) userProvidedEnvKeys.add(name);
+}
+
+export function clearUserProvidedEnvKeys(): void {
+  userProvidedEnvKeys.clear();
+}
+
 export function isPlatformSecretEnvKey(name: string): boolean {
+  if (PLATFORM_SECRET_ENV_KEYS.has(name)) return true;
   return (
-    PLATFORM_SECRET_ENV_KEYS.has(name) ||
-    (isPaprCloudService() && CLOUD_ONLY_SECRET_ENV_KEYS.has(name))
+    isPaprCloudService() &&
+    CLOUD_ONLY_SECRET_ENV_KEYS.has(name) &&
+    !userProvidedEnvKeys.has(name)
   );
 }
 
