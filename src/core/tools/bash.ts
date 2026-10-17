@@ -155,6 +155,7 @@ import {
 } from "../utils/platformBrowserBashGuard.js";
 
 import { destroyChildProcessStreams } from "../utils/destroyChildProcessStreams.js";
+import { childProcessEnv } from "../utils/childProcessEnv.js";
 
 /** Commands that fetch or produce external content - wrap stdout for prompt injection defense */
 const CURL_WGET_REGEX = /\b(curl|wget)\b/i;
@@ -418,7 +419,7 @@ async function executeBackgroundedCommand(
     // Spawn detached with stdio ignored to prevent hanging on orphaned pipes
     const proc = spawn(shellPath, shellArgs, {
       cwd: cwd || process.cwd(),
-      env: Object.keys(env).length > 0 ? { ...process.env, ...env } : process.env,
+      env: childProcessEnv(env),
       detached: true,
       stdio: "ignore", // Critical: don't inherit stdio pipes
     });
@@ -718,9 +719,7 @@ export async function executeBashCommand(
 
     // Execute with timeout and improved buffer (stdin ignored — prevents EBADF)
     const mergedExecEnv: NodeJS.ProcessEnv =
-      Object.keys(env).length > 0
-        ? { ...process.env, ...(env as Record<string, string>) }
-        : process.env;
+      childProcessEnv(env as Record<string, string>);
 
     const { stdout, stderr } = await execShellCommand(command, {
       cwd: cwd || process.cwd(),
@@ -794,9 +793,7 @@ export async function executeBashCommand(
     }
 
     const mergedEnv: NodeJS.ProcessEnv =
-      Object.keys(env).length > 0
-        ? { ...process.env, ...(env as Record<string, string>) }
-        : process.env;
+      childProcessEnv(env as Record<string, string>);
 
     const sqliteWarnings = buildSqlitePathWarnings(command, {
       appDb:
@@ -1022,7 +1019,7 @@ export async function executeBashCommandStreaming(
     const [shellPath, shellArgs] = getShellCommand(command);
     const proc = spawn(shellPath, shellArgs, {
       cwd: cwd || process.cwd(),
-      env: env ? { ...process.env, ...(env as Record<string, string>) } : process.env,
+      env: childProcessEnv(env as Record<string, string> | undefined),
       timeout,
       stdio: SPAWN_STDIO_IGNORE_IN,
     });

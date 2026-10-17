@@ -15,6 +15,7 @@ import { homedir } from "os";
 import { join } from "path";
 import { mkdirSync } from "fs";
 import type { ToolResult } from "../types/index.js";
+import { childProcessEnv } from "../utils/childProcessEnv.js";
 
 const execFileAsync = promisify(execFile);
 
@@ -38,7 +39,7 @@ async function runCommand(
   try {
     const result = await execFileAsync(command, args, {
       timeout: timeoutMs,
-      env: { ...process.env },
+      env: childProcessEnv(),
       shell: true,
       ...(cwd ? { cwd } : {}),
     });

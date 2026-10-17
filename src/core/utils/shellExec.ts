@@ -3,6 +3,7 @@ import { getShellCommand } from "./platform.js";
 import { SPAWN_STDIO_IGNORE_IN } from "./spawnStdio.js";
 import { destroyChildProcessStreams } from "./destroyChildProcessStreams.js";
 import { notifySpawnResourceError } from "./spawnResourceErrorHandler.js";
+import { childProcessEnv } from "./childProcessEnv.js";
 
 export interface ShellExecOptions {
   cwd?: string;
@@ -38,7 +39,7 @@ export function execShellCommand(
     const [shellPath, shellArgs] = getShellCommand(command);
     const proc = spawn(shellPath, shellArgs, {
       cwd,
-      env: env ? { ...process.env, ...env } : process.env,
+      env: childProcessEnv(env),
       stdio: SPAWN_STDIO_IGNORE_IN,
     });
 

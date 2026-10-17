@@ -160,7 +160,26 @@ if (secretCheck.status !== 0) {
   console.log(`Secret ${secretName} exists — ensure value matches memory Cloud Run`);
 }
 
-const computeSa = `${runCapture(`gcloud projects describe ${project} --format='value(projectNumber)'`)}-compute@developer.gserviceaccount.com`;
+// Dedicated least-privilege identity. The gateway runs agent tools (bash) for
+// app visitors, so anything in the container can mint this account's token
+// from the metadata server. It must NOT be the default compute SA (Editor).
+// It only needs to read its two secrets; memory/app-host/Turso/GitHub calls
+// use per-run tokens, not Google IAM.
+const gatewaySaName = getArg("service-account-name", "papr-cloud-agent-gateway");
+const gatewaySa = `${gatewaySaName}@${project}.iam.gserviceaccount.com`;
+console.log("\n--- Step 3a: Gateway service account ---");
+const saCheck = spawnSync(
+  "gcloud",
+  ["iam", "service-accounts", "describe", gatewaySa, `--project=${project}`],
+  { encoding: "utf8" },
+);
+if (saCheck.status !== 0) {
+  run(
+    `gcloud iam service-accounts create ${gatewaySaName} --project=${project} --display-name="Papr cloud agent gateway (least privilege)"`,
+  );
+}
+// Kept for the secret bindings below; the variable name is historical.
+const computeSa = gatewaySa;
 const memorySa =
   getArg("memory-sa", process.env.CLOUD_MEMORY_RUN_SA) ??
   "cloud-run-webapp-sa@gen-lang-client-0873281406.iam.gserviceaccount.com";
@@ -221,6 +240,7 @@ const deployCmd = [
   "--max-instances=10",
   "--timeout=1800",
   "--concurrency=1",
+  `--service-account=${gatewaySa}`,
   `--set-secrets=PAPR_CLOUD_AGENT_GATEWAY_KEY=${secretName}:latest${appHostSecretCheck.status === 0 ? `,PAPR_CLOUD_APP_HOST_KEY=${appHostSecretName}:latest` : ""}`,
   `--set-env-vars=GATEWAY_MODE=cloud_agent,CLOUD_SYNC_ENABLED=false,PAPR_MEMORY_SERVER_URL=${memoryUrl},TURSO_SYNC_ENABLED=false,PAPR_CLOUD_SANDBOX_TURSO_DIRECT=1,NODE_ENV=production,CLOUD_AGENT_GATEWAY_TIMEOUT_SEC=1800,PAPR_CLOUD_APPS_HOST=${getArg("apps-host", process.env.PAPR_CLOUD_APPS_HOST ?? "https://apps.papr.ai")}`,
 ].join(" ");

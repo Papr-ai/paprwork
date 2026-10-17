@@ -8,6 +8,7 @@
 import { spawn, type ChildProcess } from "node:child_process";
 import { randomUUID } from "node:crypto";
 import type { AppBackendRunResult } from "../../../core/types/appBackend.js";
+import { childProcessEnv } from "../../../core/utils/childProcessEnv.js";
 
 const WORKER_BOOT_TIMEOUT_MS = 30_000;
 
@@ -194,7 +195,7 @@ async function ensureWorkerReady(): Promise<void> {
 
     const proc = spawn("python3", ["-u", "-c", PYTHON_WORKER_SCRIPT], {
       stdio: ["pipe", "pipe", "pipe"],
-      env: process.env,
+      env: childProcessEnv(), // app backends never see platform service keys
     });
     workerProcess = proc;
     workerFailed = false;

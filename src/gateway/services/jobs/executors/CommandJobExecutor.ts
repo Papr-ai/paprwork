@@ -20,6 +20,7 @@ import { jobSdkEnv } from "../jobSdkEnv.js";
 import { leaseJobDbProxyEnv } from "../jobDbProxyEnv.js";
 import { ensureJobRuntime, defaultRuntimesRoot } from "../runtime/jobRuntime.js";
 import { platformCdpEnvForRun } from "../../../utils/platformCdpBridge.js";
+import { childProcessEnv } from "../../../../core/utils/childProcessEnv.js";
 
 export class CommandJobExecutor implements IJobExecutor {
   private supportedTypes: Set<JobType>;
@@ -385,7 +386,7 @@ export class CommandJobExecutor implements IJobExecutor {
    * Ensures jobs use the Node version specified in .nvmrc to prevent native module mismatches.
    */
   private getNvmEnv(): NodeJS.ProcessEnv {
-    const env: NodeJS.ProcessEnv = { ...process.env };
+    const env: NodeJS.ProcessEnv = childProcessEnv();
     
     // Windows uses nvm-windows with different structure, Unix uses nvm
     const isWindows = process.platform === 'win32';
