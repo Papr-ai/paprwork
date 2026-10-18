@@ -2174,6 +2174,12 @@ export class CloudAppHostService {
     lastOutput?: string;
     stdout?: string;
   }): void {
+    // With Pub/Sub push live, memory announces the result itself (with completedAt
+    // and recordedAt). Publishing it here too sent every tab "completed" twice.
+    if (this.jobEventsPush?.isActive() === true) {
+      publishJobOutputProgress(result.jobId, result.stdout);
+      return;
+    }
     publishJobStatusChanged({
       jobId: result.jobId,
       name: result.name,
