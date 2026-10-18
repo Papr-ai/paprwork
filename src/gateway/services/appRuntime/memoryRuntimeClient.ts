@@ -412,6 +412,8 @@ export interface RuntimeJobSummary {
   /** "local-only" → the cloud refuses to run it; show "Open in Papr Work". */
   executionCapability?: string | null;
   localOnlyReason?: string | null;
+  /** Opaque owner workspace id; pushed status events carry the same value. */
+  ownerKey?: string;
 }
 
 /** Memory refused a cloud run because the job only runs in Papr Work desktop (409). */
