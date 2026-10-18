@@ -20,6 +20,10 @@ import { TursoDbAdapter } from "./TursoDbAdapter.js";
 import { getJobEventHub } from "../JobEventHub.js";
 import { publishDbChanged } from "../../utils/publishJobRunEvents.js";
 import { registerJobEventsSseRoutes } from "../registerJobEventsSse.js";
+import {
+  startJobEventsSubscriber,
+  type JobEventsSubscriberHandle,
+} from "./jobEventsPubSubSubscriber.js";
 import { registerAppAgentChatRoutes } from "../appAgentChat/registerAppAgentChatRoutes.js";
 import { getMemoryAppAgentChatSessionStore } from "../appAgentChat/AppAgentChatSessionStore.js";
 import { registerPaprMiniAppSdkRoutes } from "../../utils/registerPaprMiniAppSdkRoutes.js";
@@ -300,6 +304,18 @@ export class CloudAppHostService {
     this.turso = new TursoDbAdapter(deps.tursoCredentials);
   }
 
+  private jobEventsPush: JobEventsSubscriberHandle | null = null;
+
+  /** Start receiving pushed job events (Pub/Sub). No-op without PAPR_JOB_EVENTS_TOPIC. */
+  async startJobEventsPush(): Promise<void> {
+    this.jobEventsPush = await startJobEventsSubscriber(getJobEventHub());
+  }
+
+  async stopJobEventsPush(): Promise<void> {
+    await this.jobEventsPush?.stop();
+    this.jobEventsPush = null;
+  }
+
   registerRoutes(app: Express): void {
     this.auth.registerRoutes(app);
     this.credentials.registerRoutes(app);
@@ -315,6 +331,8 @@ export class CloudAppHostService {
     });
     registerJobEventsSseRoutes(app, {
       hub: getJobEventHub(),
+      // Pub/Sub subscriber live → status arrives pushed; polling only as a safety net.
+      pushActive: () => this.jobEventsPush?.isActive() === true,
       pollJobStatus: async (jobId, req) => {
         // Same credentials as the page itself (session → namespace key), or
         // team/private apps 403 every poll.
@@ -333,6 +351,7 @@ export class CloudAppHostService {
             status: job.status ?? "unknown",
             completedAt: job.completedAt,
             lastOutput: job.lastOutput,
+            ownerKey: job.ownerKey,
           };
         } catch (err) {
           // Denied won't change mid-connection — tell the stream to stop asking.

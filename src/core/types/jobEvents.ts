@@ -54,6 +54,14 @@ export type JobEventData =
 export interface JobEvent {
   type: JobEventType;
   data: JobEventData;
+  /**
+   * Set on status events pushed from the memory server (never sent to the
+   * browser): opaque owner workspace id, matched against the owner the SSE
+   * connection resolved when it read the job. Absent = in-process event.
+   */
+  ownerKey?: string;
+  /** Pushed events: when memory recorded the change (drops out-of-order delivery). */
+  recordedAt?: string;
 }
 
 export function jobEventJobId(event: JobEvent): string | undefined {

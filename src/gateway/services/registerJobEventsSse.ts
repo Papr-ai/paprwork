@@ -1,10 +1,18 @@
 /**
  * Server-Sent Events endpoint for mini-app job subscriptions.
  * Works on desktop gateway and cloud app host (same-origin with iframe).
+ *
+ * Status delivery:
+ * - Push (cloud app host with the Pub/Sub subscriber live): status events arrive
+ *   in the hub, stamped with the owning workspace's ownerKey. One status read per
+ *   job on connect (baseline + access check + ownerKey), then events only; a slow
+ *   safety re-read (default 60s) while a job is running covers a lost event.
+ * - Poll (desktop, or push unavailable / older memory without ownerKey): read
+ *   every pollIntervalMs, as before.
  */
 
 import type { Express, Request, Response } from "express";
-import type { JobEvent } from "../../core/types/jobEvents.js";
+import type { JobEvent, JobStatusChangedData } from "../../core/types/jobEvents.js";
 import { jobEventDbId, jobEventJobId } from "../../core/types/jobEvents.js";
 import type { JobEventHub } from "./JobEventHub.js";
 
@@ -15,6 +23,8 @@ export interface JobStatusPollResult {
   error?: string;
   lastOutput?: string;
   name?: string;
+  /** Owner workspace (opaque, from memory). Required to accept pushed events. */
+  ownerKey?: string;
 }
 
 export interface JobEventsSseOptions {
@@ -25,8 +35,24 @@ export interface JobEventsSseOptions {
     req: Request,
   ) => Promise<JobStatusPollResult | null>;
   pollIntervalMs?: number;
+  /** True while pushed status events are flowing (cloud app host subscriber). */
+  pushActive?: () => boolean;
+  /** Re-read interval for running jobs when push is active. Default 60s. */
+  safetyPollMs?: number;
   /** Desktop-only: one-shot Turso pull when client subscribes to dbIds (mini-app SSE). */
   onDbIdsSubscribe?: (dbIds: string[]) => void;
+}
+
+const ACTIVE_STATUSES = new Set(["running", "pending", "queued", "starting"]);
+
+interface JobWatch {
+  status?: string;
+  completedAt?: string;
+  ownerKey?: string;
+  recordedAt?: string;
+  lastPolledAt: number;
+  forbidden: boolean;
+  polling: boolean;
 }
 
 function parseIdList(raw: unknown): string[] {
@@ -69,6 +95,7 @@ export function registerJobEventsSseRoutes(
   options: JobEventsSseOptions,
 ): void {
   const pollIntervalMs = options.pollIntervalMs ?? 5000;
+  const safetyPollMs = options.safetyPollMs ?? 60_000;
 
   app.get("/api/jobs/events", (req: Request, res: Response) => {
     const jobIds = parseIdList(req.query.jobIds);
@@ -86,58 +113,100 @@ export function registerJobEventsSseRoutes(
       options.onDbIdsSubscribe(dbIds);
     }
 
+    const watches = new Map<string, JobWatch>(
+      jobIds.map((id) => [id, { lastPolledAt: 0, forbidden: false, polling: false }]),
+    );
+
+    const emitStatus = (data: JobStatusChangedData): void => {
+      writeSse(res, { type: "jobs:status-changed", data });
+    };
+
     const unsubscribe = options.hub.subscribe((event) => {
       if (!matchesFilter(event, jobIds, dbIds)) {
         return;
       }
-      writeSse(res, event);
+      if (event.type !== "jobs:status-changed") {
+        writeSse(res, event);
+        return;
+      }
+      const data = event.data as JobStatusChangedData;
+      const watch = watches.get(data.jobId);
+      if (event.ownerKey !== undefined) {
+        // Pushed from memory: only for connections that read this job as the same owner.
+        if (!watch || watch.forbidden || !watch.ownerKey || watch.ownerKey !== event.ownerKey) {
+          return;
+        }
+        if (event.recordedAt && watch.recordedAt && event.recordedAt < watch.recordedAt) {
+          return; // out-of-order delivery: older than what this tab already has
+        }
+        if (event.recordedAt) watch.recordedAt = event.recordedAt;
+        if (watch.status === data.status && watch.completedAt === data.completedAt) {
+          return; // duplicate delivery
+        }
+      }
+      if (watch) {
+        watch.status = data.status;
+        watch.completedAt = data.completedAt;
+      }
+      emitStatus(data);
     });
 
-    const lastPolledStatus = new Map<string, string>();
-    const forbiddenJobs = new Set<string>();
     let pollTimer: ReturnType<typeof setInterval> | undefined;
 
     if (options.pollJobStatus && jobIds.length > 0) {
-      const poll = async (): Promise<void> => {
-        for (const jobId of jobIds) {
-          if (forbiddenJobs.has(jobId)) continue;
-          try {
-            const snapshot = await options.pollJobStatus!(jobId, req);
-            if (!snapshot) {
-              continue;
-            }
-            const prev = lastPolledStatus.get(jobId);
-            if (prev === undefined) {
-              // Seed baseline without emitting — avoids replaying a stale terminal
-              // status (e.g. previous run "failed") when the user starts a new run.
-              lastPolledStatus.set(jobId, snapshot.status);
-              continue;
-            }
-            if (prev === snapshot.status) {
-              continue;
-            }
-            lastPolledStatus.set(jobId, snapshot.status);
-            writeSse(res, {
-              type: "jobs:status-changed",
-              data: {
-                jobId: snapshot.jobId,
-                name: snapshot.name,
-                status: snapshot.status,
-                completedAt: snapshot.completedAt,
-                error: snapshot.error,
-                lastOutput: snapshot.lastOutput,
-              },
-            });
-          } catch (err) {
-            // Access denied for this caller: stop polling it on this connection.
-            if ((err as { forbidden?: boolean })?.forbidden) forbiddenJobs.add(jobId);
+      const pollOne = async (jobId: string, watch: JobWatch): Promise<void> => {
+        watch.polling = true;
+        watch.lastPolledAt = Date.now();
+        try {
+          const snapshot = await options.pollJobStatus!(jobId, req);
+          if (!snapshot) {
+            return;
           }
+          if (snapshot.ownerKey) watch.ownerKey = snapshot.ownerKey;
+          if (watch.status === undefined) {
+            // Seed baseline without emitting — avoids replaying a stale terminal
+            // status (e.g. previous run "failed") when the user starts a new run.
+            watch.status = snapshot.status;
+            watch.completedAt = snapshot.completedAt;
+            return;
+          }
+          if (watch.status === snapshot.status && watch.completedAt === snapshot.completedAt) {
+            return;
+          }
+          watch.status = snapshot.status;
+          watch.completedAt = snapshot.completedAt;
+          emitStatus({
+            jobId: snapshot.jobId,
+            name: snapshot.name,
+            status: snapshot.status,
+            completedAt: snapshot.completedAt,
+            error: snapshot.error,
+            lastOutput: snapshot.lastOutput,
+          });
+        } catch (err) {
+          // Access denied for this caller: stop polling it on this connection.
+          if ((err as { forbidden?: boolean })?.forbidden) watch.forbidden = true;
+        } finally {
+          watch.polling = false;
         }
       };
-      void poll();
-      pollTimer = setInterval(() => {
-        void poll();
-      }, pollIntervalMs);
+
+      const isDue = (watch: JobWatch, now: number): boolean => {
+        if (watch.forbidden || watch.polling) return false;
+        if (watch.lastPolledAt === 0) return true;
+        const pushed = Boolean(watch.ownerKey) && options.pushActive?.() === true;
+        if (!pushed) return now - watch.lastPolledAt >= pollIntervalMs - 50;
+        return ACTIVE_STATUSES.has(watch.status ?? "") && now - watch.lastPolledAt >= safetyPollMs;
+      };
+
+      const tick = (): void => {
+        const now = Date.now();
+        for (const [jobId, watch] of watches) {
+          if (isDue(watch, now)) void pollOne(jobId, watch);
+        }
+      };
+      tick();
+      pollTimer = setInterval(tick, pollIntervalMs);
     }
 
     const keepAlive = setInterval(() => {

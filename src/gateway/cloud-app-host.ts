@@ -58,6 +58,10 @@ async function main(): Promise<void> {
     console.log(`[CloudAppHost] MCP endpoint enabled: ${mcp.resourceUrl}`);
   }
   host.registerRoutes(app);
+  // Pushed job status / db-changed events from memory (Pub/Sub). Not awaited:
+  // startup must never wait on Pub/Sub. Until (or unless) the subscription is
+  // live, the SSE route keeps polling memory, as before.
+  void host.startJobEventsPush();
 
   app.listen(PORT, "0.0.0.0", () => {
     console.log(`[CloudAppHost] Listening on :${PORT}`);
@@ -68,7 +72,9 @@ async function main(): Promise<void> {
 
   const shutdown = (): void => {
     shutdownBackendPythonWorker();
-    process.exit(0);
+    const exit = (): never => process.exit(0);
+    // Delete this instance's subscription (it would expire anyway after 1 day idle).
+    void Promise.race([host.stopJobEventsPush(), new Promise((r) => setTimeout(r, 3000))]).then(exit, exit);
   };
   process.on("SIGTERM", shutdown);
   process.on("SIGINT", shutdown);
