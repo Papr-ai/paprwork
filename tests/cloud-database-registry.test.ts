@@ -3,6 +3,13 @@ import { loadAppDataSourcesConfig } from "../src/gateway/services/appRuntime/clo
 import { resetCloudAppHostCachesForTests } from "../src/gateway/services/appRuntime/cloudAppHostCache.js";
 import type { AppRuntimeRouteAuth } from "../src/gateway/services/appRuntime/types.js";
 import { PAPR_APP_CLOUD_REVISION_PATH } from "../src/gateway/services/cloudSync/cloudAppRevisionMarker.js";
+import { PAPR_APP_META_RELATIVE_PATH } from "../src/gateway/services/cloudSync/cloudAppMeta.js";
+import { CLOUD_REPO_HEAD_RELATIVE_PATH } from "../src/gateway/services/cloudSync/cloudRepoHeadMarker.js";
+
+/** Revision lookup reads these three files in parallel (marker, app meta, repo head). */
+const REVISION_PATHS = [PAPR_APP_CLOUD_REVISION_PATH, PAPR_APP_META_RELATIVE_PATH, CLOUD_REPO_HEAD_RELATIVE_PATH];
+const isRevisionPath = (path: unknown) =>
+  typeof path === "string" && REVISION_PATHS.some((p) => path.includes(p));
 import { useIsolatedPaprWorkspace } from "./setup/isolatedWorkspace.js";
 
 vi.mock("../src/gateway/services/appRuntime/memoryRuntimeClient.js", () => ({
@@ -31,6 +38,7 @@ describe("loadAppDataSourcesConfig", () => {
       if (typeof path === "string" && path.includes(PAPR_APP_CLOUD_REVISION_PATH)) {
         return { content: "rev-1\n", contentType: "text/plain" };
       }
+      if (isRevisionPath(path)) return null;
       callOrder.push(String(path));
       await new Promise((resolve) => setTimeout(resolve, 5));
       if (path === "data-sources.json") {
@@ -90,8 +98,8 @@ describe("loadAppDataSourcesConfig", () => {
     await loadAppDataSourcesConfig(auth, "data-sources.json", stats2);
     expect(stats2.cacheHit).toBe(true);
 
-    // Revision marker + 3 files on first load only.
-    expect(fetchRuntimeRepoFile).toHaveBeenCalledTimes(4);
+    // Revision lookup (3 files) + 3 config files on first load only; second load is a cache hit.
+    expect(fetchRuntimeRepoFile).toHaveBeenCalledTimes(REVISION_PATHS.length + 3);
   });
 
   it("does not cache empty config when data-sources.json is missing", async () => {
