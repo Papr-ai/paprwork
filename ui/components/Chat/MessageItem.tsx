@@ -37,6 +37,7 @@ import { DelegationCard } from "./DelegationCard";
 import {
   KeyRequestCard,
   parseKeyRequestFromToolResult,
+  type KeySubmitScope,
 } from "./KeyRequestCard";
 import { MiniChatCard } from "./MiniChatCard";
 import { Markdown } from "../common/Markdown";
@@ -87,6 +88,24 @@ interface MessageItemProps {
   turnInFlight?: boolean;
 }
 
+/** Save a key from the chat card into the requesting chat's org + audience. Throws so the card can show the error. */
+async function saveRequestedKey(
+  name: string,
+  value: string,
+  permission: "always" | "ask",
+  scope: KeySubmitScope,
+): Promise<void> {
+  await window.electronAPI.customKeys.add({
+    name,
+    value,
+    permission,
+    description: "",
+    orgScope: scope.orgScope,
+    organizationId: scope.organizationId,
+    vaultAudience: scope.vaultAudience,
+  });
+}
+
 /**
  * Render V1-style sequence (interleaved text and tool calls)
  * Expected output:
@@ -110,27 +129,7 @@ function renderSequence(
   const elements: React.ReactNode[] = [];
 
   // Define handlers for key request cards
-  const handleKeySubmit = async (
-    name: string,
-    value: string,
-    permission: "always" | "ask",
-  ) => {
-    console.log("[MessageItem] handleKeySubmit called", { name, permission });
-    try {
-      console.log("[MessageItem] Calling window.electronAPI.customKeys.add...");
-      const result = await window.electronAPI.customKeys.add({
-        name,
-        value,
-        permission,
-        description: "",
-      });
-      console.log("[MessageItem] Key added successfully:", result);
-      // Card will update to "submitted" status via the tool result
-      // TODO: Optionally trigger a re-render to show success state immediately
-    } catch (error) {
-      console.error("[MessageItem] Failed to add custom key:", error);
-    }
-  };
+  const handleKeySubmit = saveRequestedKey;
 
   const handleKeyCancel = () => {
     // Card will update to "cancelled" status
@@ -500,6 +499,7 @@ function renderSequence(
           <KeyRequestCard
             key={`key-request-${keyName}`}
             data={keyRequestData}
+            chatId={chatId}
             onSubmit={handleKeySubmit}
             onCancel={handleKeyCancel}
           />,
@@ -878,28 +878,7 @@ const MessageItemInner: React.FC<MessageItemProps> = ({
                 });
 
                 // Define handlers for fallback section
-                const handleKeySubmit = async (
-                  name: string,
-                  value: string,
-                  permission: "always" | "ask",
-                ) => {
-                  console.log("[MessageItem:Fallback] handleKeySubmit called", { name, permission });
-                  try {
-                    console.log("[MessageItem:Fallback] Calling window.electronAPI.customKeys.add...");
-                    const result = await window.electronAPI.customKeys.add({
-                      name,
-                      value,
-                      permission,
-                      description: "",
-                    });
-                    console.log("[MessageItem:Fallback] Key added successfully:", result);
-                  } catch (error) {
-                    console.error(
-                      "[MessageItem:Fallback] Failed to add custom key:",
-                      error,
-                    );
-                  }
-                };
+                const handleKeySubmit = saveRequestedKey;
 
                 const handleKeyCancel = () => {
                   // Card will update to "cancelled" status
@@ -909,6 +888,7 @@ const MessageItemInner: React.FC<MessageItemProps> = ({
                   <KeyRequestCard
                     key={`key-request-fallback-${keyRequest.name}`}
                     data={keyRequest}
+                    chatId={chatId}
                     onSubmit={handleKeySubmit}
                     onCancel={handleKeyCancel}
                   />
