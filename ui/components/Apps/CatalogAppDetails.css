@@ -27,47 +27,65 @@
 .cat-btn--solid:hover { background: var(--accent, #0060e0); filter: brightness(1.08); }
 .cat-acts { display: flex; gap: 6px; flex: none; }
 
-.cat-modal {
-  position: fixed; inset: 0; z-index: 1000; display: grid; place-items: center; padding: 32px 16px;
-  background: rgba(10, 16, 32, 0.32); backdrop-filter: blur(4px); animation: cat-fade .15s ease-out;
+/* App page (Prototyper .ca-page): covers the Apps view, scrolls on its own. */
+.apps-view { position: relative; }
+.cat-page {
+  position: absolute; inset: 0; z-index: 50; overflow-y: auto; overscroll-behavior: contain; outline: none;
+  background: var(--popover-bg, #fff); color: var(--text-primary); animation: cat-page-in .22s cubic-bezier(.2, .8, .2, 1);
 }
-/* Card clips; the inner layer scrolls. The hairline sits ON TOP of the content, so the
-   video's dark corners never show a grey halo through the rounded edge. */
-.cat-modal__card {
-  position: relative; display: flex; flex-direction: column; width: min(720px, 100%); max-height: calc(100vh - 64px);
-  overflow: hidden; border-radius: 24px; background: var(--popover-bg, #fff);
-  box-shadow: 0 30px 90px rgba(10, 16, 32, 0.3); animation: cat-pop .18s ease-out;
+body > .cat-page { position: fixed; z-index: 1000; }
+.cat-page__in { max-width: 1040px; margin: 0 auto; padding: 16px 32px 56px; display: grid; gap: 30px; }
+.cat-page__back {
+  justify-self: start; display: inline-flex; align-items: center; gap: 4px; min-height: 36px; padding: 0 10px 0 4px;
+  border: 0; border-radius: 10px; background: none; color: var(--accent, #0060e0); font: inherit; font-size: 15px; font-weight: 600; cursor: pointer;
 }
-.cat-modal__card::after {
-  content: ""; position: absolute; inset: 0; z-index: 3; border-radius: inherit; pointer-events: none;
-  box-shadow: inset 0 0 0 0.5px color-mix(in srgb, var(--text-primary) 12%, transparent);
+.cat-page__back:hover { background: color-mix(in srgb, var(--accent, #0060e0) 8%, transparent); }
+.cat-page__back svg { width: 18px; height: 18px; }
+.cat-page__hero { display: grid; gap: 22px; }
+/* The whole film, never cropped: previews are 16:10. */
+.cat-page__media .cat-banner {
+  aspect-ratio: 16 / 10; border-radius: 24px; background: #000;
+  box-shadow: 0 1px 2px rgba(0, 0, 0, 0.08), 0 18px 50px rgba(10, 16, 32, 0.18);
 }
-.cat-modal__scroll { min-height: 0; overflow-y: auto; overscroll-behavior: contain; }
-/* The whole preview, never cropped: films are 16:10, so the banner is too. */
-.cat-modal .cat-banner { aspect-ratio: 16 / 10; height: auto; border-radius: 0; box-shadow: none; }
-.cat-modal .cat-banner__img { object-position: center; }
-.cat-modal__x {
-  position: absolute; top: 14px; right: 14px; z-index: 4; width: 30px; height: 30px; border: 0; border-radius: 50%; cursor: pointer;
-  display: grid; place-items: center; color: var(--text-primary); background: var(--popover-bg, #fff); box-shadow: 0 2px 8px rgba(10, 16, 32, 0.18);
+.cat-page__media .cat-banner__img { object-position: center; }
+.cat-page__id { display: flex; align-items: center; gap: 18px; flex-wrap: wrap; }
+.cat-page__t { flex: 1 1 0; min-width: 220px; }
+.cat-page__t h1 { margin: 0; font-size: 32px; font-weight: 700; letter-spacing: -0.028em; line-height: 1.1; }
+.cat-page__t p { margin: 4px 0 0; font-size: 18px; color: var(--text-secondary); letter-spacing: -0.01em; }
+.cat-page__cta { display: flex; gap: 8px; align-items: center; }
+.cat-page__cta .cat-btn { height: 44px; min-width: 110px; padding: 0 24px; font-size: 16px; border-radius: 14px; }
+.cat-page__cta .cat-btn--solid {
+  background: linear-gradient(180deg, color-mix(in srgb, var(--accent, #0060e0) 85%, #fff), var(--accent, #0060e0));
+  box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.25), 0 1px 2px rgba(1, 97, 224, 0.3), 0 6px 16px rgba(1, 97, 224, 0.22);
 }
-.cat-modal__body { padding: 20px 28px 26px; }
-.cat-modal__head { display: flex; align-items: center; gap: 14px; }
-.cat-modal__ttl { flex: 1; min-width: 0; }
-.cat-modal__ttl h2 { margin: 0; font-size: 22px; font-weight: 700; letter-spacing: -0.01em; color: var(--text-primary); }
-.cat-modal__ttl span { font-size: 12.5px; color: var(--text-tertiary); }
-.cat-modal__act { display: flex; gap: 6px; flex: none; }
-.cat-modal__desc { margin: 16px 0 0; font-size: 14px; line-height: 1.55; color: var(--text-secondary); }
-.cat-modal__facts { display: grid; grid-template-columns: 1fr 1fr; gap: 16px; margin-top: 18px; padding-top: 16px; border-top: 1px solid var(--apps-card-line, rgba(10, 16, 32, 0.07)); }
-.cat-modal__facts h4 { margin: 0 0 8px; font-size: 11px; font-weight: 700; letter-spacing: .06em; text-transform: uppercase; color: var(--text-tertiary); }
-.cat-modal__facts ul { margin: 0; padding: 0; list-style: none; display: grid; gap: 6px; font-size: 13px; color: var(--text-secondary); }
-.cat-modal__facts li { display: flex; align-items: center; gap: 7px; min-width: 0; }
-.cat-modal__facts code { font-size: 12px; padding: 1px 6px; border-radius: 5px; background: color-mix(in srgb, var(--text-primary) 6%, transparent); }
-.cat-modal__note { margin: 18px 0 0; font-size: 12.5px; color: var(--text-tertiary); }
-@keyframes cat-fade { from { opacity: 0; } }
-@keyframes cat-pop { from { opacity: 0; transform: translateY(8px) scale(.98); } }
-@media (max-width: 600px) {
-  .cat-modal { place-items: end center; padding: 0; }
-  .cat-modal__card { width: 100%; border-radius: 24px 24px 0 0; max-height: 92vh; }
-  .cat-modal__facts { grid-template-columns: 1fr; }
+.cat-page__facts {
+  list-style: none; margin: 0; padding: 14px 0; display: grid; grid-auto-flow: column; grid-auto-columns: minmax(0, 1fr);
+  border-top: 1px solid var(--apps-card-line, rgba(10, 16, 32, 0.08)); border-bottom: 1px solid var(--apps-card-line, rgba(10, 16, 32, 0.08));
 }
+.cat-page__facts li { display: grid; justify-items: center; gap: 3px; min-width: 0; padding: 0 8px; text-align: center; border-left: 1px solid var(--apps-card-line, rgba(10, 16, 32, 0.08)); }
+.cat-page__facts li:first-child { border-left: 0; }
+.cat-page__facts b { max-width: 100%; font-size: 17px; font-weight: 700; letter-spacing: -0.01em; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.cat-page__facts span { font-size: 11.5px; color: var(--text-tertiary); text-transform: uppercase; letter-spacing: .05em; }
+.cat-page__sec h2 { margin: 0 0 14px; font-size: 21px; font-weight: 700; letter-spacing: -0.018em; }
+.cat-page__desc { margin: 0; max-width: 760px; font-size: 16px; line-height: 1.55; color: var(--text-secondary); }
+.cat-page__shots { display: grid; grid-auto-flow: column; grid-auto-columns: min(420px, 78%); gap: 16px; overflow-x: auto; scroll-snap-type: x mandatory; padding-bottom: 6px; }
+.cat-page__shots figure { margin: 0; display: grid; gap: 8px; scroll-snap-align: start; }
+.cat-page__shots img { width: 100%; aspect-ratio: 16 / 10; object-fit: cover; border-radius: 16px; background: color-mix(in srgb, var(--text-primary) 5%, transparent); box-shadow: inset 0 0 0 0.5px color-mix(in srgb, var(--text-primary) 10%, transparent); }
+.cat-page__shots figcaption { font-size: 13px; color: var(--text-secondary); }
+.cat-page__two { display: grid; grid-template-columns: 1fr 1fr; gap: 28px; }
+.cat-page__list { margin: 0; padding: 0; list-style: none; display: grid; gap: 10px; font-size: 15px; color: var(--text-secondary); }
+.cat-page__list li { display: flex; align-items: center; gap: 9px; min-width: 0; }
+.cat-page__list code { font-size: 13px; padding: 2px 8px; border-radius: 6px; background: color-mix(in srgb, var(--text-primary) 6%, transparent); }
+.cat-page__note { margin: 0; font-size: 13px; color: var(--text-tertiary); }
+@keyframes cat-page-in { from { opacity: 0; transform: translateY(10px); } }
+@media (max-width: 760px) {
+  .cat-page__in { padding: 12px 16px 40px; gap: 24px; }
+  .cat-page__t h1 { font-size: 26px; }
+  .cat-page__cta { width: 100%; }
+  .cat-page__cta .cat-btn { flex: 1; }
+  .cat-page__facts { grid-auto-flow: row; grid-template-columns: repeat(3, 1fr); row-gap: 12px; }
+  .cat-page__facts li:nth-child(4) { border-left: 0; }
+  .cat-page__two { grid-template-columns: 1fr; }
+}
+@media (prefers-reduced-motion: reduce) { .cat-page { animation: none; } }
 .community-apps__grid:has(> .cat-card) { grid-template-columns: repeat(auto-fill, minmax(320px, 1fr)); gap: 28px 24px; }

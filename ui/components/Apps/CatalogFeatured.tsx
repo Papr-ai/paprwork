@@ -1,7 +1,7 @@
 /**
  * Community "Featured" banner — App Store style: dark full-width card, a big
  * editorial headline (publisher-set `headline`, else the description), the
- * app's preview upright in a window on the right, and a glass row with the droplet, name, by-line
+ * app's preview filling the card (hover grows it to show the whole film), and a glass row with the droplet, name, by-line
  * and the same Open / Preview / Get buttons as the card.
  */
 import { useState, type ReactNode } from "react";
@@ -35,8 +35,9 @@ export function FeaturedBanner({ entry, coverUrl, onOpen, actions, children }: P
   const videoUrl = catalogCoverVideoUrl(entry, coverUrl);
   const headline = entry.headline?.trim() || entry.description;
   return (
+    <div className="cat-feat-wrap">
     <section
-      className="cat-feat"
+      className={`cat-feat${shot && coverUrl ? " has-shot" : ""}`}
       role="button"
       tabIndex={0}
       aria-label={`Featured: ${entry.name}`}
@@ -65,5 +66,6 @@ export function FeaturedBanner({ entry, coverUrl, onOpen, actions, children }: P
       </div>
       {children}
     </section>
+    </div>
   );
 }

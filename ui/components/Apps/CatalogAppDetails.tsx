@@ -1,9 +1,9 @@
 /**
- * Team / Community app details — centered modal opened from a catalog card.
+ * Team / Community app details — a full app page opened from a catalog card.
  * One Get button (resolveOneInstallSelection decides track vs fork and data);
  * no "Use it / Make my own copy" choice.
  */
-import { useEffect, useState, type ReactNode } from "react";
+import { useEffect, useRef, useState, type ReactNode } from "react";
 import { DemoVideo } from "./DemoVideo";
 import { createPortal } from "react-dom";
 import type { CommunityCatalogEntry } from "../../../src/core/types/communityCatalog";
@@ -13,7 +13,7 @@ import { lookupService } from "../../../src/core/data/knownServices";
 import { formatCatalogUpdated, getCatalogByline } from "../../utils/communityCatalogDisplay";
 import { DropGlyph } from "./HomeTiles";
 import { DefaultCover } from "./DefaultCover";
-import { catalogCoverVideoUrl } from "../../utils/catalogPreviewUrl";
+import { catalogCoverVideoUrl, viaDesktopMedia } from "../../utils/catalogPreviewUrl";
 import "./CatalogAppDetails.css";
 
 export function catalogKeyNames(entry: CommunityCatalogEntry): string[] {
@@ -76,65 +76,108 @@ interface Props {
   onClose: () => void;
 }
 
+/** The surface the page covers: the Apps view (keeps the sidebar + tabs), else the window. */
+function pageHost(): HTMLElement {
+  // Several tabs can each mount an Apps view; cover the one on screen.
+  const views = Array.from(document.querySelectorAll<HTMLElement>(".apps-view"));
+  return views.find((v) => v.offsetParent !== null && v.getClientRects().length > 0) ?? document.body;
+}
+
+/**
+ * Prototyper-style app page (not a floating modal): back link, the whole preview film,
+ * identity row with a big Get, a facts strip, screenshots, then what it needs / runs.
+ * Covers the Apps view, so there is no card edge to show a halo.
+ */
 export function CatalogAppDetails({ entry, coverUrl, hasWeb, actions, onClose }: Props) {
+  const scroller = useRef<HTMLDivElement>(null);
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => { if (e.key === "Escape") onClose(); };
     window.addEventListener("keydown", onKey);
+    scroller.current?.focus({ preventScroll: true });
     return () => window.removeEventListener("keydown", onKey);
   }, [onClose]);
   const keys = catalogKeyNames(entry);
   const updated = formatCatalogUpdated(entry.updatedAt);
   const installs = entry.installCount;
-  const meta = [
-    catalogBy(entry),
-    updated ? `Updated ${updated}` : null,
-    typeof installs === "number" && installs > 0 ? `${installs.toLocaleString()} install${installs === 1 ? "" : "s"}` : null,
-  ].filter(Boolean).join(" · ");
   const teamData = isTeamSharedVisibility(entry.visibility);
+  const shots = (entry.media ?? []).filter((m) => m.role === "gallery" && m.kind === "image" && m.url);
+  const facts: Array<[string, string]> = [
+    ...(typeof installs === "number" && installs > 0 ? [[installs.toLocaleString(), installs === 1 ? "install" : "installs"] as [string, string]] : []),
+    [entry.isOwned ? "You" : (getCatalogByline(entry).replace(/^By\s+/i, "") || "Papr"), "built by"],
+    [String(keys.length), keys.length === 1 ? "key needed" : "keys needed"],
+    ...(updated ? [[updated, "updated"] as [string, string]] : []),
+    ...(hasWeb ? [["Web", "also runs on"] as [string, string]] : []),
+  ];
   return createPortal(
     <div
-      className="cat-modal"
+      ref={scroller}
+      className="cat-page"
+      role="dialog"
+      aria-modal="true"
+      aria-label={entry.name}
+      tabIndex={-1}
       onClick={(e) => e.stopPropagation()}
       onKeyDown={(e) => e.stopPropagation()}
-      onMouseDown={(e) => { if (e.target === e.currentTarget) onClose(); }}
     >
-      <div className="cat-modal__card" role="dialog" aria-modal="true" aria-label={entry.name}>
-        <button type="button" className="cat-modal__x" onClick={onClose} aria-label="Close"><CatIcon name="x" size={14} /></button>
-        <div className="cat-modal__scroll">
-        <CatalogBanner entry={entry} coverUrl={coverUrl} glyphSize={104} />
-        <div className="cat-modal__body">
-          <div className="cat-modal__head">
-            <DropGlyph icon={entry.icon} title={entry.name} size={56} />
-            <div className="cat-modal__ttl"><h2>{entry.name}</h2><span>{meta}</span></div>
-            <div className="cat-modal__act">{actions}</div>
+      <div className="cat-page__in">
+        <button type="button" className="cat-page__back" onClick={onClose}>
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true"><path d="M15 5l-7 7 7 7" /></svg>
+          {teamData ? "Team" : "Community"}
+        </button>
+        <section className="cat-page__hero">
+          <div className="cat-page__media"><CatalogBanner entry={entry} coverUrl={coverUrl} /></div>
+          <div className="cat-page__id">
+            <DropGlyph icon={entry.icon} title={entry.name} size={88} />
+            <div className="cat-page__t">
+              <h1>{entry.name}</h1>
+              {entry.headline?.trim() ? <p>{entry.headline.trim()}</p> : null}
+            </div>
+            <div className="cat-page__cta">{actions}</div>
           </div>
-          {entry.description ? <p className="cat-modal__desc">{entry.description}</p> : null}
-          <div className="cat-modal__facts">
-            <section>
-              <h4>What it needs</h4>
-              <ul>
-                {keys.length ? keys.map((k) => (
-                  <li key={k}><CatIcon name="key" /><code>{k}</code></li>
-                )) : <li><CatIcon name="check" /><span>No keys needed</span></li>}
-              </ul>
-            </section>
-            <section>
-              <h4>What it runs</h4>
-              <ul>
-                <li><CatIcon name="bolt" /><span>{entry.catalogAutomation?.cardLine ?? "Nothing in the background"}</span></li>
-                {hasWeb ? <li><CatIcon name="globe" /><span>Also works on the web</span></li> : null}
-              </ul>
-            </section>
+        </section>
+        <ul className="cat-page__facts">
+          {facts.map(([v, k]) => <li key={k}><b title={v}>{v}</b><span>{k}</span></li>)}
+        </ul>
+        {entry.description ? (
+          <section className="cat-page__sec"><h2>About</h2><p className="cat-page__desc">{entry.description}</p></section>
+        ) : null}
+        {shots.length ? (
+          <section className="cat-page__sec">
+            <h2>Screenshots</h2>
+            <div className="cat-page__shots">
+              {shots.map((m, i) => (
+                <figure key={i}>
+                  <img src={viaDesktopMedia(m.url!)} alt={m.alt ?? ""} loading="lazy" draggable={false} />
+                  {m.alt ? <figcaption>{m.alt}</figcaption> : null}
+                </figure>
+              ))}
+            </div>
+          </section>
+        ) : null}
+        <section className="cat-page__sec cat-page__two">
+          <div>
+            <h2>What it needs</h2>
+            <ul className="cat-page__list">
+              {keys.length ? keys.map((k) => (
+                <li key={k}><CatIcon name="key" /><code>{k}</code></li>
+              )) : <li><CatIcon name="check" /><span>No keys needed</span></li>}
+            </ul>
           </div>
-          {!entry.isOwned ? (
-            <p className="cat-modal__note">
-              {teamData ? "Uses your team's data." : "Your data stays private."} Updates arrive automatically.
-            </p>
-          ) : null}
-        </div>
-        </div>
+          <div>
+            <h2>What it runs</h2>
+            <ul className="cat-page__list">
+              <li><CatIcon name="bolt" /><span>{entry.catalogAutomation?.cardLine ?? "Nothing in the background"}</span></li>
+              {hasWeb ? <li><CatIcon name="globe" /><span>Also works on the web</span></li> : null}
+            </ul>
+          </div>
+        </section>
+        {!entry.isOwned ? (
+          <p className="cat-page__note">
+            {teamData ? "Uses your team's data." : "Your data stays private."} Updates arrive automatically.
+          </p>
+        ) : null}
       </div>
     </div>,
-    document.body,
+    pageHost(),
   );
 }
