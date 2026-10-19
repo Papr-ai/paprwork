@@ -8,6 +8,7 @@
 
 import React, { useState, useRef, useEffect } from "react";
 import { useJobLiveLogsStore } from "../../stores/jobLiveLogsStore";
+import { AgentGlyph } from "../Agent/AgentGlyph";
 import "./JobStatusCard.css";
 
 export interface JobStatusData {
@@ -19,7 +20,13 @@ export interface JobStatusData {
   startedAt: string;
   logs?: string[];
   waitingPermissionKeys?: string[];
+  /** Job runtime type; agent/subagent jobs show the user's agent instead of a generic icon. */
+  jobType?: string;
+  /** "cloud" = ran on Papr Cloud: no live log stream, output arrives when the run finishes. */
+  runtime?: "local" | "cloud";
 }
+
+const AGENT_JOB_TYPES = new Set(["agent", "subagent"]);
 
 interface Props {
   data: JobStatusData;
@@ -33,6 +40,14 @@ export function JobStatusCard({ data }: Props) {
   // Get job name from store (updated via broadcast)
   const jobNameFromStore = useJobLiveLogsStore((s) => s.getJobName(data.jobId));
   const displayName = jobNameFromStore || data.jobName;
+  const jobTypeFromStore = useJobLiveLogsStore((s) => s.typesByJobId.get(data.jobId));
+  const jobType = data.jobType || jobTypeFromStore;
+  useEffect(() => {
+    if (!data.jobType && !jobTypeFromStore && data.jobId !== "unknown") {
+      void useJobLiveLogsStore.getState().fetchJobName(data.jobId);
+    }
+  }, [data.jobId, data.jobType, jobTypeFromStore]);
+  const isAgentJob = !!jobType && AGENT_JOB_TYPES.has(jobType);
 
   // Live logs stream in while job is running
   const liveLogs = useJobLiveLogsStore((s) =>
@@ -51,7 +66,7 @@ export function JobStatusCard({ data }: Props) {
     container.scrollTop = container.scrollHeight;
   }, [data.status, logLines.length]);
 
-  const statusIcon = {
+  const genericIcons = {
     running: (
       <svg width="14" height="14" viewBox="0 0 24 24" fill="none">
         <circle cx="12" cy="12" r="3" stroke="currentColor" strokeWidth="1.5" />
@@ -138,6 +153,14 @@ export function JobStatusCard({ data }: Props) {
       <circle cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="1.5" />
     </svg>
   );
+  // Agent jobs show the user's own agent (Replay trace while running); failures keep the clear X.
+  const statusIcon =
+    isAgentJob && data.status !== "failed" && data.status !== "waiting_permission" ? (
+      <AgentGlyph size={16} state={data.status === "running" ? "working" : "idle"} />
+    ) : (
+      genericIcons
+    );
+  const isCloudRun = data.runtime === "cloud";
 
   const statusClass =
     {
@@ -224,7 +247,9 @@ export function JobStatusCard({ data }: Props) {
                 ) : (
                   <div className="job-status-card__logs-placeholder">
                     <span className="job-status-card__logs-placeholder-dot" />
-                    Waiting for output…
+                    {isCloudRun
+                      ? "Running in Papr Cloud — output arrives when it finishes"
+                      : "Waiting for output…"}
                   </div>
                 )}
               </div>
@@ -279,6 +304,7 @@ export function parseJobStatusFromToolResult(
         startedAt: data.startedAt || new Date().toISOString(),
         logs: data.logs || [],
         waitingPermissionKeys: data.waitingPermissionKeys,
+        jobType: data.job?.type,
       };
     }
   } catch (e) {
