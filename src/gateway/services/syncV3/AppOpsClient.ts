@@ -15,6 +15,7 @@ import {
   AppRepoOpsSuccessResponseSchema,
 } from "../../../core/types/appRepoWriterOps.js";
 import { getPaprApiKey } from "../../utils/keyResolver.js";
+import { cloudActingUserId } from "../../utils/cloudActingUser.js";
 import {
   applyAckedBlobOids,
   removeCachedPaths,
@@ -67,6 +68,10 @@ async function writerFetch(
     "Content-Type": "application/json",
     "X-API-Key": apiKey,
   };
+  // The writer asks memory for this user's role on the app; without it memory
+  // falls back to the API key's own user (role_cannot_publish for owners).
+  const actingUser = cloudActingUserId();
+  if (actingUser) headers["X-Papr-User-Id"] = actingUser;
 
   assertGitHubNotPaused();
   const baseUrl = getAppRepoWriterBaseUrl();
