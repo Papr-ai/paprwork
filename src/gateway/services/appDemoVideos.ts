@@ -331,8 +331,9 @@ function begin(appId: string, kind: DemoTask["kind"], run: (task: DemoTask) => P
 }
 
 /** Start (or join) the background generation for one app. */
-export function startDemoGeneration(appId: string, deps: DemoDeps): DemoTask {
-  return begin(appId, "create", (task) => runCreate(appId, deps, task), deps);
+/** fresh: Start over — write a new gallery from the current prompt and listing (old versions stay). */
+export function startDemoGeneration(appId: string, deps: DemoDeps, opts: { fresh?: boolean } = {}): DemoTask {
+  return begin(appId, "create", (task) => runCreate(appId, deps, task, opts.fresh === true), deps);
 }
 
 /** Make the next version from the owner's open notes (all of them, in one run). */
@@ -406,12 +407,13 @@ async function reviewTake(
   }
 }
 
-async function runCreate(appId: string, deps: DemoDeps, task: DemoTask): Promise<number> {
+async function runCreate(appId: string, deps: DemoDeps, task: DemoTask, fresh = false): Promise<number> {
   const prompt = buildDemoScenePrompt(appId);
   // The app's real components first (gallery/); a written scene only if that can't be filmed.
   if (deps.writeGallery) {
     const v = await runGallery(appId, { ...deps, writeGallery: deps.writeGallery }, task, {
       kind: "create",
+      fresh,
       appPrompt: buildDemoScenePrompt(appId, { codeFirst: true, budget: GALLERY_SOURCE_BUDGET }),
       check: (r) => checkFeedback(r.check),
     });

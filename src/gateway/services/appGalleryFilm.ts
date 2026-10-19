@@ -238,6 +238,8 @@ export function galleryFilesFor(appId: string, v: number): GalleryFile[] {
 
 interface RunOpts {
   kind: "create" | "revise";
+  /** create: ignore the app's gallery/ and write a new one from the current prompt (Start over). */
+  fresh?: boolean;
   appPrompt: string;
   /** revise: what to change, and the frames the notes point at. */
   requests?: string;
@@ -259,7 +261,7 @@ export async function runGallery(appId: string, deps: DemoDeps & GalleryDeps, ta
       if (!current.length) return null;
       task.stage = "revising";
       files = normalizeGalleryFiles(await deps.writeGallery(appId, editGalleryPrompt(o.appPrompt, current, o.requests ?? ""), o.images));
-    } else if (hasGallery(appId)) {
+    } else if (!o.fresh && hasGallery(appId)) {
       files = readGalleryFiles(appId);
       task.stage = "recording";
     } else {

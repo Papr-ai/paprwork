@@ -11,6 +11,7 @@ import {
   appDemoVersionUrl,
   downloadGallery,
   markGallerySeen,
+  startDemoGeneration,
   updateDemoScreen,
   useDemoVersion,
   type DemoStatus,
@@ -117,6 +118,13 @@ export function DemoGallery({ appId, appName, demo, onMake }: { appId: string; a
             onClick={() => { video.current?.pause(); if (composing) stopComposing(); else setComposing(true); }}>
             <svg viewBox="0 0 16 16" width="15" height="15" fill="none" stroke="currentColor" strokeWidth="1.6" strokeLinejoin="round" aria-hidden><path d="M3 3.5h10v7H7l-3 2.5v-2.5H3z" /></svg>
             {open.length ? <b>{open.length}</b> : null}
+          </button>
+          <button type="button" className="dg-ib" aria-label="Start over"
+            title="Start over: a new video and screens from your current name, headline and colours (older versions stay)"
+            onClick={() => { video.current?.pause(); stopComposing(); run(startDemoGeneration(appId, { fresh: true })); }}>
+            <svg viewBox="0 0 16 16" width="15" height="15" fill="none" stroke="currentColor" strokeWidth="1.6" strokeLinecap="round" strokeLinejoin="round" aria-hidden>
+              <path d="M2.5 8a5.5 5.5 0 1 0 1.6-3.9M2.5 2.5v3h3" />
+            </svg>
           </button>
           <button type="button" className="dg-ib" aria-label="Download all" title={flash ? "Saved to Downloads" : "Download all"}
             onClick={() => run(downloadGallery(appId).then(() => { setFlash(true); setTimeout(() => setFlash(false), 1600); }))}>

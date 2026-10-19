@@ -121,9 +121,13 @@ function follow(appId: string): void {
   void tick();
 }
 
-/** Start making the preview video (joins a run already in progress). */
-export async function startDemoGeneration(appId: string): Promise<DemoStatus | null> {
-  const r = await fetch(`${base(appId)}/generate`, { method: "POST" });
+/** Start making the preview video (joins a run already in progress). fresh: Start over from the current listing. */
+export async function startDemoGeneration(appId: string, opts: { fresh?: boolean } = {}): Promise<DemoStatus | null> {
+  const r = await fetch(`${base(appId)}/generate`, {
+    method: "POST",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify({ fresh: opts.fresh === true }),
+  });
   const s = (await r.json().catch(() => null)) as (DemoStatus & { error?: string }) | null;
   if (!r.ok) throw new Error(s?.error ?? "Couldn't start the preview video.");
   follow(appId);

@@ -275,7 +275,7 @@ export function registerAppDemoSceneRoutes(app: Express): void {
       return;
     }
     try {
-      startDemoGeneration(appId, deps);
+      startDemoGeneration(appId, deps, { fresh: (req.body as { fresh?: unknown } | undefined)?.fresh === true });
       res.status(202).json(demoStatus(appId));
     } catch (err) {
       res.status(500).json({ error: (err as Error).message });
