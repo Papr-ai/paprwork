@@ -8,6 +8,8 @@ import { useState, type ReactNode } from "react";
 import type { CommunityCatalogEntry } from "../../../src/core/types/communityCatalog";
 import { DropGlyph } from "./HomeTiles";
 import { catalogBy } from "./CatalogAppDetails";
+import { DemoVideo } from "./DemoVideo";
+import { catalogCoverVideoUrl } from "../../utils/catalogPreviewUrl";
 import "./CatalogFeatured.css";
 
 /** Publisher headline first, then most installs; never your own app. */
@@ -28,6 +30,9 @@ interface Props {
 
 export function FeaturedBanner({ entry, coverUrl, onOpen, actions, children }: Props) {
   const [shot, setShot] = useState(Boolean(coverUrl));
+  // The owner's shared preview loop plays in the banner; no video (or 404) → the picture.
+  const [noVideo, setNoVideo] = useState(false);
+  const videoUrl = catalogCoverVideoUrl(entry, coverUrl);
   const headline = entry.headline?.trim() || entry.description;
   return (
     <section
@@ -38,7 +43,9 @@ export function FeaturedBanner({ entry, coverUrl, onOpen, actions, children }: P
       onClick={onOpen}
       onKeyDown={(e) => { if (e.key === "Enter" && e.target === e.currentTarget) onOpen(); }}
     >
-      {shot && coverUrl ? (
+      {shot && coverUrl && videoUrl && !noVideo ? (
+        <DemoVideo className="cat-feat__shot" src={videoUrl} poster={coverUrl} onError={() => setNoVideo(true)} />
+      ) : shot && coverUrl ? (
         <img className="cat-feat__shot" src={coverUrl} alt="" draggable={false} onError={() => setShot(false)} />
       ) : (
         <span className="cat-feat__big"><DropGlyph icon={entry.icon} title={entry.name} size={168} /></span>
