@@ -188,10 +188,14 @@ function composeHtml(c) {
   const bg1 = dark ? mix(0.45, 0) : mix(0.86, 255);
   const bg2 = dark ? mix(0.15, 0) : mix(0.7, 255);
   const a = Array.isArray(c.accent) ? c.accent : null;
-  const shade = (t, to) => (a ? `rgb(${a.map((v) => Math.round(v + (to - v) * t)).join(",")})` : null);
+  const lumA = a ? (0.2126 * a[0] + 0.7152 * a[1] + 0.0722 * a[2]) / 255 : 0;
+  // Neon accents (cyan, lime) vanish on light backgrounds; dark ones on dark. Pull toward readable first.
+  const fixT = a ? (dark ? Math.max(0, (0.55 - lumA) / (1 - lumA)) : Math.max(0, (lumA - 0.38) / lumA)) : 0;
+  const base = a ? a.map((v) => Math.round(v + ((dark ? 255 : 0) - v) * fixT)) : null;
+  const shade = (t, to) => (base ? `rgb(${base.map((v) => Math.round(v + (to - v) * t)).join(",")})` : null);
   const gFrom = a ? shade(dark ? 0 : 0.15, 0) : "#0060E0";
   const gTo = a ? shade(dark ? 0.35 : 0.25, 255) : "#00ACFA";
-  const glow = a ? `rgba(${a.join(",")},${dark ? 0.28 : 0.16})` : "rgba(0,120,255,0.14)";
+  const glow = a ? `rgba(${a.join(",")},${dark ? 0.24 : 0.1})` : "rgba(0,120,255,0.14)";
   const ink = dark ? "#fff" : "#0f172a";
   const muted = dark ? "rgba(255,255,255,0.68)" : "#5b6474";
   const words = String(c.caption || "").split(/\s+/).filter(Boolean);
@@ -211,7 +215,7 @@ body{position:relative;font-family:-apple-system,BlinkMacSystemFont,"SF Pro Disp
 h1{position:absolute;left:72px;right:72px;top:60px;margin:0;text-align:center;font-size:${words.join(" ").length > 26 ? 46 : 54}px;font-weight:750;letter-spacing:-0.025em;line-height:1.1;color:${ink}}
 .g{background:linear-gradient(90deg,${gFrom},${gTo});-webkit-background-clip:text;background-clip:text;color:transparent}
 p{position:absolute;left:72px;right:72px;top:${words.join(" ").length > 26 ? 128 : 136}px;margin:0;text-align:center;font-size:24px;font-weight:500;color:${muted}}
-img{position:absolute;display:block;border-radius:18px;box-shadow:${card}}
+img{position:absolute;display:block;border-radius:${c.radius != null ? 0 : 18}px;box-shadow:${card}}
 </style></head><body><h1>${head}</h1>${sub ? `<p>${esc(sub)}</p>` : ""}<img src="${esc(path.basename(c.raw))}">
 <script>
 window.__layout = () => {
@@ -220,6 +224,7 @@ window.__layout = () => {
   const w = img.naturalWidth / devicePixelRatio, h = img.naturalHeight / devicePixelRatio;
   const s = Math.min(2.6, (${OUT_W} - side * 2) / w, (${OUT_H} - top - bottom) / h);
   img.style.width = (w * s) + 'px'; img.style.height = (h * s) + 'px';
+  ${c.radius != null ? `img.style.borderRadius = (${Number(c.radius) || 0} * w * s) + 'px';` : ""}
   img.style.left = ((${OUT_W} - w * s) / 2) + 'px';
   img.style.top = (top + (${OUT_H} - top - bottom - h * s) / 2) + 'px';
   return true;
@@ -359,18 +364,33 @@ async function renderOnce(opts) {
           // Gallery film screen: the element the gallery code names, captured sharp.
           const z = wc.getZoomFactor();
           const box = await wc.executeJavaScript(`(() => {
-            const el = document.querySelector(${JSON.stringify(String(s.sel))});
+            let el = document.querySelector(${JSON.stringify(String(s.sel))});
             if (!el) return null;
-            const b = el.getBoundingClientRect(), p = 2;
+            const surf = (st) => (st.backgroundColor && !/rgba\\(0, 0, 0, 0\\)|transparent/.test(st.backgroundColor)) || (st.boxShadow && st.boxShadow !== 'none') || parseFloat(st.borderTopWidth) > 0;
+            // A wrapper around one card (card behind card): use the inner card, so the corners and edges are the card's own.
+            for (let i = 0; i < 4; i++) {
+              const kids = [...el.children].filter((k) => { const r = k.getBoundingClientRect(); return r.width > 2 && r.height > 2 && getComputedStyle(k).visibility !== 'hidden'; });
+              if (kids.length !== 1) break;
+              const ob = el.getBoundingClientRect(), kb = kids[0].getBoundingClientRect();
+              if (kb.width * kb.height < 0.6 * ob.width * ob.height) break;
+              el = kids[0];
+            }
+            const b = el.getBoundingClientRect(), st = getComputedStyle(el);
+            // A card (own surface): cut on its edge and keep its corner radius. A bare wrapper: frame it with real margin.
+            const card = surf(st);
+            const fit = el.closest('.papr-fit'), zf = (fit && Number(fit.style.zoom)) || 1;
+            const own = Math.min(parseFloat(st.borderTopLeftRadius) || 0, b.width / 2, b.height / 2) * zf;
+            const p = card ? 0 : 36;
             const l = Math.max(0, b.left - p), t = Math.max(0, b.top - p);
-            return { x: l, y: t, width: Math.min(innerWidth, b.right + p) - l, height: Math.min(innerHeight, b.bottom + p) - t };
+            const width = Math.min(innerWidth, b.right + p) - l;
+            return { x: l, y: t, width, height: Math.min(innerHeight, b.bottom + p) - t, radius: (card ? own : 28) / width };
           })()`);
           if (!box || box.width < 24 || box.height < 16) { stills.push({ t, path: s.path, missing: true }); continue; }
           const rect = { x: Math.round(box.x * z), y: Math.round(box.y * z), width: Math.round(box.width * z), height: Math.round(box.height * z) };
           fs.writeFileSync(s.path, (await wc.capturePage(rect)).toPNG());
           const W = OUT_W / z, H = OUT_H / z;
           const crop = { x: box.x / W, y: box.y / H, w: box.width / W, h: box.height / H };
-          stills.push({ t, path: s.path, snapped: true, crop, ...frameTones(frame) });
+          stills.push({ t, path: s.path, snapped: true, crop, radius: box.radius || 0, ...frameTones(frame) });
           continue;
         }
         if (s.snap && s.crop) {

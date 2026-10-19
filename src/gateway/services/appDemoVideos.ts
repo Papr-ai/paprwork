@@ -262,6 +262,8 @@ export interface DemoStill {
   missing?: boolean;
   /** Gallery screen captures: where the element sat (fractions of the frame). */
   crop?: DemoCrop;
+  /** Gallery screen captures: the card's corner radius as a fraction of its width. */
+  radius?: number;
   /** What sits under a pinned note: element, its text and parents. */
   probe?: { element: string; text: string; path: string } | null;
 }

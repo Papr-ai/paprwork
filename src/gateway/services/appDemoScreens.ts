@@ -90,6 +90,7 @@ export interface ComposeItem {
   key?: string;
   tone?: number[];
   accent?: number[] | null;
+  radius?: number;
 }
 
 export interface ScreenDeps {
@@ -108,6 +109,7 @@ export function composeItem(appId: string, v: number, k: number, s: DemoScreen):
     ...(s.key ? { key: s.key } : {}),
     ...(s.tone ? { tone: s.tone } : {}),
     ...(s.accent !== undefined ? { accent: s.accent } : {}),
+    ...(s.radius != null ? { radius: s.radius } : {}),
   };
 }
 

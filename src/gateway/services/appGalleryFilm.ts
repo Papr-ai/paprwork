@@ -44,7 +44,8 @@ It lives in the app's code as gallery/index.ts (+ optional gallery/data.ts, gall
 
 STEP 0 — READ THE LISTING: the app name, Community headline, description and brand colours above are what a scroller reads under the film.
   The film must PROVE that headline visually (same promise, same nouns, never contradicting it) and feel like the app's icon and brand.
-  Set the film accent to the app's brand colour (the icon / --accent colour) by writing --accent on #papr-film in gallery/poster.css when the app's CSS doesn't already define it.
+  Set the film accent to the app's brand HUE by writing --accent on #papr-film in gallery/poster.css when the app's CSS doesn't already define it (the kit tunes its lightness so it reads on the theme).
+  Icon colours are often neon/glow tones: never use them raw for text, chips or fills — only through var(--pg-accent). Text is var(--pg-fg)/var(--pg-muted); accent text only for short labels and numbers.
 
 STEP 1 — FIND THE CHANGE (decide this before any code; write it as a comment at the top of gallery/index.ts):
   BEFORE: the user's world without the app (100 cold invites, an empty week, an unknown website).
@@ -84,7 +85,7 @@ STEP 5 — LOOK: THE PAPR DESIGN SYSTEM.
   Generous whitespace; text >= 20px; one composition ~900-1150px wide, centred.
 
 STEP 6 — SCREENS: screen: { headline, key, sub, shot } on every scene (3-4 total; you may add a second screen on the hero by splitting it into two scenes only if both read on their own).
-  headline 2-5 words about the OUTCOME that echo the listing headline (don't repeat it verbatim), never a feature name, no app name, no end punctuation ("Warm intros while you sleep", "Walk in prepared"). key = the one headline word in the accent colour. sub = max 9 words. shot = CSS selector of the whole composition or focal card in that scene.
+  headline 2-5 words about the OUTCOME that echo the listing headline (don't repeat it verbatim), never a feature name, no app name, no end punctuation ("Warm intros while you sleep", "Walk in prepared"). key = the one headline word in the accent colour. sub = max 9 words. shot = CSS selector of the ONE focal card in that scene (the element that has the card surface and radius) — never a wrapper or a card stacked on another card; if the scene is a composition, give the composition wrapper no background, border or shadow.
 
 STEP 7 — SELF-CHECK before returning (fix and simplify if any fails):
   A stranger knows what the app does after 3s? Blur the text: is it still obviously THIS app? Swap in another app's words: would the film still fit? (then the SIGNATURE is too generic — make it bigger and more specific.) One place to look at every moment? The film ends on a payoff? No scene looks like a full app screen? Every colour from pg-* / accent?
@@ -200,6 +201,7 @@ async function galleryScreens(appId: string, deps: DemoDeps, v: number, declared
         style: "scene",
         ...(shot.tone ? { tone: shot.tone } : {}),
         ...(shot.accent !== undefined ? { accent: shot.accent } : {}),
+        ...(typeof shot.radius === "number" ? { radius: Math.round(shot.radius * 1e4) / 1e4 } : {}),
       });
     });
     // Renumber so file k matches screen k.

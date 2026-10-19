@@ -143,7 +143,10 @@ export function enter(el: HTMLElement | null, p: number, rise = 24): void {
  *   .pg-bar > i  progress (set i's width)  .pg-toast  payoff that arrives last
  */
 const DESIGN_CSS = `
-#papr-film{--pg-accent:var(--accent,#0161E0);--pg-ok:#1a9e63;font-family:var(--font-sans,-apple-system,BlinkMacSystemFont,"SF Pro Display",Inter,system-ui,sans-serif);-webkit-font-smoothing:antialiased}
+#papr-film{--pg-accent:var(--accent,#0161E0);}
+#papr-film.pg-light{--pg-accent:oklch(from var(--accent,#0161E0) clamp(0.36,l,0.52) min(c,0.19) h)}
+#papr-film.pg-dark{--pg-accent:oklch(from var(--accent,#0161E0) clamp(0.7,l,0.84) min(c,0.16) h)}
+#papr-film{--pg-ok:#1a9e63;font-family:var(--font-sans,-apple-system,BlinkMacSystemFont,"SF Pro Display",Inter,system-ui,sans-serif);-webkit-font-smoothing:antialiased}
 #papr-film{color-scheme:light}
 #papr-film.pg-dark{color-scheme:dark}
 #papr-film .pg-card :where(p,h1,h2,h3,h4,b,strong,small,span,em,div,article,section,button){color:inherit;margin:0}

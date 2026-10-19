@@ -46,6 +46,8 @@ export interface DemoScreen {
   key?: string;
   tone?: number[];
   accent?: number[] | null;
+  /** Gallery film screens: the captured card's corner radius as a fraction of its width; the composed image keeps it. */
+  radius?: number;
   /** Left out of the gallery by the owner. */
   hidden?: boolean;
 }
