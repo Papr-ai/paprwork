@@ -63,6 +63,10 @@ describe("looksLikeCredentialName", () => {
     expect(looksLikeCredentialName("GITHUB_TOKEN")).toBe(true);
     expect(looksLikeCredentialName("TASK")).toBe(false);
     expect(looksLikeCredentialName("CAMPAIGN_JSON")).toBe(false);
+    // Real keys from existing apps that the first version called parameters.
+    for (const name of ["GCP_OPS_MONITOR_SA", "PAPR_SERVICE_ACCOUNT", "SLACK_WEBHOOK_URL", "LINKEDIN_JSESSIONID", "JOE_PAPR_API_KEY_V3", "RR_GDRIVE_SERVICE_ACCOUNT"]) {
+      expect(looksLikeCredentialName(name), name).toBe(true);
+    }
   });
 });
 
@@ -86,13 +90,15 @@ describe("findUndeclaredKeys", () => {
     expect(result.every((k) => k.reason === "not_declared")).toBe(true);
   });
 
-  it("treats old auto-synced rows as undeclared and user keys need a purpose", () => {
+  it("blocks only visitor-facing rows that were never reviewed", () => {
     const result = findUndeclaredKeys({
       saved: [
         spec({ name: "PROMO_SECRET", description: AUTO_DETECTED_KEY_DESCRIPTION, credentialScope: "user" }),
         spec({ name: "LINKEDIN_LI_AT", credentialScope: "user", description: "" }),
         spec({ name: "OPENAI_API_KEY", description: "Writes drafts", credentialScope: "owner" }),
         spec({ name: "STRIPE_API_KEY", description: "", credentialScope: "owner" }),
+        // Old auto-synced owner row: never shown to visitors, so not blocking.
+        spec({ name: "RR_ATTENTION_API_KEY", description: AUTO_DETECTED_KEY_DESCRIPTION, credentialScope: "owner" }),
       ],
       detected: [],
       notKeys: [],

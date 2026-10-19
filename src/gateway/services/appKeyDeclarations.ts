@@ -48,22 +48,30 @@ export interface UndeclaredKey {
 
 /** Names that read as credentials. A ${NAME} that matches none of these is usually a parameter. */
 const SECRET_NAME_PATTERN =
-  /(API_?KEY|_KEY|_KEY_ID|TOKEN|SECRET|PASSWORD|PASSWD|_PAT|_DSN|_LI_AT|COOKIE|CREDENTIALS?|_DB_URL|DATABASE_URL|_URI)$/i;
+  /(API_?KEY|_KEY|_KEY_ID|TOKEN|SECRET|PASSWORD|PASSWD|_PAT|_DSN|_LI_AT|COOKIE|CREDENTIALS?|_DB_URL|DATABASE_URL|_URI|SERVICE_ACCOUNT|_SA|WEBHOOK(_URL)?|SESSION(_?ID)?|JSESSIONID|_AUTH)$/i;
+/** Credential words anywhere in the name: JOE_PAPR_API_KEY_V3, GDRIVE_SA_JSON. */
+const SECRET_WORD_PATTERN =
+  /(^|_)(API_?KEY|KEY|TOKEN|SECRET|PASSWORD|SERVICE_ACCOUNT|SA|WEBHOOK|CREDENTIALS?|COOKIE|SESSION)(_|$)/i;
 
 export function looksLikeCredentialName(name: string): boolean {
-  return SECRET_NAME_PATTERN.test(name.trim()) || lookupService(name.trim()) !== undefined;
+  const trimmed = name.trim();
+  return (
+    SECRET_NAME_PATTERN.test(trimmed) ||
+    SECRET_WORD_PATTERN.test(trimmed) ||
+    lookupService(trimmed) !== undefined
+  );
 }
 
 /** True when a requirements.json row is a real decision someone made, not a leftover guess. */
 export function isDeclaredSpec(spec: RequiredKeySpec): boolean {
+  // Owner keys are never shown to visitors (they resolve from the publisher's
+  // vault), so an old auto-synced owner row is harmless and does not block.
+  // Only rows that put a question in front of visitors need a real decision.
+  if (spec.credentialScope !== "user") {
+    return true;
+  }
   const description = spec.description?.trim() ?? "";
-  if (description === AUTO_DETECTED_KEY_DESCRIPTION) {
-    return false;
-  }
-  if (spec.credentialScope === "user" && !description) {
-    return false;
-  }
-  return true;
+  return description.length > 0 && description !== AUTO_DETECTED_KEY_DESCRIPTION;
 }
 
 function describeSource(ref: DetectedKeyRef): string {
