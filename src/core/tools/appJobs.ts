@@ -283,11 +283,9 @@ async function runPostEditAppValidation(
     };
   }
 
-  // Undeclared keys are a validate_app error the agent should fix, but not a
-  // build failure: editing an old app must not report BUILD FAILED.
-  const errorCount = issues.filter(
-    (issue) => issue.severity === "error" && issue.rule !== "app-keys-undeclared",
-  ).length;
+  // Undeclared keys block like any other error: whoever edits an app declares
+  // its keys (declare_app_keys) before moving on. Publish itself never blocks.
+  const errorCount = issues.filter((issue) => issue.severity === "error").length;
   const warningCount = issues.filter((issue) => issue.severity === "warning").length;
   const issueList = buildCappedValidationIssueList(issues);
 
@@ -299,7 +297,7 @@ async function runPostEditAppValidation(
       "",
       issueList,
       "",
-      "ACTION REQUIRED: Fix every ❌ error now. Common fixes: rename .ts → .tsx for JSX, close mismatched braces, split CODE files over 100 lines (move long report text to content/*.md instead).",
+      "ACTION REQUIRED: Fix every ❌ error now. Common fixes: rename .ts → .tsx for JSX, close mismatched braces, split CODE files over 100 lines (move long report text to content/*.md instead), undeclared keys → declare_app_keys.",
     ].join("\n"),
     issues,
     filesChecked: validation.filesChecked,

@@ -467,7 +467,7 @@ Handlers receive **`PAPR_ACTION_PARAMS`** (JSON string of all merged params), **
 5. Gateway injects as env vars — handler/job uses `os.environ[...]` or `process.env`.
 6. **Never** grep keychain, read `custom-keys.json`, or call `get_key` / `/api/keys` — those are agent-only.
 7. Cloud error "No matching catalog requirements" → **Sync now** / republish (catalog out of date), not more keychain debugging.
-8. **`validate_app`** reports `app-keys-undeclared` (an error, not a build failure) with each name, where it was found, and a suggestion (in your vault → probably owner; not credential-shaped → probably a parameter).
+8. **`validate_app`** reports `app-keys-undeclared` (an error: edits report BUILD FAILED until declared) with each name, where it was found, and a suggestion (in your vault → probably owner; not credential-shaped → probably a parameter).
 
 **Frontend body shape:** `{ appId, params: { limit: "50" } }` — nested `params` required (`PAPR_ACTION_PARAMS`).
 
