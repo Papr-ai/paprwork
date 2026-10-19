@@ -1175,6 +1175,67 @@ function AboutTab() {
           </div>
         </div>
 
+        {currentVersion === "2.7.0" && (
+          <div className="about-card">
+            <h3>What&apos;s New in v2.7.0</h3>
+            <ul className="whats-new-list">
+              <li className="whats-new-list__item">
+                <strong>Apps &amp; gallery</strong>
+                <p>
+                  Redesigned Apps home with favorites, search, and clearer status.
+                  Preview videos and gallery kit for polished app listings. Open apps
+                  from Claude handoff cards directly in Papr.
+                </p>
+              </li>
+              <li className="whats-new-list__item">
+                <strong>Share &amp; collaborate (v9)</strong>
+                <p>
+                  Richer sharing: audiences, link permissions, and team vs public
+                  publish flows. Collaborate on community apps without copying the
+                  publisher&apos;s private data.
+                </p>
+              </li>
+              <li className="whats-new-list__item">
+                <strong>Connections</strong>
+                <p>
+                  Connect external tools and MCP servers from Settings. Safer OAuth
+                  and credential handling for integrations you use with agents.
+                </p>
+              </li>
+              <li className="whats-new-list__item">
+                <strong>Cloud sync &amp; databases</strong>
+                <p>
+                  Clearer sync panel, replica engine improvements, and more reliable
+                  push/pull when many apps share a workspace. Goals and billing views
+                  for Papr subscription usage.
+                </p>
+              </li>
+              <li className="whats-new-list__item">
+                <strong>Chat &amp; reliability</strong>
+                <p>
+                  Fewer stuck turns, clearer errors when a provider rate-limits or
+                  refuses a request, and better recovery after sleep or network blips.
+                </p>
+              </li>
+              <li className="whats-new-list__item">
+                <strong>macOS install</strong>
+                <p>
+                  PKG installers now open Papr automatically after setup when possible,
+                  using your logged-in session.
+                </p>
+              </li>
+            </ul>
+            <a
+              href="https://github.com/Papr-ai/paprwork/releases/tag/v2.7.0"
+              target="_blank"
+              rel="noopener noreferrer"
+              className="about-card__link"
+            >
+              View release notes on GitHub
+            </a>
+          </div>
+        )}
+
         {currentVersion === "2.6.26" && (
           <div className="about-card">
             <h3>What's New in v2.6.26</h3>
