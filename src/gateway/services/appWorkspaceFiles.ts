@@ -9,6 +9,8 @@ import type { Dirent } from "fs";
 const APP_DIR_SKIP = new Set([
   ".versions",
   ".dist-staging",
+  ".gallery-a",
+  ".gallery-b",
   "node_modules",
 ]);
 

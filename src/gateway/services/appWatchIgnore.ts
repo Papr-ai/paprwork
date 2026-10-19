@@ -43,7 +43,9 @@ export function shouldIgnoreAppWatchPath(filePath: string): boolean {
   if (
     normalized.includes("/.versions/") ||
     normalized.includes("/dist/") ||
-    normalized.includes("/.dist-staging/")
+    normalized.includes("/.dist-staging/") ||
+    // Gallery takes being filmed (appGallery.ts): scratch, never an app edit.
+    /\/\.gallery-[a-z0-9]+\//.test(normalized)
   ) {
     return true;
   }

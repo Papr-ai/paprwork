@@ -41,6 +41,7 @@ import {
   type DemoScreen,
 } from "./appDemoStore.js";
 import { makeScreens, type ComposeItem, type ScreenStill } from "./appDemoScreens.js";
+import { runGallery } from "./appGalleryFilm.js";
 import {
   REVIEW_AT,
   normalizeReview,
@@ -60,7 +61,9 @@ import {
 
 export const DEMO_STAGE = { width: 1280, height: 800 } as const;
 const SOURCE_BUDGET = 90_000;
-const SKIP = /node_modules|(^|\/)dist\/|__papr__|\.d\.ts$|(^|\/)assets\/|(^|\/)content\//;
+/** Galleries import the app's modules, so the agent needs more of the code (and none of the CSS). */
+const GALLERY_SOURCE_BUDGET = 160_000;
+const SKIP = /node_modules|(^|\/)dist\/|__papr__|\.d\.ts$|(^|\/)assets\/|(^|\/)content\/|(^|\/)\.?gallery(-[a-z0-9]+)?\/|(^|\/)\.versions\/|(^|\/)\.dist-staging\//;
 /** More than this many unreadable labels triggers the one polish retry. */
 const MAX_SMALL_LABELS = 2;
 
@@ -106,7 +109,7 @@ function readAppCss(dir: string): string {
 }
 
 /** The app's title/description + source files (CSS first), within a size budget. */
-export function buildDemoScenePrompt(appId: string): string {
+export function buildDemoScenePrompt(appId: string, opts: { codeFirst?: boolean; budget?: number } = {}): string {
   const dir = appDir(appId);
   if (!fs.existsSync(dir)) throw new Error("App not found");
   let meta: { title?: string; description?: string } = {};
@@ -127,9 +130,12 @@ export function buildDemoScenePrompt(appId: string): string {
     }
   };
   walk(dir);
-  files.sort((a, b) => Number(b.endsWith(".css")) - Number(a.endsWith(".css")));
+  // Written scenes copy the look (CSS first). Galleries import the code (code first, CSS is injected).
+  files.sort((a, b) => opts.codeFirst
+    ? Number(a.endsWith(".css")) - Number(b.endsWith(".css")) || Number(a.endsWith(".html")) - Number(b.endsWith(".html"))
+    : Number(b.endsWith(".css")) - Number(a.endsWith(".css")));
   let src = "";
-  let budget = SOURCE_BUDGET;
+  let budget = opts.budget ?? SOURCE_BUDGET;
   for (const rel of files) {
     const c = fs.readFileSync(path.join(dir, rel), "utf8");
     if (c.length > budget) continue;
@@ -171,6 +177,9 @@ export interface RenderResult {
   check: RenderCheck;
   /** Stills mode only. */
   stills?: DemoStill[];
+  /** Gallery films: the screens the gallery declares, and page errors while filming. */
+  screens?: { t: number; sel: string; caption: string; key?: string; sub?: string }[];
+  errors?: string[];
 }
 
 /** Feedback for the polish retry, or null when the take is good. */
@@ -214,6 +223,10 @@ export interface DemoTask {
 export interface DemoStill {
   t: number;
   path: string;
+  /** Gallery screen captures: the element wasn't on stage. */
+  missing?: boolean;
+  /** Gallery screen captures: where the element sat (fractions of the frame). */
+  crop?: DemoCrop;
   /** What sits under a pinned note: element, its text and parents. */
   probe?: { element: string; text: string; path: string } | null;
 }
@@ -226,7 +239,7 @@ export interface DemoDeps {
   /** Frames at chosen moments (+ what sits under a pin, or cropped). Optional: no review without it. */
   stills?: (
     scenePath: string,
-    stills: { t: number; path: string; probe?: { x: number; y: number }; crop?: DemoCrop; snap?: boolean }[],
+    stills: { t: number; path: string; probe?: { x: number; y: number }; crop?: DemoCrop; snap?: boolean; sel?: string }[],
   ) => Promise<(DemoStill & ScreenStill)[]>;
   /** Vision pick of the gallery screens from a contact sheet. Optional: no screens without it. */
   pickScreens?: (prompt: string, images: string[]) => Promise<unknown>;
@@ -236,6 +249,8 @@ export interface DemoDeps {
   review?: (prompt: string, images: string[]) => Promise<unknown>;
   /** Called after a new video is in place (e.g. notify the UI). */
   onDone?: (appId: string) => void;
+  /** Write/edit the app's gallery/ code (real components). Optional: written scenes without it. */
+  writeGallery?: (appId: string, prompt: string, images?: string[]) => Promise<unknown>;
 }
 
 const tasks = new Map<string, DemoTask>();
@@ -358,6 +373,15 @@ async function reviewTake(
 
 async function runCreate(appId: string, deps: DemoDeps, task: DemoTask): Promise<number> {
   const prompt = buildDemoScenePrompt(appId);
+  // The app's real components first (gallery/); a written scene only if that can't be filmed.
+  if (deps.writeGallery) {
+    const v = await runGallery(appId, { ...deps, writeGallery: deps.writeGallery }, task, {
+      kind: "create",
+      appPrompt: buildDemoScenePrompt(appId, { codeFirst: true, budget: GALLERY_SOURCE_BUDGET }),
+      check: (r) => checkFeedback(r.check),
+    });
+    if (v) return v;
+  }
   const ref = referenceImage(appId);
   task.stage = "writing";
   const first = await writeTake(appId, deps, "a", prompt);
@@ -415,7 +439,8 @@ async function runRevise(appId: string, deps: DemoDeps, task: DemoTask): Promise
   const m = readManifest(appId);
   const notes = openNotes(appId);
   const scene = fs.readFileSync(demoPaths(appId, `v${m.current}`).scene, "utf8");
-  const screens = m.versions.find((x) => x.v === m.current)?.screens;
+  const ver = m.versions.find((x) => x.v === m.current);
+  const screens = ver?.screens;
   const moments = notes.map((n) => noteMoment(n, screens));
   const shown = notes.slice(0, 6);
   let stills: DemoStill[] = [];
@@ -434,6 +459,20 @@ async function runRevise(appId: string, deps: DemoDeps, task: DemoTask): Promise
     }
   }
   const requests = notes.map((n, i) => noteLine(n, i, stills[i], moments[i]!.screen)).join("\n");
+  // Filmed from gallery/ code: the notes become edits to those files.
+  if (ver?.source === "gallery" && deps.writeGallery) {
+    const v = await runGallery(appId, { ...deps, writeGallery: deps.writeGallery }, task, {
+      kind: "revise",
+      appPrompt: buildDemoScenePrompt(appId, { codeFirst: true, budget: GALLERY_SOURCE_BUDGET }),
+      baseVersion: m.current,
+      requests: `The owner watched v${m.current} and left these notes${stills.length ? " (the attached images are the frames they refer to, in order)" : ""}:\n${requests}\nScreen N is the Nth scene that declares a screen.`,
+      images: stills.map((s) => s.path),
+      fixedNoteIds: notes.map((n) => n.id),
+      check: (r) => checkFeedback(r.check),
+    });
+    if (v) return v;
+    throw new Error("Couldn't apply the notes to the gallery code. Try again, or edit gallery/ in the app.");
+  }
   const prompt = editPrompt(buildDemoScenePrompt(appId), scene, `The owner watched v${m.current} and left these notes${stills.length ? " (the attached images are the frames they refer to, in order)" : ""}:\n${requests}`);
   task.stage = "revising";
   const take = await writeTake(appId, deps, "a", prompt, stills.map((s) => s.path));

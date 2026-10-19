@@ -61,6 +61,8 @@ export interface DemoVersion {
   polish?: number;
   /** Gallery screens made from this version (files: {appId}.v{n}.s{k}.jpg). */
   screens?: DemoScreen[];
+  /** "gallery" = filmed from the app's gallery/ code (real components). Absent = a written scene. */
+  source?: "gallery";
 }
 
 export interface DemoNote {
@@ -110,6 +112,11 @@ export function stillPath(appId: string, name: string): string {
 
 export function screenPath(appId: string, v: number, k: number): string {
   return path.join(demoDir(), `${appId}.v${v}.s${k}.jpg`);
+}
+
+/** The gallery code a version was filmed from (so Revise edits what made that version). */
+export function gallerySnapshotPath(appId: string, v: number): string {
+  return path.join(demoDir(), `${appId}.v${v}.gallery.json`);
 }
 
 /** The bare component behind a scene-style screen (kept so a caption edit can re-lay it out). */
@@ -215,6 +222,7 @@ function prune(appId: string, m: DemoManifest): void {
     if (i < 0) return;
     const [old] = m.versions.splice(i, 1);
     for (const f of Object.values(demoPaths(appId, versionTake(old!.v)))) fs.rmSync(f, { force: true });
+    fs.rmSync(gallerySnapshotPath(appId, old!.v), { force: true });
     for (let k = 1; k <= MAX_SCREENS; k++) {
       fs.rmSync(screenPath(appId, old!.v, k), { force: true });
       fs.rmSync(screenRawPath(appId, old!.v, k), { force: true });
@@ -278,6 +286,15 @@ export function cleanCaption(raw: string): string {
 /** The supporting line under a headline: one short sentence. */
 export function cleanSub(raw: string): string {
   return raw.trim().replace(/\s+/g, " ").slice(0, 70).trim();
+}
+
+/** Mark a version as filmed from the app's gallery/ code. */
+export function markGalleryVersion(appId: string, v: number): void {
+  const m = readManifest(appId);
+  const ver = m.versions.find((x) => x.v === v);
+  if (!ver) return;
+  ver.source = "gallery";
+  writeManifest(appId, m);
 }
 
 export function setScreens(appId: string, v: number, screens: DemoScreen[]): void {

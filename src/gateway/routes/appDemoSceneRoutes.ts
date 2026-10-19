@@ -20,6 +20,7 @@ import {
 } from "../services/appDemoVideos.js";
 import { REVIEW_SCHEMA } from "../services/appDemoQuality.js";
 import { SCREENS_SCHEMA, composeItem } from "../services/appDemoScreens.js";
+import { GALLERY_SCHEMA, GALLERY_SYSTEM } from "../services/appGalleryFilm.js";
 import {
   addNote,
   deleteNote,
@@ -52,6 +53,19 @@ const deps: DemoDeps = {
     const html = (result.object as { html?: unknown })?.html;
     if (typeof html !== "string") throw new Error("The model returned no scene.");
     return html;
+  },
+  async writeGallery(appId, prompt, images) {
+    const { getAgentService } = await import("../services/AgentService.js");
+    const result = await getAgentService().runStructuredJobSession({
+      jobId: `app-gallery-${appId}`,
+      runId: String(Date.now()),
+      prompt: `${GALLERY_SYSTEM}\n\n---\n\n${prompt}`,
+      ...(images?.length ? { images } : {}),
+      schemaName: "app_gallery",
+      schemaDescription: "The app's gallery/ source files: a preview film made from its own components.",
+      outputSchema: GALLERY_SCHEMA as unknown as Record<string, unknown>,
+    });
+    return result.object;
   },
   async render(paths) {
     markRecording(paths.scenePath.split(/[\\/]/).pop()!.split(".")[0]!);

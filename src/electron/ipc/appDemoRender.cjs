@@ -19,7 +19,7 @@ const OUT_W = 1280;
 const OUT_H = 800;
 const FPS = 30;
 const BITRATE = 1_200_000;
-const MAX_SECONDS = 6;
+const MAX_SECONDS = 8;
 /** Text must be ≥ this many px on the 1280x800 output (≈ 8px on a 460px-wide card). */
 const MIN_TEXT_PX = 20;
 const PARTITION = "demo-render";
@@ -312,12 +312,21 @@ async function renderOnce(opts) {
   wc.setWindowOpenHandler(() => ({ action: "deny" }));
   wc.on("will-navigate", (e) => e.preventDefault());
 
+  // Page errors (a gallery component that throws) go back to the agent as feedback.
+  const errors = [];
+  wc.on("console-message", (e, level, message) => {
+    const lvl = e && e.level !== undefined ? e.level : level;
+    const msg = e && e.message !== undefined ? e.message : message;
+    if ((lvl === "error" || lvl === 3) && errors.length < 10) errors.push(String(msg).slice(0, 300));
+  });
   try {
     if (Array.isArray(opts.compose)) return await composeScreens(win, opts.compose);
     await win.loadFile(opts.scenePath);
+    // Gallery films mount the app's real components, possibly async (they load sample data).
+    await wc.executeJavaScript("Promise.race([Promise.resolve(window.__ready).then(() => true), new Promise((r) => setTimeout(() => r(false), 8000))])");
     await wc.executeJavaScript("document.fonts ? document.fonts.ready.then(() => true) : true");
     const info = await wc.executeJavaScript(
-      "({ total: Number(window.__total) || 0, ok: typeof window.__setT === 'function', stage: Array.isArray(window.__stage) ? window.__stage : null })",
+      "({ total: Number(window.__total) || 0, ok: typeof window.__setT === 'function', stage: Array.isArray(window.__stage) ? window.__stage : null, screens: Array.isArray(window.__screens) ? JSON.parse(JSON.stringify(window.__screens)) : null })",
     );
     if (!info.ok) throw new Error("Scene has no window.__setT");
     // Fit the authored stage to the 1280x800 output.
@@ -346,6 +355,24 @@ async function renderOnce(opts) {
         const t = Math.min(seconds, Math.max(0, Number(s.t) || 0));
         await setT(t);
         const frame = await grab();
+        if (s.snap && s.sel) {
+          // Gallery film screen: the element the gallery code names, captured sharp.
+          const z = wc.getZoomFactor();
+          const box = await wc.executeJavaScript(`(() => {
+            const el = document.querySelector(${JSON.stringify(String(s.sel))});
+            if (!el) return null;
+            const b = el.getBoundingClientRect(), p = 2;
+            const l = Math.max(0, b.left - p), t = Math.max(0, b.top - p);
+            return { x: l, y: t, width: Math.min(innerWidth, b.right + p) - l, height: Math.min(innerHeight, b.bottom + p) - t };
+          })()`);
+          if (!box || box.width < 24 || box.height < 16) { stills.push({ t, path: s.path, missing: true }); continue; }
+          const rect = { x: Math.round(box.x * z), y: Math.round(box.y * z), width: Math.round(box.width * z), height: Math.round(box.height * z) };
+          fs.writeFileSync(s.path, (await wc.capturePage(rect)).toPNG());
+          const W = OUT_W / z, H = OUT_H / z;
+          const crop = { x: box.x / W, y: box.y / H, w: box.width / W, h: box.height / H };
+          stills.push({ t, path: s.path, snapped: true, crop, ...frameTones(frame) });
+          continue;
+        }
         if (s.snap && s.crop) {
           // Gallery screen: the one component, captured at the display's full resolution (sharp).
           const z = wc.getZoomFactor();
@@ -385,7 +412,7 @@ async function renderOnce(opts) {
     const tmp = `${opts.videoPath}.tmp`;
     fs.writeFileSync(tmp, buf);
     fs.renameSync(tmp, opts.videoPath);
-    return { seconds, frames, codec, bytes: buf.length, check };
+    return { seconds, frames, codec, bytes: buf.length, check, ...(info.screens ? { screens: info.screens } : {}), ...(errors.length ? { errors } : {}) };
   } finally {
     // close() (not destroy) lets Chromium tear the frame down; destroy() leaves the
     // next file:// load in this session failing with ERR_FAILED.

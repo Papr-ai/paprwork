@@ -23,7 +23,7 @@ export function requestAppDemoRender(request: {
   videoPath: string;
   posterPath: string;
   /** Stills mode: capture these moments instead of a video. */
-  stills?: { t: number; path: string; probe?: { x: number; y: number }; crop?: unknown; snap?: boolean }[];
+  stills?: { t: number; path: string; probe?: { x: number; y: number }; crop?: unknown; snap?: boolean; sel?: string }[];
   /** Compose mode: lay out gallery screens (see appDemoScreens.ts). */
   compose?: import("../services/appDemoScreens.js").ComposeItem[];
 }): Promise<RenderResult> {
