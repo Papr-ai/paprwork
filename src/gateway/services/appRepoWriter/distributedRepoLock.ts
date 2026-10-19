@@ -4,6 +4,7 @@
  */
 
 import { hostname } from "node:os";
+import { randomUUID } from "node:crypto";
 import { getMemoryServerBaseUrl } from "../../utils/cloudApiClient.js";
 import { withAppRepoLock } from "./repoLock.js";
 
@@ -14,12 +15,14 @@ export class WriterLeaseContentionError extends Error {
   }
 }
 
-/** Unique per writer instance (Cloud Run revision or local hostname). */
+/**
+ * Unique per writer instance. K_REVISION alone is shared by every instance of a
+ * revision, so with max-instances > 1 two instances would both "hold" the same
+ * lease (same holder re-acquires idempotently). Suffix a per-process id.
+ */
 export const WRITER_LEASE_HOLDER =
   process.env.PAPR_WRITER_LEASE_HOLDER ??
-  (process.env.K_REVISION
-    ? `writer:${process.env.K_REVISION}`
-    : `writer:${hostname()}`);
+  `writer:${process.env.K_REVISION ?? hostname()}:${randomUUID().slice(0, 8)}`;
 
 interface AcquireResponse {
   acquired: boolean;

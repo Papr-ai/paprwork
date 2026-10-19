@@ -19,6 +19,7 @@ import {
 } from "./idempotencyCache.js";
 import { publishAppRepoCommitted } from "./pubsubNotify.js";
 import { withDistributedAppRepoLock, WriterLeaseContentionError } from "./distributedRepoLock.js";
+import { withAppRepoLock } from "./repoLock.js";
 
 export class WriterAuthError extends Error {
   constructor(message: string) {
@@ -99,7 +100,9 @@ export class AppRepoWriterService {
     actingUserId?: string,
   ): Promise<{ commitSha: string; files: Array<{ path: string; blobOid: string }> }> {
     const record = await fetchAppRepoRecord(appId, apiKey, actingUserId);
-    return readAppRepoHead(record);
+    // readAppRepoHead fetches + resets the shared worktree; with concurrency > 1
+    // it must not run while postOps is committing in the same checkout.
+    return withAppRepoLock(appId, () => readAppRepoHead(record));
   }
 
   async postOps(

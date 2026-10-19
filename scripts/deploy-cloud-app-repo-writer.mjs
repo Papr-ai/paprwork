@@ -367,8 +367,8 @@ run(
     --memory=1Gi \
     --cpu=1 \
     --timeout=300 \
-    --concurrency=1 \
-    --max-instances=1 \
+    --concurrency=4 \
+    --max-instances=3 \
     --service-account=${writerSa} \
     --set-env-vars=${envVars.join(",")} \
     --set-secrets=${secretBindings}`,
