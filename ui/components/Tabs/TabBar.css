@@ -5,8 +5,8 @@
 .tab-bar {
   width: 100%;
   height: 52px;
-  /* Sits on the shared chrome surface (.app-layout__topbar) — no own fill, no divider. */
-  background: transparent;
+  border-bottom: 1px solid var(--border-color);
+  background: var(--background-color);
   display: flex;
   align-items: center;
   padding: 0 8px;
