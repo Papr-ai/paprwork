@@ -133,4 +133,46 @@ describe("syncPanelModel: failed publish", () => {
     expect(p.rows).toEqual([]);
     expect(p.offerAgent).toBe(false);
   });
+
+  describe("chip and panel never disagree", () => {
+    const warn = { label: "Unpublished changes", tone: "warn" as const };
+    const job = (o: object) => ({ jobId: "j1", label: "Collector", status: "outdated", phase: "changed", detail: "", ...o });
+
+    it("job held for manual publish: Code row lists the job", () => {
+      const p = buildSyncPanel(base({ chip: warn, status: status({ overall: "needs_sync", dependentJobs: [job({})] as never }) }));
+      expect(p.rows[0]).toMatchObject({ kind: "code", value: "1 job file", action: { id: "publish" } });
+      expect(p.rows[0].groups?.[0]).toMatchObject({ name: "Jobs", items: [{ path: "Collector" }] });
+    });
+
+    it("job already in the file list is not listed twice", () => {
+      const p = buildSyncPanel(base({
+        chip: warn,
+        codeChanges: [{ path: "jobs/j1/run.py", change: "edited" }],
+        status: status({ dependentJobs: [job({})] as never }),
+      }));
+      expect(p.rows[0].groups?.[0].items).toHaveLength(1);
+    });
+
+    it("web copy republishing: busy row, no action", () => {
+      const p = buildSyncPanel(base({ chip: warn, status: status({ overall: "needs_sync", publishStatus: "republishing", cloudUploading: true }) }));
+      expect(p.rows).toEqual([expect.objectContaining({ title: "Web copy", tone: "busy" })]);
+      expect(p.rows[0].action).toBeUndefined();
+    });
+
+    it("web copy drift: Publish row", () => {
+      const p = buildSyncPanel(base({ chip: warn, status: status({ overall: "needs_sync", publishStatus: "drift" }) }));
+      expect(p.rows[0]).toMatchObject({ title: "Web copy is behind", action: { id: "publish" } });
+    });
+
+    it("yellow chip with nothing else explained: fallback row, never Nothing to send", () => {
+      const p = buildSyncPanel(base({ chip: warn, status: status({ overall: "needs_sync", summaryLine: "1 database waiting" }) }));
+      expect(p.rows).toHaveLength(1);
+      expect(p.rows[0]).toMatchObject({ title: "Not fully on the web yet", value: "1 database waiting" });
+      expect(p.offerAgent).toBe(true);
+    });
+
+    it("green chip stays calm", () => {
+      expect(buildSyncPanel(base()).rows).toEqual([]);
+    });
+  });
 });

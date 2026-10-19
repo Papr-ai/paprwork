@@ -212,13 +212,33 @@ function updateRow(input: SyncPanelInput): PanelRow {
   };
 }
 
+/** App jobs whose folder differs from the web but that the file list above
+ *  doesn't already name (e.g. held for manual publish, or mid auto-publish). */
+function jobsNotOnWeb(status: AppCloudSyncStatus | null, items: ChangeItem[]): ChangeItem[] {
+  if (!status) return [];
+  return status.dependentJobs
+    .filter((job) => job.phase === "changed" || job.phase === "not_uploaded" || job.status === "failed")
+    .filter((job) => !items.some((i) => i.path.startsWith(`jobs/${job.jobId}/`)))
+    .map((job) => ({
+      path: job.label,
+      change: job.phase === "not_uploaded" ? ("added" as const) : ("edited" as const),
+      note: job.status === "failed" ? "Upload failed" : job.phase === "not_uploaded" ? "Not on the web" : undefined,
+    }));
+}
+
 function codeRow(input: SyncPanelInput, blockedByUpdate: boolean): PanelRow | null {
   const status = input.status;
   const items = input.codeChanges ?? [];
-  const unpublished = status?.hasLocalChanges === true || items.length > 0 || !input.live;
+  const jobs = input.codeDestination === "publish" ? jobsNotOnWeb(status, items) : [];
+  const unpublished = status?.hasLocalChanges === true || items.length > 0 || jobs.length > 0 || !input.live;
   if (!unpublished) return null;
   if (input.codeDestination === "propose" && items.length === 0) return null;
   const groups = groupChanges(items);
+  if (jobs.length > 0) {
+    const existing = groups.find((g) => g.name === "Jobs");
+    if (existing) existing.items.push(...jobs);
+    else groups.splice(groups.findIndex((g) => g.name === "Database") >= 0 ? groups.findIndex((g) => g.name === "Database") : groups.length, 0, { name: "Jobs", items: jobs });
+  }
   const label = input.codeDestination === "propose" ? "Propose" : "Publish";
   const busyLabel = input.codeDestination === "propose" ? label : "Publishing…";
   return {
@@ -238,6 +258,26 @@ function codeRow(input: SyncPanelInput, blockedByUpdate: boolean): PanelRow | nu
       disabled: input.pushing || input.pulling || blockedByUpdate,
     },
   };
+}
+
+/** The live web copy itself: rebuilding after a publish, or behind local. */
+function webCopyRow(status: AppCloudSyncStatus, input: SyncPanelInput, hasCodeRow: boolean): PanelRow | null {
+  if (!input.live || input.codeDestination !== "publish") return null;
+  if (status.publishStatus === "republishing" || status.cloudUploading) {
+    return { kind: "code", title: "Web copy", value: "Updating the live app…", tone: "busy" };
+  }
+  // A Code row already offers Publish, which also refreshes the web copy.
+  if (hasCodeRow) return null;
+  if (status.publishStatus === "drift" || status.publishStatus === "not_web_ready" || status.publishStatus === "error") {
+    return {
+      kind: "code",
+      title: "Web copy is behind",
+      value: status.publishDetail?.trim() || "Publish to bring the live app up to date.",
+      tone: "warn",
+      action: { id: "publish", label: input.pushing ? "Publishing…" : "Publish", disabled: input.pushing || input.pulling },
+    };
+  }
+  return null;
 }
 
 function dataRow(status: AppCloudSyncStatus, input: SyncPanelInput): PanelRow | null {
@@ -416,6 +456,8 @@ export function buildSyncPanel(input: SyncPanelInput): SyncPanel {
   if (code) rows.push(code);
 
   if (status) {
+    const web = webCopyRow(status, input, code != null);
+    if (web) rows.push(web);
     const data = dataRow(status, input);
     if (data) rows.push(data);
     rows.push(...issueRows(status, input));
@@ -427,6 +469,20 @@ export function buildSyncPanel(input: SyncPanelInput): SyncPanel {
   rows.push(...deleteRows(input));
 
   // Problems first; within the rest, keep the order above.
+  // The chip says something is off but no row explains it: never answer a
+  // yellow chip with "Nothing to send".
+  if (rows.length === 0 && status && (input.chip.tone === "warn" || input.chip.tone === "bad")) {
+    rows.push({
+      kind: "issue",
+      title: "Not fully on the web yet",
+      value: status.summaryLine?.trim() || "Publish to send what's left.",
+      tone: "warn",
+      action: input.codeDestination === "publish"
+        ? { id: "publish", label: input.pushing ? "Publishing…" : "Publish", disabled: input.pushing || input.pulling }
+        : { id: "ask_agent", label: "Ask agent" },
+    });
+  }
+
   const sorted = rows
     .map((row, i) => ({ row, i }))
     .sort((a, b) => ORDER[a.row.tone] - ORDER[b.row.tone] || a.i - b.i)
