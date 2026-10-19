@@ -33,6 +33,12 @@ export function TabOverview({ onClose }: { onClose: () => void }) {
   const [query, setQuery] = useState("");
   const [dragId, setDragId] = useState<string | null>(null);
   const [drop, setDrop] = useState<{ id: string; pos: DropPos } | null>(null);
+  // "Split with…" pick mode: choose the source, then search/click any row to merge.
+  // Works across a long list where dragging row 35 onto row 1 is painful.
+  const [pickId, setPickId] = useState<string | null>(null);
+  const listRef = useRef<HTMLDivElement>(null);
+  const escRef = useRef<() => void>(onClose);
+  escRef.current = pickId ? () => setPickId(null) : onClose;
   const rootRef = useRef<HTMLDivElement>(null);
   const inputRef = useRef<HTMLInputElement>(null);
   const closeRef = useRef(onClose);
@@ -43,16 +49,18 @@ export function TabOverview({ onClose }: { onClose: () => void }) {
     t.childTabIds.map((id) => byId.get(id)).filter((c): c is Tab => Boolean(c));
   const top = tabs.filter((t) => t.displayMode !== "child");
   const q = query.trim().toLowerCase();
-  const shown = q
+  const shown = (q
     ? top.filter((t) => [t, ...kids(t)].some((x) => x.title.toLowerCase().includes(q)))
-    : top;
+    : top
+  ).filter((t) => t.id !== pickId);
+  const pickTab = pickId ? byId.get(pickId) : undefined;
 
   useEffect(() => {
     inputRef.current?.focus();
     const onKey = (e: KeyboardEvent) => {
       if (e.key !== "Escape") return;
       e.preventDefault();
-      closeRef.current();
+      escRef.current();
     };
     // Pinch out (ctrl+wheel up) closes, mirroring the pinch in that opened it.
     let acc = 0;
@@ -80,6 +88,24 @@ export function TabOverview({ onClose }: { onClose: () => void }) {
     store().switchToTab(id);
     onClose();
   };
+  const startPick = (id: string) => {
+    setPickId(id);
+    setQuery("");
+    inputRef.current?.focus();
+  };
+  const pickMerge = (targetId: string) => {
+    if (pickId && pickId !== targetId) store().enableSplitView(pickId, targetId);
+    setPickId(null);
+    setQuery("");
+  };
+  // Native drag doesn't reliably auto-scroll; nudge the list near its edges.
+  const autoScroll = (e: React.DragEvent) => {
+    const el = listRef.current;
+    if (!el || !dragId) return;
+    const r = el.getBoundingClientRect();
+    if (e.clientY < r.top + 40) el.scrollTop -= 14;
+    else if (e.clientY > r.bottom - 40) el.scrollTop += 14;
+  };
   const unmerge = (t: Tab) => t.childTabIds.forEach((id) => store().promoteToStandalone(id));
   const statusOf = (t: Tab) => {
     const c = t.type === "chat" ? chats.find((x) => x.id === t.entityId) : undefined;
@@ -88,12 +114,12 @@ export function TabOverview({ onClose }: { onClose: () => void }) {
 
   const posFor = (e: React.DragEvent<HTMLElement>): DropPos => {
     const r = e.currentTarget.getBoundingClientRect();
-    const edge = r.width * 0.28;
+    const edge = r.height * 0.3;
     // A split tab can't be nested inside another split — only reorder it.
     const dragged = dragId ? byId.get(dragId) : undefined;
-    if (dragged?.childTabIds.length) return e.clientX < r.left + r.width / 2 ? "before" : "after";
-    if (e.clientX < r.left + edge) return "before";
-    if (e.clientX > r.right - edge) return "after";
+    if (dragged?.childTabIds.length) return e.clientY < r.top + r.height / 2 ? "before" : "after";
+    if (e.clientY < r.top + edge) return "before";
+    if (e.clientY > r.bottom - edge) return "after";
     return "merge";
   };
 
@@ -136,25 +162,36 @@ export function TabOverview({ onClose }: { onClose: () => void }) {
           <input
             ref={inputRef}
             className="tab-ov__search"
-            placeholder="Filter tabs"
+            placeholder={pickTab ? "Search for the tab to split with…" : "Search titles…"}
             value={query}
             onChange={(e) => setQuery(e.target.value)}
             onKeyDown={(e) => {
-              if (e.key === "Enter" && shown[0]) open(shown[0].id);
+              if (e.key === "Enter" && shown[0]) (pickId ? pickMerge : open)(shown[0].id);
             }}
           />
-          <span className="tab-ov__hint">Drag to reorder · drop on a tab to merge</span>
         </header>
+        {pickTab ? (
+          <div className="tab-ov__pick">
+            <span>
+              Split <b>{pickTab.title}</b> with…
+            </span>
+            <button type="button" className="tab-ov__pick-cancel" onClick={() => setPickId(null)}>
+              Cancel
+            </button>
+          </div>
+        ) : (
+          <span className="tab-ov__hint">Drag to reorder · hover a tab and press ⊟ to split it with any other</span>
+        )}
 
         {shown.length === 0 ? <p className="tab-ov__none">No tabs match.</p> : null}
 
-        <div className="tab-ov__grid">
+        <div className={`tab-ov__list${pickTab ? " is-picking" : ""}`} ref={listRef} onDragOver={autoScroll}>
           {shown.map((t) => {
             const children = kids(t);
             const status = statusOf(t);
             const dropHere = drop?.id === t.id ? drop.pos : null;
             const cls = [
-              "tab-ov__card",
+              "tab-ov__row",
               t.id === activeTabId ? "is-active" : "",
               dragId === t.id ? "is-dragging" : "",
               dropHere ? `is-drop-${dropHere}` : "",
@@ -167,10 +204,10 @@ export function TabOverview({ onClose }: { onClose: () => void }) {
                 className={cls}
                 role="button"
                 tabIndex={0}
-                draggable
-                onClick={() => open(t.id)}
+                draggable={!pickId}
+                onClick={() => (pickId ? pickMerge(t.id) : open(t.id))}
                 onKeyDown={(e) => {
-                  if (e.key === "Enter") open(t.id);
+                  if (e.key === "Enter") (pickId ? pickMerge : open)(t.id);
                 }}
                 onDragStart={(e) => {
                   e.dataTransfer.effectAllowed = "move";
@@ -197,13 +234,45 @@ export function TabOverview({ onClose }: { onClose: () => void }) {
                   dropOn(t);
                 }}
               >
-                <div className="tab-ov__card-top">
-                  <span className="tab-ov__icon">
-                    <TabGlyph tab={t} />
-                  </span>
-                  <span className="tab-ov__type">{children.length ? "Split view" : typeLabel(t)}</span>
-                  {status ? <i className={`tab-ov__dot tab-ov__dot--${status}`} /> : null}
-                  <span className="tab-ov__acts">
+                <span className="tab-ov__icon">
+                  <TabGlyph tab={t} />
+                </span>
+                <span className="tab-ov__main">
+                  <span className="tab-ov__name">{t.title}</span>
+                  {children.map((c) => (
+                    <span key={c.id} className="tab-ov__child">
+                      <span className="tab-ov__icon tab-ov__icon--sm">
+                        <TabGlyph tab={c} />
+                      </span>
+                      <span className="tab-ov__child-title">{c.title}</span>
+                    </span>
+                  ))}
+                </span>
+                {status ? <i className={`tab-ov__dot tab-ov__dot--${status}`} /> : null}
+                <span className="tab-ov__type">{children.length ? "Split" : typeLabel(t)}</span>
+                <span className="tab-ov__acts">
+                    {!children.length && !pickId ? (
+                      <button
+                        type="button"
+                        className="tab-ov__act"
+                        aria-label="Split with another tab"
+                        title="Split with…"
+                        onClick={(e) => {
+                          e.stopPropagation();
+                          startPick(t.id);
+                        }}
+                      >
+                        <svg viewBox="0 0 16 16" width="12" height="12" aria-hidden="true">
+                          <path
+                            d="M2.5 3.5h11v9h-11zM8 3.5v9"
+                            fill="none"
+                            stroke="currentColor"
+                            strokeWidth="1.3"
+                            strokeLinejoin="round"
+                          />
+                        </svg>
+                      </button>
+                    ) : null}
                     {children.length ? (
                       <button
                         type="button"
@@ -239,16 +308,6 @@ export function TabOverview({ onClose }: { onClose: () => void }) {
                       ×
                     </button>
                   </span>
-                </div>
-                <div className="tab-ov__name">{t.title}</div>
-                {children.map((c) => (
-                  <div key={c.id} className="tab-ov__child">
-                    <span className="tab-ov__icon tab-ov__icon--sm">
-                      <TabGlyph tab={c} />
-                    </span>
-                    <span className="tab-ov__child-title">{c.title}</span>
-                  </div>
-                ))}
                 {dropHere === "merge" ? <span className="tab-ov__merge-badge">Merge</span> : null}
               </div>
             );

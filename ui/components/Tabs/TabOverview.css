@@ -1,4 +1,4 @@
-/* TabOverview — "show all tabs" sheet (pinch the tab bar / ⌘⇧\). */
+/* TabOverview — compact "all tabs" list (pinch the tab bar / ⌘⇧\). */
 
 .tab-ov {
   position: fixed;
@@ -7,7 +7,7 @@
   display: flex;
   justify-content: center;
   align-items: flex-start;
-  padding: 64px 32px 32px;
+  padding: 72px 24px 24px;
   background: rgba(20, 22, 28, 0.16);
   backdrop-filter: blur(18px) saturate(1.2);
   -webkit-backdrop-filter: blur(18px) saturate(1.2);
@@ -16,11 +16,16 @@
 }
 
 .tab-ov__panel {
-  width: min(1100px, 100%);
-  max-height: 100%;
+  width: min(560px, 100%);
+  max-height: min(600px, 100%);
   display: flex;
   flex-direction: column;
-  gap: 16px;
+  gap: 8px;
+  padding: 12px;
+  border-radius: 16px;
+  background: var(--rail-card, var(--glass-bg-active));
+  border: 1px solid rgba(255, 255, 255, 0.7);
+  box-shadow: 0 18px 50px rgba(10, 16, 32, 0.18), 0 0 0 1px var(--border-color);
   /* Starts slightly large and settles — reads as "zooming out" to the tabs. */
   animation: tab-ov-zoom 0.2s var(--ease, ease-out);
 }
@@ -38,12 +43,14 @@
 .tab-ov__head {
   display: flex;
   align-items: center;
-  gap: 12px;
+  gap: 10px;
+  padding: 0 2px;
 }
 
 .tab-ov__title {
   margin: 0;
-  font-size: 15px;
+  flex: none;
+  font-size: 14px;
   font-weight: 600;
   color: var(--text-primary);
 }
@@ -54,100 +61,154 @@
   color: var(--text-tertiary);
 }
 
+/* Same as the timeline's search box. */
 .tab-ov__search {
-  flex: 0 1 260px;
-  height: 30px;
-  padding: 0 12px;
-  border-radius: 8px;
-  border: 0.5px solid var(--border-color);
-  background: var(--glass-bg-active);
-  color: var(--text-primary);
+  flex: 1;
+  min-width: 0;
+  padding: 7px 10px;
   font: inherit;
   font-size: 13px;
+  border: 1px solid var(--border-color);
+  border-radius: 9px;
+  background: var(--background-secondary);
+  color: var(--text-primary);
   outline: none;
+  transition: all 0.15s ease;
 }
 
 .tab-ov__search:focus {
-  box-shadow: 0 0 0 3px rgba(var(--accent-rgb), 0.25);
+  border-color: var(--primary-color);
+  background: var(--background-tertiary);
+}
+
+.tab-ov__search::placeholder {
+  color: var(--text-tertiary);
 }
 
 .tab-ov__hint {
-  margin-left: auto;
-  font-size: 12px;
+  padding: 0 4px;
+  font-size: 11px;
   color: var(--text-tertiary);
+}
+
+/* Pick mode banner: "Split X with…" */
+.tab-ov__pick {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 6px 8px 6px 10px;
+  border-radius: 9px;
+  background: rgba(var(--accent-rgb), 0.12);
+  font-size: 12px;
+  color: var(--text-secondary);
+}
+
+.tab-ov__pick span {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  white-space: nowrap;
+  text-overflow: ellipsis;
+}
+
+.tab-ov__pick b {
+  font-weight: 600;
+  color: var(--text-primary);
+}
+
+.tab-ov__pick-cancel {
+  flex: none;
+  padding: 3px 8px;
+  border: 0;
+  border-radius: 6px;
+  background: transparent;
+  color: var(--accent);
+  font: inherit;
+  font-size: 12px;
+  font-weight: 600;
+  cursor: pointer;
+}
+
+.tab-ov__pick-cancel:hover {
+  background: rgba(var(--accent-rgb), 0.14);
+}
+
+/* While picking, rows read as targets. */
+.tab-ov__list.is-picking .tab-ov__row:hover {
+  background: rgba(var(--accent-rgb), 0.14);
+  box-shadow: inset 0 0 0 1.5px var(--accent);
+}
+
+.tab-ov__list.is-picking .tab-ov__acts {
+  display: none !important;
+}
+
+.tab-ov__list.is-picking .tab-ov__row:hover .tab-ov__type {
+  display: inline;
 }
 
 .tab-ov__none {
   margin: 0;
+  padding: 8px;
   font-size: 13px;
   color: var(--text-tertiary);
 }
 
-.tab-ov__grid {
-  display: grid;
-  grid-template-columns: repeat(auto-fill, minmax(210px, 1fr));
-  gap: 12px;
-  padding: 4px;
+.tab-ov__list {
+  display: flex;
+  flex-direction: column;
+  gap: 1px;
+  min-height: 0;
   overflow-y: auto;
 }
 
-.tab-ov__card {
+/* One line per tab: icon · title (+ split partner) · status · type · actions */
+.tab-ov__row {
   position: relative;
   display: flex;
-  flex-direction: column;
-  gap: 6px;
-  min-height: 92px;
-  padding: 12px;
-  border-radius: 12px;
-  background: var(--glass-bg-active);
-  box-shadow: 0 1px 2px rgba(0, 0, 0, 0.06), 0 0 0 0.5px var(--border-color);
+  align-items: center;
+  gap: 10px;
+  flex: none;
+  min-height: 36px;
+  padding: 0 8px;
+  border-radius: 8px;
   cursor: pointer;
   user-select: none;
   outline: none;
-  transition: transform 0.15s var(--ease, ease), box-shadow 0.15s var(--ease, ease), opacity 0.15s;
+  transition: background 0.12s, opacity 0.15s;
 }
 
-.tab-ov__card:hover,
-.tab-ov__card:focus-visible {
-  transform: translateY(-1px);
-  box-shadow: 0 6px 18px rgba(0, 0, 0, 0.1), 0 0 0 0.5px var(--border-color);
+.tab-ov__row:hover,
+.tab-ov__row:focus-visible {
+  background: rgba(127, 127, 127, 0.1);
 }
 
-.tab-ov__card.is-active {
-  box-shadow: 0 0 0 2px var(--accent), 0 6px 18px rgba(0, 0, 0, 0.1);
+.tab-ov__row.is-active {
+  background: rgba(var(--accent-rgb), 0.12);
 }
 
-.tab-ov__card.is-dragging {
+.tab-ov__row.is-dragging {
   opacity: 0.4;
 }
 
-.tab-ov__card.is-drop-merge {
-  background: rgba(var(--accent-rgb), 0.1);
-  box-shadow: 0 0 0 2px var(--accent);
+.tab-ov__row.is-drop-merge {
+  background: rgba(var(--accent-rgb), 0.14);
+  box-shadow: inset 0 0 0 1.5px var(--accent);
 }
 
-.tab-ov__card.is-drop-before::before,
-.tab-ov__card.is-drop-after::after {
+.tab-ov__row.is-drop-before::before,
+.tab-ov__row.is-drop-after::after {
   content: "";
   position: absolute;
-  top: 8px;
-  bottom: 8px;
-  width: 3px;
-  border-radius: 2px;
+  left: 8px;
+  right: 8px;
+  height: 2px;
+  border-radius: 1px;
   background: var(--accent);
 }
 
-.tab-ov__card.is-drop-before::before { left: -8px; }
-.tab-ov__card.is-drop-after::after { right: -8px; }
-
-.tab-ov__card-top {
-  display: flex;
-  align-items: center;
-  gap: 6px;
-  min-height: 20px;
-  font-size: 11px;
-  color: var(--text-tertiary);
-}
+.tab-ov__row.is-drop-before::before { top: -1px; }
+.tab-ov__row.is-drop-after::after { bottom: -1px; }
 
 .tab-ov__icon {
   display: inline-flex;
@@ -161,6 +222,47 @@
 
 .tab-ov__icon--sm {
   transform: scale(0.85);
+}
+
+.tab-ov__main {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex: 1;
+  min-width: 0;
+}
+
+.tab-ov__name,
+.tab-ov__child-title {
+  min-width: 0;
+  overflow: hidden;
+  white-space: nowrap;
+  text-overflow: ellipsis;
+}
+
+.tab-ov__name {
+  flex: 0 1 auto;
+  font-size: 13px;
+  color: var(--text-primary);
+}
+
+/* Split partner sits on the same line, after a thin divider. */
+.tab-ov__child {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  flex: 0 1 auto;
+  min-width: 0;
+  padding-left: 8px;
+  border-left: 1px solid var(--border-color);
+  font-size: 13px;
+  color: var(--text-secondary);
+}
+
+.tab-ov__type {
+  flex: none;
+  font-size: 11px;
+  color: var(--text-tertiary);
 }
 
 .tab-ov__dot {
@@ -183,31 +285,35 @@
   50% { opacity: 0.35; }
 }
 
+/* Actions replace the type label on hover so the row width never jumps. */
 .tab-ov__acts {
-  margin-left: auto;
-  display: flex;
+  display: none;
+  flex: none;
   gap: 2px;
-  opacity: 0;
-  transition: opacity 0.12s;
 }
 
-.tab-ov__card:hover .tab-ov__acts,
-.tab-ov__card:focus-within .tab-ov__acts {
-  opacity: 1;
+.tab-ov__row:hover .tab-ov__acts,
+.tab-ov__row:focus-within .tab-ov__acts {
+  display: flex;
+}
+
+.tab-ov__row:hover .tab-ov__type,
+.tab-ov__row:focus-within .tab-ov__type {
+  display: none;
 }
 
 .tab-ov__act {
   display: inline-flex;
   align-items: center;
   justify-content: center;
-  width: 20px;
-  height: 20px;
+  width: 22px;
+  height: 22px;
   padding: 0;
   border: 0;
-  border-radius: 5px;
+  border-radius: 6px;
   background: transparent;
   color: var(--text-secondary);
-  font-size: 14px;
+  font-size: 15px;
   line-height: 1;
   cursor: pointer;
 }
@@ -217,38 +323,8 @@
   color: var(--text-primary);
 }
 
-.tab-ov__name {
-  display: -webkit-box;
-  -webkit-line-clamp: 2;
-  -webkit-box-orient: vertical;
-  overflow: hidden;
-  font-size: 13px;
-  font-weight: 500;
-  line-height: 1.35;
-  color: var(--text-primary);
-}
-
-.tab-ov__child {
-  display: flex;
-  align-items: center;
-  gap: 6px;
-  padding-top: 6px;
-  border-top: 0.5px solid var(--border-color);
-  font-size: 12px;
-  color: var(--text-secondary);
-}
-
-.tab-ov__child-title {
-  min-width: 0;
-  overflow: hidden;
-  white-space: nowrap;
-  text-overflow: ellipsis;
-}
-
 .tab-ov__merge-badge {
-  position: absolute;
-  right: 10px;
-  bottom: 8px;
+  flex: none;
   font-size: 11px;
   font-weight: 600;
   color: var(--accent);
@@ -258,8 +334,8 @@
   .tab-ov {
     background: rgba(0, 0, 0, 0.35);
   }
-  .tab-ov__card {
-    box-shadow: 0 0 0 0.5px rgba(255, 255, 255, 0.08);
+  .tab-ov__panel {
+    border-color: rgba(255, 255, 255, 0.08);
   }
 }
 
@@ -267,18 +343,12 @@
   .tab-ov {
     padding: 56px 12px 12px;
   }
-  .tab-ov__hint {
-    display: none;
-  }
-  .tab-ov__grid {
-    grid-template-columns: repeat(auto-fill, minmax(150px, 1fr));
-  }
 }
 
 @media (prefers-reduced-motion: reduce) {
   .tab-ov,
   .tab-ov__panel,
-  .tab-ov__card,
+  .tab-ov__row,
   .tab-ov__dot--streaming {
     animation: none;
     transition: none;
