@@ -5,14 +5,24 @@
  */
 import { useState } from "react";
 import { addDemoNote, deleteDemoNote, reviseDemo, type DemoNote, type DemoScreen, type DemoStatus } from "../../utils/appDemo";
+import { useProfileStore } from "../../stores/profileStore";
 
 export interface Pin {
   x: number;
   y: number;
 }
 
-const where = (n: DemoNote, screens: DemoScreen[]) =>
-  n.on ? screens[n.on - 1]?.caption ?? `Screen ${n.on}` : `Video ${n.t.toFixed(1)}s`;
+const where = (n: DemoNote) => (n.on ? `Screen ${n.on}` : `${n.t.toFixed(1)}s`);
+
+/** The commenter (comments are owner-only, so it's the signed-in user), like Launch Video Studio. */
+export function Avatar({ size = 20 }: { size?: number }) {
+  const { imageUrl, name, email } = useProfileStore();
+  const [broken, setBroken] = useState(false);
+  const initial = (name || email || "?").trim().charAt(0).toUpperCase();
+  return imageUrl && !broken
+    ? <img className="dn-av" src={imageUrl} alt="" style={{ width: size, height: size }} onError={() => setBroken(true)} />
+    : <span className="dn-av is-init" style={{ width: size, height: size, fontSize: size * 0.48 }}>{initial}</span>;
+}
 
 export function DemoComments(props: {
   appId: string;
@@ -31,27 +41,28 @@ export function DemoComments(props: {
   };
   return (
     <div className="dn">
-
       {open.length ? (
         <ul className="dn-list">
           {open.map((n) => (
             <li key={n.id}>
-              <button type="button" className="dn-t" onClick={() => onSeek(n.on ?? 0, n.t)}>{where(n, screens)}</button>
-              <span className="dn-body">{n.x != null ? <span className="dn-mark" aria-label="pinned" /> : null}{n.body}</span>
+              <Avatar />
+              <button type="button" className="dn-row" title={n.on ? screens[n.on - 1]?.caption : undefined} onClick={() => onSeek(n.on ?? 0, n.t)}>
+                <span className="dn-t">{where(n)}</span>
+                <span className="dn-body">{n.body}</span>
+              </button>
               <button type="button" className="dn-x" aria-label="Delete comment" onClick={() => run(deleteDemoNote(appId, n.id))}>×</button>
             </li>
           ))}
         </ul>
       ) : null}
-
       {open.length ? (
         <div className="dn-foot">
           <button type="button" className="ss6-btn ss6-btn--primary" disabled={busy} onClick={() => run(reviseDemo(appId))}>
             Revise with {open.length} comment{open.length === 1 ? "" : "s"}
           </button>
+          {fixed.length ? <span className="dn-fixed">{fixed.length} fixed earlier</span> : null}
         </div>
       ) : null}
-      {fixed.length ? <p className="pis-hint">{fixed.length} fixed in earlier versions</p> : null}
       {error ? <p className="pis-error">{error}</p> : null}
     </div>
   );
@@ -72,12 +83,17 @@ export function DemoDraft({ appId, item, at, pin, onDone }: { appId: string; ite
     void addDemoNote(appId, { t: item ? 0 : at, body, ...(item ? { on: item } : {}), ...pin })
       .then(onDone).catch((err: Error) => setError(err.message));
   };
-  const flipX = pin.x > 0.55;
-  const flipY = pin.y > 0.6;
+  // Above the pin (below it near the top edge), centred on it but kept inside the picture.
+  const below = pin.y < 0.42;
+  const style = {
+    "--px": `${pin.x * 100}%`,
+    ...(below ? { top: `calc(${pin.y * 100}% + 16px)` } : { bottom: `calc(${(1 - pin.y) * 100}% + 16px)` }),
+  } as unknown as React.CSSProperties;
   return (
-    <div className={`dn-draft ${flipX ? "is-left" : ""} ${flipY ? "is-up" : ""}`} style={{ left: `${pin.x * 100}%`, top: `${pin.y * 100}%` }}
-      onClick={(e) => e.stopPropagation()}>
+    <div className="dn-draft" style={style} onClick={(e) => e.stopPropagation()}>
       <form className="dn-draft__box" onSubmit={(e) => { e.preventDefault(); add(); }}>
+        <Avatar size={22} />
+        <div className="dn-draft__main">
         <textarea rows={2} value={draft} maxLength={1000} autoFocus aria-label="New comment"
           placeholder="What should change here?" onChange={(e) => setDraft(e.target.value)}
           onKeyDown={(e) => {
@@ -90,6 +106,7 @@ export function DemoDraft({ appId, item, at, pin, onDone }: { appId: string; ite
           <button type="submit" className="ss6-btn ss6-btn--primary" disabled={!draft.trim()}>Comment</button>
         </div>
         {error ? <p className="pis-error">{error}</p> : null}
+        </div>
       </form>
     </div>
   );
