@@ -79,6 +79,25 @@ ${hasReference ? `Fidelity to the real app (it should feel like the same product
 Frame numbers in problems are 1-based; use 0 for the whole scene.`;
 }
 
+/** QA for a gallery film: the frames are the hold moments the gallery screens are cut from. */
+export function galleryReviewPrompt(listing: string, hasReference: boolean, times: number[]): string {
+  const frames = times.map((t, i) => `frame ${i + 1} = ${t.toFixed(1)}s`).join(", ");
+  return `You are the QA reviewer for an app's Community poster film (a short loop on a card, and 3-4 gallery screens cut from these same moments).
+Listing the viewer reads under it:
+${listing}
+${hasReference ? "The FIRST image is a screenshot of the real app (reference only — it holds the owner's real data). The next images are" : "The images are"} frames from the film: ${frames}.
+
+Judge it like an App Store editor. Report only real problems, concrete (which element, where) with a concrete fix. No praise.
+- contrast: any text or chip that is hard to read on what it sits on; neon / glowing colours (cyan, lime, magenta) used for text or fills; colours that are not the app's own
+- card on card: a card sitting inside another box whose corners or edges don't match, or with no even margin around it
+- clutter: more than one place to look; stacks of small text rows instead of one big visual
+- generic: if you blur the text, could this be any app? It should show this app's signature (its own chart, board, calendar, faces, score...)
+- story: the film must prove the listing headline; the last frame must land a clear payoff
+- text too small at card size, clipped, overlapping, placeholder text, blank or half-rendered pieces
+${hasReference ? "- feels unlike the reference app (palette, type, corner radius, components, wording); ANY data copied from the reference is always a problem\n" : ""}Scores: fidelity 1-5 (5 = unmistakably this app), polish 1-5 (5 = ready to feature).
+Frame numbers in problems are 1-based; use 0 for the whole film.`;
+}
+
 /** Copy the owner's private cover (a real screenshot) next to the scratch files with the right extension. */
 export function referenceImage(appId: string): string | null {
   try {

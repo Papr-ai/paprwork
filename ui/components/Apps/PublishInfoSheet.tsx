@@ -50,10 +50,6 @@ export function PublishInfoSheet({ appId, initialTitle, onCancel, onConfirmed, m
     };
   }, [appId]);
 
-  useEffect(() => {
-    if (demo?.task?.state === "failed") setError(demo.task.error ?? "Couldn't make the gallery.");
-  }, [demo?.task?.state, demo?.task?.error]);
-
   const make = () => {
     setError(null);
     void startDemoGeneration(appId).catch((err: Error) => setError(err.message));

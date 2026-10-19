@@ -17,6 +17,7 @@ import {
   type DemoStatus,
 } from "../../utils/appDemo";
 import { DemoComments, DemoDraft, type Pin } from "./DemoComments";
+import { openCloudSyncAgentChat } from "../../utils/openCloudSyncAgentChat";
 import { DemoPlayer } from "./DemoPlayer";
 import { DefaultCover } from "./DefaultCover";
 import "./DemoNotes.css";
@@ -36,6 +37,18 @@ export function DemoGallery({ appId, appName, demo, onMake }: { appId: string; a
   const [at, setAt] = useState(0);
   const [flash, setFlash] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const failed = demo.task?.state === "failed" ? demo.task.error || "Couldn't make the gallery." : null;
+  const shown = error ?? failed;
+  const ask = () => openCloudSyncAgentChat(
+    `The gallery video for my app "${appName}" (app id ${appId}) failed: "${shown}". Find out why (gallery/ code in the app, demo files under data/demos/${appId}.*), fix it, and get the video and screens made.`,
+    { send: true, title: "Fix gallery video" },
+  );
+  const errorBar = shown ? (
+    <div className="dg-err" role="alert">
+      <span>{shown}</span>
+      <button type="button" className="dg-err__ask" onClick={ask}>Ask agent</button>
+    </div>
+  ) : null;
   const video = useRef<HTMLVideoElement>(null);
   const making = demo.task?.state === "running" && demo.task?.kind !== "revise";
   const ver = (demo.versions ?? []).find((v) => v.v === viewing);
@@ -89,6 +102,7 @@ export function DemoGallery({ appId, appName, demo, onMake }: { appId: string; a
             </button>
           </DefaultCover>
         </div>
+        {errorBar}
         <Slots />
       </div>
     );
@@ -186,7 +200,7 @@ export function DemoGallery({ appId, appName, demo, onMake }: { appId: string; a
             if (!on) requestAnimationFrame(() => { if (video.current) { video.current.pause(); video.current.currentTime = t; setAt(t); } });
           }} />
       ) : null}
-      {error ? <p className="pis-error">{error}</p> : null}
+      {errorBar}
     </div>
   );
 }

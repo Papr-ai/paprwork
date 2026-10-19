@@ -19,6 +19,7 @@ import {
   screenPath,
   screenRawPath,
   setScreens,
+  stillPath,
   cleanCaption,
   cleanSub,
   type DemoScreen,
@@ -37,15 +38,16 @@ import {
 } from "./appGallery.js";
 import { composeItem } from "./appDemoScreens.js";
 import type { DemoDeps, DemoTask, RenderResult } from "./appDemoVideos.js";
+import { galleryReviewPrompt, normalizeReview, referenceImage, reviewFeedback, reviewScore, type SceneReview } from "./appDemoQuality.js";
 
 export const GALLERY_SYSTEM = `You make an app's Community POSTER FILM: a short loop that shows, sound off and without reading, what changes for the user — plus 3-4 gallery screens cut from it.
 It is NOT a screen recording or a tour of the app. It is one designed moment, like an App Store hero card.
 It lives in the app's code as gallery/index.ts (+ optional gallery/data.ts, gallery/posters.ts, gallery/poster.css). Papr bundles it with the app's stylesheets and films it on a frozen clock at 1280x800.
 
-STEP 0 — READ THE LISTING: the app name, Community headline, description and brand colours above are what a scroller reads under the film.
-  The film must PROVE that headline visually (same promise, same nouns, never contradicting it) and feel like the app's icon and brand.
-  Set the film accent to the app's brand HUE by writing --accent on #papr-film in gallery/poster.css when the app's CSS doesn't already define it (the kit tunes its lightness so it reads on the theme).
-  Icon colours are often neon/glow tones: never use them raw for text, chips or fills — only through var(--pg-accent). Text is var(--pg-fg)/var(--pg-muted); accent text only for short labels and numbers.
+STEP 0 — READ THE LISTING: the app name, Community headline and description above are what a scroller reads under the film.
+  The film must PROVE that headline visually (same promise, same nouns, never contradicting it) and look like the app itself.
+  Colours come from the app's CSS (the App CSS colours above and its stylesheets, which are bundled in): its --accent is the film accent automatically.
+  Never take colours from the app icon and never invent hex colours. Text is var(--pg-fg)/var(--pg-fg2); accent text only for short labels and numbers.
 
 STEP 1 — FIND THE CHANGE (decide this before any code; write it as a comment at the top of gallery/index.ts):
   BEFORE: the user's world without the app (100 cold invites, an empty week, an unknown website).
@@ -181,6 +183,22 @@ async function filmTake(appId: string, deps: DemoDeps, take: string, files: Gall
   return { r: (await deps.render({ scenePath: p.scene, videoPath: p.video, posterPath: p.poster })) as GalleryRender, error: null };
 }
 
+/** The frames the screens are cut from (plus the hero mid-way), judged by a vision reviewer. */
+async function reviewFilm(appId: string, deps: DemoDeps, take: string, r: GalleryRender | null, appPrompt: string, ref: string | null): Promise<{ review: SceneReview | null; times: number[] }> {
+  if (!r || !deps.stills || !deps.review) return { review: null, times: [] };
+  const holds = (r.screens ?? []).map((s) => s.t);
+  const times = [...new Set([Math.round(r.seconds * 0.2 * 10) / 10, ...holds])].sort((a, b) => a - b).slice(0, 5);
+  try {
+    const shots = await deps.stills(demoPaths(appId, take).scene, times.map((t, i) => ({ t, path: stillPath(appId, `r${take}${i}`) })));
+    const listing = appPrompt.split("\n\nSource:")[0]!.slice(0, 1200);
+    const raw = await deps.review(galleryReviewPrompt(listing, Boolean(ref), times), [...(ref ? [ref] : []), ...shots.map((s) => s.path)]);
+    return { review: normalizeReview(raw), times };
+  } catch (err) {
+    console.warn(`[appGallery] review failed for ${appId}:`, (err as Error).message);
+    return { review: null, times };
+  }
+}
+
 /** Screens from the gallery's declarations: capture each named component, lay it out. */
 async function galleryScreens(appId: string, deps: DemoDeps, v: number, declared: DeclaredScreen[]): Promise<number> {
   if (!deps.stills || !declared.length) return 0;
@@ -255,12 +273,19 @@ interface RunOpts {
  * One gallery run. Returns the new version, or null to fall back to a written scene.
  * create: if the app already has gallery/ (owner-edited), film it as-is first.
  */
+/** Why the last gallery run for an app gave up (shown to the owner with Ask agent). */
+export const galleryFailure = new Map<string, string>();
+
 export async function runGallery(appId: string, deps: DemoDeps & GalleryDeps, task: DemoTask, o: RunOpts): Promise<number | null> {
+  galleryFailure.delete(appId);
   try {
     let files: GalleryFile[];
     if (o.kind === "revise") {
       const current = galleryFilesFor(appId, o.baseVersion ?? 0);
-      if (!current.length) return null;
+      if (!current.length) {
+        galleryFailure.set(appId, `No gallery code saved for v${o.baseVersion ?? 0}.`);
+        return null;
+      }
       task.stage = "revising";
       files = normalizeGalleryFiles(await deps.writeGallery(appId, editGalleryPrompt(o.appPrompt, current, o.requests ?? ""), o.images));
     } else if (!o.fresh && hasGallery(appId)) {
@@ -271,20 +296,28 @@ export async function runGallery(appId: string, deps: DemoDeps & GalleryDeps, ta
       files = normalizeGalleryFiles(await deps.writeGallery(appId, createPrompt(o.appPrompt)));
     }
 
-    let best = { take: "a", files, ...(await filmTake(appId, deps, "a", files)) };
-    const feedback = filmFeedback(best.r, best.error, o.check);
+    // Film, then a reviewer looks at the frames (like Launch Video Studio); one round of edits, keep the better take.
+    const ref = referenceImage(appId);
+    const first = { take: "a", files, ...(await filmTake(appId, deps, "a", files)) };
+    task.stage = "reviewing";
+    const r1 = await reviewFilm(appId, deps, "a", first.r, o.appPrompt, ref);
+    let best = { ...first, review: r1.review };
+    const feedback = [filmFeedback(first.r, first.error, o.check), reviewFeedback(r1.review, r1.times)].filter(Boolean).join("\n");
     if (feedback) {
       task.stage = "polishing";
       try {
-        const fixed = normalizeGalleryFiles(await deps.writeGallery(appId, editGalleryPrompt(o.appPrompt, files, `Fix these problems from filming it:\n${feedback}`)));
+        const fixed = normalizeGalleryFiles(await deps.writeGallery(appId, editGalleryPrompt(o.appPrompt, files, `A reviewer watched it. Fix these problems:\n${feedback}`)));
         const second = { take: "b", files: fixed, ...(await filmTake(appId, deps, "b", fixed)) };
-        if (score(second.r) < score(best.r)) best = second;
+        const r2 = second.r ? await reviewFilm(appId, deps, "b", second.r, o.appPrompt, ref) : { review: null };
+        const total = (r: GalleryRender | null, rv: SceneReview | null) => score(r) + reviewScore(rv);
+        if (total(second.r, r2.review) < total(best.r, best.review)) best = { ...second, review: r2.review };
       } catch (err) {
         console.warn(`[appGallery] polish failed for ${appId}:`, (err as Error).message);
       }
     }
     if (!best.r) {
       console.warn(`[appGallery] ${appId}: gallery did not build: ${best.error}`);
+      galleryFailure.set(appId, `The gallery code did not build: ${String(best.error).slice(0, 400)}`);
       return null;
     }
     const v = addVersion(appId, best.take, o.kind, o.fixedNoteIds ?? []);
@@ -296,6 +329,7 @@ export async function runGallery(appId: string, deps: DemoDeps & GalleryDeps, ta
     return v;
   } catch (err) {
     console.warn(`[appGallery] ${appId}: ${(err as Error).message}`);
+    galleryFailure.set(appId, (err as Error).message.slice(0, 400));
     return null;
   } finally {
     dropGalleryTakes(appId);

@@ -41,7 +41,7 @@ import {
   type DemoScreen,
 } from "./appDemoStore.js";
 import { makeScreens, type ComposeItem, type ScreenStill } from "./appDemoScreens.js";
-import { runGallery } from "./appGalleryFilm.js";
+import { galleryFailure, runGallery } from "./appGalleryFilm.js";
 import {
   REVIEW_AT,
   normalizeReview,
@@ -145,7 +145,7 @@ export function buildDemoScenePrompt(appId: string, opts: { codeFirst?: boolean;
   return `${appBrand(appId, dir, meta)}\n\nSource:${src}`;
 }
 
-/** Name, Community headline, description and brand colours (icon + CSS custom properties) — the film should feel like this listing. */
+/** Name, Community headline, description and the app's CSS colour tokens — the film should feel like this listing. */
 function appBrand(appId: string, dir: string, meta: { title?: string; description?: string; icon?: string; headline?: string }): string {
   let entry: { title?: string; description?: string; headline?: string } = {};
   try {
@@ -157,7 +157,6 @@ function appBrand(appId: string, dir: string, meta: { title?: string; descriptio
   const title = entry.title || meta.title || appId;
   const headline = entry.headline || meta.headline || "";
   const description = entry.description || meta.description || "";
-  const iconColors = [...new Set((meta.icon ?? "").match(/#[0-9a-fA-F]{6}\b/g) ?? [])].slice(0, 4);
   const cssVars = new Map<string, string>();
   for (const f of fs.readdirSync(dir).filter((n) => n.endsWith(".css") && n !== "base.css")) {
     const css = fs.readFileSync(path.join(dir, f), "utf8");
@@ -168,15 +167,13 @@ function appBrand(appId: string, dir: string, meta: { title?: string; descriptio
       if (cssVars.size >= 10) break;
     }
   }
-  const colors = [
-    iconColors.length ? `icon ${iconColors.join(", ")}` : "",
-    cssVars.size ? [...cssVars].map(([k, v]) => `${k}: ${v}`).join("; ") : "",
-  ].filter(Boolean).join(" | ");
+  // The app's own CSS tokens only — icon colours are glow/neon art, not UI colours.
+  const colors = cssVars.size ? [...cssVars].map(([k, v]) => `${k}: ${v}`).join("; ") : "";
   return [
     `App: ${title}`,
     headline ? `Headline (Community listing): ${headline}` : "",
     `Description: ${description}`,
-    colors ? `Brand colours: ${colors}` : "",
+    colors ? `App CSS colours: ${colors}` : "",
   ].filter(Boolean).join("\n");
 }
 
@@ -510,7 +507,8 @@ async function runRevise(appId: string, deps: DemoDeps, task: DemoTask): Promise
       check: (r) => checkFeedback(r.check),
     });
     if (v) return v;
-    throw new Error("Couldn't apply the notes to the gallery code. Try again, or edit gallery/ in the app.");
+    const why = galleryFailure.get(appId);
+    throw new Error(`Couldn't apply your notes to the gallery.${why ? ` ${why}` : ""}`);
   }
   const prompt = editPrompt(buildDemoScenePrompt(appId), scene, `The owner watched v${m.current} and left these notes${stills.length ? " (the attached images are the frames they refer to, in order)" : ""}:\n${requests}`);
   task.stage = "revising";
