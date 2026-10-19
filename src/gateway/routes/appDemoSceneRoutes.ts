@@ -33,10 +33,14 @@ import {
 } from "../services/appDemoStore.js";
 import { exportGallery } from "../services/appDemoExport.js";
 
+/** Videos and screens: Claude Opus 5.5 first; AgentService falls back to the user's other models. */
+const GALLERY_MODEL = { provider: "anthropic" as const, model: "claude-opus-5-5" };
+
 const deps: DemoDeps = {
   async writeScene(appId, prompt, images) {
     const { getAgentService } = await import("../services/AgentService.js");
     const result = await getAgentService().runStructuredJobSession({
+      ...GALLERY_MODEL,
       jobId: `app-demo-${appId}`,
       runId: String(Date.now()),
       prompt: `${DEMO_SCENE_SYSTEM}\n\n---\n\n${prompt}`,
@@ -57,6 +61,7 @@ const deps: DemoDeps = {
   async writeGallery(appId, prompt, images) {
     const { getAgentService } = await import("../services/AgentService.js");
     const result = await getAgentService().runStructuredJobSession({
+      ...GALLERY_MODEL,
       jobId: `app-gallery-${appId}`,
       runId: String(Date.now()),
       prompt: `${GALLERY_SYSTEM}\n\n---\n\n${prompt}`,
@@ -88,6 +93,7 @@ const deps: DemoDeps = {
   async review(prompt, images) {
     const { getAgentService } = await import("../services/AgentService.js");
     const result = await getAgentService().runStructuredJobSession({
+      ...GALLERY_MODEL,
       jobId: "app-demo-review",
       runId: String(Date.now()),
       prompt,
@@ -101,6 +107,7 @@ const deps: DemoDeps = {
   async pickScreens(prompt, images) {
     const { getAgentService } = await import("../services/AgentService.js");
     const result = await getAgentService().runStructuredJobSession({
+      ...GALLERY_MODEL,
       jobId: "app-demo-screens",
       runId: String(Date.now()),
       prompt,

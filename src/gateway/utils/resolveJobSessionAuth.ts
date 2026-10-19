@@ -94,7 +94,7 @@ export async function resolveJobSessionAuth(params: {
  */
 export async function resolveOAuthRateLimitRetryCredentials(
   provider: Provider,
-  model: string,
+  _model: string,
 ): Promise<ResolvedAgentCredentials | null> {
   const authProvider = provider === "openai-codex" ? "openai" : provider;
   if (authProvider === "openai" || authProvider === "anthropic") {
@@ -107,5 +107,11 @@ export async function resolveOAuthRateLimitRetryCredentials(
     }
   }
 
-  return resolveAgentProviderCredentials(provider, model);
+  // No Platform key: only the Papr proxy is a real alternative. Never return the
+  // same OAuth token — callers would send it down an API-key route.
+  const { resolvePaprProxyAuth } = await import("./keyResolver.js");
+  const proxy = await resolvePaprProxyAuth();
+  return proxy
+    ? { apiKey: proxy.apiKey, authType: "apiKey", usePaprProxy: proxy.usePaprProxy }
+    : null;
 }

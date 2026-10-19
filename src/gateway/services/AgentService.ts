@@ -14,9 +14,8 @@ import { measureLanguageModel, measureTools } from "./agent/requestPerformanceDi
 
 import { resolvePaprUserDataPath } from "../../core/utils/paprWorkspace.js";
 import { v4 as uuidv4 } from "uuid";
-import * as fs from "fs";
 import * as path from "path";
-import { streamText, generateObject, jsonSchema } from "ai";
+import { streamText } from "ai";
 import type { LanguageModel, ModelMessage, ToolSet, StepResult } from "ai";
 import { ToolRegistry } from "../../core/agents/ToolRegistry.js";
 import {
@@ -5284,11 +5283,10 @@ ${last15.substring(0, 8_000)}`;
   }
 
   /**
-   * Run a structured output session using AI SDK's generateObject.
-   * Uses model-level constrained decoding (not prompt-based) to guarantee
-   * the response matches the provided JSON schema exactly.
-   *
-   * This replaces the old pattern of: streamText → JSON.parse → manual validation.
+   * Structured (JSON) output on the same agent path as chat and agent jobs (streamAgent:
+   * ChatGPT/Claude OAuth via pi-ai, API keys, Papr proxy). Tries the requested model first;
+   * on an OAuth rate limit retries that provider with its Platform key / Papr proxy (never the
+   * OAuth token on an API-key route), then falls back to the other providers the user has set up.
    */
   async runStructuredJobSession(input: {
     jobId: string;
@@ -5301,228 +5299,114 @@ ${last15.substring(0, 8_000)}`;
     model?: string;
     /** Local image files (JPEG/PNG) the model should look at, e.g. rendered frames. */
     images?: string[];
+    /** Try the user's other providers when the requested one fails (default true). */
+    fallback?: boolean;
   }): Promise<{ chatId: string; object: unknown }> {
     if (!this.initialized) {
       throw new Error("AgentService not initialized");
     }
-
     await this.ensureKeysLoaded();
 
-    // Resolve default provider and model based on user's available authentication
-    let provider = input.provider;
-    let modelId = input.model;
-
-    if (!provider || !modelId) {
-      const { getDefaultProviderAndModel } =
-        await import("../utils/defaultProvider.js");
-      const defaults = await getDefaultProviderAndModel();
-      provider = provider ?? defaults.provider;
-      modelId = modelId ?? defaults.model;
-      console.log(
-        `[AgentService] Using default provider/model: ${provider}/${modelId}`,
-      );
-    }
-
-    const defaultModelByProvider: Record<Provider, string> = {
-      openai: "gpt-5-6-sol",
-      "openai-codex": "gpt-5.3-codex",
-      anthropic: "claude-sonnet-5-5",
-      google: "gemini-3.8-flash",
-      ollama: "qwen3.5:latest",
-      cursor: "composer-2.5",
-      zai: "glm-5.2",
-      groq: "openai/gpt-oss-120b",
-      moonshot: "kimi-k3",
-    };
-    modelId = modelId ?? defaultModelByProvider[provider];
+    const { resolveJobProviderModel } = await import("../utils/resolveJobProviderModel.js");
+    const { resolveJobSessionAuth, resolveOAuthRateLimitRetryCredentials } =
+      await import("../utils/resolveJobSessionAuth.js");
+    const first = await resolveJobProviderModel({ provider: input.provider, model: input.model });
 
     const chatId = `job:${input.jobId}:${input.runId}`;
-    const imageAttachments = (input.images ?? []).map((filePath, i) => ({
+    const attachments = (input.images ?? []).map((filePath, i) => ({
       id: `${chatId}-img-${i}`,
       name: path.basename(filePath),
       kind: "file" as const,
       mimeType: /\.png$/i.test(filePath) ? "image/png" : "image/jpeg",
       filePath,
     }));
+    const prompt = `${input.prompt}\n\nRespond with ONLY valid JSON matching this schema (no markdown, no explanation):\n${JSON.stringify(input.outputSchema, null, 2)}`;
+    const systemPrompt = `${this.systemPrompt}\n\n# Structured Output Job\n- Session: ${chatId}\n- Return ONLY valid JSON matching the requested schema. No markdown code blocks, no explanation.`;
 
-    const sessionAuth = await (
-      await import("../utils/resolveJobSessionAuth.js")
-    ).resolveJobSessionAuth({
-      provider,
-      model: modelId,
-      requestedModel: input.model,
-    });
-    provider = sessionAuth.provider;
-    modelId = sessionAuth.model;
-    let apiKey = sessionAuth.apiKey;
-    let authType = sessionAuth.authType;
-    let usePaprProxy = sessionAuth.usePaprProxy;
-
-    // OAuth and Papr proxy both need streamAgent — generateObject hits Platform APIs directly.
-    const useOAuthPiAi =
-      (provider === "openai" ||
-        provider === "openai-codex" ||
-        provider === "anthropic") &&
-      authType === "oauth";
-    const useStreamJsonPath = useOAuthPiAi || Boolean(usePaprProxy);
-
-    if (useStreamJsonPath) {
-      const schemaStr = JSON.stringify(input.outputSchema, null, 2);
-      const jsonPrompt = `${input.prompt}\n\nRespond with ONLY valid JSON matching this schema (no markdown, no explanation):\n${schemaStr}`;
-      const config: AgentConfigInternal = {
-        provider,
-        model: modelId,
-        apiKey,
-        authType,
-        usePaprProxy,
-        systemPrompt: `${this.systemPrompt}\n\n# Structured Output Job\n- Session: ${chatId}\n- Return ONLY valid JSON matching the requested schema. No markdown code blocks, no explanation.`,
-        contextLimit: DEFAULT_SESSION_CONTEXT_LIMIT,
-      };
-
-      let text = "";
-      let retryWithApiKey = false;
-
-      try {
-        for await (const chunk of this.streamAgent(chatId, jsonPrompt, config, {
-          maxSteps: 10,
-          ...(imageAttachments.length ? { attachments: imageAttachments } : {}),
-        })) {
-          if (chunk.type === "error") {
-            const errMsg =
-              (chunk.payload as { error?: string })?.error ?? "Model API error";
-
-            // Check if this is an OAuth rate limit error
-            if (
-              errMsg.includes("usage limit") ||
-              errMsg.includes("rate limit") ||
-              errMsg.includes("Try again in")
-            ) {
-              console.log(
-                `[AgentService] OAuth rate limit hit for structured job (${provider}). Retrying with API key...`,
-              );
-              retryWithApiKey = true;
-              break;
-            }
-
-            throw new Error(
-              `Structured job model error (${provider}/${modelId}): ${errMsg}`,
-            );
-          }
-          if (chunk.type === "text-delta") {
-            const payload = chunk.payload as { text?: string };
-            if (typeof payload.text === "string") text += payload.text;
-          }
+    const candidates: { provider: Provider; model: string }[] = [first];
+    if (input.fallback !== false) {
+      const { getAvailableProviders } = await import("../utils/defaultProvider.js");
+      for (const p of await getAvailableProviders()) {
+        if (p.hasAuth && p.provider !== first.provider && p.provider !== "ollama") {
+          candidates.push({ provider: p.provider, model: p.model });
         }
-      } catch (err) {
-        if (!retryWithApiKey) throw err;
-      }
-
-      if (retryWithApiKey) {
-        const { resolveOAuthRateLimitRetryCredentials } =
-          await import("../utils/resolveJobSessionAuth.js");
-        const retryCreds = await resolveOAuthRateLimitRetryCredentials(
-          provider,
-          modelId,
-        );
-        if (!retryCreds) {
-          throw new Error(
-            `OAuth rate limit reached and no API key or Papr proxy available for ${provider}. ` +
-              `Add an API key in Settings, sign in with Papr, or wait for rate limit to reset.`,
-          );
-        }
-        apiKey = retryCreds.apiKey;
-        authType = retryCreds.authType;
-        usePaprProxy = retryCreds.usePaprProxy;
-        if (retryCreds.usePaprProxy) {
-          const schemaStr = JSON.stringify(input.outputSchema, null, 2);
-          const jsonPrompt = `${input.prompt}\n\nRespond with ONLY valid JSON matching this schema (no markdown, no explanation):\n${schemaStr}`;
-          const retryConfig: AgentConfigInternal = {
-            provider,
-            model: modelId,
-            apiKey,
-            authType,
-            usePaprProxy,
-            systemPrompt: `${this.systemPrompt}\n\n# Structured Output Job\n- Session: ${chatId}\n- Return ONLY valid JSON matching the requested schema. No markdown code blocks, no explanation.`,
-            contextLimit: DEFAULT_SESSION_CONTEXT_LIMIT,
-          };
-          let retryText = "";
-          for await (const chunk of this.streamAgent(
-            `${chatId}-retry`,
-            jsonPrompt,
-            retryConfig,
-            { maxSteps: 10, ...(imageAttachments.length ? { attachments: imageAttachments } : {}) },
-          )) {
-            if (chunk.type === "error") {
-              const errMsg =
-                (chunk.payload as { error?: string })?.error ??
-                "Model API error";
-              throw new Error(
-                `Structured job model error (${provider}/${modelId}) after Papr proxy retry: ${errMsg}`,
-              );
-            }
-            if (chunk.type === "text-delta") {
-              const payload = chunk.payload as { text?: string };
-              if (typeof payload.text === "string") retryText += payload.text;
-            }
-          }
-          const parsed = this.parseJsonFromResponse(retryText);
-          await gradeRunSearchOutcomes({
-            runKey: chatId,
-            answerText: JSON.stringify(parsed),
-            surface: "job:structured",
-          });
-          return { chatId, object: parsed };
-        }
-        console.log(
-          `[AgentService] Retrying structured job with API key for ${provider} (OAuth rate limited)`,
-        );
-      } else {
-        // No retry needed, parse and return
-        const parsed = this.parseJsonFromResponse(text);
-        // Structured jobs still search memory, so they still owe labels. The
-        // "answer" is the JSON it produced — citation derivation is plain term
-        // containment, so a serialised object works the same as prose.
-        await gradeRunSearchOutcomes({
-          runKey: chatId,
-          answerText: JSON.stringify(parsed),
-          surface: "job:structured",
-        });
-        return { chatId, object: parsed };
       }
     }
 
-    // API key path: use AI SDK generateObject (model-level schema enforcement)
-    await this.setProviderAuth(provider, apiKey);
-    const model = await this.createLanguageModel(provider, modelId);
-
-    const imageParts = (input.images ?? []).flatMap((filePath) => {
+    const isRateLimit = (m: string) => /usage limit|rate limit|try again in/i.test(m);
+    const tried = new Set<string>();
+    const errors: string[] = [];
+    for (const [i, cand] of candidates.entries()) {
+      let auth: Awaited<ReturnType<typeof resolveJobSessionAuth>>;
       try {
-        return [{
-          type: "image" as const,
-          image: fs.readFileSync(filePath),
-          mediaType: /\.png$/i.test(filePath) ? "image/png" : "image/jpeg",
-        }];
-      } catch {
-        return [];
+        auth = await resolveJobSessionAuth({ provider: cand.provider, model: cand.model, requestedModel: cand.model });
+      } catch (err) {
+        errors.push(`${cand.provider}/${cand.model}: ${(err as Error).message}`);
+        continue;
       }
-    });
-    const result = await generateObject({
-      model,
-      schema: jsonSchema(input.outputSchema),
-      schemaName: input.schemaName,
-      schemaDescription: input.schemaDescription,
-      ...(imageParts.length
-        ? { messages: [{ role: "user" as const, content: [{ type: "text" as const, text: input.prompt }, ...imageParts] }] }
-        : { prompt: input.prompt }),
-      system: `${this.systemPrompt}\n\n# Structured Output Job\n- Session: ${chatId}\n- Return data matching the requested schema exactly.`,
-    });
+      const key = `${auth.provider}/${auth.model}`;
+      if (tried.has(key)) continue;
+      tried.add(key);
+      const runId = i ? `${chatId}-fb${i}` : chatId;
+      try {
+        return await this.structuredAttempt(runId, prompt, systemPrompt, auth, attachments);
+      } catch (err) {
+        const msg = (err as Error).message;
+        if (auth.authType === "oauth" && isRateLimit(msg)) {
+          const retry = await resolveOAuthRateLimitRetryCredentials(auth.provider, auth.model);
+          if (retry && retry.authType !== "oauth") {
+            console.log(`[AgentService] Structured job: ${key} OAuth rate limited — retrying with ${retry.usePaprProxy ? "Papr proxy" : "API key"}`);
+            try {
+              return await this.structuredAttempt(`${runId}-retry`, prompt, systemPrompt, { ...auth, ...retry }, attachments);
+            } catch (err2) {
+              errors.push(`${key} (${retry.usePaprProxy ? "proxy" : "API key"}): ${(err2 as Error).message}`);
+              console.warn(`[AgentService] Structured job ${key} retry failed: ${(err2 as Error).message.slice(0, 200)}`);
+              continue;
+            }
+          }
+        }
+        errors.push(`${key}: ${msg}`);
+        console.warn(`[AgentService] Structured job ${key} failed — trying next model: ${msg.slice(0, 200)}`);
+      }
+    }
+    throw new Error(errors.length > 1 ? `Every model failed. ${errors.join(" | ")}` : (errors[0] ?? "No model available for this job."));
+  }
 
-    await gradeRunSearchOutcomes({
-      runKey: chatId,
-      answerText: JSON.stringify(result.object),
-      surface: "job:structured",
-    });
-    return { chatId, object: result.object };
+  /** One structured call through streamAgent with resolved credentials. */
+  private async structuredAttempt(
+    runChatId: string,
+    prompt: string,
+    systemPrompt: string,
+    auth: { provider: Provider; model: string; apiKey: string; authType: "oauth" | "apiKey"; usePaprProxy?: boolean },
+    attachments: { id: string; name: string; kind: "file"; mimeType: string; filePath: string }[],
+  ): Promise<{ chatId: string; object: unknown }> {
+    const config: AgentConfigInternal = {
+      provider: auth.provider,
+      model: auth.model,
+      apiKey: auth.apiKey,
+      authType: auth.authType,
+      usePaprProxy: auth.usePaprProxy,
+      systemPrompt,
+      contextLimit: DEFAULT_SESSION_CONTEXT_LIMIT,
+    };
+    let text = "";
+    for await (const chunk of this.streamAgent(runChatId, prompt, config, {
+      maxSteps: 10,
+      ...(attachments.length ? { attachments } : {}),
+    })) {
+      if (chunk.type === "error") {
+        const errMsg = (chunk.payload as { error?: string })?.error ?? "Model API error";
+        throw new Error(`Structured job model error (${auth.provider}/${auth.model}): ${errMsg}`);
+      }
+      if (chunk.type === "text-delta") {
+        const payload = chunk.payload as { text?: string };
+        if (typeof payload.text === "string") text += payload.text;
+      }
+    }
+    const parsed = this.parseJsonFromResponse(text);
+    // Structured jobs still search memory, so they still owe labels.
+    await gradeRunSearchOutcomes({ runKey: runChatId, answerText: JSON.stringify(parsed), surface: "job:structured" });
+    return { chatId: runChatId, object: parsed };
   }
 
   /** Parse JSON from model response (handles markdown code blocks) */
@@ -5537,186 +5421,6 @@ ${last15.substring(0, 8_000)}`;
       throw new Error(
         `Structured output job returned invalid JSON. Raw response: ${text.slice(0, 200)}...`,
       );
-    }
-  }
-
-  /**
-   * Set provider API key or OAuth token in environment so AI SDK providers can pick it up.
-   * Prioritizes OAuth tokens over API keys.
-   */
-  private async setProviderAuth(
-    provider: Provider,
-    apiKey?: string,
-  ): Promise<void> {
-    // Ollama runs locally, no authentication needed
-    if (provider === "ollama") {
-      console.log(`[AgentService] Ollama provider - no authentication needed`);
-      return;
-    }
-
-    // First, try to use OAuth token (if available)
-    const { getProviderAuth } = await import("../utils/keyResolver.js");
-
-    if (
-      provider === "openai" ||
-      provider === "openai-codex" ||
-      provider === "anthropic"
-    ) {
-      // Map openai-codex to openai for OAuth lookup (they share the same OAuth token)
-      const authProvider = provider === "openai-codex" ? "openai" : provider;
-      const auth = await getProviderAuth(authProvider);
-
-      if (auth) {
-        if (auth.type === "oauth") {
-          // Set OAuth token as API key (AI SDK uses OPENAI_API_KEY/ANTHROPIC_API_KEY env vars)
-          switch (provider) {
-            case "openai":
-            case "openai-codex":
-              process.env.OPENAI_API_KEY = auth.token;
-              console.log(
-                `[AgentService] Using OpenAI OAuth token for ${provider}`,
-              );
-              break;
-            case "anthropic":
-              process.env.ANTHROPIC_API_KEY = auth.token;
-              console.log(`[AgentService] Using Anthropic OAuth token`);
-              break;
-          }
-          return;
-        } else if (auth.type === "apiKey") {
-          // Use API key
-          switch (provider) {
-            case "openai":
-            case "openai-codex":
-              process.env.OPENAI_API_KEY = auth.key;
-              console.log(
-                `[AgentService] Using OpenAI API key for ${provider}`,
-              );
-              break;
-            case "anthropic":
-              process.env.ANTHROPIC_API_KEY = auth.key;
-              console.log(`[AgentService] Using Anthropic API key`);
-              break;
-          }
-          return;
-        }
-      }
-    }
-
-    // Fall back to provided API key (for non-OAuth providers or when OAuth not available)
-    if (apiKey) {
-      switch (provider) {
-        case "anthropic":
-          process.env.ANTHROPIC_API_KEY = apiKey;
-          break;
-        case "openai":
-        case "openai-codex":
-          process.env.OPENAI_API_KEY = apiKey;
-          break;
-        case "google":
-          process.env.GOOGLE_GENERATIVE_AI_API_KEY = apiKey;
-          break;
-      }
-    }
-  }
-
-  /**
-   * Create an AI SDK LanguageModel instance for the given provider and model ID.
-   * Centralises model creation logic shared by streamAgent and generateObject paths.
-   */
-  private async createLanguageModel(
-    provider: Provider,
-    modelId: string,
-    options?: { usePaprProxy?: boolean; paprApiKey?: string },
-  ): Promise<LanguageModel> {
-    // Route through Papr proxy if configured
-    if (options?.usePaprProxy && options?.paprApiKey) {
-      const { createProxyModel } =
-        await import("../utils/paprProxyProvider.js");
-      console.log(
-        `[AgentService] Using Papr AI proxy for ${provider}/${modelId}`,
-      );
-      return createProxyModel(provider, modelId, options.paprApiKey);
-    }
-
-    switch (provider) {
-      case "anthropic": {
-        const { anthropic } = await import("@ai-sdk/anthropic");
-        return anthropic(modelId) as LanguageModel;
-      }
-      case "openai": {
-        const { openai } = await import("@ai-sdk/openai");
-        const { normalizeOpenAIModelId } =
-          await import("../utils/modelNormalizer.js");
-        const normalizedModel = normalizeOpenAIModelId(modelId);
-        if (normalizedModel.startsWith("gpt-5")) {
-          return openai.responses(normalizedModel) as LanguageModel;
-        }
-        return openai(normalizedModel) as LanguageModel;
-      }
-      case "openai-codex": {
-        // OpenAI Codex uses the same SDK but with OAuth token
-        // The token is already set in OPENAI_API_KEY by setProviderAuth
-        const { openai } = await import("@ai-sdk/openai");
-        // Use responses API for Codex models (gpt-5.3-codex)
-        return openai.responses(modelId) as LanguageModel;
-      }
-      case "google": {
-        const { google } = await import("@ai-sdk/google");
-        const { normalizeGoogleModelId } =
-          await import("../utils/modelNormalizer.js");
-        return google(normalizeGoogleModelId(modelId)) as LanguageModel;
-      }
-      case "ollama": {
-        const { ollama } = await import("ollama-ai-provider-v2");
-        return ollama(modelId) as LanguageModel;
-      }
-      case "zai": {
-        const { createOpenAI } = await import("@ai-sdk/openai");
-        const { normalizeZaiModelId } = await import("../utils/zaiModel.js");
-        const zaiApiKey = process.env.ZAI_API_KEY;
-        if (!zaiApiKey) {
-          throw new Error(
-            "Z.ai direct API requires ZAI_API_KEY. Sign in with Papr to use GLM via proxy.",
-          );
-        }
-        const zai = createOpenAI({
-          baseURL: "https://api.z.ai/api/paas/v4",
-          apiKey: zaiApiKey,
-        });
-        return zai.chat(normalizeZaiModelId(modelId)) as LanguageModel;
-      }
-      case "groq": {
-        const { createGroqChatModel } =
-          await import("../utils/groqProvider.js");
-        const groqApiKey = process.env.GROQ_API_KEY;
-        if (!groqApiKey) {
-          throw new Error(
-            "Groq direct API requires GROQ_API_KEY. Sign in with Papr to use Groq models via proxy.",
-          );
-        }
-        const { normalizeGroqModelId } = await import("../utils/groqModel.js");
-        return createGroqChatModel(normalizeGroqModelId(modelId), {
-          apiKey: groqApiKey,
-        });
-      }
-      case "moonshot": {
-        const { createMoonshotChatModel } =
-          await import("../utils/moonshotProvider.js");
-        const moonshotApiKey = process.env.MOONSHOT_API_KEY;
-        if (!moonshotApiKey) {
-          throw new Error(
-            "Moonshot direct API requires MOONSHOT_API_KEY. Sign in with Papr to use Kimi via proxy.",
-          );
-        }
-        const { normalizeMoonshotModelId } =
-          await import("../utils/moonshotModel.js");
-        return createMoonshotChatModel(normalizeMoonshotModelId(modelId), {
-          apiKey: moonshotApiKey,
-        });
-      }
-      default:
-        throw new Error(`Unsupported provider: ${provider}`);
     }
   }
 
