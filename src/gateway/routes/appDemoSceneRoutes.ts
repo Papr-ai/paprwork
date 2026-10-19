@@ -33,48 +33,10 @@ import {
 } from "../services/appDemoStore.js";
 import { exportGallery } from "../services/appDemoExport.js";
 
-type StructuredInput = Parameters<Awaited<ReturnType<typeof agentService>>["runStructuredJobSession"]>[0];
-async function agentService() {
-  const { getAgentService } = await import("../services/AgentService.js");
-  return getAgentService();
-}
-/** A key the provider rejects for permissions (e.g. OpenAI restricted key without api.responses.write). */
-const isPermissionError = (err: unknown) =>
-  /insufficient permissions|missing scopes|api\.responses|\b401\b|\b403\b|unauthorized|invalid api key|incorrect api key/i.test(String((err as Error)?.message ?? err));
-/**
- * Structured call on the default model; when that provider rejects the key, retry on the
- * next provider the user has set up so a restricted OpenAI key doesn't break the gallery.
- */
-async function structured(input: StructuredInput): Promise<{ object: unknown }> {
-  const svc = await agentService();
-  try {
-    return await svc.runStructuredJobSession(input);
-  } catch (err) {
-    if (!isPermissionError(err)) throw err;
-    const { getProviderAuth, getApiKeys } = await import("../utils/keyResolver.js");
-    const keys = await getApiKeys(["GOOGLE_API_KEY"]).catch(() => ({} as Record<string, string | undefined>));
-    const others: { provider: "anthropic" | "google"; model: string }[] = [];
-    if (await getProviderAuth("anthropic").catch(() => null)) others.push({ provider: "anthropic", model: "claude-sonnet-5-5" });
-    if (keys.GOOGLE_API_KEY) others.push({ provider: "google", model: "gemini-3.8-flash" });
-    for (const o of others) {
-      try {
-        console.warn(`[appDemo] default provider rejected the key; retrying on ${o.provider}`);
-        return await svc.runStructuredJobSession({ ...input, provider: o.provider, model: o.model } as StructuredInput);
-      } catch (e) {
-        if (!isPermissionError(e)) throw e;
-      }
-    }
-    const msg = String((err as Error)?.message ?? err);
-    if (/api\.responses|missing scopes/i.test(msg)) {
-      throw new Error("Your OpenAI API key is restricted and can't use the Responses API (missing api.responses.write). In OpenAI → API keys, set the key's permissions to All (or allow Responses: Write), or add an Anthropic or Google key in Settings.");
-    }
-    throw err;
-  }
-}
-
 const deps: DemoDeps = {
   async writeScene(appId, prompt, images) {
-    const result = await structured({
+    const { getAgentService } = await import("../services/AgentService.js");
+    const result = await getAgentService().runStructuredJobSession({
       jobId: `app-demo-${appId}`,
       runId: String(Date.now()),
       prompt: `${DEMO_SCENE_SYSTEM}\n\n---\n\n${prompt}`,
@@ -93,7 +55,8 @@ const deps: DemoDeps = {
     return html;
   },
   async writeGallery(appId, prompt, images) {
-    const result = await structured({
+    const { getAgentService } = await import("../services/AgentService.js");
+    const result = await getAgentService().runStructuredJobSession({
       jobId: `app-gallery-${appId}`,
       runId: String(Date.now()),
       prompt: `${GALLERY_SYSTEM}\n\n---\n\n${prompt}`,
@@ -123,7 +86,8 @@ const deps: DemoDeps = {
     await requestAppDemoRender({ scenePath: `${base}.html`, videoPath: `${base}.mp4`, posterPath: `${base}.poster.jpg`, compose: items });
   },
   async review(prompt, images) {
-    const result = await structured({
+    const { getAgentService } = await import("../services/AgentService.js");
+    const result = await getAgentService().runStructuredJobSession({
       jobId: "app-demo-review",
       runId: String(Date.now()),
       prompt,
@@ -135,7 +99,8 @@ const deps: DemoDeps = {
     return result.object;
   },
   async pickScreens(prompt, images) {
-    const result = await structured({
+    const { getAgentService } = await import("../services/AgentService.js");
+    const result = await getAgentService().runStructuredJobSession({
       jobId: "app-demo-screens",
       runId: String(Date.now()),
       prompt,
