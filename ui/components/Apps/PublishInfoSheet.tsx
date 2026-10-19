@@ -42,8 +42,8 @@ export function PublishInfoSheet({ appId, initialTitle, onCancel, onConfirmed, m
       const data = resp.data as { title?: string; description?: string; headline?: string } | undefined;
       if (cancelled || !data) return;
       if (data.title) setTitle(data.title);
-      setDescription(data.description ?? "");
-      setHeadline(data.headline ?? "");
+      setDescription((cur) => cur || (data.description ?? ""));
+      setHeadline((cur) => cur || (data.headline ?? ""));
     });
     return () => {
       cancelled = true;
@@ -59,15 +59,27 @@ export function PublishInfoSheet({ appId, initialTitle, onCancel, onConfirmed, m
     void startDemoGeneration(appId).catch((err: Error) => setError(err.message));
   };
 
-  const next = () => {
+  const next = async () => {
     if (!title.trim()) {
       setError("Give the app a name.");
       return;
     }
     setError(null);
-    if (publish) void confirm();
-    else setStep(2);
+    if (publish) return void confirm();
+    // App info: Details save on Next, so closing on the Gallery step never drops a headline edit.
+    setSaving(true);
+    try {
+      await saveDetails();
+      setStep(2);
+    } catch (err) {
+      setError((err as Error).message || "Couldn't save app info.");
+    } finally {
+      setSaving(false);
+    }
   };
+
+  const saveDetails = () =>
+    gateway.send("app:update", { appId, title: title.trim(), description: description.trim(), headline: headline.trim() });
 
   const confirm = async () => {
     const name = title.trim();
@@ -79,7 +91,7 @@ export function PublishInfoSheet({ appId, initialTitle, onCancel, onConfirmed, m
     setSaving(true);
     setError(null);
     try {
-      await gateway.send("app:update", { appId, title: name, description: description.trim(), headline: headline.trim() });
+      await saveDetails();
       if (hasVideo && !publish) {
         if (!(await shareDemoVideo(appId))) throw new Error("Couldn't share the gallery.");
       } else if (publish ? demo?.sharedKind !== "video" : demo?.sharedKind == null) {
@@ -126,7 +138,7 @@ export function PublishInfoSheet({ appId, initialTitle, onCancel, onConfirmed, m
         {step === 1 ? (
           <>
             <button type="button" className="ss6-btn" onClick={onCancel}>Cancel</button>
-            <button type="button" className="ss6-btn ss6-btn--primary" disabled={saving} onClick={next}>
+            <button type="button" className="ss6-btn ss6-btn--primary" disabled={saving} onClick={() => void next()}>
               {publish ? (saving ? "Publishing…" : "Publish") : "Next"}
             </button>
           </>
