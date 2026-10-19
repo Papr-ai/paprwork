@@ -52,6 +52,8 @@
   flex-direction: column;
   overflow: hidden;
   position: relative;
+  /* Chrome color shows around the content card's rounded corner (was the app gradient → visible square). */
+  background: var(--app-chrome-bg);
 }
 
 .app-layout__topbar {
@@ -69,27 +71,12 @@
   overflow: hidden;
   display: flex;
   /* Zoom-style inset canvas: content reads as a card nested in the chrome, rounded where it meets rail + tab bar.
-     Content keeps its existing (transparent → app-layout) background; only the corner is filled with chrome. */
+     The chrome color on .app-layout__main shows outside the curve. */
   border-top-left-radius: var(--app-content-radius);
   position: relative;
-}
-
-/* Corner mask: covers the square corner of opaque panes / webviews (which ignore parent radius clipping).
-   Sits BELOW the hairline so the curve is drawn once, cleanly. */
-.app-layout__content::before {
-  content: "";
-  position: absolute;
-  top: 0;
-  left: 0;
-  width: var(--app-content-radius);
-  height: var(--app-content-radius);
-  background: radial-gradient(
-    circle at 100% 100%,
-    transparent calc(var(--app-content-radius) - 1px),
-    var(--app-chrome-bg) calc(var(--app-content-radius) - 0.25px)
-  );
-  pointer-events: none;
-  z-index: 100;
+  /* Repaint the app gradient on the card itself; fixed attachment keeps it pixel-identical to before. */
+  background: var(--background-color);
+  background-attachment: fixed;
 }
 
 /* Hairline traced along the card's top + left edge, including the curve. */
