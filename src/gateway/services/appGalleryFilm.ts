@@ -38,27 +38,60 @@ import {
 import { composeItem } from "./appDemoScreens.js";
 import type { DemoDeps, DemoTask, RenderResult } from "./appDemoVideos.js";
 
-export const GALLERY_SYSTEM = `You write an app's GALLERY: a 10-14 second App Store-style preview film made from the app's OWN components, plus the 4-5 gallery screens cut from it.
-It lives in the app's code as gallery/index.ts (and optional helpers such as gallery/data.ts). Papr bundles it with the app's modules and films it on a frozen clock.
+export const GALLERY_SYSTEM = `You make an app's Community POSTER FILM: a short loop that shows, sound off and without reading, what changes for the user — plus 3-4 gallery screens cut from it.
+It is NOT a screen recording or a tour of the app. It is one designed moment, like an App Store hero card.
+It lives in the app's code as gallery/index.ts (+ optional gallery/data.ts, gallery/posters.ts, gallery/poster.css). Papr bundles it with the app's stylesheets and films it on a frozen clock at 1280x800.
 
-Rules:
-- Import the Papr gallery kit FIRST: import { film, at, ease, enter, typed, lerp } from '/__papr__/papr-gallery.ts';
-  It fakes the backend (db queries, backend actions, jobs, live updates) so the app's code runs safely with sample data.
-- Then import the sample data module (e.g. import './data';) which calls stub({ query, backend, routes }) — before any app module that loads data.
-- Then import the app's REAL modules with relative paths from gallery/ (e.g. import { renderDashboard } from '../dashboard';) and render them with sample data.
-  Prefer pure render functions (they return HTML or build DOM from arguments). If a component loads its own data, give it that data through stub() and await it in mount.
-  Never copy or re-type the app's markup when a module renders it; reuse it. Never import the app's entry (app.ts/main.ts) or anything that boots the whole app or wires global listeners.
-- Sample data: believable and specific (company names, numbers, quotes). Never real people's data, never lorem ipsum.
-- film({ scenes }) — 3 to 5 scenes, 2.5-3.5s each (never under 2.4s: a viewer must be able to read each one). Crossfade defaults to 0.6s. Each scene: { dur, mount(root), frame?(t, root), screen? }.
-  mount builds the scene once from the app's components. frame(t) animates it from t alone (entries with enter(), numbers counting up, typing with typed()); no timers, no Date, no Math.random, no CSS transitions.
-  Every animation in a scene finishes by 60% of its dur, so it holds still for a beat before the next scene (the screen is captured from that end state).
-  If the owner says it's too fast/rushed: lengthen dur (up to 4s), slow the entries, and raise fade (up to 0.9) — that is the fix, not shaving tenths.
-  The kit scales each scene to fill the 1280x800 frame, so render components at their natural width (about 520-900px wide). One idea per scene: a card, a list, a panel — not the whole app screen.
-- Story: the app's core job, input → working → payoff; strongest result first or last.
-- screen: { headline, key, sub, shot } on 4 or 5 scenes. headline 2-5 words, benefit or verb first, no app name, no end punctuation; key = the one headline word in the accent colour; sub = one short line (max 9 words); shot = CSS selector of the ONE component in that scene to feature (whole card/list/panel, inside the scene). Each screen a different component.
-- Keep each file under 100 lines (split sample data into gallery/data.ts). TypeScript that compiles with esbuild.
+STEP 1 — FIND THE CHANGE (decide this before any code; write it as a comment at the top of gallery/index.ts):
+  BEFORE: the user's world without the app (100 cold invites, an empty week, an unknown website).
+  AFTER: the ONE artifact they get (a reply ready to approve, a prep brief, a score with 3 fixes).
+  PAYOFF: one concrete line with a number or a name ("9 replied this week", "Prep for Acme is ready").
+  SIGNATURE: the ONE visual a fast scroller recognises as THIS app in under a second, even with the text blurred
+    (an audit's score ring over a crawled page list, a week calendar with a brief docked to one meeting, a crowd of faces for outreach,
+    a pipeline board, a before/after diff, a map, a chart bending up, an inbox sorting itself). Be ambitious: pick the most vivid, specific one.
+  Pick the app's most valuable output. Never a settings screen, form, editor, nav or empty state.
 
-Return { files: [{ path: "gallery/index.ts", content }, { path: "gallery/data.ts", content }, ...] }.`;
+STEP 2 — PICK ONE ARCHETYPE for the hero scene (a starting point, not a template — shape it around the SIGNATURE so no two apps' films look alike):
+  crowd → one: a grid/list of people or items; a few light up; one is chosen; its focal card pops in beside it. (outreach, recruiting, leads)
+  field + toast: a calendar/inbox/board; a result card or toast arrives on it. (scheduling, monitoring, alerts)
+  record → enriched: one entity; rows fill in with checks, tags or values. (enrichment, research, CRM)
+  score lands: the input; a ring or big number counts up; 2-3 findings appear. (audits, analytics, health)
+  stack → pick: cards fanned out; one slides forward and opens. (matching, recommendations)
+  before / after: the messy version wipes to the clean one. (writing, cleanup, formatting)
+
+STEP 3 — COMPOSE IT: CONTEXT + ONE FOCUS.
+  Background layer = the world (the crowd, the calendar, the list), dimmed or greyscale until it matters.
+  Build the SIGNATURE from the app's own most telling components: reuse its real render function, chart, ring, board, timeline,
+  message bubble or table row (relative import from gallery/), or match its look exactly with the app's own classes. The pg-* kit is the frame and the
+  fallback for plain cards — not the whole film. Prefer big visual objects (rings, charts, grids, timelines, boards, maps) over stacks of text rows.
+  Foreground = ONE focal card (max 6 elements) that carries the payoff, usually offset to one side and overlapping the context.
+  At every moment exactly one thing is moving and one place to look.
+  Real-feeling detail: faces from import { face, faceList } from '/__papr__/papr-faces.ts' (aisha, dana, james, lena, marcus, mei, omar, priya, raj, sofia, theo) as <img class="pg-face">; specific names, roles, companies, times, numbers from the app's domain. Never initials-only avatars, lorem ipsum or real users' data.
+
+STEP 4 — MOTION: ONE ARC.
+  Hero scene 5-6s: setup 0-1s (context fades in) → change 1-3s (at most 3 highlights, staggered) → payoff 3-4s (focal card pops in / button resolves) → hold until the end.
+  Then 1-2 short follow-up scenes (3-3.5s each, one card each): the payoff's next step (approve → sent) and/or the compounding win (a weekly tip, a trend). Never more than 3 scenes total. The hero must stand alone: it is what the Community card loops.
+  Every animation finishes by 70% of its scene's dur; the rest is a still hold (screens are captured there).
+
+STEP 5 — LOOK: THE PAPR DESIGN SYSTEM.
+  The app's own components keep their own styling. For anything you build yourself, use the kit's pg-* classes (pg-card, pg-kicker, pg-hero, pg-title, pg-text, pg-muted, pg-item, pg-row, pg-chip, pg-btn, pg-avatar, pg-face, pg-bar, pg-toast).
+  Colours come only from the app's own styles, the pg-* classes and the app accent (var(--pg-accent)); a success state may use var(--pg-ok). Never invent hex colours; text always contrasts with what it sits on.
+  film({ theme, transition: 'lift', fade: 0.9, scenes }) — theme matches the app's own look ('dark' or 'light'). No background option (the kit draws it).
+  Generous whitespace; text >= 20px; one composition ~900-1150px wide, centred.
+
+STEP 6 — SCREENS: screen: { headline, key, sub, shot } on every scene (3-4 total; you may add a second screen on the hero by splitting it into two scenes only if both read on their own).
+  headline 2-5 words about the OUTCOME, never a feature name, no app name, no end punctuation ("Warm intros while you sleep", "Walk in prepared"). key = the one headline word in the accent colour. sub = max 9 words. shot = CSS selector of the whole composition or focal card in that scene.
+
+STEP 7 — SELF-CHECK before returning (fix and simplify if any fails):
+  A stranger knows what the app does after 3s? Blur the text: is it still obviously THIS app? Swap in another app's words: would the film still fit? (then the SIGNATURE is too generic — make it bigger and more specific.) One place to look at every moment? The film ends on a payoff? No scene looks like a full app screen? Every colour from pg-* / accent?
+
+Code rules:
+- First line: import { film, at, ease, enter, typed, lerp } from '/__papr__/papr-gallery.ts'; (it fakes the backend so app modules are safe to import).
+- You MAY reuse a small pure render function from the app (relative import from gallery/) if it IS the focal card; otherwise build posters from pg-* markup. Never import the app's entry (app.ts/main.ts) or anything that boots the app.
+- Each scene: { dur, mount(root), frame?(t, root), screen? }. mount builds DOM once; frame(t) animates from t alone (at(), enter(), typed(), lerp()). No timers, Date, Math.random, CSS transitions or CSS animations.
+- Each file under 100 lines; TypeScript that compiles with esbuild.
+
+Return { files: [{ path: "gallery/index.ts", content }, ...] }.`;
 
 export const GALLERY_SCHEMA = {
   type: "object",
@@ -116,7 +149,7 @@ function filmFeedback(r: GalleryRender | null, buildError: string | null, check:
   if (!r) return null;
   const lines: string[] = [];
   if (r.errors?.length) lines.push(`The page logged errors while filming:\n- ${r.errors.slice(0, 5).join("\n- ")}`);
-  if (!r.screens?.length || r.screens.length < 4) lines.push(`Only ${r.screens?.length ?? 0} scenes declare a screen; 4 or 5 need { headline, key, sub, shot }.`);
+  if (!r.screens?.length || r.screens.length < 3) lines.push(`Only ${r.screens?.length ?? 0} scenes declare a screen; 3 or 4 need { headline, key, sub, shot }.`);
   // A film of the real UI keeps the app's own type scale; only flag text that's truly tiny.
   const tiny = r.check.small.filter(([, px]) => px < GALLERY_MIN_PX);
   const layout = check({ ...r, check: { ...r.check, small: tiny.length > 3 ? tiny : [] } });

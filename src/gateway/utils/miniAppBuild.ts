@@ -117,7 +117,8 @@ export async function buildMiniApp(appDir: string): Promise<MiniAppBuildResult> 
       // esbuild automatically extracts `import './foo.css'` into dist/app.css
     });
 
-    const stagedOutputs = Object.keys(result.metafile?.outputs ?? {});
+    // metafile output paths are relative to absWorkingDir (the app), not process.cwd().
+    const stagedOutputs = Object.keys(result.metafile?.outputs ?? {}).map((p) => path.resolve(appDir, p));
     for (const stagedPath of stagedOutputs) {
       const rel = path.relative(stagingDir, stagedPath);
       const dest = path.join(outdir, rel);

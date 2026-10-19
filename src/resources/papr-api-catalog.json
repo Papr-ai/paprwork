@@ -1,7 +1,7 @@
 {
   "version": 1,
-  "generatedAt": "2026-10-16T16:03:16.949Z",
-  "entryCount": 213,
+  "generatedAt": "2026-10-19T09:36:20.729Z",
+  "entryCount": 215,
   "entries": [
     {
       "id": "access-members",
@@ -611,6 +611,27 @@
         "tool",
         "agent"
       ]
+    },
+    {
+      "id": "agent-tool-declare_app_keys",
+      "title": "declare_app_keys",
+      "summary": "Declare the API keys a mini-app uses: what each is for, who provides it (owner = publisher, user = each visitor brings their own), and whether it is required.\n\nWrites apps/{appId}/requirements.json, which is what apps.papr.ai shows visitors on the setup screen. validate_app reports an error while any key found in the app's backend/manifest.json or linked jobs (requiredKeys, ${NAME} in commands) is undeclared, listing them with suggestions (e.g. \"in your vault → probably owner\", \"not credential-shaped → probably a parameter\").\n\nCall it when you add a key to an app or job, or when validate_ap...",
+      "surfaces": [
+        "agent-tool"
+      ],
+      "runtimes": [
+        "desktop"
+      ],
+      "toolId": "declare_app_keys",
+      "keywords": [
+        "declare_app_keys",
+        "declare",
+        "app",
+        "keys",
+        "tool",
+        "agent"
+      ],
+      "playbookRef": "preloaded-app-and-jobs-guide"
     },
     {
       "id": "agent-tool-delegate_task",
@@ -4302,6 +4323,31 @@
         "__papr__"
       ],
       "example": "import { papr } from '/__papr__/papr-dialog.ts';",
+      "playbookRef": "preloaded-miniapp-contracts"
+    },
+    {
+      "id": "sdk-papr-faces",
+      "title": "papr-faces.ts",
+      "summary": "Mini-app SDK module (papr-faces.ts)",
+      "surfaces": [
+        "mini-app-sdk"
+      ],
+      "runtimes": [
+        "desktop",
+        "cloud"
+      ],
+      "sdkRoute": "/__papr__/papr-faces.ts",
+      "keywords": [
+        "papr-faces.ts",
+        "/__papr__/papr-faces.ts",
+        "(see",
+        "source",
+        "file)",
+        "sdk",
+        "papr",
+        "__papr__"
+      ],
+      "example": "import { papr } from '/__papr__/papr-faces.ts';",
       "playbookRef": "preloaded-miniapp-contracts"
     },
     {
