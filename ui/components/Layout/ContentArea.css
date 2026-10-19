@@ -278,6 +278,7 @@ body.resizing .content-area__resize-line {
 .content-area,
 .content-pane--full,
 .content-pane--left,
+.content-pane__keep-alive,
 .content-area__app-tab-layer {
   border-top-left-radius: var(--app-content-radius, 12px);
 }
