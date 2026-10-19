@@ -5,6 +5,7 @@
 import type { CommunityCatalogEntry } from "../../src/core/types/communityCatalog";
 import {
   buildDesktopCloudPreviewUrl,
+  desktopGatewayOrigin,
   buildUpstreamPublishedWebUrl,
 } from "./cloudDesktopPreview";
 
@@ -45,9 +46,20 @@ export function resolveCatalogLiveWebUrl(
  * Owner-approved cover for a catalog card, served by the cloud host at
  * /{ns}/{slug}/papr-cover (proxied through the desktop gateway). 404 → icon.
  */
+/**
+ * Memory serves listing media under the app's own access rules, so apps that require
+ * sign-in 404 for a plain <img>/<video> (no key). On desktop, ask through the gateway,
+ * which calls as the signed-in user and redirects to the signed link.
+ */
+export function viaDesktopMedia(url: string): string {
+  const m = /^https:\/\/[^/]+\/v1\/cloud\/apps\/media\/([^/?#]+)\/([^/?#]+)\/(\d+)(\?poster=1)?$/.exec(url);
+  const gw = m && typeof window !== "undefined" && window.electronAPI ? desktopGatewayOrigin() : null;
+  return m && gw ? `${gw}/api/cloud/catalog-media/${m[1]}/${m[2]}/${m[3]}${m[4] ?? ""}` : url;
+}
+
 export function catalogCoverUrl(entry: CommunityCatalogEntry): string | null {
   // Stored on the catalog record (memory) — no per-card repo fetch + redirect.
-  if (entry.coverUrl) return entry.coverUrl;
+  if (entry.coverUrl) return viaDesktopMedia(entry.coverUrl);
   const live = resolveCatalogLiveWebUrl(entry);
   if (!live) return null;
   const preview = buildDesktopCloudPreviewUrl(live) ?? live;
@@ -62,7 +74,7 @@ export function catalogCoverUrl(entry: CommunityCatalogEntry): string | null {
 
 /** Owner-shared preview loop: catalog record first, legacy papr-cover-video route otherwise. */
 export function catalogCoverVideoUrl(entry: CommunityCatalogEntry, coverUrl: string | null): string | null {
-  if (entry.coverVideoUrl) return entry.coverVideoUrl;
+  if (entry.coverVideoUrl) return viaDesktopMedia(entry.coverVideoUrl);
   if (entry.coverUrl || !coverUrl) return null; // stored cover with no video → picture only
   return coverUrl.replace(/\/papr-cover(\?|$)/, "/papr-cover-video$1");
 }

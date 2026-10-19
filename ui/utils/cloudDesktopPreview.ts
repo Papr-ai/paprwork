@@ -7,6 +7,10 @@ const GATEWAY =
     ? `http://${import.meta.env.VITE_GATEWAY_HOST || "localhost"}:${import.meta.env.VITE_GATEWAY_PORT || "18789"}`
     : "http://localhost:18789";
 
+export function desktopGatewayOrigin(): string {
+  return GATEWAY;
+}
+
 export function isDesktopElectron(): boolean {
   return typeof window !== "undefined" && typeof window.electronAPI !== "undefined";
 }

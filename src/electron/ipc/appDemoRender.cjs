@@ -19,7 +19,7 @@ const OUT_W = 1280;
 const OUT_H = 800;
 const FPS = 30;
 const BITRATE = 1_200_000;
-const MAX_SECONDS = 8;
+const MAX_SECONDS = 16;
 /** Text must be ≥ this many px on the 1280x800 output (≈ 8px on a 460px-wide card). */
 const MIN_TEXT_PX = 20;
 const PARTITION = "demo-render";

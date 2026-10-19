@@ -48,7 +48,44 @@ export function syncCoverToCatalog(appId: string): void {
   })().catch((err) => console.warn(`[appCovers] catalog cover sync failed for ${appId.slice(0, 8)}…`, err));
 }
 
+const MEDIA_SEG = /^[A-Za-z0-9_-]{1,64}$/;
+
 export function registerAppCoverRoutes(app: Express): void {
+  /**
+   * Catalog cover / gallery media, fetched AS the signed-in user. memory.papr.ai gates media
+   * by the app's own access, so for apps that require sign-in a bare <video src> (no key)
+   * gets 404 and Discover shows nothing. The desktop asks with the user's key and hands the
+   * player the short-lived signed link.
+   */
+  app.get("/api/cloud/catalog-media/:ns/:slug/:index", async (req, res) => {
+    const { ns = "", slug = "", index = "" } = req.params;
+    if (!MEDIA_SEG.test(ns) || !MEDIA_SEG.test(slug) || !/^\d{1,3}$/.test(index)) {
+      res.status(400).end();
+      return;
+    }
+    try {
+      const { getMemoryServerBaseUrl } = await import("../utils/cloudApiClient.js");
+      const { getPaprApiKey } = await import("../utils/keyResolver.js");
+      const key = await getPaprApiKey();
+      const q = req.query.poster === "1" ? "?poster=1" : "";
+      const r = await fetch(`${getMemoryServerBaseUrl()}/v1/cloud/apps/media/${ns}/${slug}/${index}${q}`, {
+        headers: key ? { "X-API-Key": key } : {},
+        redirect: "manual",
+        signal: AbortSignal.timeout(15_000),
+      });
+      const to = r.headers.get("location");
+      if (r.status >= 300 && r.status < 400 && to) {
+        // Signed links live ~minutes; let the player re-ask rather than cache a dead one.
+        res.setHeader("Cache-Control", "private, max-age=300");
+        res.redirect(302, to);
+        return;
+      }
+      res.status(r.status === 200 ? 502 : r.status).end();
+    } catch {
+      res.status(502).end();
+    }
+  });
+
   /** Which apps have a cover — one call for the whole library (cards skip the rest). */
   app.get("/api/apps/covers", (_req, res) => {
     res.setHeader("Cache-Control", "no-cache");

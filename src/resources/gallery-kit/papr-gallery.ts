@@ -172,8 +172,12 @@ export interface FilmOptions {
  * Lay out the scenes on the 1280x800 stage and hand Papr's recorder the clock
  * (window.__total / window.__setT). Each scene is its own layer; one is visible at a time.
  */
-export function film({ scenes, background, fade = 0.35 }: FilmOptions): void {
+/** Shortest time a scene stays on screen: long enough to read it before the next one. */
+const MIN_SCENE = 2.4;
+
+export function film({ scenes, background, fade = 0.6 }: FilmOptions): void {
   const w = window as any;
+  const durs = scenes.map((s) => Math.max(MIN_SCENE, Number(s.dur) || 0));
   const style = document.createElement("style");
   // Frozen clock: the app's own CSS transitions/animations would smear frames.
   style.textContent = `*,*::before,*::after{transition:none!important;animation:none!important;caret-color:transparent!important}
@@ -192,7 +196,7 @@ export function film({ scenes, background, fade = 0.35 }: FilmOptions): void {
   const mounted = scenes.map(() => false);
   const layers = scenes.map((s, i) => {
     starts.push(total);
-    total += s.dur;
+    total += durs[i]!;
     const layer = document.createElement("div");
     layer.className = "papr-scene";
     layer.dataset.scene = String(i + 1);
@@ -204,7 +208,7 @@ export function film({ scenes, background, fade = 0.35 }: FilmOptions): void {
       mounted[i] = true;
       if (s.fit === false) return;
       // Fit the settled UI to ~88% x 85% of the stage, up to 2.2x (small UI must read on a card).
-      try { s.frame?.(s.dur, el); } catch { /* measured as mounted */ }
+      try { s.frame?.(durs[i]!, el); } catch { /* measured as mounted */ }
       layer.style.visibility = "visible";
       const w = el.scrollWidth, h = el.scrollHeight;
       if (w > 0 && h > 0) el.style.zoom = String(Math.min(2.2, (1280 * 0.88) / w, (800 * 0.85) / h));
@@ -217,7 +221,7 @@ export function film({ scenes, background, fade = 0.35 }: FilmOptions): void {
   // The gallery screens, for Papr: when to capture, which element, and the words.
   w.__screens = scenes.flatMap((s, i) => s.screen ? [{
     // Default: the scene's end state (everything typed/counted), before the loop's closing fade.
-    t: Math.round((starts[i]! + Math.min(s.dur - (i === scenes.length - 1 ? 0.45 : 0.02), Math.max(0, s.screen.at ?? s.dur))) * 100) / 100,
+    t: Math.round((starts[i]! + Math.min(durs[i]! - (i === scenes.length - 1 ? 0.45 : 0.02), Math.max(0, s.screen.at ?? durs[i]!))) * 100) / 100,
     sel: `[data-scene="${i + 1}"] > .papr-fit ${s.screen.shot || "> *"}`,
     caption: s.screen.headline,
     ...(s.screen.key ? { key: s.screen.key } : {}),
@@ -227,14 +231,16 @@ export function film({ scenes, background, fade = 0.35 }: FilmOptions): void {
     scenes.forEach((s, i) => {
       const local = t - starts[i]!;
       const inP = i === 0 ? 1 : at(local, 0, fade, ease.linear);
-      const outP = i === scenes.length - 1 ? 1 - at(local, s.dur - 0.4, 0.4, ease.linear) : 1;
-      const on = local >= 0 && local < s.dur + (i === scenes.length - 1 ? 0.01 : fade);
+      const d = durs[i]!;
+      const outP = i === scenes.length - 1 ? 1 - at(local, d - 0.4, 0.4, ease.linear) : 1;
+      const on = local >= 0 && local < d + (i === scenes.length - 1 ? 0.01 : fade);
       const el = layers[i]!;
       const layer = el.parentElement!;
       layer.style.opacity = on ? String(Math.min(inP, outP)) : "0";
       layer.style.visibility = on ? "visible" : "hidden";
       if (on && s.frame && mounted[i]) {
         try {
+          // Animations are authored against s.dur; the extra floor time is a hold on the end state.
           s.frame(Math.min(s.dur, Math.max(0, local)), el);
         } catch (err) {
           console.error("[gallery] frame failed:", err);

@@ -38,7 +38,7 @@ import {
 import { composeItem } from "./appDemoScreens.js";
 import type { DemoDeps, DemoTask, RenderResult } from "./appDemoVideos.js";
 
-export const GALLERY_SYSTEM = `You write an app's GALLERY: a 5-8 second App Store-style preview film made from the app's OWN components, plus the 4-5 gallery screens cut from it.
+export const GALLERY_SYSTEM = `You write an app's GALLERY: a 10-14 second App Store-style preview film made from the app's OWN components, plus the 4-5 gallery screens cut from it.
 It lives in the app's code as gallery/index.ts (and optional helpers such as gallery/data.ts). Papr bundles it with the app's modules and films it on a frozen clock.
 
 Rules:
@@ -49,9 +49,10 @@ Rules:
   Prefer pure render functions (they return HTML or build DOM from arguments). If a component loads its own data, give it that data through stub() and await it in mount.
   Never copy or re-type the app's markup when a module renders it; reuse it. Never import the app's entry (app.ts/main.ts) or anything that boots the whole app or wires global listeners.
 - Sample data: believable and specific (company names, numbers, quotes). Never real people's data, never lorem ipsum.
-- film({ scenes }) — 3 to 5 scenes, 1.2-2s each. Each scene: { dur, mount(root), frame?(t, root), screen? }.
+- film({ scenes }) — 3 to 5 scenes, 2.5-3.5s each (never under 2.4s: a viewer must be able to read each one). Crossfade defaults to 0.6s. Each scene: { dur, mount(root), frame?(t, root), screen? }.
   mount builds the scene once from the app's components. frame(t) animates it from t alone (entries with enter(), numbers counting up, typing with typed()); no timers, no Date, no Math.random, no CSS transitions.
-  Every animation in a scene finishes by 75% of its dur, so it holds still before the next scene (the screen is captured from that end state).
+  Every animation in a scene finishes by 60% of its dur, so it holds still for a beat before the next scene (the screen is captured from that end state).
+  If the owner says it's too fast/rushed: lengthen dur (up to 4s), slow the entries, and raise fade (up to 0.9) — that is the fix, not shaving tenths.
   The kit scales each scene to fill the 1280x800 frame, so render components at their natural width (about 520-900px wide). One idea per scene: a card, a list, a panel — not the whole app screen.
 - Story: the app's core job, input → working → payoff; strongest result first or last.
 - screen: { headline, key, sub, shot } on 4 or 5 scenes. headline 2-5 words, benefit or verb first, no app name, no end punctuation; key = the one headline word in the accent colour; sub = one short line (max 9 words); shot = CSS selector of the ONE component in that scene to feature (whole card/list/panel, inside the scene). Each screen a different component.
