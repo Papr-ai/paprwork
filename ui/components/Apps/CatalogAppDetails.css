@@ -15,8 +15,6 @@
 .cat-row__txt { flex: 1; min-width: 0; }
 .cat-row__t { display: flex; align-items: center; gap: 6px; margin: 0; font-size: 15px; font-weight: 650; color: var(--text-primary); }
 .cat-row__name { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-.cat-marks { display: inline-flex; gap: 4px; flex: none; color: var(--text-tertiary); }
-.cat-marks .is-mine { color: var(--accent, #0060e0); }
 .cat-row__by { margin: 2px 0 0; font-size: 12.5px; color: var(--text-tertiary); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 .cat-btn {
   flex: none; height: 30px; padding: 0 16px; border: 0; border-radius: 999px; cursor: pointer; font: inherit; font-size: 13.5px; font-weight: 650;

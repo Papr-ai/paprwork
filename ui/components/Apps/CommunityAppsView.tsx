@@ -24,7 +24,7 @@ import { CategoryPills, matchesCategory } from "./CategoryPills";
 import "./CommunityAppsView.css";
 import "./AppsHome.css";
 import { DropGlyph } from "./HomeTiles";
-import { CatalogAppDetails, CatalogBanner, CatIcon, catalogBy, catalogKeyServices } from "./CatalogAppDetails";
+import { CatalogAppDetails, CatalogBanner, catalogBy } from "./CatalogAppDetails";
 import { FeaturedBanner, pickFeaturedCatalogEntry } from "./CatalogFeatured";
 import { HomeMenu, type HomeMenuItem } from "./HomeMenu";
 import { trackEvent } from "../../lib/telemetry";
@@ -1137,7 +1137,6 @@ export function CommunityAppCard({
   const icon = entry.icon?.trim().startsWith("<") ? sanitizeIcon(entry.icon.trim()) : entry.icon;
   const shown = { ...entry, icon };
   const [details, setDetails] = useState(false);
-  const keys = catalogKeyServices(entry);
   const hasWeb = Boolean(onOpenWeb) || Boolean(entry.liveUrl);
 
   const stop = (fn?: () => void) => (e: React.MouseEvent) => { e.stopPropagation(); fn?.(); };
@@ -1210,14 +1209,6 @@ export function CommunityAppCard({
         <div className="cat-row__txt">
           <h3 className="cat-row__t">
             <span className="cat-row__name" title={entry.name}>{entry.name}</span>
-            <span className="cat-marks">
-              {entry.isOwned ? <span className="is-mine" title="Yours"><CatIcon name="check" /></span> : null}
-              {entry.catalogAutomation?.cardLine ? (
-                <span title={`Automation · ${entry.catalogAutomation.cardLine}`}><CatIcon name="bolt" /></span>
-              ) : null}
-              {hasWeb && entry.source === "cloud" ? <span title="Works on the web"><CatIcon name="globe" /></span> : null}
-              {keys.length ? <span title={`Needs ${keys.join(", ")} key${keys.length === 1 ? "" : "s"}`}><CatIcon name="key" /></span> : null}
-            </span>
           </h3>
           <p className="cat-row__by">{catalogBy(entry)}</p>
         </div>
