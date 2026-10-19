@@ -272,17 +272,3 @@ body.resizing .content-area__resize-line {
     transform: rotate(360deg);
   }
 }
-
-/* Inset-card corner (see .app-layout__content): carry the radius down the chain so each
-   layer that paints its own background clips to the curve instead of drawing a square corner. */
-.content-area,
-.content-pane--full,
-.content-pane--left,
-.content-pane__keep-alive,
-.content-area__app-tab-layer {
-  border-top-left-radius: var(--app-content-radius, 12px);
-}
-.content-pane--full,
-.content-pane--left {
-  overflow: hidden;
-}
