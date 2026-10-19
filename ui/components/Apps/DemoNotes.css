@@ -54,3 +54,22 @@
 .dn-x:hover { color: var(--text-primary); background: var(--ss6-hover, rgba(15, 23, 42, 0.04)); }
 .dn-foot { display: flex; align-items: center; gap: 10px; }
 .dn-done summary { font-size: 12px; color: var(--text-tertiary); cursor: pointer; }
+
+/* Comment box at the clicked spot (same model as Launch Video Studio). */
+.dn-draft { position: absolute; z-index: 5; width: min(300px, 70%); transform: translate(14px, -14px); cursor: auto; }
+.dn-draft.is-left { transform: translate(calc(-100% - 14px), -14px); }
+.dn-draft.is-up { transform: translate(14px, calc(-100% + 14px)); }
+.dn-draft.is-left.is-up { transform: translate(calc(-100% - 14px), calc(-100% + 14px)); }
+.dn-draft__box {
+  display: flex; flex-direction: column; gap: 8px; padding: 10px 10px 8px 12px; border-radius: 12px;
+  background: var(--bg-primary, #fff); color: var(--text-primary); border: 1px solid var(--border-color);
+  box-shadow: 0 12px 32px rgba(0, 0, 0, 0.28);
+}
+.dn-draft textarea {
+  width: 100%; border: 0; outline: 0; resize: none; background: transparent; color: var(--text-primary);
+  font: inherit; font-size: 13.5px; line-height: 1.45; padding: 0;
+}
+.dn-draft textarea::placeholder { color: var(--text-tertiary); }
+.dn-draft__row { display: flex; align-items: center; gap: 10px; }
+.dn-draft__row .dn-cancel { margin-left: auto; color: var(--text-secondary); }
+.dn-draft__row .ss6-btn { padding: 5px 12px; font-size: 12.5px; }

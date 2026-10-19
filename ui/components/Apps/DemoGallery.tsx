@@ -15,7 +15,7 @@ import {
   useDemoVersion,
   type DemoStatus,
 } from "../../utils/appDemo";
-import { DemoComments, type Pin } from "./DemoComments";
+import { DemoComments, DemoDraft, type Pin } from "./DemoComments";
 import { DemoPlayer } from "./DemoPlayer";
 import { DefaultCover } from "./DefaultCover";
 import "./DemoNotes.css";
@@ -32,7 +32,6 @@ export function DemoGallery({ appId, appName, demo, onMake }: { appId: string; a
   const [item, setItem] = useState(0);
   const [composing, setComposing] = useState(false);
   const [pin, setPin] = useState<Pin | null>(null);
-  const [pinning, setPinning] = useState(false);
   const [at, setAt] = useState(0);
   const [flash, setFlash] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -57,18 +56,23 @@ export function DemoGallery({ appId, appName, demo, onMake }: { appId: string; a
     video.current?.pause();
     if (k !== item) setPin(null);
     setItem(k);
-    if (composing) setPinning(true);
   };
+  // Comment mode: a click on the picture drops the pin and opens the box right there.
   const place = (e: React.MouseEvent<HTMLDivElement>) => {
-    if (!pinning) return;
+    if (!composing) return;
+    video.current?.pause();
     const r = e.currentTarget.getBoundingClientRect();
     setPin({ x: (e.clientX - r.left) / r.width, y: (e.clientY - r.top) / r.height });
-    setPinning(false);
   };
+  const stopComposing = () => { setComposing(false); setPin(null); };
   const pins = (k: number) => [
     ...openOn(k).filter((n) => n.x != null && (k > 0 || Math.abs(n.t - at) <= 0.6))
       .map((n) => <span key={n.id} className="dn-pin" style={{ left: `${n.x! * 100}%`, top: `${n.y! * 100}%` }} title={n.body} />),
-    ...(pin ? [<span key="draft" className="dn-pin is-draft" style={{ left: `${pin.x * 100}%`, top: `${pin.y * 100}%` }} />] : []),
+    ...(composing && pin ? [
+      <span key="draft" className="dn-pin is-draft" style={{ left: `${pin.x * 100}%`, top: `${pin.y * 100}%` }} />,
+      <DemoDraft key={`box-${k}-${pin.x}-${pin.y}`} appId={appId} item={k} at={at} pin={pin} onDone={stopComposing} />,
+    ] : []),
+    ...(composing && !pin ? [<span key="hint" className="dn-hint">Click where something should change</span>] : []),
   ];
   const badge = (k: number) => (openOn(k).length ? <b className="dg-thn">{openOn(k).length}</b> : null);
 
@@ -110,7 +114,7 @@ export function DemoGallery({ appId, appName, demo, onMake }: { appId: string; a
         <span className="dg-ibs">
           <button type="button" className={`dg-ib ${composing ? "is-on" : ""}`} aria-label="Comment"
             title={item ? `Comment on screen ${item}` : "Comment on the video"}
-            onClick={() => { video.current?.pause(); setComposing((c) => !c); setPinning(!composing); if (composing) setPin(null); }}>
+            onClick={() => { video.current?.pause(); if (composing) stopComposing(); else setComposing(true); }}>
             <svg viewBox="0 0 16 16" width="15" height="15" fill="none" stroke="currentColor" strokeWidth="1.6" strokeLinejoin="round" aria-hidden><path d="M3 3.5h10v7H7l-3 2.5v-2.5H3z" /></svg>
             {open.length ? <b>{open.length}</b> : null}
           </button>
@@ -125,12 +129,12 @@ export function DemoGallery({ appId, appName, demo, onMake }: { appId: string; a
 
       {item === 0 || !s ? (
         <DemoPlayer key={viewing} src={appDemoVersionUrl(appId, viewing)} poster={appDemoVersionUrl(appId, viewing, "poster")}
-          videoRef={video} pinning={pinning} onTime={setAt} onPlace={place}
+          videoRef={video} pinning={composing} onTime={setAt} onPlace={place}
           marks={openOn(0).map((n) => ({ id: n.id, t: n.t }))}>
           {pins(0)}
         </DemoPlayer>
       ) : (
-        <div className={`dg-box dg-shot ${pinning ? "is-pinning" : ""} ${s.hidden ? "is-off" : ""}`} onClick={place}>
+        <div className={`dg-box dg-shot ${composing ? "is-pinning" : ""} ${s.hidden ? "is-off" : ""}`} onClick={place}>
           <input key={`${viewing}-${item}`} className="dg-cap" defaultValue={s.caption} maxLength={40} aria-label={`Caption for screen ${item}`}
             disabled={viewing !== current} onClick={(e) => e.stopPropagation()}
             onBlur={(e) => e.target.value.trim() !== s.caption && run(updateDemoScreen(appId, item, { caption: e.target.value }))} />
@@ -157,10 +161,8 @@ export function DemoGallery({ appId, appName, demo, onMake }: { appId: string; a
         ) : <span key={j} className="dg-mini is-slot" />)}
       </div>
 
-      {composing || open.length ? (
-        <DemoComments appId={appId} demo={demo} item={item} at={at} screens={screens} pin={pin} pinning={pinning} composing={composing}
-          setPin={setPin} setPinning={(p) => { if (p) video.current?.pause(); setPinning(p); }}
-          onDone={() => { setComposing(false); setPinning(false); setPin(null); }}
+      {open.length ? (
+        <DemoComments appId={appId} demo={demo} screens={screens}
           onSeek={(on, t) => {
             show(on);
             if (!on) requestAnimationFrame(() => { if (video.current) { video.current.pause(); video.current.currentTime = t; setAt(t); } });

@@ -17,58 +17,20 @@ const where = (n: DemoNote, screens: DemoScreen[]) =>
 export function DemoComments(props: {
   appId: string;
   demo: DemoStatus;
-  /** 0 = the video, k = screen k. */
-  item: number;
-  at: number;
   screens: DemoScreen[];
-  pin: Pin | null;
-  pinning: boolean;
-  setPin: (p: Pin | null) => void;
-  setPinning: (p: boolean) => void;
   onSeek: (on: number, t: number) => void;
-  /** The comment button is on: show the box. Otherwise only the list. */
-  composing: boolean;
-  /** After adding (or Cancel): close the box. */
-  onDone: () => void;
 }) {
-  const { appId, demo, item, at, screens, pin, pinning, setPin, setPinning, onSeek, composing, onDone } = props;
-  const [draft, setDraft] = useState("");
+  const { appId, demo, screens, onSeek } = props;
   const [error, setError] = useState<string | null>(null);
   const busy = demo.task?.state === "running";
   const open = (demo.notes ?? []).filter((n) => !n.fixedIn).sort((a, b) => (a.on ?? 0) - (b.on ?? 0) || a.t - b.t);
   const fixed = (demo.notes ?? []).filter((n) => n.fixedIn);
-  const label = item ? `Screen ${item}` : `the video at ${at.toFixed(1)}s`;
-
   const run = (p: Promise<void>, after?: () => void) => {
     setError(null);
     void p.then(after).catch((err: Error) => setError(err.message));
   };
-  const add = () => {
-    const body = draft.trim();
-    if (!body) return;
-    run(addDemoNote(appId, { t: item ? 0 : at, body, ...(item ? { on: item } : {}), ...pin }), () => {
-      setDraft("");
-      setPin(null);
-      onDone();
-    });
-  };
-
   return (
     <div className="dn">
-      {composing ? <div className="dn-compose">
-        <textarea className="pis-input" rows={1} value={draft} maxLength={1000} autoFocus
-          placeholder={`What should change on ${label}?`} aria-label="New comment"
-          onChange={(e) => setDraft(e.target.value)}
-          onKeyDown={(e) => { if (e.key === "Enter" && !e.shiftKey) { e.preventDefault(); add(); } }} />
-        <div className="dn-compose-row">
-          <span className="dn-at">On <b>{label}</b></span>
-          <button type="button" className={`pis-link ${pin ? "is-set" : ""}`} onClick={() => (pin ? setPin(null) : setPinning(!pinning))}>
-            {pin ? "Remove point" : pinning ? "Click the spot" : "Point at something"}
-          </button>
-          <button type="button" className="pis-link dn-cancel" onClick={onDone}>Cancel</button>
-          <button type="button" className="ss6-btn" disabled={!draft.trim()} onClick={add}>Comment</button>
-        </div>
-      </div> : null}
 
       {open.length ? (
         <ul className="dn-list">
@@ -91,6 +53,44 @@ export function DemoComments(props: {
       ) : null}
       {fixed.length ? <p className="pis-hint">{fixed.length} fixed in earlier versions</p> : null}
       {error ? <p className="pis-error">{error}</p> : null}
+    </div>
+  );
+}
+
+/**
+ * The comment box that opens right at the clicked spot, like Launch Video Studio: type,
+ * Enter (or Add) saves it on that moment / screen; Esc or Cancel closes.
+ */
+export function DemoDraft({ appId, item, at, pin, onDone }: { appId: string; item: number; at: number; pin: Pin; onDone: () => void }) {
+  const [draft, setDraft] = useState("");
+  const [error, setError] = useState<string | null>(null);
+  const label = item ? `screen ${item}` : `${at.toFixed(1)}s`;
+  const add = () => {
+    const body = draft.trim();
+    if (!body) return;
+    setError(null);
+    void addDemoNote(appId, { t: item ? 0 : at, body, ...(item ? { on: item } : {}), ...pin })
+      .then(onDone).catch((err: Error) => setError(err.message));
+  };
+  const flipX = pin.x > 0.55;
+  const flipY = pin.y > 0.6;
+  return (
+    <div className={`dn-draft ${flipX ? "is-left" : ""} ${flipY ? "is-up" : ""}`} style={{ left: `${pin.x * 100}%`, top: `${pin.y * 100}%` }}
+      onClick={(e) => e.stopPropagation()}>
+      <form className="dn-draft__box" onSubmit={(e) => { e.preventDefault(); add(); }}>
+        <textarea rows={2} value={draft} maxLength={1000} autoFocus aria-label="New comment"
+          placeholder="What should change here?" onChange={(e) => setDraft(e.target.value)}
+          onKeyDown={(e) => {
+            if (e.key === "Escape") onDone();
+            else if (e.key === "Enter" && !e.shiftKey) { e.preventDefault(); add(); }
+          }} />
+        <div className="dn-draft__row">
+          <span className="dn-at">On <b>{label}</b></span>
+          <button type="button" className="pis-link dn-cancel" onClick={onDone}>Cancel</button>
+          <button type="submit" className="ss6-btn ss6-btn--primary" disabled={!draft.trim()}>Comment</button>
+        </div>
+        {error ? <p className="pis-error">{error}</p> : null}
+      </form>
     </div>
   );
 }
