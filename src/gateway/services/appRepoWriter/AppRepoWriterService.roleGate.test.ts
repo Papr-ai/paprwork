@@ -68,3 +68,48 @@ describe("AppRepoWriterService role gate", () => {
     expect(fetchMock).toHaveBeenCalledTimes(2);
   });
 });
+
+describe("AppRepoWriterService acting user", () => {
+  let fetchMock: ReturnType<typeof vi.fn>;
+  beforeEach(() => {
+    resetAppRepoRecordCacheForTests();
+    fetchMock = vi.fn();
+    vi.stubGlobal("fetch", fetchMock);
+  });
+  afterEach(() => vi.unstubAllGlobals());
+
+  it("forwards the desktop user to memory so an owner on a shared key can publish", async () => {
+    fetchMock.mockImplementation(async (url: string) => {
+      const owner = url.includes("external_user_id=owner-1");
+      return {
+        ok: true, status: 200, text: async () => "",
+        json: async () => record(owner
+          ? { callerCanWriteMain: true, callerRole: "admin" }
+          : { callerCanWriteMain: false, callerRole: "viewer" }),
+      };
+    });
+    const out = await new AppRepoWriterService().postOps("app-1", "shared-key", body("u1"), "owner-1");
+    expect(out.ok).toBe(true);
+    expect(String(fetchMock.mock.calls[0][0])).toContain("/repo?external_user_id=owner-1");
+  });
+
+  it("caches per user, so two members on one key never share a role", async () => {
+    fetchMock.mockResolvedValue({
+      ok: true, status: 200, text: async () => "",
+      json: async () => record({ callerCanWriteMain: true }),
+    });
+    const svc = new AppRepoWriterService();
+    await svc.postOps("app-1", "shared-key", body("u2"), "user-a");
+    await svc.postOps("app-1", "shared-key", body("u3"), "user-b");
+    expect(fetchMock).toHaveBeenCalledTimes(2);
+  });
+
+  it("omits the query when no user is known (older desktops)", async () => {
+    fetchMock.mockResolvedValue({
+      ok: true, status: 200, text: async () => "",
+      json: async () => record({ callerCanWriteMain: true }),
+    });
+    await new AppRepoWriterService().postOps("app-1", "k", body("u4"));
+    expect(String(fetchMock.mock.calls[0][0])).toMatch(/\/repo$/);
+  });
+});

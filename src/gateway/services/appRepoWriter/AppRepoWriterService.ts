@@ -35,22 +35,27 @@ export class WriterRepoNotFoundError extends Error {
 }
 
 /**
- * Repo record + caller's main-write right, reused for 60s per (app, key).
+ * Repo record + caller's main-write right, reused for 60s per (app, key, user).
  * Memory caches the role too and clears it on any access change; this only
  * saves the hop on burst pushes (debounced flushes, batch-budget requeues).
  */
 const RECORD_TTL_MS = 60_000;
 const recordCache = new Map<string, { value: AppRepoRecord; expiresAt: number }>();
 
-function recordCacheKey(appId: string, apiKey: string): string {
-  return `${appId}:${createHash("sha256").update(apiKey).digest("hex").slice(0, 32)}`;
+function recordCacheKey(appId: string, apiKey: string, actingUserId?: string): string {
+  // One namespace key can be shared by several members: the role is per user.
+  return `${appId}:${createHash("sha256").update(apiKey).digest("hex").slice(0, 32)}:${actingUserId ?? ""}`;
 }
 
-async function fetchAppRepoRecordCached(appId: string, apiKey: string): Promise<AppRepoRecord> {
-  const key = recordCacheKey(appId, apiKey);
+async function fetchAppRepoRecordCached(
+  appId: string,
+  apiKey: string,
+  actingUserId?: string,
+): Promise<AppRepoRecord> {
+  const key = recordCacheKey(appId, apiKey, actingUserId);
   const hit = recordCache.get(key);
   if (hit && hit.expiresAt > Date.now()) return hit.value;
-  const value = await fetchAppRepoRecord(appId, apiKey);
+  const value = await fetchAppRepoRecord(appId, apiKey, actingUserId);
   if (recordCache.size > 2000) recordCache.clear();
   recordCache.set(key, { value, expiresAt: Date.now() + RECORD_TTL_MS });
   return value;
@@ -64,9 +69,11 @@ export function resetAppRepoRecordCacheForTests(): void {
 async function fetchAppRepoRecord(
   appId: string,
   apiKey: string,
+  actingUserId?: string,
 ): Promise<AppRepoRecord> {
+  const query = actingUserId ? `?external_user_id=${encodeURIComponent(actingUserId)}` : "";
   const resp = await fetch(
-    `${getMemoryServerBaseUrl()}/v1/cloud/apps/${encodeURIComponent(appId)}/repo`,
+    `${getMemoryServerBaseUrl()}/v1/cloud/apps/${encodeURIComponent(appId)}/repo${query}`,
     {
       headers: {
         "X-API-Key": apiKey,
@@ -89,8 +96,9 @@ export class AppRepoWriterService {
   async getHead(
     appId: string,
     apiKey: string,
+    actingUserId?: string,
   ): Promise<{ commitSha: string; files: Array<{ path: string; blobOid: string }> }> {
-    const record = await fetchAppRepoRecord(appId, apiKey);
+    const record = await fetchAppRepoRecord(appId, apiKey, actingUserId);
     return readAppRepoHead(record);
   }
 
@@ -98,6 +106,7 @@ export class AppRepoWriterService {
     appId: string,
     apiKey: string,
     body: unknown,
+    actingUserId?: string,
   ): Promise<
     | { ok: true; response: AppRepoOpsSuccessResponse }
     | {
@@ -140,7 +149,7 @@ export class AppRepoWriterService {
       };
     }
 
-    const record = await fetchAppRepoRecordCached(appId, apiKey);
+    const record = await fetchAppRepoRecordCached(appId, apiKey, actingUserId);
     // main is the live app: only Maintainers / Admins push there. Everyone
     // else proposes (contribute branch + PR), which never goes through here.
     if (record.callerCanWriteMain === false) {

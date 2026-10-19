@@ -37,6 +37,17 @@ function requireApiKey(req: Request, res: Response, next: NextFunction): void {
   next();
 }
 
+/**
+ * Desktop's signed-in user (Parse objectId). A namespace API key can belong to
+ * a different member, so without this memory resolves the key's own user and
+ * an app's publisher can read back as a Viewer. Memory verifies it is a
+ * workspace member before using it.
+ */
+function actingUserId(req: Request): string | undefined {
+  const id = req.header("X-Papr-User-Id")?.trim();
+  return id || undefined;
+}
+
 const app = express();
 app.use(express.json({ limit: "32mb" }));
 
@@ -51,7 +62,7 @@ app.get(
     const appId = String(req.params.appId);
     const apiKey = (req as Request & { paprApiKey: string }).paprApiKey;
     try {
-      const head = await getAppRepoWriterService().getHead(appId, apiKey);
+      const head = await getAppRepoWriterService().getHead(appId, apiKey, actingUserId(req));
       res.json(head);
     } catch (err) {
       if (err instanceof WriterRepoNotFoundError) {
@@ -74,6 +85,7 @@ app.post(
         appId,
         apiKey,
         req.body,
+        actingUserId(req),
       );
       if (!outcome.ok) {
         res.status(outcome.status).json(outcome.body);
