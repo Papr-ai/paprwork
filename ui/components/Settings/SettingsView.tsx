@@ -1175,6 +1175,45 @@ function AboutTab() {
           </div>
         </div>
 
+        {currentVersion === "2.7.1" && (
+          <div className="about-card">
+            <h3>What&apos;s New in v2.7.1</h3>
+            <ul className="whats-new-list">
+              <li className="whats-new-list__item">
+                <strong>Tabs</strong>
+                <p>
+                  Clearer tab bar and overview when you have many chats, apps, and
+                  documents open — easier to see what&apos;s open and jump between
+                  workspaces.
+                </p>
+              </li>
+              <li className="whats-new-list__item">
+                <strong>Cloud publish &amp; sync</strong>
+                <p>
+                  Publishing and sync now respect your signed-in Papr role, so team
+                  permissions match what you see in the dashboard. Faster, more
+                  reliable app-repo writer when several sync operations run at once.
+                </p>
+              </li>
+              <li className="whats-new-list__item">
+                <strong>Layout fix</strong>
+                <p>
+                  Split-pane backgrounds render correctly again after a chrome styling
+                  change that had affected some views.
+                </p>
+              </li>
+            </ul>
+            <a
+              href="https://github.com/Papr-ai/paprwork/releases/tag/v2.7.1"
+              target="_blank"
+              rel="noopener noreferrer"
+              className="about-card__link"
+            >
+              View release notes on GitHub
+            </a>
+          </div>
+        )}
+
         {currentVersion === "2.7.0" && (
           <div className="about-card">
             <h3>What&apos;s New in v2.7.0</h3>
