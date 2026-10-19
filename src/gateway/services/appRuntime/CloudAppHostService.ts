@@ -2709,8 +2709,14 @@ export class CloudAppHostService {
       }
 
       const access = await this.resolveAccess(req);
-      if (requestedPath === "opengraph-icon") {
-        await this.handleOpenGraphIcon(req, res, runtimeAuth, access?.canRead === true);
+      if (requestedPath === "opengraph-icon" || requestedPath === "opengraph-image") {
+        await this.handleOpenGraphIcon(
+          req,
+          res,
+          runtimeAuth,
+          access?.canRead === true,
+          requestedPath === "opengraph-image" ? "card" : "icon",
+        );
         return;
       }
 
@@ -2851,10 +2857,11 @@ export class CloudAppHostService {
     res: Response,
     runtimeAuth: AppRuntimeRouteAuth,
     canReadRepo: boolean,
+    shape: "icon" | "card" = "icon",
   ): Promise<void> {
     const iconSource = await resolvePreviewIconSource(runtimeAuth, canReadRepo);
     const { body, contentType } =
-      await rasterizePreviewIconForOpenGraph(iconSource);
+      await rasterizePreviewIconForOpenGraph(iconSource, shape);
     res.setHeader("Content-Type", contentType);
     res.setHeader("Cache-Control", "public, max-age=300");
     res.send(body);

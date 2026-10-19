@@ -64,7 +64,7 @@ export function buildPreviewHeadTags(meta: CloudAppPreviewMeta): string {
     `<title>${title}</title>`,
     `<meta name="description" content="${description}">`,
     `<link rel="icon" href="${iconUrl}">`,
-    `<link rel="apple-touch-icon" href="${imageUrl}">`,
+    `<link rel="apple-touch-icon" href="${iconUrl}">`,
     `<meta property="og:type" content="website">`,
     `<meta property="og:site_name" content="${siteName}">`,
     `<meta property="og:title" content="${title}">`,
