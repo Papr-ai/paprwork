@@ -4,7 +4,7 @@
  *  - Narrow page, two columns of connector-style cards: droplet · name · one
  *    line about it · one status line. The card opens the app; ⋯ on hover.
  *  - Recent (last 4 opened) → New from your team → All apps (A–Z).
- *  - Chips filter in place: All · Favorites · Team apps · Needs attention · categories · Live.
+ *  - Chips filter in place: All · Favorites · Team apps · Shared · Needs attention · categories.
  *  - Under Recent: the newest 4 team apps you don't have yet + "Show all" (= the Team apps chip).
  *  - Covers / preview videos live on Discover and in App info, not here.
  */
@@ -76,11 +76,14 @@ export function AppsHome(p: AppsHomeProps) {
     return [...n].filter(([, k]) => k >= 2).sort((x, y) => y[1] - x[1]).map(([c]) => c);
   }, [active, p.categoryOf]);
 
+  const isShared = (id: string) => (p.shareById[id]?.audience ?? "private") !== "private";
+  const anyShared = active.some((a) => isShared(a.id));
+
   const matches = (a: Artifact): boolean => {
     if (filter === "all") return true;
     if (filter === "pin") return Boolean(a.favorite);
     if (filter === "bad") return attention(a);
-    if (filter === "live") return p.publishedIds.has(a.id);
+    if (filter === "live") return isShared(a.id);
     return p.categoryOf(a.id) === filter.slice(4);
   };
 
@@ -165,11 +168,10 @@ export function AppsHome(p: AppsHomeProps) {
         {chip("all", "All")}
         {pinned ? chip("pin", <><HomeIcon name="star" size={13} />Favorites</>) : null}
         {hasTeam ? chip("team", <><HomeIcon name="users" size={13} />Team apps</>) : null}
+        {anyShared ? chip("live", <><HomeIcon name="live" size={13} />Shared</>) : null}
         {bad ? chip("bad", <><i className="ah-chip__dot" />Needs attention <em>{bad}</em></>, "ah-chip--bad") : null}
         {cats.length ? <span className="ah-chips__sep" /> : null}
         {cats.map((c) => chip(`cat:${c}`, c))}
-        {p.publishedIds.size ? <span className="ah-chips__sep" /> : null}
-        {p.publishedIds.size ? chip("live", <><HomeIcon name="globe" size={13} />Live</>) : null}
       </div>
 
       {filter === "team" ? (

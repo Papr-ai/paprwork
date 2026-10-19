@@ -1,8 +1,12 @@
-/** Small stroke icons for the Apps home (24px grid, currentColor). */
+import { shareAudienceGlyphPath } from "../../utils/shareAudienceGlyphs";
+
+/** Small stroke icons for the Apps home (24px grid, currentColor; `live` is the 16px share-bar glyph). */
 const PATHS = {
   clock: "M12 7v5l3 2M21 12a9 9 0 1 1-18 0 9 9 0 0 1 18 0Z",
   star: "m12 4 2.4 5 5.4.6-4 3.7 1.1 5.3L12 16l-4.9 2.6 1.1-5.3-4-3.7L9.6 9z",
   globe: "M12 3a9 9 0 1 0 0 18 9 9 0 0 0 0-18ZM3 12h18M12 3c2.4 2.5 3.6 5.6 3.6 9s-1.2 6.5-3.6 9c-2.4-2.5-3.6-5.6-3.6-9S9.6 5.5 12 3Z",
+  // "Shared" = the same two-people glyph as the app share bar (16px grid).
+  live: shareAudienceGlyphPath("team"),
   layers: "m12 3 9 5-9 5-9-5 9-5ZM3 13l9 5 9-5",
   more: "M5 12h.01M12 12h.01M19 12h.01",
   plus: "M12 5v14M5 12h14",
@@ -24,10 +28,10 @@ export function HomeIcon({ name, size = 16, className }: { name: HomeIconName; s
       className={className}
       width={size}
       height={size}
-      viewBox="0 0 24 24"
+      viewBox={name === "live" ? "0 0 16 16" : "0 0 24 24"}
       fill="none"
       stroke="currentColor"
-      strokeWidth={name === "more" ? 3 : name === "grid" ? 1.7 : 1.8}
+      strokeWidth={name === "more" ? 3 : name === "grid" ? 1.7 : name === "live" ? 1.4 : 1.8}
       strokeLinecap="round"
       strokeLinejoin="round"
       aria-hidden="true"

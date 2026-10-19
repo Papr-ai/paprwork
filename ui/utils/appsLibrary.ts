@@ -49,6 +49,8 @@ export function needsAttention(
 
 export interface SectionContext {
   publishedIds: ReadonlySet<string>;
+  /** Apps whose audience is not private. Falls back to publishedIds. */
+  sharedIds?: ReadonlySet<string>;
   health: Readonly<Record<string, AppHealth>>;
 }
 
@@ -63,7 +65,7 @@ export function inSection(
     case "favorites":
       return Boolean(a.favorite) && !isArchived(a);
     case "live":
-      return ctx.publishedIds.has(a.id) && !isArchived(a);
+      return (ctx.sharedIds ?? ctx.publishedIds).has(a.id) && !isArchived(a);
     case "drafts":
       return statusOf(a) === "draft" && !ctx.publishedIds.has(a.id);
     case "automations":

@@ -1,6 +1,6 @@
 /**
- * My apps cards, Discover-row style: droplet · name (+ globe = live, bolt =
- * scheduled, star) · one line about it · "Daily 8:00 · Edited 2h ago" (Draft tag). Your apps get a quiet "Open" (⋯ on hover);
+ * My apps cards, Discover-row style: droplet · name (+ share glyph / live waves, bolt =
+ * scheduled, star) · "Daily 8:00 · Edited 2h ago" (Draft tag). Your apps get a quiet "Open" (⋯ on hover);
  * team apps you don't have yet get one "Get".
  */
 import type { ReactNode } from "react";
@@ -33,11 +33,14 @@ export function AppRow(p: AppRowProps) {
         <span className="ah-row__txt">
           <span className="ah-row__t">
             <AppName app={p.app} className="ah-row__name" renaming={p.renaming} onRename={p.onRename} onDone={p.onRenameDone} />
-            {live ? <span className="ah-row__mark" title="Live on the web"><HomeIcon name="globe" size={13} /></span> : null}
+            {p.share && p.share.audience !== "private" ? (
+              <span className="ah-row__mark" title="Shared"><ShareMark share={p.share} /></span>
+            ) : live ? (
+              <span className="ah-row__mark" title="Shared"><HomeIcon name="live" size={13} /></span>
+            ) : null}
             {scheduled ? <span className="ah-row__mark" title="Runs on a schedule"><HomeIcon name="bolt" size={13} /></span> : null}
             {p.app.favorite ? <HomeIcon name="star" size={13} className="ah-row__pin" /> : null}
           </span>
-          {p.app.description ? <span className="ah-row__d">{p.app.description}</span> : null}
           <span className={`ah-row__s${bad ? " ah-row__s--bad" : ""}`}>
             {draft && !bad ? <span className="ah-row__tag">Draft</span> : null}
             {text}
@@ -45,7 +48,6 @@ export function AppRow(p: AppRowProps) {
         </span>
       </button>
       <span className="ah-row__act">
-        <ShareMark share={p.share} />
         {p.menu}
         <button type="button" className="ah-row__open" onClick={p.onOpen}>Open</button>
       </span>

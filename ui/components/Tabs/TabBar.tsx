@@ -9,6 +9,8 @@ import { useChat } from "../../hooks/useChat";
 import { useChatStore } from "../../stores/chatStore";
 import { useDismissOnOutsideClick } from "../../hooks/useDismissOnOutsideClick";
 import { Tab } from "./Tab";
+import { TabOverview } from "./TabOverview";
+import { TabList } from "./TabList";
 import { ChatHistoryDropdown } from "../Chat/ChatHistoryDropdown";
 import "./TabBar.css";
 
@@ -32,6 +34,72 @@ export function TabBar() {
     useState<React.CSSProperties>({ display: "none" });
   const [dropIndicatorOnTop, setDropIndicatorOnTop] = useState(false);
   const [showHistory, setShowHistory] = useState(false);
+  // "All tabs" overview: pinch the tab bar (trackpad pinch arrives as ctrl+wheel;
+  // ctrl+scroll on a mouse does the same), ⌘⇧\ like Safari, or the grid button.
+  const [showOverview, setShowOverview] = useState(false);
+  const [showList, setShowList] = useState(false);
+  // Same peek behaviour as the history button: hover previews (no focus steal),
+  // click pins it open with the search focused.
+  const [listMode, setListMode] = useState<"hover" | "click">("click");
+  const listTimer = useRef<number | undefined>(undefined);
+  const clearListTimer = () => window.clearTimeout(listTimer.current);
+  const onListEnter = () => {
+    clearListTimer();
+    if (showList) return;
+    listTimer.current = window.setTimeout(() => {
+      setListMode("hover");
+      setShowList(true);
+    }, 120);
+  };
+  const onListLeave = () => {
+    clearListTimer();
+    if (!showList || listMode !== "hover") return;
+    listTimer.current = window.setTimeout(() => setShowList(false), 180);
+  };
+  const onListClick = () => {
+    clearListTimer();
+    if (showList && listMode === "click") {
+      setShowList(false);
+      return;
+    }
+    setListMode("click");
+    setShowList(true);
+  };
+  useEffect(() => clearListTimer, []);
+  const listBtnRef = useRef<HTMLButtonElement>(null);
+  const listRef = useRef<HTMLDivElement>(null);
+  useDismissOnOutsideClick(showList, () => setShowList(false), listBtnRef, listRef);
+  const barRef = useRef<HTMLDivElement>(null);
+  useEffect(() => {
+    const el = barRef.current;
+    if (!el) return;
+    let acc = 0;
+    let timer: number | undefined;
+    const onWheel = (e: WheelEvent) => {
+      if (!e.ctrlKey) return;
+      e.preventDefault();
+      acc += e.deltaY;
+      window.clearTimeout(timer);
+      timer = window.setTimeout(() => (acc = 0), 250);
+      if (acc > 24) {
+        acc = 0;
+        setShowOverview(true);
+      }
+    };
+    const onKey = (e: KeyboardEvent) => {
+      if ((isMac ? e.metaKey : e.ctrlKey) && e.shiftKey && e.code === "Backslash") {
+        e.preventDefault();
+        setShowOverview((v) => !v);
+      }
+    };
+    el.addEventListener("wheel", onWheel, { passive: false });
+    window.addEventListener("keydown", onKey);
+    return () => {
+      el.removeEventListener("wheel", onWheel);
+      window.removeEventListener("keydown", onKey);
+      window.clearTimeout(timer);
+    };
+  }, []);
   // "hover" peeks like the rail (closes when the pointer leaves, no focus steal);
   // "click" pins it open with the search focused until an outside click.
   const [historyMode, setHistoryMode] = useState<"hover" | "click">("click");
@@ -175,16 +243,6 @@ export function TabBar() {
     return () => window.removeEventListener("keydown", handleKeyDown);
   }, [tabs, activeLeftTab, createTab, switchToTab, closeTab, handleNewTab]);
 
-  const { goBack, goForward, canGoBack, canGoForward } = useTabs();
-
-  const handleBack = () => {
-    goBack();
-  };
-
-  const handleForward = () => {
-    goForward();
-  };
-
   const handleDragPositionChange = (
     position: "before" | "after" | "on-top" | null,
     targetElement: HTMLElement | null,
@@ -231,41 +289,36 @@ export function TabBar() {
   };
 
   return (
-    <div className="tab-bar">
+    <div className="tab-bar" ref={barRef}>
       {/* Navigation controls */}
       <div className="tab-bar__nav">
-        <button
-          className="tab-bar__nav-btn"
-          onClick={handleBack}
-          disabled={!canGoBack()}
-          title="Back"
-        >
-          <svg width="14" height="14" viewBox="0 0 24 24" fill="none">
-            <path
-              d="M19 12H5M12 19l-7-7 7-7"
-              stroke="currentColor"
-              strokeWidth="2"
-              strokeLinecap="round"
-              strokeLinejoin="round"
+        <div className="tab-bar__tablist" onMouseEnter={onListEnter} onMouseLeave={onListLeave}>
+          <button
+            ref={listBtnRef}
+            className="tab-bar__nav-btn"
+            onClick={onListClick}
+            aria-expanded={showList}
+            aria-label="Search tabs"
+            title="All open tabs"
+          >
+            {/* Bold chevron — opens the Chrome-style open-tabs list */}
+            <svg width="14" height="14" viewBox="0 0 24 24" fill="none">
+              <path d="M5 9l7 7 7-7" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" />
+            </svg>
+          </button>
+          {showList ? (
+            <TabList
+              dropdownRef={listRef}
+              autoFocusSearch={listMode === "click"}
+              onInteract={() => setListMode("click")}
+              onClose={() => setShowList(false)}
+              onRearrange={() => {
+                setShowList(false);
+                setShowOverview(true);
+              }}
             />
-          </svg>
-        </button>
-        <button
-          className="tab-bar__nav-btn"
-          onClick={handleForward}
-          disabled={!canGoForward()}
-          title="Forward"
-        >
-          <svg width="14" height="14" viewBox="0 0 24 24" fill="none">
-            <path
-              d="M5 12h14M12 5l7 7-7 7"
-              stroke="currentColor"
-              strokeWidth="2"
-              strokeLinecap="round"
-              strokeLinejoin="round"
-            />
-          </svg>
-        </button>
+          ) : null}
+        </div>
       </div>
 
       <div className="tab-bar__tabs" id="header-tabs" ref={tabBarRef}>
@@ -376,6 +429,7 @@ export function TabBar() {
         )}
         </div>
       </div>
+      {showOverview ? <TabOverview onClose={() => setShowOverview(false)} /> : null}
     </div>
   );
 }

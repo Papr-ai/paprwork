@@ -27,9 +27,10 @@ const LIBRARY: Item[] = [
   },
   {
     id: "live",
-    label: "Live",
-    // Broadcast waves — the globe is reserved for "anyone on the web" sharing.
-    icon: "M12 12v.01M8.5 8.5a5 5 0 0 0 0 7M15.5 8.5a5 5 0 0 1 0 7M5.6 5.6a9 9 0 0 0 0 12.8M18.4 5.6a9 9 0 0 1 0 12.8",
+    label: "Shared",
+    // Same two-people glyph as the app share bar.
+    icon: shareAudienceGlyphPath("team"),
+    grid: 16,
   },
   {
     id: "automations",

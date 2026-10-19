@@ -37,7 +37,7 @@ const HEADINGS: Record<LibrarySection, [string, string]> = {
     "Everything you use, newest first. Near-duplicate copies are stacked.",
   ],
   favorites: ["Favorites", "Apps you starred."],
-  live: ["Live", "Published to the web — anyone with access can open these."],
+  live: ["Shared", "Apps other people can open — your team, specific people, or anyone with the link."],
   drafts: ["Drafts", "Only you can see these until you publish."],
   automations: [
     "Automations",
@@ -78,7 +78,11 @@ interface LibraryPaneProps extends LibraryCardHandlers {
 export function LibraryPane(props: LibraryPaneProps) {
   const { section, apps, health, publishedIds, searchQuery } = props;
   const [expanded, setExpanded] = useState<Set<string>>(new Set());
-  const ctx = useMemo(() => ({ publishedIds, health }), [publishedIds, health]);
+  const sharedIds = useMemo(
+    () => new Set(Object.keys(props.shareById).filter((id) => props.shareById[id]?.audience !== "private")),
+    [props.shareById],
+  );
+  const ctx = useMemo(() => ({ publishedIds, sharedIds, health }), [publishedIds, sharedIds, health]);
   const searching = searchQuery.trim().length > 0;
 
   const sectionList = useMemo(

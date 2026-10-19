@@ -167,8 +167,57 @@ export function Tab({
     onDragPositionChange?.(null, null);
   };
 
-  // Get icon for tab type
-  const getIcon = () => {
+  const getIcon = () => <TabGlyph tab={tab} />;
+
+  const tabStatusClass = isActive
+    ? ""
+    : tab.isStreaming
+      ? "tab--streaming"
+      : tab.hasUnread
+        ? "tab--unread"
+        : tab.pendingRefresh
+          ? "tab--pending-refresh"
+          : "";
+
+  return (
+    <div
+      ref={tabRef}
+      className={`tab ${isActive ? "tab--active" : ""} ${isDragging ? "tab--dragging" : ""} ${dragPosition === "on-top" ? "tab--split-preview" : ""} ${dragPosition ? "tab--drag-over" : ""} ${isMerged ? "tab--merged" : ""} ${tabStatusClass}`}
+      onClick={handleClick}
+      onDoubleClick={handleDoubleClick}
+      draggable
+      onDragStart={handleDragStart}
+      onDragEnd={handleDragEnd}
+      onDragOver={handleDragOver}
+      onDragLeave={handleDragLeave}
+      onDrop={handleDrop}
+    >
+      <span className="tab__icon">{getIcon()}</span>
+      {isMerged && rightTab ? (
+        <span className="tab__title tab__title--merged">
+          <span className="tab__title-left">{tab.title}</span>
+          <span className="tab__title-separator">|</span>
+          <span className="tab__title-right">{rightTab.title}</span>
+        </span>
+      ) : (
+        <span className="tab__title">{tab.title}</span>
+      )}
+
+      {isActive && (
+        <button
+          className="tab__close"
+          onClick={handleClose}
+          aria-label="Close tab"
+        >
+          ×
+        </button>
+      )}
+    </div>
+  );
+}
+
+/** The tab's type/app icon — shared by the tab strip and the tab overview. */
+export function TabGlyph({ tab }: { tab: TabType }) {
     if (tab.type === "focus") return <FocusTabIcon />;
     if (tab.type === "memory") return <MemoryIcon size={14} />;
     // App, document, and documents tabs: wrap icon in a mini liquid glass orb
@@ -273,51 +322,4 @@ export function Tab({
         />
       </svg>
     );
-  };
-
-  const tabStatusClass = isActive
-    ? ""
-    : tab.isStreaming
-      ? "tab--streaming"
-      : tab.hasUnread
-        ? "tab--unread"
-        : tab.pendingRefresh
-          ? "tab--pending-refresh"
-          : "";
-
-  return (
-    <div
-      ref={tabRef}
-      className={`tab ${isActive ? "tab--active" : ""} ${isDragging ? "tab--dragging" : ""} ${dragPosition === "on-top" ? "tab--split-preview" : ""} ${dragPosition ? "tab--drag-over" : ""} ${isMerged ? "tab--merged" : ""} ${tabStatusClass}`}
-      onClick={handleClick}
-      onDoubleClick={handleDoubleClick}
-      draggable
-      onDragStart={handleDragStart}
-      onDragEnd={handleDragEnd}
-      onDragOver={handleDragOver}
-      onDragLeave={handleDragLeave}
-      onDrop={handleDrop}
-    >
-      <span className="tab__icon">{getIcon()}</span>
-      {isMerged && rightTab ? (
-        <span className="tab__title tab__title--merged">
-          <span className="tab__title-left">{tab.title}</span>
-          <span className="tab__title-separator">|</span>
-          <span className="tab__title-right">{rightTab.title}</span>
-        </span>
-      ) : (
-        <span className="tab__title">{tab.title}</span>
-      )}
-
-      {isActive && (
-        <button
-          className="tab__close"
-          onClick={handleClose}
-          aria-label="Close tab"
-        >
-          ×
-        </button>
-      )}
-    </div>
-  );
 }
