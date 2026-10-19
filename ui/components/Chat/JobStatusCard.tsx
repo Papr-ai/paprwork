@@ -43,10 +43,10 @@ export function JobStatusCard({ data }: Props) {
   const jobTypeFromStore = useJobLiveLogsStore((s) => s.typesByJobId.get(data.jobId));
   const jobType = data.jobType || jobTypeFromStore;
   useEffect(() => {
-    if (!data.jobType && !jobTypeFromStore && data.jobId !== "unknown") {
+    if ((!jobNameFromStore || (!data.jobType && !jobTypeFromStore)) && data.jobId !== "unknown") {
       void useJobLiveLogsStore.getState().fetchJobName(data.jobId);
     }
-  }, [data.jobId, data.jobType, jobTypeFromStore]);
+  }, [data.jobId, data.jobType, jobTypeFromStore, jobNameFromStore]);
   const isAgentJob = !!jobType && AGENT_JOB_TYPES.has(jobType);
 
   // Live logs stream in while job is running
@@ -67,14 +67,12 @@ export function JobStatusCard({ data }: Props) {
   }, [data.status, logLines.length]);
 
   const genericIcons = {
+    // Script/runtime jobs: a terminal prompt with a blinking cursor (agents get AgentGlyph).
     running: (
-      <svg width="14" height="14" viewBox="0 0 24 24" fill="none">
-        <circle cx="12" cy="12" r="3" stroke="currentColor" strokeWidth="1.5" />
-        <path
-          d="M12 1v6m0 6v6M4.22 4.22l4.24 4.24m5.08 5.08l4.24 4.24M1 12h6m6 0h6M4.22 19.78l4.24-4.24m5.08-5.08l4.24-4.24"
-          stroke="currentColor"
-          strokeWidth="1.5"
-        />
+      <svg width="14" height="14" viewBox="0 0 24 24" fill="none" aria-hidden="true">
+        <rect x="2.5" y="4" width="19" height="16" rx="3" stroke="currentColor" strokeWidth="1.5" />
+        <path d="M7 10l3 2.5L7 15" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round" />
+        <path className="job-status-card__cursor" d="M12.5 15H17" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" />
       </svg>
     ),
     waiting_permission: (

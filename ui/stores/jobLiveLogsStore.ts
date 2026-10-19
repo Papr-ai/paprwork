@@ -26,6 +26,8 @@ interface JobLiveLogsStore {
   clearJob: (jobId: string) => void;
 }
 
+const nameFetchAttempts = new Map<string, number>();
+
 export const useJobLiveLogsStore = create<JobLiveLogsStore>((set, get) => ({
   logsByJobId: new Map(),
   namesByJobId: new Map(),
@@ -74,12 +76,19 @@ export const useJobLiveLogsStore = create<JobLiveLogsStore>((set, get) => ({
         `[jobLiveLogsStore] Failed to fetch job name for ${jobId}:`,
         error,
       );
-      // Mark this job as failed so we don't retry
-      set((state) => {
-        const next = new Set(state.failedFetches);
-        next.add(jobId);
-        return { failedFetches: next };
-      });
+      // A transient failure (gateway busy while the job is being updated/started) used to
+      // pin the card to the raw job id forever. Retry a few times before giving up.
+      const attempt = (nameFetchAttempts.get(jobId) ?? 0) + 1;
+      nameFetchAttempts.set(jobId, attempt);
+      if (attempt < 4) {
+        setTimeout(() => void get().fetchJobName(jobId), 1500 * attempt);
+      } else {
+        set((state) => {
+          const next = new Set(state.failedFetches);
+          next.add(jobId);
+          return { failedFetches: next };
+        });
+      }
     }
     return undefined;
   },
