@@ -22,9 +22,6 @@
   flex: 1;
   min-height: 0;
   overflow-y: auto;
-  /* Scroller gets its own composited layer, which escapes the parent's rounded clip —
-     round it directly so it follows the inset-card corner (.app-layout__content). */
-  border-top-left-radius: var(--app-content-radius, 12px);
   color: var(--ag-ink);
   font-family: var(--font-body, -apple-system, BlinkMacSystemFont, "SF Pro Text", sans-serif);
   -webkit-font-smoothing: antialiased;

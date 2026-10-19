@@ -52,8 +52,6 @@
   flex-direction: column;
   overflow: hidden;
   position: relative;
-  /* Chrome color shows around the content card's rounded corner (was the app gradient → visible square). */
-  background: var(--app-chrome-bg);
 }
 
 .app-layout__topbar {
@@ -70,13 +68,29 @@
   min-height: 0;
   overflow: hidden;
   display: flex;
-  /* Zoom-style inset canvas: content reads as a card nested in the chrome, rounded where it meets rail + tab bar.
-     The chrome color on .app-layout__main shows outside the curve. */
-  border-top-left-radius: var(--app-content-radius);
   position: relative;
-  /* Repaint the app gradient on the card itself; fixed attachment keeps it pixel-identical to before. */
-  background: var(--background-color);
-  background-attachment: fixed;
+  /* Inset-card look WITHOUT clipping: no border-radius/overflow clip here and no repainted
+     background. A rounded clip over iframes (app tabs) and composited scrollers (chat) makes
+     Chromium drop those layers (blank chat / half-painted apps), and re-painting the
+     translucent gradient on top of the chrome color shifted every colour. The curve is
+     drawn by the ::before mask below instead. */
+}
+
+/* Corner mask: paints chrome colour outside the curve. Overlay only — never clips children. */
+.app-layout__content::before {
+  content: "";
+  position: absolute;
+  top: 0;
+  left: 0;
+  width: var(--app-content-radius);
+  height: var(--app-content-radius);
+  background: radial-gradient(
+    circle at 100% 100%,
+    transparent calc(var(--app-content-radius) - 1px),
+    var(--app-chrome-bg) calc(var(--app-content-radius) - 0.25px)
+  );
+  pointer-events: none;
+  z-index: 100;
 }
 
 /* Hairline traced along the card's top + left edge, including the curve. */
