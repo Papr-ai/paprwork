@@ -100,6 +100,7 @@ export function CatalogAppDetails({ entry, coverUrl, hasWeb, actions, onClose }:
     >
       <div className="cat-modal__card" role="dialog" aria-modal="true" aria-label={entry.name}>
         <button type="button" className="cat-modal__x" onClick={onClose} aria-label="Close"><CatIcon name="x" size={14} /></button>
+        <div className="cat-modal__scroll">
         <CatalogBanner entry={entry} coverUrl={coverUrl} glyphSize={104} />
         <div className="cat-modal__body">
           <div className="cat-modal__head">
@@ -130,6 +131,7 @@ export function CatalogAppDetails({ entry, coverUrl, hasWeb, actions, onClose }:
               {teamData ? "Uses your team's data." : "Your data stays private."} Updates arrive automatically.
             </p>
           ) : null}
+        </div>
         </div>
       </div>
     </div>,

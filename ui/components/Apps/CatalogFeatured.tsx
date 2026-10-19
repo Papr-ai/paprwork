@@ -1,7 +1,7 @@
 /**
  * Community "Featured" banner — App Store style: dark full-width card, a big
  * editorial headline (publisher-set `headline`, else the description), the
- * app's cover on the right, and a glass row with the droplet, name, by-line
+ * app's preview upright in a window on the right, and a glass row with the droplet, name, by-line
  * and the same Open / Preview / Get buttons as the card.
  */
 import { useState, type ReactNode } from "react";
@@ -43,10 +43,14 @@ export function FeaturedBanner({ entry, coverUrl, onOpen, actions, children }: P
       onClick={onOpen}
       onKeyDown={(e) => { if (e.key === "Enter" && e.target === e.currentTarget) onOpen(); }}
     >
-      {shot && coverUrl && videoUrl && !noVideo ? (
-        <DemoVideo className="cat-feat__shot" src={videoUrl} poster={coverUrl} onError={() => setNoVideo(true)} />
-      ) : shot && coverUrl ? (
-        <img className="cat-feat__shot" src={coverUrl} alt="" draggable={false} onError={() => setShot(false)} />
+      {shot && coverUrl ? (
+        <span className="cat-feat__media">
+          {videoUrl && !noVideo ? (
+            <DemoVideo className="cat-feat__shot" src={videoUrl} poster={coverUrl} onError={() => setNoVideo(true)} />
+          ) : (
+            <img className="cat-feat__shot" src={coverUrl} alt="" draggable={false} onError={() => setShot(false)} />
+          )}
+        </span>
       ) : (
         <span className="cat-feat__big"><DropGlyph icon={entry.icon} title={entry.name} size={168} /></span>
       )}

@@ -31,14 +31,23 @@
   position: fixed; inset: 0; z-index: 1000; display: grid; place-items: center; padding: 32px 16px;
   background: rgba(10, 16, 32, 0.32); backdrop-filter: blur(4px); animation: cat-fade .15s ease-out;
 }
+/* Card clips; the inner layer scrolls. The hairline sits ON TOP of the content, so the
+   video's dark corners never show a grey halo through the rounded edge. */
 .cat-modal__card {
-  position: relative; width: min(640px, 100%); max-height: calc(100vh - 64px); overflow: auto; border-radius: 24px;
-  background: var(--popover-bg, #fff); box-shadow: 0 30px 90px rgba(10, 16, 32, 0.3), 0 0 0 1px var(--apps-card-line, rgba(10, 16, 32, 0.07));
-  animation: cat-pop .18s ease-out;
+  position: relative; display: flex; flex-direction: column; width: min(720px, 100%); max-height: calc(100vh - 64px);
+  overflow: hidden; border-radius: 24px; background: var(--popover-bg, #fff);
+  box-shadow: 0 30px 90px rgba(10, 16, 32, 0.3); animation: cat-pop .18s ease-out;
 }
-.cat-modal .cat-banner { aspect-ratio: auto; height: 260px; border-radius: 0; box-shadow: none; }
+.cat-modal__card::after {
+  content: ""; position: absolute; inset: 0; z-index: 3; border-radius: inherit; pointer-events: none;
+  box-shadow: inset 0 0 0 0.5px color-mix(in srgb, var(--text-primary) 12%, transparent);
+}
+.cat-modal__scroll { min-height: 0; overflow-y: auto; overscroll-behavior: contain; }
+/* The whole preview, never cropped: films are 16:10, so the banner is too. */
+.cat-modal .cat-banner { aspect-ratio: 16 / 10; height: auto; border-radius: 0; box-shadow: none; }
+.cat-modal .cat-banner__img { object-position: center; }
 .cat-modal__x {
-  position: absolute; top: 14px; right: 14px; z-index: 2; width: 30px; height: 30px; border: 0; border-radius: 50%; cursor: pointer;
+  position: absolute; top: 14px; right: 14px; z-index: 4; width: 30px; height: 30px; border: 0; border-radius: 50%; cursor: pointer;
   display: grid; place-items: center; color: var(--text-primary); background: var(--popover-bg, #fff); box-shadow: 0 2px 8px rgba(10, 16, 32, 0.18);
 }
 .cat-modal__body { padding: 20px 28px 26px; }
@@ -59,7 +68,6 @@
 @media (max-width: 600px) {
   .cat-modal { place-items: end center; padding: 0; }
   .cat-modal__card { width: 100%; border-radius: 24px 24px 0 0; max-height: 92vh; }
-  .cat-modal .cat-banner { height: 180px; }
   .cat-modal__facts { grid-template-columns: 1fr; }
 }
 .community-apps__grid:has(> .cat-card) { grid-template-columns: repeat(auto-fill, minmax(320px, 1fr)); gap: 28px 24px; }

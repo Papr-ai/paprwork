@@ -1,18 +1,18 @@
+/* Text on the left, the app's preview in a clean window on the right — upright, whole,
+   at full brightness (no tilt, no scrim over it, nothing cut off at the edge). */
 .cat-feat {
-  position: relative; overflow: hidden; display: flex; align-items: flex-end; min-height: 360px; margin: 4px 0 24px;
+  position: relative; overflow: hidden; display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 1.1fr);
+  align-items: center; gap: clamp(28px, 4vw, 56px); min-height: 360px; margin: 4px 0 24px;
   padding: 40px 44px; border-radius: 26px; cursor: pointer; color: #fff; isolation: isolate;
-  background: radial-gradient(120% 140% at 85% 30%, color-mix(in srgb, var(--accent, #0060e0) 45%, #07080c), #07080c 62%);
+  background: radial-gradient(110% 130% at 80% 50%, color-mix(in srgb, var(--accent, #0060e0) 38%, #07080c), #07080c 64%);
 }
-.cat-feat__shot {
-  position: absolute; right: -4%; top: 10%; width: 56%; border-radius: 16px; transform: rotate(-3deg); z-index: -2;
-  box-shadow: 0 30px 80px rgba(0, 0, 0, 0.55); opacity: 0.92; pointer-events: none;
+.cat-feat__media {
+  order: 2; position: relative; display: block; aspect-ratio: 16 / 10; border-radius: 14px; overflow: hidden;
+  background: #0d1017; box-shadow: 0 24px 70px rgba(0, 0, 0, 0.5), 0 0 0 0.5px rgba(255, 255, 255, 0.14);
 }
-.cat-feat::after {
-  content: ""; position: absolute; inset: 0; z-index: -1; pointer-events: none;
-  background: linear-gradient(90deg, rgba(7, 8, 12, 0.96) 30%, rgba(7, 8, 12, 0.55) 62%, transparent);
-}
-.cat-feat__big { position: absolute; right: 12%; top: 50%; transform: translateY(-50%); z-index: -2; }
-.cat-feat__txt { position: relative; max-width: 640px; width: 100%; }
+.cat-feat__shot { position: absolute; inset: 0; width: 100%; height: 100%; object-fit: cover; object-position: center; pointer-events: none; }
+.cat-feat__big { order: 2; display: grid; place-items: center; }
+.cat-feat__txt { position: relative; min-width: 0; align-self: end; }
 .cat-feat__k { font-size: 12px; font-weight: 700; text-transform: uppercase; letter-spacing: 0.1em; color: rgba(255, 255, 255, 0.75); }
 .cat-feat__h {
   margin: 10px 0 24px; font-size: clamp(28px, 3.4vw, 44px); line-height: 1.08; letter-spacing: -0.025em; font-weight: 750;
@@ -28,8 +28,8 @@
 .cat-feat__act { display: flex; gap: 6px; flex: none; }
 .cat-feat .cat-btn { height: 34px; padding: 0 20px; font-size: 14px; background: #fff; color: var(--accent, #0060e0); }
 .cat-feat .cat-btn:hover { background: #fff; filter: brightness(0.95); }
-@media (max-width: 720px) {
-  .cat-feat { min-height: 300px; padding: 26px 20px; }
-  .cat-feat__shot { display: none; }
+@media (max-width: 900px) {
+  .cat-feat { grid-template-columns: minmax(0, 1fr); min-height: 0; padding: 26px 22px; gap: 22px; }
+  .cat-feat__media, .cat-feat__big { order: 0; }
   .cat-feat__big { display: none; }
 }
