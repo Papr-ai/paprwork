@@ -134,10 +134,12 @@ export function DemoGallery({ appId, appName, demo, onMake }: { appId: string; a
           {pins(0)}
         </DemoPlayer>
       ) : (
-        <div className={`dg-box dg-shot ${composing ? "is-pinning" : ""} ${s.hidden ? "is-off" : ""}`} onClick={place}>
-          <input key={`${viewing}-${item}`} className="dg-cap" defaultValue={s.caption} maxLength={40} aria-label={`Caption for screen ${item}`}
-            disabled={viewing !== current} onClick={(e) => e.stopPropagation()}
-            onBlur={(e) => e.target.value.trim() !== s.caption && run(updateDemoScreen(appId, item, { caption: e.target.value }))} />
+        <div className={`dg-box dg-shot ${s.style === "scene" ? "is-scene" : ""} ${composing ? "is-pinning" : ""} ${s.hidden ? "is-off" : ""}`} onClick={place}>
+          {s.style === "scene" ? null : (
+            <input key={`${viewing}-${item}`} className="dg-cap" defaultValue={s.caption} maxLength={40} aria-label={`Caption for screen ${item}`}
+              disabled={viewing !== current} onClick={(e) => e.stopPropagation()}
+              onBlur={(e) => e.target.value.trim() !== s.caption && run(updateDemoScreen(appId, item, { caption: e.target.value }))} />
+          )}
           <img src={appDemoScreenUrl(appId, item, viewing, demo.updatedAt)} alt={s.caption} />
           {pins(item)}
           {viewing === current && (s.hidden || kept > MIN_SCREENS) ? (
@@ -148,6 +150,14 @@ export function DemoGallery({ appId, appName, demo, onMake }: { appId: string; a
           ) : null}
         </div>
       )}
+      {s?.style === "scene" && item !== 0 && viewing === current ? (
+        <div className="dg-words" key={`w-${viewing}-${item}-${s.caption}-${s.sub ?? ""}`}>
+          <input className="dg-words__h" defaultValue={s.caption} maxLength={40} aria-label={`Headline for screen ${item}`}
+            onBlur={(e) => e.target.value.trim() !== s.caption && run(updateDemoScreen(appId, item, { caption: e.target.value }))} />
+          <input className="dg-words__s" defaultValue={s.sub ?? ""} maxLength={70} placeholder="Supporting line" aria-label={`Supporting line for screen ${item}`}
+            onBlur={(e) => e.target.value.trim() !== (s.sub ?? "") && run(updateDemoScreen(appId, item, { sub: e.target.value }))} />
+        </div>
+      ) : null}
 
       <div className="dg-minis">
         <button type="button" className={`dg-mini ${item === 0 ? "is-on" : ""}`} aria-label="Video" onClick={() => show(0)}>

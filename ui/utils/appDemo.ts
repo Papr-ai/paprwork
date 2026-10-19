@@ -16,6 +16,9 @@ export interface DemoScreen {
   crop: { x: number; y: number; w: number; h: number };
   caption: string;
   hidden?: boolean;
+  /** "scene" = headline + component baked into the image (Launch Video Studio style). */
+  style?: "scene";
+  sub?: string;
 }
 export interface DemoVersion {
   v: number;
@@ -173,7 +176,7 @@ export function addDemoNote(appId: string, note: { t: number; body: string; on?:
 export function deleteDemoNote(appId: string, noteId: string): Promise<void> {
   return sendAndRefresh(appId, `/notes/${encodeURIComponent(noteId)}`, "DELETE");
 }
-export function updateDemoScreen(appId: string, k: number, patch: { caption?: string; hidden?: boolean }): Promise<void> {
+export function updateDemoScreen(appId: string, k: number, patch: { caption?: string; sub?: string; hidden?: boolean }): Promise<void> {
   return sendAndRefresh(appId, `/screens/${k}`, "PATCH", patch);
 }
 /** The owner opened the Gallery. */

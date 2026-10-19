@@ -115,7 +115,7 @@ const PROBE_SCRIPT = `(x, y) => {
     box: [Math.round(r.left), Math.round(r.top), Math.round(r.width), Math.round(r.height)] };
 }`;
 
-/** Gallery screen: cut one region (fractions 0..1) and scale it to the card's 2x width. */
+/** Gallery screen (older style): cut one region (fractions 0..1) and scale it to the card's 2x width. */
 const SCREEN_W = 1120;
 function cropStill(img, c) {
   const f = (n) => Math.min(1, Math.max(0, Number(n) || 0));
@@ -125,6 +125,128 @@ function cropStill(img, c) {
   const y = Math.min(OUT_H - h, Math.round(f(c.y) * OUT_H));
   const cut = img.crop({ x, y, width: w, height: h });
   return w === SCREEN_W ? cut : cut.resize({ width: SCREEN_W, quality: "best" });
+}
+
+/**
+ * Runs in the scene page. Snap a picked region (fractions) to the one component it frames:
+ * the visible element whose box best overlaps it. Falls back to the region itself.
+ */
+const SNAP_SCRIPT = `(c) => {
+  const W = innerWidth, H = innerHeight;
+  const R = { l: c.x * W, t: c.y * H, r: (c.x + c.w) * W, b: (c.y + c.h) * H };
+  const area = (a) => Math.max(0, a.r - a.l) * Math.max(0, a.b - a.t);
+  const ra = area(R);
+  // A "card": something with its own surface (background, border or shadow).
+  const surface = (st) => (st.backgroundColor && !/rgba\\(0, 0, 0, 0\\)|transparent/.test(st.backgroundColor))
+    || parseFloat(st.borderTopWidth) > 0 || (st.boxShadow && st.boxShadow !== 'none');
+  let best = null, score = 0, hold = null, holdArea = Infinity;
+  for (const el of document.body.querySelectorAll('*')) {
+    const b = el.getBoundingClientRect();
+    if (b.width < W * 0.16 || b.height < H * 0.1 || b.width * b.height > W * H * 0.8) continue;
+    const st = getComputedStyle(el);
+    if (st.visibility === 'hidden' || st.display === 'none' || Number(st.opacity) < 0.5) continue;
+    const e = { l: b.left, t: b.top, r: b.right, b: b.bottom };
+    const ea = area(e);
+    const i = area({ l: Math.max(e.l, R.l), t: Math.max(e.t, R.t), r: Math.min(e.r, R.r), b: Math.min(e.b, R.b) });
+    const iou = i / (ea + ra - i);
+    if (iou > score) { score = iou; best = e; }
+    // Fallback: the smallest card that holds most of the picked region.
+    if (surface(st) && i >= 0.8 * ra && ea <= 4 * ra && ea < holdArea) { hold = e; holdArea = ea; }
+  }
+  const box = score >= 0.6 ? best : hold || (score >= 0.4 ? best : R);
+  const pad = 2;
+  const l = Math.max(0, box.l - pad), t = Math.max(0, box.t - pad);
+  return { x: l, y: t, width: Math.min(W, box.r + pad) - l, height: Math.min(H, box.b + pad) - t, snapped: box !== R };
+}`;
+
+/** Average colour of a frame and its most saturated colour (the accent), as [r, g, b]. */
+function frameTones(img) {
+  const small = img.resize({ width: 32, height: 20 });
+  const px = small.toBitmap(); // BGRA
+  let r = 0, g = 0, b = 0, n = 0, accent = null, best = 0.28;
+  for (let i = 0; i + 3 < px.length; i += 4) {
+    const B = px[i], G = px[i + 1], R = px[i + 2];
+    r += R; g += G; b += B; n++;
+    const max = Math.max(R, G, B), min = Math.min(R, G, B);
+    const sat = max ? (max - min) / max : 0;
+    if (sat * (max / 255) > best) { best = sat * (max / 255); accent = [R, G, B]; }
+  }
+  return { tone: [Math.round(r / n), Math.round(g / n), Math.round(b / n)], accent };
+}
+
+const esc = (t) => String(t).replace(/[&<>"]/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;" })[c]);
+
+/**
+ * One gallery screen laid out like a Launch Video Studio scene: headline centered on top
+ * (key word in the accent), one supporting line, the real component floating large on a
+ * calm background in the app's own colours.
+ */
+function composeHtml(c) {
+  const [r, g, b] = Array.isArray(c.tone) ? c.tone : [238, 244, 255];
+  const dark = (0.2126 * r + 0.7152 * g + 0.0722 * b) / 255 < 0.45;
+  const mix = (t, to) => `rgb(${[r, g, b].map((v) => Math.round(v + (to - v) * t)).join(",")})`;
+  const bg1 = dark ? mix(0.45, 0) : mix(0.86, 255);
+  const bg2 = dark ? mix(0.15, 0) : mix(0.7, 255);
+  const a = Array.isArray(c.accent) ? c.accent : null;
+  const shade = (t, to) => (a ? `rgb(${a.map((v) => Math.round(v + (to - v) * t)).join(",")})` : null);
+  const gFrom = a ? shade(dark ? 0 : 0.15, 0) : "#0060E0";
+  const gTo = a ? shade(dark ? 0.35 : 0.25, 255) : "#00ACFA";
+  const glow = a ? `rgba(${a.join(",")},${dark ? 0.28 : 0.16})` : "rgba(0,120,255,0.14)";
+  const ink = dark ? "#fff" : "#0f172a";
+  const muted = dark ? "rgba(255,255,255,0.68)" : "#5b6474";
+  const words = String(c.caption || "").split(/\s+/).filter(Boolean);
+  const key = String(c.key || "").toLowerCase().replace(/[^\p{L}\p{N}]/gu, "");
+  const head = words.map((w) => {
+    const hit = key && w.toLowerCase().replace(/[^\p{L}\p{N}]/gu, "") === key;
+    return hit ? `<span class="g">${esc(w)}</span>` : esc(w);
+  }).join(" ");
+  const sub = String(c.sub || "").trim();
+  const card = dark
+    ? "0 34px 90px rgba(0,0,0,.5), 0 0 0 1px rgba(255,255,255,.08)"
+    : "0 30px 80px rgba(10,26,58,.16), 0 0 0 1px rgba(10,26,58,.06)";
+  return `<!doctype html><html><head><meta charset="utf-8"><style>
+html,body{margin:0;width:${OUT_W}px;height:${OUT_H}px;overflow:hidden}
+body{position:relative;font-family:-apple-system,BlinkMacSystemFont,"SF Pro Display","Inter",system-ui,sans-serif;
+  background:radial-gradient(60% 55% at 50% 68%,${glow},transparent 70%),linear-gradient(160deg,${bg1},${bg2});-webkit-font-smoothing:antialiased}
+h1{position:absolute;left:72px;right:72px;top:60px;margin:0;text-align:center;font-size:${words.join(" ").length > 26 ? 46 : 54}px;font-weight:750;letter-spacing:-0.025em;line-height:1.1;color:${ink}}
+.g{background:linear-gradient(90deg,${gFrom},${gTo});-webkit-background-clip:text;background-clip:text;color:transparent}
+p{position:absolute;left:72px;right:72px;top:${words.join(" ").length > 26 ? 128 : 136}px;margin:0;text-align:center;font-size:24px;font-weight:500;color:${muted}}
+img{position:absolute;display:block;border-radius:18px;box-shadow:${card}}
+</style></head><body><h1>${head}</h1>${sub ? `<p>${esc(sub)}</p>` : ""}<img src="${esc(path.basename(c.raw))}">
+<script>
+window.__layout = () => {
+  const img = document.querySelector('img');
+  const top = ${sub ? 206 : 166}, bottom = 56, side = 72;
+  const w = img.naturalWidth / devicePixelRatio, h = img.naturalHeight / devicePixelRatio;
+  const s = Math.min(2.6, (${OUT_W} - side * 2) / w, (${OUT_H} - top - bottom) / h);
+  img.style.width = (w * s) + 'px'; img.style.height = (h * s) + 'px';
+  img.style.left = ((${OUT_W} - w * s) / 2) + 'px';
+  img.style.top = (top + (${OUT_H} - top - bottom - h * s) / 2) + 'px';
+  return true;
+};
+</script></body></html>`;
+}
+
+/** Lay out each screen (compose mode) and save it as a JPEG at the display's full resolution. */
+async function composeScreens(win, items) {
+  const wc = win.webContents;
+  for (const c of items.slice(0, MAX_STILLS)) {
+    if (!fs.existsSync(c.raw)) continue;
+    const html = `${c.path}.html`;
+    fs.writeFileSync(html, composeHtml(c));
+    try {
+      await win.loadFile(html);
+      wc.setZoomFactor(1);
+      await wc.executeJavaScript("document.querySelector('img').decode().then(() => window.__layout()).then(() => new Promise((r) => requestAnimationFrame(() => requestAnimationFrame(() => r(true)))))");
+      wc.invalidate();
+      await wait(60);
+      const img = await wc.capturePage({ x: 0, y: 0, width: OUT_W, height: OUT_H });
+      fs.writeFileSync(c.path, img.toJPEG(90));
+    } finally {
+      fs.rmSync(html, { force: true });
+    }
+  }
+  return { seconds: 0, frames: 0, codec: "", bytes: 0, check: { small: [], offStage: [] }, stills: [] };
 }
 
 /** Union of two checks (mid-animation + hold), so a clash at either moment counts. */
@@ -191,6 +313,7 @@ async function renderOnce(opts) {
   wc.on("will-navigate", (e) => e.preventDefault());
 
   try {
+    if (Array.isArray(opts.compose)) return await composeScreens(win, opts.compose);
     await win.loadFile(opts.scenePath);
     await wc.executeJavaScript("document.fonts ? document.fonts.ready.then(() => true) : true");
     const info = await wc.executeJavaScript(
@@ -199,7 +322,8 @@ async function renderOnce(opts) {
     if (!info.ok) throw new Error("Scene has no window.__setT");
     // Fit the authored stage to the 1280x800 output.
     const stageW = info.stage && Number(info.stage[0]) > 0 ? Number(info.stage[0]) : OUT_W;
-    if (stageW !== OUT_W) wc.setZoomFactor(OUT_W / stageW);
+    // Zoom sticks per origin in the shared session: always set it.
+    wc.setZoomFactor(stageW !== OUT_W ? OUT_W / stageW : 1);
     const seconds = Math.min(MAX_SECONDS, Math.max(2, info.total || 4));
     const frames = Math.round(seconds * FPS);
 
@@ -222,6 +346,15 @@ async function renderOnce(opts) {
         const t = Math.min(seconds, Math.max(0, Number(s.t) || 0));
         await setT(t);
         const frame = await grab();
+        if (s.snap && s.crop) {
+          // Gallery screen: the one component, captured at the display's full resolution (sharp).
+          const z = wc.getZoomFactor();
+          const box = await wc.executeJavaScript(`(${SNAP_SCRIPT})(${JSON.stringify({ x: +s.crop.x || 0, y: +s.crop.y || 0, w: +s.crop.w || 0, h: +s.crop.h || 0 })})`);
+          const rect = { x: Math.round(box.x * z), y: Math.round(box.y * z), width: Math.max(32, Math.round(box.width * z)), height: Math.max(24, Math.round(box.height * z)) };
+          fs.writeFileSync(s.path, (await wc.capturePage(rect)).toPNG());
+          stills.push({ t, path: s.path, snapped: !!box.snapped, ...frameTones(frame) });
+          continue;
+        }
         fs.writeFileSync(s.path, (s.crop ? cropStill(frame, s.crop) : frame).toJPEG(s.crop ? 88 : 80));
         const probe = s.probe
           ? await wc.executeJavaScript(`(${PROBE_SCRIPT})(${Number(s.probe.x) || 0}, ${Number(s.probe.y) || 0})`)

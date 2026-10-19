@@ -1,20 +1,25 @@
 /**
- * Gallery screens: five cropped moments of the preview, each under a short caption.
+ * Gallery screens: five moments of the preview, each laid out like a Launch Video Studio
+ * scene — a headline (key word in the accent) and one supporting line over the real
+ * component, floating large on a calm background in the app's colours.
  *
  * Runs after a video version is made, from the same scene (sample data only):
  *   1. contact sheet — frames at even moments of the loop (Electron stills).
- *   2. pick          — a vision model picks 5 moments, crops each to ONE region and writes
- *                      a 2-5 word caption (SCREENS_PROMPT). It only picks; Papr owns the layout.
- *   3. crop          — each pick is re-captured at its moment and cropped (Electron).
+ *   2. pick          — a vision model picks 5 moments, marks the ONE component in each and
+ *                      writes the headline + line (SCREENS_PROMPT). It only picks; Papr lays out.
+ *   3. capture       — each component is snapped to its real element box and captured sharp.
+ *   4. compose       — Papr lays out each screen and saves the finished image (Electron).
  * A failed or partial pick never fails the video: the gallery just has no screens yet.
  */
 import * as fs from "fs";
 import {
   MAX_SCREENS,
   cleanCaption,
+  cleanSub,
   demoPaths,
   screenPath,
   setScreens,
+  screenRawPath,
   stillPath,
   versionTake,
   type DemoCrop,
@@ -27,14 +32,16 @@ export const SHEET_AT = [0.12, 0.25, 0.38, 0.5, 0.62, 0.72, 0.8, 0.88] as const;
 const MIN_CROP = 0.25;
 
 export const SCREENS_PROMPT = `You make the 5 gallery screens for a Papr app from frames of its sample-data preview. Frame k is at the time listed for it.
+Each screen is laid out like a launch-video scene: a big headline, one supporting line, and ONE real piece of the app floating large below them.
 1. Pick 5 moments. Each shows ONE thing a person gets. Strongest result first, key actions next, sharing or settings last.
    Skip loading, empty or half-open states, toasts, menus, dialogs, mid-animation frames, and anything that looks like personal data.
-2. For each moment, crop to the ONE region that shows it: a card, a list, a chart, a button and its result. Never the whole frame.
-   The crop must stay readable at 560px wide: body text at least 14px after scaling. If it isn't, crop tighter.
-   Keep it to about 3 to 6 elements. If the region is busier than that, pick a smaller region or a different moment.
-   Crop is x, y, w, h as fractions (0..1) of the frame; aspect about 16:10 or wider.
-3. Write a caption: 2 to 5 words, leads with the benefit or a verb, no app name, no end punctuation.
-Layout is fixed by Papr, not by you: 16:10 card, soft tint, caption top-left inside the card, crop below it.`;
+   Each screen shows a different component; never the same card twice.
+2. For each moment, mark the ONE whole component that shows it: a card, a list, a chart, a panel. Never the whole frame, never half a card.
+   The box (x, y, w, h as fractions 0..1 of the frame) should hug that component's edges; Papr snaps it to the element.
+   Prefer components with about 3 to 6 elements that are big enough to read.
+3. Headline: 2 to 5 words, leads with the benefit or a verb, no app name, no end punctuation. key = the one word of the headline to put in the accent colour.
+4. Line: one short sentence (max 9 words) that says what the person gets. Plain words, no jargon, no end punctuation.
+Layout is fixed by Papr, not by you.`;
 
 export const SCREENS_SCHEMA = {
   type: "object",
@@ -53,9 +60,11 @@ export const SCREENS_SCHEMA = {
             additionalProperties: false,
           },
           caption: { type: "string" },
+          key: { type: "string" },
+          sub: { type: "string" },
           why: { type: "string" },
         },
-        required: ["frame", "crop", "caption", "why"],
+        required: ["frame", "crop", "caption", "key", "sub", "why"],
         additionalProperties: false,
       },
     },
@@ -64,9 +73,42 @@ export const SCREENS_SCHEMA = {
   additionalProperties: false,
 } as const;
 
+export interface ScreenStill {
+  t: number;
+  path: string;
+  /** Snap captures: the frame's average colour and accent, [r, g, b]. */
+  tone?: number[];
+  accent?: number[] | null;
+}
+
+/** One screen to lay out: the captured component (raw) → the finished image (path). */
+export interface ComposeItem {
+  raw: string;
+  path: string;
+  caption: string;
+  sub?: string;
+  key?: string;
+  tone?: number[];
+  accent?: number[] | null;
+}
+
 export interface ScreenDeps {
-  stills: (scenePath: string, stills: { t: number; path: string; crop?: DemoCrop }[]) => Promise<{ t: number; path: string }[]>;
+  stills: (scenePath: string, stills: { t: number; path: string; crop?: DemoCrop; snap?: boolean }[]) => Promise<ScreenStill[]>;
   pick: (prompt: string, images: string[]) => Promise<unknown>;
+  /** Lay out scene-style screens. Without it, screens are the older bare crops. */
+  compose?: (items: ComposeItem[]) => Promise<void>;
+}
+
+export function composeItem(appId: string, v: number, k: number, s: DemoScreen): ComposeItem {
+  return {
+    raw: screenRawPath(appId, v, k),
+    path: screenPath(appId, v, k),
+    caption: s.caption,
+    ...(s.sub ? { sub: s.sub } : {}),
+    ...(s.key ? { key: s.key } : {}),
+    ...(s.tone ? { tone: s.tone } : {}),
+    ...(s.accent !== undefined ? { accent: s.accent } : {}),
+  };
 }
 
 const unit = (n: unknown, lo = 0) => (typeof n === "number" && Number.isFinite(n) ? Math.min(1, Math.max(lo, n)) : null);
@@ -88,12 +130,19 @@ export function normalizeScreens(raw: unknown, times: number[]): DemoScreen[] {
   if (!Array.isArray(list)) return [];
   const out: DemoScreen[] = [];
   for (const item of list) {
-    const p = item as { frame?: unknown; crop?: unknown; caption?: unknown; why?: unknown };
+    const p = item as { frame?: unknown; crop?: unknown; caption?: unknown; key?: unknown; sub?: unknown; why?: unknown };
     const t = times[Number(p.frame) - 1];
     const crop = normalizeCrop(p.crop);
     const caption = typeof p.caption === "string" ? cleanCaption(p.caption) : "";
     if (t === undefined || !crop || !caption) continue;
-    out.push({ t, crop, caption, ...(typeof p.why === "string" && p.why ? { why: p.why.slice(0, 200) } : {}) });
+    const sub = typeof p.sub === "string" ? cleanSub(p.sub).replace(/[.!?;:,]+$/, "") : "";
+    const key = typeof p.key === "string" ? p.key.trim().slice(0, 30) : "";
+    out.push({
+      t, crop, caption,
+      ...(sub ? { sub } : {}),
+      ...(key ? { key } : {}),
+      ...(typeof p.why === "string" && p.why ? { why: p.why.slice(0, 200) } : {}),
+    });
     if (out.length === MAX_SCREENS) break;
   }
   return out;
@@ -110,7 +159,17 @@ export async function makeScreens(appId: string, v: number, seconds: number, dep
     const raw = await deps.pick(`${SCREENS_PROMPT}\n\nFrames: ${listed}.${owner}`, sheet.map((s) => s.path));
     const screens = normalizeScreens(raw, times);
     if (!screens.length) return 0;
-    await deps.stills(scene, screens.map((s, i) => ({ t: s.t, path: screenPath(appId, v, i + 1), crop: s.crop })));
+    if (deps.compose) {
+      const shots = await deps.stills(scene, screens.map((s, i) => ({ t: s.t, path: screenRawPath(appId, v, i + 1), crop: s.crop, snap: true })));
+      screens.forEach((s, i) => {
+        s.style = "scene";
+        if (shots[i]?.tone) s.tone = shots[i]!.tone;
+        if (shots[i]?.accent !== undefined) s.accent = shots[i]!.accent;
+      });
+      await deps.compose(screens.map((s, i) => composeItem(appId, v, i + 1, s)));
+    } else {
+      await deps.stills(scene, screens.map((s, i) => ({ t: s.t, path: screenPath(appId, v, i + 1), crop: s.crop })));
+    }
     // All or nothing: file k must match screen k.
     if (!screens.every((_, i) => fs.existsSync(screenPath(appId, v, i + 1)))) return 0;
     setScreens(appId, v, screens);

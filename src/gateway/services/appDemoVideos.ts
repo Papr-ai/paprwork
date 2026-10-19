@@ -40,7 +40,7 @@ import {
   type DemoNote,
   type DemoScreen,
 } from "./appDemoStore.js";
-import { makeScreens } from "./appDemoScreens.js";
+import { makeScreens, type ComposeItem, type ScreenStill } from "./appDemoScreens.js";
 import {
   REVIEW_AT,
   normalizeReview,
@@ -226,10 +226,12 @@ export interface DemoDeps {
   /** Frames at chosen moments (+ what sits under a pin, or cropped). Optional: no review without it. */
   stills?: (
     scenePath: string,
-    stills: { t: number; path: string; probe?: { x: number; y: number }; crop?: DemoCrop }[],
-  ) => Promise<DemoStill[]>;
+    stills: { t: number; path: string; probe?: { x: number; y: number }; crop?: DemoCrop; snap?: boolean }[],
+  ) => Promise<(DemoStill & ScreenStill)[]>;
   /** Vision pick of the gallery screens from a contact sheet. Optional: no screens without it. */
   pickScreens?: (prompt: string, images: string[]) => Promise<unknown>;
+  /** Lay out scene-style gallery screens (Electron). Optional: bare crops without it. */
+  composeScreens?: (items: ComposeItem[]) => Promise<void>;
   /** Vision review of the frames (and a screenshot of the real app). Returns raw JSON. */
   review?: (prompt: string, images: string[]) => Promise<unknown>;
   /** Called after a new video is in place (e.g. notify the UI). */
@@ -389,7 +391,7 @@ async function runCreate(appId: string, deps: DemoDeps, task: DemoTask): Promise
 async function screensFor(appId: string, deps: DemoDeps, task: DemoTask, v: number, seconds: number, notes = ""): Promise<void> {
   if (!deps.stills || !deps.pickScreens) return;
   task.stage = "screens";
-  await makeScreens(appId, v, seconds, { stills: deps.stills, pick: deps.pickScreens }, notes);
+  await makeScreens(appId, v, seconds, { stills: deps.stills, pick: deps.pickScreens, ...(deps.composeScreens ? { compose: deps.composeScreens } : {}) }, notes);
 }
 
 /** A note on a gallery screen points at that screen's moment and region. */

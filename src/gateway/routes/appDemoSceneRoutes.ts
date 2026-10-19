@@ -19,7 +19,7 @@ import {
   type DemoDeps,
 } from "../services/appDemoVideos.js";
 import { REVIEW_SCHEMA } from "../services/appDemoQuality.js";
-import { SCREENS_SCHEMA } from "../services/appDemoScreens.js";
+import { SCREENS_SCHEMA, composeItem } from "../services/appDemoScreens.js";
 import {
   addNote,
   deleteNote,
@@ -65,6 +65,12 @@ const deps: DemoDeps = {
     const r = await requestAppDemoRender({ scenePath, videoPath: `${base}.mp4`, posterPath: `${base}.jpg`, stills });
     return r.stills ?? [];
   },
+  async composeScreens(items) {
+    const { requestAppDemoRender } = await import("../utils/appDemoRenderBridge.js");
+    // video/poster paths are unused in compose mode but must sit in the demos folder.
+    const base = items[0]!.path.replace(/\.jpg$/, "");
+    await requestAppDemoRender({ scenePath: `${base}.html`, videoPath: `${base}.mp4`, posterPath: `${base}.poster.jpg`, compose: items });
+  },
   async review(prompt, images) {
     const { getAgentService } = await import("../services/AgentService.js");
     const result = await getAgentService().runStructuredJobSession({
@@ -86,7 +92,7 @@ const deps: DemoDeps = {
       prompt,
       images,
       schemaName: "gallery_screens",
-      schemaDescription: "Five cropped moments of an app preview, each with a short caption.",
+      schemaDescription: "Five moments of an app preview: one component each, with a headline and a supporting line.",
       outputSchema: SCREENS_SCHEMA as unknown as Record<string, unknown>,
     });
     return result.object;
@@ -168,11 +174,18 @@ export function registerAppDemoSceneRoutes(app: Express): void {
   });
 
   /** Edit a screen's caption, or leave it out / put it back. */
-  app.patch("/api/apps/:appId/demo/screens/:k", (req, res) => {
+  app.patch("/api/apps/:appId/demo/screens/:k", async (req, res) => {
     const appId = ownAppId(req, res);
     if (!appId) return;
     try {
-      updateScreen(appId, Number(req.params.k), (req.body ?? {}) as { caption?: unknown; hidden?: unknown });
+      const k = Number(req.params.k);
+      const body = (req.body ?? {}) as { caption?: unknown; sub?: unknown; hidden?: unknown };
+      const m = updateScreen(appId, k, body);
+      // Scene-style screens carry the words in the image: lay it out again.
+      const screen = m.versions.find((x) => x.v === m.current)?.screens?.[k - 1];
+      if (screen?.style === "scene" && (body.caption !== undefined || body.sub !== undefined)) {
+        await deps.composeScreens!([composeItem(appId, m.current, k, screen)]);
+      }
       res.json(demoStatus(appId));
     } catch (err) {
       res.status(400).json({ error: (err as Error).message });

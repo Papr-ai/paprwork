@@ -32,12 +32,20 @@ export interface DemoCrop {
   h: number;
 }
 
-/** One gallery screen: a cropped moment of the preview under a short caption. */
+/** One gallery screen: a moment of the preview under a short caption. */
 export interface DemoScreen {
   t: number;
   crop: DemoCrop;
   caption: string;
   why?: string;
+  /** "scene" = laid out like a Launch Video Studio scene (headline + floating component, baked
+   *  into the image). Absent = older style: a bare crop with the caption drawn by the UI. */
+  style?: "scene";
+  /** Scene style: the supporting line, the headline word in the accent, the app's colours. */
+  sub?: string;
+  key?: string;
+  tone?: number[];
+  accent?: number[] | null;
   /** Left out of the gallery by the owner. */
   hidden?: boolean;
 }
@@ -102,6 +110,11 @@ export function stillPath(appId: string, name: string): string {
 
 export function screenPath(appId: string, v: number, k: number): string {
   return path.join(demoDir(), `${appId}.v${v}.s${k}.jpg`);
+}
+
+/** The bare component behind a scene-style screen (kept so a caption edit can re-lay it out). */
+export function screenRawPath(appId: string, v: number, k: number): string {
+  return path.join(demoDir(), `${appId}.v${v}.s${k}.raw.png`);
 }
 
 export function hasDemoVideo(appId: string): boolean {
@@ -202,7 +215,10 @@ function prune(appId: string, m: DemoManifest): void {
     if (i < 0) return;
     const [old] = m.versions.splice(i, 1);
     for (const f of Object.values(demoPaths(appId, versionTake(old!.v)))) fs.rmSync(f, { force: true });
-    for (let k = 1; k <= MAX_SCREENS; k++) fs.rmSync(screenPath(appId, old!.v, k), { force: true });
+    for (let k = 1; k <= MAX_SCREENS; k++) {
+      fs.rmSync(screenPath(appId, old!.v, k), { force: true });
+      fs.rmSync(screenRawPath(appId, old!.v, k), { force: true });
+    }
   }
 }
 
@@ -259,6 +275,11 @@ export function cleanCaption(raw: string): string {
   return raw.trim().replace(/\s+/g, " ").replace(/[.!?;:,]+$/, "").slice(0, 40).trim();
 }
 
+/** The supporting line under a headline: one short sentence. */
+export function cleanSub(raw: string): string {
+  return raw.trim().replace(/\s+/g, " ").slice(0, 70).trim();
+}
+
 export function setScreens(appId: string, v: number, screens: DemoScreen[]): void {
   const m = readManifest(appId);
   const ver = m.versions.find((x) => x.v === v);
@@ -268,7 +289,7 @@ export function setScreens(appId: string, v: number, screens: DemoScreen[]): voi
 }
 
 /** Edit a screen of the version in use: its caption, or leave it out / put it back. */
-export function updateScreen(appId: string, k: number, patch: { caption?: unknown; hidden?: unknown }): DemoManifest {
+export function updateScreen(appId: string, k: number, patch: { caption?: unknown; sub?: unknown; hidden?: unknown }): DemoManifest {
   const m = readManifest(appId);
   const ver = m.versions.find((x) => x.v === m.current);
   const screen = ver?.screens?.[k - 1];
@@ -278,6 +299,7 @@ export function updateScreen(appId: string, k: number, patch: { caption?: unknow
     if (!caption) throw new Error("Write a caption.");
     screen.caption = caption;
   }
+  if (typeof patch.sub === "string") screen.sub = cleanSub(patch.sub);
   if (patch.hidden === true && !screen.hidden) {
     if (ver.screens.filter((s) => !s.hidden).length <= MIN_SCREENS) throw new Error(`Keep at least ${MIN_SCREENS} screens.`);
     screen.hidden = true;

@@ -57,6 +57,17 @@
   box-shadow: 0 10px 30px rgba(15, 23, 42, 0.1), 0 0 0 1px rgba(15, 23, 42, 0.05);
 }
 .dg-shot.is-off > img, .dg-shot.is-off .dg-cap { opacity: 0.35; }
+/* Scene-style screen: the finished image fills the frame (headline is in the picture). */
+.dg-shot.is-scene { padding: 0; background: #0b1220; }
+.dg-shot.is-scene > img { flex: 1; margin: 0; border-radius: 0; object-fit: contain; object-position: center; box-shadow: none; }
+.dg-words { display: flex; flex-direction: column; gap: 2px; margin-top: -2px; }
+.dg-words input {
+  width: 100%; padding: 4px 8px; margin-left: -8px; border: 0; border-radius: 6px; background: none; font: inherit; color: var(--text-primary);
+}
+.dg-words input:hover { background: var(--ss6-hover, rgba(15, 23, 42, 0.04)); }
+.dg-words input:focus { outline: 2px solid rgba(1, 97, 224, 0.3); background: var(--bg-primary, #fff); }
+.dg-words__h { font-size: 15px; font-weight: 650; letter-spacing: -0.01em; }
+.dg-words__s { font-size: 13px; color: var(--text-secondary) !important; }
 .dg-x {
   position: absolute; top: 10px; right: 10px; height: 26px; padding: 0 10px; border: 0; border-radius: 999px;
   font: inherit; font-size: 12px; font-weight: 500; color: #334155; background: rgba(255, 255, 255, 0.92);
