@@ -1,4 +1,4 @@
-import { describe, it, expect } from "vitest";
+import { beforeEach, describe, it, expect } from "vitest";
 import { useIsolatedPaprWorkspace } from "./setup/isolatedWorkspace.js";
 import {
   applyExactStringReplacement,
@@ -98,6 +98,14 @@ describe("AppService.updateAppFile", () => {
   // from it, so this suite used to create "Concurrent Edit App_N" fixtures in
   // the developer's live workspace.
   useIsolatedPaprWorkspace("papr-app-edit-test");
+
+  // First import of AppService compiles its whole module tree (10-30s on a
+  // cold vitest cache). Do it in a hook with its own budget, after the
+  // isolated workspace is set up, so the test's 5s limit measures the edit
+  // logic and not the compiler.
+  beforeEach(async () => {
+    await import("../src/gateway/services/AppService.js");
+  }, 120_000);
 
   it("serializes concurrent edits to the same file", async () => {
     const { AppService } = await import(
