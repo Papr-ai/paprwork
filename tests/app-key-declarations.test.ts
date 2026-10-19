@@ -120,6 +120,26 @@ describe("findUndeclaredKeys", () => {
   });
 });
 
+describe("publish never blocks on undeclared keys", () => {
+  it("publishes undeclared credential keys as owner keys, skips parameters, leaves the file alone", async () => {
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), "keys-fallback-"));
+    fs.mkdirSync(path.join(dir, "apps", "app-1"), { recursive: true });
+    fs.mkdirSync(path.join(dir, "Jobs", "job-1"), { recursive: true });
+    fs.mkdirSync(path.join(dir, "data"), { recursive: true });
+    fs.writeFileSync(path.join(dir, "data", "jobs.json"), JSON.stringify({ jobs: [{ id: "job-1", appIds: ["app-1"] }] }));
+    fs.writeFileSync(
+      path.join(dir, "Jobs", "job-1", "job.json"),
+      JSON.stringify({ id: "job-1", command: 'python3 run.py "${TASK}" "${PROMO_SECRET}"', requiredKeys: ["SERPAPI_KEY"] }),
+    );
+    const { requirements } = await ensureAppRequirementsSyncedWithBackend(dir, "app-1");
+    expect(requirements.map((spec) => [spec.name, spec.credentialScope])).toEqual([
+      ["PROMO_SECRET", "owner"],
+      ["SERPAPI_KEY", "owner"],
+    ]);
+    expect(readAppRequirements(dir, "app-1")).toEqual([]);
+  });
+});
+
 describe("declared app keys end to end", () => {
   it("auto-sync no longer writes guessed keys", async () => {
     const dir = makeScreenshotApp();

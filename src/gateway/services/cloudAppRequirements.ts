@@ -31,6 +31,7 @@ import {
   AUTO_DETECTED_KEY_DESCRIPTION,
   AppKeysUndeclaredError,
   findUndeclaredKeys,
+  looksLikeCredentialName,
   type DetectedKeyRef,
   type UndeclaredKey,
 } from "./appKeyDeclarations.js";
@@ -582,6 +583,31 @@ export async function assertAppKeysDeclared(
   }
 }
 
+/**
+ * Publish never blocks on undeclared keys (validate_app is where the agent
+ * fixes them). Until declared, a credential-shaped key found in the backend or
+ * a linked job is published as an OWNER key: it resolves from the publisher's
+ * vault and is never shown to visitors. That is what old apps did before
+ * declaring existed, so they keep working. Not written to requirements.json.
+ */
+export async function undeclaredOwnerFallbackNames(
+  paprDir: string,
+  appId: string,
+  saved: RequiredKeySpec[],
+): Promise<string[]> {
+  const savedNames = new Set(saved.map((spec) => spec.name));
+  const notKeys = new Set(readAppNotKeys(paprDir, appId));
+  const names = new Set<string>();
+  for (const ref of await readDetectedAppKeyRefs(paprDir, appId)) {
+    const name = ref.name.trim();
+    if (!name || savedNames.has(name) || notKeys.has(name)) continue;
+    // ${TASK}-style command parameters are not keys.
+    if (ref.source === "job-command" && !looksLikeCredentialName(name)) continue;
+    names.add(name);
+  }
+  return [...names].sort();
+}
+
 export interface AppRequirementsDiscovery {
   requirements: RequiredKeySpec[];
   savedRequirements: RequiredKeySpec[];
@@ -637,12 +663,18 @@ export async function ensureAppRequirementsSyncedWithBackend(
   const merged = await readEffectiveAppRequirements(paprDir, appId);
   const existingNames = new Set(existing.map((spec) => spec.name));
   const added = merged.filter((spec) => !existingNames.has(spec.name));
-  if (added.length === 0) {
-    return { updated: false, requirements: merged };
+  if (added.length > 0) {
+    writeAppRequirements(paprDir, appId, merged);
+    console.log(
+      `[CloudRequirements] Added embedded-chat LLM keys to requirements.json for ${appId}: ${added.map((spec) => spec.name).join(", ")}`,
+    );
   }
-  writeAppRequirements(paprDir, appId, merged);
-  console.log(
-    `[CloudRequirements] Added embedded-chat LLM keys to requirements.json for ${appId}: ${added.map((spec) => spec.name).join(", ")}`,
-  );
-  return { updated: true, requirements: merged };
+  // The published list also carries undeclared keys as owner keys; the file
+  // on disk stays declarations-only.
+  const fallback = await undeclaredOwnerFallbackNames(paprDir, appId, merged);
+  return {
+    updated: added.length > 0,
+    requirements:
+      fallback.length > 0 ? mergeBackendKeysIntoRequirements(merged, fallback) : merged,
+  };
 }

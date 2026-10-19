@@ -90,9 +90,9 @@ export const declareAppKeysTool = createTool({
   id: "declare_app_keys",
   description: `Declare the API keys a mini-app uses: what each is for, who provides it (owner = publisher, user = each visitor brings their own), and whether it is required.
 
-Writes apps/{appId}/requirements.json, which is what apps.papr.ai shows visitors on the setup screen. Publishing is blocked while any key found in the app's backend/manifest.json or linked jobs (requiredKeys, \${NAME} in commands) is undeclared — the error lists them with suggestions (e.g. "in your vault → probably owner", "not credential-shaped → probably a parameter").
+Writes apps/{appId}/requirements.json, which is what apps.papr.ai shows visitors on the setup screen. validate_app reports an error while any key found in the app's backend/manifest.json or linked jobs (requiredKeys, \${NAME} in commands) is undeclared, listing them with suggestions (e.g. "in your vault → probably owner", "not credential-shaped → probably a parameter").
 
-Call it when you add a key to an app or job, or when publish says keys are undeclared. Call with no keys to see what still needs declaring.
+Call it when you add a key to an app or job, or when validate_app says keys are undeclared. Publish never blocks on this: undeclared keys publish as owner keys, never shown to visitors. Call with no keys to see what still needs declaring.
 Example: declare_app_keys({ appId, keys: [{ name: "OPENAI_API_KEY", purpose: "Writes your drafts", provider: "owner", required: true }], notKeys: ["TASK"] })`,
   inputSchema: declareAppKeysSchema,
   execute: async (input) => {
@@ -135,7 +135,7 @@ Example: declare_app_keys({ appId, keys: [{ name: "OPENAI_API_KEY", purpose: "Wr
         message:
           stillUndeclared.length === 0
             ? "All keys declared. Republish (publish_cloud_app) if the app is already live so visitors see the change."
-            : `Still undeclared: ${stillUndeclared.map((key) => key.name).join(", ")}. Declare them (or list them in notKeys) before publishing.`,
+            : `Still undeclared: ${stillUndeclared.map((key) => key.name).join(", ")}. Declare them (or list them in notKeys); until then they publish as owner keys.`,
       },
       duration: performance.now() - startTime,
       timestamp: new Date().toISOString(),

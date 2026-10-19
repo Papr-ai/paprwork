@@ -58,7 +58,7 @@ When a mini-app needs a **secret API key** server-side (no CORS, key must not re
 
 1. **Create** `apps/{appId}/backend/manifest.json` and handler script.
 2. **Declare keys on each action** in backend manifest: `"keys": ["RR_ATTENTION_API_KEY"]` (exact name from Settings → Integration Keys).
-3. **Cloud — declare each key:** `declare_app_keys({ appId, keys: [{ name, purpose, provider: "owner" | "user", required }] })`. Publish is blocked until every backend/job key is declared (nothing is auto-synced). `purpose` is shown to visitors; `owner` = you supply it, `user` = each visitor brings their own.
+3. **Cloud — declare each key:** `declare_app_keys({ appId, keys: [{ name, purpose, provider: "owner" | "user", required }] })`. validate_app errors until every backend/job key is declared (nothing is auto-synced). Publish does not block; undeclared keys go out as owner keys. `purpose` is shown to visitors; `owner` = you supply it, `user` = each visitor brings their own.
 4. **Handler reads env** — gateway injects automatically:
    - Python: `os.environ["RR_ATTENTION_API_KEY"]`
    - Node/TS: `process.env.RR_ATTENTION_API_KEY`

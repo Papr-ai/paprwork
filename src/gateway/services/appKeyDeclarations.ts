@@ -175,11 +175,11 @@ export function formatUndeclaredKeysMessage(
     return `- ${key.name} (${key.foundIn.join(", ")}): ${key.hint}${suggestion}`;
   });
   return (
-    `Publish blocked: ${undeclared.length} key${undeclared.length === 1 ? "" : "s"} not declared for app ${appId}. ` +
-    `Visitors would see these with no explanation, so say what each one is first.\n` +
+    `${undeclared.length} key${undeclared.length === 1 ? "" : "s"} not declared for app ${appId}. ` +
+    `Until declared they publish as your (owner) keys and visitors are never asked for them. Say what each one is.\n` +
     `${lines.join("\n")}\n` +
     `Fix: declare_app_keys({ appId: "${appId}", keys: [{ name, purpose, provider: "owner" | "user", required }], notKeys: [...] }) ` +
-    `(or Share → API keys), then publish again. Ask the user only when it is unclear who should pay for a paid API.`
+    `(or Share → API keys). Ask the user only when it is unclear who should pay for a paid API.`
   );
 }
 

@@ -91,7 +91,7 @@ describe("readLinkedJobKeyNames", () => {
     // Detected names are no longer guessed into the published catalog...
     const effective = await readEffectiveAppRequirements(paprDir, "app-1");
     expect(effective.map((spec) => spec.name)).not.toContain("RR_ATTENTION_API_KEY");
-    // ...they block publish until declared.
+    // ...validate_app reports them until declared.
     const undeclared = await checkAppKeyDeclarations(paprDir, "app-1", {
       ownerVaultKeyNames: new Set(),
     });

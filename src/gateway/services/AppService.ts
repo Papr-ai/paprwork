@@ -254,6 +254,9 @@ export interface ValidationIssue {
   rule?: string;
 }
 
+/** validate_app rule for keys that still need declare_app_keys. Not a build failure. */
+export const APP_KEYS_UNDECLARED_RULE = "app-keys-undeclared";
+
 export interface DeleteAppOptions {
   /** When true, unpublish from cloud before deleting local files. Required if app is live on apps.papr.ai. */
   unpublishFromCloud?: boolean;
@@ -3979,6 +3982,25 @@ export class AppService {
       }
     } catch (healthError) {
       console.warn("[AppService] Startup health checks failed:", healthError);
+    }
+
+    // Keys must be declared (purpose, owner/user, required) so visitors never
+    // see an unexplained prompt. Reported here, while the agent is editing,
+    // instead of blocking publish for apps that predate declaring.
+    try {
+      const { checkAppKeyDeclarations } = await import("./cloudAppRequirements.js");
+      const { formatUndeclaredKeysMessage } = await import("./appKeyDeclarations.js");
+      const undeclared = await checkAppKeyDeclarations(this.paprRootDir, appId);
+      if (undeclared.length > 0) {
+        issues.push({
+          file: "requirements.json",
+          severity: "error",
+          rule: APP_KEYS_UNDECLARED_RULE,
+          message: formatUndeclaredKeysMessage(appId, undeclared),
+        });
+      }
+    } catch (keysError) {
+      console.warn("[AppService] Key declaration check failed:", keysError);
     }
 
     // Claude cards (metadata.claude): same build publish runs, so errors surface before publish.

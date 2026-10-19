@@ -283,7 +283,11 @@ async function runPostEditAppValidation(
     };
   }
 
-  const errorCount = issues.filter((issue) => issue.severity === "error").length;
+  // Undeclared keys are a validate_app error the agent should fix, but not a
+  // build failure: editing an old app must not report BUILD FAILED.
+  const errorCount = issues.filter(
+    (issue) => issue.severity === "error" && issue.rule !== "app-keys-undeclared",
+  ).length;
   const warningCount = issues.filter((issue) => issue.severity === "warning").length;
   const issueList = buildCappedValidationIssueList(issues);
 
@@ -397,7 +401,7 @@ function buildAppEditToolResult(input: {
 const BACKEND_VAULT_KEYS_REMINDER =
   "Backend vault keys: when handlers read os.environ / process.env, key names are auto-synced " +
   "into backend/manifest.json action \"keys\". Declare each with declare_app_keys (what it is for, owner vs user, required) — " +
-  "publish is blocked until every key is declared. " +
+  "validate_app reports undeclared keys as an error. " +
   "The gateway injects Settings → Integration Keys as environment variables. " +
   "Do NOT grep keychain, query custom-keys.json, call get_key, or invent /api/keys endpoints. " +
   "Linked DBs: attach_database first; gateway injects PAPR_DB_{KEY}* for every linked source. " +
@@ -991,7 +995,7 @@ export const createAppTool = createTool({
         _backendReminder:
           `Server-side code: apps/{appId}/backend/ + manifest.json → POST /api/app/backend/:action. ` +
           `Declare "keys": ["KEY_NAME"] per action — gateway injects Settings keys as env vars (os.environ/process.env). ` +
-          `Cloud: declare each key with declare_app_keys (purpose, provider owner|user, required) — publish is blocked until you do. Never grep keychain or call get_key. ` +
+          `Cloud: declare each key with declare_app_keys (purpose, provider owner|user, required) — validate_app flags undeclared ones. Never grep keychain or call get_key. ` +
           `Conversational buttons: paprAPI.invoke('chat.open', { message }) (desktop). Background AI: POST /api/jobs/run. Never /api/bash/run from mini-apps.`,
       };
     }
@@ -1025,7 +1029,7 @@ export const createAppTool = createTool({
       _backendReminder:
         `Server-side code: apps/{appId}/backend/ + manifest.json → POST /api/app/backend/:action. ` +
         `Declare "keys": ["KEY_NAME"] per action — gateway injects Settings keys as env vars. ` +
-        `Cloud: declare each key with declare_app_keys (purpose, provider owner|user, required) — publish is blocked until you do. Never grep keychain or call get_key. ` +
+        `Cloud: declare each key with declare_app_keys (purpose, provider owner|user, required) — validate_app flags undeclared ones. Never grep keychain or call get_key. ` +
         `Conversational buttons: paprAPI.invoke('chat.open', { message }) (desktop). Background AI: POST /api/jobs/run. Never /api/bash/run from mini-apps.`,
     };
   },

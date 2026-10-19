@@ -75,7 +75,7 @@ function publishCategory(appId: string): string | undefined {
 import { normalizeCatalogTags } from "../../core/utils/catalogTags.js";
 import { buildMiniApp } from "../utils/miniAppBuild.js";
 import {
-  assertAppKeysDeclared,
+  checkAppKeyDeclarations,
   catalogRequirementsForPublish,
   ensureAppRequirementsSyncedWithBackend,
 } from "./cloudAppRequirements.js";
@@ -868,11 +868,7 @@ export class CloudAppPublishService {
       slug?: string;
       /** Code/catalog refresh only — keep ACL fields from the live cloud publish record. */
       preserveCloudSharing?: boolean;
-      /**
-       * Background auto-republish has no agent to answer "what is this key?",
-       * so undeclared keys are logged instead of blocking (blocking would
-       * silently freeze code updates for live apps). Explicit publishes block.
-       */
+      /** Background auto-republish (no agent attached). */
       background?: boolean;
     },
   ): Promise<CloudPublishConfig> {
@@ -1044,17 +1040,18 @@ export class CloudAppPublishService {
       await detectCrossAppDependencies(this.paprDir, appId),
     );
 
-    // Every key visitors could be asked for must be declared (purpose, who
-    // provides it, required or not). Guessing them is how parameters like
-    // ${TASK} ended up on the visitor setup screen.
+    // Undeclared keys never block publish: existing apps predate declaring.
+    // validate_app is where the agent fixes them; until then they publish as
+    // owner keys, which visitors are never asked for.
     try {
-      await assertAppKeysDeclared(this.paprDir, appId);
-    } catch (error) {
-      if (!options?.background) throw error;
-      console.warn(
-        `[CloudPublish] ${appId} has undeclared keys; auto-republishing anyway:`,
-        (error as Error).message.split("\n")[0],
-      );
+      const undeclared = await checkAppKeyDeclarations(this.paprDir, appId);
+      if (undeclared.length > 0) {
+        console.warn(
+          `[CloudPublish] ${appId}: ${undeclared.length} undeclared key(s) published as owner keys: ${undeclared.map((key) => key.name).join(", ")}`,
+        );
+      }
+    } catch {
+      // advisory only
     }
 
     if (

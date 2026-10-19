@@ -458,7 +458,7 @@ Handlers receive **`PAPR_ACTION_PARAMS`** (JSON string of all merged params), **
 1. User stores keys in **Settings → Integration Keys** (syncs to cloud vault on publish).
 2. **Backend handlers:** list exact key names in **backend/manifest.json** `"keys": ["RR_ATTENTION_API_KEY"]` (per-action allowlist).
 3. **Linked jobs (buttons → `/api/jobs/run`):** declare `requiredKeys: ["RR_ATTENTION_API_KEY"]` in **job.json** and read `os.environ["RR_ATTENTION_API_KEY"]` (or add `${RR_ATTENTION_API_KEY}` in the job **command** so publish auto-detection sees it).
-4. **Declare every key (REQUIRED for publish):** `declare_app_keys({ appId, keys: [{ name, purpose, provider: "owner" | "user", required }], notKeys: [...] })`, or pass the same objects as job `requiredKeys`. This writes **apps/{appId}/requirements.json**, which is what visitors see on apps.papr.ai. **Nothing is auto-synced any more:** publish is blocked until every key found in backend/manifest.json and linked jobs is declared.
+4. **Declare every key:** `declare_app_keys({ appId, keys: [{ name, purpose, provider: "owner" | "user", required }], notKeys: [...] })`, or pass the same objects as job `requiredKeys`. This writes **apps/{appId}/requirements.json**, which is what visitors see on apps.papr.ai. **Nothing is auto-synced any more:** `validate_app` reports an error until every key found in backend/manifest.json and linked jobs is declared. Publish does not block; until declared, keys publish as owner keys (visitors are never asked for them).
    - `purpose`: one plain sentence a visitor reads ("Writes your drafts with your own OpenAI account"). No env var names.
    - `provider: "owner"`: the publisher supplies it (app secrets, shared config, a paid API the publisher pays for). `"user"`: each visitor connects their own account (their LinkedIn session, their Notion).
    - `required: false` when the app still works without it. Visitors can always skip; only features that need a missing key fail.
@@ -467,7 +467,7 @@ Handlers receive **`PAPR_ACTION_PARAMS`** (JSON string of all merged params), **
 5. Gateway injects as env vars — handler/job uses `os.environ[...]` or `process.env`.
 6. **Never** grep keychain, read `custom-keys.json`, or call `get_key` / `/api/keys` — those are agent-only.
 7. Cloud error "No matching catalog requirements" → **Sync now** / republish (catalog out of date), not more keychain debugging.
-8. **`validate_app`** warns about undeclared keys; `publish_cloud_app` returns `code: "app_keys_undeclared"` with each name, where it was found, and a suggestion (in your vault → probably owner; not credential-shaped → probably a parameter).
+8. **`validate_app`** reports `app-keys-undeclared` (an error, not a build failure) with each name, where it was found, and a suggestion (in your vault → probably owner; not credential-shaped → probably a parameter).
 
 **Frontend body shape:** `{ appId, params: { limit: "50" } }` — nested `params` required (`PAPR_ACTION_PARAMS`).
 
