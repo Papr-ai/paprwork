@@ -41,7 +41,7 @@
 @media (prefers-color-scheme: dark) {
   .app-layout {
     --app-chrome-bg: #0c0f14;
-    --app-chrome-line: rgba(255, 255, 255, 0.07);
+    --app-chrome-line: rgba(255, 255, 255, 0.09);
   }
 }
 
@@ -74,6 +74,8 @@
   position: relative;
 }
 
+/* Corner mask: covers the square corner of opaque panes / webviews (which ignore parent radius clipping).
+   Sits BELOW the hairline so the curve is drawn once, cleanly. */
 .app-layout__content::before {
   content: "";
   position: absolute;
@@ -83,21 +85,21 @@
   height: var(--app-content-radius);
   background: radial-gradient(
     circle at 100% 100%,
-    transparent calc(var(--app-content-radius) - 0.5px),
-    var(--app-chrome-bg) var(--app-content-radius)
+    transparent calc(var(--app-content-radius) - 1px),
+    var(--app-chrome-bg) calc(var(--app-content-radius) - 0.25px)
   );
   pointer-events: none;
-  z-index: 101;
+  z-index: 100;
 }
 
-/* Hairline traced along the card's top + left edge (overlay so opaque pane children can't hide it). */
+/* Hairline traced along the card's top + left edge, including the curve. */
 .app-layout__content::after {
   content: "";
   position: absolute;
   inset: 0;
   border-top: 1px solid var(--app-chrome-line);
   border-left: 1px solid var(--app-chrome-line);
-  border-top-left-radius: inherit;
+  border-top-left-radius: var(--app-content-radius);
   pointer-events: none;
-  z-index: 100;
+  z-index: 101;
 }
