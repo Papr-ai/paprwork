@@ -42,7 +42,17 @@ open_app_as_user() {
   log "open as $u (home=$home)"
   /usr/bin/xattr -dr com.apple.quarantine "$APP_PATH" >>"$LOG" 2>&1 || true
 
-  # Prefer direct open in the user's GUI session (works on modern macOS).
+  local uid_primary
+  uid_primary="$(/usr/bin/id -u "$u" 2>/dev/null)"
+
+  # Primary: run `open` inside the user's GUI (Aqua) bootstrap namespace.
+  # Plain `sudo -u` from the root installer context often lands in the wrong
+  # session and silently does nothing.
+  if [ -n "$uid_primary" ] && /bin/launchctl asuser "$uid_primary" /usr/bin/sudo -u "$u" env HOME="$home" USER="$u" /usr/bin/open -a "$APP_PATH" >>"$LOG" 2>&1; then
+    log "launchctl asuser open succeeded"
+    return 0
+  fi
+
   if /usr/bin/sudo -u "$u" env HOME="$home" USER="$u" /usr/bin/open -a "$APP_PATH" >>"$LOG" 2>&1; then
     log "open -a succeeded"
     return 0

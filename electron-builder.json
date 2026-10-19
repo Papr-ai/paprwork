@@ -120,7 +120,7 @@
     "allowRootDirectory": false,
     "isRelocatable": false,
     "overwriteAction": "upgrade",
-    "scripts": "build/pkg-scripts",
+    "scripts": "pkg-scripts",
     "conclusion": "build/pkg-conclusion.html"
   }
 }

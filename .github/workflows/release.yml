@@ -102,6 +102,7 @@ jobs:
           node scripts/verify-packaged-mini-app-sdk.mjs "${{ matrix.app_path }}"
           node scripts/verify-packaged-job-sdk.mjs "${{ matrix.app_path }}"
           node scripts/verify-packaged-turso-sync.mjs "${{ matrix.app_path }}/Contents/Resources" darwin ${{ matrix.arch }}
+          node scripts/verify-packaged-pkg-scripts.mjs release
 
       - name: Cleanup keychain
         if: always()
