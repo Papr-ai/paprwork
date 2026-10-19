@@ -905,12 +905,12 @@ async function createMainWindow() {
     ...baseConfig,
     titleBarStyle: "hidden",
     titleBarOverlay: {
-      color: isDarkMode ? "#1C1C1E" : "#F5F5F7", // Dark or light background based on theme
+      color: isDarkMode ? "#0C0F14" : "#F6F7F9", // Match rail/tab-bar chrome (--app-chrome-bg)
       symbolColor: isDarkMode ? "#FFFFFF" : "#000000", // White icons in dark, black icons in light
       height: 52, // Match tab bar height
     },
     transparent: false, // Use solid background on Windows
-    backgroundColor: isDarkMode ? "#1C1C1E" : "#F5F5F7", // Match titlebar color
+    backgroundColor: isDarkMode ? "#0C0F14" : "#F6F7F9", // Match titlebar color
     // Enable window resizing
     resizable: true,
     minimizable: true,
@@ -938,7 +938,7 @@ async function createMainWindow() {
     nativeTheme.on('updated', () => {
       const isDarkMode = nativeTheme.shouldUseDarkColors;
       mainWindow.setTitleBarOverlay({
-        color: isDarkMode ? "#1C1C1E" : "#F5F5F7",
+        color: isDarkMode ? "#0C0F14" : "#F6F7F9",
         symbolColor: isDarkMode ? "#FFFFFF" : "#000000",
         height: 52,
       });

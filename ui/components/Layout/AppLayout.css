@@ -14,6 +14,10 @@
      ~100% of one GPU-process core on its own — removed. */
   background: var(--background-color);
   background-attachment: fixed; /* Keep gradient fixed */
+  /* Window chrome (rail + tab bar) is ONE surface — must match .rail --rail-bg. */
+  --app-chrome-bg: #f6f7f9;
+  --app-chrome-line: rgba(10, 16, 32, 0.07);
+  --app-content-radius: 12px;
 }
 
 .app-layout__sidebar {
@@ -22,8 +26,8 @@
   min-width: 96px;
   max-width: 96px;
   height: 100%;
-  border-right: 1px solid var(--sidebar-border);
-  background: #f6f7f9;
+  /* No divider: rail flows into the tab bar like one L-shaped chrome surface. */
+  background: var(--app-chrome-bg);
   display: flex;
   flex-direction: column;
   /* Visible so rail tooltips and peek flyouts can float over the content area. */
@@ -35,9 +39,9 @@
 
 /* Dark mode rail */
 @media (prefers-color-scheme: dark) {
-  .app-layout__sidebar {
-    background: #0c0f14;
-    border-right-color: #242b36;
+  .app-layout {
+    --app-chrome-bg: #0c0f14;
+    --app-chrome-line: rgba(255, 255, 255, 0.07);
   }
 }
 
@@ -52,6 +56,7 @@
 
 .app-layout__topbar {
   width: 100%;
+  background: var(--app-chrome-bg);
   flex-shrink: 0;
   position: relative;
   z-index: 200;
@@ -60,6 +65,39 @@
 
 .app-layout__content {
   flex: 1;
+  min-height: 0;
   overflow: hidden;
   display: flex;
+  /* Zoom-style inset canvas: content reads as a card nested in the chrome, rounded where it meets rail + tab bar.
+     Content keeps its existing (transparent → app-layout) background; only the corner is filled with chrome. */
+  border-top-left-radius: var(--app-content-radius);
+  position: relative;
+}
+
+.app-layout__content::before {
+  content: "";
+  position: absolute;
+  top: 0;
+  left: 0;
+  width: var(--app-content-radius);
+  height: var(--app-content-radius);
+  background: radial-gradient(
+    circle at 100% 100%,
+    transparent calc(var(--app-content-radius) - 0.5px),
+    var(--app-chrome-bg) var(--app-content-radius)
+  );
+  pointer-events: none;
+  z-index: 101;
+}
+
+/* Hairline traced along the card's top + left edge (overlay so opaque pane children can't hide it). */
+.app-layout__content::after {
+  content: "";
+  position: absolute;
+  inset: 0;
+  border-top: 1px solid var(--app-chrome-line);
+  border-left: 1px solid var(--app-chrome-line);
+  border-top-left-radius: inherit;
+  pointer-events: none;
+  z-index: 100;
 }
