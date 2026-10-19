@@ -61,8 +61,12 @@ async function handleCommittedEvent(event: AppRepoCommittedEvent): Promise<void>
 
   await applyRemoteCommit(event.appId, event.commitSha);
 
-  const { getCloudAppPublishService } = await import("../CloudAppPublishService.js");
+  const { getCloudAppPublishService, invalidatePublishStatusCache } = await import(
+    "../CloudAppPublishService.js"
+  );
   try {
+    // Another device may have just published this app: re-read, don't trust the cache.
+    invalidatePublishStatusCache(event.appId);
     const status = await getCloudAppPublishService().getCloudPublishStatus(event.appId);
     if (!status.published || !status.shareUrl) {
       return;

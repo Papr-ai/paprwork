@@ -18,6 +18,8 @@ async function start(opts: {
   snapshot: (jobId: string) => JobStatusPollResult | null;
   pollIntervalMs?: number;
   safetyPollMs?: number;
+  notFoundPollMs?: number;
+  resolveOwnerKey?: () => Promise<string | undefined>;
 }): Promise<Harness> {
   const hub = new JobEventHub();
   const polls: string[] = [];
@@ -27,6 +29,8 @@ async function start(opts: {
     pushActive: () => opts.pushActive,
     pollIntervalMs: opts.pollIntervalMs ?? 50,
     safetyPollMs: opts.safetyPollMs ?? 60_000,
+    notFoundPollMs: opts.notFoundPollMs,
+    resolveOwnerKey: opts.resolveOwnerKey,
     pollJobStatus: async (jobId) => {
       polls.push(jobId);
       return opts.snapshot(jobId);
@@ -161,6 +165,52 @@ describe("job events SSE with pushed status", () => {
     await sleep(100);
     s.stop();
     expect(s.events.map((e) => e.data.status)).toEqual(["running"]);
+  });
+});
+
+const notFound = (): never => {
+  throw Object.assign(new Error("job not found"), { notFound: true });
+};
+
+describe("job events SSE: unknown jobs are a final answer", () => {
+  let h: Harness | undefined;
+  afterEach(async () => { await h?.close(); h = undefined; });
+
+  it("a missing job is read once and announced once, never re-polled while push is live", async () => {
+    h = await start({ pushActive: true, resolveOwnerKey: async () => "o", snapshot: notFound });
+    const s = listen(`${h.url}?jobIds=ghost`);
+    await sleep(400); // ~8 ticks at 50ms
+    s.stop();
+    expect(h.polls).toEqual(["ghost"]);
+    expect(s.events).toEqual([{ type: "jobs:unknown", data: { jobId: "ghost" } }]);
+  });
+
+  it("a job created later still gets its pushed status (owner from access, not the read)", async () => {
+    h = await start({ pushActive: true, resolveOwnerKey: async () => "o", snapshot: notFound });
+    const s = listen(`${h.url}?jobIds=late`);
+    await sleep(100);
+    push(h.hub, "o", { jobId: "late", status: "running" }, "2026-01-01T00:00:01Z");
+    await sleep(100);
+    s.stop();
+    expect(s.events.map((e) => e.type)).toEqual(["jobs:unknown", "jobs:status-changed"]);
+    expect(h.polls).toEqual(["late"]);
+  });
+
+  it("owner from access: existing jobs stop polling even if the read has no ownerKey", async () => {
+    h = await start({ pushActive: true, resolveOwnerKey: async () => "o", snapshot: (id) => ({ jobId: id, status: "completed" }) });
+    const s = listen(`${h.url}?jobIds=j1`);
+    await sleep(300);
+    s.stop();
+    expect(h.polls).toEqual(["j1"]);
+  });
+
+  it("without push, a missing job is re-read slowly, not every tick", async () => {
+    h = await start({ pushActive: false, notFoundPollMs: 250, snapshot: notFound });
+    const s = listen(`${h.url}?jobIds=ghost`);
+    await sleep(400);
+    s.stop();
+    expect(h.polls.length).toBe(2); // t=0 and t≈250ms, not 8
+    expect(s.events.filter((e) => e.type === "jobs:unknown")).toHaveLength(1);
   });
 });
 
