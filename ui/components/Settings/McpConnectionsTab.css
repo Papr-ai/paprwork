@@ -277,8 +277,10 @@
 }
 
 .svc-btn--primary {
-  border-color: var(--cx-accent);
-  background: var(--cx-accent);
+  /* Same blue as .settings-btn--primary in SettingsView — not the lighter
+     dark-mode --cx-accent, which looked washed out behind white text. */
+  border-color: rgb(var(--accent-rgb));
+  background: rgb(var(--accent-rgb));
   color: #fff;
 }
 
