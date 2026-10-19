@@ -3080,7 +3080,7 @@ async function startGateway(): Promise<void> {
 
     app.put("/api/cloud/apps/:appId/requirements", async (req, res) => {
       try {
-        const body = req.body as { requirements?: unknown };
+        const body = req.body as { requirements?: unknown; notKeys?: unknown };
         if (!Array.isArray(body.requirements)) {
           res.status(400).json({ error: "requirements array is required" });
           return;
@@ -3090,6 +3090,13 @@ async function startGateway(): Promise<void> {
           paprDir,
           req.params.appId,
           body.requirements as RequiredKeySpec[],
+          Array.isArray(body.notKeys)
+            ? {
+                notKeys: body.notKeys.filter(
+                  (name): name is string => typeof name === "string",
+                ),
+              }
+            : undefined,
         );
         const { notifyAppRequirementsChanged } = await import(
           "./services/appRequirementsChanged.js"

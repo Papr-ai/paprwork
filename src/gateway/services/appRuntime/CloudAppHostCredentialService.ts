@@ -8,7 +8,9 @@ import type { RequiredKeySpec } from "../../../core/types/bundles.js";
 import {
   appRequiresUserSignIn,
   getUserCredentialKeys,
+  normalizeCredentialRequirements,
 } from "../../../core/utils/credentialScope.js";
+import { renderCredentialSetupPage } from "./cloudAppCredentialSetupPage.js";
 import {
   CLOUD_APP_REQUIREMENTS_FILENAME,
   parseRequirementsFileContent,
@@ -26,14 +28,6 @@ import {
   resolveCloudAuthReturnToFromRequest,
   cloudAppRootPath,
 } from "./cloudAppHostCookies.js";
-
-function escapeHtml(value: string): string {
-  return value
-    .replaceAll("&", "&amp;")
-    .replaceAll("<", "&lt;")
-    .replaceAll(">", "&gt;")
-    .replaceAll('"', "&quot;");
-}
 
 export async function loadPublishedAppRequirements(
   runtimeAuth: AppRuntimeRouteAuth,
@@ -81,148 +75,53 @@ async function missingUserCredentialNames(
   );
 }
 
-function buildCredentialHelpMessage(missing: RequiredKeySpec[]): string {
-  if (missing.length === 0) {
-    return "Help me connect my accounts and set up credentials in my Papr vault.";
-  }
-  const names = missing.map((spec) => spec.name).join(", ");
-  return `Help me set up these credentials in my Papr vault: ${names}`;
+/** Visitor chose "Skip for now": open the app; features that need a key still say so. */
+const CREDENTIAL_SKIP_COOKIE = "papr_cred_skip";
+const CREDENTIAL_SKIP_MAX_AGE_SEC = 60 * 60 * 24 * 30;
+
+function skipCookiePath(namespaceId: string, slug: string): string {
+  return appRootPath(namespaceId, slug);
 }
 
-function renderCredentialSetupPage(params: {
-  namespaceId: string;
-  slug: string;
-  returnTo: string;
-  missing: RequiredKeySpec[];
-  error?: string;
-}): string {
-  const action = setupPath(params.namespaceId, params.slug);
-  const fields = params.missing
-    .map((spec) => {
-      const label = spec.service || spec.name;
-      const hint = spec.description
-        ? `<p class="hint">${escapeHtml(spec.description)}</p>`
-        : "";
-      const links: string[] = [];
-      if (spec.signupUrl) {
-        links.push(
-          `<a href="${escapeHtml(spec.signupUrl)}" target="_blank" rel="noopener noreferrer">Get API key</a>`,
-        );
-      }
-      if (spec.docsUrl) {
-        links.push(
-          `<a href="${escapeHtml(spec.docsUrl)}" target="_blank" rel="noopener noreferrer">Docs</a>`,
-        );
-      }
-      const linkBlock =
-        links.length > 0
-          ? `<div class="links">${links.join(" · ")}</div>`
-          : "";
+export function hasCredentialSkipCookie(cookieHeader: string | undefined): boolean {
+  return Boolean(
+    cookieHeader
+      ?.split(";")
+      .some((part) => part.trim() === `${CREDENTIAL_SKIP_COOKIE}=1`),
+  );
+}
 
-      return `<label class="field">
-  <span class="field-label">${escapeHtml(label)} <code>${escapeHtml(spec.name)}</code></span>
-  ${hint}
-  ${linkBlock}
-  <input type="password" name="${escapeHtml(spec.name)}" autocomplete="off" required placeholder="Paste ${escapeHtml(spec.name)}" />
-</label>`;
-    })
-    .join("\n");
+function buildCredentialSkipCookie(
+  namespaceId: string,
+  slug: string,
+  secure: boolean,
+): string {
+  return (
+    `${CREDENTIAL_SKIP_COOKIE}=1; Path=${skipCookiePath(namespaceId, slug)}; HttpOnly; ` +
+    `SameSite=${secure ? "None" : "Lax"}; Max-Age=${CREDENTIAL_SKIP_MAX_AGE_SEC}${secure ? "; Secure" : ""}`
+  );
+}
 
-  const errorBlock = params.error
-    ? `<p class="error">${escapeHtml(params.error)}</p>`
-    : "";
+function requestIsSecure(req: Request): boolean {
+  return req.protocol === "https" || req.headers["x-forwarded-proto"] === "https";
+}
 
-  const helpMessage = buildCredentialHelpMessage(params.missing);
-  const helpMessageJson = JSON.stringify(helpMessage);
+/** "linkedin-outreach" → "Linkedin Outreach" (the page has no catalog title). */
+function appTitleFromSlug(slug: string): string {
+  return (
+    slug
+      .split(/[-_]+/)
+      .filter(Boolean)
+      .map((part) => part.charAt(0).toUpperCase() + part.slice(1))
+      .join(" ") || slug
+  );
+}
 
-  return `<!DOCTYPE html>
-<html lang="en">
-<head>
-  <meta charset="utf-8" />
-  <meta name="viewport" content="width=device-width, initial-scale=1" />
-  <title>Set up credentials</title>
-  <style>
-    body { margin:0; min-height:100vh; display:flex; align-items:center; justify-content:center;
-      font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
-      background: linear-gradient(135deg, #f5f7fb 0%, #eef2ff 100%); color:#111827; padding:24px; box-sizing:border-box; }
-    .card { width:100%; max-width:520px; padding:32px 28px; border-radius:16px;
-      background:rgba(255,255,255,0.95); box-shadow:0 20px 60px rgba(15,23,42,0.12); }
-    h1 { margin:0 0 8px; font-size:24px; }
-    .lead { margin:0 0 20px; color:#667085; line-height:1.5; font-size:15px; }
-    .field { display:block; margin:0 0 18px; }
-    .field-label { display:block; font-weight:600; margin-bottom:6px; font-size:14px; }
-    .field-label code { font-weight:500; color:#475467; font-size:12px; margin-left:6px; }
-    .hint { margin:0 0 8px; color:#667085; font-size:13px; line-height:1.4; }
-    .links { margin:0 0 8px; font-size:13px; }
-    .links a { color:#2563eb; text-decoration:none; }
-    input { width:100%; box-sizing:border-box; padding:12px 14px; border:1px solid #d0d5dd;
-      border-radius:10px; font-size:14px; }
-    .btn { margin-top:8px; width:100%; padding:14px 16px; border:none; border-radius:10px;
-      background:#2563eb; color:white; font-size:15px; font-weight:600; cursor:pointer; }
-    .error { color:#b42318; font-size:14px; margin:0 0 12px; }
-    .help { margin:0 0 20px; padding:14px 16px; border-radius:10px;
-      background:#f0f4ff; border:1px solid #dbeafe; font-size:14px; line-height:1.5; color:#344054; }
-    .help-btn { display:inline; padding:0; border:none; background:none; color:#2563eb;
-      font:inherit; font-weight:600; cursor:pointer; text-decoration:underline; }
-    .footnote { margin:16px 0 0; font-size:12px; color:#98a2b3; line-height:1.4; }
-  </style>
-</head>
-<body>
-  <div class="card">
-    <h1>Set up your credentials</h1>
-    <p class="lead">This app needs API keys from <strong>you</strong> before it can run. Keys are stored in your Papr vault — not shared with the app owner.</p>
-    <p class="help">Don't have these credentials?
-      <button type="button" class="help-btn" id="paprwork-help">Get help in Paprwork</button>
-      — opens chat if Paprwork is installed, otherwise downloads from papr.ai.</p>
-    ${errorBlock}
-    <form method="POST" action="${escapeHtml(action)}">
-      <input type="hidden" name="returnTo" value="${escapeHtml(params.returnTo)}" />
-      ${fields}
-      <button class="btn" type="submit">Save and continue</button>
-    </form>
-    <p class="footnote">Owner-provided keys (if any) are injected server-side when sandbox jobs run — you only configure keys marked as yours.</p>
-  </div>
-  <script>
-    (function () {
-      var helpMessage = ${helpMessageJson};
-      var downloadUrl = "https://papr.ai";
-      var btn = document.getElementById("paprwork-help");
-      if (!btn) return;
-
-      btn.addEventListener("click", function () {
-        // Paprwork desktop preview: papr:// does not work inside nested iframes.
-        if (window.parent !== window) {
-          window.parent.postMessage(
-            { type: "papr-open-chat", message: helpMessage },
-            "*",
-          );
-          return;
-        }
-
-        var deepLink =
-          "papr://chat/open?message=" + encodeURIComponent(helpMessage);
-        var fallbackTimer = window.setTimeout(function () {
-          window.location.href = downloadUrl;
-        }, 1800);
-
-        function cancelFallback() {
-          window.clearTimeout(fallbackTimer);
-          window.removeEventListener("blur", cancelFallback);
-          document.removeEventListener("visibilitychange", onHide);
-        }
-
-        function onHide() {
-          if (document.hidden) cancelFallback();
-        }
-
-        window.addEventListener("blur", cancelFallback);
-        document.addEventListener("visibilitychange", onHide);
-        window.location.href = deepLink;
-      });
-    })();
-  </script>
-</body>
-</html>`;
+/** Keys each visitor brings, including optional ones (shown, never forced). */
+function allUserCredentialKeys(requirements: RequiredKeySpec[]): RequiredKeySpec[] {
+  return normalizeCredentialRequirements(requirements).filter(
+    (spec) => spec.credentialScope === "user",
+  );
 }
 
 export class CloudAppHostCredentialService {
@@ -296,6 +195,10 @@ export class CloudAppHostCredentialService {
       return true;
     }
 
+    if (hasCredentialSkipCookie(req.headers.cookie)) {
+      return true;
+    }
+
     const missingNames = await missingUserCredentialNames(
       runtimeAuth,
       requirements,
@@ -357,12 +260,15 @@ export class CloudAppHostCredentialService {
     runtimeAuth: AppRuntimeRouteAuth,
   ): Promise<void> {
     const requirements = await loadPublishedAppRequirements(runtimeAuth);
-    const userKeys = getUserCredentialKeys(requirements);
-    const missingNames = await missingUserCredentialNames(
+    const userKeys = allUserCredentialKeys(requirements);
+    const missingNames = await resolveMissingRuntimeVaultKeyNames(
       runtimeAuth,
-      requirements,
+      userKeys.map((spec) => spec.name),
     );
-    const missing = userKeys.filter((spec) => missingNames.includes(spec.name));
+    // Required first: those are what the app needs to work at all.
+    const missing = userKeys
+      .filter((spec) => missingNames.includes(spec.name))
+      .sort((a, b) => Number(a.required === false) - Number(b.required === false));
 
     const returnTo = resolveCloudAuthReturnToPath(
       typeof req.query.returnTo === "string"
@@ -384,8 +290,8 @@ export class CloudAppHostCredentialService {
       .setHeader("Content-Type", "text/html; charset=utf-8")
       .send(
         renderCredentialSetupPage({
-          namespaceId: runtimeAuth.namespaceId,
-          slug: runtimeAuth.slug,
+          action: setupPath(runtimeAuth.namespaceId, runtimeAuth.slug),
+          appTitle: appTitleFromSlug(runtimeAuth.slug),
           returnTo,
           missing,
           error,
@@ -468,13 +374,19 @@ export class CloudAppHostCredentialService {
     }
 
     const requirements = await loadPublishedAppRequirements(runtimeAuth);
-    const userKeys = getUserCredentialKeys(requirements);
+    const userKeys = allUserCredentialKeys(requirements);
     const returnTo = resolveCloudAuthReturnToPath(
       typeof req.body?.returnTo === "string"
         ? req.body.returnTo
         : appRootPath(runtimeAuth.namespaceId, runtimeAuth.slug),
       { namespaceId: runtimeAuth.namespaceId, slug: runtimeAuth.slug },
     );
+    const skipCookie = buildCredentialSkipCookie(
+      runtimeAuth.namespaceId,
+      runtimeAuth.slug,
+      requestIsSecure(req),
+    );
+    const skipping = req.body?.skip === "1";
 
     const keys: Array<{ name: string; value: string }> = [];
     for (const spec of userKeys) {
@@ -485,7 +397,12 @@ export class CloudAppHostCredentialService {
     }
 
     if (keys.length === 0) {
-      const setupUrl = `${setupPath(runtimeAuth.namespaceId, runtimeAuth.slug)}?returnTo=${encodeURIComponent(returnTo)}&error=${encodeURIComponent("Enter at least one API key")}`;
+      if (skipping) {
+        res.append("Set-Cookie", skipCookie);
+        res.redirect(302, returnTo);
+        return;
+      }
+      const setupUrl = `${setupPath(runtimeAuth.namespaceId, runtimeAuth.slug)}?returnTo=${encodeURIComponent(returnTo)}&error=${encodeURIComponent("Paste a key, or choose Skip for now.")}`;
       res.redirect(302, setupUrl);
       return;
     }
@@ -496,10 +413,16 @@ export class CloudAppHostCredentialService {
         runtimeAuth,
         requirements,
       );
-      if (stillMissing.length > 0) {
-        const setupUrl = `${setupPath(runtimeAuth.namespaceId, runtimeAuth.slug)}?returnTo=${encodeURIComponent(returnTo)}&error=${encodeURIComponent(`Still missing: ${stillMissing.join(", ")}`)}`;
+      if (stillMissing.length > 0 && !skipping) {
+        const labels = userKeys
+          .filter((spec) => stillMissing.includes(spec.name))
+          .map((spec) => spec.service || spec.name);
+        const setupUrl = `${setupPath(runtimeAuth.namespaceId, runtimeAuth.slug)}?returnTo=${encodeURIComponent(returnTo)}&error=${encodeURIComponent(`Saved. Still needed: ${labels.join(", ")} — add it or skip for now.`)}`;
         res.redirect(302, setupUrl);
         return;
+      }
+      if (stillMissing.length > 0) {
+        res.append("Set-Cookie", skipCookie);
       }
       res.redirect(302, returnTo);
     } catch (err) {

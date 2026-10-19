@@ -3206,9 +3206,9 @@ if (!userId) throw new Error("Sign in required");
 - **Never** list \`PAPR_CALLER_USER_ID\` / \`PAPR_CALLER_EMAIL\` in \`"keys"\` — they are session-injected automatically, not vault keys.
 - **Cloud (two layers — both required):**
   1. \`backend/manifest.json\` \`"keys"\` — per-action allowlist (what this handler may receive)
-  2. \`apps/{appId}/requirements.json\` — publish **vault catalog** (what cloud vault knows about). Auto-sync merges **backend manifest keys**, linked job **\${KEY_NAME}** in commands, and linked job **job.json requiredKeys** before git push / **Sync now** (then republish when drift is detected).
+  2. \`apps/{appId}/requirements.json\` — publish **vault catalog**, written by \`declare_app_keys({ appId, keys: [{ name, purpose, provider: "owner" | "user", required }], notKeys })\` (or rich job \`requiredKeys\`). Nothing is auto-synced: **publish is blocked until every key in the backend manifest and linked jobs is declared**. \`purpose\` is what visitors read; \`owner\` = publisher supplies it, \`user\` = each visitor brings their own; \`notKeys\` = \${NAME} job parameters that are not secrets. For a paid API with unclear payer, ask the user.
 - **Not the same file:** \`papr-cloud-dependencies.json\` = cross-app/database install deps for community publish — **never** put API keys there.
-- **Job runtime vs catalog:** \`job.json requiredKeys\` injects secrets when the job runs; **requirements.json** is still required for vault resolve on **apps.papr.ai** unless you add keys manually in the publish credentials panel.
+- **Job runtime vs catalog:** \`job.json requiredKeys\` injects secrets when the job runs; the declaration in **requirements.json** is what apps.papr.ai uses for vault resolve and the visitor setup screen.
 - Python: \`api_key = os.environ["RR_ATTENTION_API_KEY"]\` · Node/TS: \`process.env.RR_ATTENTION_API_KEY\`
 - **Never** grep keychain, read \`custom-keys.json\`, call \`get_key\`, or invent \`/api/keys/*\` — those are agent-only paths, not backend runtime.
 - If cloud injection fails ("No matching catalog requirements"): ensure key is in Settings + manifest \`keys\`, then run **Sync now** on the app (do not tell users to republish manually unless sync fails).

@@ -3,6 +3,7 @@ import * as os from "os";
 import * as path from "path";
 import { afterEach, describe, expect, it } from "vitest";
 import {
+  checkAppKeyDeclarations,
   readEffectiveAppRequirements,
   readLinkedJobCatalogKeyRefs,
   readLinkedJobKeyNames,
@@ -76,7 +77,7 @@ describe("readLinkedJobKeyNames", () => {
     ]);
   });
 
-  it("readEffectiveAppRequirements includes linked job requiredKeys", async () => {
+  it("linked job requiredKeys must be declared, not auto-added", async () => {
     const paprDir = makePaprDir();
     fs.writeFileSync(
       path.join(paprDir, "Jobs", "job-sync", "job.json"),
@@ -87,8 +88,14 @@ describe("readLinkedJobKeyNames", () => {
       }),
     );
 
+    // Detected names are no longer guessed into the published catalog...
     const effective = await readEffectiveAppRequirements(paprDir, "app-1");
-    expect(effective.map((spec) => spec.name)).toContain("RR_ATTENTION_API_KEY");
+    expect(effective.map((spec) => spec.name)).not.toContain("RR_ATTENTION_API_KEY");
+    // ...they block publish until declared.
+    const undeclared = await checkAppKeyDeclarations(paprDir, "app-1", {
+      ownerVaultKeyNames: new Set(),
+    });
+    expect(undeclared.map((key) => key.name)).toEqual(["RR_ATTENTION_API_KEY"]);
   });
 
   it("flags keys missing from saved requirements.json", () => {

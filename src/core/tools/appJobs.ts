@@ -2,6 +2,11 @@ import { gatewayBackgroundBudget } from "../../gateway/services/gatewayBackgroun
 import { createTool } from "@mastra/core/tools";
 import { z } from "zod";
 import { RequirementItemSchema } from "../types/bundles.js";
+import {
+  JobRequiredKeysSchema,
+  declareJobKeysOnApps,
+  jobRequiredKeyNames,
+} from "./appKeysJobDeclarations.js";
 import { applyExactStringReplacement } from "../utils/exactStringReplace.js";
 import { withFileEditLock } from "../utils/fileEditLock.js";
 import { buildPostEditSnippet } from "../utils/postEditSnippet.js";
@@ -391,7 +396,8 @@ function buildAppEditToolResult(input: {
 
 const BACKEND_VAULT_KEYS_REMINDER =
   "Backend vault keys: when handlers read os.environ / process.env, key names are auto-synced " +
-  "into backend/manifest.json action \"keys\" (and requirements.json on save). " +
+  "into backend/manifest.json action \"keys\". Declare each with declare_app_keys (what it is for, owner vs user, required) — " +
+  "publish is blocked until every key is declared. " +
   "The gateway injects Settings → Integration Keys as environment variables. " +
   "Do NOT grep keychain, query custom-keys.json, call get_key, or invent /api/keys endpoints. " +
   "Linked DBs: attach_database first; gateway injects PAPR_DB_{KEY}* for every linked source. " +
@@ -612,12 +618,12 @@ const createJobSchemaCore = z
         "Use list_job_folders first to see existing groups. Same name = same folder.",
     ),
   command: z.string().optional(),
-  requiredKeys: z
-    .array(z.string().min(1))
-    .optional()
-    .describe(
-      "Custom API key names from Settings to inject into the job process as environment variables. Use this instead of passing secrets as CLI args. Example: ['VERCEL_API_KEY']",
-    ),
+  requiredKeys: JobRequiredKeysSchema.optional().describe(
+    "Settings keys to inject into the job as environment variables (never pass secrets as CLI args). " +
+      "Bare names work for local runs: ['VERCEL_API_KEY']. When the job is linked to an app, declare each key instead so " +
+      "publish knows what it is: [{ name: 'OPENAI_API_KEY', purpose: 'Writes your drafts', provider: 'owner' | 'user', required: true }] " +
+      "(owner = app publisher supplies it; user = each visitor connects their own). ${NAME} job parameters that are not secrets go in declare_app_keys notKeys.",
+  ),
   requirements: z
     .array(z.string().min(1))
     .optional()
@@ -985,7 +991,7 @@ export const createAppTool = createTool({
         _backendReminder:
           `Server-side code: apps/{appId}/backend/ + manifest.json → POST /api/app/backend/:action. ` +
           `Declare "keys": ["KEY_NAME"] per action — gateway injects Settings keys as env vars (os.environ/process.env). ` +
-          `Cloud: requirements.json catalog too (auto-synced on publish_cloud_app). Never grep keychain or call get_key. ` +
+          `Cloud: declare each key with declare_app_keys (purpose, provider owner|user, required) — publish is blocked until you do. Never grep keychain or call get_key. ` +
           `Conversational buttons: paprAPI.invoke('chat.open', { message }) (desktop). Background AI: POST /api/jobs/run. Never /api/bash/run from mini-apps.`,
       };
     }
@@ -1019,7 +1025,7 @@ export const createAppTool = createTool({
       _backendReminder:
         `Server-side code: apps/{appId}/backend/ + manifest.json → POST /api/app/backend/:action. ` +
         `Declare "keys": ["KEY_NAME"] per action — gateway injects Settings keys as env vars. ` +
-        `Cloud: requirements.json catalog too (auto-synced on publish_cloud_app). Never grep keychain or call get_key. ` +
+        `Cloud: declare each key with declare_app_keys (purpose, provider owner|user, required) — publish is blocked until you do. Never grep keychain or call get_key. ` +
         `Conversational buttons: paprAPI.invoke('chat.open', { message }) (desktop). Background AI: POST /api/jobs/run. Never /api/bash/run from mini-apps.`,
     };
   },
@@ -1098,7 +1104,7 @@ export const createJobTool = createTool({
       writeDbIds: args.writeDbIds,
       folder: args.folder,
       command: args.command,
-      requiredKeys: args.requiredKeys,
+      requiredKeys: jobRequiredKeyNames(args.requiredKeys),
       requirements: args.requirements,
       dependsOn: args.dependsOn?.map((dependency) => ({
         jobId: dependency.jobId,
@@ -1158,14 +1164,12 @@ export const createJobTool = createTool({
     const linkedAppIds = (args.appIds ?? []).filter(
       (appId) => appId !== "__standalone__",
     );
-    const publishCatalogReminder =
-      isScriptJob &&
-      (args.requiredKeys?.length ?? 0) > 0 &&
-      linkedAppIds.length > 0
-        ? `☁️ PUBLISH CATALOG: job.json requiredKeys inject at runtime, but apps.papr.ai vault uses apps/{appId}/requirements.json. ` +
-          `Sync now / publish auto-syncs requiredKeys and \${KEY} in the job command into requirements.json. ` +
-          `Or add keys in the publish credentials panel. Do NOT put API keys in papr-cloud-dependencies.json (cross-app install deps only).`
-        : undefined;
+    const keyDeclaration = await declareJobKeysOnApps(
+      linkedAppIds,
+      args.requiredKeys,
+      args.command,
+    );
+    const publishCatalogReminder = keyDeclaration.reminder;
     let writeDbSummary: string | undefined;
     const writeDbIds = args.writeDbIds ?? [];
     if (writeDbIds.length > 0) {
@@ -1963,12 +1967,10 @@ const updateJobSchema = z.object({
     .string()
     .optional()
     .describe("New command to run (e.g. 'python3 selector.py')"),
-  requiredKeys: z
-    .array(z.string().min(1))
-    .optional()
-    .describe(
-      "Replace custom API key names to inject as env vars. Pass [] to clear. Do not pass secrets as CLI args.",
-    ),
+  requiredKeys: JobRequiredKeysSchema.optional().describe(
+    "Replace the keys injected as env vars. Pass [] to clear. Same shape as create_job: bare names, or " +
+      "{ name, purpose, provider: 'owner' | 'user', required } to also declare them on the linked apps.",
+  ),
   requirements: z
     .array(z.string().min(1))
     .optional()
@@ -2825,13 +2827,16 @@ Common use cases:
   inputSchema: updateJobSchema,
   execute: async (input) => {
     const args = (input as { context?: UpdateJobArgs }).context ?? input;
-    const { jobId, dependsOn, retries, schedule, folder, ...rest } = args;
+    const { jobId, dependsOn, retries, schedule, folder, requiredKeys, ...rest } = args;
     const { getJobsService } =
       await import("../../gateway/services/JobsService.js");
     const jobsService = getJobsService();
     await jobsService.initialize();
     const job = await jobsService.updateJob(jobId, {
       ...rest,
+      ...(requiredKeys !== undefined
+        ? { requiredKeys: jobRequiredKeyNames(requiredKeys) }
+        : {}),
       ...(folder !== undefined ? { folder } : {}),
       ...(dependsOn !== undefined
         ? {
@@ -2881,10 +2886,21 @@ Common use cases:
       job.writeDbIds ?? [],
     );
     const desktopOnlyReminder = await desktopOnlyReminderFor(jobId);
+    const keyDeclaration =
+      requiredKeys !== undefined || rest.command !== undefined
+        ? await declareJobKeysOnApps(
+            (job.appIds ?? []).filter((appId) => appId !== "__standalone__"),
+            requiredKeys,
+            job.command,
+          )
+        : { reminder: undefined };
 
     return {
       success: true,
       data: (await jobsService.getJob(jobId)) ?? job,
+      ...(keyDeclaration.reminder
+        ? { _publishCatalogReminder: keyDeclaration.reminder }
+        : {}),
       ...(agentJobReminder ? { _agentJobReminder: agentJobReminder } : {}),
       ...(scriptPathReminder ? { _scriptPathReminder: scriptPathReminder } : {}),
       ...(hardcodedDbIdReminder

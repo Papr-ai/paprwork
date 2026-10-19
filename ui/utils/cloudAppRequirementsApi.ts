@@ -14,6 +14,8 @@ export interface AppRequirementsDiscovery {
   requirements: RequiredKeySpec[];
   savedRequirements?: RequiredKeySpec[];
   detectedKeyNames?: string[];
+  /** Names declared as job parameters, not keys. */
+  notKeys?: string[];
 }
 
 export async function fetchAppRequirements(
@@ -28,17 +30,19 @@ export async function fetchAppRequirements(
     requirements: body.requirements ?? [],
     savedRequirements: body.savedRequirements ?? [],
     detectedKeyNames: body.detectedKeyNames ?? [],
+    notKeys: body.notKeys ?? [],
   };
 }
 
 export async function saveAppRequirements(
   appId: string,
   requirements: RequiredKeySpec[],
+  notKeys?: string[],
 ): Promise<RequiredKeySpec[]> {
   const res = await fetch(`${GATEWAY}/api/cloud/apps/${appId}/requirements`, {
     method: "PUT",
     headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ requirements }),
+    body: JSON.stringify(notKeys ? { requirements, notKeys } : { requirements }),
   });
   if (!res.ok) {
     const body = (await res.json()) as { error?: string };

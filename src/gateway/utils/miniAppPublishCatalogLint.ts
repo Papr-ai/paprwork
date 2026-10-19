@@ -19,9 +19,9 @@ function formatCatalogGapMessage(
       : "${KEY_NAME} in the job command";
   return (
     `Linked job ${ref.jobId} uses integration key ${ref.keyName} (${via}). ` +
-    `It is missing from apps/${appId}/requirements.json — the cloud vault catalog for apps.papr.ai. ` +
-    `Job runtime still injects requiredKeys in the sandbox; visitors need the catalog entry for vault resolve. ` +
-    `Fix: run Sync now on the app (auto-syncs detected keys), republish, or add the key in the publish credentials panel. ` +
+    `It is not declared in apps/${appId}/requirements.json, so publishing is blocked. ` +
+    `Fix: declare_app_keys({ appId: "${appId}", keys: [{ name: "${ref.keyName}", purpose, provider: "owner" | "user", required }] }), ` +
+    `or notKeys: ["${ref.keyName}"] if it is a job parameter rather than a secret. ` +
     `Do not use papr-cloud-dependencies.json for API keys (that file is cross-app/database install deps only).`
   );
 }

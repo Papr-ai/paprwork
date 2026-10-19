@@ -36,15 +36,25 @@ interface DraftRow {
   description: string;
   category: ServiceCategory;
   credentialScope: CredentialScope;
+  /** Kept as loaded: the panel does not edit it, and dropping it reset browser-safe keys to server. */
+  clientAccess: "server" | "client";
+  required: boolean;
 }
 
+/** Placeholder the old auto-sync wrote; never shown as a real description. */
+const AUTO_DETECTED_DESCRIPTION =
+  "Server-side key for published app (synced from backend manifest, linked jobs, or app chat)";
+
 function toDraft(spec: RequiredKeySpec): DraftRow {
+  const description = spec.description ?? "";
   return {
     name: spec.name,
     service: spec.service,
-    description: spec.description ?? "",
+    description: description === AUTO_DETECTED_DESCRIPTION ? "" : description,
     category: spec.category ?? "other",
     credentialScope: spec.credentialScope === "owner" ? "owner" : "user",
+    clientAccess: spec.clientAccess === "client" ? "client" : "server",
+    required: spec.required !== false,
   };
 }
 
@@ -54,8 +64,9 @@ function toSpec(row: DraftRow): RequiredKeySpec {
     service: row.service.trim() || row.name.trim(),
     category: row.category,
     description: row.description.trim(),
-    required: true,
+    required: row.required,
     credentialScope: row.credentialScope,
+    clientAccess: row.clientAccess,
   };
 }
 
@@ -79,6 +90,8 @@ export function CloudAppCredentialsPanel({
 }: CloudAppCredentialsPanelProps) {
   const [rows, setRows] = useState<DraftRow[]>([]);
   const [detectedKeyNames, setDetectedKeyNames] = useState<string[]>([]);
+  /** Detected names removed here: job parameters, not keys. Saved so publish stops asking. */
+  const [notKeys, setNotKeys] = useState<string[]>([]);
   /** Rows render read-only until you ask to edit one. A freshly added row has
    *  no name yet, so it opens in edit mode on its own — see `editing` below. */
   const [editingIndex, setEditingIndex] = useState<number | null>(null);
@@ -96,8 +109,9 @@ export function CloudAppCredentialsPanel({
       const discovery = await fetchAppRequirements(appId);
       setRows(discovery.requirements.map(toDraft));
       setDetectedKeyNames(discovery.detectedKeyNames ?? []);
+      setNotKeys(discovery.notKeys ?? []);
       // Baseline is what loaded; unsaved detections are tracked separately.
-      setSavedFingerprint(fingerprint(discovery.requirements));
+      setSavedFingerprint(fingerprint(discovery.requirements.map(toDraft).map(toSpec)));
     } catch (err) {
       setError((err as Error).message.slice(0, 160));
     } finally {
@@ -118,6 +132,8 @@ export function CloudAppCredentialsPanel({
         description: "",
         category: "other",
         credentialScope: "user",
+        clientAccess: "server",
+        required: true,
       },
     ]);
   };
@@ -129,6 +145,12 @@ export function CloudAppCredentialsPanel({
   };
 
   const removeRow = (index: number) => {
+    const name = rows[index]?.name.trim();
+    // Removing a key the app's code uses means "this is not a key" (e.g. a
+    // ${TASK} job parameter). Remember it, or publish would keep asking.
+    if (name && detectedKeyNames.includes(name)) {
+      setNotKeys((prev) => (prev.includes(name) ? prev : [...prev, name]));
+    }
     setRows((prev) => prev.filter((_, i) => i !== index));
   };
 
@@ -152,13 +174,18 @@ export function CloudAppCredentialsPanel({
         );
         return false;
       }
+      // Visitors read this on the setup screen; without it they see a bare name.
+      if (spec.credentialScope === "user" && !spec.description.trim()) {
+        setError(`Say what ${spec.name} is for — visitors are asked for it (Edit).`);
+        return false;
+      }
     }
 
     setSaving(true);
     setError(null);
     setMessage(null);
     try {
-      await saveAppRequirements(appId, normalized);
+      await saveAppRequirements(appId, normalized, notKeys);
       setDetectedKeyNames([]);
       setSavedFingerprint(fingerprint(normalized));
       if (!embedded) {
@@ -219,9 +246,10 @@ export function CloudAppCredentialsPanel({
 
           {detectedKeyNames.length > 0 ? (
             <p className="share-sheet__footnote">
-              Detected from app backend, linked jobs, and embedded chat:{" "}
-              <strong>{detectedKeyNames.join(", ")}</strong>. Save to include
-              them in the published catalog.
+              Found in the app's code but not set up yet:{" "}
+              <strong>{detectedKeyNames.join(", ")}</strong>. Check who
+              provides each one and say what it is for (Edit), or Remove it if
+              it is not a secret. Publishing waits until these are saved.
             </p>
           ) : null}
 

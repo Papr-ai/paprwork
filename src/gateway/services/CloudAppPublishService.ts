@@ -75,6 +75,7 @@ function publishCategory(appId: string): string | undefined {
 import { normalizeCatalogTags } from "../../core/utils/catalogTags.js";
 import { buildMiniApp } from "../utils/miniAppBuild.js";
 import {
+  assertAppKeysDeclared,
   catalogRequirementsForPublish,
   ensureAppRequirementsSyncedWithBackend,
 } from "./cloudAppRequirements.js";
@@ -867,6 +868,12 @@ export class CloudAppPublishService {
       slug?: string;
       /** Code/catalog refresh only — keep ACL fields from the live cloud publish record. */
       preserveCloudSharing?: boolean;
+      /**
+       * Background auto-republish has no agent to answer "what is this key?",
+       * so undeclared keys are logged instead of blocking (blocking would
+       * silently freeze code updates for live apps). Explicit publishes block.
+       */
+      background?: boolean;
     },
   ): Promise<CloudPublishConfig> {
     if (!this.isWriteAllowed(`publishApp ${appId}`)) {
@@ -1036,6 +1043,19 @@ export class CloudAppPublishService {
       appId,
       await detectCrossAppDependencies(this.paprDir, appId),
     );
+
+    // Every key visitors could be asked for must be declared (purpose, who
+    // provides it, required or not). Guessing them is how parameters like
+    // ${TASK} ended up on the visitor setup screen.
+    try {
+      await assertAppKeysDeclared(this.paprDir, appId);
+    } catch (error) {
+      if (!options?.background) throw error;
+      console.warn(
+        `[CloudPublish] ${appId} has undeclared keys; auto-republishing anyway:`,
+        (error as Error).message.split("\n")[0],
+      );
+    }
 
     if (
       options?.preserveCloudSharing &&
@@ -1646,7 +1666,7 @@ export class CloudAppPublishService {
           if (await copyIsOnTeamData(appId)) {
             continue;
           }
-          const published = await this.publishApp(appId);
+          const published = await this.publishApp(appId, { background: true });
           setAppPublishPrefs(
             appId,
             {

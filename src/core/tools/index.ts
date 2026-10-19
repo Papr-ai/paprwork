@@ -14,6 +14,7 @@ import { paprMemoryTools } from "./paprMemory.js";
 import { paprDocumentMemoryTools } from "./paprDocumentMemory.js";
 import { skillsTools } from "./skills.js";
 import { appJobsTools } from "./appJobs.js";
+import { appKeysTools } from "./appKeys.js";
 import { jobFolderTools } from "./jobFolders.js";
 import { webviewTools } from "./webview.js";
 import { delegationTools } from "./delegation.js";
@@ -69,6 +70,7 @@ export const allTools = [
   ...wikiGraphTools,
   ...skillsTools,
   ...appJobsTools,
+  ...appKeysTools,
   ...databaseTools,
   ...jobFolderTools,
   ...webviewTools,
@@ -116,7 +118,7 @@ export const toolsByCategory = {
   ],
   documents: documentTools,
   skills: skillsTools,
-  automation: [...appJobsTools, ...databaseTools, ...appAgentChatTools],
+  automation: [...appJobsTools, ...appKeysTools, ...databaseTools, ...appAgentChatTools],
   delegation: [...delegationTools, ...architectTriageTools],
   planning: planningTools,
   keyManagement: keyManagementTools,

@@ -375,10 +375,9 @@ function checkBackendKeysInRequirements(
       file: `${BACKEND_FOLDER}/manifest.json`,
       severity: "warning",
       message:
-        `Backend declares keys ${missing.map((n) => `"${n}"`).join(", ")} but they are missing from ` +
-        `requirements.json. Cloud vault-resolve requires both: manifest "keys" (per-action allowlist) ` +
-        `AND requirements.json (published catalog). Run cloud publish to auto-sync, or add the keys to ` +
-        `requirements.json with credentialScope: "owner" and clientAccess: "server".`,
+        `Backend uses keys ${missing.map((n) => `"${n}"`).join(", ")} that are not declared. ` +
+        `Publishing is blocked until each is declared with declare_app_keys({ appId, keys: [{ name, purpose, ` +
+        `provider: "owner" | "user", required }] }) — owner = you supply it, user = each visitor brings their own.`,
       rule: "backend-keys-missing-from-requirements",
     },
   ];
