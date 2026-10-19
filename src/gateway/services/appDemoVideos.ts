@@ -25,7 +25,7 @@
  */
 import * as fs from "fs";
 import * as path from "path";
-import { getPaprAppsRoot } from "../../core/utils/paprRoot.js";
+import { getPaprAppsRoot, getPaprDataDir } from "../../core/utils/paprRoot.js";
 import {
   addVersion,
   demoDir,
@@ -112,7 +112,7 @@ function readAppCss(dir: string): string {
 export function buildDemoScenePrompt(appId: string, opts: { codeFirst?: boolean; budget?: number } = {}): string {
   const dir = appDir(appId);
   if (!fs.existsSync(dir)) throw new Error("App not found");
-  let meta: { title?: string; description?: string } = {};
+  let meta: { title?: string; description?: string; icon?: string; headline?: string } = {};
   try {
     meta = JSON.parse(fs.readFileSync(path.join(dir, "metadata.json"), "utf8"));
   } catch {
@@ -142,7 +142,42 @@ export function buildDemoScenePrompt(appId: string, opts: { codeFirst?: boolean;
     budget -= c.length;
     src += `\n===== ${rel} =====\n${c}`;
   }
-  return `App: ${meta.title ?? appId}\nDescription: ${meta.description ?? ""}\n\nSource:${src}`;
+  return `${appBrand(appId, dir, meta)}\n\nSource:${src}`;
+}
+
+/** Name, Community headline, description and brand colours (icon + CSS custom properties) — the film should feel like this listing. */
+function appBrand(appId: string, dir: string, meta: { title?: string; description?: string; icon?: string; headline?: string }): string {
+  let entry: { title?: string; description?: string; headline?: string } = {};
+  try {
+    const apps = JSON.parse(fs.readFileSync(path.join(getPaprDataDir(), "apps.json"), "utf8")) as Array<{ id?: string; title?: string; description?: string; headline?: string }>;
+    entry = (Array.isArray(apps) ? apps.find((a) => a?.id === appId) : undefined) ?? {};
+  } catch {
+    /* no registry */
+  }
+  const title = entry.title || meta.title || appId;
+  const headline = entry.headline || meta.headline || "";
+  const description = entry.description || meta.description || "";
+  const iconColors = [...new Set((meta.icon ?? "").match(/#[0-9a-fA-F]{6}\b/g) ?? [])].slice(0, 4);
+  const cssVars = new Map<string, string>();
+  for (const f of fs.readdirSync(dir).filter((n) => n.endsWith(".css") && n !== "base.css")) {
+    const css = fs.readFileSync(path.join(dir, f), "utf8");
+    for (const m of css.matchAll(/--(accent|primary|brand|bg|surface|text)[\w-]*\s*:\s*([^;}{]{3,40})/g)) {
+      const name = m[0].split(":")[0]!.trim();
+      if (!/#|rgb|hsl|oklch/i.test(m[2]!) || /gradient|\([^)]*$/.test(m[2]!) || cssVars.has(name)) continue;
+      cssVars.set(name, m[2]!.trim());
+      if (cssVars.size >= 10) break;
+    }
+  }
+  const colors = [
+    iconColors.length ? `icon ${iconColors.join(", ")}` : "",
+    cssVars.size ? [...cssVars].map(([k, v]) => `${k}: ${v}`).join("; ") : "",
+  ].filter(Boolean).join(" | ");
+  return [
+    `App: ${title}`,
+    headline ? `Headline (Community listing): ${headline}` : "",
+    `Description: ${description}`,
+    colors ? `Brand colours: ${colors}` : "",
+  ].filter(Boolean).join("\n");
 }
 
 /** Strip fences/prose, check the animation contract, inject the app's CSS. */

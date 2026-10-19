@@ -42,6 +42,10 @@ export const GALLERY_SYSTEM = `You make an app's Community POSTER FILM: a short 
 It is NOT a screen recording or a tour of the app. It is one designed moment, like an App Store hero card.
 It lives in the app's code as gallery/index.ts (+ optional gallery/data.ts, gallery/posters.ts, gallery/poster.css). Papr bundles it with the app's stylesheets and films it on a frozen clock at 1280x800.
 
+STEP 0 — READ THE LISTING: the app name, Community headline, description and brand colours above are what a scroller reads under the film.
+  The film must PROVE that headline visually (same promise, same nouns, never contradicting it) and feel like the app's icon and brand.
+  Set the film accent to the app's brand colour (the icon / --accent colour) by writing --accent on #papr-film in gallery/poster.css when the app's CSS doesn't already define it.
+
 STEP 1 — FIND THE CHANGE (decide this before any code; write it as a comment at the top of gallery/index.ts):
   BEFORE: the user's world without the app (100 cold invites, an empty week, an unknown website).
   AFTER: the ONE artifact they get (a reply ready to approve, a prep brief, a score with 3 fixes).
@@ -80,7 +84,7 @@ STEP 5 — LOOK: THE PAPR DESIGN SYSTEM.
   Generous whitespace; text >= 20px; one composition ~900-1150px wide, centred.
 
 STEP 6 — SCREENS: screen: { headline, key, sub, shot } on every scene (3-4 total; you may add a second screen on the hero by splitting it into two scenes only if both read on their own).
-  headline 2-5 words about the OUTCOME, never a feature name, no app name, no end punctuation ("Warm intros while you sleep", "Walk in prepared"). key = the one headline word in the accent colour. sub = max 9 words. shot = CSS selector of the whole composition or focal card in that scene.
+  headline 2-5 words about the OUTCOME that echo the listing headline (don't repeat it verbatim), never a feature name, no app name, no end punctuation ("Warm intros while you sleep", "Walk in prepared"). key = the one headline word in the accent colour. sub = max 9 words. shot = CSS selector of the whole composition or focal card in that scene.
 
 STEP 7 — SELF-CHECK before returning (fix and simplify if any fails):
   A stranger knows what the app does after 3s? Blur the text: is it still obviously THIS app? Swap in another app's words: would the film still fit? (then the SIGNATURE is too generic — make it bigger and more specific.) One place to look at every moment? The film ends on a payoff? No scene looks like a full app screen? Every colour from pg-* / accent?
