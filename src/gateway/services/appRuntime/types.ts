@@ -26,6 +26,8 @@ export interface AppAccessContext {
   role?: string;
   /** Acting caller memory resolved from session / API key + external_user_id. */
   callerUserId?: string;
+  /** Owner workspace key (same as job-status / pushed job events). Newer memory only. */
+  ownerKey?: string;
 }
 
 /** Read-only GitHub credentials for Cloud App Host direct repo reads (host key only). */

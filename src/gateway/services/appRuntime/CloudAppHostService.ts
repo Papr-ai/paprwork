@@ -182,6 +182,8 @@ export class MemoryServerPublishResolver implements AppPublishResolver {
   }): Promise<AppAccessContext | null> {
     const headers: Record<string, string> = {
       "Content-Type": "application/json",
+      // Ask for a denial as 200 {allowed:false}: the check worked, the answer is no.
+      "X-Papr-Access-Answer": "1",
     };
     if (input.paprApiKey) {
       headers["X-API-Key"] = input.paprApiKey;
@@ -212,6 +214,8 @@ export class MemoryServerPublishResolver implements AppPublishResolver {
       throw new Error(`Access validate failed: ${res.status}`);
     }
     const json = (await res.json()) as {
+      allowed?: boolean;
+      ownerKey?: string;
       orgId: string;
       namespaceId: string;
       userId: string;
@@ -222,6 +226,15 @@ export class MemoryServerPublishResolver implements AppPublishResolver {
       role?: string;
       callerUserId?: string;
     };
+    // Fail closed: older memory omits `allowed` on grants (and 403s denials);
+    // newer memory sends allowed:false. Anything but an explicit grant with an
+    // owner is a denial.
+    if (json.allowed !== undefined && json.allowed !== true) {
+      return null;
+    }
+    if (!json.orgId || !json.userId || !json.appId) {
+      return null;
+    }
     return {
       orgId: json.orgId,
       namespaceId: json.namespaceId,
@@ -232,6 +245,7 @@ export class MemoryServerPublishResolver implements AppPublishResolver {
       canWrite: json.canWrite,
       ...(json.role ? { role: json.role } : {}),
       ...(json.callerUserId ? { callerUserId: json.callerUserId } : {}),
+      ...(json.ownerKey ? { ownerKey: json.ownerKey } : {}),
     };
   }
 }
@@ -333,6 +347,9 @@ export class CloudAppHostService {
       hub: getJobEventHub(),
       // Pub/Sub subscriber live → status arrives pushed; polling only as a safety net.
       pushActive: () => this.jobEventsPush?.isActive() === true,
+      // Owner from the page's own access check (cached), so pushed events reach
+      // every watched job without a successful status read first.
+      resolveOwnerKey: async (req) => (await this.resolveAccess(req).catch(() => null))?.ownerKey,
       pollJobStatus: async (jobId, req) => {
         // Same credentials as the page itself (session → namespace key), or
         // team/private apps 403 every poll.
@@ -343,7 +360,8 @@ export class CloudAppHostService {
         try {
           const job = await getRuntimeJobStatus(runtimeAuth, jobId);
           if (!job) {
-            return null;
+            // 404: this job does not exist for this app. Final, not "try again in 5s".
+            throw Object.assign(new Error("job not found"), { notFound: true });
           }
           return {
             jobId: job.id,
@@ -354,6 +372,7 @@ export class CloudAppHostService {
             ownerKey: job.ownerKey,
           };
         } catch (err) {
+          if ((err as { notFound?: boolean }).notFound) throw err;
           // Denied won't change mid-connection — tell the stream to stop asking.
           if (/\((401|403)\)/.test((err as Error).message ?? "")) {
             throw Object.assign(new Error("job status forbidden"), { forbidden: true });

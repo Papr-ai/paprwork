@@ -37,6 +37,7 @@ import {
 } from "./CloudAppInstallService.js";
 import { getAppService } from "./AppService.js";
 import { decideTrackPullAction } from "./cloudSync/trackPullOnPublishLogic.js";
+import type { InstallDeniedReason } from "./CloudAppInstallService.js";
 import { fetchPublisherRevisionSignedIn } from "./syncV3/checkPublisherUpstreamRevision.js";
 import {
   hasMetadataChanges,
@@ -73,6 +74,7 @@ export interface TrackPullOnPublishResult {
   updatedFiles?: string[];
   conflictFiles?: string[];
   error?: string;
+  reason?: string;
 }
 
 function hashContent(content: string): string {
@@ -341,7 +343,26 @@ export class CloudAppTrackSyncService {
     };
 
     const installService = getCloudAppInstallService();
-    const prepare = await installService.prepareInstall(installInput);
+    let prepare: Awaited<ReturnType<typeof installService.prepareInstall>>;
+    try {
+      prepare = await installService.prepareInstall(installInput);
+    } catch (err) {
+      // A final "no" from the publisher's side: record it so background checks
+      // stop and the UI can say why. Re-checked when the user asks for updates.
+      const reason = (err as { deniedReason?: InstallDeniedReason }).deniedReason;
+      if (reason && !options.dryRun) {
+        await writeLineageFile(appId, this.appsDir, {
+          ...lineage,
+          updatesPaused: { reason, at: new Date().toISOString() },
+        }).catch(() => undefined);
+      }
+      throw err;
+    }
+    if (lineage.updatesPaused && !options.dryRun) {
+      // Access is back: resume (later lineage writes spread this object).
+      delete lineage.updatesPaused;
+      await writeLineageFile(appId, this.appsDir, lineage).catch(() => undefined);
+    }
     const env = ephemeralGitEnv();
 
     const { sourceDir: upstreamDir, repoDir, cleanup } = await cloneCloudAppSource(
@@ -778,6 +799,15 @@ export class CloudAppTrackSyncService {
 
       const lineage = await readLineageFile(appId, this.appsDir);
       if (!lineage) {
+        continue;
+      }
+
+      // Decide before any network call: auto-pull off (the default) or updates
+      // paused (publisher removed access / code sharing) never needs the live
+      // revision. The update badge has its own check.
+      const precheck = decideTrackPullAction({ mode: entry.mode, lineage, liveRevision: "?" });
+      if (precheck.action === "skip") {
+        results.push({ appId, action: "skipped", upstreamRevision: lineage.upstreamRevision ?? null, liveRevision: null, reason: precheck.reason });
         continue;
       }
 

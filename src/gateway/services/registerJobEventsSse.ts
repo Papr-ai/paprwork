@@ -9,6 +9,13 @@
  *   safety re-read (default 60s) while a job is running covers a lost event.
  * - Poll (desktop, or push unavailable / older memory without ownerKey): read
  *   every pollIntervalMs, as before.
+ *
+ * Final answers stop the asking: 401/403 (forbidden) and 404 (job not found) are
+ * not retried on the poll timer. A missing job is announced once (jobs:unknown,
+ * ignored by older SDKs). With push live it is never re-read — if it is created
+ * later its pushed status still arrives, because the owner comes from the page's
+ * access (resolveOwnerKey), not from a successful status read. Without push it
+ * is re-read every notFoundPollMs.
  */
 
 import type { Express, Request, Response } from "express";
@@ -39,6 +46,13 @@ export interface JobEventsSseOptions {
   pushActive?: () => boolean;
   /** Re-read interval for running jobs when push is active. Default 60s. */
   safetyPollMs?: number;
+  /**
+   * Owner workspace for this page, from its access check (cloud app host). Lets
+   * pushed events reach jobs the status read can't find yet (or ever).
+   */
+  resolveOwnerKey?: (req: Request) => Promise<string | undefined>;
+  /** Re-read interval for a not-found job when push is not active. Default 5 min. */
+  notFoundPollMs?: number;
   /** Desktop-only: one-shot Turso pull when client subscribes to dbIds (mini-app SSE). */
   onDbIdsSubscribe?: (dbIds: string[]) => void;
 }
@@ -52,6 +66,8 @@ interface JobWatch {
   recordedAt?: string;
   lastPolledAt: number;
   forbidden: boolean;
+  /** Last read said the job does not exist (404). */
+  notFound: boolean;
   polling: boolean;
 }
 
@@ -96,6 +112,7 @@ export function registerJobEventsSseRoutes(
 ): void {
   const pollIntervalMs = options.pollIntervalMs ?? 5000;
   const safetyPollMs = options.safetyPollMs ?? 60_000;
+  const notFoundPollMs = options.notFoundPollMs ?? 300_000;
 
   app.get("/api/jobs/events", (req: Request, res: Response) => {
     const jobIds = parseIdList(req.query.jobIds);
@@ -114,7 +131,7 @@ export function registerJobEventsSseRoutes(
     }
 
     const watches = new Map<string, JobWatch>(
-      jobIds.map((id) => [id, { lastPolledAt: 0, forbidden: false, polling: false }]),
+      jobIds.map((id) => [id, { lastPolledAt: 0, forbidden: false, notFound: false, polling: false }]),
     );
 
     const emitStatus = (data: JobStatusChangedData): void => {
@@ -152,6 +169,7 @@ export function registerJobEventsSseRoutes(
     });
 
     let pollTimer: ReturnType<typeof setInterval> | undefined;
+    let closed = false;
 
     if (options.pollJobStatus && jobIds.length > 0) {
       const pollOne = async (jobId: string, watch: JobWatch): Promise<void> => {
@@ -162,6 +180,7 @@ export function registerJobEventsSseRoutes(
           if (!snapshot) {
             return;
           }
+          watch.notFound = false;
           if (snapshot.ownerKey) watch.ownerKey = snapshot.ownerKey;
           if (watch.status === undefined) {
             // Seed baseline without emitting — avoids replaying a stale terminal
@@ -186,6 +205,11 @@ export function registerJobEventsSseRoutes(
         } catch (err) {
           // Access denied for this caller: stop polling it on this connection.
           if ((err as { forbidden?: boolean })?.forbidden) watch.forbidden = true;
+          // Job does not exist: a final answer, not "nothing yet". Say so once.
+          if ((err as { notFound?: boolean })?.notFound && !watch.notFound) {
+            watch.notFound = true;
+            res.write(`event: jobs:unknown\ndata: ${JSON.stringify({ jobId })}\n\n`);
+          }
         } finally {
           watch.polling = false;
         }
@@ -195,6 +219,10 @@ export function registerJobEventsSseRoutes(
         if (watch.forbidden || watch.polling) return false;
         if (watch.lastPolledAt === 0) return true;
         const pushed = Boolean(watch.ownerKey) && options.pushActive?.() === true;
+        if (watch.notFound) {
+          // Pushed events still arrive if it is created later; only re-read without push.
+          return !pushed && now - watch.lastPolledAt >= notFoundPollMs - 50;
+        }
         if (!pushed) return now - watch.lastPolledAt >= pollIntervalMs - 50;
         return ACTIVE_STATUSES.has(watch.status ?? "") && now - watch.lastPolledAt >= safetyPollMs;
       };
@@ -205,8 +233,23 @@ export function registerJobEventsSseRoutes(
           if (isDue(watch, now)) void pollOne(jobId, watch);
         }
       };
-      tick();
-      pollTimer = setInterval(tick, pollIntervalMs);
+      const startPolling = (): void => {
+        if (closed) return;
+        tick();
+        pollTimer = setInterval(tick, pollIntervalMs);
+      };
+      if (options.resolveOwnerKey) {
+        // Owner from the page's access: push works from connect, for every job.
+        void options
+          .resolveOwnerKey(req)
+          .then((key) => {
+            if (key) for (const watch of watches.values()) watch.ownerKey ??= key;
+          })
+          .catch(() => undefined)
+          .finally(startPolling);
+      } else {
+        startPolling();
+      }
     }
 
     const keepAlive = setInterval(() => {
@@ -214,6 +257,7 @@ export function registerJobEventsSseRoutes(
     }, 25_000);
 
     req.on("close", () => {
+      closed = true;
       unsubscribe();
       if (pollTimer) {
         clearInterval(pollTimer);

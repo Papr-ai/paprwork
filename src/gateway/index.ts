@@ -3177,6 +3177,13 @@ async function startGateway(): Promise<void> {
         );
         res.json(result);
       } catch (err) {
+        const deniedReason = (err as { deniedReason?: string }).deniedReason;
+        if (deniedReason) {
+          // Final answer from the publisher's side: say why, in words.
+          const { updatesPausedMessage } = await import("../core/utils/updatesPausedMessage.js");
+          res.status(403).json({ error: updatesPausedMessage(deniedReason), updatesPaused: { reason: deniedReason } });
+          return;
+        }
         res.status(500).json({ error: (err as Error).message });
       }
     });

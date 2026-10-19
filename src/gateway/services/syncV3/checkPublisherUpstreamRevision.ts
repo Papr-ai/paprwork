@@ -43,6 +43,8 @@ export interface PublisherUpstreamRevisionStatus {
   liveRevision: string | null;
   storedUpstreamRevision: string | null;
   reason: string;
+  /** Publisher refused this copy (no access / code sharing off): updates paused. */
+  updatesPaused?: { reason: string; at: string } | null;
 }
 
 export async function checkPublisherUpstreamRevision(
@@ -75,6 +77,17 @@ export async function checkPublisherUpstreamRevision(
   // Plain forks are the user's own app: they are never "behind the publisher".
   if (lineage.mode !== "track") {
     return { ...empty, reason: "plain fork: not linked to the publisher" };
+  }
+
+  if (lineage.updatesPaused) {
+    // Final answer already recorded: don't ask again on every refresh. Get
+    // updates re-checks (and clears this when access is back).
+    return {
+      ...empty,
+      storedUpstreamRevision: lineage.upstreamRevision ?? null,
+      reason: "updates paused: publisher changed access",
+      updatesPaused: lineage.updatesPaused,
+    };
   }
 
   const liveRevision = await fetchPublisherRevisionSignedIn(
