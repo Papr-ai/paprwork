@@ -1175,6 +1175,29 @@ function AboutTab() {
           </div>
         </div>
 
+        {currentVersion === "2.7.2" && (
+          <div className="about-card">
+            <h3>What&apos;s New in v2.7.2</h3>
+            <ul className="whats-new-list">
+              <li className="whats-new-list__item">
+                <strong>Cloud sync</strong>
+                <p>
+                  Sync retries automatically when the app-repo writer is briefly
+                  busy or rate-limited, and scales better under heavy publish load.
+                </p>
+              </li>
+            </ul>
+            <a
+              href="https://github.com/Papr-ai/paprwork/releases/tag/v2.7.2"
+              target="_blank"
+              rel="noopener noreferrer"
+              className="about-card__link"
+            >
+              View release notes on GitHub
+            </a>
+          </div>
+        )}
+
         {currentVersion === "2.7.1" && (
           <div className="about-card">
             <h3>What&apos;s New in v2.7.1</h3>
