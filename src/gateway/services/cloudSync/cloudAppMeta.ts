@@ -140,11 +140,43 @@ export async function buildCloudAppMeta(
     seenDbPaths.add(normalized);
   }
 
+  // A machine without the local databases (cloud sandbox, fresh install) has no
+  // applied-migration ledger to read. The app's own migration files are the same
+  // on every machine, so they are the fallback — not null, which turns the web
+  // schema gate off.
+  const required =
+    requiredSchemaVersionFromMigrationIds(migrationIds) ??
+    requiredSchemaVersionFromMigrationIds(listRepoMigrationIds(appDir));
+
   return {
     schemaVersion: "1.0.0",
     distRevision,
-    requiredSchemaVersion: requiredSchemaVersionFromMigrationIds(migrationIds),
+    requiredSchemaVersion: required,
   };
+}
+
+/** Migration ids shipped in the app repo: databases/{slug}/migrations/*.sql. */
+export function listRepoMigrationIds(appDir: string): string[] {
+  const root = path.join(appDir, "databases");
+  const ids: string[] = [];
+  let slugs: string[] = [];
+  try {
+    slugs = fs.readdirSync(root);
+  } catch {
+    return ids;
+  }
+  for (const slug of slugs) {
+    let files: string[] = [];
+    try {
+      files = fs.readdirSync(path.join(root, slug, "migrations"));
+    } catch {
+      continue;
+    }
+    for (const file of files) {
+      if (file.endsWith(".sql")) ids.push(file.slice(0, -4));
+    }
+  }
+  return ids.sort();
 }
 
 export async function writeCloudAppMeta(
@@ -152,8 +184,14 @@ export async function writeCloudAppMeta(
   appId: string,
 ): Promise<CloudAppMetaFile> {
   const appDir = path.join(paprDir, "apps", appId);
-  const revision = await buildCloudAppMeta(appDir, appId, path.join(paprDir, "apps"));
+  const built = await buildCloudAppMeta(appDir, appId, path.join(paprDir, "apps"));
   const existing = readCloudAppMeta(appDir);
+  // Never downgrade a known schema requirement to "none" just because this machine
+  // can't see the ledger; that silently disables the web schema gate.
+  const revision =
+    built.requiredSchemaVersion === null && existing?.requiredSchemaVersion
+      ? { ...built, requiredSchemaVersion: existing.requiredSchemaVersion }
+      : built;
   if (existing) {
     const existingRevision = {
       schemaVersion: existing.schemaVersion,

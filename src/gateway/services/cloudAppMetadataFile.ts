@@ -115,12 +115,36 @@ export async function writeCloudAppMetadataFile(
   } catch {
     /* first write, or unreadable: nothing to carry */
   }
+  const next = carryAuthorOwnedMetadata(metadata, existing);
+  // Regenerating identical metadata must be a no-op: a fresh updatedAt on every
+  // prep made each cloud run (and each desktop publish) rewrite metadata.json and
+  // collide with the other side's copy.
+  if (isSameMetadataIgnoringUpdatedAt(next, existing)) {
+    return;
+  }
   const tmpPath = `${metadataPath}.tmp-${process.pid}`;
-  await fs.writeFile(
-    tmpPath,
-    serializeCloudAppMetadataFile(carryAuthorOwnedMetadata(metadata, existing)),
-    "utf8",
-  );
+  await fs.writeFile(tmpPath, serializeCloudAppMetadataFile(next), "utf8");
   await fs.rename(tmpPath, metadataPath);
   notifyJobOwnershipChanged(paprDir);
+}
+
+export function isSameMetadataIgnoringUpdatedAt(
+  next: CloudAppMetadataFile,
+  existing: unknown,
+): boolean {
+  if (!existing || typeof existing !== "object") return false;
+  const { updatedAt: _a, ...a } = next as unknown as Record<string, unknown>;
+  const { updatedAt: _b, ...b } = existing as Record<string, unknown>;
+  return stableStringify(a) === stableStringify(b);
+}
+
+function stableStringify(value: unknown): string {
+  if (Array.isArray(value)) return `[${value.map(stableStringify).join(",")}]`;
+  if (value && typeof value === "object") {
+    const entries = Object.entries(value as Record<string, unknown>)
+      .filter(([, v]) => v !== undefined)
+      .sort(([x], [y]) => x.localeCompare(y));
+    return `{${entries.map(([k, v]) => `${JSON.stringify(k)}:${stableStringify(v)}`).join(",")}}`;
+  }
+  return JSON.stringify(value);
 }

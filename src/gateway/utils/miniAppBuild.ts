@@ -95,6 +95,10 @@ export async function buildMiniApp(appDir: string): Promise<MiniAppBuildResult> 
     const result = await esbuild.build({
       entryPoints: [entryPoint],
       bundle: true,
+      // Path comments and the inline sourcemap are written relative to the working
+      // directory. Pin it to the app so desktop (~/Papr/...) and cloud sandbox
+      // (/tmp/papr-cloud-run/...) emit identical bytes for identical source.
+      absWorkingDir: appDir,
       outdir: stagingDir,
       entryNames: "app",
       format: "esm",

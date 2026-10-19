@@ -289,7 +289,9 @@ export function extractVaultEnvReferences(handlerSource: string): Set<string> {
       if (
         !name ||
         IGNORED_BACKEND_ENV_NAMES.has(name) ||
-        name.startsWith("PAPR_PARAM_")
+        name.startsWith("PAPR_PARAM_") ||
+        // Set by Paprwork itself (telemetry, runtime) — never a user/owner vault key.
+        name.startsWith("PAPRWORK_")
       ) {
         continue;
       }
