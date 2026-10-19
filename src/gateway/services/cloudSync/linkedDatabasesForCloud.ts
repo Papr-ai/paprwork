@@ -21,11 +21,48 @@ export interface LinkedDatabasesExportResult {
   missingDbIds: string[];
 }
 
-function portableRecord(record: DatabaseRecord): DatabaseRecord {
-  return {
-    ...record,
-    localPath: "",
-  };
+/**
+ * Fields that mean the same thing on every machine. Everything else in a registry
+ * record is per-machine state — cutover flags, replica push timestamps,
+ * createdAt/updatedAt — and must not ship in the app repo. Stable output means a
+ * regenerate on another machine is a byte-for-byte no-op, not a writer conflict.
+ *
+ * syncMode mixes two things: the database's protocol (legacy CDC vs Plan A
+ * replica — a property of the Turso database, which the Cloud App Host needs or
+ * it installs legacy triggers) and how THIS machine connects (a cloud sandbox
+ * runs "cloud-direct" against the same Plan A database). Only the protocol ships.
+ */
+const PORTABLE_RECORD_FIELDS = [
+  "dbId",
+  "tursoShortName",
+  "label",
+  "ownerJobId",
+  "schemaOwnerAppId",
+  "isolation",
+  "privateTables",
+  "status",
+] as const;
+
+/** Database protocol for the app repo: cloud-direct is a connection, the DB is Plan A. */
+export function portableSyncMode(
+  mode: DatabaseRecord["syncMode"],
+): DatabaseRecord["syncMode"] {
+  if (mode === "cloud-direct") return "replica";
+  return mode;
+}
+
+export function portableRecord(record: DatabaseRecord): DatabaseRecord {
+  const out: Record<string, unknown> = { localPath: "" };
+  for (const field of PORTABLE_RECORD_FIELDS) {
+    const value = record[field];
+    if (value !== undefined) out[field] = value;
+  }
+  const protocol = portableSyncMode(record.syncMode);
+  if (protocol) out.syncMode = protocol;
+  if (Array.isArray(out.privateTables)) {
+    out.privateTables = [...(out.privateTables as string[])].sort();
+  }
+  return out as unknown as DatabaseRecord;
 }
 
 /** Write apps/{appId}/linked-databases.json for dbIds referenced in data-sources. */

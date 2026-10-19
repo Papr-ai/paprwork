@@ -95,6 +95,17 @@ export interface DatabaseRecord {
   updatedAt: string;
 }
 
+/** Fields an app-repo registry file may update on an existing local record. */
+const REGISTRY_FILE_PORTABLE_FIELDS = [
+  "tursoShortName",
+  "label",
+  "ownerJobId",
+  "schemaOwnerAppId",
+  "isolation",
+  "privateTables",
+  "status",
+] as const;
+
 export interface DatabaseRegistrySaveOptions {
   /** Local-only bookkeeping (replica push timestamps) — skip memory server upload. */
   skipCloudUpload?: boolean;
@@ -925,8 +936,9 @@ export class DatabaseRegistryService {
   }
 
   /**
-   * Merge registry entries from synced git (cloud host). Does not write disk.
-   * Newer updatedAt wins when the same dbId exists locally.
+   * Merge registry entries from synced git / an app's linked-databases.json.
+   * Does not write disk. Existing local records only take portable fields;
+   * machine state (connection mode, paths, replica bookkeeping) stays local.
    */
   mergeFromRegistryFile(raw: string): number {
     let parsed: DatabasesRegistryFile;
@@ -946,27 +958,65 @@ export class DatabaseRegistryService {
         continue;
       }
       const existing = state.databases[dbId];
-      if (
-        !existing ||
-        existing.status === "tombstone" ||
-        incoming.updatedAt > existing.updatedAt
-      ) {
-        // Cloud copies of databases.json carry localPath "" (paths are stripped
-        // before upload). Blank is not job scratch — keep syncMode=replica, or the
-        // cloud host treats replica DBs as legacy and installs CDC columns/triggers.
-        const localPath = incoming.localPath?.trim() ?? "";
-        const next =
-          localPath.length > 0 &&
-          !isEligibleRegistryLocalPath(localPath) &&
-          incoming.syncMode === "replica"
-            ? (() => {
-                const { syncMode: _drop, ...rest } = incoming;
-                return rest as DatabaseRecord;
-              })()
-            : incoming;
-        state.databases[dbId] = next;
-        merged += 1;
+      if (existing && existing.status !== "tombstone") {
+        // App-repo copies (linked-databases.json) only carry portable fields and no
+        // reliable timestamps. Overlay the portable fields; never take machine state
+        // (localPath, cutover/replica bookkeeping, this machine's connection mode)
+        // from a file another machine — e.g. a cloud sandbox — wrote. The one
+        // syncMode change accepted is a protocol upgrade: legacy → replica after a
+        // cutover elsewhere. A local replica or cloud-direct record is never touched.
+        // Full registry copies (databases.json) carry updatedAt: keep "newer wins".
+        // Portable app-repo copies have no timestamp; they are the published truth.
+        if (incoming.updatedAt && existing.updatedAt && incoming.updatedAt <= existing.updatedAt) {
+          continue;
+        }
+        let changed = false;
+        const next: DatabaseRecord = { ...existing };
+        const incomingMode = incoming.syncMode === "cloud-direct" ? "replica" : incoming.syncMode;
+        if (
+          incomingMode === "replica" &&
+          (existing.syncMode === undefined || existing.syncMode === "legacy")
+        ) {
+          next.syncMode = "replica";
+          changed = true;
+        }
+        for (const field of REGISTRY_FILE_PORTABLE_FIELDS) {
+          // No privateTables in a record = every table public (not "unknown").
+          const value = field === "privateTables" ? (incoming.privateTables ?? []) : incoming[field];
+          if (value === undefined) continue;
+          if (field === "privateTables" && (existing.privateTables ?? []).length === 0 && (value as string[]).length === 0) continue;
+          if (JSON.stringify(existing[field]) === JSON.stringify(value)) continue;
+          (next as unknown as Record<string, unknown>)[field] = value;
+          changed = true;
+        }
+        if (changed) {
+          if (incoming.updatedAt) next.updatedAt = incoming.updatedAt;
+          state.databases[dbId] = next;
+          merged += 1;
+        }
+        continue;
       }
+      // New to this machine: adopt the database's protocol, not the writer's
+      // connection mode (cloud-direct → replica) or its bookkeeping.
+      const { syncMode: foreignSyncMode, cutoverInProgress: _c, cutoverBlocked: _b,
+        cutoverBlockReason: _r, lastReplicaPushError: _e, lastReplicaPushAt: _p,
+        lastReplicaLocalMutationAt: _m, ...rest } = incoming;
+      const now = new Date().toISOString();
+      // Cloud copies carry localPath "" (paths stripped before upload) and keep
+      // replica. A real path that is job scratch is not a replica DB — drop it.
+      const incomingPath = incoming.localPath?.trim() ?? "";
+      const scratchReplica =
+        incomingPath.length > 0 && !isEligibleRegistryLocalPath(incomingPath);
+      const mapped = foreignSyncMode === "cloud-direct" ? "replica" : foreignSyncMode;
+      const protocol = scratchReplica && mapped === "replica" ? undefined : mapped;
+      state.databases[dbId] = {
+        ...rest,
+        ...(protocol ? { syncMode: protocol } : {}),
+        localPath: incoming.localPath ?? "",
+        createdAt: incoming.createdAt || now,
+        updatedAt: incoming.updatedAt || now,
+      } as DatabaseRecord;
+      merged += 1;
     }
     this.cache = state;
     return merged;

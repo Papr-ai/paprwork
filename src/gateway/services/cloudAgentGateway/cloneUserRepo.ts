@@ -170,6 +170,8 @@ export async function materializeAppWorkspaceToPaprHome(input: {
     }
   }
 
+  await reconcileScaffoldAppEntryWithMetadata(input.targetPaprHome, input.appId);
+
   if (remoteHead) {
     await writeMaterializedHeadSha(input.targetPaprHome, remoteHead);
   }
@@ -179,4 +181,64 @@ export async function materializeAppWorkspaceToPaprHome(input: {
       `repo=${input.owner}/${input.repo} head=${remoteHead?.slice(0, 8) ?? "unknown"} ` +
       `→ ${input.targetPaprHome}`,
   );
+}
+
+const SCAFFOLD_METADATA_FIELDS = [
+  "title",
+  "description",
+  "icon",
+  "tags",
+  "headline",
+  "ownerUserId",
+  "organizationId",
+  "namespaceId",
+] as const;
+
+/**
+ * The sandbox regenerates apps/{appId}/metadata.json from data/apps.json before it
+ * pushes. Older memory servers seeded that entry from the job (title = job name,
+ * description "Published mini-app"), which renamed apps on the web. The repo's own
+ * metadata.json is the published truth — overlay it onto the scaffold entry so a run
+ * that doesn't touch the title can't change it, while an agent that edits the title
+ * still goes through apps.json as usual.
+ */
+export async function reconcileScaffoldAppEntryWithMetadata(
+  paprHome: string,
+  appId: string,
+): Promise<void> {
+  let metadata: Record<string, unknown>;
+  try {
+    metadata = JSON.parse(
+      await fs.readFile(path.join(paprHome, "apps", appId, "metadata.json"), "utf8"),
+    ) as Record<string, unknown>;
+  } catch {
+    return;
+  }
+  const appsPath = path.join(paprHome, "data", "apps.json");
+  let entries: Array<Record<string, unknown>> = [];
+  try {
+    const parsed = JSON.parse(await fs.readFile(appsPath, "utf8")) as unknown;
+    entries = Array.isArray(parsed)
+      ? (parsed as Array<Record<string, unknown>>)
+      : Object.values(parsed as Record<string, Record<string, unknown>>);
+  } catch {
+    /* no scaffold: create the entry from metadata */
+  }
+  let entry = entries.find((e) => e.id === appId);
+  if (!entry) {
+    entry = { id: appId, type: "app" };
+    entries.push(entry);
+  }
+  for (const field of SCAFFOLD_METADATA_FIELDS) {
+    const value = metadata[field];
+    const empty =
+      value === undefined || value === null || value === "" ||
+      (Array.isArray(value) && value.length === 0);
+    if (!empty) entry[field] = value;
+  }
+  if (typeof metadata.updatedAt === "string" && metadata.updatedAt) {
+    entry.updatedAt = metadata.updatedAt;
+  }
+  await fs.mkdir(path.dirname(appsPath), { recursive: true });
+  await fs.writeFile(appsPath, JSON.stringify(entries, null, 2), "utf8");
 }
