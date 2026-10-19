@@ -27,24 +27,28 @@
 .cat-btn--solid:hover { background: var(--accent, #0060e0); filter: brightness(1.08); }
 .cat-acts { display: flex; gap: 6px; flex: none; }
 
-/* App page (Prototyper .ca-page): covers the Apps view, scrolls on its own. */
-.apps-view { position: relative; }
-.cat-page {
-  position: absolute; inset: 0; z-index: 50; overflow-y: auto; overscroll-behavior: contain; outline: none;
-  background: var(--popover-bg, #fff); color: var(--text-primary); animation: cat-page-in .22s cubic-bezier(.2, .8, .2, 1);
+/* App details: centered modal, Prototyper app-page layout inside. No outline ring:
+   the card edge is its own background, the film sits inset in its own frame. */
+.cat-modal {
+  position: fixed; inset: 0; z-index: 1000; display: grid; place-items: center; padding: 24px 16px;
+  background: rgba(6, 8, 14, 0.5); backdrop-filter: blur(6px); animation: cat-fade .15s ease-out;
 }
-body > .cat-page { position: fixed; z-index: 1000; }
-.cat-page__in { max-width: 1040px; margin: 0 auto; padding: 16px 32px 56px; display: grid; gap: 30px; }
-.cat-page__back {
-  justify-self: start; display: inline-flex; align-items: center; gap: 4px; min-height: 36px; padding: 0 10px 0 4px;
-  border: 0; border-radius: 10px; background: none; color: var(--accent, #0060e0); font: inherit; font-size: 15px; font-weight: 600; cursor: pointer;
+.cat-modal__card {
+  position: relative; display: flex; flex-direction: column; width: min(880px, 100%); max-height: calc(100vh - 48px);
+  overflow: hidden; border-radius: 26px; background: var(--popover-bg, #fff); color: var(--text-primary);
+  box-shadow: 0 30px 90px rgba(0, 0, 0, 0.35); animation: cat-pop .2s cubic-bezier(.2, .8, .2, 1);
 }
-.cat-page__back:hover { background: color-mix(in srgb, var(--accent, #0060e0) 8%, transparent); }
-.cat-page__back svg { width: 18px; height: 18px; }
+.cat-modal__scroll { min-height: 0; overflow-y: auto; overscroll-behavior: contain; outline: none; }
+.cat-modal__x {
+  position: absolute; top: 14px; right: 14px; z-index: 4; width: 32px; height: 32px; border: 0; border-radius: 50%; cursor: pointer;
+  display: grid; place-items: center; color: #fff; background: rgba(20, 20, 26, 0.55); backdrop-filter: blur(16px);
+}
+.cat-modal__x:hover { background: rgba(20, 20, 26, 0.75); }
+.cat-page__in { padding: 24px 28px 36px; display: grid; gap: 28px; }
 .cat-page__hero { display: grid; gap: 22px; }
 /* The whole film, never cropped: previews are 16:10. */
 .cat-page__media .cat-banner {
-  aspect-ratio: 16 / 10; border-radius: 24px; background: #000;
+  aspect-ratio: 16 / 10; border-radius: 18px; background: #000;
   box-shadow: 0 1px 2px rgba(0, 0, 0, 0.08), 0 18px 50px rgba(10, 16, 32, 0.18);
 }
 .cat-page__media .cat-banner__img { object-position: center; }
@@ -77,9 +81,12 @@ body > .cat-page { position: fixed; z-index: 1000; }
 .cat-page__list li { display: flex; align-items: center; gap: 9px; min-width: 0; }
 .cat-page__list code { font-size: 13px; padding: 2px 8px; border-radius: 6px; background: color-mix(in srgb, var(--text-primary) 6%, transparent); }
 .cat-page__note { margin: 0; font-size: 13px; color: var(--text-tertiary); }
-@keyframes cat-page-in { from { opacity: 0; transform: translateY(10px); } }
+@keyframes cat-fade { from { opacity: 0; } }
+@keyframes cat-pop { from { opacity: 0; transform: translateY(10px) scale(.985); } }
 @media (max-width: 760px) {
-  .cat-page__in { padding: 12px 16px 40px; gap: 24px; }
+  .cat-modal { place-items: end center; padding: 0; }
+  .cat-modal__card { width: 100%; max-height: 94vh; border-radius: 24px 24px 0 0; }
+  .cat-page__in { padding: 16px 16px 32px; gap: 22px; }
   .cat-page__t h1 { font-size: 26px; }
   .cat-page__cta { width: 100%; }
   .cat-page__cta .cat-btn { flex: 1; }
@@ -87,5 +94,5 @@ body > .cat-page { position: fixed; z-index: 1000; }
   .cat-page__facts li:nth-child(4) { border-left: 0; }
   .cat-page__two { grid-template-columns: 1fr; }
 }
-@media (prefers-reduced-motion: reduce) { .cat-page { animation: none; } }
+@media (prefers-reduced-motion: reduce) { .cat-modal, .cat-modal__card { animation: none; } }
 .community-apps__grid:has(> .cat-card) { grid-template-columns: repeat(auto-fill, minmax(320px, 1fr)); gap: 28px 24px; }

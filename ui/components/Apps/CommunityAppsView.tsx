@@ -40,9 +40,6 @@ import {
 } from "../../utils/communityCatalogCache";
 import { isWorkspaceSwitchReloading } from "../../lib/workspaceSwitchReload";
 import {
-  getCatalogShareBadge,
-} from "../../utils/communityCatalogDisplay";
-import {
   shouldShowInCommunityBrowse,
   sortCommunityEntriesInstallableFirst,
 } from "../../utils/communityCatalogBrowseFilter";
@@ -56,9 +53,6 @@ import {
   cloudCatalogPreviewEntityId,
   type CloudCatalogPreviewTabMetadata,
 } from "../../types/cloudCatalogPreviewTab";
-import { ShareAudienceIcon } from "./WebSyncPopover";
-import { shareGlyphForCatalogEntry } from "../../utils/shareGlyph";
-import { shareAudienceShortLabel } from "../../utils/shareAudienceGlyphs";
 import { CloudInstallOptionalDepsNotice } from "./CloudInstallOptionalDepsNotice";
 import {
   CLOUD_INSTALL_TIMEOUT_MESSAGE,
@@ -1130,8 +1124,6 @@ export function CommunityAppCard({
   // Open = your copy on this computer. Preview = the live web app. Get = install.
   const showLocalOpen = Boolean(localAppId) && Boolean(onOpen);
   const showOpenWeb = !showLocalOpen && Boolean(onOpenWeb);
-  const share = shareGlyphForCatalogEntry(entry);
-  const shareBadge = getCatalogShareBadge(entry);
   // Owner-approved cover (served by the cloud host); falls back to a gradient + droplet.
   const coverUrl = catalogCoverUrl(entry);
   const icon = entry.icon?.trim().startsWith("<") ? sanitizeIcon(entry.icon.trim()) : entry.icon;
@@ -1198,12 +1190,7 @@ export function CommunityAppCard({
       onKeyDown={(e) => { if (e.key === "Enter" && e.target === e.currentTarget) setDetails(true); }}
     >
       <CatalogBanner entry={shown} coverUrl={coverUrl} glyphSize={88} />
-      <span className="cat-card__tr" onClick={(e) => e.stopPropagation()}>
-        <span className="ah-share" title={shareBadge ?? shareAudienceShortLabel(share.audience)}>
-          <ShareAudienceIcon audience={share.audience} loginAccess={null} codeAccess={share.codeAccess} />
-        </span>
-        {menu}
-      </span>
+      {menu ? <span className="cat-card__tr" onClick={(e) => e.stopPropagation()}>{menu}</span> : null}
       <div className="cat-row">
         <DropGlyph icon={icon} title={entry.name} size={44} />
         <div className="cat-row__txt">

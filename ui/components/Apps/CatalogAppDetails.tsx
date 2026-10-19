@@ -76,17 +76,10 @@ interface Props {
   onClose: () => void;
 }
 
-/** The surface the page covers: the Apps view (keeps the sidebar + tabs), else the window. */
-function pageHost(): HTMLElement {
-  // Several tabs can each mount an Apps view; cover the one on screen.
-  const views = Array.from(document.querySelectorAll<HTMLElement>(".apps-view"));
-  return views.find((v) => v.offsetParent !== null && v.getClientRects().length > 0) ?? document.body;
-}
-
 /**
- * Prototyper-style app page (not a floating modal): back link, the whole preview film,
- * identity row with a big Get, a facts strip, screenshots, then what it needs / runs.
- * Covers the Apps view, so there is no card edge to show a halo.
+ * Prototyper-style app page in a centered modal: the whole preview film (inset in its own
+ * rounded frame, so nothing dark touches the card's corners), identity row with a big Get,
+ * a facts strip, screenshots, then what it needs / runs. Scrolls inside; Esc/backdrop closes.
  */
 export function CatalogAppDetails({ entry, coverUrl, hasWeb, actions, onClose }: Props) {
   const scroller = useRef<HTMLDivElement>(null);
@@ -110,20 +103,14 @@ export function CatalogAppDetails({ entry, coverUrl, hasWeb, actions, onClose }:
   ];
   return createPortal(
     <div
-      ref={scroller}
-      className="cat-page"
-      role="dialog"
-      aria-modal="true"
-      aria-label={entry.name}
-      tabIndex={-1}
+      className="cat-modal"
       onClick={(e) => e.stopPropagation()}
       onKeyDown={(e) => e.stopPropagation()}
+      onMouseDown={(e) => { if (e.target === e.currentTarget) onClose(); }}
     >
-      <div className="cat-page__in">
-        <button type="button" className="cat-page__back" onClick={onClose}>
-          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true"><path d="M15 5l-7 7 7 7" /></svg>
-          {teamData ? "Team" : "Community"}
-        </button>
+      <div className="cat-modal__card" role="dialog" aria-modal="true" aria-label={entry.name}>
+      <button type="button" className="cat-modal__x" onClick={onClose} aria-label="Close"><CatIcon name="x" size={14} /></button>
+      <div ref={scroller} className="cat-modal__scroll cat-page__in" tabIndex={-1}>
         <section className="cat-page__hero">
           <div className="cat-page__media"><CatalogBanner entry={entry} coverUrl={coverUrl} /></div>
           <div className="cat-page__id">
@@ -177,7 +164,8 @@ export function CatalogAppDetails({ entry, coverUrl, hasWeb, actions, onClose }:
           </p>
         ) : null}
       </div>
+      </div>
     </div>,
-    pageHost(),
+    document.body,
   );
 }
