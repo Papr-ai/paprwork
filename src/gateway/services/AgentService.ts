@@ -4142,7 +4142,8 @@ ${last15.substring(0, 8_000)}`;
       userCap: contextLimit ?? null,
       // Never clamp peak — the ring may exceed 100% when the last request was
       // larger than the user's history cap (tools + system are not capped).
-      usedTokens: live?.peakContextTokens ?? restingFill,
+      // `||`, not `??`: a live turn starts at 0, which is not "measured".
+      usedTokens: live?.peakContextTokens || restingFill,
       fillSource,
       lastTurn,
       recentTurns,

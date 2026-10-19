@@ -32,6 +32,7 @@ import {
   recordWidthNudge,
   type TurnMetrics,
 } from "../agent/turnMetrics.js";
+import { updateLiveTurn } from "../agent/liveTurn.js";
 import { resolveParallelWidthNudge } from "../agent/parallelWidthNudge.js";
 import {
   estimateMessagesTokens,
@@ -860,6 +861,16 @@ export async function* createPiCodexStreamWithToolLoop(
                   toolContext?.turnMetrics,
                   cumulativeTokens,
                 );
+                // The AI SDK route publishes from onStepFinish; this loop is
+                // the OAuth equivalent. Without it the live meter sat at
+                // 0 steps / 0% for every subscription turn.
+                if (toolContext?.chatId) {
+                  updateLiveTurn(toolContext.chatId, {
+                    steps: step + 1, // `step` advances only after this step's tools run
+                    toolCalls: totalToolCalls,
+                    peakContextTokens: cumulativeTokens,
+                  });
+                }
                 accumulatedBilling = accumulatePiAiBillingUsage(
                   accumulatedBilling,
                   stepUsage,
@@ -1022,6 +1033,12 @@ export async function* createPiCodexStreamWithToolLoop(
 
       // Update total tool call counter
       totalToolCalls += toolCallsThisTurn.length;
+      if (toolContext?.chatId) {
+        updateLiveTurn(toolContext.chatId, {
+          steps: step + 1, // `step` advances only after this step's tools run
+          toolCalls: totalToolCalls,
+        });
+      }
       
       // Track recent tool calls to detect loops
       for (const tc of toolCallsThisTurn) {
