@@ -3,6 +3,7 @@ import type { RequiredKeySpec } from "../../../core/types/bundles.js";
 import { AUTO_DETECTED_KEY_DESCRIPTION } from "../appKeyDeclarations.js";
 import {
   buildCredentialHelpMessage,
+  platformForKey,
   renderCredentialSetupPage,
 } from "./cloudAppCredentialSetupPage.js";
 import { hasCredentialSkipCookie } from "./CloudAppHostCredentialService.js";
@@ -69,5 +70,62 @@ describe("hasCredentialSkipCookie", () => {
     expect(hasCredentialSkipCookie("a=1; papr_cred_skip=1")).toBe(true);
     expect(hasCredentialSkipCookie("papr_cred_skip=0")).toBe(false);
     expect(hasCredentialSkipCookie(undefined)).toBe(false);
+  });
+});
+
+describe("platform sign-ins", () => {
+  const reddit: RequiredKeySpec = {
+    name: "REDDIT_REDDIT_SESSION",
+    service: "Reddit Reddit Session",
+    category: "other",
+    description: AUTO_DETECTED_KEY_DESCRIPTION,
+    required: true,
+    credentialScope: "user",
+    clientAccess: "server",
+  };
+  const redditToken: RequiredKeySpec = { ...reddit, name: "REDDIT_TOKEN_V2" };
+
+  it("detects platform cookie keys", () => {
+    expect(platformForKey("REDDIT_REDDIT_SESSION")).toEqual({ id: "reddit", name: "Reddit" });
+    expect(platformForKey("LINKEDIN_LI_AT")?.id).toBe("linkedin");
+    expect(platformForKey("TWITTER_AUTH_TOKEN")?.id).toBe("twitter");
+    expect(platformForKey("OPENAI_API_KEY")).toBeNull();
+  });
+
+  it("shows one Connect card per platform instead of a paste box", () => {
+    const html = renderCredentialSetupPage({
+      action: "/ns/app/credentials/setup",
+      returnTo: "/ns/app/",
+      appTitle: "Reddit Research",
+      missing: [reddit, redditToken],
+      statusUrl: "/ns/app/api/credentials/status",
+    });
+    expect(html.match(/data-connect="reddit"/g)).toHaveLength(1);
+    expect(html).toContain("Connect Reddit");
+    expect(html).toContain('data-keys="REDDIT_REDDIT_SESSION,REDDIT_TOKEN_V2"');
+    expect(html).not.toContain("Reddit Reddit Session");
+    expect(html).not.toContain("Paste your Reddit key");
+    // Only the "paste a session instead" fallback has a Save button.
+    expect(html.match(/Save and open app/g)).toHaveLength(1);
+    expect(html).toContain("<summary>Paste a session instead</summary>");
+    expect(html).toContain("Skip for now");
+    expect(html).toContain("papr://connections/connect?platform=");
+  });
+
+  it("keeps API key cards alongside a platform card", () => {
+    const html = render([reddit, openai]);
+    expect(html).toContain("Connect Reddit");
+    expect(html).toContain("Paste your OpenAI key");
+    expect(html).toContain("Save and open app");
+  });
+
+  it("hides the older backend-manifest placeholder too", () => {
+    const html = render([{ ...reddit, description: "Server-side key for app backend handlers (synced from backend/manifest.json)" }]);
+    expect(html).not.toContain("synced from");
+    expect(html).toContain("Sign in to Reddit so this app can work as you.");
+  });
+
+  it("tells Pen it's a sign-in, not a key", () => {
+    expect(buildCredentialHelpMessage("Reddit Research", [reddit])).toContain("Reddit sign-in");
   });
 });

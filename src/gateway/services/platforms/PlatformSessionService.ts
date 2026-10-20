@@ -730,6 +730,11 @@ export class PlatformSessionService {
       expiresAt: expiresAt.toISOString(),
     };
     await this.saveStore();
+    // Cookies are already in the keychain: sync them to the cloud vault right away
+    // so web apps waiting on this sign-in (apps.papr.ai setup page) see it in seconds.
+    void import("../VaultSyncService.js")
+      .then(({ getVaultSyncService }) => getVaultSyncService()?.pushSoon(`${config.name} connected`))
+      .catch(() => {});
     if (platformId === "linkedin") {
       this.linkedInLiveValidationCache = {
         validatedAt: Date.now(),

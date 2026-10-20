@@ -295,6 +295,7 @@ export class CloudAppHostCredentialService {
           returnTo,
           missing,
           error,
+          statusUrl: `/${encodeURIComponent(runtimeAuth.namespaceId)}/${encodeURIComponent(runtimeAuth.slug)}/api/credentials/status`,
         }),
       );
   }

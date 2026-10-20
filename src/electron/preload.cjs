@@ -438,6 +438,10 @@ ipcRenderer.on("notification:open-settings", (_event, data) => {
   window.dispatchEvent(new CustomEvent("papr-notification-open-settings", { detail: data }));
 });
 
+ipcRenderer.on("platform:connect-open", (_event, data) => {
+  window.dispatchEvent(new CustomEvent("papr-platform-connect", { detail: data }));
+});
+
 ipcRenderer.on("chat:open", (_event, data) => {
   window.dispatchEvent(new CustomEvent('papr-chat-open', { detail: data }));
 });

@@ -102,4 +102,30 @@ export function initPlatformConnectListener(): void {
   };
 
   window.addEventListener("gateway-broadcast", handleBroadcast);
+
+  // "Connect Reddit" on a published app's setup page: papr:// deep link (browser)
+  // or postMessage from the app's preview iframe. Same modal the agent opens.
+  window.addEventListener("papr-platform-connect", (event: Event) => {
+    const platform = (event as CustomEvent<{ platform?: string }>).detail?.platform;
+    if (typeof platform === "string" && platform.trim()) openPlatformConnect(platform.trim());
+  });
+  window.addEventListener("message", (event: MessageEvent) => {
+    if (event.data?.type !== "papr-connect-platform") return;
+    const platform = event.data.platform;
+    if (typeof platform === "string" && /^[a-z][a-z0-9-]{1,60}$/.test(platform)) {
+      openPlatformConnect(platform);
+    }
+  });
+}
+
+/** Open the Connected Platforms sign-in modal (no-op when already connected). */
+export function openPlatformConnect(platformId: string, reason?: string): void {
+  void (async () => {
+    if (await isPlatformAlreadyConnected(platformId)) return;
+    usePlatformConnectStore.getState().setActiveRequest({
+      platform: platformId,
+      reason: reason ?? "An app you opened on the web needs this sign-in.",
+      requestId: crypto.randomUUID(),
+    });
+  })();
 }
