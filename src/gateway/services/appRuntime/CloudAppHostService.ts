@@ -1752,6 +1752,7 @@ export class CloudAppHostService {
     let accessMs = 0;
     let configMs = 0;
     let tursoWriteMs = 0;
+    const tursoPerf: { clientMs?: number; execMs?: number; bumpMs?: number } = {};
 
     try {
       const { appId: requestedAppId, sourceId, sql, params } = req.body as {
@@ -1789,6 +1790,7 @@ export class CloudAppHostService {
       configMs = performance.now() - configStarted;
       const writeStartedMs = performance.now();
       const result = await this.turso.write({
+        perf: tursoPerf,
         orgId: access.orgId,
         namespaceId: access.namespaceId,
         ...this.tursoDbRequest(access, runtimeAuth),
@@ -1809,6 +1811,9 @@ export class CloudAppHostService {
         access: accessMs,
         config: configMs,
         turso: tursoWriteMs,
+        ...(tursoPerf.execMs !== undefined
+          ? { tclient: tursoPerf.clientMs ?? 0, texec: tursoPerf.execMs, tbump: tursoPerf.bumpMs ?? 0 }
+          : {}),
         total: performance.now() - writeStarted,
       });
       res.json(result);
@@ -1825,7 +1830,8 @@ export class CloudAppHostService {
         console.log(
           `[CloudAppHost] /api/db/write timing accessMs=${Math.round(accessMs)} ` +
             `configMs=${Math.round(configMs)} tursoWriteMs=${Math.round(tursoWriteMs)} ` +
-            `totalMs=${totalMs}`,
+            `clientMs=${Math.round(tursoPerf.clientMs ?? -1)} execMs=${Math.round(tursoPerf.execMs ?? -1)} ` +
+            `bumpMs=${Math.round(tursoPerf.bumpMs ?? -1)} totalMs=${totalMs}`,
         );
       }
     }

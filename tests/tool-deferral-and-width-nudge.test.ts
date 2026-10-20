@@ -695,7 +695,8 @@ describe("wiring invariants", () => {
     // step-limit-warning branch that returns early above the nudge, so a plain
     // indexOf matches *that* one and the ordering holds whatever the main path
     // does — the assertion passes against code that has the bug.
-    const mainPath = body.indexOf("const msgs = [...stepOptions.messages];");
+    // `const` or `let` — match the assignment, not the declaration keyword.
+    const mainPath = body.indexOf("msgs = [...stepOptions.messages];");
     expect(mainPath).toBeGreaterThan(-1);
 
     const trim = body.indexOf("trimOldestHistoryTurns(msgs", mainPath);
