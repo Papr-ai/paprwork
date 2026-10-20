@@ -139,6 +139,7 @@ import {
   resolvePreviewIconSvg,
 } from "./CloudAppPreviewService.js";
 import { rasterizePreviewIconForOpenGraph } from "../../utils/openGraphIconRaster.js";
+import { registerDiscoverRoutes } from "./cloudAppDiscoverPage.js";
 import {
   PAPR_APP_META_RELATIVE_PATH,
   readCloudAppMetaFromContent,
@@ -390,6 +391,9 @@ export class CloudAppHostService {
     app.get("/health", (_req, res) => {
       res.json({ status: "ok", service: "cloud-app-host" });
     });
+
+    // Homepage: Community Discover (+ per-app pages, My apps, sitemap). Before /:ns/:slug.
+    registerDiscoverRoutes(app, this.auth);
 
     // Connections sign-in: providers redirect here; the memory server does the exchange.
     app.get("/oauth/callback", (req, res) => void proxyOAuthCallback(req, res));
