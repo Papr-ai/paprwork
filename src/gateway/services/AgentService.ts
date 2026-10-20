@@ -2635,7 +2635,22 @@ export class AgentService {
           },
           // Lets a refusal name which credential it refused. The kind is read
           // from the token inside the loop, so only the provider is needed.
-          { provider: config.provider },
+          {
+            provider: config.provider,
+            // A background refresh revokes the token this turn started with;
+            // fetch the current one instead of failing the turn.
+            refreshAuth: async () => {
+              const { clearKeyCache, getProviderAuthForModel } = await import(
+                "../utils/keyResolver.js"
+              );
+              clearKeyCache(envKey);
+              const auth = await getProviderAuthForModel(
+                config.provider === "openai-codex" ? "openai" : (config.provider as "openai" | "anthropic"),
+                { modelId: config.model, modelProvider: config.provider },
+              );
+              return auth?.type === "oauth" && auth.token !== token ? auth.token : null;
+            },
+          },
         );
         piWrapUpContext = piContext;
         // Same credentials and session with reasoning turned down, for a
