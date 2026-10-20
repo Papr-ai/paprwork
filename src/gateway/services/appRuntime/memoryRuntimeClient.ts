@@ -255,6 +255,29 @@ export async function fetchRuntimeVaultKeyNames(
 }
 
 /** Same resolution path as cloud bash/jobs — accurate per-app namespace context. */
+/**
+ * Open memory's vault change stream for the signed-in visitor (key names only).
+ * Resolves to the raw SSE response; the caller reads it until `signal` aborts.
+ */
+export async function openRuntimeVaultEvents(
+  auth: AppRuntimeRouteAuth,
+  signal: AbortSignal,
+): Promise<Response | null> {
+  if (!auth.sessionToken) return null;
+  const query = new URLSearchParams({ max_seconds: "240" });
+  if (auth.namespaceId) query.set("namespace_id", auth.namespaceId);
+  try {
+    const res = await fetch(`${getMemoryServerBaseUrl()}/v1/cloud/vault/events?${query}`, {
+      method: "GET",
+      headers: { ...runtimeHeaders(auth), Accept: "text/event-stream" },
+      signal,
+    });
+    return res.ok && res.body ? res : null;
+  } catch {
+    return null;
+  }
+}
+
 export async function resolveMissingRuntimeVaultKeyNames(
   auth: AppRuntimeRouteAuth,
   keyNames: readonly string[],

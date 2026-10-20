@@ -2599,8 +2599,10 @@ async function flushPendingDeepLinks() {
       continue;
     }
 
-    // Server sign-in finished (apps.papr.ai/oauth/callback). The gateway is already
-    // polling the session; just bring Papr to the front.
+    // Server sign-in finished (apps.papr.ai/oauth/callback): the gateway is already
+    // polling the session, just bring Papr to the front.
+    // papr://connections/connect?platform=reddit ("Connect Reddit" on an app's setup
+    // page): also open the Connected Platforms sign-in for that platform.
     if (url.startsWith("papr://connections/")) {
       if (!mainWindow || mainWindow.isDestroyed()) {
         return;
@@ -2609,6 +2611,15 @@ async function flushPendingDeepLinks() {
       if (mainWindow.isMinimized()) mainWindow.restore();
       mainWindow.show();
       mainWindow.focus();
+      try {
+        const parsed = new URL(url);
+        const platform = (parsed.searchParams.get("platform") || "").trim();
+        if (parsed.pathname === "/connect" && /^[a-z][a-z0-9-]{1,60}$/.test(platform)) {
+          mainWindow.webContents.send("platform:connect-open", { platform });
+        }
+      } catch {
+        /* malformed link: focusing is enough */
+      }
       continue;
     }
 

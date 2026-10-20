@@ -800,6 +800,24 @@ export class VaultSyncService {
   /**
    * Notify that a key was added or updated. Triggers a debounced full push.
    */
+  /**
+   * Push now, skipping the debounce. A platform sign-in just finished and a web
+   * page (apps.papr.ai setup screen) is waiting for those cookies in the cloud vault.
+   */
+  pushSoon(reason: string): void {
+    if (this.workspacePaused) return;
+    if (this.pushDebounceTimer) {
+      clearTimeout(this.pushDebounceTimer);
+      this.pushDebounceTimer = null;
+    }
+    if (this.pushInFlight) {
+      this.pushPendingAfterInflight = true;
+      return;
+    }
+    console.log(`[VaultSync] ${reason} — pushing to cloud vault now`);
+    void this.enqueuePush();
+  }
+
   async onKeyChanged(keyName: string): Promise<void> {
     this.schedulePushAfterKeyChange(keyName, "changed");
   }
