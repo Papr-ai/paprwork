@@ -45,3 +45,52 @@ export async function adoptRefreshedToken(
     return false;
   }
 }
+
+/**
+ * Open a model stream and, if its first answer is a token rejection, adopt the
+ * current token and open it once more. Used by calls that build their own
+ * request options (wrap-up, text-first retry) and so never see the live ones
+ * the tool loop updates. A rejection that cannot be recovered is surfaced
+ * unchanged, so the caller's existing error handling still applies.
+ */
+export async function* streamWithTokenRetry<E extends { type?: string }>(
+  open: (options: Record<string, unknown>) => AsyncIterable<E>,
+  options: Record<string, unknown>,
+  refreshAuth?: () => Promise<string | null>,
+): AsyncGenerator<E> {
+  let current = options;
+  let retried = false;
+  while (true) {
+    let started = false;
+    let swallowedEvent: E | undefined;
+    let swallowedError: unknown;
+    let rejected = false;
+    try {
+      for await (const event of open(current)) {
+        if (
+          !retried && !started && event.type === "error" &&
+          isOAuthTokenRejection((event as { error?: unknown }).error ?? event)
+        ) {
+          swallowedEvent = event;
+          rejected = true;
+          break;
+        }
+        if (event.type !== "start") started = true;
+        yield event;
+      }
+    } catch (err) {
+      if (retried || started || !isOAuthTokenRejection(err)) throw err;
+      swallowedError = err;
+      rejected = true;
+    }
+    if (!rejected) return;
+    retried = true;
+    const next = { ...current } as Record<string, unknown> & { apiKey: string };
+    if (!(await adoptRefreshedToken(next, refreshAuth))) {
+      if (swallowedEvent) yield swallowedEvent;
+      else throw swallowedError;
+      return;
+    }
+    current = next;
+  }
+}
