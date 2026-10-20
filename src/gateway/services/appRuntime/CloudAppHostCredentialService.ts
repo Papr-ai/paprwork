@@ -75,7 +75,7 @@ async function missingUserCredentialNames(
   );
 }
 
-/** Visitor chose "Skip for now": open the app; features that need a key still say so. */
+/** Visitor chose "Look around first" (skip): open the app; features that need a key still say so. */
 const CREDENTIAL_SKIP_COOKIE = "papr_cred_skip";
 const CREDENTIAL_SKIP_MAX_AGE_SEC = 60 * 60 * 24 * 30;
 
@@ -115,6 +115,21 @@ function appTitleFromSlug(slug: string): string {
       .map((part) => part.charAt(0).toUpperCase() + part.slice(1))
       .join(" ") || slug
   );
+}
+
+/** Name, one-line description and icon from the published metadata.json. */
+async function readAppIntro(
+  runtimeAuth: AppRuntimeRouteAuth,
+): Promise<{ title?: string; description?: string; iconSvg?: string }> {
+  try {
+    const file = await fetchCachedRuntimeRepoFile(runtimeAuth, "metadata.json");
+    if (!file?.content) return {};
+    const meta = JSON.parse(file.content) as Record<string, unknown>;
+    const str = (v: unknown) => (typeof v === "string" && v.trim() ? v.trim() : undefined);
+    return { title: str(meta.title), description: str(meta.description), iconSvg: str(meta.icon) };
+  } catch {
+    return {};
+  }
 }
 
 /** Keys each visitor brings, including optional ones (shown, never forced). */
@@ -265,9 +280,12 @@ export class CloudAppHostCredentialService {
       runtimeAuth,
       userKeys.map((spec) => spec.name),
     );
-    // Required first: those are what the app needs to work at all.
+    // Getting started only asks for what the app can't run without. Optional
+    // accounts show only when someone opens this page on purpose (?all=1).
+    const showOptional = req.query.all === "1";
     const missing = userKeys
       .filter((spec) => missingNames.includes(spec.name))
+      .filter((spec) => showOptional || spec.required !== false)
       .sort((a, b) => Number(a.required === false) - Number(b.required === false));
 
     const returnTo = resolveCloudAuthReturnToPath(
@@ -284,6 +302,7 @@ export class CloudAppHostCredentialService {
 
     const error =
       typeof req.query.error === "string" ? req.query.error : undefined;
+    const intro = await readAppIntro(runtimeAuth);
 
     res
       .status(200)
@@ -291,7 +310,9 @@ export class CloudAppHostCredentialService {
       .send(
         renderCredentialSetupPage({
           action: setupPath(runtimeAuth.namespaceId, runtimeAuth.slug),
-          appTitle: appTitleFromSlug(runtimeAuth.slug),
+          appTitle: intro.title || appTitleFromSlug(runtimeAuth.slug),
+          appDescription: intro.description,
+          appIconSvg: intro.iconSvg,
           returnTo,
           missing,
           error,
@@ -403,7 +424,7 @@ export class CloudAppHostCredentialService {
         res.redirect(302, returnTo);
         return;
       }
-      const setupUrl = `${setupPath(runtimeAuth.namespaceId, runtimeAuth.slug)}?returnTo=${encodeURIComponent(returnTo)}&error=${encodeURIComponent("Paste a key, or choose Skip for now.")}`;
+      const setupUrl = `${setupPath(runtimeAuth.namespaceId, runtimeAuth.slug)}?returnTo=${encodeURIComponent(returnTo)}&error=${encodeURIComponent("Paste a key, or choose Look around first.")}`;
       res.redirect(302, setupUrl);
       return;
     }
@@ -418,7 +439,7 @@ export class CloudAppHostCredentialService {
         const labels = userKeys
           .filter((spec) => stillMissing.includes(spec.name))
           .map((spec) => spec.service || spec.name);
-        const setupUrl = `${setupPath(runtimeAuth.namespaceId, runtimeAuth.slug)}?returnTo=${encodeURIComponent(returnTo)}&error=${encodeURIComponent(`Saved. Still needed: ${labels.join(", ")} — add it or skip for now.`)}`;
+        const setupUrl = `${setupPath(runtimeAuth.namespaceId, runtimeAuth.slug)}?returnTo=${encodeURIComponent(returnTo)}&error=${encodeURIComponent(`Saved. Still needed: ${labels.join(", ")} — add it, or look around first.`)}`;
         res.redirect(302, setupUrl);
         return;
       }

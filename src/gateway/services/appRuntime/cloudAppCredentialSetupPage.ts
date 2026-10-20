@@ -181,6 +181,9 @@ export function renderCredentialSetupPage(params: {
   error?: string;
   /** GET → { ready, missing[] }; lets the page continue once Papr Work syncs a sign-in. */
   statusUrl?: string;
+  /** What the app is, so the visitor knows what they're connecting for. */
+  appDescription?: string;
+  appIconSvg?: string;
 }): string {
   const { platforms, apiKeys } = splitPlatformKeys(params.missing);
   const cards = [...platforms.map(renderPlatformCard), ...apiKeys.map(renderCard)].join("\n");
@@ -190,8 +193,18 @@ export function renderCredentialSetupPage(params: {
   const helpMessageJson = JSON.stringify(
     buildCredentialHelpMessage(params.appTitle, params.missing),
   ).replace(/</g, "\\u003c");
-  const count = params.missing.length;
   const title = escapeHtml(params.appTitle);
+  const description = params.appDescription?.trim() ?? "";
+  const iconSvg = params.appIconSvg?.trim().startsWith("<svg") ? params.appIconSvg.trim() : "";
+  // Publisher SVG as an <img> data URL: scripts inside it never run.
+  const appIcon = iconSvg
+    ? `<img alt="" src="data:image/svg+xml;base64,${Buffer.from(iconSvg).toString("base64")}" />`
+    : `<span>${escapeHtml(params.appTitle.charAt(0).toUpperCase())}</span>`;
+  const names = [...platforms.map((p) => p.name), ...apiKeys.map(serviceLabel)];
+  const list = names.length <= 2 ? names.join(" and ") : `${names.slice(0, -1).join(", ")} and ${names[names.length - 1]}`;
+  const ask = platforms.length && !apiKeys.length
+    ? `To start, connect your ${escapeHtml(list)} account${names.length > 1 ? "s" : ""}.`
+    : `To start, add your ${escapeHtml(list)} ${names.length > 1 ? "accounts" : "account"}.`;
   const errorBlock = params.error
     ? `<p class="error" role="alert">${escapeHtml(params.error)}</p>`
     : "";
@@ -201,7 +214,7 @@ export function renderCredentialSetupPage(params: {
 <head>
   <meta charset="utf-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1" />
-  <title>Connect your accounts · ${title}</title>
+  <title>${title} · Get started</title>
   <style>
     :root { color-scheme: light dark; --bg:#f6f7f9; --card:rgba(255,255,255,.92); --line:rgba(10,16,32,.06);
       --ink:#1d1d1f; --soft:#6e6e73; --faint:#8e8e93; --blue:#0060e0; --hover:rgba(0,96,224,.07);
@@ -218,8 +231,14 @@ export function renderCredentialSetupPage(params: {
       box-shadow:0 18px 50px rgba(10,16,32,.16),0 0 0 1px var(--line); animation:rise .22s ease-out; }
     @keyframes rise { from { opacity:0; transform:translateY(8px) scale(.985); } }
     header { padding:14px 12px 10px; }
+    .app { display:flex; gap:12px; align-items:center; }
+    .app__icon { flex:0 0 auto; width:48px; height:48px; border-radius:24%; display:grid; place-items:center; overflow:hidden;
+      background:#fff; color:#1d1d1f; font-weight:700; font-size:20px; box-shadow:0 0 0 1px var(--line),0 4px 14px rgba(10,16,32,.08); }
+    .app__icon img { width:70%; height:70%; }
+    .app__text { min-width:0; }
     h1 { margin:0; font-size:17px; font-weight:600; letter-spacing:-.01em; }
-    .lead { margin:4px 0 0; color:var(--soft); font-size:13px; }
+    .app__desc { margin:2px 0 0; color:var(--soft); font-size:13px; line-height:1.4; }
+    .lead { margin:14px 0 0; font-size:13.5px; font-weight:500; }
     h6 { margin:6px 12px 4px; font-size:11px; font-weight:600; letter-spacing:.04em; text-transform:uppercase; color:var(--faint); }
     .accts { display:flex; flex-direction:column; gap:1px; }
     .acct { border-radius:12px; padding:2px 0; transition:background .12s; }
@@ -273,8 +292,11 @@ export function renderCredentialSetupPage(params: {
 <body>
   <main class="card">
     <header>
-      <h1>Connect your accounts</h1>
-      <p class="lead"><strong>${title}</strong> uses ${count === 1 ? "an account" : `${count} accounts`} of yours. Add ${count === 1 ? "it" : "them"} now, or skip and add ${count === 1 ? "it" : "them"} later.</p>
+      <div class="app">
+        <span class="app__icon">${appIcon}</span>
+        <span class="app__text"><h1>${title}</h1>${description ? `<p class="app__desc">${escapeHtml(description)}</p>` : ""}</span>
+      </div>
+      <p class="lead">${ask}</p>
     </header>
     ${errorBlock}
     <form method="POST" action="${escapeHtml(params.action)}">
@@ -286,7 +308,7 @@ export function renderCredentialSetupPage(params: {
         ${onlySignIns ? "" : '<button class="btn" type="submit">Save and open app</button>'}
         <div class="row">
           <button type="button" class="link" id="ask-pen">Not sure? Ask Pen to help</button>
-          <button type="submit" class="link skip" name="skip" value="1" formnovalidate>Skip for now</button>
+          <button type="submit" class="link skip" name="skip" value="1" formnovalidate>Look around first</button>
         </div>
         <p class="trust">Saved to your private Papr vault. The app's owner never sees your keys.</p>
       </footer>
@@ -308,23 +330,44 @@ export function renderCredentialSetupPage(params: {
         q(".nodesk").hidden = state !== "nodesk";
         card.classList.toggle("done", state === "done");
       }
-      function poll() {
-        if (!statusUrl || polling) return;
-        polling = window.setInterval(function () {
-          fetch(statusUrl, { credentials: "same-origin", cache: "no-store" })
-            .then(function (r) { return r.ok ? r.json() : null; })
-            .then(function (s) {
-              if (!s) return;
-              var missing = s.missing || [];
-              document.querySelectorAll(".plat").forEach(function (card) {
-                var keys = (card.getAttribute("data-keys") || "").split(",");
-                if (keys.every(function (k) { return missing.indexOf(k) < 0; })) show(card, "done");
-              });
-              if (s.ready) { window.clearInterval(polling); window.setTimeout(function () { window.location.href = returnTo; }, 500); }
-            })
-            .catch(function () {});
-        }, 2000);
+      var waiting = false;
+      var fallback = null;
+      // Papr Work saves the sign-in and pushes it to your vault the moment you connect,
+      // but this page can't hear that. So check when it matters: when you come back to
+      // this tab, when the desktop preview tells us, and on a slow fallback timer.
+      function check() {
+        if (!statusUrl || !waiting) return;
+        fetch(statusUrl, { credentials: "same-origin", cache: "no-store" })
+          .then(function (r) { return r.ok ? r.json() : null; })
+          .then(function (s) {
+            if (!s) return;
+            var missing = s.missing || [];
+            document.querySelectorAll(".plat").forEach(function (card) {
+              var keys = (card.getAttribute("data-keys") || "").split(",");
+              if (keys.every(function (k) { return missing.indexOf(k) < 0; })) show(card, "done");
+            });
+            if (s.ready) {
+              waiting = false;
+              window.clearInterval(fallback);
+              window.setTimeout(function () { window.location.href = returnTo; }, 500);
+            }
+          })
+          .catch(function () {});
       }
+      function poll() {
+        if (waiting) return;
+        waiting = true;
+        fallback = window.setInterval(check, 5000);
+      }
+      window.addEventListener("focus", check);
+      document.addEventListener("visibilitychange", function () { if (!document.hidden) check(); });
+      window.addEventListener("message", function (e) {
+        // Papr Work says you're signed in; the vault push lands within a second or two.
+        if (e.data && e.data.type === "papr-platform-connected") {
+          document.querySelectorAll(".plat .wait").forEach(function (n) { n.textContent = "Signed in. Syncing to your vault…"; });
+          [300, 1500, 3500].forEach(function (ms) { window.setTimeout(check, ms); });
+        }
+      });
       document.querySelectorAll("[data-connect]").forEach(function (btn) {
         btn.addEventListener("click", function () {
           var id = btn.getAttribute("data-connect");

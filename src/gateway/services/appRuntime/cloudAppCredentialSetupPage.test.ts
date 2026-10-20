@@ -30,7 +30,7 @@ function render(missing: RequiredKeySpec[]): string {
 describe("renderCredentialSetupPage", () => {
   it("leads with the service and purpose, links to signup, offers skip and help", () => {
     const html = render([openai]);
-    expect(html).toContain("Connect your accounts");
+    expect(html).toContain("To start, add your");
     expect(html).toContain("Writes your drafts with your own OpenAI account");
     expect(html).toContain("Get a OpenAI key");
     expect(html).toContain("platform.openai.com");
@@ -108,7 +108,7 @@ describe("platform sign-ins", () => {
     // Only the "paste a session instead" fallback has a Save button.
     expect(html.match(/Save and open app/g)).toHaveLength(1);
     expect(html).toContain("<summary>Paste a session instead</summary>");
-    expect(html).toContain("Skip for now");
+    expect(html).toContain("Look around first");
     expect(html).toContain("papr://connections/connect?platform=");
   });
 
@@ -127,5 +127,21 @@ describe("platform sign-ins", () => {
 
   it("tells Pen it's a sign-in, not a key", () => {
     expect(buildCredentialHelpMessage("Reddit Research", [reddit])).toContain("Reddit sign-in");
+  });
+});
+
+describe("getting started intro", () => {
+  it("leads with what the app is, then one plain ask", () => {
+    const html = renderCredentialSetupPage({
+      action: "/a", returnTo: "/r", appTitle: "Reddit Research Agent",
+      appDescription: "Watches Reddit for customer pain points",
+      appIconSvg: '<svg xmlns="http://www.w3.org/2000/svg"><script>alert(1)</script></svg>',
+      missing: [{ name: "REDDIT_REDDIT_SESSION", service: "Reddit", category: "other", description: "", required: true, credentialScope: "user", clientAccess: "server" }],
+    });
+    expect(html).toContain("Watches Reddit for customer pain points");
+    expect(html).toContain("To start, connect your Reddit account.");
+    expect(html).not.toContain("uses an account of yours");
+    expect(html).not.toContain("<script>alert(1)"); // icon only as an <img> data URL
+    expect(html).toContain('src="data:image/svg+xml;base64,');
   });
 });

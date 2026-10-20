@@ -109,12 +109,33 @@ export function initPlatformConnectListener(): void {
     const platform = (event as CustomEvent<{ platform?: string }>).detail?.platform;
     if (typeof platform === "string" && platform.trim()) openPlatformConnect(platform.trim());
   });
+  // Setup pages inside app previews that are waiting on a sign-in.
+  const waitingFrames = new Map<string, Set<MessageEventSource>>();
+  const notifyConnected = (platform: string) => {
+    for (const source of waitingFrames.get(platform) ?? []) {
+      (source as Window).postMessage({ type: "papr-platform-connected", platform }, "*");
+    }
+    waitingFrames.delete(platform);
+  };
+  window.addEventListener("gateway-broadcast", (event: Event) => {
+    const message = (event as CustomEvent).detail;
+    if (message?.type !== "platform:status-changed" || message.data?.status !== "connected") return;
+    if (typeof message.data.platformId === "string") notifyConnected(message.data.platformId);
+  });
   window.addEventListener("message", (event: MessageEvent) => {
     if (event.data?.type !== "papr-connect-platform") return;
     const platform = event.data.platform;
-    if (typeof platform === "string" && /^[a-z][a-z0-9-]{1,60}$/.test(platform)) {
-      openPlatformConnect(platform);
+    if (typeof platform !== "string" || !/^[a-z][a-z0-9-]{1,60}$/.test(platform)) return;
+    if (event.source) {
+      const set = waitingFrames.get(platform) ?? new Set<MessageEventSource>();
+      set.add(event.source);
+      waitingFrames.set(platform, set);
     }
+    void (async () => {
+      // Already signed in on this computer: tell the page right away.
+      if (await isPlatformAlreadyConnected(platform)) notifyConnected(platform);
+      else openPlatformConnect(platform);
+    })();
   });
 }
 
