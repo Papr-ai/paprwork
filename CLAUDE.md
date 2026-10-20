@@ -6,6 +6,16 @@ This file tracks key learnings, architectural decisions, and context for AI assi
 
 ---
 
+## Change process (required for every PR, humans and agents)
+
+1. **Ticket first.** Before writing code, create the issue: `gh issue create --title "<what and why>" --body "<context, acceptance criteria>"`. Note the number N.
+2. **Branch from development:** `git fetch origin && git switch -c <fix|feat|chore>/<N>-<short-slug> origin/development`.
+3. **Open the PR into `development`** with `Refs #N` on the first line of the description (template: `.github/pull_request_template.md`). Use `Closes #N` only for PRs into `master`/`main`.
+4. **Never merge your own PR.** Request review from the other engineer. Agents must not approve or merge.
+5. The **Ticket check** workflow fails any PR without a linked ticket. Exempt: Dependabot, branch-sync PRs, `release/*` PRs.
+
+---
+
 ## Project Overview
 
 **Paprwork V2** is a complete greenfield rewrite using OpenClaw's proven architecture:

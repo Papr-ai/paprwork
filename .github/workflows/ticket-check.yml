@@ -1,0 +1,27 @@
+name: Ticket check
+on:
+  pull_request:
+    types: [opened, edited, reopened, synchronize]
+permissions:
+  pull-requests: read
+jobs:
+  ticket:
+    name: Ticket linked
+    runs-on: ubuntu-latest
+    steps:
+      - name: Require a linked ticket in the PR description
+        env:
+          BODY: ${{ github.event.pull_request.body }}
+          HEAD: ${{ github.head_ref }}
+          AUTHOR: ${{ github.event.pull_request.user.login }}
+        run: |
+          if [ "$AUTHOR" = "dependabot[bot]" ]; then echo "Dependabot PR: exempt"; exit 0; fi
+          if echo "$HEAD" | grep -Eq '^(main|master|development)$|^release/' \
+             || echo "$HEAD" | grep -Eiq '(^|/)sync[-_/].*(main|master|development)|(main|master|development)-(into|to)-'; then
+            echo "Release or branch-sync PR: exempt"; exit 0
+          fi
+          if printf '%s' "$BODY" | grep -Eiq 'linear\.app/|/issues/[0-9]+|(close[sd]?|fix(e[sd])?|resolve[sd]?|refs?|ticket|issue)[[:space:]]*:?[[:space:]]*#[0-9]+'; then
+            echo "Ticket linked"; exit 0
+          fi
+          echo "::error::No ticket linked. Create the issue first (gh issue create), then add 'Refs #123' or a Linear link to the PR description."
+          exit 1
