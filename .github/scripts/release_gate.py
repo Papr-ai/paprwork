@@ -25,12 +25,20 @@ def api(path):
     return out
 
 
-shas = subprocess.run(['git', 'log', '--format=%H', f'{BASE}..{HEAD}'], capture_output=True, text=True, check=True).stdout.split()
+# PR numbers from merge/squash commit messages ("Merge pull request #12" or "title (#12)"): no per-commit API calls.
+import re
+log = subprocess.run(['git', 'log', '--format=%s', f'{BASE}..{HEAD}'], capture_output=True, text=True, check=True).stdout
+nums = {int(m) for m in re.findall(r'Merge pull request #(\d+)|\(#(\d+)\)\s*$', log, re.M) for m in m if m}
 prs = {}
-for sha in shas:
-    for p in api(f'commits/{sha}/pulls?per_page=100'):
-        if p.get('merged_at') and p['base']['ref'] == 'development':
-            prs[p['number']] = p
+for n in sorted(nums):
+    req = urllib.request.Request(f'https://api.github.com/repos/{REPO}/pulls/{n}', headers={'Authorization': f'Bearer {TOKEN}', 'Accept': 'application/vnd.github+json'})
+    try:
+        with urllib.request.urlopen(req) as r:
+            p = json.load(r)
+    except Exception:
+        continue
+    if p.get('merged_at') and p['base']['ref'] == 'development':
+        prs[n] = p
 
 rows, missing = [], []
 for n, p in sorted(prs.items()):
