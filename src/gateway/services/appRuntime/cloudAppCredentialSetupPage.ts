@@ -163,7 +163,7 @@ function renderPlatformCard(p: PlatformSignIn): string {
     <span class="pill pill--wait" hidden><span class="spin"></span>Waiting</span>
     <span class="pill pill--ok" hidden><svg viewBox="0 0 16 16" aria-hidden="true"><path d="M3.5 8.5l3 3 6-7" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"/></svg>Connected</span>
   </div>
-  <p class="note wait" hidden>Finish signing in to ${name} in Papr Work. This page continues by itself.</p>
+  <p class="note wait" hidden>Sign in to ${name} in Papr Work.</p>
   <p class="note slow" hidden>Still waiting for your ${name} sign-in to reach your vault. Check that Cloud Sync is on in Papr Work, or skip for now.</p>
   <p class="note nodesk" hidden>Connecting ${name} needs Papr Work on this computer. <a href="https://papr.ai/download" target="_blank" rel="noopener">Get Papr Work</a>, or skip for now.</p>
   <details class="tech"><summary>Paste a session instead</summary>
@@ -310,7 +310,7 @@ export function renderCredentialSetupPage(params: {
           <button type="button" class="link" id="ask-pen">Not sure? Ask Pen to help</button>
           <button type="submit" class="link skip" name="skip" value="1" formnovalidate>Look around first</button>
         </div>
-        <p class="trust">Saved to your private Papr vault. The app's owner never sees your keys.</p>
+        <p class="trust">Private to you.</p>
       </footer>
     </form>
   </main>
@@ -364,7 +364,7 @@ export function renderCredentialSetupPage(params: {
       window.addEventListener("message", function (e) {
         // Papr Work says you're signed in; the vault push lands within a second or two.
         if (e.data && e.data.type === "papr-platform-connected") {
-          document.querySelectorAll(".plat .wait").forEach(function (n) { n.textContent = "Signed in. Syncing to your vault…"; });
+          document.querySelectorAll(".plat .wait").forEach(function (n) { n.textContent = "Signed in. Opening the app…"; });
           [300, 1500, 3500].forEach(function (ms) { window.setTimeout(check, ms); });
         }
       });
