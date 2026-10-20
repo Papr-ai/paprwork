@@ -58,14 +58,33 @@ export interface CardContext {
   run: (action: string, params?: Record<string, string>) => Promise<unknown>;
   refresh: () => Promise<void>;
   setPrimary: (primary: CardPrimary | null) => void;
-  /** Short line in the header, right of the app name (e.g. "Draft · 14 shots · 58s"). */
+  /** Quiet state line on the left of the footer (e.g. "Running on your Mac · synced 2 min ago"). */
   setMeta: (text: string) => void;
+  /** Change the footer's "Open in Papr": land on a view, run something first (e.g. record where to land), or hide it. */
+  setOpen: (open: CardOpen) => void;
+  /** Hand the user to Papr on their Mac, signed in, on this app (one-time link); falls back to the web app. True when a link opened. */
+  openInPapr: (opts?: { view?: string }) => Promise<boolean>;
   /** Open a link through the host (the only way out of the sandbox). */
   open: (url: string) => void;
   /** Call a Papr MCP tool through the host, e.g. papr_continue_on_mac for the "Open in Papr" hand-off. */
   callTool: (name: string, args: Record<string, unknown>) => Promise<ToolResult>;
   tellClaude: (text: string) => void;
 }
+
+/** The footer's "Open in Papr" (Prototyper: outlined pill next to the action, solid when the card has no action). */
+export interface CardOpen {
+  label?: string;
+  /** Passed to papr_continue_on_mac so Papr lands on it, e.g. "outreach:c_123". */
+  view?: string;
+  /** Runs before the hand-off link is requested. */
+  before?: () => void | Promise<void>;
+  hidden?: boolean;
+  /** Quiet text link instead of a pill (e.g. "Didn't open? Open Papr" while a hand-off is in flight). */
+  quiet?: boolean;
+}
+
+/** MCP tool that mints the one-time papr:// link (server.ts). */
+export const HANDOFF_TOOL = "papr_continue_on_mac";
 
 export interface CardOptions {
   primary?: CardPrimary;
@@ -134,9 +153,22 @@ export async function card(opts: CardOptions, deps: CardDeps = {}): Promise<Card
 
   let primary: CardPrimary | null = opts.primary ?? null;
   let meta = "";
+  let openCfg: CardOpen = {};
+  let ready = false;
   // Footer left: the card's state line (setMeta), plus where the primary action runs.
   const renderNote = (): void => {
     $("pc-note").textContent = [meta, primary?.runsOn === "mac" ? "Runs on your Mac when it's awake" : ""].filter(Boolean).join(" · ");
+  };
+  /** Prototyper footer: state line left; "Open in Papr" outlined beside the one gradient action (solid when it is the only action). */
+  const renderFooter = (): void => {
+    renderNote();
+    const open = $("pc-open") as HTMLButtonElement;
+    const hidden = !!openCfg.hidden || !ready;
+    open.hidden = hidden;
+    open.classList.toggle("pc-solid", !primary && !openCfg.quiet);
+    open.classList.toggle("pc-quiet", !!openCfg.quiet);
+    if (!open.dataset.busy) open.textContent = openCfg.label ?? "Open in Papr";
+    $("pc-f").classList.toggle("pc-f-off", hidden && !primary && !$("pc-note").textContent);
   };
   let armed = false;
   const ctx: CardContext = {
@@ -171,7 +203,27 @@ export async function card(opts: CardOptions, deps: CardDeps = {}): Promise<Card
     },
     setMeta(text) {
       meta = text;
-      renderNote();
+      renderFooter();
+    },
+    setOpen(o) {
+      openCfg = o;
+      renderFooter();
+    },
+    async openInPapr(o = {}) {
+      const { namespaceId, slug, openUrl } = ctx.app;
+      try {
+        const res = await callTool(HANDOFF_TOOL, { namespaceId, slug, ...(o.view ? { view: o.view } : {}) });
+        const url = (res.structuredContent as { url?: string } | undefined)?.url;
+        if (!res.isError && url) {
+          await bridge.openLink(url);
+          return true;
+        }
+      } catch {
+        /* no hand-off on this connector: fall back to the web app */
+      }
+      if (!openUrl) return false;
+      await bridge.openLink(openUrl).catch(() => {});
+      return true;
     },
     open(url) {
       void bridge.openLink(url).catch(() => {});
@@ -179,11 +231,28 @@ export async function card(opts: CardOptions, deps: CardDeps = {}): Promise<Card
     callTool,
   };
 
+  async function onOpen(): Promise<void> {
+    const btn = $("pc-open") as HTMLButtonElement;
+    btn.disabled = true;
+    btn.dataset.busy = "1";
+    btn.textContent = "Opening Papr…";
+    let ok = false;
+    try {
+      await openCfg.before?.();
+      ok = await ctx.openInPapr({ view: openCfg.view });
+    } catch {
+      ok = false;
+    }
+    btn.textContent = ok ? "Opened in Papr" : "Couldn't open. Try again";
+    btn.disabled = false;
+    delete btn.dataset.busy;
+    if (ok) ctx.tellClaude(`The user opened ${ctx.app.title ?? ctx.app.slug} in Papr on their Mac.`);
+  }
+  ($("pc-open") as HTMLButtonElement).onclick = () => void onOpen();
+
   function renderPrimary(): void {
     const act = $("pc-act");
-    // One accent button per card: "Open in {App}" is solid only when the app has no action of its own.
-    $("pc-open").classList.toggle("pc-ghost", !!primary);
-    renderNote();
+    renderFooter();
     if (!primary) {
       act.innerHTML = "";
       return;
@@ -246,10 +315,8 @@ export async function card(opts: CardOptions, deps: CardDeps = {}): Promise<Card
     } else tile.textContent = initials(title);
     $("pc-title").textContent = title;
     $("pc-sub").textContent = sc.publisher ? `by ${sc.publisher}` : "Your Papr app";
-    const open = $("pc-open") as HTMLButtonElement;
-    open.textContent = `Open in ${title}`;
-    open.disabled = !sc.openUrl;
-    open.onclick = () => sc.openUrl && void bridge.openLink(sc.openUrl).catch(() => {});
+    ready = true;
+    renderFooter();
     void ctx.refresh();
   };
 

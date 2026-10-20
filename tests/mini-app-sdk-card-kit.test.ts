@@ -55,12 +55,49 @@ describe("card kit", () => {
     await m.open(APP);
     await vi.waitFor(() => expect(document.getElementById("n")?.textContent).toBe("3 replies"));
     expect($("pc-title").textContent).toBe("LinkedIn Outreach");
-    expect($("pc-open").textContent).toBe("Open in LinkedIn Outreach");
+    expect($("pc-open").textContent).toBe("Open in Papr");
+    expect($("pc-open").hidden).toBe(false);
+    expect($("pc-open").classList.contains("pc-solid")).toBe(true);
     expect($("pc-tile").textContent).toBe("LO");
     expect(m.calls[0]).toMatchObject({ namespaceId: "ns1", slug: "linkedin-outreach", method: "POST", path: "/api/db/query" });
 
     $("pc-open").click();
     await vi.waitFor(() => expect(m.links).toEqual([APP.openUrl]));
+  });
+
+  it("Open in Papr asks for a one-time Mac link for the view, after the card's own step", async () => {
+    const order: string[] = [];
+    const m = await mountCard(
+      {
+        primary: { label: "Approve and send", action: "approve", effect: "write" },
+        render(ctx) {
+          ctx.setOpen({ view: "outreach:c_1", before: () => void order.push("before") });
+        },
+      },
+      (a) => {
+        const t = a as unknown as { view?: string; namespaceId?: string };
+        if (t.view) order.push(`link:${t.view}`);
+        return t.view ? ({ url: "papr://auth/handoff?code=abc" } as never) : { status: 200, body: {} };
+      },
+    );
+    await m.open(APP);
+    await vi.waitFor(() => expect($("pc-go").textContent).toBe("Approve and send"));
+    // The action owns the gradient; Open in Papr is the outlined pill beside it.
+    expect($("pc-open").classList.contains("pc-solid")).toBe(false);
+    $("pc-open").click();
+    await vi.waitFor(() => expect(m.links).toEqual(["papr://auth/handoff?code=abc"]));
+    expect(order).toEqual(["before", "link:outreach:c_1"]);
+    await vi.waitFor(() => expect($("pc-open").textContent).toBe("Opened in Papr"));
+  });
+
+  it("falls back to the web app when no hand-off link comes back, and can hide Open", async () => {
+    const m = await mountCard({ render: (ctx) => ctx.setOpen({ label: "See all in Papr" }) }, () => ({ status: 200, body: {} }));
+    await m.open(APP);
+    await vi.waitFor(() => expect($("pc-open").textContent).toBe("See all in Papr"));
+    $("pc-open").click();
+    await vi.waitFor(() => expect(m.links).toEqual([APP.openUrl]));
+    m.ctx.setOpen({ hidden: true });
+    expect($("pc-open").hidden).toBe(true);
   });
 
   it("asks before an external action runs, then runs it and tells Claude", async () => {
