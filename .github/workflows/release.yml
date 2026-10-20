@@ -152,9 +152,40 @@ jobs:
           PAPR_MEMORY_SERVER_URL: ${{ secrets.PAPR_MEMORY_SERVER_URL }}
 
       - name: Build Windows distributables
-        run: npx electron-builder --win --publish never
+        run: |
+          SIGN_ARGS=()
+          if [ -n "$AZURE_SIGNING_PROFILE" ] && [ -n "$AZURE_CLIENT_SECRET" ]; then
+            echo "Signing with Azure Trusted Signing (profile: $AZURE_SIGNING_PROFILE)"
+            SIGN_ARGS=(
+              "-c.win.azureSignOptions.endpoint=$AZURE_SIGNING_ENDPOINT"
+              "-c.win.azureSignOptions.codeSigningAccountName=$AZURE_SIGNING_ACCOUNT"
+              "-c.win.azureSignOptions.certificateProfileName=$AZURE_SIGNING_PROFILE"
+              "-c.win.azureSignOptions.publisherName=$AZURE_SIGNING_PUBLISHER"
+            )
+          else
+            echo "::warning::Windows build is UNSIGNED - Azure Trusted Signing profile not configured yet"
+          fi
+          npx electron-builder --win --publish never "${SIGN_ARGS[@]}"
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          AZURE_TENANT_ID: ${{ secrets.AZURE_TENANT_ID }}
+          AZURE_CLIENT_ID: ${{ secrets.AZURE_CLIENT_ID }}
+          AZURE_CLIENT_SECRET: ${{ secrets.AZURE_CLIENT_SECRET }}
+          AZURE_SIGNING_ENDPOINT: ${{ vars.AZURE_SIGNING_ENDPOINT }}
+          AZURE_SIGNING_ACCOUNT: ${{ vars.AZURE_SIGNING_ACCOUNT }}
+          AZURE_SIGNING_PROFILE: ${{ vars.AZURE_SIGNING_PROFILE }}
+          AZURE_SIGNING_PUBLISHER: ${{ vars.AZURE_SIGNING_PUBLISHER }}
+
+      - name: Verify Windows signature
+        if: ${{ vars.AZURE_SIGNING_PROFILE != '' }}
+        shell: pwsh
+        run: |
+          $files = @(Get-ChildItem release/*.exe) + @(Get-Item "release/win-unpacked/Papr Work.exe" -ErrorAction SilentlyContinue)
+          foreach ($f in $files) {
+            $sig = Get-AuthenticodeSignature $f.FullName
+            Write-Host "$($f.Name): $($sig.Status) - $($sig.SignerCertificate.Subject)"
+            if ($sig.Status -ne 'Valid') { throw "Unsigned or invalid signature: $($f.Name)" }
+          }
 
       - name: Verify packaged SDK bundles (Windows)
         run: |
