@@ -21,6 +21,10 @@ function resolveCursorProxyBaseUrl(): string {
     return `${paprBase.replace(/\/$/, "")}/v1/ai`;
   }
 
+  const mem = process.env.PAPR_MEMORY_SERVER_URL;
+  if (mem) {
+    return `${mem.replace(/\/$/, "")}/v1/ai`;
+  }
   return "https://memory.papr.ai/v1/ai";
 }
 
