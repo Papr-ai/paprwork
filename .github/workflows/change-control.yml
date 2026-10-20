@@ -26,8 +26,8 @@ jobs:
               exit 1
             fi
           fi
-          if ! printf "%s" "$BODY" | grep -Eiq "(linear\.app/|/issues/[0-9]+|(close[sd]?|fix(e[sd])?|resolve[sd]?|refs?|ticket|issue)[[:space:]]*:?[[:space:]]*#[0-9]+)"; then
-            echo "::error::Link a ticket in the PR description (e.g. \"Ticket: #123\" or a Linear URL)."
+          if ! printf "%s" "$BODY" | grep -Eiq "(/issues/[0-9]+|(close[sd]?|fix(e[sd])?|resolve[sd]?|refs?|ticket|issue)[[:space:]]*:?[[:space:]]*#[0-9]+)"; then
+            echo "::error::Link a ticket in the PR description (e.g. \"Ticket: #123\", a GitHub issue in this repo)."
             exit 1
           fi
           echo "Ticket linked: ok"
