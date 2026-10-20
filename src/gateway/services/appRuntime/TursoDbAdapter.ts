@@ -94,6 +94,12 @@ interface SyncVersionMemo {
   checkedAt: number;
 }
 
+/** Ping a little under Turso's ~5 s idle close. */
+const KEEP_WARM_INTERVAL_MS = 4_000;
+/** Keep a database warm this long after its last real query. */
+const KEEP_WARM_WINDOW_MS = 10 * 60_000;
+const KEEP_WARM_MAX_CLIENTS = 200;
+
 export class TursoDbAdapter {
   private clientCache = new Map<string, { client: Client; tokenExpiresAt: number }>();
   /** Public-table list per database (schema read with the owner token). */
@@ -105,7 +111,37 @@ export class TursoDbAdapter {
   /** Dedupe concurrent CDC prep for the same linked database. */
   private remoteChangeLogPrep = new Map<string, Promise<void>>();
 
+  /** Last time each cached client ran a real query (keep-warm window). */
+  private clientLastUsed = new WeakMap<Client, number>();
+  private keepWarmTimer: ReturnType<typeof setInterval> | null = null;
+
   constructor(private readonly credentials: TursoCredentialsProvider) {}
+
+  /**
+   * Turso closes idle connections after ~5 s; the next query then pays a fresh
+   * TLS + WebSocket handshake to the primary (~300 ms cross-country). Ping
+   * clients that served a request recently so the socket stays open.
+   * Needs CPU between requests (Cloud Run "CPU always allocated") to fire.
+   */
+  private touchClient(client: Client): Client {
+    this.clientLastUsed.set(client, Date.now());
+    if (!this.keepWarmTimer && process.env.TURSO_KEEP_WARM !== "0") {
+      this.keepWarmTimer = setInterval(() => this.pingWarmClients(), KEEP_WARM_INTERVAL_MS);
+      this.keepWarmTimer.unref?.();
+    }
+    return client;
+  }
+
+  private pingWarmClients(): void {
+    const now = Date.now();
+    let pinged = 0;
+    for (const { client } of this.clientCache.values()) {
+      const last = this.clientLastUsed.get(client);
+      if (!last || now - last > KEEP_WARM_WINDOW_MS) continue;
+      if (++pinged > KEEP_WARM_MAX_CLIENTS) break;
+      client.execute("SELECT 1").catch(() => {});
+    }
+  }
 
   private toActors(input: TursoDbActorInput): TursoDbActors {
     return {
@@ -225,7 +261,7 @@ export class TursoDbAdapter {
     const cacheKey = `${this.clientKey(runtimeAuth, actingUserId, database)}|client:${mode}:${tables.join(",")}`;
     const now = Date.now();
     const cached = this.clientCache.get(cacheKey);
-    if (cached && cached.tokenExpiresAt > now) return cached.client;
+    if (cached && cached.tokenExpiresAt > now) return this.touchClient(cached.client);
     if (cached) {
       try { cached.client.close(); } catch { /* best-effort */ }
       this.clientCache.delete(cacheKey);
@@ -244,7 +280,7 @@ export class TursoDbAdapter {
       ? Math.max(now + 60_000, new Date(bundle.expiresAt).getTime() - 60_000)
       : now + 50 * 60 * 1000;
     this.clientCache.set(cacheKey, { client, tokenExpiresAt });
-    return client;
+    return this.touchClient(client);
   }
 
   /** Owner client, or the table-scoped client when the SQL came from the browser. */
@@ -302,7 +338,7 @@ export class TursoDbAdapter {
     const cached = this.clientCache.get(cacheKey);
     const now = Date.now();
     if (cached && cached.tokenExpiresAt > now) {
-      return cached.client;
+      return this.touchClient(cached.client);
     }
     if (cached) {
       try {
@@ -347,6 +383,7 @@ export class TursoDbAdapter {
       ? Math.max(now + 60_000, new Date(expiresAt).getTime() - 60_000)
       : now + 50 * 60 * 1000;
     this.clientCache.set(cacheKey, { client, tokenExpiresAt });
+    this.touchClient(client);
 
     const registry = getDatabaseRegistryService();
     const record = registry.getRecordForSource(source);
