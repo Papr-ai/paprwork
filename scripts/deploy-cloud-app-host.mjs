@@ -258,6 +258,7 @@ const deployCmd = [
   "--memory=512Mi",
   "--cpu=1",
   "--min-instances=1",
+  "--no-cpu-throttling", // Turso keep-warm timer must run between requests
   "--max-instances=20",
   "--timeout=120",
   `--service-account=${hostSa}`,
