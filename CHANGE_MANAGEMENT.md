@@ -2,7 +2,7 @@
 
 Every change to production follows this path. GitHub enforces the steps marked (enforced).
 
-1. **Ticket.** Every PR links a ticket in its description (`Ticket: #123` or a Linear URL). (enforced: Change control check)
+1. **Ticket.** Every PR links a ticket in its description (`Ticket: #123`, a GitHub issue; use a full issue URL for another repo). (enforced: Change control check)
 2. **PR into `development`.** No direct pushes. The author may merge their own PR once checks pass. (enforced: branch protection)
 3. **Verify on dev.** Test the change on the dev environment and record it in Release Desk ("Mark verified"). Release Desk posts the sign-off as a comment on the PR. (enforced: Release gate check fails the release PR if any change lacks a "Verified on dev" or "Break-glass exception" comment)
 4. **Release PR.** Release Desk opens the PR from `development` (memory) or `release/vX.Y.Z` (paprwork) into the production branch, listing each change and its dev verification.
