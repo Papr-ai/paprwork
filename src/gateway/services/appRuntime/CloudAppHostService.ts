@@ -123,7 +123,12 @@ import {
   setCachedDbResult,
 } from "./dbRequestGuard.js";
 import { isMiniAppTypeScriptFile } from "../../utils/miniAppTranspile.js";
-import { buildCloudAuthLoginUrl, isLinkPreviewCrawler } from "../../../core/utils/cloudAppPreview.js";
+import {
+  buildCloudAuthLoginUrl,
+  buildWebAppManifest,
+  CLOUD_APP_MANIFEST_PATH,
+  isLinkPreviewCrawler,
+} from "../../../core/utils/cloudAppPreview.js";
 import {
   buildShareGateLandingHtml,
   resolveShareGatePresentation,
@@ -2721,6 +2726,11 @@ export class CloudAppHostService {
         return;
       }
 
+      if (requestedPath === CLOUD_APP_MANIFEST_PATH) {
+        await this.handleWebAppManifest(req, res, runtimeAuth, access?.canRead === true);
+        return;
+      }
+
       if (requestedPath === "papr-cover" || requestedPath === "papr-cover-video") {
         await this.handleSharedCover(res, runtimeAuth, access?.canRead === true, requestedPath === "papr-cover-video");
         return;
@@ -2861,11 +2871,41 @@ export class CloudAppHostService {
     shape: "icon" | "card" = "icon",
   ): Promise<void> {
     const iconSource = await resolvePreviewIconSource(runtimeAuth, canReadRepo);
-    const { body, contentType } =
+    let { body, contentType } =
       await rasterizePreviewIconForOpenGraph(iconSource, shape);
+    // Web App Manifest asks for a true 192×192 alongside the 512×512.
+    if (shape === "icon" && _req.query["size"] === "192" && contentType === "image/png") {
+      try {
+        const sharp = (await import("sharp")).default;
+        body = await sharp(body).resize(192, 192).png().toBuffer();
+      } catch {
+        // sharp missing → serve the 512 as-is
+      }
+    }
     res.setHeader("Content-Type", contentType);
     res.setHeader("Cache-Control", "public, max-age=300");
     res.send(body);
+  }
+
+  /**
+   * Per-app Web App Manifest → Chrome/Edge show "Install" for this app.
+   * Served like opengraph-icon: no access gate (same title/description the
+   * share-gate page already exposes); signed-in readers get repo metadata.
+   */
+  private async handleWebAppManifest(
+    req: Request,
+    res: Response,
+    runtimeAuth: AppRuntimeRouteAuth,
+    canReadRepo: boolean,
+  ): Promise<void> {
+    const meta = await resolveCloudAppPreviewMeta({
+      runtimeAuth,
+      publicBaseUrl: getCloudAppPublicBaseUrl(req),
+      canReadRepo,
+    });
+    res.setHeader("Content-Type", "application/manifest+json; charset=utf-8");
+    res.setHeader("Cache-Control", "public, max-age=300");
+    res.send(JSON.stringify(buildWebAppManifest(meta)));
   }
 
   private async sendAppFile(
