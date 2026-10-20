@@ -6,6 +6,9 @@ import {
 } from "../src/core/utils/cloudAppMetadata.js";
 import {
   buildPreviewHeadTags,
+  buildWebAppManifest,
+  buildWebAppManifestUrl,
+  shortAppName,
   buildPreviewLandingHtml,
   buildPreviewMetaFromSlug,
   CLOUD_APP_LOGIN_BUTTON_LABEL,
@@ -59,6 +62,58 @@ describe("cloudAppPreview", () => {
     expect(tags).toContain('property="og:site_name"');
     expect(tags).toContain("Papr Work");
     expect(tags).toContain('property="og:image"');
+  });
+
+  it("links a per-app web manifest so the app is installable", () => {
+    const meta = buildPreviewMetaFromSlug(
+      "tip-split",
+      "https://apps.papr.ai/ns/tip-split/",
+      "https://apps.papr.ai/ns/tip-split/opengraph-icon",
+      "https://apps.papr.ai/ns/tip-split/opengraph-image",
+    );
+    const tags = buildPreviewHeadTags(meta);
+    expect(tags).toContain('<link rel="manifest" href="https://apps.papr.ai/ns/tip-split/manifest.webmanifest"');
+    expect(tags).toContain('name="theme-color"');
+  });
+
+  it("builds a manifest scoped to the app root", () => {
+    const meta = buildPreviewMetaFromSlug(
+      "tip-split",
+      "https://apps.papr.ai/ns/tip-split/",
+      "https://apps.papr.ai/ns/tip-split/opengraph-icon",
+      "https://apps.papr.ai/ns/tip-split/opengraph-image",
+    );
+    const m = buildWebAppManifest(meta);
+    expect(m.scope).toBe("/ns/tip-split/");
+    expect(m.start_url).toBe("/ns/tip-split/");
+    expect(m.id).toBe("/ns/tip-split/");
+    expect(m.display).toBe("standalone");
+    expect(m.name).toBe("Tip Split");
+    expect(m.icons).toEqual([
+      { src: "https://apps.papr.ai/ns/tip-split/opengraph-icon?size=192", sizes: "192x192", type: "image/png", purpose: "any" },
+      { src: "https://apps.papr.ai/ns/tip-split/opengraph-icon", sizes: "512x512", type: "image/png", purpose: "any" },
+    ]);
+  });
+
+  it("keeps the share token so invite-link visitors can install and reopen", () => {
+    const meta = buildPreviewMetaFromSlug(
+      "crm",
+      "https://apps.papr.ai/ns/crm/",
+      "https://apps.papr.ai/ns/crm/opengraph-icon?t=abc%2B1",
+      "https://apps.papr.ai/ns/crm/opengraph-image?t=abc%2B1",
+    );
+    expect(buildWebAppManifestUrl(meta)).toBe("https://apps.papr.ai/ns/crm/manifest.webmanifest?t=abc%2B1");
+    expect(buildWebAppManifest(meta).start_url).toBe("/ns/crm/?t=abc%2B1");
+    expect(buildWebAppManifest(meta).id).toBe("/ns/crm/");
+    expect((buildWebAppManifest(meta).icons as Array<{ src: string }>)[0]!.src).toBe(
+      "https://apps.papr.ai/ns/crm/opengraph-icon?t=abc%2B1&size=192",
+    );
+  });
+
+  it("shortens long titles for the Dock label", () => {
+    expect(shortAppName("Tip Split")).toBe("Tip Split");
+    expect(shortAppName("Papr Careers · Forward Deployed Engineer")).toBe("Papr Careers");
+    expect(shortAppName("Delaware Tax Filing Guide — Papr, Inc.")).toBe("Delaware Tax Filing Guide".slice(0, 23).trimEnd() + "…");
   });
 
   it("injects preview tags into html head", () => {

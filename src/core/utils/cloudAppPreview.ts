@@ -65,6 +65,12 @@ export function buildPreviewHeadTags(meta: CloudAppPreviewMeta): string {
     `<meta name="description" content="${description}">`,
     `<link rel="icon" href="${iconUrl}">`,
     `<link rel="apple-touch-icon" href="${iconUrl}">`,
+    // Installable as its own desktop/Dock app (Chrome/Edge "Install" in the address bar).
+    // use-credentials so signed-in visitors get repo metadata (title/description).
+    `<link rel="manifest" href="${escapeHtmlAttribute(buildWebAppManifestUrl(meta))}" crossorigin="use-credentials">`,
+    `<meta name="theme-color" content="${CLOUD_APP_THEME_COLOR}">`,
+    `<meta name="apple-mobile-web-app-capable" content="yes">`,
+    `<meta name="apple-mobile-web-app-title" content="${title}">`,
     `<meta property="og:type" content="website">`,
     `<meta property="og:site_name" content="${siteName}">`,
     `<meta property="og:title" content="${title}">`,
@@ -76,6 +82,65 @@ export function buildPreviewHeadTags(meta: CloudAppPreviewMeta): string {
     `<meta name="twitter:description" content="${description}">`,
     `<meta name="twitter:image" content="${imageUrl}">`,
   ].join("\n  ");
+}
+
+/** Browser chrome color for installed (standalone) mini-app windows. */
+export const CLOUD_APP_THEME_COLOR = "#ffffff";
+
+export const CLOUD_APP_MANIFEST_PATH = "manifest.webmanifest";
+
+/** `{canonical}/manifest.webmanifest`, keeping a share token so link visitors can install. */
+export function buildWebAppManifestUrl(meta: Pick<CloudAppPreviewMeta, "canonicalUrl" | "iconUrl">): string {
+  const base = meta.canonicalUrl.endsWith("/") ? meta.canonicalUrl : `${meta.canonicalUrl}/`;
+  const token = shareTokenFromUrl(meta.iconUrl);
+  return token ? `${base}${CLOUD_APP_MANIFEST_PATH}?t=${encodeURIComponent(token)}` : `${base}${CLOUD_APP_MANIFEST_PATH}`;
+}
+
+function withQuery(url: string, key: string, value: string): string {
+  return `${url}${url.includes("?") ? "&" : "?"}${key}=${encodeURIComponent(value)}`;
+}
+
+function shareTokenFromUrl(url: string): string | null {
+  try {
+    return new URL(url).searchParams.get("t");
+  } catch {
+    return null;
+  }
+}
+
+/** Short name for the Dock / taskbar label (Chrome truncates around 12 chars). */
+export function shortAppName(title: string): string {
+  const clean = title.replace(/\s+/g, " ").trim();
+  if (clean.length <= 12) return clean;
+  const firstPart = clean.split(/\s[·|—–-]\s|:\s/)[0]?.trim() ?? clean;
+  return firstPart.length <= 24 ? firstPart : `${firstPart.slice(0, 23).trimEnd()}…`;
+}
+
+/**
+ * Per-app Web App Manifest. Each published app is its own installable app:
+ * scope = the app's root, so installs of different apps never collide.
+ */
+export function buildWebAppManifest(meta: CloudAppPreviewMeta): Record<string, unknown> {
+  const root = new URL(meta.canonicalUrl);
+  const scope = root.pathname.endsWith("/") ? root.pathname : `${root.pathname}/`;
+  const token = shareTokenFromUrl(meta.iconUrl);
+  const startUrl = token ? `${scope}?t=${encodeURIComponent(token)}` : scope;
+  return {
+    id: scope,
+    name: meta.title,
+    short_name: shortAppName(meta.title),
+    description: meta.description,
+    start_url: startUrl,
+    scope,
+    display: "standalone",
+    display_override: ["window-controls-overlay", "standalone"],
+    background_color: CLOUD_APP_THEME_COLOR,
+    theme_color: CLOUD_APP_THEME_COLOR,
+    icons: [
+      { src: withQuery(meta.iconUrl, "size", "192"), sizes: "192x192", type: "image/png", purpose: "any" },
+      { src: meta.iconUrl, sizes: "512x512", type: "image/png", purpose: "any" },
+    ],
+  };
 }
 
 export function injectPreviewHeadTags(html: string, headTags: string): string {
