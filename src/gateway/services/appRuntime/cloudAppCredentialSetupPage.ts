@@ -332,32 +332,44 @@ export function renderCredentialSetupPage(params: {
       }
       var waiting = false;
       var fallback = null;
-      // Papr Work saves the sign-in and pushes it to your vault the moment you connect,
-      // but this page can't hear that. So check when it matters: when you come back to
-      // this tab, when the desktop preview tells us, and on a slow fallback timer.
+      var stream = null;
+      var eventsUrl = statusUrl ? statusUrl.replace(/status$/, "events") : "";
+      function apply(s) {
+        if (!s) return;
+        var missing = s.missing || [];
+        document.querySelectorAll(".plat").forEach(function (card) {
+          var keys = (card.getAttribute("data-keys") || "").split(",");
+          if (keys.every(function (k) { return missing.indexOf(k) < 0; })) show(card, "done");
+        });
+        if (s.ready && waiting) {
+          waiting = false;
+          if (stream) stream.close();
+          window.clearInterval(fallback);
+          window.setTimeout(function () { window.location.href = returnTo; }, 500);
+        }
+      }
       function check() {
         if (!statusUrl || !waiting) return;
         fetch(statusUrl, { credentials: "same-origin", cache: "no-store" })
           .then(function (r) { return r.ok ? r.json() : null; })
-          .then(function (s) {
-            if (!s) return;
-            var missing = s.missing || [];
-            document.querySelectorAll(".plat").forEach(function (card) {
-              var keys = (card.getAttribute("data-keys") || "").split(",");
-              if (keys.every(function (k) { return missing.indexOf(k) < 0; })) show(card, "done");
-            });
-            if (s.ready) {
-              waiting = false;
-              window.clearInterval(fallback);
-              window.setTimeout(function () { window.location.href = returnTo; }, 500);
-            }
-          })
+          .then(apply)
           .catch(function () {});
+      }
+      // The server pushes { ready, missing } the moment your vault changes. If the
+      // stream isn't available, check when you come back to this tab, plus a slow timer.
+      function listen() {
+        if (!eventsUrl || !window.EventSource) { fallback = window.setInterval(check, 5000); return; }
+        stream = new EventSource(eventsUrl, { withCredentials: true });
+        stream.addEventListener("status", function (e) { try { apply(JSON.parse(e.data)); } catch (_) {} });
+        stream.addEventListener("unavailable", function () {
+          stream.close();
+          if (waiting && !fallback) fallback = window.setInterval(check, 5000);
+        });
       }
       function poll() {
         if (waiting) return;
         waiting = true;
-        fallback = window.setInterval(check, 5000);
+        listen();
       }
       window.addEventListener("focus", check);
       document.addEventListener("visibilitychange", function () { if (!document.hidden) check(); });

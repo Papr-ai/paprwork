@@ -21,6 +21,7 @@ import {
   resolveMissingRuntimeVaultKeyNames,
   resolveRuntimeVaultClientKeys,
   syncRuntimeVaultKeys,
+  openRuntimeVaultEvents,
 } from "./memoryRuntimeClient.js";
 import { fetchCachedRuntimeRepoFile } from "./cloudAppHostCache.js";
 import {
@@ -73,6 +74,17 @@ async function missingUserCredentialNames(
     runtimeAuth,
     userKeys.map((spec) => spec.name),
   );
+}
+
+/** returnTo plus papr_skip=1, so skip works even where the cookie is dropped. */
+export function withSkipParam(returnTo: string): string {
+  return `${returnTo}${returnTo.includes("?") ? "&" : "?"}papr_skip=1`;
+}
+
+export function isDocumentRequest(req: Request, requestedPath: string): boolean {
+  const dest = req.headers["sec-fetch-dest"];
+  if (typeof dest === "string" && dest && dest !== "document" && dest !== "iframe") return false;
+  return requestedPath === "index.html" || requestedPath === "" || !/\.[a-z0-9]{1,8}$/i.test(requestedPath);
 }
 
 /** Visitor chose "Look around first" (skip): open the app; features that need a key still say so. */
@@ -151,6 +163,10 @@ export class CloudAppHostCredentialService {
       "/:namespaceId/:slug/api/credentials/status",
       (req, res) => void this.handleStatus(req, res),
     );
+    app.get(
+      "/:namespaceId/:slug/api/credentials/events",
+      (req, res) => void this.handleEvents(req, res),
+    );
     app.post(
       "/:namespaceId/:slug/api/credentials/client-keys",
       (req, res) => void this.handleClientKeys(req, res),
@@ -210,7 +226,15 @@ export class CloudAppHostCredentialService {
       return true;
     }
 
-    if (hasCredentialSkipCookie(req.headers.cookie)) {
+    if (hasCredentialSkipCookie(req.headers.cookie) || req.query.papr_skip === "1") {
+      return true;
+    }
+
+    // Only page loads go to setup. Scripts, styles and images under the app path
+    // always load: a visitor who chose "Look around first" inside an iframe may not
+    // send the skip cookie, and redirecting their app.js to the setup page left
+    // them stuck on it.
+    if (!isDocumentRequest(req, requestedPath)) {
       return true;
     }
 
@@ -360,6 +384,65 @@ export class CloudAppHostCredentialService {
     });
   }
 
+  /**
+   * SSE for the setup page: relays memory's vault change stream and answers each
+   * change with { ready, missing }, so the page continues the moment Papr Work
+   * syncs a sign-in. No polling; the page falls back to focus checks if this drops.
+   */
+  private async handleEvents(req: Request, res: Response): Promise<void> {
+    const runtimeAuth = this.resolveRuntimeAuth(req);
+    if (!runtimeAuth?.sessionToken) {
+      res.status(401).json({ error: "authentication_required" });
+      return;
+    }
+    const requirements = await loadPublishedAppRequirements(runtimeAuth);
+    const controller = new AbortController();
+    req.on("close", () => controller.abort());
+
+    res.status(200);
+    res.setHeader("Content-Type", "text/event-stream; charset=utf-8");
+    res.setHeader("Cache-Control", "no-cache, no-transform");
+    res.setHeader("X-Accel-Buffering", "no");
+    res.flushHeaders?.();
+    const send = (event: string, data: unknown) => {
+      if (!res.writableEnded) res.write(`event: ${event}\ndata: ${JSON.stringify(data)}\n\n`);
+    };
+    const sendStatus = async () => {
+      const missing = await missingUserCredentialNames(runtimeAuth, requirements);
+      send("status", { ready: missing.length === 0, missing });
+    };
+
+    await sendStatus();
+    const upstream = await openRuntimeVaultEvents(runtimeAuth, controller.signal);
+    if (!upstream?.body) {
+      send("unavailable", {});
+      res.end();
+      return;
+    }
+    const reader = upstream.body.getReader();
+    const decoder = new TextDecoder();
+    let buffer = "";
+    try {
+      for (;;) {
+        const { value, done } = await reader.read();
+        if (done) break;
+        buffer += decoder.decode(value, { stream: true });
+        let idx: number;
+        while ((idx = buffer.indexOf("\n\n")) >= 0) {
+          const frame = buffer.slice(0, idx);
+          buffer = buffer.slice(idx + 2);
+          if (frame.startsWith(":")) res.write(": keepalive\n\n");
+          else if (/^event: vault_changed$/m.test(frame)) await sendStatus();
+        }
+      }
+    } catch {
+      /* client left or upstream closed */
+    } finally {
+      controller.abort();
+      if (!res.writableEnded) res.end();
+    }
+  }
+
   private async handleSetupJson(req: Request, res: Response): Promise<void> {
     const runtimeAuth = this.resolveRuntimeAuth(req);
     if (!runtimeAuth?.sessionToken) {
@@ -421,7 +504,7 @@ export class CloudAppHostCredentialService {
     if (keys.length === 0) {
       if (skipping) {
         res.append("Set-Cookie", skipCookie);
-        res.redirect(302, returnTo);
+        res.redirect(302, withSkipParam(returnTo));
         return;
       }
       const setupUrl = `${setupPath(runtimeAuth.namespaceId, runtimeAuth.slug)}?returnTo=${encodeURIComponent(returnTo)}&error=${encodeURIComponent("Paste a key, or choose Look around first.")}`;
@@ -446,7 +529,7 @@ export class CloudAppHostCredentialService {
       if (stillMissing.length > 0) {
         res.append("Set-Cookie", skipCookie);
       }
-      res.redirect(302, returnTo);
+      res.redirect(302, stillMissing.length > 0 ? withSkipParam(returnTo) : returnTo);
     } catch (err) {
       const message = err instanceof Error ? err.message : "Failed to save keys";
       const setupUrl = `${setupPath(runtimeAuth.namespaceId, runtimeAuth.slug)}?returnTo=${encodeURIComponent(returnTo)}&error=${encodeURIComponent(message)}`;
