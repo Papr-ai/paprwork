@@ -1,0 +1,27 @@
+name: Release gate
+on:
+  pull_request:
+    branches: [main, master]
+    types: [opened, synchronize, reopened, ready_for_review]
+permissions:
+  contents: read
+  pull-requests: read
+  issues: read
+jobs:
+  release-gate:
+    name: Release gate
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - name: Every change verified on dev or excepted
+        # Hotfix PRs skip the gate; they are logged as break-glass exceptions instead.
+        if: github.head_ref == 'development' || startsWith(github.head_ref, 'release/')
+        env:
+          GH_TOKEN: ${{ github.token }}
+          REPO: ${{ github.repository }}
+          BASE_SHA: ${{ github.event.pull_request.base.sha }}
+          HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+          AUDIT_START: '2026-10-19'
+        run: python3 .github/scripts/release_gate.py
