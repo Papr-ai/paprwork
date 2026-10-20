@@ -43,6 +43,9 @@ const {
 // single-instance lock, so it runs side by side with the production app.
 const PAPR_DEV_PROFILE = (process.env.PAPR_PROFILE || "").trim().toLowerCase() === "dev";
 app.setName(PAPR_DEV_PROFILE ? "Papr Work Dev" : "Papr Work");
+// Dev profile owns papr-dev:// so it never fights the production app for papr://.
+const PAPR_SCHEME = PAPR_DEV_PROFILE ? "papr-dev" : "papr";
+const PAPR_URL = `${PAPR_SCHEME}://`;
 
 // Real Chrome owns port 9222 for platform jobs + agent automation.
 // Enable embedded Electron CDP only when explicitly requested (PAPR_PLATFORM_EMBEDDED_CDP=1).
@@ -2598,7 +2601,7 @@ async function flushPendingDeepLinks() {
   while (index < pendingDeepLinks.length) {
     const url = pendingDeepLinks[index];
 
-    if (url.startsWith("papr://auth/callback")) {
+    if (url.startsWith((PAPR_URL + "auth/callback"))) {
       if (
         !authDeepLinksReady ||
         !handlePaprAuthCallback ||
@@ -2624,7 +2627,7 @@ async function flushPendingDeepLinks() {
     // polling the session, just bring Papr to the front.
     // papr://connections/connect?platform=reddit ("Connect Reddit" on an app's setup
     // page): also open the Connected Platforms sign-in for that platform.
-    if (url.startsWith("papr://connections/")) {
+    if (url.startsWith(PAPR_URL + "connections/")) {
       if (!mainWindow || mainWindow.isDestroyed()) {
         return;
       }
@@ -2644,7 +2647,7 @@ async function flushPendingDeepLinks() {
       continue;
     }
 
-    if (url.startsWith("papr://auth/handoff")) {
+    if (url.startsWith((PAPR_URL + "auth/handoff"))) {
       // Claude "Continue on your Mac" (one-time code). Needs storage like the login callback.
       if (!authDeepLinksReady || !handlePaprHandoffLink || !customKeysStorage || !settingsStorage) {
         return;
@@ -2659,7 +2662,7 @@ async function flushPendingDeepLinks() {
       continue;
     }
 
-    if (url.startsWith("papr://chat/")) {
+    if (url.startsWith((PAPR_URL + "chat/"))) {
       if (!mainWindow || mainWindow.isDestroyed()) {
         return;
       }
@@ -2671,7 +2674,7 @@ async function flushPendingDeepLinks() {
 
     // "Open Papr Work" on the post-checkout page (dashboard /billing/success):
     // bring Papr forward on Settings -> Billing so the new plan is right there.
-    if (url.startsWith("papr://billing")) {
+    if (url.startsWith((PAPR_URL + "billing"))) {
       if (!mainWindow || mainWindow.isDestroyed()) {
         return;
       }
@@ -2684,7 +2687,7 @@ async function flushPendingDeepLinks() {
     }
 
     // "Open Papr Work" button on the browser sign-in success page.
-    if (url.startsWith("papr://focus")) {
+    if (url.startsWith((PAPR_URL + "focus"))) {
       if (!mainWindow || mainWindow.isDestroyed()) {
         return;
       }
@@ -2701,7 +2704,7 @@ async function flushPendingDeepLinks() {
 }
 
 function queueDeepLink(url) {
-  if (typeof url !== "string" || !url.startsWith("papr://")) {
+  if (typeof url !== "string" || !url.startsWith(PAPR_URL)) {
     return;
   }
   console.log("[Electron] Queued deep link:", url.split("?")[0], {
@@ -2737,7 +2740,7 @@ if (!gotTheLock) {
     }
     
     // Check if the second instance was launched with a deep link
-    const url = commandLine.find(arg => arg.startsWith('papr://'));
+    const url = commandLine.find(arg => arg.startsWith(PAPR_URL));
     if (url) {
       console.log('[Electron] Second instance opened with deep link:', url);
       queueDeepLink(url);
@@ -2810,15 +2813,15 @@ app.whenReady().then(async () => {
   // Register custom URL protocol for papr:// deep links
   if (process.defaultApp) {
     if (process.argv.length >= 2) {
-      const registered = app.setAsDefaultProtocolClient('papr', process.execPath, [path.resolve(process.argv[1])]);
+      const registered = app.setAsDefaultProtocolClient(PAPR_SCHEME, process.execPath, [path.resolve(process.argv[1])]);
       console.log('[Electron] Protocol handler registered (dev mode):', registered);
     }
   } else {
-    const registered = app.setAsDefaultProtocolClient('papr');
+    const registered = app.setAsDefaultProtocolClient(PAPR_SCHEME);
     console.log('[Electron] Protocol handler registered (production):', registered);
   }
   
-  console.log('[Electron] isDefaultProtocolClient for papr://:', app.isDefaultProtocolClient('papr'));
+  console.log('[Electron] isDefaultProtocolClient for', PAPR_URL, app.isDefaultProtocolClient(PAPR_SCHEME));
 
   // Load ESM modules first
   await loadESMModules();
@@ -3347,7 +3350,7 @@ app.whenReady().then(async () => {
   console.log("[Electron] Startup: complete");
 
   // Process auth deep links after Gateway + window are ready (callback needs both)
-  const coldStartUrl = process.argv.find((arg) => arg.startsWith("papr://"));
+  const coldStartUrl = process.argv.find((arg) => arg.startsWith(PAPR_URL));
   if (coldStartUrl) {
     queueDeepLink(coldStartUrl);
   }
