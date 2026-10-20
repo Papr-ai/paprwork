@@ -46,6 +46,8 @@ app.setName(PAPR_DEV_PROFILE ? "Papr Work Dev" : "Papr Work");
 // Dev profile owns papr-dev:// so it never fights the production app for papr://.
 const PAPR_SCHEME = PAPR_DEV_PROFILE ? "papr-dev" : "papr";
 const PAPR_URL = `${PAPR_SCHEME}://`;
+// Base workspace dir: ~/Papr (prod) or ~/Papr-dev (dev profile). Keep in sync with getPaprBaseDir().
+const PAPR_BASE_DIRNAME = PAPR_DEV_PROFILE ? "Papr-dev" : "Papr";
 
 // Real Chrome owns port 9222 for platform jobs + agent automation.
 // Enable embedded Electron CDP only when explicitly requested (PAPR_PLATFORM_EMBEDDED_CDP=1).
@@ -1159,7 +1161,7 @@ function readActiveWorkspacePointer() {
     const osMod = require("os");
     const pointerPath = pathMod.join(
       osMod.homedir(),
-      "Papr",
+      PAPR_BASE_DIRNAME,
       ".active-workspace.json",
     );
     if (!fs.existsSync(pointerPath)) {
@@ -3064,7 +3066,7 @@ app.whenReady().then(async () => {
       const fs = require("fs");
       const pathMod = require("path");
       const osMod = require("os");
-      const pointerPath = pathMod.join(osMod.homedir(), "Papr", ".active-workspace.json");
+      const pointerPath = pathMod.join(osMod.homedir(), PAPR_BASE_DIRNAME, ".active-workspace.json");
       if (!fs.existsSync(pointerPath)) {
         return {};
       }
@@ -3093,7 +3095,7 @@ app.whenReady().then(async () => {
     if (workspaceEnv.PAPR_HOME) {
       return pathMod.join(workspaceEnv.PAPR_HOME, "data", "settings.json");
     }
-    return pathMod.join(osMod.homedir(), "Papr", "data", "settings.json");
+    return pathMod.join(osMod.homedir(), PAPR_BASE_DIRNAME, "data", "settings.json");
   };
 
   const activeWorkspaceEnv = readActiveWorkspaceEnv();
