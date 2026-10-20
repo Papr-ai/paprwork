@@ -8,6 +8,7 @@ release/
 # Environment
 .env.*
 !.env.example
+!.env.development.example
 
 # IDE
 .vscode/

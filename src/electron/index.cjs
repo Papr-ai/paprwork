@@ -10,6 +10,10 @@
 // the first file to define a key wins. Omitting `.env` left dev builds without
 // keys that only live there (PAPR_TURSO_REPLICA_SYNC), which silently ran the
 // legacy sync engine against already-cutover replica databases.
+// PAPR_PROFILE=dev → .env.development wins (dev backend URLs, dev Auth0).
+if ((process.env.PAPR_PROFILE || "").trim().toLowerCase() === "dev") {
+  require("dotenv").config({ path: require("path").join(__dirname, "../../.env.development") });
+}
 require("dotenv").config({ path: require("path").join(__dirname, "../../.env.local") });
 require("dotenv").config({ path: require("path").join(__dirname, "../../.env") });
 
@@ -35,7 +39,10 @@ const {
 
 // Set app name for macOS Keychain (must be before any safeStorage usage)
 // This determines the keychain entry name: "Papr Work Safe Storage"
-app.setName("Papr Work");
+// A dev profile gets its own name → own userData dir, keychain entry and
+// single-instance lock, so it runs side by side with the production app.
+const PAPR_DEV_PROFILE = (process.env.PAPR_PROFILE || "").trim().toLowerCase() === "dev";
+app.setName(PAPR_DEV_PROFILE ? "Papr Work Dev" : "Papr Work");
 
 // Real Chrome owns port 9222 for platform jobs + agent automation.
 // Enable embedded Electron CDP only when explicitly requested (PAPR_PLATFORM_EMBEDDED_CDP=1).
