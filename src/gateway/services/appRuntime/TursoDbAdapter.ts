@@ -657,6 +657,8 @@ export class TursoDbAdapter {
   }
 
   async write(input: TursoDbActorInput & {
+    /** Optional per-step timings (ms) for Server-Timing; filled on the Turso path. */
+    perf?: { clientMs?: number; execMs?: number; bumpMs?: number };
     orgId: string;
     namespaceId: string;
     runtimeAuth: AppRuntimeRouteAuth;
@@ -718,16 +720,27 @@ export class TursoDbAdapter {
       };
     }
 
+    const clientStarted = performance.now();
     const client = await this.clientFor(input, actors, source);
 
     if (!input.clientScope) await this.ensureRemoteChangeLogReady(client, cacheKey, null, source);
+    const execStarted = performance.now();
     const result = await client
       .execute({ sql: remoteSql, args: toLibsqlArgs(input.params) })
       .catch((err: unknown) => this.rethrowClientDenied(err, input, source, remoteSql));
 
     // Bump _papr_sync_meta so desktop version-checked pulls (and other host
-    // instances' version-gated caches) see this write.
+    // instances' version-gated caches) see this write. Runs after the write
+    // commits (a pull that sees the new version must also see the row). It
+    // uses the owner client — the browser's table-scoped token cannot touch
+    // the meta table — so it cannot share the write's batch.
+    const bumpStarted = performance.now();
     await this.bumpOwnerSyncVersion(input, actors, source, cacheKey);
+    if (input.perf) {
+      input.perf.clientMs = execStarted - clientStarted;
+      input.perf.execMs = bumpStarted - execStarted;
+      input.perf.bumpMs = performance.now() - bumpStarted;
+    }
 
     return {
       changes: result.rowsAffected,
