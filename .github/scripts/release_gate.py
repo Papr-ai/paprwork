@@ -40,12 +40,16 @@ for n in sorted(nums):
     if p.get('merged_at') and p['base']['ref'] == 'development':
         prs[n] = p
 
+import re as _re
+def _is_sync(head):
+    return head in SYNC or head.startswith("release/") or bool(_re.search(r"(^|/)sync[-_/].*(main|master|development)|(main|master|development)-(into|to)-", head, _re.I))
+
 rows, missing = [], []
 for n, p in sorted(prs.items()):
     who, head = p['user']['login'], p['head']['ref']
     if p['merged_at'][:10] < START:
         status = 'before audit start'
-    elif who.endswith('[bot]') or head in SYNC:
+    elif who.endswith('[bot]') or _is_sync(head):
         status = 'not required (bot or branch sync)'
     else:
         bodies = [c['body'] or '' for c in api(f'issues/{n}/comments?per_page=100')]
