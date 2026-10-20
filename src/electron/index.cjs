@@ -457,6 +457,20 @@ async function handleWebviewTestRequest(request) {
       return { success: false, error: "appId is required for launch" };
     }
 
+    // Cap hidden previews: each holds an SSE connection open to the gateway and a few forgotten
+    // ones starve the app tab the user is looking at. Close the oldest before opening a new one.
+    const { pickSessionsToClose } = require("./webviewSessionCap.cjs");
+    const stale = pickSessionsToClose(
+      Array.from(webviewSessions.entries()).map(([sid, e]) => ({
+        id: sid,
+        createdAt: e.createdAt,
+      })),
+    );
+    for (const sid of stale) {
+      const old = webviewSessions.get(sid);
+      if (old && !old.window.isDestroyed()) old.window.close();
+    }
+
     const id = `webview-${Date.now()}-${++webviewCounter}`;
     const width = Number(payload.width) || 1280;
     const height = Number(payload.height) || 720;
