@@ -20,6 +20,7 @@ interface LinkedRegistryDbInfo {
   tursoShortName: string;
   sharedWithApps: Array<{ appId: string; title: string }>;
   soleLinker: boolean;
+  publisherShared?: boolean;
 }
 
 export interface DeleteAppPreview {
@@ -66,7 +67,14 @@ export function DeleteAppModal({
 
   const linkedRegistryDatabases = preview?.linkedRegistryDatabases ?? [];
   const sharedRegistryDbs = useMemo(
-    () => linkedRegistryDatabases.filter((db) => !db.soleLinker),
+    () =>
+      linkedRegistryDatabases.filter(
+        (db) => !db.soleLinker && !db.publisherShared && db.sharedWithApps.length > 0,
+      ),
+    [linkedRegistryDatabases],
+  );
+  const publisherSharedDbs = useMemo(
+    () => linkedRegistryDatabases.filter((db) => db.publisherShared),
     [linkedRegistryDatabases],
   );
   const soleLinkerRegistryDbs = useMemo(
@@ -78,7 +86,7 @@ export function DeleteAppModal({
     if (isOpen) {
       setConfirmText("");
       const localOnly = preview?.localUninstallOnly === true;
-      setDeleteJobs(!localOnly);
+      setDeleteJobs(true);
       setDeleteTurso(!localOnly);
       setDeleteRegistryDbs(false);
       setDeleteRegistryTurso(!localOnly);
@@ -111,7 +119,7 @@ export function DeleteAppModal({
     setIsDeleting(true);
     try {
       await onConfirm({
-        deleteLinkedJobs: localUninstallOnly ? false : deleteJobs,
+        deleteLinkedJobs: deleteJobs,
         deleteTursoDatabases: localUninstallOnly
           ? false
           : deleteTurso && deleteJobs,
@@ -218,6 +226,21 @@ export function DeleteAppModal({
             </div>
           ))}
 
+          {publisherSharedDbs.map((db) => (
+            <div
+              key={db.dbId}
+              className="delete-app-modal__item delete-app-modal__item--shared-db"
+            >
+              <span className="delete-app-modal__item-icon">🔗</span>
+              <div className="delete-app-modal__shared-db-content">
+                <span>
+                  Database <strong>{db.label}</strong> ({db.alias}) stays — it is the
+                  team's shared copy, owned by the publisher
+                </span>
+              </div>
+            </div>
+          ))}
+
           {!localUninstallOnly && soleLinkerRegistryDbs.length > 0 && (
             <label className="delete-app-modal__option">
               <input
@@ -272,7 +295,7 @@ export function DeleteAppModal({
             </label>
           )}
 
-          {!localUninstallOnly && hasLinkedJobs && (
+          {hasLinkedJobs && (
             <label className="delete-app-modal__option">
               <input
                 type="checkbox"
@@ -282,7 +305,10 @@ export function DeleteAppModal({
               <div className="delete-app-modal__option-content">
                 <div className="delete-app-modal__option-label">
                   <span className="delete-app-modal__item-icon">⚙️</span>
-                  <span>{preview.linkedJobs.length} linked job{preview.linkedJobs.length !== 1 ? "s" : ""}</span>
+                  <span>
+                    {localUninstallOnly ? "This device's copies of " : ""}
+                    {preview.linkedJobs.length} linked job{preview.linkedJobs.length !== 1 ? "s" : ""}
+                  </span>
                 </div>
                 <div className="delete-app-modal__job-list">
                   {preview.linkedJobs.map((job) => (
@@ -299,7 +325,7 @@ export function DeleteAppModal({
             </label>
           )}
 
-          {hasTursoDbs && deleteJobs && (
+          {!localUninstallOnly && hasTursoDbs && deleteJobs && (
             <label className="delete-app-modal__option delete-app-modal__option--nested">
               <input
                 type="checkbox"
