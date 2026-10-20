@@ -2113,6 +2113,7 @@ export class CloudAppHostService {
           canRead: access.canRead,
           canWrite: access.canWrite,
           mode: access.mode,
+          role: access.role,
         },
       });
 

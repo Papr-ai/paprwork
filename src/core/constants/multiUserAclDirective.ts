@@ -24,6 +24,8 @@ export const MULTI_USER_ACL_RULES = [
   "Enforcement lives on the server: /api/db/query does NOT enforce row ACL. Private/team rows and all writes to ACL columns go through POST /api/app/backend/:action using PAPR_CALLER_USER_ID — never a client-supplied userId/role param.",
   "Canonical read filter (backend): WHERE visibility='public' OR (visibility='team' AND :caller_is_member) OR owner_user_id=:caller OR id IN (SELECT row_id FROM row_acl WHERE table_name=? AND principal_user_id=:caller) — admins skip the filter.",
   "Only public/aggregate data may be read directly from the browser via /api/db/query (e.g. app_stats). Anonymous funnels with no sign-in use owner_session instead, and are UX isolation only.",
+  "Private-table `_acl` keys can be user ids, \"*\", \"team\" (publisher's workspace team) or \"role:viewer|contributor|maintainer|admin\" (app share role, hierarchical) — set via papr_db.acl_for_caller(min_read_role=…, team_read=…); the server injects PAPR_CALLER_ROLE / PAPR_CALLER_TEAM_MEMBER.",
+  "Rows that belong to a group (a standup, project, channel) with its own membership table: papr_db.acl_segment_filter(column, members_table, segment_column, user_column, active_column=…) — membership changes need no per-row rewrite.",
   "Publish access ≠ row ACL: publish_cloud_app loginAccess decides who can open the app; the ACL tables decide which rows each person sees.",
 ] as const;
 

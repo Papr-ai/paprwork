@@ -40,6 +40,8 @@ export class AppBackendService {
     callerIdentity?: MiniAppCallerIdentity;
     loggedIn?: boolean;
   }): Promise<AppBackendRunResult> {
+    // Desktop: the signed-in Papr user runs their own install — same as the
+    // local /api/access response (owner, full access).
     const manifestPath = path.join(
       this.paprRoot,
       backendManifestRelativePath(input.appId),
@@ -80,6 +82,7 @@ export class AppBackendService {
       paprRoot: this.paprRoot,
       appDir: path.join(this.paprRoot, "apps", input.appId),
       callerIdentity: input.callerIdentity,
+      callerAccess: { role: "admin", teamMember: true },
       loggedIn: input.loggedIn,
     });
 

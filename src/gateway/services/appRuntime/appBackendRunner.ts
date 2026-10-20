@@ -13,8 +13,12 @@ import type { AppBackendActionSpec } from "../../../core/types/appBackend.js";
 import type { AppBackendRunResult } from "../../../core/types/appBackend.js";
 import {
   mergeVerifiedCallerJobParams,
+  normalizeAppRole,
   VERIFIED_CALLER_EMAIL_PARAM,
+  VERIFIED_CALLER_ROLE_ENV,
+  VERIFIED_CALLER_TEAM_ENV,
   VERIFIED_CALLER_USER_ID_PARAM,
+  type MiniAppCallerAccess,
   type MiniAppCallerIdentity,
 } from "./miniAppAccess.js";
 import {
@@ -47,6 +51,8 @@ export function buildBackendActionEnv(input: {
   appDir?: string;
   /** Server-resolved caller — injected when signed in; overrides client identity params. */
   callerIdentity?: MiniAppCallerIdentity;
+  /** Server-resolved role/team for `_acl` principals — never from client params. */
+  callerAccess?: MiniAppCallerAccess;
   loggedIn?: boolean;
 }): Record<string, string> {
   const mergedParams = mergeVerifiedCallerJobParams(
@@ -73,6 +79,9 @@ export function buildBackendActionEnv(input: {
       env[`PAPR_PARAM_${key}`] = String(value);
     }
   }
+  // Never inherit caller principals from the parent process environment.
+  delete env[VERIFIED_CALLER_ROLE_ENV];
+  delete env[VERIFIED_CALLER_TEAM_ENV];
   const callerUserId = input.callerIdentity?.userId?.trim();
   if (input.loggedIn && callerUserId) {
     env[VERIFIED_CALLER_USER_ID_PARAM] = callerUserId;
@@ -80,6 +89,9 @@ export function buildBackendActionEnv(input: {
     if (callerEmail) {
       env[VERIFIED_CALLER_EMAIL_PARAM] = callerEmail;
     }
+    const role = normalizeAppRole(input.callerAccess?.role);
+    if (role) env[VERIFIED_CALLER_ROLE_ENV] = role;
+    if (input.callerAccess?.teamMember) env[VERIFIED_CALLER_TEAM_ENV] = "1";
   }
   return env;
 }
