@@ -139,7 +139,7 @@ import {
   resolvePreviewIconSvg,
 } from "./CloudAppPreviewService.js";
 import { rasterizePreviewIconForOpenGraph } from "../../utils/openGraphIconRaster.js";
-import { buildDiscoverHtml, fetchDiscoverEntries } from "./cloudAppDiscoverPage.js";
+import { registerDiscoverRoutes } from "./cloudAppDiscoverPage.js";
 import {
   PAPR_APP_META_RELATIVE_PATH,
   readCloudAppMetaFromContent,
@@ -392,8 +392,8 @@ export class CloudAppHostService {
       res.json({ status: "ok", service: "cloud-app-host" });
     });
 
-    // Homepage: Community Discover for everyone (signed in or not).
-    app.get("/", (req, res) => void this.handleDiscoverHome(req, res));
+    // Homepage: Community Discover (+ per-app pages, My apps, sitemap). Before /:ns/:slug.
+    registerDiscoverRoutes(app, this.auth);
 
     // Connections sign-in: providers redirect here; the memory server does the exchange.
     app.get("/oauth/callback", (req, res) => void proxyOAuthCallback(req, res));
@@ -2889,17 +2889,6 @@ export class CloudAppHostService {
     res.setHeader("Content-Type", contentType);
     res.setHeader("Cache-Control", "public, max-age=300");
     res.send(body);
-  }
-
-  private async handleDiscoverHome(req: Request, res: Response): Promise<void> {
-    try {
-      const apps = await fetchDiscoverEntries();
-      res.setHeader("Content-Type", "text/html; charset=utf-8");
-      res.setHeader("Cache-Control", "public, max-age=60, stale-while-revalidate=300");
-      res.send(buildDiscoverHtml({ apps, publicBaseUrl: getCloudAppPublicBaseUrl(req) }));
-    } catch (err) {
-      res.status(500).send((err as Error).message);
-    }
   }
 
   /**
