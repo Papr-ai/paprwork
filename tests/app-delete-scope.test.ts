@@ -123,7 +123,8 @@ describe("appDeleteScope", () => {
     });
     expect(safe).toEqual({
       unpublishFromCloud: false,
-      deleteLinkedJobs: false,
+      // This device's job copies are removed (cloud-side job/Turso deletes stay off).
+      deleteLinkedJobs: true,
       deleteTursoDatabases: false,
       deleteRegistryDbIds: [],
       deleteRegistryTurso: false,

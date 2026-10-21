@@ -32,4 +32,16 @@ describe("jobTombstones", () => {
     expect(tombstones.has("job-c")).toBe(true);
     expect(tombstones.size).toBe(3);
   });
+
+  test("parallel adds do not collide or lose ids", async () => {
+    const paprDir = join(tmpdir(), `papr-tombstones-par-${Date.now()}`);
+    mkdirSync(join(paprDir, "data"), { recursive: true });
+    dirs.push(paprDir);
+
+    const ids = Array.from({ length: 12 }, (_, i) => `job-${i}`);
+    await Promise.all(ids.map((id) => addJobTombstones(paprDir, [id])));
+
+    const tombstones = await readJobTombstones(paprDir);
+    expect(tombstones.size).toBe(ids.length);
+  });
 });

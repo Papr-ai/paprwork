@@ -1,5 +1,9 @@
 # CLAUDE.md - Project Context & Learnings
 
+## Change management (read first)
+All changes follow [CHANGE_MANAGEMENT.md](CHANGE_MANAGEMENT.md): ticket in every PR, PRs into `development` only, verify on dev in Release Desk, releases only through Release Desk with a second-person approval. Never push directly to `development`, `main` or `master`.
+
+
 **Last Updated:** 2026-03-18
 
 This file tracks key learnings, architectural decisions, and context for AI assistants working on Paprwork V2.
