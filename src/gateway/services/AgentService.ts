@@ -2170,6 +2170,7 @@ export class AgentService {
       let fullStream: AsyncIterable<unknown>;
       let aiSdkStreamResult: Awaited<ReturnType<typeof streamText>> | undefined;
       let piWrapUpContext: { messages: unknown[] } | undefined;
+      let piRefreshAuth: (() => Promise<string | null>) | undefined;
       let piWrapUpDeps:
         | {
             streamSimple: (
@@ -2591,6 +2592,22 @@ export class AgentService {
         const apiKeys = getApiKeysForSanitization();
         const maxSteps = options?.maxSteps ?? 100;
 
+        // A background refresh revokes the token this turn started with; fetch
+        // the current one. Shared by the tool loop and the wrap-up path.
+        piRefreshAuth = async (): Promise<string | null> => {
+          const { clearKeyCache, getProviderAuthForModel } = await import(
+            "../utils/keyResolver.js"
+          );
+          clearKeyCache(envKey);
+          const auth = await getProviderAuthForModel(
+            config.provider === "openai-codex"
+              ? "openai"
+              : (config.provider as "openai" | "anthropic"),
+            { modelId: config.model, modelProvider: config.provider },
+          );
+          return auth?.type === "oauth" ? auth.token : null;
+        };
+
         fullStream = createPiCodexStreamWithToolLoop(
           streamSimple as any,
           finalModel,
@@ -2635,7 +2652,7 @@ export class AgentService {
           },
           // Lets a refusal name which credential it refused. The kind is read
           // from the token inside the loop, so only the provider is needed.
-          { provider: config.provider },
+          { provider: config.provider, refreshAuth: piRefreshAuth },
         );
         piWrapUpContext = piContext;
         // Same credentials and session with reasoning turned down, for a
@@ -3224,6 +3241,7 @@ export class AgentService {
                 apiKeys: getApiKeysForSanitization(),
                 abortSignal: abortController.signal,
                 wrapUpMessage: instruction,
+                refreshAuth: piRefreshAuth,
               });
             }
             if (aiSdkStreamResult) {
