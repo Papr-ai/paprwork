@@ -8,6 +8,7 @@
 import React, { useState, useRef, useEffect } from "react";
 import { Markdown } from "../common/Markdown";
 import { useJobLiveLogsStore } from "../../stores/jobLiveLogsStore";
+import { AgentGlyph } from "../Agent/AgentGlyph";
 import "./DelegationCard.css";
 
 export interface DelegationData {
@@ -51,12 +52,8 @@ function StatusIcon({ status }: { status: DelegationData["status"] }) {
         </svg>
       );
     case "running":
-      return (
-        <svg className={className} {...common}>
-          <circle cx="12" cy="12" r="10" />
-          <path d="M12 6v6l4 2" />
-        </svg>
-      );
+      // A delegation is an agent at work: show the user's agent with the Replay trace.
+      return <AgentGlyph size={16} state="working" className={className} />;
     case "completed":
       return (
         <svg className={className} {...common}>
