@@ -160,3 +160,19 @@ export function decideHandoffAccount(currentUserId: string | undefined, handoffU
   if (!currentUserId) return "sign_in";
   return currentUserId === handoffUserId ? "same_user" : "different_user";
 }
+
+/** Just what pickHandoffWindow needs from a BrowserWindow (testable without Electron). */
+export interface WindowLike {
+  isDestroyed(): boolean;
+  isVisible(): boolean;
+}
+
+/**
+ * The window a hand-off lands in: the main window. Never a hidden preview (webview_launch_app)
+ * or offscreen render window: showing one of those pops up a blank or stale "Papr Work" window
+ * and the landing goes nowhere. Without a main window, only an already-visible window qualifies.
+ */
+export function pickHandoffWindow<W extends WindowLike>(main: W | null | undefined, all: readonly W[]): W | null {
+  if (main && !main.isDestroyed()) return main;
+  return all.find((w) => !w.isDestroyed() && w.isVisible()) ?? null;
+}

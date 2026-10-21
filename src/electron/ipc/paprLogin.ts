@@ -20,6 +20,7 @@ import {
   handoffLanding,
   resolveHandoffApp,
   HandoffRedeemError,
+  pickHandoffWindow,
   isHandoffUrl,
   parseHandoffCode,
   redeemHandoffCode,
@@ -233,6 +234,8 @@ type LoginTelemetryTracker = (
 ) => void;
 
 let trackLoginEvent: LoginTelemetryTracker | undefined;
+/** The app's main window (created/shown on demand). Set by the Electron entry. */
+let mainWindowProvider: (() => Promise<BrowserWindow | null> | BrowserWindow | null) | undefined;
 let loginCompletionInFlight = false;
 
 interface PendingOrgSetupContext {
@@ -3820,9 +3823,12 @@ export function initializePaprLoginIPC(
   settingsStorage: SettingsStorage,
   options?: {
     trackLoginEvent?: LoginTelemetryTracker;
+    /** Main window, created or shown if needed. Hand-offs land here, never in a preview window. */
+    getMainWindow?: () => Promise<BrowserWindow | null> | BrowserWindow | null;
   },
 ) {
   trackLoginEvent = options?.trackLoginEvent;
+  mainWindowProvider = options?.getMainWindow;
   void restorePkceFromDisk();
   registerPaprWorkspaceHandlers();
   // Check if user is already logged in
@@ -5325,10 +5331,18 @@ export async function handlePaprHandoffLink(
     // Open the app itself when it lives on this Mac (the publisher's own copy), beside the chat.
     const local = await resolveHandoffApp(result.intent, result.sessionToken);
     const landing = handoffLanding(result.intent, undefined, local);
+    console.log("[PaprLogin] Handoff landing", { appId: landing.appId ?? null, view: result.intent.view ?? null });
+    trackLoginStep("handoff_landing", { found_app: !!landing.appId, has_view: !!result.intent.view });
     // After a fresh sign-in the renderer leaves the auth wall first; give it a beat.
-    setTimeout(() => {
-      const win = BrowserWindow.getAllWindows().find((w) => !w.isDestroyed());
-      if (!win) return;
+    setTimeout(() => void (async () => {
+      const win = pickHandoffWindow(await mainWindowProvider?.(), BrowserWindow.getAllWindows());
+      if (!win) {
+        console.warn("[PaprLogin] Handoff: no main window to land in");
+        return;
+      }
+      if (win.webContents.isLoading()) {
+        await new Promise<void>((resolve) => win.webContents.once("did-finish-load", () => setTimeout(resolve, 1500)));
+      }
       if (win.isMinimized()) win.restore();
       win.show();
       win.focus();
@@ -5336,10 +5350,12 @@ export async function handlePaprHandoffLink(
         win.webContents.send("chat:open", {
           title: landing.title,
           message: landing.message,
-          ...(landing.appId ? { appId: landing.appId, mode: "handoff" } : {}),
+          ...(landing.appId
+            ? { appId: landing.appId, mode: "handoff", view: result.intent.view ?? null, source: result.intent.source ?? "claude" }
+            : {}),
         });
       }
-    }, decision === "sign_in" ? 1500 : 0);
+    })(), decision === "sign_in" ? 1500 : 0);
   } catch (err) {
     console.error("[PaprLogin] Handoff failed:", err);
     const message = err instanceof HandoffRedeemError ? err.message : "Couldn't open Papr from Claude. Try again.";

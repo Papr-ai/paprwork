@@ -2860,6 +2860,12 @@ app.whenReady().then(async () => {
   // Register Papr IPC before any slow network (namespace API key, OAuth). macOS
   // "activate" can open the window while those await; handlers must exist first.
   initializePaprLoginIPC(customKeysStorage, settingsStorage, {
+    // Hand-offs from Claude land in the main window (re-created if it was closed), never in a
+    // hidden preview window from webview_launch_app.
+    getMainWindow: async () => {
+      await createMainWindow();
+      return mainWindow && !mainWindow.isDestroyed() ? mainWindow : null;
+    },
     trackLoginEvent: (eventName, properties) => {
       if (telemetryClientInstance) {
         telemetryClientInstance.trackFireAndForget(eventName, properties);
