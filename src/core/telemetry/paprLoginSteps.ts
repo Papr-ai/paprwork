@@ -16,6 +16,7 @@ export type PaprLoginStep =
   | "callback_received"
   | "handoff_received"
   | "handoff_redeemed"
+  | "handoff_landing"
   | "pkce_validated"
   | "token_exchanged"
   | "user_claims_decoded"
