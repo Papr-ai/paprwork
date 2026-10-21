@@ -9,6 +9,22 @@ export interface MiniAppBuildError {
   severity: "error" | "warning";
 }
 
+/** dist/ build failed — publish stops instead of shipping an unbundled app. */
+export class MiniAppDistBuildError extends Error {
+  constructor(
+    readonly appId: string,
+    readonly errors: MiniAppBuildError[],
+  ) {
+    const first = errors
+      .filter((e) => e.severity === "error")
+      .slice(0, 3)
+      .map((e) => `${e.file}${e.line ? `:${e.line}` : ""} ${e.message}`)
+      .join("; ");
+    super(`Build failed for app ${appId} — fix and publish again: ${first || "unknown esbuild error"}`);
+    this.name = "MiniAppDistBuildError";
+  }
+}
+
 export interface MiniAppBuildResult {
   success: boolean;
   errors: MiniAppBuildError[];
@@ -49,18 +65,17 @@ export function formatMiniAppBuildErrorMessage(raw: string): string {
 }
 
 /**
- * Detect whether an app uses the bundled architecture (single app.ts entry with imports)
- * vs legacy multi-<script> pattern. Only bundled apps go through esbuild.build().
+ * Find the TypeScript entry (app.ts / main.ts). Any TS entry is bundled, imports or
+ * not: a no-import app.ts used to skip dist/ and was transpiled per request instead,
+ * so it missed the immutable dist/ cache and took a different path than every other
+ * app. Legacy apps (plain multi-<script> .js) have no TS entry and stay unbundled.
  */
 async function detectBundledApp(appDir: string): Promise<string | null> {
   const candidates = ["app.ts", "app.tsx", "main.ts", "main.tsx"];
   for (const candidate of candidates) {
-    const entryPath = path.join(appDir, candidate);
     try {
-      const content = await fs.readFile(entryPath, "utf-8");
-      if (/\bimport\s/.test(content)) {
-        return candidate;
-      }
+      await fs.access(path.join(appDir, candidate));
+      return candidate;
     } catch {
       // File doesn't exist
     }

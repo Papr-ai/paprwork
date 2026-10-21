@@ -37,6 +37,7 @@ import {
   getPaprDataDir,
   getPaprJobsRoot,
   getPaprRoot,
+  isCloudAgentGatewayMode,
 } from "../../core/utils/paprRoot.js";
 import {
   jobUpdateAffectsOwnership,
@@ -461,6 +462,12 @@ export class JobsService {
    * Each workspace owns its own job UUID — match by Home app link + job name.
    */
   private async syncHomeDailyBriefFromBundle(): Promise<void> {
+    // Cloud sandbox: Home and its Daily Brief job come from the cloud repos. Re-running
+    // the desktop Home setup there minted a new job id and rewrote default-job-id.txt /
+    // data-sources.json on every run, and the run pushed that over the real Home.
+    if (isCloudAgentGatewayMode()) {
+      return;
+    }
     const bundledAppsDir = await resolveBundledResourcesDir(
       __dirname,
       "resources/default-apps/home-dashboard",
@@ -756,6 +763,12 @@ export class JobsService {
    * Jobs with no linkage get STANDALONE_APP_ID.
    */
   private async migrateLegacyHomeDailyBriefJobIfNeeded(): Promise<void> {
+    // Cloud sandbox: Home and its Daily Brief job come from the cloud repos. Re-running
+    // the desktop Home setup there minted a new job id and rewrote default-job-id.txt /
+    // data-sources.json on every run, and the run pushed that over the real Home.
+    if (isCloudAgentGatewayMode()) {
+      return;
+    }
     try {
       const { migrateLegacyHomeDailyBriefJobIfNeeded } = await import(
         "./migrateLegacyHomeDailyBriefJob.js"
@@ -784,6 +797,12 @@ export class JobsService {
 
   /** Remove duplicate Daily Brief jobs re-introduced by cloud/git sync. */
   private async reconcileDuplicateHomeDailyBriefJobsIfNeeded(): Promise<void> {
+    // Cloud sandbox: Home and its Daily Brief job come from the cloud repos. Re-running
+    // the desktop Home setup there minted a new job id and rewrote default-job-id.txt /
+    // data-sources.json on every run, and the run pushed that over the real Home.
+    if (isCloudAgentGatewayMode()) {
+      return;
+    }
     try {
       const { reconcileDuplicateHomeDailyBriefJobs } = await import(
         "./migrateLegacyHomeDailyBriefJob.js"
@@ -1076,6 +1095,13 @@ export class JobsService {
 
     const paprDir = this.boundPaprDir ?? getPaprRoot();
     const tombstonesRemoved = await this.filterTombstonedJobsFromRegistry(paprDir);
+    if (isCloudAgentGatewayMode()) {
+      return {
+        tombstonesRemoved,
+        duplicatesReconciled: false,
+        duplicateIdsRemoved: [],
+      };
+    }
     const { reconcileDuplicateHomeDailyBriefJobs } = await import(
       "./migrateLegacyHomeDailyBriefJob.js"
     );
