@@ -1483,6 +1483,7 @@ class GatewayProcessSupervisor {
         console.log("[Electron] Gateway requested keys:", msg.keys);
 
         const resolvedKeys = {};
+        let paprApiKeyNamespaceId;
         for (const keyName of msg.keys || []) {
           try {
             if (keyName === "PAPR_API_KEY" && resolveActivePaprApiKey) {
@@ -1508,6 +1509,7 @@ class GatewayProcessSupervisor {
                   );
                 if (boundOk) {
                   resolvedKeys[keyName] = value;
+                  paprApiKeyNamespaceId = pointer?.namespaceId;
                   console.log(`[Electron]   ✓ Resolved ${keyName}`);
                 } else {
                   console.warn(
@@ -1631,6 +1633,7 @@ class GatewayProcessSupervisor {
             type: "KEYS_RESPONSE",
             requestId: msg.requestId,
             keys: resolvedKeys,
+            ...(paprApiKeyNamespaceId ? { paprApiKeyNamespaceId } : {}),
             // Always send (possibly {}) so gateway clears stale oauth cache when tokens are missing/expired
             oauthTokens,
           });

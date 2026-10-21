@@ -12,7 +12,10 @@ import {
   canPerformWorkspaceDbWrite,
   getWorkspaceWriteGeneration,
 } from "./workspaceWriteGuard.js";
-import { getPaprApiKey } from "../utils/keyResolver.js";
+import {
+  getCachedPaprApiKeyNamespace,
+  getPaprApiKey,
+} from "../utils/keyResolver.js";
 import { publishDbChanged } from "../utils/publishJobRunEvents.js";
 import {
   getPaprAppsRoot,
@@ -327,8 +330,26 @@ export class TursoSyncBridge {
     const promise = this.fetchCredentialsUncached(databaseName, options?.appId)
       .then((bundle) => {
         // Filed under the identity captured BEFORE the request — a switch
-        // mid-flight cannot land this token under the new workspace.
-        this.rememberCredentials(key, bundle.creds, bundle.expiresAtMs);
+        // mid-flight cannot land this token under the new workspace. The key
+        // that fetched it must belong to that identity too: the server resolves
+        // tursoUrl from the KEY's namespace, so another workspace's key returns
+        // another workspace's database.
+        if (
+          bundle.keyNamespaceId &&
+          scope &&
+          bundle.keyNamespaceId !== scope.namespaceId
+        ) {
+          this.credentialsFetchPromises.delete(key);
+          throw new Error(
+            `Turso token for ${databaseName} was fetched with a Papr API key for namespace ${bundle.keyNamespaceId}, not ${scope.namespaceId} — refusing it`,
+          );
+        }
+        this.rememberCredentials(
+          key,
+          bundle.creds,
+          bundle.expiresAtMs,
+          bundle.keyNamespaceId,
+        );
         this.credentialsFetchPromises.delete(key);
         return bundle.creds;
       })
@@ -416,9 +437,10 @@ export class TursoSyncBridge {
     key: string,
     creds: TursoCredentials,
     expiresAtMs: number,
+    keyNamespaceId?: string | null,
   ): void {
     this.credentialsCacheByDb.set(key, { creds, expiresAt: expiresAtMs });
-    saveTursoCredentialsEntry(key, creds, expiresAtMs);
+    saveTursoCredentialsEntry(key, creds, expiresAtMs, undefined, keyNamespaceId);
   }
 
   private resolveCredentialExpiryMs(expiresAt?: string): number {
@@ -435,11 +457,16 @@ export class TursoSyncBridge {
   private async fetchCredentialsUncached(
     databaseName: string,
     appId?: string,
-  ): Promise<{ creds: TursoCredentials; expiresAtMs: number }> {
+  ): Promise<{
+    creds: TursoCredentials;
+    expiresAtMs: number;
+    keyNamespaceId: string | null;
+  }> {
     const apiKey = await getPaprApiKey();
     if (!apiKey) {
       throw new Error("PAPR_API_KEY not configured");
     }
+    const keyNamespaceId = getCachedPaprApiKeyNamespace();
 
     const response = await fetch(
       `${this.memoryServerBase}/v1/cloud/databases/token`,
@@ -489,6 +516,7 @@ export class TursoSyncBridge {
     return {
       creds,
       expiresAtMs: this.resolveCredentialExpiryMs(data.expiresAt),
+      keyNamespaceId,
     };
   }
 

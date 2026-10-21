@@ -21,6 +21,7 @@ import {
   getActivePaprWorkspacePointer,
   paprApiKeyMatchesActiveWorkspace,
   paprApiKeyMatchesNamespaceBound,
+  parsePaprApiKeyScope,
 } from "../../core/utils/paprApiKey.js";
 import { readActiveWorkspacePointer } from "../../core/utils/paprWorkspace.js";
 
@@ -97,6 +98,44 @@ export function preserveEnvKeyBeforeOverwrite(keyName: string): void {
 let paprApiKeyIpcInFlight: Promise<string | undefined> | null = null;
 let paprApiKeyUnavailableUntil = 0;
 
+/**
+ * Namespace the cached PAPR_API_KEY was resolved FOR — the active namespace when
+ * the request was sent, not when the answer arrived. Legacy keys carry no
+ * namespace in the string, so this is the only thing that ties them to a
+ * workspace. Without it a legacy key from the previous workspace passed every
+ * check after a switch (Oct 20: 85ZIB7mD1V key used for XHqOmymyGP).
+ */
+let paprApiKeyBoundNamespace: string | null = null;
+/** Bumped whenever PAPR_API_KEY is cleared; answers to older requests are dropped. */
+let paprApiKeyEpoch = 0;
+
+function activeNamespaceIdForKeys(): string | null {
+  const pointer =
+    getActivePaprWorkspacePointer() ?? readActiveWorkspacePointer();
+  return pointer?.namespaceId?.trim() || null;
+}
+
+function cachePaprApiKey(value: string, boundNamespace: string | null): void {
+  keyCache.PAPR_API_KEY = value;
+  paprApiKeyBoundNamespace = boundNamespace;
+}
+
+/** Cached key still belongs to the active workspace (scoped or legacy). */
+function cachedPaprApiKeyStillBound(value: string): boolean {
+  if (!paprApiKeyMatchesBoundActiveWorkspace(value)) return false;
+  if (parsePaprApiKeyScope(value)) return true; // namespace is in the key itself
+  const active = activeNamespaceIdForKeys();
+  if (!active) return true;
+  return paprApiKeyBoundNamespace === active;
+}
+
+/** Namespace the cached PAPR_API_KEY belongs to (embedded, else the bound one). */
+export function getCachedPaprApiKeyNamespace(): string | null {
+  const cached = keyCache.PAPR_API_KEY?.trim();
+  if (!cached) return null;
+  return parsePaprApiKeyScope(cached)?.namespaceId ?? paprApiKeyBoundNamespace;
+}
+
 function paprApiKeyMatchesBoundActiveWorkspace(apiKey: string): boolean {
   const pointer =
     getActivePaprWorkspacePointer() ?? readActiveWorkspacePointer();
@@ -128,7 +167,11 @@ async function requestKeysViaIPC(
   keyNames: string[],
   ipcProcess: IpcProcessLike,
 ): Promise<Record<string, string>> {
-  const dedupeKey = [...keyNames].sort().join(",");
+  // PAPR_API_KEY requests are per key-epoch: after a switch clears the key, a
+  // new caller must not join a request sent for the previous workspace.
+  const dedupeKey =
+    [...keyNames].sort().join(",") +
+    (keyNames.includes("PAPR_API_KEY") ? `#papr${paprApiKeyEpoch}` : "");
   const inFlight = inFlightKeyRequests.get(dedupeKey);
   if (inFlight) {
     return inFlight;
@@ -160,6 +203,8 @@ async function requestKeysViaIPC(
 
     const reqId = `keys-${++requestId}`;
     const sentAt = Date.now();
+    const sentNamespace = activeNamespaceIdForKeys();
+    const sentPaprEpoch = paprApiKeyEpoch;
     const timeout = setTimeout(() => {
       cleanup();
       reject(new Error("Key resolution timeout"));
@@ -184,16 +229,31 @@ async function requestKeysViaIPC(
         if ("oauthTokens" in message) {
           oauthTokenCache = message.oauthTokens ?? {};
         }
-        const received = message.keys || {};
+        const received = { ...(message.keys || {}) };
+        // Main answered for the workspace that was active when we ASKED. If a
+        // switch (or key change) happened while the request was in flight, that
+        // answer belongs to the old workspace — drop it rather than cache it.
+        const nowNamespace = activeNamespaceIdForKeys();
+        const answeredFor = message.paprApiKeyNamespaceId?.trim() || null;
+        if (
+          received.PAPR_API_KEY &&
+          (paprApiKeyEpoch !== sentPaprEpoch ||
+            nowNamespace !== sentNamespace ||
+            (answeredFor !== null && nowNamespace !== null && answeredFor !== nowNamespace))
+        ) {
+          console.warn(
+            `[KeyResolver] Dropping PAPR_API_KEY answer for ${sentNamespace ?? "?"} — workspace changed while ${reqId} was in flight`,
+          );
+          delete received.PAPR_API_KEY;
+        }
         for (const name of keyNames) {
           ipcAskedNames.add(name);
         }
         for (const [keyName, value] of Object.entries(received)) {
           if (!value || isOAuthShapedToken(value)) continue;
-          if (
-            keyName === "PAPR_API_KEY" &&
-            !paprApiKeyMatchesBoundActiveWorkspace(value)
-          ) {
+          if (keyName === "PAPR_API_KEY") {
+            if (!paprApiKeyMatchesBoundActiveWorkspace(value)) continue;
+            cachePaprApiKey(value, answeredFor ?? sentNamespace);
             continue;
           }
           keyCache[keyName] = value;
@@ -265,6 +325,8 @@ export async function getApiKeys(
           );
           continue;
         }
+        // PAPR_API_KEY is cached (with its namespace binding) by the IPC handler.
+        if (keyName === "PAPR_API_KEY") continue;
         keyCache[keyName] = value;
       }
       console.log(
@@ -288,6 +350,14 @@ export async function getApiKeys(
   // Env is fallback only — never overrides a Settings key already in cache.
   // Also runs when IPC already answered "not present" (ipcAskedNames).
   for (const keyName of keyNames) {
+    if (
+      keyName === "PAPR_API_KEY" &&
+      keyCache.PAPR_API_KEY &&
+      !cachedPaprApiKeyStillBound(keyCache.PAPR_API_KEY)
+    ) {
+      delete keyCache.PAPR_API_KEY;
+      paprApiKeyBoundNamespace = null;
+    }
     if (keyCache[keyName]) {
       keys[keyName] = keyCache[keyName];
       continue;
@@ -309,7 +379,11 @@ export async function getApiKeys(
       );
       continue;
     }
-    keyCache[keyName] = value;
+    if (keyName === "PAPR_API_KEY") {
+      cachePaprApiKey(value, activeNamespaceIdForKeys());
+    } else {
+      keyCache[keyName] = value;
+    }
     keys[keyName] = value;
     console.log(`[KeyResolver]   ✓ ${keyName} found in env`);
   }
@@ -342,7 +416,10 @@ async function resolvePaprApiKeyViaIpc(
           );
           return undefined;
         }
-        keyCache.PAPR_API_KEY = resolved;
+        // Handler cached it with its namespace binding (or dropped it as stale).
+        if (keyCache.PAPR_API_KEY?.trim() !== resolved) {
+          return undefined;
+        }
         paprApiKeyUnavailableUntil = 0;
         return resolved;
       }
@@ -382,13 +459,14 @@ export async function getPaprApiKey(
   // Main process is authoritative for Papr login keys (namespace vault slots).
   const cached = keyCache.PAPR_API_KEY?.trim();
   if (cached) {
-    if (paprApiKeyMatchesBoundActiveWorkspace(cached)) {
+    if (cachedPaprApiKeyStillBound(cached)) {
       return cached;
     }
     console.warn(
-      "[KeyResolver] Clearing stale cached PAPR_API_KEY — wrong org/namespace for active workspace",
+      "[KeyResolver] Clearing stale cached PAPR_API_KEY — resolved for a different workspace",
     );
     delete keyCache.PAPR_API_KEY;
+    paprApiKeyBoundNamespace = null;
   }
 
   if (Date.now() < paprApiKeyUnavailableUntil) {
@@ -397,9 +475,13 @@ export async function getPaprApiKey(
 
   if (ipcProcess.send) {
     if (!paprApiKeyIpcInFlight) {
-      paprApiKeyIpcInFlight = resolvePaprApiKeyViaIpc(ipcProcess).finally(() => {
-        paprApiKeyIpcInFlight = null;
+      const pending: Promise<string | undefined> = resolvePaprApiKeyViaIpc(
+        ipcProcess,
+      ).finally(() => {
+        // clearKeyCache may have replaced it with a request for the new workspace.
+        if (paprApiKeyIpcInFlight === pending) paprApiKeyIpcInFlight = null;
       });
+      paprApiKeyIpcInFlight = pending;
     }
     const fromIpc = await paprApiKeyIpcInFlight;
     if (fromIpc) {
@@ -431,7 +513,7 @@ export function seedPaprApiKeyFromParent(apiKey: string): boolean {
   if (!trimmed || !paprApiKeyMatchesBoundActiveWorkspace(trimmed)) {
     return false;
   }
-  keyCache.PAPR_API_KEY = trimmed;
+  cachePaprApiKey(trimmed, activeNamespaceIdForKeys());
   paprApiKeyUnavailableUntil = 0;
   return true;
 }
@@ -448,6 +530,12 @@ export function clearKeyCache(keyName?: string): void {
       clearCloudSchedulerAuthorityCache();
     })
     .catch(() => undefined);
+  if (!keyName || keyName === "PAPR_API_KEY") {
+    paprApiKeyEpoch += 1;
+    paprApiKeyBoundNamespace = null;
+    // A request still in flight belongs to the old key/workspace — don't join it.
+    paprApiKeyIpcInFlight = null;
+  }
   if (keyName) {
     delete keyCache[keyName];
     ipcAskedNames.delete(keyName);

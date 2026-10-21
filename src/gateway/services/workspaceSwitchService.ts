@@ -495,6 +495,25 @@ async function refreshVaultForWorkspaceSwitch(): Promise<void> {
   console.log("[WorkspaceSwitch] Vault re-sync scheduled for active workspace");
 }
 
+/**
+ * Publish status answers are only valid for the key that fetched them — a key
+ * for another workspace reads "not published" for every app here.
+ */
+async function invalidatePublishStatusForKeyChange(reason: string): Promise<void> {
+  try {
+    const { invalidatePublishStatusCache } = await import(
+      "./CloudAppPublishService.js"
+    );
+    invalidatePublishStatusCache();
+    console.log(`[WorkspaceSwitch] Publish status cache cleared (${reason})`);
+  } catch (err) {
+    console.warn(
+      "[WorkspaceSwitch] Publish status cache clear failed:",
+      (err as Error).message.slice(0, 120),
+    );
+  }
+}
+
 /** Last key fully applied (storage + agent reinit) in this gateway process. */
 let lastAppliedPaprApiKey: string | null = null;
 
@@ -540,6 +559,7 @@ export async function applyGatewayPaprApiKey(apiKey: string): Promise<void> {
   clearKeyCache("PAPR_API_KEY");
   invalidatePaprUserIdCache();
   getCustomKeysService().invalidateCache();
+  await invalidatePublishStatusForKeyChange("Papr API key changed");
 
   // Key rotated within the same workspace. Turso tokens belong to databases,
   // not to the API key, and are keyed by org/namespace/user — keep them.
@@ -638,7 +658,38 @@ async function finishWorkspaceSwitchInBackground(
   }
 }
 
+/**
+ * Switch requests run their pointer/key prefix one at a time. Two switches
+ * interleaving here could leave the pointer on one workspace and PAPR_API_KEY /
+ * caches from the other. A newer switch still supersedes an older one's
+ * background phase via switchGeneration.
+ */
+let switchPrefixChain: Promise<unknown> = Promise.resolve();
+
+/** Wait for any earlier switch's prefix; returns the release for ours. */
+async function acquireSwitchPrefixTurn(): Promise<() => void> {
+  let release!: () => void;
+  const mine = new Promise<void>((resolve) => {
+    release = resolve;
+  });
+  const previous = switchPrefixChain;
+  switchPrefixChain = previous.then(() => mine);
+  await previous;
+  return release;
+}
+
 export async function switchActiveWorkspace(
+  input: SwitchWorkspaceInput,
+): Promise<SwitchWorkspaceResult> {
+  const releaseTurn = await acquireSwitchPrefixTurn();
+  try {
+    return await switchActiveWorkspacePrefix(input);
+  } finally {
+    releaseTurn();
+  }
+}
+
+async function switchActiveWorkspacePrefix(
   input: SwitchWorkspaceInput,
 ): Promise<SwitchWorkspaceResult> {
   const generation = ++switchGeneration;
@@ -701,6 +752,7 @@ export async function switchActiveWorkspace(
     process.env.PAPR_API_KEY = paprApiKey;
     clearKeyCache("PAPR_API_KEY");
     invalidatePaprUserIdCache();
+    await invalidatePublishStatusForKeyChange("workspace switch");
 
     broadcast({
       type: "workspace:switch-started",

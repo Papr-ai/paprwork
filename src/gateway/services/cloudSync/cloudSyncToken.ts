@@ -21,6 +21,27 @@ export interface TokenCache {
   cloneUrl: string;
 }
 
+/** Why the last repos/token request failed (cloud's own words), for status UI. */
+let lastRepoTokenError: string | null = null;
+
+export function getLastRepoTokenError(): string | null {
+  return lastRepoTokenError;
+}
+
+/** Pull a readable message out of a memory-server error body (`{detail}` / `{error}`). */
+export function describeCloudErrorBody(status: number, body: string): string {
+  let message = body.trim();
+  try {
+    const parsed = JSON.parse(body) as { detail?: unknown; error?: unknown; message?: unknown };
+    const pick = parsed.detail ?? parsed.error ?? parsed.message;
+    if (typeof pick === "string" && pick.trim()) message = pick.trim();
+    else if (pick && typeof pick === "object") message = JSON.stringify(pick);
+  } catch {
+    /* not JSON */
+  }
+  return `${status}: ${message.slice(0, 300)}`;
+}
+
 export interface TokenStateCallbacks {
   getRepoUrl: () => string | null;
   setRepoUrl: (url: string) => void;
@@ -115,10 +136,9 @@ export async function fetchRepoToken(
       body: buildCloudReposRequestBody("user"),
       timeoutMs: 60_000,
     });
-    if (resp.status === 401) return null;
     if (!resp.ok) {
-      const text = await resp.text();
-      throw new Error(`repos/token ${resp.status}: ${text.slice(0, 200)}`);
+      const text = await resp.text().catch(() => "");
+      throw new Error(`repos/token ${describeCloudErrorBody(resp.status, text)}`);
     }
     const data = (await resp.json()) as RepoTokenResponse;
     const userRepo = data.repos.find((r) => r.scope === "user") ?? data.repos[0];
@@ -126,9 +146,11 @@ export async function fetchRepoToken(
       throw new Error("repos/token missing user cloneUrl");
     }
     applyUserRepoToken(state, userRepo, data.token, data.expiresAt);
+    lastRepoTokenError = null;
     return data;
   } catch (err) {
-    console.error("[CloudSync] Token fetch failed:", (err as Error).message);
+    lastRepoTokenError = (err as Error).message;
+    console.error("[CloudSync] Token fetch failed:", lastRepoTokenError);
     return null;
   }
 }

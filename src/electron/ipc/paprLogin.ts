@@ -2713,6 +2713,7 @@ async function applyActiveNamespaceSwitch(input: {
 
   await persistNamespaceApiKeys(
     input.customKeysStorage,
+    input.organizationId,
     input.namespaceId,
     apiKey,
   );
@@ -2793,6 +2794,7 @@ async function refreshActiveNamespaceApiKey(input: {
 
   await persistNamespaceApiKeys(
     input.customKeysStorage,
+    input.organizationId,
     input.namespaceId,
     resolved.apiKey,
   );
@@ -2832,8 +2834,14 @@ async function resolvePaprAuthContext(
   return { profile, sessionToken };
 }
 
+/**
+ * Store the namespace key in ITS org's vault. organizationId is explicit: the
+ * active vault org can be flipped by a concurrent key lookup while a switch is
+ * awaiting the gateway (Oct 20: development key landed in Y8D4H7Yp3Z's vault).
+ */
 async function persistNamespaceApiKeys(
   customKeysStorage: CustomKeysStorage,
+  organizationId: string,
   namespaceId: string,
   apiKey: string,
 ): Promise<void> {
@@ -2841,11 +2849,13 @@ async function persistNamespaceApiKeys(
     name: paprNamespaceApiKeyName(namespaceId),
     value: apiKey,
     orgScope: "organization",
+    organizationId,
   });
   await customKeysStorage.addKey({
     name: "PAPR_API_KEY",
     value: apiKey,
     orgScope: "organization",
+    organizationId,
   });
 }
 

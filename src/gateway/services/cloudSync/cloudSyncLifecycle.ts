@@ -5,6 +5,7 @@
 import { waitForPaprApiKey } from "../../utils/cloudApiClient.js";
 import {
   buildAuthedUrl,
+  getLastRepoTokenError,
   getForeignGitRoot,
   hasWorkspaceGitAtRoot,
   normalizeRepoIdentity,
@@ -64,9 +65,16 @@ export async function runBackgroundInit(host: CloudSyncLifecycleHost): Promise<v
 
   const tokenResp = await host.fetchRepoToken();
   if (!tokenResp) {
-    console.warn("[CloudSync] No git token from memory server");
+    const reason = getLastRepoTokenError();
+    console.warn(
+      `[CloudSync] No git token from memory server${reason ? ` — ${reason}` : ""}`,
+    );
     host.setSyncStatus("error");
-    host.setLastError("Could not fetch cloud repo token");
+    host.setLastError(
+      reason
+        ? `Could not fetch cloud repo token (${reason})`
+        : "Could not fetch cloud repo token",
+    );
     return;
   }
 

@@ -333,11 +333,16 @@ function parsePublishConfig(
  * Publish status changes only when someone publishes/unpublishes, so it is not
  * re-asked on every UI refresh (each refresh resolved slugs across sibling apps:
  * ~4 GET /publish/{id} per unpublished app every 5 minutes, all 404).
- * "Not published" is kept 1h; a live record 30s (collapses one refresh's burst).
+ * "Not published" is kept 10 min; a live record 30s (collapses one refresh's burst).
  * This desktop's own publish/unpublish clears the entry; other devices' changes
  * show within the TTL, or at once via invalidatePublishStatusCache.
+ *
+ * A 404 is only as good as the key that asked: a key for another workspace gets
+ * 404 for every app here. Workspace switches and key changes clear the whole
+ * cache (workspaceSwitchService), and the TTL is short enough that a wrong
+ * answer can't pin "Draft" for an hour (Oct 20: four GTM apps).
  */
-const PUBLISH_STATUS_NOT_FOUND_TTL_MS = 60 * 60 * 1000;
+const PUBLISH_STATUS_NOT_FOUND_TTL_MS = 10 * 60 * 1000;
 const PUBLISH_STATUS_FOUND_TTL_MS = 30 * 1000;
 const publishStatusCache = new Map<
   string,

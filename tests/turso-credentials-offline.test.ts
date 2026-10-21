@@ -144,6 +144,7 @@ describe("TursoSyncBridge credentials", () => {
     setIdentity(ORG_A, NS_A, USER_1);
     vi.doMock("../src/gateway/utils/keyResolver.js", () => ({
       getPaprApiKey: vi.fn(async () => "sk-test"),
+      getCachedPaprApiKeyNamespace: vi.fn(() => null),
     }));
   });
 

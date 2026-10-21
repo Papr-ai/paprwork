@@ -27,6 +27,14 @@ export interface TursoCredentialsRecord {
   /** Unix ms — server token expiry minus safety margin. */
   expiresAtMs: number;
   updatedAt: string;
+  /**
+   * Namespace of the Papr API key that fetched this token. The key decides
+   * which segment the server resolves `tursoUrl` to, so a token fetched with
+   * another workspace's key points at THAT workspace's databases even though
+   * it is filed under this one (Oct 20: p-y8d4h7yp-85zib7md-* filed under
+   * 6hqIK7Erba/XHqOmymyGP). Absent on entries written before this field.
+   */
+  keyNamespaceId?: string;
 }
 
 export interface TursoCredentialsStoreFile {
@@ -100,7 +108,29 @@ export function saveTursoCredentialsStore(
   });
 }
 
-/** Look up by scoped key (`tursoCredentialsScopeKey`). Legacy keys never match. */
+/** Namespace segment of a scoped key (`org/ns/user/db`). */
+function scopedKeyNamespace(key: string): string | null {
+  const parts = key.split("/");
+  return parts.length === 4 ? parts[1] : null;
+}
+
+/**
+ * True when the record was fetched with a key for a different namespace than
+ * the one it is filed under — its URL belongs to another workspace.
+ */
+export function isTursoCredentialsRecordMisbound(
+  key: string,
+  record: Pick<TursoCredentialsRecord, "keyNamespaceId">,
+): boolean {
+  const filedUnder = scopedKeyNamespace(key);
+  const fetchedWith = record.keyNamespaceId?.trim();
+  return Boolean(filedUnder && fetchedWith && fetchedWith !== filedUnder);
+}
+
+/**
+ * Look up by scoped key (`tursoCredentialsScopeKey`). Legacy keys never match.
+ * Misbound entries (fetched with another workspace's key) are dropped.
+ */
 export function getTursoCredentialsEntry(
   key: string,
   paprDir?: string,
@@ -109,7 +139,16 @@ export function getTursoCredentialsEntry(
     return null;
   }
   const store = loadTursoCredentialsStore(paprDir);
-  return store.databases[key] ?? null;
+  const record = store.databases[key] ?? null;
+  if (record && isTursoCredentialsRecordMisbound(key, record)) {
+    console.warn(
+      `[TursoCredentials] Dropping ${key} — fetched with a key for namespace ${record.keyNamespaceId}`,
+    );
+    delete store.databases[key];
+    saveTursoCredentialsStore(store, paprDir);
+    return null;
+  }
+  return record;
 }
 
 export function saveTursoCredentialsEntry(
@@ -117,8 +156,15 @@ export function saveTursoCredentialsEntry(
   creds: TursoCredentials,
   expiresAtMs: number,
   paprDir?: string,
+  keyNamespaceId?: string | null,
 ): void {
   if (!isScopedKey(key)) {
+    return;
+  }
+  if (keyNamespaceId && isTursoCredentialsRecordMisbound(key, { keyNamespaceId })) {
+    console.warn(
+      `[TursoCredentials] Refusing to persist ${key} — fetched with a key for namespace ${keyNamespaceId}`,
+    );
     return;
   }
   const store = loadTursoCredentialsStore(paprDir);
@@ -134,6 +180,7 @@ export function saveTursoCredentialsEntry(
     authToken: creds.authToken,
     expiresAtMs,
     updatedAt: new Date().toISOString(),
+    ...(keyNamespaceId ? { keyNamespaceId } : {}),
   };
   saveTursoCredentialsStore(store, paprDir);
 }

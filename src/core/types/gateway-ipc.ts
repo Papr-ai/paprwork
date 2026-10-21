@@ -13,6 +13,12 @@ export interface KeysResponseMessage {
   type: "KEYS_RESPONSE";
   requestId: string;
   keys: Record<string, string>;
+  /**
+   * Namespace main resolved PAPR_API_KEY for (active pointer at resolve time).
+   * Legacy keys carry no namespace in the string; the gateway drops the key
+   * when this differs from its own active namespace.
+   */
+  paprApiKeyNamespaceId?: string;
   oauthTokens?: {
     openai?: {
       accessToken: string;
