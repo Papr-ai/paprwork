@@ -9,6 +9,7 @@
  * user's own.
  */
 import type { McpCaller } from "./auth.js";
+import { openPageUrl } from "./openPage.js";
 
 export interface HandoffIntent {
   appNamespaceId?: string;
@@ -17,7 +18,10 @@ export interface HandoffIntent {
 }
 
 export interface HandoffLink {
+  /** What Claude opens: an https page that launches the desktop app (Claude blocks papr://). */
   url: string;
+  /** The raw one-time papr:// link. */
+  paprUrl?: string;
   expiresAt: string;
 }
 
@@ -25,7 +29,7 @@ export type CreateHandoff = (caller: McpCaller, intent: HandoffIntent) => Promis
 
 export class HandoffError extends Error {}
 
-export function memoryHandoff(baseUrl: string, fetchImpl: typeof fetch = fetch): CreateHandoff {
+export function memoryHandoff(baseUrl: string, fetchImpl: typeof fetch = fetch, appsBaseUrl?: string): CreateHandoff {
   const url = `${baseUrl.replace(/\/$/, "")}/v1/cloud/handoff/codes`;
   return async (caller, intent) => {
     let res: Response;
@@ -43,6 +47,9 @@ export function memoryHandoff(baseUrl: string, fetchImpl: typeof fetch = fetch):
     if (!res.ok) throw new HandoffError(`Couldn't create a Mac link (HTTP ${res.status}).`);
     const body = (await res.json()) as { url?: string; expiresAt?: string };
     if (!body.url?.startsWith("papr://")) throw new HandoffError("Papr returned an invalid Mac link.");
-    return { url: body.url, expiresAt: String(body.expiresAt ?? "") };
+    const expiresAt = String(body.expiresAt ?? "");
+    if (!appsBaseUrl) return { url: body.url, expiresAt };
+    const web = intent.appNamespaceId && intent.appSlug ? `${appsBaseUrl.replace(/\/$/, "")}/${intent.appNamespaceId}/${intent.appSlug}` : undefined;
+    return { url: openPageUrl(appsBaseUrl, body.url, web), paprUrl: body.url, expiresAt };
   };
 }
