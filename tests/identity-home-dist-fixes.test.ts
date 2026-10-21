@@ -3,7 +3,6 @@ import os from "os";
 import path from "path";
 import { promises as fs } from "fs";
 import { buildMiniApp, MiniAppDistBuildError } from "../src/gateway/utils/miniAppBuild.js";
-import { keepPublishedOwner } from "../src/gateway/services/cloudAppMetadataFile.js";
 import { isPublishedPageRequest } from "../src/gateway/services/appRuntime/CloudAppHostService.js";
 
 const dirs: string[] = [];
@@ -38,17 +37,6 @@ describe("dist/ for every TypeScript entry", () => {
       { file: "app.ts", line: 3, message: "Unexpected }", severity: "error" },
     ]);
     expect(err.message).toContain("app.ts:3 Unexpected }");
-  });
-});
-
-describe("metadata.json owner", () => {
-  const next = { appId: "a", title: "T", description: "d", updatedAt: "x", ownerUserId: "runner" };
-  it("keeps the owner already published", () => {
-    expect(keepPublishedOwner(next, { ownerUserId: "owner" }).ownerUserId).toBe("owner");
-  });
-  it("uses the registry owner when the file has none", () => {
-    expect(keepPublishedOwner(next, {}).ownerUserId).toBe("runner");
-    expect(keepPublishedOwner(next, null).ownerUserId).toBe("runner");
   });
 });
 

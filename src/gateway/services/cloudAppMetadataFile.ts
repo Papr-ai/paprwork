@@ -115,7 +115,7 @@ export async function writeCloudAppMetadataFile(
   } catch {
     /* first write, or unreadable: nothing to carry */
   }
-  const next = keepPublishedOwner(carryAuthorOwnedMetadata(metadata, existing), existing);
+  const next = carryAuthorOwnedMetadata(metadata, existing);
   // Regenerating identical metadata must be a no-op: a fresh updatedAt on every
   // prep made each cloud run (and each desktop publish) rewrite metadata.json and
   // collide with the other side's copy.
@@ -147,19 +147,4 @@ function stableStringify(value: unknown): string {
     return `{${entries.map(([k, v]) => `${JSON.stringify(k)}:${stableStringify(v)}`).join(",")}}`;
   }
   return JSON.stringify(value);
-}
-
-/**
- * metadata.json's ownerUserId is the app's owner, not whoever prepared the last
- * publish. Cloud runs and teammates rebuild it from their own registry entry, which
- * flipped the owner on every run. Keep the owner already in the file.
- */
-export function keepPublishedOwner(
-  next: CloudAppMetadataFile,
-  existing: unknown,
-): CloudAppMetadataFile {
-  if (!existing || typeof existing !== "object") return next;
-  const owner = (existing as Record<string, unknown>).ownerUserId;
-  if (typeof owner !== "string" || !owner.trim()) return next;
-  return { ...next, ownerUserId: owner.trim() };
 }
