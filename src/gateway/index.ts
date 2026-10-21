@@ -199,8 +199,11 @@ function isExpectedJobRunCollision(err: unknown): boolean {
 
 // Configuration
 const PORT = process.env.GATEWAY_PORT || 18789;
-// Listen on all interfaces (0.0.0.0) to accept connections from both localhost and 127.0.0.1
-const HOST = process.env.GATEWAY_HOST || "0.0.0.0";
+// Loopback only. The gateway serves local app APIs and databases without auth,
+// so it must never be reachable from the LAN (SOC 2 CC6.1/CC6.6). Binding to
+// loopback also avoids the Windows Defender Firewall "allow access" prompt.
+// Clients resolving "localhost" to ::1 fall back to 127.0.0.1 (happy eyeballs).
+const HOST = process.env.GATEWAY_HOST || "127.0.0.1";
 
 /**
  * Initialize all services
