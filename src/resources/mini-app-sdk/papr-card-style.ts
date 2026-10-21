@@ -16,8 +16,8 @@ export function frameHtml(): string {
 <header class="pc-h"><span class="pt"><span class="pt-ic" id="pc-tile">P</span><span class="pt-seal" title="Built on Papr">${PAPR_SEAL}</span></span>
 <div class="pc-id"><b id="pc-title">Papr</b><em id="pc-sub">Papr app</em></div><span class="pc-by">Built on ${PAPR_SEAL}<b>Papr</b></span></header>
 <main class="pc-b" id="pc-body"><p class="pc-mu">Loading…</p></main>
-<footer class="pc-f"><span class="pc-note" id="pc-note"></span><span class="pc-act" id="pc-act"></span>
-<button class="pc-btn" id="pc-open" disabled>Open in Papr</button></footer></section>`;
+<footer class="pc-f" id="pc-f"><span class="pc-note" id="pc-note"></span><span class="pc-acts"><button class="pc-open" id="pc-open" hidden>Open in Papr</button>
+<span class="pc-act" id="pc-act"></span></span></footer></section>`;
 }
 
 export const CARD_CSS = `
@@ -50,14 +50,22 @@ background:#fff;box-shadow:0 0 0 1.5px #fff,0 2px 6px rgba(1,40,110,.28)}
 .pc-by{margin-left:auto;display:inline-flex;align-items:center;gap:5px;font-size:11.5px;color:var(--pc-mu);white-space:nowrap}
 .pc-by .seal-mk{width:11px;height:13px}
 .pc-by b{font-weight:600;background:linear-gradient(135deg,#00c6ff,#0161e0);-webkit-background-clip:text;background-clip:text;color:transparent}
-.pc-b{padding:var(--pc-pad);display:grid;gap:14px;min-height:40px}
+.pc-b{padding:var(--pc-pad);display:grid;grid-template-columns:minmax(0,1fr);gap:14px;min-height:40px;min-width:0}
+.pc-b>*{min-width:0}
 .pc-b:empty{display:none}
 .pc-pic{display:block;margin:calc(-1 * var(--pc-pad)) calc(-1 * var(--pc-pad)) 0;background:#05070a}
 .pc-pic img,.pc-pic video{width:100%;aspect-ratio:16/9;object-fit:cover;display:block}
 .pc-flag{margin:0;font-size:14px;line-height:1.55;color:var(--pc-mu)}.pc-flag b{color:var(--pc-fg);font-weight:600}
 .pc-mu{color:var(--pc-mu);margin:0}.pc-err{color:var(--pc-err);margin:0}
 .pc-f{display:flex;align-items:center;justify-content:flex-end;gap:12px;flex-wrap:wrap;padding:12px 16px;border-top:1px solid var(--pc-bd);font-size:12px;color:var(--pc-mu)}
-.pc-note{margin-right:auto;min-width:0}
+.pc-note{margin-right:auto;min-width:0}.pc-f.pc-f-off{display:none}
+.pc-acts{display:flex;align-items:center;gap:10px;flex-wrap:wrap}
+.pc-open{all:unset;box-sizing:border-box;cursor:pointer;white-space:nowrap;padding:8px 14px;border-radius:999px;font-size:13px;font-weight:600;
+color:var(--pc-ac);border:1px solid var(--pc-bd);transition:background .15s ease}
+.pc-open:hover{background:var(--pc-soft)}.pc-open[hidden]{display:none}.pc-open[disabled]{opacity:.6;cursor:progress}
+.pc-open.pc-solid{color:#fff;border-color:transparent;background:var(--pc-cta);box-shadow:0 4px 14px rgba(1,97,224,.28)}
+.pc-open:focus-visible{outline:2px solid var(--pc-ac);outline-offset:2px}
+.pc-open.pc-quiet{padding:0;border:0;color:var(--pc-mu);font-size:12px;font-weight:500;opacity:.85}.pc-open.pc-quiet:hover{background:none;opacity:1;color:var(--pc-fg)}
 .pc-act{display:flex;align-items:center;gap:10px;flex-wrap:wrap}.pc-act:empty{display:none}
 .pc-confirm{font-size:12.5px;color:var(--pc-fg)}
 .pc-btn{all:unset;box-sizing:border-box;cursor:pointer;white-space:nowrap;padding:9px 16px;border-radius:999px;font-size:13px;font-weight:600;

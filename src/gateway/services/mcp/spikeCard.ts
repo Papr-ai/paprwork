@@ -58,6 +58,8 @@ function generic(sc, text) {
   document.querySelectorAll(".pc-chip").forEach((b) => b.onclick = () => request("ui/message", { role: "user", content: [{ type: "text", text: asks[Number(b.dataset.i)] }] }).catch(() => {}));
   const open = $("pc-open");
   open.textContent = "Open in " + title;
+  open.hidden = false;
+  open.classList.add("pc-solid");
   open.disabled = !sc.openUrl;
   open.onclick = () => request("ui/open-link", { url: sc.openUrl }).catch(() => {});
 }
