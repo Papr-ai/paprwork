@@ -1,4 +1,4 @@
-import { describe, it, expect, afterEach } from "vitest";
+import { describe, it, expect, vi, afterEach } from "vitest";
 import os from "os";
 import path from "path";
 import { promises as fs } from "fs";
@@ -47,5 +47,19 @@ describe("published app access denial", () => {
     expect(isPublishedPageRequest("app.ts")).toBe(false);
     expect(isPublishedPageRequest("dist/app.js")).toBe(false);
     expect(isPublishedPageRequest("styles.css")).toBe(false);
+  });
+});
+
+describe("papr identity reminder", () => {
+  it("warns only when the desktop key hits memory without user ids", async () => {
+    vi.resetModules();
+    vi.doMock("../src/gateway/utils/keyResolver.js", () => ({ getPaprApiKey: async () => "desk-key-123" }));
+    const { paprIdentityReminder } = await import("../src/core/tools/bash.js");
+    const url = "https://memory.papr.ai/v1/memory";
+    expect(await paprIdentityReminder(`curl -H 'X-API-Key: desk-key-123' ${url}`)).toMatch(/external_user_id/);
+    expect(await paprIdentityReminder(`curl -H 'X-API-Key: desk-key-123' ${url} -d '{"external_user_id":"x"}'`)).toBeUndefined();
+    expect(await paprIdentityReminder(`curl -H 'X-API-Key: other-org-key' ${url}`)).toBeUndefined();
+    expect(await paprIdentityReminder("echo desk-key-123")).toBeUndefined();
+    vi.doUnmock("../src/gateway/utils/keyResolver.js");
   });
 });
