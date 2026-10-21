@@ -35,6 +35,30 @@ function mergeBashEnv(inputEnv?: Record<string, string>): Record<string, string>
   return { ...getJobToolEnv(), ...(inputEnv ?? {}) };
 }
 
+/**
+ * Papr identity for shell commands. process.env can carry the legacy sign-in
+ * PAPR_API_KEY (not namespace-bound), so a raw curl to the memory server ran as a
+ * different user than the desktop. Hand commands the same workspace key the
+ * gateway uses, plus the user id to send as user_id / external_user_id.
+ */
+async function paprIdentityBashEnv(): Promise<Record<string, string>> {
+  const out: Record<string, string> = {};
+  try {
+    const { getPaprApiKey } = await import("../../gateway/utils/keyResolver.js");
+    // Empty when no workspace key: never fall through to the legacy env key.
+    out.PAPR_API_KEY = (await getPaprApiKey())?.trim() ?? "";
+    const { getPaprUserId } = await import("../../gateway/utils/paprUserId.js");
+    const userId = getPaprUserId()?.trim();
+    if (userId) {
+      out.PAPR_USER_ID = userId;
+      out.PAPR_EXTERNAL_USER_ID = userId;
+    }
+  } catch {
+    // Identity is best-effort; commands still run without it.
+  }
+  return out;
+}
+
 /** Values of job requiredKeys injected into env — redacted from bash output like any other key. */
 function jobSecretValues(): string[] {
   const env = getJobToolEnv();
@@ -204,6 +228,10 @@ async function getCustomKeys(): Promise<Record<string, string>> {
     console.warn("[Bash Tool] Failed to load custom keys:", error);
   }
   
+  // 11c7c9af65fbcc95dd51c55413445e39 must resolve to the workspace key, not the legacy sign-in key.
+  const identity = await paprIdentityBashEnv();
+  if (identity.PAPR_API_KEY) keys.PAPR_API_KEY = identity.PAPR_API_KEY;
+
   // Update cache
   customKeysCache = keys;
   customKeysCacheTime = now;
@@ -587,7 +615,8 @@ export async function executeBashCommand(
   let { command } = input;
   const cwd = input.cwd || "";
   const timeout = input.timeout || 60000;
-  const env = mergeBashEnv(input.env);
+  const env = { ...(await paprIdentityBashEnv()), ...mergeBashEnv(input.env) };
+  const identityKey = env.PAPR_API_KEY;
 
   // Capture git fingerprint BEFORE command runs (cheap; no-op outside repos)
   // Only when the command might write — saves the probe for read-only ops.
@@ -636,6 +665,7 @@ export async function executeBashCommand(
 
     // Get API keys for sanitization and substitution
     const apiKeys = [...getApiKeysForSanitization(), ...jobSecretValues()];
+    if (identityKey && !apiKeys.includes(identityKey)) apiKeys.push(identityKey);
 
     // Quick check: does the command even use custom keys?
     const hasKeyPattern = /\$\{[A-Z_]+\}/.test(command);
@@ -864,6 +894,7 @@ export async function executeBashCommand(
   } catch (error: unknown) {
     const duration = Date.now() - startTime;
     const apiKeys = [...getApiKeysForSanitization(), ...jobSecretValues()];
+    if (identityKey && !apiKeys.includes(identityKey)) apiKeys.push(identityKey);
 
     if (isSpawnResourceError(error)) {
       notifySpawnResourceError(error, "bash tool spawn");
@@ -923,7 +954,8 @@ export async function executeBashCommandStreaming(
   let command = input.command;
   const cwd = input.cwd || "";
   const timeout = input.timeout || 60000;
-  const env = mergeBashEnv(input.env);
+  const env = { ...(await paprIdentityBashEnv()), ...mergeBashEnv(input.env) };
+  const identityKey = env.PAPR_API_KEY;
 
   if (!command || command.trim().length === 0) {
     return {
@@ -948,6 +980,7 @@ export async function executeBashCommandStreaming(
 
   // Get API keys for sanitization and substitution
   const apiKeys = [...getApiKeysForSanitization(), ...jobSecretValues()];
+  if (identityKey && !apiKeys.includes(identityKey)) apiKeys.push(identityKey);
 
   // Quick check: does the command even use custom keys?
   const hasKeyPattern = /\$\{[A-Z_]+\}/.test(command);

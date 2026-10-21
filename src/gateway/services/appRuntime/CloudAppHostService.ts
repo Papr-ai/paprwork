@@ -2751,7 +2751,11 @@ export class CloudAppHostService {
           await this.sendShareGatePreview(req, res, runtimeAuth);
           return;
         }
-        await this.respondAccessDenied(req, res, runtimeAuth, { html: true });
+        // Only page loads get the sign-in page. A .js/.css answered with that HTML at
+        // 200 looked like a working asset and broke the app with a MIME error.
+        await this.respondAccessDenied(req, res, runtimeAuth, {
+          html: isPublishedPageRequest(requestedPath),
+        });
         return;
       }
 
@@ -3112,4 +3116,11 @@ export class CloudAppHostService {
       res.status(500).send((err as Error).message);
     }
   }
+}
+
+/** Navigations (no extension, or .html) — everything else is an asset or API call. */
+export function isPublishedPageRequest(requestedPath: string): boolean {
+  const last = requestedPath.split("/").pop() ?? "";
+  if (!last.includes(".")) return true;
+  return /\.html?$/i.test(last);
 }

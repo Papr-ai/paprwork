@@ -73,7 +73,7 @@ function publishCategory(appId: string): string | undefined {
   }
 }
 import { normalizeCatalogTags } from "../../core/utils/catalogTags.js";
-import { buildMiniApp } from "../utils/miniAppBuild.js";
+import { buildMiniApp, MiniAppDistBuildError } from "../utils/miniAppBuild.js";
 import {
   checkAppKeyDeclarations,
   catalogRequirementsForPublish,
@@ -1118,21 +1118,19 @@ export class CloudAppPublishService {
       const { prepareAppForCloudGitSync } = await import(
         "./cloudSync/prepareAppsForCloud.js"
       );
-      await prepareAppForCloudGitSync(this.paprDir, appId);
+      await prepareAppForCloudGitSync(this.paprDir, appId, { strictBuild: true });
     } else {
       try {
         const build = await buildMiniApp(appDir);
         if (!build.legacy && !build.success) {
-          console.warn(
-            `[CloudPublish] dist build failed for ${appId} — publishing unbundled:`,
-            build.errors.slice(0, 3).map((e) => e.message).join("; "),
-          );
+          throw new MiniAppDistBuildError(appId, build.errors);
         } else if (!build.legacy) {
           console.log(
             `[CloudPublish] Built dist bundle for ${appId}: ${build.outputFiles.join(", ")}`,
           );
         }
       } catch (error) {
+        if (error instanceof MiniAppDistBuildError) throw error;
         console.warn(
           `[CloudPublish] dist build errored for ${appId} — publishing unbundled:`,
           (error as Error).message,
