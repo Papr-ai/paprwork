@@ -9,6 +9,11 @@ import {
 } from "./appRepoCommittedFanout.js";
 import { fetchAppRepoHead } from "./AppOpsClient.js";
 import { overwriteOidCacheFromHead, readOidCache } from "./OidCache.js";
+import {
+  WRITER_SCAFFOLD_PATHS,
+  isPlatformGeneratedAppPath,
+  isWriterScaffoldPath,
+} from "./platformGeneratedAppPaths.js";
 
 /** Skip remote HEAD fetch for preview opens when we verified recently (manual sync bypasses). */
 export const RECENT_HEAD_VERIFY_MS = Number(
@@ -31,12 +36,10 @@ export function isAppCodeRecentlyVerified(
   return { verified: true, commitSha: cursor.lastCommitSha };
 }
 
-/** Paths the writer seeds when it creates a per-app repo (never app code). */
-const SCAFFOLD_PATHS = new Set(["README.md", ".gitignore"]);
 
 /** True when the remote repo has only the creation scaffold — no published app files. */
 export function isScaffoldOnlyHead(head: AppRepoHeadResponse): boolean {
-  return head.files.every((file) => SCAFFOLD_PATHS.has(file.path));
+  return head.files.every((file) => WRITER_SCAFFOLD_PATHS.has(file.path));
 }
 
 /** True when last-pulled commit or acked blob OIDs match remote HEAD (no git clone needed). */
@@ -73,6 +76,13 @@ export async function isLocalAppCodeAtRemoteHead(
   }
 
   for (const file of head.files) {
+    // Platform-written files never mean "newer code on the web".
+    if (
+      isPlatformGeneratedAppPath(file.path) ||
+      (isWriterScaffoldPath(file.path) && appCache[file.path] === undefined)
+    ) {
+      continue;
+    }
     if (appCache[file.path] !== file.blobOid) {
       return false;
     }
@@ -80,7 +90,7 @@ export async function isLocalAppCodeAtRemoteHead(
   // A path we last saw on the web that HEAD no longer has: someone deleted it.
   const headPaths = new Set(head.files.map((file) => file.path));
   for (const cachedPath of Object.keys(appCache)) {
-    if (!headPaths.has(cachedPath)) {
+    if (!headPaths.has(cachedPath) && !isPlatformGeneratedAppPath(cachedPath)) {
       return false;
     }
   }
