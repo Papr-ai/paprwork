@@ -1,0 +1,51 @@
+{
+  "name": "@splitin/outreach-core",
+  "version": "0.0.0",
+  "description": "Outreach engine core: durable action execution, campaign domain, policy and inbound processing.",
+  "license": "MIT",
+  "author": "SplitInTech",
+  "homepage": "https://github.com/splitintech/open-internal-tools/tree/main/outreach-engine#readme",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/splitintech/open-internal-tools.git",
+    "directory": "outreach-engine/packages/outreach-core"
+  },
+  "type": "module",
+  "sideEffects": false,
+  "engines": {
+    "node": ">=22.13"
+  },
+  "main": "./dist/index.cjs",
+  "module": "./dist/index.js",
+  "types": "./dist/index.d.ts",
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "import": "./dist/index.js",
+      "require": "./dist/index.cjs"
+    }
+  },
+  "files": [
+    "dist",
+    "README.md",
+    "package.json"
+  ],
+  "publishConfig": {
+    "access": "public"
+  },
+  "scripts": {
+    "build": "tsup",
+    "typecheck": "tsc --noEmit -p tsconfig.json"
+  },
+  "dependencies": {
+    "@splitin/outreach-contracts": "0.0.0",
+    "luxon": "^3.7.2",
+    "yaml": "^2.9.1",
+    "zod": "^4.6.5"
+  },
+  "devDependencies": {
+    "@splitin/outreach-fakes": "0.0.0",
+    "@splitin/outreach-store-sqlite": "0.0.0",
+    "@types/luxon": "^3.7.5"
+  }
+}

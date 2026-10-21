@@ -1,0 +1,12 @@
+{
+  "version": 1,
+  "actions": {
+    "overview": { "handler": "outreach.mjs", "runtime": "node", "keys": ["OUTREACH_API_URL", "OUTREACH_API_TOKEN"], "timeoutMs": 15000 },
+    "approval-decide": { "handler": "outreach.mjs", "runtime": "node", "keys": ["OUTREACH_API_URL", "OUTREACH_API_TOKEN"], "timeoutMs": 15000 },
+    "task-outcome": { "handler": "outreach.mjs", "runtime": "node", "keys": ["OUTREACH_API_URL", "OUTREACH_API_TOKEN"], "timeoutMs": 15000 },
+    "review-resolve": { "handler": "outreach.mjs", "runtime": "node", "keys": ["OUTREACH_API_URL", "OUTREACH_API_TOKEN"], "timeoutMs": 15000 },
+    "campaign-pause": { "handler": "outreach.mjs", "runtime": "node", "keys": ["OUTREACH_API_URL", "OUTREACH_API_TOKEN"], "timeoutMs": 15000 },
+    "campaign-resume": { "handler": "outreach.mjs", "runtime": "node", "keys": ["OUTREACH_API_URL", "OUTREACH_API_TOKEN"], "timeoutMs": 15000 },
+    "kill-switch": { "handler": "outreach.mjs", "runtime": "node", "keys": ["OUTREACH_API_URL", "OUTREACH_API_TOKEN"], "timeoutMs": 15000 }
+  }
+}

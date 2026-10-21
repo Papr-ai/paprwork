@@ -1,0 +1,45 @@
+{
+  "name": "outreach-engine",
+  "private": true,
+  "version": "0.0.0",
+  "description": "MIT-licensed, provider-neutral outreach orchestration engine workspace.",
+  "license": "MIT",
+  "author": "SplitInTech",
+  "type": "module",
+  "engines": {
+    "node": ">=22.13"
+  },
+  "packageManager": "npm@10.9.2",
+  "workspaces": [
+    "packages/*",
+    "apps/*"
+  ],
+  "scripts": {
+    "build": "node scripts/build.mjs",
+    "typecheck": "npm run typecheck --workspaces --if-present",
+    "test": "vitest run",
+    "lint": "eslint .",
+    "boundaries": "node scripts/check-package-boundaries.mjs",
+    "secrets": "node scripts/scan-secrets.mjs",
+    "loc": "node scripts/check-max-lines.mjs",
+    "check": "npm run lint && npm run typecheck && npm test && npm run boundaries && npm run secrets && npm run loc",
+    "soak": "node scripts/soak.mjs",
+    "release:verify": "node scripts/verify-release.mjs",
+    "mcp:smoke": "node scripts/mcp-smoke.mjs"
+  },
+  "devDependencies": {
+    "@eslint/js": "^9.39.5",
+    "@types/node": "^22.20.4",
+    "eslint": "^9.39.5",
+    "fast-check": "^4.10.2",
+    "tsup": "^8.5.1",
+    "typescript": "^5.9.3",
+    "typescript-eslint": "^8.70.1",
+    "vitest": "^3.2.7"
+  },
+  "overrides": {
+    "exceljs": {
+      "uuid": "^11.1.1"
+    }
+  }
+}

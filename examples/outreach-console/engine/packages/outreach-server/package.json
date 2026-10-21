@@ -1,0 +1,52 @@
+{
+  "name": "@splitin/outreach-server",
+  "version": "0.0.0",
+  "description": "Outreach HTTP API: bearer-token /v1 routes, signed provider webhooks and one-click unsubscribe.",
+  "license": "MIT",
+  "author": "SplitInTech",
+  "homepage": "https://github.com/splitintech/open-internal-tools/tree/main/outreach-engine#readme",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/splitintech/open-internal-tools.git",
+    "directory": "outreach-engine/packages/outreach-server"
+  },
+  "type": "module",
+  "sideEffects": false,
+  "engines": {
+    "node": ">=22.13"
+  },
+  "main": "./dist/index.cjs",
+  "module": "./dist/index.js",
+  "types": "./dist/index.d.ts",
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "import": "./dist/index.js",
+      "require": "./dist/index.cjs"
+    }
+  },
+  "files": [
+    "dist",
+    "README.md",
+    "package.json"
+  ],
+  "publishConfig": {
+    "access": "public"
+  },
+  "scripts": {
+    "build": "tsup",
+    "typecheck": "tsc --noEmit -p tsconfig.json"
+  },
+  "dependencies": {
+    "@hono/node-server": "^1.19.17",
+    "@splitin/outreach-contracts": "0.0.0",
+    "@splitin/outreach-core": "0.0.0",
+    "@splitin/outreach-import": "0.0.0",
+    "hono": "^4.13.9",
+    "zod": "^4.6.5"
+  },
+  "devDependencies": {
+    "@splitin/outreach-fakes": "0.0.0",
+    "@splitin/outreach-store-sqlite": "0.0.0"
+  }
+}

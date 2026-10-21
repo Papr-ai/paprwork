@@ -4,6 +4,6 @@ The runtime bundle is derived from `splitintech/open-internal-tools`, `outreach-
 
 Original notice: Copyright (c) 2026 SplitInTech.
 
-The complete original MIT permission and warranty notice is retained in `LICENSE`. It must remain with copies or substantial portions of that code. The independently running engine is not included and remains in its own MIT-licensed repository.
+The complete original MIT permission and warranty notice is retained in `LICENSE`. It must remain with copies or substantial portions of that code. The complete independently running engine source is now included under `engine/`, copied without modification from `outreach-engine/` at that same commit. Its root and package license notices are retained exactly. See `SOURCE-SNAPSHOT.json` for every source path and hash.
 
-This proposed contribution is submitted under Papr's AGPL-3.0 contribution terms. Retaining the MIT notice does not change the license of Papr's existing code. No Papr source code is copied into the separate engine repository or into this example.
+This proposed contribution is submitted under Papr's AGPL-3.0 contribution terms. Retaining the original MIT notices and package metadata does not make Papr MIT-licensed or change the license of Papr's existing code. The separate source repository remains MIT-licensed. No Papr source code is copied into that repository or vendored into the engine.
