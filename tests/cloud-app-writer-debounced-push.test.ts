@@ -132,4 +132,40 @@ describe("cloud app writer debounced push", () => {
     expect(first.pushedAppIds).toEqual(["app-1"]);
     expect(second.pushedAppIds).toEqual(["app-1"]);
   });
+  it("drops saves made before the run started (sandbox setup)", async () => {
+    // Warm setup reconciles Home jobs and rewrites default-job-id.txt before the
+    // agent runs. That must not ride along with the run's publish.
+    notifyCloudSandboxAppSave("home-app");
+    const handle = await startCloudAppWriterDebouncedPush();
+    notifyCloudSandboxAppSave("new-app");
+    const result = await handle.flushAndStop();
+    expect(finalizeAppRepoMutation).toHaveBeenCalledTimes(1);
+    expect(finalizeAppRepoMutation).toHaveBeenCalledWith(
+      "/tmp/papr-cloud-writer-test",
+      "new-app",
+      expect.anything(),
+    );
+    expect(result.failed).toEqual([]);
+  });
+
+  it("does not carry dirty apps from one warm run into the next", async () => {
+    const first = await startCloudAppWriterDebouncedPush();
+    notifyCloudSandboxAppSave("app-a");
+    await first.stop();
+    notifyCloudSandboxAppSave("app-between-runs");
+    const second = await startCloudAppWriterDebouncedPush();
+    notifyCloudSandboxAppSave("app-b");
+    await second.flushAndStop();
+    const pushed = finalizeAppRepoMutation.mock.calls.map((c) => c[1]);
+    expect(pushed).toEqual(["app-b"]);
+  });
+
+  it("app-scope run pushes only its own app", async () => {
+    const handle = await startCloudAppWriterDebouncedPush({ onlyAppId: "mine" });
+    notifyCloudSandboxAppSave("home-app");
+    notifyCloudSandboxAppSave("mine");
+    await handle.flushAndStop();
+    const pushed = finalizeAppRepoMutation.mock.calls.map((c) => c[1]);
+    expect(pushed).toEqual(["mine"]);
+  });
 });
