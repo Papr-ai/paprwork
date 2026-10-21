@@ -23,6 +23,25 @@ import Database from "better-sqlite3";
 
 const MARKER_SUFFIX = "-papr-bootstrap-pending";
 const SNAPSHOT_SUFFIX = "-papr-presnapshot";
+const BUDGET_SUFFIX = "-papr-bootstrap-budget";
+
+const DAY_MS = 24 * 60 * 60_000;
+/** Opens within this window count as one bootstrap (status reads, retries of one attempt). */
+const BUDGET_DEDUPE_MS = 60_000;
+
+/**
+ * Full re-downloads allowed per replica per rolling 24h.
+ *
+ * Backoff alone does not bound a loop: every repair writes a *fresh* marker with
+ * attempts = 0, and a successful bootstrap clears it, so "bootstrap → engine panic →
+ * new marker → bootstrap" never accumulates attempts. One replica looped like that
+ * every ~15 min for weeks — ~10 GB/day of Turso sync for a 100 MB file. This budget
+ * lives in its own file so neither marker clears nor relaunches reset it.
+ */
+export function maxBootstrapsPerDay(): number {
+  const n = Number(process.env.PAPR_REPLICA_MAX_BOOTSTRAPS_PER_DAY);
+  return Number.isFinite(n) && n > 0 ? n : 4;
+}
 
 /** Tables that carry no user rows and must never gate "is this replica populated". */
 export const REPLICA_NON_USER_TABLES = new Set([
@@ -64,6 +83,53 @@ export interface BootstrapPendingMarker {
 
 export function bootstrapMarkerPath(dbPath: string): string {
   return `${dbPath}${MARKER_SUFFIX}`;
+}
+
+export function bootstrapBudgetPath(dbPath: string): string {
+  return `${dbPath}${BUDGET_SUFFIX}`;
+}
+
+function readBudget(dbPath: string, nowMs: number): number[] {
+  try {
+    const raw = JSON.parse(fs.readFileSync(bootstrapBudgetPath(dbPath), "utf8")) as unknown;
+    return Array.isArray(raw)
+      ? raw.filter((t): t is number => typeof t === "number" && nowMs - t < DAY_MS)
+      : [];
+  } catch {
+    return [];
+  }
+}
+
+/** Full bootstraps of this replica in the last 24h. */
+export function recentBootstrapCount(dbPath: string, nowMs: number = Date.now()): number {
+  return readBudget(dbPath, nowMs).length;
+}
+
+export function bootstrapBudgetExhausted(dbPath: string, nowMs: number = Date.now()): boolean {
+  return recentBootstrapCount(dbPath, nowMs) >= maxBootstrapsPerDay();
+}
+
+/** Record a full bootstrap. Calls within a minute of the last one are the same attempt. */
+export function noteBootstrapStarted(dbPath: string, nowMs: number = Date.now()): void {
+  const times = readBudget(dbPath, nowMs);
+  if (times.length && nowMs - times[times.length - 1] < BUDGET_DEDUPE_MS) {
+    return;
+  }
+  times.push(nowMs);
+  try {
+    fs.writeFileSync(bootstrapBudgetPath(dbPath), JSON.stringify(times), "utf8");
+  } catch {
+    /* best effort — a missing budget file only loses the cap, never data */
+  }
+}
+
+/** Explicit user repair (papr_db_repair) resets the cap. */
+export function clearBootstrapBudget(dbPath: string): void {
+  try {
+    fs.rmSync(bootstrapBudgetPath(dbPath), { force: true });
+  } catch {
+    /* absent */
+  }
 }
 
 export function bootstrapSnapshotPath(dbPath: string): string {
