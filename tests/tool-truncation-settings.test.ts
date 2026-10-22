@@ -85,9 +85,11 @@ describe("tool truncation settings wiring", () => {
       isOrphan: false,
     });
 
-    expect(truncated.startsWith("y".repeat(5000))).toBe(true);
+    // Content plus the get_full_tool_result marker fit in the 5000-char cap.
+    expect(truncated.startsWith("y".repeat(4000))).toBe(true);
     expect(truncated).toContain("get_full_tool_result");
-    expect(truncated.length).toBeGreaterThan(5000);
+    // The truncation marker now fits inside the cap.
+    expect(truncated.length).toBeLessThanOrEqual(5000);
   });
 
   test("custom memorySearchMaxChars is used for search_agent_memory", () => {
@@ -278,7 +280,8 @@ describe("tool truncation settings wiring", () => {
     });
 
     expect(truncated.length).toBeLessThan(huge.length);
-    expect(truncated.length).toBeGreaterThan(5000);
+    // The truncation marker now fits inside the cap.
+    expect(truncated.length).toBeLessThanOrEqual(5000);
     expect(truncated).toContain("get_full_tool_result");
   });
 

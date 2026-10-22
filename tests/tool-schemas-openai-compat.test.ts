@@ -8,7 +8,13 @@ describe("Tool schemas OpenAI compatibility", () => {
       const schema = (tool as unknown as { inputSchema?: unknown }).inputSchema;
       expect(schema, `Tool ${tool.id} is missing inputSchema`).toBeDefined();
 
-      const isObjectSchema = schema instanceof z.ZodObject;
+      // z.preprocess(...) wraps the object in a pipe; the JSON schema the
+      // provider sees is still the inner object.
+      const inner =
+        schema instanceof z.ZodPipe
+          ? (schema as unknown as { _zod: { def: { out: unknown } } })._zod.def.out
+          : schema;
+      const isObjectSchema = inner instanceof z.ZodObject;
       expect(
         isObjectSchema,
         `Tool ${tool.id} must use root z.object(...) inputSchema for OpenAI function calling`,

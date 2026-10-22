@@ -35,7 +35,8 @@ vi.mock("../src/gateway/services/syncV3/WorkspaceLogClient.js", () => ({
   }),
 }));
 
-vi.mock("../src/gateway/services/DatabaseRegistryService.js", () => ({
+vi.mock("../src/gateway/services/DatabaseRegistryService.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../src/gateway/services/DatabaseRegistryService.js")>()),
   resolveTursoDatabaseNameForSource: () => "d-test-replica",
 }));
 

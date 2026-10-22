@@ -6,7 +6,8 @@ import {
 
 const getAppPublishPrefs = vi.fn();
 
-vi.mock("../src/gateway/services/cloudPublishPrefs.js", () => ({
+vi.mock("../src/gateway/services/cloudPublishPrefs.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../src/gateway/services/cloudPublishPrefs.js")>()),
   getAppPublishPrefs: (...args: unknown[]) => getAppPublishPrefs(...args),
 }));
 

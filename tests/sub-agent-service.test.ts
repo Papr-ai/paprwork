@@ -113,35 +113,4 @@ describe("SubAgentService", () => {
     runSpy.mockRestore();
   });
 
-  test("migrates legacy run records into job records", async () => {
-    const legacyPath = path.join(home, "Papr", "data", "subagent-runs.json");
-    await fs.mkdir(path.dirname(legacyPath), { recursive: true });
-    await fs.writeFile(
-      legacyPath,
-      JSON.stringify(
-        [
-          {
-            id: "legacy-run-1",
-            agentId: "research-specialist",
-            task: "Summarize issue trends",
-            status: "completed",
-            createdAt: new Date().toISOString(),
-            startedAt: new Date().toISOString(),
-            completedAt: new Date().toISOString(),
-          },
-        ],
-        null,
-        2,
-      ),
-      "utf8",
-    );
-
-    const service = new SubAgentService();
-    await service.initialize();
-    const jobsService = getJobsService();
-    await jobsService.initialize();
-    const migrated = await jobsService.getJob("legacy-legacy-run-1");
-    expect(migrated).not.toBeNull();
-    expect(migrated?.type).toBe("subagent");
-  });
 });

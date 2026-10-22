@@ -65,6 +65,14 @@ export const TEST_STEPS = [
     requires: [],
   },
   {
+    id: "build-tests",
+    name: "Build-tier tests (*.build.test.ts, need dist/)",
+    tiers: ["ci", "local", "cloud", "full"],
+    npmScript: "test:build",
+    command: null,
+    requires: [],
+  },
+  {
     id: "independent-databases-e2e",
     name: "Independent databases E2E (no HTTP)",
     tiers: ["ci", "local", "cloud", "full"],

@@ -26,6 +26,11 @@ export default defineConfig({
       "**/*.d.ts",
       "**/ui/**",
       "tests/manual/**",
+      // Tier by file name: *.build.test.ts needs dist/ (run after
+      // build:gateway via test:build); *.live.test.ts hits real networks/keys
+      // (test:live, never CI).
+      "**/*.build.test.ts",
+      "**/*.live.test.ts",
       // Legacy script/manual/live tests (not deterministic vitest suites)
       "tests/agent-performance-scaling.test.ts",
       "tests/bash-tool.test.ts",
