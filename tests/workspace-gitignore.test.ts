@@ -43,6 +43,7 @@ describe("workspaceGitignore", () => {
       "data/.legacy-home-job-migration.json",
       "data/.gateway-sync-busy.json",
       "data/covers/",
+      "data/demos/",
       "Jobs/*/job.runtime.json",
       "data/job-runs.jsonl",
       "**/*.sync-backup-*",

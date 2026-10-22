@@ -14,9 +14,8 @@ describe("clearQueuedMessagesForChat", () => {
       queued("c", "chat-1", "hi"),
     ];
 
-    expect(clearQueuedMessagesForChat(queue, "chat-1")).toEqual([
-      queued("b", "chat-2", "other"),
-    ]);
+    // Compare against the same object, not a fresh one with a new Date.now().
+    expect(clearQueuedMessagesForChat(queue, "chat-1")).toEqual([queue[1]]);
   });
 
   it("returns the same array contents when no messages match", () => {
