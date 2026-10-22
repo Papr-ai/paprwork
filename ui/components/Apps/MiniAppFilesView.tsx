@@ -381,6 +381,8 @@ export function MiniAppFilesView({ appId, panel }: MiniAppFilesViewProps) {
                 onSelectTable={(tableName) =>
                   void workspace.selectDbTable(tableName)
                 }
+                onPageChange={(page) => void workspace.changeDbPage(page)}
+                onPageSizeChange={(size) => void workspace.changeDbPageSize(size)}
               />
             ) : null}
 

@@ -4206,6 +4206,8 @@ export class JobsService {
     jobId: string,
     dbRelativePath: string,
     tableName?: string,
+    limitInput?: number,
+    offsetInput?: number,
   ): Promise<{
     dbPath: string;
     tables: Array<{
@@ -4215,6 +4217,8 @@ export class JobsService {
       rows: Record<string, unknown>[];
     }>;
     selectedTable: string | null;
+    limit: number;
+    offset: number;
   }> {
     const job = this.jobs.get(jobId);
     if (!job) {
@@ -4246,6 +4250,15 @@ export class JobsService {
     const quoteTable = (name: string): string =>
       `"${name.replace(/"/g, '""')}"`;
 
+    const { normalizePreviewPaging, previewOrderBy } = await import(
+      "./dbPreviewPaging.js"
+    );
+    const { limit, offset } = normalizePreviewPaging(limitInput, offsetInput);
+    const selectedName =
+      tableName && userTables.some((table) => table.table === tableName)
+        ? tableName
+        : userTables[0]?.table ?? null;
+
     const tables = await Promise.all(
       userTables.map(async (table) => {
         const countResult = await pool.query(
@@ -4255,30 +4268,31 @@ export class JobsService {
           [],
         );
         const rowCount = Number(countResult.rows[0]?.cnt ?? 0);
-        const preview = await pool.query(
-          `job-preview:${jobId}`,
-          dbPath,
-          `SELECT * FROM ${quoteTable(table.table)} LIMIT 50`,
-          [],
-        );
+        let rows: Record<string, unknown>[] = [];
+        if (table.table === selectedName) {
+          const preview = await pool.query(
+            `job-preview:${jobId}`,
+            dbPath,
+            `SELECT * FROM ${quoteTable(table.table)}${previewOrderBy(table.columns)} LIMIT ${limit} OFFSET ${offset}`,
+            [],
+          );
+          rows = preview.rows;
+        }
         return {
           name: table.table,
           columns: table.columns,
           rowCount,
-          rows: preview.rows,
+          rows,
         };
       }),
     );
 
-    const selectedTable =
-      tableName && tables.some((table) => table.name === tableName)
-        ? tableName
-        : tables[0]?.name ?? null;
-
     return {
       dbPath,
       tables,
-      selectedTable,
+      selectedTable: selectedName,
+      limit,
+      offset,
     };
   }
 
