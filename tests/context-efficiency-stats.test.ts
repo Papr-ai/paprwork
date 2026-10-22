@@ -52,7 +52,7 @@ describe("computeChatTurnFootprint", () => {
   });
 
   it("replaces archived messages with summary text", () => {
-    const messages = Array.from({ length: 8 }, (_, index) => ({
+    const messages = Array.from({ length: 40 }, (_, index) => ({
       role: index % 2 === 0 ? "user" : "assistant",
       content: "a".repeat(1000),
       thinking: null,
@@ -62,7 +62,9 @@ describe("computeChatTurnFootprint", () => {
     const footprint = computeChatTurnFootprint(
       {
         id: "chat-2",
-        message_count: 8,
+        message_count: 40,
+        // Summary covered the first 30; the recent window keeps the rest.
+        summary_base_message_count: 30,
         title: "Summarized",
         summary_short: "short",
         summary_medium: "medium",

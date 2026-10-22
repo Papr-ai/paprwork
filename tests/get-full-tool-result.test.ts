@@ -65,7 +65,7 @@ describe("StorageManager singleton", () => {
         timestamp: new Date().toISOString(),
         sync_status: "local",
       }),
-    ).rejects.toThrow(/database connection is not open/i);
+    ).rejects.toThrow(/database connection is not open|Chat storage is not initialized/i);
     },
   );
 });

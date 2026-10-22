@@ -60,11 +60,12 @@ describe("uniqueAppNaming", () => {
     ).toBe("mem0-stargazers-1");
   });
 
-  it("publishSlugRetryCandidates returns incremental suffixes", () => {
-    expect(publishSlugRetryCandidates("mem0-stargazers", 3)).toEqual([
+  it("publishSlugRetryCandidates returns incremental suffixes then a random fallback", () => {
+    expect(publishSlugRetryCandidates("mem0-stargazers", 3, () => "x7k2qp")).toEqual([
       "mem0-stargazers",
       "mem0-stargazers-1",
       "mem0-stargazers-2",
+      "mem0-stargazers-x7k2qp",
     ]);
   });
 });
