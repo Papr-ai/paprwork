@@ -1,0 +1,10 @@
+# Build the Scout Commons image (service, worker and builder share it).
+#   gcloud builds submit services/scout-commons --config services/scout-commons/cloudbuild.yaml \
+#     --substitutions=_IMAGE=us-west1-docker.pkg.dev/PROJECT/papr/scout-commons:TAG
+steps:
+  - name: gcr.io/cloud-builders/docker
+    args: [build, -t, "${_IMAGE}", .]
+images:
+  - ${_IMAGE}
+options:
+  logging: CLOUD_LOGGING_ONLY
