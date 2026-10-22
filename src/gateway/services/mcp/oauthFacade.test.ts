@@ -61,8 +61,8 @@ describe("OAuth facade (one shared Auth0 client)", () => {
       body: new URLSearchParams({ grant_type: "authorization_code", code: "c1", code_verifier: "v1", redirect_uri: "https://claude.ai/api/mcp/auth_callback", client_id: "shared-client", client_secret: "attacker" }).toString(),
     });
     expect(res.status).toBe(200);
-    const sent = new URLSearchParams(upstream.at(-1)!.body);
-    expect(upstream.at(-1)!.url).toBe("https://papr.auth0.com/oauth/token");
+    const sent = new URLSearchParams(upstream[upstream.length - 1].body);
+    expect(upstream[upstream.length - 1].url).toBe("https://papr.auth0.com/oauth/token");
     expect(sent.get("client_secret")).toBe("s3cret");
     expect(sent.get("code_verifier")).toBe("v1");
   });
