@@ -1,6 +1,6 @@
 import { openDiagnosticDatabase } from "./databaseDiagnostics/sqlite.js";
 import { gatewayBackgroundBudget } from "./gatewayBackgroundBudget.js";
-import { promises as fs } from "fs";
+import { existsSync, promises as fs } from "fs";
 import path from "path";
 import os from "os";
 import type { ChildProcess } from "child_process";
@@ -1004,6 +1004,103 @@ export class JobsService {
   }
 
   /**
+   * Register job folders (Jobs/{id}/job.json) in the live registry.
+   *
+   * Installs and track updates copy job folders and write data/jobs.json
+   * directly. The running service never saw those entries, and its next
+   * saveJobs() wrote its own in-memory list back over the file, so the
+   * installed jobs vanished until a restart (and stayed gone if an earlier
+   * install of the same app had tombstoned their IDs). Callers that know the
+   * user wants these jobs (install / update) pass clearTombstones: true.
+   *
+   * Never adopts a folder whose job.json id does not match the folder name.
+   * Returns the IDs newly added to the registry (already-registered IDs are
+   * refreshed from disk but not reported).
+   */
+  async adoptJobsFromDisk(
+    jobIds: readonly string[],
+    options?: { clearTombstones?: boolean },
+  ): Promise<{ adopted: string[]; untombstoned: string[] }> {
+    const ids = [...new Set(jobIds.map((id) => id.trim()).filter(Boolean))];
+    if (ids.length === 0 || !this.isWriteContextValid("adopt jobs from disk")) {
+      return { adopted: [], untombstoned: [] };
+    }
+    const paprDir = this.boundPaprDir ?? getPaprRoot();
+    const { clearJobTombstones, readJobTombstones } = await import(
+      "./jobs/jobTombstones.js"
+    );
+    const untombstoned = options?.clearTombstones
+      ? await clearJobTombstones(paprDir, ids)
+      : [];
+    const tombstones = await readJobTombstones(paprDir);
+
+    const adopted: string[] = [];
+    let changed = false;
+    for (const jobId of ids) {
+      if (tombstones.has(jobId)) {
+        continue;
+      }
+      const record = await this.readMergedJobRecordFromDisk(jobId);
+      if (!record) {
+        continue;
+      }
+      const declaredId = await this.readDeclaredJobId(jobId);
+      if (declaredId && declaredId !== jobId) {
+        continue;
+      }
+      if (!this.jobs.has(jobId)) {
+        adopted.push(jobId);
+      }
+      this.setJobInMemory(record);
+      changed = true;
+    }
+    if (changed) {
+      await this.saveJobs();
+      if (adopted.length > 0) {
+        console.log(
+          `[JobsService] Registered ${adopted.length} job(s) from disk: [${adopted.join(", ")}]`,
+        );
+        void this.rebuildGraph();
+        void import("./JobsScheduler.js")
+          .then(({ getJobsScheduler }) => getJobsScheduler().requestReschedule())
+          .catch(() => {});
+      }
+    }
+    return { adopted, untombstoned };
+  }
+
+  /** job.json "id" for a folder, or null when absent/unreadable. */
+  private async readDeclaredJobId(dirName: string): Promise<string | null> {
+    try {
+      const raw = parseJsonTolerant<Record<string, unknown>>(
+        await fs.readFile(path.join(this.jobsRootDir, dirName, "job.json"), "utf8"),
+      );
+      return typeof raw?.id === "string" && raw.id.length > 0 ? raw.id : null;
+    } catch {
+      return null;
+    }
+  }
+
+  /** Job folders on disk that are not in the registry (UUID-named, with a job.json). */
+  private async listUnregisteredJobDirs(): Promise<string[]> {
+    let dirs: string[];
+    try {
+      dirs = await fs.readdir(this.jobsRootDir);
+    } catch {
+      return [];
+    }
+    const uuid = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+    const out: string[] = [];
+    for (const dirName of dirs) {
+      if (!uuid.test(dirName) || this.jobs.has(dirName)) continue;
+      if (existsSync(path.join(this.jobsRootDir, dirName, "job.json"))) {
+        out.push(dirName);
+      }
+    }
+    return out;
+  }
+
+  /**
    * Reload jobs from disk, picking up any manual edits to jobs.json.
    * Useful when agent or user manually fixes job status on disk.
    */
@@ -1011,6 +1108,13 @@ export class JobsService {
     console.log("[JobsService] Reloading jobs from disk...");
     await this.loadJobs();
     await this.hydrateJobsFromRuntimeFiles();
+    // Job folders that exist on disk but are missing from jobs.json (an install
+    // wrote them, then a save from this process dropped the entries). Tombstoned
+    // IDs stay deleted: adoptJobsFromDisk skips them without clearTombstones.
+    const orphaned = await this.listUnregisteredJobDirs();
+    if (orphaned.length > 0) {
+      await this.adoptJobsFromDisk(orphaned);
+    }
     await this.pruneStaleJobEntries();
     await this.reconcileRegistryAfterSync();
     // Explicit reload is a user signal: drop phantom `running` flags now

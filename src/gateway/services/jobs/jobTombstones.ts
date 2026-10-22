@@ -55,3 +55,40 @@ export async function addJobTombstones(
   await fs.writeFile(tmp, `${JSON.stringify(payload, null, 2)}\n`, "utf8");
   await fs.rename(tmp, target);
 }
+
+/**
+ * Remove job IDs from the tombstone list. Use only on explicit user intent to
+ * have those jobs again: installing an app that ships them. A track install
+ * keeps the publisher's job IDs, so an earlier install of the same app that
+ * was deleted left them tombstoned, and the reinstalled jobs were dropped on
+ * the next reload with no error (the scheduler never fired). (#500)
+ * Returns the IDs that were actually removed.
+ */
+export async function clearJobTombstones(
+  paprDir: string,
+  jobIds: string[],
+): Promise<string[]> {
+  const wanted = new Set(jobIds.map((id) => id.trim()).filter(Boolean));
+  if (wanted.size === 0) {
+    return [];
+  }
+  const existing = await readJobTombstones(paprDir);
+  const cleared = [...wanted].filter((id) => existing.has(id));
+  if (cleared.length === 0) {
+    return [];
+  }
+  for (const id of cleared) {
+    existing.delete(id);
+  }
+  const target = tombstonesPath(paprDir);
+  await fs.mkdir(path.dirname(target), { recursive: true });
+  const payload: JobTombstonesFile = {
+    removedJobIds: [...existing].sort(),
+    updatedAt: new Date().toISOString(),
+  };
+  // Atomic write (same as addJobTombstones): never leave a truncated file.
+  const tmp = `${target}.tmp-${process.pid}-${Date.now()}-${Math.random().toString(36).slice(2, 10)}`;
+  await fs.writeFile(tmp, `${JSON.stringify(payload, null, 2)}\n`, "utf8");
+  await fs.rename(tmp, target);
+  return cleared;
+}
