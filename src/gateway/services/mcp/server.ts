@@ -43,6 +43,7 @@ import { HandoffError, memoryHandoff, type CreateHandoff } from "./handoff.js";
 import { memorySessionExchange, type McpSessionExchange } from "./session.js";
 import { buildInstructions } from "./routing.js";
 import { paprIcons, registerPaprIconRoutes } from "./paprIcon.js";
+import { facadeIssuer, loadOAuthFacadeConfig, registerOAuthFacade, type OAuthFacadeConfig } from "./oauthFacade.js";
 import { allowedIn, LISTED_SUFFIX, loadListingPolicy, personalConnectorNote, splitForConnector, type ConnectorMode, type ListingPolicy } from "./listing.js";
 import { memoryAppSearch, registerSearchTool, type AppSearchFn } from "./searchTool.js";
 
@@ -452,6 +453,8 @@ export function registerMcpRoutes(
     listing?: ListingPolicy;
     /** null disables papr_search. */
     search?: ((caller: McpCaller) => AppSearchFn) | null;
+    /** Shared-client OAuth facade. Defaults to PAPR_MCP_OAUTH_CLIENT_ID; null disables. */
+    oauthFacade?: OAuthFacadeConfig | null;
   },
 ): McpEndpointConfig {
   const policy = opts.listing ?? loadListingPolicy();
@@ -463,7 +466,9 @@ export function registerMcpRoutes(
   // The handoff needs a memory-minted session; the claims bridge's Parse session works too.
   const handoff = opts.handoff === null ? undefined : (opts.handoff ?? memoryHandoff(memoryBaseUrl, fetch, cfg.appsBaseUrl));
   const searchFor = opts.search === null ? undefined : (opts.search ?? ((caller: McpCaller) => memoryAppSearch(memoryBaseUrl, caller)));
-  registerProtectedResourceMetadata(app, cfg);
+  const facade = opts.oauthFacade === null ? undefined : (opts.oauthFacade ?? loadOAuthFacadeConfig());
+  if (facade) registerOAuthFacade(app, cfg, facade);
+  registerProtectedResourceMetadata(app, cfg, facade ? facadeIssuer(cfg) : undefined);
   registerPaprIconRoutes(app);
   const bearer = requireBearerAuth({
     verifier: opts.verifier ?? createAuth0Verifier(cfg, exchange),
