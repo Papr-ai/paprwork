@@ -2595,6 +2595,19 @@ export class AppService {
             }
           }
 
+          // A track install keeps the publisher's job IDs, so two local apps can
+          // ship the same job. If the registry record's appIds only name one of
+          // them, the graph says the job is exclusive and deleting that app
+          // tombstoned the other app's jobs too (#500). Count jobs bundled in any
+          // other app's jobs/ folder as shared.
+          const { listBundledAppJobIds } = await import("./cloudAppResourceIntegrity.js");
+          for (const other of await this.listApps()) {
+            if (other.id === id) continue;
+            for (const jobId of await listBundledAppJobIds(path.join(this.appsDir, other.id))) {
+              jobIdsInOtherApps.add(jobId);
+            }
+          }
+
           const exclusiveJobIds = [...thisAppJobIds].filter(
             (jobId) => !jobIdsInOtherApps.has(jobId),
           );
