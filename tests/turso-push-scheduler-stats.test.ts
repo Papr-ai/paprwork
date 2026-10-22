@@ -12,14 +12,30 @@ const bridgeMock = vi.hoisted(() => ({
       role: "primary" as const,
     },
   ]),
-  linkedSourceNeedsPush: vi.fn(async () => true),
-  pushJob: vi.fn(async () => ({
+  // Dirty until the first push ships; still-dirty after a push means the
+  // scheduler keeps draining, which is a different test.
+  linkedSourceNeedsPush: vi.fn(async () => bridgeMock.pushLinkedSourceIfNeeded.mock.calls.length === 0),
+  pushLinkedSourceIfNeeded: vi.fn(async () => ({
     status: "pushed" as const,
     tables: ["items"],
     syncMode: "delta" as const,
   })),
 }));
 
+// Auto-upload is off in a fresh workspace; these tests cover the scheduler,
+// not the upload preference.
+vi.mock("../src/gateway/services/cloudUploadMode.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../src/gateway/services/cloudUploadMode.js")>()),
+  shouldAutoUploadJobFolder: vi.fn(() => true),
+  shouldAutoUploadReplicaSyncKey: vi.fn(() => true),
+  shouldAutoUploadTursoForApp: vi.fn(() => true),
+}));
+// The fixture DB lives outside the temp workspace; the write-generation guard
+// is not what this test is about.
+vi.mock("../src/gateway/services/workspaceWriteGuard.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../src/gateway/services/workspaceWriteGuard.js")>()),
+  canPerformWorkspaceDbWrite: () => true,
+}));
 vi.mock("../src/gateway/services/TursoSyncBridge.js", () => ({
   ensureTursoSyncBridge: () => bridgeMock,
 }));
@@ -58,6 +74,8 @@ describe("tursoPushScheduler stats", () => {
       scheduleTursoPushForJob("job-1", "normal", "watcher");
       scheduleTursoPushForJob("job-1", "normal", "watcher");
       scheduleTursoPushForJob("job-1", "normal", "watcher");
+      // Routing (replica vs legacy) is decided after an async import.
+      await new Promise((resolve) => setTimeout(resolve, 50));
 
       const stats = getTursoPushSchedulerStatsForTests();
       expect(stats.schedules).toBe(3);
@@ -68,7 +86,7 @@ describe("tursoPushScheduler stats", () => {
       const after = getTursoPushSchedulerStatsForTests();
       expect(after.enqueues).toBe(1);
       expect(after.enqueuesByKey["job-1"]).toBe(1);
-      expect(bridgeMock.pushJob).toHaveBeenCalledTimes(1);
+      await vi.waitFor(() => expect(bridgeMock.pushLinkedSourceIfNeeded).toHaveBeenCalledTimes(1));
     },
     10_000,
   );

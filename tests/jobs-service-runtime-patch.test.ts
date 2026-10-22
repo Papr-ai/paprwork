@@ -5,6 +5,9 @@ import path from "node:path";
 import { JobsService } from "../src/gateway/services/JobsService.js";
 import { JOB_RUNTIME_FILE_NAME } from "../src/gateway/services/jobs/jobRuntimeFields.js";
 
+const base = Date.now() + 60_000;
+const at = (min: number) => new Date(base + min * 60_000).toISOString();
+
 describe("JobsService.applyCloudRunPatch", () => {
   let tmpRoot: string;
   let jobsService: JobsService;
@@ -106,13 +109,13 @@ describe("JobsService.applyCloudRunPatch", () => {
       status: "completed",
       exitCode: 0,
       lastOutput: "done",
-      scheduleState: { nextRunAt: "2025-06-01T11:00:00.000Z" },
-      recordedAt: "2025-06-01T10:30:00.000Z",
+      scheduleState: { nextRunAt: at(60) },
+      recordedAt: at(30),
       source: "cloud_scheduler",
     });
 
     expect(result?.status).toBe("completed");
-    expect(result?.scheduleState?.nextRunAt).toBe("2025-06-01T11:00:00.000Z");
+    expect(result?.scheduleState?.nextRunAt).toBe(at(60));
 
     const runtimeRaw = await readFile(
       path.join(tmpRoot, "Jobs", "test-job-id", JOB_RUNTIME_FILE_NAME),
@@ -126,14 +129,14 @@ describe("JobsService.applyCloudRunPatch", () => {
     await jobsService.applyCloudRunPatch({
       jobId: "test-job-id",
       status: "completed",
-      recordedAt: "2025-06-01T12:00:00.000Z",
+      recordedAt: at(120),
       source: "cloud_scheduler",
     });
 
     const skipped = await jobsService.applyCloudRunPatch({
       jobId: "test-job-id",
       status: "failed",
-      recordedAt: "2025-06-01T11:00:00.000Z",
+      recordedAt: at(60),
       source: "cloud_scheduler",
     });
 
@@ -147,8 +150,8 @@ describe("JobsService.applyCloudRunPatch", () => {
       jobId: "test-job-id",
       status: "completed",
       exitCode: 0,
-      recordedAt: "2025-06-01T12:00:00.000Z",
-      scheduleState: { nextRunAt: "2025-06-01T13:00:00.000Z" },
+      recordedAt: at(120),
+      scheduleState: { nextRunAt: at(180) },
       source: "cloud_scheduler",
     });
 
@@ -156,6 +159,6 @@ describe("JobsService.applyCloudRunPatch", () => {
 
     const job = await jobsService.getJob("test-job-id");
     expect(job?.status).toBe("completed");
-    expect(job?.scheduleState?.nextRunAt).toBe("2025-06-01T13:00:00.000Z");
+    expect(job?.scheduleState?.nextRunAt).toBe(at(180));
   });
 });
