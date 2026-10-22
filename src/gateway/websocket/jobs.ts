@@ -59,6 +59,8 @@ interface JobDbPreviewPayload {
   jobId: string;
   filename: string;
   tableName?: string;
+  limit?: number;
+  offset?: number;
 }
 
 interface JobIdPayload {
@@ -388,6 +390,8 @@ export async function setupJobsHandlers(
           payload.jobId,
           payload.filename,
           payload.tableName,
+          payload.limit,
+          payload.offset,
         );
         sendResponse(ws, {
           id: message.id,
