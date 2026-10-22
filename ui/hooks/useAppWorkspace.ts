@@ -26,6 +26,15 @@ export type WorkspaceFileTarget =
       path: string;
       kind: WorkspaceFileKind;
       readOnly: boolean;
+    }
+  | {
+      /** Registry database linked by dbId; browsed read-only via app:db-preview. */
+      scope: "registry";
+      appId: string;
+      alias: string;
+      path: string;
+      kind: "database";
+      readOnly: true;
     };
 
 export interface WorkspaceFileEntry {
@@ -41,10 +50,16 @@ export interface WorkspaceJobFiles {
   files: WorkspaceFileEntry[];
 }
 
+export interface WorkspaceRegistryDatabase {
+  alias: string;
+  dbId: string;
+}
+
 export interface AppWorkspaceFilesResult {
   appId: string;
   appFiles: WorkspaceFileEntry[];
   jobs: WorkspaceJobFiles[];
+  databases?: WorkspaceRegistryDatabase[];
 }
 
 export interface JobDbPreviewTable {
@@ -63,6 +78,9 @@ export interface JobDbPreviewResult {
 function fileKey(target: WorkspaceFileTarget): string {
   if (target.scope === "app") {
     return `app:${target.path}`;
+  }
+  if (target.scope === "registry") {
+    return `registry:${target.alias}`;
   }
   return `job:${target.jobId}:${target.path}`;
 }
@@ -140,7 +158,8 @@ export function useAppWorkspace(appId: string) {
 
   const loadDbPreview = useCallback(
     async (target: WorkspaceFileTarget, tableName?: string) => {
-      if (target.scope !== "job" || target.kind !== "database") return;
+      if (target.kind !== "database") return;
+      if (target.scope === "app") return;
 
       setLoadingDb(true);
       setError(null);
@@ -150,11 +169,18 @@ export function useAppWorkspace(appId: string) {
       setSavedContent("");
 
       try {
-        const resp = await gateway.send("jobs:db-preview", {
-          jobId: target.jobId,
-          filename: target.path,
-          tableName,
-        });
+        const resp =
+          target.scope === "registry"
+            ? await gateway.send("app:db-preview", {
+                appId: target.appId,
+                alias: target.alias,
+                tableName,
+              })
+            : await gateway.send("jobs:db-preview", {
+                jobId: target.jobId,
+                filename: target.path,
+                tableName,
+              });
         setDbPreview(resp.data as JobDbPreviewResult);
       } catch (err) {
         setDbPreview(null);
@@ -234,6 +260,9 @@ export function useAppWorkspace(appId: string) {
     setSaving(true);
     setError(null);
     try {
+      if (target.scope === "registry") {
+        throw new Error("Linked databases are read-only.");
+      }
       if (target.scope === "app") {
         await gateway.send("app:write-file", {
           appId: target.appId,

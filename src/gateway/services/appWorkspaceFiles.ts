@@ -55,10 +55,18 @@ export interface WorkspaceJobFiles {
   files: WorkspaceFileEntry[];
 }
 
+/** A registry database linked to the app by dbId (no owning job in the link). */
+export interface WorkspaceRegistryDatabase {
+  alias: string;
+  dbId: string;
+}
+
 export interface AppWorkspaceFilesResult {
   appId: string;
   appFiles: WorkspaceFileEntry[];
   jobs: WorkspaceJobFiles[];
+  /** Registry-linked databases, browsable read-only from the DB tab. */
+  databases: WorkspaceRegistryDatabase[];
 }
 
 function classifyFileKind(relativePath: string): WorkspaceFileKind {
@@ -147,9 +155,15 @@ export async function listAppWorkspaceFiles(params: {
 
   const config = await params.getDataSources(params.appId);
   const jobs: WorkspaceJobFiles[] = [];
+  const databases: WorkspaceRegistryDatabase[] = [];
 
   for (const source of config.sources) {
     if (!source.jobId) {
+      // Registry link (dbId only): there is no job folder to list, but the DB tab
+      // can still browse it through the router. Skipping it left nothing to click.
+      if (source.dbId) {
+        databases.push({ alias: source.alias, dbId: source.dbId });
+      }
       continue;
     }
     const jobFiles = await params.listJobFiles(
@@ -166,6 +180,7 @@ export async function listAppWorkspaceFiles(params: {
     appId: params.appId,
     appFiles,
     jobs,
+    databases,
   };
 }
 
