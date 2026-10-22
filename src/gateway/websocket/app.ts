@@ -124,6 +124,12 @@ interface ListAppFilesPayload {
   appId: string;
 }
 
+interface AppDbPreviewPayload {
+  appId: string;
+  alias: string;
+  tableName?: string;
+}
+
 interface AppRuntimeLogPayload {
   appId: string;
   entry: {
@@ -613,6 +619,33 @@ export async function setupAppHandlers(
             type: "app:list-files:response",
             success: true,
             data: files,
+          }),
+        );
+        break;
+      }
+
+      case "app:db-preview": {
+        const payload = message.payload as AppDbPreviewPayload;
+        const { previewLinkedDatabase } = await import(
+          "../services/linkedDatabasePreview.js"
+        );
+        const { getDbRouter } = await import(
+          "../services/appRuntime/DbRouter.js"
+        );
+        const config = await appService.getDataSourcesConfig(payload.appId);
+        const preview = await previewLinkedDatabase({
+          appId: payload.appId,
+          alias: payload.alias,
+          tableName: payload.tableName,
+          sources: config.sources,
+          router: getDbRouter(),
+        });
+        ws.send(
+          JSON.stringify({
+            id: message.id,
+            type: "app:db-preview:response",
+            success: true,
+            data: preview,
           }),
         );
         break;
