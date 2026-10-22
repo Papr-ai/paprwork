@@ -73,6 +73,9 @@ export interface JobDbPreviewResult {
   dbPath: string;
   tables: JobDbPreviewTable[];
   selectedTable: string | null;
+  /** Page size and start offset echoed by the server. */
+  limit?: number;
+  offset?: number;
 }
 
 function fileKey(target: WorkspaceFileTarget): string {
@@ -135,10 +138,13 @@ export function useAppWorkspace(appId: string) {
   const selectedRef = useRef(selected);
   const savedContentRef = useRef(savedContent);
   const contentRef = useRef(content);
+  const dbPreviewRef = useRef(dbPreview);
+  const pageSizeRef = useRef(50);
 
   selectedRef.current = selected;
   savedContentRef.current = savedContent;
   contentRef.current = content;
+  dbPreviewRef.current = dbPreview;
 
   const isDirty = content !== savedContent;
   const viewMode = selected?.kind === "database" ? "database" : "code";
@@ -157,7 +163,12 @@ export function useAppWorkspace(appId: string) {
   }, [appId]);
 
   const loadDbPreview = useCallback(
-    async (target: WorkspaceFileTarget, tableName?: string) => {
+    async (
+      target: WorkspaceFileTarget,
+      tableName?: string,
+      page = 0,
+      pageSize = pageSizeRef.current,
+    ) => {
       if (target.kind !== "database") return;
       if (target.scope === "app") return;
 
@@ -175,11 +186,15 @@ export function useAppWorkspace(appId: string) {
                 appId: target.appId,
                 alias: target.alias,
                 tableName,
+                limit: pageSize,
+                offset: page * pageSize,
               })
             : await gateway.send("jobs:db-preview", {
                 jobId: target.jobId,
                 filename: target.path,
                 tableName,
+                limit: pageSize,
+                offset: page * pageSize,
               });
         setDbPreview(resp.data as JobDbPreviewResult);
       } catch (err) {
@@ -303,6 +318,27 @@ export function useAppWorkspace(appId: string) {
     [loadDbPreview],
   );
 
+  const changeDbPage = useCallback(
+    async (page: number) => {
+      const target = selectedRef.current;
+      if (!target || target.kind !== "database") return;
+      const table = dbPreviewRef.current?.selectedTable ?? undefined;
+      await loadDbPreview(target, table, Math.max(0, page));
+    },
+    [loadDbPreview],
+  );
+
+  const changeDbPageSize = useCallback(
+    async (size: number) => {
+      const target = selectedRef.current;
+      if (!target || target.kind !== "database") return;
+      pageSizeRef.current = size;
+      const table = dbPreviewRef.current?.selectedTable ?? undefined;
+      await loadDbPreview(target, table, 0, size);
+    },
+    [loadDbPreview],
+  );
+
   useEffect(() => {
     void refreshTree();
   }, [refreshTree]);
@@ -381,6 +417,8 @@ export function useAppWorkspace(appId: string) {
     saveFile,
     reloadFromDisk,
     selectDbTable,
+    changeDbPage,
+    changeDbPageSize,
   };
 }
 
