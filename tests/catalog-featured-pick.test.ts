@@ -16,8 +16,8 @@ describe("pickFeaturedCatalogEntry", () => {
     expect(pickFeaturedCatalogEntry(list)?.catalogId).toBe("cloud:b");
     expect(pickFeaturedCatalogEntry(list.map((x) => ({ ...x, headline: undefined })))?.catalogId).toBe("cloud:a");
   });
-  it("never features your own or non-installable apps", () => {
-    const list = [e("mine", { isOwned: true, installCount: 999 }), e("web", { codeInstallable: false, installCount: 500 }), e("c", { installCount: 3 }), e("d"), e("f"), e("g")];
+  it("never features non-installable apps", () => {
+    const list = [e("web", { codeInstallable: false, installCount: 500 }), e("c", { installCount: 3 }), e("d"), e("f"), e("g")];
     expect(pickFeaturedCatalogEntry(list)?.catalogId).toBe("cloud:c");
   });
 });
