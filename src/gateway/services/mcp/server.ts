@@ -461,7 +461,7 @@ export function registerMcpRoutes(
   const exchange = opts.exchange ?? (cfg.serviceKey ? memorySessionExchange(memoryBaseUrl, cfg.serviceKey) : undefined);
   if (!exchange) console.warn("[mcp] PAPR_MCP_SERVICE_KEY unset: using the Auth0 claims bridge (spike only).");
   // The handoff needs a memory-minted session; the claims bridge's Parse session works too.
-  const handoff = opts.handoff === null ? undefined : (opts.handoff ?? memoryHandoff(memoryBaseUrl, fetch, cfg.appsBaseUrl));
+  const handoff = opts.handoff === null ? undefined : (opts.handoff ?? memoryHandoff(memoryBaseUrl, fetch, cfg.appsBaseUrl, cfg.resourceUrl));
   const searchFor = opts.search === null ? undefined : (opts.search ?? ((caller: McpCaller) => memoryAppSearch(memoryBaseUrl, caller)));
   registerProtectedResourceMetadata(app, cfg);
   registerPaprIconRoutes(app);

@@ -29,7 +29,11 @@ export type CreateHandoff = (caller: McpCaller, intent: HandoffIntent) => Promis
 
 export class HandoffError extends Error {}
 
-export function memoryHandoff(baseUrl: string, fetchImpl: typeof fetch = fetch, appsBaseUrl?: string): CreateHandoff {
+/**
+ * `appsBaseUrl` builds the web fallback; `pageBaseUrl` is where /open is served (the MCP host's
+ * own origin). Without `pageBaseUrl` the raw papr:// link is returned (desktop gateway).
+ */
+export function memoryHandoff(baseUrl: string, fetchImpl: typeof fetch = fetch, appsBaseUrl?: string, pageBaseUrl?: string): CreateHandoff {
   const url = `${baseUrl.replace(/\/$/, "")}/v1/cloud/handoff/codes`;
   return async (caller, intent) => {
     let res: Response;
@@ -48,8 +52,8 @@ export function memoryHandoff(baseUrl: string, fetchImpl: typeof fetch = fetch, 
     const body = (await res.json()) as { url?: string; expiresAt?: string };
     if (!body.url?.startsWith("papr://")) throw new HandoffError("Papr returned an invalid Mac link.");
     const expiresAt = String(body.expiresAt ?? "");
-    if (!appsBaseUrl) return { url: body.url, expiresAt };
-    const web = intent.appNamespaceId && intent.appSlug ? `${appsBaseUrl.replace(/\/$/, "")}/${intent.appNamespaceId}/${intent.appSlug}` : undefined;
-    return { url: openPageUrl(appsBaseUrl, body.url, web), paprUrl: body.url, expiresAt };
+    if (!pageBaseUrl) return { url: body.url, expiresAt };
+    const web = appsBaseUrl && intent.appNamespaceId && intent.appSlug ? `${appsBaseUrl.replace(/\/$/, "")}/${intent.appNamespaceId}/${intent.appSlug}` : undefined;
+    return { url: openPageUrl(pageBaseUrl, body.url, web), paprUrl: body.url, expiresAt };
   };
 }
