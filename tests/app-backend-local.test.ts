@@ -203,7 +203,8 @@ json.dump({"dbMode": os.environ.get("PAPR_DB_MODE"), "appDb": os.environ.get("AP
       dbMode: string;
       appDb: string;
     };
-    expect(payload.dbMode).toBe("local");
+    // Handlers reach the DB through the gateway proxy; APP_DB stays for backward compat.
+    expect(payload.dbMode).toBe("proxy");
     expect(payload.appDb).toBe(dbPath);
   });
 

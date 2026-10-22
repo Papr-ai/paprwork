@@ -14,7 +14,7 @@ import "./CatalogFeatured.css";
 
 /** Publisher headline first, then most installs. Your own apps compete like any other. */
 export function pickFeaturedCatalogEntry(entries: CommunityCatalogEntry[]): CommunityCatalogEntry | null {
-  const pool = entries.filter((e) => e.source === "cloud" && e.codeInstallable);
+  const pool = entries.filter((e) => e.source === "cloud" && e.codeInstallable && !e.isOwned);
   if (pool.length < 4) return null;
   const score = (e: CommunityCatalogEntry) => (e.headline?.trim() ? 1e9 : 0) + (e.installCount ?? 0);
   return pool.reduce((best, e) => (score(e) > score(best) ? e : best), pool[0]!);

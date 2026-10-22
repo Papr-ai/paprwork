@@ -26,6 +26,7 @@ describe("cloudPublishMapping", () => {
       visibility: "public_read",
       linkPermission: "read_write",
       shareLinkEnabled: false,
+      communityCatalogListed: true,
     });
   });
 

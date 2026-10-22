@@ -1,6 +1,5 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
 import {
-  browserParseHtmlTool,
   browserFillFormTool,
   browserScrollTool,
 } from "../src/core/tools/browser.js";
@@ -21,34 +20,6 @@ describe("Browser Tools Phase 1", () => {
     vi.restoreAllMocks();
   });
 
-  describe("browserParseHtmlTool", () => {
-    it("should have correct id and schema", () => {
-      expect(browserParseHtmlTool.id).toBe("browser_parse_html");
-      expect(browserParseHtmlTool.description).toContain("BeautifulSoup");
-      expect(browserParseHtmlTool.inputSchema).toBeDefined();
-    });
-
-    it("should validate required code parameter", () => {
-      const schema = browserParseHtmlTool.inputSchema;
-      expect(() => schema.parse({})).toThrow();
-      expect(() => schema.parse({ code: "" })).toThrow();
-      expect(() =>
-        schema.parse({ code: "soup = BeautifulSoup(html, 'html.parser')" }),
-      ).not.toThrow();
-    });
-
-    it("should have optional timeout with default", () => {
-      const schema = browserParseHtmlTool.inputSchema;
-      const parsed = schema.parse({ code: "result = 'test'" });
-      expect(parsed.timeout).toBe(30000);
-    });
-
-    it("should accept custom timeout", () => {
-      const schema = browserParseHtmlTool.inputSchema;
-      const parsed = schema.parse({ code: "result = 'test'", timeout: 60000 });
-      expect(parsed.timeout).toBe(60000);
-    });
-  });
 
   describe("pageWaitForTool", () => {
     it("should have correct id and schema", () => {

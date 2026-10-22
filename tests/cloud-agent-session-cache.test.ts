@@ -6,6 +6,7 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import type { CloudAgentRunRequest } from "../src/gateway/services/cloudAgentGateway/types.js";
 
 vi.mock("../src/gateway/services/cloudAgentGateway/cloudAgentRunContext.js", () => ({
+  forgetBoundCloudWorkspace: vi.fn(),
   beginCloudAgentRun: vi.fn(async () => ({
     runRoot: "/tmp/papr-cloud-session/test-session",
     paprHome: "/tmp/papr-cloud-session/test-session/Papr",
