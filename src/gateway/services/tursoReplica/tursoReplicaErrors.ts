@@ -37,7 +37,14 @@ export function isReplicaBusyError(error: unknown): boolean {
   return (
     lower.includes("database is locked") ||
     lower.includes("database table is locked") ||
-    lower.includes("sqlite_busy")
+    lower.includes("sqlite_busy") ||
+    // @tursodatabase/sync's file-lock wording when another handle holds the
+    // replica: "Locking error: Failed locking file '…'. File is locked by
+    // another process". Same contention, different words — without this it
+    // fell through to "unopenable" and blocked update_job/validate_job with a
+    // "restart / re-link" remediation that does not apply.
+    lower.includes("failed locking file") ||
+    lower.includes("file is locked by another process")
   );
 }
 
