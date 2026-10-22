@@ -128,6 +128,8 @@ interface AppDbPreviewPayload {
   appId: string;
   alias: string;
   tableName?: string;
+  limit?: number;
+  offset?: number;
 }
 
 interface AppRuntimeLogPayload {
@@ -637,6 +639,8 @@ export async function setupAppHandlers(
           appId: payload.appId,
           alias: payload.alias,
           tableName: payload.tableName,
+          limit: payload.limit,
+          offset: payload.offset,
           sources: config.sources,
           router: getDbRouter(),
         });
