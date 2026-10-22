@@ -1,26 +1,70 @@
-# Scout Commons: shared link-graph lookalikes
+# Scout Commons: shared public data for Scout
 
-Scout's best way of finding companies similar to a seed company is the link graph: sites that the same blogs, directories and review pages link to are probably alike. The data behind it is Common Crawl's domain-level web graph (about 133 million domains and 2 billion links). That's roughly 9 GB once processed, it's rebuilt every quarter, and **the answer is the same for every user**.
+Scout Commons answers questions about companies whose answer is **the same for every Scout user**. It works each one out once and serves it to everyone. It has four parts:
 
-Without this service each Scout install would have to download and rebuild that graph itself, and cloud runs couldn't use it at all. Scout Commons builds it once and answers `neighbors?domain=` for everyone.
+| Part | Question it answers | Source |
+|---|---|---|
+| **Lookalikes** | Which companies look like this one? | Common Crawl's domain web graph (133M domains, 2B links, about 9 GB, rebuilt quarterly) |
+| **Email patterns** | How does this company format its email addresses (`first.last@`, `flast@` …)? | Addresses published on the company's own pages, and commit authors in its own GitHub org |
+| **Job boards** | Which public job boards does this company use, and is it hiring? | Links on the company's own careers pages, vendor job APIs, and the Common Crawl URL index |
+| **Dataset definitions** | How do you read sales signals from this city's or state's open data? | Definitions submitted by Scout installs, checked automatically before they're shared |
 
-This first version serves **lookalikes only**. Other shared data proposed for Commons (email patterns, job-board index, open-data recipes) is deliberately left out until the privacy and review questions are settled.
+## What it holds, and what it never holds
 
-## What it holds
+**Holds:** public link data, computed lookalike lists, email *patterns* with sample counts and source URLs, job-board slugs with job counts and posting dates, and dataset definitions.
 
-- Common Crawl's public domain graph, processed into parquet (`vertices`, `deg`, `rev`, `fwd`).
-- Computed lookalike lists, one JSON file per seed domain requested.
-- A queue of seed domains waiting to be computed.
+**Never holds:**
+- **Email addresses.** They're read in memory to work out the pattern, then discarded. A test checks that no `@` reaches the store.
+- **User data:** runs, leads, people, contacts or labels.
+- **Who asked.** Requests carry only a domain or a definition, and every caller gets the same answer.
 
-**It never holds user data.** No runs, leads, people, contacts or labels. Requests carry only a domain, and every caller gets the same answer.
+**Rules for outbound requests:**
+- **Company pages:** the worker identifies itself with a User-Agent that links here, honours `robots.txt`, waits at least 1 s between requests to the same host, and reads at most 400 KB of a page.
+- **Private addresses:** it refuses non-public IP addresses on every redirect.
+- **No probing:** no SMTP checks, no catch-all probing, and no account-lookup endpoints such as Gravatar.
+- **Opting out:** a company can opt out of email patterns with `python -m commons.compute --optout example.com`. The pattern is deleted and never computed again.
 
 ## API
 
 | Endpoint | Returns |
 |---|---|
 | `GET /commons/v1/health` | `{ok, release}`. No key needed. |
-| `GET /commons/v1/release` | The live graph release and its build stats. |
+| `GET /commons/v1/release` | The live graph release, its build stats, and the job-board index crawl. |
 | `GET /commons/v1/neighbors?domain=lemlist.com&k=50` | Lookalikes, highest score first. `k` is at most 500. |
+| `GET /commons/v1/pattern?domain=sentry.io` | `{pattern, samples, conflicting, confidence, sources, provider, mx_ok}` |
+| `GET /commons/v1/ats?domain=lemlist.com` | `{boards: [{vendor, slug, url, jobs_open, newest_posted, found_via}]}` |
+| `GET /commons/v1/ats/boards?vendor=greenhouse&offset=0&limit=1000` | Every board slug Common Crawl saw for one vendor. |
+| `GET /commons/v1/recipes?state=IL&city=Chicago&signal_type=` | Shared (validated) dataset definitions. |
+| `GET /commons/v1/recipes/{id}` | One definition with its status and check results. |
+| `POST /commons/v1/recipes` | Submit a definition. It returns `pending`, and the worker checks it. |
+
+### Per-domain lookups (`neighbors`, `pattern`, `ats`)
+- **First request:** returns `202 queued`, and the worker fills it in within a few minutes.
+- **Results go stale:** patterns after 90 days, job boards after 7 days. A stale result is still returned, with `stale: true`, and is re-queued.
+
+### Email patterns
+- **How it works:** the pattern is the one that explains the most distinct addresses. Each address is matched to a person named on the same page, or to the author of the commit it came from. Role addresses (`info@`, `sales@` …) are ignored.
+- **Confidence:** `confirmed` means 2 or more addresses support the pattern; `single` means only 1. `conflicting` counts addresses that follow a different pattern.
+- **GitHub:** set `COMMONS_GITHUB_TOKEN` to read commits from the GitHub org that the company's homepage links to. Without it, only website pages are used, and many companies don't publish personal addresses there.
+
+### Job boards
+- **Vendors covered:** Greenhouse, Lever, Ashby, Workable, SmartRecruiters, Recruitee, Personio, Teamtailor and BambooHR.
+- **`found_via: site`:** the company's own careers pages link to the board.
+- **`found_via: guess`:** the domain name was tried as a board slug on Greenhouse, Lever and Ashby. It's only kept if that board has open jobs. Treat it as weaker evidence, because another company could own that slug.
+- **The board index** is rebuilt monthly (`--ats-index`). It reads the newest crawl's `cluster.idx` and range-fetches only each vendor's slice of the URL index.
+
+### Dataset definitions
+A submitted definition is shared only after automatic checks:
+- **Structure:**
+  - The dataset and every named column exist.
+  - The date column is a real date type.
+  - Its name doesn't look like an expiry, renewal or due date.
+  - Filters use literal values only.
+- **Freshness:**
+  - At least 5 matching rows in the last 90 days.
+  - The newest row is no more than 14 days old.
+
+Structural failures are `rejected`, and freshness failures are `stale`. Shared definitions are rechecked weekly. Six seed definitions ship in `seed_recipes.json` (`--seed-recipes`). v1 supports Socrata portals.
 
 `/neighbors` responses:
 
@@ -53,7 +97,8 @@ One image (`Dockerfile`), three entry points, sharing a GCS bucket mounted at `C
 | Part | Runs as | Schedule | Needs |
 |---|---|---|---|
 | **API** `uvicorn commons.api:app` | Cloud Run service | always on | 1 vCPU, 512 MB. Serves file reads. |
-| **Worker** `python -m commons.compute` | Cloud Run job | every 5 minutes | 4 vCPU, 8 GB. Computes queued seeds against the parquet graph. |
+| **Worker** `python -m commons.compute` | Cloud Run job | every 5 minutes | 4 vCPU, 8 GB. Works through the lookalike, pattern, job-board and definition queues. |
+| **Board index** `python -m commons.compute --ats-index` | Cloud Run job | monthly | 1 vCPU, 1 GB, under a minute (about 15,000 boards). |
 | **Builder** `python -m commons.build` | Cloud Batch or a VM | quarterly, after Common Crawl publishes a graph | 16 GB RAM, 60 GB scratch disk, about an hour. |
 
 The builder downloads the newest graph listed in `graphinfo.json` (resuming partial downloads), converts it, then switches `current` to the new release. It also re-queues every seed that was computed for the old release, so the new one warms up from real demand.
@@ -85,10 +130,14 @@ A full local build (`python -m commons.build --data-dir ./data --work-dir ./work
 | `COMMONS_THREADS` | `4` | DuckDB threads for queries |
 | `COMMONS_BUILD_MEM` | `14GB` | DuckDB memory limit for the builder |
 | `COMMONS_WORK_DIR` | `./work` | Builder scratch space |
+| `COMMONS_GITHUB_TOKEN` | unset | Read-only GitHub token for commit-author email patterns |
+| `COMMONS_HOST_GAP_S` | `1.0` | Minimum seconds between requests to one host |
 
 ## Not in this PR
 
 - **Deployment.** The GCP project, bucket, service account, Cloud Run service and job, and the quarterly Cloud Batch schedule still need to be created. `cloudbuild.yaml` only builds the image.
-- **The Scout client.** Scout's `commons.py` (spec `lib/scout/commons.py`) calls `/neighbors` when `PAPR_COMMONS` is set and otherwise uses its own sources. It will ship in the Scout app.
-- **The other Commons data**: email patterns, job boards, domain cache, open-data recipes and Overture extracts.
+- **The Scout client.** Scout's `commons.py` (spec `lib/scout/commons.py`) calls Commons when `PAPR_COMMONS` is set and otherwise uses its own sources. It will ship in the Scout app.
+- **Domain cache and Overture extracts** from the original Commons proposal.
+- **ArcGIS and CKAN** dataset definitions (Socrata only for now).
+- **Automatic dataset discovery.** Scout installs submit definitions; Commons only checks and shares them.
 - **Sister-brand filtering** (same registrant, or a redirect to the seed). That needs page fetches, so Scout does it client-side.
