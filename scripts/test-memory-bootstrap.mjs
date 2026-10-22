@@ -3,6 +3,8 @@
  * Manual integration test for chat-start memory bootstrap.
  * Run: node --import tsx scripts/test-memory-bootstrap.mjs
  */
+// Deliberately uses the REAL workspace — needs PAPR_E2E_REAL_HOME=1.
+import "./lib/requireRealWorkspace.mjs";
 import dotenv from "dotenv";
 import { resolve } from "path";
 

@@ -11,6 +11,9 @@ import os from "os";
 import path from "path";
 
 if (process.env.PAPR_E2E_REAL_HOME !== "1") {
+  // Keychain helpers (scripts/lib/testEnv.mjs) read the key from the real
+  // home read-only; they spawn with this instead of the temp HOME.
+  process.env.PAPR_E2E_ORIGINAL_HOME ??= os.homedir();
   const home = fs.mkdtempSync(path.join(os.tmpdir(), "papr-e2e-home-"));
   fs.mkdirSync(path.join(home, "Papr"), { recursive: true });
   fs.mkdirSync(path.join(home, ".paprwork-v2"), { recursive: true });
