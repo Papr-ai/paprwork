@@ -45,6 +45,7 @@ import { fileURLToPath } from "url";
 import { initializeAgentService } from "./services/AgentService.js";
 import { registerAppFilesRoutes } from "./services/appFiles/appFilesRoutes.js";
 import { registerAppSearchRoutes } from "./services/appSearch/appSearchRoutes.js";
+import { registerEntitiesRoutes } from "./services/entities/entitiesRoutes.js";
 import { registerChatgptHistoryRoutes } from "./services/chatgptHistoryRoutes.js";
 import { registerMcpRoutes } from "./services/mcp/mcpRoutes.js";
 import {
@@ -1972,6 +1973,48 @@ async function startGateway(): Promise<void> {
     registerMcpRoutes(app);
     // App search: a mini-app's items in Papr Memory, found by meaning (papr.search.*).
     registerAppSearchRoutes(app, { resolveAppId: (req, appId) => resolveRequestAppId(req, appId) });
+    // Entities: shared identity across apps via a schema pack (papr.entities.*, entities.json).
+    registerEntitiesRoutes(app, {
+      resolveAppId: (req, appId) => resolveRequestAppId(req, appId),
+      readManifest: async (appId) => {
+        const raw = await getAppService().readAppFile(appId, "entities.json");
+        return raw === null ? null : (JSON.parse(raw) as unknown);
+      },
+      sqlPort: async (appId, sourceAlias) => {
+        const config = await getAppService().getDataSourcesConfig(appId);
+        const source = config.sources.find((s) => s.alias === sourceAlias || s.id === sourceAlias);
+        if (!source) {
+          throw Object.assign(new Error(`Data source '${sourceAlias}' is not linked to this app`), { status: 404 });
+        }
+        return {
+          query: async (sql, params) => (await dbRouter.query(appId, source, sql, params)).rows,
+          run: async (sql, params) => {
+            await dbRouter.write(appId, source, sql, params);
+          },
+          exec: (sql) => dbRouter.exec(appId, source, sql),
+        };
+      },
+      graphPort: async (appId, manifest) => {
+        const { memoryGraphPort } = await import("./services/entities/entitiesGraph.js");
+        const { getPaprClient } = await import("../core/tools/paprClient.js");
+        const { paprMemoryScopeSpread } = await import("./utils/memoryScopeResolver.js");
+        const client = await getPaprClient();
+        const packName = manifest.pack.split("@")[0]!.replace("/", ".");
+        const schemas = (await client.schemas.list({}).catch(() => null)) as { data?: Array<{ id?: string; name?: string; status?: string }> } | null;
+        const schemaId = schemas?.data?.find((s) => s.name === packName && s.status === "active")?.id ?? null;
+        return memoryGraphPort(
+          {
+            add: async (body) => {
+              const res = (await client.memory.add({ ...body, ...(await paprMemoryScopeSpread()) } as never)) as {
+                data?: Array<{ memoryId?: string }> | null;
+              };
+              return { memoryId: res.data?.[0]?.memoryId ?? null };
+            },
+          },
+          { appId, pack: manifest.pack, schemaId },
+        );
+      },
+    });
     registerAppFilesRoutes(app, {
       resolveSource: (appId, sourceId, sql, operation) =>
         resolveLinkedSource(appId, sourceId, sql, operation),
