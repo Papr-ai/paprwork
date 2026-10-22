@@ -132,7 +132,10 @@ export function buildProposalChangeSet(trees: ProposalTree[]): ProposalChangeSet
       }
 
       if (base !== undefined && same(base, content)) continue;
-      if (tree.kind === "migrations" || /(^|\/)migrations\/[^/]+\.sql$/.test(rel)) {
+      // Only .sql files are migrations. Other files in a migrations folder
+      // (snapshot.json, the schema snapshot) change over time and are never in the
+      // ledger, so treating them as migrations blocked every proposal (#503).
+      if (/\.sql$/.test(rel) && (tree.kind === "migrations" || /(^|\/)migrations\/[^/]+\.sql$/.test(rel))) {
         // Applied migrations are immutable: the publisher's copy wins, always.
         if (base !== undefined) {
           immutableSkipped.push(repoPath);

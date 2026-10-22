@@ -180,6 +180,22 @@ describe("proposal migrations must have run", () => {
     expect(() => assertProposalMigrationsApplied(c)).toThrow(/Couldn't read/);
   });
 
+  it("snapshot.json in a migrations folder is not a migration (#503)", () => {
+    const t = tree(new Set(["0008_tables", "0009_trigger"]));
+    t.local.set("snapshot.json", '{"tables":["b"]}');
+    t.base.set("snapshot.json", '{"tables":["a"]}');
+    const c = buildProposalChangeSet([t]);
+    expect(c.unapplied).toEqual([]);
+    expect(c.unverified).toEqual([]);
+    expect(() => assertProposalMigrationsApplied(c)).not.toThrow();
+    expect([...c.writes.keys()]).toContain("databases/contacts/migrations/snapshot.json");
+    // and it never trips the unreadable-ledger guard either
+    const u = tree(null);
+    u.local = new Map([["snapshot.json", "{}"]]);
+    u.base = new Map();
+    expect(buildProposalChangeSet([u]).unverified).toEqual([]);
+  });
+
   it("job migration trees without a ledger check are unaffected", () => {
     const c = buildProposalChangeSet([tree(undefined)]);
     expect(c.unapplied).toEqual([]);
