@@ -17,6 +17,8 @@
  * Run: node scripts/test-jobs-advanced.mjs
  */
 
+// Must stay first: isolates HOME before any gateway module resolves paths.
+import "./lib/isolateHome.mjs";
 import { getJobsService } from "../dist/gateway/services/JobsService.js";
 import { getJobRunHistory } from "../dist/gateway/services/jobs/JobRunHistory.js";
 
@@ -67,6 +69,7 @@ async function testAgentJobExecution() {
 
   log("Creating agent job...");
   const job = await jobsService.createJob({
+    appIds: ["__standalone__"],
     name: "E2E Test: Agent Execution",
     type: "agent",
     command: 'Say "Agent job executed successfully" and nothing else.',
@@ -126,6 +129,7 @@ async function testScheduledAgentJob() {
 
   log("Creating scheduled agent job (1-minute interval)...");
   const job = await jobsService.createJob({
+    appIds: ["__standalone__"],
     name: "E2E Test: Scheduled Agent",
     type: "agent",
     command: 'Say "Scheduled agent run" and nothing else.',
@@ -167,6 +171,7 @@ async function testJobPersistence() {
 
   log("Creating persistent job with schedule...");
   const job = await jobsService.createJob({
+    appIds: ["__standalone__"],
     name: "E2E Test: Persistence",
     type: "bash",
     command: 'echo "Persistent job"',
@@ -223,6 +228,7 @@ async function testScheduleReconciliation() {
 
   log("Creating job with stale nextRunAt...");
   const job = await jobsService.createJob({
+    appIds: ["__standalone__"],
     name: "E2E Test: Stale Schedule",
     type: "bash",
     command: 'echo "Reconciled"',
@@ -283,6 +289,7 @@ async function testInterruptedJobRecovery() {
 
   log("Creating job and marking as 'running' (simulating interruption)...");
   const job = await jobsService.createJob({
+    appIds: ["__standalone__"],
     name: "E2E Test: Interrupted Job",
     type: "bash",
     command: 'echo "This would have been running"',
@@ -336,6 +343,7 @@ async function testAgentJobRetry() {
   warn("Note: This test requires API keys/OAuth configured");
   
   const job = await jobsService.createJob({
+    appIds: ["__standalone__"],
     name: "E2E Test: Agent Retry",
     type: "agent",
     command: 'Generate a random number between 1 and 10.',
@@ -384,6 +392,7 @@ async function testScheduledJobsAfterRestart() {
   log("Creating multiple scheduled jobs...");
   
   const job1 = await jobsService.createJob({
+    appIds: ["__standalone__"],
     name: "E2E Test: Restart Job 1",
     type: "bash",
     command: 'echo "Job 1"',
@@ -394,6 +403,7 @@ async function testScheduledJobsAfterRestart() {
   });
 
   const job2 = await jobsService.createJob({
+    appIds: ["__standalone__"],
     name: "E2E Test: Restart Job 2",
     type: "bash",
     command: 'echo "Job 2"',
@@ -465,6 +475,7 @@ async function testRunHistoryPersistence() {
 
   log("Creating job and running it multiple times...");
   const job = await jobsService.createJob({
+    appIds: ["__standalone__"],
     name: "E2E Test: History Persistence",
     type: "bash",
     command: 'echo "Run complete"',
@@ -532,6 +543,7 @@ async function testMissedScheduleHandling() {
 
   log("Creating job with missed schedule (nextRunAt in past)...");
   const job = await jobsService.createJob({
+    appIds: ["__standalone__"],
     name: "E2E Test: Missed Schedule",
     type: "bash",
     command: 'echo "Catching up"',
@@ -598,6 +610,7 @@ async function testConcurrentJobPrevention() {
 
   log("Creating long-running job...");
   const job = await jobsService.createJob({
+    appIds: ["__standalone__"],
     name: "E2E Test: Long Running",
     type: "bash",
     command: 'sleep 3 && echo "Long job done"',
