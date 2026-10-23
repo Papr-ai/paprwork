@@ -277,13 +277,13 @@ npm run test:jobs-e2e && npm run test:jobs-advanced
 ### Run Unit Tests (CI)
 ```bash
 # Error classification + run history
-npm test -- tests/jobs-e2e-simple.test.ts
+npm test -- tests/jobs/jobs-e2e-simple.test.ts
 
 # Schedule engine logic
-npm test -- tests/schedule-engine.test.ts
+npm test -- tests/jobs/schedule-engine.test.ts
 
 # Stale job reconciliation
-npm test -- tests/jobs-stale-reconcile.test.ts
+npm test -- tests/jobs/jobs-stale-reconcile.test.ts
 ```
 
 ---
@@ -403,9 +403,9 @@ Full job execution tests in Vitest skip due to worker serialization issues. Manu
 2. [`scripts/test-jobs-advanced.mjs`](../scripts/test-jobs-advanced.mjs) - Advanced scenarios (8 tests)
 
 ### Test Files
-3. [`tests/jobs-e2e-simple.test.ts`](../tests/jobs-e2e-simple.test.ts) - Vitest unit tests (6 tests)
-4. [`tests/schedule-engine.test.ts`](../tests/schedule-engine.test.ts) - Schedule logic tests (5 tests)
-5. [`tests/jobs-stale-reconcile.test.ts`](../tests/jobs-stale-reconcile.test.ts) - Reconciliation tests (3 tests)
+3. [`tests/jobs/jobs-e2e-simple.test.ts`](../tests/jobs/jobs-e2e-simple.test.ts) - Vitest unit tests (6 tests)
+4. [`tests/jobs/schedule-engine.test.ts`](../tests/jobs/schedule-engine.test.ts) - Schedule logic tests (5 tests)
+5. [`tests/jobs/jobs-stale-reconcile.test.ts`](../tests/jobs/jobs-stale-reconcile.test.ts) - Reconciliation tests (3 tests)
 
 ### Documentation
 6. [`docs/E2E_JOB_TESTING_GUIDE.md`](./E2E_JOB_TESTING_GUIDE.md) - Complete testing guide

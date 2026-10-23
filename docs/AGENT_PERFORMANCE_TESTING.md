@@ -306,7 +306,7 @@ If a message is unusually slow:
 
 ## Related Files
 
-- **Test**: `tests/agent-performance-scaling.test.ts`
+- **Test**: `tests/agent/agent-performance-scaling.test.ts`
 - **Runner**: `scripts/run-perf-tests.mjs`
 - **Agent Service**: `src/gateway/services/AgentService.ts`
 - **WebSocket Handler**: `src/gateway/websocket/agent.ts`

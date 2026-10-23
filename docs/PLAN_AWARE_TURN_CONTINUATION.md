@@ -121,7 +121,7 @@ ai-sdk continuation is not merged into the turn's reported usage.
 **Added**
 - `src/gateway/services/agent/turnContinuation.ts` — decision matrix, handoff
   detection, nudge builder
-- `tests/turn-continuation.test.ts` — 30 tests; the handoff cases use verbatim
+- `tests/agent/turn-continuation.test.ts` — 30 tests; the handoff cases use verbatim
   trailing text from the logged failures
 
 **Changed**

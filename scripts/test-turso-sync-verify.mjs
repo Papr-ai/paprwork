@@ -9,6 +9,8 @@
  *   PAPR_MEMORY_SERVER_URL — default https://memory.papr.ai
  *   PAPR_API_KEY — required for live Turso usage sample only
  */
+// Deliberately uses the REAL workspace — needs PAPR_E2E_REAL_HOME=1.
+import "./lib/requireRealWorkspace.mjs";
 import Database from "better-sqlite3";
 import * as fs from "fs";
 import * as os from "os";

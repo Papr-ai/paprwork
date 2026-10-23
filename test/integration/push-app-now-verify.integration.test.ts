@@ -28,7 +28,7 @@ describe("CloudSyncService.pushAppNow", () => {
   it("delegates to ordered flushAppNow pipeline", async () => {
     await service.pushAppNow("app-fixture-1");
 
-    expect(mockFlushAppNow).toHaveBeenCalledWith(service, "app-fixture-1");
+    expect(mockFlushAppNow).toHaveBeenCalledWith(expect.anything(), "app-fixture-1", { skipTursoReschedule: true });
   });
 
   it("propagates flush failures", async () => {

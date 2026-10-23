@@ -9,6 +9,8 @@
  *     --teammate-user=l6UFSw9m4T
  */
 
+// Must stay first: runs in a temp workspace, never the real ~/Papr.
+import "./lib/isolateHome.mjs";
 import { mkdtempSync, rmSync, readFileSync, existsSync, mkdirSync, writeFileSync } from "fs";
 import { homedir, tmpdir } from "os";
 import { join } from "path";

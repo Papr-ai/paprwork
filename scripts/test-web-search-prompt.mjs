@@ -7,6 +7,8 @@
  * documentation based on the provider.
  */
 
+// Must stay first: runs in a temp workspace, never the real ~/Papr.
+import "./lib/isolateHome.mjs";
 import { buildSystemPrompt } from "../dist/core/agents/SystemPrompt.js";
 
 async function testWebSearchPrompt() {

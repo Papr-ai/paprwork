@@ -4,6 +4,8 @@
  * Tests that duplicate plans are blocked at tool level
  */
 
+// Must stay first: runs in a temp workspace, never the real ~/Papr.
+import "./lib/isolateHome.mjs";
 import { fileURLToPath } from 'url';
 import { dirname, join } from 'path';
 import os from 'os';

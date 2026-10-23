@@ -12,6 +12,8 @@
  * Phases: install, hold, propose, settle, cloudcheck, cleanup
  * Approve/reject happen in between, as the owner (resolve_cloud_app_pr).
  */
+// Must stay first: runs in a temp workspace, never the real ~/Papr.
+import "./lib/isolateHome.mjs";
 import { existsSync, mkdirSync, readFileSync, readdirSync, rmSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { pathToFileURL } from "node:url";
