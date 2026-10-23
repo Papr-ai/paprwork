@@ -29,7 +29,8 @@ async function flush() { for (let i = 0; i < 60; i++) await Promise.resolve(); }
 beforeEach(() => {
   vi.clearAllMocks();
   mocks.push.mockResolvedValue(result); mocks.mirror.mockResolvedValue({ upserted: 0, pruned: 0 }); mocks.reconcile.mockResolvedValue({});
-  mocks.schedule.mockImplementation((_name, run) => { void run(); });
+  // The real scheduler catches; without this a run outliving the test (real fetch restored) is an unhandled rejection.
+  mocks.schedule.mockImplementation((_name, run) => { void run().catch(() => undefined); });
   vi.stubGlobal("fetch", vi.fn().mockResolvedValue({ ok: true, json: async () => ({ keys: [] }) }));
 });
 afterEach(() => { vi.useRealTimers(); vi.unstubAllGlobals(); });

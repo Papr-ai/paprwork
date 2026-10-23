@@ -12,6 +12,7 @@ vi.mock("../src/gateway/services/syncV3/finalizeAppRepoMutation.js", () => ({
   finalizeAppRepoMutation,
 }));
 
+vi.mock("../src/gateway/services/cloudAppMetadataFile.js", () => ({ writeCloudAppMetadataFile: vi.fn(async () => undefined) }));
 vi.mock("../src/core/utils/paprRoot.js", () => ({
   getPaprRoot,
 }));

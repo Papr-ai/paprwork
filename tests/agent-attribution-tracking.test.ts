@@ -6,7 +6,7 @@
 import { describe, it, expect, beforeEach, afterEach } from "vitest";
 import { LocalStorageProvider } from "../src/gateway/services/storage/LocalStorageProvider.js";
 import { DocumentService } from "../src/gateway/services/DocumentService.js";
-import { AppService } from "../src/gateway/services/AppService.js";
+import { AppService, getAppService, resetAppServiceSingletonForTests } from "../src/gateway/services/AppService.js";
 import { PlanService } from "../src/gateway/services/PlanService.js";
 import type { StoredMessage } from "../src/gateway/services/storage/IStorageProvider.js";
 import * as fs from "fs-extra";
@@ -47,7 +47,9 @@ describe("Agent Attribution Tracking", () => {
     documentService = new DocumentService();
     await documentService.initialize();
 
-    appService = new AppService();
+    // getAgentOutputs reads the AppService singleton, so the test must use it too.
+    resetAppServiceSingletonForTests();
+    appService = getAppService();
     await appService.initialize();
 
     planService = new PlanService();
@@ -66,7 +68,7 @@ describe("Agent Attribution Tracking", () => {
     else process.env.HOME = originalHome;
     if (originalPaprHome === undefined) delete process.env.PAPR_HOME;
     else process.env.PAPR_HOME = originalPaprHome;
-    await fs.remove(TEST_DATA_PATH);
+    await fs.rm(TEST_DATA_PATH, { recursive: true, force: true, maxRetries: 5, retryDelay: 50 });
   });
 
   describe("Message Token & Cost Tracking", () => {
@@ -110,13 +112,15 @@ describe("Agent Attribution Tracking", () => {
           timestamp: new Date().toISOString(),
           sync_status: "local",
           model: "gpt-5-mini",
+          prompt_tokens: 80,
+          completion_tokens: 20,
           total_tokens: 100,
           cost: 0.001,
           source_agent_id: TEST_AGENT_ID,
-          tool_calls: JSON.stringify([
-            { name: "read_file", args: {} },
-            { name: "bash", args: {} },
-          ]),
+          toolCalls: [
+            { id: "t1", name: "read_file", args: {} },
+            { id: "t2", name: "bash", args: {} },
+          ] as any,
         },
         {
           id: "msg-2",
@@ -126,10 +130,12 @@ describe("Agent Attribution Tracking", () => {
           timestamp: new Date().toISOString(),
           sync_status: "local",
           model: "gpt-5-mini",
+          prompt_tokens: 150,
+          completion_tokens: 50,
           total_tokens: 200,
           cost: 0.002,
           source_agent_id: TEST_AGENT_ID,
-          tool_calls: JSON.stringify([{ name: "read_file", args: {} }]),
+          toolCalls: [{ id: "t3", name: "read_file", args: {} }] as any,
         },
       ];
 

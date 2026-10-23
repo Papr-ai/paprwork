@@ -51,7 +51,7 @@ describe("BundleService", () => {
       command: "python3 -c \"print('ok')\"",
     });
 
-    const manifest = await bundleService.exportBundle({
+    const { manifest } = await bundleService.exportBundle({
       appId: app.id,
       bundleId: "bundle-one",
       name: "Bundle One",

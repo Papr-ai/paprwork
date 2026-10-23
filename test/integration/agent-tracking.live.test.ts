@@ -49,11 +49,10 @@ describe("Agent Integration Tests - Real Agent Calls", () => {
     await storageManager.initialize({ mode: "local", userDataPath: TEST_DATA_PATH });
 
     // Initialize agent service
-    await initializeAgentService({
-      storageManager,
+    agentService = await initializeAgentService({
+      mode: "local",
       userDataPath: TEST_DATA_PATH,
     });
-    agentService = AgentService.getInstance();
 
     // Initialize other services
     documentService = await initializeDocumentService();

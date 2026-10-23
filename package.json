@@ -50,6 +50,8 @@
     "test:stack:smoke:full": "node scripts/test-stack.mjs smoke --full",
     "test:stack:smoke:full-local": "node scripts/test-stack.mjs smoke --full --with-memory-local",
     "test:sequential": "node scripts/run-all-tests-sequential.mjs",
+    "test:build": "vitest run --project build",
+    "test:live": "vitest run --project live",
     "test:unit": "vitest run --project unit-backend --reporter=verbose",
     "test:ui": "vitest run --project unit-ui --reporter=verbose",
     "test:integration": "vitest run --project integration --reporter=verbose",

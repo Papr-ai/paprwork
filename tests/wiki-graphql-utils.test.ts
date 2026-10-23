@@ -27,19 +27,18 @@ describe("wikiGraphqlUtils", () => {
     expect(graphqlStringEq("id", "")).toBeNull();
   });
 
-  it("graphqlNameContainsWhere uses name_CONTAINS", () => {
+  // Memory GraphQL uses StringScalarFilters; name_CONTAINS does not exist (Aug 19).
+  it("graphqlNameContainsWhere uses nested contains filter", () => {
     expect(graphqlNameContainsWhere("Pivotvia")).toBe(
-      '{ name_CONTAINS: "Pivotvia" }',
+      '{ name: { contains: "Pivotvia" } }',
     );
     expect(graphqlNameContainsWhere("")).toBeNull();
   });
 
-  it("wrapWikiGraphQLSelection rejects nested contains filters", () => {
-    expect(() =>
-      wrapWikiGraphQLSelection(
-        'people(where: { name: { contains: "x" } }) { id }',
-      ),
-    ).toThrow(/field_CONTAINS/i);
+  it("wrapWikiGraphQLSelection accepts nested contains filters", () => {
+    expect(
+      wrapWikiGraphQLSelection('people(where: { name: { contains: "x" } }) { id }'),
+    ).toBe('{ people(where: { name: { contains: "x" } }) { id } }');
   });
 
   it("wrapWikiGraphQLSelection accepts valid selections", () => {

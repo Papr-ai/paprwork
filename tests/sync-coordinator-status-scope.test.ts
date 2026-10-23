@@ -10,6 +10,18 @@ import {
   saveTursoSyncState,
 } from "../src/gateway/services/tursoSyncState.js";
 import { useIsolatedPaprWorkspace } from "./setup/isolatedWorkspace.js";
+import Database from "better-sqlite3";
+import { SYNC_LOG_TABLE } from "../src/gateway/services/tursoSyncLog.js";
+
+function writeDbWithPendingChange(file: string): void {
+  const db = new Database(file);
+  db.exec(
+    `CREATE TABLE IF NOT EXISTS ${SYNC_LOG_TABLE} (id INTEGER PRIMARY KEY AUTOINCREMENT, tbl TEXT, op TEXT, row_pk TEXT, payload TEXT, created_at TEXT);`,
+  );
+  db.prepare(`INSERT INTO ${SYNC_LOG_TABLE} (tbl, op, row_pk) VALUES ('items', 'insert', '1')`).run();
+  db.close();
+}
+
 
 function writeDataSources(
   paprDir: string,
@@ -47,9 +59,9 @@ describe("SyncCoordinator.getStatus app-scoped db dirty keys", () => {
     fs.mkdirSync(path.dirname(dbA), { recursive: true });
     fs.mkdirSync(path.dirname(dbB), { recursive: true });
     fs.mkdirSync(path.dirname(dbOut), { recursive: true });
-    fs.writeFileSync(dbA, "sqlite");
-    fs.writeFileSync(dbB, "sqlite");
-    fs.writeFileSync(dbOut, "sqlite");
+    // Real DBs with one unpushed change-log row each — the dirty check reads
+    // the change log, so placeholder files always look clean.
+    for (const file of [dbA, dbB, dbOut]) writeDbWithPendingChange(file);
 
     writeDataSources(paprDir, "app-1", "db-a", dbA);
     writeDataSources(paprDir, "app-2", "db-b", dbB);

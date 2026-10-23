@@ -142,6 +142,7 @@ describe("cloud publish ACL regression (GTM / public community)", () => {
       linkPermission: "read_write",
       shareLinkEnabled: true,
       requireSignIn: true,
+      communityCatalogListed: false,
     });
   });
 

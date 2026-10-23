@@ -11,6 +11,8 @@
  *   PAPR_MEMORY_SERVER_URL=http://127.0.0.1:5001 node --import tsx scripts/test-subagents-metadata-e2e.ts
  */
 
+// Deliberately uses the REAL workspace — needs PAPR_E2E_REAL_HOME=1.
+import "./lib/requireRealWorkspace.mjs";
 import { createServer, type Server } from "node:http";
 import { mkdtempSync, readFileSync, rmSync, writeFileSync, mkdirSync, existsSync } from "node:fs";
 import { tmpdir } from "node:os";

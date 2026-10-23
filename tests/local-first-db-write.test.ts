@@ -26,6 +26,8 @@ describe("local-first db write", () => {
   } as unknown as DbRouter;
 
   beforeEach(() => {
+    // Each test doMocks different modules; drop the cached graph so they apply.
+    vi.resetModules();
     vi.clearAllMocks();
     delete process.env.CLOUD_SYNC_ENABLED;
   });
@@ -68,6 +70,12 @@ describe("local-first db write", () => {
     const scheduleTursoPushForJob = vi.fn();
     vi.doMock("../src/gateway/services/tursoPushScheduler.js", () => ({
       scheduleTursoPushForJob,
+    }));
+    // Fresh workspaces have auto-upload off; this test is about local-first
+    // ordering, so turn it on.
+    vi.doMock("../src/gateway/services/cloudUploadMode.js", async (importOriginal) => ({
+      ...(await importOriginal<typeof import("../src/gateway/services/cloudUploadMode.js")>()),
+      shouldAutoUploadReplicaSyncKey: () => true,
     }));
 
     const { writeLinkedDbRowLocalFirst } = await import(

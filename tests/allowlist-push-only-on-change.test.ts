@@ -14,7 +14,15 @@ vi.mock("../src/gateway/services/cloudSync/notifyCloudAppRevision.js", () => ({
 
 import { scheduleCloudAppHostAccessInvalidation } from "../src/gateway/services/cloudAppPublishAllowlistSync.js";
 
-const flush = () => new Promise((r) => setTimeout(r, 50));
+// The push runs after a dynamic import + file write; a fixed 50ms wait was
+// too short on 2-CPU CI. Wait for the expected count, then give a stray
+// extra push time to show up.
+const settle = () => new Promise((r) => setTimeout(r, 150));
+const expectPushes = async (n: number) => {
+  await vi.waitFor(() => expect(push).toHaveBeenCalledTimes(n), { timeout: 3000 });
+  await settle();
+  expect(push).toHaveBeenCalledTimes(n);
+};
 
 describe("scheduleCloudAppHostAccessInvalidation", () => {
   let dir = "";
@@ -30,16 +38,15 @@ describe("scheduleCloudAppHostAccessInvalidation", () => {
     const config = { shareUrl: null, slug: null } as never;
 
     scheduleCloudAppHostAccessInvalidation(dir, "app-1", config, prefs);
-    await flush();
-    expect(push).toHaveBeenCalledTimes(1);
+    await expectPushes(1);
 
     // Regression: every catalog update (each publish) pushed again → ~20s loop.
     scheduleCloudAppHostAccessInvalidation(dir, "app-1", config, prefs);
-    await flush();
+    await settle();
+    await settle();
     expect(push).toHaveBeenCalledTimes(1);
 
     scheduleCloudAppHostAccessInvalidation(dir, "app-1", config, { ...prefs, allowedUserIds: ["u2"] });
-    await flush();
-    expect(push).toHaveBeenCalledTimes(2);
+    await expectPushes(2);
   });
 });

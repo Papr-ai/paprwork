@@ -2732,6 +2732,14 @@ export class JobsService {
 
     const runSanitizationValues = launch.sanitizationValues ?? [];
 
+    // The child is already running. Capture its exit now: a fast command
+    // (`echo`) can finish during the awaits below, and a "close" listener
+    // attached afterwards never fires, leaving the job "running" until the
+    // 30-minute watchdog.
+    const earlyExit = launch.mode === "process" && launch.process
+      ? captureEarlyProcessExit(launch.process)
+      : undefined;
+
     // Sanitize command before logging (replace API key values with ***)
     const sanitizedCommand = await this.sanitizeCommandForLogging(
       launch.command,
@@ -2822,7 +2830,7 @@ export class JobsService {
         );
         void appendRunLog(`[stderr] ${sanitized}`);
       });
-      proc.on("close", (code: number | null) => {
+      const onClose = (code: number | null) => {
         this.running.delete(job.id);
         destroyChildProcessStreams(proc);
         const exitCode = code ?? -1;
@@ -2830,15 +2838,17 @@ export class JobsService {
         const lastOutput =
           outputChunks.join("\n").slice(0, MAX_OUTPUT_BYTES) || undefined;
         safeResolve({ exitCode, lastOutput });
-      });
-      proc.on("error", (error: Error) => {
+      };
+      earlyExit?.onClose(onClose);
+      const onError = (error: Error) => {
         this.running.delete(job.id);
         destroyChildProcessStreams(proc);
         notifySpawnResourceError(error, `job ${job.id} spawn`);
         const formatted = formatSpawnErrorForLogs(error.message);
         void appendRunLog(`Process error: ${formatted}`);
         safeResolve({ exitCode: -1, errorMessage: formatted });
-      });
+      };
+      earlyExit?.onError(onError);
     });
   }
 
@@ -4370,4 +4380,42 @@ export async function initializeJobsService(): Promise<JobsService> {
   const service = getJobsService();
   await service.initialize();
   return service;
+}
+
+/**
+ * Record a child's "close"/"error" from the moment it is spawned and replay it
+ * to a handler attached later. Stdout/stderr "data" still needs listeners
+ * before the stream ends, so callers attach those synchronously after awaits;
+ * Node buffers piped output until a reader attaches.
+ */
+export function captureEarlyProcessExit(proc: import("child_process").ChildProcess): {
+  onClose: (handler: (code: number | null) => void) => void;
+  onError: (handler: (error: Error) => void) => void;
+} {
+  let closed: { code: number | null } | undefined;
+  let failed: Error | undefined;
+  let closeHandler: ((code: number | null) => void) | undefined;
+  let errorHandler: ((error: Error) => void) | undefined;
+  proc.once("close", (code: number | null) => {
+    closed = { code };
+    closeHandler?.(code);
+  });
+  proc.once("error", (error: Error) => {
+    failed = error;
+    errorHandler?.(error);
+  });
+  return {
+    onClose(handler) {
+      closeHandler = handler;
+      // Defer so buffered stdout/stderr reach the "data" listeners first.
+      if (closed) {
+        const { code } = closed;
+        setImmediate(() => handler(code));
+      }
+    },
+    onError(handler) {
+      errorHandler = handler;
+      if (failed) handler(failed);
+    },
+  };
 }

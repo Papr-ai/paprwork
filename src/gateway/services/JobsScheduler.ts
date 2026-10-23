@@ -32,6 +32,8 @@ let jobsSchedulerInstance: JobsScheduler | null = null;
 export class JobsScheduler {
   private static readonly BACKUP_POLL_MS = 60_000;
   private static readonly WAKE_MIN_MS = 250;
+  /** Below setTimeout's 2^31-1 ms limit. */
+  private static readonly WAKE_MAX_MS = 24 * 60 * 60 * 1000;
 
   private backupTimer: ReturnType<typeof setInterval> | null = null;
   private wakeTimer: ReturnType<typeof setTimeout> | null = null;
@@ -153,10 +155,15 @@ export class JobsScheduler {
     if (ms === null) {
       return;
     }
-    const delay =
+    // setTimeout overflows above 2^31-1 ms (~24.8 days) and fires after 1ms,
+    // which turned far-future schedules (yearly cron, distant one-shots) into
+    // a 1ms tick loop. Cap the wake; the next tick re-arms it.
+    const delay = Math.min(
       ms === 0
         ? JobsScheduler.WAKE_MIN_MS
-        : Math.max(ms, JobsScheduler.WAKE_MIN_MS);
+        : Math.max(ms, JobsScheduler.WAKE_MIN_MS),
+      JobsScheduler.WAKE_MAX_MS,
+    );
     this.wakeTimer = setTimeout(() => {
       this.wakeTimer = null;
       void this.tick();
@@ -238,7 +245,14 @@ export class JobsScheduler {
       this.runningLeases.add(leaseKey);
 
       const runLease = await tryAcquireSchedulerRunLease(job.id, dueAt);
-      if (!runLease.acquired) {
+      // When the cloud scheduler is not in charge (logged out, cloud sync off,
+      // offline), nothing else can run this slot, so a lease service that
+      // cannot answer must not stop the desktop from running the job.
+      if (!runLease.acquired && runLease.unavailable && !cloudSchedulerAuthoritative) {
+        console.warn(
+          `[JobsScheduler] Run lease unavailable for ${job.id}; running locally (cloud scheduler not authoritative)`,
+        );
+      } else if (!runLease.acquired) {
         this.runningLeases.delete(leaseKey);
         skippedRunLease++;
         continue;

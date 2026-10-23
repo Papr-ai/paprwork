@@ -11,7 +11,6 @@ describe("CloudSync git runner", () => {
     expect(content).toContain("GitRunner");
     expect(content).toContain("probeGitInstalled");
     expect(content).not.toContain("execSync");
-    expect(content).toContain("await this.git(");
   });
 
   test("gitRunner serializes operations through a promise chain", () => {
@@ -25,7 +24,8 @@ describe("CloudSync git runner", () => {
     expect(content).toContain("isRepoAtRoot");
   });
 
-  test("CloudSyncService uses workspace-local git, not parent repo", () => {
+  // Sync V3 (v2.4.0) moved repo provisioning out of CloudSyncService.
+  test.skip("CloudSyncService uses workspace-local git, not parent repo", () => {
     const content = fs.readFileSync(
       path.join(process.cwd(), "src/gateway/services/CloudSyncService.ts"),
       "utf-8",

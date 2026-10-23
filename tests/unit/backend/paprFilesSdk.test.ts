@@ -193,6 +193,10 @@ describe("papr.files.upload", () => {
           sha256: "sha",
         });
       }
+      // Dedupe still commits so the server can verify and record the file.
+      if (url === "/api/files/commit") {
+        return jsonResponse({ id: "file-1", deduped: true, verified: true });
+      }
       throw new Error(`unexpected call to ${url}`);
     }) as never);
 

@@ -51,15 +51,23 @@ describe("scanMiniAppCloudCompatibility", () => {
     expect(report.findings.some((f) => f.category === "localhost-gateway")).toBe(true);
   });
 
-  it("flags paprAPI as desktop-only", () => {
+  it("flags desktop paprAPI methods as desktop-only", () => {
     const files = new Map<string, string>([
-      ["app.js", `window.paprAPI.invoke('chat.open', {});`],
+      ["app.js", `window.paprAPI.invoke('shell.openExternal', 'https://x');`],
     ]);
     const report = buildCloudCompatibilityReport(scanMiniAppCloudCompatibility(files));
     expect(report.level).toBe("desktop-only");
   });
 
-  it("marks relative job triggers as hybrid", () => {
+  it("treats paprAPI chat.open as cloud-safe", () => {
+    const files = new Map<string, string>([
+      ["app.js", `window.paprAPI.invoke('chat.open', {});`],
+    ]);
+    const report = buildCloudCompatibilityReport(scanMiniAppCloudCompatibility(files));
+    expect(report.level).toBe("cloud-ready");
+  });
+
+  it("job triggers run in the cloud sandbox (cloud-ready)", () => {
     const files = new Map<string, string>([
       [
         "actions.js",
@@ -68,7 +76,7 @@ describe("scanMiniAppCloudCompatibility", () => {
       ["db.js", `fetch('/api/db/query', { method: 'POST' });`],
     ]);
     const report = buildCloudCompatibilityReport(scanMiniAppCloudCompatibility(files));
-    expect(report.level).toBe("hybrid");
+    expect(report.level).toBe("cloud-ready");
     expect(report.requiresAcknowledgement).toBe(false);
   });
 });

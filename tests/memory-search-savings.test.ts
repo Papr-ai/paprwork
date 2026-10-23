@@ -11,7 +11,8 @@ function createChatsDb(toolCallsJson: string): Database.Database {
     CREATE TABLE messages (
       id TEXT PRIMARY KEY,
       role TEXT,
-      tool_calls TEXT
+      tool_calls TEXT,
+      timestamp TEXT DEFAULT CURRENT_TIMESTAMP
     );
   `);
   db.prepare(
@@ -55,12 +56,13 @@ describe("computeMemorySearchSavings", () => {
     expect(stats.memorySearchCount).toBe(1);
     expect(stats.hitsAnalyzed).toBe(1);
     expect(stats.hitsWithSource).toBe(1);
+    // Source size comes from lines_of_code (disk reads were removed: sync I/O
+    // blocked the gateway), so savings ~= 100 lines minus the snippet.
     expect(stats.tokensSaved).toBeGreaterThan(0);
-    expect(stats.tokensSaved).toBeLessThan(
-      Math.ceil(sourceContent.length / 4),
-    );
   });
 
+  // Hybrid bash results have no lines_of_code; size comes only from the code
+  // index, which is not present in unit tests. Path parsing still counts.
   it("parses hybrid bash memory section file paths", () => {
     const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), "papr-bash-save-"));
     const sourceFile = path.join(tempDir, "handler.ts");
@@ -94,7 +96,6 @@ describe("computeMemorySearchSavings", () => {
     db.close();
 
     expect(stats.hybridBashCount).toBe(1);
-    expect(stats.hitsWithSource).toBe(1);
-    expect(stats.tokensSaved).toBeGreaterThan(0);
+    expect(stats.hitsAnalyzed).toBe(1);
   });
 });

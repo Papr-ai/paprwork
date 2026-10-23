@@ -59,8 +59,8 @@ describe("billable context efficiency", () => {
     db.prepare(
       `INSERT INTO messages
        (id, chat_id, role, content, timestamp, prompt_tokens, completion_tokens, total_tokens, hypothetical_prompt_tokens)
-       VALUES ('m1', 'c1', 'assistant', 'hi', '2026-07-30T12:00:00.000Z', 100, 50, 999999, 250)`,
-    ).run();
+       VALUES ('m1', 'c1', 'assistant', 'hi', ?, 100, 50, 999999, 250)`,
+    ).run(new Date().toISOString());
 
     rebuildContextStatsCacheNow(db);
     const stats = computeContextEfficiencyStats(db);

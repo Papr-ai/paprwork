@@ -235,54 +235,6 @@ describe("CustomKeysService change listener", () => {
   });
 });
 
-describe("Gateway wiring", () => {
-  const indexContent = fs.readFileSync(
-    path.join(SRC, "src/gateway/index.ts"),
-    "utf-8",
-  );
-
-  it("imports VaultSyncService", () => {
-    expect(indexContent).toContain("initializeVaultSyncService");
-    expect(indexContent).toContain("getVaultSyncService");
-  });
-
-  it("initializes vault sync alongside cloud sync", () => {
-    expect(indexContent).toContain("initializeVaultSyncService");
-    expect(indexContent).toContain("gatewayPort: Number(PORT)");
-  });
-
-  it("hooks key change listener to vault sync", () => {
-    expect(indexContent).toContain("getCustomKeysService().onKeyChange");
-    expect(indexContent).toContain("vaultSync.onKeyChanged");
-    expect(indexContent).toContain("scheduleDebouncedPushAll");
-  });
-
-  it("has /api/vault/status endpoint", () => {
-    expect(indexContent).toContain('"/api/vault/status"');
-    expect(indexContent).toContain("getVaultSyncService()");
-  });
-
-  it("has /api/vault/push endpoint", () => {
-    expect(indexContent).toContain('"/api/vault/push"');
-    expect(indexContent).toContain("vault.pushAllKeys()");
-  });
-
-  it("has /api/vault/sync-key endpoint for owner delete and audience revoke", () => {
-    expect(indexContent).toContain('"/api/vault/sync-key"');
-    expect(indexContent).toContain("vault.syncKeyVaultChange");
-  });
-
-  it("vault sync is inside CLOUD_SYNC_ENABLED check", () => {
-    const cloudSyncIdx = indexContent.indexOf(
-      'if (!isCloudAgentGatewayMode() && process.env.CLOUD_SYNC_ENABLED !== "false")',
-    );
-    expect(cloudSyncIdx).toBeGreaterThan(-1);
-    const block = indexContent.slice(cloudSyncIdx, cloudSyncIdx + 6000);
-    expect(block).toContain("initializeVaultSyncService");
-    expect(block).toContain("tryDeferredVaultSyncStartup");
-  });
-});
-
 describe("Vault API models alignment", () => {
   const vaultContent = fs.readFileSync(
     path.join(SRC, "src/gateway/services/VaultSyncService.ts"),

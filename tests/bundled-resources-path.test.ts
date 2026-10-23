@@ -3,7 +3,7 @@ import { describe, expect, test } from "vitest";
 import { resolveBundledResourcesDir } from "../src/core/utils/bundledResourcesPath.js";
 
 describe("resolveBundledResourcesDir", () => {
-  const servicesDir = path.join(process.cwd(), "dist/gateway/services");
+  const servicesDir = path.join(process.cwd(), "src/gateway/services");
 
   test("finds default-apps under dist/ in dev builds", async () => {
     const resolved = await resolveBundledResourcesDir(

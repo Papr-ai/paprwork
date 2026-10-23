@@ -16,7 +16,12 @@ describe("Job Scheduling E2E (Simplified)", () => {
 
     const runHistory = getJobRunHistory();
     await runHistory.initialize();
-  });
+ 
+    // Cold start (default apps, app registry) is slow under parallel load;
+    // warm it here so the first test's own timeout measures the job, not setup.
+    const { getAppService } = await import("../src/gateway/services/AppService.js");
+    await getAppService().initialize();
+  }, 120_000);
 
   afterAll(async () => {
     // Cleanup test jobs
@@ -179,8 +184,14 @@ describe("Job Scheduling E2E (Simplified)", () => {
       name: "E2E Test Python Job",
       appIds: [STANDALONE_APP_ID],
       type: "python",
-      command: "print('Python E2E test')",
+      command: "python3 code/main.py",
     });
+      {
+        const fsp = await import("fs/promises");
+        const dir = (jobsService as any).getJobDir(job.id);
+        await fsp.mkdir(dir + "/code", { recursive: true });
+        await fsp.writeFile(dir + "/code/main.py", "print('Python E2E test')\n");
+      }
 
     // Run the job
     const result = await jobsService.runJob(job.id);
