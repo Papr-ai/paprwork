@@ -77,7 +77,7 @@ beforeEach(() => {
   mkdirSync(path.join(root, "migrations"));
   writeFileSync(path.join(root, "migrations", "0006_seed.sql"), SEED);
 });
-afterEach(() => rmSync(root, { recursive: true, force: true }));
+afterEach(() => rmSync(root, { recursive: true, force: true, maxRetries: 5, retryDelay: 50 }));
 
 async function apply() {
   const { applyRegistryMigrationSingleRoute } = await import(

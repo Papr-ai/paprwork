@@ -383,7 +383,11 @@ describe("JobsScheduler overlapping ticks", () => {
 
     const a = scheduler.tickNow();
     const b = scheduler.tickNow();
-    await new Promise((r) => setTimeout(r, 20));
+    // Hold the lease until tick A is inside it, then give tick B time to reach
+    // the in-flight check. A fixed 20ms wait let B start after A finished on a
+    // loaded machine, so B legitimately launched again.
+    await vi.waitFor(() => expect(acquireSpy).toHaveBeenCalled(), { timeout: 3000 });
+    await new Promise((r) => setTimeout(r, 100));
     releaseAcquire();
     await Promise.all([a, b]);
 

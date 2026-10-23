@@ -17,7 +17,7 @@ describe("applyDbIdRemapToJobs", () => {
   });
 
   afterEach(async () => {
-    await fs.rm(testHome, { recursive: true, force: true });
+    await fs.rm(testHome, { recursive: true, force: true, maxRetries: 5, retryDelay: 50 });
   });
 
   it("updates jobs.json, Jobs job.json, and bundled job.json", async () => {

@@ -72,7 +72,7 @@ describe("proposal events → refresh + notices", () => {
 describe("pollProposalEvents", () => {
   let dir: string | undefined;
   afterEach(async () => {
-    if (dir) await rm(dir, { recursive: true, force: true });
+    if (dir) await rm(dir, { recursive: true, force: true, maxRetries: 5, retryDelay: 50 });
   });
 
   it("persists the cursor per user and only acts on new events", async () => {

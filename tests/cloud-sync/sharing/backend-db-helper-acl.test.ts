@@ -24,7 +24,7 @@ describe("backendDbHelper.py row _acl helpers", () => {
       );
       expect(out).toContain("python acl ok");
     } finally {
-      rmSync(dir, { recursive: true, force: true });
+      rmSync(dir, { recursive: true, force: true, maxRetries: 5, retryDelay: 50 });
     }
   });
 });

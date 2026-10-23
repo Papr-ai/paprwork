@@ -14,5 +14,5 @@ test("streams project code, excluding dependencies, loose files and symlink cycl
     expect(files.sort()).toEqual(["Jobs/j/job.js", "apps/a/main.ts", "apps/a/nested/code.py"]);
     const controller = new AbortController(); controller.abort();
     await expect(scanCodeFiles(root, controller.signal).next()).rejects.toBeDefined();
-  } finally { await rm(root, { recursive: true, force: true }); }
+  } finally { await rm(root, { recursive: true, force: true, maxRetries: 5, retryDelay: 50 }); }
 });

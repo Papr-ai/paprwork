@@ -42,7 +42,7 @@ describe("collaborators never migrate a team-shared database", () => {
     appsRoot = mkdtempSync(path.join(tmpdir(), "collab-db-"));
     for (const k of Object.keys(records)) delete records[k];
   });
-  afterEach(() => rmSync(appsRoot, { recursive: true, force: true }));
+  afterEach(() => rmSync(appsRoot, { recursive: true, force: true, maxRetries: 5, retryDelay: 50 }));
 
   it("collaborator install of a shared db: skip migrations", () => {
     records["db-1"] = { dbId: "db-1", isolation: "shared", schemaOwnerAppId: "publisher-app" };

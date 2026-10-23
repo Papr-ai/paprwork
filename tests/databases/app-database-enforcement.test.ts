@@ -97,7 +97,7 @@ describe("checkMissingTablesOnPrimaryDb", () => {
   afterEach(async () => {
     if (tempDir) {
       const { rm } = await import("fs/promises");
-      await rm(tempDir, { recursive: true, force: true });
+      await rm(tempDir, { recursive: true, force: true, maxRetries: 5, retryDelay: 50 });
     }
   });
 

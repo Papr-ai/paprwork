@@ -185,7 +185,7 @@ describe("AppService", () => {
       { filename: "index.html", content: "<h1>x</h1>" },
     ]);
     const appPath = path.join(testHomeDir, "Papr", "apps", created.id);
-    await fs.rm(appPath, { recursive: true, force: true });
+    await fs.rm(appPath, { recursive: true, force: true, maxRetries: 5, retryDelay: 50 });
     const listed = await appService.listApps();
     expect(listed.find((a) => a.id === created.id)).toBeUndefined();
   });

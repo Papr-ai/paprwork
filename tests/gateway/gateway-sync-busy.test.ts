@@ -14,7 +14,7 @@ describe("gateway sync busy state", () => {
 
   afterEach(() => {
     if (tempDir) {
-      fs.rmSync(tempDir, { recursive: true, force: true });
+      fs.rmSync(tempDir, { recursive: true, force: true, maxRetries: 5, retryDelay: 50 });
     }
   });
 

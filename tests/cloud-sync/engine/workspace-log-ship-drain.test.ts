@@ -57,7 +57,7 @@ afterEach(() => {
   appendCalls.length = 0;
   testPaprRoot = "";
   for (const dir of tempDirs.splice(0)) {
-    fs.rmSync(dir, { recursive: true, force: true });
+    fs.rmSync(dir, { recursive: true, force: true, maxRetries: 5, retryDelay: 50 });
   }
   vi.clearAllMocks();
 });

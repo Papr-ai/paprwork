@@ -57,7 +57,7 @@ describe("paprRoot test guard", () => {
     try {
       expect(() => getPaprRoot()).not.toThrow();
     } finally {
-      fs.rmSync(dir, { recursive: true, force: true });
+      fs.rmSync(dir, { recursive: true, force: true, maxRetries: 5, retryDelay: 50 });
     }
   });
 

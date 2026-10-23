@@ -46,7 +46,7 @@ describe("LocalStorageProvider.patchDelegateTaskToolResult", () => {
   });
 
   afterEach(() => {
-    fs.rmSync(tmpDir, { recursive: true, force: true });
+    fs.rmSync(tmpDir, { recursive: true, force: true, maxRetries: 5, retryDelay: 50 });
   });
 
   it("updates stored delegate_task result when delegation completes", () => {

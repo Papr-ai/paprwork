@@ -95,7 +95,7 @@ describe("wikiGraphHelpers", () => {
     delete process.env.PAPR_HOME;
     delete process.env.GATEWAY_MODE;
     clearAppsTitleCache();
-    fs.rmSync(tmp, { recursive: true, force: true });
+    fs.rmSync(tmp, { recursive: true, force: true, maxRetries: 5, retryDelay: 50 });
   });
 
   it("resolveUuidToDisplayName returns null for unknown UUIDs", () => {
@@ -122,7 +122,7 @@ describe("wikiGraphHelpers", () => {
     delete process.env.PAPR_HOME;
     delete process.env.GATEWAY_MODE;
     clearAppsTitleCache();
-    fs.rmSync(tmp, { recursive: true, force: true });
+    fs.rmSync(tmp, { recursive: true, force: true, maxRetries: 5, retryDelay: 50 });
   });
 });
 
@@ -163,6 +163,6 @@ describe("codeIndexMetadata", () => {
     delete process.env.PAPR_HOME;
     delete process.env.GATEWAY_MODE;
     clearAppsTitleCache();
-    fs.rmSync(tmp, { recursive: true, force: true });
+    fs.rmSync(tmp, { recursive: true, force: true, maxRetries: 5, retryDelay: 50 });
   });
 });

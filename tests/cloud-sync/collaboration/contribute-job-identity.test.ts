@@ -107,7 +107,7 @@ describe("folded job in the change set", () => {
 describe("data/jobs.json in proposals", () => {
   const dirs: string[] = [];
   afterEach(() => {
-    for (const d of dirs.splice(0)) fs.rmSync(d, { recursive: true, force: true });
+    for (const d of dirs.splice(0)) fs.rmSync(d, { recursive: true, force: true, maxRetries: 5, retryDelay: 50 });
   });
 
   function setup() {

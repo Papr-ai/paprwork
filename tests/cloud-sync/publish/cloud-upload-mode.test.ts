@@ -17,7 +17,7 @@ describe("cloudUploadMode", () => {
 
   afterEach(() => {
     for (const dir of tmpDirs) {
-      fs.rmSync(dir, { recursive: true, force: true });
+      fs.rmSync(dir, { recursive: true, force: true, maxRetries: 5, retryDelay: 50 });
     }
     tmpDirs.length = 0;
   });

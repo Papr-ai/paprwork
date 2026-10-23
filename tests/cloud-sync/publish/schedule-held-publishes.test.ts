@@ -21,7 +21,7 @@ beforeEach(() => {
 });
 afterEach(() => {
   delete process.env.PAPR_HOME;
-  fs.rmSync(root, { recursive: true, force: true });
+  fs.rmSync(root, { recursive: true, force: true, maxRetries: 5, retryDelay: 50 });
 });
 
 describe("scheduleHeldPublishes", () => {

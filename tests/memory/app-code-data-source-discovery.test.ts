@@ -12,7 +12,7 @@ describe("appCodeDataSourceDiscovery", () => {
   });
 
   afterEach(async () => {
-    await fs.rm(tempDir, { recursive: true, force: true });
+    await fs.rm(tempDir, { recursive: true, force: true, maxRetries: 5, retryDelay: 50 });
   });
 
   it("finds job databases from /api/db/query jobId and dist bundles", async () => {

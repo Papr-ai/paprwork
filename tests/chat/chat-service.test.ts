@@ -33,7 +33,7 @@ describe("ChatService", () => {
     } else {
       process.env.HOME = originalHome;
     }
-    await fs.rm(testHomeDir, { recursive: true, force: true });
+    await fs.rm(testHomeDir, { recursive: true, force: true, maxRetries: 5, retryDelay: 50 });
   });
 
   test("creates and lists chats", async () => {

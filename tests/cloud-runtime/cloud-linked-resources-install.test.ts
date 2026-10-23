@@ -155,8 +155,8 @@ describe("cloud linked resources (install/sync)", () => {
     } else {
       process.env.PAPR_HOME = originalPaprHome;
     }
-    await fs.rm(sourceHome, { recursive: true, force: true });
-    await fs.rm(targetHome, { recursive: true, force: true });
+    await fs.rm(sourceHome, { recursive: true, force: true, maxRetries: 5, retryDelay: 50 });
+    await fs.rm(targetHome, { recursive: true, force: true, maxRetries: 5, retryDelay: 50 });
   });
 
   it("syncAppLinkedResourcesToTarget copies jobs bundled under apps/{id}/jobs", async () => {
@@ -244,7 +244,7 @@ describe("cloud linked resources (install/sync)", () => {
       fs.access(path.join(targetHome, "Jobs", bundledOnlyJobId, "job.json")),
     ).resolves.toBeUndefined();
 
-    await fs.rm(bundledSourceHome, { recursive: true, force: true });
+    await fs.rm(bundledSourceHome, { recursive: true, force: true, maxRetries: 5, retryDelay: 50 });
   });
 
   it("syncAppLinkedResourcesToTarget copies jobs and remaps appIds", async () => {

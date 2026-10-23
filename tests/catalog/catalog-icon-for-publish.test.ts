@@ -15,7 +15,7 @@ describe("prepareCatalogIconForPublish", () => {
   });
 
   afterEach(async () => {
-    await fs.rm(tmpDir, { recursive: true, force: true });
+    await fs.rm(tmpDir, { recursive: true, force: true, maxRetries: 5, retryDelay: 50 });
   });
 
   it("passes through icons within the limit", async () => {

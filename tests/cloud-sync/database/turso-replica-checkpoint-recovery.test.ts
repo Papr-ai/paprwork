@@ -166,7 +166,7 @@ describe("turso replica checkpoint wedge — production guarantees", () => {
     expect(push).toHaveBeenCalledTimes(1);
     expect(removeSidecars).toHaveBeenCalledWith(dbPath);
 
-    fs.rmSync(dir, { recursive: true, force: true });
+    fs.rmSync(dir, { recursive: true, force: true, maxRetries: 5, retryDelay: 50 });
   });
 
   it("pull recovers from checkpoint WAL error after sidecar reset", async () => {
@@ -219,7 +219,7 @@ describe("turso replica checkpoint wedge — production guarantees", () => {
     expect(pull).toHaveBeenCalledTimes(2);
     expect(removeSidecars).toHaveBeenCalledWith(dbPath);
 
-    fs.rmSync(dir, { recursive: true, force: true });
+    fs.rmSync(dir, { recursive: true, force: true, maxRetries: 5, retryDelay: 50 });
   });
 
   it("syncStatus repairs an unsatisfiable watermark on connect and reports healthy", async () => {
@@ -275,7 +275,7 @@ describe("turso replica checkpoint wedge — production guarantees", () => {
     expect(status.sidecarWedge).toBe(false);
     expect(status.pendingOps).toBe(2);
 
-    fs.rmSync(dir, { recursive: true, force: true });
+    fs.rmSync(dir, { recursive: true, force: true, maxRetries: 5, retryDelay: 50 });
   });
 
   it("recoverReplicaAfterCheckpointError resets sidecars before pull", async () => {
@@ -346,6 +346,6 @@ describe("turso replica checkpoint wedge — production guarantees", () => {
     expect(fs.existsSync(`${dbPath}-info`)).toBe(false);
     expect(fs.readFileSync(dbPath, "utf8")).toBe("sqlite-data");
 
-    fs.rmSync(dir, { recursive: true, force: true });
+    fs.rmSync(dir, { recursive: true, force: true, maxRetries: 5, retryDelay: 50 });
   });
 });

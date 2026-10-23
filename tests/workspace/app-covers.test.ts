@@ -18,7 +18,7 @@ describe("app covers", () => {
   beforeEach(() => {
     root = fs.mkdtempSync(path.join(os.tmpdir(), "papr-covers-"));
   });
-  afterEach(() => fs.rmSync(root, { recursive: true, force: true }));
+  afterEach(() => fs.rmSync(root, { recursive: true, force: true, maxRetries: 5, retryDelay: 50 }));
 
   it("stores validate screenshots privately (outside the app folder)", () => {
     expect(covers.savePrivateCover(APP, big(), "validate").saved).toBe(true);

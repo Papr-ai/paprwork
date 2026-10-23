@@ -42,8 +42,8 @@ describe("CodeIndexTracker path identity", () => {
     } catch {
       /* ignore */
     }
-    fs.rmSync(work, { recursive: true, force: true });
-    fs.rmSync(dataDir, { recursive: true, force: true });
+    fs.rmSync(work, { recursive: true, force: true, maxRetries: 5, retryDelay: 50 });
+    fs.rmSync(dataDir, { recursive: true, force: true, maxRetries: 5, retryDelay: 50 });
   });
 
   test("an alias spelling does NOT trigger a second index of the same file", () => {

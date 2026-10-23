@@ -62,7 +62,7 @@ describe("confirmAppUnchangedSinceUpload", () => {
     write("data/share-people-allowlist.json", "{}\n", 60_000);
     await publish({ "app.ts": "console.info(1)\n", "data/share-people-allowlist.json": "{}\n" });
   });
-  afterEach(() => fs.rmSync(paprDir, { recursive: true, force: true }));
+  afterEach(() => fs.rmSync(paprDir, { recursive: true, force: true, maxRetries: 5, retryDelay: 50 }));
 
   it("identical re-save is not a change, and re-baselines the cheap hash", async () => {
     touch("data/share-people-allowlist.json");

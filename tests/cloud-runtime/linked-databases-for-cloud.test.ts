@@ -91,7 +91,7 @@ describe("writeLinkedDatabasesForApp", () => {
       expect(linked.databases[dbId]?.tursoShortName).toBe(dbTursoDatabaseName(dbId));
       expect(linked.databases[dbId]?.localPath).toBe("");
     } finally {
-      fs.rmSync(paprDir, { recursive: true, force: true });
+      fs.rmSync(paprDir, { recursive: true, force: true, maxRetries: 5, retryDelay: 50 });
     }
   });
 });

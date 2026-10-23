@@ -53,7 +53,7 @@ vi.mock("../../../src/gateway/services/cloudSync/cloudGitClone.js", () => ({
       await fs.mkdir(path.dirname(path.join(dir, rel)), { recursive: true });
       await fs.writeFile(path.join(dir, rel), content);
     }
-    return { sourceDir: dir, cleanup: async () => fs.rm(dir, { recursive: true, force: true }) };
+    return { sourceDir: dir, cleanup: async () => fs.rm(dir, { recursive: true, force: true, maxRetries: 5, retryDelay: 50 }) };
   }),
 }));
 

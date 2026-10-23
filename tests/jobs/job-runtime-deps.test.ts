@@ -47,8 +47,8 @@ beforeEach(() => {
   logs.length = 0;
 });
 afterEach(() => {
-  rmSync(jobDir, { recursive: true, force: true });
-  rmSync(root, { recursive: true, force: true });
+  rmSync(jobDir, { recursive: true, force: true, maxRetries: 5, retryDelay: 50 });
+  rmSync(root, { recursive: true, force: true, maxRetries: 5, retryDelay: 50 });
 });
 
 describe("readJobRuntimeSpec", () => {

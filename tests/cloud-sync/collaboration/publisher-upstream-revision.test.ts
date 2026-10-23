@@ -66,7 +66,7 @@ describe("checkPublisherUpstreamRevision", () => {
     appsRoot = await fs.mkdtemp(path.join(os.tmpdir(), "papr-upstream-"));
   });
   afterEach(async () => {
-    await fs.rm(appsRoot, { recursive: true, force: true });
+    await fs.rm(appsRoot, { recursive: true, force: true, maxRetries: 5, retryDelay: 50 });
   });
 
   it("plain fork is never behind the publisher", async () => {

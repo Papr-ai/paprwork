@@ -144,7 +144,7 @@ describe("cloud-direct backend (primary stand-in: local libsql file)", () => {
     mod.setCloudDirectClientFactoryForTests(null);
     vi.doUnmock("../../src/gateway/services/DatabaseRegistryService.js");
     vi.resetModules();
-    fs.rmSync(tmp, { recursive: true, force: true });
+    fs.rmSync(tmp, { recursive: true, force: true, maxRetries: 5, retryDelay: 50 });
   });
 
   async function load() {

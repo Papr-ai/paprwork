@@ -47,7 +47,7 @@ beforeEach(() => {
 
 afterEach(() => {
   vi.useRealTimers();
-  fs.rmSync(baseDir, { recursive: true, force: true });
+  fs.rmSync(baseDir, { recursive: true, force: true, maxRetries: 5, retryDelay: 50 });
 });
 
 describe("workspace cache persistence", () => {

@@ -42,6 +42,6 @@ test("Turso reports actual executing operations on a stable handle and leaves in
     const exported = JSON.stringify(collector.snapshot());
     for (const secret of ["private-endpoint", "secret-auth-token", "privateTable", "private-parameter", "private engine error", "never-export"]) expect(exported).not.toContain(secret);
   } finally {
-    await core.closeAll(); stopDatabaseDiagnosticTransport(); await collector.close(); await rm(dir, { recursive: true, force: true });
+    await core.closeAll(); stopDatabaseDiagnosticTransport(); await collector.close(); await rm(dir, { recursive: true, force: true, maxRetries: 5, retryDelay: 50 });
   }
 });

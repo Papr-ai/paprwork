@@ -80,7 +80,7 @@ vi.mock("../../src/gateway/services/cloudSync/cloudGitClone.js", async (orig) =>
     return {
       repoDir,
       sourceDir: path.join(repoDir, input.repoPath),
-      cleanup: async () => fs.rm(root, { recursive: true, force: true }),
+      cleanup: async () => fs.rm(root, { recursive: true, force: true, maxRetries: 5, retryDelay: 50 }),
     };
   }),
 }));

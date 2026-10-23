@@ -41,7 +41,7 @@ describe("app requirements changed broadcast", () => {
       dir = fs.mkdtempSync(path.join(os.tmpdir(), "jobkeys-"));
       fs.mkdirSync(path.join(dir, "job1"));
     });
-    afterEach(() => fs.rmSync(dir, { recursive: true, force: true }));
+    afterEach(() => fs.rmSync(dir, { recursive: true, force: true, maxRetries: 5, retryDelay: 50 }));
 
     it("broadcasts for the job's apps when job.json changes", async () => {
       const w = startJobKeysWatcher(dir);

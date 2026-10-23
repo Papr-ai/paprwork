@@ -40,7 +40,7 @@ describe("resolveAppCloudSyncRelativePaths", () => {
         path.join("apps", appId),
       ]);
     } finally {
-      fs.rmSync(paprDir, { recursive: true, force: true });
+      fs.rmSync(paprDir, { recursive: true, force: true, maxRetries: 5, retryDelay: 50 });
     }
   });
 });

@@ -19,7 +19,7 @@ import type { RequiredKeySpec } from "../../src/core/types/bundles.js";
 
 const tempDirs: string[] = [];
 afterEach(() => {
-  for (const dir of tempDirs.splice(0)) fs.rmSync(dir, { recursive: true, force: true });
+  for (const dir of tempDirs.splice(0)) fs.rmSync(dir, { recursive: true, force: true, maxRetries: 5, retryDelay: 50 });
 });
 
 function spec(partial: Partial<RequiredKeySpec> & { name: string }): RequiredKeySpec {

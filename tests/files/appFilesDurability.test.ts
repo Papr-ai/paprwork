@@ -114,7 +114,7 @@ describe("hashFileCached", () => {
     expect(cached).toHaveLength(1);
     expect(cached[0].sha256).toBe(first);
 
-    await rm(dir, { recursive: true, force: true });
+    await rm(dir, { recursive: true, force: true, maxRetries: 5, retryDelay: 50 });
   });
 
   it("rehashes when the file changed underneath us", async () => {
@@ -134,6 +134,6 @@ describe("hashFileCached", () => {
     const second = await hashFileCached(db, file, await stat(file));
 
     expect(second).not.toBe(first);
-    await rm(dir, { recursive: true, force: true });
+    await rm(dir, { recursive: true, force: true, maxRetries: 5, retryDelay: 50 });
   });
 });

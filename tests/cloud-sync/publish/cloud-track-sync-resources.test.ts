@@ -125,8 +125,8 @@ describe("CloudAppTrackSyncService shared database track sync", () => {
   });
 
   afterEach(() => {
-    rmSync(appsDir, { recursive: true, force: true });
-    rmSync(upstreamRepoDir, { recursive: true, force: true });
+    rmSync(appsDir, { recursive: true, force: true, maxRetries: 5, retryDelay: 50 });
+    rmSync(upstreamRepoDir, { recursive: true, force: true, maxRetries: 5, retryDelay: 50 });
   });
 
   it("uses jobs_and_code linked sync and pull-only Turso for shared databasePolicy", async () => {

@@ -130,8 +130,8 @@ describe("copy / fork database bootstrap", () => {
   });
 
   afterEach(async () => {
-    await fs.rm(sourceHome, { recursive: true, force: true });
-    await fs.rm(targetHome, { recursive: true, force: true });
+    await fs.rm(sourceHome, { recursive: true, force: true, maxRetries: 5, retryDelay: 50 });
+    await fs.rm(targetHome, { recursive: true, force: true, maxRetries: 5, retryDelay: 50 });
   });
 
   it.skipIf(!canUseBetterSqlite)(

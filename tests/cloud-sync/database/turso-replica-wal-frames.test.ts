@@ -36,7 +36,7 @@ function writeWal(
 
 afterEach(() => {
   while (tempDirs.length > 0) {
-    fs.rmSync(tempDirs.pop() as string, { recursive: true, force: true });
+    fs.rmSync(tempDirs.pop() as string, { recursive: true, force: true, maxRetries: 5, retryDelay: 50 });
   }
 });
 

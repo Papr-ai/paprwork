@@ -75,6 +75,6 @@ describe("checkoutPublishedCommit", () => {
 
     await checkoutPublishedCommit(clone, v1, process.env);
     expect(await read()).toBe("v1");
-    await fs.rm(root, { recursive: true, force: true });
+    await fs.rm(root, { recursive: true, force: true, maxRetries: 5, retryDelay: 50 });
   }, 30_000);
 });

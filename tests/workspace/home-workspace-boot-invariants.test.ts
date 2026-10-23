@@ -24,7 +24,7 @@ describe("homeWorkspaceBootInvariants", () => {
   });
 
   afterEach(async () => {
-    await fs.rm(tmpDir, { recursive: true, force: true });
+    await fs.rm(tmpDir, { recursive: true, force: true, maxRetries: 5, retryDelay: 50 });
   });
 
   it("returns false when data-sources.json is missing", async () => {

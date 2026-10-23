@@ -423,3 +423,9 @@ export function startJobsScheduler(): void {
   const scheduler = getJobsScheduler();
   scheduler.start();
 }
+
+/** Tests: stop timers and drop the singleton so a tick can't outlive the test's temp workspace. */
+export function resetJobsSchedulerForTests(): void {
+  jobsSchedulerInstance?.stop();
+  jobsSchedulerInstance = null;
+}

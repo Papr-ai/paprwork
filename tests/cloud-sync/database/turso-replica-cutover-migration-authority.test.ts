@@ -138,7 +138,7 @@ describe("tursoReplicaCutoverMigrationAuthority", () => {
         "0003_person",
       ]);
       after.close();
-      fs.rmSync(dir, { recursive: true, force: true });
+      fs.rmSync(dir, { recursive: true, force: true, maxRetries: 5, retryDelay: 50 });
     },
   );
 });

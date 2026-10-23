@@ -318,7 +318,7 @@ describe("tool truncation settings wiring", () => {
     afterEach(async () => {
       if (previousPaprHome === undefined) delete process.env.PAPR_HOME;
       else process.env.PAPR_HOME = previousPaprHome;
-      await fs.rm(tempRoot, { recursive: true, force: true });
+      await fs.rm(tempRoot, { recursive: true, force: true, maxRetries: 5, retryDelay: 50 });
     });
 
     test("getSettingsPath follows PAPR_HOME clone", async () => {

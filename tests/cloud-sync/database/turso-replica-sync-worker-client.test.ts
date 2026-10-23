@@ -47,7 +47,7 @@ describe("TursoReplicaSyncWorkerClient", () => {
     vi.spyOn(console, "warn").mockImplementation(() => {});
   });
   afterEach(() => {
-    fs.rmSync(tmpDir, { recursive: true, force: true });
+    fs.rmSync(tmpDir, { recursive: true, force: true, maxRetries: 5, retryDelay: 50 });
     vi.restoreAllMocks();
   });
 

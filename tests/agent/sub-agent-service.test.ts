@@ -27,7 +27,7 @@ describe("SubAgentService", () => {
     } else {
       process.env.HOME = originalHome;
     }
-    await fs.rm(root, { recursive: true, force: true });
+    await fs.rm(root, { recursive: true, force: true, maxRetries: 5, retryDelay: 50 });
   });
 
   test("loads default sub-agents and supports create/update", async () => {
