@@ -292,6 +292,8 @@ type PiAiWrapUpArgs = {
   abortSignal: AbortSignal;
   /** Defaults to the terminal wording; pass WRAP_UP_WITH_PLAN_INCOMPLETE when steps remain. */
   wrapUpMessage?: string;
+  /** Returns the current subscription token when the one in streamOpts was replaced. */
+  refreshAuth?: () => Promise<string | null>;
 };
 
 /** Text-only continuation for pi-ai when the tool loop did not produce a summary. */
@@ -326,10 +328,21 @@ export async function* runPiAiWrapUpContinuation(
       ? (args.streamOpts as Record<string, unknown>)
       : {};
 
-  const piStream = args.streamSimple(args.piModel, contextWithoutTools, {
-    ...streamOptsRecord,
-    signal: args.abortSignal,
-  });
+  // These options were copied before the turn started, so a background token
+  // refresh leaves them holding a revoked token: recover once, like the loop.
+  const { streamWithTokenRetry } = await import(
+    "../providers/oauthRevokedRetry.js"
+  );
+  const piStream = streamWithTokenRetry(
+    (options) =>
+      args.streamSimple(
+        args.piModel,
+        contextWithoutTools,
+        options,
+      ) as AsyncIterable<import("@mariozechner/pi-ai").AssistantMessageEvent>,
+    { ...streamOptsRecord, signal: args.abortSignal },
+    args.refreshAuth,
+  );
 
   const fullStream = adaptPiStreamToAISDK(
     piStream as AsyncIterable<import("@mariozechner/pi-ai").AssistantMessageEvent>,

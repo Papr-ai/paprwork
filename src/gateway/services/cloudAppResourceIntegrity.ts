@@ -181,14 +181,27 @@ export async function reconcileAppDataSourcesForPublish(
     "./registryDatabaseEligibility.js"
   );
 
-  for (const source of config.sources) {
+  for (let source of config.sources) {
     const sourcePath = source.dbPath?.trim();
     if (sourcePath && !isEligibleRegistryLocalPath(sourcePath)) {
-      report.changed = true;
-      report.warnings.push(
-        `Removed job scratch path from data-sources (${source.alias}). Use attach_database with a registry dbId.`,
-      );
-      continue;
+      // A source that carries a live registry dbId is a real app link — the dbId
+      // resolves the database. Older registry entries still live under
+      // Jobs/{id}/data/data.db, so the stale path must not take the link with it:
+      // dropping it made every /api/db/* call for that alias fail and blanked the app.
+      const dbId = source.dbId?.trim();
+      if (dbId && registryTrusted && knownDbIds.has(dbId)) {
+        source = { ...source, dbPath: "" };
+        report.changed = true;
+        report.warnings.push(
+          `Cleared job scratch path from data-sources (${source.alias}); kept registry link ${dbId}.`,
+        );
+      } else {
+        report.changed = true;
+        report.warnings.push(
+          `Removed job scratch path from data-sources (${source.alias}). Use attach_database with a registry dbId.`,
+        );
+        continue;
+      }
     }
     if (source.jobId) {
       if (!canonicalJobIds.has(source.jobId)) {

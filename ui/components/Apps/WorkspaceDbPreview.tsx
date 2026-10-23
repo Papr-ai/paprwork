@@ -2,7 +2,7 @@
  * WorkspaceDbPreview — table browser for job SQLite databases.
  */
 
-import React from "react";
+import React, { useEffect, useRef } from "react";
 import type { JobDbPreviewResult } from "../../hooks/useAppWorkspace";
 import "./WorkspaceDbPreview.css";
 
@@ -10,13 +10,28 @@ interface WorkspaceDbPreviewProps {
   preview: JobDbPreviewResult;
   loading: boolean;
   onSelectTable: (tableName: string) => void;
+  onPageChange?: (page: number) => void;
+  onPageSizeChange?: (size: number) => void;
 }
+
+const PAGE_SIZES = [20, 50, 100];
 
 export function WorkspaceDbPreview({
   preview,
   loading,
   onSelectTable,
+  onPageChange,
+  onPageSizeChange,
 }: WorkspaceDbPreviewProps) {
+  const wrapRef = useRef<HTMLDivElement>(null);
+  const pageSize = preview.limit ?? 50;
+  const offset = preview.offset ?? 0;
+
+  // New page or table: start at the top-left of the grid, not mid-scroll.
+  useEffect(() => {
+    wrapRef.current?.scrollTo({ top: 0, left: 0 });
+  }, [offset, pageSize, preview.selectedTable]);
+
   const activeTable =
     preview.tables.find((table) => table.name === preview.selectedTable) ??
     preview.tables[0] ??
@@ -39,6 +54,9 @@ export function WorkspaceDbPreview({
       : activeTable.rows[0]
         ? Object.keys(activeTable.rows[0])
         : [];
+
+  const page = Math.floor(offset / pageSize);
+  const pageCount = Math.max(1, Math.ceil(activeTable.rowCount / pageSize));
 
   return (
     <div className="workspace-db-preview">
@@ -66,13 +84,16 @@ export function WorkspaceDbPreview({
 
       <div className="workspace-db-preview__meta">
         <span>
-          Showing {Math.min(activeTable.rows.length, 50)} of{" "}
-          {activeTable.rowCount.toLocaleString()} rows
+          {activeTable.rows.length === 0
+            ? "0 rows"
+            : `Rows ${(offset + 1).toLocaleString()}–${(
+                offset + activeTable.rows.length
+              ).toLocaleString()} of ${activeTable.rowCount.toLocaleString()}`}
         </span>
-        {loading ? <span>Refreshing…</span> : null}
+        {loading ? <span>Loading…</span> : null}
       </div>
 
-      <div className="workspace-db-preview__table-wrap">
+      <div className="workspace-db-preview__table-wrap" ref={wrapRef}>
         <table className="workspace-db-preview__table">
           <thead>
             <tr>
@@ -92,9 +113,43 @@ export function WorkspaceDbPreview({
           </tbody>
         </table>
         {activeTable.rows.length === 0 ? (
-          <p className="workspace-db-preview__empty-rows">No rows in this table.</p>
+          <p className="workspace-db-preview__empty-rows">
+            {activeTable.rowCount === 0
+              ? "No rows in this table."
+              : "No rows on this page."}
+          </p>
         ) : null}
       </div>
+
+      {onPageChange ? (
+        <div className="workspace-db-preview__pager">
+          <label className="workspace-db-preview__pager-size">
+            Rows per page
+            <select
+              value={pageSize}
+              disabled={loading}
+              onChange={(e) => onPageSizeChange?.(Number(e.target.value))}
+            >
+              {[...new Set([...PAGE_SIZES, pageSize])]
+                .sort((a, b) => a - b)
+                .map((size) => (
+                  <option key={size} value={size}>
+                    {size}
+                  </option>
+                ))}
+            </select>
+          </label>
+          <span className="workspace-db-preview__pager-pos">
+            Page {page + 1} of {pageCount}
+          </span>
+          <div className="workspace-db-preview__pager-nav">
+            <button type="button" aria-label="First page" disabled={loading || page === 0} onClick={() => onPageChange(0)}>«</button>
+            <button type="button" aria-label="Previous page" disabled={loading || page === 0} onClick={() => onPageChange(page - 1)}>‹ Prev</button>
+            <button type="button" aria-label="Next page" disabled={loading || page >= pageCount - 1} onClick={() => onPageChange(page + 1)}>Next ›</button>
+            <button type="button" aria-label="Last page" disabled={loading || page >= pageCount - 1} onClick={() => onPageChange(pageCount - 1)}>»</button>
+          </div>
+        </div>
+      ) : null}
     </div>
   );
 }

@@ -14,6 +14,8 @@
  *     --namespace=VIA2C5VDxj --slug=myadvice-gtm-metrics --app-id=91d94d77-...
  */
 
+// Must stay first: runs in a temp workspace, never the real ~/Papr.
+import "./lib/isolateHome.mjs";
 import { execSync } from "child_process";
 import {
   existsSync,

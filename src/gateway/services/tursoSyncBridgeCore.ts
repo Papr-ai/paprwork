@@ -920,17 +920,22 @@ export async function remoteAheadOfLocal(
  * write) so other devices' version-checked pulls see the change; returns new version. */
 export async function bumpRemoteSyncVersion(remote: Client): Promise<number | undefined> {
   try {
-    await remote.execute(
-      `CREATE TABLE IF NOT EXISTS ${quoteIdent(SYNC_META_TABLE)} ` +
-        `(id INTEGER PRIMARY KEY CHECK (id = 1), version INTEGER NOT NULL DEFAULT 0, updated_at TEXT)`,
+    // One round trip: ensure the meta table + bump + read back the new
+    // version in a single batch. Was three sequential calls (~80 ms each to
+    // the Turso primary from the cloud app host).
+    const [, bumped] = await remote.batch(
+      [
+        `CREATE TABLE IF NOT EXISTS ${quoteIdent(SYNC_META_TABLE)} ` +
+          `(id INTEGER PRIMARY KEY CHECK (id = 1), version INTEGER NOT NULL DEFAULT 0, updated_at TEXT)`,
+        `INSERT INTO ${quoteIdent(SYNC_META_TABLE)} (id, version, updated_at) ` +
+          `VALUES (1, 1, datetime('now')) ` +
+          `ON CONFLICT(id) DO UPDATE SET version = version + 1, updated_at = datetime('now') ` +
+          `RETURNING version`,
+      ],
+      "write",
     );
-    await remote.execute(
-      `INSERT INTO ${quoteIdent(SYNC_META_TABLE)} (id, version, updated_at) ` +
-        `VALUES (1, 1, datetime('now')) ` +
-        `ON CONFLICT(id) DO UPDATE SET version = version + 1, updated_at = datetime('now')`,
-    );
-    const version = await readRemoteSyncVersion(remote);
-    return version ?? undefined;
+    const parsed = Number(bumped?.rows[0]?.["version"]);
+    return Number.isFinite(parsed) ? parsed : undefined;
   } catch {
     return undefined; // best-effort — never fail a push over the counter
   }

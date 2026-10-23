@@ -21,4 +21,8 @@ export default defineWorkspace([
   "vitest.config.integration.ts",
   "vitest.config.e2e.ts",
   "ui/vitest.config.ts",
+  // Not in `npm test`: build needs dist/ (`npm run test:build` after
+  // build:gateway); live hits real networks/keys (`npm run test:live`).
+  "vitest.config.build.ts",
+  "vitest.config.live.ts",
 ]);

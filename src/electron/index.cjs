@@ -457,6 +457,20 @@ async function handleWebviewTestRequest(request) {
       return { success: false, error: "appId is required for launch" };
     }
 
+    // Cap hidden previews: each holds an SSE connection open to the gateway and a few forgotten
+    // ones starve the app tab the user is looking at. Close the oldest before opening a new one.
+    const { pickSessionsToClose } = require("./webviewSessionCap.cjs");
+    const stale = pickSessionsToClose(
+      Array.from(webviewSessions.entries()).map(([sid, e]) => ({
+        id: sid,
+        createdAt: e.createdAt,
+      })),
+    );
+    for (const sid of stale) {
+      const old = webviewSessions.get(sid);
+      if (old && !old.window.isDestroyed()) old.window.close();
+    }
+
     const id = `webview-${Date.now()}-${++webviewCounter}`;
     const width = Number(payload.width) || 1280;
     const height = Number(payload.height) || 720;
@@ -2846,6 +2860,12 @@ app.whenReady().then(async () => {
   // Register Papr IPC before any slow network (namespace API key, OAuth). macOS
   // "activate" can open the window while those await; handlers must exist first.
   initializePaprLoginIPC(customKeysStorage, settingsStorage, {
+    // Hand-offs from Claude land in the main window (re-created if it was closed), never in a
+    // hidden preview window from webview_launch_app.
+    getMainWindow: async () => {
+      await createMainWindow();
+      return mainWindow && !mainWindow.isDestroyed() ? mainWindow : null;
+    },
     trackLoginEvent: (eventName, properties) => {
       if (telemetryClientInstance) {
         telemetryClientInstance.trackFireAndForget(eventName, properties);

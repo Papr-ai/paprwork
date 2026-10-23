@@ -6,6 +6,7 @@ import {
   isHandoffUrl,
   memoryBaseUrl,
   parseHandoffCode,
+  pickHandoffWindow,
   redeemHandoffCode,
   resolveHandoffApp,
 } from "./paprHandoff.js";
@@ -111,5 +112,19 @@ describe("handoffLanding from the web card", () => {
     const landing = handoffLanding({ appNamespaceId: "n1", appSlug: "linkedin-outreach", source: "web" });
     expect(landing.title).toBe("From the web");
     expect(landing.message).toContain("needs Papr Work desktop");
+  });
+});
+
+describe("pickHandoffWindow", () => {
+  const w = (name: string, visible: boolean, destroyed = false) => ({ name, isVisible: () => visible, isDestroyed: () => destroyed });
+  it("lands in the main window, never a hidden preview window opened earlier", () => {
+    const preview = w("preview", false);
+    const main = w("main", true);
+    expect(pickHandoffWindow(main, [preview, main])?.name).toBe("main");
+  });
+  it("without a main window, only a visible window qualifies", () => {
+    expect(pickHandoffWindow(null, [w("preview", false), w("other", true)])?.name).toBe("other");
+    expect(pickHandoffWindow(null, [w("preview", false)])).toBeNull();
+    expect(pickHandoffWindow(w("main", true, true), [w("preview", false)])).toBeNull();
   });
 });

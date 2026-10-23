@@ -720,6 +720,11 @@ export class AppService {
    * Rewrites foreign dbPath pointers and persists default-job-id.txt — no file copies.
    */
   async repairHomeAndWorkspaceOnStartup(): Promise<void> {
+    // Cloud sandbox never repairs Home: it would rewrite Home's files and the run
+    // would publish them (see JobsService Home guards).
+    if (process.env.GATEWAY_MODE === "cloud_agent") {
+      return;
+    }
     try {
       const { getJobsService } = await import("./JobsService.js");
       const jobsService = getJobsService();

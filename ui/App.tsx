@@ -46,6 +46,7 @@ import {
 } from "./lib/telemetry";
 import { gateway } from "./src/lib/gateway";
 import { openAppWithDraftChat } from "./utils/openCloudInstalledAppWithChat";
+import { deliverAppHandoff } from "./utils/deliverAppHandoff";
 import { ensureGatewayRecoveryRegistered } from "./lib/agentStreamRecovery";
 import {
   appAgentMainChatTabTitle,
@@ -75,6 +76,10 @@ type ChatOpenPayload = {
   /** "handoff": opened from Claude — show `appId` beside the new chat. */
   mode?: "main" | "app-agent" | "handoff";
   appId?: string;
+  /** Hand-off only: the view the Claude card named (e.g. "outreach:c_123"), passed to papr.onHandoff. */
+  view?: string | null;
+  /** Hand-off only: "claude" or "web". */
+  source?: string | null;
   subAgentId?: string;
   /** Send `message` immediately (same as install / onboarding), instead of drafting it. */
   send?: boolean;
@@ -579,6 +584,8 @@ export function App() {
                 draft: detail.message ?? "",
                 chatTabTitle: detail.title?.trim() || appTitle,
               });
+              // Already open = no reload: tell the app where the card sent the user (papr.onHandoff).
+              deliverAppHandoff(detail.appId, { view: detail.view, source: detail.source });
               return;
             }
           } catch (err) {

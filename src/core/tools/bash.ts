@@ -35,6 +35,71 @@ function mergeBashEnv(inputEnv?: Record<string, string>): Record<string, string>
   return { ...getJobToolEnv(), ...(inputEnv ?? {}) };
 }
 
+/**
+ * Papr user identity for shell commands. A raw memory-server call with the
+ * workspace PAPR_API_KEY must send user_id / external_user_id or it routes to the
+ * key owner. PAPR_API_KEY itself is left alone: a command may deliberately use a
+ * different key (another org/namespace) where these ids must not be forced.
+ */
+async function paprIdentityBashEnv(): Promise<Record<string, string>> {
+  const out: Record<string, string> = {};
+  try {
+    const { getPaprUserId } = await import("../../gateway/utils/paprUserId.js");
+    const userId = getPaprUserId()?.trim();
+    if (userId) {
+      out.PAPR_USER_ID = userId;
+      out.PAPR_EXTERNAL_USER_ID = userId;
+    }
+  } catch {
+    // Best-effort; commands still run without it.
+  }
+  return out;
+}
+
+/**
+ * Warn (never block) when a command calls the memory server with the desktop's own
+ * PAPR_API_KEY but sends no user_id / external_user_id. A workspace key alone routes
+ * to the key owner, not the signed-in member. A different key (another org or
+ * namespace the user can access) is left alone — no ids are needed there.
+ */
+export async function paprIdentityReminder(command: string): Promise<string | undefined> {
+  if (!/papr\.ai|PAPR_MEMORY|\/v1\/(memory|cloud|documents|feedback)/i.test(command)) return undefined;
+  if (/user_id|external_user_id|end_user_id|PAPR_USER_ID|PAPR_EXTERNAL_USER_ID/i.test(command)) return undefined;
+  let desktopKey: string | undefined;
+  try {
+    const { getPaprApiKey } = await import("../../gateway/utils/keyResolver.js");
+    desktopKey = (await getPaprApiKey())?.trim();
+  } catch {
+    return undefined;
+  }
+  if (!desktopKey) return undefined;
+  let usesDesktopKey = command.includes(desktopKey);
+  if (!usesDesktopKey && /\$\{?PAPR_API_KEY\b/.test(command)) {
+    const stored = (await getCustomKeys())?.PAPR_API_KEY?.trim();
+    const envKey = process.env.PAPR_API_KEY?.trim();
+    usesDesktopKey = stored === desktopKey || (!stored && envKey === desktopKey);
+  }
+  if (!usesDesktopKey) return undefined;
+  return (
+    "This command calls the Papr memory server with this workspace's PAPR_API_KEY but sends no " +
+    "user_id / external_user_id, so it runs as the key owner, not the signed-in user. Add " +
+    "external_user_id=$PAPR_EXTERNAL_USER_ID (and user_id=$PAPR_USER_ID) to the request, or prefer the " +
+    "built-in memory tools. Ignore this if you deliberately target the key owner."
+  );
+}
+
+async function attachIdentityReminder(
+  command: string,
+  run: Promise<ToolResult<BashOutput>>,
+): Promise<ToolResult<BashOutput>> {
+  const [result, reminder] = await Promise.all([run, paprIdentityReminder(command).catch(() => undefined)]);
+  if (!reminder) return result;
+  const r = result as { data?: BashOutput; _paprIdentityReminder?: string };
+  if (r.data && typeof r.data === "object") r.data._paprIdentityReminder = reminder;
+  else r._paprIdentityReminder = reminder;
+  return result;
+}
+
 /** Values of job requiredKeys injected into env — redacted from bash output like any other key. */
 function jobSecretValues(): string[] {
   const env = getJobToolEnv();
@@ -245,6 +310,8 @@ export interface BashOutput {
   _schemaMigrationReminder?: string;
   /** Actionable recovery hint when spawn fails (EBADF, EMFILE, fd pressure). */
   _processHint?: string;
+  /** Desktop PAPR_API_KEY used against the memory server without user ids. */
+  _paprIdentityReminder?: string;
 }
 
 /**
@@ -581,13 +648,19 @@ async function captureGitChangesIfChanged(
 export async function executeBashCommand(
   input: BashInput,
 ): Promise<ToolResult<BashOutput>> {
+  return attachIdentityReminder(input.command ?? "", executeBashCommandInner(input));
+}
+
+async function executeBashCommandInner(
+  input: BashInput,
+): Promise<ToolResult<BashOutput>> {
   const startTime = Date.now();
 
   // Apply defaults for optional parameters
   let { command } = input;
   const cwd = input.cwd || "";
   const timeout = input.timeout || 60000;
-  const env = mergeBashEnv(input.env);
+  const env = { ...(await paprIdentityBashEnv()), ...mergeBashEnv(input.env) };
 
   // Capture git fingerprint BEFORE command runs (cheap; no-op outside repos)
   // Only when the command might write — saves the probe for read-only ops.
@@ -917,13 +990,20 @@ export async function executeBashCommandStreaming(
   input: BashInput,
   onData: (type: "stdout" | "stderr", data: string) => void,
 ): Promise<ToolResult<BashOutput>> {
+  return attachIdentityReminder(input.command ?? "", executeBashCommandStreamingInner(input, onData));
+}
+
+async function executeBashCommandStreamingInner(
+  input: BashInput,
+  onData: (type: "stdout" | "stderr", data: string) => void,
+): Promise<ToolResult<BashOutput>> {
   const startTime = Date.now();
 
   // Apply defaults for optional parameters
   let command = input.command;
   const cwd = input.cwd || "";
   const timeout = input.timeout || 60000;
-  const env = mergeBashEnv(input.env);
+  const env = { ...(await paprIdentityBashEnv()), ...mergeBashEnv(input.env) };
 
   if (!command || command.trim().length === 0) {
     return {

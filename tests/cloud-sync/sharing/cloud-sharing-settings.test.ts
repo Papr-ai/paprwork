@@ -1,0 +1,170 @@
+import { describe, expect, it } from "vitest";
+import { shouldAppendShareToken } from "../../../src/core/utils/cloudShareLink.js";
+import {
+  accessModeToSharingSettings,
+  resolvePublishFieldsFromPrefs,
+  sharingSettingsRequireShareToken,
+  sharingSettingsToPublishFields,
+  sharingSettingsToAccessMode,
+} from "../../../src/gateway/services/cloudSharingSettings.js";
+
+describe("cloudSharingSettings", () => {
+  it("maps legacy access modes to login + external link axes", () => {
+    expect(accessModeToSharingSettings("team")).toEqual({
+      loginAccess: "team",
+      externalLink: "off",
+    });
+    expect(accessModeToSharingSettings("link_read")).toEqual({
+      loginAccess: "none",
+      externalLink: "read",
+    });
+  });
+
+  it("supports team login plus external read link", () => {
+    const settings = { loginAccess: "team" as const, externalLink: "read" as const };
+    expect(sharingSettingsToPublishFields(settings)).toEqual({
+      visibility: "team",
+      linkPermission: "read_write",
+      shareLinkEnabled: true,
+      communityCatalogListed: false,
+    });
+    expect(sharingSettingsToAccessMode(settings)).toBe("team");
+    expect(sharingSettingsRequireShareToken(settings)).toBe(true);
+  });
+
+  it("uses link-only visibility when Papr login is disabled", () => {
+    expect(
+      sharingSettingsToPublishFields({
+        loginAccess: "none",
+        externalLink: "read_write",
+      }),
+    ).toEqual({
+      visibility: "link_read_write",
+      linkPermission: "read_write",
+      shareLinkEnabled: true,
+    });
+  });
+
+  it("grants read_write for public community apps", () => {
+    expect(
+      resolvePublishFieldsFromPrefs({
+        loginAccess: "public",
+        externalLink: "off",
+        accessMode: "public_read",
+        codeAccess: "off",
+      }),
+    ).toEqual({
+      visibility: "public_read",
+      linkPermission: "read_write",
+      shareLinkEnabled: false,
+      communityCatalogListed: true,
+    });
+    expect(
+      resolvePublishFieldsFromPrefs({
+        loginAccess: "public",
+        externalLink: "off",
+        accessMode: "public_read",
+        codeAccess: "off",
+        requireSignIn: true,
+      }),
+    ).toEqual({
+      visibility: "public_read",
+      linkPermission: "read_write",
+      shareLinkEnabled: false,
+      requireSignIn: true,
+      communityCatalogListed: true,
+    });
+    expect(
+      resolvePublishFieldsFromPrefs({
+        loginAccess: "public",
+        externalLink: "off",
+        accessMode: "public_read",
+        codeAccess: "install",
+      }),
+    ).toEqual({
+      visibility: "public_read",
+      linkPermission: "read_write",
+      shareLinkEnabled: false,
+      communityCatalogListed: true,
+    });
+  });
+
+  it("maps public login plus external read link to link visibility (not community)", () => {
+    expect(
+      resolvePublishFieldsFromPrefs({
+        loginAccess: "public",
+        externalLink: "read",
+        accessMode: "link_read",
+        codeAccess: "off",
+      }),
+    ).toEqual({
+      visibility: "link_read",
+      linkPermission: "read",
+      shareLinkEnabled: true,
+      requireSignIn: true,
+      communityCatalogListed: false,
+    });
+  });
+
+  it("does not stack overflow for public login plus external read_write link", () => {
+    expect(() =>
+      sharingSettingsToPublishFields({
+        loginAccess: "public",
+        externalLink: "read_write",
+      }),
+    ).not.toThrow();
+    expect(
+      sharingSettingsToPublishFields({
+        loginAccess: "public",
+        externalLink: "read_write",
+      }),
+    ).toEqual({
+      visibility: "link_read_write",
+      linkPermission: "read_write",
+      shareLinkEnabled: true,
+      requireSignIn: true,
+    });
+  });
+
+  it("does not list specific people (workspace allowlist) in community", () => {
+    expect(
+      resolvePublishFieldsFromPrefs({
+        loginAccess: "team",
+        externalLink: "off",
+        accessMode: "team",
+        codeAccess: "off",
+        allowedUserIds: ["user-abc"],
+      }),
+    ).toEqual({
+      visibility: "team",
+      linkPermission: "read_write",
+      shareLinkEnabled: false,
+      communityCatalogListed: false,
+    });
+  });
+
+  it("does not list specific people (external email) in community", () => {
+    expect(
+      resolvePublishFieldsFromPrefs({
+        loginAccess: "public",
+        externalLink: "off",
+        accessMode: "public_read",
+        codeAccess: "off",
+        requireSignIn: true,
+        allowedEmails: ["guest@acme.com"],
+      }),
+    ).toEqual({
+      visibility: "public_read",
+      linkPermission: "read_write",
+      shareLinkEnabled: false,
+      requireSignIn: true,
+      communityCatalogListed: false,
+    });
+  });
+
+  it("appends share token when external link is enabled", () => {
+    expect(shouldAppendShareToken("team", true)).toBe(true);
+    expect(shouldAppendShareToken("team", false)).toBe(false);
+    expect(shouldAppendShareToken("link_read")).toBe(true);
+  });
+});

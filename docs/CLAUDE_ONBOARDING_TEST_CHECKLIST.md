@@ -11,7 +11,7 @@ From repo root with Node 24:
 ```bash
 nvm use 24
 npm run test:claude-cli-on-demand
-npx vitest run tests/claude-setup-token-cli-provider.test.ts --project unit-backend
+npx vitest run tests/providers/claude-setup-token-cli-provider.test.ts --project unit-backend
 ```
 
 **Expect:**

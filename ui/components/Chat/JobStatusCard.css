@@ -185,3 +185,14 @@
     background: rgba(255, 255, 255, 0.05);
   }
 }
+
+/* Running script job: blinking terminal cursor */
+.job-status-card__cursor {
+  animation: job-status-card-cursor 1.1s steps(1, end) infinite;
+}
+@keyframes job-status-card-cursor {
+  50% { opacity: 0; }
+}
+@media (prefers-reduced-motion: reduce) {
+  .job-status-card__cursor { animation: none; }
+}

@@ -18,6 +18,8 @@
  *   npm run test:turso-bidirectional-e2e
  */
 
+// Must stay first: runs in a temp workspace, never the real ~/Papr.
+import "./lib/isolateHome.mjs";
 import * as fs from "fs";
 import * as os from "os";
 import * as path from "path";

@@ -189,7 +189,7 @@ Phase 1 Implementation Complete:
 🔒 Security vulnerabilities fixed!
 ```
 
-### Unit Test (`tests/security-features.test.ts`)
+### Unit Test (`tests/account/security-features.test.ts`)
 
 Comprehensive test suite covering:
 - ✅ Single and multiple API key sanitization
@@ -211,7 +211,7 @@ Comprehensive test suite covering:
 | `src/core/tools/index.ts` | Updated | Export security utilities |
 | `src/gateway/services/AgentService.ts` | Updated | Sanitize all tool results |
 | `tests/security-manual-test.ts` | New | Manual test script |
-| `tests/security-features.test.ts` | New | Unit test suite |
+| `tests/account/security-features.test.ts` | New | Unit test suite |
 | `docs/PHASE_1_COMPLETE.md` | New | This document |
 
 ---
