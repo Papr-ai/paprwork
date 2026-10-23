@@ -394,7 +394,7 @@ A conservative pass disabled create-time linking to avoid linking empty baseline
 
 - `SystemPrompt.ts` (still says `create_job` auto-links)
 - `create_job` tool `_dataSourceLinkReminder` (expects link at create)
-- `tests/jobs-service.test.ts` ("createJob auto-links database to linked mini-app")
+- `tests/jobs/jobs-service.test.ts` ("createJob auto-links database to linked mini-app")
 - Agent workflow: create job → build app → `/api/db/*` fails validation without manual `link_app_data_source`
 
 **`allowBaseline: true` on create** is the right compromise: link immediately so apps work; completion hook still upgrades when real tables exist.
@@ -457,10 +457,10 @@ Everything required beyond the 4 infrastructure phases. **Treat unchecked items 
 
 | Test | File | Status |
 |---|---|---|
-| Independent databases (registry, tools, events) | `tests/independent-databases.test.ts` | ✅ Done |
-| SSE `?dbIds=` filter | `tests/job-events-sse-filter.test.ts` | ✅ Done |
-| `createJob` auto-links on create | `tests/jobs-service.test.ts` | ✅ Restored in JobsService |
-| Turso sync status dirty fingerprint | `tests/turso-sync-status.test.ts` | ✅ Done |
+| Independent databases (registry, tools, events) | `tests/databases/independent-databases.test.ts` | ✅ Done |
+| SSE `?dbIds=` filter | `tests/jobs/job-events-sse-filter.test.ts` | ✅ Done |
+| `createJob` auto-links on create | `tests/jobs/jobs-service.test.ts` | ✅ Restored in JobsService |
+| Turso sync status dirty fingerprint | `tests/cloud-sync/database/turso-sync-status.test.ts` | ✅ Done |
 | E2E: naming + registry checks | `scripts/test-independent-databases-e2e.mjs` | ✅ Done (automated) |
 | E2E: team write not overwritten | manual / script | ⏳ Manual with live Turso |
 | E2E: `create_database` → app reads without job | manual / script | ⏳ Manual with gateway |
