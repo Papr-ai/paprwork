@@ -126,5 +126,5 @@ Then, per series, count buckets with a non-zero value and keep orgs with
 2. If the event can be triggered by automation, add a dimension that separates
    human from machine — as `creation_source` does for apps and `trigger` does
    for jobs. Without it the metric will be unusable later.
-3. Add a test in `tests/telemetry.test.ts` asserting the properties survive
+3. Add a test in `tests/gateway/telemetry.test.ts` asserting the properties survive
    `sanitizeTelemetryProperties`.

@@ -106,6 +106,9 @@ function targetKey(target: WorkspaceFileTarget): string {
   if (target.scope === "app") {
     return `app:${target.path}`;
   }
+  if (target.scope === "registry") {
+    return `registry:${target.alias}`;
+  }
   return `job:${target.jobId}:${target.path}`;
 }
 

@@ -188,7 +188,7 @@ function checkSubAgentProfile(name, paprDir, subAgentId, failOnMissing = true) {
 function runUnitTests() {
   console.log(`\n${BOLD}${CYAN}Layer 1 — Unit tests${RESET}`);
   const cmd =
-    "npx vitest run tests/app-dependent-sync.test.ts tests/jobs-service.test.ts tests/app-agent-chat-sidecar.test.ts tests/sub-agent-metadata-slice.test.ts tests/hydrate-subagents-registry.test.ts -t \"agent chat|subagent|sidecar|metadata\"";
+    "npx vitest run tests/cloud-sync/engine/app-dependent-sync.test.ts tests/jobs/jobs-service.test.ts tests/agent/app-agent-chat-sidecar.test.ts tests/agent/sub-agent-metadata-slice.test.ts tests/agent/hydrate-subagents-registry.test.ts -t \"agent chat|subagent|sidecar|metadata\"";
   const result = spawnSync(cmd, {
     shell: true,
     stdio: "inherit",

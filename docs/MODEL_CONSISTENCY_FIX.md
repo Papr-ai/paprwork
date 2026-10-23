@@ -255,7 +255,7 @@ npm run build
 
 **Tests (2 files):**
 6. `tests/llm-streaming-from-storage.ts` - Test models
-7. `tests/agent-max-tokens.test.ts` - Test models
+7. `tests/agent/agent-max-tokens.test.ts` - Test models
 
 ---
 
@@ -265,7 +265,7 @@ npm run build
 
 These test files still use old models but are not critical:
 
-- `tests/chat-session-manager.test.ts` (13 occurrences of `claude-3-5-sonnet-20241022`)
+- `tests/chat/chat-session-manager.test.ts` (13 occurrences of `claude-3-5-sonnet-20241022`)
 - `test/integration/gateway-storage.test.ts` (4 occurrences)
 - `test/integration/agent-streaming.test.ts` (9 occurrences)
 - Multiple other test files with `gpt-4o-mini`, `gpt-4`, etc.

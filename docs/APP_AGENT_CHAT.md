@@ -157,7 +157,7 @@ Default tool list: `DEFAULT_APP_AGENT_CHAT_TOOL_IDS` in `src/core/types/appAgent
 | `src/resources/mini-app-sdk/papr-agent-chat.ts` | Client SDK (live chat) |
 | `ui/components/Apps/AppAgentChatOverlay.tsx` | Desktop floating panel |
 | `ui/components/Apps/EmbeddedAppAgentChatPanel.tsx` | Multi-turn session UI (desktop overlay body) |
-| `tests/app-agent-chat.test.ts` | Unit tests |
+| `tests/agent/app-agent-chat.test.ts` | Unit tests |
 
 ---
 
