@@ -38,6 +38,7 @@ if (!globalThis.crypto) {
 }
 
 import express from "express";
+import { registerVaultRoutes, wireVaultKeyChanges } from "./routes/vaultRoutes.js";
 import { createServer } from "http";
 import { WebSocketServer } from "ws";
 import path from "path";
@@ -4345,83 +4346,7 @@ async function startGateway(): Promise<void> {
 
     lapRouteRegistrationSection("cloud-sync-routes");
 
-    // ── Vault Sync Status + Triggers ──────────────────────────────────────
-    app.get("/api/vault/status", (_req, res) => {
-      const vault = getVaultSyncService();
-      if (!vault) {
-        res.json({ enabled: false, reason: "Vault sync not initialized" });
-        return;
-      }
-      res.json({ enabled: true, ...vault.getState() });
-    });
-
-    app.post("/api/vault/push", async (_req, res) => {
-      const vault = getVaultSyncService();
-      if (!vault) {
-        res.status(503).json({ error: "Vault sync not initialized" });
-        return;
-      }
-      try {
-        const result = await vault.pushAllKeys();
-        res.json({ success: true, ...vault.getState(), result });
-      } catch (err) {
-        res.status(500).json({ error: (err as Error).message });
-      }
-    });
-
-    app.post("/api/vault/pull-shared", async (_req, res) => {
-      const vault = getVaultSyncService();
-      if (!vault) {
-        res.status(503).json({ error: "Vault sync not initialized" });
-        return;
-      }
-      try {
-        const upserted = await vault.pullSharedKeys();
-        res.json({ success: true, ...vault.getState(), upserted });
-      } catch (err) {
-        res.status(500).json({ error: (err as Error).message });
-      }
-    });
-
-    app.post("/api/vault/sync-key", async (req, res) => {
-      const vault = getVaultSyncService();
-      if (!vault) {
-        res.status(503).json({ error: "Vault sync not initialized" });
-        return;
-      }
-      const body = req.body as {
-        name?: string;
-        previousAudience?: string;
-        nextAudience?: string;
-        targetOrgId?: string;
-        mode?: "delete" | "update";
-      };
-      if (
-        !body.name?.trim() ||
-        (body.mode !== "delete" && body.mode !== "update")
-      ) {
-        res
-          .status(400)
-          .json({ error: "name and mode (delete|update) are required" });
-        return;
-      }
-      try {
-        const result = await vault.syncKeyVaultChange({
-          name: body.name.trim(),
-          previousAudience: body.previousAudience as
-            | import("../core/storage/customKeysVault.js").IntegrationKeyVaultAudience
-            | undefined,
-          nextAudience: body.nextAudience as
-            | import("../core/storage/customKeysVault.js").IntegrationKeyVaultAudience
-            | undefined,
-          targetOrgId: body.targetOrgId,
-          mode: body.mode,
-        });
-        res.json({ success: true, ...vault.getState(), result });
-      } catch (err) {
-        res.status(500).json({ error: (err as Error).message });
-      }
-    });
+    registerVaultRoutes(app, getVaultSyncService);
 
     // Renderer telemetry: validate sync, respond immediately, forward async (never block hot path).
     app.post("/api/telemetry/events", (req, res) => {
@@ -5118,20 +5043,7 @@ async function startGateway(): Promise<void> {
               const vaultSync = await initializeVaultSyncService({
                 gatewayPort: Number(PORT),
               });
-              getCustomKeysService().onKeyChange((keyName) => {
-                if (keyName) {
-                  vaultSync
-                    .onKeyChanged(keyName)
-                    .catch((e) =>
-                      console.warn(
-                        "[Gateway] Vault key push failed:",
-                        (e as Error).message,
-                      ),
-                    );
-                } else {
-                  vaultSync.scheduleDebouncedPushAll();
-                }
-              });
+              wireVaultKeyChanges(getCustomKeysService(), vaultSync);
             },
           );
         })().catch((err) => {

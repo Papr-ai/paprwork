@@ -14,6 +14,8 @@
  *   node scripts/test-turso-option-a-e2e.mjs [--skip-memory] [--skip-live]
  */
 
+// Must stay first: runs in a temp workspace, never the real ~/Papr.
+import "./lib/isolateHome.mjs";
 import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
@@ -109,7 +111,7 @@ function runVitest() {
   console.log("\n--- 1. Vitest (turso-runtime-identity) ---\n");
   const r = spawnSync(
     "npx",
-    ["vitest", "run", "tests/turso-runtime-identity.test.ts", "--project", "unit-backend"],
+    ["vitest", "run", "tests/cloud-sync/database/turso-runtime-identity.test.ts", "--project", "unit-backend"],
     { cwd: REPO_ROOT, encoding: "utf8", stdio: "pipe" },
   );
   const ok = r.status === 0;

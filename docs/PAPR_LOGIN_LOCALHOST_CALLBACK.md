@@ -69,4 +69,4 @@ npm run start:commercial  # production build with auth wall
 - `src/electron/ipc/paprLogin.ts` — PKCE flow, token exchange, provisioning
 - `src/core/telemetry/paprLoginSteps.ts` — funnel step definitions
 - `ui/components/Auth/AuthWall.tsx` — auth wall UI + step tracking
-- `tests/papr-login-funnel.test.ts` — funnel step unit tests
+- `tests/account/papr-login-funnel.test.ts` — funnel step unit tests

@@ -141,7 +141,7 @@ await fetch("/api/app/backend/fetch-attention-calls", {
 - [x] `CloudAppBackendService` — load manifest + handler from git cache, run at edge
 - [x] `buildAppBackendBundle()` at publish time
 - [x] Memory `action-run` removed (vault-resolve + repo-file only)
-- [x] Unit tests (`tests/app-backend-manifest.test.ts`, `tests/mini-app-backend-build.test.ts`)
+- [x] Unit tests (`tests/apps/app-backend-manifest.test.ts`, `tests/apps/mini-app-backend-build.test.ts`)
 - [x] E2E script `test-cloud-app-backend-e2e.mjs` (requires deployed cloud host)
 
 ### Phase D — Agent tooling

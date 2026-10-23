@@ -17,6 +17,8 @@
  *   npm run test:sync-v3-concurrency-e2e -- --writer=http://127.0.0.1:8789
  */
 
+// Must stay first: runs in a temp workspace, never the real ~/Papr.
+import "./lib/isolateHome.mjs";
 import Database from "better-sqlite3";
 import { randomUUID } from "crypto";
 import * as fs from "fs";
