@@ -111,7 +111,7 @@ function runVitest() {
   console.log("\n--- 1. Vitest (turso-runtime-identity) ---\n");
   const r = spawnSync(
     "npx",
-    ["vitest", "run", "tests/turso-runtime-identity.test.ts", "--project", "unit-backend"],
+    ["vitest", "run", "tests/cloud-sync/database/turso-runtime-identity.test.ts", "--project", "unit-backend"],
     { cwd: REPO_ROOT, encoding: "utf8", stdio: "pipe" },
   );
   const ok = r.status === 0;

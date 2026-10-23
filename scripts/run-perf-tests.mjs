@@ -19,7 +19,7 @@ const rootDir = join(__dirname, '..');
 const args = [
   'vitest',
   'run',
-  'tests/agent-performance-scaling.test.ts',
+  'tests/agent/agent-performance-scaling.test.ts',
   '--config',
   'vitest.config.integration.ts',
   ...process.argv.slice(2), // Pass through any CLI args

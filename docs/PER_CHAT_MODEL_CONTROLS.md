@@ -93,7 +93,7 @@ temp→permanent id rename (`chatStore.migrateChatId`).
 - `ui/utils/buildAgentConfig.ts` — single place that turns model + settings into `AgentConfig`
 - `ui/components/Chat/ModelSettingsPopover.tsx` / `.css` — the popover
 - `ui/components/Chat/ModelSettingsButton.tsx` — the composer pill
-- `tests/model-controls.test.ts` — 40 tests
+- `tests/providers/model-controls.test.ts` — 40 tests
 
 **Changed:**
 - `src/core/types/agents.ts` — `contextLimit`, `thinking?: false`, `speed`

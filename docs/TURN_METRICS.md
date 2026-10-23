@@ -219,7 +219,7 @@ GROUP BY bucket;
 - `src/core/tools/context.ts` — ambient `turnMetrics` on the tool context
 - `src/core/tools/chatHistory.ts` — records the recovery at the point of recovery
 - `src/core/telemetry/events.ts` — `AgentTurnCompletedProperties`
-- `tests/turn-metrics.test.ts` — 15 tests, including the no-content invariant
+- `tests/agent/turn-metrics.test.ts` — 15 tests, including the no-content invariant
 
 ## Related
 
