@@ -92,7 +92,7 @@ Agent: [calls create_job]
 
 ### 3. Created Comprehensive Test Suite
 
-Added `tests/delegation-tools.test.ts` with 15 tests:
+Added `tests/agent/delegation-tools.test.ts` with 15 tests:
 
 ✅ All delegation tools registered (`create_sub_agent`, `delegate_task`, etc.)
 ✅ All job tools registered (`create_job`, `run_job`, etc.)
@@ -174,7 +174,7 @@ The fix makes it **crystal clear**:
 - `src/core/tools/index.ts` - Tool registration (no changes needed)
 - `src/core/tools/delegation.ts` - Sub-agent tools (no changes needed)
 - `src/core/tools/appJobs.ts` - Job tools (no changes needed)
-- `tests/delegation-tools.test.ts` - New comprehensive test suite
+- `tests/agent/delegation-tools.test.ts` - New comprehensive test suite
 
 ## Monitoring
 

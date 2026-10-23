@@ -36,6 +36,8 @@
  *   node scripts/test-flush-web-ready-e2e.mjs [--gateway URL] [--app-id ID] [--skip-gateway] [--skip-module]
  */
 
+// Must stay first: runs in a temp workspace, never the real ~/Papr.
+import "./lib/isolateHome.mjs";
 import * as fs from "fs";
 import * as path from "path";
 import { fileURLToPath } from "url";

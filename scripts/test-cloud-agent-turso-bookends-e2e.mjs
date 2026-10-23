@@ -18,6 +18,8 @@
  *   npm run test:cloud-agent-turso-bookends -- --concurrent-push
  */
 
+// Must stay first: runs in a temp workspace, never the real ~/Papr.
+import "./lib/isolateHome.mjs";
 import Database from "better-sqlite3";
 import * as fs from "fs";
 import * as os from "os";

@@ -712,7 +712,8 @@ export class LocalStorageProvider implements IStorageProvider {
       SELECT 
         id, chat_id, role, content, timestamp,
         thinking, error, incomplete,
-        model, prompt_tokens, completion_tokens, total_tokens,
+        model, prompt_tokens, completion_tokens, total_tokens, cost,
+        cache_read_tokens, cache_write_tokens,
         sync_status, papr_message_id, last_sync_attempt, sync_error,
         source_agent_id, source_agent_name,
         attachments,

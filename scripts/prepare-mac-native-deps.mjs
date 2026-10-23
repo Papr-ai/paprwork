@@ -132,10 +132,14 @@ function prepareMacNativeDeps(arch) {
   log(`done — node_modules ready for darwin-${arch} packaging`);
 }
 
-const archArg = process.argv[2]?.trim();
-if (!archArg || (archArg !== "arm64" && archArg !== "x64")) {
-  console.error("Usage: node scripts/prepare-mac-native-deps.mjs <arm64|x64>");
-  process.exit(1);
-}
+export { MAC_NATIVE_PACKAGES, ALL_MAC_NATIVE_PACKAGES, scopedPackageName };
 
-prepareMacNativeDeps(archArg);
+// Only run when executed directly (tests import the package lists).
+if (process.argv[1] && fileURLToPath(import.meta.url) === process.argv[1]) {
+  const archArg = process.argv[2]?.trim();
+  if (!archArg || (archArg !== "arm64" && archArg !== "x64")) {
+    console.error("Usage: node scripts/prepare-mac-native-deps.mjs <arm64|x64>");
+    process.exit(1);
+  }
+  prepareMacNativeDeps(archArg);
+}
