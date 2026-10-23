@@ -66,7 +66,7 @@ describe("job tool paths (org/namespace workspace)", () => {
       process.env.HOME = previousHome;
     }
     delete process.env.PAPR_HOME;
-    await fs.rm(tempHome, { recursive: true, force: true });
+    await fs.rm(tempHome, { recursive: true, force: true, maxRetries: 5, retryDelay: 50 });
   });
 
   it("list_jobs returns dir under active org/namespace Jobs root", async () => {

@@ -64,7 +64,7 @@ describe("AgentJobExecutor.buildSessionInput", () => {
     else process.env.PAPR_HOME = previousPaprHome;
     if (previousGatewayMode === undefined) delete process.env.GATEWAY_MODE;
     else process.env.GATEWAY_MODE = previousGatewayMode;
-    await fs.rm(tempRoot, { recursive: true, force: true });
+    await fs.rm(tempRoot, { recursive: true, force: true, maxRetries: 5, retryDelay: 50 });
   });
 
   it("builds prompt from job.command and env block, not memory fallback text", async () => {

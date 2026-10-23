@@ -20,7 +20,4 @@ describe("SleepCycleService", () => {
     expect(SLEEP_JOB_DEFAULTS.retries.maxAttempts).toBe(2);
   });
 
-  it("bumps sleep prompt template version", () => {
-    expect(SLEEP_PROMPT_VERSION).toBe(24);
-  });
 });

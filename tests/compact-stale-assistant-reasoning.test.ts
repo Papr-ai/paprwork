@@ -48,7 +48,8 @@ describe("compactStaleAssistantReasoning", () => {
       },
     ];
 
-    const stats = compactStaleAssistantReasoning(messages);
+    // Default keeps the last 3 tool batches (Sep 14); this fixture has 2.
+    const stats = compactStaleAssistantReasoning(messages, { keepLastBatches: 1 });
 
     expect(stats.strippedMessages).toBe(1);
     expect(stats.removedParts).toBeGreaterThan(0);

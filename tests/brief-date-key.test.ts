@@ -6,7 +6,7 @@ import {
 
 describe("briefDateKey", () => {
   it("formatBriefDateKey uses local calendar parts", () => {
-    const key = formatBriefDateKey(new Date("2026-08-29T23:30:00-07:00"));
+    const key = formatBriefDateKey(new Date(2026, 7, 29, 23, 30));
     expect(key).toBe("2026-08-29");
   });
 

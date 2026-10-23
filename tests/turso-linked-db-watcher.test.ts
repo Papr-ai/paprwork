@@ -10,6 +10,16 @@ import {
 import * as tursoSyncBridgeCore from "../src/gateway/services/tursoSyncBridgeCore.js";
 import * as tursoSyncState from "../src/gateway/services/tursoSyncState.js";
 
+// Auto-upload is off in a fresh workspace; these tests cover the scheduler,
+// not the upload preference.
+vi.mock("../src/gateway/services/cloudUploadMode.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../src/gateway/services/cloudUploadMode.js")>()),
+  shouldAutoUploadJobFolder: vi.fn(() => true),
+  shouldAutoUploadReplicaSyncKey: vi.fn(() => true),
+  shouldAutoUploadTursoForApp: vi.fn(() => true),
+}));
+
+
 describe("TursoLinkedDbWatcher", () => {
   afterEach(() => {
     vi.restoreAllMocks();
@@ -47,7 +57,7 @@ describe("TursoLinkedDbWatcher", () => {
     expect(resolveWatchedDbPathForTests(path.join(dataDir, "scratch.db"))).toBeNull();
   });
 
-  it("quarantines corrupt databases instead of throwing during evaluation", () => {
+  it("quarantines corrupt databases instead of throwing during evaluation", async () => {
     const dbPath = path.join("/tmp/Papr/Jobs", jobId, "data", "data.db");
     const recordQuarantine = vi
       .spyOn(tursoSyncState, "recordTursoPushQuarantine")
@@ -66,10 +76,13 @@ describe("TursoLinkedDbWatcher", () => {
       evaluateDbChangeForTests({ syncKey: jobId, dbPath, jobId }),
     ).not.toThrow();
 
-    expect(recordQuarantine).toHaveBeenCalledWith(
-      jobId,
-      dbPath,
-      "database disk image is malformed",
+    // Replica-vs-legacy routing resolves after async imports.
+    await vi.waitFor(() =>
+      expect(recordQuarantine).toHaveBeenCalledWith(
+        jobId,
+        dbPath,
+        "database disk image is malformed",
+      ),
     );
   });
 });

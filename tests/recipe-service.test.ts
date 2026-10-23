@@ -2,15 +2,17 @@ import { describe, it, expect, beforeEach, afterEach } from "vitest";
 import { RecipeService } from "../src/gateway/services/jobs/RecipeService.js";
 import { promises as fs } from "fs";
 import path from "path";
-import os from "os";
 import { useIsolatedPaprWorkspace } from "./setup/isolatedWorkspace.js";
+import { getPaprJobsRoot } from "../src/core/utils/paprRoot.js";
 
 const TEST_JOB_ID = "test-recipe-job-" + Date.now();
 
 // Resolved lazily inside hooks: os.homedir() at module scope is evaluated at
 // import time, before useIsolatedPaprWorkspace can redirect HOME, so the paths
 // would point at the developer's real ~/Papr.
-const jobsRoot = () => path.join(os.homedir(), "Papr", "jobs");
+// Same resolver the service uses. The old hand-built "Papr/jobs" only matched
+// "Papr/Jobs" on case-insensitive macOS and failed on Linux CI.
+const jobsRoot = () => getPaprJobsRoot();
 const jobDir = () => path.join(jobsRoot(), TEST_JOB_ID);
 
 const SAMPLE_RECIPE = `# Execution Recipe: Test Job

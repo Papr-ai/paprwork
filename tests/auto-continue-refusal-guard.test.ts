@@ -272,7 +272,7 @@ describe("the outcome is cleared only by a deliberate new attempt", () => {
   it("does not clear the outcome for a hidden continue message", () => {
     // Clearing on every send would let the retry loop clear its own brake.
     const guarded = agent.match(
-      /if \(!isHiddenContinueUserMessage\(message\)\)[\s\S]{0,220}?setLastTurnOutcome\([^)]*undefined\)/,
+      /if \(!(?:isHiddenContinueUserMessage\(message\)|hiddenContinue)\)[\s\S]{0,220}?setLastTurnOutcome\([^)]*undefined\)/,
     );
     expect(guarded).not.toBeNull();
   });

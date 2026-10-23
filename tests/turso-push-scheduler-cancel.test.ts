@@ -36,7 +36,8 @@ describe("cancelAllScheduledTursoPushes", () => {
       await import("../src/gateway/services/tursoPushScheduler.js");
 
     scheduleTursoPushForJob("db-test", "normal", "watcher");
-    expect(vi.getTimerCount()).toBeGreaterThan(0);
+    // Routing to the legacy scheduler happens after an async import.
+    await vi.waitFor(() => expect(vi.getTimerCount()).toBeGreaterThan(0));
 
     cancelAllScheduledTursoPushes("unit test");
 

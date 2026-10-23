@@ -1,6 +1,6 @@
 import { describe, expect, it, vi, beforeEach, afterEach } from "vitest";
 
-vi.mock("../src/gateway/websocket/settings.js", () => ({
+vi.mock("../src/gateway/services/settingsStore.js", () => ({
   loadSettings: vi.fn(),
 }));
 
@@ -8,7 +8,7 @@ vi.mock("../src/gateway/utils/keyResolver.js", () => ({
   getPaprApiKey: vi.fn(),
 }));
 
-import { loadSettings } from "../src/gateway/websocket/settings.js";
+import { loadSettings } from "../src/gateway/services/settingsStore.js";
 import { getPaprApiKey } from "../src/gateway/utils/keyResolver.js";
 import { checkCloudPublishAvailable } from "../src/gateway/utils/cloudPublishGate.js";
 

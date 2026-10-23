@@ -392,3 +392,34 @@ describe("JobsScheduler overlapping ticks", () => {
     vi.restoreAllMocks();
   });
 });
+
+describe("JobsScheduler wake timer", () => {
+  test("caps far-future wakes below the setTimeout limit (no 1ms tick loop)", () => {
+    const spy = vi.spyOn(globalThis, "setTimeout");
+    const scheduler = new JobsScheduler();
+    const farFuture = new Date(Date.now() + 70 * 24 * 60 * 60 * 1000).toISOString();
+    (scheduler as unknown as { queueWake: (jobs: JobRecord[], auth: boolean) => void }).queueWake(
+      [
+        {
+          id: "yearly",
+          name: "Yearly",
+          type: "bash",
+          command: "true",
+          appIds: ["__standalone__"],
+          status: "pending",
+          schedule: { enabled: true, cron: "0 0 1 1 *" },
+          scheduleState: { nextRunAt: farFuture },
+          createdAt: new Date().toISOString(),
+          updatedAt: new Date().toISOString(),
+        } as unknown as JobRecord,
+      ],
+      false,
+    );
+    const delays = spy.mock.calls.map((c) => Number(c[1]));
+    scheduler.stop();
+    spy.mockRestore();
+    expect(delays.length).toBeGreaterThan(0);
+    expect(Math.max(...delays)).toBeLessThanOrEqual(2 ** 31 - 1);
+    expect(Math.min(...delays)).toBeGreaterThan(60_000);
+  });
+});

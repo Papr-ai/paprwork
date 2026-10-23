@@ -14,6 +14,7 @@ import {
   resetWorkspaceSwitchOverlayForTests,
 } from "../ui/lib/workspaceSwitchOverlay";
 import { writeWorkspaceUiCache, buildWorkspaceUiCacheKey } from "../ui/lib/workspaceUiCache";
+import { allowTabPersistence, resetTabPersistenceGuardForTests } from "../ui/lib/tabPersistenceGuard";
 
 const gatewaySendMock = vi.fn(async (type: string) => {
   if (type === "chat:list") {
@@ -90,6 +91,7 @@ function stubWindowForReload(): void {
 describe("reloadUiForWorkspaceSwitch", () => {
   beforeEach(() => {
     resetWorkspaceReloadForTests();
+    resetTabPersistenceGuardForTests();
     resetWorkspaceSwitchOverlayForTests();
     gatewaySendMock.mockClear();
     vi.stubGlobal("fetch", vi.fn());
@@ -344,15 +346,20 @@ describe("reloadUiForWorkspaceSwitch", () => {
     stubWindowForReload();
     attachWorkspaceSwitchBroadcastListener();
 
+    // The leaving workspace's saved tab bar was read, so its tabs are real and
+    // the flush is allowed (it is blocked until that read succeeds).
+    allowTabPersistence();
     useTabStore.getState().createTab("chat", "chat-leave", "Leaving chat");
     useTabStore.getState().createTab("app", "app-leave", "Leaving app");
 
     const saveTabsCalls: Array<{ length: number; titles: string[] }> = [];
     gatewaySendMock.mockImplementation(async (type: string, payload?: unknown) => {
       if (type === "app:save_tabs") {
-        const tabs = Array.isArray(payload)
-          ? (payload as Array<{ title: string }>)
-          : [];
+        // Payload is { tabs, sync } (was a bare array before Sep).
+        const raw = Array.isArray(payload)
+          ? payload
+          : (payload as { tabs?: unknown } | undefined)?.tabs;
+        const tabs = Array.isArray(raw) ? (raw as Array<{ title: string }>) : [];
         saveTabsCalls.push({
           length: tabs.length,
           titles: tabs.map((tab) => tab.title),

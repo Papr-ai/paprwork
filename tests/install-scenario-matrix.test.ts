@@ -531,7 +531,9 @@ describe.skipIf(!DatabaseSync)("install scenario matrix", () => {
   const withDevice = (device: Device) => Object.assign(process.env, DEVICE_ENV[device]);
 
   for (const device of DEVICES) {
-    describe(`device: ${device}`, () => {
+    // The first replica case cold-starts the sync worker: ~6-10s on a 2-CPU CI
+    // runner, over the 5s default. It is setup cost, not a hang.
+    describe(`device: ${device}`, { timeout: 30_000 }, () => {
       for (const kind of ["community-fork", "team-fork", "community-collaborate"] as const) {
         for (const snapshot of [false, "seed-file", "stale-seeding"] as const) {
           it(`${kind} (${snapshot || "replay"}) → fresh database, installer owns seed`, async () => {
