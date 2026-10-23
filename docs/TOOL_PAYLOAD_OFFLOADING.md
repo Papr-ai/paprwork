@@ -160,7 +160,7 @@ duplication that is now gone — roughly 975 MB across those 150 rows.
 - `src/gateway/services/storage/messagePayloadStore.ts` — serialize/restore, offload, sidecar I/O
 - `src/gateway/services/storage/toolPayloadMigration.ts` — backfill scheduling and progress
 - `src/gateway/services/storage/toolPayloadRowRewrite.ts` — the per-row SQL surgery
-- `tests/message-payload-store.test.ts` — round-trip and offload unit tests
+- `tests/chat/message-payload-store.test.ts` — round-trip and offload unit tests
 - `scripts/test-tool-payload-migration.mjs` — backfill tests (Electron)
 - `scripts/verify-payload-migration-on-real-db.mjs` — losslessness check against a real DB
 
@@ -177,7 +177,7 @@ duplication that is now gone — roughly 975 MB across those 150 rows.
 ## Testing
 
 ```bash
-npx vitest run tests/message-payload-store.test.ts --project unit-backend   # 13 tests
+npx vitest run tests/chat/message-payload-store.test.ts --project unit-backend   # 13 tests
 npm run test:payload-migration                                              # 26 tests (Electron)
 
 # Optional: prove losslessness against your own database (read-only)

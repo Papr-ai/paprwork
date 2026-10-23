@@ -107,10 +107,10 @@ E2E tests call `syncTursoFromCloudDbChanged` directly.
 
 | File | Cases |
 |------|-------|
-| `tests/turso-cloud-db-changed.test.ts` | reconcileFromCloudDbChanges dedupes; dbId scope; jobId → writeDbIds expansion |
+| `tests/cloud-sync/database/turso-cloud-db-changed.test.ts` | reconcileFromCloudDbChanges dedupes; dbId scope; jobId → writeDbIds expansion |
 | `tests/turso-sync-overlap.test.ts` | watcher-only path: simulate file change → single enqueue; api/db/write without schedule → still one enqueue via watcher mock |
-| `tests/turso-push-scheduler-stats.test.ts` | debounce coalesces N schedules → 1 enqueue; completion priority shorter window |
-| Extend `tests/turso-sync-session.test.ts` | db-changed trigger uses assumeRemoteChanged per change, not global |
+| `tests/cloud-sync/database/turso-push-scheduler-stats.test.ts` | debounce coalesces N schedules → 1 enqueue; completion priority shorter window |
+| Extend `tests/cloud-sync/database/turso-sync-session.test.ts` | db-changed trigger uses assumeRemoteChanged per change, not global |
 
 #### 5.2 E2E script — `scripts/test-turso-sync-overlap-e2e.mjs`
 

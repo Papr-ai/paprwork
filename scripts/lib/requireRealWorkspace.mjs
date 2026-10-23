@@ -5,7 +5,7 @@
  * at their live workspace by accident.
  *
  * Scripts that can run against a throwaway workspace should import
- * ./isolateHome.mjs instead. tests/scripts-workspace-isolation.test.ts
+ * ./isolateHome.mjs instead. tests/gateway/scripts-workspace-isolation.test.ts
  * enforces that every script importing app code picks one.
  */
 if (process.env.PAPR_E2E_REAL_HOME !== "1") {

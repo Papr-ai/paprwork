@@ -126,12 +126,12 @@ Older discovery/bash results still truncate to 400 chars. Use `get_full_tool_res
 | `src/gateway/services/agent/historyFormatter.ts` | Applies truncation when building model messages |
 | `src/gateway/services/agent/compactToolResults.ts` | Within-turn batch compaction (unchanged) |
 | `src/gateway/services/storage/contextFootprint.ts` | Re-exports constants for efficiency stats |
-| `tests/tool-result-truncation.test.ts` | Unit tests |
+| `tests/agent/tool-result-truncation.test.ts` | Unit tests |
 
 ## Testing
 
 ```bash
-npm run test -- tests/tool-result-truncation.test.ts
+npm run test -- tests/agent/tool-result-truncation.test.ts
 ```
 
 ## Related Docs
