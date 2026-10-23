@@ -50,13 +50,13 @@ const IIFE_JS_ROUTE = new Set([
 ]);
 
 /** ESM modules that apps import via `.js` URL (bundler convention). */
-const ESM_JS_ROUTE = new Set(["papr-files.ts", "papr-connect.ts", "papr-search.ts"]);
+const ESM_JS_ROUTE = new Set(["papr-files.ts", "papr-connect.ts", "papr-search.ts", "papr-entities.ts"]);
 
 const AGENT_HINTS: Record<string, Pick<MiniAppSdkModule, "summary" | "exports">> =
   {
     "papr-sdk.ts": {
       summary: "Unified SDK entry — prefer this single import",
-      exports: "papr.dialog.*, papr.jobs.*, papr.files.*, papr.connect.*, papr.search.*, papr.preview.*",
+      exports: "papr.dialog.*, papr.jobs.*, papr.files.*, papr.connect.*, papr.search.*, papr.entities.*, papr.preview.*",
     },
     "papr-dialog.ts": {
       summary: "Modal text input / confirm / alert (legacy direct import)",
@@ -81,6 +81,10 @@ const AGENT_HINTS: Record<string, Pick<MiniAppSdkModule, "summary" | "exports">>
     "papr-search.ts": {
       summary: "Index app items in Papr Memory and search them by meaning (Claude finds them via papr_search)",
       exports: "papr.search.index / query / remove (prefer papr-sdk import)",
+    },
+    "papr-entities.ts": {
+      summary: "Shared identity for people / funds / meetings across apps via a schema pack (entities.json). Shadow mode by default",
+      exports: "papr.entities.sync / resolve / get / forRow / observe / manifest (prefer papr-sdk import)",
     },
     "papr-agent-chat.ts": {
       summary: "Embedded assistant bubble script (after enable_app_agent_chat)",
