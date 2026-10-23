@@ -75,6 +75,20 @@ function gitShortSha() {
   }
 }
 
+
+// SOC 2 change management: production deploys go through
+// .github/workflows/deploy-cloud-app-host.yml (tests + approval + GitHub log).
+// Laptop deploys to the production service are blocked unless this is a
+// documented emergency (docs/CHANGE_MANAGEMENT.md).
+if (service === "papr-cloud-app-host" && !dryRun && !args.includes("--break-glass")) {
+  console.error(
+    "\n❌ Production deploys run from GitHub Actions (Deploy Cloud App Host workflow).\n" +
+      "   Merge to master and approve the Promote step.\n" +
+      "   Emergency only: rerun with --break-glass and open an `emergency` PR within 24h.",
+  );
+  process.exit(1);
+}
+
 const tag = getArg("tag", gitShortSha());
 const registry = `${region}-docker.pkg.dev`;
 const fullImage = `${registry}/${project}/${repo}/${imageName}:${tag}`;
@@ -258,6 +272,7 @@ const deployCmd = [
   "--memory=512Mi",
   "--cpu=1",
   "--min-instances=1",
+  "--no-cpu-throttling", // Turso keep-warm timer must run between requests
   "--max-instances=20",
   "--timeout=120",
   `--service-account=${hostSa}`,

@@ -16,6 +16,8 @@ type FailedFetchesState = Set<string>;
 interface JobLiveLogsStore {
   logsByJobId: LogsState;
   namesByJobId: NamesState;
+  /** Job runtime type (python, agent, subagent…) — agent jobs render the user's AgentGlyph. */
+  typesByJobId: Map<string, string>;
   failedFetches: FailedFetchesState;
   appendLine: (jobId: string, line: string) => void;
   setJobName: (jobId: string, name: string) => void;
@@ -24,9 +26,12 @@ interface JobLiveLogsStore {
   clearJob: (jobId: string) => void;
 }
 
+const nameFetchAttempts = new Map<string, number>();
+
 export const useJobLiveLogsStore = create<JobLiveLogsStore>((set, get) => ({
   logsByJobId: new Map(),
   namesByJobId: new Map(),
+  typesByJobId: new Map(),
   failedFetches: new Set(),
 
   appendLine: (jobId, line) =>
@@ -49,7 +54,7 @@ export const useJobLiveLogsStore = create<JobLiveLogsStore>((set, get) => ({
   fetchJobName: async (jobId) => {
     // Check if we already have it
     const existing = get().namesByJobId.get(jobId);
-    if (existing) return existing;
+    if (existing && get().typesByJobId.has(jobId)) return existing;
 
     // Don't retry if we already failed to fetch this job
     if (get().failedFetches.has(jobId)) return undefined;
@@ -57,7 +62,11 @@ export const useJobLiveLogsStore = create<JobLiveLogsStore>((set, get) => ({
     // Fetch from gateway
     try {
       const response = await gateway.send("jobs:get", { jobId });
-      const job = response.data as { name?: string };
+      const job = response.data as { name?: string; type?: string };
+      if (job?.type) {
+        const type = job.type;
+        set((state) => ({ typesByJobId: new Map(state.typesByJobId).set(jobId, type) }));
+      }
       if (job?.name) {
         get().setJobName(jobId, job.name);
         return job.name;
@@ -67,12 +76,19 @@ export const useJobLiveLogsStore = create<JobLiveLogsStore>((set, get) => ({
         `[jobLiveLogsStore] Failed to fetch job name for ${jobId}:`,
         error,
       );
-      // Mark this job as failed so we don't retry
-      set((state) => {
-        const next = new Set(state.failedFetches);
-        next.add(jobId);
-        return { failedFetches: next };
-      });
+      // A transient failure (gateway busy while the job is being updated/started) used to
+      // pin the card to the raw job id forever. Retry a few times before giving up.
+      const attempt = (nameFetchAttempts.get(jobId) ?? 0) + 1;
+      nameFetchAttempts.set(jobId, attempt);
+      if (attempt < 4) {
+        setTimeout(() => void get().fetchJobName(jobId), 1500 * attempt);
+      } else {
+        set((state) => {
+          const next = new Set(state.failedFetches);
+          next.add(jobId);
+          return { failedFetches: next };
+        });
+      }
     }
     return undefined;
   },

@@ -89,6 +89,7 @@ import {
   type SharingPatch,
 } from "../../utils/shareSheetModel";
 import { PublishBarOverflowMenu } from "./PublishBarOverflowMenu";
+import { updatesPausedMessage } from "../../../src/core/utils/updatesPausedMessage";
 import { AppWorkspacePanelMenu } from "./AppWorkspacePanelMenu";
 import {
   WebSyncStatusDot,
@@ -405,6 +406,7 @@ export function MiniAppPublishBar({
     checkStatus: webSyncCheckStatus,
     lastCheckedAt: webSyncLastCheckedAt,
     publisherUpdatesAvailable: webSyncPublisherUpdatesAvailableRaw,
+    updatesPaused: webSyncUpdatesPausedRaw,
     refresh: webSyncRefresh,
   } = useAppCloudSyncStatus(appId, {
     enabled: workspaceMode === "preview",
@@ -977,6 +979,7 @@ export function MiniAppPublishBar({
           hasUnproposedEdits: collabUnproposed,
           hasUnpublishedEdits: webSyncStatus?.hasLocalChanges === true,
           publisherAhead: webSyncPublisherUpdatesAvailable,
+          updatesPaused: isTrackCollaborator ? webSyncUpdatesPausedRaw : null,
           pullState: upstreamPulling
             ? "pulling"
             : webSyncState === "action_required"
@@ -1195,6 +1198,16 @@ export function MiniAppPublishBar({
       return {
         tone: upstreamNotice.tone === "ok" ? ("success" as const) : ("warn" as const),
         message: upstreamNotice.message,
+      };
+    }
+    if (isTrackCollaborator && webSyncUpdatesPausedRaw) {
+      // Final answer from the publisher's side: say why and who can fix it.
+      return {
+        tone: "warn" as const,
+        message: updatesPausedMessage(
+          webSyncUpdatesPausedRaw.reason,
+          cloudLineage?.sourceSlug ? `The publisher of ${cloudLineage.sourceSlug}` : "The publisher",
+        ),
       };
     }
     if (cloud.errorDetail && !needsDesktopAck) {
@@ -1609,6 +1622,11 @@ export function MiniAppPublishBar({
       case "get_updates":
         void handleUpstreamPull();
         return;
+      case "recheck_access":
+        // Re-asks the server once. If access is back, this pulls and clears the
+        // pause; if not, the notice says why (from the gateway's 403 message).
+        void handleUpstreamPull().finally(() => void webSyncRefresh(true));
+        return;
       case "update_and_repropose":
         void handleUpdateAndRepropose();
         return;
@@ -1897,6 +1915,7 @@ export function MiniAppPublishBar({
                         ? {
                             glyph:
                               copyBar.chip.action === "get_updates" ||
+                              copyBar.chip.action === "recheck_access" ||
                               copyBar.chip.action === "update_and_repropose"
                                 ? ("down" as const)
                                 : copyBar.chip.action === "propose"

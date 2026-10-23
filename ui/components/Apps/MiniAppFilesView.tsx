@@ -77,6 +77,11 @@ export function MiniAppFilesView({ appId, panel }: MiniAppFilesViewProps) {
     [workspace.workspace],
   );
 
+  const registryDbs = useMemo(
+    () => workspace.workspace?.databases ?? [],
+    [workspace.workspace],
+  );
+
   const canSave =
     workspace.selected != null &&
     workspace.viewMode === "code" &&
@@ -203,6 +208,42 @@ export function MiniAppFilesView({ appId, panel }: MiniAppFilesViewProps) {
           ))
             : null}
 
+          {panel === "db" && registryDbs.length > 0 ? (
+            <section className="mini-app-files__group mini-app-files__group--job">
+              <p className="mini-app-files__panel-hint">
+                Click a linked database to browse its tables and rows (read-only).
+              </p>
+              <ul className="workspace-file-tree__list">
+                {registryDbs.map((db) => (
+                  <li key={db.alias}>
+                    <button
+                      type="button"
+                      className={`workspace-file-tree__file${
+                        workspace.selectedKey === `registry:${db.alias}`
+                          ? " workspace-file-tree__file--active"
+                          : ""
+                      }`}
+                      onClick={() => {
+                        setSelectedAppFile(null);
+                        void workspace.openTarget({
+                          scope: "registry",
+                          appId,
+                          alias: db.alias,
+                          path: db.alias,
+                          kind: "database",
+                          readOnly: true,
+                        });
+                      }}
+                    >
+                      <span className="workspace-file-tree__file-name">{db.alias}</span>
+                      <span className="workspace-file-tree__badge">{db.dbId}</span>
+                    </button>
+                  </li>
+                ))}
+              </ul>
+            </section>
+          ) : null}
+
           {panel === "db" && jobGroups.length > 0 ? (
             <>
               <p className="mini-app-files__panel-hint">
@@ -257,7 +298,7 @@ export function MiniAppFilesView({ appId, panel }: MiniAppFilesViewProps) {
           <div className="mini-app-files__placeholder">
             <p>Linked databases for this app.</p>
             <p className="mini-app-files__placeholder-sub">
-              Select a job database below to browse tables and rows.
+              Select a linked database or job database to browse tables and rows.
             </p>
           </div>
         ) : !workspace.selected ? (
@@ -279,6 +320,9 @@ export function MiniAppFilesView({ appId, panel }: MiniAppFilesViewProps) {
                 ) : (
                   <span className="mini-app-files__editor-lang">database</span>
                 )}
+                {workspace.selected.scope === "registry" ? (
+                  <span className="mini-app-files__job-badge">Linked</span>
+                ) : null}
                 {workspace.selected.scope === "job" ? (
                   <span className="mini-app-files__job-badge">Job</span>
                 ) : null}
@@ -337,6 +381,8 @@ export function MiniAppFilesView({ appId, panel }: MiniAppFilesViewProps) {
                 onSelectTable={(tableName) =>
                   void workspace.selectDbTable(tableName)
                 }
+                onPageChange={(page) => void workspace.changeDbPage(page)}
+                onPageSizeChange={(size) => void workspace.changeDbPageSize(size)}
               />
             ) : null}
 

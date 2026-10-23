@@ -75,7 +75,7 @@ These remain for **pull / migration / hygiene** — they do not block the upload
 
 ```bash
 nvm use 24
-npm run test -- tests/cloud-publish-drift.test.ts
+npm run test -- tests/cloud-sync/publish/cloud-publish-drift.test.ts
 ```
 
 Manual verification:

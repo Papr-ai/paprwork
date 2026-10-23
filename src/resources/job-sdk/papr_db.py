@@ -68,6 +68,9 @@ _READ_RETRIES = 3
 # outside the gateway's per-database lane, so waiting holds no lock. Total ~3.5s.
 _TRANSIENT_RETRY_DELAYS_S = (0.5, 1.0, 2.0)
 
+# Rows per batched executemany request to the cloud job-db proxy.
+_BATCH_ROWS = 500
+
 __all__ = ["connect", "query", "execute", "PaprDbError"]
 
 _WRITE_VERBS = ("INSERT", "UPDATE", "DELETE", "REPLACE", "UPSERT")
@@ -309,7 +312,23 @@ class ReplicaConnection:
         return self._last
 
     def executemany(self, sql, seq_of_params):
-        for params in seq_of_params:
+        rows = [list(p or []) for p in seq_of_params]
+        verb = sql.lstrip().split(None, 1)[0].upper() if sql.strip() else ""
+        url = os.environ.get("PAPR_DB_PROXY_URL", "").strip()
+        token = os.environ.get("PAPR_DB_PROXY_TOKEN", "").strip()
+        # Cloud job-db proxy: one atomic request per chunk instead of one per
+        # row (~4 rows/s per-row → 8+ min for a 2k-row job). The desktop
+        # gateway proxy has no /write-many, so it keeps the per-row path.
+        if rows and verb in _WRITE_VERBS and url and token and url.rstrip("/").endswith("/job-db"):
+            headers = {"Content-Type": "application/json", "Authorization": "Bearer " + token}
+            for i in range(0, len(rows), _BATCH_ROWS):
+                payload = {"sql": sql, "rows": rows[i:i + _BATCH_ROWS]}
+                if self._alias:
+                    payload["sourceId"] = self._alias
+                _send(url.rstrip("/") + "/write-many", payload, headers, "write")
+            self._last = _Cursor([])
+            return self._last
+        for params in rows:
             self.execute(sql, params)
         return _Cursor([])
 

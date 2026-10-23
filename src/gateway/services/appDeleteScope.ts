@@ -158,9 +158,13 @@ export function sanitizeDeleteAppOptionsForScope(
     };
   }
 
+  // Local uninstall still removes this device's copies of the linked jobs —
+  // otherwise their schedules keep running and writing to the publisher's
+  // shared DB after the app is gone. JobsService.deleteJob resolves its own
+  // local-only scope (no Turso / cloud catalog deletes) while lineage exists.
   return {
     unpublishFromCloud: false,
-    deleteLinkedJobs: false,
+    deleteLinkedJobs: options.deleteLinkedJobs === true,
     deleteTursoDatabases: false,
     deleteRegistryDbIds: [],
     deleteRegistryTurso: false,

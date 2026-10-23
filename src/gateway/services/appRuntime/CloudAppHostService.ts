@@ -123,7 +123,12 @@ import {
   setCachedDbResult,
 } from "./dbRequestGuard.js";
 import { isMiniAppTypeScriptFile } from "../../utils/miniAppTranspile.js";
-import { buildCloudAuthLoginUrl, isLinkPreviewCrawler } from "../../../core/utils/cloudAppPreview.js";
+import {
+  buildCloudAuthLoginUrl,
+  buildWebAppManifest,
+  CLOUD_APP_MANIFEST_PATH,
+  isLinkPreviewCrawler,
+} from "../../../core/utils/cloudAppPreview.js";
 import {
   buildShareGateLandingHtml,
   resolveShareGatePresentation,
@@ -134,6 +139,7 @@ import {
   resolvePreviewIconSvg,
 } from "./CloudAppPreviewService.js";
 import { rasterizePreviewIconForOpenGraph } from "../../utils/openGraphIconRaster.js";
+import { registerDiscoverRoutes } from "./cloudAppDiscoverPage.js";
 import {
   PAPR_APP_META_RELATIVE_PATH,
   readCloudAppMetaFromContent,
@@ -182,6 +188,8 @@ export class MemoryServerPublishResolver implements AppPublishResolver {
   }): Promise<AppAccessContext | null> {
     const headers: Record<string, string> = {
       "Content-Type": "application/json",
+      // Ask for a denial as 200 {allowed:false}: the check worked, the answer is no.
+      "X-Papr-Access-Answer": "1",
     };
     if (input.paprApiKey) {
       headers["X-API-Key"] = input.paprApiKey;
@@ -212,6 +220,8 @@ export class MemoryServerPublishResolver implements AppPublishResolver {
       throw new Error(`Access validate failed: ${res.status}`);
     }
     const json = (await res.json()) as {
+      allowed?: boolean;
+      ownerKey?: string;
       orgId: string;
       namespaceId: string;
       userId: string;
@@ -222,6 +232,15 @@ export class MemoryServerPublishResolver implements AppPublishResolver {
       role?: string;
       callerUserId?: string;
     };
+    // Fail closed: older memory omits `allowed` on grants (and 403s denials);
+    // newer memory sends allowed:false. Anything but an explicit grant with an
+    // owner is a denial.
+    if (json.allowed !== undefined && json.allowed !== true) {
+      return null;
+    }
+    if (!json.orgId || !json.userId || !json.appId) {
+      return null;
+    }
     return {
       orgId: json.orgId,
       namespaceId: json.namespaceId,
@@ -232,6 +251,7 @@ export class MemoryServerPublishResolver implements AppPublishResolver {
       canWrite: json.canWrite,
       ...(json.role ? { role: json.role } : {}),
       ...(json.callerUserId ? { callerUserId: json.callerUserId } : {}),
+      ...(json.ownerKey ? { ownerKey: json.ownerKey } : {}),
     };
   }
 }
@@ -333,6 +353,9 @@ export class CloudAppHostService {
       hub: getJobEventHub(),
       // Pub/Sub subscriber live → status arrives pushed; polling only as a safety net.
       pushActive: () => this.jobEventsPush?.isActive() === true,
+      // Owner from the page's own access check (cached), so pushed events reach
+      // every watched job without a successful status read first.
+      resolveOwnerKey: async (req) => (await this.resolveAccess(req).catch(() => null))?.ownerKey,
       pollJobStatus: async (jobId, req) => {
         // Same credentials as the page itself (session → namespace key), or
         // team/private apps 403 every poll.
@@ -343,7 +366,8 @@ export class CloudAppHostService {
         try {
           const job = await getRuntimeJobStatus(runtimeAuth, jobId);
           if (!job) {
-            return null;
+            // 404: this job does not exist for this app. Final, not "try again in 5s".
+            throw Object.assign(new Error("job not found"), { notFound: true });
           }
           return {
             jobId: job.id,
@@ -354,6 +378,7 @@ export class CloudAppHostService {
             ownerKey: job.ownerKey,
           };
         } catch (err) {
+          if ((err as { notFound?: boolean }).notFound) throw err;
           // Denied won't change mid-connection — tell the stream to stop asking.
           if (/\((401|403)\)/.test((err as Error).message ?? "")) {
             throw Object.assign(new Error("job status forbidden"), { forbidden: true });
@@ -366,6 +391,9 @@ export class CloudAppHostService {
     app.get("/health", (_req, res) => {
       res.json({ status: "ok", service: "cloud-app-host" });
     });
+
+    // Homepage: Community Discover (+ per-app pages, My apps, sitemap). Before /:ns/:slug.
+    registerDiscoverRoutes(app, this.auth);
 
     // Connections sign-in: providers redirect here; the memory server does the exchange.
     app.get("/oauth/callback", (req, res) => void proxyOAuthCallback(req, res));
@@ -1724,6 +1752,7 @@ export class CloudAppHostService {
     let accessMs = 0;
     let configMs = 0;
     let tursoWriteMs = 0;
+    const tursoPerf: { clientMs?: number; execMs?: number; bumpMs?: number } = {};
 
     try {
       const { appId: requestedAppId, sourceId, sql, params } = req.body as {
@@ -1761,6 +1790,7 @@ export class CloudAppHostService {
       configMs = performance.now() - configStarted;
       const writeStartedMs = performance.now();
       const result = await this.turso.write({
+        perf: tursoPerf,
         orgId: access.orgId,
         namespaceId: access.namespaceId,
         ...this.tursoDbRequest(access, runtimeAuth),
@@ -1781,6 +1811,9 @@ export class CloudAppHostService {
         access: accessMs,
         config: configMs,
         turso: tursoWriteMs,
+        ...(tursoPerf.execMs !== undefined
+          ? { tclient: tursoPerf.clientMs ?? 0, texec: tursoPerf.execMs, tbump: tursoPerf.bumpMs ?? 0 }
+          : {}),
         total: performance.now() - writeStarted,
       });
       res.json(result);
@@ -1797,7 +1830,8 @@ export class CloudAppHostService {
         console.log(
           `[CloudAppHost] /api/db/write timing accessMs=${Math.round(accessMs)} ` +
             `configMs=${Math.round(configMs)} tursoWriteMs=${Math.round(tursoWriteMs)} ` +
-            `totalMs=${totalMs}`,
+            `clientMs=${Math.round(tursoPerf.clientMs ?? -1)} execMs=${Math.round(tursoPerf.execMs ?? -1)} ` +
+            `bumpMs=${Math.round(tursoPerf.bumpMs ?? -1)} totalMs=${totalMs}`,
         );
       }
     }
@@ -2094,6 +2128,7 @@ export class CloudAppHostService {
           canRead: access.canRead,
           canWrite: access.canWrite,
           mode: access.mode,
+          role: access.role,
         },
       });
 
@@ -2690,8 +2725,19 @@ export class CloudAppHostService {
       }
 
       const access = await this.resolveAccess(req);
-      if (requestedPath === "opengraph-icon") {
-        await this.handleOpenGraphIcon(req, res, runtimeAuth, access?.canRead === true);
+      if (requestedPath === "opengraph-icon" || requestedPath === "opengraph-image") {
+        await this.handleOpenGraphIcon(
+          req,
+          res,
+          runtimeAuth,
+          access?.canRead === true,
+          requestedPath === "opengraph-image" ? "card" : "icon",
+        );
+        return;
+      }
+
+      if (requestedPath === CLOUD_APP_MANIFEST_PATH) {
+        await this.handleWebAppManifest(req, res, runtimeAuth, access?.canRead === true);
         return;
       }
 
@@ -2705,7 +2751,11 @@ export class CloudAppHostService {
           await this.sendShareGatePreview(req, res, runtimeAuth);
           return;
         }
-        await this.respondAccessDenied(req, res, runtimeAuth, { html: true });
+        // Only page loads get the sign-in page. A .js/.css answered with that HTML at
+        // 200 looked like a working asset and broke the app with a MIME error.
+        await this.respondAccessDenied(req, res, runtimeAuth, {
+          html: isPublishedPageRequest(requestedPath),
+        });
         return;
       }
 
@@ -2832,13 +2882,44 @@ export class CloudAppHostService {
     res: Response,
     runtimeAuth: AppRuntimeRouteAuth,
     canReadRepo: boolean,
+    shape: "icon" | "card" = "icon",
   ): Promise<void> {
     const iconSource = await resolvePreviewIconSource(runtimeAuth, canReadRepo);
-    const { body, contentType } =
-      await rasterizePreviewIconForOpenGraph(iconSource);
+    let { body, contentType } =
+      await rasterizePreviewIconForOpenGraph(iconSource, shape);
+    // Web App Manifest asks for a true 192×192 alongside the 512×512.
+    if (shape === "icon" && _req.query["size"] === "192" && contentType === "image/png") {
+      try {
+        const sharp = (await import("sharp")).default;
+        body = await sharp(body).resize(192, 192).png().toBuffer();
+      } catch {
+        // sharp missing → serve the 512 as-is
+      }
+    }
     res.setHeader("Content-Type", contentType);
     res.setHeader("Cache-Control", "public, max-age=300");
     res.send(body);
+  }
+
+  /**
+   * Per-app Web App Manifest → Chrome/Edge show "Install" for this app.
+   * Served like opengraph-icon: no access gate (same title/description the
+   * share-gate page already exposes); signed-in readers get repo metadata.
+   */
+  private async handleWebAppManifest(
+    req: Request,
+    res: Response,
+    runtimeAuth: AppRuntimeRouteAuth,
+    canReadRepo: boolean,
+  ): Promise<void> {
+    const meta = await resolveCloudAppPreviewMeta({
+      runtimeAuth,
+      publicBaseUrl: getCloudAppPublicBaseUrl(req),
+      canReadRepo,
+    });
+    res.setHeader("Content-Type", "application/manifest+json; charset=utf-8");
+    res.setHeader("Cache-Control", "public, max-age=300");
+    res.send(JSON.stringify(buildWebAppManifest(meta)));
   }
 
   private async sendAppFile(
@@ -3035,4 +3116,11 @@ export class CloudAppHostService {
       res.status(500).send((err as Error).message);
     }
   }
+}
+
+/** Navigations (no extension, or .html) — everything else is an asset or API call. */
+export function isPublishedPageRequest(requestedPath: string): boolean {
+  const last = requestedPath.split("/").pop() ?? "";
+  if (!last.includes(".")) return true;
+  return /\.html?$/i.test(last);
 }

@@ -9,7 +9,7 @@ export interface CloudRouteContext {
   shareToken?: string;
 }
 
-const RESERVED_SEGMENTS = new Set(["health", "api", "apps", "auth"]);
+const RESERVED_SEGMENTS = new Set(["health", "api", "apps", "auth", "discover", "my-apps"]);
 
 export function isReservedCloudPathSegment(segment: string): boolean {
   return RESERVED_SEGMENTS.has(segment.toLowerCase());

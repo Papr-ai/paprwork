@@ -31,8 +31,11 @@ Reports: `test_reports/paprwork_report_<timestamp>.json`
 ## Layout
 
 ```
-tests/                          # Vitest unit tests (~290 files)
-  *.test.ts
+tests/                          # Vitest unit tests, one folder per product area
+  <area>/*.test.ts              # see "Areas" below; `npm run test:area <area>`
+  *.build.test.ts               # need dist/ — `npm run test:build` (runs after build in CI)
+  *.live.test.ts                # real keys/network — `npm run test:live` (never CI)
+  setup/ helpers/ fixtures/     # shared, not tests
   manual/                       # Ad-hoc debug scripts (NOT in CI)
 test/
   integration/                  # Vitest integration (4 files)
@@ -48,6 +51,38 @@ scripts/
     testEnv.mjs                 # Auth resolution
 vitest.workspace.ts             # unit-backend | unit-ui | integration | e2e
 ```
+
+## Areas
+
+Put a new test in the folder of the area whose behavior it checks. Run one area
+with `npm run test:area <area>`; list them with `npm run test:area`.
+
+| Folder | What lives here |
+|--------|-----------------|
+| `cloud-sync/collaboration` | Owner vs contributor: proposals, change requests, get-updates, contribute flow |
+| `cloud-sync/sharing` | Who can see what: share links, people allowlists, roles, ACLs, audiences |
+| `cloud-sync/publish` | Publishing an app: git/app repo, writer ops, revisions, upload mode, flush |
+| `cloud-sync/database` | Database sync: Turso replicas, push/pull, CDC, row replay, schema drift |
+| `cloud-sync/jobs` | Job state across devices/cloud: run patches, tombstones, deletion catalog, scheduler authority |
+| `cloud-sync/engine` | The sync machinery itself: coordinator, outbox, workspace log, vault sync, watchers |
+| `cloud-runtime` | Cloud app host, sandbox, cloud agent runs, cloud install |
+| `catalog` | Community catalog, install from catalog, featured apps |
+| `apps` | Mini-apps locally: build, validate, backends, preview, lifecycle |
+| `databases` | Local databases: registry, migrations, data sources, table access |
+| `files` | App file storage and uploads |
+| `jobs` | Local jobs: scheduler, runner, recipes, schedules |
+| `agent` | Agent runtime: tools, turns, streaming, delegation, context, compaction |
+| `chat` | Chat storage, messages, titles, rendering helpers |
+| `memory` | Papr memory, wiki, code index, search, goals, briefs, documents |
+| `providers` | Model providers, OAuth, usage/plan limits, model controls |
+| `platforms` | Browser automation and connected platforms (LinkedIn, etc.) |
+| `account` | Login, identity, billing/quota, API keys, vault keys |
+| `workspace` | Workspace switch, tabs, settings, home, desktop shell state |
+| `gateway` | Gateway infra: performance, diagnostics, packaging, process limits |
+
+Shared `cloud-sync` vs `databases`: if the test only touches the local SQLite
+file, it's `databases`; if it moves rows to/from the cloud, it's
+`cloud-sync/database`. Same rule for `jobs` vs `cloud-sync/jobs`.
 
 ## Tiers
 
@@ -105,6 +140,9 @@ npm run test:unit           # backend only
 npm run test:ui             # React only
 npm run test:integration    # test/integration/
 npm run test:e2e            # test/e2e/ (requires build)
+npm run test:area <area>    # one product area, e.g. cloud-sync/collaboration
+npm run test:build          # *.build.test.ts (requires build:gateway)
+npm run test:live           # *.live.test.ts (real keys/network)
 ```
 
 ## Individual E2E scripts

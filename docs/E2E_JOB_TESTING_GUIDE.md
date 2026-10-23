@@ -24,8 +24,8 @@ We provide **two complementary test approaches**:
 **Best for:** Validating the complete system works in a real environment.
 
 ### 2. Vitest Integration Tests
-**File:** `tests/jobs-e2e-simple.test.ts`  
-**Run:** `npm test tests/jobs-e2e-simple.test.ts`
+**File:** `tests/jobs/jobs-e2e-simple.test.ts`  
+**Run:** `npm test tests/jobs/jobs-e2e-simple.test.ts`
 
 - ✅ Automated test suite
 - ✅ Part of CI/CD pipeline
@@ -601,7 +601,7 @@ jobs:
           node-version: '24'
       - run: npm install
       - run: npm run build
-      - run: npm test tests/jobs-e2e-simple.test.ts
+      - run: npm test tests/jobs/jobs-e2e-simple.test.ts
 ```
 
 ### Pre-Push Hook
@@ -609,7 +609,7 @@ jobs:
 Add to `.git/hooks/pre-push`:
 ```bash
 #!/bin/bash
-npm run build && npm test tests/jobs-e2e-simple.test.ts
+npm run build && npm test tests/jobs/jobs-e2e-simple.test.ts
 ```
 
 ---

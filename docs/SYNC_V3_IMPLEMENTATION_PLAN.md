@@ -148,7 +148,7 @@ flowchart LR
 
 ### 0.1 Contract test harness (paprwork-v2)
 
-Add [`tests/mini-app-api-contract.test.ts`](../tests/mini-app-api-contract.test.ts) that pins **request/response shapes** for:
+Add [`tests/apps/mini-app-api-contract.test.ts`](../tests/apps/mini-app-api-contract.test.ts) that pins **request/response shapes** for:
 
 - `POST /api/db/query`, `/api/db/write`, `/api/db/exec`, `/api/db/batch`
 - `POST /api/jobs/run`, `/api/jobs/status`, `/api/jobs/list`
@@ -195,7 +195,7 @@ Implementation: [`syncV3Metrics.ts`](../src/gateway/services/syncV3/syncV3Metric
 
 **Exit criteria:**
 
-- [x] Contract tests green — [`tests/mini-app-api-contract.test.ts`](../tests/mini-app-api-contract.test.ts)
+- [x] Contract tests green — [`tests/apps/mini-app-api-contract.test.ts`](../tests/apps/mini-app-api-contract.test.ts)
 - [x] Flags wired (default off)
 - [x] Metrics counters + telemetry sink
 - [x] Desktop heartbeat reports `syncProtocol`
@@ -328,7 +328,7 @@ SYNC_V3_MIGRATION_TOKEN=... poetry run python scripts/sync_v3/migrate_namespace_
 
 ### Test matrix (Phase 1 — runnable locally)
 
-**paprwork-v2 unit:** [`sync-v3-heartbeat.test.ts`](../tests/sync-v3-heartbeat.test.ts), [`app-repo-client.test.ts`](../tests/app-repo-client.test.ts), [`push-app-via-writer-ops.test.ts`](../tests/push-app-via-writer-ops.test.ts), [`job-runtime-off-git.test.ts`](../tests/job-runtime-off-git.test.ts), [`mini-app-api-contract.test.ts`](../tests/mini-app-api-contract.test.ts), [`cloud-sync-heartbeat-runtime.test.ts`](../tests/cloud-sync-heartbeat-runtime.test.ts)
+**paprwork-v2 unit:** [`sync-v3-heartbeat.test.ts`](../tests/cloud-sync/engine/sync-v3-heartbeat.test.ts), [`app-repo-client.test.ts`](../tests/cloud-sync/publish/app-repo-client.test.ts), [`push-app-via-writer-ops.test.ts`](../tests/cloud-sync/publish/push-app-via-writer-ops.test.ts), [`job-runtime-off-git.test.ts`](../tests/cloud-sync/jobs/job-runtime-off-git.test.ts), [`mini-app-api-contract.test.ts`](../tests/apps/mini-app-api-contract.test.ts), [`cloud-sync-heartbeat-runtime.test.ts`](../tests/cloud-sync/engine/cloud-sync-heartbeat-runtime.test.ts)
 
 **paprwork-v2 E2E (live memory):** `npm run test:sync-v3-e2e` ([`scripts/test-sync-v3-e2e.mjs`](../scripts/test-sync-v3-e2e.mjs)), `npm run test:sync-v3-e2e:full`, `npm run test:sync-v3-e2e:vitest` ([`test/e2e/sync-v3.e2e.test.ts`](../test/e2e/sync-v3.e2e.test.ts))
 
@@ -521,7 +521,7 @@ Quiesce → queue writes server-side → snapshot genesis → verify hash → fl
 
 ### 3.5 CI replay determinism test
 
-[`tests/workspace-log-replay.test.ts`](../tests/workspace-log-replay.test.ts) using **3 captured production workloads** from Phase 0.
+[`tests/cloud-sync/engine/workspace-log-replay.test.ts`](../tests/cloud-sync/engine/workspace-log-replay.test.ts) using **3 captured production workloads** from Phase 0.
 
 **Phase 3 fingerprint deletion blocked until replay CI passes.**
 
@@ -559,7 +559,7 @@ Quiesce → queue writes server-side → snapshot genesis → verify hash → fl
 | Memory: fetch job files from app repo | [`app_repo_fetch_service.py`](../memory/services/app_repo_fetch_service.py) | ✅ |
 | Memory: materialize job workspace | [`cloud_workspace_repo_service.py`](../memory/services/cloud_workspace_repo_service.py) | ✅ |
 | Memory: catalog + runtime file serving | [`cloud_app_catalog_platform.py`](../memory/services/cloud_app_catalog_platform.py), [`cloud_app_runtime_service.py`](../memory/services/cloud_app_runtime_service.py) | ✅ |
-| Tests | [`collect-app-op-files.test.ts`](../tests/collect-app-op-files.test.ts), [`test_app_repo_fetch_service.py`](../memory/tests/test_app_repo_fetch_service.py), E2E | ✅ |
+| Tests | [`collect-app-op-files.test.ts`](../tests/cloud-sync/publish/collect-app-op-files.test.ts), [`test_app_repo_fetch_service.py`](../memory/tests/test_app_repo_fetch_service.py), E2E | ✅ |
 
 **Exit criteria:**
 
@@ -687,7 +687,7 @@ sequenceDiagram
 | 4 | Scheduler SLO; dispatch SSE prod proof; idempotency double-submit | ⏳ |
 | 5 | Release pin immutability; host atomic swap; install from manifest | ⏳ |
 
-Extend: [`cloud-publish-drift.test.ts`](../tests/cloud-publish-drift.test.ts), [`turso-sync-log.test.ts`](../tests/turso-sync-log.test.ts), [`job-runtime-off-git.test.ts`](../tests/job-runtime-off-git.test.ts), [`test-turso-phase1-oplog-e2e.mjs`](../scripts/test-turso-phase1-oplog-e2e.mjs).
+Extend: [`cloud-publish-drift.test.ts`](../tests/cloud-sync/publish/cloud-publish-drift.test.ts), [`turso-sync-log.test.ts`](../tests/cloud-sync/database/turso-sync-log.test.ts), [`job-runtime-off-git.test.ts`](../tests/cloud-sync/jobs/job-runtime-off-git.test.ts), [`test-turso-phase1-oplog-e2e.mjs`](../scripts/test-turso-phase1-oplog-e2e.mjs).
 
 ---
 

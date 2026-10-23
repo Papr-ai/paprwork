@@ -228,6 +228,8 @@ export function useAppCloudSyncStatus(
   applyRemoteUpdates: () => Promise<void>;
   /** Track-mode installs: publisher has newer code than last upstream sync. */
   publisherUpdatesAvailable: boolean;
+  /** Track-mode installs: publisher stopped sharing (updates paused, with why). */
+  updatesPaused: { reason: string; at?: string } | null;
 } {
   const active = options?.enabled !== false;
   const previewTabVisible = options?.previewTabVisible !== false;
@@ -339,6 +341,7 @@ export function useAppCloudSyncStatus(
         publisherLiveRevision: body.publisherLiveRevision ?? null,
         storedUpstreamRevision: body.storedUpstreamRevision ?? null,
         pendingUpdate: body.pendingUpdate ?? null,
+        updatesPaused: body.updatesPaused ?? null,
       });
     } catch {
       // Non-blocking metadata check
@@ -700,5 +703,6 @@ export function useAppCloudSyncStatus(
     pullUpdates,
     applyRemoteUpdates,
     publisherUpdatesAvailable: remoteCodeCheck?.publisherUpdatesAvailable ?? false,
+    updatesPaused: remoteCodeCheck?.updatesPaused ?? null,
   };
 }

@@ -164,6 +164,11 @@ export async function repairCloudSync(options: {
     await import("./TursoReplicaService.js")
   ).getTursoReplicaService();
 
+  // Explicit repair is the user saying "try again" — lift the daily re-download cap.
+  if (options.strategy === "pull" || options.strategy === "accept_cloud") {
+    (await import("./tursoReplicaBootstrapMarker.js")).clearBootstrapBudget(source.dbPath);
+  }
+
   switch (options.strategy) {
     case "pull": {
       const { pullReplicaHonest } = await import("./tursoReplicaRepairHelpers.js");
