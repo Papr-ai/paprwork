@@ -69,6 +69,7 @@ app.get(
         res.status(404).json({ error: err.message });
         return;
       }
+      logWriter500("head", appId, err);
       res.status(500).json({ error: (err as Error).message.slice(0, 300) });
     }
   },
@@ -97,10 +98,29 @@ app.post(
         res.status(404).json({ error: err.message });
         return;
       }
+      logWriter500("ops", appId, err);
       res.status(500).json({ error: (err as Error).message.slice(0, 300) });
     }
   },
 );
+
+/**
+ * One structured line per 500 so Cloud Logging (severity ERROR) and Ops
+ * Monitor can show why a publish failed, not just that it did.
+ */
+function logWriter500(route: string, appId: string, err: unknown): void {
+  const e = err instanceof Error ? err : new Error(String(err));
+  console.error(
+    JSON.stringify({
+      severity: "ERROR",
+      message: `app-repo-writer ${route} 500: ${e.message.slice(0, 500)}`,
+      route,
+      appId,
+      errorName: e.name,
+      stack: e.stack?.split("\n").slice(0, 8).join("\n"),
+    }),
+  );
+}
 
 app.listen(PORT, "0.0.0.0", () => {
   console.log(`[AppRepoWriter] listening on http://0.0.0.0:${PORT}`);

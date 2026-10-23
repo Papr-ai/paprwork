@@ -2642,7 +2642,11 @@ If jobs have Turso cloud databases, set deleteTursoDatabases: true to delete tho
         items.push(`Published at: ${preview.shareUrl ?? "apps.papr.ai"}`);
       }
       for (const db of preview.linkedRegistryDatabases) {
-        if (db.soleLinker) {
+        if (db.publisherShared) {
+          items.push(
+            `Registry DB (team shared, owned by the publisher — kept, cannot be deleted): ${db.label} (${db.dbId})`,
+          );
+        } else if (db.soleLinker) {
           items.push(
             `Registry DB (sole linker, optional delete): ${db.label} (${db.dbId})`,
           );
@@ -2652,8 +2656,13 @@ If jobs have Turso cloud databases, set deleteTursoDatabases: true to delete tho
           );
         }
       }
+      if (preview.localUninstallOnly) {
+        items.unshift(
+          "Scope: remove from this device only (you are not the publisher). Cloud app, shared databases and the publisher's jobs are not changed.",
+        );
+      }
       if (preview.linkedJobs.length > 0) {
-        items.push(`Linked jobs (${preview.linkedJobs.length}): ${preview.linkedJobs.map(j => j.name).join(", ")}`);
+        items.push(`Local copies of linked jobs (${preview.linkedJobs.length}): ${preview.linkedJobs.map(j => j.name).join(", ")}`);
       }
       if (preview.tursoDbCount > 0) {
         items.push(`Job Turso cloud databases: ${preview.tursoDbCount}`);

@@ -61,7 +61,10 @@ let modulePendingTimer: NodeJS.Timeout | null = null;
 let moduleMaxWaitTimer: NodeJS.Timeout | null = null;
 let moduleFirstDirtyAtMs: number | null = null;
 let moduleFlushInFlight: Promise<CloudAppWriterFlushResult> | null = null;
-let moduleStopped = false;
+// Closed until a run calls start(). Saves before that come from sandbox setup
+// (clone, registry seed, Home-job dedupe, data-source reconcile), not the agent,
+// and must never be published as part of the run.
+let moduleStopped = true;
 /** This run's caller can't change the live app (role below Maintainer). */
 let moduleDisabled = false;
 /** App-scope run: the only app this run may push (others are scaffolding). */
@@ -251,6 +254,10 @@ export function notifyCloudSandboxAppSave(appId: string): void {
   if (process.env.GATEWAY_MODE !== "cloud_agent" || moduleDisabled) {
     return;
   }
+  if (moduleStopped) {
+    console.log(`[CloudAppWriterDebouncedPush] Ignoring save for ${appId} — no run is active (setup or post-run)`);
+    return;
+  }
   if (moduleOnlyAppId && appId !== moduleOnlyAppId) {
     console.log(`[CloudAppWriterDebouncedPush] Ignoring save for ${appId} — run is scoped to ${moduleOnlyAppId}`);
     return;
@@ -276,6 +283,10 @@ export async function startCloudAppWriterDebouncedPush(
 ): Promise<CloudAppWriterDebouncedPushHandle> {
   moduleOnlyAppId = options.onlyAppId?.trim() || null;
   moduleDisabled = false;
+  // A warm sandbox is reused across runs: drop anything left from setup or the
+  // previous run so this run only pushes what its own agent changed.
+  clearModuleTimers();
+  moduleDirtyApps.clear();
   moduleStopped = false;
   modulePushedAppIds.clear();
   console.log(
@@ -306,6 +317,7 @@ export async function startCloudAppWriterDebouncedPush(
     async stop(): Promise<void> {
       moduleStopped = true;
       clearModuleTimers();
+      moduleDirtyApps.clear();
     },
   };
 

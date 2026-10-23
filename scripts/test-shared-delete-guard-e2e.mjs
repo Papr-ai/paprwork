@@ -106,7 +106,7 @@ function runVitest() {
   }
   const r = spawnSync(
     process.execPath,
-    [vitest, "run", "tests/app-delete-scope.test.ts", "--project", "unit-backend"],
+    [vitest, "run", "tests/apps/app-delete-scope.test.ts", "--project", "unit-backend"],
     { stdio: "inherit", env: process.env },
   );
   if (r.status === 0) {

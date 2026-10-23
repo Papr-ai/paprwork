@@ -22,6 +22,7 @@ import {
 import { shutdownBackendPythonWorker } from "./services/appRuntime/appBackendPythonWorker.js";
 import { isMcpEndpointEnabled } from "./services/mcp/config.js";
 import { registerMcpRoutes } from "./services/mcp/server.js";
+import { registerOpenPage } from "./services/mcp/openPage.js";
 import { captureServiceSecrets, getServiceSecret } from "../core/utils/serviceSecrets.js";
 
 // `.env.local` before `.env`: dotenv never overwrites an already-set
@@ -57,6 +58,7 @@ async function main(): Promise<void> {
     const mcp = registerMcpRoutes(app, { port: PORT });
     console.log(`[CloudAppHost] MCP endpoint enabled: ${mcp.resourceUrl}`);
   }
+  registerOpenPage(app);
   host.registerRoutes(app);
   // Pushed job status / db-changed events from memory (Pub/Sub). Not awaited:
   // startup must never wait on Pub/Sub. Until (or unless) the subscription is

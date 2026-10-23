@@ -18,6 +18,7 @@ import {
   loadBackendRevisionArtifacts,
   loadBackendModuleContent,
 } from "./backendArtifactCache.js";
+import { isTeamAccessMode } from "./miniAppAccess.js";
 import {
   buildBackendActionEnv,
   resolveActionTimeoutMs,
@@ -115,6 +116,8 @@ export class CloudAppBackendService {
         canWrite: boolean;
         /** Access mode (team / people / link …) for `members` action ACLs. */
         mode?: AppAccessContext["mode"];
+        /** Caller's app share role from memory validate_access (newer servers). */
+        role?: string;
       };
     },
   ): Promise<AppBackendRunResult & { action: string }> {
@@ -220,6 +223,12 @@ export class CloudAppBackendService {
         ...proxyEnv,
       },
       callerIdentity: input.callerIdentity,
+      callerAccess: input.cloudAccess
+        ? {
+            role: input.cloudAccess.role,
+            teamMember: isTeamAccessMode(input.cloudAccess.mode),
+          }
+        : undefined,
       loggedIn: input.loggedIn,
     });
     runEnv[PAPR_GATEWAY_URL_ENV] =

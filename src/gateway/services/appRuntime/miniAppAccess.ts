@@ -10,6 +10,29 @@ import type {
 /** Server-injected job env vars — override any client-supplied identity params. */
 export const VERIFIED_CALLER_USER_ID_PARAM = "PAPR_CALLER_USER_ID";
 export const VERIFIED_CALLER_EMAIL_PARAM = "PAPR_CALLER_EMAIL";
+/** App share role of the verified caller (viewer|contributor|maintainer|admin). */
+export const VERIFIED_CALLER_ROLE_ENV = "PAPR_CALLER_ROLE";
+/** "1" when the verified caller is in the publisher's workspace team. */
+export const VERIFIED_CALLER_TEAM_ENV = "PAPR_CALLER_TEAM_MEMBER";
+
+export const APP_ROLES = ["viewer", "contributor", "maintainer", "admin"] as const;
+export type AppRole = (typeof APP_ROLES)[number];
+
+export function normalizeAppRole(raw: unknown): AppRole | undefined {
+  const r = String(raw ?? "").trim().toLowerCase();
+  return (APP_ROLES as readonly string[]).includes(r) ? (r as AppRole) : undefined;
+}
+
+/** Server-resolved role + team membership for row ACL principals. */
+export interface MiniAppCallerAccess {
+  role?: string;
+  teamMember?: boolean;
+}
+
+/** Workspace team = publisher ("owner") or a namespace member ("team"). Named people are not. */
+export function isTeamAccessMode(mode: string | null | undefined): boolean {
+  return mode === "owner" || mode === "team";
+}
 
 export interface MiniAppCallerIdentity {
   /** Parse _User.objectId — same value as externalUserId on cloud. */

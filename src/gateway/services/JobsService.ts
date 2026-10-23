@@ -37,6 +37,7 @@ import {
   getPaprDataDir,
   getPaprJobsRoot,
   getPaprRoot,
+  isCloudAgentGatewayMode,
 } from "../../core/utils/paprRoot.js";
 import {
   jobUpdateAffectsOwnership,
@@ -461,6 +462,12 @@ export class JobsService {
    * Each workspace owns its own job UUID — match by Home app link + job name.
    */
   private async syncHomeDailyBriefFromBundle(): Promise<void> {
+    // Cloud sandbox: Home and its Daily Brief job come from the cloud repos. Re-running
+    // the desktop Home setup there minted a new job id and rewrote default-job-id.txt /
+    // data-sources.json on every run, and the run pushed that over the real Home.
+    if (isCloudAgentGatewayMode()) {
+      return;
+    }
     const bundledAppsDir = await resolveBundledResourcesDir(
       __dirname,
       "resources/default-apps/home-dashboard",
@@ -756,6 +763,12 @@ export class JobsService {
    * Jobs with no linkage get STANDALONE_APP_ID.
    */
   private async migrateLegacyHomeDailyBriefJobIfNeeded(): Promise<void> {
+    // Cloud sandbox: Home and its Daily Brief job come from the cloud repos. Re-running
+    // the desktop Home setup there minted a new job id and rewrote default-job-id.txt /
+    // data-sources.json on every run, and the run pushed that over the real Home.
+    if (isCloudAgentGatewayMode()) {
+      return;
+    }
     try {
       const { migrateLegacyHomeDailyBriefJobIfNeeded } = await import(
         "./migrateLegacyHomeDailyBriefJob.js"
@@ -784,6 +797,12 @@ export class JobsService {
 
   /** Remove duplicate Daily Brief jobs re-introduced by cloud/git sync. */
   private async reconcileDuplicateHomeDailyBriefJobsIfNeeded(): Promise<void> {
+    // Cloud sandbox: Home and its Daily Brief job come from the cloud repos. Re-running
+    // the desktop Home setup there minted a new job id and rewrote default-job-id.txt /
+    // data-sources.json on every run, and the run pushed that over the real Home.
+    if (isCloudAgentGatewayMode()) {
+      return;
+    }
     try {
       const { reconcileDuplicateHomeDailyBriefJobs } = await import(
         "./migrateLegacyHomeDailyBriefJob.js"
@@ -1076,6 +1095,13 @@ export class JobsService {
 
     const paprDir = this.boundPaprDir ?? getPaprRoot();
     const tombstonesRemoved = await this.filterTombstonedJobsFromRegistry(paprDir);
+    if (isCloudAgentGatewayMode()) {
+      return {
+        tombstonesRemoved,
+        duplicatesReconciled: false,
+        duplicateIdsRemoved: [],
+      };
+    }
     const { reconcileDuplicateHomeDailyBriefJobs } = await import(
       "./migrateLegacyHomeDailyBriefJob.js"
     );
@@ -2732,6 +2758,14 @@ export class JobsService {
 
     const runSanitizationValues = launch.sanitizationValues ?? [];
 
+    // The child is already running. Capture its exit now: a fast command
+    // (`echo`) can finish during the awaits below, and a "close" listener
+    // attached afterwards never fires, leaving the job "running" until the
+    // 30-minute watchdog.
+    const earlyExit = launch.mode === "process" && launch.process
+      ? captureEarlyProcessExit(launch.process)
+      : undefined;
+
     // Sanitize command before logging (replace API key values with ***)
     const sanitizedCommand = await this.sanitizeCommandForLogging(
       launch.command,
@@ -2822,7 +2856,7 @@ export class JobsService {
         );
         void appendRunLog(`[stderr] ${sanitized}`);
       });
-      proc.on("close", (code: number | null) => {
+      const onClose = (code: number | null) => {
         this.running.delete(job.id);
         destroyChildProcessStreams(proc);
         const exitCode = code ?? -1;
@@ -2830,15 +2864,17 @@ export class JobsService {
         const lastOutput =
           outputChunks.join("\n").slice(0, MAX_OUTPUT_BYTES) || undefined;
         safeResolve({ exitCode, lastOutput });
-      });
-      proc.on("error", (error: Error) => {
+      };
+      earlyExit?.onClose(onClose);
+      const onError = (error: Error) => {
         this.running.delete(job.id);
         destroyChildProcessStreams(proc);
         notifySpawnResourceError(error, `job ${job.id} spawn`);
         const formatted = formatSpawnErrorForLogs(error.message);
         void appendRunLog(`Process error: ${formatted}`);
         safeResolve({ exitCode: -1, errorMessage: formatted });
-      });
+      };
+      earlyExit?.onError(onError);
     });
   }
 
@@ -4180,6 +4216,8 @@ export class JobsService {
     jobId: string,
     dbRelativePath: string,
     tableName?: string,
+    limitInput?: number,
+    offsetInput?: number,
   ): Promise<{
     dbPath: string;
     tables: Array<{
@@ -4189,6 +4227,8 @@ export class JobsService {
       rows: Record<string, unknown>[];
     }>;
     selectedTable: string | null;
+    limit: number;
+    offset: number;
   }> {
     const job = this.jobs.get(jobId);
     if (!job) {
@@ -4220,6 +4260,15 @@ export class JobsService {
     const quoteTable = (name: string): string =>
       `"${name.replace(/"/g, '""')}"`;
 
+    const { normalizePreviewPaging, previewOrderBy } = await import(
+      "./dbPreviewPaging.js"
+    );
+    const { limit, offset } = normalizePreviewPaging(limitInput, offsetInput);
+    const selectedName =
+      tableName && userTables.some((table) => table.table === tableName)
+        ? tableName
+        : userTables[0]?.table ?? null;
+
     const tables = await Promise.all(
       userTables.map(async (table) => {
         const countResult = await pool.query(
@@ -4229,30 +4278,31 @@ export class JobsService {
           [],
         );
         const rowCount = Number(countResult.rows[0]?.cnt ?? 0);
-        const preview = await pool.query(
-          `job-preview:${jobId}`,
-          dbPath,
-          `SELECT * FROM ${quoteTable(table.table)} LIMIT 50`,
-          [],
-        );
+        let rows: Record<string, unknown>[] = [];
+        if (table.table === selectedName) {
+          const preview = await pool.query(
+            `job-preview:${jobId}`,
+            dbPath,
+            `SELECT * FROM ${quoteTable(table.table)}${previewOrderBy(table.columns)} LIMIT ${limit} OFFSET ${offset}`,
+            [],
+          );
+          rows = preview.rows;
+        }
         return {
           name: table.table,
           columns: table.columns,
           rowCount,
-          rows: preview.rows,
+          rows,
         };
       }),
     );
 
-    const selectedTable =
-      tableName && tables.some((table) => table.name === tableName)
-        ? tableName
-        : tables[0]?.name ?? null;
-
     return {
       dbPath,
       tables,
-      selectedTable,
+      selectedTable: selectedName,
+      limit,
+      offset,
     };
   }
 
@@ -4370,4 +4420,42 @@ export async function initializeJobsService(): Promise<JobsService> {
   const service = getJobsService();
   await service.initialize();
   return service;
+}
+
+/**
+ * Record a child's "close"/"error" from the moment it is spawned and replay it
+ * to a handler attached later. Stdout/stderr "data" still needs listeners
+ * before the stream ends, so callers attach those synchronously after awaits;
+ * Node buffers piped output until a reader attaches.
+ */
+export function captureEarlyProcessExit(proc: import("child_process").ChildProcess): {
+  onClose: (handler: (code: number | null) => void) => void;
+  onError: (handler: (error: Error) => void) => void;
+} {
+  let closed: { code: number | null } | undefined;
+  let failed: Error | undefined;
+  let closeHandler: ((code: number | null) => void) | undefined;
+  let errorHandler: ((error: Error) => void) | undefined;
+  proc.once("close", (code: number | null) => {
+    closed = { code };
+    closeHandler?.(code);
+  });
+  proc.once("error", (error: Error) => {
+    failed = error;
+    errorHandler?.(error);
+  });
+  return {
+    onClose(handler) {
+      closeHandler = handler;
+      // Defer so buffered stdout/stderr reach the "data" listeners first.
+      if (closed) {
+        const { code } = closed;
+        setImmediate(() => handler(code));
+      }
+    },
+    onError(handler) {
+      errorHandler = handler;
+      if (failed) handler(failed);
+    },
+  };
 }

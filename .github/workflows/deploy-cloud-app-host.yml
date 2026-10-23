@@ -1,0 +1,210 @@
+name: Deploy Cloud App Host
+
+# Change-management pipeline for apps.papr.ai (SOC 2 CC8.1).
+#
+#   development  --push-->  test -> build -> deploy to papr-cloud-app-host-dev (100% traffic) -> health check
+#   master       --push-->  test -> build -> deploy to papr-cloud-app-host as a 0% "candidate" revision
+#                           -> health check on the candidate URL
+#                           -> WAIT for approval (environment: cloud-app-host-production, a reviewer other than the merger)
+#                           -> shift 100% traffic to the candidate
+#
+# Code only reaches master through a reviewed PR (branch protection), so every production
+# change has: a PR review, passing tests, a GitHub-logged deploy, and a second human approval.
+# Emergency changes: label the PR `emergency` (see docs/CHANGE_MANAGEMENT.md); the approval step still applies.
+# Rollback: re-run the "promote" job of an earlier successful run, or
+#   gcloud run services update-traffic papr-cloud-app-host --to-revisions=<previous-revision>=100
+
+on:
+  push:
+    branches: [development, master]
+    paths:
+      - "src/**"
+      - "package.json"
+      - "package-lock.json"
+      - "Dockerfile.cloud-app-host"
+      - "tsconfig*.json"
+      - "scripts/build-mini-app-sdk-browser-bundles.mjs"
+      - "scripts/verify-mini-app-sdk-bundles.mjs"
+      - ".github/workflows/deploy-cloud-app-host.yml"
+  workflow_dispatch:
+
+concurrency:
+  group: deploy-cloud-app-host-${{ github.ref_name }}
+  cancel-in-progress: false
+
+permissions:
+  contents: read
+
+env:
+  GCP_PROJECT_ID: gen-lang-client-0873281406
+  GCP_REGION: us-west1
+  REGISTRY: us-west1-docker.pkg.dev
+  IMAGE: us-west1-docker.pkg.dev/gen-lang-client-0873281406/papr-apps/cloud-app-host
+  RUNTIME_SA: papr-cloud-app-host@gen-lang-client-0873281406.iam.gserviceaccount.com
+
+jobs:
+  test:
+    name: Tests
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "24"
+          cache: npm
+      - run: npm ci
+      - run: npm rebuild better-sqlite3
+      - name: CI test tier
+        run: npm run test:sequential -- --tier=ci
+
+  build:
+    name: Build and push image
+    needs: test
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    permissions:
+      contents: read
+      id-token: write
+    outputs:
+      image: ${{ steps.meta.outputs.image }}
+      tag: ${{ steps.meta.outputs.tag }}
+    steps:
+      - uses: actions/checkout@v4
+      - id: meta
+        run: |
+          TAG="${GITHUB_REF_NAME}-${GITHUB_SHA::8}"
+          echo "tag=${TAG}" >> "$GITHUB_OUTPUT"
+          echo "image=${IMAGE}:${TAG}" >> "$GITHUB_OUTPUT"
+      - uses: google-github-actions/auth@v2
+        with:
+          workload_identity_provider: ${{ vars.GCP_WIF_PROVIDER }}
+          service_account: ${{ vars.GCP_DEPLOYER_SA }}
+      - uses: google-github-actions/setup-gcloud@v2
+      - run: gcloud auth configure-docker "${REGISTRY}" --quiet
+      - uses: docker/setup-buildx-action@v3
+      - name: Build and push
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          file: Dockerfile.cloud-app-host
+          platforms: linux/amd64
+          push: true
+          tags: ${{ steps.meta.outputs.image }}
+          cache-from: type=gha
+          cache-to: type=gha,mode=min
+
+  deploy-dev:
+    name: Deploy to dev
+    if: github.ref_name == 'development'
+    needs: build
+    runs-on: ubuntu-latest
+    environment:
+      name: cloud-app-host-dev
+      url: ${{ steps.deploy.outputs.url }}
+    permissions:
+      contents: read
+      id-token: write
+    steps:
+      - uses: google-github-actions/auth@v2
+        with:
+          workload_identity_provider: ${{ vars.GCP_WIF_PROVIDER }}
+          service_account: ${{ vars.GCP_DEPLOYER_SA }}
+      - uses: google-github-actions/setup-gcloud@v2
+      - id: deploy
+        run: |
+          gcloud run deploy papr-cloud-app-host-dev \
+            --image="${{ needs.build.outputs.image }}" \
+            --region="${GCP_REGION}" --project="${GCP_PROJECT_ID}" \
+            --service-account="${RUNTIME_SA}" \
+            --allow-unauthenticated --port=8080 --memory=512Mi --cpu=1 \
+            --min-instances=0 --max-instances=3 --timeout=120 \
+            --update-secrets=PAPR_CLOUD_APP_HOST_KEY=papr-cloud-app-host-key:latest \
+            --update-env-vars=PAPR_MEMORY_SERVER_URL=https://memoryserver-development-7dckb3v3oa-uw.a.run.app,NODE_ENV=production,AUTH0_DOMAIN=papr.auth0.com,AUTH0_CLIENT_ID=asVGkVRkRAxYvtQadqivntIRjB4D1Iur,CLOUD_APP_HOST_GCS_BUCKET=gen-lang-client-0873281406-cloud-app-host-cache,CLOUD_APP_HOST_MEMORY_TIMEOUT_MS=90000 \
+            --labels=commit=${GITHUB_SHA::8}
+          URL=$(gcloud run services describe papr-cloud-app-host-dev --region="${GCP_REGION}" --project="${GCP_PROJECT_ID}" --format='value(status.url)')
+          echo "url=${URL}" >> "$GITHUB_OUTPUT"
+      - name: Health check
+        run: |
+          for i in 1 2 3 4 5 6; do
+            curl -sf --max-time 10 "${{ steps.deploy.outputs.url }}/health" && exit 0
+            sleep 10
+          done
+          echo "::error::Dev health check failed"; exit 1
+
+  deploy-candidate:
+    name: Deploy production candidate (0% traffic)
+    if: github.ref_name == 'master'
+    needs: build
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      id-token: write
+    outputs:
+      revision: ${{ steps.deploy.outputs.revision }}
+      candidate_url: ${{ steps.deploy.outputs.candidate_url }}
+    steps:
+      - uses: google-github-actions/auth@v2
+        with:
+          workload_identity_provider: ${{ vars.GCP_WIF_PROVIDER }}
+          service_account: ${{ vars.GCP_DEPLOYER_SA }}
+      - uses: google-github-actions/setup-gcloud@v2
+      - id: deploy
+        run: |
+          CTAG="c-${GITHUB_SHA::8}"
+          # Only the image changes; env, secrets and scaling stay as configured on the service.
+          gcloud run deploy papr-cloud-app-host \
+            --image="${{ needs.build.outputs.image }}" \
+            --region="${GCP_REGION}" --project="${GCP_PROJECT_ID}" \
+            --no-traffic --tag="${CTAG}" \
+            --labels=commit=${GITHUB_SHA::8}
+          REV=$(gcloud run services describe papr-cloud-app-host --region="${GCP_REGION}" --project="${GCP_PROJECT_ID}" --format="value(status.traffic[?tag='${CTAG}'].revisionName)" 2>/dev/null || true)
+          [ -z "$REV" ] && REV=$(gcloud run revisions list --service=papr-cloud-app-host --region="${GCP_REGION}" --project="${GCP_PROJECT_ID}" --sort-by=~metadata.creationTimestamp --limit=1 --format='value(metadata.name)')
+          BASE=$(gcloud run services describe papr-cloud-app-host --region="${GCP_REGION}" --project="${GCP_PROJECT_ID}" --format='value(status.url)')
+          echo "revision=${REV}" >> "$GITHUB_OUTPUT"
+          echo "candidate_url=${BASE/https:\/\//https://${CTAG}---}" >> "$GITHUB_OUTPUT"
+      - name: Health check candidate
+        run: |
+          for i in 1 2 3 4 5 6; do
+            curl -sf --max-time 10 "${{ steps.deploy.outputs.candidate_url }}/health" && exit 0
+            sleep 10
+          done
+          echo "::error::Candidate health check failed; production traffic was not changed"; exit 1
+      - name: Summary
+        run: |
+          {
+            echo "### Production candidate ready"
+            echo "- Revision: \`${{ steps.deploy.outputs.revision }}\` (0% traffic)"
+            echo "- Test it: ${{ steps.deploy.outputs.candidate_url }}"
+            echo "- Approve the **Promote** job to send 100% of apps.papr.ai traffic to it."
+          } >> "$GITHUB_STEP_SUMMARY"
+
+  promote:
+    name: Promote to 100% traffic (requires approval)
+    if: github.ref_name == 'master'
+    needs: deploy-candidate
+    runs-on: ubuntu-latest
+    environment:
+      name: cloud-app-host-production
+      url: https://apps.papr.ai
+    permissions:
+      contents: read
+      id-token: write
+    steps:
+      - uses: google-github-actions/auth@v2
+        with:
+          workload_identity_provider: ${{ vars.GCP_WIF_PROVIDER }}
+          service_account: ${{ vars.GCP_DEPLOYER_SA }}
+      - uses: google-github-actions/setup-gcloud@v2
+      - name: Shift traffic
+        run: |
+          PREV=$(gcloud run services describe papr-cloud-app-host --region="${GCP_REGION}" --project="${GCP_PROJECT_ID}" --format='value(status.traffic[0].revisionName)')
+          echo "Previous revision: ${PREV}"
+          gcloud run services update-traffic papr-cloud-app-host \
+            --to-revisions="${{ needs.deploy-candidate.outputs.revision }}=100" \
+            --region="${GCP_REGION}" --project="${GCP_PROJECT_ID}"
+          echo "Rollback: gcloud run services update-traffic papr-cloud-app-host --to-revisions=${PREV}=100 --region=${GCP_REGION} --project=${GCP_PROJECT_ID}" >> "$GITHUB_STEP_SUMMARY"
+      - name: Verify apps.papr.ai
+        run: |
+          sleep 15
+          curl -sf --max-time 15 https://apps.papr.ai/health

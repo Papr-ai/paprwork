@@ -26,6 +26,7 @@ import { computeBlobOidForContent } from "./computeParentHash.js";
 import { mergeFileContents, runGit } from "../cloudSync/threeWayMerge.js";
 import { ephemeralGitEnv } from "../../utils/ephemeralGitEnv.js";
 import { fetchAppRepoHead } from "./AppOpsClient.js";
+import { isPlatformGeneratedAppPath, isWriterScaffoldPath } from "./platformGeneratedAppPaths.js";
 import { MASS_DELETE_THRESHOLD, readSyncManifest, updateSyncManifest } from "./SyncManifest.js";
 import { localPathForRepoPath, planRemoteDeletes } from "./syncDeletes.js";
 import { writeAppRepoCommitCursor, readAppRepoCommitCursors } from "./appRepoCommittedFanout.js";
@@ -370,6 +371,15 @@ export async function pullAppCodeFromRepo(
     // Phase 1 — classify every file without touching disk.
     const plan: PlannedFile[] = [];
     for (const [filePath, upstreamContent] of upstreamFiles) {
+      // Platform-written files (app-meta, platform-catalog, writer README…) are
+      // regenerated locally; pulling them only produced false overlaps.
+      if (
+        isPlatformGeneratedAppPath(filePath) ||
+        (isWriterScaffoldPath(filePath) && !localFiles.has(filePath) && !cachedPaths[filePath])
+      ) {
+        plan.push({ action: "skip", filePath });
+        continue;
+      }
       const remoteOid = remoteOidByPath.get(filePath);
       const lastSyncedOid = cachedPaths[filePath] ?? null;
 
@@ -431,6 +441,12 @@ export async function pullAppCodeFromRepo(
         localContent === undefined ||
         (lastSyncedOid !== null && localOid === lastSyncedOid);
 
+      if (!localUnchanged && remoteOid && localOid !== remoteOid && filePath === "metadata.json") {
+        // metadata.json is rebuilt from this machine's app record on every
+        // publish, so the local copy wins; the next publish updates the web.
+        plan.push({ action: "skip", filePath });
+        continue;
+      }
       if (!localUnchanged && remoteOid && localOid !== remoteOid) {
         // Both sides edited: combine line by line against the last synced
         // version, like git. Only overlapping lines are a real conflict.

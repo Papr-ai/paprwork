@@ -73,7 +73,7 @@ function publishCategory(appId: string): string | undefined {
   }
 }
 import { normalizeCatalogTags } from "../../core/utils/catalogTags.js";
-import { buildMiniApp } from "../utils/miniAppBuild.js";
+import { buildMiniApp, MiniAppDistBuildError } from "../utils/miniAppBuild.js";
 import {
   checkAppKeyDeclarations,
   catalogRequirementsForPublish,
@@ -329,6 +329,26 @@ function parsePublishConfig(
   };
 }
 
+/**
+ * Publish status changes only when someone publishes/unpublishes, so it is not
+ * re-asked on every UI refresh (each refresh resolved slugs across sibling apps:
+ * ~4 GET /publish/{id} per unpublished app every 5 minutes, all 404).
+ * "Not published" is kept 1h; a live record 30s (collapses one refresh's burst).
+ * This desktop's own publish/unpublish clears the entry; other devices' changes
+ * show within the TTL, or at once via invalidatePublishStatusCache.
+ */
+const PUBLISH_STATUS_NOT_FOUND_TTL_MS = 60 * 60 * 1000;
+const PUBLISH_STATUS_FOUND_TTL_MS = 30 * 1000;
+const publishStatusCache = new Map<
+  string,
+  { expiresAt: number; value: Promise<PublishApiResponse | null> }
+>();
+
+export function invalidatePublishStatusCache(appId?: string): void {
+  if (appId) publishStatusCache.delete(appId);
+  else publishStatusCache.clear();
+}
+
 export class CloudAppPublishService {
   private readonly boundPaprDir: string;
   private readonly boundWriteGeneration: number;
@@ -351,7 +371,28 @@ export class CloudAppPublishService {
     );
   }
 
-  private async fetchMemoryPublishResponse(
+  private fetchMemoryPublishResponse(
+    appId: string,
+  ): Promise<PublishApiResponse | null> {
+    const hit = publishStatusCache.get(appId);
+    if (hit && hit.expiresAt > Date.now()) return hit.value;
+    const value = this.fetchMemoryPublishResponseUncached(appId);
+    // Concurrent callers share one request; errors are never cached.
+    publishStatusCache.set(appId, { expiresAt: Date.now() + PUBLISH_STATUS_FOUND_TTL_MS, value });
+    value.then(
+      (data) => {
+        if (publishStatusCache.get(appId)?.value !== value) return;
+        const ttl = data ? PUBLISH_STATUS_FOUND_TTL_MS : PUBLISH_STATUS_NOT_FOUND_TTL_MS;
+        publishStatusCache.set(appId, { expiresAt: Date.now() + ttl, value });
+      },
+      () => {
+        if (publishStatusCache.get(appId)?.value === value) publishStatusCache.delete(appId);
+      },
+    );
+    return value;
+  }
+
+  private async fetchMemoryPublishResponseUncached(
     appId: string,
   ): Promise<PublishApiResponse | null> {
     const response = await cloudApiFetch(
@@ -714,6 +755,7 @@ export class CloudAppPublishService {
     const intent = body.intent ?? "register";
     const timeoutMs = publishIntentTimeoutMs(intent);
 
+    invalidatePublishStatusCache(appId);
     return withPublishInFlight(appId, async () => {
       const response = await cloudApiFetch("/v1/cloud/apps/publish", {
         method: "POST",
@@ -784,6 +826,7 @@ export class CloudAppPublishService {
         );
       }
 
+      invalidatePublishStatusCache(appId);
       return (await response.json()) as PublishApiResponse;
     });
   }
@@ -1075,21 +1118,19 @@ export class CloudAppPublishService {
       const { prepareAppForCloudGitSync } = await import(
         "./cloudSync/prepareAppsForCloud.js"
       );
-      await prepareAppForCloudGitSync(this.paprDir, appId);
+      await prepareAppForCloudGitSync(this.paprDir, appId, { strictBuild: true });
     } else {
       try {
         const build = await buildMiniApp(appDir);
         if (!build.legacy && !build.success) {
-          console.warn(
-            `[CloudPublish] dist build failed for ${appId} — publishing unbundled:`,
-            build.errors.slice(0, 3).map((e) => e.message).join("; "),
-          );
+          throw new MiniAppDistBuildError(appId, build.errors);
         } else if (!build.legacy) {
           console.log(
             `[CloudPublish] Built dist bundle for ${appId}: ${build.outputFiles.join(", ")}`,
           );
         }
       } catch (error) {
+        if (error instanceof MiniAppDistBuildError) throw error;
         console.warn(
           `[CloudPublish] dist build errored for ${appId} — publishing unbundled:`,
           (error as Error).message,
@@ -1339,6 +1380,7 @@ export class CloudAppPublishService {
     const memory = await this.fetchMemoryPublishResponse(appId);
 
     await this.revokeAppFiles(appId);
+    invalidatePublishStatusCache(appId);
     const response = await cloudApiFetch(
       `/v1/cloud/apps/publish/${encodeURIComponent(appId)}`,
       { method: "DELETE" },
@@ -1363,6 +1405,7 @@ export class CloudAppPublishService {
         `Cloud unpublish failed (${response.status}): ${body.slice(0, 200)}`,
       );
     }
+    invalidatePublishStatusCache(appId);
 
     if (memory) {
       scheduleCloudAppHostAccessInvalidation(

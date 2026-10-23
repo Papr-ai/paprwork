@@ -102,4 +102,51 @@ export function initPlatformConnectListener(): void {
   };
 
   window.addEventListener("gateway-broadcast", handleBroadcast);
+
+  // "Connect Reddit" on a published app's setup page: papr:// deep link (browser)
+  // or postMessage from the app's preview iframe. Same modal the agent opens.
+  window.addEventListener("papr-platform-connect", (event: Event) => {
+    const platform = (event as CustomEvent<{ platform?: string }>).detail?.platform;
+    if (typeof platform === "string" && platform.trim()) openPlatformConnect(platform.trim());
+  });
+  // Setup pages inside app previews that are waiting on a sign-in.
+  const waitingFrames = new Map<string, Set<MessageEventSource>>();
+  const notifyConnected = (platform: string) => {
+    for (const source of waitingFrames.get(platform) ?? []) {
+      (source as Window).postMessage({ type: "papr-platform-connected", platform }, "*");
+    }
+    waitingFrames.delete(platform);
+  };
+  window.addEventListener("gateway-broadcast", (event: Event) => {
+    const message = (event as CustomEvent).detail;
+    if (message?.type !== "platform:status-changed" || message.data?.status !== "connected") return;
+    if (typeof message.data.platformId === "string") notifyConnected(message.data.platformId);
+  });
+  window.addEventListener("message", (event: MessageEvent) => {
+    if (event.data?.type !== "papr-connect-platform") return;
+    const platform = event.data.platform;
+    if (typeof platform !== "string" || !/^[a-z][a-z0-9-]{1,60}$/.test(platform)) return;
+    if (event.source) {
+      const set = waitingFrames.get(platform) ?? new Set<MessageEventSource>();
+      set.add(event.source);
+      waitingFrames.set(platform, set);
+    }
+    void (async () => {
+      // Already signed in on this computer: tell the page right away.
+      if (await isPlatformAlreadyConnected(platform)) notifyConnected(platform);
+      else openPlatformConnect(platform);
+    })();
+  });
+}
+
+/** Open the Connected Platforms sign-in modal (no-op when already connected). */
+export function openPlatformConnect(platformId: string, reason?: string): void {
+  void (async () => {
+    if (await isPlatformAlreadyConnected(platformId)) return;
+    usePlatformConnectStore.getState().setActiveRequest({
+      platform: platformId,
+      reason: reason ?? "An app you opened on the web needs this sign-in.",
+      requestId: crypto.randomUUID(),
+    });
+  })();
 }
