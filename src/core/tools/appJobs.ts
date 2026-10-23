@@ -1,6 +1,7 @@
 import { gatewayBackgroundBudget } from "../../gateway/services/gatewayBackgroundBudget.js";
 import { createTool } from "@mastra/core/tools";
 import { z } from "zod";
+import { isPlatformInjectedEnvKey } from "../utils/platformInjectedEnvKeys.js";
 import { RequirementItemSchema } from "../types/bundles.js";
 import {
   JobRequiredKeysSchema,
@@ -1339,6 +1340,10 @@ async function scanJobSourceForEnvKeyAntiPattern(
     "NODE_ENV",
   ]);
 
+  // Set by the job runner itself (desktop or cloud), never a Settings key.
+  const isRuntimeEnvKey = (name: string): boolean =>
+    inheritedEnvKeys.has(name) || isPlatformInjectedEnvKey(name);
+
   const looksLikeApiKey = (name: string): boolean => {
     const upper = name.toUpperCase();
     return /(?:KEY|TOKEN|SECRET|PASSWORD|CREDENTIAL|AUTH|_URL$)/.test(upper);
@@ -1377,7 +1382,8 @@ async function scanJobSourceForEnvKeyAntiPattern(
         for (const pattern of pyPatterns) {
           let match: RegExpExecArray | null;
           while ((match = pattern.exec(content)) !== null) {
-            if (!inheritedEnvKeys.has(match[1]) && looksLikeApiKey(match[1])) {
+            if (isRuntimeEnvKey(match[1])) continue;
+            if (looksLikeApiKey(match[1])) {
               warnings.push(
                 `${relPath}: \`${match[0]})\` — "${match[1]}" is a custom key from Settings and is NOT available as an env var. ` +
                   `Fix: pass it via CLI arg in the job command using \${${match[1]}} and use argparse in the script.`,
@@ -1394,7 +1400,8 @@ async function scanJobSourceForEnvKeyAntiPattern(
           let match: RegExpExecArray | null;
           while ((match = pattern.exec(content)) !== null) {
             const key = match[1] || match[2];
-            if (!inheritedEnvKeys.has(key) && looksLikeApiKey(key)) {
+            if (isRuntimeEnvKey(key)) continue;
+            if (looksLikeApiKey(key)) {
               warnings.push(
                 `${relPath}: \`${match[0]}\` — "${key}" is a custom key from Settings and is NOT available as an env var. ` +
                   `Fix: add it to requiredKeys and read from env; do not pass it as a CLI argument.`,
