@@ -1070,6 +1070,15 @@ export class JobsService {
       if (!this.jobs.has(jobId)) {
         adopted.push(jobId);
       }
+      // A job.json shipped by an app bundle carries a schedule but no
+      // scheduleState (that is per-machine). Without nextRunAt the schedule
+      // index drops the job, so an installed 9:05 job never fires (#500).
+      if (record.schedule?.enabled && !record.scheduleState?.nextRunAt) {
+        record.scheduleState = this.computeScheduleState(
+          record.schedule,
+          record.scheduleState,
+        );
+      }
       this.setJobInMemory(record);
       changed = true;
     }
