@@ -96,6 +96,12 @@ describe("adopt job folders into the live registry", () => {
     expect(res.adopted).toEqual([id]);
     expect(svc.hasJob(id)).toBe(true);
     expect((await svc.getJob(id))?.schedule?.cron).toBe("5 9 * * *");
+    // The scheduler must actually see it: nextRunAt computed, job in the index.
+    expect((await svc.getJob(id))?.scheduleState?.nextRunAt).toBeTruthy();
+    const countBefore = svc.getScheduleIndexScheduledCount();
+    expect(countBefore).toBeGreaterThanOrEqual(1);
+    const farFuture = new Date(Date.now() + 2 * 24 * 3600 * 1000);
+    expect(svc.getDueScheduledJobIds(farFuture)).toContain(id);
 
     // Survives a later reload (the original bug: the next reload dropped it again).
     await svc.reloadJobs();
