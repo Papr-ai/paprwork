@@ -24,6 +24,25 @@ describe("platformInjectedEnvKeys", () => {
     expect(isPlatformInjectedEnvKey("NEON_DB_URL")).toBe(false);
   });
 
+  it("treats job-runner env (app id, db/files proxy, linked DBs) as built in", () => {
+    for (const name of [
+      "PAPR_APP_ID",
+      "APP_ID",
+      "PAPR_JOB_ID",
+      "PAPR_DB_MODE",
+      "PAPR_DB_PROXY_TOKEN",
+      "PAPR_FILES_PROXY_URL",
+      "PAPR_DB_CAREERS",
+      "PAPR_DB_CAREERS_MODE",
+      "APP_DB",
+      "APP_DB_ALIAS",
+    ]) {
+      expect(isPlatformInjectedEnvKey(name), name).toBe(true);
+    }
+    expect(isPlatformInjectedEnvKey("GOOGLE_API_KEY")).toBe(false);
+    expect(isPlatformInjectedEnvKey("PAPR_API_KEY")).toBe(false);
+  });
+
   it("filters platform keys from vault key lists", () => {
     expect(
       filterVaultKeyNames([
