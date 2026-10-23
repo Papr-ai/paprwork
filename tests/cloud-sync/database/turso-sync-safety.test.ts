@@ -140,7 +140,7 @@ describe("turso sync safety", () => {
       expect(rows).toEqual([{ label: "before-push" }]);
       removeLocalJobDbBackup(backup);
     } finally {
-      fs.rmSync(base, { recursive: true, force: true });
+      fs.rmSync(base, { recursive: true, force: true, maxRetries: 5, retryDelay: 50 });
     }
   });
 });

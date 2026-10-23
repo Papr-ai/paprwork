@@ -61,7 +61,7 @@ describe("checkoutPublishedCommit", () => {
     expect(await fs.readFile(path.join(dir, "app.ts"), "utf8")).toBe("v2-mid-upload");
     await checkoutPublishedCommit(dir, published, env, true);
     expect(await fs.readFile(path.join(dir, "app.ts"), "utf8")).toBe("v1");
-    await fs.rm(root, { recursive: true, force: true });
+    await fs.rm(root, { recursive: true, force: true, maxRetries: 5, retryDelay: 50 });
   });
 
   it("keeps HEAD (no throw) when the commit doesn't exist", async () => {
@@ -70,7 +70,7 @@ describe("checkoutPublishedCommit", () => {
     git(root, "clone", "-q", "--depth", "1", `file://${repo}`, dir);
     await checkoutPublishedCommit(dir, "deadbeefdeadbeefdeadbeefdeadbeefdeadbeef", env, true);
     expect(await fs.readFile(path.join(dir, "app.ts"), "utf8")).toBe("v2-mid-upload");
-    await fs.rm(root, { recursive: true, force: true });
+    await fs.rm(root, { recursive: true, force: true, maxRetries: 5, retryDelay: 50 });
   });
 });
 

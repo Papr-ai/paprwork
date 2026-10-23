@@ -59,7 +59,7 @@ describe("syncMetadataToCloudForFlush", () => {
   });
 
   afterEach(() => {
-    fs.rmSync(paprDir, { recursive: true, force: true });
+    fs.rmSync(paprDir, { recursive: true, force: true, maxRetries: 5, retryDelay: 50 });
     vi.clearAllMocks();
   });
 

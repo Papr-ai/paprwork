@@ -101,6 +101,6 @@ describe("SyncCoordinator.getStatus app-scoped db dirty keys", () => {
     expect(app1Report?.status).toBe("waiting");
     expect(app2Report?.status).toBe("waiting");
 
-    fs.rmSync(otherDir, { recursive: true, force: true });
+    fs.rmSync(otherDir, { recursive: true, force: true, maxRetries: 5, retryDelay: 50 });
   });
 });

@@ -66,8 +66,8 @@ describe("shared-data install keeps the publisher as schema owner", () => {
     await applyIdRemapsToDirectory(appDir, new Map([[PUBLISHER, COPY]]));
   });
   afterEach(() => {
-    rmSync(home, { recursive: true, force: true });
-    rmSync(repo, { recursive: true, force: true });
+    rmSync(home, { recursive: true, force: true, maxRetries: 5, retryDelay: 50 });
+    rmSync(repo, { recursive: true, force: true, maxRetries: 5, retryDelay: 50 });
   });
 
   it("the remap alone does rewrite the owner (the bug this guards against)", async () => {

@@ -170,7 +170,7 @@ describe("checkBackendManifestIntegrity", () => {
 
   afterEach(async () => {
     if (tempDir) {
-      await rm(tempDir, { recursive: true, force: true });
+      await rm(tempDir, { recursive: true, force: true, maxRetries: 5, retryDelay: 50 });
     }
   });
 
@@ -340,7 +340,7 @@ describe("checkOrphanBackendHandlers", () => {
 
   afterEach(async () => {
     if (tempDir) {
-      await rm(tempDir, { recursive: true, force: true });
+      await rm(tempDir, { recursive: true, force: true, maxRetries: 5, retryDelay: 50 });
     }
   });
 

@@ -49,7 +49,7 @@ describe("jobScriptPathValidation", () => {
     expect(issues.some((i) => i.rule === "job-script-missing-code-prefix")).toBe(
       true,
     );
-    await fs.rm(tempDir, { recursive: true, force: true });
+    await fs.rm(tempDir, { recursive: true, force: true, maxRetries: 5, retryDelay: 50 });
   });
 
   it("errors when script exists in code/ but command omits code/", async () => {
@@ -67,7 +67,7 @@ describe("jobScriptPathValidation", () => {
       true,
     );
     expect(issues[0]?.suggestedCommand).toContain("code/fetch.py");
-    await fs.rm(tempDir, { recursive: true, force: true });
+    await fs.rm(tempDir, { recursive: true, force: true, maxRetries: 5, retryDelay: 50 });
   });
 });
 
@@ -118,7 +118,7 @@ describe("run_job script path preflight", () => {
       process.env.HOME = previousHome;
     }
     delete process.env.PAPR_HOME;
-    await fs.rm(tempHome, { recursive: true, force: true });
+    await fs.rm(tempHome, { recursive: true, force: true, maxRetries: 5, retryDelay: 50 });
   });
 
   it("blocks run_job when command path does not match code/ script", async () => {

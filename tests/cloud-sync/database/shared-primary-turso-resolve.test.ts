@@ -79,7 +79,7 @@ describe("resolveSharedPrimaryTursoEntry", () => {
   });
 
   afterEach(async () => {
-    await fs.rm(paprHome, { recursive: true, force: true });
+    await fs.rm(paprHome, { recursive: true, force: true, maxRetries: 5, retryDelay: 50 });
   });
 
   it("discovers mapping from lineage without writing a registry file", async () => {

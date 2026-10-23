@@ -66,7 +66,7 @@ describe("scanLegacyPathHealth", () => {
     );
 
     await import("fs/promises").then((fs) =>
-      fs.rm(tempRoot, { recursive: true, force: true }),
+      fs.rm(tempRoot, { recursive: true, force: true, maxRetries: 5, retryDelay: 50 }),
     );
   });
 
@@ -111,7 +111,7 @@ describe("scanLegacyPathHealth", () => {
     ).toBe(true);
 
     await import("fs/promises").then((fs) =>
-      fs.rm(tempRoot, { recursive: true, force: true }),
+      fs.rm(tempRoot, { recursive: true, force: true, maxRetries: 5, retryDelay: 50 }),
     );
   });
 
@@ -178,7 +178,7 @@ describe("scanLegacyPathHealth", () => {
     ).toBe(true);
 
     await import("fs/promises").then((fs) =>
-      fs.rm(tempRoot, { recursive: true, force: true }),
+      fs.rm(tempRoot, { recursive: true, force: true, maxRetries: 5, retryDelay: 50 }),
     );
   });
 
@@ -229,7 +229,7 @@ describe("scanLegacyPathHealth", () => {
     expect(result.apps).toHaveLength(0);
 
     await import("fs/promises").then((fs) =>
-      fs.rm(tempRoot, { recursive: true, force: true }),
+      fs.rm(tempRoot, { recursive: true, force: true, maxRetries: 5, retryDelay: 50 }),
     );
   });
 });

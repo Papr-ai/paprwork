@@ -51,7 +51,7 @@ beforeEach(() => {
 });
 
 afterEach(() => {
-  fs.rmSync(dataDir, { recursive: true, force: true });
+  fs.rmSync(dataDir, { recursive: true, force: true, maxRetries: 5, retryDelay: 50 });
   delete process.env.PAPRWORK_TELEMETRY_PAPR_USER_ID;
 });
 

@@ -32,7 +32,7 @@ describe("sharedPrimaryTursoStore", () => {
   });
 
   afterEach(async () => {
-    await fs.rm(paprHome, { recursive: true, force: true });
+    await fs.rm(paprHome, { recursive: true, force: true, maxRetries: 5, retryDelay: 50 });
   });
 
   it("registers and looks up turso short name entries", () => {

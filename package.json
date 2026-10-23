@@ -191,7 +191,7 @@
     "test:turso-bidirectional-e2e": "npm run build:gateway && ELECTRON_RUN_AS_NODE=1 ./node_modules/.bin/electron scripts/test-turso-bidirectional-e2e.mjs",
     "test:cloud-turso-db-changed-e2e": "npm run build:gateway && ELECTRON_RUN_AS_NODE=1 ./node_modules/.bin/electron scripts/test-cloud-turso-db-changed-e2e.mjs",
     "test:cloud-agent-turso-bookends": "npm run build:gateway && ELECTRON_RUN_AS_NODE=1 ./node_modules/.bin/electron scripts/test-cloud-agent-turso-bookends-e2e.mjs",
-    "test:new-models": "tsx tests/ai-proxy-new-models.ts",
+    "test:new-models": "tsx tests/manual/ai-proxy-new-models.ts",
     "fix-app-icons": "node scripts/fix-app-icons.mjs",
     "set-home-app": "node scripts/set-default-home-app.mjs",
     "migrate:v1": "tsx scripts/migrate-v1-data.ts",

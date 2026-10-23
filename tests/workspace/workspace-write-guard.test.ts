@@ -71,7 +71,7 @@ describe("workspace write guard", () => {
       canPerformWorkspaceDbWrite(0, dbPath, "turso push"),
     ).toBe(false);
 
-    fs.rmSync(other, { recursive: true, force: true });
+    fs.rmSync(other, { recursive: true, force: true, maxRetries: 5, retryDelay: 50 });
   });
 
   it("assertWorkspaceWriteAllowed throws WorkspaceWriteBlockedError", () => {

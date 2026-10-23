@@ -20,7 +20,7 @@ describe("shared sync state under parallel publishes", () => {
   afterEach(() => {
     if (prevRoot === undefined) delete process.env.PAPR_HOME;
     else process.env.PAPR_HOME = prevRoot;
-    fs.rmSync(home, { recursive: true, force: true });
+    fs.rmSync(home, { recursive: true, force: true, maxRetries: 5, retryDelay: 50 });
   });
 
   it("OID cache keeps every app's acked OIDs when 10 apps ack at once", async () => {

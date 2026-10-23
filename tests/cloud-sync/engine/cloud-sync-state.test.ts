@@ -57,7 +57,7 @@ describe("SyncStateManager content hash", () => {
 
   afterEach(() => {
     for (const dir of tempDirs.splice(0)) {
-      fs.rmSync(dir, { recursive: true, force: true });
+      fs.rmSync(dir, { recursive: true, force: true, maxRetries: 5, retryDelay: 50 });
     }
   });
 

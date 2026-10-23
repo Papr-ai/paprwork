@@ -15,7 +15,7 @@ describe("cloudAppRevisionMarker", () => {
 
   afterEach(() => {
     if (appDir) {
-      rmSync(appDir, { recursive: true, force: true });
+      rmSync(appDir, { recursive: true, force: true, maxRetries: 5, retryDelay: 50 });
       appDir = "";
     }
   });

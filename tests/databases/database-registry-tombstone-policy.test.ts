@@ -84,7 +84,7 @@ describe("databaseRegistryTombstonePolicy", () => {
   });
 
   afterEach(async () => {
-    await fs.rm(paprHome, { recursive: true, force: true });
+    await fs.rm(paprHome, { recursive: true, force: true, maxRetries: 5, retryDelay: 50 });
   });
 
   it("blocks tombstone for publisher shared-primary segment", () => {

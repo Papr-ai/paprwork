@@ -147,7 +147,7 @@ describe("namespace-scoped job-linked data sources", () => {
     expect(result.appIssueCount).toBe(0);
 
     await import("fs/promises").then((fs) =>
-      fs.rm(tempRoot, { recursive: true, force: true }),
+      fs.rm(tempRoot, { recursive: true, force: true, maxRetries: 5, retryDelay: 50 }),
     );
   });
 

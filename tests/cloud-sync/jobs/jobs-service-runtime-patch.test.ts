@@ -100,7 +100,7 @@ describe("JobsService.applyCloudRunPatch", () => {
     } else {
       process.env.GATEWAY_MODE = prevGatewayMode;
     }
-    await rm(tmpRoot, { recursive: true, force: true });
+    await rm(tmpRoot, { recursive: true, force: true, maxRetries: 5, retryDelay: 50 });
   });
 
   test("applies newer patch and advances scheduleState", async () => {

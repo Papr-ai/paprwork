@@ -38,7 +38,7 @@ describe("cloud agent gateway path resolution", () => {
     else process.env.GATEWAY_MODE = previousGatewayMode;
     if (previousHome === undefined) delete process.env.HOME;
     else process.env.HOME = previousHome;
-    await fs.rm(tempRoot, { recursive: true, force: true });
+    await fs.rm(tempRoot, { recursive: true, force: true, maxRetries: 5, retryDelay: 50 });
   });
 
   it("uses PAPR_HOME for Jobs and data paths", () => {

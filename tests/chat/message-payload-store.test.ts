@@ -23,7 +23,7 @@ beforeEach(() => {
 });
 
 afterEach(() => {
-  fs.rmSync(dbDir, { recursive: true, force: true });
+  fs.rmSync(dbDir, { recursive: true, force: true, maxRetries: 5, retryDelay: 50 });
 });
 
 /** Round-trips a message through storage the way LocalStorageProvider does. */

@@ -15,7 +15,7 @@ async function tmpApp(files: Record<string, string>): Promise<string> {
   return dir;
 }
 afterEach(async () => {
-  for (const d of dirs.splice(0)) await fs.rm(d, { recursive: true, force: true });
+  for (const d of dirs.splice(0)) await fs.rm(d, { recursive: true, force: true, maxRetries: 5, retryDelay: 50 });
 });
 
 describe("dist/ for every TypeScript entry", () => {

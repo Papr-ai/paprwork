@@ -28,7 +28,7 @@ describe("scheduleCloudAppHostAccessInvalidation", () => {
   let dir = "";
   afterEach(async () => {
     push.mockReset();
-    if (dir) await rm(dir, { recursive: true, force: true });
+    if (dir) await rm(dir, { recursive: true, force: true, maxRetries: 5, retryDelay: 50 });
   });
 
   it("pushes only when the allowlist file actually changes (no publish loop)", async () => {

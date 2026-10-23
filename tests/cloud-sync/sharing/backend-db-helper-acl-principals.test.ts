@@ -21,7 +21,7 @@ describe("row ACL: role / team principals and segment filter", () => {
       );
       expect(out).toContain("principals acl ok");
     } finally {
-      rmSync(dir, { recursive: true, force: true });
+      rmSync(dir, { recursive: true, force: true, maxRetries: 5, retryDelay: 50 });
     }
   });
 

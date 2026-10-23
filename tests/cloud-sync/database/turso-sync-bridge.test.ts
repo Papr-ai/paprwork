@@ -206,7 +206,7 @@ describe("tursoSyncBridgeCore", () => {
         expect(row?.name).toBe("_papr_sync_log");
       } finally {
         resetChangeLogReadyCacheForTests();
-        fs.rmSync(base, { recursive: true, force: true });
+        fs.rmSync(base, { recursive: true, force: true, maxRetries: 5, retryDelay: 50 });
       }
     },
   );
@@ -257,7 +257,7 @@ describe("tursoSyncBridgeCore", () => {
       expect(result.status).toBe("failed");
       expect(fs.existsSync(path.dirname(dbPath))).toBe(true);
     } finally {
-      fs.rmSync(base, { recursive: true, force: true });
+      fs.rmSync(base, { recursive: true, force: true, maxRetries: 5, retryDelay: 50 });
     }
   });
 

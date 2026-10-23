@@ -16,7 +16,7 @@ const OTHER = "b973ace9-e0f8-4d26-97e3-bc021c8bbec0";
 
 const tmp: string[] = [];
 afterEach(() => {
-  for (const d of tmp.splice(0)) fs.rmSync(d, { recursive: true, force: true });
+  for (const d of tmp.splice(0)) fs.rmSync(d, { recursive: true, force: true, maxRetries: 5, retryDelay: 50 });
 });
 
 describe("{{papr.app_id}}", () => {

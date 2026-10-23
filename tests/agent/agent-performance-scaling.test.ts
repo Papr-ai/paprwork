@@ -69,7 +69,7 @@ describe('Agent Performance Scaling', () => {
   afterEach(async () => {
     // Cleanup
     await agentService.shutdown();
-    await fs.rm(testDir, { recursive: true, force: true });
+    await fs.rm(testDir, { recursive: true, force: true, maxRetries: 5, retryDelay: 50 });
   });
 
   /**

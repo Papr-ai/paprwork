@@ -78,7 +78,7 @@ describe("appDirtyState", () => {
     setAppEditTrackingActive(true);
     await publish();
   });
-  afterEach(() => fs.rmSync(paprDir, { recursive: true, force: true }));
+  afterEach(() => fs.rmSync(paprDir, { recursive: true, force: true, maxRetries: 5, retryDelay: 50 }));
 
   it("starts clean after publish", async () => {
     expect(await dirty()).toBe(false);

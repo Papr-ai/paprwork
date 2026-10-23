@@ -123,7 +123,7 @@ describe("appWorkspaceAssignment", () => {
       process.env.HOME = previousHome;
     }
     delete process.env.PAPR_HOME;
-    await fs.rm(tempHome, { recursive: true, force: true });
+    await fs.rm(tempHome, { recursive: true, force: true, maxRetries: 5, retryDelay: 50 });
   });
 
   it("merges runnable bundles into canonical workspace before deleting duplicates", async () => {

@@ -29,7 +29,7 @@ describe("v5 Detach", () => {
   beforeEach(() => {
     appsDir = mkdtempSync(join(tmpdir(), "detach-"));
   });
-  afterEach(() => rmSync(appsDir, { recursive: true, force: true }));
+  afterEach(() => rmSync(appsDir, { recursive: true, force: true, maxRetries: 5, retryDelay: 50 }));
 
   it("detaches a linked copy on its own data, and it stays detached", async () => {
     write(lineage({ databasePolicy: "forked", sourceAudience: "community", trackAutoPull: true }));

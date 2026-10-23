@@ -63,7 +63,7 @@ describe("createMigrationFile", () => {
     fs.mkdirSync(path.join(root, "migrations"));
     fs.writeFileSync(path.join(root, "migrations", "0001_init.sql"), "CREATE TABLE t(id INTEGER);");
   });
-  afterEach(() => fs.rmSync(root, { recursive: true, force: true }));
+  afterEach(() => fs.rmSync(root, { recursive: true, force: true, maxRetries: 5, retryDelay: 50 }));
 
   it("writes the file with the assigned name and returns the migration id", async () => {
     const out = await createMigrationFile({

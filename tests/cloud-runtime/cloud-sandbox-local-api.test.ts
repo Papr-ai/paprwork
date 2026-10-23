@@ -43,7 +43,7 @@ describe("sandbox local API", () => {
     vi.doUnmock("../../src/gateway/services/DatabaseRegistryService.js");
     vi.resetModules();
     process.env = { ...originalEnv };
-    fs.rmSync(tmp, { recursive: true, force: true });
+    fs.rmSync(tmp, { recursive: true, force: true, maxRetries: 5, retryDelay: 50 });
   });
 
   it("serves /api/db/query and /api/db/write against the cloud primary", async () => {

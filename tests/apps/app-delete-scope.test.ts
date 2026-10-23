@@ -67,7 +67,7 @@ describe("appDeleteScope", () => {
 
   beforeEach(() => {
     resetDatabaseRegistryForWorkspaceSwitch();
-    fs.rmSync(path.join(appsRoot(), appId), { recursive: true, force: true });
+    fs.rmSync(path.join(appsRoot(), appId), { recursive: true, force: true, maxRetries: 5, retryDelay: 50 });
   });
 
   async function writeCollaboratorSharedPrimaryFixture(input: {

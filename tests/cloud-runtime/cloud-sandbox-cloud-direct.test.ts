@@ -16,7 +16,7 @@ describe("seedCloudDatabaseRegistry", () => {
   });
   afterEach(() => {
     vi.resetModules();
-    fs.rmSync(tmp, { recursive: true, force: true });
+    fs.rmSync(tmp, { recursive: true, force: true, maxRetries: 5, retryDelay: 50 });
   });
 
   const request = () => ({
@@ -121,7 +121,7 @@ describe("papr_db_exec on a cloud-direct database", () => {
     vi.doUnmock("../../src/gateway/services/DatabaseRegistryService.js");
     vi.resetModules();
     process.env = { ...originalEnv };
-    fs.rmSync(tmp, { recursive: true, force: true });
+    fs.rmSync(tmp, { recursive: true, force: true, maxRetries: 5, retryDelay: 50 });
   });
 
   it("writes to the primary even with replica sync off, and refuses DDL", async () => {
@@ -161,7 +161,7 @@ describe("setCloudDirectCredentials", () => {
     } as never);
     const r = await client.execute("SELECT 1 AS one");
     expect(Number(r.rows[0].one)).toBe(1);
-    fs.rmSync(tmp, { recursive: true, force: true });
+    fs.rmSync(tmp, { recursive: true, force: true, maxRetries: 5, retryDelay: 50 });
   });
 });
 
@@ -194,7 +194,7 @@ describe("papr_db_query", () => {
     vi.doUnmock("../../src/gateway/services/DatabaseRegistryService.js");
     vi.resetModules();
     process.env = { ...originalEnv };
-    fs.rmSync(tmp, { recursive: true, force: true });
+    fs.rmSync(tmp, { recursive: true, force: true, maxRetries: 5, retryDelay: 50 });
   });
 
   it("cloud-direct (web-only, no local file): reads rows from the primary", async () => {

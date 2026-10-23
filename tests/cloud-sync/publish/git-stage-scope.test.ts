@@ -29,7 +29,7 @@ describe("stageGitSyncScopes", () => {
 
   afterEach(() => {
     for (const dir of tmpDirs) {
-      fs.rmSync(dir, { recursive: true, force: true });
+      fs.rmSync(dir, { recursive: true, force: true, maxRetries: 5, retryDelay: 50 });
     }
     tmpDirs.length = 0;
   });
@@ -157,6 +157,6 @@ describe("partitionUntrackedBySize", () => {
 
     expect(toAdd).toEqual(["small.ts"]);
     expect(skippedOversized).toEqual(["huge.bin"]);
-    fs.rmSync(dir, { recursive: true, force: true });
+    fs.rmSync(dir, { recursive: true, force: true, maxRetries: 5, retryDelay: 50 });
   });
 });

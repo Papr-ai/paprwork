@@ -26,7 +26,7 @@ describe("private table publish gate", () => {
   let dir = "";
   afterEach(() => {
     vi.restoreAllMocks();
-    if (dir) rmSync(dir, { recursive: true, force: true });
+    if (dir) rmSync(dir, { recursive: true, force: true, maxRetries: 5, retryDelay: 50 });
   });
 
   it("passes when nothing is private (default)", async () => {

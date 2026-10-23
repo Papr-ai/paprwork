@@ -43,7 +43,7 @@ describe("buildCloudAppMeta replica reads", () => {
     workerRead.mockClear();
     sqliteOpen.mockClear();
   });
-  afterEach(() => fs.rmSync(dir, { recursive: true, force: true }));
+  afterEach(() => fs.rmSync(dir, { recursive: true, force: true, maxRetries: 5, retryDelay: 50 }));
 
   it("reads replica-managed DBs through the sync worker, never better-sqlite3", async () => {
     const dbPath = path.join(dir, "notes", "data.db");

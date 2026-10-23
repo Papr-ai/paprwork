@@ -77,7 +77,7 @@ describe("legacyCdcArtifacts", () => {
     const after = new Database(dbPath, { readonly: true });
     expect(filterSyncableTables(listUserTables(after))).toEqual(["contacts"]);
     after.close();
-    fs.rmSync(dir, { recursive: true, force: true });
+    fs.rmSync(dir, { recursive: true, force: true, maxRetries: 5, retryDelay: 50 });
   });
 
   it.skipIf(!canUseBetterSqlite)(
@@ -102,7 +102,7 @@ describe("legacyCdcArtifacts", () => {
         .all() as Array<{ id: string }>;
       expect(ids.map((row) => row.id)).toEqual(["0003_person.sql"]);
       after.close();
-      fs.rmSync(dir, { recursive: true, force: true });
+      fs.rmSync(dir, { recursive: true, force: true, maxRetries: 5, retryDelay: 50 });
     },
   );
 
@@ -133,7 +133,7 @@ describe("legacyCdcArtifacts", () => {
       .all() as Array<{ name: string }>;
     expect(tables.map((row) => row.name)).toContain("_papr_schema_migrations");
     after.close();
-    fs.rmSync(dir, { recursive: true, force: true });
+    fs.rmSync(dir, { recursive: true, force: true, maxRetries: 5, retryDelay: 50 });
   });
 });
 

@@ -32,7 +32,7 @@ describe("resolveRegistryDbPath", () => {
 
     expect(resolved).toBe(workspaceDb);
 
-    await fs.rm(tempRoot, { recursive: true, force: true });
+    await fs.rm(tempRoot, { recursive: true, force: true, maxRetries: 5, retryDelay: 50 });
   });
 });
 

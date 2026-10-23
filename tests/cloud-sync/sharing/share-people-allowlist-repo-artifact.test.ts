@@ -17,7 +17,7 @@ describe("writeSharePeopleAllowlistRepoFile", () => {
   beforeEach(() => {
     appDir = fs.mkdtempSync(path.join(os.tmpdir(), "allowlist-"));
   });
-  afterEach(() => fs.rmSync(appDir, { recursive: true, force: true }));
+  afterEach(() => fs.rmSync(appDir, { recursive: true, force: true, maxRetries: 5, retryDelay: 50 }));
 
   it("does not touch the file when the content is unchanged", async () => {
     const target = path.join(appDir, SHARE_PEOPLE_ALLOWLIST_REPO_PATH);

@@ -175,7 +175,7 @@ describe.skipIf(!canUseNodeSqlite)("replica migration runner: re-run safety", ()
     vi.restoreAllMocks();
     if (harness) {
       harness.db.close();
-      rmSync(harness.root, { recursive: true, force: true });
+      rmSync(harness.root, { recursive: true, force: true, maxRetries: 5, retryDelay: 50 });
       harness = null;
     }
   });
