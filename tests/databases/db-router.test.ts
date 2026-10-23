@@ -62,7 +62,7 @@ describe("isLocalDbReadable", () => {
     const dbPath = path.join(tmpDir, "data.db");
     fs.writeFileSync(dbPath, "sqlite");
     expect(isLocalDbReadable(dbPath)).toBe(true);
-    fs.rmSync(tmpDir, { recursive: true, force: true });
+    fs.rmSync(tmpDir, { recursive: true, force: true, maxRetries: 5, retryDelay: 50 });
   });
 });
 
@@ -115,7 +115,7 @@ describe("DbRouter", () => {
     const result = await router.query("app-1", localSource, "SELECT 1", []);
     expect(result.backend).toBe("local");
     expect(pool.query).toHaveBeenCalledWith("app-1", dbPath, "SELECT 1", []);
-    fs.rmSync(tmpDir, { recursive: true, force: true });
+    fs.rmSync(tmpDir, { recursive: true, force: true, maxRetries: 5, retryDelay: 50 });
   });
 
   it("rejects writes when local db is missing", async () => {
@@ -155,7 +155,7 @@ describe("DbRouter", () => {
       { pullBeforeRead: false },
     );
 
-    fs.rmSync(tmpDir, { recursive: true, force: true });
+    fs.rmSync(tmpDir, { recursive: true, force: true, maxRetries: 5, retryDelay: 50 });
   });
 
   it("times out mini-app replica reads when local db is missing", async () => {
@@ -211,6 +211,6 @@ describe("DbRouter", () => {
     );
     expect(mockClearReplicaReadPathDegraded).toHaveBeenCalledWith(dbPath);
 
-    fs.rmSync(tmpDir, { recursive: true, force: true });
+    fs.rmSync(tmpDir, { recursive: true, force: true, maxRetries: 5, retryDelay: 50 });
   });
 });

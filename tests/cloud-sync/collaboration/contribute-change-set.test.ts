@@ -23,7 +23,7 @@ import { hashBlobContent } from "../../../src/gateway/services/syncV3/computePar
 
 const tmp: string[] = [];
 afterEach(() => {
-  for (const d of tmp.splice(0)) fs.rmSync(d, { recursive: true, force: true });
+  for (const d of tmp.splice(0)) fs.rmSync(d, { recursive: true, force: true, maxRetries: 5, retryDelay: 50 });
 });
 
 function git(cwd: string, ...args: string[]): string {

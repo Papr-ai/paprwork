@@ -19,7 +19,7 @@ const tmpRoots: string[] = [];
 
 afterEach(async () => {
   for (const root of tmpRoots.splice(0, tmpRoots.length)) {
-    await fs.rm(root, { recursive: true, force: true });
+    await fs.rm(root, { recursive: true, force: true, maxRetries: 5, retryDelay: 50 });
   }
   vi.restoreAllMocks();
 });

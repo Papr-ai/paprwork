@@ -34,7 +34,7 @@ describe("End-to-End Job Scheduling Tests", () => {
   afterAll(async () => {
     // Cleanup temp directory
     try {
-      await fs.rm(tempDir, { recursive: true, force: true });
+      await fs.rm(tempDir, { recursive: true, force: true, maxRetries: 5, retryDelay: 50 });
     } catch {
       // Ignore cleanup errors
     }

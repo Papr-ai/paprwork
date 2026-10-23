@@ -30,7 +30,7 @@ function replicaFile(): string {
   return p;
 }
 afterEach(() => {
-  for (const d of dirs.splice(0)) rmSync(d, { recursive: true, force: true });
+  for (const d of dirs.splice(0)) rmSync(d, { recursive: true, force: true, maxRetries: 5, retryDelay: 50 });
 });
 
 describe("parked replica during job validation", () => {

@@ -92,7 +92,7 @@ describe("uploadResumable", () => {
     try {
       await fn(path);
     } finally {
-      await rm(dir, { recursive: true, force: true });
+      await rm(dir, { recursive: true, force: true, maxRetries: 5, retryDelay: 50 });
     }
   }
 
@@ -222,7 +222,7 @@ describe("hashFile", () => {
     const b = await hashFile(path);
     expect(a).toBe(b);
     expect(a).toMatch(/^[0-9a-f]{64}$/);
-    await rm(dir, { recursive: true, force: true });
+    await rm(dir, { recursive: true, force: true, maxRetries: 5, retryDelay: 50 });
   });
 });
 

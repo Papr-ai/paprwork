@@ -23,7 +23,7 @@ beforeEach(() => {
 afterEach(() => {
   clearGitHubPause();
   delete process.env.PAPR_GITHUB_PAUSE_FILE;
-  fs.rmSync(dir, { recursive: true, force: true });
+  fs.rmSync(dir, { recursive: true, force: true, maxRetries: 5, retryDelay: 50 });
 });
 
 describe("shared GitHub pause", () => {

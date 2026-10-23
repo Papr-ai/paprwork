@@ -33,7 +33,7 @@ describe('Permissions System', () => {
   afterEach(() => {
     // Clean up temp directory
     if (fs.existsSync(tempDir)) {
-      fs.rmSync(tempDir, { recursive: true, force: true });
+      fs.rmSync(tempDir, { recursive: true, force: true, maxRetries: 5, retryDelay: 50 });
     }
     delete process.env.PAPR_TEST_DATA_PATH;
   });

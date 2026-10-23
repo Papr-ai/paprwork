@@ -32,7 +32,7 @@ function tempDb(): { dbPath: string; cleanup: () => void } {
   const dbPath = path.join(dir, "data.db");
   return {
     dbPath,
-    cleanup: () => fs.rmSync(dir, { recursive: true, force: true }),
+    cleanup: () => fs.rmSync(dir, { recursive: true, force: true, maxRetries: 5, retryDelay: 50 }),
   };
 }
 
@@ -163,7 +163,7 @@ describe("loadTursoSyncState legacy fingerprint cleanup", () => {
   });
 
   afterEach(() => {
-    fs.rmSync(paprDir, { recursive: true, force: true });
+    fs.rmSync(paprDir, { recursive: true, force: true, maxRetries: 5, retryDelay: 50 });
   });
 
   it("strips deprecated tableFingerprints on load", () => {

@@ -46,7 +46,7 @@ describe("papr workspace hierarchy", () => {
     delete process.env.PAPR_USER_DATA;
     delete process.env.PAPR_ORG_ID;
     delete process.env.PAPR_NAMESPACE_ID;
-    await fs.rm(tempHome, { recursive: true, force: true });
+    await fs.rm(tempHome, { recursive: true, force: true, maxRetries: 5, retryDelay: 50 });
   });
 
   it("resolves org/namespace workspace and user-data paths", () => {

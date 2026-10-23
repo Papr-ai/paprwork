@@ -60,7 +60,7 @@ describe("tursoSyncState", () => {
     const state: TursoSyncStateFile = { jobs: {} };
     expect(isJobDbDirty("job-1", dbPath, state)).toBe(true);
 
-    fs.rmSync(tmpDir, { recursive: true, force: true });
+    fs.rmSync(tmpDir, { recursive: true, force: true, maxRetries: 5, retryDelay: 50 });
   });
 
   it.skipIf(!canUseBetterSqlite)(
@@ -78,7 +78,7 @@ describe("tursoSyncState", () => {
       const state = loadTursoSyncState(tmpDir);
       expect(isJobDbDirty("job-1", dbPath, state)).toBe(false);
 
-      fs.rmSync(tmpDir, { recursive: true, force: true });
+      fs.rmSync(tmpDir, { recursive: true, force: true, maxRetries: 5, retryDelay: 50 });
     },
   );
 
@@ -108,7 +108,7 @@ describe("tursoSyncState", () => {
       const state = loadTursoSyncState(tmpDir);
       expect(isJobDbDirty("job-1", dbPath, state)).toBe(true);
 
-      fs.rmSync(tmpDir, { recursive: true, force: true });
+      fs.rmSync(tmpDir, { recursive: true, force: true, maxRetries: 5, retryDelay: 50 });
     },
   );
 
@@ -129,7 +129,7 @@ describe("tursoSyncState", () => {
       const state = loadTursoSyncState(tmpDir);
       expect(isJobDbDirty("job-1", dbPath, state)).toBe(false);
 
-      fs.rmSync(tmpDir, { recursive: true, force: true });
+      fs.rmSync(tmpDir, { recursive: true, force: true, maxRetries: 5, retryDelay: 50 });
     },
   );
 
@@ -145,7 +145,7 @@ describe("tursoSyncState", () => {
     const statePath = path.join(tmpDir, "data", ".turso-sync-state.json");
     expect(fs.existsSync(statePath)).toBe(true);
 
-    fs.rmSync(tmpDir, { recursive: true, force: true });
+    fs.rmSync(tmpDir, { recursive: true, force: true, maxRetries: 5, retryDelay: 50 });
   });
 });
 
@@ -424,8 +424,8 @@ describe("tursoPushScheduler permanent skip integration", () => {
     vi.unmock("../../../src/core/utils/paprRoot.js");
     vi.unmock("../../../src/gateway/services/TursoSyncBridge.js");
     vi.unmock("../../../src/gateway/services/tursoReplica/tursoReplicaRouting.js");
-    fs.rmSync(tmpPapr, { recursive: true, force: true });
-    fs.rmSync(tmpJobDir, { recursive: true, force: true });
+    fs.rmSync(tmpPapr, { recursive: true, force: true, maxRetries: 5, retryDelay: 50 });
+    fs.rmSync(tmpJobDir, { recursive: true, force: true, maxRetries: 5, retryDelay: 50 });
   });
 
   it.skipIf(!canUseBetterSqlite)(

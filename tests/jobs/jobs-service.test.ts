@@ -20,6 +20,11 @@ function userVisibleJobs(jobs: Awaited<ReturnType<JobsService["listJobs"]>>) {
 const tmpRoots: string[] = [];
 
 afterEach(async () => {
+  // createJob/reload request a reschedule on the global scheduler; its tick
+  // re-initializes JobsService under this test's PAPR_HOME. Stop it before the
+  // temp dir goes, or the tick mkdirs into a deleted folder (unhandled ENOENT).
+  const { resetJobsSchedulerForTests } = await import("../../src/gateway/services/JobsScheduler.js");
+  resetJobsSchedulerForTests();
   // Brief delay to let file watchers release handles before cleanup
   await new Promise((resolve) => setTimeout(resolve, 50));
   for (const root of tmpRoots.splice(0, tmpRoots.length)) {

@@ -15,7 +15,7 @@ describe("checkBackendActionSmokeTest", () => {
 
   afterEach(async () => {
     if (tempRoot) {
-      await rm(tempRoot, { recursive: true, force: true });
+      await rm(tempRoot, { recursive: true, force: true, maxRetries: 5, retryDelay: 50 });
     }
   });
 

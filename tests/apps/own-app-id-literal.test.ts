@@ -15,7 +15,7 @@ const OTHER = "5bebcac4-0000-4000-8000-000000000000";
 
 let dir: string;
 afterEach(async () => {
-  if (dir) await rm(dir, { recursive: true, force: true });
+  if (dir) await rm(dir, { recursive: true, force: true, maxRetries: 5, retryDelay: 50 });
 });
 
 async function app(files: Record<string, string>): Promise<string> {

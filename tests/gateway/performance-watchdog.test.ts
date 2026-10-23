@@ -165,6 +165,6 @@ test("watchdog retains measurements and detects a gateway whose event loop is bl
     expect(snapshot.samples.some(sample => Date.parse(sample.startedAt) > blockStartedAt && Date.parse(sample.finishedAt) < blockFinishedAt)).toBe(true);
   } finally {
     gateway?.kill();
-    await rm(directory, { recursive: true, force: true });
+    await rm(directory, { recursive: true, force: true, maxRetries: 5, retryDelay: 50 });
   }
 }, 20000);

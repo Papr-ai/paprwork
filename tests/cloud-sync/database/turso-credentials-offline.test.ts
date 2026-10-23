@@ -49,7 +49,7 @@ describe("tursoCredentialsStore", () => {
   const paprDir = path.join(os.tmpdir(), `turso-creds-test-${process.pid}`);
 
   afterEach(() => {
-    fs.rmSync(paprDir, { recursive: true, force: true });
+    fs.rmSync(paprDir, { recursive: true, force: true, maxRetries: 5, retryDelay: 50 });
   });
 
   it("round-trips credentials per scoped key", async () => {

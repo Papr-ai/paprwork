@@ -31,7 +31,7 @@ describe("remapForkJobIds", () => {
   });
 
   afterEach(async () => {
-    await fs.rm(root, { recursive: true, force: true });
+    await fs.rm(root, { recursive: true, force: true, maxRetries: 5, retryDelay: 50 });
   });
 
   it("gives every linked job a new id in folders, job.json, jobs.json and app code", async () => {

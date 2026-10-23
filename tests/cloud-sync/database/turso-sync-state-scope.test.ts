@@ -71,8 +71,8 @@ describe("turso sync state workspace scoping", () => {
 
     expect(listDbDirtySyncKeys(workspace)).toEqual(["db-in"]);
 
-    fs.rmSync(workspace, { recursive: true, force: true });
-    fs.rmSync(other, { recursive: true, force: true });
+    fs.rmSync(workspace, { recursive: true, force: true, maxRetries: 5, retryDelay: 50 });
+    fs.rmSync(other, { recursive: true, force: true, maxRetries: 5, retryDelay: 50 });
   });
 
   it("pruneTursoSyncStateForWorkspace removes cross-workspace rows", () => {
@@ -110,8 +110,8 @@ describe("turso sync state workspace scoping", () => {
     expect(state.jobs["db-out"]).toBeUndefined();
     expect(state.jobs["db-in"]).toBeDefined();
 
-    fs.rmSync(workspace, { recursive: true, force: true });
-    fs.rmSync(other, { recursive: true, force: true });
+    fs.rmSync(workspace, { recursive: true, force: true, maxRetries: 5, retryDelay: 50 });
+    fs.rmSync(other, { recursive: true, force: true, maxRetries: 5, retryDelay: 50 });
   });
 
   it("prune in one workspace does not delete another workspace sync state file", () => {
@@ -161,8 +161,8 @@ describe("turso sync state workspace scoping", () => {
     expect(loadTursoSyncState(workspaceB).jobs["db-b"]).toBeDefined();
     expect(listDbDirtySyncKeys(workspaceB)).toEqual(["db-b"]);
 
-    fs.rmSync(workspaceA, { recursive: true, force: true });
-    fs.rmSync(workspaceB, { recursive: true, force: true });
+    fs.rmSync(workspaceA, { recursive: true, force: true, maxRetries: 5, retryDelay: 50 });
+    fs.rmSync(workspaceB, { recursive: true, force: true, maxRetries: 5, retryDelay: 50 });
   });
 
   it("markDbDirty ignores DB paths outside active workspace", () => {
@@ -182,8 +182,8 @@ describe("turso sync state workspace scoping", () => {
     expect(state.jobs["db-in"]).toBeDefined();
     expect(state.jobs["db-out"]).toBeUndefined();
 
-    fs.rmSync(workspace, { recursive: true, force: true });
-    fs.rmSync(other, { recursive: true, force: true });
+    fs.rmSync(workspace, { recursive: true, force: true, maxRetries: 5, retryDelay: 50 });
+    fs.rmSync(other, { recursive: true, force: true, maxRetries: 5, retryDelay: 50 });
   });
 
   it("listDbDirtySyncKeysForApp filters to linked sync keys", () => {
@@ -201,6 +201,6 @@ describe("turso sync state workspace scoping", () => {
     const linked = new Set(["db-a"]);
     expect(listDbDirtySyncKeysForApp(linked, workspace)).toEqual(["db-a"]);
 
-    fs.rmSync(workspace, { recursive: true, force: true });
+    fs.rmSync(workspace, { recursive: true, force: true, maxRetries: 5, retryDelay: 50 });
   });
 });

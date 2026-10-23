@@ -17,7 +17,7 @@ const cleanup: Array<() => Promise<unknown> | void> = [];
 afterEach(async () => { stopDatabaseDiagnosticTransport(); vi.unstubAllEnvs(); for (const fn of cleanup.splice(0).reverse()) await fn(); });
 async function environment() {
   const dir = await mkdtemp(path.join(os.tmpdir(), "pdt-"));
-  cleanup.push(() => rm(dir, { recursive: true, force: true }));
+  cleanup.push(() => rm(dir, { recursive: true, force: true, maxRetries: 5, retryDelay: 50 }));
   const endpoint = process.platform === "win32" ? String.raw`\\.\pipe` + "\\" + `pdt-${path.basename(dir)}` : path.join(dir, "t.sock");
   const collector = new DatabaseDiagnosticCollector(); await collector.listen(endpoint);
   expect(collector.status).toBe("listening"); cleanup.push(() => collector.close());

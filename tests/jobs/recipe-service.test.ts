@@ -59,7 +59,7 @@ describe("RecipeService", () => {
   });
 
   afterEach(async () => {
-    await fs.rm(jobDir(), { recursive: true, force: true });
+    await fs.rm(jobDir(), { recursive: true, force: true, maxRetries: 5, retryDelay: 50 });
   });
 
   describe("Recipe CRUD", () => {

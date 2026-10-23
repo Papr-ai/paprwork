@@ -65,7 +65,7 @@ function seedWalDb(rowCount: number): void {
     }
   } finally {
     db.close();
-    fs.rmSync(stage, { recursive: true, force: true });
+    fs.rmSync(stage, { recursive: true, force: true, maxRetries: 5, retryDelay: 50 });
   }
 }
 
@@ -146,7 +146,7 @@ beforeEach(() => {
 });
 
 afterEach(() => {
-  fs.rmSync(dir, { recursive: true, force: true });
+  fs.rmSync(dir, { recursive: true, force: true, maxRetries: 5, retryDelay: 50 });
 });
 
 describe("WAL sidecar cleanup preserves committed rows", () => {

@@ -25,7 +25,7 @@ beforeEach(() => {
   managed.clear();
   applyDatabaseMigrations.mockClear();
 });
-afterEach(() => rmSync(root, { recursive: true, force: true }));
+afterEach(() => rmSync(root, { recursive: true, force: true, maxRetries: 5, retryDelay: 50 }));
 
 function jobDir(): string {
   const dir = path.join(root, "Jobs", "32be089d-83d5-4e03-a71c-25b588c961f8");

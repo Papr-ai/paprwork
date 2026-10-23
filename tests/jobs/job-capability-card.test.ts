@@ -86,7 +86,7 @@ describe("readJobTableShapes", () => {
     db.close();
   });
 
-  afterAll(() => fs.rmSync(dir, { recursive: true, force: true }));
+  afterAll(() => fs.rmSync(dir, { recursive: true, force: true, maxRetries: 5, retryDelay: 50 }));
 
   test("THE REGRESSION: calendar_events is present, plumbing is gone", () => {
     const names = readJobTableShapes(dbPath).map((t) => t.table);
@@ -206,7 +206,7 @@ describe("readJobReliability", () => {
     dbPath = path.join(dir, "data.db");
   });
 
-  afterAll(() => fs.rmSync(dir, { recursive: true, force: true }));
+  afterAll(() => fs.rmSync(dir, { recursive: true, force: true, maxRetries: 5, retryDelay: 50 }));
 
   test("computes success rate over recent runs", () => {
     seed([...Array(48).fill("completed"), "failed", "failed"]);

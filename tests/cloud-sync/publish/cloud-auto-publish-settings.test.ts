@@ -15,7 +15,7 @@ describe("cloudAutoPublishSettings", () => {
     } else {
       process.env.CLOUD_AUTO_PUBLISH_ENABLED = originalEnv;
     }
-    fs.rmSync(tmpHome, { recursive: true, force: true });
+    fs.rmSync(tmpHome, { recursive: true, force: true, maxRetries: 5, retryDelay: 50 });
   });
 
   it("defaults to disabled when no settings file exists", () => {

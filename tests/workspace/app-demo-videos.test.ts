@@ -40,7 +40,7 @@ describe("app demo videos", () => {
     fs.writeFileSync(path.join(root, "apps", APP, "app.ts"), "export const x = 1;");
     demos._resetDemoTasks();
   });
-  afterEach(() => fs.rmSync(root, { recursive: true, force: true }));
+  afterEach(() => fs.rmSync(root, { recursive: true, force: true, maxRetries: 5, retryDelay: 50 }));
 
   it("prompts with the app's metadata and source", () => {
     const prompt = demos.buildDemoScenePrompt(APP);

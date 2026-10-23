@@ -30,7 +30,7 @@ describe("notifyAppSaveForWriterOps", () => {
   });
 
   afterEach(() => {
-    fs.rmSync(tmpDir, { recursive: true, force: true });
+    fs.rmSync(tmpDir, { recursive: true, force: true, maxRetries: 5, retryDelay: 50 });
   });
 
   it("does not schedule auto flush when per-app upload mode is manual", async () => {

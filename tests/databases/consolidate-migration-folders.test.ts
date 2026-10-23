@@ -10,7 +10,7 @@ import {
 
 const tmp: string[] = [];
 afterEach(() => {
-  for (const d of tmp.splice(0)) fs.rmSync(d, { recursive: true, force: true });
+  for (const d of tmp.splice(0)) fs.rmSync(d, { recursive: true, force: true, maxRetries: 5, retryDelay: 50 });
 });
 
 describe("planShadowCleanup", () => {

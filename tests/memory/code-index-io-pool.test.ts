@@ -14,7 +14,7 @@ describe("CodeIndexIoPool", () => {
   afterEach(() => {
     terminateCodeIndexIoPool();
     if (tmpDir) {
-      fs.rmSync(tmpDir, { recursive: true, force: true });
+      fs.rmSync(tmpDir, { recursive: true, force: true, maxRetries: 5, retryDelay: 50 });
       tmpDir = "";
     }
   });

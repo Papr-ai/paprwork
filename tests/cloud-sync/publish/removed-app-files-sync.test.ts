@@ -43,7 +43,7 @@ beforeEach(() => {
 afterEach(() => {
   if (prev === undefined) delete process.env.PAPR_HOME;
   else process.env.PAPR_HOME = prev;
-  for (const d of dirs.splice(0)) fs.rmSync(d, { recursive: true, force: true });
+  for (const d of dirs.splice(0)) fs.rmSync(d, { recursive: true, force: true, maxRetries: 5, retryDelay: 50 });
 });
 
 const appFile = (rel: string) => path.join(home, "apps", appId, rel);

@@ -22,7 +22,7 @@ describe("buildMiniApp", () => {
   });
 
   afterEach(async () => {
-    await fs.rm(TEST_DIR, { recursive: true, force: true });
+    await fs.rm(TEST_DIR, { recursive: true, force: true, maxRetries: 5, retryDelay: 50 });
   });
 
   it("removes .dist-staging after a FAILED build", async () => {
@@ -236,7 +236,7 @@ describe("preferBundledEntryInHtml", () => {
   });
 
   afterEach(async () => {
-    await fs.rm(appDir, { recursive: true, force: true });
+    await fs.rm(appDir, { recursive: true, force: true, maxRetries: 5, retryDelay: 50 });
   });
 
   it("leaves html unchanged when dist/app.js is missing", async () => {

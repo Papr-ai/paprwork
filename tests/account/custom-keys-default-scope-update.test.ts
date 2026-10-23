@@ -20,7 +20,7 @@ vi.mock("electron", () => {
 const { CustomKeysStorage } = await import("../../src/core/storage/CustomKeysStorage.js");
 
 afterAll(async () => {
-  await fs.rm(userData, { recursive: true, force: true });
+  await fs.rm(userData, { recursive: true, force: true, maxRetries: 5, retryDelay: 50 });
 });
 
 describe("CustomKeysStorage default-scope keys", () => {

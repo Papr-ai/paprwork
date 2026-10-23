@@ -17,7 +17,7 @@ const write = (obj: unknown) => {
 };
 
 describe("catalog media is sent as App Files references, never as public links", () => {
-  beforeEach(() => fs.rmSync(path.join(root, "apps"), { recursive: true, force: true }));
+  beforeEach(() => fs.rmSync(path.join(root, "apps"), { recursive: true, force: true, maxRetries: 5, retryDelay: 50 }));
   afterEach(() => vi.resetModules());
 
   it("video cover → object keys for video + poster, no url", async () => {

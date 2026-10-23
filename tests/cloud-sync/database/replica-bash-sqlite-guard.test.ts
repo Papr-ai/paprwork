@@ -89,7 +89,7 @@ describe("replicaBashSqliteGuard", () => {
     } finally {
       process.env.PAPR_HOME = prevHome;
       resetReplicaRegistryCacheForTests();
-      fs.rmSync(tmpRoot, { recursive: true, force: true });
+      fs.rmSync(tmpRoot, { recursive: true, force: true, maxRetries: 5, retryDelay: 50 });
     }
   });
 

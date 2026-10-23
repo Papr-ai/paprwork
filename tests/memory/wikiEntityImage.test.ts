@@ -47,7 +47,7 @@ beforeAll(async () => {
 });
 
 afterAll(() => {
-  fs.rmSync(tmpHome, { recursive: true, force: true });
+  fs.rmSync(tmpHome, { recursive: true, force: true, maxRetries: 5, retryDelay: 50 });
 });
 
 describe("resolveEntityImage", () => {

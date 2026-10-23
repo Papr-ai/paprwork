@@ -29,7 +29,7 @@ describe("tableAccessService", () => {
   let root = "";
   afterEach(() => {
     vi.restoreAllMocks();
-    if (root) rmSync(root, { recursive: true, force: true });
+    if (root) rmSync(root, { recursive: true, force: true, maxRetries: 5, retryDelay: 50 });
   });
 
   it("lists frontend call sites and unfiltered backend reads as blockers", async () => {

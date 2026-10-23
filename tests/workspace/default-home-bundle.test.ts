@@ -27,7 +27,7 @@ describe("defaultHomeBundle", () => {
   });
 
   afterEach(async () => {
-    await fs.rm(tmpDir, { recursive: true, force: true });
+    await fs.rm(tmpDir, { recursive: true, force: true, maxRetries: 5, retryDelay: 50 });
   });
 
   it("buildDailyBriefDataSource uses a stable id/alias that never embeds the job id", () => {

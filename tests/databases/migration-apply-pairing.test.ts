@@ -19,7 +19,7 @@ describe("migrationApplyPairing", () => {
   });
 
   afterEach(() => {
-    fs.rmSync(migrationRoot, { recursive: true, force: true });
+    fs.rmSync(migrationRoot, { recursive: true, force: true, maxRetries: 5, retryDelay: 50 });
   });
 
   it("creates apply token with checksum and tracks cloud apply", async () => {

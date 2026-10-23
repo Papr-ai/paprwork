@@ -134,7 +134,7 @@ describe("CloudAppTrackSyncService.pullTrackAppsOnPublish", () => {
   });
 
   afterEach(() => {
-    rmSync(appsDir, { recursive: true, force: true });
+    rmSync(appsDir, { recursive: true, force: true, maxRetries: 5, retryDelay: 50 });
     vi.restoreAllMocks();
   });
 

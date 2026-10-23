@@ -149,7 +149,7 @@ describe("cloud app install bootstrap", () => {
     } else {
       process.env.GATEWAY_MODE = originalGatewayMode;
     }
-    await fs.rm(paprHome, { recursive: true, force: true });
+    await fs.rm(paprHome, { recursive: true, force: true, maxRetries: 5, retryDelay: 50 });
   });
 
   it.skipIf(!canUseBetterSqlite)(

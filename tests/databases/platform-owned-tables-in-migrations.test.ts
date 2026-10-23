@@ -74,7 +74,7 @@ beforeEach(() => {
   tmp = fs.mkdtempSync(path.join(os.tmpdir(), "papr-platform-tables-"));
 });
 afterEach(() => {
-  fs.rmSync(tmp, { recursive: true, force: true });
+  fs.rmSync(tmp, { recursive: true, force: true, maxRetries: 5, retryDelay: 50 });
 });
 
 function writeMigrations(root: string, files: Record<string, string>): void {
