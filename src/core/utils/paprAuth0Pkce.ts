@@ -23,7 +23,7 @@ export function getDesktopAuth0Config(): PaprAuth0Config {
   return {
     domain: normalizeAuth0Domain(process.env.AUTH0_DOMAIN || "papr.auth0.com"),
     clientId: process.env.AUTH0_CLIENT_ID || "asVGkVRkRAxYvtQadqivntIRjB4D1Iur",
-    redirectUri: "papr://auth/callback",
+    redirectUri: `${(process.env.PAPR_PROFILE || "").trim().toLowerCase() === "dev" ? "papr-dev" : "papr"}://auth/callback`,
     scope: DEFAULT_SCOPE,
   };
 }

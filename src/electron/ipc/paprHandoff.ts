@@ -8,7 +8,8 @@
  * Pure helpers live here so they're testable without Electron.
  */
 
-export const HANDOFF_URL_PREFIX = "papr://auth/handoff";
+const PAPR_SCHEME = (process.env.PAPR_PROFILE || "").trim().toLowerCase() === "dev" ? "papr-dev" : "papr";
+export const HANDOFF_URL_PREFIX = `${PAPR_SCHEME}://auth/handoff`;
 
 export interface HandoffRedeemResult {
   userId: string;

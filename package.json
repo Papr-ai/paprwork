@@ -199,7 +199,8 @@
     "dist:mac": "npm run build && electron-builder --mac --arm64",
     "dist:mac:universal": "npm run build && electron-builder --mac --arm64 --x64",
     "dist:win": "npm run build && electron-builder --win --x64",
-    "dist:linux": "npm run build && electron-builder --linux --x64"
+    "dist:linux": "npm run build && electron-builder --linux --x64",
+    "dev:devenv": "cross-env PAPR_PROFILE=dev npm run dev:commercial"
   },
   "keywords": [
     "electron",

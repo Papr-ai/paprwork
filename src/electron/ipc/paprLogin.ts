@@ -191,7 +191,8 @@ export async function clearPaprUserIdFromGatewaySettings(): Promise<void> {
 // Remove https:// prefix if present (to avoid double https in URLs)
 const AUTH0_DOMAIN = (process.env.AUTH0_DOMAIN || "papr.auth0.com").replace(/^https?:\/\//, "");
 const AUTH0_CLIENT_ID = process.env.AUTH0_CLIENT_ID || "asVGkVRkRAxYvtQadqivntIRjB4D1Iur";
-const AUTH0_REDIRECT_URI = "papr://auth/callback";
+const PAPR_SCHEME = (process.env.PAPR_PROFILE || "").trim().toLowerCase() === "dev" ? "papr-dev" : "papr";
+const AUTH0_REDIRECT_URI = `${PAPR_SCHEME}://auth/callback`;
 const AUTH0_SCOPE = "openid profile email offline_access";
 
 console.log("[PaprLogin] Configuration:");
@@ -5247,7 +5248,7 @@ export async function handlePaprAuthCallback(
   customKeysStorage: CustomKeysStorage,
   settingsStorage: SettingsStorage,
 ): Promise<void> {
-  if (!callbackUrl.startsWith("papr://auth/callback")) return;
+  if (!callbackUrl.startsWith(AUTH0_REDIRECT_URI)) return;
 
   console.log("[PaprLogin] Deep link callback received:", callbackUrl.split("?")[0]);
 
