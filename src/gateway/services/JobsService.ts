@@ -1070,16 +1070,7 @@ export class JobsService {
       if (!this.jobs.has(jobId)) {
         adopted.push(jobId);
       }
-      // A job.json shipped by an app bundle carries a schedule but no
-      // scheduleState (that is per-machine). Without nextRunAt the schedule
-      // index drops the job, so an installed 9:05 job never fires (#500).
-      if (record.schedule?.enabled && !record.scheduleState?.nextRunAt) {
-        record.scheduleState = this.computeScheduleState(
-          record.schedule,
-          record.scheduleState,
-        );
-      }
-      this.setJobInMemory(record);
+      this.setJobInMemory(this.withInitialNextRunAt(record));
       changed = true;
     }
     if (changed) {
@@ -2578,6 +2569,29 @@ export class JobsService {
 
   private async sleep(ms: number): Promise<void> {
     await new Promise((resolve) => setTimeout(resolve, ms));
+  }
+
+  /**
+   * An enabled schedule with no nextRunAt is invisible to the scheduler: the
+   * schedule index only holds jobs that have one. Records built from an app
+   * bundle's job.json (install, Get updates, bundle import) never carry
+   * scheduleState, because it is per-machine and stripped on publish, so an
+   * installed 9:05 job sat in the list and never ran until a restart (#513).
+   * Fill it here so every write path is covered. A one-shot atTime already in
+   * the past is left alone: reconcileScheduleStates decides whether it fires.
+   */
+  private withInitialNextRunAt(job: JobRecord): JobRecord {
+    const schedule = job.schedule;
+    if (!schedule?.enabled) return job;
+    const current = job.scheduleState?.nextRunAt;
+    if (current && !Number.isNaN(new Date(current).getTime())) return job;
+    const now = new Date();
+    if (schedule.atTime && new Date(schedule.atTime).getTime() < now.getTime()) {
+      return job;
+    }
+    const nextRunAt = computeInitialNextRunAt(schedule, now, job.scheduleState);
+    if (!nextRunAt) return job;
+    return { ...job, scheduleState: { ...job.scheduleState, nextRunAt } };
   }
 
   private computeScheduleState(
@@ -4498,6 +4512,7 @@ export class JobsService {
   }
 
   async upsertJob(job: JobRecord, sourceDir?: string): Promise<JobRecord> {
+    job = this.withInitialNextRunAt(job);
     const destination = this.getJobDir(job.id);
     await fs.mkdir(destination, { recursive: true });
     if (sourceDir) {

@@ -155,4 +155,45 @@ describe("track Get updates keeps deliberately deleted jobs deleted", () => {
     expect(getJobsService().hasJob(jobId)).toBe(true);
     expect((await readJobTombstones(ws.paprHome)).has(jobId)).toBe(false);
   });
+
+  it("an installed scheduled job is in the scheduler index right away (#513)", async () => {
+    // Real install path: promoteBundledAppJobsToRegistry → upsertJob with a
+    // record rebuilt from the bundle job.json, which never has scheduleState.
+    const { promoteBundledAppJobsToRegistry } = await import(
+      "../src/gateway/services/cloudAppResourceIntegrity.js"
+    );
+    const localAppId = randomUUID();
+    const jobId = randomUUID();
+    const localAppDir = path.join(ws.paprHome, "apps", localAppId);
+    await fs.mkdir(path.join(localAppDir, "jobs", jobId, "code"), { recursive: true });
+    await fs.writeFile(
+      path.join(localAppDir, "jobs", jobId, "job.json"),
+      JSON.stringify({ id: jobId, name: "Connection Sender", type: "python", appIds: [localAppId], command: "python3 code/run.py", schedule: { enabled: true, cron: "5 9 * * *" } }),
+    );
+    const svc = getJobsService();
+    await svc.initialize();
+    await svc.waitForStartupMaintenance();
+    const before = svc.getScheduleIndexScheduledCount();
+
+    const res = await promoteBundledAppJobsToRegistry({ localAppId, localAppDir, paprHome: ws.paprHome });
+    expect(res.promotedJobIds).toEqual([jobId]);
+    expect((await svc.getJob(jobId))?.scheduleState?.nextRunAt).toBeTruthy();
+    expect(svc.getScheduleIndexScheduledCount()).toBe(before + 1);
+    const farFuture = new Date(Date.now() + 2 * 24 * 3600 * 1000);
+    expect(svc.getDueScheduledJobIds(farFuture)).toContain(jobId);
+  });
+
+  it("a one-shot atTime already in the past is not armed on install", async () => {
+    const svc = getJobsService();
+    await svc.initialize();
+    await svc.waitForStartupMaintenance();
+    const id = randomUUID();
+    await svc.upsertJob({
+      id, name: "Old one-shot", type: "bash", status: "pending", appIds: [], command: "true",
+      schedule: { enabled: true, atTime: "2020-01-01T00:00:00.000Z" },
+      createdAt: new Date().toISOString(), updatedAt: new Date().toISOString(),
+    } as never);
+    expect((await svc.getJob(id))?.scheduleState?.nextRunAt).toBeFalsy();
+    expect(svc.getDueScheduledJobIds(new Date())).not.toContain(id);
+  });
 });
