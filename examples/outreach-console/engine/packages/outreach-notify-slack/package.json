@@ -1,0 +1,44 @@
+{
+  "name": "@splitin/outreach-notify-slack",
+  "version": "0.0.0",
+  "description": "Slack notifier for the outreach engine: incoming webhook or chat.postMessage, Block Kit with escaped content, error codes mapped to the engine taxonomy.",
+  "license": "MIT",
+  "author": "SplitInTech",
+  "homepage": "https://github.com/splitintech/open-internal-tools/tree/main/outreach-engine#readme",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/splitintech/open-internal-tools.git",
+    "directory": "outreach-engine/packages/outreach-notify-slack"
+  },
+  "type": "module",
+  "sideEffects": false,
+  "engines": {
+    "node": ">=22.13"
+  },
+  "main": "./dist/index.cjs",
+  "module": "./dist/index.js",
+  "types": "./dist/index.d.ts",
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "import": "./dist/index.js",
+      "require": "./dist/index.cjs"
+    }
+  },
+  "files": [
+    "dist",
+    "README.md",
+    "package.json"
+  ],
+  "publishConfig": {
+    "access": "public"
+  },
+  "scripts": {
+    "build": "tsup",
+    "typecheck": "tsc --noEmit -p tsconfig.json"
+  },
+  "dependencies": {
+    "@splitin/outreach-contracts": "0.0.0",
+    "@splitin/outreach-provider-kit": "0.0.0"
+  }
+}

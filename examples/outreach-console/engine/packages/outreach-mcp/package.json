@@ -1,0 +1,27 @@
+{
+  "name": "@splitin/outreach-mcp",
+  "version": "0.0.0",
+  "description": "Local stdio MCP control surface for the outreach engine.",
+  "license": "MIT",
+  "author": "SplitInTech",
+  "repository": {"type":"git","url":"git+https://github.com/splitintech/open-internal-tools.git","directory":"outreach-engine/packages/outreach-mcp"},
+  "type": "module",
+  "engines": {"node": ">=22.13"},
+  "main": "./dist/index.cjs",
+  "module": "./dist/index.js",
+  "types": "./dist/index.d.ts",
+  "exports": {".": {"types":"./dist/index.d.ts","import":"./dist/index.js","require":"./dist/index.cjs"}},
+  "files": ["dist", "README.md", "package.json"],
+  "publishConfig": {"access":"public"},
+  "bin": {"outreach-mcp":"./dist/bin.js"},
+  "scripts": {"build":"tsup", "typecheck":"tsc --noEmit -p tsconfig.json"},
+  "dependencies": {
+    "@modelcontextprotocol/sdk": "^1.26.0",
+    "@splitin/outreach-contracts":"0.0.0",
+    "@splitin/outreach-core":"0.0.0",
+    "@splitin/outreach-import":"0.0.0",
+    "@splitin/outreach-store-sqlite":"0.0.0",
+    "zod":"^4.6.5"
+  },
+  "devDependencies": {"@splitin/outreach-fakes":"0.0.0"}
+}

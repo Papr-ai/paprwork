@@ -1,0 +1,55 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Outreach Console</title>
+    <link rel="stylesheet" href="style.css" />
+  </head>
+  <body>
+    <header class="bar">
+      <div>
+        <h1>Outreach</h1>
+        <p class="sub" id="summary">Loading…</p>
+      </div>
+      <div class="bar-actions">
+        <button class="ghost" id="refresh" type="button" aria-label="Refresh">Refresh</button>
+        <button class="danger" id="stop-all" type="button">Stop all sending</button>
+      </div>
+    </header>
+
+    <main>
+      <section class="panel" aria-labelledby="next-title">
+        <div class="panel-head">
+          <h2 id="next-title">Next 24 hours</h2>
+          <span class="hint">Everything that will leave, what is holding it, and the one control that stops it.</span>
+        </div>
+        <ol class="timeline" id="timeline"></ol>
+      </section>
+
+      <div class="columns">
+        <section class="panel" aria-labelledby="approvals-title">
+          <div class="panel-head"><h2 id="approvals-title">Waiting for your approval</h2></div>
+          <ul class="cards" id="approvals"></ul>
+        </section>
+        <section class="panel" aria-labelledby="review-title">
+          <div class="panel-head"><h2 id="review-title">Needs a human</h2></div>
+          <ul class="cards" id="review"></ul>
+        </section>
+        <section class="panel" aria-labelledby="tasks-title">
+          <div class="panel-head"><h2 id="tasks-title">Your manual touches</h2></div>
+          <ul class="cards" id="tasks"></ul>
+        </section>
+      </div>
+
+      <section class="panel" aria-labelledby="campaigns-title">
+        <div class="panel-head"><h2 id="campaigns-title">Campaigns</h2></div>
+        <ul class="campaigns" id="campaigns"></ul>
+      </section>
+    </main>
+
+    <div class="toast" id="toast" role="status" aria-live="polite"></div>
+    <template id="empty"><li class="empty"></li></template>
+    <script src="app.js"></script>
+  </body>
+</html>

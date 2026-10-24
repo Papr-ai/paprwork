@@ -1,0 +1,18 @@
+{
+  "name": "@splitin/outreach-app-papr",
+  "version": "0.0.0",
+  "private": true,
+  "description": "Papr Work bundle: operator console mini-app, worker job and agent skill for the outreach engine.",
+  "license": "MIT",
+  "type": "module",
+  "scripts": {
+    "typecheck": "tsc --noEmit -p tsconfig.json"
+  },
+  "devDependencies": {
+    "@splitin/outreach-contracts": "0.0.0",
+    "@splitin/outreach-core": "0.0.0",
+    "@splitin/outreach-fakes": "0.0.0",
+    "@splitin/outreach-server": "0.0.0",
+    "@splitin/outreach-store-sqlite": "0.0.0"
+  }
+}

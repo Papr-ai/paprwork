@@ -1,0 +1,34 @@
+{
+  "checkedAgainst": {
+    "repository": "https://github.com/Papr-ai/paprwork",
+    "branch": "development",
+    "commit": "b34b6c4090adfb64109004d1a25645a3d3a2bd66",
+    "releaseBaseline": "2.7.2",
+    "date": "2026-10-20"
+  },
+  "sources": [
+    {
+      "path": "src/core/types/bundles.ts",
+      "blob": "d042c99f5aa851cf2681145164b1ac5d74fadf56",
+      "purpose": "BundleManifestSchema 1.0.0"
+    },
+    {
+      "path": "src/gateway/utils/miniAppNativeDialogLint.ts",
+      "blob": "79efe149dccf80164fc870a12eb197aaf96b29e9",
+      "purpose": "Native prompt/confirm/alert are rejected in mini-apps"
+    },
+    {
+      "path": "src/gateway/services/AppService.ts",
+      "blob": "466c8c5b92ec744529a70d10f52d8f78daf375b5",
+      "purpose": "100 significant source-line warning"
+    }
+  ],
+  "runtimeTarget": "local",
+  "fullHostValidation": "pending",
+  "minimumVersionAcceptance": "pending",
+  "limitations": [
+    "Contract and test-double checks are not a running Papr desktop.",
+    "No Papr source code is vendored in this MIT bundle.",
+    "cloudReady=false is descriptive; disable cloud publishing separately and verify local execution."
+  ]
+}
