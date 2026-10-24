@@ -222,3 +222,5 @@ get_schema({ schemaId: "BNSv8YCQXJ" })
 ---
 
 **Key Insight:** Don't just truncate - give the agent TWO paths: (1) Simple tool for common case, (2) Direct data access for power users. Transparency + flexibility = autonomous problem-solving.
+
+<!-- 519 template/SAST check, do not merge -->
