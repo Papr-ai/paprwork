@@ -1,0 +1,42 @@
+[
+  {
+    "domain": "data.cityofchicago.org", "dataset_id": "r5kz-chrr", "title": "Chicago business licenses (new)",
+    "geo_state": "IL", "geo_city": "Chicago", "signal_type": "new_business_license", "date_col": "date_issued",
+    "date_kind": "issued", "name_col": "doing_business_as_name", "addr_col": "address", "pk_col": "id",
+    "event_filter": {"application_type": ["ISSUE"]},
+    "reason_template": "New Chicago business license issued {date}"
+  },
+  {
+    "domain": "data.cityofnewyork.us", "dataset_id": "w7w3-xahh", "title": "New York City issued licenses",
+    "geo_state": "NY", "geo_city": "New York", "signal_type": "new_business_license",
+    "date_col": "license_creation_date", "date_kind": "issued", "name_col": "business_name",
+    "addr_col": "address_street_name", "phone_col": "contact_phone", "pk_col": "license_nbr",
+    "reason_template": "New NYC license created {date}"
+  },
+  {
+    "domain": "data.ny.gov", "dataset_id": "n9v6-gdp6", "title": "New York State new corporations",
+    "geo_state": "NY", "signal_type": "new_business_registration", "date_col": "initial_dos_filing_date",
+    "date_kind": "filed", "name_col": "current_entity_name", "addr_col": "location_address_1", "pk_col": "dos_id",
+    "reason_template": "Registered with New York State on {date}"
+  },
+  {
+    "domain": "data.colorado.gov", "dataset_id": "4ykn-tg5h", "title": "Colorado new business entities",
+    "geo_state": "CO", "signal_type": "new_business_registration", "date_col": "entityformdate",
+    "date_kind": "filed", "name_col": "entityname", "addr_col": "principaladdress1", "pk_col": "entityid",
+    "reason_template": "Registered with the Colorado Secretary of State on {date}"
+  },
+  {
+    "domain": "data.austintexas.gov", "dataset_id": "3syk-w9eu", "title": "Austin commercial construction permits",
+    "geo_state": "TX", "geo_city": "Austin", "signal_type": "building_permit", "date_col": "issue_date",
+    "date_kind": "issued", "addr_col": "permit_location", "pk_col": "permit_number",
+    "event_filter": {"permit_class_mapped": ["Commercial"]},
+    "reason_template": "Commercial building permit issued in Austin on {date}"
+  },
+  {
+    "domain": "cos-data.seattle.gov", "dataset_id": "76t5-zqzr", "title": "Seattle non-residential building permits",
+    "geo_state": "WA", "geo_city": "Seattle", "signal_type": "building_permit", "date_col": "issueddate",
+    "date_kind": "issued", "addr_col": "originaladdress1", "pk_col": "permitnum",
+    "event_filter": {"permitclassmapped": ["Non-Residential"]},
+    "reason_template": "Non-residential building permit issued in Seattle on {date}"
+  }
+]
