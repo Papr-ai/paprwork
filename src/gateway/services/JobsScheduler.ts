@@ -38,28 +38,47 @@ export class JobsScheduler {
   private backupTimer: ReturnType<typeof setInterval> | null = null;
   private wakeTimer: ReturnType<typeof setTimeout> | null = null;
   private runningLeases: Set<string> = new Set();
+  private stopped = false;
+  private inflightTicks: Set<Promise<void>> = new Set();
 
   start(): void {
     if (this.backupTimer) {
       return;
     }
+    this.stopped = false;
     this.backupTimer = setInterval(() => {
-      void this.tick();
+      void this.trackedTick();
     }, JobsScheduler.BACKUP_POLL_MS);
-    void this.tick();
+    void this.trackedTick();
     console.log("[JobsScheduler] Started (wake + backup poll)");
   }
 
   /** Call after job schedule mutations so the next `setTimeout` wake is refreshed. */
   requestReschedule(): void {
-    void this.tick();
+    void this.trackedTick();
   }
 
   async tickNow(): Promise<void> {
-    await this.tick();
+    await this.trackedTick();
+  }
+
+  /** Resolves once every tick already started has finished (used after stop()). */
+  async drain(): Promise<void> {
+    while (this.inflightTicks.size > 0) {
+      await Promise.allSettled([...this.inflightTicks]);
+    }
+  }
+
+  private trackedTick(): Promise<void> {
+    const p = this.tick().finally(() => {
+      this.inflightTicks.delete(p);
+    });
+    this.inflightTicks.add(p);
+    return p;
   }
 
   stop(): void {
+    this.stopped = true;
     if (this.backupTimer) {
       clearInterval(this.backupTimer);
       this.backupTimer = null;
@@ -166,7 +185,7 @@ export class JobsScheduler {
     );
     this.wakeTimer = setTimeout(() => {
       this.wakeTimer = null;
-      void this.tick();
+      void this.trackedTick();
     }, delay);
   }
 
@@ -175,6 +194,9 @@ export class JobsScheduler {
     const { waitForWorkspaceReady } = await import("./workspaceReadiness.js");
     await waitForWorkspaceReady();
     timer.mark("workspaceReady");
+    if (this.stopped) {
+      return;
+    }
 
     const jobsService = getJobsService();
     await jobsService.initialize();
@@ -424,8 +446,13 @@ export function startJobsScheduler(): void {
   scheduler.start();
 }
 
-/** Tests: stop timers and drop the singleton so a tick can't outlive the test's temp workspace. */
-export function resetJobsSchedulerForTests(): void {
-  jobsSchedulerInstance?.stop();
+/** Tests: stop timers, wait for any tick already running, and drop the singleton so a tick can't outlive the test's temp workspace. */
+export async function resetJobsSchedulerForTests(): Promise<void> {
+  const scheduler = jobsSchedulerInstance;
   jobsSchedulerInstance = null;
+  if (!scheduler) {
+    return;
+  }
+  scheduler.stop();
+  await scheduler.drain();
 }
