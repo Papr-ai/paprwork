@@ -14,6 +14,7 @@ import { formatCatalogUpdated, getCatalogByline } from "../../utils/communityCat
 import { DropGlyph } from "./HomeTiles";
 import { DefaultCover } from "./DefaultCover";
 import { catalogCoverVideoUrl, viaDesktopMedia } from "../../utils/catalogPreviewUrl";
+import { mediaForScheme, useColorScheme } from "../../utils/catalogScheme";
 import "./CatalogAppDetails.css";
 
 export function catalogKeyNames(entry: CommunityCatalogEntry): string[] {
@@ -53,7 +54,7 @@ export function CatalogBanner({ entry, coverUrl, autoPlay = false }: { entry: Co
   const [failed, setFailed] = useState(false);
   // Owner-shared preview video lives next to the cover (papr-cover-video); 404 → the picture.
   const [noVideo, setNoVideo] = useState(false);
-  const videoUrl = catalogCoverVideoUrl(entry, coverUrl);
+  const videoUrl = catalogCoverVideoUrl(entry, coverUrl, useColorScheme());
   return (
     <span className="cat-banner">
       {videoUrl && coverUrl && !noVideo && !failed ? (
@@ -93,6 +94,7 @@ const mention = (name: string) => name.replace(/[^A-Za-z0-9]+/g, "");
  */
 export function CatalogAppDetails({ entry, coverUrl, hasWeb, actions, onClose, onEditPage }: Props) {
   const scroller = useRef<HTMLDivElement>(null);
+  const scheme = useColorScheme();
   const [host] = useState(pageHost);
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => { if (e.key === "Escape") onClose(); };
@@ -105,7 +107,7 @@ export function CatalogAppDetails({ entry, coverUrl, hasWeb, actions, onClose, o
   const updated = formatCatalogUpdated(entry.updatedAt);
   const installs = entry.installCount;
   const teamData = isTeamSharedVisibility(entry.visibility);
-  const steps = (entry.media ?? []).filter((m) => m.role === "gallery" && m.kind === "image" && m.url).slice(0, 3);
+  const steps = mediaForScheme(entry.media, scheme).filter((m) => m.role === "gallery" && m.kind === "image" && m.url).slice(0, 3);
   const headline = entry.headline?.trim() || entry.description;
   const facts: Array<[string, string]> = [
     ...(typeof installs === "number" && installs > 0 ? [[installs.toLocaleString(), installs === 1 ? "install" : "installs"] as [string, string]] : []),

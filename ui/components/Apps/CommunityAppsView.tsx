@@ -27,6 +27,7 @@ import { DropGlyph } from "./HomeTiles";
 import { CatalogAppDetails, CatalogBanner, catalogBy } from "./CatalogAppDetails";
 import { FeaturedBanner, pickFeaturedCatalogEntry } from "./CatalogFeatured";
 import { requestAppInfo } from "../../utils/appInfoRequest";
+import { useColorScheme } from "../../utils/catalogScheme";
 import { HomeMenu, type HomeMenuItem } from "./HomeMenu";
 import { trackEvent } from "../../lib/telemetry";
 import {
@@ -1126,7 +1127,8 @@ export function CommunityAppCard({
   const showLocalOpen = Boolean(localAppId) && Boolean(onOpen);
   const showOpenWeb = !showLocalOpen && Boolean(onOpenWeb);
   // Owner-approved cover (served by the cloud host); falls back to a gradient + droplet.
-  const coverUrl = catalogCoverUrl(entry);
+  const scheme = useColorScheme();
+  const coverUrl = catalogCoverUrl(entry, scheme);
   const icon = entry.icon?.trim().startsWith("<") ? sanitizeIcon(entry.icon.trim()) : entry.icon;
   const shown = { ...entry, icon };
   const [details, setDetails] = useState(false);

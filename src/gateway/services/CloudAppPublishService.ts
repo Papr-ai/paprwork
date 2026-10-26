@@ -111,6 +111,7 @@ export function sharedCoverCatalogFields(appId: string): { catalogMedia: Catalog
         videoUrl?: string;
         videoObjectKey?: string;
         gallery?: { objectKey?: string; caption?: string }[];
+        dark?: { objectKey?: string; videoObjectKey?: string; gallery?: { objectKey?: string; caption?: string }[] };
       })
     | null;
   const media: CatalogMediaItem[] = [];
@@ -121,8 +122,16 @@ export function sharedCoverCatalogFields(appId: string): { catalogMedia: Catalog
   } else if (p?.objectKey) {
     media.push({ kind: "image", role: "cover", objectKey: p.objectKey });
   }
+  // Light first (older clients and the web page read the first cover); dark items carry scheme "dark".
+  const d = p?.kind === "video" ? p.dark : undefined;
+  if (d?.videoObjectKey && d.objectKey) {
+    media.push({ kind: "video", role: "cover", scheme: "dark", objectKey: d.videoObjectKey, posterObjectKey: d.objectKey });
+  }
   for (const g of p?.kind === "video" && Array.isArray(p.gallery) ? p.gallery : []) {
     if (g?.objectKey) media.push({ kind: "image", role: "gallery", objectKey: g.objectKey, ...(g.caption ? { alt: g.caption } : {}) });
+  }
+  for (const g of Array.isArray(d?.gallery) ? d!.gallery! : []) {
+    if (g?.objectKey) media.push({ kind: "image", role: "gallery", scheme: "dark", objectKey: g.objectKey, ...(g.caption ? { alt: g.caption } : {}) });
   }
   return { catalogMedia: media };
 }

@@ -26,7 +26,7 @@ const category = (e: DiscoverEntry) => e.catalogCategory?.trim() || OTHER;
 const httpsUrl = (u?: string | null) => (u && /^https:\/\/\S+$/.test(u) ? u : null);
 
 function cover(e: DiscoverEntry): { image: string | null; video: string | null } {
-  const c = e.catalogMedia?.find((m) => m?.role === "cover");
+  const c = e.catalogMedia?.find((m) => m?.role === "cover" && m.scheme !== "dark");
   if (!c) return { image: null, video: null };
   if (c.kind === "video") return { image: httpsUrl(c.posterUrl), video: httpsUrl(c.url) };
   return { image: httpsUrl(c.url), video: null };
@@ -103,7 +103,7 @@ function details(e: DiscoverEntry, me?: string): string {
     ...(updated ? [[updated, "updated"] as [string, string]] : []),
     ["Web", "also runs on"],
   ];
-  const shots = (e.catalogMedia ?? []).filter((m) => m?.role === "gallery" && m.kind === "image" && httpsUrl(m.url));
+  const shots = (e.catalogMedia ?? []).filter((m) => m?.role === "gallery" && m.scheme !== "dark" && m.kind === "image" && httpsUrl(m.url));
   return `<article class="page" itemscope itemtype="https://schema.org/SoftwareApplication">
 <section class="hero"><div class="hero__media">${banner(e, { video: true })}</div>
 <div class="id">${dropGlyph(e, 88)}<div class="id__t"><h1 itemprop="name">${esc(name(e))}</h1>${e.catalogHeadline?.trim() ? `<p>${esc(e.catalogHeadline.trim())}</p>` : ""}</div>

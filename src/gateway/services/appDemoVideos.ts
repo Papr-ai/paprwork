@@ -563,6 +563,13 @@ export interface SharedGalleryItem {
   caption: string;
 }
 
+/** The same film and screens made for dark mode (optional; captions are shared with the light set). */
+export interface SharedDarkSet {
+  objectKey: string;
+  videoObjectKey: string;
+  gallery: SharedGalleryItem[];
+}
+
 export interface SharedVideoPointer extends SharedCoverPointer {
   kind: "video";
   videoUrl: string;
@@ -570,6 +577,8 @@ export interface SharedVideoPointer extends SharedCoverPointer {
   videoObjectKey?: string;
   /** Gallery screens the owner kept, in order (details page). */
   gallery?: SharedGalleryItem[];
+  /** Dark-mode set; viewers in dark mode see it instead of the light one. */
+  dark?: SharedDarkSet;
 }
 
 export function sharedCoverKind(appId: string): "video" | "image" | null {
@@ -604,6 +613,22 @@ export async function shareDemoVideo(
     const up = await upload({ appId, filePath: copy, fileName: `screen-${gallery.length + 1}.jpg`, mime: "image/jpeg" });
     gallery.push({ appFileId: up.id, objectKey: up.objectKey, url: up.url, caption: s.caption });
   }
+  // Dark set: <appId>.dark.mp4 / .dark.jpg / .dark.s1..n.jpg (one screen per shown gallery item).
+  let dark: SharedDarkSet | undefined;
+  const darkVideo = path.join(demoDir(), `${appId}.dark.mp4`);
+  const darkPoster = path.join(demoDir(), `${appId}.dark.jpg`);
+  if (fs.existsSync(darkVideo) && fs.existsSync(darkPoster)) {
+    const dv = await upload({ appId, filePath: darkVideo, fileName: "preview-dark.mp4", mime: "video/mp4" });
+    const di = await upload({ appId, filePath: darkPoster, fileName: "preview-dark.jpg", mime: "image/jpeg" });
+    const dg: SharedGalleryItem[] = [];
+    for (const [n, item] of gallery.entries()) {
+      const f = path.join(demoDir(), `${appId}.dark.s${n + 1}.jpg`);
+      if (!fs.existsSync(f)) break;
+      const up = await upload({ appId, filePath: f, fileName: `screen-dark-${n + 1}.jpg`, mime: "image/jpeg" });
+      dg.push({ appFileId: up.id, objectKey: up.objectKey, url: up.url, caption: item.caption });
+    }
+    dark = { objectKey: di.objectKey, videoObjectKey: dv.objectKey, gallery: dg };
+  }
   const pointer: SharedVideoPointer = {
     kind: "video",
     appFileId: i.id,
@@ -613,6 +638,7 @@ export async function shareDemoVideo(
     videoObjectKey: v.objectKey,
     videoUrl: v.url,
     ...(gallery.length ? { gallery } : {}),
+    ...(dark ? { dark } : {}),
   };
   fs.writeFileSync(sharedCoverPointerPath(appId), `${JSON.stringify(pointer, null, 2)}\n`);
   fs.rmSync(sharedCoverPath(appId), { force: true });

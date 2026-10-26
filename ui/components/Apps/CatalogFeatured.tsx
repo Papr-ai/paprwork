@@ -10,6 +10,7 @@ import { DropGlyph } from "./HomeTiles";
 import { catalogBy } from "./CatalogAppDetails";
 import { DemoVideo } from "./DemoVideo";
 import { catalogCoverVideoUrl } from "../../utils/catalogPreviewUrl";
+import { useColorScheme } from "../../utils/catalogScheme";
 import "./CatalogFeatured.css";
 
 /** Publisher headline first, then most installs. Your own apps compete like any other. */
@@ -32,7 +33,7 @@ export function FeaturedBanner({ entry, coverUrl, onOpen, actions, children }: P
   const [shot, setShot] = useState(Boolean(coverUrl));
   // The owner's shared preview loop plays in the banner; no video (or 404) → the picture.
   const [noVideo, setNoVideo] = useState(false);
-  const videoUrl = catalogCoverVideoUrl(entry, coverUrl);
+  const videoUrl = catalogCoverVideoUrl(entry, coverUrl, useColorScheme());
   const headline = entry.headline?.trim() || entry.description;
   return (
     <div className="cat-feat-wrap">
