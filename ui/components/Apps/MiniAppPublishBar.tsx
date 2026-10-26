@@ -89,6 +89,7 @@ import {
   type SharingPatch,
 } from "../../utils/shareSheetModel";
 import { PublishBarOverflowMenu } from "./PublishBarOverflowMenu";
+import { updatesPausedMessage } from "../../../src/core/utils/updatesPausedMessage";
 import { AppWorkspacePanelMenu } from "./AppWorkspacePanelMenu";
 import {
   WebSyncStatusDot,
@@ -117,6 +118,7 @@ import type { CloudPublishReadinessReport } from "../../../src/core/types/cloudA
 import { linkedDepItems } from "./ShareLinkedDeps";
 import { PreviewUrlRow } from "./PreviewUrlRow";
 import { PublishInfoSheet } from "./PublishInfoSheet";
+import { APP_INFO_REQUEST_EVENT, takeAppInfoRequest } from "../../utils/appInfoRequest";
 import { pendingCommunity } from "../../utils/galleryGate";
 import { galleryProgress, useDemoStatus } from "../../utils/appDemo";
 import { APP_COVER_CHANGED_EVENT } from "../../utils/appCover";
@@ -348,6 +350,15 @@ export function MiniAppPublishBar({
   const [publishInfoOpen, setPublishInfoOpen] = useState(false);
   /** More → App info: edit name, description and cover any time. */
   const [appInfoOpen, setAppInfoOpen] = useState<false | "details" | "gallery">(false);
+  // Discover → "Edit page" on an app you own lands here, on App info.
+  useEffect(() => {
+    if (takeAppInfoRequest(appId)) setAppInfoOpen("details");
+    const on = (e: Event) => {
+      if ((e as CustomEvent<{ appId?: string }>).detail?.appId === appId && takeAppInfoRequest(appId)) setAppInfoOpen("details");
+    };
+    window.addEventListener(APP_INFO_REQUEST_EVENT, on);
+    return () => window.removeEventListener(APP_INFO_REQUEST_EVENT, on);
+  }, [appId]);
   // Gallery progress rides on the status chip (no toast): "Gallery 2 of 4", then "Review gallery".
   const galleryTail = galleryProgress(useDemoStatus(appId));
   const publishInfoConfirmedRef = useRef(false);
@@ -405,6 +416,7 @@ export function MiniAppPublishBar({
     checkStatus: webSyncCheckStatus,
     lastCheckedAt: webSyncLastCheckedAt,
     publisherUpdatesAvailable: webSyncPublisherUpdatesAvailableRaw,
+    updatesPaused: webSyncUpdatesPausedRaw,
     refresh: webSyncRefresh,
   } = useAppCloudSyncStatus(appId, {
     enabled: workspaceMode === "preview",
@@ -977,6 +989,7 @@ export function MiniAppPublishBar({
           hasUnproposedEdits: collabUnproposed,
           hasUnpublishedEdits: webSyncStatus?.hasLocalChanges === true,
           publisherAhead: webSyncPublisherUpdatesAvailable,
+          updatesPaused: isTrackCollaborator ? webSyncUpdatesPausedRaw : null,
           pullState: upstreamPulling
             ? "pulling"
             : webSyncState === "action_required"
@@ -1195,6 +1208,16 @@ export function MiniAppPublishBar({
       return {
         tone: upstreamNotice.tone === "ok" ? ("success" as const) : ("warn" as const),
         message: upstreamNotice.message,
+      };
+    }
+    if (isTrackCollaborator && webSyncUpdatesPausedRaw) {
+      // Final answer from the publisher's side: say why and who can fix it.
+      return {
+        tone: "warn" as const,
+        message: updatesPausedMessage(
+          webSyncUpdatesPausedRaw.reason,
+          cloudLineage?.sourceSlug ? `The publisher of ${cloudLineage.sourceSlug}` : "The publisher",
+        ),
       };
     }
     if (cloud.errorDetail && !needsDesktopAck) {
@@ -1609,6 +1632,11 @@ export function MiniAppPublishBar({
       case "get_updates":
         void handleUpstreamPull();
         return;
+      case "recheck_access":
+        // Re-asks the server once. If access is back, this pulls and clears the
+        // pause; if not, the notice says why (from the gateway's 403 message).
+        void handleUpstreamPull().finally(() => void webSyncRefresh(true));
+        return;
       case "update_and_repropose":
         void handleUpdateAndRepropose();
         return;
@@ -1897,6 +1925,7 @@ export function MiniAppPublishBar({
                         ? {
                             glyph:
                               copyBar.chip.action === "get_updates" ||
+                              copyBar.chip.action === "recheck_access" ||
                               copyBar.chip.action === "update_and_repropose"
                                 ? ("down" as const)
                                 : copyBar.chip.action === "propose"

@@ -23,8 +23,11 @@ through this process. `add()` is idempotent — content-addressed, so re-running
 a job returns the existing id instead of storing a second copy.
 
 Env (injected by the job runner):
-  APP_ID           — mini-app this job belongs to (from job.appIds)
+  PAPR_APP_ID      — mini-app this job belongs to (from job.appIds; APP_ID also read)
   PAPR_GATEWAY_URL — gateway base, defaults to http://127.0.0.1:18789
+  PAPR_FILES_PROXY_URL + PAPR_DB_PROXY_TOKEN — cloud sandbox runs only: there
+    is no desktop gateway in the pod, so url()/local_path() resolve file ids
+    through the memory server with the run's signed grant instead.
 """
 from __future__ import annotations
 
@@ -52,7 +55,11 @@ def _gateway() -> str:
 
 
 def _app_id(explicit: str | None) -> str:
-    app_id = explicit or os.environ.get("APP_ID", "")
+    app_id = (
+        explicit
+        or os.environ.get("PAPR_APP_ID", "")
+        or os.environ.get("APP_ID", "")
+    )
     if not app_id:
         raise PaprFilesError(
             "No app id. This job is not linked to a mini-app — set appIds on the "
@@ -133,7 +140,38 @@ def add(
     return str(file_id)
 
 
+def _cloud_proxy() -> tuple[str, str] | None:
+    """(files proxy url, token) when running in the cloud sandbox."""
+    base = os.environ.get("PAPR_FILES_PROXY_URL", "").strip()
+    token = os.environ.get("PAPR_DB_PROXY_TOKEN", "").strip()
+    return (base.rstrip("/"), token) if base and token else None
+
+
+def _resolve_via_cloud(base: str, token: str, file_id: str) -> dict[str, Any]:
+    request = urllib.request.Request(
+        f"{base}/url",
+        data=json.dumps({"id": file_id}).encode("utf-8"),
+        headers={"Content-Type": "application/json", "Authorization": f"Bearer {token}"},
+        method="POST",
+    )
+    try:
+        with urllib.request.urlopen(request, timeout=CALL_TIMEOUT_SECONDS) as response:
+            return json.loads(response.read().decode("utf-8"))
+    except urllib.error.HTTPError as err:
+        detail = err.read().decode("utf-8", errors="replace")
+        try:
+            detail = json.loads(detail).get("detail", detail)
+        except (ValueError, AttributeError):
+            pass
+        raise PaprFilesError(f"file url failed ({err.code}): {detail}") from err
+    except urllib.error.URLError as err:
+        raise PaprFilesError(f"Cannot reach the Papr files proxy ({err.reason})") from err
+
+
 def _resolve(file_id: str, app_id: str | None) -> dict[str, Any]:
+    cloud = _cloud_proxy()
+    if cloud:
+        return _resolve_via_cloud(cloud[0], cloud[1], file_id)
     return _post(
         "/api/files/url",
         {"appId": _app_id(app_id), "id": file_id},

@@ -1,6 +1,7 @@
 import { gatewayBackgroundBudget } from "../../gateway/services/gatewayBackgroundBudget.js";
 import { createTool } from "@mastra/core/tools";
 import { z } from "zod";
+import { isPlatformInjectedEnvKey } from "../utils/platformInjectedEnvKeys.js";
 import { RequirementItemSchema } from "../types/bundles.js";
 import {
   JobRequiredKeysSchema,
@@ -1339,6 +1340,10 @@ async function scanJobSourceForEnvKeyAntiPattern(
     "NODE_ENV",
   ]);
 
+  // Set by the job runner itself (desktop or cloud), never a Settings key.
+  const isRuntimeEnvKey = (name: string): boolean =>
+    inheritedEnvKeys.has(name) || isPlatformInjectedEnvKey(name);
+
   const looksLikeApiKey = (name: string): boolean => {
     const upper = name.toUpperCase();
     return /(?:KEY|TOKEN|SECRET|PASSWORD|CREDENTIAL|AUTH|_URL$)/.test(upper);
@@ -1377,7 +1382,8 @@ async function scanJobSourceForEnvKeyAntiPattern(
         for (const pattern of pyPatterns) {
           let match: RegExpExecArray | null;
           while ((match = pattern.exec(content)) !== null) {
-            if (!inheritedEnvKeys.has(match[1]) && looksLikeApiKey(match[1])) {
+            if (isRuntimeEnvKey(match[1])) continue;
+            if (looksLikeApiKey(match[1])) {
               warnings.push(
                 `${relPath}: \`${match[0]})\` — "${match[1]}" is a custom key from Settings and is NOT available as an env var. ` +
                   `Fix: pass it via CLI arg in the job command using \${${match[1]}} and use argparse in the script.`,
@@ -1394,7 +1400,8 @@ async function scanJobSourceForEnvKeyAntiPattern(
           let match: RegExpExecArray | null;
           while ((match = pattern.exec(content)) !== null) {
             const key = match[1] || match[2];
-            if (!inheritedEnvKeys.has(key) && looksLikeApiKey(key)) {
+            if (isRuntimeEnvKey(key)) continue;
+            if (looksLikeApiKey(key)) {
               warnings.push(
                 `${relPath}: \`${match[0]}\` — "${key}" is a custom key from Settings and is NOT available as an env var. ` +
                   `Fix: add it to requiredKeys and read from env; do not pass it as a CLI argument.`,
@@ -2642,7 +2649,11 @@ If jobs have Turso cloud databases, set deleteTursoDatabases: true to delete tho
         items.push(`Published at: ${preview.shareUrl ?? "apps.papr.ai"}`);
       }
       for (const db of preview.linkedRegistryDatabases) {
-        if (db.soleLinker) {
+        if (db.publisherShared) {
+          items.push(
+            `Registry DB (team shared, owned by the publisher — kept, cannot be deleted): ${db.label} (${db.dbId})`,
+          );
+        } else if (db.soleLinker) {
           items.push(
             `Registry DB (sole linker, optional delete): ${db.label} (${db.dbId})`,
           );
@@ -2652,8 +2663,13 @@ If jobs have Turso cloud databases, set deleteTursoDatabases: true to delete tho
           );
         }
       }
+      if (preview.localUninstallOnly) {
+        items.unshift(
+          "Scope: remove from this device only (you are not the publisher). Cloud app, shared databases and the publisher's jobs are not changed.",
+        );
+      }
       if (preview.linkedJobs.length > 0) {
-        items.push(`Linked jobs (${preview.linkedJobs.length}): ${preview.linkedJobs.map(j => j.name).join(", ")}`);
+        items.push(`Local copies of linked jobs (${preview.linkedJobs.length}): ${preview.linkedJobs.map(j => j.name).join(", ")}`);
       }
       if (preview.tursoDbCount > 0) {
         items.push(`Job Turso cloud databases: ${preview.tursoDbCount}`);

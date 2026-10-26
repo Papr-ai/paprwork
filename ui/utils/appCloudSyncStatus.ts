@@ -1109,6 +1109,8 @@ export interface RemoteCodeCheckSnapshot {
   publisherUpdatesAvailable?: boolean;
   publisherLiveRevision?: string | null;
   storedUpstreamRevision?: string | null;
+  /** Publisher stopped sharing this copy (no access / code sharing off). */
+  updatesPaused?: { reason: string; at?: string } | null;
   /** Remote commit arrived but auto-pull is deferred (gateway appRepoPendingUpdate). */
   pendingUpdate?: {
     commitSha: string;

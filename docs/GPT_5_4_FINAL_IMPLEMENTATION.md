@@ -89,7 +89,7 @@ fullStream = createPiCodexStreamWithToolLoop(streamSimple, finalModel, ...);
 |------|--------|
 | `src/gateway/services/AgentService.ts` | Added manual model creation logic |
 | `src/gateway/utils/modelNormalizer.ts` | Re-added GPT-5.4 to OAuth models list |
-| `tests/gpt-5-4-integration.test.ts` | Updated OAuth tests (21/21 passing) |
+| `tests/providers/gpt-5-4-integration.test.ts` | Updated OAuth tests (21/21 passing) |
 | `docs/GPT_5_4_INTEGRATION.md` | Updated OAuth availability status |
 | `docs/GPT_5_4_OAUTH_MANUAL_MODEL_FIX.md` | Documented the fix |
 | `CLAUDE.md` | Updated availability section |
@@ -158,7 +158,7 @@ When `@mariozechner/pi-ai` eventually adds GPT-5.4:
 
 **Testing:**
 ```bash
-npm test tests/gpt-5-4-integration.test.ts
+npm test tests/providers/gpt-5-4-integration.test.ts
 # 21/21 tests passing ✅
 ```
 

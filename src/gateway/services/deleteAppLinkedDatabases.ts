@@ -24,6 +24,8 @@ export interface LinkedRegistryDbPreview {
   tursoShortName: string;
   sharedWithApps: Array<{ appId: string; title: string }>;
   soleLinker: boolean;
+  /** Publisher's team shared database — only the publisher may delete it. */
+  publisherShared: boolean;
 }
 
 export interface DeleteRegistryDatabasesResult {
@@ -124,8 +126,15 @@ export async function buildLinkedRegistryDbPreview(
       appId: otherAppId,
       title: resolveAppTitle(otherAppId),
     }));
+    const publisherShared = shouldBlockTursoDeleteForSharedPrimary(
+      record.tursoShortName,
+    );
+    // A collaborator's local copy is the only *local* linker of the publisher's
+    // shared DB, but it is not theirs to delete — never offer it as sole-linker.
     const soleLinker =
-      referencingAppIds.length === 1 && referencingAppIds[0] === appId;
+      !publisherShared &&
+      referencingAppIds.length === 1 &&
+      referencingAppIds[0] === appId;
 
     previews.push({
       dbId: record.dbId,
@@ -135,6 +144,7 @@ export async function buildLinkedRegistryDbPreview(
       tursoShortName: record.tursoShortName,
       sharedWithApps,
       soleLinker,
+      publisherShared,
     });
   }
 

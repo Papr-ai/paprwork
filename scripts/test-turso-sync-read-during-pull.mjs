@@ -10,6 +10,8 @@
  *   npm run build:gateway && npm run test:turso-read-during-pull
  */
 
+// Must stay first: runs in a temp workspace, never the real ~/Papr.
+import "./lib/isolateHome.mjs";
 import { connect } from "@tursodatabase/sync";
 import * as fs from "node:fs";
 import * as os from "node:os";

@@ -16,6 +16,14 @@ const PLATFORM_INJECTED_ENV_KEYS = new Set<string>([
   PAPR_APP_DIR_ENV,
   "PAPR_DB_PROXY_URL",
   "PAPR_DB_PROXY_TOKEN",
+  // Job runner (desktop CommandJobExecutor / cloud _resolve_job_env).
+  "PAPR_APP_ID",
+  "APP_ID",
+  "PAPR_JOB_ID",
+  "PAPR_DB_MODE",
+  "PAPR_FILES_PROXY_URL",
+  "APP_DB",
+  "APP_DB_ALIAS",
 ]);
 
 /** True when Papr injects the env var at runtime — not a Settings / cloud vault key. */
@@ -27,7 +35,8 @@ export function isPlatformInjectedEnvKey(name: string): boolean {
   if (PLATFORM_INJECTED_ENV_KEYS.has(trimmed)) {
     return true;
   }
-  return trimmed.startsWith("PAPR_CALLER_");
+  // PAPR_CALLER_* (verified caller) and PAPR_DB_<ALIAS>[_MODE|_ALIAS] (linked DBs).
+  return trimmed.startsWith("PAPR_CALLER_") || trimmed.startsWith("PAPR_DB_");
 }
 
 /** Drop platform-injected env names from vault key lists. */

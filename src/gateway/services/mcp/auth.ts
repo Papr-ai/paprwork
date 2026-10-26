@@ -90,10 +90,11 @@ export function createAuth0Verifier(cfg: McpEndpointConfig, exchange?: McpSessio
   };
 }
 
-export function protectedResourceMetadata(cfg: McpEndpointConfig): Record<string, unknown> {
+export function protectedResourceMetadata(cfg: McpEndpointConfig, authorizationServer?: string): Record<string, unknown> {
   return {
     resource: cfg.resourceUrl,
-    authorization_servers: [cfg.issuer],
+    // The OAuth facade (oauthFacade.ts) when enabled, else Auth0 directly.
+    authorization_servers: [authorizationServer ?? cfg.issuer],
     scopes_supported: ["openid", "profile", "email", "offline_access"],
     bearer_methods_supported: ["header"],
     resource_name: "Papr",
@@ -102,8 +103,8 @@ export function protectedResourceMetadata(cfg: McpEndpointConfig): Record<string
 }
 
 /** Serves RFC 9728 metadata at both the path-suffixed and root well-known URLs. */
-export function registerProtectedResourceMetadata(app: Express, cfg: McpEndpointConfig): void {
-  const body = protectedResourceMetadata(cfg);
+export function registerProtectedResourceMetadata(app: Express, cfg: McpEndpointConfig, authorizationServer?: string): void {
+  const body = protectedResourceMetadata(cfg, authorizationServer);
   const send = (_req: Request, res: Response): void => {
     res.setHeader("Cache-Control", "public, max-age=300");
     res.setHeader("Access-Control-Allow-Origin", "*");

@@ -226,6 +226,24 @@ function resolveIcon(files: AppFile[]): string | undefined {
   return undefined;
 }
 
+export type InstallDeniedReason = "no_access" | "code_access_off" | "share_mode" | "denied";
+
+/**
+ * Why memory refused (403). Newer servers send X-Papr-Denied-Reason; older ones
+ * only the message. 401 (expired sign-in) is not a denial — never pause on it.
+ */
+export function installDeniedReason(
+  response: { status: number; headers?: { get(name: string): string | null } },
+  body: string,
+): InstallDeniedReason | undefined {
+  if (response.status !== 403) return undefined;
+  const header = response.headers?.get("x-papr-denied-reason")?.trim();
+  if (header === "no_access" || header === "code_access_off" || header === "share_mode") return header;
+  if (/code install is not enabled/i.test(body)) return "code_access_off";
+  if (/no (read )?access/i.test(body)) return "no_access";
+  return "denied";
+}
+
 export class CloudAppInstallService {
   async prepareInstall(
     input: CloudAppInstallInput,
@@ -242,8 +260,9 @@ export class CloudAppInstallService {
 
     if (!response.ok) {
       const body = await response.text();
-      throw new Error(
-        `Cloud install prepare failed (${response.status}): ${body.slice(0, 200)}`,
+      throw Object.assign(
+        new Error(`Cloud install prepare failed (${response.status}): ${body.slice(0, 200)}`),
+        { status: response.status, deniedReason: installDeniedReason(response, body) },
       );
     }
 

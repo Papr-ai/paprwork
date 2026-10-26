@@ -15,6 +15,7 @@ import { DiagnosticOperation } from "../../../core/utils/performanceDiagnostics.
  */
 
 import type { AssistantMessageEvent } from "@mariozechner/pi-ai";
+import { adoptRefreshedToken, isOAuthTokenRejection } from "./oauthRevokedRetry.js";
 import {
   applyForcedTextOnlyWrapUpStep,
   applyPlanContinuationStep,
@@ -509,7 +510,11 @@ export async function* createPiCodexStreamWithToolLoop(
    * Which credential this turn goes out with, so a refusal can name it. Only
    * the provider is worth passing — the kind is read off the token below.
    */
-  credential?: { provider?: string },
+  credential?: {
+    provider?: string;
+    /** Returns the current token when it differs from the one in use. */
+    refreshAuth?: () => Promise<string | null>;
+  },
 ): AsyncGenerator<OurChunk> {
   const context = {
     ...initialContext,
@@ -740,6 +745,7 @@ export async function* createPiCodexStreamWithToolLoop(
 
     let stepStreamCompleted = false;
     let rateLimitAttempt = 0;
+    let authRetried = false;
 
     while (!stepStreamCompleted) {
       toolCallsThisTurn.length = 0;
@@ -749,6 +755,7 @@ export async function* createPiCodexStreamWithToolLoop(
 
       let capacityError: unknown | null = null;
       let shouldRetryCapacity = false;
+      let shouldRetryAuth = false;
 
       const requestTrace = new DiagnosticOperation("model", "provider-request", {
         chatId: toolContext?.chatId, provider: credential?.provider,
@@ -813,6 +820,14 @@ export async function* createPiCodexStreamWithToolLoop(
             if (event.type === "error") {
               const apiError =
                 (event as { error?: unknown }).error ?? event;
+              if (!authRetried && isOAuthTokenRejection(apiError)) {
+                authRetried = true;
+                if (await adoptRefreshedToken(streamOptions, credential?.refreshAuth)) {
+                  console.warn("[PiCodexToolLoop] Token was replaced mid-turn — retrying step with the current one");
+                  shouldRetryAuth = true;
+                  break;
+                }
+              }
               const quotaChunk = quotaExhaustedChunk(apiError, activeCredential);
               if (quotaChunk) {
                 yield quotaChunk;
@@ -958,6 +973,13 @@ export async function* createPiCodexStreamWithToolLoop(
         }
       } catch (err) {
         requestFailed = true; requestTrace.error(err);
+        if (
+          !authRetried &&
+          isOAuthTokenRejection(err) &&
+          ((authRetried = true), await adoptRefreshedToken(streamOptions, credential?.refreshAuth))
+        ) {
+          shouldRetryAuth = true;
+        } else {
         const quotaChunk = quotaExhaustedChunk(err, activeCredential);
         if (quotaChunk) {
           yield quotaChunk;
@@ -976,9 +998,12 @@ export async function* createPiCodexStreamWithToolLoop(
         } else {
           throw err;
         }
+        }
       } finally {
         requestTrace.finish(requestFailed ? "error" : requestCompleted ? "completed" : "cancelled");
       }
+
+      if (shouldRetryAuth) continue;
 
       if (shouldRetryCapacity && capacityError) {
         const waitMs = computeRateLimitBackoffMs(

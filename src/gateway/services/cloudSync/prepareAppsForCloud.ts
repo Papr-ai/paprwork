@@ -12,6 +12,7 @@
  */
 
 import * as path from "path";
+import { MiniAppDistBuildError } from "../../utils/miniAppBuild.js";
 import { ensureAppRequirementsSyncedWithBackend } from "../cloudAppRequirements.js";
 
 export function appIdsFromSyncRelativePaths(
@@ -31,6 +32,10 @@ export function appIdsFromSyncRelativePaths(
 export async function prepareAppForCloudGitSync(
   paprDir: string,
   appId: string,
+  options?: {
+    /** Explicit publish: a failed dist/ build stops it. Background sync only warns. */
+    strictBuild?: boolean;
+  },
 ): Promise<void> {
   const appDir = path.join(paprDir, "apps", appId);
   try {
@@ -109,6 +114,9 @@ export async function prepareAppForCloudGitSync(
     const { buildMiniApp } = await import("../../utils/miniAppBuild.js");
     const dist = await buildMiniApp(appDir);
     if (!dist.legacy && !dist.success) {
+      // On publish, thrown past the catch-all below: shipping without dist/ makes the
+      // web app fetch every module one by one, and nobody sees why it got slow.
+      if (options?.strictBuild) throw new MiniAppDistBuildError(appId, dist.errors);
       console.warn(
         `[CloudSync] dist build failed for ${appId}:`,
         dist.errors.slice(0, 2).map((e) => e.message).join("; "),
@@ -152,6 +160,7 @@ export async function prepareAppForCloudGitSync(
     );
     void uploadAppDbConfigToCloud(paprDir, appId).catch(() => {});
   } catch (error) {
+    if (error instanceof MiniAppDistBuildError) throw error;
     console.warn(
       `[CloudSync] cloud prep skipped for ${appId}:`,
       (error as Error).message.slice(0, 120),

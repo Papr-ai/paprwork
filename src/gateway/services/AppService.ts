@@ -720,6 +720,11 @@ export class AppService {
    * Rewrites foreign dbPath pointers and persists default-job-id.txt — no file copies.
    */
   async repairHomeAndWorkspaceOnStartup(): Promise<void> {
+    // Cloud sandbox never repairs Home: it would rewrite Home's files and the run
+    // would publish them (see JobsService Home guards).
+    if (process.env.GATEWAY_MODE === "cloud_agent") {
+      return;
+    }
     try {
       const { getJobsService } = await import("./JobsService.js");
       const jobsService = getJobsService();
@@ -2592,6 +2597,19 @@ export class AppService {
               for (const jobId of link.jobIds) {
                 jobIdsInOtherApps.add(jobId);
               }
+            }
+          }
+
+          // A track install keeps the publisher's job IDs, so two local apps can
+          // ship the same job. If the registry record's appIds only name one of
+          // them, the graph says the job is exclusive and deleting that app
+          // tombstoned the other app's jobs too (#500). Count jobs bundled in any
+          // other app's jobs/ folder as shared.
+          const { listBundledAppJobIds } = await import("./cloudAppResourceIntegrity.js");
+          for (const other of await this.listApps()) {
+            if (other.id === id) continue;
+            for (const jobId of await listBundledAppJobIds(path.join(this.appsDir, other.id))) {
+              jobIdsInOtherApps.add(jobId);
             }
           }
 

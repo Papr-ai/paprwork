@@ -43,6 +43,7 @@ import { HandoffError, memoryHandoff, type CreateHandoff } from "./handoff.js";
 import { memorySessionExchange, type McpSessionExchange } from "./session.js";
 import { buildInstructions } from "./routing.js";
 import { paprIcons, registerPaprIconRoutes } from "./paprIcon.js";
+import { facadeIssuer, loadOAuthFacadeConfig, registerOAuthFacade, type OAuthFacadeConfig } from "./oauthFacade.js";
 import { allowedIn, LISTED_SUFFIX, loadListingPolicy, personalConnectorNote, splitForConnector, type ConnectorMode, type ListingPolicy } from "./listing.js";
 import { memoryAppSearch, registerSearchTool, type AppSearchFn } from "./searchTool.js";
 
@@ -345,7 +346,7 @@ export function buildMcpServer(
             ...(args.view ? { view: args.view } : {}),
           });
           return {
-            content: [{ type: "text", text: `Open Papr on your Mac: ${link.url}\n(One-time link, expires in 10 minutes. Don't have Papr? https://papr.ai/download)` }],
+            content: [{ type: "text", text: `Open Papr: ${link.url}\n(One-time link, expires in 10 minutes. Don't have Papr? https://papr.ai/download)` }],
             structuredContent: { ...link, downloadUrl: "https://papr.ai/download" },
           };
         } catch (err) {
@@ -452,6 +453,8 @@ export function registerMcpRoutes(
     listing?: ListingPolicy;
     /** null disables papr_search. */
     search?: ((caller: McpCaller) => AppSearchFn) | null;
+    /** Shared-client OAuth facade. Defaults to PAPR_MCP_OAUTH_CLIENT_ID; null disables. */
+    oauthFacade?: OAuthFacadeConfig | null;
   },
 ): McpEndpointConfig {
   const policy = opts.listing ?? loadListingPolicy();
@@ -461,9 +464,11 @@ export function registerMcpRoutes(
   const exchange = opts.exchange ?? (cfg.serviceKey ? memorySessionExchange(memoryBaseUrl, cfg.serviceKey) : undefined);
   if (!exchange) console.warn("[mcp] PAPR_MCP_SERVICE_KEY unset: using the Auth0 claims bridge (spike only).");
   // The handoff needs a memory-minted session; the claims bridge's Parse session works too.
-  const handoff = opts.handoff === null ? undefined : (opts.handoff ?? memoryHandoff(memoryBaseUrl));
+  const handoff = opts.handoff === null ? undefined : (opts.handoff ?? memoryHandoff(memoryBaseUrl, fetch, cfg.appsBaseUrl, cfg.resourceUrl));
   const searchFor = opts.search === null ? undefined : (opts.search ?? ((caller: McpCaller) => memoryAppSearch(memoryBaseUrl, caller)));
-  registerProtectedResourceMetadata(app, cfg);
+  const facade = opts.oauthFacade === null ? undefined : (opts.oauthFacade ?? loadOAuthFacadeConfig());
+  if (facade) registerOAuthFacade(app, cfg, facade);
+  registerProtectedResourceMetadata(app, cfg, facade ? facadeIssuer(cfg) : undefined);
   registerPaprIconRoutes(app);
   const bearer = requireBearerAuth({
     verifier: opts.verifier ?? createAuth0Verifier(cfg, exchange),

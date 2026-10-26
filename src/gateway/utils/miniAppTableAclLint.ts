@@ -18,7 +18,7 @@ export const TABLE_ACL_FRONTEND_RULE = "table-acl-frontend";
 export const TABLE_ACL_UNFILTERED_RULE = "table-acl-unfiltered";
 
 const ACL_SCOPED_RE =
-  /acl_read_filter\s*\(|acl_write_filter\s*\(|acl_for_caller\s*\(|\b_acl\b|:caller_id\b/;
+  /acl_read_filter\s*\(|acl_write_filter\s*\(|acl_for_caller\s*\(|acl_segment_filter\s*\(|\b_acl\b|:caller_id\b/;
 const ALL_ROWS_MARKER_RE = /(?:#|\/\/)\s*acl:\s*all-rows\b/i;
 
 export interface TableAclIssue extends ValidationIssue {
@@ -85,6 +85,7 @@ export function checkMiniAppTableAcl(
           message:
             `Backend action reads private table "${table}" without a row filter, so every ` +
             "signed-in user would see every row. Filter with papr_db.acl_read_filter() " +
+            "(or acl_segment_filter() for rows scoped by a membership table) " +
             "(acl_write_filter() for UPDATE/DELETE, acl_for_caller() on INSERT), or add " +
             "`# acl: all-rows` if returning all rows is intended.",
         });

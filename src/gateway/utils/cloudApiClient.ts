@@ -11,6 +11,7 @@ import {
   mergeCloudActingUserBody,
 } from "./cloudActingUser.js";
 import { getPaprApiKey } from "./keyResolver.js";
+import { Agent } from "undici";
 
 export function getMemoryServerBaseUrl(): string {
   return (
@@ -58,6 +59,20 @@ function prepareCloudJsonBody(
   };
 }
 
+const DEFAULT_UNDICI_HEADERS_TIMEOUT_MS = 300_000;
+const longDispatchers = new Map<number, Agent>();
+
+/** Shared undici Agent per timeout bucket (minute granularity). */
+function longRequestDispatcher(timeoutMs: number): Agent {
+  const bucket = Math.ceil(timeoutMs / 60_000) * 60_000;
+  let agent = longDispatchers.get(bucket);
+  if (!agent) {
+    agent = new Agent({ headersTimeout: bucket, bodyTimeout: bucket });
+    longDispatchers.set(bucket, agent);
+  }
+  return agent;
+}
+
 export async function cloudApiFetch(
   cloudPath: string,
   opts: CloudApiFetchOptions = {},
@@ -99,6 +114,16 @@ export async function cloudApiFetch(
       Object.assign(fetchOpts.headers as Record<string, string>, prepared.extraHeaders);
     } else if (opts.skipActingUser !== true) {
       pathWithActingUser = appendCloudActingUserQuery(cloudPath);
+    }
+    // Node's fetch (undici) aborts if response headers take > 300s
+    // (UND_ERR_HEADERS_TIMEOUT → "fetch failed"), regardless of our own
+    // timeout. Synchronous calls such as /runtime/job-run wait for the whole
+    // job, so give long requests a dispatcher whose limits match timeoutMs.
+    if (timeoutMs > DEFAULT_UNDICI_HEADERS_TIMEOUT_MS) {
+      // Node's global fetch accepts any undici Dispatcher; the npm undici
+      // types differ nominally from Node's bundled copy, hence the cast.
+      (fetchOpts as unknown as { dispatcher: unknown }).dispatcher =
+        longRequestDispatcher(timeoutMs);
     }
     return await fetch(`${getMemoryServerBaseUrl()}${pathWithActingUser}`, fetchOpts);
   } finally {

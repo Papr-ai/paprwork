@@ -50,6 +50,8 @@ export interface CopyFacts {
   busy: boolean;
   /** Owner turned proposals off (server flag). */
   proposalsClosed?: boolean;
+  /** Publisher stopped sharing this copy's code (server 403): updates paused. */
+  updatesPaused?: { reason: string } | null;
 }
 
 export interface CopyState extends CopyFacts {
@@ -67,7 +69,8 @@ export type CopyChipAction =
   | "see_decline"
   | "view_proposal"
   | "propose"
-  | "publish";
+  | "publish"
+  | "recheck_access";
 
 export interface CopyBar {
   chip: { label: string; tone: CopyTone; action: CopyChipAction | null; verb: string | null };
@@ -108,6 +111,7 @@ function resolveChip(s: CopyState): CopyBar["chip"] {
   if (s.lastPublishFailed && !onTeam) return chip("Last publish failed", "bad", "retry_publish", "Retry");
   if (linked && s.proposal === "needs_update")
     return chip("Proposal needs update", "warn", "update_and_repropose", "Update & re-propose");
+  if (linked && s.updatesPaused) return chip("Updates paused", "warn", "recheck_access", "Check again");
   if (linked && s.publisherAhead) return chip("Publisher has updates", "info", "get_updates", "Get updates");
   if (linked && s.proposal === "rejected") return chip("Proposal declined", "bad", "see_decline", "See why");
   if (linked && s.proposal === "approved") return chip("Proposal accepted", "ok", "view_proposal", "View");

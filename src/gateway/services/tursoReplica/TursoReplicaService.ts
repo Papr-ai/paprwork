@@ -38,6 +38,9 @@ import {
   readBootstrapPendingMarker,
   bootstrapRetryReadyAtMs,
   type BootstrapPendingMarker,
+  bootstrapBudgetExhausted,
+  noteBootstrapStarted,
+  recentBootstrapCount,
 } from "./tursoReplicaBootstrapMarker.js";
 import { replayBootstrapSnapshot } from "./tursoReplicaBootstrapReplay.js";
 import { describeSchemaDegradation } from "./tursoReplicaSchemaDegradation.js";
@@ -878,6 +881,18 @@ export class TursoReplicaService {
     // The marker is the durable record that the follow-up pull never happened.
     const localReplicaExists = fs.existsSync(localPath);
     const bootstrapPending = hasBootstrapPendingMarker(localPath);
+    const willBootstrap = overrides?.bootstrapIfEmpty ?? (!localReplicaExists || bootstrapPending);
+    if (willBootstrap) {
+      // A full bootstrap downloads the whole database. Cap them so a repair loop parks
+      // the replica instead of re-downloading it all day.
+      if (bootstrapBudgetExhausted(localPath)) {
+        throw new Error(
+          `Replica re-downloaded ${recentBootstrapCount(localPath)} times in 24h — sync parked ` +
+            `to stop a download loop. Run papr_db_repair (strategy "pull") to retry.`,
+        );
+      }
+      noteBootstrapStarted(localPath);
+    }
     markReplicaReadPhase("openSpecPreflightMs", performance.now() - preflightStarted);
     try {
       const creds = await timeReplicaReadPhase("openSpecCredentialsMs", () =>
@@ -890,8 +905,7 @@ export class TursoReplicaService {
         localPath,
         tursoUrl: creds.tursoUrl,
         authToken: creds.authToken,
-        bootstrapIfEmpty:
-          overrides?.bootstrapIfEmpty ?? (!localReplicaExists || bootstrapPending),
+        bootstrapIfEmpty: willBootstrap,
       };
     } catch (error) {
       noteTursoReplicaTransportError(error);

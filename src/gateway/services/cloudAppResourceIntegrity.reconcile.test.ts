@@ -99,3 +99,50 @@ describe("reconcileAppDataSourcesForPublish — fail closed", () => {
     expect(await readSources()).toHaveLength(2);
   });
 });
+
+describe("reconcileAppDataSourcesForPublish — registry link with a job-scratch path", () => {
+  const REVIEW_APP = "a2607f88-0ef5-42cb-a5be-0ce585942d37";
+  const scratch = () => path.join(paprDir, "Jobs", JOB_A, "data", "data.db");
+
+  async function readReview(): Promise<Array<{ alias: string; dbId?: string; dbPath?: string }>> {
+    const raw = await readFile(path.join(paprDir, "apps", REVIEW_APP, "data-sources.json"), "utf8");
+    return (JSON.parse(raw) as { sources: Array<{ alias: string; dbId?: string; dbPath?: string }> }).sources;
+  }
+
+  beforeEach(async () => {
+    // Older registry DBs still live in the owning job's folder (pre-promotion layout).
+    await writeJson("data/databases.json", {
+      version: 1,
+      databases: {
+        "db-675acc05": { dbId: "db-675acc05", status: "active", localPath: "" },
+        "db-0a2adba9": { dbId: "db-0a2adba9", status: "active", localPath: scratch(), ownerJobId: JOB_A },
+      },
+    });
+    await writeJson(`apps/${REVIEW_APP}/data-sources.json`, {
+      sources: [
+        { id: "db-675acc05:review", type: "sqlite", dbId: "db-675acc05", alias: "review", dbPath: "", tables: [] },
+        { id: "db-0a2adba9:dataroom", type: "sqlite", dbId: "db-0a2adba9", alias: "dataroom", dbPath: scratch(), tables: [] },
+      ],
+    });
+  });
+
+  it("keeps the registry link and only clears the stale path", async () => {
+    const report = await reconcileAppDataSourcesForPublish(paprDir, REVIEW_APP);
+    const kept = await readReview();
+    expect(kept.map((s) => s.alias)).toEqual(["review", "dataroom"]);
+    expect(kept.find((s) => s.alias === "dataroom")).toMatchObject({ dbId: "db-0a2adba9", dbPath: "" });
+    expect(report.removedDbIds).toEqual([]);
+    expect(report.warnings.join(" ")).toMatch(/kept registry link db-0a2adba9/);
+  });
+
+  it("still removes a scratch path that has no live registry dbId", async () => {
+    await writeJson(`apps/${REVIEW_APP}/data-sources.json`, {
+      sources: [
+        { id: "db-675acc05:review", type: "sqlite", dbId: "db-675acc05", alias: "review", dbPath: "", tables: [] },
+        { id: "scratch", type: "sqlite", alias: "scratch", dbPath: scratch(), tables: [] },
+      ],
+    });
+    await reconcileAppDataSourcesForPublish(paprDir, REVIEW_APP);
+    expect((await readReview()).map((s) => s.alias)).toEqual(["review"]);
+  });
+});

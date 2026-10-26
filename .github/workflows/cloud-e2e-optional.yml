@@ -14,50 +14,58 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 45
     continue-on-error: true
+    # `secrets` can't be used in step `if:` — GitHub rejects the whole file.
+    # Expose it as job env and gate on that instead.
+    env:
+      PAPR_API_KEY: ${{ secrets.PAPR_API_KEY }}
+      PAPR_MEMORY_SERVER_URL: ${{ vars.PAPR_MEMORY_SERVER_URL || 'https://memory.papr.ai' }}
 
     steps:
+      - name: Check for API key
+        id: gate
+        run: |
+          if [ -n "$PAPR_API_KEY" ]; then
+            echo "enabled=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "enabled=false" >> "$GITHUB_OUTPUT"
+            echo "::notice::Skipping cloud E2E — add the PAPR_API_KEY repository secret to enable"
+          fi
+
       - name: Checkout
+        if: steps.gate.outputs.enabled == 'true'
         uses: actions/checkout@v4
 
       - name: Setup Node.js
+        if: steps.gate.outputs.enabled == 'true'
         uses: actions/setup-node@v4
         with:
           node-version: "24"
           cache: npm
 
       - name: Install dependencies
+        if: steps.gate.outputs.enabled == 'true'
         run: npm ci
 
       - name: Rebuild native modules for Electron
+        if: steps.gate.outputs.enabled == 'true'
         run: npx @electron/rebuild -f -w better-sqlite3
 
       - name: Build gateway
+        if: steps.gate.outputs.enabled == 'true'
         run: npm run build:gateway
 
       - name: Start gateway test stack
-        if: ${{ secrets.PAPR_API_KEY != '' }}
-        env:
-          PAPR_API_KEY: ${{ secrets.PAPR_API_KEY }}
-          PAPR_MEMORY_SERVER_URL: ${{ vars.PAPR_MEMORY_SERVER_URL || 'https://memory.papr.ai' }}
+        if: steps.gate.outputs.enabled == 'true'
         run: node scripts/test-stack.mjs up
 
       - name: Run contribute-back E2E
-        if: ${{ secrets.PAPR_API_KEY != '' }}
-        env:
-          PAPR_API_KEY: ${{ secrets.PAPR_API_KEY }}
-          PAPR_MEMORY_SERVER_URL: ${{ vars.PAPR_MEMORY_SERVER_URL || 'https://memory.papr.ai' }}
+        if: steps.gate.outputs.enabled == 'true'
         run: npm run test:contribute-back-e2e
 
       - name: Run track pull-on-publish E2E
-        if: ${{ secrets.PAPR_API_KEY != '' }}
-        env:
-          PAPR_API_KEY: ${{ secrets.PAPR_API_KEY }}
+        if: steps.gate.outputs.enabled == 'true'
         run: npm run test:track-pull-on-publish-e2e -- --poll-seconds=60
 
       - name: Stop test stack
-        if: ${{ always() && secrets.PAPR_API_KEY != '' }}
+        if: always() && steps.gate.outputs.enabled == 'true'
         run: node scripts/test-stack.mjs down
-
-      - name: Skip cloud E2E (no API key)
-        if: ${{ secrets.PAPR_API_KEY == '' }}
-        run: echo "Skipping cloud E2E — configure PAPR_API_KEY repository secret to enable"
