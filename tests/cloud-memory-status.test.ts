@@ -115,3 +115,22 @@ describe("formatPaprLoginStatusLine", () => {
     ).toBe("paused");
   });
 });
+
+describe("memoryPaused only on paused level", () => {
+  it("metered overage is a warning, not a pause", async () => {
+    const { deriveCloudMemoryStatus } = await import("../ui/utils/cloudMemoryStatus");
+    const summary = {
+      subscriptionStatus: "active",
+      isMeteredBillingOn: true,
+      usage: { miniInteractionCount: 23150, memoriesCount: 3953, storageCount: 0 },
+      limits: { miniInteractionLimit: 20000, memoriesLimit: 50000, storageLimit: "10GB" },
+      warnings: {
+        operationsExceeded: false, memoriesExceeded: false, storageExceeded: false,
+        operationsNearLimit: true, memoriesNearLimit: false, storageNearLimit: false,
+      },
+    } as never;
+    const status = deriveCloudMemoryStatus(summary);
+    expect(status?.level).toBe("warning");
+    expect(status?.level === "paused").toBe(false);
+  });
+});
