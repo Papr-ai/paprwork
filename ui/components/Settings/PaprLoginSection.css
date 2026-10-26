@@ -1145,6 +1145,52 @@
   padding: 6px 8px;
 }
 
+.papr-team__seats {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  font-size: 12px;
+  color: var(--text-primary);
+  padding: 8px 10px;
+  margin-bottom: 8px;
+  border: 1px solid var(--border-color);
+  border-radius: 8px;
+}
+
+.papr-team__seats-note {
+  color: var(--text-tertiary);
+}
+
+.papr-team__seat {
+  flex-shrink: 0;
+  min-width: 72px;
+  font-size: 11px;
+  color: var(--text-secondary);
+  background: transparent;
+  border: 1px solid var(--border-color);
+  border-radius: 999px;
+  padding: 3px 10px;
+  cursor: pointer;
+}
+
+select.papr-team__seat {
+  appearance: none;
+  -webkit-appearance: none;
+  text-align: center;
+  text-align-last: center;
+  min-width: 112px;
+}
+
+.papr-team__seat--on {
+  color: var(--text-primary);
+  border-color: var(--accent-color, var(--text-secondary));
+}
+
+.papr-team__seat:disabled {
+  cursor: default;
+  opacity: 0.7;
+}
+
 .papr-team__role-select:disabled {
   opacity: 0.6;
 }

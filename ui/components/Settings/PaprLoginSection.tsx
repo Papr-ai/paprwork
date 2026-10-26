@@ -32,6 +32,17 @@ import {
   type WorkspaceRoleName,
 } from "../../../src/core/utils/workspaceRolePermissions";
 import { UserAvatar } from "../common/UserAvatar";
+import {
+  formatCredits,
+  isBuilderRoles,
+  isRoleBuilder,
+  monthlySeatTotal,
+  seatChangeMessage,
+  seatValue,
+  usageByUser,
+  type BuildersView,
+} from "../../../src/core/utils/paprCreditSeats";
+import { PAPR_CREDIT_PLANS } from "../../../src/core/types/paprCreditPlans";
 import "./PaprLoginSection.css";
 
 interface Namespace {
@@ -131,6 +142,8 @@ export function PaprLoginSection({ onApiKeyReceived, profileFields }: PaprLoginS
   const [workspaceCurrentUserRole, setWorkspaceCurrentUserRole] = useState<string>("member");
   const [workspaceMembersLoading, setWorkspaceMembersLoading] = useState(false);
   const [roleUpdatingUserId, setRoleUpdatingUserId] = useState<string | null>(null);
+  const [seatsView, setSeatsView] = useState<BuildersView | null>(null);
+  const [seatUpdatingUserId, setSeatUpdatingUserId] = useState<string | null>(null);
   const [inviteEmail, setInviteEmail] = useState("");
   const [inviteLoading, setInviteLoading] = useState(false);
   const [inviteMessage, setInviteMessage] = useState<string | null>(null);
@@ -301,6 +314,7 @@ export function PaprLoginSection({ onApiKeyReceived, profileFields }: PaprLoginS
         setWorkspaceMembers(result.members || []);
         setWorkspaceCurrentUserId(result.currentUserId || null);
         setWorkspaceCurrentUserRole(result.currentUserRole || "member");
+        void loadBuilderSeats(result.currentUserRole);
       } else {
         setWorkspaceMembers([]);
         setWorkspaceCurrentUserId(null);
@@ -314,6 +328,57 @@ export function PaprLoginSection({ onApiKeyReceived, profileFields }: PaprLoginS
       setWorkspaceMembersLoading(false);
     }
   }, []);
+
+  /** Seats + per-person usage. Owner/admin only; null on legacy plans or when the server says no. */
+  const loadBuilderSeats = useCallback(async (role?: string) => {
+    const r = normalizeWorkspaceRole(role);
+    if (r !== "owner" && r !== "admin") {
+      setSeatsView(null);
+      return;
+    }
+    try {
+      const res = await window.electronAPI.papr.getBuilderSeats();
+      setSeatsView(res.success && res.view?.plan && res.view.plan !== "local" ? res.view : null);
+    } catch {
+      setSeatsView(null);
+    }
+  }, []);
+
+  const planName = (k: string) => seatsView?.planOptions?.find((o) => o.key === k)?.name ?? k;
+
+  /** to = "member" or a plan key (new builder, or move an existing builder's seat). */
+  const handleSeatChange = async (member: WorkspaceMember, from: string, to: string) => {
+    if (!seatsView || from === to) return;
+    const name = member.user.displayName;
+    if (!window.confirm(seatChangeMessage(seatsView, name, from, to))) return;
+    const builder = to !== "member";
+    setSeatUpdatingUserId(member.user.objectId);
+    setInviteMessage(null);
+    try {
+      const res = await window.electronAPI.papr.setBuilder(
+        builder ? { userId: member.user.objectId, builder, plan: to } : { userId: member.user.objectId, builder },
+      );
+      if (!res.success) {
+        setInviteMessage(res.error || "Could not update seat");
+      } else {
+        const seatErr = res.result?.seats?.error;
+        setInviteMessage(
+          seatErr
+            ? `${name} updated. Billing will catch up within the hour.`
+            : !builder
+              ? `${name} is now a member.`
+              : res.result?.when === "period_end"
+                ? `${name} moves to ${planName(to)} at renewal.`
+                : `${name} is now on ${planName(to)}.`,
+        );
+        await loadBuilderSeats(workspaceCurrentUserRole);
+      }
+    } catch (err) {
+      setInviteMessage(err instanceof Error ? err.message : "Could not update seat");
+    } finally {
+      setSeatUpdatingUserId(null);
+    }
+  };
 
   const handleMemberRoleChange = async (
     member: WorkspaceMember,
@@ -920,6 +985,9 @@ export function PaprLoginSection({ onApiKeyReceived, profileFields }: PaprLoginS
           inviteLoading={inviteLoading}
           inviteMessage={inviteMessage}
           roleUpdatingUserId={roleUpdatingUserId}
+          seatsView={seatsView}
+          seatUpdatingUserId={seatUpdatingUserId}
+          onSeatChange={(m, from, to) => void handleSeatChange(m, from, to)}
           onInviteEmailChange={setInviteEmail}
           onInvite={handleInviteMember}
           onRoleChange={handleMemberRoleChange}
@@ -1342,6 +1410,9 @@ function WorkspaceTeamSection({
   inviteLoading,
   inviteMessage,
   roleUpdatingUserId,
+  seatsView,
+  seatUpdatingUserId,
+  onSeatChange,
   onInviteEmailChange,
   onInvite,
   onRoleChange,
@@ -1356,12 +1427,17 @@ function WorkspaceTeamSection({
   inviteLoading: boolean;
   inviteMessage: string | null;
   roleUpdatingUserId: string | null;
+  seatsView: BuildersView | null;
+  seatUpdatingUserId: string | null;
+  onSeatChange: (member: WorkspaceMember, from: string, to: string) => void;
   onInviteEmailChange: (value: string) => void;
   onInvite: () => void;
   onRoleChange: (member: WorkspaceMember, newRole: WorkspaceRoleName) => void;
   onRefresh: () => void;
 }) {
   const [isCollapsed, setIsCollapsed] = useState(false);
+  const usage = usageByUser(seatsView);
+  const plan = PAPR_CREDIT_PLANS.find((p) => p.id === seatsView?.plan);
 
   return (
     <div className="papr-team">
@@ -1435,6 +1511,22 @@ function WorkspaceTeamSection({
             <p className="papr-team__message">{inviteMessage}</p>
           )}
 
+          {seatsView && (
+            <div className="papr-team__seats">
+              <span>
+                <strong>{seatsView.seats}</strong> builder seat{seatsView.seats === 1 ? "" : "s"}
+                {seatsView.planOptions?.length
+                  ? ` · $${monthlySeatTotal(seatsView)}/mo`
+                  : plan ? ` · ${plan.name} · $${plan.pricePerSeat * seatsView.seats}/mo` : ""}
+              </span>
+              <span className="papr-team__seats-note">
+                Each builder gets their plan's credits. Members pay per credit
+                (up to {formatCredits(seatsView.memberCap)}/mo). One bill for the team.
+                {!seatsView.seatsInSync && " Seat count is syncing."}
+              </span>
+            </div>
+          )}
+
           <ul className="papr-team__list">
             {members.map((member) => {
               const role = normalizeWorkspaceRole(member.user.role);
@@ -1447,6 +1539,11 @@ function WorkspaceTeamSection({
                   members,
                 });
               const isUpdatingRole = roleUpdatingUserId === member.user.objectId;
+              const row = usage.get(member.user.objectId);
+              const roles = row?.roles ?? [];
+              const builder = seatsView ? row?.seat ?? isBuilderRoles(roles) : false;
+              const lockedBuilder = isRoleBuilder(roles) || role === "owner" || role === "admin";
+              const seatBusy = seatUpdatingUserId === member.user.objectId;
 
               return (
                 <li key={member.objectId} className="papr-team__member">
@@ -1458,8 +1555,65 @@ function WorkspaceTeamSection({
                   />
                   <div className="papr-team__member-info">
                     <span className="papr-team__member-name">{member.user.displayName}</span>
-                    <span className="papr-team__member-email">{member.user.email}</span>
+                    <span className="papr-team__member-email">
+                      {member.user.email}
+                      {seatsView && row && row.used > 0 && (
+                        <>
+                          {" · "}
+                          {formatCredits(row.used)}
+                          {builder ? ` / ${formatCredits(row.grant)}` : ""} credits
+                          {row.overageUsd > 0 ? ` · $${row.overageUsd.toFixed(2)} extra` : ""}
+                        </>
+                      )}
+                    </span>
                   </div>
+                  {seatsView && (() => {
+                    const value = seatValue(seatsView, row, builder);
+                    const options = seatsView.planOptions ?? [];
+                    if (seatBusy) return <span className="papr-team__seat"><Spinner /></span>;
+                    if (!options.length) {
+                      // Server without per-seat plans: plain Builder / Member toggle.
+                      return (
+                        <button
+                          type="button"
+                          className={`papr-team__seat${builder ? " papr-team__seat--on" : ""}`}
+                          disabled={lockedBuilder || loading}
+                          title={lockedBuilder ? "Owners and admins are always builders" : undefined}
+                          onClick={() => onSeatChange(member, value, builder ? "member" : (seatsView.plan ?? "member"))}
+                        >
+                          {builder ? "Builder" : "Member"}
+                        </button>
+                      );
+                    }
+                    const until = row?.planUntilPeriodEnd
+                      ? options.find((o) => o.key === row.planUntilPeriodEnd)?.name
+                      : undefined;
+                    return (
+                      <select
+                        className={`papr-team__seat${builder ? " papr-team__seat--on" : ""}`}
+                        value={value}
+                        disabled={loading}
+                        aria-label={`Seat for ${member.user.displayName}`}
+                        title={
+                          until
+                            ? `Keeps ${until} credits until this period ends`
+                            : builder
+                              ? "Builder: a paid seat with its plan's credits"
+                              : "Member: no seat, pays per credit"
+                        }
+                        onChange={(e) => onSeatChange(member, value, e.target.value)}
+                      >
+                        <option value="member" disabled={lockedBuilder}>
+                          Member{lockedBuilder ? " (owners/admins are builders)" : ""}
+                        </option>
+                        {options.map((o) => (
+                          <option key={o.key} value={o.key}>
+                            {o.name.replace(/^Cloud /, "")} · ${o.price}/mo
+                          </option>
+                        ))}
+                      </select>
+                    );
+                  })()}
                   {canEditRole ? (
                     <select
                       className="papr-team__role-select"
