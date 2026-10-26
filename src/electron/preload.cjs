@@ -258,6 +258,8 @@ contextBridge.exposeInMainWorld("electronAPI", {
       startCheckout: (input) => ipcRenderer.invoke("papr:start-checkout", input),
       startCreditsCheckout: (input) =>
         ipcRenderer.invoke("papr:start-credits-checkout", input),
+      getBuilderSeats: () => ipcRenderer.invoke("papr:get-builder-seats"),
+      setBuilder: (input) => ipcRenderer.invoke("papr:set-builder", input),
       startExpertBuildCheckout: (input) =>
         ipcRenderer.invoke("papr:start-expert-build-checkout", input),
       subscribeDeveloperPlan: () =>

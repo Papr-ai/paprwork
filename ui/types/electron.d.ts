@@ -477,6 +477,16 @@ export interface ElectronAPI {
       plan: import("../../src/core/types/paprCreditPlans").PaprCreditPlanId;
       track?: import("../../src/core/types/paprCreditPlans").PaprPlanTrack;
     }) => Promise<{ success: boolean; error?: string }>;
+    getBuilderSeats: () => Promise<{
+      success: boolean;
+      view?: import("../../src/core/utils/paprCreditSeats").BuildersView;
+      error?: string;
+    }>;
+    setBuilder: (input: { userId: string; builder: boolean }) => Promise<{
+      success: boolean;
+      result?: { builder: boolean; seats?: { builders?: number; changed?: boolean; error?: string } };
+      error?: string;
+    }>;
     startExpertBuildCheckout: (input: {
       size: import("../../src/core/types/paprCreditPlans").PaprExpertBuildSize;
       notes?: string;
