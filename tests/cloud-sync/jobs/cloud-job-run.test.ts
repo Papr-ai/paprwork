@@ -65,6 +65,7 @@ describe("runJobInCloud", () => {
 
     vi.mocked(getCloudSyncService).mockReturnValue({
       pushNow: vi.fn().mockResolvedValue(undefined),
+      pushGitNow: vi.fn().mockResolvedValue({ pushedPaths: [], skippedPaths: [], scope: "job" }),
     } as unknown as ReturnType<typeof getCloudSyncService>);
   });
 
@@ -111,7 +112,11 @@ describe("runJobInCloud", () => {
     );
 
     const cloudSync = getCloudSyncService();
-    expect(cloudSync?.pushNow).toHaveBeenCalled();
+    // Scoped push: only this job's folder, never the whole workspace.
+    expect(cloudSync?.pushNow).not.toHaveBeenCalled();
+    expect(cloudSync?.pushGitNow).toHaveBeenCalledWith(
+      expect.objectContaining({ jobId: job.id }),
+    );
     expect(applyCloudRunPatch).toHaveBeenCalledWith(
       expect.objectContaining({
         jobId: job.id,
