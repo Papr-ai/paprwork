@@ -10,6 +10,8 @@ export interface WorkspaceMemberUser {
   displayName: string;
   profileImageUrl?: string;
   role: string;
+  /** Holds a paid seat on credits plans: owner/admin/moderator/expert (memory server BUILDER_ROLES). */
+  isBuilder?: boolean;
 }
 
 export interface WorkspaceMember {
@@ -44,6 +46,28 @@ const WORKSPACE_ROLE_PRIORITY = [
   "member",
   "expert",
 ] as const;
+
+/** Same set as memory server services/credits/billing.py BUILDER_ROLES. */
+export const SEAT_ROLES = ["owner", "admin", "moderator", "expert"] as const;
+
+function hasSeatRole(user: DashboardMemberUser): boolean {
+  const names = new Set<string>();
+  for (const role of user.allRoles ?? []) {
+    const name = role.name?.trim();
+    if (name) names.add(name);
+  }
+  const primary = user.role?.name?.trim();
+  if (primary) names.add(primary);
+  return SEAT_ROLES.some((role) => names.has(role));
+}
+
+/**
+ * Seats for a credits-plan checkout: builders only. Members (and followers) are not seats —
+ * they pay per credit. Counting every member billed TruePoint for 8 seats with 3 people.
+ */
+export function countSeatHolders(members: WorkspaceMember[]): number {
+  return Math.max(members.filter((member) => member.user.isBuilder === true).length, 1);
+}
 
 function resolveWorkspaceRole(user: DashboardMemberUser): string {
   const roleNames =
@@ -96,6 +120,7 @@ function normalizeMember(
       displayName,
       profileImageUrl: user.profileimage?.url || user.socialProfilePicURL,
       role: resolveWorkspaceRole(user),
+      isBuilder: hasSeatRole(user),
     },
   };
 }
