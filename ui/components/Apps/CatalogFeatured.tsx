@@ -1,7 +1,7 @@
 /**
  * Community "Featured" banner — App Store style: dark full-width card, a big
  * editorial headline (publisher-set `headline`, else the description), the
- * app's preview filling the card (hover grows it to show the whole film), and a glass row with the droplet, name, by-line
+ * app's preview filling the card (still poster; plays only while hovered), and a glass row with the droplet, name, by-line
  * and the same Open / Preview / Get buttons as the card.
  */
 import { useState, type ReactNode } from "react";
@@ -38,6 +38,7 @@ export function FeaturedBanner({ entry, coverUrl, onOpen, actions, children }: P
     <div className="cat-feat-wrap">
     <section
       className={`cat-feat${shot && coverUrl ? " has-shot" : ""}`}
+      data-hover-play=""
       role="button"
       tabIndex={0}
       aria-label={`Featured: ${entry.name}`}
@@ -56,11 +57,11 @@ export function FeaturedBanner({ entry, coverUrl, onOpen, actions, children }: P
         <span className="cat-feat__big"><DropGlyph icon={entry.icon} title={entry.name} size={168} /></span>
       )}
       <div className="cat-feat__txt">
-        <span className="cat-feat__k">Featured</span>
+        <span className="cat-feat__k">App of the week</span>
         <h2 className="cat-feat__h">{headline}</h2>
         <div className="cat-feat__app">
           <DropGlyph icon={entry.icon} title={entry.name} size={52} />
-          <div className="cat-feat__n"><b>{entry.name}</b><span>{catalogBy(entry)}</span></div>
+          <div className="cat-feat__n"><b>{entry.name}</b><span>{entry.headline?.trim() && entry.description ? entry.description : catalogBy(entry)}</span></div>
           <span className="cat-feat__act">{actions}</span>
         </div>
       </div>
