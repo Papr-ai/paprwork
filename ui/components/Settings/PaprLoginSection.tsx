@@ -1541,7 +1541,10 @@ function WorkspaceTeamSection({
               const isUpdatingRole = roleUpdatingUserId === member.user.objectId;
               const row = usage.get(member.user.objectId);
               const roles = row?.roles ?? [];
-              const builder = seatsView ? row?.seat ?? isBuilderRoles(roles) : false;
+              // The role says what they are now; row.seat stays true until renewal after a
+              // demote (they keep the credits), so it must not drive the menu.
+              const builder = seatsView ? isBuilderRoles(roles) : false;
+              const keepsSeat = !builder && !!row?.seat;
               const lockedBuilder = isRoleBuilder(roles) || role === "owner" || role === "admin";
               const seatBusy = seatUpdatingUserId === member.user.objectId;
 
@@ -1597,7 +1600,9 @@ function WorkspaceTeamSection({
                         title={
                           until
                             ? `Keeps ${until} credits until this period ends`
-                            : builder
+                            : keepsSeat
+                              ? "Member from renewal: keeps builder credits until this period ends"
+                              : builder
                               ? "Builder: a paid seat with its plan's credits"
                               : "Member: no seat, pays per credit"
                         }
