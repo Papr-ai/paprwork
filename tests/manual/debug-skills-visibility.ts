@@ -2,7 +2,7 @@
  * System Prompt Debug - Check why skills section isn't appearing
  */
 
-import { SystemPromptBuilder } from "../src/core/agents/SystemPrompt.js";
+import { SystemPromptBuilder } from "../../src/core/agents/SystemPrompt.js";
 
 const builder = new SystemPromptBuilder({
   userDataPath: "/test/path",

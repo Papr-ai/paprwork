@@ -5,9 +5,9 @@
  * Run with: npm run test:llm-storage
  */
 
-import { MastraAgent } from "../src/core/agents/MastraAgent.js";
-import { CustomKeysStorage } from "../src/core/storage/CustomKeysStorage.js";
-import type { AgentConfigInternal } from "../src/core/types/agents.js";
+import { MastraAgent } from "../../src/core/agents/MastraAgent.js";
+import { CustomKeysStorage } from "../../src/core/storage/CustomKeysStorage.js";
+import type { AgentConfigInternal } from "../../src/core/types/agents.js";
 import os from "os";
 import path from "path";
 

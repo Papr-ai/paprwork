@@ -11,8 +11,8 @@ import { createOpenAI } from "@ai-sdk/openai";
 import {
   buildZaiProviderOptions,
   normalizeZaiModelId,
-} from "../src/gateway/utils/zaiModel.js";
-import { createMoonshotChatModel } from "../src/gateway/utils/moonshotProvider.js";
+} from "../../src/gateway/utils/zaiModel.js";
+import { createMoonshotChatModel } from "../../src/gateway/utils/moonshotProvider.js";
 
 const PROXY_BASE =
   process.env.PROXY_BASE ??

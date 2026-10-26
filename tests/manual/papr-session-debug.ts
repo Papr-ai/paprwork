@@ -2,7 +2,7 @@
 /**
  * Debug test - send multiple messages to same session and verify they're stored correctly
  */
-import { PaprMemoryProvider } from '../src/gateway/services/storage/PaprMemoryProvider';
+import { PaprMemoryProvider } from '../../src/gateway/services/storage/PaprMemoryProvider';
 import { config } from 'dotenv';
 import { dirname, join } from 'path';
 import { fileURLToPath } from 'url';

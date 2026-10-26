@@ -2,7 +2,7 @@
 /**
  * Send 20 messages to a single session to test 15+ message summarization
  */
-import { PaprMemoryProvider } from '../src/gateway/services/storage/PaprMemoryProvider';
+import { PaprMemoryProvider } from '../../src/gateway/services/storage/PaprMemoryProvider';
 import { config } from 'dotenv';
 import { dirname, join } from 'path';
 import { fileURLToPath } from 'url';

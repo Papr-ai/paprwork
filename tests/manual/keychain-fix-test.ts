@@ -8,7 +8,7 @@
  * 3. Keys are only decrypted when getKey() or getKeyByName() is called
  */
 
-import { CustomKeysStorage } from '../src/core/storage/CustomKeysStorage.js';
+import { CustomKeysStorage } from '../../src/core/storage/CustomKeysStorage.js';
 import { performance } from 'perf_hooks';
 
 async function testKeychainBehavior() {
