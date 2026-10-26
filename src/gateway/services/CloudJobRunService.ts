@@ -40,8 +40,8 @@ async function appendCloudRunLine(jobId: string, line: string): Promise<void> {
 }
 
 /**
- * Push only what this run needs: the job folder, its linked app folders, and
- * the job's linked databases. A whole-workspace push here made every cloud
+ * Push only what this run needs: the job folder (uploaded through the app that
+ * owns it) and the job's linked databases. A whole-workspace push here made every cloud
  * run wait on unrelated pending changes across all apps and jobs.
  */
 export async function pushJobScopeBeforeCloudRun(job: JobRecord): Promise<void> {
@@ -52,13 +52,10 @@ export async function pushJobScopeBeforeCloudRun(job: JobRecord): Promise<void> 
     );
     return;
   }
-  const appIds = (job.appIds ?? []).filter((id) => id && id !== "__standalone__");
-  console.log(`[CloudJobRun] Scoped push before cloud run: job=${job.id} apps=${appIds.length}`);
+  console.log(`[CloudJobRun] Scoped push before cloud run: job=${job.id}`);
   try {
+    // A job-scoped push already uploads through the app(s) that own the job.
     await cloudSync.pushGitNow({ jobId: job.id, skipPostSyncHooks: true });
-    for (const appId of appIds) {
-      await cloudSync.pushGitNow({ appId, skipPostSyncHooks: true });
-    }
   } catch (err) {
     console.warn(
       "[CloudJobRun] Scoped git push failed (continuing):",

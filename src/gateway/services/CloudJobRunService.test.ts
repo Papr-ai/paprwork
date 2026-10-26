@@ -38,7 +38,7 @@ describe("runJobInCloud", () => {
     vi.clearAllMocks();
   });
 
-  it("pushes only the job, its apps and its own database — never the whole workspace", async () => {
+  it("pushes only the job and its own database — never the whole workspace", async () => {
     cloudApiFetch.mockResolvedValue({
       ok: true,
       json: async () => ({ jobId: "job-1", status: "completed", exitCode: 0, stdout: "ok", stderr: "" }),
@@ -48,7 +48,7 @@ describe("runJobInCloud", () => {
 
     expect(pushNow).not.toHaveBeenCalled();
     expect(pushGitNow).toHaveBeenCalledWith({ jobId: "job-1", skipPostSyncHooks: true });
-    expect(pushGitNow).toHaveBeenCalledWith({ appId: "app-1", skipPostSyncHooks: true });
+    expect(pushGitNow).toHaveBeenCalledTimes(1);
     expect(pushLinkedSourceIfNeeded).toHaveBeenCalledTimes(1);
     expect(pushLinkedSourceIfNeeded).toHaveBeenCalledWith(
       expect.objectContaining({ dbPath: "/tmp/job-1.db" }),
