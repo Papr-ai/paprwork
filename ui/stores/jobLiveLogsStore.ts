@@ -19,6 +19,11 @@ interface JobLiveLogsStore {
   /** Job runtime type (python, agent, subagent…) — agent jobs render the user's AgentGlyph. */
   typesByJobId: Map<string, string>;
   failedFetches: FailedFetchesState;
+  /** Last final status seen per job (completed/failed/cancelled) — reconciles stale "running" cards. */
+  finalStatusByJobId: Map<string, string>;
+  setFinalStatus: (jobId: string, status: string) => void;
+  /** One-shot gateway check for a card restored as "running" (no broadcast arrives after reload). */
+  reconcileStatus: (jobId: string) => Promise<void>;
   appendLine: (jobId: string, line: string) => void;
   setJobName: (jobId: string, name: string) => void;
   getJobName: (jobId: string) => string | undefined;
@@ -27,12 +32,30 @@ interface JobLiveLogsStore {
 }
 
 const nameFetchAttempts = new Map<string, number>();
+const reconciled = new Set<string>();
+export const FINAL_JOB_STATUSES = new Set(["completed", "failed", "cancelled"]);
 
 export const useJobLiveLogsStore = create<JobLiveLogsStore>((set, get) => ({
   logsByJobId: new Map(),
   namesByJobId: new Map(),
   typesByJobId: new Map(),
   failedFetches: new Set(),
+  finalStatusByJobId: new Map(),
+  setFinalStatus: (jobId, status) =>
+    set((state) => ({
+      finalStatusByJobId: new Map(state.finalStatusByJobId).set(jobId, status),
+    })),
+  reconcileStatus: async (jobId) => {
+    if (reconciled.has(jobId)) return;
+    reconciled.add(jobId);
+    try {
+      const response = await gateway.send("jobs:get", { jobId });
+      const status = (response.data as { status?: string } | undefined)?.status;
+      if (status && FINAL_JOB_STATUSES.has(status)) get().setFinalStatus(jobId, status);
+    } catch {
+      reconciled.delete(jobId); // transient: allow a later mount to retry
+    }
+  },
 
   appendLine: (jobId, line) =>
     set((state) => {
@@ -128,8 +151,17 @@ export function initJobLiveLogsListener(): void {
         useJobLiveLogsStore.getState().setJobName(jobId, String(data.name));
       }
       // Clear logs when job finishes
-      if (["completed", "failed", "cancelled"].includes(String(data.status))) {
+      if (FINAL_JOB_STATUSES.has(String(data.status))) {
         useJobLiveLogsStore.getState().clearJob(jobId);
+        useJobLiveLogsStore.getState().setFinalStatus(jobId, String(data.status));
+      } else if (data.status === "running") {
+        // A new run started: drop the previous final status so fresh cards show it running.
+        const store = useJobLiveLogsStore.getState();
+        if (store.finalStatusByJobId.has(jobId)) {
+          const next = new Map(store.finalStatusByJobId);
+          next.delete(jobId);
+          useJobLiveLogsStore.setState({ finalStatusByJobId: next });
+        }
       }
     }
   };
