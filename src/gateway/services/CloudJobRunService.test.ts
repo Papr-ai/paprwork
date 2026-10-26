@@ -8,7 +8,7 @@ const listLinkedSources = vi.fn(async () => [
   { dbId: "db-other", dbPath: "/tmp/other.db", alias: "b", appId: "app-2" },
 ]);
 const cloudApiFetch = vi.fn();
-const appendFile = vi.fn(async () => undefined);
+const appendFile = vi.fn(async (_path: string, _data: string, _enc?: string) => undefined);
 
 vi.mock("node:fs/promises", () => ({
   default: { mkdir: vi.fn(async () => undefined), appendFile },
@@ -29,7 +29,7 @@ const job = { id: "job-1", name: "Probe", type: "bash", appIds: ["app-1"], statu
 function makeJobsService() {
   return {
     getJob: vi.fn(async () => job),
-    applyCloudRunPatch: vi.fn(async () => job),
+    applyCloudRunPatch: vi.fn(async (_patch: { status: string }) => job),
   };
 }
 
@@ -61,7 +61,7 @@ describe("runJobInCloud", () => {
     const { runJobInCloud } = await import("./CloudJobRunService.js");
     await expect(runJobInCloud(service as never, "job-1")).rejects.toThrow("Request timed out");
 
-    const statuses = service.applyCloudRunPatch.mock.calls.map((c) => (c[0] as { status: string }).status);
+    const statuses = service.applyCloudRunPatch.mock.calls.map((c) => c[0].status);
     expect(statuses).toEqual(["running", "failed"]);
     const logged = appendFile.mock.calls.map((c) => String(c[1])).join("");
     expect(logged).toContain("Cloud run started");
