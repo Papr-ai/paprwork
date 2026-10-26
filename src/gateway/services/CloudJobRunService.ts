@@ -33,6 +33,63 @@ function jobLogPath(jobId: string): string {
   return path.join(getPaprRoot(), "Jobs", jobId, "logs", "run.log");
 }
 
+async function appendCloudRunLine(jobId: string, line: string): Promise<void> {
+  const logPath = jobLogPath(jobId);
+  await fs.mkdir(path.dirname(logPath), { recursive: true });
+  await fs.appendFile(logPath, `\n${line}\n`, "utf8");
+}
+
+/**
+ * Push only what this run needs: the job folder, its linked app folders, and
+ * the job's linked databases. A whole-workspace push here made every cloud
+ * run wait on unrelated pending changes across all apps and jobs.
+ */
+export async function pushJobScopeBeforeCloudRun(job: JobRecord): Promise<void> {
+  const cloudSync = getCloudSyncService();
+  if (!cloudSync) {
+    console.warn(
+      "[CloudJobRun] Cloud Sync not active — cloud may run last-pushed GitHub state",
+    );
+    return;
+  }
+  const appIds = (job.appIds ?? []).filter((id) => id && id !== "__standalone__");
+  console.log(`[CloudJobRun] Scoped push before cloud run: job=${job.id} apps=${appIds.length}`);
+  try {
+    await cloudSync.pushGitNow({ jobId: job.id, skipPostSyncHooks: true });
+    for (const appId of appIds) {
+      await cloudSync.pushGitNow({ appId, skipPostSyncHooks: true });
+    }
+  } catch (err) {
+    console.warn(
+      "[CloudJobRun] Scoped git push failed (continuing):",
+      (err as Error).message.slice(0, 120),
+    );
+  }
+  try {
+    const { ensureTursoSyncBridge } = await import("./TursoSyncBridge.js");
+    const bridge = ensureTursoSyncBridge();
+    if (bridge.enabled) {
+      // Resolve targets here: pushScoped() with an unmatched jobId falls back
+      // to every dirty database, which is exactly the fan-out to avoid.
+      const { findLinkedSourceForJob } = await import("./tursoLinkedSources.js");
+      const sources = await bridge.listLinkedSources();
+      const keys = [job.id, ...(job.writeDbIds ?? [])];
+      const seen = new Set<string>();
+      for (const key of keys) {
+        const linked = findLinkedSourceForJob(sources, key);
+        if (!linked || seen.has(linked.dbPath)) continue;
+        seen.add(linked.dbPath);
+        await bridge.pushLinkedSourceIfNeeded(linked);
+      }
+    }
+  } catch (err) {
+    console.warn(
+      "[CloudJobRun] Scoped database push failed (continuing):",
+      (err as Error).message.slice(0, 120),
+    );
+  }
+}
+
 function cloudRunTimeoutMs(job: JobRecord): number {
   if (job.type === "agent" || job.type === "subagent") {
     return CLOUD_AGENT_JOB_TIMEOUT_MS;
@@ -117,45 +174,59 @@ export async function runJobInCloud(
     throw new Error(`Job is already running locally: ${job.name}`);
   }
 
-  const cloudSync = getCloudSyncService();
-  if (cloudSync) {
-    console.log(`[CloudJobRun] Pushing workspace before cloud run: ${jobId}`);
-    try {
-      await cloudSync.pushNow();
-    } catch (err) {
-      console.warn(
-        "[CloudJobRun] Pre-run push failed (continuing):",
-        (err as Error).message.slice(0, 120),
-      );
-    }
-  } else {
-    console.warn(
-      "[CloudJobRun] Cloud Sync not active — cloud may run last-pushed GitHub state",
-    );
-  }
+  await pushJobScopeBeforeCloudRun(job);
+
+  const runStartedAt = new Date().toISOString();
+  await appendCloudRunLine(jobId, `[${runStartedAt}] ☁️ Cloud run started — waiting for the cloud sandbox…`);
+  await jobsService.applyCloudRunPatch({
+    jobId,
+    status: "running",
+    lastRunAt: runStartedAt,
+    recordedAt: runStartedAt,
+    source: "cloud_manual",
+  });
 
   const timeoutMs = cloudRunTimeoutMs(job);
   // Measured around the request only. Includes cloud queue + execution, which
   // is the wall-clock time the user actually waited for the agent's work.
   const startedAt = Date.now();
-  const res = await cloudApiFetch("/v1/cloud/runtime/job-run", {
-    method: "POST",
-    body: {
+  let payload: CloudJobRunApiResponse;
+  try {
+    const res = await cloudApiFetch("/v1/cloud/runtime/job-run", {
+      method: "POST",
+      body: {
+        jobId,
+        tier: "sandbox",
+        timeoutMs,
+      },
+      timeoutMs: timeoutMs + 30_000,
+    });
+    if (!res.ok) {
+      const text = await res.text();
+      throw new Error(
+        `Cloud job run failed (${res.status}): ${text.slice(0, 300)}`,
+      );
+    }
+    payload = (await res.json()) as CloudJobRunApiResponse;
+  } catch (err) {
+    // Never leave the job showing "running" with an empty log when the cloud
+    // request fails or times out — record the failure where the user looks.
+    const message = (err as Error).message.slice(0, 500);
+    const failedAt = new Date().toISOString();
+    await appendCloudRunLine(jobId, `[${failedAt}] ☁️ Cloud run failed: ${message}`);
+    await jobsService.applyCloudRunPatch({
       jobId,
-      tier: "sandbox",
-      timeoutMs,
-    },
-    timeoutMs: timeoutMs + 30_000,
-  });
-
-  if (!res.ok) {
-    const text = await res.text();
-    throw new Error(
-      `Cloud job run failed (${res.status}): ${text.slice(0, 300)}`,
-    );
+      status: "failed",
+      exitCode: 1,
+      error: message,
+      lastRunAt: runStartedAt,
+      completedAt: failedAt,
+      recordedAt: failedAt,
+      source: "cloud_manual",
+    });
+    throw err;
   }
 
-  const payload = (await res.json()) as CloudJobRunApiResponse;
   await appendCloudRunLog(jobId, payload);
   await syncAfterCloudRun(jobsService, jobId, payload);
   emitCloudRunTelemetry(job, payload, Date.now() - startedAt);
