@@ -85,6 +85,9 @@ describe("JobsService.applyCloudRunPatch", () => {
   });
 
   afterEach(async () => {
+  // Wait for a scheduler tick started by createJob/reload before the temp workspace is removed (#525).
+  const { resetJobsSchedulerForTests } = await import("../../../src/gateway/services/JobsScheduler.js");
+  await resetJobsSchedulerForTests();
     if (prevFlag === undefined) {
       delete process.env.JOB_RUNTIME_OFF_GIT;
     } else {

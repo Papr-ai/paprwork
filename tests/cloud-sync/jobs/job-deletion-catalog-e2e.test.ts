@@ -46,6 +46,9 @@ vi.mock("../../../src/gateway/services/CloudSyncService.js", () => ({
 const tmpRoots: string[] = [];
 
 afterEach(async () => {
+  // Wait for a scheduler tick started by createJob/reload before the temp workspace is removed (#525).
+  const { resetJobsSchedulerForTests } = await import("../../../src/gateway/services/JobsScheduler.js");
+  await resetJobsSchedulerForTests();
   vi.clearAllMocks();
   await new Promise((resolve) => setTimeout(resolve, 50));
   for (const root of tmpRoots.splice(0, tmpRoots.length)) {
