@@ -118,6 +118,7 @@ import type { CloudPublishReadinessReport } from "../../../src/core/types/cloudA
 import { linkedDepItems } from "./ShareLinkedDeps";
 import { PreviewUrlRow } from "./PreviewUrlRow";
 import { PublishInfoSheet } from "./PublishInfoSheet";
+import { APP_INFO_REQUEST_EVENT, takeAppInfoRequest } from "../../utils/appInfoRequest";
 import { pendingCommunity } from "../../utils/galleryGate";
 import { galleryProgress, useDemoStatus } from "../../utils/appDemo";
 import { APP_COVER_CHANGED_EVENT } from "../../utils/appCover";
@@ -349,6 +350,15 @@ export function MiniAppPublishBar({
   const [publishInfoOpen, setPublishInfoOpen] = useState(false);
   /** More → App info: edit name, description and cover any time. */
   const [appInfoOpen, setAppInfoOpen] = useState<false | "details" | "gallery">(false);
+  // Discover → "Edit page" on an app you own lands here, on App info.
+  useEffect(() => {
+    if (takeAppInfoRequest(appId)) setAppInfoOpen("details");
+    const on = (e: Event) => {
+      if ((e as CustomEvent<{ appId?: string }>).detail?.appId === appId && takeAppInfoRequest(appId)) setAppInfoOpen("details");
+    };
+    window.addEventListener(APP_INFO_REQUEST_EVENT, on);
+    return () => window.removeEventListener(APP_INFO_REQUEST_EVENT, on);
+  }, [appId]);
   // Gallery progress rides on the status chip (no toast): "Gallery 2 of 4", then "Review gallery".
   const galleryTail = galleryProgress(useDemoStatus(appId));
   const publishInfoConfirmedRef = useRef(false);

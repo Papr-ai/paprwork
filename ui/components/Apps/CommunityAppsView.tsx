@@ -26,6 +26,7 @@ import "./AppsHome.css";
 import { DropGlyph } from "./HomeTiles";
 import { CatalogAppDetails, CatalogBanner, catalogBy } from "./CatalogAppDetails";
 import { FeaturedBanner, pickFeaturedCatalogEntry } from "./CatalogFeatured";
+import { requestAppInfo } from "../../utils/appInfoRequest";
 import { HomeMenu, type HomeMenuItem } from "./HomeMenu";
 import { trackEvent } from "../../lib/telemetry";
 import {
@@ -903,7 +904,7 @@ export function CommunityAppsView({
       : publicWorkspaceEntries;
 
   return (
-    <div className="community-apps">
+    <div className={`community-apps${scope === "global" && !resultsHeading ? " community-apps--discover" : ""}`}>
       {resultsHeading ? (
         searchMatches.length > 0 ? (
           <section className="apps-view__results">
@@ -1168,6 +1169,7 @@ export function CommunityAppCard({
       hasWeb={hasWeb && entry.source === "cloud"}
       actions={actions(true)}
       onClose={() => setDetails(false)}
+      onEditPage={entry.isOwned && localAppId && onOpen ? () => { requestAppInfo(localAppId); setDetails(false); onOpen(); } : undefined}
     />
   ) : null;
 
@@ -1184,6 +1186,7 @@ export function CommunityAppCard({
   return (
     <div
       className="cat-card"
+      data-hover-play=""
       role="button"
       tabIndex={0}
       onClick={() => setDetails(true)}
