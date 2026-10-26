@@ -27,7 +27,7 @@ import {
   requiresPaymentMethodForMeteredBilling,
   resolvePlanTierForBilling,
 } from "../../core/utils/paprPlanLimits.js";
-import { fetchWorkspaceMembers } from "../../core/utils/paprWorkspaceTeam.js";
+import { countSeatHolders, fetchWorkspaceMembers } from "../../core/utils/paprWorkspaceTeam.js";
 import { PAPR_USAGE_URL } from "../../core/utils/paprQuota.js";
 import { fetchBuilders, setBuilder } from "../../core/utils/paprCreditSeats.js";
 import { memoryBaseUrl } from "./paprHandoff.js";
@@ -872,10 +872,11 @@ export function registerPaprBillingHandlers(deps: {
           throw new Error("Only the workspace owner can change plans.");
         }
         const profile = requireLoggedInProfile(deps.settingsStorage);
-        // Individual = one person. Team = one seat per workspace member (credits per person).
+        // Individual = one person. Team = one seat per builder; members pay per credit
+        // (matches the memory server's seat sync, which would correct the count anyway).
         const seats = input.track === "individual"
           ? 1
-          : Math.max((await fetchWorkspaceMembers(profile.sessionToken!, profile.workspaceId!)).length, 1);
+          : countSeatHolders(await fetchWorkspaceMembers(profile.sessionToken!, profile.workspaceId!));
         const url = await createCreditsCheckoutUrl(profile.sessionToken!, {
           workspaceId: profile.workspaceId!,
           kind: "plan",
