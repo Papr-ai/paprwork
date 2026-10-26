@@ -1231,3 +1231,39 @@ select.papr-team__seat {
     color: #aeaeb2;
   }
 }
+
+/* ─── Team tab ─── */
+
+.papr-team--tab {
+  margin-top: 16px;
+}
+
+.papr-team__title {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--text-primary);
+}
+
+.papr-team__meta-inline {
+  font-size: 12px;
+  font-weight: 400;
+  color: var(--text-tertiary);
+}
+
+.papr-section__team-link {
+  margin: 14px 0 0;
+  font-size: 12px;
+  color: var(--text-tertiary);
+}
+
+.papr-section__inline-link {
+  border: none;
+  background: none;
+  padding: 0;
+  font: inherit;
+  color: var(--accent-color, #2563eb);
+  cursor: pointer;
+}

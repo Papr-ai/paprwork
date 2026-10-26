@@ -5,7 +5,8 @@ import {
   isBuilderRoles,
   isRoleBuilder,
   monthlySeatTotal,
-  seatChangeMessage,
+  describeSeatChange,
+  planLabel,
   seatValue,
   setBuilder,
   usageByUser,
@@ -82,12 +83,19 @@ describe("paprCreditSeats", () => {
     expect(seatValue(v, v.builderUsage[0], true)).toBe("cloud_plus");
   });
 
-  it("explains each kind of seat change", () => {
+  it("says which seat changes charge now", () => {
     const v = view({ planOptions: opts });
-    expect(seatChangeMessage(v, "Ana", "member", "cloud_max")).toMatch(/builder on Cloud Max 20x \(\$300\/mo.*charged now/s);
-    expect(seatChangeMessage(v, "Ana", "cloud", "cloud_max")).toMatch(/difference is charged now/);
-    expect(seatChangeMessage(v, "Ana", "cloud_max", "cloud")).toMatch(/keep Cloud Max 20x's credits until this period ends/);
-    expect(seatChangeMessage(v, "Ana", "cloud", "member")).toMatch(/a member\?/);
+    const add = describeSeatChange(v, "member", "cloud_max");
+    expect(add.chargesNow).toBe(true);
+    expect(add.deltaPerMonth).toBe(300);
+    expect(add.summary).toMatch(/Adds a Cloud Max 20x seat: \+\$300\/mo/);
+    expect(describeSeatChange(v, "cloud", "cloud_max")).toMatchObject({ chargesNow: true, deltaPerMonth: 270 });
+    const down = describeSeatChange(v, "cloud_max", "cloud");
+    expect(down).toMatchObject({ chargesNow: false, deltaPerMonth: -270 });
+    expect(down.summary).toMatch(/Keeps Cloud Max 20x credits until then/);
+    expect(describeSeatChange(v, "cloud", "member")).toMatchObject({ chargesNow: false });
+    expect(planLabel(v, "cloud_max")).toBe("Max 20x · $300");
+    expect(planLabel(v, "member")).toBe("Pay as you go");
   });
 
   it("sends the seat plan", async () => {

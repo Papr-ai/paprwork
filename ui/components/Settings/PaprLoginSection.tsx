@@ -1,5 +1,5 @@
 /**
- * PaprLoginSection - Compact Papr account card with org/namespace selector and schemas
+ * PaprLoginSection - Papr account: Profile (you) or Team (org/team, members, seats)
  */
 
 import React, { useState, useEffect, useRef, useCallback } from "react";
@@ -24,25 +24,14 @@ import {
   type OrgNamespaceSetupRequest,
 } from "../Auth/OrgNamespaceSetup";
 import {
-  WORKSPACE_ROLE_PRIORITY,
   canAssignWorkspaceRole,
-  canModifyMemberRole,
   formatWorkspaceRoleLabel,
   normalizeWorkspaceRole,
   type WorkspaceRoleName,
 } from "../../../src/core/utils/workspaceRolePermissions";
 import { UserAvatar } from "../common/UserAvatar";
-import {
-  formatCredits,
-  isBuilderRoles,
-  isRoleBuilder,
-  monthlySeatTotal,
-  seatChangeMessage,
-  seatValue,
-  usageByUser,
-  type BuildersView,
-} from "../../../src/core/utils/paprCreditSeats";
-import { PAPR_CREDIT_PLANS } from "../../../src/core/types/paprCreditPlans";
+import { TeamMembersTable } from "./TeamMembersTable";
+import { type BuildersView } from "../../../src/core/utils/paprCreditSeats";
 import "./PaprLoginSection.css";
 
 interface Namespace {
@@ -69,17 +58,6 @@ interface Organization {
   defaultNamespaceId?: string;
 }
 
-interface SchemaInfo {
-  id: string;
-  name: string;
-  description?: string;
-  status: string;
-  version?: string;
-  nodeTypeCount: number;
-  relationshipTypeCount: number;
-  nodeTypeNames: string[];
-  relationshipTypeNames: string[];
-}
 
 interface WorkspaceMember {
   objectId: string;
@@ -110,9 +88,12 @@ interface ProfileFieldsBinding {
 interface PaprLoginSectionProps {
   onApiKeyReceived?: (apiKey: string) => void;
   profileFields?: ProfileFieldsBinding;
+  /** profile = you (account, AI connections, memory sharing). team = org/team pickers,
+   *  invite, members with access + plan. */
+  view?: "profile" | "team";
 }
 
-export function PaprLoginSection({ onApiKeyReceived, profileFields }: PaprLoginSectionProps) {
+export function PaprLoginSection({ onApiKeyReceived, profileFields, view = "profile" }: PaprLoginSectionProps) {
   const [isLoading, setIsLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [isLoggedIn, setIsLoggedIn] = useState(false);
@@ -130,11 +111,7 @@ export function PaprLoginSection({ onApiKeyReceived, profileFields }: PaprLoginS
   const [switchingNamespace, setSwitchingNamespace] = useState(false);
   const [namespacesLoaded, setNamespacesLoaded] = useState(false);
 
-  const [schemas, setSchemas] = useState<SchemaInfo[]>([]);
-  const [schemasError, setSchemasError] = useState<string | null>(null);
   const [setupRequest, setSetupRequest] = useState<OrgNamespaceSetupRequest | null>(null);
-  const [schemasLoading, setSchemasLoading] = useState(false);
-  const [expandedSchema, setExpandedSchema] = useState<string | null>(null);
 
   const [workspaceName, setWorkspaceName] = useState<string | null>(null);
   const [workspaceMembers, setWorkspaceMembers] = useState<WorkspaceMember[]>([]);
@@ -238,41 +215,6 @@ export function PaprLoginSection({ onApiKeyReceived, profileFields }: PaprLoginS
     [],
   );
 
-  const loadSchemas = useCallback(async () => {
-    setSchemasLoading(true);
-    setSchemasError(null);
-    try {
-      const fetchSchemas = () =>
-        gateway.send("memory:list-schemas", {}, { timeoutMs: 45_000 });
-
-      let response: Awaited<ReturnType<typeof fetchSchemas>>;
-      try {
-        response = await fetchSchemas();
-      } catch (firstError) {
-        const message =
-          firstError instanceof Error ? firstError.message : String(firstError);
-        if (!message.includes("timeout")) {
-          throw firstError;
-        }
-        await new Promise((resolve) => setTimeout(resolve, 1500));
-        response = await fetchSchemas();
-      }
-
-      const data = response.data as
-        | { schemas?: SchemaInfo[]; error?: string }
-        | undefined;
-      setSchemas(data?.schemas ?? []);
-      setSchemasError(data?.error?.trim() ? data.error.trim() : null);
-    } catch (err) {
-      console.error("Failed to load schemas:", err);
-      setSchemas([]);
-      setSchemasError(
-        err instanceof Error ? err.message : "Failed to load schemas",
-      );
-    } finally {
-      setSchemasLoading(false);
-    }
-  }, []);
 
   useEffect(() => {
     if (isLoggedIn && activeOrganizationId && organizationsLoaded) {
@@ -280,23 +222,6 @@ export function PaprLoginSection({ onApiKeyReceived, profileFields }: PaprLoginS
       void loadNamespaceGroups(activeOrganizationId);
     }
   }, [isLoggedIn, activeOrganizationId, organizationsLoaded, loadNamespaceGroups]);
-
-  useEffect(() => {
-    if (
-      isLoggedIn &&
-      activeNamespaceId &&
-      !switchingOrganization &&
-      !switchingNamespace
-    ) {
-      void loadSchemas();
-    }
-  }, [
-    isLoggedIn,
-    activeNamespaceId,
-    switchingOrganization,
-    switchingNamespace,
-    loadSchemas,
-  ]);
 
   useEffect(() => {
     if (isLoggedIn) {
@@ -350,7 +275,6 @@ export function PaprLoginSection({ onApiKeyReceived, profileFields }: PaprLoginS
   const handleSeatChange = async (member: WorkspaceMember, from: string, to: string) => {
     if (!seatsView || from === to) return;
     const name = member.user.displayName;
-    if (!window.confirm(seatChangeMessage(seatsView, name, from, to))) return;
     const builder = to !== "member";
     setSeatUpdatingUserId(member.user.objectId);
     setInviteMessage(null);
@@ -380,9 +304,12 @@ export function PaprLoginSection({ onApiKeyReceived, profileFields }: PaprLoginS
     }
   };
 
+  /** plan: they had no seat and the new role needs one (admin/owner): seat them on the plan
+   *  the user picked first, then change the role. */
   const handleMemberRoleChange = async (
     member: WorkspaceMember,
     newRole: WorkspaceRoleName,
+    plan?: string,
   ) => {
     if (!workspaceCurrentUserId) {
       setInviteMessage("Could not verify your team permissions");
@@ -404,6 +331,13 @@ export function PaprLoginSection({ onApiKeyReceived, profileFields }: PaprLoginS
     setInviteMessage(null);
     setError(null);
     try {
+      if (plan) {
+        const seat = await window.electronAPI.papr.setBuilder({ userId: member.user.objectId, builder: true, plan });
+        if (!seat.success) {
+          setInviteMessage(seat.error || "Could not add their seat");
+          return;
+        }
+      }
       const result = await window.electronAPI.papr.updateWorkspaceMemberRole({
         userId: member.user.objectId,
         currentRole: member.user.role,
@@ -513,8 +447,6 @@ export function PaprLoginSection({ onApiKeyReceived, profileFields }: PaprLoginS
         if (result.success) {
           setActiveOrganizationId(workspaceId);
           setActiveNamespaceId(result.activeNamespaceId || null);
-          setSchemas([]);
-          setSchemasError(null);
           setWorkspaceMembers([]);
           setWorkspaceName(null);
           setInviteEmail("");
@@ -628,7 +560,6 @@ export function PaprLoginSection({ onApiKeyReceived, profileFields }: PaprLoginS
         setNamespaceGroups([]);
         setActiveNamespaceId(null);
         setNamespacesLoaded(false);
-        setSchemas([]);
         setWorkspaceMembers([]);
         setWorkspaceName(null);
         setInviteEmail("");
@@ -709,17 +640,15 @@ export function PaprLoginSection({ onApiKeyReceived, profileFields }: PaprLoginS
       setWorkspaceMembers([]);
       setWorkspaceName(null);
       setInviteMessage(null);
-      setSchemas([]);
       void loadOrganizations();
       void loadWorkspaceMembers();
-      void loadSchemas();
       const workspaceId = activeOrganizationIdRef.current;
       if (workspaceId) void loadNamespaceGroups(workspaceId, true);
     };
     window.addEventListener("papr-workspace-switch-complete", refreshForWorkspace);
     return () =>
       window.removeEventListener("papr-workspace-switch-complete", refreshForWorkspace);
-  }, [isLoggedIn, loadWorkspaceMembers, loadSchemas, loadNamespaceGroups]);
+  }, [isLoggedIn, loadWorkspaceMembers, loadNamespaceGroups]);
 
   useEffect(() => {
     const loginCb = handleLoginSuccessRef.current;
@@ -765,7 +694,6 @@ export function PaprLoginSection({ onApiKeyReceived, profileFields }: PaprLoginS
       setActiveOrganizationId(null);
       setNamespaceGroups([]);
       setActiveNamespaceId(null);
-      setSchemas([]);
     };
 
     window.addEventListener("papr-auth-success", handleLoginSuccess as EventListener);
@@ -818,39 +746,9 @@ export function PaprLoginSection({ onApiKeyReceived, profileFields }: PaprLoginS
       cloudStatus,
     });
 
-    return (
-      <div className={`papr-section${profileFields ? " papr-section--profile" : ""}`}>
-        {profileFields ? (
-          <>
-            <ProfileIdentitySection
-              {...profileFields}
-              isLoggedIn
-              userEmail={userEmail}
-              onLogout={() => void handleLogout()}
-            />
-            <ProfileAiConnections />
-          </>
-        ) : (
-          <div className="papr-section__header">
-            <div className="papr-section__status">
-              <span className={`papr-section__dot ${compactLoginStatus.dotClass}`} />
-              <span className="papr-section__status-text">{compactLoginStatus.text}</span>
-              {userEmail && (
-                <span className="papr-section__email">{userEmail}</span>
-              )}
-            </div>
-            <button
-              type="button"
-              className="papr-section__logout"
-              onClick={handleLogout}
-            >
-              Logout
-            </button>
-          </div>
-        )}
-
-        {profileFields && <div className="profile-merged__divider" />}
-
+    if (view === "team") {
+      return (
+        <div className="papr-section papr-section--team">
         {/* Organization + Team selectors in a row */}
         <div className="papr-section__selectors">
           {organizationsLoaded && organizations.length > 0 && (
@@ -948,6 +846,71 @@ export function PaprLoginSection({ onApiKeyReceived, profileFields }: PaprLoginS
           </div>
         )}
 
+        <WorkspaceTeamSection
+          workspaceName={workspaceName || undefined}
+          members={workspaceMembers}
+          currentUserId={workspaceCurrentUserId}
+          currentUserRole={workspaceCurrentUserRole}
+          loading={workspaceMembersLoading}
+          inviteEmail={inviteEmail}
+          inviteLoading={inviteLoading}
+          inviteMessage={inviteMessage}
+          busyUserId={seatUpdatingUserId ?? roleUpdatingUserId}
+          seatsView={seatsView}
+          onPlanChange={(m, from, to) => void handleSeatChange(m, from, to)}
+          onInviteEmailChange={setInviteEmail}
+          onInvite={handleInviteMember}
+          onAccessChange={(m, role, plan) => void handleMemberRoleChange(m, role, plan)}
+          onRefresh={() => void loadWorkspaceMembers()}
+        />
+        </div>
+      );
+    }
+
+    return (
+      <div className={`papr-section${profileFields ? " papr-section--profile" : ""}`}>
+        {profileFields ? (
+          <>
+            <ProfileIdentitySection
+              {...profileFields}
+              isLoggedIn
+              userEmail={userEmail}
+              onLogout={() => void handleLogout()}
+            />
+            <ProfileAiConnections />
+          </>
+        ) : (
+          <div className="papr-section__header">
+            <div className="papr-section__status">
+              <span className={`papr-section__dot ${compactLoginStatus.dotClass}`} />
+              <span className="papr-section__status-text">{compactLoginStatus.text}</span>
+              {userEmail && (
+                <span className="papr-section__email">{userEmail}</span>
+              )}
+            </div>
+            <button
+              type="button"
+              className="papr-section__logout"
+              onClick={handleLogout}
+            >
+              Logout
+            </button>
+          </div>
+        )}
+
+        <div className="profile-merged__divider" />
+
+        {error && (
+          <div className="papr-section__error">
+            <svg width="14" height="14" viewBox="0 0 24 24" fill="none">
+              <circle cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="2"/>
+              <line x1="12" y1="8" x2="12" y2="12" stroke="currentColor" strokeWidth="2" strokeLinecap="round"/>
+              <line x1="12" y1="16" x2="12.01" y2="16" stroke="currentColor" strokeWidth="2" strokeLinecap="round"/>
+            </svg>
+            <span>{error}</span>
+          </div>
+        )}
+
         <div className="papr-selector papr-memory-default">
           <label className="papr-selector__label" htmlFor="default-memory-scope">
             Default memory sharing
@@ -974,37 +937,13 @@ export function PaprLoginSection({ onApiKeyReceived, profileFields }: PaprLoginS
           </p>
         </div>
 
-        {/* Team members — needed for My team cloud app access */}
-        <WorkspaceTeamSection
-          workspaceName={workspaceName || undefined}
-          members={workspaceMembers}
-          currentUserId={workspaceCurrentUserId}
-          currentUserRole={workspaceCurrentUserRole}
-          loading={workspaceMembersLoading}
-          inviteEmail={inviteEmail}
-          inviteLoading={inviteLoading}
-          inviteMessage={inviteMessage}
-          roleUpdatingUserId={roleUpdatingUserId}
-          seatsView={seatsView}
-          seatUpdatingUserId={seatUpdatingUserId}
-          onSeatChange={(m, from, to) => void handleSeatChange(m, from, to)}
-          onInviteEmailChange={setInviteEmail}
-          onInvite={handleInviteMember}
-          onRoleChange={handleMemberRoleChange}
-          onRefresh={() => void loadWorkspaceMembers()}
-        />
-
-        {/* Schemas section */}
-        <SchemasSection
-          schemas={schemas}
-          loading={schemasLoading}
-          error={schemasError}
-          expandedSchema={expandedSchema}
-          onToggleSchema={setExpandedSchema}
-          onRefresh={loadSchemas}
-          namespaceName={activeNs?.name}
-        />
-
+        <p className="papr-section__team-link">
+          Organization, team members and seats are in 
+          <button type="button" className="papr-section__inline-link"
+            onClick={() => window.dispatchEvent(new CustomEvent("papr:open-settings", { detail: { tab: "team" } }))}>
+            Team
+          </button>.
+        </p>
       </div>
     );
   }
@@ -1409,13 +1348,12 @@ function WorkspaceTeamSection({
   inviteEmail,
   inviteLoading,
   inviteMessage,
-  roleUpdatingUserId,
+  busyUserId,
   seatsView,
-  seatUpdatingUserId,
-  onSeatChange,
+  onPlanChange,
   onInviteEmailChange,
   onInvite,
-  onRoleChange,
+  onAccessChange,
   onRefresh,
 }: {
   workspaceName?: string;
@@ -1426,410 +1364,50 @@ function WorkspaceTeamSection({
   inviteEmail: string;
   inviteLoading: boolean;
   inviteMessage: string | null;
-  roleUpdatingUserId: string | null;
+  busyUserId: string | null;
   seatsView: BuildersView | null;
-  seatUpdatingUserId: string | null;
-  onSeatChange: (member: WorkspaceMember, from: string, to: string) => void;
+  onPlanChange: (member: WorkspaceMember, from: string, to: string) => void;
   onInviteEmailChange: (value: string) => void;
   onInvite: () => void;
-  onRoleChange: (member: WorkspaceMember, newRole: WorkspaceRoleName) => void;
+  onAccessChange: (member: WorkspaceMember, role: WorkspaceRoleName, plan?: string) => void;
   onRefresh: () => void;
 }) {
-  const [isCollapsed, setIsCollapsed] = useState(false);
-  const usage = usageByUser(seatsView);
-  const plan = PAPR_CREDIT_PLANS.find((p) => p.id === seatsView?.plan);
-
   return (
-    <div className="papr-team">
+    <div className="papr-team papr-team--tab">
       <div className="papr-team__header">
-        <button
-          className="papr-team__toggle"
-          onClick={() => setIsCollapsed(!isCollapsed)}
-          type="button"
-        >
-          <svg
-            className={`papr-team__chevron ${!isCollapsed ? "papr-team__chevron--open" : ""}`}
-            width="12"
-            height="12"
-            viewBox="0 0 24 24"
-            fill="none"
-            stroke="currentColor"
-            strokeWidth="2"
-          >
-            <polyline points="9 18 15 12 9 6" />
-          </svg>
-          <span>Team</span>
-          <span className="papr-team__count">{members.length}</span>
-        </button>
-        <button
-          type="button"
-          className="papr-team__refresh"
-          onClick={onRefresh}
-          disabled={loading}
-          title="Refresh team"
-        >
+        <span className="papr-team__title">
+          Members <span className="papr-team__count">{members.length}</span>
+          {workspaceName && <span className="papr-team__meta-inline">{workspaceName}</span>}
+        </span>
+        <button type="button" className="papr-team__refresh" onClick={onRefresh} disabled={loading}
+          title="Refresh team">
           {loading ? <Spinner /> : "Refresh"}
         </button>
       </div>
-
-      {!isCollapsed && (
-        <div className="papr-team__body">
-          <p className="papr-team__hint">
-            People here can open cloud apps shared as <strong>My team</strong> on apps.papr.ai.
-            Team membership controls cloud access on apps.papr.ai.
-          </p>
-
-          {workspaceName && (
-            <div className="papr-team__meta">
-              <span>{workspaceName}</span>
-            </div>
-          )}
-
-          <div className="papr-team__invite">
-            <input
-              type="email"
-              className="papr-team__input"
-              placeholder="colleague@company.com"
-              value={inviteEmail}
-              onChange={(e) => onInviteEmailChange(e.target.value)}
-              onKeyDown={(e) => {
-                if (e.key === "Enter") onInvite();
-              }}
-              disabled={inviteLoading}
-            />
-            <button
-              type="button"
-              className="papr-team__invite-btn"
-              onClick={onInvite}
-              disabled={inviteLoading || !inviteEmail.trim()}
-            >
-              {inviteLoading ? <Spinner /> : "Invite"}
-            </button>
-          </div>
-
-          {inviteMessage && (
-            <p className="papr-team__message">{inviteMessage}</p>
-          )}
-
-          {seatsView && (
-            <div className="papr-team__seats">
-              <span>
-                <strong>{seatsView.seats}</strong> builder seat{seatsView.seats === 1 ? "" : "s"}
-                {seatsView.planOptions?.length
-                  ? ` · $${monthlySeatTotal(seatsView)}/mo`
-                  : plan ? ` · ${plan.name} · $${plan.pricePerSeat * seatsView.seats}/mo` : ""}
-              </span>
-              <span className="papr-team__seats-note">
-                Each builder gets their plan's credits. Members pay per credit
-                (up to {formatCredits(seatsView.memberCap)}/mo). One bill for the team.
-                {!seatsView.seatsInSync && " Seat count is syncing."}
-              </span>
-            </div>
-          )}
-
-          <ul className="papr-team__list">
-            {members.map((member) => {
-              const role = normalizeWorkspaceRole(member.user.role);
-              const canEditRole =
-                currentUserId !== null &&
-                canModifyMemberRole({
-                  currentUserId,
-                  currentUserRole,
-                  targetMember: member,
-                  members,
-                });
-              const isUpdatingRole = roleUpdatingUserId === member.user.objectId;
-              const row = usage.get(member.user.objectId);
-              const roles = row?.roles ?? [];
-              // The role says what they are now; row.seat stays true until renewal after a
-              // demote (they keep the credits), so it must not drive the menu.
-              const builder = seatsView ? isBuilderRoles(roles) : false;
-              const keepsSeat = !builder && !!row?.seat;
-              const lockedBuilder = isRoleBuilder(roles) || role === "owner" || role === "admin";
-              const seatBusy = seatUpdatingUserId === member.user.objectId;
-
-              return (
-                <li key={member.objectId} className="papr-team__member">
-                  <UserAvatar
-                    imageUrl={member.user.profileImageUrl}
-                    displayName={member.user.displayName}
-                    email={member.user.email}
-                    size={32}
-                  />
-                  <div className="papr-team__member-info">
-                    <span className="papr-team__member-name">{member.user.displayName}</span>
-                    <span className="papr-team__member-email">
-                      {member.user.email}
-                      {seatsView && row && row.used > 0 && (
-                        <>
-                          {" · "}
-                          {formatCredits(row.used)}
-                          {builder ? ` / ${formatCredits(row.grant)}` : ""} credits
-                          {row.overageUsd > 0 ? ` · $${row.overageUsd.toFixed(2)} extra` : ""}
-                        </>
-                      )}
-                    </span>
-                  </div>
-                  {seatsView && (() => {
-                    const value = seatValue(seatsView, row, builder);
-                    const options = seatsView.planOptions ?? [];
-                    if (seatBusy) return <span className="papr-team__seat"><Spinner /></span>;
-                    if (!options.length) {
-                      // Server without per-seat plans: plain Builder / Member toggle.
-                      return (
-                        <button
-                          type="button"
-                          className={`papr-team__seat${builder ? " papr-team__seat--on" : ""}`}
-                          disabled={lockedBuilder || loading}
-                          title={lockedBuilder ? "Owners and admins are always builders" : undefined}
-                          onClick={() => onSeatChange(member, value, builder ? "member" : (seatsView.plan ?? "member"))}
-                        >
-                          {builder ? "Builder" : "Member"}
-                        </button>
-                      );
-                    }
-                    const until = row?.planUntilPeriodEnd
-                      ? options.find((o) => o.key === row.planUntilPeriodEnd)?.name
-                      : undefined;
-                    return (
-                      <select
-                        className={`papr-team__seat${builder ? " papr-team__seat--on" : ""}`}
-                        value={value}
-                        disabled={loading}
-                        aria-label={`Seat for ${member.user.displayName}`}
-                        title={
-                          until
-                            ? `Keeps ${until} credits until this period ends`
-                            : keepsSeat
-                              ? "Member from renewal: keeps builder credits until this period ends"
-                              : builder
-                              ? "Builder: a paid seat with its plan's credits"
-                              : "Member: no seat, pays per credit"
-                        }
-                        onChange={(e) => onSeatChange(member, value, e.target.value)}
-                      >
-                        <option value="member" disabled={lockedBuilder}>
-                          Member{lockedBuilder ? " (owners/admins are builders)" : ""}
-                        </option>
-                        {options.map((o) => (
-                          <option key={o.key} value={o.key}>
-                            {o.name.replace(/^Cloud /, "")} · ${o.price}/mo
-                          </option>
-                        ))}
-                      </select>
-                    );
-                  })()}
-                  {canEditRole ? (
-                    <select
-                      className="papr-team__role-select"
-                      value={role}
-                      disabled={loading || isUpdatingRole}
-                      aria-label={`Role for ${member.user.displayName}`}
-                      onChange={(event) =>
-                        onRoleChange(member, event.target.value as WorkspaceRoleName)
-                      }
-                    >
-                      {WORKSPACE_ROLE_PRIORITY.map((option) => (
-                        <option key={option} value={option}>
-                          {formatWorkspaceRoleLabel(option)}
-                        </option>
-                      ))}
-                    </select>
-                  ) : (
-                    <span className="papr-team__role">{formatWorkspaceRoleLabel(role)}</span>
-                  )}
-                </li>
-              );
-            })}
-            {!loading && members.length === 0 && (
-              <li className="papr-team__empty">No team members loaded yet.</li>
-            )}
-          </ul>
-        </div>
-      )}
-    </div>
-  );
-}
-
-function SchemasSection({
-  schemas,
-  loading,
-  error,
-  expandedSchema,
-  onToggleSchema,
-  onRefresh,
-  namespaceName,
-}: {
-  schemas: SchemaInfo[];
-  loading: boolean;
-  error?: string | null;
-  expandedSchema: string | null;
-  onToggleSchema: (id: string | null) => void;
-  onRefresh: () => void;
-  namespaceName?: string;
-}) {
-  const [isCollapsed, setIsCollapsed] = useState(true);
-
-  const activeSchemas = schemas.filter(s => s.status === "active");
-  const draftSchemas = schemas.filter(s => s.status === "draft");
-  const otherSchemas = schemas.filter(s => s.status !== "active" && s.status !== "draft");
-
-  return (
-    <div className="papr-schemas">
-      <div className="papr-schemas__header">
-        <button
-          className="papr-schemas__toggle"
-          onClick={() => setIsCollapsed(!isCollapsed)}
-        >
-          <svg
-            className={`papr-schemas__chevron ${!isCollapsed ? "papr-schemas__chevron--open" : ""}`}
-            width="12"
-            height="12"
-            viewBox="0 0 24 24"
-            fill="none"
-            stroke="currentColor"
-            strokeWidth="2"
-          >
-            <polyline points="6 9 12 15 18 9"/>
-          </svg>
-          <h4 className="papr-schemas__title">
-            Schemas
-            {schemas.length > 0 && (
-              <span className="papr-schemas__count-badge">{schemas.length}</span>
-            )}
-            {namespaceName && (
-              <span className="papr-schemas__ns-badge">{namespaceName}</span>
-            )}
-          </h4>
-        </button>
-        <button
-          className="papr-schemas__refresh"
-          onClick={onRefresh}
-          disabled={loading}
-          title="Refresh schemas"
-        >
-          <svg
-            width="14"
-            height="14"
-            viewBox="0 0 24 24"
-            fill="none"
-            stroke="currentColor"
-            strokeWidth="2"
-            className={loading ? "papr-spinner" : ""}
-          >
-            <path d="M21.5 2v6h-6M2.5 22v-6h6M2 11.5a10 10 0 0 1 18.8-4.3M22 12.5a10 10 0 0 1-18.8 4.2"/>
-          </svg>
+      <p className="papr-team__hint">
+        People here can open cloud apps shared with <strong>My team</strong> on apps.papr.ai.
+      </p>
+      <div className="papr-team__invite">
+        <input type="email" className="papr-team__input" placeholder="colleague@company.com"
+          value={inviteEmail} onChange={(e) => onInviteEmailChange(e.target.value)}
+          onKeyDown={(e) => { if (e.key === "Enter") onInvite(); }} disabled={inviteLoading} />
+        <button type="button" className="papr-team__invite-btn" onClick={onInvite}
+          disabled={inviteLoading || !inviteEmail.trim()}>
+          {inviteLoading ? <Spinner /> : "Invite"}
         </button>
       </div>
-
-      {!isCollapsed && (
-        <>
-          {loading && schemas.length === 0 && !error && (
-            <div className="papr-schemas__empty">Loading schemas...</div>
-          )}
-
-          {error && (
-            <div className="papr-schemas__empty papr-schemas__empty--error">
-              {error}
-            </div>
-          )}
-
-          {!loading && schemas.length === 0 && !error && (
-            <div className="papr-schemas__empty">
-              No schemas in this namespace. The agent can create schemas using <code>register_schema</code>.
-            </div>
-          )}
-
-          {schemas.length > 0 && (
-            <div className="papr-schemas__list">
-              {[...activeSchemas, ...draftSchemas, ...otherSchemas].map((schema) => (
-                <SchemaCard
-                  key={schema.id}
-                  schema={schema}
-                  isExpanded={expandedSchema === schema.id}
-                  onToggle={() => onToggleSchema(expandedSchema === schema.id ? null : schema.id)}
-                />
-              ))}
-            </div>
-          )}
-        </>
-      )}
+      {inviteMessage && <p className="papr-team__message">{inviteMessage}</p>}
+      <TeamMembersTable
+        members={members}
+        currentUserId={currentUserId}
+        currentUserRole={currentUserRole}
+        loading={loading}
+        busyUserId={busyUserId}
+        seatsView={seatsView}
+        onPlanChange={onPlanChange}
+        onAccessChange={onAccessChange}
+      />
     </div>
   );
 }
 
-function SchemaCard({
-  schema,
-  isExpanded,
-  onToggle,
-}: {
-  schema: SchemaInfo;
-  isExpanded: boolean;
-  onToggle: () => void;
-}) {
-  return (
-    <div className={`papr-schema-card ${isExpanded ? "papr-schema-card--expanded" : ""}`}>
-      <button className="papr-schema-card__header" onClick={onToggle}>
-        <div className="papr-schema-card__info">
-          <span className="papr-schema-card__name">{schema.name}</span>
-          <span className={`papr-schema-card__status papr-schema-card__status--${schema.status}`}>
-            {schema.status}
-          </span>
-        </div>
-        <div className="papr-schema-card__meta">
-          <span className="papr-schema-card__count">{schema.nodeTypeCount} types</span>
-          <span className="papr-schema-card__count">{schema.relationshipTypeCount} rels</span>
-          <svg
-            className={`papr-schema-card__chevron ${isExpanded ? "papr-schema-card__chevron--open" : ""}`}
-            width="12"
-            height="12"
-            viewBox="0 0 24 24"
-            fill="none"
-            stroke="currentColor"
-            strokeWidth="2"
-          >
-            <polyline points="6 9 12 15 18 9"/>
-          </svg>
-        </div>
-      </button>
-
-      {isExpanded && (
-        <div className="papr-schema-card__details">
-          {schema.description && (
-            <p className="papr-schema-card__description">{schema.description}</p>
-          )}
-
-          {schema.nodeTypeNames.length > 0 && (
-            <div className="papr-schema-card__section">
-              <span className="papr-schema-card__section-label">Node Types</span>
-              <div className="papr-schema-card__tags">
-                {schema.nodeTypeNames.map((name) => (
-                  <span key={name} className="papr-schema-card__tag papr-schema-card__tag--node">
-                    {name}
-                  </span>
-                ))}
-              </div>
-            </div>
-          )}
-
-          {schema.relationshipTypeNames.length > 0 && (
-            <div className="papr-schema-card__section">
-              <span className="papr-schema-card__section-label">Relationships</span>
-              <div className="papr-schema-card__tags">
-                {schema.relationshipTypeNames.map((name) => (
-                  <span key={name} className="papr-schema-card__tag papr-schema-card__tag--rel">
-                    {name}
-                  </span>
-                ))}
-              </div>
-            </div>
-          )}
-
-          {schema.version && (
-            <span className="papr-schema-card__version">v{schema.version}</span>
-          )}
-        </div>
-      )}
-    </div>
-  );
-}
