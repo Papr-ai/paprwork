@@ -235,17 +235,11 @@ export async function resolveLinkedSourceDbPath(input: {
     return path.normalize(stored);
   }
 
-  if (input.jobId) {
-    const canonical = path.join(
-      input.jobsRoot,
-      input.jobId,
-      "data",
-      "data.db",
-    );
-    if (existsSync(canonical)) {
-      return canonical;
-    }
-    return canonical;
+  // A registry DB (dbId) wins over the producing job's id. Sources like Home's
+  // briefs carry both; resolving the jobId first returned Jobs/{id}/data/data.db,
+  // which the Turso watcher skips as job scratch, so replica writes never auto-pushed.
+  if (input.jobId && !input.dbId) {
+    return path.join(input.jobsRoot, input.jobId, "data", "data.db");
   }
 
   const dataDir = input.dataDir ?? getPaprDataDir();
@@ -282,5 +276,8 @@ export async function resolveLinkedSourceDbPath(input: {
     }
   }
 
+  if (input.jobId) {
+    return path.join(input.jobsRoot, input.jobId, "data", "data.db");
+  }
   return null;
 }

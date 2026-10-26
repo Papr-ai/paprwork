@@ -33,6 +33,8 @@ describe("TursoLinkedDbWatcher", () => {
     expect(isLinkedJobSqliteFile(dbPath)).toBe(true);
     expect(isLinkedJobSqliteFile(`${dbPath}-wal`)).toBe(true);
     expect(isLinkedJobSqliteFile(`${dbPath}-shm`)).toBe(true);
+    expect(isLinkedJobSqliteFile(`${dbPath}-changes`)).toBe(true);
+    expect(isLinkedJobSqliteFile(`${dbPath}-info`)).toBe(false);
     expect(isLinkedJobSqliteFile(path.join(dataDir, "other.db"))).toBe(false);
     expect(isLinkedJobSqliteFile(path.join(dataDir, "export.csv"))).toBe(false);
   });
