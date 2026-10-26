@@ -1173,6 +1173,14 @@
   cursor: pointer;
 }
 
+select.papr-team__seat {
+  appearance: none;
+  -webkit-appearance: none;
+  text-align: center;
+  text-align-last: center;
+  min-width: 112px;
+}
+
 .papr-team__seat--on {
   color: var(--text-primary);
   border-color: var(--accent-color, var(--text-secondary));

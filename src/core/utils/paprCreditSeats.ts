@@ -16,6 +16,17 @@ export interface BuilderUsageRow {
   overageCredits: number;
   overageUsd: number;
   memberCap?: number;
+  /** Builders: the plan this seat is on (may differ from the org's default plan). */
+  plan?: string;
+  /** Downgraded this period: keeps this plan's credits until renewal. */
+  planUntilPeriodEnd?: string;
+}
+
+export interface SeatPlanOption {
+  key: string;
+  name: string;
+  price: number;
+  credits: number;
 }
 
 export interface BuildersView {
@@ -31,6 +42,43 @@ export interface BuildersView {
   builderUsage: BuilderUsageRow[];
   members: string[];
   memberUsage: BuilderUsageRow[];
+  /** {plan: seats on it}. */
+  seatPlans?: Record<string, number>;
+  planOptions?: SeatPlanOption[];
+}
+
+/** What a person's seat is: "member" or a plan key. */
+export function seatValue(view: BuildersView | null, row: BuilderUsageRow | undefined, builder: boolean): string {
+  if (!builder) return "member";
+  return row?.plan ?? view?.plan ?? "member";
+}
+
+/** Monthly seat total across plans. */
+export function monthlySeatTotal(view: BuildersView | null): number {
+  if (!view) return 0;
+  const price = new Map((view.planOptions ?? []).map((o) => [o.key, o.price]));
+  const counts = view.seatPlans ?? (view.plan ? { [view.plan]: view.seats } : {});
+  return Object.entries(counts).reduce((sum, [k, n]) => sum + (price.get(k) ?? 0) * n, 0);
+}
+
+/** Confirm text for changing a seat from `from` to `to` ("member" or a plan key). */
+export function seatChangeMessage(view: BuildersView, name: string, from: string, to: string): string {
+  const opt = (k: string) => (view.planOptions ?? []).find((o) => o.key === k);
+  const cap = formatCredits(view.memberCap);
+  if (to === "member") {
+    return `Make ${name} a member?\n\nThey keep their builder credits until this period ends; the seat comes off your bill at renewal. ` +
+      `After that they pay per credit they use, up to ${cap} a month.`;
+  }
+  const next = opt(to);
+  const label = next ? `${next.name} ($${next.price}/mo, ${formatCredits(next.credits)} credits)` : to;
+  if (from === "member") {
+    return `Make ${name} a builder on ${label}?\n\nAdds a seat to your bill, charged now for the rest of this period.`;
+  }
+  const prev = opt(from);
+  if (prev && next && next.price > prev.price) {
+    return `Move ${name} to ${label}?\n\nThe difference is charged now for the rest of this period, and the extra credits apply right away.`;
+  }
+  return `Move ${name} to ${label}?\n\nThey keep ${prev?.name ?? "their current plan"}'s credits until this period ends; the lower price starts at renewal.`;
 }
 
 const BUILDER_ROLES = new Set(["owner", "admin", "moderator", "expert"]);
@@ -93,19 +141,23 @@ export async function fetchBuilders(
   return (await credits(baseUrl, sessionToken, "/builders", {}, fetchImpl)) as BuildersView;
 }
 
+export type SetBuilderResult = {
+  builder?: boolean;
+  when?: "now" | "period_end";
+  seats?: { builders?: number; changed?: boolean; error?: string };
+};
+
+/** builder=false -> member. builder=true with plan -> that seat on that plan (new or existing builder). */
 export async function setBuilder(
   baseUrl: string,
   sessionToken: string,
   userId: string,
   builder: boolean,
   fetchImpl?: typeof fetch,
-): Promise<{ builder: boolean; seats?: { builders?: number; changed?: boolean; error?: string } }> {
+  plan?: string,
+): Promise<SetBuilderResult> {
   if (!/^[A-Za-z0-9]{1,40}$/.test(userId)) throw new Error("Invalid user id");
-  return (await credits(
-    baseUrl,
-    sessionToken,
-    `/builders/${userId}`,
-    { method: "POST", body: { builder } },
-    fetchImpl,
-  )) as { builder: boolean; seats?: { builders?: number; changed?: boolean; error?: string } };
+  if (plan !== undefined && (!builder || !/^[a-z_]{1,32}$/.test(plan))) throw new Error("Invalid plan");
+  const body = plan ? { builder, plan } : { builder };
+  return (await credits(baseUrl, sessionToken, `/builders/${userId}`, { method: "POST", body }, fetchImpl)) as SetBuilderResult;
 }

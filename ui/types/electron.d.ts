@@ -482,9 +482,9 @@ export interface ElectronAPI {
       view?: import("../../src/core/utils/paprCreditSeats").BuildersView;
       error?: string;
     }>;
-    setBuilder: (input: { userId: string; builder: boolean }) => Promise<{
+    setBuilder: (input: { userId: string; builder: boolean; plan?: string }) => Promise<{
       success: boolean;
-      result?: { builder: boolean; seats?: { builders?: number; changed?: boolean; error?: string } };
+      result?: import("../../src/core/utils/paprCreditSeats").SetBuilderResult;
       error?: string;
     }>;
     startExpertBuildCheckout: (input: {

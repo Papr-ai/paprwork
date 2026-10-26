@@ -906,11 +906,14 @@ export function registerPaprBillingHandlers(deps: {
 
   ipcMain.handle(
     "papr:set-builder",
-    async (_event, input: { userId: string; builder: boolean }) => {
+    async (_event, input: { userId: string; builder: boolean; plan?: string }) => {
       try {
         if (typeof input?.builder !== "boolean") throw new Error("builder must be true or false");
+        if (input.plan !== undefined && typeof input.plan !== "string") throw new Error("plan must be a string");
         const profile = requireLoggedInProfile(deps.settingsStorage);
-        const result = await setBuilder(memoryBaseUrl(), profile.sessionToken!, input.userId, input.builder);
+        const result = await setBuilder(
+          memoryBaseUrl(), profile.sessionToken!, input.userId, input.builder, undefined, input.plan,
+        );
         invalidatePlanSummaryCache();
         return { success: true, result };
       } catch (error) {

@@ -4,6 +4,9 @@ import {
   formatCredits,
   isBuilderRoles,
   isRoleBuilder,
+  monthlySeatTotal,
+  seatChangeMessage,
+  seatValue,
   setBuilder,
   usageByUser,
   type BuildersView,
@@ -59,5 +62,39 @@ describe("paprCreditSeats", () => {
     await expect(setBuilder("https://m", "r:tok", "abc123", false, bad as unknown as typeof fetch))
       .rejects.toThrow("org owner or admin required");
     await expect(setBuilder("https://m", "r:tok", "../x", true, ok as unknown as typeof fetch)).rejects.toThrow("Invalid user id");
+  });
+
+  const opts = [
+    { key: "cloud", name: "Cloud", price: 30, credits: 30_000 },
+    { key: "cloud_plus", name: "Cloud Max 5x", price: 100, credits: 150_000 },
+    { key: "cloud_max", name: "Cloud Max 20x", price: 300, credits: 500_000 },
+  ];
+
+  it("totals seats across plans", () => {
+    expect(monthlySeatTotal(view({ planOptions: opts, seatPlans: { cloud_plus: 1, cloud_max: 1 } }))).toBe(400);
+    expect(monthlySeatTotal(view({ planOptions: opts }))).toBe(200);   // falls back to plan x seats
+  });
+
+  it("reads a person's seat value", () => {
+    const v = view({ planOptions: opts });
+    expect(seatValue(v, undefined, false)).toBe("member");
+    expect(seatValue(v, { ...v.builderUsage[0], plan: "cloud_max" }, true)).toBe("cloud_max");
+    expect(seatValue(v, v.builderUsage[0], true)).toBe("cloud_plus");
+  });
+
+  it("explains each kind of seat change", () => {
+    const v = view({ planOptions: opts });
+    expect(seatChangeMessage(v, "Ana", "member", "cloud_max")).toMatch(/builder on Cloud Max 20x \(\$300\/mo.*charged now/s);
+    expect(seatChangeMessage(v, "Ana", "cloud", "cloud_max")).toMatch(/difference is charged now/);
+    expect(seatChangeMessage(v, "Ana", "cloud_max", "cloud")).toMatch(/keep Cloud Max 20x's credits until this period ends/);
+    expect(seatChangeMessage(v, "Ana", "cloud", "member")).toMatch(/a member\?/);
+  });
+
+  it("sends the seat plan", async () => {
+    const ok = vi.fn(async () => new Response(JSON.stringify({ when: "now" }), { status: 200 }));
+    await setBuilder("https://m", "r:tok", "abc123", true, ok as unknown as typeof fetch, "cloud_max");
+    const [, init] = ok.mock.calls[0] as unknown as [string, RequestInit];
+    expect(JSON.parse(String(init.body))).toEqual({ builder: true, plan: "cloud_max" });
+    await expect(setBuilder("https://m", "r:tok", "abc123", false, ok as unknown as typeof fetch, "cloud")).rejects.toThrow("Invalid plan");
   });
 });
