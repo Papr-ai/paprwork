@@ -9,7 +9,7 @@ import * as dotenv from "dotenv";
 import {
   listSchemasTool,
   registerSchemaTool,
-} from "../src/core/tools/paprMemory.js";
+} from "../../src/core/tools/paprMemory.js";
 
 // Load environment variables
 dotenv.config();

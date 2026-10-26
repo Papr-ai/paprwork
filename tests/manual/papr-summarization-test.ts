@@ -3,7 +3,7 @@
  * Test PAPR Memory SDK summarization behavior
  * Tests how summaries are generated with different message counts
  */
-import { PaprMemoryProvider } from '../src/gateway/services/storage/PaprMemoryProvider';
+import { PaprMemoryProvider } from '../../src/gateway/services/storage/PaprMemoryProvider';
 import type { MessageStoreParams } from '@papr/memory';
 import { config } from 'dotenv';
 import { dirname, join } from 'path';

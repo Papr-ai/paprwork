@@ -2,7 +2,7 @@
  * System Prompt Debug - Output actual prompt for inspection
  */
 
-import { buildSystemPrompt } from "../src/core/agents/SystemPrompt.js";
+import { buildSystemPrompt } from "../../src/core/agents/SystemPrompt.js";
 import { writeFileSync } from "fs";
 
 const prompt = buildSystemPrompt({

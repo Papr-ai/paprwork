@@ -1,4 +1,4 @@
-import { RecipeService } from "../src/gateway/services/jobs/RecipeService.js";
+import { RecipeService } from "../../src/gateway/services/jobs/RecipeService.js";
 import { promises as fs } from "fs";
 import path from "path";
 import os from "os";

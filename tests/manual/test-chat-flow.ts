@@ -3,7 +3,7 @@
  * Run with: npx tsx tests/test-chat-flow.ts
  */
 
-import { getAgentService, initializeAgentService } from '../src/gateway/services/AgentService.js';
+import { getAgentService, initializeAgentService } from '../../src/gateway/services/AgentService.js';
 import { v4 as uuidv4 } from 'uuid';
 import * as fs from 'fs-extra';
 import * as path from 'path';

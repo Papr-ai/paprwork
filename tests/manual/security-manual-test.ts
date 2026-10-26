@@ -9,7 +9,7 @@ import {
   truncateResult,
   substituteCustomKeys,
   MAX_TOOL_RESULT_LENGTH,
-} from '../src/core/tools/security.js';
+} from '../../src/core/tools/security.js';
 
 console.log('🔐 Testing Security Features - Phase 1\n');
 
