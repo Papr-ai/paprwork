@@ -18,6 +18,7 @@ import { buildDiscoverHtml, buildRobotsTxt, buildSitemapXml, type DiscoverView }
 export interface DiscoverMedia {
   kind?: string;
   role?: string;
+  scheme?: string | null;
   url?: string | null;
   posterUrl?: string | null;
   alt?: string | null;
