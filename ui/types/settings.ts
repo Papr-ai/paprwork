@@ -81,6 +81,7 @@ export type SettingsTab =
   | "platforms"
   | "connections"
   | "profile"
+  | "team"
   | "billing"
   | "permissions"
   | "privacy"

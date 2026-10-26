@@ -62,23 +62,47 @@ export function monthlySeatTotal(view: BuildersView | null): number {
 }
 
 /** Confirm text for changing a seat from `from` to `to` ("member" or a plan key). */
-export function seatChangeMessage(view: BuildersView, name: string, from: string, to: string): string {
+/** "member" in the seat menu = pay as you go (no seat). */
+export const PAYG = "member";
+
+export interface SeatChange {
+  /** true = charged now (new seat or upgrade): needs an explicit confirm. false = nothing
+   *  charged now (downgrade / pay as you go): applied after an undo window. */
+  chargesNow: boolean;
+  /** Monthly price difference ($), positive = more. */
+  deltaPerMonth: number;
+  /** One line for the inline confirm / undo toast. */
+  summary: string;
+}
+
+/** What moving a seat from -> to does to the bill. Plan keys or PAYG. */
+export function describeSeatChange(view: BuildersView, from: string, to: string): SeatChange {
   const opt = (k: string) => (view.planOptions ?? []).find((o) => o.key === k);
+  const price = (k: string) => (k === PAYG ? 0 : opt(k)?.price ?? 0);
+  const name = (k: string) => (k === PAYG ? "Pay as you go" : opt(k)?.name ?? k);
+  const delta = price(to) - price(from);
   const cap = formatCredits(view.memberCap);
-  if (to === "member") {
-    return `Make ${name} a member?\n\nThey keep their builder credits until this period ends; the seat comes off your bill at renewal. ` +
-      `After that they pay per credit they use, up to ${cap} a month.`;
+  if (to === PAYG) {
+    return { chargesNow: false, deltaPerMonth: delta,
+      summary: `Keeps ${name(from)} credits until renewal, then pays per credit (up to ${cap}/mo).` };
   }
-  const next = opt(to);
-  const label = next ? `${next.name} ($${next.price}/mo, ${formatCredits(next.credits)} credits)` : to;
-  if (from === "member") {
-    return `Make ${name} a builder on ${label}?\n\nAdds a seat to your bill, charged now for the rest of this period.`;
+  if (from === PAYG) {
+    return { chargesNow: true, deltaPerMonth: delta,
+      summary: `Adds a ${name(to)} seat: +$${delta}/mo, the rest of this period is charged now.` };
   }
-  const prev = opt(from);
-  if (prev && next && next.price > prev.price) {
-    return `Move ${name} to ${label}?\n\nThe difference is charged now for the rest of this period, and the extra credits apply right away.`;
+  if (delta > 0) {
+    return { chargesNow: true, deltaPerMonth: delta,
+      summary: `+$${delta}/mo. The difference for the rest of this period is charged now; credits apply right away.` };
   }
-  return `Move ${name} to ${label}?\n\nThey keep ${prev?.name ?? "their current plan"}'s credits until this period ends; the lower price starts at renewal.`;
+  return { chargesNow: false, deltaPerMonth: delta,
+    summary: `−$${-delta}/mo from renewal. Keeps ${name(from)} credits until then.` };
+}
+
+/** Short plan label for menus: "Max 20x · $300". */
+export function planLabel(view: BuildersView | null, key: string): string {
+  if (key === PAYG) return "Pay as you go";
+  const o = (view?.planOptions ?? []).find((x) => x.key === key);
+  return o ? `${o.name.replace(/^Cloud /, "")} · $${o.price}` : key;
 }
 
 const BUILDER_ROLES = new Set(["owner", "admin", "moderator", "expert"]);
