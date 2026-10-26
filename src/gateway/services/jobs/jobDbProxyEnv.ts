@@ -38,10 +38,16 @@ export function leaseJobDbProxyEnv(
   const linkedAppId =
     appId && appId !== STANDALONE_APP_ID ? appId : undefined;
 
+  // The session lists every replica-managed database the job may write, so a
+  // job can name one by dbId, registry label, or its app's alias — and a job
+  // with two such databases can reach both (not just the first).
+  const allowedDbIds = targets.filter(isReplicaManagedTarget).map((t) => t.dbId);
+
   const env = mintBackendDbProxyEnv({
     appId: linkedAppId ?? STANDALONE_APP_ID,
     sourceId: replicaTarget.alias,
     registryDbId: linkedAppId ? undefined : replicaTarget.dbId,
+    allowedDbIds,
     proxyBaseUrl: `http://127.0.0.1:${GATEWAY_PORT}`,
     ttlMs: JOB_PROXY_TTL_MS,
   });

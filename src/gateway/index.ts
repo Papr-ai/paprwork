@@ -1899,6 +1899,18 @@ async function startGateway(): Promise<void> {
       "/internal/backend-db",
       createDesktopBackendDbProxyRouter({
         resolveSource: resolveLinkedSource,
+        registryLabel: async (dbId) => {
+          const { getDatabaseRegistryService } =
+            await import("./services/DatabaseRegistryService.js");
+          const record = getDatabaseRegistryService().getById(dbId);
+          return record && record.status === "active" ? record.label ?? null : null;
+        },
+        appDbAliases: async (appId) => {
+          const config = await getAppService().getDataSourcesConfig(appId);
+          return config.sources
+            .filter((s) => s.dbId)
+            .map((s) => ({ dbId: s.dbId as string, alias: s.alias }));
+        },
         resolveRegistrySource: async (dbId, sourceId) => {
           const { getDatabaseRegistryService } =
             await import("./services/DatabaseRegistryService.js");
