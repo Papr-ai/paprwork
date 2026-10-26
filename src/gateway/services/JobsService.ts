@@ -150,6 +150,8 @@ export class JobsService {
   private legacyJobsRootDir: string;
   private legacyJobsIndexPath: string;
   private attemptControllers = new Map<string, AbortController>();
+  /** Manual cloud runs in flight: no local process, so the stale-running watchdog must skip them. */
+  private cloudRuns = new Set<string>();
   /**
    * Jobs between "accepted a run" and "attempt controller registered". The
    * running/attemptControllers check is followed by several awaits before
@@ -3569,7 +3571,12 @@ export class JobsService {
     if (!job || job.status !== "running") {
       return false;
     }
-    if (this.running.has(jobId) || this.agentRuns.has(jobId) || this.attemptControllers.has(jobId)) {
+    if (
+      this.running.has(jobId) ||
+      this.agentRuns.has(jobId) ||
+      this.attemptControllers.has(jobId) ||
+      this.cloudRuns.has(jobId)
+    ) {
       return false;
     }
     await this.appendLog(
@@ -3590,10 +3597,18 @@ export class JobsService {
 
   /** Run on Papr Cloud (memory server) while desktop is awake — for testing cloud execution. */
   async runJobInCloud(jobId: string): Promise<JobRecord> {
+    if (this.cloudRuns.has(jobId)) {
+      throw new Error("Job is already running in the cloud");
+    }
     const { runJobInCloud: executeCloudJobRun } = await import(
       "./CloudJobRunService.js"
     );
-    return executeCloudJobRun(this, jobId);
+    this.cloudRuns.add(jobId);
+    try {
+      return await executeCloudJobRun(this, jobId);
+    } finally {
+      this.cloudRuns.delete(jobId);
+    }
   }
 
   /**
@@ -4029,6 +4044,8 @@ export class JobsService {
     const nowMs = Date.now();
     for (const [jobId, job] of this.jobs.entries()) {
       if (this.attemptControllers.has(jobId) && !this.running.has(jobId)) continue;
+      // A cloud run has no local process; its own request records the outcome.
+      if (this.cloudRuns.has(jobId)) continue;
       if (job.status !== "running") {
         continue;
       }
