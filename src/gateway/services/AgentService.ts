@@ -3067,9 +3067,12 @@ export class AgentService {
 
         // Widened from the SDK's narrower assistant|tool response type so the
         // continuation's own messages can be threaded back in.
-        let continuationMessages: ModelMessage[] = (
-          await aiSdkStreamResult.response
-        ).messages;
+        // Prompt + history first: the response alone opens on a model turn,
+        // which Gemini rejects once it is sent back as the next request.
+        let continuationMessages: ModelMessage[] = [
+          ...((streamTextOptions.messages as ModelMessage[] | undefined) ?? []),
+          ...(await aiSdkStreamResult.response).messages,
+        ];
 
         for (
           let attempt = 0;
