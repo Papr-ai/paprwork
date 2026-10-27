@@ -67,10 +67,17 @@ function banner(e: DiscoverEntry, opts: { video?: boolean } = {}): string {
   return `<span class="ban"><span class="dcover"><b>${esc(name(e))}</b></span></span>`;
 }
 
+/** Desktop rule: Preview = the live web app (unless it needs the desktop), Get = make your own copy. */
+const canPreview = (e: DiscoverEntry) => e.catalogRequiresDesktop !== true;
+
 function card(e: DiscoverEntry, me?: string): string {
-  return `<a class="card" href="${detailPath(e)}" data-d="${tplId(e)}" data-cat="${esc(category(e))}">
-${banner(e)}
-<span class="row">${dropGlyph(e, 44)}<span class="tx"><b>${esc(name(e))}</b><small>${esc(byline(e, me))}</small></span><span class="btn">Get</span></span></a>`;
+  const preview = canPreview(e)
+    ? `<a class="btn" href="${appPath(e)}" target="_blank" rel="noopener" title="Open the live web app">Preview</a>`
+    : "";
+  return `<div class="card" data-cat="${esc(category(e))}">
+<a class="card__ban" href="${detailPath(e)}" data-d="${tplId(e)}" aria-label="${esc(name(e))}">${banner(e)}</a>
+<span class="row"><a class="row__main" href="${detailPath(e)}" data-d="${tplId(e)}">${dropGlyph(e, 44)}<span class="tx"><b>${esc(name(e))}</b><small>${esc(byline(e, me))}</small></span></a>
+<span class="row__act">${preview}<a class="btn btn--solid" href="${detailPath(e)}" data-d="${tplId(e)}" title="Get this app">Get</a></span></span></div>`;
 }
 
 function ago(iso?: string | null): string | null {
@@ -88,6 +95,8 @@ const ICON = {
   check: '<svg viewBox="0 0 16 16" width="15" height="15" fill="none" stroke="currentColor" stroke-width="1.5"><path d="m3.5 8.5 3 3 6-7" stroke-linecap="round" stroke-linejoin="round"/></svg>',
   bolt: '<svg viewBox="0 0 16 16" width="15" height="15" fill="none" stroke="currentColor" stroke-width="1.5"><path d="M9 1.5 3.5 9H8l-1 5.5L12.5 7H8z" stroke-linejoin="round"/></svg>',
   globe: '<svg viewBox="0 0 16 16" width="15" height="15" fill="none" stroke="currentColor" stroke-width="1.5"><circle cx="8" cy="8" r="6"/><path d="M2 8h12M8 2c1.8 1.7 2.6 3.7 2.6 6S9.8 12.3 8 14C6.2 12.3 5.4 10.3 5.4 8S6.2 3.7 8 2z"/></svg>',
+  users: '<svg viewBox="0 0 24 24" width="13" height="13" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"><path d="M9 11a3.5 3.5 0 1 0 0-7 3.5 3.5 0 0 0 0 7ZM2.5 20c0-3.3 2.9-5.5 6.5-5.5s6.5 2.2 6.5 5.5M16 4.3a3.5 3.5 0 0 1 0 6.4M18 14.8c2.1.7 3.5 2.6 3.5 5.2"/></svg>',
+  info: '<svg viewBox="0 0 16 16" width="16" height="16" fill="none" stroke="currentColor" stroke-width="1.5"><circle cx="8" cy="8" r="6.2"/><path d="M8 7.2v3.8M8 5h.01" stroke-linecap="round"/></svg>',
   x: '<svg viewBox="0 0 16 16" width="14" height="14" fill="none" stroke="currentColor" stroke-width="1.8"><path d="m4 4 8 8M12 4l-8 8" stroke-linecap="round"/></svg>',
 };
 
@@ -107,7 +116,7 @@ function details(e: DiscoverEntry, me?: string): string {
   return `<article class="page" itemscope itemtype="https://schema.org/SoftwareApplication">
 <section class="hero"><div class="hero__media">${banner(e, { video: true })}</div>
 <div class="id">${dropGlyph(e, 88)}<div class="id__t"><h1 itemprop="name">${esc(name(e))}</h1>${e.catalogHeadline?.trim() ? `<p>${esc(e.catalogHeadline.trim())}</p>` : ""}</div>
-<div class="cta"><a class="btn btn--lg btn--solid" href="${appPath(e)}">Open</a><a class="btn btn--lg" href="${DOWNLOAD_URL}">Get Papr Work</a></div></div></section>
+<div class="cta">${canPreview(e) ? `<a class="btn btn--lg" href="${appPath(e)}" target="_blank" rel="noopener">Preview</a>` : ""}<a class="btn btn--lg btn--solid" href="${DOWNLOAD_URL}" title="Get Papr Work to make your own copy">Get</a></div></div></section>
 <ul class="facts">${facts.map(([v, k]) => `<li><b title="${esc(v)}">${esc(v)}</b><span>${esc(k)}</span></li>`).join("")}</ul>
 ${e.description ? `<section class="sec"><h2>About</h2><p class="desc" itemprop="description">${esc(e.description)}</p></section>` : ""}
 ${shots.length ? `<section class="sec"><h2>Screenshots</h2><div class="shots">${shots.map((m) => `<figure><img src="${esc(m.url!)}" alt="${esc(m.alt ?? `${name(e)} screenshot`)}" loading="lazy">${m.alt ? `<figcaption>${esc(m.alt)}</figcaption>` : ""}</figure>`).join("")}</div></section>` : ""}
@@ -148,6 +157,41 @@ function pills(apps: DiscoverEntry[]): string {
 const sortApps = (apps: DiscoverEntry[]) =>
   [...apps].sort((a, b) => (b.installCount ?? 0) - (a.installCount ?? 0) || name(a).localeCompare(name(b)));
 
+
+/** My apps — desktop AppsHome rows: droplet · name · status line · Open. No covers, no featured. */
+function mineRow(e: DiscoverEntry, me?: string): string {
+  const yours = Boolean(me && e.publisherUserId === me);
+  const updated = ago(e.updatedAt);
+  const line = [yours ? "" : `by ${e.author?.trim() || "Unknown"}`, updated ? `Updated ${updated}` : ""].filter(Boolean).join(" · ");
+  const shared = !yours || (e.visibility && e.visibility !== "private");
+  return `<div class="mrow" data-who="${yours ? "me" : "team"}" data-cat="${esc(category(e))}">
+<a class="mrow__main" href="${appPath(e)}" target="_blank" rel="noopener" title="${esc(name(e))}">${dropGlyph(e, 48)}<span class="mrow__txt"><span class="mrow__t"><b>${esc(name(e))}</b>${shared ? `<span class="mrow__mark" title="Shared">${ICON.users}</span>` : ""}</span>${e.description ? `<span class="mrow__d">${esc(e.description)}</span>` : ""}${line ? `<span class="mrow__s">${esc(line)}</span>` : ""}</span></a>
+<span class="mrow__act">${mineActions(e, yours)}</span></div>`;
+}
+
+/** Yours: Open. Someone else's: Preview (live web app) + Get when its code can be copied. */
+function mineActions(e: DiscoverEntry, yours: boolean): string {
+  const info = e.codeAccess === "install"
+    ? `<a class="mrow__info" href="${detailPath(e)}" data-d="${tplId(e)}" aria-label="About ${esc(name(e))}">${ICON.info}</a>`
+    : "";
+  if (yours) return `${info}<a class="btn" href="${appPath(e)}" target="_blank" rel="noopener">Open</a>`;
+  const get = e.codeAccess === "install"
+    ? `<a class="btn btn--solid" href="${detailPath(e)}" data-d="${tplId(e)}" title="Get this app">Get</a>`
+    : "";
+  return `<a class="btn" href="${appPath(e)}" target="_blank" rel="noopener" title="Open the live web app">Preview</a>${get}`;
+}
+
+function mineBody(mine: DiscoverEntry[], me?: string): string {
+  const yours = mine.filter((e) => me && e.publisherUserId === me);
+  const team = mine.length - yours.length;
+  const cats = [...new Set(mine.map(category))].filter((c) => c !== OTHER && mine.filter((e) => category(e) === c).length >= 2).sort();
+  const chip = (f: string, label: string, on = false) => `<button class="${on ? "on" : ""}" data-f="${esc(f)}">${label}</button>`;
+  const chips = yours.length && team
+    ? `<nav class="chips" aria-label="Filter apps">${chip("", "All", true)}${chip("who:me", "By you")}${chip("who:team", `${ICON.users}Shared with you`)}${cats.length ? '<span class="chips__sep"></span>' : ""}${cats.map((c) => chip(`cat:${c}`, esc(c))).join("")}</nav>`
+    : "";
+  return `${chips}<section class="mrows">${mine.map((e) => mineRow(e, me)).join("")}</section><p class="mnone" hidden>Nothing here.</p>`;
+}
+
 const PAPR_MARK = `<svg class="logo__mark" viewBox="0 0 105 124" width="20" height="24" fill="none" aria-hidden="true"><path d="M28 101.5C-11.5 158 7 51 43.4 60.5c55.9 14.6 71.8-39.7 40.3-52.2C40.3-8.9 52 65 28 101.5Z" stroke="url(#pl)" stroke-width="10" stroke-linecap="round" stroke-linejoin="round"/><defs><linearGradient id="pl" x1="17.2" y1="89.4" x2="68.9" y2="35.8" gradientUnits="userSpaceOnUse"><stop stop-color="#0060E0"/><stop offset=".6" stop-color="#00ACFA"/><stop offset="1" stop-color="#0BCDFF"/></linearGradient></defs></svg>`;
 
 const FAVICON = `data:image/svg+xml,${encodeURIComponent(PAPR_MARK.replace(' class="logo__mark"', "").replace(' width="20" height="24"', ""))}`;
@@ -161,6 +205,8 @@ export interface DiscoverHtmlInput {
   signedIn: boolean;
   userId?: string;
   email?: string;
+  displayName?: string;
+  avatarUrl?: string;
   publicBaseUrl: string;
 }
 
@@ -175,13 +221,11 @@ export function buildDiscoverHtml(input: DiscoverHtmlInput): string {
 
   let body: string;
   if (view === "mine") {
-    body = !input.signedIn
-      ? `<section class="empty"><h2>Sign in to see your apps</h2><p>Apps you've published, and apps your team has shared with you.</p><a class="btn btn--lg btn--solid" href="/auth/login?returnTo=%2Fmy-apps">Sign in</a></section>`
-      : !mine
-        ? `<section class="empty"><h2>Couldn't load your apps</h2><p>Try again in a moment.</p></section>`
-        : !mine.length
-          ? `<section class="empty"><h2>No apps yet</h2><p>Publish an app from Papr Work and it shows up here.</p><a class="btn btn--lg btn--solid" href="${DOWNLOAD_URL}">Get Papr Work</a></section>`
-          : `${pills(mine)}<section class="grid">${mine.map((e) => card(e, me)).join("")}</section>`;
+    body = !mine
+      ? `<section class="empty"><h2>Couldn't load your apps</h2><p>Try again in a moment.</p></section>`
+      : !mine.length
+        ? `<section class="empty"><h2>No apps yet</h2><p>Publish an app from Papr Work and it shows up here.</p><a class="btn btn--lg btn--solid" href="${DOWNLOAD_URL}">Get Papr Work</a></section>`
+        : mineBody(mine, me);
   } else {
     body = apps.length
       ? `${feat ? featured(feat, me) : ""}${pills(apps)}<section class="grid">${apps.map((e) => card(e, me)).join("")}</section>`
@@ -190,7 +234,7 @@ export function buildDiscoverHtml(input: DiscoverHtmlInput): string {
 
   // One details template per app on screen; the focused app's modal is rendered open.
   const shown = new Map<string, DiscoverEntry>();
-  for (const e of view === "mine" ? mine ?? [] : apps) shown.set(key(e), e);
+  for (const e of view === "mine" ? (mine ?? []).filter((m) => m.codeAccess === "install") : apps) shown.set(key(e), e);
   if (input.focused) shown.set(key(input.focused), input.focused);
   const templates = [...shown.values()].map((e) => `<template id="${tplId(e)}">${details(e, me)}</template>`).join("");
   const openModal = modal(input.focused, me, listPath);
@@ -217,9 +261,18 @@ export function buildDiscoverHtml(input: DiscoverHtmlInput): string {
         }
       : null;
 
+  const who = input.displayName?.trim() || input.email?.trim() || "Signed in";
+  const initial = esc((who[0] ?? "?").toUpperCase());
+  const avatar = httpsUrl(input.avatarUrl)
+    ? `<img src="${esc(input.avatarUrl!)}" alt="" referrerpolicy="no-referrer" onerror="this.replaceWith(Object.assign(document.createElement('span'),{textContent:'${initial}'}))">`
+    : `<span>${initial}</span>`;
   const account = input.signedIn
-    ? `<span class="acct" title="${esc(input.email ?? "Signed in")}">${esc((input.email ?? "?")[0]!.toUpperCase())}</span><a class="link" href="/auth/logout?returnTo=%2Fdiscover">Sign out</a>`
-    : `<a class="link" href="/auth/login?returnTo=${encodeURIComponent(view === "mine" ? "/my-apps" : "/discover")}">Sign in</a>`;
+    ? `<details class="acct"><summary class="acct__btn" aria-label="Account" title="${esc(who)}">${avatar}</summary>
+<div class="acct__menu" role="menu"><div class="acct__who">${input.displayName?.trim() ? `<b>${esc(input.displayName.trim())}</b>` : ""}${input.email ? `<small>${esc(input.email)}</small>` : ""}</div>
+<a role="menuitem" href="/my-apps">My apps</a><a role="menuitem" href="${DOWNLOAD_URL}">Get Papr Work</a><hr><a role="menuitem" href="/auth/logout?returnTo=%2F">Sign out</a></div></details>`
+    : `<a class="link" href="/auth/login?returnTo=${encodeURIComponent(f ? detailPath(f) : "/")}">Sign in</a>`;
+  const tab = (href: string, label: string, on: boolean) => `<a href="${href}"${on ? ' class="on" aria-current="page"' : ""}>${label}</a>`;
+  const tabs = `${input.signedIn ? tab("/my-apps", "My apps", view === "mine") : ""}${tab("/", "Discover", view === "discover")}`;
 
   return `<!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
 <title>${esc(title)}</title><meta name="description" content="${esc(desc)}"><link rel="canonical" href="${esc(canonical)}"><link rel="icon" href="${FAVICON}">
@@ -230,10 +283,11 @@ ${ogImage ? `<meta property="og:image" content="${esc(ogImage)}"><meta name="twi
 <meta name="theme-color" content="#f5f5f7" media="(prefers-color-scheme: light)"><meta name="theme-color" content="#0b0c10" media="(prefers-color-scheme: dark)">
 ${jsonLd ? `<script type="application/ld+json">${JSON.stringify(jsonLd).replace(/</g, "\\u003c")}</script>` : ""}
 <style>${DISCOVER_CSS}</style></head><body>
+<div class="nprog" aria-hidden="true"></div>
 <header class="top"><a class="logo" href="${PAPR_URL}" title="Learn about Papr">${PAPR_MARK}<span>Papr</span></a>
-<nav class="tabs" aria-label="Sections"><a href="/"${view === "discover" ? ' class="on" aria-current="page"' : ""}>Discover</a><a href="/my-apps"${view === "mine" ? ' class="on" aria-current="page"' : ""}>My apps</a></nav>
+<nav class="tabs" aria-label="Sections">${tabs}</nav>
 <span class="right">${account}<a class="btn btn--solid get" href="${DOWNLOAD_URL}">Get Papr Work</a></span></header>
-<main><h1 class="h1">${view === "mine" ? "My apps" : "Discover"}</h1><p class="sub">${view === "mine" ? "Apps you've published and apps shared with you." : "Apps built and shared by the Papr Work community."}</p>
+<main${view === "mine" ? ' class="narrow"' : ""}>${view === "mine" ? '<h1 class="mh1">My apps</h1>' : '<h1 class="h1">Discover</h1><p class="sub">Apps built and shared by the Papr Work community.</p>'}
 ${body}</main>
 <footer class="foot"><a href="${PAPR_URL}">Papr</a> · <a href="${DOWNLOAD_URL}">Download Papr Work</a></footer>
 ${openModal}${templates}
