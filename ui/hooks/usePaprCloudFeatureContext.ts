@@ -49,8 +49,13 @@ export function usePaprCloudFeatureContext(): void {
       // `refresh` gave `refresh` a new identity, which re-ran the effect that
       // called it. That loop ran ~9 times a second for a whole session.
       const cloudStatus = useCloudMemoryStatusStore.getState().status;
+      // Only a "paused" status blocks cloud features. Warnings (near limit,
+      // metered overage) are informational — treating them as paused locked
+      // paying metered customers out of sync/publish/memory.
       const memoryPaused =
-        plan !== null ? deriveCloudMemoryStatus(plan) !== null : cloudStatus !== null;
+        plan !== null
+          ? deriveCloudMemoryStatus(plan)?.level === "paused"
+          : cloudStatus?.level === "paused";
 
       setContext(
         buildPaprCloudAccessContext({
@@ -95,7 +100,8 @@ export function usePaprCloudFeatureContext(): void {
         const login = await window.electronAPI.papr.checkLoginStatus();
         const isLoggedIn = Boolean(login.success && login.isLoggedIn);
         const cloudSyncEnabled = await loadCloudSyncEnabled();
-        const memoryPaused = deriveCloudMemoryStatus(detail.summary) !== null;
+        const memoryPaused =
+          deriveCloudMemoryStatus(detail.summary)?.level === "paused";
 
         setContext(
           buildPaprCloudAccessContext({
