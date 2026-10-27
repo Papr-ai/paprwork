@@ -84,12 +84,28 @@ class PaprDbError(RuntimeError):
 # ── env resolution ────────────────────────────────────────────────────────────
 
 def _prefix_for_alias(alias):
-    """PAPR_DB_{KEY}_ALIAS == alias  →  PAPR_DB_{KEY}"""
-    suffix = "_ALIAS"
-    for key, value in os.environ.items():
-        if key.startswith("PAPR_DB_") and key.endswith(suffix) and value == alias:
-            return key[: -len(suffix)]
+    """Find PAPR_DB_{KEY} for a name: the registry label (PAPR_DB_{KEY}_ALIAS),
+    the dbId (PAPR_DB_{KEY}_ID), or the alias a linked app gave it
+    (PAPR_DB_{KEY}_APP_ALIASES, comma-separated)."""
+    env = os.environ
+    for key, value in env.items():
+        if key.startswith("PAPR_DB_") and key.endswith("_ALIAS") and value == alias:
+            return key[: -len("_ALIAS")]
+    for suffix in ("_ID", "_APP_ALIASES"):
+        for key, value in env.items():
+            if not (key.startswith("PAPR_DB_") and key.endswith(suffix)):
+                continue
+            prefix = key[: -len(suffix)]
+            if prefix + "_ALIAS" not in env:
+                continue
+            names = value.split(",") if suffix == "_APP_ALIASES" else [value]
+            if alias in (n.strip() for n in names):
+                return prefix
     return None
+
+
+def _label_for_prefix(prefix):
+    return os.environ.get(prefix + "_ALIAS", "")
 
 
 def _linked_aliases():
@@ -97,7 +113,9 @@ def _linked_aliases():
     for key, value in os.environ.items():
         if key.startswith("PAPR_DB_") and key.endswith("_ALIAS"):
             out.append(value)
-    return sorted(out)
+        elif key.startswith("PAPR_DB_") and key.endswith("_APP_ALIASES"):
+            out.extend(n.strip() for n in value.split(",") if n.strip())
+    return sorted(set(out))
 
 
 def _resolve(source_id):
@@ -109,10 +127,12 @@ def _resolve(source_id):
                 'No linked database with alias "%s". Linked: %s'
                 % (source_id, ", ".join(_linked_aliases()) or "(none)")
             )
+        # The gateway proxy knows the database by its registry label, so send
+        # that as the alias even when the job named it by dbId or app alias.
         return (
             os.environ.get(prefix + "_MODE", "local"),
             os.environ.get(prefix, ""),
-            source_id,
+            _label_for_prefix(prefix) or source_id,
         )
 
     mode = os.environ.get("PAPR_DB_MODE", "")
