@@ -30,6 +30,7 @@ function makeJobsService() {
   return {
     getJob: vi.fn(async () => job),
     applyCloudRunPatch: vi.fn(async (_patch: { status: string }) => job),
+    appendJobRunLog: vi.fn(async (_jobId: string, _line: string) => undefined),
   };
 }
 
@@ -66,5 +67,50 @@ describe("runJobInCloud", () => {
     const logged = appendFile.mock.calls.map((c) => String(c[1])).join("");
     expect(logged).toContain("Cloud run started");
     expect(logged).toContain("Cloud run failed: Request timed out");
+  });
+
+  it("writes live output while the run is in flight and doesn't repeat it at the end", async () => {
+    vi.useFakeTimers();
+    let finishRun!: () => void;
+    const runDone = new Promise<void>((resolve) => {
+      finishRun = resolve;
+    });
+    const logPages = [
+      { chunks: [{ seq: 1, text: "step 1\n" }], next: 1 },
+      { chunks: [{ seq: 2, text: "step 2\n" }], next: 2 },
+      { chunks: [], done: true, next: 3 },
+    ];
+    const logUrls: string[] = [];
+    cloudApiFetch.mockImplementation(async (url: string, opts: { body?: { logRunId?: string } }) => {
+      if (url.startsWith("/v1/cloud/runtime/job-run/logs")) {
+        logUrls.push(url);
+        const page = logPages.shift() ?? { chunks: [], done: true, next: 3 };
+        return { ok: true, json: async () => page };
+      }
+      expect(opts.body?.logRunId).toMatch(/^job-1-/);
+      await runDone;
+      return {
+        ok: true,
+        json: async () => ({
+          jobId: "job-1", status: "completed", exitCode: 0, stdout: "step 1\nstep 2\n", stderr: "",
+        }),
+      };
+    });
+    const service = makeJobsService();
+    const { runJobInCloud } = await import("./CloudJobRunService.js");
+    const run = runJobInCloud(service as never, "job-1");
+
+    await vi.advanceTimersByTimeAsync(2_100);
+    expect(service.appendJobRunLog).toHaveBeenCalledWith("job-1", "step 1");
+    finishRun();
+    await vi.advanceTimersByTimeAsync(0);
+    await run;
+    vi.useRealTimers();
+
+    expect(service.appendJobRunLog.mock.calls.map((c) => c[1])).toEqual(["step 1", "step 2"]);
+    expect(logUrls[1]).toContain("after=1");
+    const finalBlock = appendFile.mock.calls.map((c) => String(c[1])).join("");
+    expect(finalBlock).toContain("exitCode=0 status=completed");
+    expect(finalBlock).not.toContain("step 1");
   });
 });
