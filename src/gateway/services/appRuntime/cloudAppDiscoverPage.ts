@@ -41,6 +41,7 @@ export interface DiscoverEntry {
   catalogMedia?: DiscoverMedia[] | null;
   catalogRequirements?: Array<{ name?: string; service?: string }> | null;
   catalogAutomation?: { cardLine?: string } | null;
+  catalogRequiresDesktop?: boolean | null;
   updatedAt?: string | null;
   installCount?: number | null;
 }
@@ -99,6 +100,42 @@ export async function fetchMyApps(sessionToken: string): Promise<DiscoverEntry[]
   }
 }
 
+const PARSE_URL = (process.env.PARSE_SERVER_URL ?? "https://server.papr.ai/parse").replace(/\/$/, "");
+const PARSE_APP_ID = process.env.PARSE_APP_ID ?? "671e705a-f735-4ec0-8474-15899a475440";
+const PROFILE_MS = 10 * 60_000;
+const profiles = new Map<string, { at: number; p: DiscoverProfile }>();
+
+export interface DiscoverProfile {
+  displayName?: string;
+  avatarUrl?: string;
+}
+
+/** Signed-in user's Parse profile (name + profile image) for the header avatar. */
+export async function fetchDiscoverProfile(sessionToken: string): Promise<DiscoverProfile> {
+  const hit = profiles.get(sessionToken);
+  if (hit && Date.now() - hit.at < PROFILE_MS) return hit.p;
+  try {
+    const res = await runtimeFetch(
+      `${PARSE_URL}/users/me`,
+      { headers: { "X-Parse-Application-Id": PARSE_APP_ID, "X-Parse-Session-Token": sessionToken } },
+      5_000,
+    );
+    if (!res.ok) throw new Error(`parse ${res.status}`);
+    const u = (await res.json()) as {
+      displayName?: string; fullname?: string; profileimage?: { url?: string }; imageUrl?: string;
+    };
+    const p: DiscoverProfile = {
+      displayName: (u.displayName || u.fullname || "").trim() || undefined,
+      avatarUrl: (u.profileimage?.url || u.imageUrl || "").trim() || undefined,
+    };
+    if (profiles.size > 2_000) profiles.clear();
+    profiles.set(sessionToken, { at: Date.now(), p });
+    return p;
+  } catch {
+    return {};
+  }
+}
+
 const ASSET_RE = /^drop-(light|dark)\.png$/;
 const assetCache = new Map<string, Buffer | null>();
 function loadAsset(file: string): Buffer | null {
@@ -121,9 +158,14 @@ export function registerDiscoverRoutes(app: Express, session: DiscoverSessionRea
   const render = async (req: Request, res: Response, view: DiscoverView, focus?: { ns: string; slug: string }) => {
     try {
       const sessionToken = session.getSessionToken(req);
-      const [apps, mine] = await Promise.all([
+      if (view === "mine" && !focus && !sessionToken) {
+        res.redirect(302, "/auth/login?returnTo=%2Fmy-apps");
+        return;
+      }
+      const [apps, mine, profile] = await Promise.all([
         fetchDiscoverEntries(),
         sessionToken ? fetchMyApps(sessionToken) : Promise.resolve(null),
+        sessionToken ? fetchDiscoverProfile(sessionToken) : Promise.resolve({} as DiscoverProfile),
       ]);
       let focused: DiscoverEntry | undefined;
       if (focus) {
@@ -151,6 +193,8 @@ export function registerDiscoverRoutes(app: Express, session: DiscoverSessionRea
           signedIn: Boolean(sessionToken),
           userId: session.getExternalUserId(req),
           email: session.getSessionEmail(req),
+          displayName: profile.displayName,
+          avatarUrl: profile.avatarUrl,
           publicBaseUrl: getCloudAppPublicBaseUrl(req),
         }),
       );

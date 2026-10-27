@@ -36,6 +36,18 @@ export function DemoGallery({ appId, appName, demo, onMake }: { appId: string; a
   const [pin, setPin] = useState<Pin | null>(null);
   const [at, setAt] = useState(0);
   const [flash, setFlash] = useState(false);
+  // Where "Download all" put the files — shown until dismissed so it's never a mystery.
+  const [savedTo, setSavedTo] = useState<string | null>(null);
+  const reveal = (folder: string) =>
+    void window.electronAPI?.system?.invoke("shell.showItemInFolder", folder)?.catch(() => undefined);
+  const downloadAll = () =>
+    run(downloadGallery(appId).then((folder) => {
+      setFlash(true);
+      setTimeout(() => setFlash(false), 1600);
+      if (!folder) return;
+      setSavedTo(folder);
+      reveal(folder);
+    }));
   const [error, setError] = useState<string | null>(null);
   const failed = demo.task?.state === "failed" ? demo.task.error || "Couldn't make the gallery." : null;
   const shown = error ?? failed;
@@ -103,6 +115,13 @@ export function DemoGallery({ appId, appName, demo, onMake }: { appId: string; a
           </DefaultCover>
         </div>
         {errorBar}
+        {savedTo ? (
+          <div className="dg-saved" role="status">
+            <span>Saved to <b>Downloads/{savedTo.split(/[\\/]/).pop()}</b></span>
+            <button type="button" className="dg-saved__btn" onClick={() => reveal(savedTo)}>Show in Finder</button>
+            <button type="button" className="dg-saved__x" aria-label="Dismiss" onClick={() => setSavedTo(null)}>×</button>
+          </div>
+        ) : null}
         <Slots />
       </div>
     );
@@ -140,8 +159,8 @@ export function DemoGallery({ appId, appName, demo, onMake }: { appId: string; a
               <path d="M2.5 8a5.5 5.5 0 1 0 1.6-3.9M2.5 2.5v3h3" />
             </svg>
           </button>
-          <button type="button" className="dg-ib" aria-label="Download all" title={flash ? "Saved to Downloads" : "Download all"}
-            onClick={() => run(downloadGallery(appId).then(() => { setFlash(true); setTimeout(() => setFlash(false), 1600); }))}>
+          <button type="button" className="dg-ib" aria-label="Download all" title={flash ? "Saved to Downloads" : "Download all (video + screens to your Downloads folder)"}
+            onClick={downloadAll}>
             <svg viewBox="0 0 16 16" width="15" height="15" fill="none" stroke="currentColor" strokeWidth={flash ? 2 : 1.6} strokeLinecap="round" strokeLinejoin="round" aria-hidden>
               <path d={flash ? "m3.5 8.5 3 3 6-7" : "M8 2.5v8m-3.5-3.5L8 10.5 11.5 7M3 13.5h10"} />
             </svg>
