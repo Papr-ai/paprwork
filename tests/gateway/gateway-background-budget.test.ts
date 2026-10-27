@@ -79,7 +79,7 @@ test("stats name blockers and grace vs capacity", async () => {
 });
 
 
-test("explicit jobs bypass grace behind maintenance but still respect capacity", async () => {
+test("explicit jobs bypass grace and the chat single-slot limit, but still respect capacity", async () => {
   vi.useFakeTimers();
   const budget = new BackgroundBudget(() => 4, () => true, () => 120000);
   const maintenance = vi.fn(async () => {});
@@ -90,10 +90,10 @@ test("explicit jobs bypass grace behind maintenance but still respect capacity",
   const first = budget.runInteractive(() => budget.run("requested-job", firstStarted));
   const second = budget.runInteractive(() => budget.run("second-requested-job", secondStarted));
   await vi.advanceTimersByTimeAsync(0);
+  // Requested jobs run side by side up to capacity, even while a chat is active.
   expect(firstStarted).toHaveBeenCalledOnce();
-  expect(secondStarted).not.toHaveBeenCalled();
+  expect(secondStarted).toHaveBeenCalledOnce();
   expect(maintenance).not.toHaveBeenCalled();
-  expect(budget.stats().queued.find(w => w.label === "second-requested-job")?.blockReason).toBe("interactive_busy");
   hold.resolve(); await first; await second;
   expect(secondStarted).toHaveBeenCalledOnce();
   expect(maintenance).not.toHaveBeenCalled();
@@ -148,4 +148,19 @@ test("an aborted job releases its slot even when its work never settles", async 
   await next;
   expect(started).toEqual(["next"]);
   expect(budget.stats().active).toEqual([]);
+});
+
+test("explicit jobs still queue at full capacity during a chat", async () => {
+  vi.useFakeTimers();
+  const budget = new BackgroundBudget(() => 2, () => true, () => 120000);
+  const hold = deferred();
+  const started = [vi.fn(() => hold.promise), vi.fn(() => hold.promise), vi.fn(async () => {})];
+  const runs = started.map((fn, i) => budget.runInteractive(() => budget.run(`job-${i}`, fn)));
+  await vi.advanceTimersByTimeAsync(0);
+  expect(started[0]).toHaveBeenCalledOnce();
+  expect(started[1]).toHaveBeenCalledOnce();
+  expect(started[2]).not.toHaveBeenCalled();
+  expect(budget.stats().queued.find(w => w.label === "job-2")?.blockReason).toBe("at_capacity");
+  hold.resolve(); await Promise.all(runs);
+  expect(started[2]).toHaveBeenCalledOnce();
 });
