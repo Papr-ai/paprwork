@@ -178,7 +178,15 @@ export async function generateMediaBytes(input: {
   aspectRatio?: string;
   durationSeconds?: number;
   referenceImagePath?: string;
+  lastFramePath?: string;
+  referenceImagePaths?: string[];
 }): Promise<GeneratedMediaBytes> {
+  if (
+    (input.lastFramePath || input.referenceImagePaths?.length) &&
+    input.model.apiStyle !== "veo_predict_long_running"
+  ) {
+    throw new Error("lastFramePath and referenceImagePaths are only supported by Veo video models.");
+  }
   switch (input.model.apiStyle) {
     case "gemini_generate_content": {
       if (!input.model.apiKey) {
@@ -203,6 +211,8 @@ export async function generateMediaBytes(input: {
         aspectRatio: input.aspectRatio,
         durationSeconds: input.durationSeconds,
         referenceImagePath: input.referenceImagePath,
+        lastFramePath: input.lastFramePath,
+        referenceImagePaths: input.referenceImagePaths,
       });
     }
     case "openai_images": {
