@@ -113,7 +113,9 @@ export function TeamMembersTable(props: {
           const canEditRole = currentUserId !== null &&
             canModifyMemberRole({ currentUserId, currentUserRole, targetMember: member, members });
           const busy = busyUserId === id;
-          const until = row?.planUntilPeriodEnd ? planLabel(seatsView, row.planUntilPeriodEnd) : null;
+          const until = row?.planUntilPeriodEnd
+            ? (options.find((o) => o.key === row.planUntilPeriodEnd)?.name ?? row.planUntilPeriodEnd)
+            : null;
           const rowPending = pending?.userId === id ? pending : null;
           const rowHeld = held?.member.user.objectId === id ? held : null;
           const shownPlan = rowHeld?.to ?? (rowPending?.kind === "plan" ? rowPending.to : plan);
