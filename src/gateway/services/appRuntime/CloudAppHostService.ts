@@ -1335,6 +1335,7 @@ export class CloudAppHostService {
       runtimeAuth,
       config,
       warmRemoteChangeLog: access.canWrite,
+      scopes: access.canWrite ? ["read", "write"] : ["read"],
     });
   }
 
