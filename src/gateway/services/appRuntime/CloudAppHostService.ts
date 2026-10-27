@@ -1822,6 +1822,9 @@ export class CloudAppHostService {
         ...(tursoPerf.clientReused !== undefined
           ? { reuse: tursoPerf.clientReused ? "1" : "0", idle: tursoPerf.idleMs ?? -1, ping: tursoPerf.sincePingMs ?? -1 }
           : {}),
+        ...(tursoPerf.preflightMs !== undefined
+          ? { tpre: tursoPerf.preflightMs, tappend: tursoPerf.appendMs ?? -1 }
+          : {}),
         total: performance.now() - writeStarted,
       });
       res.json(result);
@@ -1841,7 +1844,8 @@ export class CloudAppHostService {
             `clientMs=${Math.round(tursoPerf.clientMs ?? -1)} execMs=${Math.round(tursoPerf.execMs ?? -1)} ` +
             `bumpMs=${Math.round(tursoPerf.bumpMs ?? -1)} totalMs=${totalMs} ` +
             `inst=${HOST_INSTANCE_ID} reused=${tursoPerf.clientReused ?? "na"} ` +
-            `idleMs=${tursoPerf.idleMs ?? -1} sincePingMs=${tursoPerf.sincePingMs ?? -1}`,
+            `idleMs=${tursoPerf.idleMs ?? -1} sincePingMs=${tursoPerf.sincePingMs ?? -1} ` +
+            `preflightMs=${Math.round(tursoPerf.preflightMs ?? -1)} appendMs=${Math.round(tursoPerf.appendMs ?? -1)}`,
         );
       }
     }

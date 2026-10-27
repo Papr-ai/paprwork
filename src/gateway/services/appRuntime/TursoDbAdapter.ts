@@ -138,6 +138,19 @@ export class TursoDbAdapter {
     return client;
   }
 
+  private noteClientReuse(
+    client: Client,
+    startedAt: number,
+    perf: { clientReused?: boolean; idleMs?: number; sincePingMs?: number },
+  ): void {
+    const created = this.clientCreatedAt.get(client);
+    const prev = this.clientPrevUse.get(client);
+    const ping = this.clientLastPing.get(client);
+    perf.clientReused = created === undefined || created < startedAt;
+    perf.idleMs = perf.clientReused && prev !== undefined ? startedAt - prev : -1;
+    perf.sincePingMs = ping !== undefined ? startedAt - ping : -1;
+  }
+
   private pingWarmClients(): void {
     const now = Date.now();
     let pinged = 0;
@@ -315,9 +328,12 @@ export class TursoDbAdapter {
     source: AppDataSource,
     sql: string,
     params?: unknown[],
+    perf?: { clientReused?: boolean; idleMs?: number; sincePingMs?: number },
   ): Promise<void> {
     if (!input.clientScope) return;
+    const startedAt = Date.now();
     const client = await this.clientFor(input, actors, source);
+    if (perf) this.noteClientReuse(client, startedAt, perf);
     await client
       .execute({ sql: `EXPLAIN ${sql}`, args: toLibsqlArgs(params) })
       .catch((err: unknown) => this.rethrowClientDenied(err, input, source, sql));
@@ -716,6 +732,9 @@ export class TursoDbAdapter {
       idleMs?: number;
       /** ms since keep-warm last pinged this client (-1 = never). */
       sincePingMs?: number;
+      /** Workspace-log path: scoped EXPLAIN preflight and memory append (ms). */
+      preflightMs?: number;
+      appendMs?: number;
     };
     orgId: string;
     namespaceId: string;
@@ -742,7 +761,10 @@ export class TursoDbAdapter {
     const cacheKey = this.clientKey(input.runtimeAuth, actingUserId, database);
 
     if (this.usesWorkspaceLogAuthorityForSource(source)) {
-      await this.preflightScoped(input, actors, source, remoteSql, input.params);
+      const preflightStarted = performance.now();
+      await this.preflightScoped(input, actors, source, remoteSql, input.params, input.perf);
+      if (input.perf) input.perf.preflightMs = performance.now() - preflightStarted;
+      const appendStarted = performance.now();
       const { appendRuntimeWorkspaceLogEntry } = await import(
         "./memoryRuntimeClient.js"
       );
@@ -762,6 +784,7 @@ export class TursoDbAdapter {
         hostScope,
       );
       this.syncVersionMemo.delete(cacheKey);
+      if (input.perf) input.perf.appendMs = performance.now() - appendStarted;
 
       if (process.env.CLOUD_DB_WRITE_TIMING !== "0") {
         console.log(
@@ -781,14 +804,7 @@ export class TursoDbAdapter {
     const clientStarted = performance.now();
     const clientStartedAt = Date.now();
     const client = await this.clientFor(input, actors, source);
-    if (input.perf) {
-      const created = this.clientCreatedAt.get(client);
-      const prev = this.clientPrevUse.get(client);
-      const ping = this.clientLastPing.get(client);
-      input.perf.clientReused = created === undefined || created < clientStartedAt;
-      input.perf.idleMs = input.perf.clientReused && prev !== undefined ? clientStartedAt - prev : -1;
-      input.perf.sincePingMs = ping !== undefined ? clientStartedAt - ping : -1;
-    }
+    if (input.perf) this.noteClientReuse(client, clientStartedAt, input.perf);
 
     if (!input.clientScope) await this.ensureRemoteChangeLogReady(client, cacheKey, null, source);
     const execStarted = performance.now();
