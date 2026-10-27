@@ -28,10 +28,10 @@ export async function resolveJobSessionAuth(params: {
   const originalProvider = params.provider;
   const requestedModel = params.requestedModel ?? params.model;
 
-  let provider = params.provider;
-  let model = params.model;
+  const provider = params.provider;
+  const model = params.model;
 
-  let creds = await resolveAgentProviderCredentials(provider, model);
+  const creds = await resolveAgentProviderCredentials(provider, model);
   if (creds) {
     return { provider, model, ...creds };
   }
@@ -53,35 +53,57 @@ export async function resolveJobSessionAuth(params: {
     }
   }
 
-  const { getBestFallbackModel } = await import("./smartFallback.js");
-  const { getAvailableProviders, getDefaultProviderAndModel } =
-    await import("./defaultProvider.js");
+  // Capability-matched pick first, then every other provider the user can reach
+  // (Anthropic → OpenAI → Google). One unusable candidate must not end the
+  // search — e.g. a Claude-pinned profile on a Google-only account.
+  const tried = new Set<string>([`${provider}/${model}`]);
+  if (params.fallbackProvider && params.fallbackModel) {
+    tried.add(`${params.fallbackProvider}/${params.fallbackModel}`);
+  }
+  const candidates: Array<{ provider: Provider; model: string; why: string }> =
+    [];
 
-  const available = await getAvailableProviders();
-  const smart = await getBestFallbackModel(
-    originalProvider,
-    requestedModel,
-    available,
-  );
-
-  if (smart) {
-    provider = smart.provider;
-    model = smart.model;
-    console.log(
-      `[AgentService] Smart fallback: ${originalProvider}/${requestedModel} → ${provider}/${model} (capability-matched)`,
+  try {
+    const { getBestFallbackModel } = await import("./smartFallback.js");
+    const { getAvailableProviders } = await import("./defaultProvider.js");
+    const available = await getAvailableProviders();
+    const smart = await getBestFallbackModel(
+      originalProvider,
+      requestedModel,
+      available,
     );
-  } else {
-    const defaults = await getDefaultProviderAndModel();
-    provider = defaults.provider;
-    model = defaults.model;
-    console.log(
-      `[AgentService] Falling back from ${originalProvider} to ${provider}/${model}`,
-    );
+    if (smart) candidates.push({ ...smart, why: "capability-matched" });
+  } catch (error) {
+    console.warn("[AgentService] Smart fallback lookup failed:", error);
   }
 
-  creds = await resolveAgentProviderCredentials(provider, model);
-  if (creds) {
-    return { provider, model, ...creds };
+  const { REACHABLE_PROVIDER_ORDER } = await import("./reachableProvider.js");
+  const { DEFAULT_AUTO_LADDERS } = await import(
+    "../../core/agents/autoLadders.js"
+  );
+  for (const p of REACHABLE_PROVIDER_ORDER) {
+    const m = DEFAULT_AUTO_LADDERS[p]?.models.strong;
+    if (m) candidates.push({ provider: p, model: m, why: "reachable provider" });
+  }
+
+  const { getDefaultProviderAndModel } = await import("./defaultProvider.js");
+  const defaults = await getDefaultProviderAndModel();
+  candidates.push({ ...defaults, why: "default" });
+
+  for (const cand of candidates) {
+    const key = `${cand.provider}/${cand.model}`;
+    if (tried.has(key)) continue;
+    tried.add(key);
+    const candCreds = await resolveAgentProviderCredentials(
+      cand.provider,
+      cand.model,
+    );
+    if (candCreds) {
+      console.log(
+        `[AgentService] Fallback (${cand.why}): ${originalProvider}/${requestedModel} → ${key}`,
+      );
+      return { provider: cand.provider, model: cand.model, ...candCreds };
+    }
   }
 
   throw new Error(

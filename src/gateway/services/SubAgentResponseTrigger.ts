@@ -8,7 +8,7 @@
 import { getAgentService } from "./AgentService.js";
 import { getJobsService } from "./JobsService.js";
 import { broadcast } from "../websocket/index.js";
-import type { AgentConfigInternal, Provider } from "../../core/types/agents.js";
+import type { AgentConfigInternal } from "../../core/types/agents.js";
 import type { JobRecord } from "./jobs/types.js";
 import { DEFAULT_SESSION_CONTEXT_LIMIT } from "./agent/contextBudget.js";
 import { resolveDelegationResultExcerptChars } from "../../core/subagents/codebaseExplorer.js";
@@ -82,17 +82,18 @@ async function resolveConfigForChat(
     return existingSession.config;
   }
 
-  const provider: Provider = "anthropic";
-  const model = "claude-sonnet-5-5";
-  const { resolveAgentProviderCredentials } =
-    await import("../utils/resolveAgentProviderCredentials.js");
-  const creds = await resolveAgentProviderCredentials(provider, model);
-  if (!creds) {
+  // No live session: use whichever cloud provider the user can reach
+  // (Anthropic first, then OpenAI, then Google) rather than assuming Claude.
+  const { findReachableProvider } =
+    await import("../utils/reachableProvider.js");
+  const reachable = await findReachableProvider();
+  if (!reachable) {
     console.warn(
-      "[SubAgentResponseTrigger] No API key or Papr proxy for default provider, skipping",
+      "[SubAgentResponseTrigger] No API key or Papr proxy for any provider, skipping",
     );
     return null;
   }
+  const { provider, model, creds } = reachable;
 
   return {
     provider,
