@@ -515,3 +515,33 @@ describe("provider errors keep their text through sanitization", () => {
     expect(JSON.stringify(out)).not.toContain(key);
   });
 });
+
+describe("wrap-up keeps the original prompt (#567)", () => {
+  beforeEach(() => vi.mocked(streamText).mockReset());
+
+  it("sends prompt + tool turns + instruction, so the history never opens on a model call", async () => {
+    vi.mocked(streamText).mockImplementationOnce(() => fakeStream(TEXT_REPLY));
+    const prompt = { role: "user" as const, content: "Reply with OK." };
+    const toolTurn = {
+      role: "assistant" as const,
+      content: [{ type: "tool-call", toolCallId: "t1", toolName: "read_file", input: {} }],
+    };
+    const toolResult = {
+      role: "tool" as const,
+      content: [{ type: "tool-result", toolCallId: "t1", toolName: "read_file", output: { type: "text", value: "x" } }],
+    };
+    await drain(
+      runAiSdkWrapUpContinuation({
+        aiSdkResult: { response: Promise.resolve({ messages: [toolTurn, toolResult] }) } as never,
+        streamTextOptions: { model: {} as never, messages: [prompt], tools: { bash: {} } },
+        chatId: "chat-567",
+        apiKeys: [],
+        provider: "google",
+        abortSignal: new AbortController().signal,
+      }),
+    );
+    const sent = (vi.mocked(streamText).mock.calls[0]![0] as { messages: Array<{ role: string }> }).messages;
+    expect(sent.map((m) => m.role)).toEqual(["user", "assistant", "tool", "user"]);
+    expect(sent[0]).toEqual(prompt);
+  });
+});
