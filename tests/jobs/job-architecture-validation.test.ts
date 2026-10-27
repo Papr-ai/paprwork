@@ -98,3 +98,27 @@ describe("validateJobArchitecture", () => {
     expect(issues).toHaveLength(0);
   });
 });
+
+describe("job-full-table-rewrite", () => {
+  const rule = (scriptSources: string, command = "python3 code/sync.py") =>
+    validateJobArchitecture({ type: "python", command, appIds: [APP_ID], scriptSources })
+      .filter((i) => i.rule === "job-full-table-rewrite");
+
+  it("warns on a wipe-and-reload in the job script", () => {
+    const src = `for t in ("usage_orgs", "usage_daily"):\n    add(f"DELETE FROM {t}")\nadd_many("INSERT INTO usage_orgs (a) VALUES (?)", rows)`;
+    const issues = rule(src);
+    expect(issues).toHaveLength(1);
+    expect(issues[0].severity).toBe("warning");
+  });
+
+  it("warns on a literal table wiped then reloaded", () => {
+    expect(rule(`cur.execute("DELETE FROM leads")\ncur.executemany("INSERT INTO leads VALUES (?,?)", r)`)).toHaveLength(1);
+    expect(rule(`DELETE FROM "leads";\nINSERT OR REPLACE INTO leads (id) VALUES (1)`)).toHaveLength(1);
+  });
+
+  it("does not warn on targeted deletes or upserts", () => {
+    expect(rule(`DELETE FROM leads WHERE id IN (?, ?)\nINSERT INTO leads (id) VALUES (?)`)).toHaveLength(0);
+    expect(rule(`INSERT INTO leads (id) VALUES (?) ON CONFLICT(id) DO UPDATE SET n=excluded.n`)).toHaveLength(0);
+    expect(rule(`DELETE FROM run_log\nINSERT INTO leads (id) VALUES (?)`)).toHaveLength(0);
+  });
+});

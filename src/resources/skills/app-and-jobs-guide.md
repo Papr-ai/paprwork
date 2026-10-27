@@ -909,6 +909,14 @@ webview_execute({ script: "fetch('/api/jobs/run', ...)" })
 // ❌ Node.js imports in browser JS
 import Database from 'better-sqlite3'  // browser can't use Node modules
 
+// ❌ Wiping and reloading a table on every run
+// for t in tables: DELETE FROM t   then   INSERT INTO t ... (every row, every run)
+// → On a synced database every rewritten row is a change the cloud must upload. A
+//   15-minute job reloading 15K rows built a 5.3M-change backlog. Write only what
+//   changed: read existing rows, upsert new/changed ones
+//   (INSERT ... ON CONFLICT(id) DO UPDATE SET ...), delete only rows that are gone.
+//   Runs log a [job-full-table-rewrite] warning when the job's code does this.
+
 // ❌ Polling when WebSocket push is available
 setInterval(() => fetch('/api/jobs/status/...'), 1000)
 // → set up ws.onmessage listener instead

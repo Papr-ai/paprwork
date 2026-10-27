@@ -1034,6 +1034,33 @@ export const createAppTool = createTool({
   },
 });
 
+/**
+ * Agent-facing note when the job's code wipes a table and re-inserts it on every run.
+ * Returned at the moment the code is written (create_job, update_job, edit_file /
+ * write_file on a job file), so the agent fixes it before the first scheduled run
+ * instead of finding it later as a sync backlog. Cheap: static scan of the job's files.
+ */
+export async function tableRewriteReminderFor(jobId: string): Promise<string | undefined> {
+  try {
+    const { getJobsService } = await import("../../gateway/services/JobsService.js");
+    const job = await getJobsService().getJob(jobId);
+    if (!job) return undefined;
+    const { readJobScriptSources } = await import("../../gateway/services/jobs/jobScriptSources.js");
+    const { validateJobArchitecture } = await import(
+      "../../gateway/services/jobs/jobArchitectureValidation.js"
+    );
+    const issue = validateJobArchitecture({
+      type: job.type,
+      command: job.command,
+      appIds: job.appIds,
+      scriptSources: await readJobScriptSources(await getJobDir(jobId)),
+    }).find((i) => i.rule === "job-full-table-rewrite");
+    return issue ? `⚠️ ${issue.message} Fix now: ${issue.remediation}` : undefined;
+  } catch {
+    return undefined;
+  }
+}
+
 /** Agent-facing note when a job's code needs the desktop (auto local-only or a conflict). */
 async function desktopOnlyReminderFor(jobId: string): Promise<string | undefined> {
   try {
@@ -1245,11 +1272,13 @@ export const createJobTool = createTool({
     }
     // createJob already ran the check; this re-reads the decision for the agent.
     const desktopOnlyReminder = await desktopOnlyReminderFor(job.id);
+    const tableRewriteReminder = await tableRewriteReminderFor(job.id);
 
     return {
       success: true,
       data: (await jobsService.getJob(job.id)) ?? job,
       _architectReminder: PRODUCT_ARCHITECT_REMINDER,
+      ...(tableRewriteReminder ? { _tableRewriteReminder: tableRewriteReminder } : {}),
       ...(desktopOnlyReminder ? { _desktopOnlyReminder: desktopOnlyReminder } : {}),
       ...(keyReminder ? { _keyPatternReminder: keyReminder } : {}),
       ...(publishCatalogReminder
@@ -2733,6 +2762,7 @@ export async function runEditJobFile(args: EditJobFileArgs): Promise<{
   data: Record<string, unknown>;
   _verifyReminder: string;
   _desktopOnlyReminder?: string;
+  _tableRewriteReminder?: string;
 }> {
   const { getJobsService } = await import("../../gateway/services/JobsService.js");
   const jobsService = getJobsService();
@@ -2813,6 +2843,7 @@ export async function runEditJobFile(args: EditJobFileArgs): Promise<{
     focusText: args.newString,
   });
   const desktopOnlyReminder = await desktopOnlyReminderFor(args.jobId);
+  const tableRewriteReminder = await tableRewriteReminderFor(args.jobId);
 
   return {
     success: true,
@@ -2828,6 +2859,7 @@ export async function runEditJobFile(args: EditJobFileArgs): Promise<{
     },
     _verifyReminder: JOB_VERIFY_AFTER_EDIT_REMINDER,
     ...(desktopOnlyReminder ? { _desktopOnlyReminder: desktopOnlyReminder } : {}),
+    ...(tableRewriteReminder ? { _tableRewriteReminder: tableRewriteReminder } : {}),
   };
 }
 
@@ -2904,6 +2936,7 @@ Common use cases:
       job.writeDbIds ?? [],
     );
     const desktopOnlyReminder = await desktopOnlyReminderFor(jobId);
+    const tableRewriteReminder = await tableRewriteReminderFor(jobId);
     const keyDeclaration =
       requiredKeys !== undefined || rest.command !== undefined
         ? await declareJobKeysOnApps(
@@ -2925,6 +2958,7 @@ Common use cases:
         ? { _hardcodedDbIdReminder: hardcodedDbIdReminder }
         : {}),
       ...(desktopOnlyReminder ? { _desktopOnlyReminder: desktopOnlyReminder } : {}),
+      ...(tableRewriteReminder ? { _tableRewriteReminder: tableRewriteReminder } : {}),
     };
   },
 });

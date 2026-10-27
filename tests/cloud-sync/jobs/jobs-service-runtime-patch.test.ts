@@ -1,4 +1,4 @@
-import { describe, expect, test, beforeEach, afterEach } from "vitest";
+import { describe, expect, test, beforeEach, afterEach, vi } from "vitest";
 import { mkdtemp, rm, readFile, mkdir, writeFile } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
@@ -163,5 +163,37 @@ describe("JobsService.applyCloudRunPatch", () => {
     const job = await jobsService.getJob("test-job-id");
     expect(job?.status).toBe("completed");
     expect(job?.scheduleState?.nextRunAt).toBe(at(180));
+  });
+
+  test("stale-running watchdog leaves a job alone while its cloud run is in flight", async () => {
+    let release!: () => void;
+    const gate = new Promise<void>((resolve) => {
+      release = resolve;
+    });
+    const mod = await import("../../../src/gateway/services/CloudJobRunService.js");
+    const spy = vi.spyOn(mod, "runJobInCloud").mockImplementation(async (svc, jobId) => {
+      await svc.applyCloudRunPatch({
+        jobId,
+        status: "running",
+        lastRunAt: at(1),
+        recordedAt: at(1),
+        source: "cloud_manual",
+      });
+      await gate;
+      return (await svc.getJob(jobId))!;
+    });
+
+    const run = jobsService.runJobInCloud("test-job-id");
+    await vi.waitFor(async () =>
+      expect((await jobsService.getJob("test-job-id"))?.status).toBe("running"),
+    );
+    // minStaleMs=0 would mark any untracked running job failed immediately.
+    await jobsService.reconcileStaleRunningJobs(0);
+    expect((await jobsService.getJob("test-job-id"))?.status).toBe("running");
+    await expect(jobsService.clearStaleRunningState("test-job-id")).resolves.toBe(false);
+
+    release();
+    await run;
+    spy.mockRestore();
   });
 });

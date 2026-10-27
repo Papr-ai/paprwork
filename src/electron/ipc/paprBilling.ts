@@ -29,6 +29,8 @@ import {
 } from "../../core/utils/paprPlanLimits.js";
 import { fetchWorkspaceMembers } from "../../core/utils/paprWorkspaceTeam.js";
 import { PAPR_USAGE_URL } from "../../core/utils/paprQuota.js";
+import { fetchBuilders, setBuilder } from "../../core/utils/paprCreditSeats.js";
+import { memoryBaseUrl } from "./paprHandoff.js";
 
 type GraphQLRunner = (
   query: string,
@@ -888,6 +890,34 @@ export function registerPaprBillingHandlers(deps: {
           success: false,
           error: error instanceof Error ? error.message : "Failed to start checkout",
         };
+      }
+    },
+  );
+
+  // Builder seats (credits billing). Owner/admin only — the server enforces it.
+  ipcMain.handle("papr:get-builder-seats", async () => {
+    try {
+      const profile = requireLoggedInProfile(deps.settingsStorage);
+      return { success: true, view: await fetchBuilders(memoryBaseUrl(), profile.sessionToken!) };
+    } catch (error) {
+      return { success: false, error: error instanceof Error ? error.message : "Failed to load seats" };
+    }
+  });
+
+  ipcMain.handle(
+    "papr:set-builder",
+    async (_event, input: { userId: string; builder: boolean; plan?: string }) => {
+      try {
+        if (typeof input?.builder !== "boolean") throw new Error("builder must be true or false");
+        if (input.plan !== undefined && typeof input.plan !== "string") throw new Error("plan must be a string");
+        const profile = requireLoggedInProfile(deps.settingsStorage);
+        const result = await setBuilder(
+          memoryBaseUrl(), profile.sessionToken!, input.userId, input.builder, undefined, input.plan,
+        );
+        invalidatePlanSummaryCache();
+        return { success: true, result };
+      } catch (error) {
+        return { success: false, error: error instanceof Error ? error.message : "Failed to update seat" };
       }
     },
   );

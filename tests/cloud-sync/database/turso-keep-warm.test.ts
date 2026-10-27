@@ -17,4 +17,21 @@ describe("TursoDbAdapter keep-warm", () => {
     clearInterval(a.keepWarmTimer);
     vi.useRealTimers();
   });
+
+  it("records last use and last ping for write timing diagnostics", async () => {
+    vi.useFakeTimers();
+    const a = new TursoDbAdapter({} as any) as any;
+    const c = { execute: vi.fn(async () => ({})) };
+    a.clientCache.set("c", { client: c, tokenExpiresAt: Date.now() + 1e6 });
+    a.touchClient(c);
+    const firstUse = Date.now();
+    vi.advanceTimersByTime(4_100);
+    await Promise.resolve();
+    await Promise.resolve();
+    expect(a.clientLastPing.get(c)).toBeGreaterThanOrEqual(firstUse + 4_000);
+    a.touchClient(c);
+    expect(a.clientPrevUse.get(c)).toBe(firstUse);
+    clearInterval(a.keepWarmTimer);
+    vi.useRealTimers();
+  });
 });
