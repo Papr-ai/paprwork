@@ -1276,6 +1276,12 @@ export class TursoDbAdapter {
     config: AppDataSourcesFile;
     /** When true, also prepare remote CDC triggers (replica direct-write path). */
     warmRemoteChangeLog?: boolean;
+    /**
+     * Table-scoped clients to open as well. Browser SQL never uses the owner
+     * client, so without these the first /api/db/query or /api/db/write on a
+     * fresh instance still pays token mint + TLS (~1-2 s).
+     */
+    scopes?: ClientScopeMode[];
   }): Promise<void> {
     const actors = this.toActors(input);
     let schemaRevision: string | null = null;
@@ -1295,6 +1301,17 @@ export class TursoDbAdapter {
           input.runtimeAuth,
           source,
         );
+        for (const mode of input.scopes ?? []) {
+          try {
+            const scoped = await this.getScopedClientForSource(
+              input.orgId, input.namespaceId, actors, input.runtimeAuth, source, mode,
+            );
+            // Open the socket now; the first real query reuses it.
+            await scoped.execute("SELECT 1");
+          } catch {
+            /* best-effort warm */
+          }
+        }
         if (!input.warmRemoteChangeLog) {
           continue;
         }
