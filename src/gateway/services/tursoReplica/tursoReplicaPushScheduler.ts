@@ -396,6 +396,13 @@ async function executeReplicaPushForSyncKey(syncKey: string): Promise<void> {
       return;
     }
 
+    if (!result.ok && result.backlogHold) {
+      // Held on purpose: retrying won't help until someone chooses accept_cloud or push.
+      // New writes re-schedule and re-check it.
+      noProgressFollowUps.delete(syncKey);
+      clearDirtyTracking(syncKey);
+      return;
+    }
     notePushFailureBackoff(syncKey);
     console.warn(
       `[TursoReplicaPushScheduler] Push failed for ${syncKey}: ${result.error ?? "unknown"}`,
