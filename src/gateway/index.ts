@@ -3006,76 +3006,30 @@ async function startGateway(): Promise<void> {
     });
 
     // Roles: who has which role on a published app (memory /apps/{id}/access).
-    // A team collaborator's copy manages the original, so resolve to its source.
-    const accessTargetAppId = async (appId: string): Promise<string> => {
-      const lineage = await getCloudAppLineageService().readLineageForApp(appId);
-      return lineage?.mode === "track" && lineage.databasePolicy === "shared"
-        ? lineage.sourceAppId
-        : appId;
-    };
+    // Same service as publish_cloud_app, so the Share sheet and agent tools stay in sync.
     const proxyAppAccess = async (
       req: import("express").Request,
       res: import("express").Response,
       method: "GET" | "PUT",
     ) => {
       try {
-        const { cloudApiFetch } = await import("./utils/cloudApiClient.js");
-        const target = await accessTargetAppId(String(req.params.appId));
-        // Community listings need an approved gallery; already-listed apps are left alone.
-        if (method === "PUT") {
-          const gate = await import("./services/communityGalleryGate.js");
-          const patch = (req.body ?? {}) as import("./services/communityGalleryGate.js").AccessPatchLike;
-          const { sharedCoverKind } = await import("./services/appDemoVideos.js");
-          if (gate.blocksCommunityListing(patch, {}, sharedCoverKind(String(req.params.appId)) === "video")) {
-            const cur = await cloudApiFetch(`/v1/cloud/apps/${encodeURIComponent(target)}/access`, { method: "GET", timeoutMs: 20_000 });
-            const current = cur.ok ? ((await cur.json().catch(() => null)) as import("./services/communityGalleryGate.js").AccessStateLike | null) : null;
-            if (gate.blocksCommunityListing(patch, current, false)) {
-              res.status(409).json({ error: gate.COMMUNITY_NEEDS_GALLERY, code: "community_needs_gallery" });
-              return;
-            }
-          }
+        const aud = await import("./services/cloudAppAudiences.js");
+        const appId = String(req.params.appId);
+        if (method === "GET") {
+          const { cloudApiFetch } = await import("./utils/cloudApiClient.js");
+          const target = await aud.accessTargetAppId(appId);
+          const upstream = await cloudApiFetch(`/v1/cloud/apps/${encodeURIComponent(target)}/access`, { method: "GET", timeoutMs: 20_000 });
+          res.status(upstream.status).type("application/json").send((await upstream.text()) || "{}");
+          return;
         }
-        const upstream = await cloudApiFetch(
-          `/v1/cloud/apps/${encodeURIComponent(target)}/access`,
-          { method, ...(method === "PUT" ? { body: req.body ?? {} } : {}), timeoutMs: 20_000 },
-        );
-        const text = await upstream.text();
-        if (method === "PUT" && upstream.ok) {
-          syncAudiencePrefs(String(req.params.appId), target, text);
-        }
-        res.status(upstream.status).type("application/json").send(text || "{}");
-      } catch (err) {
-        res.status(500).json({ error: (err as Error).message });
-      }
-    };
-    // v9: after a Share sheet save, mirror who can open it into local publish
-    // prefs so the bar's link, icon and next code publish match the server.
-    const syncAudiencePrefs = (appId: string, target: string, body: string) => {
-      try {
-        const a = JSON.parse(body) as {
-          accessModel?: string;
-          visibility?: CloudAccessMode;
-          linkPermission?: "read" | "read_write";
-          requireSignIn?: boolean;
-          audiences?: { workspace: boolean; link: boolean; community: boolean };
-          shareToken?: string;
-        };
-        if (a.accessModel !== "audiences" || !a.audiences || target !== appId) return;
-        const open = a.audiences;
-        const prefs = getAppPublishPrefs(appId);
-        setAppPublishPrefs(appId, {
-          accessMode: a.visibility ?? prefs.accessMode,
-          loginAccess: open.community ? "public" : open.workspace ? "team" : "private",
-          externalLink: open.link ? (a.linkPermission === "read_write" ? "read_write" : "read") : "off",
-          requireSignIn: a.requireSignIn === true,
-          audiencesModel: true,
-          ...(a.shareToken ? { shareToken: a.shareToken } : {}),
-          // People are grants now; the old allowlists were folded in server-side.
-          allowedUserIds: undefined,
-          allowedEmails: undefined,
+        const { sharedCoverKind } = await import("./services/appDemoVideos.js");
+        const access = await aud.saveAudiences(appId, (req.body ?? {}) as import("./services/cloudAppAudiences.js").AudiencesPatch, {
+          hasGallery: sharedCoverKind(appId) === "video",
         });
-      } catch {
-        /* not JSON: leave prefs alone */
+        res.json(access);
+      } catch (err) {
+        const e = err as { message: string; status?: number; code?: string };
+        res.status(e.status ?? 500).json({ error: e.message, ...(e.code ? { code: e.code } : {}) });
       }
     };
     app.get("/api/cloud/apps/:appId/access", (req, res) => void proxyAppAccess(req, res, "GET"));
