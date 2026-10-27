@@ -91,4 +91,49 @@ describe("portableDataSources", () => {
 
     expect(resolved).toBe(dbPath);
   });
+  it("resolveLinkedSourceDbPath prefers the registry DB over the producing job (dbId + jobId)", async () => {
+    resetDatabaseRegistryForWorkspaceSwitch();
+
+    const dataDir = path.join(getPaprJobsRoot(), "..", "data");
+    const slugDir = path.join(dataDir, "databases", "home-daily-briefs");
+    await fs.mkdir(slugDir, { recursive: true });
+    const registryDb = path.join(slugDir, "data.db");
+    await fs.writeFile(registryDb, Buffer.alloc(4096));
+    const jobId = "38cc0dfc-a2b6-4399-8f3e-02c7b594ea01";
+    const jobDb = path.join(getPaprJobsRoot(), jobId, "data", "data.db");
+    await fs.mkdir(path.dirname(jobDb), { recursive: true });
+    await fs.writeFile(jobDb, Buffer.alloc(4096));
+
+    const { getDatabaseRegistryService } = await import(
+      "../../src/gateway/services/DatabaseRegistryService.js"
+    );
+    getDatabaseRegistryService().mergeFromRegistryFile(
+      JSON.stringify({
+        version: 1,
+        databases: {
+          "db-57c03fda": {
+            dbId: "db-57c03fda",
+            localPath: registryDb,
+            tursoShortName: "d-57c03fda",
+            label: "Home Daily Briefs",
+            isolation: "per-user",
+            status: "active",
+            createdAt: "2026-01-01T00:00:00.000Z",
+            updatedAt: "2026-01-01T00:00:00.000Z",
+          },
+        },
+      }),
+    );
+
+    const resolved = await resolveLinkedSourceDbPath({
+      dbPath: "",
+      dbId: "db-57c03fda",
+      jobId,
+      jobsRoot: getPaprJobsRoot(),
+    });
+    expect(resolved).toBe(registryDb);
+
+    const jobOnly = await resolveLinkedSourceDbPath({ dbPath: "", jobId, jobsRoot: getPaprJobsRoot() });
+    expect(jobOnly).toBe(jobDb);
+  });
 });

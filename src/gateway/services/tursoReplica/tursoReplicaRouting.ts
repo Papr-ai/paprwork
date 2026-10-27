@@ -44,10 +44,33 @@ import { notifyCloudDbChanged } from "../cloudSync/notifyCloudDbChanged.js";
 import { computeReplicaPendingPush } from "./replicaPendingPush.js";
 
 /** One local registry save after a replica write (no cloud upload — timestamps are local-only). */
+/**
+ * Queue the normal debounced push after a local replica write. The file watcher
+ * can't be relied on here: the sync engine writes `-changes` / `-info` sidecars,
+ * not the `data.db` / `-wal` files the watcher filters for. The scheduler still
+ * honours manual upload mode, backoff and the publish hold.
+ */
+function scheduleReplicaPushAfterWrite(source: AppDataSource): void {
+  const syncKey = source.dbId ?? source.jobId ?? source.dbPath;
+  if (!syncKey) {
+    return;
+  }
+  void import("./tursoReplicaPushScheduler.js")
+    .then(({ scheduleTursoReplicaPushForSyncKey }) =>
+      scheduleTursoReplicaPushForSyncKey(syncKey, "normal", "api_write"),
+    )
+    .catch(() => {
+      /* best effort — the startup/post-git sweep still picks it up */
+    });
+}
+
 async function noteReplicaWriteOutcome(
   source: AppDataSource,
   pendingPush: boolean,
 ): Promise<void> {
+  if (pendingPush) {
+    scheduleReplicaPushAfterWrite(source);
+  }
   if (!source.dbId) {
     return;
   }
