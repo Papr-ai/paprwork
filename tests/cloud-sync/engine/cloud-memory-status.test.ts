@@ -118,7 +118,7 @@ describe("formatPaprLoginStatusLine", () => {
 
 describe("memoryPaused only on paused level", () => {
   it("metered overage is a warning, not a pause", async () => {
-    const { deriveCloudMemoryStatus } = await import("../ui/utils/cloudMemoryStatus");
+    const { deriveCloudMemoryStatus } = await import("../../../ui/utils/cloudMemoryStatus");
     const summary = {
       subscriptionStatus: "active",
       isMeteredBillingOn: true,
