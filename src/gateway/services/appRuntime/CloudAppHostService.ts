@@ -3,6 +3,7 @@
  * Deploy standalone via cloud-app-host.ts (apps.papr.ai).
  */
 
+import { randomUUID } from "node:crypto";
 import { proxyOAuthCallback } from "./oauthCallbackProxy.js";
 import type { Express, Request, Response } from "express";
 import path from "path";
@@ -274,6 +275,9 @@ function getRequestPaprApiKey(req: Request): string | undefined {
   if (auth?.startsWith("Bearer ")) return auth.slice(7);
   return undefined;
 }
+
+/** Per-process id so write timings show which Cloud Run instance served them. */
+const HOST_INSTANCE_ID = `${process.env.K_REVISION?.split("-").pop() ?? "local"}.${randomUUID().slice(0, 6)}`;
 
 /** Exposed as Server-Timing for E2E / browser devtools (Phase 1 perf tracking). */
 function setCloudDbServerTiming(
@@ -1752,7 +1756,7 @@ export class CloudAppHostService {
     let accessMs = 0;
     let configMs = 0;
     let tursoWriteMs = 0;
-    const tursoPerf: { clientMs?: number; execMs?: number; bumpMs?: number } = {};
+    const tursoPerf: NonNullable<Parameters<TursoDbAdapter["write"]>[0]["perf"]> = {};
 
     try {
       const { appId: requestedAppId, sourceId, sql, params } = req.body as {
@@ -1814,6 +1818,10 @@ export class CloudAppHostService {
         ...(tursoPerf.execMs !== undefined
           ? { tclient: tursoPerf.clientMs ?? 0, texec: tursoPerf.execMs, tbump: tursoPerf.bumpMs ?? 0 }
           : {}),
+        inst: HOST_INSTANCE_ID,
+        ...(tursoPerf.clientReused !== undefined
+          ? { reuse: tursoPerf.clientReused ? "1" : "0", idle: tursoPerf.idleMs ?? -1, ping: tursoPerf.sincePingMs ?? -1 }
+          : {}),
         total: performance.now() - writeStarted,
       });
       res.json(result);
@@ -1831,7 +1839,9 @@ export class CloudAppHostService {
           `[CloudAppHost] /api/db/write timing accessMs=${Math.round(accessMs)} ` +
             `configMs=${Math.round(configMs)} tursoWriteMs=${Math.round(tursoWriteMs)} ` +
             `clientMs=${Math.round(tursoPerf.clientMs ?? -1)} execMs=${Math.round(tursoPerf.execMs ?? -1)} ` +
-            `bumpMs=${Math.round(tursoPerf.bumpMs ?? -1)} totalMs=${totalMs}`,
+            `bumpMs=${Math.round(tursoPerf.bumpMs ?? -1)} totalMs=${totalMs} ` +
+            `inst=${HOST_INSTANCE_ID} reused=${tursoPerf.clientReused ?? "na"} ` +
+            `idleMs=${tursoPerf.idleMs ?? -1} sincePingMs=${tursoPerf.sincePingMs ?? -1}`,
         );
       }
     }
