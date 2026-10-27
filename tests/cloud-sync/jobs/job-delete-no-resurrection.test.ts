@@ -46,6 +46,9 @@ vi.mock("../../../src/gateway/services/appDeleteScope.js", async (importOriginal
 const tmpRoots: string[] = [];
 
 afterEach(async () => {
+  // Wait for a scheduler tick started by createJob/reload before the temp workspace is removed (#525).
+  const { resetJobsSchedulerForTests } = await import("../../../src/gateway/services/JobsScheduler.js");
+  await resetJobsSchedulerForTests();
   vi.clearAllMocks();
   resolveJobDeleteScope.mockReset();
   await new Promise((r) => setTimeout(r, 50));
