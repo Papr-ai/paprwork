@@ -68,7 +68,7 @@ describe("sandbox local API: App Files", () => {
     await writeFile(file, "abc");
     const res = await post("/api/files/upload", { appId: APP, filePath: file, fileName: "film.mp4" });
     expect(res.status).toBe(200);
-    expect(res.body.id).toBe("file-1");
+    expect((res.body as { id?: string }).id).toBe("file-1");
     expect(addFile).toHaveBeenCalledWith(
       expect.anything(),
       expect.objectContaining({ appId: APP, filePath: file, fileName: "film.mp4", keepLocal: true }),
