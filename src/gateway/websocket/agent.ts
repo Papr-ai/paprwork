@@ -17,6 +17,9 @@ import {
   startStreamProfiler,
 } from "../../core/utils/streamProfiler.js";
 
+/** `${authEpoch}:${requestedProvider}` → provider Auto actually runs on. */
+const autoProviderMemo = new Map<string, AgentConfig["provider"]>();
+
 interface StreamPayload {
   chatId: string;
   message: string;
@@ -96,8 +99,39 @@ export async function setupAgentHandlers(
         let authType: "oauth" | "apiKey" | undefined;
         let usePaprProxy = false;
 
+        // Auto must run on a provider the user can actually reach. The UI picks
+        // one from its own auth snapshot (defaulting to Anthropic when unknown),
+        // which can be stale or wrong — re-check here and move to the first
+        // reachable provider (Anthropic → OpenAI → Google) instead of erroring.
         const { getAuthEpoch } = await import("../utils/keyResolver.js");
         const authEpoch = getAuthEpoch();
+
+        if (config.model === "auto") {
+          // Memoized per auth epoch: only the first Auto turn after a
+          // credential change pays for the lookup; later turns are a Map hit.
+          const memoKey = `${authEpoch}:${config.provider}`;
+          let routed = autoProviderMemo.get(memoKey);
+          if (routed === undefined) {
+            const { findReachableProvider, REACHABLE_PROVIDER_ORDER } =
+              await import("../utils/reachableProvider.js");
+            const reachable = await findReachableProvider([], [
+              config.provider,
+              ...REACHABLE_PROVIDER_ORDER,
+            ]);
+            routed = reachable?.provider ?? config.provider;
+            if (autoProviderMemo.size > 32) autoProviderMemo.clear();
+            autoProviderMemo.set(memoKey, routed);
+          }
+          if (routed !== config.provider) {
+            console.log(
+              `[Agent WS] Auto: no ${config.provider} auth — rerouting to ${routed}`,
+            );
+            config.provider = routed;
+            // Allow-list and fallback were computed for the old provider.
+            delete config.autoAllowedModels;
+            delete config.autoFallbackModelId;
+          }
+        }
 
         if (
           existingSession &&

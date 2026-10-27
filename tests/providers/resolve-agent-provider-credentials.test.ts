@@ -4,12 +4,14 @@ vi.mock("../../src/gateway/utils/keyResolver.js", () => ({
   getApiKeys: vi.fn(),
   getPaprApiKey: vi.fn(),
   getProviderAuthForModel: vi.fn(),
+  getProviderAuth: vi.fn().mockResolvedValue(null),
   resolvePaprProxyAuth: vi.fn(),
   PAPR_PROXY_SIGN_IN_MESSAGE: "Sign in with Papr",
 }));
 
 import {
   getApiKeys,
+  getProviderAuth,
   getProviderAuthForModel,
   resolvePaprProxyAuth,
 } from "../../src/gateway/utils/keyResolver.js";
@@ -96,5 +98,50 @@ describe("resolveJobSessionAuth", () => {
     expect(session.provider).toBe("anthropic");
     expect(session.model).toBe("claude-opus-4-6");
     expect(session.usePaprProxy).toBe(true);
+  });
+});
+
+describe("resolveJobSessionAuth — Claude-pinned profile without Anthropic", () => {
+  afterEach(() => {
+    vi.resetAllMocks();
+  });
+
+  it("falls back to a reachable OpenAI/Google model when Anthropic and Papr proxy are missing", async () => {
+    vi.mocked(resolvePaprProxyAuth).mockResolvedValue(null);
+    vi.mocked(getApiKeys).mockResolvedValue({});
+    // Only Google resolves; every other provider has no auth.
+    vi.mocked(getProviderAuthForModel).mockResolvedValue(null);
+    vi.mocked(getProviderAuth).mockResolvedValue(null);
+    vi.mocked(getApiKeys).mockImplementation(async (names: string[]) =>
+      names.includes("GOOGLE_API_KEY") ? { GOOGLE_API_KEY: "g-key" } : {},
+    );
+
+    const session = await resolveJobSessionAuth({
+      provider: "anthropic",
+      model: "claude-opus-4-6",
+      fallbackProvider: "openai",
+      fallbackModel: "gpt-5-6-sol",
+    });
+
+    expect(session.provider).toBe("google");
+    expect(session.apiKey).toBe("g-key");
+  });
+
+  it("uses the explicit OpenAI fallback when only OpenAI is configured", async () => {
+    vi.mocked(resolvePaprProxyAuth).mockResolvedValue(null);
+    vi.mocked(getApiKeys).mockResolvedValue({});
+    vi.mocked(getProviderAuthForModel).mockImplementation(async (provider) =>
+      provider === "openai" ? { type: "apiKey", key: "oa-key" } : null,
+    );
+
+    const session = await resolveJobSessionAuth({
+      provider: "anthropic",
+      model: "claude-opus-4-6",
+      fallbackProvider: "openai",
+      fallbackModel: "gpt-5-6-sol",
+    });
+
+    expect(session.provider).toBe("openai");
+    expect(session.model).toBe("gpt-5-6-sol");
   });
 });
