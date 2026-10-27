@@ -90,6 +90,23 @@ import {
 
 const REPLICA_STATUS_TIMEOUT_MS = 12_000;
 const REPLICA_SYNC_TIMEOUT_MS = 15_000;
+/** Extra push time per pending change and the ceiling (see replicaPushTimeoutMs). */
+const REPLICA_PUSH_MS_PER_OP = 2;
+const REPLICA_PUSH_TIMEOUT_MAX_MS = 10 * 60_000;
+
+/**
+ * Push time limit for a backlog of `pendingOps` changes.
+ *
+ * A fixed 15s limit meant a backlog too big to upload in 15s could never shrink: every
+ * push was killed, and the next one started over with the same backlog (one replica
+ * reached 5.3M pending changes). The engine sends the backlog in batches
+ * (pushOperationsThreshold), so a longer limit lets it work through them; the ceiling
+ * keeps a wedged engine from holding the path forever, and batches already sent stay sent.
+ */
+export function replicaPushTimeoutMs(pendingOps: number): number {
+  const ops = Number.isFinite(pendingOps) && pendingOps > 0 ? pendingOps : 0;
+  return Math.min(REPLICA_PUSH_TIMEOUT_MAX_MS, REPLICA_SYNC_TIMEOUT_MS + ops * REPLICA_PUSH_MS_PER_OP);
+}
 const REPLICA_QUERY_TIMEOUT_MS = 30_000;
 const REPLICA_OPERATION_TIMEOUT_MS = 30_000;
 
@@ -313,7 +330,9 @@ export class TursoReplicaService {
           spec,
           options?.pullBeforePush === false ? "push" : "pullPush",
         );
-      });
+        // The push itself is bounded by replicaPushTimeoutMs (scaled to the backlog);
+        // this outer limit only has to leave room for it plus the stats/pull around it.
+      }, REPLICA_PUSH_TIMEOUT_MAX_MS + REPLICA_OPERATION_TIMEOUT_MS);
       return { ok: true };
     } catch (error) {
       noteTursoReplicaTransportError(error);
@@ -445,11 +464,18 @@ export class TursoReplicaService {
       return false;
     }
     const client = getTursoReplicaSyncWorkerClient();
+    let timeoutMs = REPLICA_SYNC_TIMEOUT_MS;
+    if (op !== "pull") {
+      const pendingOps = await client
+        .stats({ ...spec, timeoutMs: REPLICA_STATUS_TIMEOUT_MS })
+        .catch(() => 0);
+      timeoutMs = replicaPushTimeoutMs(pendingOps);
+    }
     const run = () =>
       withTursoReplicaSyncBusy(spec.localPath, `replica_${op}`, () =>
         withTimeout(
-          client.sync({ ...spec, timeoutMs: REPLICA_SYNC_TIMEOUT_MS }, op),
-          REPLICA_SYNC_TIMEOUT_MS + 1_000,
+          client.sync({ ...spec, timeoutMs }, op),
+          timeoutMs + 1_000,
           `replica ${op}`,
         ),
       );
@@ -936,10 +962,11 @@ export class TursoReplicaService {
   private async withBackgroundPath<T>(
     localPath: string,
     fn: () => Promise<T>,
+    timeoutMs: number = REPLICA_OPERATION_TIMEOUT_MS,
   ): Promise<T> {
     const key = normalizeDbPath(localPath);
     return this.pathScheduler.runBackground(key, () =>
-      withTimeout(fn(), REPLICA_OPERATION_TIMEOUT_MS, `replica background (${key})`),
+      withTimeout(fn(), timeoutMs, `replica background (${key})`),
     );
   }
 }
