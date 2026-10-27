@@ -43,6 +43,10 @@ export interface GenerateMediaInput {
   appId?: string;
   fileName?: string;
   referenceImagePath?: string;
+  /** Veo only: last frame to interpolate toward. */
+  lastFramePath?: string;
+  /** Veo only: up to 3 character/object reference images. */
+  referenceImagePaths?: string[];
 }
 
 export interface GeneratedMediaArtifact {

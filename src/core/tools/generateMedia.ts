@@ -140,7 +140,20 @@ export const generateMediaTool = createTool({
       .string()
       .optional()
       .describe(
-        "Optional local image path for Gemini image editing / conditioning (absolute or ~/ path).",
+        "Optional local image path. Gemini image models: image to edit / condition on. Veo: the FIRST frame of the clip (image-to-video).",
+      ),
+    lastFramePath: z
+      .string()
+      .optional()
+      .describe(
+        "Veo only: local image path for the LAST frame. Veo animates from referenceImagePath to this frame, so clips chain seamlessly when clip N's last frame is clip N+1's first frame. Requires referenceImagePath; clip length is forced to 8s.",
+      ),
+    referenceImagePaths: z
+      .array(z.string())
+      .max(3)
+      .optional()
+      .describe(
+        "Veo only: up to 3 local image paths of a character or object to keep consistent in the clip (asset references). Clip length is forced to 8s.",
       ),
   }),
   execute: async (input): Promise<ToolResult> => {
@@ -169,6 +182,8 @@ export const generateMediaTool = createTool({
           appId,
           fileName: args.fileName,
           referenceImagePath: args.referenceImagePath,
+          lastFramePath: args.lastFramePath,
+          referenceImagePaths: args.referenceImagePaths,
         },
         { jobDir: jobEnv.JOB_DIR },
       );
