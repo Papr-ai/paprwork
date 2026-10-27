@@ -46,7 +46,9 @@ export function leaseJobDbProxyEnv(
   const env = mintBackendDbProxyEnv({
     appId: linkedAppId ?? STANDALONE_APP_ID,
     sourceId: replicaTarget.alias,
-    registryDbId: linkedAppId ? undefined : replicaTarget.dbId,
+    // Always resolve by dbId: the job env names the database by its registry
+    // label, which need not match the alias the app linked it under.
+    registryDbId: replicaTarget.dbId,
     allowedDbIds,
     proxyBaseUrl: `http://127.0.0.1:${GATEWAY_PORT}`,
     ttlMs: JOB_PROXY_TTL_MS,

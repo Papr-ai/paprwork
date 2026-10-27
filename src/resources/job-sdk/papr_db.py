@@ -148,6 +148,8 @@ def _proxy_post(action, sql, params, alias=""):
     if url and token:
         headers["Authorization"] = "Bearer " + token
         endpoint = "%s/%s" % (url.rstrip("/"), action)
+        if alias:  # connect("alias") must reach that source, not the session default
+            payload["sourceId"] = alias
     elif app_id:
         base = os.environ.get("PAPR_GATEWAY_URL", "http://127.0.0.1:18789")
         endpoint = "%s/api/db/%s" % (base.rstrip("/"), action)
