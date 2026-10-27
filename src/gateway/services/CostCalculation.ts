@@ -109,6 +109,8 @@ export const MODEL_PRICING: Record<string, ModelPricing> = {
   "qwen3.5:4b": { input: 0, output: 0 },
   "qwen3.5:latest": { input: 0, output: 0 },
   "qwen3.5:27b": { input: 0, output: 0 },
+  "flint:latest": { input: 0, output: 0 },
+  "flint:40b": { input: 0, output: 0 },
   "gemma4:e2b": { input: 0, output: 0 },
   "gemma4:e4b": { input: 0, output: 0 },
   "gemma4:12b": { input: 0, output: 0 },

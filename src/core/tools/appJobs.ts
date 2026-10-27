@@ -715,6 +715,9 @@ const createJobSchemaCore = z
       "qwen3.5:latest",
       "qwen3.5:9b-q4_k_m",
       "qwen3.5:27b",
+      // Ollama - Recursive Flint
+      "flint:latest",
+      "flint:40b",
       // Ollama - Gemma 4
       "gemma4:e2b",
       "gemma4:e4b",
@@ -2110,6 +2113,9 @@ const updateJobSchema = z.object({
       "qwen3.5:latest",
       "qwen3.5:9b-q4_k_m",
       "qwen3.5:27b",
+      // Ollama - Recursive Flint
+      "flint:latest",
+      "flint:40b",
       // Ollama - Gemma 4
       "gemma4:e2b",
       "gemma4:e4b",

@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 import {
   bytesToRamGbRounded,
+  getRecommendedFlintModel,
   getRecommendedGemmaModel,
   getRecommendedQwenModel,
   ollamaModelFitsHostRam,
@@ -25,6 +26,12 @@ describe("ollamaModelFit", () => {
     expect(getRecommendedGemmaModel(4)).toBe("gemma3:1b");
     expect(getRecommendedGemmaModel(12)).toBe("gemma4:e4b");
     expect(getRecommendedGemmaModel(16)).toBe("gemma4:12b");
+  });
+
+  it("recommends flint when RAM meets MoE requirement", () => {
+    expect(getRecommendedFlintModel(32)).toBe("flint:latest");
+    expect(ollamaModelFitsHostRam("flint:latest", 24)).toBe(true);
+    expect(ollamaModelFitsHostRam("flint:latest", 16)).toBe(false);
   });
 
   it("ollamaModelFitsHostRam uses minimum total RAM from table", () => {
