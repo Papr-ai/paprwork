@@ -309,6 +309,22 @@ const AVAILABLE_MODELS: Record<Provider, ModelInfo[]> = {
       supportsVision: false,
     },
     {
+      id: "flint:latest",
+      name: "Flint (Recursive)",
+      provider: "ollama",
+      contextWindow: 262144,
+      supportsThinking: false,
+      supportsVision: false,
+    },
+    {
+      id: "flint:40b",
+      name: "Flint 40B (Recursive)",
+      provider: "ollama",
+      contextWindow: 262144,
+      supportsThinking: false,
+      supportsVision: false,
+    },
+    {
       id: "gemma4:12b",
       name: "Gemma 4 12B",
       provider: "ollama",

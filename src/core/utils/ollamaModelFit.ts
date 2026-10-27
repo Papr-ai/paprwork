@@ -15,6 +15,21 @@ export const QWEN_RAM_REQUIREMENTS: Record<string, number> = {
   "qwen3.5:27b": 32,
 };
 
+/** Recursive Flint — ~23GB quantized on Ollama; MoE with ~2.5B active params/token */
+export const FLINT_RAM_REQUIREMENTS: Record<string, number> = {
+  "flint:latest": 24,
+  "flint:40b": 24,
+  flint: 24,
+};
+
+export const FLINT_MODEL_SIZES: Record<string, number> = {
+  "flint:latest": 23,
+  "flint:40b": 23,
+  flint: 23,
+};
+
+const FLINT_PREFERENCE_ORDER: readonly string[] = ["flint:latest", "flint:40b", "flint"];
+
 export const QWEN_MODEL_SIZES: Record<string, number> = {
   "qwen3.5:0.8b": 1.0,
   "qwen3.5:2b": 2.7,
@@ -133,11 +148,20 @@ export function getRecommendedGemmaModel(totalRamGb?: number): string {
   );
 }
 
+export function getRecommendedFlintModel(totalRamGb?: number): string {
+  if (totalRamGb === undefined || !Number.isFinite(totalRamGb) || totalRamGb <= 0) {
+    return "flint:latest";
+  }
+  return pickFittingOllamaModelId(FLINT_RAM_REQUIREMENTS, FLINT_PREFERENCE_ORDER, totalRamGb);
+}
+
 export function getOllamaRamRequirementGb(modelId: string): number | undefined {
+  const baseId = modelId.split("/").pop() ?? modelId;
   return (
-    QWEN_RAM_REQUIREMENTS[modelId] ??
-    GEMMA4_RAM_REQUIREMENTS[modelId] ??
-    GEMMA_RAM_REQUIREMENTS[modelId]
+    FLINT_RAM_REQUIREMENTS[baseId] ??
+    QWEN_RAM_REQUIREMENTS[baseId] ??
+    GEMMA4_RAM_REQUIREMENTS[baseId] ??
+    GEMMA_RAM_REQUIREMENTS[baseId]
   );
 }
 
