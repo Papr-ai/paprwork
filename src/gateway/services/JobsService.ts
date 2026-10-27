@@ -1952,7 +1952,12 @@ export class JobsService {
     >,
     currentJobId?: string,
   ): Promise<JobArchitectureIssue[]> {
-    const issues = validateJobArchitecture(job);
+    let scriptSources = "";
+    if (currentJobId) {
+      const { readJobScriptSources } = await import("./jobs/jobScriptSources.js");
+      scriptSources = await readJobScriptSources(this.getJobDir(currentJobId));
+    }
+    const issues = validateJobArchitecture({ ...job, scriptSources });
     const linkedAppId = job.appIds?.find((id) => id !== STANDALONE_APP_ID);
     if (!linkedAppId) return issues;
 
@@ -3059,6 +3064,11 @@ export class JobsService {
     const architectureErrors = formatJobArchitectureErrors(architectureIssues);
     if (architectureErrors) {
       throw new Error(`Job architecture validation failed before run:\n${architectureErrors}`);
+    }
+    for (const issue of architectureIssues) {
+      if (issue.rule === "job-full-table-rewrite") {
+        await this.appendLog(jobId, `[Architecture] WARNING: ${issue.message} Fix: ${issue.remediation}`);
+      }
     }
     // Read before stack.add: a non-empty stack means this run was pulled in by
     // ensureDependencyChain rather than started directly. Separating chained
