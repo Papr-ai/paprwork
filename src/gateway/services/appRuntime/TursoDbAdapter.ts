@@ -113,6 +113,10 @@ export class TursoDbAdapter {
 
   /** Last time each cached client ran a real query (keep-warm window). */
   private clientLastUsed = new WeakMap<Client, number>();
+  /** Diagnostics for write timing: when a client was created / last used before this call / last pinged. */
+  private clientCreatedAt = new WeakMap<Client, number>();
+  private clientPrevUse = new WeakMap<Client, number>();
+  private clientLastPing = new WeakMap<Client, number>();
   private keepWarmTimer: ReturnType<typeof setInterval> | null = null;
 
   constructor(private readonly credentials: TursoCredentialsProvider) {}
@@ -124,6 +128,8 @@ export class TursoDbAdapter {
    * Needs CPU between requests (Cloud Run "CPU always allocated") to fire.
    */
   private touchClient(client: Client): Client {
+    const prev = this.clientLastUsed.get(client);
+    if (prev !== undefined) this.clientPrevUse.set(client, prev);
     this.clientLastUsed.set(client, Date.now());
     if (!this.keepWarmTimer && process.env.TURSO_KEEP_WARM !== "0") {
       this.keepWarmTimer = setInterval(() => this.pingWarmClients(), KEEP_WARM_INTERVAL_MS);
@@ -139,7 +145,10 @@ export class TursoDbAdapter {
       const last = this.clientLastUsed.get(client);
       if (!last || now - last > KEEP_WARM_WINDOW_MS) continue;
       if (++pinged > KEEP_WARM_MAX_CLIENTS) break;
-      client.execute("SELECT 1").catch(() => {});
+      client
+        .execute("SELECT 1")
+        .then(() => this.clientLastPing.set(client, Date.now()))
+        .catch(() => {});
     }
   }
 
@@ -276,6 +285,7 @@ export class TursoDbAdapter {
       );
     }
     const client = createClient({ url: bundle.tursoUrl, authToken: bundle.authToken });
+    this.clientCreatedAt.set(client, Date.now());
     const tokenExpiresAt = bundle.expiresAt
       ? Math.max(now + 60_000, new Date(bundle.expiresAt).getTime() - 60_000)
       : now + 50 * 60 * 1000;
@@ -379,6 +389,7 @@ export class TursoDbAdapter {
 
     const { tursoUrl, authToken, expiresAt } = tokenBundle;
     const client = createClient({ url: tursoUrl, authToken });
+    this.clientCreatedAt.set(client, Date.now());
     const tokenExpiresAt = expiresAt
       ? Math.max(now + 60_000, new Date(expiresAt).getTime() - 60_000)
       : now + 50 * 60 * 1000;
@@ -695,7 +706,17 @@ export class TursoDbAdapter {
 
   async write(input: TursoDbActorInput & {
     /** Optional per-step timings (ms) for Server-Timing; filled on the Turso path. */
-    perf?: { clientMs?: number; execMs?: number; bumpMs?: number };
+    perf?: {
+      clientMs?: number;
+      execMs?: number;
+      bumpMs?: number;
+      /** false = a new libsql client (fresh socket) was created for this write. */
+      clientReused?: boolean;
+      /** ms since this client last served a request (-1 = never). */
+      idleMs?: number;
+      /** ms since keep-warm last pinged this client (-1 = never). */
+      sincePingMs?: number;
+    };
     orgId: string;
     namespaceId: string;
     runtimeAuth: AppRuntimeRouteAuth;
@@ -758,7 +779,16 @@ export class TursoDbAdapter {
     }
 
     const clientStarted = performance.now();
+    const clientStartedAt = Date.now();
     const client = await this.clientFor(input, actors, source);
+    if (input.perf) {
+      const created = this.clientCreatedAt.get(client);
+      const prev = this.clientPrevUse.get(client);
+      const ping = this.clientLastPing.get(client);
+      input.perf.clientReused = created === undefined || created < clientStartedAt;
+      input.perf.idleMs = input.perf.clientReused && prev !== undefined ? clientStartedAt - prev : -1;
+      input.perf.sincePingMs = ping !== undefined ? clientStartedAt - ping : -1;
+    }
 
     if (!input.clientScope) await this.ensureRemoteChangeLogReady(client, cacheKey, null, source);
     const execStarted = performance.now();
