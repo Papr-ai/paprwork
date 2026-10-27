@@ -22,8 +22,9 @@ jobs:
             runner: macos-15-intel
             app_path: release/mac/Papr Work.app
             builder_flag: --x64
+            timeout_minutes: 40
     runs-on: ${{ matrix.runner }}
-    timeout-minutes: 25
+    timeout-minutes: ${{ matrix.timeout_minutes || 25 }}
     steps:
       - uses: actions/checkout@v4
 
@@ -89,7 +90,7 @@ jobs:
         run: node scripts/prepare-mac-native-deps.mjs ${{ matrix.arch }}
 
       - name: Build Mac distributables (${{ matrix.arch }})
-        run: npx electron-builder --mac ${{ matrix.builder_flag }} --publish never
+        run: node scripts/build-mac-release-ci.mjs ${{ matrix.builder_flag }}
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           APPLE_ID: ${{ secrets.APPLE_ID }}

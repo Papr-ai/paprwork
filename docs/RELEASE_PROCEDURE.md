@@ -44,6 +44,7 @@ Watch: **Actions → Release** (triggered by the tag).
 
 The workflow now:
 - Builds Mac **arm64** (`macos-14`) and **x64** (`macos-15-intel`) in **parallel** jobs with isolated `node_modules`
+- On **Intel x64**, `build-mac-release-ci.mjs` retries `xcrun stapler` (and up to 3 full builds) when notarization succeeds but stapling fails with transient CloudKit / Error 68 — you should not need `gh run rerun --failed` for that flake alone
 - Builds Windows/Linux with `--publish never` (local artifacts only)
 - **Generates `latest-mac.yml`** from both Mac zip artifacts (`fix-latest-mac-yml.mjs`)
 - Collects `latest.yml`, `latest-linux.yml` from platform artifacts
