@@ -43,6 +43,14 @@ describe("isReplicaBusyError", () => {
     ).toBe(true);
   });
 
+  it("matches the sync engine's file-lock wording", () => {
+    const msg =
+      "sync engine operation failed: database error: Locking error: Failed locking file " +
+      "'/x/Jobs/abc/data/data.db'. File is locked by another process";
+    expect(isReplicaBusyError(new Error(msg))).toBe(true);
+    expect(isSqliteBusyError(new Error(msg))).toBe(true);
+  });
+
   it("accepts non-Error throwables", () => {
     expect(isReplicaBusyError("database is locked")).toBe(true);
   });
