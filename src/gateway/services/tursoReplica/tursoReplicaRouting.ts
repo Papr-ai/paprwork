@@ -389,7 +389,12 @@ export async function pullLinkedDbViaTursoReplica(
 
 export async function pushLinkedDbViaTursoReplica(
   source: AppDataSource,
-  options?: { pullBeforePush?: boolean; skipMigrationConflictCheck?: boolean },
+  options?: {
+    pullBeforePush?: boolean;
+    skipMigrationConflictCheck?: boolean;
+    /** Upload even a backlog that looks like churn (explicit user/agent choice). */
+    allowLargeBacklog?: boolean;
+  },
 ): Promise<TursoReplicaPushResponse> {
   const tursoDatabase = resolveTursoDatabaseForReplicaSource(source);
 
@@ -421,6 +426,18 @@ export async function pushLinkedDbViaTursoReplica(
           localOnlyMigrationIds: conflict.localOnlyIds,
           cloudAheadMigrationIds: conflict.cloudAheadIds,
         };
+      }
+    }
+
+    if (!options?.allowLargeBacklog) {
+      const held = await checkReplicaBacklogHold(source, tursoDatabase);
+      if (held) {
+        if (source.dbId) {
+          await getDatabaseRegistryService().updateReplicaPushState(source.dbId, {
+            lastReplicaPushError: held,
+          });
+        }
+        return { ok: false, error: held, backlogHold: true };
       }
     }
 
@@ -470,6 +487,41 @@ export async function pushLinkedDbViaTursoReplica(
   } catch (error) {
     noteTursoReplicaTransportError(error);
     throw error;
+  }
+}
+
+/** Returns the hold message when the pending backlog looks like churn, else null. */
+async function checkReplicaBacklogHold(
+  source: AppDataSource,
+  tursoDatabase: string,
+): Promise<string | null> {
+  const guard = await import("./replicaBacklogGuard.js");
+  try {
+    const pendingOps = await getTursoReplicaService().readCdcOperations(source.dbPath, tursoDatabase);
+    if (pendingOps < guard.BACKLOG_HOLD_MIN_PENDING) return null;
+    const liveRows = await guard.countLiveRows(async (statements) =>
+      (await queryBatchLinkedDbViaTursoReplica(source, statements)) as { rows: unknown[] }[],
+    );
+    const assessment = guard.assessReplicaBacklog(pendingOps, liveRows);
+    if (!assessment.hold) return null;
+    let jobNames: string[] = [];
+    if (source.dbId) {
+      try {
+        const { getJobsService } = await import("../JobsService.js");
+        jobNames = (await getJobsService().listJobs())
+          .filter((j) => j.writeDbIds?.includes(source.dbId!))
+          .map((j) => j.name)
+          .slice(0, 3);
+      } catch {
+        // job lookup is only a hint
+      }
+    }
+    const message = guard.formatBacklogHold(assessment, jobNames);
+    console.warn(`[TursoReplicaRouting] ${source.dbId ?? source.dbPath}: ${message}`);
+    return message;
+  } catch {
+    // Never block a push because the check itself failed.
+    return null;
   }
 }
 

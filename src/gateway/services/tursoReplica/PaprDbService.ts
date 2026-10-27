@@ -107,6 +107,7 @@ export async function paprDbSyncStatus(
 
 export async function paprDbPush(
   ref: PaprDbSourceRef,
+  options?: { allowLargeBacklog?: boolean },
 ): Promise<{
   ok: boolean;
   error?: string;
@@ -117,7 +118,7 @@ export async function paprDbPush(
 }> {
   await initializeDatabaseRegistry();
   const source = resolveSource(ref);
-  const result = await pushLinkedDbViaTursoReplica(source);
+  const result = await pushLinkedDbViaTursoReplica(source, options);
   return { ...result, dbId: source.dbId ?? source.id };
 }
 
@@ -222,7 +223,8 @@ export async function repairCloudSync(options: {
       };
     }
     case "push": {
-      const push = await paprDbPush({ dbId: options.dbId });
+      // An explicit push is the "upload anyway" choice for a held backlog.
+      const push = await paprDbPush({ dbId: options.dbId }, { allowLargeBacklog: true });
       if (push.ok) {
         await scheduleLegacyCutoverRetryAfterRepair(options.dbId);
       }
@@ -305,6 +307,7 @@ export async function repairCloudSync(options: {
       const pushResult = await pushLinkedDbViaTursoReplica(source, {
         pullBeforePush: false,
         skipMigrationConflictCheck: true,
+        allowLargeBacklog: true,
       });
 
       await registry.updateReplicaPushState(options.dbId, {
