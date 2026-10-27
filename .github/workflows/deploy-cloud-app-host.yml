@@ -120,7 +120,7 @@ jobs:
             --allow-unauthenticated --port=8080 --memory=512Mi --cpu=1 \
             --min-instances=0 --max-instances=3 --timeout=120 \
             --update-secrets=PAPR_CLOUD_APP_HOST_KEY=papr-cloud-app-host-key-dev:latest \
-            --update-env-vars=PAPR_MEMORY_SERVER_URL=https://memoryserver-development-7dckb3v3oa-uw.a.run.app,NODE_ENV=production,AUTH0_DOMAIN=papr.auth0.com,AUTH0_CLIENT_ID=asVGkVRkRAxYvtQadqivntIRjB4D1Iur,CLOUD_APP_HOST_GCS_BUCKET=gen-lang-client-0873281406-cloud-app-host-cache,CLOUD_APP_HOST_MEMORY_TIMEOUT_MS=90000 \
+            --update-env-vars=PAPR_MEMORY_SERVER_URL=https://memoryserver-development-7dckb3v3oa-uw.a.run.app,NODE_ENV=production,AUTH0_DOMAIN=papr.auth0.com,AUTH0_CLIENT_ID=asVGkVRkRAxYvtQadqivntIRjB4D1Iur,CLOUD_APP_HOST_GCS_BUCKET=gen-lang-client-0873281406-cloud-app-host-cache,CLOUD_APP_HOST_MEMORY_TIMEOUT_MS=90000,PARSE_SERVER_URL=https://parseserver-development-223473570766.us-west1.run.app/parse \
             --labels=commit=${GITHUB_SHA::8}
           URL=$(gcloud run services describe papr-cloud-app-host-dev --region="${GCP_REGION}" --project="${GCP_PROJECT_ID}" --format='value(status.url)')
           echo "url=${URL}" >> "$GITHUB_OUTPUT"
