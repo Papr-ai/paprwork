@@ -6,7 +6,7 @@ export type MediaProviderId = "google" | "openai";
 
 export type MediaApiStyle =
   | "gemini_generate_content"
-  | "veo_predict_long_running"
+  | "gemini_omni_interactions"
   | "openai_images"
   | "openai_codex_image";
 
@@ -24,7 +24,7 @@ export interface MediaModelDefinition {
   unavailableReason?: string;
   defaultAspectRatio?: string;
   supportedAspectRatios?: readonly string[];
-  /** Veo-only: default clip length in seconds. */
+  /** Video models: nominal clip length in seconds (informational). */
   defaultDurationSeconds?: number;
 }
 
@@ -43,9 +43,9 @@ export interface GenerateMediaInput {
   appId?: string;
   fileName?: string;
   referenceImagePath?: string;
-  /** Veo only: last frame to interpolate toward. */
+  /** Video only: last frame to interpolate toward. */
   lastFramePath?: string;
-  /** Veo only: up to 3 character/object reference images. */
+  /** Video only: up to 3 character/object reference images. */
   referenceImagePaths?: string[];
 }
 
