@@ -31,8 +31,10 @@ import { startLoopbackCallback } from "./mcpLoopbackCallback.js";
 import {
   BUILTIN_MCP_SERVERS,
   deriveMcpServerId,
+  builtinForHost,
   inferMcpTransport,
   isValidMcpServerId,
+  PAPR_CLIENT_METADATA_URL,
   type McpServerDefinition,
 } from "./mcpServerCatalog.js";
 import { buildMcpAgentTool, mcpAgentToolId, type McpCallResult, type McpToolDescriptor } from "./mcpToolAdapter.js";
@@ -165,11 +167,17 @@ export class McpConnectionService {
     const existing = all.find((s) => s.url === url.toString());
     if (existing) return existing;
     for (let n = 2; all.some((s) => s.id === id); n++) id = `${id.replace(/-\d+$/, "")}-${n}`;
+    // Same host as a built-in (e.g. a heyBTW workspace URL): reuse its client + name.
+    const base = builtinForHost(url.toString());
     const def: McpServerDefinition = {
       id,
-      name: input.name?.trim() || url.hostname,
+      name: input.name?.trim() || (base ? `${base.name} workspace` : url.hostname),
       url: url.toString(),
       transport: inferMcpTransport(url.toString()),
+      ...(base?.category ? { category: base.category } : {}),
+      ...(base?.clientId ? { clientId: base.clientId } : {}),
+      ...(base?.serverOAuth ? { serverOAuth: base.serverOAuth } : {}),
+      ...(base?.requiresClientId ? { requiresClientId: base.requiresClientId } : {}),
       custom: true,
     };
     this.custom.push(def);
@@ -234,6 +242,7 @@ export class McpConnectionService {
       redirectUri,
       state,
       staticClientId: def.clientId,
+      clientMetadataUrl: PAPR_CLIENT_METADATA_URL,
       openBrowser: this.openBrowser,
     });
   }
