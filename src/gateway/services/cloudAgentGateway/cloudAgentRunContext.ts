@@ -808,8 +808,11 @@ export async function resolveCloudAgentJobStreamInput(
     authType: request.llmAuth.authType,
   });
 
-  const provider = session.provider ?? llmAuth.provider;
-  const model = session.model ?? request.model;
+  const { provider, model } = pickCloudJobProviderModel(
+    session.provider,
+    session.model ?? request.model,
+    llmAuth.provider,
+  );
 
   const workspaceChatOverrides = await resolveCloudWorkspaceChatStreamOverrides(request);
   const appAgentOverrides =
@@ -853,6 +856,30 @@ export async function resolveCloudAgentJobStreamInput(
     session,
     appendLog,
   };
+}
+
+const sameProviderFamily = (a: Provider, b: Provider) =>
+  a === b || (a.startsWith("openai") && b.startsWith("openai"));
+
+/**
+ * The credential decides the provider. Memory falls back to another provider
+ * when the job's own key is missing (e.g. openai → google), and sends that
+ * provider's token. Keeping the job's provider would send a Google key to
+ * OpenAI. So when they differ, run on the credential's provider and let the
+ * job resolver pick its default model (the job's model belongs to the old one).
+ */
+export function pickCloudJobProviderModel(
+  jobProvider: Provider | undefined,
+  jobModel: string | undefined,
+  credentialProvider: Provider,
+): { provider: Provider; model: string | undefined } {
+  if (!jobProvider || sameProviderFamily(jobProvider, credentialProvider)) {
+    return { provider: jobProvider ?? credentialProvider, model: jobModel };
+  }
+  console.warn(
+    `[CloudAgentGateway] Job asked for ${jobProvider}/${jobModel ?? "default"} but the credential is ${credentialProvider} — running on ${credentialProvider}`,
+  );
+  return { provider: credentialProvider, model: undefined };
 }
 
 /** @deprecated Use resolveCloudAgentJobStreamInput for agent jobs. */
