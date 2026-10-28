@@ -113,7 +113,7 @@ export const generateMediaTool = createTool({
       .string()
       .min(1)
       .describe(
-        "Model id from list_media_models (e.g. gemini-3.1-flash-image, gpt-image-2.5-flare, gpt-image-2.5-sunburst, gpt-image-2, veo-3.1-generate-preview).",
+        "Model id from list_media_models (e.g. gemini-3.1-flash-image, gpt-image-2.5-flare, gpt-image-2.5-sunburst, gpt-image-2, gemini-omni-1.1-flash for video).",
       ),
     aspectRatio: aspectRatioSchema,
     durationSeconds: z
@@ -122,7 +122,7 @@ export const generateMediaTool = createTool({
       .min(4)
       .max(8)
       .optional()
-      .describe("Video clip length in seconds (Veo models only; default 8)."),
+      .describe("Ignored: Gemini Omni Flash picks the clip length (about 10s). Kept so older calls still validate."),
     appId: z
       .string()
       .uuid()
@@ -140,20 +140,20 @@ export const generateMediaTool = createTool({
       .string()
       .optional()
       .describe(
-        "Optional local image path. Gemini image models: image to edit / condition on. Veo: the FIRST frame of the clip (image-to-video).",
+        "Optional local image path. Gemini image models: image to edit / condition on. Video: the FIRST frame of the clip (image-to-video).",
       ),
     lastFramePath: z
       .string()
       .optional()
       .describe(
-        "Veo only: local image path for the LAST frame. Veo animates from referenceImagePath to this frame, so clips chain seamlessly when clip N's last frame is clip N+1's first frame. Requires referenceImagePath; clip length is forced to 8s.",
+        "Video only: local image path for the LAST frame. The model animates from referenceImagePath to this frame, so clips chain seamlessly when clip N's last frame is clip N+1's first frame. Requires referenceImagePath.",
       ),
     referenceImagePaths: z
       .array(z.string())
       .max(3)
       .optional()
       .describe(
-        "Veo only: up to 3 local image paths of a character or object to keep consistent in the clip (asset references). Clip length is forced to 8s.",
+        "Video only: up to 3 local image paths of a character, object or style to keep consistent in the clip.",
       ),
   }),
   execute: async (input): Promise<ToolResult> => {

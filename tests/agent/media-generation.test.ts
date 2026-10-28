@@ -16,7 +16,7 @@ describe("media generation models", () => {
     expect(result.available.some((m) => m.id === "gemini-3.1-flash-image")).toBe(
       true,
     );
-    expect(result.available.some((m) => m.id === "veo-3.1-generate-preview")).toBe(
+    expect(result.available.some((m) => m.id === "gemini-omni-1.1-flash")).toBe(
       true,
     );
     expect(result.unavailable.some((m) => m.id === "gpt-image-2")).toBe(true);
