@@ -66,33 +66,29 @@ export const MEDIA_MODELS: readonly MediaModelDefinition[] = [
     supportedAspectRatios: ["1:1", "3:2", "2:3", "16:9", "9:16"],
   },
   {
-    id: "veo-3.1-generate-preview",
-    label: "Veo 3.1",
+    id: "gemini-omni-1.1-flash",
+    label: "Gemini Omni Flash",
     kind: "video",
     provider: "google",
-    apiStyle: "veo_predict_long_running",
-    remoteModel: "veo-3.1-generate-preview",
+    apiStyle: "gemini_interactions_video",
+    remoteModel: "gemini-omni-1.1-flash",
     implemented: true,
     defaultAspectRatio: "16:9",
     supportedAspectRatios: ["16:9", "9:16"],
-    defaultDurationSeconds: 8,
-  },
-  {
-    id: "veo-3.1-fast-generate-preview",
-    label: "Veo 3.1 Fast",
-    kind: "video",
-    provider: "google",
-    apiStyle: "veo_predict_long_running",
-    remoteModel: "veo-3.1-fast-generate-preview",
-    implemented: true,
-    defaultAspectRatio: "16:9",
-    supportedAspectRatios: ["16:9", "9:16"],
-    defaultDurationSeconds: 8,
   },
 ] as const;
 
+/** Google retired Veo; old ids keep working on its replacement. */
+const RETIRED_MODEL_IDS: Readonly<Record<string, string>> = {
+  "veo-3.1-generate-preview": "gemini-omni-1.1-flash",
+  "veo-3.1-fast-generate-preview": "gemini-omni-1.1-flash",
+  "veo-3.0-generate-001": "gemini-omni-1.1-flash",
+  "gemini-omni-flash-preview": "gemini-omni-1.1-flash",
+};
+
 export function getMediaModelById(modelId: string): MediaModelDefinition | undefined {
-  return MEDIA_MODELS.find((model) => model.id === modelId);
+  const id = RETIRED_MODEL_IDS[modelId] ?? modelId;
+  return MEDIA_MODELS.find((model) => model.id === id);
 }
 
 function resolveGoogleModel(
