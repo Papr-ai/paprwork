@@ -796,6 +796,7 @@ async function startGateway(): Promise<void> {
               return {
                 alias: source.alias,
                 perUser: registry.getRecordForSource(source)?.isolation === "per-user",
+                privateTables: registry.getRecordForSource(source)?.privateTables ?? [],
                 tables: schema.tables,
               };
             } catch {
