@@ -480,6 +480,7 @@ async function handleWebviewTestRequest(request) {
     );
     for (const sid of stale) {
       const old = webviewSessions.get(sid);
+      if (defaultWebviewId === sid) defaultWebviewId = null;
       if (old && !old.window.isDestroyed()) old.window.close();
     }
 
@@ -531,9 +532,11 @@ async function handleWebviewTestRequest(request) {
           : undefined,
     };
     webviewSessions.set(id, entry);
-    if (!defaultWebviewId) {
-      defaultWebviewId = id;
-    }
+    // The newest preview is the default. The session cap above may have just
+    // closed the old default, and its "closed" handler (which clears the
+    // default) only runs later, so "keep the first one" left no default at all
+    // and every call without a webviewId failed with "No active webview session".
+    defaultWebviewId = id;
 
     const session = win.webContents.session;
     // Capture the webContentsId now — before the window can be destroyed —
