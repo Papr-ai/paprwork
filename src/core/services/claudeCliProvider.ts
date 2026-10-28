@@ -7,4 +7,6 @@ export interface ClaudeCliInstallProvider {
   ensureCLI(): Promise<string>;
   isAvailable(): Promise<boolean>;
   getVersion(): Promise<string | null>;
+  /** Windows only: bash.exe Claude Code should use (CLAUDE_CODE_GIT_BASH_PATH). */
+  getWindowsGitBashPath?(): Promise<string | null>;
 }

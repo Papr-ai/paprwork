@@ -48,6 +48,7 @@ User is stuck. ❌
 ## Implementation
 
 ### 1. Package Manager Utility (`src/gateway/utils/packageManager.ts`)
+   > Removed 2026-10: this utility was never wired in. Claude Code's Windows Git Bash dependency is handled by `ClaudeCLIManager` (PortableGit).
 
 Provides:
 - `checkPackage(name)` - Detects if package installed

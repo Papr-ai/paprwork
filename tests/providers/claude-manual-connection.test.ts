@@ -1,6 +1,7 @@
 import { describe, expect, test } from "vitest";
 import {
   buildClaudeManualAgentPrompt,
+  getClaudeCliCheckCommand,
   getClaudeCliInstallCommand,
   getClaudeManualConnectionSteps,
   getTerminalLabel,
@@ -19,6 +20,18 @@ describe("claude manual connection", () => {
       "curl -fsSL https://claude.ai/install.sh | bash",
     );
     expect(getTerminalLabel("mac")).toBe("Terminal");
+  });
+
+  test("windows check command is valid PowerShell (no `where` alias, no &&)", () => {
+    const cmd = getClaudeCliCheckCommand("windows");
+    expect(cmd).toBe("Get-Command claude; claude --version");
+    expect(cmd).not.toContain("&&");
+    expect(getClaudeCliCheckCommand("mac")).toBe("which claude && claude --version");
+  });
+
+  test("windows agent prompt mentions Git for Windows", () => {
+    expect(buildClaudeManualAgentPrompt("windows")).toContain("Git for Windows");
+    expect(buildClaudeManualAgentPrompt("mac")).not.toContain("Git for Windows");
   });
 
   test("manual steps include install, verify, and setup-token", () => {

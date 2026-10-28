@@ -2753,6 +2753,7 @@ Agent: "Python 3.12.8 installed successfully! Now creating your scraper job..."
 ```
 **Implementation:**
 1. **Package Manager Utility** (`src/gateway/utils/packageManager.ts`):
+   > Removed 2026-10: this utility was never wired in. Claude Code's Windows Git Bash dependency is handled by `ClaudeCLIManager` (PortableGit).
    - `checkPackage()` - Detects if package installed
    - `installPackage()` - Runs platform-specific install command
    - `getAgentInstallInstructions()` - Provides fallback manual instructions

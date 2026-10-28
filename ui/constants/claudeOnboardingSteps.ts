@@ -1,5 +1,6 @@
 import {
   detectManualConnectionPlatform,
+  getClaudeCliCheckCommand,
   getClaudeCliInstallCommand,
   getTerminalLabel,
   type ManualConnectionPlatform,
@@ -33,8 +34,7 @@ export function getClaudeOnboardingSteps(
   const machine = machineLabel(platform);
   const terminal = getTerminalLabel(platform);
   const installCmd = getClaudeCliInstallCommand(platform);
-  const checkCmd =
-    platform === "windows" ? "where claude && claude --version" : "which claude && claude --version";
+  const checkCmd = getClaudeCliCheckCommand(platform);
   const switchAppHint =
     platform === "mac" ? "the Dock or ⌘Tab" : platform === "windows" ? "the taskbar or Alt+Tab" : "your window switcher";
 
@@ -50,11 +50,15 @@ export function getClaudeOnboardingSteps(
     },
     {
       title: "Install Claude Code",
-      body: "Papr can run this for you. It downloads Claude Code from Anthropic and installs it on your computer. You will see the output as it happens.",
+      body:
+        platform === "windows"
+          ? "Papr can run this for you. It installs Claude Code from Anthropic, plus Git for Windows if this PC doesn't have it (Claude Code needs it). No admin rights needed — this can take a couple of minutes."
+          : "Papr can run this for you. It downloads Claude Code from Anthropic and installs it on your computer. You will see the output as it happens.",
       cmd: installCmd,
       mode: "run",
       action: "Install for me",
-      running: "Installing Claude Code",
+      running:
+        platform === "windows" ? "Installing Claude Code (and Git if needed)" : "Installing Claude Code",
       defaultOk: "Installed Claude Code",
     },
     {
@@ -64,7 +68,7 @@ export function getClaudeOnboardingSteps(
       mode: "hand",
       action: `Open ${terminal} and run it`,
       running: `Waiting for you to finish in ${terminal}`,
-      defaultOk: "Sign-in finished. Token is on screen in Terminal.",
+      defaultOk: `Sign-in finished. Token is on screen in ${terminal}.`,
     },
     {
       title: "Paste your token",
