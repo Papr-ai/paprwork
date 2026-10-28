@@ -20,7 +20,7 @@
     "@tiptap/starter-kit": "3.19.0",
     "@tiptap/suggestion": "3.19.0",
     "markdown-it-multimd-table": "^4.2.3",
-    "react": "^18.3.1",
+    "react": "^19.3.1",
     "react-dom": "^18.3.1",
     "react-markdown": "^9.0.1",
     "react-syntax-highlighter": "^16.1.0",
