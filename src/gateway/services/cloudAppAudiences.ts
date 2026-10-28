@@ -87,15 +87,36 @@ export function audiencesPatchFromSharing(args: LegacySharingArgs, current: Audi
   return p;
 }
 
+/**
+ * The link audience's role decides read vs read+write, as in the Share sheet.
+ * The server's legacy `linkPermission` / `visibility` can lag behind the role
+ * (an old read_write link stays read_write after the role drops to viewer), so
+ * they are only used when no role is reported.
+ */
+function linkWrites(a: AudiencesAccess): boolean {
+  if (a.linkRole) return a.linkRole !== "none" && a.linkRole !== "viewer";
+  return a.linkPermission === "read_write";
+}
+
+/** Legacy access mode derived from the audiences, so the publish bar and tool agree with the sheet. */
+export function audiencesAccessMode(a: AudiencesAccess): CloudAccessMode | undefined {
+  const open = a.audiences;
+  if (!open) return a.visibility;
+  if (open.link) return (linkWrites(a) ? "link_read_write" : "link_read") as CloudAccessMode;
+  if (open.community) return "public_read" as CloudAccessMode;
+  if (open.workspace) return "team" as CloudAccessMode;
+  return "private" as CloudAccessMode;
+}
+
 /** Mirror the server's answer into local prefs so the bar's link, token and next publish agree. */
 export function syncAudiencePrefs(appId: string, a: AudiencesAccess | null): void {
   if (!a || a.accessModel !== "audiences" || !a.audiences) return;
   const open = a.audiences;
   const prefs = getAppPublishPrefs(appId);
   setAppPublishPrefs(appId, {
-    accessMode: a.visibility ?? prefs.accessMode,
+    accessMode: audiencesAccessMode(a) ?? prefs.accessMode,
     loginAccess: open.community ? "public" : open.workspace ? "team" : "private",
-    externalLink: open.link ? (a.linkPermission === "read_write" ? "read_write" : "read") : "off",
+    externalLink: open.link ? (linkWrites(a) ? "read_write" : "read") : "off",
     requireSignIn: a.requireSignIn === true,
     audiencesModel: true,
     ...(a.shareToken ? { shareToken: a.shareToken } : {}),

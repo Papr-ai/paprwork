@@ -28,3 +28,14 @@ describe("audiencesPatchFromSharing", () => {
     expect(describeAudiences({ ...v9, linkRole: "viewer" })).toEqual({ workspace: "viewer", link: "none", community: "none", requireSignIn: false });
   });
 });
+
+describe("audiencesAccessMode follows the link role, not the lagging linkPermission", () => {
+  it("viewer link is link_read even when the server still says read_write", async () => {
+    const { audiencesAccessMode } = await import("../../../src/gateway/services/cloudAppAudiences.js");
+    const a = { accessModel: "audiences", visibility: "link_read_write", linkPermission: "read_write",
+      audiences: { workspace: true, link: true, community: false }, workspaceRole: "viewer", linkRole: "viewer" } as const;
+    expect(audiencesAccessMode(a as never)).toBe("link_read");
+    expect(audiencesAccessMode({ ...a, linkRole: "contributor" } as never)).toBe("link_read_write");
+    expect(audiencesAccessMode({ ...a, audiences: { workspace: true, link: false, community: false } } as never)).toBe("team");
+  });
+});
