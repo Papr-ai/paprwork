@@ -403,6 +403,20 @@ export async function pushLinkedDbViaTursoReplica(
     isTursoReplicaOnline() && options?.pullBeforePush !== false;
 
   try {
+    // Before the pull: a pull rewrites the replica files, the file watcher then
+    // schedules another push, and a held backlog was re-checked every minute.
+    if (!options?.allowLargeBacklog) {
+      const held = await checkReplicaBacklogHold(source, tursoDatabase);
+      if (held) {
+        if (source.dbId) {
+          await getDatabaseRegistryService().updateReplicaPushState(source.dbId, {
+            lastReplicaPushError: held,
+          });
+        }
+        return { ok: false, error: held, backlogHold: true };
+      }
+    }
+
     if (pullFirst) {
       await replica.pull(source.dbPath, tursoDatabase);
     }
@@ -426,18 +440,6 @@ export async function pushLinkedDbViaTursoReplica(
           localOnlyMigrationIds: conflict.localOnlyIds,
           cloudAheadMigrationIds: conflict.cloudAheadIds,
         };
-      }
-    }
-
-    if (!options?.allowLargeBacklog) {
-      const held = await checkReplicaBacklogHold(source, tursoDatabase);
-      if (held) {
-        if (source.dbId) {
-          await getDatabaseRegistryService().updateReplicaPushState(source.dbId, {
-            lastReplicaPushError: held,
-          });
-        }
-        return { ok: false, error: held, backlogHold: true };
       }
     }
 
