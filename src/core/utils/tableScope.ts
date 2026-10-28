@@ -5,10 +5,15 @@
  *   user    — papr_user_id: each signed-in person sees their own rows
  *   visitor — owner_session: per browser, but only without sign-in it's guessable
  *   all     — no owner column: everyone who can open the app sees every row
+ *   private — marked private on the database (papr_db_set_table_access): the
+ *             browser can't query it; rows are read through backend actions
+ *             that filter on _acl, so who sees what is the app's own sharing
  * A database with per-user isolation is "user" for every table.
+ * Engine / sync / migration bookkeeping is not app data and is never listed
+ * (browser tokens never include it either; see clientTableScope.ts).
  */
 
-export type TableScope = "all" | "user" | "visitor";
+export type TableScope = "all" | "user" | "visitor" | "private";
 
 export interface ScopedTable {
   db: string;
@@ -19,10 +24,12 @@ export interface ScopedTable {
 export interface SchemaSourceLike {
   alias: string;
   perUser?: boolean;
+  /** Tables marked private on the registry record (lower-case or any case). */
+  privateTables?: string[];
   tables: Array<{ table: string; columns: Array<{ name: string }> }>;
 }
 
-const INTERNAL = /^(sqlite_|_papr|_cf_|papr_|_litestream|__)/i;
+const INTERNAL = /^(sqlite_|_papr|__papr|_cf_|papr_|_litestream|__|turso_|libsql_|schema_migrations$)/i;
 const USER_COLS = new Set(["papr_user_id"]);
 const VISITOR_COLS = new Set(["owner_session"]);
 
@@ -37,9 +44,11 @@ export function tableScope(columns: Array<{ name: string }>, perUser = false): T
 export function scopeTables(sources: SchemaSourceLike[]): ScopedTable[] {
   const out: ScopedTable[] = [];
   for (const s of sources) {
+    const priv = new Set((s.privateTables ?? []).map((n) => n.toLowerCase()));
     for (const t of s.tables) {
       if (INTERNAL.test(t.table)) continue;
-      out.push({ db: s.alias, name: t.table, scope: tableScope(t.columns, s.perUser) });
+      const scope = priv.has(t.table.toLowerCase()) ? "private" : tableScope(t.columns, s.perUser);
+      out.push({ db: s.alias, name: t.table, scope });
     }
   }
   return out;
@@ -51,6 +60,7 @@ export function tableIsShared(t: ScopedTable, signIn: boolean): boolean {
 }
 
 export function scopeTag(t: ScopedTable, signIn: boolean): string {
+  if (t.scope === "private") return "Private";
   if (!tableIsShared(t, signIn)) return "Per person";
   return t.scope === "visitor" ? "Needs sign-in" : "Everyone";
 }

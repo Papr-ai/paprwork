@@ -44,6 +44,25 @@ describe("table scope", () => {
   });
 });
 
+describe("table scope: private tables and engine bookkeeping", () => {
+  const cols = (...n: string[]) => n.map((name) => ({ name }));
+  it("tables marked private on the database are not visible to visitors", () => {
+    const t = scopeTables([{ alias: "docs", privateTables: ["Docs", "doc_blocks"], tables: [
+      { table: "docs", columns: cols("id", "_acl") },
+      { table: "doc_blocks", columns: cols("id") },
+      { table: "catalog", columns: cols("id") },
+    ] }]);
+    expect(t.map((x) => [x.name, x.scope])).toEqual([["docs", "private"], ["doc_blocks", "private"], ["catalog", "all"]]);
+    expect(t.filter((x) => tableIsShared(x, false)).map((x) => x.name)).toEqual(["catalog"]);
+    expect(scopeTag(t[0], false)).toBe("Private");
+  });
+  it("never lists sync, CDC or migration bookkeeping as app data", () => {
+    const t = scopeTables([{ alias: "docs", tables: ["turso_cdc", "turso_cdc_version", "turso_sync_last_change_id", "schema_migrations", "libsql_wasm_func_table", "notes"]
+      .map((table) => ({ table, columns: cols("id") })) }]);
+    expect(t.map((x) => x.name)).toEqual(["notes"]);
+  });
+});
+
 describe("Write with AI", () => {
   it("keeps only the changed middle of a file", () => {
     const d = compactFileDiff({ path: "app.ts", before: "a\nb\nc\nd", after: "a\nB\nc\nd" });
