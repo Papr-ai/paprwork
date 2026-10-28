@@ -32,6 +32,7 @@ import { appendLineageToPublishData } from "../utils/cloudPublishLineageHints.js
 import { getCloudAppLineageService } from "../../gateway/services/CloudAppLineageService.js";
 import {
   audiencesPatchFromSharing,
+  audiencesAccessMode,
   describeAudiences,
   fetchAudiences,
   saveAudiences,
@@ -51,8 +52,12 @@ function withAudiences(data: Record<string, unknown>, a: AudiencesAccess | null)
   const linkOn = view.link !== "none";
   const shareUrl = typeof data.shareUrl === "string" ? data.shareUrl.split("?")[0] : null;
   const externalLinkUrl = linkOn && a?.shareToken && shareUrl ? `${shareUrl}?t=${a.shareToken}` : data.externalLinkUrl ?? null;
+  // Legacy fields follow the audience roles (what the sheet shows), not the server's lagging visibility.
+  const accessMode = a ? audiencesAccessMode(a) : undefined;
   return {
     ...data,
+    ...(accessMode ? { accessMode } : {}),
+    externalLink: !linkOn ? "off" : view.link === "viewer" ? "read" : "read_write",
     audiences: view,
     listedInCommunity: view.community !== "none",
     externalLinkUrl,
