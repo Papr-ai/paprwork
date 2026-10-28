@@ -70,6 +70,12 @@ export interface McpOAuthProviderOptions {
   openBrowser: (url: string) => Promise<void> | void;
   /** Pre-registered public client id for servers without DCR. */
   staticClientId?: string;
+  /**
+   * Client ID Metadata Document URL (CIMD, SEP-991). When the authorization
+   * server advertises `client_id_metadata_document_supported`, the SDK uses this
+   * URL as the client_id instead of dynamic registration.
+   */
+  clientMetadataUrl?: string;
   /** CSRF state appended to the authorization URL and checked on callback. */
   state?: string;
 }
@@ -88,6 +94,11 @@ export class McpOAuthProvider implements OAuthClientProvider {
     // fail with "prepareTokenRequest() required" instead of reaching
     // redirectToAuthorization — where non-interactive mode reports reauth.
     return this.opts.redirectUri ?? NON_INTERACTIVE_REDIRECT_PLACEHOLDER;
+  }
+
+  get clientMetadataUrl(): string | undefined {
+    // A pre-registered id always wins; otherwise offer CIMD (SDK falls back to DCR).
+    return this.opts.staticClientId ? undefined : this.opts.clientMetadataUrl || undefined;
   }
 
   get clientMetadata(): OAuthClientMetadata {
