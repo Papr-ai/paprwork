@@ -36,6 +36,11 @@ import {
 import { updateLiveTurn } from "../agent/liveTurn.js";
 import { resolveParallelWidthNudge } from "../agent/parallelWidthNudge.js";
 import {
+  LENGTH_STOP_RECOVERY_NUDGE,
+  shouldRecoverFromLengthStop,
+  withLowEffort,
+} from "../agent/lengthStopRecovery.js";
+import {
   estimateMessagesTokens,
   stripAllAssistantReasoning,
 } from "../agent/compactToolResults.js";
@@ -573,6 +578,10 @@ export async function* createPiCodexStreamWithToolLoop(
   /** Text streamed during the current step — i.e. after the previous step's tools. */
   let stepText = "";
   let planContinuationsUsed = 0;
+  /** Steps resumed after hitting the output cap mid-thought (lengthStopRecovery.ts). */
+  let lengthRecoveriesUsed = 0;
+  /** Set by a length-stop recovery; read and cleared at the top of the next step. */
+  let lowEffortStep = false;
   /** Bounded by MAX_WIDTH_NUDGES_PER_TURN — see parallelWidthNudge.ts. */
   let widthNudgesIssued = 0;
 
@@ -614,6 +623,9 @@ export async function* createPiCodexStreamWithToolLoop(
   };
 
   stepLoop: while (step < maxSteps) {
+    // Only the step right after a length-stop recovery runs at low effort.
+    const stepLowEffort = lowEffortStep;
+    lowEffortStep = false;
     if (streamOptions.signal?.aborted) {
       emitTurnEnd("aborted");
       break stepLoop;
@@ -765,7 +777,11 @@ export async function* createPiCodexStreamWithToolLoop(
       try {
         let piStream: AsyncIterable<AssistantMessageEvent>;
         try {
-          piStream = streamSimple(piModel, context, streamOptions);
+          piStream = streamSimple(
+            piModel,
+            context,
+            stepLowEffort ? withLowEffort(streamOptions) : streamOptions,
+          );
         } catch (err) {
           requestFailed = true; requestTrace.error(err);
           const quotaChunk = quotaExhaustedChunk(err, activeCredential);
@@ -1393,6 +1409,37 @@ export async function* createPiCodexStreamWithToolLoop(
         continue stepLoop;
       }
     } else {
+      // Cut off by the output cap while still thinking: no text, no tool
+      // call. Ending here leaves the user a "no reply" note, and "continue"
+      // replays the same plan into the same cap — so resume now, once.
+      if (
+        shouldRecoverFromLengthStop({
+          finishReason: lastFinishReason,
+          stepText,
+          toolCallCount: toolCallsThisTurn.length,
+          recoveriesUsed: lengthRecoveriesUsed,
+          aborted: Boolean(streamOptions.signal?.aborted),
+          textOnlyStep: textOnlyWrapUpStepUsed,
+        })
+      ) {
+        lengthRecoveriesUsed += 1;
+        lowEffortStep = true;
+        console.warn(
+          `[TurnEnd:length-recovery] ${JSON.stringify({
+            ts: new Date().toISOString(),
+            chatId: toolContext?.chatId ?? null,
+            sessionId: streamOptions.sessionId,
+            step,
+            totalToolCalls,
+          })}`,
+        );
+        // The cut-off message holds only reasoning, which the next request
+        // could not replay anyway — the nudge goes on the existing context.
+        applyPlanContinuationStep(context, LENGTH_STOP_RECOVERY_NUDGE);
+        step++;
+        continue stepLoop;
+      }
+
       // Model stopped without pending tools. If an active plan still has
       // pending steps this is usually a stop mid-work, not a finished turn —
       // resume the loop (tools intact) instead of ending. Bounded by
