@@ -591,6 +591,8 @@ export class AgentService {
       attachments?: import("./storage/IStorageProvider.js").StoredMessageAttachment[];
       /** Reuse an existing assistant row (continue / compress / silent retry). */
       _reuseAssistantMessageId?: string;
+      /** Internal: Auto retry on the next provider after an auth refusal. Retries once. */
+      _isAuthFallbackRetry?: boolean;
     },
   ): AsyncGenerator<StreamChunk & { chatId: string }> {
     if (!this.initialized) {
@@ -712,7 +714,8 @@ export class AgentService {
 
     const skipConcurrencyGate =
       options?._isContextCompressRetry === true ||
-      options?._isSilentRetry === true;
+      options?._isSilentRetry === true ||
+      options?._isAuthFallbackRetry === true;
     let concurrencyLease:
       | import("./agent/agentStreamConcurrency.js").AgentStreamConcurrencyLease
       | undefined;
@@ -803,6 +806,7 @@ export class AgentService {
     const isInternalRerun =
       options?._isSilentRetry === true ||
       options?._isContextCompressRetry === true ||
+      options?._isAuthFallbackRetry === true ||
       options?._isWrapUpContinuation === true;
     const { steerFollowUp } = isInternalRerun
       ? { steerFollowUp: false }
@@ -2786,6 +2790,9 @@ export class AgentService {
       let firstTextDeltaMarked = false;
       let contextLengthErrorMessage: string | null = null;
       let rateLimitExhausted = false;
+      // Auto only: the provider refused its credential before producing anything.
+      let authFallbackConfig: AgentConfigInternal | null = null;
+      let producedOutput = false;
       while (true) {
         const next = await streamIterator.next();
 
@@ -2872,6 +2879,36 @@ export class AgentService {
             break;
           }
           if (
+            autoRequested &&
+            !producedOutput &&
+            !options?._isAuthFallbackRetry
+          ) {
+            const { isProviderAuthError, markAutoProviderRefused, autoRefusedProviders } =
+              await import("../utils/autoProviderHealth.js");
+            if (isProviderAuthError(errorText)) {
+              markAutoProviderRefused(config.provider);
+              const { findReachableProvider } = await import("../utils/reachableProvider.js");
+              const next = await findReachableProvider(autoRefusedProviders());
+              if (next) {
+                console.warn(
+                  `[AgentService] Auto: ${config.provider} refused its credential — retrying on ${next.provider}. chatId=${chatId}`,
+                );
+                authFallbackConfig = {
+                  ...config,
+                  provider: next.provider,
+                  model: AUTO_MODEL_ID as typeof config.model,
+                  apiKey: next.creds.apiKey,
+                  authType: next.creds.authType,
+                  usePaprProxy: next.creds.usePaprProxy ?? false,
+                };
+                delete authFallbackConfig.reasoning;
+                delete authFallbackConfig.autoAllowedModels;
+                delete authFallbackConfig.autoFallbackModelId;
+                break;
+              }
+            }
+          }
+          if (
             !options?._isContextCompressRetry &&
             isContextLengthError(errorText)
           ) {
@@ -2922,6 +2959,13 @@ export class AgentService {
         // up-to-date content even though the orchestrator holds the
         // authoritative copy until it returns (next.done).
         const chunkType = next.value.type;
+        if (
+          chunkType === "text-delta" ||
+          chunkType === "reasoning-delta" ||
+          chunkType === "tool-call"
+        ) {
+          producedOutput = true;
+        }
         if (chunkType === "text-delta") {
           const textPayload = next.value.payload as
             | { text?: string }
@@ -3000,6 +3044,26 @@ export class AgentService {
       if (checkpointTimer) {
         clearTimeout(checkpointTimer);
         checkpointTimer = null;
+      }
+
+      if (authFallbackConfig) {
+        for await (const chunk of this.streamAgentInternal(
+          chatId,
+          userMessage,
+          authFallbackConfig,
+          {
+            ...options,
+            _isAuthFallbackRetry: true,
+            _skipSaveUserMessage: true,
+            _reuseAssistantMessageId: assistantMessageId,
+          },
+        )) {
+          // The retry skips the gate and runs under this turn's lease.
+          if (chunk.type === "done") releaseConcurrencyLease();
+          yield chunk;
+        }
+        this.sessionManager.setStreaming(chatId, false);
+        return;
       }
 
       if (contextLengthErrorMessage) {

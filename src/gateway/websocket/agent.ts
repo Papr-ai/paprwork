@@ -109,12 +109,15 @@ export async function setupAgentHandlers(
         if (config.model === "auto") {
           // Memoized per auth epoch: only the first Auto turn after a
           // credential change pays for the lookup; later turns are a Map hit.
-          const memoKey = `${authEpoch}:${config.provider}`;
+          // Providers that refused their credential this epoch are skipped too.
+          const { autoRefusedProviders } = await import("../utils/autoProviderHealth.js");
+          const refused = autoRefusedProviders();
+          const memoKey = `${authEpoch}:${config.provider}:${refused.join(",")}`;
           let routed = autoProviderMemo.get(memoKey);
           if (routed === undefined) {
             const { findReachableProvider, REACHABLE_PROVIDER_ORDER } =
               await import("../utils/reachableProvider.js");
-            const reachable = await findReachableProvider([], [
+            const reachable = await findReachableProvider(refused, [
               config.provider,
               ...REACHABLE_PROVIDER_ORDER,
             ]);
