@@ -27,6 +27,7 @@
  * Aborted turns (the user pressed Stop), transport failures (auto-continue
  * owns those) and turns with interrupted tools keep their own handling.
  */
+import { isRecoverableProviderStreamDrop } from "../../../core/constants/streamCancellation.js";
 import type { StreamChunk } from "../../../core/types/index.js";
 import { anthropicModelUsesAdaptiveThinking } from "../../utils/anthropicAdaptiveThinking.js";
 import {
@@ -45,7 +46,12 @@ export type WrapUpOutcome =
   | { kind: "not_attempted" }
   | { kind: "text"; attempts: number }
   | { kind: "empty"; attempts: number }
-  | { kind: "error"; attempts: number; message: string };
+  | { kind: "error"; attempts: number; message: string }
+  /**
+   * The connection to the provider dropped during the wrap-up. Not the
+   * model's failure, so no note: the turn is left for auto-continue.
+   */
+  | { kind: "transport"; attempts: number; message: string };
 
 export interface WrapUpRetryResult {
   state: StreamOrchestratorResult | null;
@@ -178,26 +184,15 @@ export function buildNoReplyFallback(input: {
       "or switch models if it keeps happening._"
     );
   }
-  const toolCount = input.toolNames.length;
-  const why =
-    input.reason === "wrap_up_error"
-      ? `writing the reply failed (${shortErrorForUser(input.errorMessage)})`
-      : toolCount > 0
-        ? "the model stopped after its tool calls without writing any text"
-        : "the model finished reasoning without writing any text";
-  const ran =
-    toolCount > 0
-      ? ` Ran ${toolCount} tool call${toolCount === 1 ? "" : "s"} ` +
-        `(${summarizeToolNames(input.toolNames)}).`
-      : "";
-  const pending =
-    input.pendingPlanSteps && input.pendingPlanSteps > 0
-      ? ` ${input.pendingPlanSteps} plan step${input.pendingPlanSteps === 1 ? " is" : "s are"} still open.`
-      : "";
-  return (
-    `_This turn ended without a reply: ${why}.${ran}${pending} ` +
-    `Say "continue" and I'll summarize and pick up from here._`
-  );
+  // One plain sentence. Tool counts and plan bookkeeping are visible in the
+  // turn itself; repeating them here reads like a crash report.
+  if (input.reason === "wrap_up_error") {
+    return (
+      `_I couldn't write a reply (${shortErrorForUser(input.errorMessage)}). ` +
+      `Say "continue" and I'll pick up from here._`
+    );
+  }
+  return `_I stopped without writing a reply. Say "continue" and I'll pick up from here._`;
 }
 
 /**
@@ -292,6 +287,9 @@ function errorTextFromChunk(chunk: ChatChunk): string {
  * Chunks stream through as they arrive, except `error` chunks: a failed
  * attempt is retried or replaced by the note, so its error becomes the
  * outcome's reason rather than a banner over a turn that may still reply.
+ * The exception is a dropped connection: no retry (it would land in the same
+ * outage), and its error chunk is passed through so the client resumes the
+ * turn the way it does for a drop in the main stream.
  */
 export async function* runWrapUpWithRetry(args: {
   chatId: string;
@@ -310,6 +308,7 @@ export async function* runWrapUpWithRetry(args: {
     if (args.abortSignal.aborted) break;
 
     let streamError: string | undefined;
+    let errorChunk: ChatChunk | undefined;
     try {
       const iterator = args.attempt(mode);
       if (!iterator) break;
@@ -325,6 +324,7 @@ export async function* runWrapUpWithRetry(args: {
         }
         if (next.value.type === "error") {
           streamError = errorTextFromChunk(next.value);
+          errorChunk = next.value;
           continue;
         }
         yield next.value;
@@ -340,6 +340,15 @@ export async function* runWrapUpWithRetry(args: {
       };
     }
 
+    // A dropped connection is not a reason to ask again right away — the
+    // retry lands in the same outage. Hand it to auto-continue instead.
+    if (
+      outcome.kind === "error" &&
+      isRecoverableProviderStreamDrop(outcome.message)
+    ) {
+      outcome = { ...outcome, kind: "transport" };
+    }
+
     console.warn(
       `[TurnEnd:wrap-up-no-text] ${JSON.stringify({
         ts: new Date().toISOString(),
@@ -347,11 +356,23 @@ export async function* runWrapUpWithRetry(args: {
         mode,
         attempt: attemptNumber,
         outcome: outcome.kind,
-        ...(outcome.kind === "error"
+        ...(outcome.kind === "error" || outcome.kind === "transport"
           ? { error: shortErrorForUser(outcome.message) }
           : {}),
       })}`,
     );
+    if (outcome.kind === "transport") {
+      // Surface the drop so the client marks the turn interrupted and
+      // auto-continues it, as it does for a drop in the main stream.
+      yield errorChunk ??
+        ({
+          type: "error",
+          chatId: args.chatId,
+          payload: { error: outcome.message },
+          timestamp: new Date().toISOString(),
+        } as ChatChunk);
+      break;
+    }
   }
 
   return { state: null, outcome };

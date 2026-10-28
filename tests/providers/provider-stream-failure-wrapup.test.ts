@@ -204,3 +204,27 @@ describe("resolveStepContextTokens", () => {
     ).toBe(5000);
   });
 });
+
+describe("isRetryableProviderStreamFailure — pi-ai string errors", () => {
+  it("classifies the SDK's bare \"Connection error.\" as a transport drop", () => {
+    // PiToAISDKAdapter passes only errorMessage; the cause chain is gone.
+    expect(isRetryableProviderStreamFailure("Connection error.")).toBe(true);
+    expect(
+      isRetryableProviderStreamFailure(
+        "STREAM_ENDED_EARLY: provider closed the stream without a done/error event",
+      ),
+    ).toBe(true);
+  });
+
+  it("classifies an APIConnectionError object by its message", () => {
+    const err = Object.assign(new Error("Connection error."), {
+      name: "APIConnectionError",
+    });
+    expect(isRetryableProviderStreamFailure(err)).toBe(true);
+  });
+
+  it("does not promise a resume for provider refusals", () => {
+    expect(isRetryableProviderStreamFailure("401 invalid x-api-key")).toBe(false);
+    expect(isRetryableProviderStreamFailure("prompt is too long")).toBe(false);
+  });
+});
