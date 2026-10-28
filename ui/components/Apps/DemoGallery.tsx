@@ -55,6 +55,14 @@ export function DemoGallery({ appId, appName, demo, onMake }: { appId: string; a
     `The gallery video for my app "${appName}" (app id ${appId}) failed: "${shown}". Find out why (gallery/ code in the app, demo files under data/demos/${appId}.*), fix it, and get the video and screens made.`,
     { send: true, title: "Fix gallery video" },
   );
+  // Where "Download all" put the files. Lives in the gallery view, where the button is.
+  const savedNote = savedTo ? (
+    <div className="dg-saved" role="status">
+      <span>Saved to <b>Downloads/{savedTo.split(/[\\/]/).pop()}</b></span>
+      <button type="button" className="dg-saved__btn" onClick={() => reveal(savedTo)}>Show in Finder</button>
+      <button type="button" className="dg-saved__x" aria-label="Dismiss" onClick={() => setSavedTo(null)}>×</button>
+    </div>
+  ) : null;
   const errorBar = shown ? (
     <div className="dg-err" role="alert">
       <span>{shown}</span>
@@ -115,13 +123,6 @@ export function DemoGallery({ appId, appName, demo, onMake }: { appId: string; a
           </DefaultCover>
         </div>
         {errorBar}
-        {savedTo ? (
-          <div className="dg-saved" role="status">
-            <span>Saved to <b>Downloads/{savedTo.split(/[\\/]/).pop()}</b></span>
-            <button type="button" className="dg-saved__btn" onClick={() => reveal(savedTo)}>Show in Finder</button>
-            <button type="button" className="dg-saved__x" aria-label="Dismiss" onClick={() => setSavedTo(null)}>×</button>
-          </div>
-        ) : null}
         <Slots />
       </div>
     );
@@ -167,6 +168,7 @@ export function DemoGallery({ appId, appName, demo, onMake }: { appId: string; a
           </button>
         </span>
       </div>
+      {savedNote}
 
       {item === 0 || !s ? (
         <DemoPlayer key={viewing} src={appDemoVersionUrl(appId, viewing)} poster={appDemoVersionUrl(appId, viewing, "poster")}
