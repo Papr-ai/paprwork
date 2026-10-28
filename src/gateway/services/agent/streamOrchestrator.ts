@@ -1,3 +1,4 @@
+import { isRecoverableProviderStreamDrop } from "../../../core/constants/streamCancellation.js";
 import { sanitizeToolOutput } from "../../../core/tools/index.js";
 import { isFailedToolResult } from "../../../core/utils/interruptedToolResult.js";
 import {
@@ -168,6 +169,9 @@ function isNetworkConnectivityError(error: unknown): boolean {
       message.includes("api connection timeout") ||
       message.includes("network error") ||
       message.includes("other side closed") ||
+      // Anthropic / OpenAI SDK APIConnectionError, and its bare message as
+      // the pi-ai route passes it up.
+      message.startsWith("connection error") ||
       message.includes("socket hang up")
     ) {
       return true;
@@ -194,6 +198,11 @@ function isNetworkConnectivityError(error: unknown): boolean {
  * would promise a resume that cannot happen.
  */
 export function isRetryableProviderStreamFailure(error: unknown): boolean {
+  // The pi-ai route reduces the provider error to its message before it
+  // gets here, so a string has to be classified by its wording.
+  if (typeof error === "string") {
+    return isRecoverableProviderStreamDrop(error);
+  }
   if (isNetworkConnectivityError(error)) {
     return true;
   }

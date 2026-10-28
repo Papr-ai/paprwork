@@ -3277,6 +3277,11 @@ export class AgentService {
           yield wrapUpNext.value;
         }
         wrapUpOutcome = wrapUpResult?.outcome ?? wrapUpOutcome;
+        if (wrapUpOutcome.kind === "transport") {
+          // The wrap-up lost its connection: the turn is resumable, not
+          // finished, so it gets no closing note (finalReplyGuarantee.ts).
+          providerStreamFailed = true;
+        }
         const wrapUpState = wrapUpResult?.state;
         if (wrapUpState?.assistantText.trim()) {
           const merged = mergeWrapUpTextIntoState(

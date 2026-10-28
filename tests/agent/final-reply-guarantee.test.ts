@@ -189,15 +189,17 @@ describe("buildNoReplyFallback", () => {
     expect(note.trim().length).toBeGreaterThan(20);
   });
 
-  it("says what ran and how to continue", () => {
+  it("is one plain sentence, without tool or plan bookkeeping", () => {
     const note = buildNoReplyFallback({
       reason: "wrap_up_empty",
       toolNames: ["bash", "bash", "get_full_tool_result"],
       pendingPlanSteps: 2,
     });
-    expect(note).toContain("Ran 3 tool calls (bash ×2, get_full_tool_result)");
-    expect(note).toContain("2 plan steps are still open");
-    expect(note).toContain('Say "continue"');
+    expect(note).toBe(
+      `_I stopped without writing a reply. Say "continue" and I'll pick up from here._`,
+    );
+    expect(note).not.toContain("tool call");
+    expect(note).not.toContain("plan step");
   });
 
   it("carries the wrap-up error, with credentials redacted", () => {
@@ -206,7 +208,7 @@ describe("buildNoReplyFallback", () => {
       toolNames: ["bash"],
       errorMessage: "401 invalid x-api-key sk-ant-api03-abcdefghijklmnop\nstack…",
     });
-    expect(note).toContain("writing the reply failed (401 invalid x-api-key [redacted])");
+    expect(note).toContain("I couldn't write a reply (401 invalid x-api-key [redacted])");
     expect(note).not.toContain("sk-ant");
   });
 
@@ -409,7 +411,7 @@ describe("wrap-up retry on the real runner — each provider's no-text shape", (
       }),
       toolNames: ["bash"],
     });
-    expect(note).toContain("the model stopped after its tool calls without writing any text");
+    expect(note).toContain("I stopped without writing a reply");
   });
 
   it("a provider error becomes the reason, not a red banner over the turn", async () => {
@@ -426,7 +428,7 @@ describe("wrap-up retry on the real runner — each provider's no-text shape", (
     const message = result.outcome.kind === "error" ? result.outcome.message : "";
     expect(message).toContain("prompt is too long");
     const note = buildNoReplyFallback({ reason: "wrap_up_error", toolNames: ["bash"], errorMessage: message });
-    expect(note).toContain("writing the reply failed (prompt is too long");
+    expect(note).toContain("I couldn't write a reply (prompt is too long");
   });
 
   it("a thrown request error is caught and retried", async () => {
@@ -543,5 +545,66 @@ describe("wrap-up keeps the original prompt (#567)", () => {
     const sent = (vi.mocked(streamText).mock.calls[0]![0] as { messages: Array<{ role: string }> }).messages;
     expect(sent.map((m) => m.role)).toEqual(["user", "assistant", "tool", "user"]);
     expect(sent[0]).toEqual(prompt);
+  });
+});
+
+describe("a dropped connection during the wrap-up", () => {
+  function failingAttempt(calls: { n: number }, message: string) {
+    return () => {
+      calls.n += 1;
+      return (async function* () {
+        yield {
+          type: "error",
+          chatId: "chat-3",
+          payload: { error: message },
+          timestamp: new Date().toISOString(),
+        } as never;
+        return null;
+      })();
+    };
+  }
+
+  it("is handed to auto-continue: no retry, error passed through, no note", async () => {
+    const calls = { n: 0 };
+    const { chunks, result } = await drain(
+      runWrapUpWithRetry({
+        chatId: "chat-3",
+        abortSignal: new AbortController().signal,
+        attempt: failingAttempt(calls, "Connection error."),
+      }),
+    );
+    expect(calls.n).toBe(1);
+    expect(result.outcome).toEqual({
+      kind: "transport",
+      attempts: 1,
+      message: "Connection error.",
+    });
+    // The client marks the turn interrupted from this chunk.
+    expect(chunks.filter((c) => (c as { type: string }).type === "error")).toHaveLength(1);
+    // And the guarantee stands down, the same as a drop in the main stream.
+    expect(
+      needsFinalReplyFallback({
+        sequence: [{ type: "tool", data: { name: "bash" } }],
+        assistantText: "",
+        toolCallCount: 1,
+        aborted: false,
+        isWrapUpContinuation: false,
+        providerStreamFailed: true,
+      }),
+    ).toBe(false);
+  });
+
+  it("a model error is still retried and still closes with a note", async () => {
+    const calls = { n: 0 };
+    const { chunks, result } = await drain(
+      runWrapUpWithRetry({
+        chatId: "chat-3",
+        abortSignal: new AbortController().signal,
+        attempt: failingAttempt(calls, "prompt is too long: 2000000 tokens"),
+      }),
+    );
+    expect(calls.n).toBe(2);
+    expect(result.outcome.kind).toBe("error");
+    expect(chunks.some((c) => (c as { type: string }).type === "error")).toBe(false);
   });
 });

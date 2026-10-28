@@ -12,6 +12,13 @@ describe("isRecoverableProviderStreamDrop", () => {
     expect(isRecoverableProviderStreamDrop("read ECONNRESET")).toBe(true);
   });
 
+  it("treats the SDK APIConnectionError message as recoverable", () => {
+    // Anthropic / OpenAI SDK default; the pi-ai route passes only this string.
+    expect(isRecoverableProviderStreamDrop("Connection error.")).toBe(true);
+    expect(isRecoverableProviderStreamDrop("fetch failed")).toBe(true);
+    expect(isRecoverableProviderStreamDrop("other side closed")).toBe(true);
+  });
+
   it("treats pi-ai early stream end as recoverable", () => {
     expect(
       isRecoverableProviderStreamDrop(
