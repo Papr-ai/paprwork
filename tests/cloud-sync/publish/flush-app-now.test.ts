@@ -432,4 +432,20 @@ describe("flushAppNow", () => {
     expect(mockPushLinkedSource).toHaveBeenCalled();
     expect(result.tursoPushed).toBe(true);
   });
+
+  it("does not fail the flush when a replica backlog is held", async () => {
+    mockShouldRunReplicaCutover.mockReturnValue(true);
+    mockIsLegacyWorkspaceRowSyncEnabled.mockReturnValue(false);
+    mockShouldSkipTursoPush.mockResolvedValue(false);
+    mockPushLinkedSource.mockResolvedValueOnce({
+      ok: false,
+      error: "BACKLOG_HOLD: Upload held: 288,095 pending changes for 59 rows",
+      backlogHold: true,
+    });
+
+    const result = await flushAppNow(sync, "app-1");
+
+    expect(mockPushLinkedSource).toHaveBeenCalled();
+    expect(result.tursoPushed).toBe(false);
+  });
 });

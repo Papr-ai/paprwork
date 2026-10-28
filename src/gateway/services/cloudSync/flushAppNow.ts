@@ -6,6 +6,7 @@
  */
 
 import { isParkedReplicaError as isParkedReplicaErrorShared } from "../tursoReplica/tursoReplicaErrors.js";
+import { isBacklogHoldError } from "../tursoReplica/replicaBacklogGuard.js";
 import * as path from "path";
 import type { CloudSyncService } from "../CloudSyncService.js";
 import {
@@ -159,6 +160,13 @@ async function pushLinkedSourcesForFlush(
         }
         if (pushResult.ok) {
           tursoPushed = true;
+        } else if (isBacklogHoldError(pushResult.error)) {
+          // Held on purpose (churn backlog): the user decides via repair_cloud_sync.
+          // Don't fail publish / cloud-run flushes of every app that links the DB.
+          console.warn(
+            `[CloudSync] flushAppNow skipping Turso push for ${source.alias} — backlog held: ` +
+              `${(pushResult.error ?? "").slice(0, 160)}`,
+          );
         } else if (isParkedReplicaError(pushResult.error)) {
           // A parked replica has sync paused *by design* for this session (local
           // reads/writes still work). Aborting here blocked publishing every app
