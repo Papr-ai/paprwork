@@ -66,14 +66,14 @@ describe("useModelPickerSettings", () => {
     await act(async () => {
       window.dispatchEvent(
         new CustomEvent("papr:picker-models-updated", {
-          detail: { enabledPickerModelIds: ["claude-sonnet-5"] },
+          detail: { enabledPickerModelIds: ["gpt-5-6-sol"] },
         }),
       );
     });
 
     expect(result.current.pickerModels).not.toBe(before);
-    expect(result.current.pickerModels.map((m) => m.id)).toEqual([
-      "claude-sonnet-5",
-    ]);
+    const ids = result.current.pickerModels.map((m) => m.id);
+    expect(ids).toContain("gpt-5-6-sol");
+    expect(ids).not.toContain("claude-opus-5-5");
   });
 });

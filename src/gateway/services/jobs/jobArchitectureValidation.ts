@@ -14,6 +14,31 @@ export interface JobArchitectureInput {
   type: string;
   command?: string;
   appIds?: readonly string[];
+  /** Contents of the job's script files (code/*.py etc.), when available. */
+  scriptSources?: string;
+}
+
+/**
+ * `DELETE FROM t` with no WHERE, followed by inserts into the same table: the job wipes
+ * and reloads the table on every run. On a synced database every rewritten row is a
+ * change the cloud sync must upload, so a 15-minute job that reloads 15K rows builds a
+ * backlog of millions of changes even when nothing changed.
+ */
+export function findFullTableRewrites(text: string): string[] {
+  const name = String.raw`["'\x60\[]?(\{[^}\s]+\}|[A-Za-z_][\w$]*)`;
+  // DELETE FROM <table> not followed by WHERE (a closing quote or bracket is allowed).
+  const del = new RegExp(
+    String.raw`DELETE\s+FROM\s+` + name + String.raw`["'\x60\]]?(?![\w$])(?!\s*WHERE\b)`,
+    "gi",
+  );
+  const ins = new RegExp(String.raw`(?:INSERT\s+(?:OR\s+\w+\s+)?|REPLACE\s+)INTO\s+` + name, "gi");
+  const wiped = new Set([...text.matchAll(del)].map((m) => m[1]));
+  const inserted = new Set([...text.matchAll(ins)].map((m) => m[1].toLowerCase()));
+  // A templated delete (f"DELETE FROM {t}" in a loop) can't be resolved statically;
+  // treat it as a reload when the script also inserts rows.
+  return [...wiped].filter((t) =>
+    t.startsWith("{") ? inserted.size > 0 : inserted.has(t.toLowerCase()),
+  );
 }
 
 const MUTATION =
@@ -41,7 +66,7 @@ export function validateJobArchitecture(
   input: JobArchitectureInput,
 ): JobArchitectureIssue[] {
   const text = input.command ?? "";
-  if (!text.trim()) return [];
+  if (!text.trim() && !input.scriptSources?.trim()) return [];
 
   const issues: JobArchitectureIssue[] = [];
   const queryWrite = new RegExp(
@@ -105,6 +130,21 @@ export function validateJobArchitecture(
         "App-linked job writes through a localhost /api/db/write endpoint, which is not portable to cloud execution.",
       remediation:
         "Write directly to the injected $APP_DB path from the job runtime.",
+    });
+  }
+
+  const rewrites = findFullTableRewrites(`${text}\n${input.scriptSources ?? ""}`);
+  if (rewrites.length > 0) {
+    issues.push({
+      rule: "job-full-table-rewrite",
+      severity: "warning",
+      message:
+        `Job deletes every row and re-inserts on each run (${rewrites.join(", ")}). ` +
+        "On a synced database each rewritten row is a change the cloud sync has to upload, " +
+        "so a scheduled reload builds a large backlog even when nothing changed.",
+      remediation:
+        "Write only what changed: read the existing rows, upsert new or changed ones " +
+        "(INSERT ... ON CONFLICT(id) DO UPDATE SET ...), and delete only rows that are gone.",
     });
   }
 

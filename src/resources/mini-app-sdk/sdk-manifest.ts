@@ -56,7 +56,7 @@ const AGENT_HINTS: Record<string, Pick<MiniAppSdkModule, "summary" | "exports">>
   {
     "papr-sdk.ts": {
       summary: "Unified SDK entry — prefer this single import",
-      exports: "papr.dialog.*, papr.jobs.*, papr.files.*, papr.connect.*, papr.search.*, papr.preview.*",
+      exports: "papr.dialog.*, papr.jobs.*, papr.files.*, papr.connect.*, papr.search.*, papr.onHandoff, papr.preview.*",
     },
     "papr-dialog.ts": {
       summary: "Modal text input / confirm / alert (legacy direct import)",
@@ -77,6 +77,10 @@ const AGENT_HINTS: Record<string, Pick<MiniAppSdkModule, "summary" | "exports">>
     "papr-connect.ts": {
       summary: "Use the user's connected services (Linear, HubSpot, Stripe, Notion…) via one-click OAuth; declare in connections.json",
       exports: "papr.connect.status/connect/call/callJson/tools/button (prefer papr-sdk import)",
+    },
+    "papr-handoff.ts": {
+      summary: "Claude/web hand-off into an already-open app: move to the view the card named",
+      exports: "papr.onHandoff(({ view, source }) => …) (prefer papr-sdk import)",
     },
     "papr-search.ts": {
       summary: "Index app items in Papr Memory and search them by meaning (Claude finds them via papr_search)",

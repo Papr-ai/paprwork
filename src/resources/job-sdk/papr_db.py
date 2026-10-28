@@ -68,6 +68,9 @@ _READ_RETRIES = 3
 # outside the gateway's per-database lane, so waiting holds no lock. Total ~3.5s.
 _TRANSIENT_RETRY_DELAYS_S = (0.5, 1.0, 2.0)
 
+# Rows per batched executemany request to the cloud job-db proxy.
+_BATCH_ROWS = 500
+
 __all__ = ["connect", "query", "execute", "PaprDbError"]
 
 _WRITE_VERBS = ("INSERT", "UPDATE", "DELETE", "REPLACE", "UPSERT")
@@ -81,12 +84,28 @@ class PaprDbError(RuntimeError):
 # ── env resolution ────────────────────────────────────────────────────────────
 
 def _prefix_for_alias(alias):
-    """PAPR_DB_{KEY}_ALIAS == alias  →  PAPR_DB_{KEY}"""
-    suffix = "_ALIAS"
-    for key, value in os.environ.items():
-        if key.startswith("PAPR_DB_") and key.endswith(suffix) and value == alias:
-            return key[: -len(suffix)]
+    """Find PAPR_DB_{KEY} for a name: the registry label (PAPR_DB_{KEY}_ALIAS),
+    the dbId (PAPR_DB_{KEY}_ID), or the alias a linked app gave it
+    (PAPR_DB_{KEY}_APP_ALIASES, comma-separated)."""
+    env = os.environ
+    for key, value in env.items():
+        if key.startswith("PAPR_DB_") and key.endswith("_ALIAS") and value == alias:
+            return key[: -len("_ALIAS")]
+    for suffix in ("_ID", "_APP_ALIASES"):
+        for key, value in env.items():
+            if not (key.startswith("PAPR_DB_") and key.endswith(suffix)):
+                continue
+            prefix = key[: -len(suffix)]
+            if prefix + "_ALIAS" not in env:
+                continue
+            names = value.split(",") if suffix == "_APP_ALIASES" else [value]
+            if alias in (n.strip() for n in names):
+                return prefix
     return None
+
+
+def _label_for_prefix(prefix):
+    return os.environ.get(prefix + "_ALIAS", "")
 
 
 def _linked_aliases():
@@ -94,7 +113,9 @@ def _linked_aliases():
     for key, value in os.environ.items():
         if key.startswith("PAPR_DB_") and key.endswith("_ALIAS"):
             out.append(value)
-    return sorted(out)
+        elif key.startswith("PAPR_DB_") and key.endswith("_APP_ALIASES"):
+            out.extend(n.strip() for n in value.split(",") if n.strip())
+    return sorted(set(out))
 
 
 def _resolve(source_id):
@@ -106,10 +127,12 @@ def _resolve(source_id):
                 'No linked database with alias "%s". Linked: %s'
                 % (source_id, ", ".join(_linked_aliases()) or "(none)")
             )
+        # The gateway proxy knows the database by its registry label, so send
+        # that as the alias even when the job named it by dbId or app alias.
         return (
             os.environ.get(prefix + "_MODE", "local"),
             os.environ.get(prefix, ""),
-            source_id,
+            _label_for_prefix(prefix) or source_id,
         )
 
     mode = os.environ.get("PAPR_DB_MODE", "")
@@ -145,6 +168,8 @@ def _proxy_post(action, sql, params, alias=""):
     if url and token:
         headers["Authorization"] = "Bearer " + token
         endpoint = "%s/%s" % (url.rstrip("/"), action)
+        if alias:  # connect("alias") must reach that source, not the session default
+            payload["sourceId"] = alias
     elif app_id:
         base = os.environ.get("PAPR_GATEWAY_URL", "http://127.0.0.1:18789")
         endpoint = "%s/api/db/%s" % (base.rstrip("/"), action)
@@ -309,7 +334,23 @@ class ReplicaConnection:
         return self._last
 
     def executemany(self, sql, seq_of_params):
-        for params in seq_of_params:
+        rows = [list(p or []) for p in seq_of_params]
+        verb = sql.lstrip().split(None, 1)[0].upper() if sql.strip() else ""
+        url = os.environ.get("PAPR_DB_PROXY_URL", "").strip()
+        token = os.environ.get("PAPR_DB_PROXY_TOKEN", "").strip()
+        # Cloud job-db proxy: one atomic request per chunk instead of one per
+        # row (~4 rows/s per-row → 8+ min for a 2k-row job). The desktop
+        # gateway proxy has no /write-many, so it keeps the per-row path.
+        if rows and verb in _WRITE_VERBS and url and token and url.rstrip("/").endswith("/job-db"):
+            headers = {"Content-Type": "application/json", "Authorization": "Bearer " + token}
+            for i in range(0, len(rows), _BATCH_ROWS):
+                payload = {"sql": sql, "rows": rows[i:i + _BATCH_ROWS]}
+                if self._alias:
+                    payload["sourceId"] = self._alias
+                _send(url.rstrip("/") + "/write-many", payload, headers, "write")
+            self._last = _Cursor([])
+            return self._last
+        for params in rows:
             self.execute(sql, params)
         return _Cursor([])
 

@@ -57,6 +57,9 @@ const queuedSyncKeys = new Set<string>();
 const INTERACTIVE_DEFER_POLL_MS = 500;
 const pushInFlightSyncKeys = new Set<string>();
 const pushFailureBackoffUntilMs = new Map<string, number>();
+/** Consecutive pushes that left the replica still pending (no progress). */
+const noProgressFollowUps = new Map<string, number>();
+const MAX_NO_PROGRESS_FOLLOW_UPS = 2;
 const lastMaxWaitLogAtMs = new Map<string, number>();
 let allLinkedTimer: NodeJS.Timeout | null = null;
 let queueProcessing = false;
@@ -358,6 +361,20 @@ async function executeReplicaPushForSyncKey(syncKey: string): Promise<void> {
     if (result.ok) {
       const stillPending = await replicaSourceNeedsPush(source);
       if (stillPending) {
+        // Every push here starts with a pull. Re-queuing at the front with no delay
+        // while the pending check never clears (stuck CDC counter, stale error) made
+        // one replica pull ~10 GB/hour from Turso. Same fix as tursoPushScheduler
+        // (d3471984): allow a couple of follow-ups, then back off.
+        const attempts = (noProgressFollowUps.get(syncKey) ?? 0) + 1;
+        noProgressFollowUps.set(syncKey, attempts);
+        if (attempts > MAX_NO_PROGRESS_FOLLOW_UPS) {
+          notePushFailureBackoff(syncKey);
+          console.warn(
+            `[TursoReplicaPushScheduler] ${syncKey} still pending after ${attempts} pushes — ` +
+              `backing off ${pushFailureBackoffMs()}ms instead of looping`,
+          );
+          return;
+        }
         noteDirty(syncKey);
         enqueueReplicaPush(syncKey, { front: true, trigger: "unknown" });
         console.log(
@@ -365,6 +382,7 @@ async function executeReplicaPushForSyncKey(syncKey: string): Promise<void> {
         );
         return;
       }
+      noProgressFollowUps.delete(syncKey);
       clearDirtyTracking(syncKey);
       console.log(`[TursoReplicaPushScheduler] Pushed ${syncKey} (replica)`);
       if (appIds.length > 0) {
@@ -378,6 +396,13 @@ async function executeReplicaPushForSyncKey(syncKey: string): Promise<void> {
       return;
     }
 
+    if (!result.ok && result.backlogHold) {
+      // Held on purpose: retrying won't help until someone chooses accept_cloud or push.
+      // New writes re-schedule and re-check it.
+      noProgressFollowUps.delete(syncKey);
+      clearDirtyTracking(syncKey);
+      return;
+    }
     notePushFailureBackoff(syncKey);
     console.warn(
       `[TursoReplicaPushScheduler] Push failed for ${syncKey}: ${result.error ?? "unknown"}`,

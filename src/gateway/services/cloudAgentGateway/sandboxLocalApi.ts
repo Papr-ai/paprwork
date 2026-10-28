@@ -8,6 +8,8 @@
  *   - /api/app/backend/:action → AppBackendService (handler runs with the run's vault keys)
  *   - /internal/backend-db/*   → papr_db proxy for those handlers
  *   - /api/db/query|write      → the app's linked sources
+ *   - /api/files/*             → App Files (papr_files.add/url in jobs), stored in the
+ *                                app's linked database and uploaded with the run's key
  * Reads/writes resolve through the registry, which seedCloudDatabaseRegistry marks
  * cloud-direct, so everything goes straight to the cloud primary.
  *
@@ -26,6 +28,7 @@ import {
   isCloudDirectSource,
 } from "../cloudDirect/cloudDirectDb.js";
 import { createDesktopBackendDbProxyRouter } from "../appRuntime/backendDbProxy.js";
+import { registerAppFilesRoutes } from "../appFiles/appFilesRoutes.js";
 import { assertReadOnlySql, assertWriteSql } from "../appRuntime/sqlValidation.js";
 import { httpStatusForDbRouteError } from "../tursoReplica/replicaSchemaQueryErrorMessage.js";
 
@@ -90,6 +93,15 @@ export function createSandboxLocalApi(): express.Express {
       write,
     }),
   );
+
+  // Jobs register what they render (films, audio, stills) with papr_files.add(path),
+  // which posts here. Same routes and service as the desktop; the row lands in the
+  // app's cloud database and the bytes go straight to object storage.
+  registerAppFilesRoutes(app, {
+    resolveSource: (appId, sourceId, _sql, operation) => resolveSource(appId, sourceId, operation),
+    dbQuery: (appId, source, sql, params) => query(appId, source as AppDataSource, sql, params),
+    dbWrite: (appId, source, sql, params) => write(appId, source as AppDataSource, sql, params),
+  });
 
   app.post("/api/db/query", async (req, res) => {
     try {

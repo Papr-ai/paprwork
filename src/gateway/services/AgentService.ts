@@ -591,6 +591,8 @@ export class AgentService {
       attachments?: import("./storage/IStorageProvider.js").StoredMessageAttachment[];
       /** Reuse an existing assistant row (continue / compress / silent retry). */
       _reuseAssistantMessageId?: string;
+      /** Internal: Auto retry on the next provider after an auth refusal. Retries once. */
+      _isAuthFallbackRetry?: boolean;
     },
   ): AsyncGenerator<StreamChunk & { chatId: string }> {
     if (!this.initialized) {
@@ -712,7 +714,8 @@ export class AgentService {
 
     const skipConcurrencyGate =
       options?._isContextCompressRetry === true ||
-      options?._isSilentRetry === true;
+      options?._isSilentRetry === true ||
+      options?._isAuthFallbackRetry === true;
     let concurrencyLease:
       | import("./agent/agentStreamConcurrency.js").AgentStreamConcurrencyLease
       | undefined;
@@ -803,6 +806,7 @@ export class AgentService {
     const isInternalRerun =
       options?._isSilentRetry === true ||
       options?._isContextCompressRetry === true ||
+      options?._isAuthFallbackRetry === true ||
       options?._isWrapUpContinuation === true;
     const { steerFollowUp } = isInternalRerun
       ? { steerFollowUp: false }
@@ -2170,6 +2174,7 @@ export class AgentService {
       let fullStream: AsyncIterable<unknown>;
       let aiSdkStreamResult: Awaited<ReturnType<typeof streamText>> | undefined;
       let piWrapUpContext: { messages: unknown[] } | undefined;
+      let piRefreshAuth: (() => Promise<string | null>) | undefined;
       let piWrapUpDeps:
         | {
             streamSimple: (
@@ -2591,6 +2596,22 @@ export class AgentService {
         const apiKeys = getApiKeysForSanitization();
         const maxSteps = options?.maxSteps ?? 100;
 
+        // A background refresh revokes the token this turn started with; fetch
+        // the current one. Shared by the tool loop and the wrap-up path.
+        piRefreshAuth = async (): Promise<string | null> => {
+          const { clearKeyCache, getProviderAuthForModel } = await import(
+            "../utils/keyResolver.js"
+          );
+          clearKeyCache(envKey);
+          const auth = await getProviderAuthForModel(
+            config.provider === "openai-codex"
+              ? "openai"
+              : (config.provider as "openai" | "anthropic"),
+            { modelId: config.model, modelProvider: config.provider },
+          );
+          return auth?.type === "oauth" ? auth.token : null;
+        };
+
         fullStream = createPiCodexStreamWithToolLoop(
           streamSimple as any,
           finalModel,
@@ -2635,7 +2656,7 @@ export class AgentService {
           },
           // Lets a refusal name which credential it refused. The kind is read
           // from the token inside the loop, so only the provider is needed.
-          { provider: config.provider },
+          { provider: config.provider, refreshAuth: piRefreshAuth },
         );
         piWrapUpContext = piContext;
         // Same credentials and session with reasoning turned down, for a
@@ -2769,6 +2790,9 @@ export class AgentService {
       let firstTextDeltaMarked = false;
       let contextLengthErrorMessage: string | null = null;
       let rateLimitExhausted = false;
+      // Auto only: the provider refused its credential before producing anything.
+      let authFallbackConfig: AgentConfigInternal | null = null;
+      let producedOutput = false;
       while (true) {
         const next = await streamIterator.next();
 
@@ -2855,6 +2879,36 @@ export class AgentService {
             break;
           }
           if (
+            autoRequested &&
+            !producedOutput &&
+            !options?._isAuthFallbackRetry
+          ) {
+            const { isProviderAuthError, markAutoProviderRefused, autoRefusedProviders } =
+              await import("../utils/autoProviderHealth.js");
+            if (isProviderAuthError(errorText)) {
+              markAutoProviderRefused(config.provider);
+              const { findReachableProvider } = await import("../utils/reachableProvider.js");
+              const next = await findReachableProvider(autoRefusedProviders());
+              if (next) {
+                console.warn(
+                  `[AgentService] Auto: ${config.provider} refused its credential — retrying on ${next.provider}. chatId=${chatId}`,
+                );
+                authFallbackConfig = {
+                  ...config,
+                  provider: next.provider,
+                  model: AUTO_MODEL_ID as typeof config.model,
+                  apiKey: next.creds.apiKey,
+                  authType: next.creds.authType,
+                  usePaprProxy: next.creds.usePaprProxy ?? false,
+                };
+                delete authFallbackConfig.reasoning;
+                delete authFallbackConfig.autoAllowedModels;
+                delete authFallbackConfig.autoFallbackModelId;
+                break;
+              }
+            }
+          }
+          if (
             !options?._isContextCompressRetry &&
             isContextLengthError(errorText)
           ) {
@@ -2905,6 +2959,13 @@ export class AgentService {
         // up-to-date content even though the orchestrator holds the
         // authoritative copy until it returns (next.done).
         const chunkType = next.value.type;
+        if (
+          chunkType === "text-delta" ||
+          chunkType === "reasoning-delta" ||
+          chunkType === "tool-call"
+        ) {
+          producedOutput = true;
+        }
         if (chunkType === "text-delta") {
           const textPayload = next.value.payload as
             | { text?: string }
@@ -2985,6 +3046,26 @@ export class AgentService {
         checkpointTimer = null;
       }
 
+      if (authFallbackConfig) {
+        for await (const chunk of this.streamAgentInternal(
+          chatId,
+          userMessage,
+          authFallbackConfig,
+          {
+            ...options,
+            _isAuthFallbackRetry: true,
+            _skipSaveUserMessage: true,
+            _reuseAssistantMessageId: assistantMessageId,
+          },
+        )) {
+          // The retry skips the gate and runs under this turn's lease.
+          if (chunk.type === "done") releaseConcurrencyLease();
+          yield chunk;
+        }
+        this.sessionManager.setStreaming(chatId, false);
+        return;
+      }
+
       if (contextLengthErrorMessage) {
         yield {
           type: "compression-start",
@@ -3050,9 +3131,12 @@ export class AgentService {
 
         // Widened from the SDK's narrower assistant|tool response type so the
         // continuation's own messages can be threaded back in.
-        let continuationMessages: ModelMessage[] = (
-          await aiSdkStreamResult.response
-        ).messages;
+        // Prompt + history first: the response alone opens on a model turn,
+        // which Gemini rejects once it is sent back as the next request.
+        let continuationMessages: ModelMessage[] = [
+          ...((streamTextOptions.messages as ModelMessage[] | undefined) ?? []),
+          ...(await aiSdkStreamResult.response).messages,
+        ];
 
         for (
           let attempt = 0;
@@ -3224,6 +3308,7 @@ export class AgentService {
                 apiKeys: getApiKeysForSanitization(),
                 abortSignal: abortController.signal,
                 wrapUpMessage: instruction,
+                refreshAuth: piRefreshAuth,
               });
             }
             if (aiSdkStreamResult) {
@@ -3256,6 +3341,11 @@ export class AgentService {
           yield wrapUpNext.value;
         }
         wrapUpOutcome = wrapUpResult?.outcome ?? wrapUpOutcome;
+        if (wrapUpOutcome.kind === "transport") {
+          // The wrap-up lost its connection: the turn is resumable, not
+          // finished, so it gets no closing note (finalReplyGuarantee.ts).
+          providerStreamFailed = true;
+        }
         const wrapUpState = wrapUpResult?.state;
         if (wrapUpState?.assistantText.trim()) {
           const merged = mergeWrapUpTextIntoState(

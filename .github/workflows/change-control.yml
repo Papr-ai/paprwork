@@ -1,0 +1,33 @@
+name: Change control
+on:
+  pull_request:
+    types: [opened, edited, synchronize, reopened, ready_for_review]
+permissions:
+  contents: read
+jobs:
+  change-control:
+    name: Change control
+    runs-on: ubuntu-latest
+    steps:
+      - name: Ticket linked and branch flow
+        env:
+          BODY: ${{ github.event.pull_request.body }}
+          HEAD: ${{ github.head_ref }}
+          BASE: ${{ github.base_ref }}
+          AUTHOR: ${{ github.event.pull_request.user.login }}
+        run: |
+          set -e
+          # Release PRs (development or release/* into the prod branch) carry the tickets of their changes.
+          if [ "$HEAD" = "development" ] || [[ "$HEAD" == release/* ]]; then echo "Release PR: ok"; exit 0; fi
+          if [[ "$AUTHOR" == *"[bot]" ]]; then echo "Bot PR: ok"; exit 0; fi
+          if [ "$BASE" = "main" ] || [ "$BASE" = "master" ]; then
+            if [[ "$HEAD" != hotfix/* ]]; then
+              echo "::error::Changes go to development first. Only development, release/* or hotfix/* branches may target $BASE."
+              exit 1
+            fi
+          fi
+          if ! printf "%s" "$BODY" | grep -Eiq "(/issues/[0-9]+|(close[sd]?|fix(e[sd])?|resolve[sd]?|refs?|ticket|issue)[[:space:]]*:?[[:space:]]*#[0-9]+)"; then
+            echo "::error::Link a ticket in the PR description (e.g. \"Ticket: #123\", a GitHub issue in this repo)."
+            exit 1
+          fi
+          echo "Ticket linked: ok"

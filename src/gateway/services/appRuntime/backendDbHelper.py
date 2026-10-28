@@ -42,7 +42,9 @@ from typing import Any, Union
 #   2 = proxy support (PAPR_DB_MODE=proxy), query()/write(), _ProxyConnection
 #   3 = proxy passes sourceId (required when app has 2+ linked databases)
 #   4 = row ACL helpers: caller_id(), acl_read_filter(), acl_write_filter(), acl_for_caller()
-PAPR_DB_HELPER_VERSION = 4
+#   5 = role/team principals in `_acl` (caller_role(), caller_principals()) +
+#       acl_segment_filter() for membership-scoped rows (standups, projects, …)
+PAPR_DB_HELPER_VERSION = 5
 
 
 @dataclass(frozen=True)
@@ -617,6 +619,22 @@ def _http_url(libsql_url: str) -> str:
 #   write(con, f"UPDATE notes SET body=? WHERE id=? AND {w}", [body, note_id, *wa])
 #   write(con, "INSERT INTO notes(body, _acl) VALUES (?, ?)", [body, acl_for_caller()])
 #
+# Besides user ids, `_acl` keys may be group principals the server resolves
+# for the verified caller (never from params):
+#   "role:viewer" | "role:contributor" | "role:maintainer" | "role:admin"
+#       app share role, hierarchical — "role:contributor" also admits
+#       maintainers and admins (PAPR_CALLER_ROLE)
+#   "team"   members of the publisher's workspace team (PAPR_CALLER_TEAM_MEMBER)
+#
+#   acl_for_caller(min_read_role="contributor", team_read=True)
+#
+# Rows scoped by membership in another table (a standup, a project) use a
+# segment filter instead of per-row lists — membership changes need no rewrite:
+#
+#   w, a = acl_segment_filter("standup_id", "standup_participants", "standup_id",
+#                             "external_user_id", active_column="active")
+#   rows = query(con, f"SELECT * FROM topics WHERE {w}", a)
+#
 # Reading every row on purpose (admin report, aggregate)? Put the marker
 #   # acl: all-rows
 # in the handler so validate_app knows it is intentional.
@@ -633,36 +651,92 @@ def caller_id() -> str:
     return uid if _USER_ID_RE.match(uid) else ""
 
 
-def _acl_path(uid: str, perm: str) -> str:
-    return f'$."{uid}".{perm}'
+ROLE_ORDER = ("viewer", "contributor", "maintainer", "admin")
+TEAM_PRINCIPAL = "team"
+_IDENT_RE = _re.compile(r"^[A-Za-z_][A-Za-z0-9_]{0,63}$")
+
+
+def caller_role() -> str:
+    """Caller's app share role (viewer|contributor|maintainer|admin), '' when unknown/anonymous."""
+    if not caller_id():
+        return ""
+    role = os.environ.get("PAPR_CALLER_ROLE", "").strip().lower()
+    return role if role in ROLE_ORDER else ""
+
+
+def caller_is_team_member() -> bool:
+    """True when the verified caller belongs to the publisher's workspace team."""
+    return bool(caller_id()) and os.environ.get("PAPR_CALLER_TEAM_MEMBER", "") == "1"
+
+
+def caller_principals() -> list[str]:
+    """Every `_acl` key that admits the caller: user id, role:* (hierarchical), team."""
+    uid = caller_id()
+    if not uid:
+        return []
+    out = [uid]
+    role = caller_role()
+    if role:
+        out += [f"role:{r}" for r in ROLE_ORDER[: ROLE_ORDER.index(role) + 1]]
+    if caller_is_team_member():
+        out.append(TEAM_PRINCIPAL)
+    return out
+
+
+def _acl_path(principal: str, perm: str) -> str:
+    return f'$."{principal}".{perm}'
+
+
+def _principal_clauses(p: str, perm: str) -> tuple[list[str], list[Any]]:
+    parts: list[str] = []
+    args: list[Any] = []
+    for principal in caller_principals():
+        parts.append(f"json_extract({p}_acl, ?) = 1")
+        args.append(_acl_path(principal, perm))
+    return parts, args
 
 
 def acl_read_filter(alias: str = "") -> tuple[str, list[Any]]:
-    """WHERE fragment: rows the caller may read (own/granted + public)."""
+    """WHERE fragment: rows the caller may read (own/granted/role/team + public)."""
     p = f"{alias}." if alias else ""
     parts = [f"{p}_acl IS NULL", f"json_extract({p}_acl, '$.\"*\".read') = 1"]
-    args: list[Any] = []
-    uid = caller_id()
-    if uid:
-        parts.append(f"json_extract({p}_acl, ?) = 1")
-        args.append(_acl_path(uid, "read"))
-    return "(" + " OR ".join(parts) + ")", args
+    extra, args = _principal_clauses(p, "read")
+    return "(" + " OR ".join(parts + extra) + ")", args
 
 
 def acl_write_filter(alias: str = "") -> tuple[str, list[Any]]:
     """WHERE fragment: rows the caller may update/delete. Anonymous → none."""
     p = f"{alias}." if alias else ""
-    uid = caller_id()
-    if not uid:
+    if not caller_id():
         return "0", []
-    return (
-        f"(json_extract({p}_acl, ?) = 1 OR json_extract({p}_acl, '$.\"*\".write') = 1)",
-        [_acl_path(uid, "write")],
-    )
+    parts, args = _principal_clauses(p, "write")
+    parts.append(f"json_extract({p}_acl, '$.\"*\".write') = 1")
+    return "(" + " OR ".join(parts) + ")", args
 
 
-def acl_for_caller(public_read: bool = False, share_with: list[str] | None = None) -> str:
-    """`_acl` JSON for a new row owned by the caller. Raises when anonymous."""
+def _check_role(role: str | None, name: str) -> str | None:
+    if role is None:
+        return None
+    r = role.strip().lower()
+    if r not in ROLE_ORDER:
+        raise ValueError(f"{name} must be one of {', '.join(ROLE_ORDER)}")
+    return r
+
+
+def acl_for_caller(
+    public_read: bool = False,
+    share_with: list[str] | None = None,
+    *,
+    min_read_role: str | None = None,
+    min_write_role: str | None = None,
+    team_read: bool = False,
+    team_write: bool = False,
+) -> str:
+    """`_acl` JSON for a new row owned by the caller. Raises when anonymous.
+
+    min_read_role / min_write_role grant every caller at or above that app role;
+    team_read / team_write grant the publisher's workspace team.
+    """
     uid = caller_id()
     if not uid:
         raise PermissionError("Sign-in required to create rows in a private table")
@@ -670,6 +744,49 @@ def acl_for_caller(public_read: bool = False, share_with: list[str] | None = Non
     for other in share_with or []:
         if _USER_ID_RE.match(other or ""):
             acl.setdefault(other, {})["read"] = True
+    read_role = _check_role(min_read_role, "min_read_role")
+    write_role = _check_role(min_write_role, "min_write_role")
+    if read_role:
+        acl.setdefault(f"role:{read_role}", {})["read"] = True
+    if write_role:
+        acl.setdefault(f"role:{write_role}", {}).update({"read": True, "write": True})
+    if team_read or team_write:
+        acl.setdefault(TEAM_PRINCIPAL, {})["read"] = True
+        if team_write:
+            acl[TEAM_PRINCIPAL]["write"] = True
     if public_read:
         acl["*"] = {"read": True}
     return _json.dumps(acl, separators=(",", ":"), sort_keys=True)
+
+
+def acl_segment_filter(
+    column: str,
+    members_table: str,
+    segment_column: str,
+    user_column: str = "external_user_id",
+    *,
+    alias: str = "",
+    active_column: str | None = None,
+    admin_sees_all: bool = False,
+) -> tuple[str, list[Any]]:
+    """WHERE fragment: rows whose `column` is a segment the caller belongs to.
+
+    Membership lives in `members_table` (segment_column, user_column[, active_column]),
+    so adding/removing a member needs no per-row rewrite. Anonymous → no rows.
+    admin_sees_all=True lets app admins (publisher + admin grants) read every segment.
+    """
+    for ident in (column, members_table, segment_column, user_column, active_column, alias):
+        if ident and not _IDENT_RE.match(ident):
+            raise ValueError(f"Invalid identifier for acl_segment_filter: {ident!r}")
+    uid = caller_id()
+    if not uid:
+        return "0", []
+    if admin_sees_all and caller_role() == "admin":
+        return "1", []
+    p = f"{alias}." if alias else ""
+    active = f" AND {active_column} = 1" if active_column else ""
+    return (
+        f"{p}{column} IN (SELECT {segment_column} FROM {members_table} "
+        f"WHERE {user_column} = ?{active})",
+        [uid],
+    )

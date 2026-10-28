@@ -230,6 +230,8 @@ export const MODEL_CONTEXT_WINDOWS: Readonly<Record<string, number>> = {
   "gemini-3.1-pro-preview": 1_048_576,
   "glm-5.2": 1_000_000,
   "qwen/qwen3-32b": 131_072,
+  "flint:latest": 262_144,
+  "flint:40b": 262_144,
   "openai/gpt-oss-120b": 131_072,
   "kimi-k3": 1_048_576,
 };

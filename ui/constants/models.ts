@@ -530,6 +530,29 @@ export const CHAT_MODELS: AIModel[] = [
     requiresApiKey: "NONE",
   },
 
+  // Recursive Flint (On-Device) — MoE coding agent (Apache 2.0, ollama.com/library/flint)
+  {
+    id: "flint:latest",
+    name: "Flint (Recursive)",
+    provider: "ollama",
+    description:
+      "Coding agent • 24GB+ RAM • MoE 40B (~2.5B active) • 256K context • Apache 2.0",
+    group: "Ollama (On-Device)",
+    supportsThinking: false,
+    maxTokens: 16384,
+    requiresApiKey: "NONE",
+  },
+  {
+    id: "flint:40b",
+    name: "Flint 40B (Recursive)",
+    provider: "ollama",
+    description: "Same as flint:latest • explicit 40b tag • agentic coding & tools",
+    group: "Ollama (On-Device)",
+    supportsThinking: false,
+    maxTokens: 16384,
+    requiresApiKey: "NONE",
+  },
+
   // Gemma 4 (On-Device) — latest open models (see deepmind.google/models/gemma)
   {
     id: "gemma4:e2b",

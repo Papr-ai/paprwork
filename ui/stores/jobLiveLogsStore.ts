@@ -16,7 +16,14 @@ type FailedFetchesState = Set<string>;
 interface JobLiveLogsStore {
   logsByJobId: LogsState;
   namesByJobId: NamesState;
+  /** Job runtime type (python, agent, subagent…) — agent jobs render the user's AgentGlyph. */
+  typesByJobId: Map<string, string>;
   failedFetches: FailedFetchesState;
+  /** Last final status seen per job (completed/failed/cancelled) — reconciles stale "running" cards. */
+  finalStatusByJobId: Map<string, string>;
+  setFinalStatus: (jobId: string, status: string) => void;
+  /** One-shot gateway check for a card restored as "running" (no broadcast arrives after reload). */
+  reconcileStatus: (jobId: string) => Promise<void>;
   appendLine: (jobId: string, line: string) => void;
   setJobName: (jobId: string, name: string) => void;
   getJobName: (jobId: string) => string | undefined;
@@ -24,10 +31,31 @@ interface JobLiveLogsStore {
   clearJob: (jobId: string) => void;
 }
 
+const nameFetchAttempts = new Map<string, number>();
+const reconciled = new Set<string>();
+export const FINAL_JOB_STATUSES = new Set(["completed", "failed", "cancelled"]);
+
 export const useJobLiveLogsStore = create<JobLiveLogsStore>((set, get) => ({
   logsByJobId: new Map(),
   namesByJobId: new Map(),
+  typesByJobId: new Map(),
   failedFetches: new Set(),
+  finalStatusByJobId: new Map(),
+  setFinalStatus: (jobId, status) =>
+    set((state) => ({
+      finalStatusByJobId: new Map(state.finalStatusByJobId).set(jobId, status),
+    })),
+  reconcileStatus: async (jobId) => {
+    if (reconciled.has(jobId)) return;
+    reconciled.add(jobId);
+    try {
+      const response = await gateway.send("jobs:get", { jobId });
+      const status = (response.data as { status?: string } | undefined)?.status;
+      if (status && FINAL_JOB_STATUSES.has(status)) get().setFinalStatus(jobId, status);
+    } catch {
+      reconciled.delete(jobId); // transient: allow a later mount to retry
+    }
+  },
 
   appendLine: (jobId, line) =>
     set((state) => {
@@ -49,7 +77,7 @@ export const useJobLiveLogsStore = create<JobLiveLogsStore>((set, get) => ({
   fetchJobName: async (jobId) => {
     // Check if we already have it
     const existing = get().namesByJobId.get(jobId);
-    if (existing) return existing;
+    if (existing && get().typesByJobId.has(jobId)) return existing;
 
     // Don't retry if we already failed to fetch this job
     if (get().failedFetches.has(jobId)) return undefined;
@@ -57,7 +85,11 @@ export const useJobLiveLogsStore = create<JobLiveLogsStore>((set, get) => ({
     // Fetch from gateway
     try {
       const response = await gateway.send("jobs:get", { jobId });
-      const job = response.data as { name?: string };
+      const job = response.data as { name?: string; type?: string };
+      if (job?.type) {
+        const type = job.type;
+        set((state) => ({ typesByJobId: new Map(state.typesByJobId).set(jobId, type) }));
+      }
       if (job?.name) {
         get().setJobName(jobId, job.name);
         return job.name;
@@ -67,12 +99,19 @@ export const useJobLiveLogsStore = create<JobLiveLogsStore>((set, get) => ({
         `[jobLiveLogsStore] Failed to fetch job name for ${jobId}:`,
         error,
       );
-      // Mark this job as failed so we don't retry
-      set((state) => {
-        const next = new Set(state.failedFetches);
-        next.add(jobId);
-        return { failedFetches: next };
-      });
+      // A transient failure (gateway busy while the job is being updated/started) used to
+      // pin the card to the raw job id forever. Retry a few times before giving up.
+      const attempt = (nameFetchAttempts.get(jobId) ?? 0) + 1;
+      nameFetchAttempts.set(jobId, attempt);
+      if (attempt < 4) {
+        setTimeout(() => void get().fetchJobName(jobId), 1500 * attempt);
+      } else {
+        set((state) => {
+          const next = new Set(state.failedFetches);
+          next.add(jobId);
+          return { failedFetches: next };
+        });
+      }
     }
     return undefined;
   },
@@ -112,8 +151,17 @@ export function initJobLiveLogsListener(): void {
         useJobLiveLogsStore.getState().setJobName(jobId, String(data.name));
       }
       // Clear logs when job finishes
-      if (["completed", "failed", "cancelled"].includes(String(data.status))) {
+      if (FINAL_JOB_STATUSES.has(String(data.status))) {
         useJobLiveLogsStore.getState().clearJob(jobId);
+        useJobLiveLogsStore.getState().setFinalStatus(jobId, String(data.status));
+      } else if (data.status === "running") {
+        // A new run started: drop the previous final status so fresh cards show it running.
+        const store = useJobLiveLogsStore.getState();
+        if (store.finalStatusByJobId.has(jobId)) {
+          const next = new Map(store.finalStatusByJobId);
+          next.delete(jobId);
+          useJobLiveLogsStore.setState({ finalStatusByJobId: next });
+        }
       }
     }
   };

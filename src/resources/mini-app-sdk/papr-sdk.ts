@@ -15,6 +15,7 @@ import { askConfirm, askText, showAlert } from "./papr-dialog.ts";
 import { papr as paprFilesModule } from "./papr-files.ts";
 import { papr as paprConnectModule } from "./papr-connect.ts";
 import { search as paprSearch } from "./papr-search.ts";
+import { onHandoff, type PaprHandoff } from "./papr-handoff.ts";
 import {
   subscribeJobEvents,
   type SubscribeJobEventsOptions,
@@ -29,7 +30,9 @@ import {
 
 export { askConfirm, askText, showAlert };
 export { subscribeJobEvents };
+export { onHandoff };
 export type {
+  PaprHandoff,
   PreviewLifecyclePhase,
   PausablePreviewResource,
   SubscribeJobEventsOptions,
@@ -51,6 +54,8 @@ export const papr = {
   files: paprFilesModule.files,
   connect: paprConnectModule.connect,
   search: paprSearch,
+  /** Claude's "Open in Papr" landed here while the app was open (or just opened it). */
+  onHandoff,
   preview: {
     onLifecycle: onPreviewLifecycle,
     onPreviewLifecycle,

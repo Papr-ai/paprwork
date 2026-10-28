@@ -2,6 +2,7 @@
  * Run a synced job on Papr Cloud while the desktop is awake (manual cloud test path).
  */
 
+import { randomUUID } from "node:crypto";
 import fs from "node:fs/promises";
 import path from "node:path";
 import { getPaprRoot } from "../../core/utils/paprRoot.js";
@@ -33,6 +34,60 @@ function jobLogPath(jobId: string): string {
   return path.join(getPaprRoot(), "Jobs", jobId, "logs", "run.log");
 }
 
+async function appendCloudRunLine(jobId: string, line: string): Promise<void> {
+  const logPath = jobLogPath(jobId);
+  await fs.mkdir(path.dirname(logPath), { recursive: true });
+  await fs.appendFile(logPath, `\n${line}\n`, "utf8");
+}
+
+/**
+ * Push only what this run needs: the job folder (uploaded through the app that
+ * owns it) and the job's linked databases. A whole-workspace push here made every cloud
+ * run wait on unrelated pending changes across all apps and jobs.
+ */
+export async function pushJobScopeBeforeCloudRun(job: JobRecord): Promise<void> {
+  const cloudSync = getCloudSyncService();
+  if (!cloudSync) {
+    console.warn(
+      "[CloudJobRun] Cloud Sync not active — cloud may run last-pushed GitHub state",
+    );
+    return;
+  }
+  console.log(`[CloudJobRun] Scoped push before cloud run: job=${job.id}`);
+  try {
+    // A job-scoped push already uploads through the app(s) that own the job.
+    await cloudSync.pushGitNow({ jobId: job.id, skipPostSyncHooks: true });
+  } catch (err) {
+    console.warn(
+      "[CloudJobRun] Scoped git push failed (continuing):",
+      (err as Error).message.slice(0, 120),
+    );
+  }
+  try {
+    const { ensureTursoSyncBridge } = await import("./TursoSyncBridge.js");
+    const bridge = ensureTursoSyncBridge();
+    if (bridge.enabled) {
+      // Resolve targets here: pushScoped() with an unmatched jobId falls back
+      // to every dirty database, which is exactly the fan-out to avoid.
+      const { findLinkedSourceForJob } = await import("./tursoLinkedSources.js");
+      const sources = await bridge.listLinkedSources();
+      const keys = [job.id, ...(job.writeDbIds ?? [])];
+      const seen = new Set<string>();
+      for (const key of keys) {
+        const linked = findLinkedSourceForJob(sources, key);
+        if (!linked || seen.has(linked.dbPath)) continue;
+        seen.add(linked.dbPath);
+        await bridge.pushLinkedSourceIfNeeded(linked);
+      }
+    }
+  } catch (err) {
+    console.warn(
+      "[CloudJobRun] Scoped database push failed (continuing):",
+      (err as Error).message.slice(0, 120),
+    );
+  }
+}
+
 function cloudRunTimeoutMs(job: JobRecord): number {
   if (job.type === "agent" || job.type === "subagent") {
     return CLOUD_AGENT_JOB_TIMEOUT_MS;
@@ -40,15 +95,82 @@ function cloudRunTimeoutMs(job: JobRecord): number {
   return 600_000;
 }
 
+const LIVE_LOG_POLL_MS = 2_000;
+
+interface LiveLogResponse {
+  chunks?: Array<{ seq: number; text: string }>;
+  done?: boolean;
+  next?: number;
+}
+
+/**
+ * Poll the cloud for output the sandbox printed so far and write it to run.log
+ * (and the jobs:log-line stream) while the run is in flight. Best-effort: an
+ * older server without the endpoint just yields nothing and the full output
+ * still lands when the run finishes.
+ */
+export function startCloudLiveLog(
+  jobsService: Pick<JobsService, "appendJobRunLog">,
+  jobId: string,
+  logRunId: string,
+  pollMs: number = LIVE_LOG_POLL_MS,
+): { stop: () => Promise<boolean> } {
+  let after = 0;
+  let streamed = false;
+  let stopped = false;
+  let inFlight: Promise<void> = Promise.resolve();
+
+  const pollOnce = async (): Promise<void> => {
+    try {
+      const res = await cloudApiFetch(
+        `/v1/cloud/runtime/job-run/logs?runId=${encodeURIComponent(logRunId)}&after=${after}`,
+        { method: "GET", timeoutMs: 15_000 },
+      );
+      if (!res.ok) return;
+      const data = (await res.json()) as LiveLogResponse;
+      for (const chunk of data.chunks ?? []) {
+        const text = chunk.text.replace(/\n$/, "");
+        if (text) {
+          await jobsService.appendJobRunLog(jobId, text);
+          streamed = true;
+        }
+      }
+      if (typeof data.next === "number" && data.next > after) after = data.next;
+    } catch {
+      /* transient — try again next tick */
+    }
+  };
+
+  const timer = setInterval(() => {
+    if (stopped) return;
+    inFlight = inFlight.then(pollOnce);
+  }, pollMs);
+
+  return {
+    stop: async () => {
+      stopped = true;
+      clearInterval(timer);
+      await inFlight;
+      // Pick up whatever was printed between the last tick and the run ending.
+      await pollOnce();
+      return streamed;
+    },
+  };
+}
+
 async function appendCloudRunLog(
   jobId: string,
   payload: CloudJobRunApiResponse,
+  stdoutAlreadyStreamed = false,
 ): Promise<void> {
   const logPath = jobLogPath(jobId);
   await fs.mkdir(path.dirname(logPath), { recursive: true });
   const stamp = new Date().toISOString();
   const header = `\n[${stamp}] ☁️ Cloud run (backend=${payload.backend ?? "unknown"})\n`;
-  const body = [payload.stdout, payload.stderr].filter(Boolean).join("\n");
+  // Output already streamed into the log line by line — don't write it twice.
+  const body = [stdoutAlreadyStreamed ? "" : payload.stdout, payload.stderr]
+    .filter(Boolean)
+    .join("\n");
   const footer = `\nexitCode=${payload.exitCode} status=${payload.status}\n`;
   await fs.appendFile(logPath, `${header}${body}${footer}`, "utf8");
 }
@@ -117,46 +239,66 @@ export async function runJobInCloud(
     throw new Error(`Job is already running locally: ${job.name}`);
   }
 
-  const cloudSync = getCloudSyncService();
-  if (cloudSync) {
-    console.log(`[CloudJobRun] Pushing workspace before cloud run: ${jobId}`);
-    try {
-      await cloudSync.pushNow();
-    } catch (err) {
-      console.warn(
-        "[CloudJobRun] Pre-run push failed (continuing):",
-        (err as Error).message.slice(0, 120),
-      );
-    }
-  } else {
-    console.warn(
-      "[CloudJobRun] Cloud Sync not active — cloud may run last-pushed GitHub state",
-    );
-  }
+  await pushJobScopeBeforeCloudRun(job);
+
+  const runStartedAt = new Date().toISOString();
+  await appendCloudRunLine(jobId, `[${runStartedAt}] ☁️ Cloud run started — waiting for the cloud sandbox…`);
+  await jobsService.applyCloudRunPatch({
+    jobId,
+    status: "running",
+    lastRunAt: runStartedAt,
+    recordedAt: runStartedAt,
+    source: "cloud_manual",
+  });
 
   const timeoutMs = cloudRunTimeoutMs(job);
   // Measured around the request only. Includes cloud queue + execution, which
   // is the wall-clock time the user actually waited for the agent's work.
   const startedAt = Date.now();
-  const res = await cloudApiFetch("/v1/cloud/runtime/job-run", {
-    method: "POST",
-    body: {
+  const logRunId = `${jobId}-${randomUUID().slice(0, 12)}`;
+  const liveLog = startCloudLiveLog(jobsService, jobId, logRunId);
+  let streamed = false;
+  let payload: CloudJobRunApiResponse;
+  try {
+    const res = await cloudApiFetch("/v1/cloud/runtime/job-run", {
+      method: "POST",
+      body: {
+        jobId,
+        tier: "sandbox",
+        timeoutMs,
+        logRunId,
+      },
+      timeoutMs: timeoutMs + 30_000,
+    });
+    if (!res.ok) {
+      const text = await res.text();
+      throw new Error(
+        `Cloud job run failed (${res.status}): ${text.slice(0, 300)}`,
+      );
+    }
+    payload = (await res.json()) as CloudJobRunApiResponse;
+    streamed = await liveLog.stop();
+  } catch (err) {
+    await liveLog.stop();
+    // Never leave the job showing "running" with an empty log when the cloud
+    // request fails or times out — record the failure where the user looks.
+    const message = (err as Error).message.slice(0, 500);
+    const failedAt = new Date().toISOString();
+    await appendCloudRunLine(jobId, `[${failedAt}] ☁️ Cloud run failed: ${message}`);
+    await jobsService.applyCloudRunPatch({
       jobId,
-      tier: "sandbox",
-      timeoutMs,
-    },
-    timeoutMs: timeoutMs + 30_000,
-  });
-
-  if (!res.ok) {
-    const text = await res.text();
-    throw new Error(
-      `Cloud job run failed (${res.status}): ${text.slice(0, 300)}`,
-    );
+      status: "failed",
+      exitCode: 1,
+      error: message,
+      lastRunAt: runStartedAt,
+      completedAt: failedAt,
+      recordedAt: failedAt,
+      source: "cloud_manual",
+    });
+    throw err;
   }
 
-  const payload = (await res.json()) as CloudJobRunApiResponse;
-  await appendCloudRunLog(jobId, payload);
+  await appendCloudRunLog(jobId, payload, streamed);
   await syncAfterCloudRun(jobsService, jobId, payload);
   emitCloudRunTelemetry(job, payload, Date.now() - startedAt);
 

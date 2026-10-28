@@ -155,6 +155,11 @@ type AiSdkWrapUpArgs = {
   wrapUpMessage?: string;
 };
 
+/** The conversation the AI SDK turn was started with (prompt + history). */
+function priorMessages(options: { [key: string]: unknown }): ModelMessage[] {
+  return Array.isArray(options.messages) ? (options.messages as ModelMessage[]) : [];
+}
+
 /** Text-only continuation after AI SDK stream ends on tools without a user reply. */
 export async function* runAiSdkWrapUpContinuation(
   args: AiSdkWrapUpArgs,
@@ -164,7 +169,12 @@ export async function* runAiSdkWrapUpContinuation(
   undefined
 > {
   const response = await args.aiSdkResult.response;
+  // response.messages holds only what the model produced this turn. Without
+  // the original prompt in front, the history opens on a model tool call,
+  // which Gemini rejects ("function call turn comes immediately after a user
+  // turn"). Keep the conversation the turn started from.
   const wrapUpMessages: ModelMessage[] = [
+    ...priorMessages(args.streamTextOptions),
     ...response.messages,
     {
       role: "user",
@@ -238,9 +248,10 @@ export async function* runAiSdkPlanContinuation(
   { state: StreamOrchestratorResult; messages: ModelMessage[] } | null,
   undefined
 > {
+  const sent: ModelMessage[] = [...args.messages, { role: "user", content: args.nudge }];
   const result = streamText({
     ...args.streamTextOptions,
-    messages: [...args.messages, { role: "user", content: args.nudge }],
+    messages: sent,
     abortSignal: args.abortSignal,
   });
 
@@ -272,7 +283,9 @@ export async function* runAiSdkPlanContinuation(
         return null;
       }
       const response = await result.response;
-      return { state, messages: response.messages };
+      // Return the whole thread, not just this call's output, so the next
+      // continuation still starts from the user's prompt.
+      return { state, messages: [...sent, ...response.messages] };
     }
     yield next.value;
   }
@@ -292,6 +305,8 @@ type PiAiWrapUpArgs = {
   abortSignal: AbortSignal;
   /** Defaults to the terminal wording; pass WRAP_UP_WITH_PLAN_INCOMPLETE when steps remain. */
   wrapUpMessage?: string;
+  /** Returns the current subscription token when the one in streamOpts was replaced. */
+  refreshAuth?: () => Promise<string | null>;
 };
 
 /** Text-only continuation for pi-ai when the tool loop did not produce a summary. */
@@ -326,10 +341,21 @@ export async function* runPiAiWrapUpContinuation(
       ? (args.streamOpts as Record<string, unknown>)
       : {};
 
-  const piStream = args.streamSimple(args.piModel, contextWithoutTools, {
-    ...streamOptsRecord,
-    signal: args.abortSignal,
-  });
+  // These options were copied before the turn started, so a background token
+  // refresh leaves them holding a revoked token: recover once, like the loop.
+  const { streamWithTokenRetry } = await import(
+    "../providers/oauthRevokedRetry.js"
+  );
+  const piStream = streamWithTokenRetry(
+    (options) =>
+      args.streamSimple(
+        args.piModel,
+        contextWithoutTools,
+        options,
+      ) as AsyncIterable<import("@mariozechner/pi-ai").AssistantMessageEvent>,
+    { ...streamOptsRecord, signal: args.abortSignal },
+    args.refreshAuth,
+  );
 
   const fullStream = adaptPiStreamToAISDK(
     piStream as AsyncIterable<import("@mariozechner/pi-ai").AssistantMessageEvent>,

@@ -27,31 +27,29 @@
 .cat-btn--solid:hover { background: var(--accent, #0060e0); filter: brightness(1.08); }
 .cat-acts { display: flex; gap: 6px; flex: none; }
 
-/* App details: centered modal, Prototyper app-page layout inside. No outline ring:
-   the card edge is its own background, the film sits inset in its own frame. */
-.cat-modal {
-  position: fixed; inset: 0; z-index: 1000; display: grid; place-items: center; padding: 24px 16px;
-  background: rgba(6, 8, 14, 0.5); backdrop-filter: blur(6px); animation: cat-fade .15s ease-out;
+/* App page (Prototyper .ca-page): a full view over the Apps body, not a popup. The Apps top
+   bar stays; "‹ Discover" goes back. Scrolls on its own. */
+.apps-view__body { position: relative; }
+.cat-page {
+  position: absolute; inset: 0; z-index: 50; overflow-y: auto; overscroll-behavior: contain; outline: none;
+  background: var(--popover-bg, #fff); color: var(--text-primary); animation: cat-page-in .22s cubic-bezier(.2, .8, .2, 1);
 }
-.cat-modal__card {
-  position: relative; display: flex; flex-direction: column; width: min(880px, 100%); max-height: calc(100vh - 48px);
-  overflow: hidden; border-radius: 26px; background: var(--popover-bg, #fff); color: var(--text-primary);
-  box-shadow: 0 30px 90px rgba(0, 0, 0, 0.35); animation: cat-pop .2s cubic-bezier(.2, .8, .2, 1);
+.cat-page--window { position: fixed; z-index: 1000; }
+.cat-page__in { max-width: 960px; margin: 0 auto; padding: 16px 32px 64px; display: grid; gap: 28px; }
+.cat-page__back {
+  justify-self: start; display: inline-flex; align-items: center; gap: 4px; min-height: 36px; padding: 0 10px 0 4px; margin-bottom: -8px;
+  border: 0; border-radius: 10px; background: none; color: var(--text-secondary); font: inherit; font-size: 15px; font-weight: 500; cursor: pointer;
 }
-.cat-modal__scroll { min-height: 0; overflow-y: auto; overscroll-behavior: contain; outline: none; }
-.cat-modal__x {
-  position: absolute; top: 14px; right: 14px; z-index: 4; width: 32px; height: 32px; border: 0; border-radius: 50%; cursor: pointer;
-  display: grid; place-items: center; color: #fff; background: rgba(20, 20, 26, 0.55); backdrop-filter: blur(16px);
-}
-.cat-modal__x:hover { background: rgba(20, 20, 26, 0.75); }
-.cat-page__in { padding: 24px 28px 36px; display: grid; gap: 28px; }
+.cat-page__back:hover { color: var(--text-primary); background: color-mix(in srgb, var(--text-primary) 6%, transparent); }
+.cat-page__back svg { width: 18px; height: 18px; }
 .cat-page__hero { display: grid; gap: 22px; }
-/* The whole film, never cropped: previews are 16:10. */
+/* The whole film, never cropped, never taller than the window. */
 .cat-page__media .cat-banner {
-  aspect-ratio: 16 / 10; border-radius: 18px; background: #000;
+  aspect-ratio: 16 / 9; max-height: 64vh; margin: 0 auto; width: 100%; border-radius: 24px; background: #000;
   box-shadow: 0 1px 2px rgba(0, 0, 0, 0.08), 0 18px 50px rgba(10, 16, 32, 0.18);
 }
-.cat-page__media .cat-banner__img { object-position: center; }
+.cat-page__media .cat-banner__img { object-fit: contain; object-position: center; }
+.cat-page__media img.cat-banner__img { object-fit: cover; }
 .cat-page__id { display: flex; align-items: center; gap: 18px; flex-wrap: wrap; }
 .cat-page__t { flex: 1 1 0; min-width: 220px; }
 .cat-page__t h1 { margin: 0; font-size: 32px; font-weight: 700; letter-spacing: -0.028em; line-height: 1.1; }
@@ -62,6 +60,11 @@
   background: linear-gradient(180deg, color-mix(in srgb, var(--accent, #0060e0) 85%, #fff), var(--accent, #0060e0));
   box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.25), 0 1px 2px rgba(1, 97, 224, 0.3), 0 6px 16px rgba(1, 97, 224, 0.22);
 }
+.cat-page__edit {
+  height: 44px; padding: 0 18px; border: 0; border-radius: 14px; cursor: pointer; font: inherit; font-size: 15px; font-weight: 600;
+  color: var(--text-primary); background: color-mix(in srgb, var(--text-primary) 6%, transparent);
+}
+.cat-page__edit:hover { background: color-mix(in srgb, var(--text-primary) 10%, transparent); }
 .cat-page__facts {
   list-style: none; margin: 0; padding: 14px 0; display: grid; grid-auto-flow: column; grid-auto-columns: minmax(0, 1fr);
   border-top: 1px solid var(--apps-card-line, rgba(10, 16, 32, 0.08)); border-bottom: 1px solid var(--apps-card-line, rgba(10, 16, 32, 0.08));
@@ -71,28 +74,53 @@
 .cat-page__facts b { max-width: 100%; font-size: 17px; font-weight: 700; letter-spacing: -0.01em; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .cat-page__facts span { font-size: 11.5px; color: var(--text-tertiary); text-transform: uppercase; letter-spacing: .05em; }
 .cat-page__sec h2 { margin: 0 0 14px; font-size: 21px; font-weight: 700; letter-spacing: -0.018em; }
-.cat-page__desc { margin: 0; max-width: 760px; font-size: 16px; line-height: 1.55; color: var(--text-secondary); }
-.cat-page__shots { display: grid; grid-auto-flow: column; grid-auto-columns: min(420px, 78%); gap: 16px; overflow-x: auto; scroll-snap-type: x mandatory; padding-bottom: 6px; }
-.cat-page__shots figure { margin: 0; display: grid; gap: 8px; scroll-snap-align: start; }
-.cat-page__shots img { width: 100%; aspect-ratio: 16 / 10; object-fit: cover; border-radius: 16px; background: color-mix(in srgb, var(--text-primary) 5%, transparent); box-shadow: inset 0 0 0 0.5px color-mix(in srgb, var(--text-primary) 10%, transparent); }
-.cat-page__shots figcaption { font-size: 13px; color: var(--text-secondary); }
-.cat-page__two { display: grid; grid-template-columns: 1fr 1fr; gap: 28px; }
-.cat-page__list { margin: 0; padding: 0; list-style: none; display: grid; gap: 10px; font-size: 15px; color: var(--text-secondary); }
+/* How it works: three pictures, one caption each. */
+.cat-page__steps { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 16px; }
+.cat-page__steps figure { margin: 0; display: grid; gap: 10px; align-content: start; }
+.cat-page__steps img {
+  width: 100%; aspect-ratio: 16 / 10; object-fit: cover; border-radius: 16px; display: block;
+  background: color-mix(in srgb, var(--text-primary) 5%, transparent); box-shadow: 0 0 0 1px var(--apps-card-line, rgba(10, 16, 32, 0.07));
+}
+.cat-page__steps figcaption { display: flex; gap: 10px; align-items: flex-start; font-size: 14px; line-height: 1.4; color: var(--text-primary); }
+.cat-page__steps figcaption b {
+  flex: none; display: grid; place-items: center; width: 22px; height: 22px; border-radius: 50%; font-size: 12px; font-weight: 700;
+  color: var(--accent, #0060e0); background: color-mix(in srgb, var(--accent, #0060e0) 10%, transparent);
+}
+.cat-page__empty {
+  width: 100%; display: grid; gap: 4px; justify-items: start; padding: 22px 24px; border-radius: 18px; cursor: pointer; text-align: left; font: inherit;
+  color: var(--text-primary); background: color-mix(in srgb, var(--accent, #0060e0) 5%, transparent);
+  border: 1.5px dashed color-mix(in srgb, var(--accent, #0060e0) 30%, transparent);
+}
+.cat-page__empty:hover { background: color-mix(in srgb, var(--accent, #0060e0) 8%, transparent); }
+.cat-page__empty b { font-size: 15px; } .cat-page__empty span { font-size: 14px; color: var(--text-secondary); }
+.cat-page__two { display: grid; grid-template-columns: 1fr 1fr; gap: 40px; }
+.cat-page__rows { margin: 0; padding: 0; list-style: none; }
+.cat-page__rows li { display: flex; align-items: center; gap: 14px; min-height: 46px; border-bottom: 1px solid var(--apps-card-line, rgba(10, 16, 32, 0.08)); font-size: 14.5px; }
+.cat-page__rows li > b:first-child { flex: none; width: 64px; font-size: 13px; font-weight: 600; color: var(--text-tertiary); }
+.cat-page__rows kbd {
+  flex: none; min-width: 30px; height: 26px; display: inline-grid; place-items: center; padding: 0 6px; border-radius: 7px; font: 600 12px/1 inherit;
+  color: var(--text-secondary); background: color-mix(in srgb, var(--text-primary) 5%, transparent); border: 1px solid var(--apps-card-line, rgba(10, 16, 32, 0.08));
+}
+.cat-page__more { font-size: 14.5px; color: var(--text-secondary); }
+.cat-page__more summary { cursor: pointer; list-style: none; color: var(--accent, #0060e0); font-weight: 600; width: max-content; }
+.cat-page__more summary::-webkit-details-marker { display: none; }
+.cat-page__more p { margin: 14px 0 0; max-width: 720px; line-height: 1.55; }
+.cat-page__list { margin: 14px 0 0; padding: 0; list-style: none; display: grid; gap: 10px; }
 .cat-page__list li { display: flex; align-items: center; gap: 9px; min-width: 0; }
 .cat-page__list code { font-size: 13px; padding: 2px 8px; border-radius: 6px; background: color-mix(in srgb, var(--text-primary) 6%, transparent); }
-.cat-page__note { margin: 0; font-size: 13px; color: var(--text-tertiary); }
-@keyframes cat-fade { from { opacity: 0; } }
-@keyframes cat-pop { from { opacity: 0; transform: translateY(10px) scale(.985); } }
+@keyframes cat-page-in { from { opacity: 0; transform: translateY(8px); } }
 @media (max-width: 760px) {
-  .cat-modal { place-items: end center; padding: 0; }
-  .cat-modal__card { width: 100%; max-height: 94vh; border-radius: 24px 24px 0 0; }
-  .cat-page__in { padding: 16px 16px 32px; gap: 22px; }
+  .cat-page__in { padding: 12px 16px 40px; gap: 22px; }
   .cat-page__t h1 { font-size: 26px; }
   .cat-page__cta { width: 100%; }
-  .cat-page__cta .cat-btn { flex: 1; }
-  .cat-page__facts { grid-auto-flow: row; grid-template-columns: repeat(3, 1fr); row-gap: 12px; }
-  .cat-page__facts li:nth-child(4) { border-left: 0; }
-  .cat-page__two { grid-template-columns: 1fr; }
+  .cat-page__cta .cat-btn, .cat-page__edit { flex: 1; }
+  .cat-page__facts { grid-auto-flow: row; grid-template-columns: repeat(2, 1fr); row-gap: 12px; }
+  .cat-page__facts li:nth-child(odd) { border-left: 0; }
+  .cat-page__steps { grid-template-columns: 1fr; }
+  .cat-page__two { grid-template-columns: 1fr; gap: 28px; }
 }
-@media (prefers-reduced-motion: reduce) { .cat-modal, .cat-modal__card { animation: none; } }
-.community-apps__grid:has(> .cat-card) { grid-template-columns: repeat(auto-fill, minmax(320px, 1fr)); gap: 28px 24px; }
+@media (prefers-reduced-motion: reduce) { .cat-page { animation: none; } }
+/* Discover grid: a fixed 3-up column like Prototyper, not as many as fit a wide screen. */
+.community-apps__grid:has(> .cat-card) { grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 28px 20px; }
+@media (max-width: 1000px) { .community-apps__grid:has(> .cat-card) { grid-template-columns: repeat(2, minmax(0, 1fr)); } }
+@media (max-width: 640px) { .community-apps__grid:has(> .cat-card) { grid-template-columns: 1fr; } }

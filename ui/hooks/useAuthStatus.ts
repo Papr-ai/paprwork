@@ -234,11 +234,19 @@ export function useAuthStatus() {
       if (model.provider === "openai-codex") {
         return status.openai.oauth;
       }
-      if (model.provider === "openai") {
-        return status.openai.oauth || status.openai.apiKey;
+      // No direct auth → fall through to the Papr proxy (credits), same as
+      // Google. The gateway already falls back to the proxy for these.
+      if (
+        model.provider === "openai" &&
+        (status.openai.oauth || status.openai.apiKey)
+      ) {
+        return true;
       }
-      if (model.provider === "anthropic") {
-        return status.anthropic.oauth || status.anthropic.apiKey;
+      if (
+        model.provider === "anthropic" &&
+        (status.anthropic.oauth || status.anthropic.apiKey)
+      ) {
+        return true;
       }
 
       // Papr proxy routes models without direct auth — requires active subscription

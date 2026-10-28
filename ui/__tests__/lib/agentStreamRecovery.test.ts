@@ -808,6 +808,53 @@ describe("shouldResumeWithFreshGatewayStream", () => {
   });
 });
 
+describe("mergeHistoryWithLocal — an old saved reply outside the window", () => {
+  // Seen live: a reply from 38 messages back kept rendering as the newest one
+  // until restart. Once it sat at the tail, every merge left it there.
+  const oldReply = "msg-f434f2de-4f1a-4b2c-9d3e-111111111111";
+  const u1 = "msg-1fe5a9d2-9a1b-4c2d-8e3f-222222222222";
+  const a1 = "msg-2bf22a48-4b1c-4d2e-9f3a-333333333333";
+
+  it("moves an old reply stuck at the tail back above the window", () => {
+    const local: ChatMessage[] = [
+      { id: u1, role: "user", content: "why do i still see this" },
+      { id: a1, role: "assistant", content: "Because…" },
+      { id: oldReply, role: "assistant", content: "The dev agent gateway now deploys itself" },
+    ];
+    const server: ChatMessage[] = [
+      { id: u1, role: "user", content: "why do i still see this" },
+      { id: a1, role: "assistant", content: "Because…" },
+    ];
+    const merged = mergeHistoryWithLocal(local, server);
+    expect(merged.at(-1)?.id).toBe(a1);
+    expect(merged[0]?.id).toBe(oldReply);
+  });
+
+  it("does not append old saved replies when the window shares nothing with the store", () => {
+    const local: ChatMessage[] = [
+      { id: oldReply, role: "assistant", content: "The dev agent gateway now deploys itself" },
+    ];
+    const server: ChatMessage[] = [
+      { id: u1, role: "user", content: "why do i still see this" },
+      { id: a1, role: "assistant", content: "Because…" },
+    ];
+    expect(mergeHistoryWithLocal(local, server).at(-1)?.id).toBe(a1);
+  });
+
+  it("keeps a streaming or interrupted reply at the end", () => {
+    const server: ChatMessage[] = [
+      { id: u1, role: "user", content: "why do i still see this" },
+    ];
+    for (const extra of [{ isStreaming: true }, { interrupted: true }]) {
+      const local: ChatMessage[] = [
+        { id: u1, role: "user", content: "why do i still see this" },
+        { id: a1, role: "assistant", content: "Becau", ...extra },
+      ];
+      expect(mergeHistoryWithLocal(local, server).at(-1)?.id).toBe(a1);
+    }
+  });
+});
+
 describe("mergeHistoryWithLocal — saved messages outside the window (stuck queue)", () => {
   // Real ids are msg-<uuid>; optimistic sends are msg-user-<ms>.
   const oldContinue = "msg-cb366112-daa2-49c5-9e92-658b3a1a01c0";

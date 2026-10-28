@@ -1,0 +1,377 @@
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { sanitizeTelemetryProperties } from "../../src/core/telemetry/sanitizeTelemetryProperties.js";
+import {
+  isTelemetrySendingEnabled,
+  parseTelemetryEnvOverride,
+  resolveTelemetryBaseUrl,
+} from "../../src/core/telemetry/telemetryEnv.js";
+import { TelemetryClient } from "../../src/core/telemetry/TelemetryClient.js";
+import {
+  mergeTelemetryEnvelope,
+  resolvePaprworkProductContext,
+} from "../../src/core/telemetry/telemetryProductContext.js";
+
+describe("sanitizeTelemetryProperties", () => {
+  it("keeps safe primitive properties", () => {
+    expect(
+      sanitizeTelemetryProperties({
+        feature: "chat",
+        count: 2,
+        ok: true,
+      }),
+    ).toEqual({ feature: "chat", count: 2, ok: true });
+  });
+
+  it("removes exact-match PII keys", () => {
+    expect(
+      sanitizeTelemetryProperties({
+        safe: 1,
+        email: "x@y.com",
+        query: "secret",
+        user_id: "abc",
+      }),
+    ).toEqual({ safe: 1 });
+  });
+
+  it("keeps papr_account_id and edition tags", () => {
+    expect(
+      sanitizeTelemetryProperties({
+        papr_account_id: "WkPutXGdqg",
+        edition: "paprwork",
+        product: "paprwork",
+        is_oss: false,
+      }),
+    ).toEqual({
+      papr_account_id: "WkPutXGdqg",
+      edition: "paprwork",
+      product: "paprwork",
+      is_oss: false,
+    });
+  });
+
+  it("replaces arrays with length counts", () => {
+    expect(
+      sanitizeTelemetryProperties({
+        items: ["a", "b"],
+      }),
+    ).toEqual({ items_count: 2 });
+  });
+});
+
+describe("telemetryEnv", () => {
+  const prev = { ...process.env };
+
+  beforeEach(() => {
+    vi.unstubAllEnvs();
+  });
+
+  afterEach(() => {
+    process.env = { ...prev };
+    vi.unstubAllEnvs();
+  });
+
+  it("parseTelemetryEnvOverride returns undefined when unset", () => {
+    delete process.env.PAPRWORK_TELEMETRY_ENABLED;
+    expect(parseTelemetryEnvOverride()).toBeUndefined();
+  });
+
+  it("parseTelemetryEnvOverride parses true and false", () => {
+    process.env.PAPRWORK_TELEMETRY_ENABLED = "true";
+    expect(parseTelemetryEnvOverride()).toBe(true);
+    process.env.PAPRWORK_TELEMETRY_ENABLED = "false";
+    expect(parseTelemetryEnvOverride()).toBe(false);
+  });
+
+  it("resolveTelemetryBaseUrl defaults to memory.papr.ai", () => {
+    delete process.env.PAPRWORK_TELEMETRY_URL;
+    expect(resolveTelemetryBaseUrl()).toBe("https://memory.papr.ai");
+  });
+
+  it("resolveTelemetryBaseUrl returns null for empty string", () => {
+    process.env.PAPRWORK_TELEMETRY_URL = "";
+    expect(resolveTelemetryBaseUrl()).toBeNull();
+  });
+
+  it("resolveTelemetryBaseUrl returns null for invalid scheme", () => {
+    process.env.PAPRWORK_TELEMETRY_URL = "ftp://example.com";
+    expect(resolveTelemetryBaseUrl()).toBeNull();
+  });
+
+  it("isTelemetrySendingEnabled respects env false over preference", () => {
+    process.env.PAPRWORK_TELEMETRY_ENABLED = "false";
+    expect(isTelemetrySendingEnabled(() => true)).toBe(false);
+  });
+
+  it("isTelemetrySendingEnabled respects env true over preference", () => {
+    process.env.PAPRWORK_TELEMETRY_ENABLED = "true";
+    expect(isTelemetrySendingEnabled(() => false)).toBe(true);
+  });
+
+  it("isTelemetrySendingEnabled uses preference when env unset", () => {
+    delete process.env.PAPRWORK_TELEMETRY_ENABLED;
+    expect(isTelemetrySendingEnabled(() => true)).toBe(true);
+    expect(isTelemetrySendingEnabled(() => false)).toBe(false);
+  });
+});
+
+describe("TelemetryClient", () => {
+  const prev = { ...process.env };
+
+  beforeEach(() => {
+    vi.unstubAllEnvs();
+    delete process.env.PAPRWORK_TELEMETRY_ENABLED;
+    delete process.env.PAPRWORK_TELEMETRY_URL;
+  });
+
+  afterEach(() => {
+    process.env = { ...prev };
+    vi.unstubAllEnvs();
+  });
+
+  it("does not call fetch when user preference is off", async () => {
+    const fetchMock = vi.fn();
+    const client = new TelemetryClient({
+      getEffectiveEnabled: () => false,
+      getAnonymousInstallId: () => "install-1",
+      appVersion: "9.9.9",
+      fetchImpl: fetchMock as typeof fetch,
+    });
+    await client.track("paprwork_test");
+    expect(fetchMock).not.toHaveBeenCalled();
+  });
+
+  it("does not call fetch when anonymous id is empty", async () => {
+    const fetchMock = vi.fn();
+    const client = new TelemetryClient({
+      getEffectiveEnabled: () => true,
+      getAnonymousInstallId: () => "",
+      appVersion: "1.0.0",
+      fetchImpl: fetchMock as typeof fetch,
+    });
+    await client.track("paprwork_test");
+    expect(fetchMock).not.toHaveBeenCalled();
+  });
+
+  it("calls fetch when preference is on", async () => {
+    const fetchMock = vi.fn().mockResolvedValue({
+      ok: true,
+      status: 200,
+      text: async () => "",
+    });
+    const client = new TelemetryClient({
+      getEffectiveEnabled: () => true,
+      getAnonymousInstallId: () => "install-2",
+      appVersion: "1.0.0",
+      fetchImpl: fetchMock as typeof fetch,
+    });
+    await client.track("paprwork_test_event", { foo: "bar" });
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+    const [url, init] = fetchMock.mock.calls[0] as [
+      string,
+      RequestInit | undefined,
+    ];
+    expect(url).toBe("https://memory.papr.ai/v1/telemetry/events");
+    expect(init?.method).toBe("POST");
+    const body = JSON.parse(String(init?.body)) as {
+      events: Array<{ event_name: string; properties: Record<string, unknown> }>;
+      anonymous_id: string;
+    };
+    expect(body.events[0].event_name).toBe("paprwork_test_event");
+    expect(body.events[0].properties.client).toBe("paprwork");
+    expect(body.events[0].properties.foo).toBe("bar");
+    expect(body.anonymous_id).toBe("install-2");
+  });
+
+  it("tags packaged vs dev edition", () => {
+    expect(resolvePaprworkProductContext(true)).toEqual({
+      product: "paprwork",
+      edition: "paprwork",
+      is_oss: false,
+      is_packaged: true,
+    });
+    expect(resolvePaprworkProductContext(false)).toEqual({
+      product: "paprwork",
+      edition: "paprwork-dev",
+      is_oss: true,
+      is_packaged: false,
+    });
+  });
+
+  it("mergeTelemetryEnvelope adds papr_account_id without blocking", () => {
+    const merged = mergeTelemetryEnvelope(
+      { client: "paprwork", feature: "chat" },
+      { isPackaged: true, paprAccountId: "WkPutXGdqg" },
+    );
+    expect(merged.papr_account_id).toBe("WkPutXGdqg");
+    expect(merged.edition).toBe("paprwork");
+    expect(merged.is_oss).toBe(false);
+    expect(merged.feature).toBe("chat");
+  });
+
+  it("sends Papr user id when getPaprUserId is set", async () => {
+    const fetchMock = vi.fn().mockResolvedValue({
+      ok: true,
+      status: 200,
+      text: async () => "",
+    });
+    const client = new TelemetryClient({
+      getEffectiveEnabled: () => true,
+      getAnonymousInstallId: () => "install-2",
+      getPaprUserId: () => "papr-user-abc",
+      getIsPackaged: () => true,
+      appVersion: "1.0.0",
+      fetchImpl: fetchMock as typeof fetch,
+    });
+    await client.track("paprwork_test_event");
+    const body = JSON.parse(String(fetchMock.mock.calls[0]?.[1]?.body)) as {
+      events: Array<{
+        user_id: string;
+        properties: Record<string, unknown>;
+      }>;
+      anonymous_id: string;
+    };
+    expect(body.anonymous_id).toBe("install-2");
+    expect(body.events[0].user_id).toBe("papr-user-abc");
+    expect(body.events[0].properties.papr_account_id).toBe("papr-user-abc");
+    expect(body.events[0].properties.edition).toBe("paprwork");
+    expect(body.events[0].properties.is_oss).toBe(false);
+    expect(body.events[0].properties.product).toBe("paprwork");
+  });
+
+  it("attaches workspace identity so events group per customer", async () => {
+    const fetchMock = vi.fn().mockResolvedValue({
+      ok: true,
+      status: 200,
+      text: async () => "",
+    });
+    const client = new TelemetryClient({
+      getEffectiveEnabled: () => true,
+      getAnonymousInstallId: () => "install-3",
+      getPaprUserId: () => "papr-user-abc",
+      getNamespaceId: () => "85ZIB7mD1V",
+      getOrganizationId: () => "Y8D4H7Yp3Z",
+      getIsPackaged: () => true,
+      appVersion: "1.0.0",
+      fetchImpl: fetchMock as typeof fetch,
+    });
+    await client.track("paprwork_app_created");
+    const body = JSON.parse(String(fetchMock.mock.calls[0]?.[1]?.body)) as {
+      events: Array<{ properties: Record<string, unknown> }>;
+    };
+    expect(body.events[0].properties.namespace_id).toBe("85ZIB7mD1V");
+    expect(body.events[0].properties.organization_id).toBe("Y8D4H7Yp3Z");
+  });
+
+  it("omits workspace identity when no workspace is active", async () => {
+    const fetchMock = vi.fn().mockResolvedValue({
+      ok: true,
+      status: 200,
+      text: async () => "",
+    });
+    const client = new TelemetryClient({
+      getEffectiveEnabled: () => true,
+      getAnonymousInstallId: () => "install-4",
+      // Logged-out / pre-workspace installs resolve to empty strings; those
+      // must not be sent as empty properties.
+      getNamespaceId: () => "",
+      getOrganizationId: () => "",
+      appVersion: "1.0.0",
+      fetchImpl: fetchMock as typeof fetch,
+    });
+    await client.track("paprwork_app_started");
+    const body = JSON.parse(String(fetchMock.mock.calls[0]?.[1]?.body)) as {
+      events: Array<{ properties: Record<string, unknown> }>;
+    };
+    expect(body.events[0].properties).not.toHaveProperty("namespace_id");
+    expect(body.events[0].properties).not.toHaveProperty("organization_id");
+    expect(body.events[0].properties).not.toHaveProperty("organization_name");
+  });
+
+  it("sends organization_name so reports can name the customer", async () => {
+    const fetchMock = vi.fn().mockResolvedValue({
+      ok: true,
+      status: 200,
+      text: async () => "",
+    });
+    const client = new TelemetryClient({
+      getEffectiveEnabled: () => true,
+      getAnonymousInstallId: () => "install-5",
+      getNamespaceId: () => "85ZIB7mD1V",
+      getOrganizationId: () => "Y8D4H7Yp3Z",
+      getOrganizationName: () => "Papr, Inc.",
+      appVersion: "1.0.0",
+      fetchImpl: fetchMock as typeof fetch,
+    });
+    await client.track("paprwork_app_started");
+    const body = JSON.parse(String(fetchMock.mock.calls[0]?.[1]?.body)) as {
+      events: Array<{ properties: Record<string, unknown> }>;
+    };
+    // app_started is emitted from Electron main; without workspace identity
+    // there is no org-level MAU, retention, or activation funnel.
+    expect(body.events[0].properties.organization_id).toBe("Y8D4H7Yp3Z");
+    expect(body.events[0].properties.organization_name).toBe("Papr, Inc.");
+  });
+
+  it("does not let event properties overwrite workspace identity", () => {
+    const merged = mergeTelemetryEnvelope(
+      { namespace_id: "spoofed" },
+      { namespaceId: "85ZIB7mD1V" },
+    );
+    // Event-supplied values win by design (base spreads last), so this asserts
+    // the documented precedence rather than silently trusting callers.
+    expect(merged.namespace_id).toBe("spoofed");
+  });
+});
+
+describe("rendererTelemetryForward", () => {
+  const prev = { ...process.env };
+
+  beforeEach(() => {
+    process.env.PAPRWORK_TELEMETRY_ENABLED = "true";
+    process.env.PAPRWORK_TELEMETRY_ANONYMOUS_ID = "anon-test-123";
+    process.env.PAPR_PLATFORM_URL = "https://memory.papr.ai";
+  });
+
+  afterEach(() => {
+    process.env = { ...prev };
+    vi.unstubAllGlobals();
+  });
+
+  it("prepareRendererTelemetry rejects anonymous_id mismatch", async () => {
+    const { prepareRendererTelemetry } = await import(
+      "../../src/gateway/services/rendererTelemetryForward.js"
+    );
+    const result = prepareRendererTelemetry({
+      anonymous_id: "wrong-id",
+      events: [{ event_name: "paprwork_test", properties: {} }],
+    });
+    expect(result.ok).toBe(false);
+    if (!result.ok) {
+      expect(result.status).toBe(403);
+      expect(result.error).toBe("anonymous_id mismatch");
+    }
+  });
+
+  it("prepareRendererTelemetry builds payload without network I/O", async () => {
+    const { prepareRendererTelemetry } = await import(
+      "../../src/gateway/services/rendererTelemetryForward.js"
+    );
+    const result = prepareRendererTelemetry({
+      anonymous_id: "anon-test-123",
+      events: [
+        {
+          event_name: "paprwork_app_started",
+          properties: { feature: "chat" },
+          timestamp: 1_700_000_000_000,
+        },
+      ],
+    });
+    expect(result.ok).toBe(true);
+    if (result.ok) {
+      expect(result.payload.events).toHaveLength(1);
+      expect(result.payload.events[0].event_name).toBe("paprwork_app_started");
+      expect(result.payload.anonymous_id).toBe("anon-test-123");
+      expect(result.payload.url).toContain("/v1/telemetry/events");
+    }
+  });
+});

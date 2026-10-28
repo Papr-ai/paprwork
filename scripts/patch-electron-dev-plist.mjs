@@ -59,21 +59,24 @@ function upsertPlistString(plistPath, key, value) {
   return true;
 }
 
+/** Dev profile (npm run dev:devenv) owns papr-dev:// so it never takes production's papr:// links. */
+const URL_SCHEME = (process.env.PAPR_PROFILE || "").trim().toLowerCase() === "dev" ? "papr-dev" : "papr";
+
 /**
- * Declare papr:// on the dev Electron.app. Without it macOS routes papr:// links (login callback,
+ * Declare papr:// (or papr-dev:// for the dev profile) on the dev Electron.app. Without it macOS routes papr:// links (login callback,
  * "Open in Papr" from Claude) to an installed Papr Work.app instead of the build you're running,
  * and setAsDefaultProtocolClient("papr") can't claim a scheme the bundle doesn't declare.
  */
 function ensurePaprUrlScheme(plistPath) {
   const current = runPlistBuddy(["-c", "Print :CFBundleURLTypes:0:CFBundleURLSchemes:0", plistPath]);
-  if (current.status === 0 && current.stdout.trim() === "papr") return false;
+  if (current.status === 0 && current.stdout.trim() === URL_SCHEME) return false;
   runPlistBuddy(["-c", "Delete :CFBundleURLTypes", plistPath]);
   for (const cmd of [
     "Add :CFBundleURLTypes array",
     "Add :CFBundleURLTypes:0 dict",
     "Add :CFBundleURLTypes:0:CFBundleURLName string com.paprwork.dev",
     "Add :CFBundleURLTypes:0:CFBundleURLSchemes array",
-    "Add :CFBundleURLTypes:0:CFBundleURLSchemes:0 string papr",
+    `Add :CFBundleURLTypes:0:CFBundleURLSchemes:0 string ${URL_SCHEME}`,
   ]) {
     if (runPlistBuddy(["-c", cmd, plistPath]).status !== 0) {
       console.warn(`[patch-electron-dev-plist] Failed: ${cmd}`);
@@ -114,7 +117,7 @@ function main() {
   }
 
   if (ensurePaprUrlScheme(plistPath)) {
-    console.log("[patch-electron-dev-plist] Declared papr:// on the dev Electron.app");
+    console.log(`[patch-electron-dev-plist] Declared ${URL_SCHEME}:// on the dev Electron.app`);
   }
 
   if (changed > 0) {

@@ -10,6 +10,10 @@
 // the first file to define a key wins. Omitting `.env` left dev builds without
 // keys that only live there (PAPR_TURSO_REPLICA_SYNC), which silently ran the
 // legacy sync engine against already-cutover replica databases.
+// PAPR_PROFILE=dev → .env.development wins (dev backend URLs, dev Auth0).
+if ((process.env.PAPR_PROFILE || "").trim().toLowerCase() === "dev") {
+  require("dotenv").config({ path: require("path").join(__dirname, "../../.env.development") });
+}
 require("dotenv").config({ path: require("path").join(__dirname, "../../.env.local") });
 require("dotenv").config({ path: require("path").join(__dirname, "../../.env") });
 
@@ -35,7 +39,15 @@ const {
 
 // Set app name for macOS Keychain (must be before any safeStorage usage)
 // This determines the keychain entry name: "Papr Work Safe Storage"
-app.setName("Papr Work");
+// A dev profile gets its own name → own userData dir, keychain entry and
+// single-instance lock, so it runs side by side with the production app.
+const PAPR_DEV_PROFILE = (process.env.PAPR_PROFILE || "").trim().toLowerCase() === "dev";
+app.setName(PAPR_DEV_PROFILE ? "Papr Work Dev" : "Papr Work");
+// Dev profile owns papr-dev:// so it never fights the production app for papr://.
+const PAPR_SCHEME = PAPR_DEV_PROFILE ? "papr-dev" : "papr";
+const PAPR_URL = `${PAPR_SCHEME}://`;
+// Base workspace dir: ~/Papr (prod) or ~/Papr-dev (dev profile). Keep in sync with getPaprBaseDir().
+const PAPR_BASE_DIRNAME = PAPR_DEV_PROFILE ? "Papr-dev" : "Papr";
 
 // Real Chrome owns port 9222 for platform jobs + agent automation.
 // Enable embedded Electron CDP only when explicitly requested (PAPR_PLATFORM_EMBEDDED_CDP=1).
@@ -457,6 +469,21 @@ async function handleWebviewTestRequest(request) {
       return { success: false, error: "appId is required for launch" };
     }
 
+    // Cap hidden previews: each holds an SSE connection open to the gateway and a few forgotten
+    // ones starve the app tab the user is looking at. Close the oldest before opening a new one.
+    const { pickSessionsToClose } = require("./webviewSessionCap.cjs");
+    const stale = pickSessionsToClose(
+      Array.from(webviewSessions.entries()).map(([sid, e]) => ({
+        id: sid,
+        createdAt: e.createdAt,
+      })),
+    );
+    for (const sid of stale) {
+      const old = webviewSessions.get(sid);
+      if (defaultWebviewId === sid) defaultWebviewId = null;
+      if (old && !old.window.isDestroyed()) old.window.close();
+    }
+
     const id = `webview-${Date.now()}-${++webviewCounter}`;
     const width = Number(payload.width) || 1280;
     const height = Number(payload.height) || 720;
@@ -505,9 +532,11 @@ async function handleWebviewTestRequest(request) {
           : undefined,
     };
     webviewSessions.set(id, entry);
-    if (!defaultWebviewId) {
-      defaultWebviewId = id;
-    }
+    // The newest preview is the default. The session cap above may have just
+    // closed the old default, and its "closed" handler (which clears the
+    // default) only runs later, so "keep the first one" left no default at all
+    // and every call without a webviewId failed with "No active webview session".
+    defaultWebviewId = id;
 
     const session = win.webContents.session;
     // Capture the webContentsId now — before the window can be destroyed —
@@ -1135,7 +1164,7 @@ function readActiveWorkspacePointer() {
     const osMod = require("os");
     const pointerPath = pathMod.join(
       osMod.homedir(),
-      "Papr",
+      PAPR_BASE_DIRNAME,
       ".active-workspace.json",
     );
     if (!fs.existsSync(pointerPath)) {
@@ -2577,7 +2606,7 @@ async function flushPendingDeepLinks() {
   while (index < pendingDeepLinks.length) {
     const url = pendingDeepLinks[index];
 
-    if (url.startsWith("papr://auth/callback")) {
+    if (url.startsWith((PAPR_URL + "auth/callback"))) {
       if (
         !authDeepLinksReady ||
         !handlePaprAuthCallback ||
@@ -2599,9 +2628,11 @@ async function flushPendingDeepLinks() {
       continue;
     }
 
-    // Server sign-in finished (apps.papr.ai/oauth/callback). The gateway is already
-    // polling the session; just bring Papr to the front.
-    if (url.startsWith("papr://connections/")) {
+    // Server sign-in finished (apps.papr.ai/oauth/callback): the gateway is already
+    // polling the session, just bring Papr to the front.
+    // papr://connections/connect?platform=reddit ("Connect Reddit" on an app's setup
+    // page): also open the Connected Platforms sign-in for that platform.
+    if (url.startsWith(PAPR_URL + "connections/")) {
       if (!mainWindow || mainWindow.isDestroyed()) {
         return;
       }
@@ -2609,10 +2640,19 @@ async function flushPendingDeepLinks() {
       if (mainWindow.isMinimized()) mainWindow.restore();
       mainWindow.show();
       mainWindow.focus();
+      try {
+        const parsed = new URL(url);
+        const platform = (parsed.searchParams.get("platform") || "").trim();
+        if (parsed.pathname === "/connect" && /^[a-z][a-z0-9-]{1,60}$/.test(platform)) {
+          mainWindow.webContents.send("platform:connect-open", { platform });
+        }
+      } catch {
+        /* malformed link: focusing is enough */
+      }
       continue;
     }
 
-    if (url.startsWith("papr://auth/handoff")) {
+    if (url.startsWith((PAPR_URL + "auth/handoff"))) {
       // Claude "Continue on your Mac" (one-time code). Needs storage like the login callback.
       if (!authDeepLinksReady || !handlePaprHandoffLink || !customKeysStorage || !settingsStorage) {
         return;
@@ -2627,7 +2667,7 @@ async function flushPendingDeepLinks() {
       continue;
     }
 
-    if (url.startsWith("papr://chat/")) {
+    if (url.startsWith((PAPR_URL + "chat/"))) {
       if (!mainWindow || mainWindow.isDestroyed()) {
         return;
       }
@@ -2639,7 +2679,7 @@ async function flushPendingDeepLinks() {
 
     // "Open Papr Work" on the post-checkout page (dashboard /billing/success):
     // bring Papr forward on Settings -> Billing so the new plan is right there.
-    if (url.startsWith("papr://billing")) {
+    if (url.startsWith((PAPR_URL + "billing"))) {
       if (!mainWindow || mainWindow.isDestroyed()) {
         return;
       }
@@ -2652,7 +2692,7 @@ async function flushPendingDeepLinks() {
     }
 
     // "Open Papr Work" button on the browser sign-in success page.
-    if (url.startsWith("papr://focus")) {
+    if (url.startsWith((PAPR_URL + "focus"))) {
       if (!mainWindow || mainWindow.isDestroyed()) {
         return;
       }
@@ -2669,7 +2709,7 @@ async function flushPendingDeepLinks() {
 }
 
 function queueDeepLink(url) {
-  if (typeof url !== "string" || !url.startsWith("papr://")) {
+  if (typeof url !== "string" || !url.startsWith(PAPR_URL)) {
     return;
   }
   console.log("[Electron] Queued deep link:", url.split("?")[0], {
@@ -2705,7 +2745,7 @@ if (!gotTheLock) {
     }
     
     // Check if the second instance was launched with a deep link
-    const url = commandLine.find(arg => arg.startsWith('papr://'));
+    const url = commandLine.find(arg => arg.startsWith(PAPR_URL));
     if (url) {
       console.log('[Electron] Second instance opened with deep link:', url);
       queueDeepLink(url);
@@ -2778,15 +2818,15 @@ app.whenReady().then(async () => {
   // Register custom URL protocol for papr:// deep links
   if (process.defaultApp) {
     if (process.argv.length >= 2) {
-      const registered = app.setAsDefaultProtocolClient('papr', process.execPath, [path.resolve(process.argv[1])]);
+      const registered = app.setAsDefaultProtocolClient(PAPR_SCHEME, process.execPath, [path.resolve(process.argv[1])]);
       console.log('[Electron] Protocol handler registered (dev mode):', registered);
     }
   } else {
-    const registered = app.setAsDefaultProtocolClient('papr');
+    const registered = app.setAsDefaultProtocolClient(PAPR_SCHEME);
     console.log('[Electron] Protocol handler registered (production):', registered);
   }
   
-  console.log('[Electron] isDefaultProtocolClient for papr://:', app.isDefaultProtocolClient('papr'));
+  console.log('[Electron] isDefaultProtocolClient for', PAPR_URL, app.isDefaultProtocolClient(PAPR_SCHEME));
 
   // Load ESM modules first
   await loadESMModules();
@@ -2835,6 +2875,12 @@ app.whenReady().then(async () => {
   // Register Papr IPC before any slow network (namespace API key, OAuth). macOS
   // "activate" can open the window while those await; handlers must exist first.
   initializePaprLoginIPC(customKeysStorage, settingsStorage, {
+    // Hand-offs from Claude land in the main window (re-created if it was closed), never in a
+    // hidden preview window from webview_launch_app.
+    getMainWindow: async () => {
+      await createMainWindow();
+      return mainWindow && !mainWindow.isDestroyed() ? mainWindow : null;
+    },
     trackLoginEvent: (eventName, properties) => {
       if (telemetryClientInstance) {
         telemetryClientInstance.trackFireAndForget(eventName, properties);
@@ -3023,7 +3069,7 @@ app.whenReady().then(async () => {
       const fs = require("fs");
       const pathMod = require("path");
       const osMod = require("os");
-      const pointerPath = pathMod.join(osMod.homedir(), "Papr", ".active-workspace.json");
+      const pointerPath = pathMod.join(osMod.homedir(), PAPR_BASE_DIRNAME, ".active-workspace.json");
       if (!fs.existsSync(pointerPath)) {
         return {};
       }
@@ -3052,7 +3098,7 @@ app.whenReady().then(async () => {
     if (workspaceEnv.PAPR_HOME) {
       return pathMod.join(workspaceEnv.PAPR_HOME, "data", "settings.json");
     }
-    return pathMod.join(osMod.homedir(), "Papr", "data", "settings.json");
+    return pathMod.join(osMod.homedir(), PAPR_BASE_DIRNAME, "data", "settings.json");
   };
 
   const activeWorkspaceEnv = readActiveWorkspaceEnv();
@@ -3309,7 +3355,7 @@ app.whenReady().then(async () => {
   console.log("[Electron] Startup: complete");
 
   // Process auth deep links after Gateway + window are ready (callback needs both)
-  const coldStartUrl = process.argv.find((arg) => arg.startsWith("papr://"));
+  const coldStartUrl = process.argv.find((arg) => arg.startsWith(PAPR_URL));
   if (coldStartUrl) {
     queueDeepLink(coldStartUrl);
   }

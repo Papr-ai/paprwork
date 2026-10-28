@@ -23,9 +23,10 @@ const createPlatformIssueSchema = z.object({
         "or secrets. Generic Papr Work repro steps and placeholders. contactEmail is separate (Mongo-only). " +
         "For bugs: expected vs actual behavior. For features: product gap in generic terms.",
     ),
+  // No .email(): zod emits a lookaround regex that OpenAI tool schemas reject
+  // ("regex lookaround is not supported"). Validated in execute instead.
   contactEmail: z
     .string()
-    .email()
     .optional()
     .describe(
       "Optional email for Papr team follow-up only — ask first, never invent. Do NOT repeat email in body.",
@@ -87,7 +88,10 @@ export const createPlatformIssueTool = createTool({
         type: args.type,
         title: args.title,
         body: args.body,
-        contactEmail: args.contactEmail,
+        contactEmail:
+          args.contactEmail && /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(args.contactEmail.trim())
+            ? args.contactEmail.trim()
+            : undefined,
       });
 
       return {

@@ -181,14 +181,27 @@ export async function reconcileAppDataSourcesForPublish(
     "./registryDatabaseEligibility.js"
   );
 
-  for (const source of config.sources) {
+  for (let source of config.sources) {
     const sourcePath = source.dbPath?.trim();
     if (sourcePath && !isEligibleRegistryLocalPath(sourcePath)) {
-      report.changed = true;
-      report.warnings.push(
-        `Removed job scratch path from data-sources (${source.alias}). Use attach_database with a registry dbId.`,
-      );
-      continue;
+      // A source that carries a live registry dbId is a real app link — the dbId
+      // resolves the database. Older registry entries still live under
+      // Jobs/{id}/data/data.db, so the stale path must not take the link with it:
+      // dropping it made every /api/db/* call for that alias fail and blanked the app.
+      const dbId = source.dbId?.trim();
+      if (dbId && registryTrusted && knownDbIds.has(dbId)) {
+        source = { ...source, dbPath: "" };
+        report.changed = true;
+        report.warnings.push(
+          `Cleared job scratch path from data-sources (${source.alias}); kept registry link ${dbId}.`,
+        );
+      } else {
+        report.changed = true;
+        report.warnings.push(
+          `Removed job scratch path from data-sources (${source.alias}). Use attach_database with a registry dbId.`,
+        );
+        continue;
+      }
     }
     if (source.jobId) {
       if (!canonicalJobIds.has(source.jobId)) {
@@ -413,6 +426,12 @@ export async function promoteBundledAppJobsToRegistry(input: {
   localAppId: string;
   localAppDir: string;
   paprHome: string;
+  /**
+   * Fresh install (default): the user asked for these jobs, so lift tombstones
+   * an earlier install left behind. Track "Get updates" passes false so a job
+   * the user deleted on purpose stays deleted.
+   */
+  clearTombstones?: boolean;
 }): Promise<{ promotedJobIds: string[] }> {
   const bundledIds = await listBundledAppJobIds(input.localAppDir);
   if (bundledIds.length === 0) {
@@ -423,10 +442,28 @@ export async function promoteBundledAppJobsToRegistry(input: {
   const jobsService = getJobsService();
   await jobsService.initialize();
 
-  const jobIndexIds = await readJobsIndexIds(input.paprHome);
-  const promotedJobIds: string[] = [];
+  // The app ships these jobs, so the user wants them live. A track install
+  // keeps the publisher's job IDs: an earlier install of the same app that was
+  // deleted tombstoned them, and the reinstalled jobs were dropped on the next
+  // reload. Jobs already copied to Jobs/{id} (syncAppJobsToTarget writes
+  // jobs.json behind the running service) are adopted into the LIVE registry
+  // here — checking the file alone skipped them, and the service's next save
+  // erased their jobs.json entries.
+  const onDisk = bundledIds.filter((jobId) =>
+    existsSync(path.join(input.paprHome, "Jobs", jobId, "job.json")),
+  );
+  const clearTombstones = input.clearTombstones !== false;
+  const { adopted } = await jobsService.adoptJobsFromDisk(bundledIds, {
+    clearTombstones,
+  });
+  const { readJobTombstones } = await import("./jobs/jobTombstones.js");
+  const tombstones = clearTombstones
+    ? new Set<string>()
+    : await readJobTombstones(input.paprHome);
+  const promotedJobIds: string[] = [...adopted];
+  const registered = new Set(onDisk.filter((jobId) => jobsService.hasJob(jobId)));
   for (const jobId of bundledIds) {
-    if (jobRegisteredOnDisk(input.paprHome, jobId, jobIndexIds)) {
+    if (registered.has(jobId) || tombstones.has(jobId)) {
       continue;
     }
 
@@ -477,7 +514,6 @@ export async function promoteBundledAppJobsToRegistry(input: {
       copyFrom,
     );
     promotedJobIds.push(jobId);
-    jobIndexIds.add(jobId);
   }
 
   return { promotedJobIds };

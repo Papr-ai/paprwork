@@ -212,8 +212,8 @@ google: "gemini-2-5-flash", // already correct
 
 **Files to update:**
 - `tests/llm-streaming-from-storage.ts`
-- `tests/chat-session-manager.test.ts`
-- `tests/agent-max-tokens.test.ts`
+- `tests/chat/chat-session-manager.test.ts`
+- `tests/agent/agent-max-tokens.test.ts`
 - `test/integration/gateway-storage.test.ts`
 - `test/integration/agent-streaming.test.ts`
 - Multiple other test files

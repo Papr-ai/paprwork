@@ -86,7 +86,13 @@
         ]
       }
     ],
-    "icon": "build/icon.ico"
+    "icon": "build/icon.ico",
+    "azureSignOptions": {
+      "publisherName": "Papr, Inc.",
+      "endpoint": "https://wus2.codesigning.azure.net/",
+      "codeSigningAccountName": "paprsigning",
+      "certificateProfileName": "papr-public"
+    }
   },
   "linux": {
     "target": [

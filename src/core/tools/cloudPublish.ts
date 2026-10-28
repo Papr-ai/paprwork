@@ -30,6 +30,48 @@ import {
 import { formatShareLink } from "../utils/cloudShareLink.js";
 import { appendLineageToPublishData } from "../utils/cloudPublishLineageHints.js";
 import { getCloudAppLineageService } from "../../gateway/services/CloudAppLineageService.js";
+import {
+  audiencesPatchFromSharing,
+  audiencesAccessMode,
+  describeAudiences,
+  fetchAudiences,
+  saveAudiences,
+  type AudiencesAccess,
+} from "../../gateway/services/cloudAppAudiences.js";
+import { sharedCoverKind } from "../../gateway/services/appDemoVideos.js";
+
+/** Who can open the app per the server (same source the Share sheet reads). Never throws. */
+async function readAudiences(appId: string): Promise<AudiencesAccess | null> {
+  return fetchAudiences(appId).catch(() => null);
+}
+
+/** Fold the live audiences into the tool result so agents see what the Share sheet shows. */
+function withAudiences(data: Record<string, unknown>, a: AudiencesAccess | null): Record<string, unknown> {
+  const view = describeAudiences(a);
+  if (!view) return data;
+  const linkOn = view.link !== "none";
+  const shareUrl = typeof data.shareUrl === "string" ? data.shareUrl.split("?")[0] : null;
+  const externalLinkUrl = linkOn && a?.shareToken && shareUrl ? `${shareUrl}?t=${a.shareToken}` : data.externalLinkUrl ?? null;
+  // Legacy fields follow the audience roles (what the sheet shows), not the server's lagging visibility.
+  const accessMode = a ? audiencesAccessMode(a) : undefined;
+  return {
+    ...data,
+    ...(accessMode ? { accessMode } : {}),
+    externalLink: !linkOn ? "off" : view.link === "viewer" ? "read" : "read_write",
+    audiences: view,
+    listedInCommunity: view.community !== "none",
+    externalLinkUrl,
+    signInRequired: view.community === "none" && !linkOn ? true : view.requireSignIn === true,
+    sharingSummary: [
+      view.workspace !== "none" && `Workspace: ${view.workspace}`,
+      linkOn && `Anyone with the link: ${view.link}`,
+      view.community !== "none" && `Community: ${view.community}`,
+    ].filter(Boolean).join(" · ") || "Only you",
+    tip: linkOn && !a?.shareToken
+      ? "Link audience is on but the server returned no share token yet."
+      : "Matches the Share sheet (People with access / Public access).",
+  };
+}
 
 const loginAccessSchema = z.enum(["private", "team", "public", "none"]);
 const externalLinkSchema = z.enum(["off", "read", "read_write"]);
@@ -208,14 +250,18 @@ If Cloud Sync is off, the tool returns an error — use export_app_bundle instea
       });
       const codeAccess: CodeAccess = prefs.codeAccess ?? "off";
       const lineage = await readLineageForPublishTool(args.appId);
+      const audiences = config.enabled ? await readAudiences(args.appId) : null;
       return {
         success: true,
         data: {
           ...appendLineageToPublishData(
-            formatPublishResult(args.appId, config, sharing, codeAccess, {
-              requireSignIn: prefs.requireSignIn,
-              perUserIsolation: prefs.perUserIsolation,
-            }),
+            withAudiences(
+              formatPublishResult(args.appId, config, sharing, codeAccess, {
+                requireSignIn: prefs.requireSignIn,
+                perUserIsolation: prefs.perUserIsolation,
+              }),
+              audiences,
+            ),
             lineage,
           ),
           ...(sharedExposure
@@ -249,9 +295,10 @@ export const publishCloudAppTool = createTool({
 - **Live web only:** loginAccess=public (or team/link), codeAccess=off
 - **Private cloud:** loginAccess=private, externalLink=off
 
-Three axes (memory server ACL):
-1. loginAccess — private | team | public | none  → maps to visibility on memory server
-2. externalLink — off | read | read_write
+Access is applied through the same audiences model as the Share sheet (People with access / Public access), so changes show up there:
+1. loginAccess — private | team (Workspace: Viewer) | public (Listed in Community: Viewer) | none
+2. externalLink — off | read (Anyone with the link: Viewer) | read_write (Anyone with the link: Contributor). Link and Community are one "Public access" row: turning the link on with loginAccess=team turns Community off.
+Listing in Community needs an approved gallery (409 community_needs_gallery otherwise).
 3. codeAccess — off (view/use live app) | install (Community fork + install_cloud_app)
 
 **Share sheet / multi-user options:**
@@ -325,10 +372,37 @@ If Cloud Sync is disabled, returns an error with fallbackTool=export_app_bundle 
         .then((prior) => prior.enabled)
         .catch(() => false);
 
-      const config = await publishService.publishOrUpdateSharing(
+      let config = await publishService.publishOrUpdateSharing(
         args.appId,
         publishOptions,
       );
+
+      // Who can open the app lives in the audiences model (the Share sheet's
+      // PUT /access). The legacy publish fields above are ignored by the server
+      // once an app is on audiences, so apply the same change there too.
+      let audiences: AudiencesAccess | null = null;
+      const touchesAccess =
+        args.loginAccess !== undefined ||
+        args.externalLink !== undefined ||
+        args.requireSignIn !== undefined;
+      if (config.enabled && touchesAccess) {
+        const current = await readAudiences(args.appId);
+        const patch = audiencesPatchFromSharing(
+          {
+            loginAccess: args.loginAccess as CloudLoginAccess | undefined,
+            externalLink: args.externalLink as CloudExternalLink | undefined,
+            requireSignIn: publishOptions.requireSignIn,
+          },
+          current,
+        );
+        audiences = await saveAudiences(args.appId, patch, {
+          current,
+          hasGallery: sharedCoverKind(args.appId) === "video",
+        });
+        config = await publishService.getPublishConfig(args.appId);
+      } else if (config.enabled) {
+        audiences = await readAudiences(args.appId);
+      }
 
       // Publishing was previously invisible in analytics: live apps could only
       // be inferred from cloud visitor traffic, so an app that was published
@@ -356,10 +430,13 @@ If Cloud Sync is disabled, returns an error with fallbackTool=export_app_bundle 
       return {
         success: true,
         data: appendLineageToPublishData(
-          formatPublishResult(args.appId, config, sharing, codeAccess, {
-            requireSignIn: prefs.requireSignIn,
-            perUserIsolation: prefs.perUserIsolation,
-          }),
+          withAudiences(
+            formatPublishResult(args.appId, config, sharing, codeAccess, {
+              requireSignIn: prefs.requireSignIn,
+              perUserIsolation: prefs.perUserIsolation,
+            }),
+            audiences,
+          ),
           lineage,
         ),
         duration: performance.now() - startTime,

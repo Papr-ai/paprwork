@@ -55,6 +55,15 @@ export interface CloudAppLineageFile {
    */
   sourceAudience?: "team" | "people" | "community";
   /**
+   * The publisher's server refused this copy's code fetch (403) with a final
+   * reason. Updates stay paused, with no background retries, until a re-check
+   * succeeds (user opens the copy / Get updates, or the daily re-check).
+   */
+  updatesPaused?: {
+    reason: "no_access" | "code_access_off" | "share_mode" | "denied";
+    at: string;
+  };
+  /**
    * relative path → sha256 of local content at the last proposal sent.
    * Edits matching it are "proposed" (waiting on the owner), not "unproposed".
    */

@@ -1005,7 +1005,10 @@ export class CommunityCatalogService {
     const seen = new Set<string>();
     const localAppMeta = loadLocalAppMeta(this.paprDir);
 
-    for (const remote of responses) {
+    for (const [index, remote] of responses.entries()) {
+      // shared-with-me (index 0) includes apps shared with you by name from
+      // other workspaces; /team (index 1) is this workspace only.
+      const sharedByName = index === 0;
       for (const item of remote) {
         const entry = teamEntryFromApi(
           item,
@@ -1013,7 +1016,7 @@ export class CommunityCatalogService {
           this.paprDir,
           localAppMeta,
         );
-        if (entry.namespaceId && entry.namespaceId !== namespaceId) continue;
+        if (!sharedByName && entry.namespaceId && entry.namespaceId !== namespaceId) continue;
         if (!isTeamSharedVisibility(entry.visibility)) continue;
         const key = entry.appId ?? entry.catalogId;
         if (seen.has(key)) continue;

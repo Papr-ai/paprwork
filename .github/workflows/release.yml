@@ -22,8 +22,9 @@ jobs:
             runner: macos-15-intel
             app_path: release/mac/Papr Work.app
             builder_flag: --x64
+            timeout_minutes: 40
     runs-on: ${{ matrix.runner }}
-    timeout-minutes: 25
+    timeout-minutes: ${{ matrix.timeout_minutes || 25 }}
     steps:
       - uses: actions/checkout@v4
 
@@ -89,7 +90,7 @@ jobs:
         run: node scripts/prepare-mac-native-deps.mjs ${{ matrix.arch }}
 
       - name: Build Mac distributables (${{ matrix.arch }})
-        run: npx electron-builder --mac ${{ matrix.builder_flag }} --publish never
+        run: node scripts/build-mac-release-ci.mjs ${{ matrix.builder_flag }}
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           APPLE_ID: ${{ secrets.APPLE_ID }}
@@ -155,6 +156,17 @@ jobs:
         run: npx electron-builder --win --publish never
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          AZURE_TENANT_ID: ${{ secrets.AZURE_TENANT_ID }}
+          AZURE_CLIENT_ID: ${{ secrets.AZURE_CLIENT_ID }}
+          AZURE_CLIENT_SECRET: ${{ secrets.AZURE_CLIENT_SECRET }}
+
+      - name: Verify Windows installer signature
+        shell: pwsh
+        run: |
+          $exe = Get-ChildItem release/PaprWork-Setup-*.exe | Select-Object -First 1
+          $sig = Get-AuthenticodeSignature $exe.FullName
+          Write-Host "Signature: $($sig.Status) — $($sig.SignerCertificate.Subject)"
+          if ($sig.Status -ne 'Valid') { throw "Windows installer is not signed: $($sig.Status)" }
 
       - name: Verify packaged SDK bundles (Windows)
         run: |

@@ -32,32 +32,53 @@ let jobsSchedulerInstance: JobsScheduler | null = null;
 export class JobsScheduler {
   private static readonly BACKUP_POLL_MS = 60_000;
   private static readonly WAKE_MIN_MS = 250;
+  /** Below setTimeout's 2^31-1 ms limit. */
+  private static readonly WAKE_MAX_MS = 24 * 60 * 60 * 1000;
 
   private backupTimer: ReturnType<typeof setInterval> | null = null;
   private wakeTimer: ReturnType<typeof setTimeout> | null = null;
   private runningLeases: Set<string> = new Set();
+  private stopped = false;
+  private inflightTicks: Set<Promise<void>> = new Set();
 
   start(): void {
     if (this.backupTimer) {
       return;
     }
+    this.stopped = false;
     this.backupTimer = setInterval(() => {
-      void this.tick();
+      void this.trackedTick();
     }, JobsScheduler.BACKUP_POLL_MS);
-    void this.tick();
+    void this.trackedTick();
     console.log("[JobsScheduler] Started (wake + backup poll)");
   }
 
   /** Call after job schedule mutations so the next `setTimeout` wake is refreshed. */
   requestReschedule(): void {
-    void this.tick();
+    void this.trackedTick();
   }
 
   async tickNow(): Promise<void> {
-    await this.tick();
+    await this.trackedTick();
+  }
+
+  /** Resolves once every tick already started has finished (used after stop()). */
+  async drain(): Promise<void> {
+    while (this.inflightTicks.size > 0) {
+      await Promise.allSettled([...this.inflightTicks]);
+    }
+  }
+
+  private trackedTick(): Promise<void> {
+    const p = this.tick().finally(() => {
+      this.inflightTicks.delete(p);
+    });
+    this.inflightTicks.add(p);
+    return p;
   }
 
   stop(): void {
+    this.stopped = true;
     if (this.backupTimer) {
       clearInterval(this.backupTimer);
       this.backupTimer = null;
@@ -153,13 +174,18 @@ export class JobsScheduler {
     if (ms === null) {
       return;
     }
-    const delay =
+    // setTimeout overflows above 2^31-1 ms (~24.8 days) and fires after 1ms,
+    // which turned far-future schedules (yearly cron, distant one-shots) into
+    // a 1ms tick loop. Cap the wake; the next tick re-arms it.
+    const delay = Math.min(
       ms === 0
         ? JobsScheduler.WAKE_MIN_MS
-        : Math.max(ms, JobsScheduler.WAKE_MIN_MS);
+        : Math.max(ms, JobsScheduler.WAKE_MIN_MS),
+      JobsScheduler.WAKE_MAX_MS,
+    );
     this.wakeTimer = setTimeout(() => {
       this.wakeTimer = null;
-      void this.tick();
+      void this.trackedTick();
     }, delay);
   }
 
@@ -168,6 +194,9 @@ export class JobsScheduler {
     const { waitForWorkspaceReady } = await import("./workspaceReadiness.js");
     await waitForWorkspaceReady();
     timer.mark("workspaceReady");
+    if (this.stopped) {
+      return;
+    }
 
     const jobsService = getJobsService();
     await jobsService.initialize();
@@ -238,7 +267,14 @@ export class JobsScheduler {
       this.runningLeases.add(leaseKey);
 
       const runLease = await tryAcquireSchedulerRunLease(job.id, dueAt);
-      if (!runLease.acquired) {
+      // When the cloud scheduler is not in charge (logged out, cloud sync off,
+      // offline), nothing else can run this slot, so a lease service that
+      // cannot answer must not stop the desktop from running the job.
+      if (!runLease.acquired && runLease.unavailable && !cloudSchedulerAuthoritative) {
+        console.warn(
+          `[JobsScheduler] Run lease unavailable for ${job.id}; running locally (cloud scheduler not authoritative)`,
+        );
+      } else if (!runLease.acquired) {
         this.runningLeases.delete(leaseKey);
         skippedRunLease++;
         continue;
@@ -408,4 +444,15 @@ export function getJobsScheduler(): JobsScheduler {
 export function startJobsScheduler(): void {
   const scheduler = getJobsScheduler();
   scheduler.start();
+}
+
+/** Tests: stop timers, wait for any tick already running, and drop the singleton so a tick can't outlive the test's temp workspace. */
+export async function resetJobsSchedulerForTests(): Promise<void> {
+  const scheduler = jobsSchedulerInstance;
+  jobsSchedulerInstance = null;
+  if (!scheduler) {
+    return;
+  }
+  scheduler.stop();
+  await scheduler.drain();
 }

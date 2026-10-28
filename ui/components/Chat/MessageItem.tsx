@@ -327,6 +327,7 @@ function renderSequence(
               runId: "running",
               status: "running",
               startedAt: new Date().toISOString(),
+              runtime: toolCall.args?.runtime === "cloud" ? "cloud" : "local",
             };
             jobStatusCardMap.set(jobId, runJobData);
           }
@@ -954,6 +955,7 @@ const MessageItemInner: React.FC<MessageItemProps> = ({
                         runId: "running",
                         status: "running",
                         startedAt: new Date().toISOString(),
+                        runtime: tc.args?.runtime === "cloud" ? "cloud" : "local",
                       });
                     }
                   });

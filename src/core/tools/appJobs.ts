@@ -1,6 +1,7 @@
 import { gatewayBackgroundBudget } from "../../gateway/services/gatewayBackgroundBudget.js";
 import { createTool } from "@mastra/core/tools";
 import { z } from "zod";
+import { isPlatformInjectedEnvKey } from "../utils/platformInjectedEnvKeys.js";
 import { RequirementItemSchema } from "../types/bundles.js";
 import {
   JobRequiredKeysSchema,
@@ -714,6 +715,9 @@ const createJobSchemaCore = z
       "qwen3.5:latest",
       "qwen3.5:9b-q4_k_m",
       "qwen3.5:27b",
+      // Ollama - Recursive Flint
+      "flint:latest",
+      "flint:40b",
       // Ollama - Gemma 4
       "gemma4:e2b",
       "gemma4:e4b",
@@ -1033,6 +1037,33 @@ export const createAppTool = createTool({
   },
 });
 
+/**
+ * Agent-facing note when the job's code wipes a table and re-inserts it on every run.
+ * Returned at the moment the code is written (create_job, update_job, edit_file /
+ * write_file on a job file), so the agent fixes it before the first scheduled run
+ * instead of finding it later as a sync backlog. Cheap: static scan of the job's files.
+ */
+export async function tableRewriteReminderFor(jobId: string): Promise<string | undefined> {
+  try {
+    const { getJobsService } = await import("../../gateway/services/JobsService.js");
+    const job = await getJobsService().getJob(jobId);
+    if (!job) return undefined;
+    const { readJobScriptSources } = await import("../../gateway/services/jobs/jobScriptSources.js");
+    const { validateJobArchitecture } = await import(
+      "../../gateway/services/jobs/jobArchitectureValidation.js"
+    );
+    const issue = validateJobArchitecture({
+      type: job.type,
+      command: job.command,
+      appIds: job.appIds,
+      scriptSources: await readJobScriptSources(await getJobDir(jobId)),
+    }).find((i) => i.rule === "job-full-table-rewrite");
+    return issue ? `⚠️ ${issue.message} Fix now: ${issue.remediation}` : undefined;
+  } catch {
+    return undefined;
+  }
+}
+
 /** Agent-facing note when a job's code needs the desktop (auto local-only or a conflict). */
 async function desktopOnlyReminderFor(jobId: string): Promise<string | undefined> {
   try {
@@ -1244,11 +1275,13 @@ export const createJobTool = createTool({
     }
     // createJob already ran the check; this re-reads the decision for the agent.
     const desktopOnlyReminder = await desktopOnlyReminderFor(job.id);
+    const tableRewriteReminder = await tableRewriteReminderFor(job.id);
 
     return {
       success: true,
       data: (await jobsService.getJob(job.id)) ?? job,
       _architectReminder: PRODUCT_ARCHITECT_REMINDER,
+      ...(tableRewriteReminder ? { _tableRewriteReminder: tableRewriteReminder } : {}),
       ...(desktopOnlyReminder ? { _desktopOnlyReminder: desktopOnlyReminder } : {}),
       ...(keyReminder ? { _keyPatternReminder: keyReminder } : {}),
       ...(publishCatalogReminder
@@ -1339,6 +1372,10 @@ async function scanJobSourceForEnvKeyAntiPattern(
     "NODE_ENV",
   ]);
 
+  // Set by the job runner itself (desktop or cloud), never a Settings key.
+  const isRuntimeEnvKey = (name: string): boolean =>
+    inheritedEnvKeys.has(name) || isPlatformInjectedEnvKey(name);
+
   const looksLikeApiKey = (name: string): boolean => {
     const upper = name.toUpperCase();
     return /(?:KEY|TOKEN|SECRET|PASSWORD|CREDENTIAL|AUTH|_URL$)/.test(upper);
@@ -1377,7 +1414,8 @@ async function scanJobSourceForEnvKeyAntiPattern(
         for (const pattern of pyPatterns) {
           let match: RegExpExecArray | null;
           while ((match = pattern.exec(content)) !== null) {
-            if (!inheritedEnvKeys.has(match[1]) && looksLikeApiKey(match[1])) {
+            if (isRuntimeEnvKey(match[1])) continue;
+            if (looksLikeApiKey(match[1])) {
               warnings.push(
                 `${relPath}: \`${match[0]})\` — "${match[1]}" is a custom key from Settings and is NOT available as an env var. ` +
                   `Fix: pass it via CLI arg in the job command using \${${match[1]}} and use argparse in the script.`,
@@ -1394,7 +1432,8 @@ async function scanJobSourceForEnvKeyAntiPattern(
           let match: RegExpExecArray | null;
           while ((match = pattern.exec(content)) !== null) {
             const key = match[1] || match[2];
-            if (!inheritedEnvKeys.has(key) && looksLikeApiKey(key)) {
+            if (isRuntimeEnvKey(key)) continue;
+            if (looksLikeApiKey(key)) {
               warnings.push(
                 `${relPath}: \`${match[0]}\` — "${key}" is a custom key from Settings and is NOT available as an env var. ` +
                   `Fix: add it to requiredKeys and read from env; do not pass it as a CLI argument.`,
@@ -2074,6 +2113,9 @@ const updateJobSchema = z.object({
       "qwen3.5:latest",
       "qwen3.5:9b-q4_k_m",
       "qwen3.5:27b",
+      // Ollama - Recursive Flint
+      "flint:latest",
+      "flint:40b",
       // Ollama - Gemma 4
       "gemma4:e2b",
       "gemma4:e4b",
@@ -2642,7 +2684,11 @@ If jobs have Turso cloud databases, set deleteTursoDatabases: true to delete tho
         items.push(`Published at: ${preview.shareUrl ?? "apps.papr.ai"}`);
       }
       for (const db of preview.linkedRegistryDatabases) {
-        if (db.soleLinker) {
+        if (db.publisherShared) {
+          items.push(
+            `Registry DB (team shared, owned by the publisher — kept, cannot be deleted): ${db.label} (${db.dbId})`,
+          );
+        } else if (db.soleLinker) {
           items.push(
             `Registry DB (sole linker, optional delete): ${db.label} (${db.dbId})`,
           );
@@ -2652,8 +2698,13 @@ If jobs have Turso cloud databases, set deleteTursoDatabases: true to delete tho
           );
         }
       }
+      if (preview.localUninstallOnly) {
+        items.unshift(
+          "Scope: remove from this device only (you are not the publisher). Cloud app, shared databases and the publisher's jobs are not changed.",
+        );
+      }
       if (preview.linkedJobs.length > 0) {
-        items.push(`Linked jobs (${preview.linkedJobs.length}): ${preview.linkedJobs.map(j => j.name).join(", ")}`);
+        items.push(`Local copies of linked jobs (${preview.linkedJobs.length}): ${preview.linkedJobs.map(j => j.name).join(", ")}`);
       }
       if (preview.tursoDbCount > 0) {
         items.push(`Job Turso cloud databases: ${preview.tursoDbCount}`);
@@ -2717,6 +2768,7 @@ export async function runEditJobFile(args: EditJobFileArgs): Promise<{
   data: Record<string, unknown>;
   _verifyReminder: string;
   _desktopOnlyReminder?: string;
+  _tableRewriteReminder?: string;
 }> {
   const { getJobsService } = await import("../../gateway/services/JobsService.js");
   const jobsService = getJobsService();
@@ -2797,6 +2849,7 @@ export async function runEditJobFile(args: EditJobFileArgs): Promise<{
     focusText: args.newString,
   });
   const desktopOnlyReminder = await desktopOnlyReminderFor(args.jobId);
+  const tableRewriteReminder = await tableRewriteReminderFor(args.jobId);
 
   return {
     success: true,
@@ -2812,6 +2865,7 @@ export async function runEditJobFile(args: EditJobFileArgs): Promise<{
     },
     _verifyReminder: JOB_VERIFY_AFTER_EDIT_REMINDER,
     ...(desktopOnlyReminder ? { _desktopOnlyReminder: desktopOnlyReminder } : {}),
+    ...(tableRewriteReminder ? { _tableRewriteReminder: tableRewriteReminder } : {}),
   };
 }
 
@@ -2888,6 +2942,7 @@ Common use cases:
       job.writeDbIds ?? [],
     );
     const desktopOnlyReminder = await desktopOnlyReminderFor(jobId);
+    const tableRewriteReminder = await tableRewriteReminderFor(jobId);
     const keyDeclaration =
       requiredKeys !== undefined || rest.command !== undefined
         ? await declareJobKeysOnApps(
@@ -2909,6 +2964,7 @@ Common use cases:
         ? { _hardcodedDbIdReminder: hardcodedDbIdReminder }
         : {}),
       ...(desktopOnlyReminder ? { _desktopOnlyReminder: desktopOnlyReminder } : {}),
+      ...(tableRewriteReminder ? { _tableRewriteReminder: tableRewriteReminder } : {}),
     };
   },
 });

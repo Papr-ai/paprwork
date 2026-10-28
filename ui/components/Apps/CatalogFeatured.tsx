@@ -1,7 +1,7 @@
 /**
  * Community "Featured" banner — App Store style: dark full-width card, a big
  * editorial headline (publisher-set `headline`, else the description), the
- * app's preview filling the card (hover grows it to show the whole film), and a glass row with the droplet, name, by-line
+ * app's preview filling the card (still poster; plays only while hovered), and a glass row with the droplet, name, by-line
  * and the same Open / Preview / Get buttons as the card.
  */
 import { useState, type ReactNode } from "react";
@@ -10,6 +10,7 @@ import { DropGlyph } from "./HomeTiles";
 import { catalogBy } from "./CatalogAppDetails";
 import { DemoVideo } from "./DemoVideo";
 import { catalogCoverVideoUrl } from "../../utils/catalogPreviewUrl";
+import { useColorScheme } from "../../utils/catalogScheme";
 import "./CatalogFeatured.css";
 
 /** Publisher headline first, then most installs. Your own apps compete like any other. */
@@ -32,12 +33,13 @@ export function FeaturedBanner({ entry, coverUrl, onOpen, actions, children }: P
   const [shot, setShot] = useState(Boolean(coverUrl));
   // The owner's shared preview loop plays in the banner; no video (or 404) → the picture.
   const [noVideo, setNoVideo] = useState(false);
-  const videoUrl = catalogCoverVideoUrl(entry, coverUrl);
+  const videoUrl = catalogCoverVideoUrl(entry, coverUrl, useColorScheme());
   const headline = entry.headline?.trim() || entry.description;
   return (
     <div className="cat-feat-wrap">
     <section
       className={`cat-feat${shot && coverUrl ? " has-shot" : ""}`}
+      data-hover-play=""
       role="button"
       tabIndex={0}
       aria-label={`Featured: ${entry.name}`}
@@ -56,11 +58,11 @@ export function FeaturedBanner({ entry, coverUrl, onOpen, actions, children }: P
         <span className="cat-feat__big"><DropGlyph icon={entry.icon} title={entry.name} size={168} /></span>
       )}
       <div className="cat-feat__txt">
-        <span className="cat-feat__k">Featured</span>
+        <span className="cat-feat__k">App of the week</span>
         <h2 className="cat-feat__h">{headline}</h2>
         <div className="cat-feat__app">
           <DropGlyph icon={entry.icon} title={entry.name} size={52} />
-          <div className="cat-feat__n"><b>{entry.name}</b><span>{catalogBy(entry)}</span></div>
+          <div className="cat-feat__n"><b>{entry.name}</b><span>{entry.headline?.trim() && entry.description ? entry.description : catalogBy(entry)}</span></div>
           <span className="cat-feat__act">{actions}</span>
         </div>
       </div>

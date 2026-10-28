@@ -1,6 +1,6 @@
 import { openDiagnosticDatabase } from "./databaseDiagnostics/sqlite.js";
 import { gatewayBackgroundBudget } from "./gatewayBackgroundBudget.js";
-import { promises as fs } from "fs";
+import { existsSync, promises as fs } from "fs";
 import path from "path";
 import os from "os";
 import type { ChildProcess } from "child_process";
@@ -37,6 +37,7 @@ import {
   getPaprDataDir,
   getPaprJobsRoot,
   getPaprRoot,
+  isCloudAgentGatewayMode,
 } from "../../core/utils/paprRoot.js";
 import {
   jobUpdateAffectsOwnership,
@@ -149,6 +150,8 @@ export class JobsService {
   private legacyJobsRootDir: string;
   private legacyJobsIndexPath: string;
   private attemptControllers = new Map<string, AbortController>();
+  /** Manual cloud runs in flight: no local process, so the stale-running watchdog must skip them. */
+  private cloudRuns = new Set<string>();
   /**
    * Jobs between "accepted a run" and "attempt controller registered". The
    * running/attemptControllers check is followed by several awaits before
@@ -461,6 +464,12 @@ export class JobsService {
    * Each workspace owns its own job UUID — match by Home app link + job name.
    */
   private async syncHomeDailyBriefFromBundle(): Promise<void> {
+    // Cloud sandbox: Home and its Daily Brief job come from the cloud repos. Re-running
+    // the desktop Home setup there minted a new job id and rewrote default-job-id.txt /
+    // data-sources.json on every run, and the run pushed that over the real Home.
+    if (isCloudAgentGatewayMode()) {
+      return;
+    }
     const bundledAppsDir = await resolveBundledResourcesDir(
       __dirname,
       "resources/default-apps/home-dashboard",
@@ -756,6 +765,12 @@ export class JobsService {
    * Jobs with no linkage get STANDALONE_APP_ID.
    */
   private async migrateLegacyHomeDailyBriefJobIfNeeded(): Promise<void> {
+    // Cloud sandbox: Home and its Daily Brief job come from the cloud repos. Re-running
+    // the desktop Home setup there minted a new job id and rewrote default-job-id.txt /
+    // data-sources.json on every run, and the run pushed that over the real Home.
+    if (isCloudAgentGatewayMode()) {
+      return;
+    }
     try {
       const { migrateLegacyHomeDailyBriefJobIfNeeded } = await import(
         "./migrateLegacyHomeDailyBriefJob.js"
@@ -784,6 +799,12 @@ export class JobsService {
 
   /** Remove duplicate Daily Brief jobs re-introduced by cloud/git sync. */
   private async reconcileDuplicateHomeDailyBriefJobsIfNeeded(): Promise<void> {
+    // Cloud sandbox: Home and its Daily Brief job come from the cloud repos. Re-running
+    // the desktop Home setup there minted a new job id and rewrote default-job-id.txt /
+    // data-sources.json on every run, and the run pushed that over the real Home.
+    if (isCloudAgentGatewayMode()) {
+      return;
+    }
     try {
       const { reconcileDuplicateHomeDailyBriefJobs } = await import(
         "./migrateLegacyHomeDailyBriefJob.js"
@@ -1004,6 +1025,103 @@ export class JobsService {
   }
 
   /**
+   * Register job folders (Jobs/{id}/job.json) in the live registry.
+   *
+   * Installs and track updates copy job folders and write data/jobs.json
+   * directly. The running service never saw those entries, and its next
+   * saveJobs() wrote its own in-memory list back over the file, so the
+   * installed jobs vanished until a restart (and stayed gone if an earlier
+   * install of the same app had tombstoned their IDs). Callers that know the
+   * user wants these jobs (install / update) pass clearTombstones: true.
+   *
+   * Never adopts a folder whose job.json id does not match the folder name.
+   * Returns the IDs newly added to the registry (already-registered IDs are
+   * refreshed from disk but not reported).
+   */
+  async adoptJobsFromDisk(
+    jobIds: readonly string[],
+    options?: { clearTombstones?: boolean },
+  ): Promise<{ adopted: string[]; untombstoned: string[] }> {
+    const ids = [...new Set(jobIds.map((id) => id.trim()).filter(Boolean))];
+    if (ids.length === 0 || !this.isWriteContextValid("adopt jobs from disk")) {
+      return { adopted: [], untombstoned: [] };
+    }
+    const paprDir = this.boundPaprDir ?? getPaprRoot();
+    const { clearJobTombstones, readJobTombstones } = await import(
+      "./jobs/jobTombstones.js"
+    );
+    const untombstoned = options?.clearTombstones
+      ? await clearJobTombstones(paprDir, ids)
+      : [];
+    const tombstones = await readJobTombstones(paprDir);
+
+    const adopted: string[] = [];
+    let changed = false;
+    for (const jobId of ids) {
+      if (tombstones.has(jobId)) {
+        continue;
+      }
+      const record = await this.readMergedJobRecordFromDisk(jobId);
+      if (!record) {
+        continue;
+      }
+      const declaredId = await this.readDeclaredJobId(jobId);
+      if (declaredId && declaredId !== jobId) {
+        continue;
+      }
+      if (!this.jobs.has(jobId)) {
+        adopted.push(jobId);
+      }
+      this.setJobInMemory(this.withInitialNextRunAt(record));
+      changed = true;
+    }
+    if (changed) {
+      await this.saveJobs();
+      if (adopted.length > 0) {
+        console.log(
+          `[JobsService] Registered ${adopted.length} job(s) from disk: [${adopted.join(", ")}]`,
+        );
+        void this.rebuildGraph();
+        void import("./JobsScheduler.js")
+          .then(({ getJobsScheduler }) => getJobsScheduler().requestReschedule())
+          .catch(() => {});
+      }
+    }
+    return { adopted, untombstoned };
+  }
+
+  /** job.json "id" for a folder, or null when absent/unreadable. */
+  private async readDeclaredJobId(dirName: string): Promise<string | null> {
+    try {
+      const raw = parseJsonTolerant<Record<string, unknown>>(
+        await fs.readFile(path.join(this.jobsRootDir, dirName, "job.json"), "utf8"),
+      );
+      return typeof raw?.id === "string" && raw.id.length > 0 ? raw.id : null;
+    } catch {
+      return null;
+    }
+  }
+
+  /** Job folders on disk that are not in the registry (UUID-named, with a job.json). */
+  private async listUnregisteredJobDirs(): Promise<string[]> {
+    let dirs: string[];
+    try {
+      dirs = await fs.readdir(this.jobsRootDir);
+    } catch {
+      return [];
+    }
+    const uuid = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+    const out: string[] = [];
+    for (const dirName of dirs) {
+      if (!uuid.test(dirName) || this.jobs.has(dirName)) continue;
+      if (existsSync(path.join(this.jobsRootDir, dirName, "job.json"))) {
+        out.push(dirName);
+      }
+    }
+    return out;
+  }
+
+  /**
    * Reload jobs from disk, picking up any manual edits to jobs.json.
    * Useful when agent or user manually fixes job status on disk.
    */
@@ -1011,6 +1129,13 @@ export class JobsService {
     console.log("[JobsService] Reloading jobs from disk...");
     await this.loadJobs();
     await this.hydrateJobsFromRuntimeFiles();
+    // Job folders that exist on disk but are missing from jobs.json (an install
+    // wrote them, then a save from this process dropped the entries). Tombstoned
+    // IDs stay deleted: adoptJobsFromDisk skips them without clearTombstones.
+    const orphaned = await this.listUnregisteredJobDirs();
+    if (orphaned.length > 0) {
+      await this.adoptJobsFromDisk(orphaned);
+    }
     await this.pruneStaleJobEntries();
     await this.reconcileRegistryAfterSync();
     // Explicit reload is a user signal: drop phantom `running` flags now
@@ -1076,6 +1201,13 @@ export class JobsService {
 
     const paprDir = this.boundPaprDir ?? getPaprRoot();
     const tombstonesRemoved = await this.filterTombstonedJobsFromRegistry(paprDir);
+    if (isCloudAgentGatewayMode()) {
+      return {
+        tombstonesRemoved,
+        duplicatesReconciled: false,
+        duplicateIdsRemoved: [],
+      };
+    }
     const { reconcileDuplicateHomeDailyBriefJobs } = await import(
       "./migrateLegacyHomeDailyBriefJob.js"
     );
@@ -1820,7 +1952,12 @@ export class JobsService {
     >,
     currentJobId?: string,
   ): Promise<JobArchitectureIssue[]> {
-    const issues = validateJobArchitecture(job);
+    let scriptSources = "";
+    if (currentJobId) {
+      const { readJobScriptSources } = await import("./jobs/jobScriptSources.js");
+      scriptSources = await readJobScriptSources(this.getJobDir(currentJobId));
+    }
+    const issues = validateJobArchitecture({ ...job, scriptSources });
     const linkedAppId = job.appIds?.find((id) => id !== STANDALONE_APP_ID);
     if (!linkedAppId) return issues;
 
@@ -2441,6 +2578,29 @@ export class JobsService {
     await new Promise((resolve) => setTimeout(resolve, ms));
   }
 
+  /**
+   * An enabled schedule with no nextRunAt is invisible to the scheduler: the
+   * schedule index only holds jobs that have one. Records built from an app
+   * bundle's job.json (install, Get updates, bundle import) never carry
+   * scheduleState, because it is per-machine and stripped on publish, so an
+   * installed 9:05 job sat in the list and never ran until a restart (#513).
+   * Fill it here so every write path is covered. A one-shot atTime already in
+   * the past is left alone: reconcileScheduleStates decides whether it fires.
+   */
+  private withInitialNextRunAt(job: JobRecord): JobRecord {
+    const schedule = job.schedule;
+    if (!schedule?.enabled) return job;
+    const current = job.scheduleState?.nextRunAt;
+    if (current && !Number.isNaN(new Date(current).getTime())) return job;
+    const now = new Date();
+    if (schedule.atTime && new Date(schedule.atTime).getTime() < now.getTime()) {
+      return job;
+    }
+    const nextRunAt = computeInitialNextRunAt(schedule, now, job.scheduleState);
+    if (!nextRunAt) return job;
+    return { ...job, scheduleState: { ...job.scheduleState, nextRunAt } };
+  }
+
   private computeScheduleState(
     schedule: JobSchedule,
     previous?: JobRecord["scheduleState"],
@@ -2732,6 +2892,14 @@ export class JobsService {
 
     const runSanitizationValues = launch.sanitizationValues ?? [];
 
+    // The child is already running. Capture its exit now: a fast command
+    // (`echo`) can finish during the awaits below, and a "close" listener
+    // attached afterwards never fires, leaving the job "running" until the
+    // 30-minute watchdog.
+    const earlyExit = launch.mode === "process" && launch.process
+      ? captureEarlyProcessExit(launch.process)
+      : undefined;
+
     // Sanitize command before logging (replace API key values with ***)
     const sanitizedCommand = await this.sanitizeCommandForLogging(
       launch.command,
@@ -2822,7 +2990,7 @@ export class JobsService {
         );
         void appendRunLog(`[stderr] ${sanitized}`);
       });
-      proc.on("close", (code: number | null) => {
+      const onClose = (code: number | null) => {
         this.running.delete(job.id);
         destroyChildProcessStreams(proc);
         const exitCode = code ?? -1;
@@ -2830,15 +2998,17 @@ export class JobsService {
         const lastOutput =
           outputChunks.join("\n").slice(0, MAX_OUTPUT_BYTES) || undefined;
         safeResolve({ exitCode, lastOutput });
-      });
-      proc.on("error", (error: Error) => {
+      };
+      earlyExit?.onClose(onClose);
+      const onError = (error: Error) => {
         this.running.delete(job.id);
         destroyChildProcessStreams(proc);
         notifySpawnResourceError(error, `job ${job.id} spawn`);
         const formatted = formatSpawnErrorForLogs(error.message);
         void appendRunLog(`Process error: ${formatted}`);
         safeResolve({ exitCode: -1, errorMessage: formatted });
-      });
+      };
+      earlyExit?.onError(onError);
     });
   }
 
@@ -2894,6 +3064,11 @@ export class JobsService {
     const architectureErrors = formatJobArchitectureErrors(architectureIssues);
     if (architectureErrors) {
       throw new Error(`Job architecture validation failed before run:\n${architectureErrors}`);
+    }
+    for (const issue of architectureIssues) {
+      if (issue.rule === "job-full-table-rewrite") {
+        await this.appendLog(jobId, `[Architecture] WARNING: ${issue.message} Fix: ${issue.remediation}`);
+      }
     }
     // Read before stack.add: a non-empty stack means this run was pulled in by
     // ensureDependencyChain rather than started directly. Separating chained
@@ -3406,7 +3581,12 @@ export class JobsService {
     if (!job || job.status !== "running") {
       return false;
     }
-    if (this.running.has(jobId) || this.agentRuns.has(jobId) || this.attemptControllers.has(jobId)) {
+    if (
+      this.running.has(jobId) ||
+      this.agentRuns.has(jobId) ||
+      this.attemptControllers.has(jobId) ||
+      this.cloudRuns.has(jobId)
+    ) {
       return false;
     }
     await this.appendLog(
@@ -3427,10 +3607,18 @@ export class JobsService {
 
   /** Run on Papr Cloud (memory server) while desktop is awake — for testing cloud execution. */
   async runJobInCloud(jobId: string): Promise<JobRecord> {
+    if (this.cloudRuns.has(jobId)) {
+      throw new Error("Job is already running in the cloud");
+    }
     const { runJobInCloud: executeCloudJobRun } = await import(
       "./CloudJobRunService.js"
     );
-    return executeCloudJobRun(this, jobId);
+    this.cloudRuns.add(jobId);
+    try {
+      return await executeCloudJobRun(this, jobId);
+    } finally {
+      this.cloudRuns.delete(jobId);
+    }
   }
 
   /**
@@ -3866,6 +4054,8 @@ export class JobsService {
     const nowMs = Date.now();
     for (const [jobId, job] of this.jobs.entries()) {
       if (this.attemptControllers.has(jobId) && !this.running.has(jobId)) continue;
+      // A cloud run has no local process; its own request records the outcome.
+      if (this.cloudRuns.has(jobId)) continue;
       if (job.status !== "running") {
         continue;
       }
@@ -4180,6 +4370,8 @@ export class JobsService {
     jobId: string,
     dbRelativePath: string,
     tableName?: string,
+    limitInput?: number,
+    offsetInput?: number,
   ): Promise<{
     dbPath: string;
     tables: Array<{
@@ -4189,6 +4381,8 @@ export class JobsService {
       rows: Record<string, unknown>[];
     }>;
     selectedTable: string | null;
+    limit: number;
+    offset: number;
   }> {
     const job = this.jobs.get(jobId);
     if (!job) {
@@ -4220,6 +4414,15 @@ export class JobsService {
     const quoteTable = (name: string): string =>
       `"${name.replace(/"/g, '""')}"`;
 
+    const { normalizePreviewPaging, previewOrderBy } = await import(
+      "./dbPreviewPaging.js"
+    );
+    const { limit, offset } = normalizePreviewPaging(limitInput, offsetInput);
+    const selectedName =
+      tableName && userTables.some((table) => table.table === tableName)
+        ? tableName
+        : userTables[0]?.table ?? null;
+
     const tables = await Promise.all(
       userTables.map(async (table) => {
         const countResult = await pool.query(
@@ -4229,30 +4432,31 @@ export class JobsService {
           [],
         );
         const rowCount = Number(countResult.rows[0]?.cnt ?? 0);
-        const preview = await pool.query(
-          `job-preview:${jobId}`,
-          dbPath,
-          `SELECT * FROM ${quoteTable(table.table)} LIMIT 50`,
-          [],
-        );
+        let rows: Record<string, unknown>[] = [];
+        if (table.table === selectedName) {
+          const preview = await pool.query(
+            `job-preview:${jobId}`,
+            dbPath,
+            `SELECT * FROM ${quoteTable(table.table)}${previewOrderBy(table.columns)} LIMIT ${limit} OFFSET ${offset}`,
+            [],
+          );
+          rows = preview.rows;
+        }
         return {
           name: table.table,
           columns: table.columns,
           rowCount,
-          rows: preview.rows,
+          rows,
         };
       }),
     );
 
-    const selectedTable =
-      tableName && tables.some((table) => table.name === tableName)
-        ? tableName
-        : tables[0]?.name ?? null;
-
     return {
       dbPath,
       tables,
-      selectedTable,
+      selectedTable: selectedName,
+      limit,
+      offset,
     };
   }
 
@@ -4335,6 +4539,7 @@ export class JobsService {
   }
 
   async upsertJob(job: JobRecord, sourceDir?: string): Promise<JobRecord> {
+    job = this.withInitialNextRunAt(job);
     const destination = this.getJobDir(job.id);
     await fs.mkdir(destination, { recursive: true });
     if (sourceDir) {
@@ -4370,4 +4575,42 @@ export async function initializeJobsService(): Promise<JobsService> {
   const service = getJobsService();
   await service.initialize();
   return service;
+}
+
+/**
+ * Record a child's "close"/"error" from the moment it is spawned and replay it
+ * to a handler attached later. Stdout/stderr "data" still needs listeners
+ * before the stream ends, so callers attach those synchronously after awaits;
+ * Node buffers piped output until a reader attaches.
+ */
+export function captureEarlyProcessExit(proc: import("child_process").ChildProcess): {
+  onClose: (handler: (code: number | null) => void) => void;
+  onError: (handler: (error: Error) => void) => void;
+} {
+  let closed: { code: number | null } | undefined;
+  let failed: Error | undefined;
+  let closeHandler: ((code: number | null) => void) | undefined;
+  let errorHandler: ((error: Error) => void) | undefined;
+  proc.once("close", (code: number | null) => {
+    closed = { code };
+    closeHandler?.(code);
+  });
+  proc.once("error", (error: Error) => {
+    failed = error;
+    errorHandler?.(error);
+  });
+  return {
+    onClose(handler) {
+      closeHandler = handler;
+      // Defer so buffered stdout/stderr reach the "data" listeners first.
+      if (closed) {
+        const { code } = closed;
+        setImmediate(() => handler(code));
+      }
+    },
+    onError(handler) {
+      errorHandler = handler;
+      if (failed) handler(failed);
+    },
+  };
 }

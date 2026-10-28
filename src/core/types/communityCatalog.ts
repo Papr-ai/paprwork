@@ -34,6 +34,11 @@ export interface CatalogMediaItem {
   objectKey?: string;
   posterObjectKey?: string;
   role: "cover" | "gallery";
+  /**
+   * Which appearance this item was made for. Absent = both (every older listing). A listing
+   * with `dark` items shows them when the viewer is in dark mode and the rest otherwise.
+   */
+  scheme?: "light" | "dark";
   posterUrl?: string;
   alt?: string;
   width?: number;

@@ -36,6 +36,8 @@ export interface TursoReplicaPushError {
   conflictCode?: MigrationPushConflict["code"];
   localOnlyMigrationIds?: string[];
   cloudAheadMigrationIds?: string[];
+  /** Upload held because the backlog looks like churn (see replicaBacklogGuard). */
+  backlogHold?: boolean;
 }
 
 export type TursoReplicaPushResponse = TursoReplicaPushResult | TursoReplicaPushError;

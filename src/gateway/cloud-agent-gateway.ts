@@ -31,6 +31,12 @@ dotenv.config({ path: resolve(process.cwd(), ".env") });
 
 process.env.GATEWAY_MODE = process.env.GATEWAY_MODE ?? "cloud_agent";
 process.env.CLOUD_SYNC_ENABLED = process.env.CLOUD_SYNC_ENABLED ?? "false";
+// The @papr/memory SDK reads PAPR_BASE_URL (default memory.papr.ai), not
+// PAPR_MEMORY_SERVER_URL. Without this a dev gateway synced chat messages to
+// prod memory, which rejected the dev user ("Invalid user_id", #568).
+if (!process.env.PAPR_BASE_URL && process.env.PAPR_MEMORY_SERVER_URL) {
+  process.env.PAPR_BASE_URL = process.env.PAPR_MEMORY_SERVER_URL.replace(/\/$/, "");
+}
 
 const PORT = Number(process.env.PORT ?? process.env.CLOUD_AGENT_GATEWAY_PORT ?? 8788);
 // Read once, then removed from process.env so agent bash/jobs never inherit it.

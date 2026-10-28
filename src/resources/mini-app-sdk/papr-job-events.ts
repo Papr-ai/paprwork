@@ -61,6 +61,12 @@ export interface SubscribeJobEventsOptions {
    */
   debounceMs?: number;
   onStatusChanged?: (data: JobStatusChangedEvent) => void;
+  /**
+   * A watched job id does not exist for this app (e.g. an id hard-coded from
+   * another install). Sent once; the host stops asking about it. Look jobs up
+   * by name via /api/jobs/list instead of hard-coding ids.
+   */
+  onUnknownJob?: (data: { jobId: string }) => void;
   onProgress?: (data: JobProgressEvent) => void;
   onLogLine?: (data: { jobId: string; line: string }) => void;
   onDbChanged?: (data: DbChangedEvent) => void;
@@ -120,6 +126,13 @@ function attachJobEventListeners(
     const data = parseEventData<JobStatusChangedEvent>(String(ev.data));
     if (data) {
       options.onStatusChanged?.(data);
+    }
+  });
+
+  source.addEventListener("jobs:unknown", (ev: MessageEvent) => {
+    const data = parseEventData<{ jobId: string }>(String(ev.data));
+    if (data) {
+      options.onUnknownJob?.(data);
     }
   });
 

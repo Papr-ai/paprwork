@@ -210,7 +210,7 @@ export function buildPreviewAssetUrl(
   publicBaseUrl: string,
   namespaceId: string,
   slug: string,
-  asset: "opengraph-icon" | "assets/papr-logo.svg",
+  asset: "opengraph-icon" | "opengraph-image" | "assets/papr-logo.svg",
   shareToken?: string,
 ): string {
   const base = `${publicBaseUrl.replace(/\/$/, "")}/${namespaceId}/${slug}/${asset}`;
@@ -286,7 +286,14 @@ export async function resolveCloudAppPreviewMeta(input: {
     "opengraph-icon",
     runtimeAuth.shareToken,
   );
-  const imageUrl = iconUrl;
+  // 1200×630 card for og:image / twitter:image (summary_large_image is 1.91:1).
+  const imageUrl = buildPreviewAssetUrl(
+    publicBaseUrl,
+    runtimeAuth.namespaceId,
+    runtimeAuth.slug,
+    "opengraph-image",
+    runtimeAuth.shareToken,
+  );
 
   if (canReadRepo) {
     const metadata = await readMetadataFromRepo(runtimeAuth);

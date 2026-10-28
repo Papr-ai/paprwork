@@ -13,8 +13,8 @@
  * write via rename, and a hard cap so a bad clock can't park GitHub for hours.
  */
 import fs from "node:fs";
-import os from "node:os";
 import path from "node:path";
+import { getPaprworkBaseDir } from "../../core/utils/paprWorkspace.js";
 
 const MAX_PAUSE_SEC = 60 * 60;
 const READ_CACHE_MS = 1_000;
@@ -25,7 +25,7 @@ let cached: { at: number; value: PauseFile | null } | null = null;
 
 export function githubPauseFilePath(): string {
   const override = process.env.PAPR_GITHUB_PAUSE_FILE?.trim();
-  return override || path.join(os.homedir(), ".paprwork-v2", "github-rate-pause.json");
+  return override || path.join(getPaprworkBaseDir(), "github-rate-pause.json");
 }
 
 function readPause(nowMs: number): PauseFile | null {

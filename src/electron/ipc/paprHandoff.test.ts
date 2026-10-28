@@ -6,6 +6,7 @@ import {
   isHandoffUrl,
   memoryBaseUrl,
   parseHandoffCode,
+  pickHandoffWindow,
   redeemHandoffCode,
   resolveHandoffApp,
 } from "./paprHandoff.js";
@@ -24,6 +25,21 @@ describe("handoff link parsing", () => {
     expect(parseHandoffCode("papr://auth/handoff?code=short")).toBeNull();
     expect(parseHandoffCode("papr://auth/handoff?code=has%20space%20in%20it%20padding")).toBeNull();
     expect(parseHandoffCode("not a url")).toBeNull();
+  });
+  it("dev profile accepts papr-dev:// hand-off links, not papr://", async () => {
+    const prev = process.env.PAPR_PROFILE;
+    process.env.PAPR_PROFILE = "dev";
+    vi.resetModules();
+    try {
+      const dev = await import("./paprHandoff.js");
+      expect(dev.isHandoffUrl(`papr-dev://auth/handoff?code=${CODE}`)).toBe(true);
+      expect(dev.parseHandoffCode(`papr-dev://auth/handoff?code=${CODE}`)).toBe(CODE);
+      expect(dev.parseHandoffCode(`papr://auth/handoff?code=${CODE}`)).toBeNull();
+    } finally {
+      if (prev === undefined) delete process.env.PAPR_PROFILE;
+      else process.env.PAPR_PROFILE = prev;
+      vi.resetModules();
+    }
   });
   it("finds memory the same way the gateway does", () => {
     expect(memoryBaseUrl({})).toBe("https://memory.papr.ai");
@@ -111,5 +127,19 @@ describe("handoffLanding from the web card", () => {
     const landing = handoffLanding({ appNamespaceId: "n1", appSlug: "linkedin-outreach", source: "web" });
     expect(landing.title).toBe("From the web");
     expect(landing.message).toContain("needs Papr Work desktop");
+  });
+});
+
+describe("pickHandoffWindow", () => {
+  const w = (name: string, visible: boolean, destroyed = false) => ({ name, isVisible: () => visible, isDestroyed: () => destroyed });
+  it("lands in the main window, never a hidden preview window opened earlier", () => {
+    const preview = w("preview", false);
+    const main = w("main", true);
+    expect(pickHandoffWindow(main, [preview, main])?.name).toBe("main");
+  });
+  it("without a main window, only a visible window qualifies", () => {
+    expect(pickHandoffWindow(null, [w("preview", false), w("other", true)])?.name).toBe("other");
+    expect(pickHandoffWindow(null, [w("preview", false)])).toBeNull();
+    expect(pickHandoffWindow(w("main", true, true), [w("preview", false)])).toBeNull();
   });
 });

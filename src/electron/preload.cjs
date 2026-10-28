@@ -258,6 +258,8 @@ contextBridge.exposeInMainWorld("electronAPI", {
       startCheckout: (input) => ipcRenderer.invoke("papr:start-checkout", input),
       startCreditsCheckout: (input) =>
         ipcRenderer.invoke("papr:start-credits-checkout", input),
+      getBuilderSeats: () => ipcRenderer.invoke("papr:get-builder-seats"),
+      setBuilder: (input) => ipcRenderer.invoke("papr:set-builder", input),
       startExpertBuildCheckout: (input) =>
         ipcRenderer.invoke("papr:start-expert-build-checkout", input),
       subscribeDeveloperPlan: () =>
@@ -436,6 +438,10 @@ contextBridge.exposeInMainWorld("electronAPI", {
 console.log("[Preload] Initializing chat listener");
 ipcRenderer.on("notification:open-settings", (_event, data) => {
   window.dispatchEvent(new CustomEvent("papr-notification-open-settings", { detail: data }));
+});
+
+ipcRenderer.on("platform:connect-open", (_event, data) => {
+  window.dispatchEvent(new CustomEvent("papr-platform-connect", { detail: data }));
 });
 
 ipcRenderer.on("chat:open", (_event, data) => {
