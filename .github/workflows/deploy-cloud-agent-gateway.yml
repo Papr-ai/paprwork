@@ -78,7 +78,7 @@ jobs:
           service_account: ${{ vars.GCP_DEPLOYER_SA }}
       - uses: google-github-actions/setup-gcloud@v2
       - run: gcloud auth configure-docker "${REGISTRY}" --quiet
-      - uses: docker/setup-buildx-action@v3
+      - uses: docker/setup-buildx-action@v4
       - name: Build and push
         uses: docker/build-push-action@v6
         with:
