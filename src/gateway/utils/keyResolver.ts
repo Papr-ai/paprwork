@@ -80,7 +80,14 @@ export function getAuthEpoch(): number {
  * API fails or bills against the wrong quota, so never resolve one as a key.
  */
 function isOAuthShapedToken(value: string): boolean {
-  return value.startsWith("sk-ant-oat") || value.startsWith("sk-ant-ort");
+  return (
+    value.startsWith("sk-ant-oat") ||
+    value.startsWith("sk-ant-ort") ||
+    // ChatGPT sign-in access token (a JWT). A session on ChatGPT sign-in writes
+    // it into OPENAI_API_KEY; read back as a Platform key it gets a 401
+    // ("Missing scopes: api.responses.write") from api.openai.com.
+    value.startsWith("eyJ")
+  );
 }
 
 /** Provider key names that must hold the provider's own key, never a Papr key. */
