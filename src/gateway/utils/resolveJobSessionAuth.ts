@@ -33,7 +33,7 @@ export async function resolveJobSessionAuth(params: {
 
   const creds = await resolveAgentProviderCredentials(provider, model);
   if (creds) {
-    return { provider, model, ...creds };
+    return keepOAuthOnSupportedModel({ provider, model, ...creds });
   }
 
   if (params.fallbackProvider && params.fallbackModel) {
@@ -45,11 +45,11 @@ export async function resolveJobSessionAuth(params: {
       console.log(
         `[AgentService] Explicit fallback: ${originalProvider}/${requestedModel} → ${params.fallbackProvider}/${params.fallbackModel}`,
       );
-      return {
+      return keepOAuthOnSupportedModel({
         provider: params.fallbackProvider,
         model: params.fallbackModel,
         ...fbCreds,
-      };
+      });
     }
   }
 
@@ -102,13 +102,72 @@ export async function resolveJobSessionAuth(params: {
       console.log(
         `[AgentService] Fallback (${cand.why}): ${originalProvider}/${requestedModel} → ${key}`,
       );
-      return { provider: cand.provider, model: cand.model, ...candCreds };
+      return keepOAuthOnSupportedModel({
+        provider: cand.provider,
+        model: cand.model,
+        ...candCreds,
+      });
     }
   }
 
   throw new Error(
     agentProviderAuthErrorMessage(originalProvider, requestedModel),
   );
+}
+
+/** Cheap OpenAI model that runs on ChatGPT sign-in. */
+export const CHATGPT_SIGN_IN_FALLBACK_MODEL = "gpt-5-6-luna";
+
+/**
+ * A ChatGPT sign-in token only works on the models ChatGPT serves. For any other
+ * OpenAI model (gpt-5.4-mini, gpt-5.3-codex…) the session would go down the
+ * Platform API route with that token and fail with "Invalid API key". Use a
+ * real Platform key when there is one; otherwise run on Luna, which ChatGPT does
+ * serve.
+ */
+export async function keepOAuthOnSupportedModel(
+  auth: JobSessionAuth,
+): Promise<JobSessionAuth> {
+  const isOpenAI = auth.provider === "openai" || auth.provider === "openai-codex";
+  if (!isOpenAI || auth.authType !== "oauth" || auth.usePaprProxy) return auth;
+
+  const { isOpenAICodexModel } = await import("./modelNormalizer.js");
+  if (isOpenAICodexModel(auth.model)) return auth;
+
+  const { getApiKeys } = await import("./keyResolver.js");
+  const keys = await getApiKeys(["OPENAI_API_KEY"]);
+  if (keys.OPENAI_API_KEY) {
+    console.log(
+      `[AgentService] ${auth.model} is not served on ChatGPT sign-in — using the OpenAI API key`,
+    );
+    return { ...auth, apiKey: keys.OPENAI_API_KEY, authType: "apiKey" };
+  }
+
+  console.log(
+    `[AgentService] ${auth.model} is not served on ChatGPT sign-in and there is no OpenAI API key — running on ${CHATGPT_SIGN_IN_FALLBACK_MODEL}`,
+  );
+  return { ...auth, provider: "openai", model: CHATGPT_SIGN_IN_FALLBACK_MODEL };
+}
+
+/**
+ * Next provider for an agent job whose provider refused its credential before
+ * producing anything. Skips every provider that has refused this auth epoch.
+ */
+export async function resolveAuthRefusalRetry(
+  refusedProvider: Provider,
+): Promise<JobSessionAuth | null> {
+  const { markAutoProviderRefused, autoRefusedProviders } = await import(
+    "./autoProviderHealth.js"
+  );
+  markAutoProviderRefused(refusedProvider);
+  const { findReachableProvider } = await import("./reachableProvider.js");
+  const next = await findReachableProvider(autoRefusedProviders());
+  if (!next) return null;
+  return keepOAuthOnSupportedModel({
+    provider: next.provider,
+    model: next.model,
+    ...next.creds,
+  });
 }
 
 /**
