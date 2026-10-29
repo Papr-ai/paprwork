@@ -48,7 +48,7 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 30
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
       - uses: actions/setup-node@v4
         with:
           node-version: "24"
@@ -70,7 +70,7 @@ jobs:
       image: ${{ steps.meta.outputs.image }}
       tag: ${{ steps.meta.outputs.tag }}
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
       - id: meta
         run: |
           TAG="${GITHUB_REF_NAME}-${GITHUB_SHA::8}"
