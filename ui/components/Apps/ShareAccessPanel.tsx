@@ -11,6 +11,7 @@
 import { useEffect, useMemo, useState } from "react";
 import {
   ROLE_COPY,
+  UPLOAD_MAX_MB_CHOICES,
   accessPatch,
   addGrant,
   editableGrants,
@@ -171,6 +172,22 @@ export function ShareAccessPanel(props: ShareAccessPanelProps) {
       {draft.visibility === "public_read" ? (
         <AccessRow label="Community">
           {select("community", draft.communityRole, (r) => set({ communityRole: r }))}
+        </AccessRow>
+      ) : null}
+
+      {draft.uploadMaxMb !== undefined ? (
+        <AccessRow label="Largest upload" sub="Per file, from people using the app. Counts toward your storage.">
+          <select
+            className="ss6-role"
+            aria-label="Largest upload"
+            value={draft.uploadMaxMb}
+            disabled={!edit}
+            onChange={(e) => set({ uploadMaxMb: Number(e.target.value) })}
+          >
+            {[...new Set([...UPLOAD_MAX_MB_CHOICES, draft.uploadMaxMb])].sort((a, b) => a - b).map((mb) => (
+              <option key={mb} value={mb}>{mb >= 1024 ? `${mb / 1024} GB` : `${mb} MB`}</option>
+            ))}
+          </select>
         </AccessRow>
       ) : null}
 

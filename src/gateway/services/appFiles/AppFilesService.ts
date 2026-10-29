@@ -187,6 +187,32 @@ export interface BrowserTicketArgs {
   fingerprint: string;
   /** Cloud app host: publisher namespace key from session (not desktop IPC). */
   memoryApiKey?: string;
+  /** Cloud app host: mint/verify through the host's app-access runtime instead. */
+  transport?: FilesTransport;
+}
+
+/**
+ * Where tickets and commits go. Default: the caller's own key (/v1/files).
+ * The cloud host passes one that goes through memory's app-access runtime, so
+ * a visitor needs no key in the publisher's workspace.
+ */
+export interface FilesTransport {
+  ticket(args: {
+    appId: string;
+    sha256: string;
+    sizeBytes: number;
+    fileName?: string;
+    mime?: string;
+    scope: AppFileScope;
+  }): Promise<{ object_key: string; upload_url: string | null; already_exists: boolean }>;
+  commit(appId: string, objectKey: string, sizeBytes: number): Promise<{ verified: boolean }>;
+}
+
+function keyTransport(memoryApiKey?: string): FilesTransport {
+  return {
+    ticket: (a) => requestUploadTicket({ ...a, memoryApiKey }),
+    commit: (appId, key, size) => commitUpload(appId, key, size, memoryApiKey),
+  };
 }
 
 export interface BrowserTicket {
@@ -209,14 +235,14 @@ export async function createBrowserTicket(
   args: BrowserTicketArgs,
 ): Promise<BrowserTicket> {
   const scope = args.scope ?? "app";
-  const ticket = await requestUploadTicket({
+  const transport = args.transport ?? keyTransport(args.memoryApiKey);
+  const ticket = await transport.ticket({
     appId: args.appId,
     sha256: args.fingerprint,
     sizeBytes: args.sizeBytes,
     fileName: args.fileName,
     mime: args.mime ?? undefined,
     scope,
-    memoryApiKey: args.memoryApiKey,
   });
 
   const now = Date.now();
@@ -269,6 +295,7 @@ export async function createBrowserTicket(
       objectKey: ticket.object_key,
       sizeBytes: args.sizeBytes,
       memoryApiKey: args.memoryApiKey,
+      transport: args.transport,
     });
   }
 
@@ -288,7 +315,7 @@ export async function createBrowserTicket(
 export async function tryFinalizeBrowserUpload(
   db: FilesDb,
   row: AppFileRow,
-  args: { appId: string; memoryApiKey?: string },
+  args: { appId: string; memoryApiKey?: string; transport?: FilesTransport },
 ): Promise<AppFileRow | null> {
   if (row.upload_state === "verified") {
     return row;
@@ -302,6 +329,7 @@ export async function tryFinalizeBrowserUpload(
     objectKey: row.object_key,
     sizeBytes: row.size_bytes,
     memoryApiKey: args.memoryApiKey,
+    transport: args.transport,
   });
   if (!result.verified) {
     return null;
@@ -349,13 +377,13 @@ export async function commitBrowserUpload(
     objectKey: string;
     sizeBytes: number;
     memoryApiKey?: string;
+    transport?: FilesTransport;
   },
 ): Promise<AddFileResult> {
-  const commit = await commitUpload(
+  const commit = await (args.transport ?? keyTransport(args.memoryApiKey)).commit(
     args.appId,
     args.objectKey,
     args.sizeBytes,
-    args.memoryApiKey,
   );
   await markState(db, args.objectKey, commit.verified ? "verified" : "failed");
 
