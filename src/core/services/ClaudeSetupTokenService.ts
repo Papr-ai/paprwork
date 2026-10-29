@@ -14,6 +14,11 @@ import {
   type ClaudeCliCredentials,
 } from "./claudeCliCredentials.js";
 import type { ClaudeCliInstallProvider } from "./claudeCliProvider.js";
+import {
+  buildPowerShellCommandLine,
+  buildWindowsLauncherScript,
+  withWindowsClaudeBinOnPath,
+} from "./claudeWindowsSetup.js";
 
 const execAsync = promisify(exec);
 
@@ -22,12 +27,22 @@ const execAsync = promisify(exec);
 function getShellEnv(): Record<string, string> {
   const home = process.env.HOME || process.env.USERPROFILE || "";
 
-  // Skip shell env resolution on Windows - just use existing PATH
+  // Windows: no login shell to ask. install.ps1 puts claude.exe in
+  // %USERPROFILE%\.local\bin, which Electron's startup PATH won't include
+  // until the app restarts — add it so a fresh install is found immediately.
   if (process.platform === "win32") {
-    return {
-      ...process.env,
-      PATH: process.env.PATH || "",
-    } as Record<string, string>;
+    const pathValue = withWindowsClaudeBinOnPath(
+      process.env.Path || process.env.PATH || "",
+      os.homedir(),
+    );
+    // Windows env keys are case-insensitive; drop every Path/PATH variant so
+    // the child gets exactly one.
+    const env: Record<string, string> = {};
+    for (const [k, v] of Object.entries(process.env)) {
+      if (v !== undefined && k.toLowerCase() !== "path") env[k] = v;
+    }
+    env.Path = pathValue;
+    return env;
   }
 
   // Unix: Try to get the real PATH from the user's login shell
@@ -270,6 +285,22 @@ export class ClaudeSetupTokenService {
   ): Promise<string> {
     const base = await this.resolveSetupTokenSpawn();
     const spec = this.withSubcommand(base, subArgs);
+
+    if (process.platform === "win32") {
+      const scriptPath = path.join(
+        os.tmpdir(),
+        `paprwork-claude-${slug}-${process.pid}.ps1`,
+      );
+      const script = buildWindowsLauncherScript({
+        spec,
+        home: os.homedir(),
+        footer,
+      });
+      // BOM so Windows PowerShell 5.1 reads the file as UTF-8.
+      await fs.writeFile(scriptPath, "\uFEFF" + script, "utf8");
+      return scriptPath;
+    }
+
     const env = getShellEnv();
     const scriptPath = path.join(
       os.tmpdir(),
@@ -324,23 +355,18 @@ echo "${footer.replace(/"/g, '\\"')}"
     if (spec.shell && spec.command === "claude") {
       return `claude ${subArgs.join(" ")}`;
     }
-    const argsPart = spec.args
-      .map((arg) => {
-        if (process.platform === "win32") {
-          return `"${arg.replace(/"/g, '\\"')}"`;
-        }
-        return `'${arg.replace(/'/g, `'\\''`)}'`;
-      })
-      .join(" ");
-    const quotedCommand =
-      process.platform === "win32" ? `"${spec.command}"` : this.shellQuote(spec.command);
+    if (process.platform === "win32") {
+      // Shown to the user as a PowerShell command (cmd.exe quoting broke paths
+      // with spaces and `set "K=V" &&` is not valid PowerShell).
+      return buildPowerShellCommandLine(spec);
+    }
+    const argsPart = spec.args.map((arg) => this.shellQuote(arg)).join(" ");
+    const quotedCommand = this.shellQuote(spec.command);
     const envEntries = Object.entries(spec.extraEnv ?? {});
     const envPrefix =
       envEntries.length === 0
         ? ""
-        : process.platform === "win32"
-          ? envEntries.map(([k, v]) => `set "${k}=${v}" && `).join("")
-          : `${envEntries.map(([k, v]) => `${k}=${this.shellQuote(String(v))}`).join(" ")} `;
+        : `${envEntries.map(([k, v]) => `${k}=${this.shellQuote(String(v))}`).join(" ")} `;
     return `${envPrefix}${quotedCommand} ${argsPart}`.trim();
   }
 
