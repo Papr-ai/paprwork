@@ -72,7 +72,7 @@ export function getClaudeManualConnectionSteps(
       title: "Verify the install",
       description:
         platform === "windows"
-          ? `Close ${terminal}, open a new ${terminal} window (so it picks up the new install), then run this. You should see a version number. If it says Claude Code requires git-bash, install Git for Windows from git-scm.com first.`
+          ? `Close ${terminal}, open a new ${terminal} window (so it picks up the new install), then run this. You should see a version number.`
           : `Still in ${terminal}, run this and press Enter. You should see a version number (for example 2.1.x).`,
       command: "claude --version",
     },
@@ -100,11 +100,6 @@ export function buildClaudeManualAgentPrompt(
     "1. Install the official Claude Code CLI using the HTTPS installer (prefer this over npm).",
     `2. Use ${terminal} and run: ${installCommand}`,
     "3. Verify with: claude --version",
-    ...(platform === "windows"
-      ? [
-          "   On Windows, Claude Code also needs Git for Windows (Git Bash). If it reports 'requires git-bash', install Git for Windows from https://git-scm.com/downloads/win (or set CLAUDE_CODE_GIT_BASH_PATH to bash.exe).",
-        ]
-      : []),
     "4. Run claude setup-token (or ask me to run it if you cannot open an interactive terminal).",
     "",
     "After setup-token finishes, I will copy the token starting with sk-ant-oat01- and paste it in Paprwork Settings → AI Models → Claude.",

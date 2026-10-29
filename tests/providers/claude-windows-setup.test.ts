@@ -2,15 +2,12 @@ import { describe, expect, it } from "vitest";
 import {
   buildPowerShellCommandLine,
   buildWindowsLauncherScript,
-  findWindowsGitBash,
-  managedGitBashPath,
   psQuote,
   windowsClaudeExePath,
   withWindowsClaudeBinOnPath,
 } from "../../src/core/services/claudeWindowsSetup.js";
 
 const HOME = "C:\\Users\\Jane Doe";
-const MANAGED = "C:\\Users\\Jane Doe\\AppData\\Roaming\\Papr Work\\git-portable";
 
 describe("claude windows setup", () => {
   it("points at install.ps1's claude.exe location", () => {
@@ -21,42 +18,6 @@ describe("claude windows setup", () => {
     const once = withWindowsClaudeBinOnPath("C:\\Windows;C:\\Windows\\System32", HOME);
     expect(once.split(";")[0]).toBe("C:\\Users\\Jane Doe\\.local\\bin");
     expect(withWindowsClaudeBinOnPath(once, HOME)).toBe(once);
-  });
-
-  it("prefers an existing Git for Windows over the managed copy", () => {
-    const exists = (p: string) =>
-      p === "C:\\Program Files\\Git\\bin\\bash.exe" || p === managedGitBashPath(MANAGED);
-    expect(findWindowsGitBash({ env: {}, exists, managedGitDir: MANAGED })).toBe(
-      "C:\\Program Files\\Git\\bin\\bash.exe",
-    );
-  });
-
-  it("finds bash next to git on PATH and user-scope installs", () => {
-    const gitOnPath = "D:\\Tools\\Git\\cmd\\git.exe";
-    expect(
-      findWindowsGitBash({
-        env: {},
-        exists: (p) => p === "D:\\Tools\\Git\\bin\\bash.exe",
-        gitOnPath,
-        managedGitDir: MANAGED,
-      }),
-    ).toBe("D:\\Tools\\Git\\bin\\bash.exe");
-    const local = "C:\\Users\\Jane Doe\\AppData\\Local";
-    expect(
-      findWindowsGitBash({
-        env: { LOCALAPPDATA: local },
-        exists: (p) => p === `${local}\\Programs\\Git\\bin\\bash.exe`,
-        managedGitDir: MANAGED,
-      }),
-    ).toBe(`${local}\\Programs\\Git\\bin\\bash.exe`);
-  });
-
-  it("falls back to managed PortableGit, else null (triggers download)", () => {
-    const managed = managedGitBashPath(MANAGED);
-    expect(
-      findWindowsGitBash({ env: {}, exists: (p) => p === managed, managedGitDir: MANAGED }),
-    ).toBe(managed);
-    expect(findWindowsGitBash({ env: {}, exists: () => false, managedGitDir: MANAGED })).toBeNull();
   });
 
   it("builds PowerShell (not cmd.exe) command lines that survive spaces", () => {
@@ -79,18 +40,15 @@ describe("claude windows setup", () => {
     expect(withEnv).not.toMatch(/\bset "/);
   });
 
-  it("launcher script sets PATH and CLAUDE_CODE_GIT_BASH_PATH before running", () => {
+  it("launcher script puts claude.exe on PATH before running", () => {
     const script = buildWindowsLauncherScript({
       spec: { command: windowsClaudeExePath(HOME), args: ["setup-token"] },
       home: HOME,
-      gitBashPath: managedGitBashPath(MANAGED),
       footer: "Copy the token, then paste it into Papr Work.",
     });
     const lines = script.split("\r\n");
-    expect(lines[0]).toContain(".local\\bin");
-    expect(lines[1]).toBe(
-      `$env:CLAUDE_CODE_GIT_BASH_PATH = '${managedGitBashPath(MANAGED)}'`,
-    );
+    expect(lines[0]).toBe("$env:Path = 'C:\\Users\\Jane Doe\\.local\\bin' + ';' + $env:Path");
     expect(script).toContain("& 'C:\\Users\\Jane Doe\\.local\\bin\\claude.exe' setup-token");
+    expect(script).not.toContain("GIT_BASH");
   });
 });

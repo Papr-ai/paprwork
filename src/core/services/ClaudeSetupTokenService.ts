@@ -291,13 +291,9 @@ export class ClaudeSetupTokenService {
         os.tmpdir(),
         `paprwork-claude-${slug}-${process.pid}.ps1`,
       );
-      const gitBashPath = this.cliProvider?.getWindowsGitBashPath
-        ? await this.cliProvider.getWindowsGitBashPath()
-        : null;
       const script = buildWindowsLauncherScript({
         spec,
         home: os.homedir(),
-        gitBashPath,
         footer,
       });
       // BOM so Windows PowerShell 5.1 reads the file as UTF-8.

@@ -868,7 +868,7 @@ export async function initializeOAuthIPC(
       }
       if (process.platform === "win32") {
         // Real PowerShell window (what the UI says), running the .ps1 launcher
-        // which sets PATH + CLAUDE_CODE_GIT_BASH_PATH. -NoExit keeps the token
+        // which sets claude.exe on PATH. -NoExit keeps the token
         // on screen so the user can copy it.
         await execAsync(
           `start "" powershell.exe -NoExit -NoProfile -ExecutionPolicy Bypass -File "${scriptPath}"`,
@@ -937,20 +937,10 @@ export async function initializeOAuthIPC(
           okMessage = "No install found. Nothing stale to clean up.";
         }
 
-        // Windows also needs Git Bash; keep the install step (which sets it up)
-        // unless it's already there, so the download never happens silently
-        // behind the sign-in button.
-        const hasGitBash =
-          process.platform !== "win32" ||
-          Boolean(await claudeCliManager.getWindowsGitBashPath());
-        if (process.platform === "win32" && onPath.installed && !hasGitBash) {
-          okMessage = `Found Claude Code${onPath.version ? ` ${onPath.version}` : ""}. Next step adds Git for Windows, which Claude Code needs.`;
-        }
-
         return {
           connected: false as const,
           okMessage,
-          skipInstallStep: onPath.installed && hasGitBash,
+          skipInstallStep: onPath.installed,
         };
       } catch (error) {
         const message = error instanceof Error ? error.message : "Check failed";

@@ -52,13 +52,12 @@ export function getClaudeOnboardingSteps(
       title: "Install Claude Code",
       body:
         platform === "windows"
-          ? "Papr can run this for you. It installs Claude Code from Anthropic, plus Git for Windows if this PC doesn't have it (Claude Code needs it). No admin rights needed — this can take a couple of minutes."
+          ? "Papr can run this for you. It installs Claude Code using Anthropic's official Windows installer. No admin rights needed. This can take a minute."
           : "Papr can run this for you. It downloads Claude Code from Anthropic and installs it on your computer. You will see the output as it happens.",
       cmd: installCmd,
       mode: "run",
       action: "Install for me",
-      running:
-        platform === "windows" ? "Installing Claude Code (and Git if needed)" : "Installing Claude Code",
+      running: "Installing Claude Code",
       defaultOk: "Installed Claude Code",
     },
     {

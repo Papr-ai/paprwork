@@ -29,11 +29,6 @@ describe("claude manual connection", () => {
     expect(getClaudeCliCheckCommand("mac")).toBe("which claude && claude --version");
   });
 
-  test("windows agent prompt mentions Git for Windows", () => {
-    expect(buildClaudeManualAgentPrompt("windows")).toContain("Git for Windows");
-    expect(buildClaudeManualAgentPrompt("mac")).not.toContain("Git for Windows");
-  });
-
   test("manual steps include install, verify, and setup-token", () => {
     const steps = getClaudeManualConnectionSteps("windows");
     expect(steps).toHaveLength(4);

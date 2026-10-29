@@ -17,22 +17,16 @@ import fs from 'fs';
 import https from 'https';
 import { promisify } from 'util';
 import { exec, spawn } from 'child_process';
-import crypto from 'crypto';
 import os from 'os';
 import * as tar from 'tar';
-import {
-  PORTABLE_GIT,
-  findWindowsGitBash,
-  managedGitBashPath,
-  windowsClaudeExePath,
-} from '../../core/services/claudeWindowsSetup.js';
+import { windowsClaudeExePath } from '../../core/services/claudeWindowsSetup.js';
 
 const execAsync = promisify(exec);
 
 interface DownloadProgress {
   status: 'downloading' | 'extracting' | 'complete' | 'error';
   percent: number;
-  /** Human-readable phase, e.g. "Installing Git for Windows". */
+  /** Human-readable phase, e.g. "Installing Claude Code". */
   message?: string;
   total?: number;
   completed?: number;
@@ -289,12 +283,8 @@ export class ClaudeCLIManager {
   }
 
   // ---------------------------------------------------------------------------
-  // Windows: official install.ps1 (native claude.exe) + Papr-managed Git Bash.
+  // Windows: official install.ps1 (native claude.exe). No Git needed.
   // ---------------------------------------------------------------------------
-
-  private getManagedGitDir(): string {
-    return path.join(app.getPath('userData'), 'git-portable');
-  }
 
   private async whereOnWindows(name: string): Promise<string | null> {
     try {
@@ -313,20 +303,7 @@ export class ClaudeCLIManager {
     return this.whereOnWindows('claude');
   }
 
-  /** bash.exe Claude Code will use, or null when none is installed. */
-  async getWindowsGitBashPath(): Promise<string | null> {
-    if (process.platform !== 'win32') return null;
-    return findWindowsGitBash({
-      env: process.env,
-      exists: (p) => fs.existsSync(p),
-      gitOnPath: await this.whereOnWindows('git'),
-      managedGitDir: this.getManagedGitDir(),
-    });
-  }
-
   private async ensureWindowsCLI(): Promise<string> {
-    await this.ensureWindowsGitBash();
-
     const existing = await this.findWindowsClaude();
     if (existing) {
       this.cliPath = existing;
@@ -384,92 +361,6 @@ export class ClaudeCLIManager {
         const lastLines = output.trim().split(/\r?\n/).filter(Boolean).slice(-3).join(' ');
         reject(new Error(lastLines || `Claude Code installer exited with code ${code}`));
       });
-    });
-  }
-
-  /**
-   * Make sure Claude Code can find Git Bash. Uses an existing Git for Windows
-   * when present; otherwise downloads PortableGit (no admin, no installer UI)
-   * into userData and points CLAUDE_CODE_GIT_BASH_PATH at it for this process
-   * and the user's future terminals.
-   */
-  private async ensureWindowsGitBash(): Promise<string> {
-    const found = await this.getWindowsGitBashPath();
-    if (found) {
-      if (found.startsWith(this.getManagedGitDir())) {
-        process.env.CLAUDE_CODE_GIT_BASH_PATH = found;
-      }
-      return found;
-    }
-
-    const gitDir = this.getManagedGitDir();
-    const sfxPath = path.join(app.getPath('userData'), 'PortableGit.7z.exe');
-    fs.mkdirSync(path.dirname(sfxPath), { recursive: true });
-
-    this.emitProgress({ status: 'downloading', percent: 0, message: 'Installing Git for Windows' });
-    await this.downloadFile(PORTABLE_GIT.url, sfxPath, 'Installing Git for Windows');
-
-    const hash = crypto.createHash('sha256').update(fs.readFileSync(sfxPath)).digest('hex');
-    if (hash !== PORTABLE_GIT.sha256) {
-      fs.rmSync(sfxPath, { force: true });
-      throw new Error('Git for Windows download failed verification. Please try again.');
-    }
-
-    this.emitProgress({ status: 'extracting', percent: 100, message: 'Installing Git for Windows' });
-    fs.rmSync(gitDir, { recursive: true, force: true });
-    // 7-Zip self-extractor: -o<dir> (no space) and -y for silent.
-    await execAsync(`"${sfxPath}" -o"${gitDir}" -y`, { timeout: 5 * 60_000 });
-    fs.rmSync(sfxPath, { force: true });
-
-    const bash = managedGitBashPath(gitDir);
-    if (!fs.existsSync(bash)) {
-      throw new Error('Git for Windows was extracted but bash.exe is missing.');
-    }
-
-    process.env.CLAUDE_CODE_GIT_BASH_PATH = bash;
-    try {
-      // User-scope env var so `claude` works in the user's own terminals too.
-      await execAsync(`setx CLAUDE_CODE_GIT_BASH_PATH "${bash}"`, { timeout: 10_000 });
-    } catch (err) {
-      console.warn('[ClaudeCLIManager] setx CLAUDE_CODE_GIT_BASH_PATH failed:', err);
-    }
-    return bash;
-  }
-
-  /** HTTPS download following redirects (GitHub release assets redirect). */
-  private downloadFile(url: string, dest: string, message: string, redirects = 0): Promise<void> {
-    return new Promise((resolve, reject) => {
-      https
-        .get(url, { headers: { 'User-Agent': 'PaprWork' } }, (res) => {
-          const status = res.statusCode ?? 0;
-          if (status >= 300 && status < 400 && res.headers.location && redirects < 5) {
-            res.resume();
-            this.downloadFile(res.headers.location, dest, message, redirects + 1).then(resolve, reject);
-            return;
-          }
-          if (status !== 200) {
-            res.resume();
-            reject(new Error(`Download failed with status ${status}`));
-            return;
-          }
-          const total = parseInt(res.headers['content-length'] || '0', 10);
-          let done = 0;
-          const file = fs.createWriteStream(dest);
-          res.on('data', (chunk: Buffer) => {
-            done += chunk.length;
-            this.emitProgress({
-              status: 'downloading',
-              percent: total > 0 ? Math.round((done / total) * 100) : 0,
-              total,
-              completed: done,
-              message,
-            });
-          });
-          res.pipe(file);
-          file.on('finish', () => file.close(() => resolve()));
-          file.on('error', reject);
-        })
-        .on('error', reject);
     });
   }
 
