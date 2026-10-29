@@ -56,7 +56,7 @@ create_sub_agent({
   description: "Investigates complex topics with evidence",
   systemPrompt: "You are a focused researcher. Gather evidence, cite sources, and highlight uncertainty."
 })
-// Result: Uses default provider (openai) and model (gpt-5.4-mini)
+// Result: runs on the cheap model your sign-in supports (Haiku, GPT-5.6 Luna, or Gemini Flash)
 ```
 
 ### Full Example (All Options)
@@ -100,11 +100,11 @@ Always cite sources and explain your reasoning.`,
 - **OAuth** (ChatGPT/Claude subscription) → pi-ai backend
 - **API key** (Platform) → AI SDK backend
 
-Pick models the user has access to. Default to `gpt-5.4-mini` or `claude-sonnet-4-6` when unspecified.
+Pick models the user has access to. Default to `gpt-5-6-luna` or `claude-haiku-4-5` when unspecified. Avoid `gpt-5.4-mini`: it needs an OpenAI API key and does not run on ChatGPT sign-in.
 
 ### When to Specify a Model?
 
-**Use defaults (gpt-5.4-mini or claude-sonnet-4-6) for:**
+**Use defaults (gpt-5-6-luna or claude-haiku-4-5) for:**
 - ✅ Fast, simple tasks
 - ✅ Data processing
 - ✅ Cost-sensitive operations

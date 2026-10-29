@@ -1,5 +1,7 @@
 import { beforeEach, describe, expect, test, vi } from "vitest";
 import {
+  resolveHelperAgentProviderModel,
+  usesSignInAwareModel,
   EXPLORATION_ANTHROPIC_MODEL,
   EXPLORATION_GOOGLE_MODEL,
   EXPLORATION_OPENAI_API_KEY_MODEL,
@@ -56,7 +58,7 @@ describe("resolveCodebaseExplorerProviderModel", () => {
     });
   });
 
-  test("uses gpt-5.4-mini on OpenAI Platform API key", async () => {
+  test("uses GPT Luna on an OpenAI Platform API key too", async () => {
     vi.mocked(getProviderAuth).mockImplementation(async (provider) => {
       if (provider === "openai") {
         return { type: "apiKey", key: "sk-proj-test" };
@@ -82,5 +84,29 @@ describe("resolveCodebaseExplorerProviderModel", () => {
       provider: "google",
       model: EXPLORATION_GOOGLE_MODEL,
     });
+  });
+});
+
+describe("built-in helpers use the sign-in-aware model", () => {
+  beforeEach(() => {
+    vi.mocked(getProviderAuth).mockReset();
+    vi.mocked(getApiKeys).mockReset();
+  });
+
+  test("covers explorer, research and implementation helpers, not custom agents", () => {
+    expect(usesSignInAwareModel("codebase-explorer")).toBe(true);
+    expect(usesSignInAwareModel("research-specialist")).toBe(true);
+    expect(usesSignInAwareModel("implementation-specialist")).toBe(true);
+    expect(usesSignInAwareModel("product-architect")).toBe(false);
+    expect(usesSignInAwareModel("agent-123")).toBe(false);
+    expect(usesSignInAwareModel(undefined)).toBe(false);
+  });
+
+  test("ChatGPT sign-in only never lands on gpt-5.4-mini", async () => {
+    vi.mocked(getProviderAuth).mockImplementation(async (provider) =>
+      provider === "openai" ? { type: "oauth", token: "chatgpt-oauth" } : null,
+    );
+    const picked = await resolveHelperAgentProviderModel();
+    expect(picked).toEqual({ provider: "openai", model: "gpt-5-6-luna" });
   });
 });

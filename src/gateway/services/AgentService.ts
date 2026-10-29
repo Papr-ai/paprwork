@@ -4941,6 +4941,10 @@ ${last15.substring(0, 8_000)}`;
     let toolCallCount = 0;
     let orphanToolCount = 0;
     let lastStreamError: string | undefined;
+    // The provider refused its credential before producing anything: retry once
+    // on the next provider this user can reach (same rule as Auto chat turns).
+    let authRefusal = false;
+    let producedOutput = false;
 
     try {
       try {
@@ -4972,9 +4976,30 @@ ${last15.substring(0, 8_000)}`;
               break; // Exit the stream loop to retry
             }
 
+            if (!producedOutput && !input.authOverride?.apiKey) {
+              const { isProviderAuthError } = await import(
+                "../utils/autoProviderHealth.js"
+              );
+              if (isProviderAuthError(errMsg)) {
+                console.warn(
+                  `[AgentService] Job ${input.jobId}: ${provider} refused its credential — trying the next provider`,
+                );
+                authRefusal = true;
+                break;
+              }
+            }
+
             throw new Error(
               `Agent job model error (${provider}/${model}): ${errMsg}`,
             );
+          }
+
+          if (
+            chunk.type === "text-delta" ||
+            chunk.type === "reasoning-delta" ||
+            chunk.type === "tool-call"
+          ) {
+            producedOutput = true;
           }
 
           // Log structured activity to job logs (thinking, tool calls, results)
@@ -5064,36 +5089,68 @@ ${last15.substring(0, 8_000)}`;
           thinkingBuffer = "";
         }
       } catch (err) {
-        // If error wasn't a rate limit, rethrow
-        if (!retryWithApiKey) throw err;
+        // If error wasn't a rate limit or a credential refusal, rethrow
+        if (!retryWithApiKey && !authRefusal) throw err;
       }
 
-      // Retry with API key or Papr proxy if OAuth rate limit was hit
-      if (retryWithApiKey && authType === "oauth") {
-        const { resolveOAuthRateLimitRetryCredentials } =
-          await import("../utils/resolveJobSessionAuth.js");
-        const retryCreds = await resolveOAuthRateLimitRetryCredentials(
-          provider,
-          model,
-        );
-
-        if (!retryCreds) {
-          throw new Error(
-            `OAuth rate limit reached and no API key or Papr proxy available for ${provider}. ` +
-              `Add an API key in Settings, sign in with Papr, or wait for rate limit to reset.`,
+      // Retry: OAuth rate limit → API key / Papr proxy on the same provider;
+      // credential refusal → the next provider the user can reach.
+      if ((retryWithApiKey && authType === "oauth") || authRefusal) {
+        let apiKeyConfig: AgentConfigInternal;
+        if (authRefusal) {
+          const { resolveAuthRefusalRetry } = await import(
+            "../utils/resolveJobSessionAuth.js"
           );
+          const next = await resolveAuthRefusalRetry(provider);
+          if (!next) {
+            throw new Error(
+              `Agent job model error (${provider}/${model}): ${lastStreamError ?? "credential refused"}`,
+            );
+          }
+          console.log(
+            `[AgentService] Job ${input.jobId}: retrying on ${next.provider}/${next.model} after ${provider} refused its credential`,
+          );
+          provider = next.provider;
+          model = next.model;
+          apiKey = next.apiKey;
+          authType = next.authType;
+          usePaprProxy = next.usePaprProxy;
+          const refusalRetryConfig: AgentConfigInternal = {
+            ...config,
+            provider: next.provider,
+            model: next.model as typeof config.model,
+            apiKey: next.apiKey,
+            authType: next.authType,
+            usePaprProxy: next.usePaprProxy,
+          };
+          apiKeyConfig = refusalRetryConfig;
+        } else {
+          const { resolveOAuthRateLimitRetryCredentials } =
+            await import("../utils/resolveJobSessionAuth.js");
+          const retryCreds = await resolveOAuthRateLimitRetryCredentials(
+            provider,
+            model,
+          );
+
+          if (!retryCreds) {
+            throw new Error(
+              `OAuth rate limit reached and no API key or Papr proxy available for ${provider}. ` +
+                `Add an API key in Settings, sign in with Papr, or wait for rate limit to reset.`,
+            );
+          }
+
+          console.log(
+            `[AgentService] Retrying after OAuth rate limit for ${provider} (apiKey=${retryCreds.authType === "apiKey"} paprProxy=${Boolean(retryCreds.usePaprProxy)})`,
+          );
+
+          const rateLimitRetryConfig: AgentConfigInternal = {
+            ...config,
+            apiKey: retryCreds.apiKey,
+            authType: retryCreds.authType,
+            usePaprProxy: retryCreds.usePaprProxy,
+          };
+          apiKeyConfig = rateLimitRetryConfig;
         }
-
-        console.log(
-          `[AgentService] Retrying after OAuth rate limit for ${provider} (apiKey=${retryCreds.authType === "apiKey"} paprProxy=${Boolean(retryCreds.usePaprProxy)})`,
-        );
-
-        const apiKeyConfig: AgentConfigInternal = {
-          ...config,
-          apiKey: retryCreds.apiKey,
-          authType: retryCreds.authType,
-          usePaprProxy: retryCreds.usePaprProxy,
-        };
 
         // Create new chatId for retry to avoid session cache
         retryChatId = `${chatId}-retry`;
@@ -5112,7 +5169,7 @@ ${last15.substring(0, 8_000)}`;
             const errMsg =
               (chunk.payload as { error?: string })?.error ?? "Model API error";
             throw new Error(
-              `Agent job model error (${provider}/${model}) after API key fallback: ${errMsg}`,
+              `Agent job model error (${provider}/${model}) after ${authRefusal ? "provider fallback" : "API key fallback"}: ${errMsg}`,
             );
           }
 

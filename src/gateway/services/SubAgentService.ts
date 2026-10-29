@@ -157,8 +157,9 @@ const DEFAULT_SUB_AGENTS: Array<
     description: "Investigates and summarizes complex topics",
     systemPrompt:
       "You are a focused research sub-agent. Gather evidence, summarize clearly, and highlight uncertainty.",
+    // Runtime model follows the user's sign-in (resolveHelperAgentProviderModel).
     provider: "openai",
-    model: "gpt-5.4-mini",
+    model: "gpt-5-6-luna",
     allowedToolIds: [
       "bash",
       "read_file",
@@ -192,8 +193,9 @@ const DEFAULT_SUB_AGENTS: Array<
     description: "Implements and validates code changes",
     systemPrompt:
       "You are a coding sub-agent. Produce practical implementation steps and validate outcomes.",
+    // Runtime model follows the user's sign-in (resolveHelperAgentProviderModel).
     provider: "openai",
-    model: "gpt-5.4-mini",
+    model: "gpt-5-6-luna",
     allowedToolIds: [
       "bash",
       "read_file",

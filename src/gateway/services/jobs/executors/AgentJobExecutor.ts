@@ -21,8 +21,10 @@ import {
 import { isHomeDailyBriefJob } from "../dailyBriefVerification.js";
 import { todayBriefDateKey } from "../../../../core/utils/briefDateKey.js";
 import type { SubAgentIconName } from "../../../../core/types/subagents.js";
-import { CODEBASE_EXPLORER_SUB_AGENT_ID } from "../../../../core/subagents/codebaseExplorer.js";
-import { resolveCodebaseExplorerProviderModel } from "../../../utils/explorationSubAgentModel.js";
+import {
+  resolveHelperAgentProviderModel,
+  usesSignInAwareModel,
+} from "../../../utils/explorationSubAgentModel.js";
 import {
   jobWriteDatabaseEnv,
   jobWriteDatabasePromptLines,
@@ -154,14 +156,16 @@ export class AgentJobExecutor implements IJobExecutor {
       subAgentSystemPrompt = profile.systemPrompt;
       subAgentIcon = profile.icon;
 
-      if (params.job.subAgentId === CODEBASE_EXPLORER_SUB_AGENT_ID) {
-        const exploration = await resolveCodebaseExplorerProviderModel();
-        provider = exploration.provider;
-        model = exploration.model;
+      // Built-in helpers run on the cheap model the user's sign-in can actually
+      // run, not the one stored in the profile.
+      if (usesSignInAwareModel(params.job.subAgentId)) {
+        const picked = await resolveHelperAgentProviderModel();
+        provider = picked.provider;
+        model = picked.model;
         fallbackProvider = undefined;
         fallbackModel = undefined;
         console.log(
-          `[AgentJobExecutor] codebase-explorer auth-aware model: ${provider}/${model}`,
+          `[AgentJobExecutor] ${params.job.subAgentId} sign-in-aware model: ${provider}/${model}`,
         );
       }
     }

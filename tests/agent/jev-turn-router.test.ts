@@ -73,7 +73,7 @@ describe("Auto model routing — capability × effort", () => {
     );
     expect(pick?.rung).toEqual({ model: "claude-opus-5-5", effort: "low" });
     const oa = await routeTurn("openai", { userMessage: "hey" }, async () => decision("basic", "low"));
-    expect(oa?.rung).toEqual({ model: "gpt-5.4-mini", effort: "low" });
+    expect(oa?.rung).toEqual({ model: "gpt-5-6-luna", effort: "low" });
   });
 });
 

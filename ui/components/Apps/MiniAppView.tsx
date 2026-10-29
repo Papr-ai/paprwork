@@ -11,6 +11,7 @@ import {
   type AppPreviewMode,
 } from "./MiniAppPublishBar";
 import { MiniAppFilesView } from "./MiniAppFilesView";
+import { onOpenAppTable } from "../../utils/openAppTable";
 import { MiniAppJobsView } from "./MiniAppJobsView";
 import type { AppWorkspaceMode, AppWorkspacePanel } from "../../hooks/useAppWorkspace";
 import { useAppLinkedJobCount } from "../../stores/jobsStore";
@@ -112,6 +113,19 @@ export function MiniAppView({
   useEffect(() => {
     setWorkspacePanel("code");
   }, [appId]);
+
+  // Share sheet table pill: show that table in this app's DB panel.
+  const [pendingTable, setPendingTable] = useState<{ db: string; table: string } | null>(null);
+  const clearPendingTable = useCallback(() => setPendingTable(null), []);
+  useEffect(
+    () =>
+      onOpenAppTable(appId, ({ db, table }) => {
+        setWorkspaceMode("files");
+        setWorkspacePanel("db");
+        setPendingTable({ db, table });
+      }),
+    [appId],
+  );
 
   const localPreviewOrigin = useMemo(
     () =>
@@ -901,7 +915,12 @@ export function MiniAppView({
         workspacePanel === "jobs" ? (
           <MiniAppJobsView appId={appId} appTitle={appTitle} />
         ) : (
-          <MiniAppFilesView appId={appId} panel={workspacePanel} />
+          <MiniAppFilesView
+            appId={appId}
+            panel={workspacePanel}
+            openTable={pendingTable}
+            onTableOpened={clearPendingTable}
+          />
         )
       ) : (
         <div className="mini-app-view__frame-wrap">

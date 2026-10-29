@@ -415,7 +415,7 @@ export function AgentsView() {
                         Consider using faster models
                       </div>
                       <div className="tip-description">
-                        You're using premium models. Try `gpt-5.4-mini` or
+                        You're using premium models. Try `gpt-5-6-luna` or
                         `claude-haiku-4-5` for routine tasks to save up to 95%.
                       </div>
                     </div>

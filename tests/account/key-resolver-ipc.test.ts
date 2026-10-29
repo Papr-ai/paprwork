@@ -63,6 +63,30 @@ describe("keyResolver IPC flow", () => {
     expect(keys.OPENAI_API_KEY).toBe("env-dev-key");
   });
 
+  test("a Papr key left in a provider slot by a proxy session is not resolved as that provider's key", async () => {
+    // A Papr-proxy session used to write the Papr key into OPENAI_API_KEY; the
+    // next job then sent it to api.openai.com and got 401 "Incorrect API key".
+    process.env.NODE_ENV = "development";
+    process.env.OPENAI_API_KEY = "sk-org-ABC-namespace-DEF-secret";
+    process.env.ANTHROPIC_API_KEY = "sk-org-ABC-namespace-DEF-secret";
+
+    const keys = await getApiKeys(["OPENAI_API_KEY", "ANTHROPIC_API_KEY"]);
+
+    expect(keys.OPENAI_API_KEY).toBeUndefined();
+    expect(keys.ANTHROPIC_API_KEY).toBeUndefined();
+  });
+
+  test("a ChatGPT sign-in token left in OPENAI_API_KEY is not resolved as a Platform key", async () => {
+    // A ChatGPT sign-in session writes its access token (a JWT) into
+    // OPENAI_API_KEY; a later job read it as a Platform key and got a 401.
+    process.env.NODE_ENV = "development";
+    process.env.OPENAI_API_KEY = "eyJhbGciOiJSUzI1NiIsInR5cCI6IkpXVCJ9.payload.sig";
+
+    const keys = await getApiKeys(["OPENAI_API_KEY"]);
+
+    expect(keys.OPENAI_API_KEY).toBeUndefined();
+  });
+
   test("Settings key wins over .env when IPC is available, even in development", async () => {
     // npm start sets NODE_ENV=development. The previous shortcut returned
     // process.env and never asked main for the key the user pasted in Settings.

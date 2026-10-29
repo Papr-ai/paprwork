@@ -943,40 +943,122 @@
   background: var(--text-secondary);
 }
 
-.ss6-data-dot.ss6-data-dot--ok {
-  background: #2e9d5b;
-}
-
 .ss6-data-list {
   display: flex;
   flex-direction: column;
-  gap: 6px;
-  padding: 0 12px 10px 27px;
-}
-
-.ss6-data-row {
-  display: flex;
-  align-items: center;
   gap: 8px;
+  padding: 2px 12px 12px 27px;
+}
+
+/* Everyone / Some people: label + pills. */
+.ss6-data-r {
+  display: grid;
+  grid-template-columns: 84px 1fr;
+  gap: 8px;
+  align-items: start;
+}
+
+.ss6-data-l {
+  padding-top: 4px;
   font-size: 12px;
-}
-
-.ss6-data-row code {
-  flex: 1;
-  min-width: 0;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-}
-
-.ss6-data-row small {
   color: var(--text-secondary);
+}
+
+.ss6-pills {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  min-width: 0;
+}
+
+.ss6-pill {
+  position: relative;
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  height: 24px;
+  padding: 0 9px 0 7px;
+  border: 1px solid var(--ss6-line);
+  border-radius: 999px;
+  background: var(--bg-primary, transparent);
+  font: inherit;
+  font-size: 12px;
+  color: var(--text-primary);
+  white-space: nowrap;
+  cursor: pointer;
+}
+
+.ss6-pill:hover,
+.ss6-pill:focus-visible {
+  border-color: var(--accent-primary, #0060e0);
+}
+
+.ss6-pill--more {
+  padding: 0 9px;
+  color: var(--text-secondary);
+}
+
+.ss6-pill-ico {
+  width: 12px;
+  height: 12px;
+  flex-shrink: 0;
+  fill: none;
+  stroke: var(--text-secondary);
+  stroke-width: 1.8;
+  stroke-linecap: round;
+}
+
+/* Hover card: built in the DOM, shown only on hover/focus (no fetch). */
+.ss6-pill-tip {
+  display: none;
+  position: fixed;
+  z-index: 1000;
+  width: 220px;
+  padding: 9px 11px;
+  flex-direction: column;
+  gap: 3px;
+  border: 1px solid var(--ss6-line);
+  border-radius: 10px;
+  background: var(--bg-primary, #fff);
+  box-shadow: 0 8px 24px rgba(0, 0, 0, 0.12);
+  text-align: left;
+  white-space: normal;
+  pointer-events: none;
+}
+
+.ss6-pill:hover .ss6-pill-tip,
+.ss6-pill:focus-visible .ss6-pill-tip {
+  display: flex;
+}
+
+.ss6-pill-tip b {
+  font-size: 12.5px;
+  font-weight: 600;
+}
+
+.ss6-pill-tip em {
+  font-style: normal;
+  font-size: 11.5px;
+  color: var(--text-secondary);
+}
+
+.ss6-pill-tip small {
+  font-size: 12px;
+  line-height: 1.45;
+  color: var(--text-primary);
+}
+
+.ss6-pill-tip i {
+  margin-top: 2px;
+  font-style: normal;
+  font-size: 11.5px;
+  color: var(--accent-primary, #0060e0);
 }
 
 /* Same look as "Set up with Pen" (.cx-btn): outlined, accent on hover. */
 .ss6-data-fix {
   align-self: flex-start;
-  margin-top: 4px;
+  margin-top: 2px;
   padding: 5px 12px;
   border: 1px solid var(--ss6-line);
   border-radius: 7px;
