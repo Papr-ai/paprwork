@@ -66,6 +66,7 @@ import {
 import type { Artifact, ArtifactCloudLineage } from "../../stores/artifactsStore";
 import { CopyAppModal } from "./CopyAppModal";
 import { PublishBarTitle } from "./PublishBarTitle";
+import { useAppFailingJob } from "../../stores/jobsStore";
 import { DuplicateAppNameModal } from "./DuplicateAppNameModal";
 import { usePaprNamespace } from "../../hooks/usePaprNamespace";
 import {
@@ -117,7 +118,6 @@ import {
 import type { CloudCompatibilityReport } from "../../../src/core/types/cloudAppCompatibility";
 import type { CloudPublishReadinessReport } from "../../../src/core/types/cloudAppDependencies";
 import { linkedDepItems } from "./ShareLinkedDeps";
-import { PreviewUrlRow } from "./PreviewUrlRow";
 import { PublishInfoSheet } from "./PublishInfoSheet";
 import { APP_INFO_REQUEST_EVENT, takeAppInfoRequest } from "../../utils/appInfoRequest";
 import { pendingCommunity } from "../../utils/galleryGate";
@@ -154,6 +154,8 @@ interface MiniAppPublishBarProps {
   workspaceMode: AppWorkspaceMode;
   onWorkspaceModeChange: (mode: AppWorkspaceMode) => void;
   workspacePanel: AppWorkspacePanel;
+  /** Data & code side panel is open beside the app (the bar itself stays in preview layout). */
+  dataPanelOpen?: boolean;
   onWorkspacePanelChange: (panel: AppWorkspacePanel) => void;
   linkedJobCount?: number;
   onTrackPullComplete?: () => void;
@@ -165,6 +167,8 @@ interface MiniAppPublishBarProps {
   /** True after the local preview iframe shell has loaded — sync checks wait for this. */
   previewShellLoaded?: boolean;
   onOpenDependencyApp?: (appId: string, title?: string) => void;
+  /** "Job failing" chip: open that job in the Data & code panel. */
+  onOpenFailingJob?: (jobId: string) => void;
 }
 
 function sharePrefsOptions(cloud: CloudPublishControls): {
@@ -258,12 +262,14 @@ export function MiniAppPublishBar({
   onWorkspaceModeChange,
   workspacePanel,
   onWorkspacePanelChange,
+  dataPanelOpen = false,
   linkedJobCount = 0,
   onTrackPullComplete,
   onRefreshPreview,
   previewTabVisible = true,
   previewShellLoaded = true,
   onOpenDependencyApp,
+  onOpenFailingJob,
   onTitleChange,
 }: MiniAppPublishBarProps) {
   const [shareOpen, setShareOpen] = useState(false);
@@ -899,12 +905,6 @@ export function MiniAppPublishBar({
   const copyUrl = onTeamData
     ? upstreamWebUrl
     : cloud.externalLinkUrl ?? cloud.loginUrl ?? webDisplayUrl;
-  /** Shareable web URL only — never localhost (misleading when previewing locally). */
-  const previewDisplayUrl = onTeamData
-    ? upstreamWebUrl
-    : cloud.live
-      ? (copyUrl ?? webDisplayUrl)
-      : null;
   // "Linked to a publisher" — collaborators only. Plain forks behave as owned apps.
   const isFork = isTrackCollaborator;
 
@@ -1289,6 +1289,8 @@ export function MiniAppPublishBar({
     };
   }, [appId, webSyncPopoverOpen, updateAvailable, isTrackCollaborator, webSyncLastCheckedAt, collabEditsTick, panelChangesTick]);
 
+  const failingJob = useAppFailingJob(appId);
+
   const handlePublishStatusChipClick = () => {
     // A failed publish opens the same status card as every other sync problem:
     // the reason, Publish again and Ask agent — not a separate dialog.
@@ -1359,6 +1361,18 @@ export function MiniAppPublishBar({
     } finally {
       setShareSyncNotice(null);
     }
+  };
+
+  /** Share on a draft publishes first, then opens the sheet. The first
+   *  publish detours through App info (name/cover); its confirm handler
+   *  already opens Share afterwards, so nothing more to do on that path. */
+  const handleShareClick = async () => {
+    if (cloud.live) {
+      setShareOpen(true);
+      return;
+    }
+    const ok = await handlePublishClick();
+    if (ok) setShareOpen(true);
   };
 
   /** v6 Share: answers are walked through (who → what → keys) and saved once
@@ -1894,6 +1908,17 @@ export function MiniAppPublishBar({
             {/* Status belongs to the app, so it sits with the app's name —
                 not inside the Local/Web toggle, which is about which preview
                 you are looking at. */}
+            {failingJob && onOpenFailingJob ? (
+              <button
+                type="button"
+                className="mini-app-publish-bar__job-failing"
+                title={`${failingJob.name} failed — open it`}
+                onClick={() => onOpenFailingJob(failingJob.id)}
+              >
+                <span className="mini-app-publish-bar__job-failing-dot" aria-hidden />
+                Job failing
+              </button>
+            ) : null}
             {chipSpeaks ? (
               <span
                 ref={webSyncAnchorRef}
@@ -2047,20 +2072,9 @@ export function MiniAppPublishBar({
             )
           : null}
 
-        {workspaceMode === "preview" && previewDisplayUrl ? (
-          <PreviewUrlRow
-            displayUrl={previewDisplayUrl}
-            refreshTitle={
-              viewMode === "published"
-                ? "Refresh web preview"
-                : "Refresh local preview"
-            }
-            onRefresh={() => onRefreshPreview?.()}
-            onOpenInBrowser={() => void cloud.openInBrowser(previewDisplayUrl)}
-            onCopySuccess={cloud.notifyLinkCopied}
-            onCopyError={cloud.notifyLinkCopyFailed}
-          />
-        ) : null}
+        {/* No URL row: the link lives in Share (copy / open), and Refresh
+            preview moved to the overflow. One less strip competing with the
+            title and status chip for width. */}
 
         <div className="mini-app-publish-bar__actions">
           {cloud.toast ? (
@@ -2071,7 +2085,7 @@ export function MiniAppPublishBar({
               action, and it was spending a full-width button in a row that runs
               out of space before the primary action does. */}
           <PublishBarOverflowMenu
-            mode={workspaceMode}
+            mode={dataPanelOpen ? "files" : workspaceMode}
             onModeChange={onWorkspaceModeChange}
             live={cloud.live}
             isFork={isFork}
@@ -2096,6 +2110,14 @@ export function MiniAppPublishBar({
               isTrackCollaborator && !usesSharedData(cloudLineage) ? () => void handleDetach() : undefined
             }
             onShowInFinder={handleShowInFinder}
+            onRefreshPreview={
+              workspaceMode === "preview" && onRefreshPreview
+                ? onRefreshPreview
+                : undefined
+            }
+            refreshPreviewLabel={
+              viewMode === "published" ? "Refresh web preview" : "Refresh preview"
+            }
             // Owners only: a team-data collaborator's copy reaches the team by proposal.
             onAppInfo={isTrackCollaborator ? undefined : () => setAppInfoOpen("details")}
             onCopyToWorkspace={
@@ -2212,7 +2234,11 @@ export function MiniAppPublishBar({
             </button>
           ) : null}
 
-          {!onTeamData && cloud.live ? (
+          {/* Share is always there, live or not. On a draft it publishes
+              first (same path as Publish, incl. the first-publish App info
+              step) and then opens the sheet — so "I want to share this" is one
+              click instead of Publish → find Share. */}
+          {!onTeamData ? (
             <button
               type="button"
               className={`mini-app-publish-bar__button${
@@ -2222,11 +2248,13 @@ export function MiniAppPublishBar({
               }`}
               disabled={cloud.busy}
               title={
-                forkUnpublished
-                  ? "Publish your own copy to the web"
+                !cloud.live
+                  ? forkUnpublished
+                    ? "Publish your own copy to the web, then choose who gets it"
+                    : "Publish to the web, then choose who gets it"
                   : `Shared: ${cloud.statusLabel}`
               }
-              onClick={() => setShareOpen(true)}
+              onClick={() => void handleShareClick()}
             >
               <ShareAudienceIcon
                 audience={appliedModel.audience}
