@@ -42,7 +42,12 @@ export interface AppAccess {
   accessModel?: "visibility" | "audiences";
   /** v9 server: which audiences can open it now. Missing = older server. */
   audiences?: { workspace: boolean; link: boolean; community: boolean };
+  /** Size cap (MB) for one upload by a visitor of the published app. Missing = older server. */
+  uploadMaxMb?: number;
 }
+
+/** Choices for the visitor upload cap. 50 MB is the server default. */
+export const UPLOAD_MAX_MB_CHOICES = [10, 50, 100, 250, 500, 1024, 5120] as const;
 
 export type AccessPatch = Partial<
   Pick<
@@ -55,6 +60,7 @@ export type AccessPatch = Partial<
     | "visibility"
     | "requireSignIn"
     | "accessModel"
+    | "uploadMaxMb"
   >
 >;
 
@@ -149,7 +155,7 @@ export function summarizeAccess(a: Pick<AppAccess, "visibility" | "workspaceRole
 /** Only the fields that differ, so a save never rewrites what didn't change. */
 export function accessPatch(live: AppAccess, draft: AppAccess): AccessPatch {
   const patch: AccessPatch = {};
-  const keys = ["workspaceRole", "linkRole", "communityRole", "approvalRule", "visibility", "requireSignIn"] as const;
+  const keys = ["workspaceRole", "linkRole", "communityRole", "approvalRule", "visibility", "requireSignIn", "uploadMaxMb"] as const;
   for (const k of keys) {
     if (live[k] !== draft[k]) (patch as Record<string, unknown>)[k] = draft[k];
   }

@@ -58,6 +58,12 @@ describe("appRolesModel", () => {
     expect(accessPatch(draft, reordered)).toEqual({});
   });
 
+  it("sends the upload cap only when it changed", () => {
+    const live = { ...base, uploadMaxMb: 50 };
+    expect(accessPatch(live, { ...live })).toEqual({});
+    expect(accessPatch(live, { ...live, uploadMaxMb: 500 })).toEqual({ uploadMaxMb: 500 });
+  });
+
   it("summarizes like the plan", () => {
     const a = { ...base, grants: [{ userId: "u", role: "maintainer" as const }, { email: "s@x.com", role: "viewer" as const }] };
     expect(summarizeAccess(a)).toBe("Workspace: Contributor · 2 people");
