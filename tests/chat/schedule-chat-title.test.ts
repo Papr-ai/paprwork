@@ -9,7 +9,7 @@ vi.mock("../../ui/src/lib/gateway", () => ({
 import { gateway } from "../../ui/src/lib/gateway";
 import { useChatStore } from "../../ui/stores/chatStore";
 import { useTabStore } from "../../ui/stores/tabStore";
-import { scheduleChatTitleGeneration } from "../../ui/lib/scheduleChatTitle";
+import { presetChatTitle, scheduleChatTitleGeneration } from "../../ui/lib/scheduleChatTitle";
 
 describe("scheduleChatTitleGeneration", () => {
   beforeEach(() => {
@@ -35,5 +35,13 @@ describe("scheduleChatTitleGeneration", () => {
       expect(useTabStore.getState().tabs[0]?.title).toBe("Weekly planning");
     });
     expect(useChatStore.getState().chats[0]?.title).toBe("Weekly planning");
+  });
+
+  it("keeps a title the chat was opened with, ignores the default", () => {
+    expect(presetChatTitle("Review shared data")).toBe("Review shared data");
+    expect(presetChatTitle("  Set up HubSpot ")).toBe("Set up HubSpot");
+    expect(presetChatTitle("New Chat")).toBeUndefined();
+    expect(presetChatTitle("")).toBeUndefined();
+    expect(presetChatTitle(undefined)).toBeUndefined();
   });
 });

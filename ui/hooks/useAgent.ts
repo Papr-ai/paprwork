@@ -43,7 +43,7 @@ import {
   shouldAutoOpenArtifactTab,
 } from "../utils/resolveAppIdForAutoOpen";
 import { buildRecoveryAgentConfigForChat } from "../utils/buildRecoveryAgentConfig";
-import { scheduleChatTitleGeneration } from "../lib/scheduleChatTitle";
+import { presetChatTitle, scheduleChatTitleGeneration } from "../lib/scheduleChatTitle";
 import {
   activeStreamRequests,
   appliedChunkCounts,
@@ -2506,7 +2506,13 @@ export function useAgent() {
           console.log(
             "[useAgent] First message - creating permanent chat before streaming",
           );
-          const createResponse = await gateway.send("chat:create", {});
+          const presetTitle = presetChatTitle(
+            useTabStore.getState().getTab(tabId)?.title,
+          );
+          const createResponse = await gateway.send(
+            "chat:create",
+            presetTitle ? { title: presetTitle } : {},
+          );
           const newChatId = (createResponse.data as any)?.chatId;
 
           if (!newChatId) {
@@ -2550,7 +2556,11 @@ export function useAgent() {
           setTabStreaming(tabId, false);
           setTabStreaming(`chat-${finalChatId}`, true);
 
-          scheduleChatTitleGeneration(finalChatId, message);
+          if (presetTitle) {
+            useChatStore.getState().patchChatTitle(finalChatId, presetTitle);
+          } else {
+            scheduleChatTitleGeneration(finalChatId, message);
+          }
           // No interruptIfActive(finalChatId): the id was just created, so its
           // only "active work" is this send's own isSending — interrupting it
           // clears isSending and auto-continue fires on the first message.
