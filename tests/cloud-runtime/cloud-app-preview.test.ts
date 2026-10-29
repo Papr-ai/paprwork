@@ -143,6 +143,8 @@ describe("cloudAppPreview", () => {
     expect(html).toContain(CLOUD_APP_LOGIN_BUTTON_LABEL);
     expect(html).toContain(CLOUD_APP_SIGNUP_BUTTON_LABEL);
     expect(html).toContain("mode=signup");
-    expect(html).toContain("font-style: italic");
+    expect(html).toContain('class="gate-status"');
+    expect(html).toContain("/discover/_/drop-light.png");
+    expect(html).not.toContain("font-style: italic");
   });
 });
