@@ -2,6 +2,9 @@
 import { describe, expect, it } from "vitest";
 
 import {
+  COLUMN_CAP,
+  humanTable,
+  rowsLine,
   DATA_CHECK_CHAT_TITLE,
   dataCheckAgentPrompt,
   scopeTables,
@@ -17,6 +20,26 @@ import {
 import { formatMergeByline } from "../../../ui/utils/mergeByline.js";
 
 const cols = (...names: string[]) => names.map((name) => ({ name }));
+
+describe("table scope columns (hover card)", () => {
+  const src = (cols: string[]) => [{ alias: "crm", tables: [{ table: "deals", columns: cols.map((name) => ({ name })) }] }];
+  it("returns user-facing columns from the schema it already read", () => {
+    const [t] = scopeTables(src(["id", "company", "amount", "_acl", "created_by", "papr_user_id", "stage"]));
+    expect(t.columns).toEqual(["company", "amount", "stage"]);
+    expect(t.moreColumns).toBe(0);
+  });
+  it("caps columns so the response stays small", () => {
+    const [t] = scopeTables(src(Array.from({ length: 20 }, (_, i) => `c${i}`)));
+    expect(t.columns).toHaveLength(COLUMN_CAP);
+    expect(t.moreColumns).toBe(20 - COLUMN_CAP);
+  });
+  it("describes rows in plain words", () => {
+    expect(rowsLine({ db: "a", name: "b", scope: "all" }, true)).toBe("Every row");
+    expect(rowsLine({ db: "a", name: "b", scope: "user" }, true)).toBe("Their own rows");
+    expect(rowsLine({ db: "a", name: "b", scope: "private" }, true)).toBe("Rows shared with them");
+    expect(humanTable("deal_notes")).toBe("deal notes");
+  });
+});
 
 describe("Ask Pen prompt", () => {
   const t = (name: string) => ({ db: "crm", name, scope: "all" as const });

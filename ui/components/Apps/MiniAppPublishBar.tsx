@@ -32,6 +32,7 @@ import {
 } from "../../utils/cloudContributeApi";
 import { ShareAccessPanel } from "./ShareAccessPanel";
 import { ShareAccessSheet } from "./ShareSheetV9";
+import { onOpenAppTable } from "../../utils/openAppTable";
 import { fetchWebIsAhead } from "../../utils/cloudFreshCheck";
 import { fetchLastMerge, pullAfterAccept, type LastMerge } from "../../utils/v9CloudApi";
 import { formatMergeByline } from "../../utils/mergeByline";
@@ -572,6 +573,8 @@ export function MiniAppPublishBar({
     cloud.sharePrefs?.allowedEmails,
     cloud.sharePrefs?.allowedEmailDomains,
   ]);
+
+  useEffect(() => (shareOpen ? onOpenAppTable(appId, () => setShareOpen(false)) : undefined), [shareOpen, appId]);
 
   useEffect(() => {
     if (!shareOpen) return;
