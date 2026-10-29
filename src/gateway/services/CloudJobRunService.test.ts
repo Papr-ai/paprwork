@@ -56,6 +56,22 @@ describe("runJobInCloud", () => {
     );
   });
 
+  it("passes run parameters to the cloud job (env vars in the sandbox)", async () => {
+    cloudApiFetch.mockResolvedValue({
+      ok: true,
+      json: async () => ({ jobId: "job-1", status: "completed", exitCode: 0, stdout: "ok", stderr: "" }),
+    });
+    const { runJobInCloud } = await import("./CloudJobRunService.js");
+    await runJobInCloud(makeJobsService() as never, "job-1", { PROJECT_ID: "p1", MODE: "sample" });
+    const runBody = () =>
+      cloudApiFetch.mock.calls.filter((c) => c[0] === "/v1/cloud/runtime/job-run").at(-1)?.[1]
+        ?.body as Record<string, unknown>;
+    expect(runBody().params).toEqual({ PROJECT_ID: "p1", MODE: "sample" });
+
+    await runJobInCloud(makeJobsService() as never, "job-1");
+    expect(runBody()).not.toHaveProperty("params");
+  });
+
   it("marks the job running before the request and failed with a log line when the request fails", async () => {
     cloudApiFetch.mockRejectedValue(new Error("Request timed out"));
     const service = makeJobsService();

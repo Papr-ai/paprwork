@@ -230,6 +230,7 @@ async function syncAfterCloudRun(
 export async function runJobInCloud(
   jobsService: JobsService,
   jobId: string,
+  params?: Record<string, string>,
 ): Promise<JobRecord> {
   const job = await jobsService.getJob(jobId);
   if (!job) {
@@ -267,6 +268,7 @@ export async function runJobInCloud(
         tier: "sandbox",
         timeoutMs,
         logRunId,
+        ...(params && Object.keys(params).length ? { params } : {}),
       },
       timeoutMs: timeoutMs + 30_000,
     });
