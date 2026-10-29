@@ -25,6 +25,7 @@ export interface PublishedAppResolveResult {
   catalogTitle?: string;
   catalogDescription?: string;
   catalogIcon?: string;
+  catalogHeadline?: string;
 }
 
 function memoryHeaders(sessionToken?: string): Record<string, string> {

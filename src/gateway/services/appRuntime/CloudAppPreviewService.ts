@@ -48,9 +48,11 @@ function previewMetaFromCatalog(
   const description =
     resolved.catalogDescription?.trim() ||
     buildDefaultCloudAppDescription(title);
+  const headline = resolved.catalogHeadline?.trim();
   return {
     title,
     description,
+    ...(headline ? { headline } : {}),
     canonicalUrl,
     iconUrl,
     imageUrl,
@@ -229,6 +231,7 @@ function previewMetaFromMetadata(
   return {
     title: metadata.title,
     description: metadata.description,
+    ...(metadata.headline ? { headline: metadata.headline } : {}),
     canonicalUrl,
     iconUrl,
     imageUrl,

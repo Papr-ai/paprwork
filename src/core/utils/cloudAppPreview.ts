@@ -4,8 +4,7 @@
 
 import {
   buildDefaultCloudAppDescription,
-  humanizeCloudAppSlug,
-} from "./cloudAppMetadata.js";
+  humanizeCloudAppSlug, isDefaultCloudAppDescription } from "./cloudAppMetadata.js";
 
 /** Product name for apps.papr.ai link previews (matches Electron productName). */
 export const CLOUD_APP_SITE_NAME = "Papr Work";
@@ -13,6 +12,8 @@ export const CLOUD_APP_SITE_NAME = "Papr Work";
 export interface CloudAppPreviewMeta {
   title: string;
   description: string;
+  /** Publisher one-liner; the gate shows it instead of the long description. */
+  headline?: string;
   canonicalUrl: string;
   iconUrl: string;
   imageUrl: string;
@@ -190,7 +191,10 @@ export function buildPreviewLandingHtml(
 ): string {
   const headTags = buildPreviewHeadTags(meta);
   const title = escapeHtmlAttribute(meta.title);
-  const description = escapeHtmlAttribute(meta.description);
+  // Headline (one line) beats the long description; a generated placeholder shows nothing.
+  const blurb = meta.headline?.trim()
+    || (isDefaultCloudAppDescription(meta.title, meta.description) ? "" : meta.description);
+  const description = escapeHtmlAttribute(blurb);
   const safeMessage = escapeHtmlAttribute(message.trim());
   const gateHeadline = escapeHtmlAttribute(options?.headline ?? CLOUD_APP_SIGN_IN_HEADLINE);
   const showLoginButton = options?.showLoginButton !== false;
@@ -269,7 +273,7 @@ export function buildPreviewLandingHtml(
         ${iconMarkup}
         <div>
           <h1>${title}</h1>
-          <p class="app-description">${description}</p>
+          ${description ? `<p class="app-description">${description}</p>` : ""}
         </div>
       </div>
       <p class="gate-status">${gateHeadline}</p>
