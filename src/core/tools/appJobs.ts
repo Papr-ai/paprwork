@@ -754,6 +754,12 @@ const runJobSchema = z.object({
     .describe(
       "Where to execute: local (default) = desktop gateway; cloud = Papr Cloud runtime (syncs git first, then POST /v1/cloud/runtime/job-run). Use cloud to test jobs while the Mac is awake.",
     ),
+  params: z
+    .record(z.string(), z.string())
+    .optional()
+    .describe(
+      "Run parameters, passed to the job as env vars (same as a mini-app's runJob params), e.g. { PROJECT_ID: 'p1', MODE: 'sample' }. Works for local and cloud runs.",
+    ),
 });
 
 const linkAppDataSourceSchema = z
@@ -1656,8 +1662,8 @@ export const runJobTool = createTool({
 
     const job =
       args.runtime === "cloud"
-        ? await jobsService.runJobInCloud(args.jobId)
-        : await gatewayBackgroundBudget.runInteractive(() => jobsService.runJob(args.jobId));
+        ? await jobsService.runJobInCloud(args.jobId, args.params)
+        : await gatewayBackgroundBudget.runInteractive(() => jobsService.runJob(args.jobId, args.params));
     const apiKeys = getApiKeysForSanitization();
     const logs = sanitizeError(
       await jobsService.getLogs(args.jobId, args.logBytes ?? 12000),

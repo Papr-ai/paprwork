@@ -23,7 +23,12 @@ beforeAll(async () => {
     let raw = "";
     req.on("data", (c) => (raw += c));
     req.on("end", () => {
-      const body = raw ? JSON.parse(raw) : {};
+      let body: Record<string, unknown> = {};
+      try {
+        body = raw ? JSON.parse(raw) : {};
+      } catch {
+        body = {};
+      }
       seen.push({ url: req.url ?? "", auth: req.headers.authorization, body });
       res.setHeader("Content-Type", "application/json");
       if (req.url === "/v1/cloud/runtime/job-files/url") {
@@ -33,6 +38,19 @@ beforeAll(async () => {
           return;
         }
         res.end(JSON.stringify({ url: `https://signed/${body.id}`, location: { kind: "cloud" } }));
+        return;
+      }
+      if (req.url === "/v1/cloud/runtime/job-files/upload") {
+        res.end(JSON.stringify({ uploadUrl: `${base}/storage/put`, alreadyExists: false }));
+        return;
+      }
+      if (req.url === "/storage/put") {
+        seen[seen.length - 1].body = { bytes: raw.length } as Record<string, unknown>;
+        res.end("{}");
+        return;
+      }
+      if (req.url === "/v1/cloud/runtime/job-files/commit") {
+        res.end(JSON.stringify({ id: "file-cloud-1", objectKey: "k" }));
         return;
       }
       if (req.url === "/api/files/url") {
@@ -94,6 +112,33 @@ describe.skipIf(!hasPython)("job SDK papr_files", () => {
     expect(seen).toEqual([
       { url: "/v1/cloud/runtime/job-files/url", auth: "Bearer pjdb1.tok", body: { id: "vid" } },
     ]);
+  });
+
+  it("add() in the cloud uploads to storage and commits through the proxy", async () => {
+    seen.length = 0;
+    const fs = require("fs") as typeof import("fs");
+    const os = require("os") as typeof import("os");
+    const f = path.join(fs.mkdtempSync(path.join(os.tmpdir(), "pf-")), "tika.mp3");
+    fs.writeFileSync(f, "hello audio");
+    const r = await py(`import papr_files; print(papr_files.add(${JSON.stringify(f)}, file_name='tika-sample.mp3', mime='audio/mpeg'))`, {
+      PAPR_APP_ID: APP,
+      PAPR_FILES_PROXY_URL: `${base}/v1/cloud/runtime/job-files`,
+      PAPR_DB_PROXY_TOKEN: "pjdb1.tok",
+      PAPR_GATEWAY_URL: "http://127.0.0.1:1", // must not be used in the pod
+    });
+    expect(r.err).toBe("");
+    expect(r.out).toBe("file-cloud-1");
+    expect(seen.map((s) => s.url)).toEqual([
+      "/v1/cloud/runtime/job-files/upload",
+      "/storage/put",
+      "/v1/cloud/runtime/job-files/commit",
+    ]);
+    const meta = seen[0].body;
+    expect(seen[0].auth).toBe("Bearer pjdb1.tok");
+    expect(meta).toMatchObject({ sizeBytes: 11, mime: "audio/mpeg", fileName: "tika-sample.mp3", scope: "app" });
+    expect(meta.sha256).toMatch(/^[0-9a-f]{64}$/);
+    expect(seen[1].body).toEqual({ bytes: 11 });
+    expect(seen[2].body).toEqual(meta);
   });
 
   it("surfaces proxy errors as PaprFilesError", async () => {

@@ -27,10 +27,12 @@ Env (injected by the job runner):
   PAPR_GATEWAY_URL — gateway base, defaults to http://127.0.0.1:18789
   PAPR_FILES_PROXY_URL + PAPR_DB_PROXY_TOKEN — cloud sandbox runs only: there
     is no desktop gateway in the pod, so url()/local_path() resolve file ids
-    through the memory server with the run's signed grant instead.
+    through the memory server with the run's signed grant instead, and add()
+    uploads straight to storage with a ticket from the same proxy.
 """
 from __future__ import annotations
 
+import hashlib
 import json
 import os
 import urllib.error
@@ -121,6 +123,10 @@ def add(
         # hide that behind a valid-looking reference.
         raise PaprFilesError(f"Refusing to register an empty file: {resolved}")
 
+    cloud = _cloud_proxy()
+    if cloud:
+        return _add_via_cloud(cloud[0], cloud[1], resolved, file_name, mime, scope)
+
     result = _post(
         "/api/files/upload",
         {
@@ -166,6 +172,74 @@ def _resolve_via_cloud(base: str, token: str, file_id: str) -> dict[str, Any]:
         raise PaprFilesError(f"file url failed ({err.code}): {detail}") from err
     except urllib.error.URLError as err:
         raise PaprFilesError(f"Cannot reach the Papr files proxy ({err.reason})") from err
+
+
+def _cloud_call(base: str, token: str, path: str, payload: dict[str, Any]) -> dict[str, Any]:
+    request = urllib.request.Request(
+        f"{base}/{path}",
+        data=json.dumps(payload).encode("utf-8"),
+        headers={"Content-Type": "application/json", "Authorization": f"Bearer {token}"},
+        method="POST",
+    )
+    try:
+        with urllib.request.urlopen(request, timeout=CALL_TIMEOUT_SECONDS) as response:
+            return json.loads(response.read().decode("utf-8"))
+    except urllib.error.HTTPError as err:
+        detail = err.read().decode("utf-8", errors="replace")
+        try:
+            detail = json.loads(detail).get("detail", detail)
+        except (ValueError, AttributeError):
+            pass
+        raise PaprFilesError(f"file {path} failed ({err.code}): {detail}") from err
+    except urllib.error.URLError as err:
+        raise PaprFilesError(f"Cannot reach the Papr files proxy ({err.reason})") from err
+
+
+def _add_via_cloud(
+    base: str, token: str, path: str, file_name: str | None, mime: str | None, scope: str
+) -> str:
+    """add() in a cloud sandbox: no gateway, so upload straight to storage.
+
+    The memory server derives the object key from the run's grant (its app and
+    user), hands back a resumable upload URL, then checks the stored size and
+    records the file in the app database before returning its id.
+    """
+    digest = hashlib.sha256()
+    with open(path, "rb") as fh:
+        for chunk in iter(lambda: fh.read(1 << 20), b""):
+            digest.update(chunk)
+    meta = {
+        "sha256": digest.hexdigest(),
+        "sizeBytes": os.path.getsize(path),
+        "mime": mime,
+        "scope": scope,
+        "fileName": file_name or os.path.basename(path),
+    }
+    ticket = _cloud_call(base, token, "upload", meta)
+    upload_url = ticket.get("uploadUrl")
+    if upload_url and not ticket.get("alreadyExists"):
+        with open(path, "rb") as fh:
+            request = urllib.request.Request(
+                upload_url,
+                data=fh,
+                headers={
+                    "Content-Type": mime or "application/octet-stream",
+                    "Content-Length": str(meta["sizeBytes"]),
+                },
+                method="PUT",
+            )
+            try:
+                with urllib.request.urlopen(request, timeout=UPLOAD_TIMEOUT_SECONDS):
+                    pass
+            except urllib.error.HTTPError as err:
+                raise PaprFilesError(f"Upload to storage failed ({err.code})") from err
+            except urllib.error.URLError as err:
+                raise PaprFilesError(f"Cannot reach storage ({err.reason})") from err
+    result = _cloud_call(base, token, "commit", meta)
+    file_id = result.get("id")
+    if not file_id:
+        raise PaprFilesError(f"Commit returned no file id: {result}")
+    return str(file_id)
 
 
 def _resolve(file_id: str, app_id: str | None) -> dict[str, Any]:

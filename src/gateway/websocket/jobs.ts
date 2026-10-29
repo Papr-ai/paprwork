@@ -42,6 +42,7 @@ interface CreateJobPayload {
 interface RunJobPayload {
   jobId: string;
   runtime?: "local" | "cloud";
+  params?: Record<string, string>;
 }
 
 interface JobFilePayload {
@@ -207,8 +208,8 @@ export async function setupJobsHandlers(
         const payload = message.payload as RunJobPayload;
         const job =
           payload.runtime === "cloud"
-            ? await jobsService.runJobInCloud(payload.jobId)
-            : await jobsService.runJob(payload.jobId);
+            ? await jobsService.runJobInCloud(payload.jobId, payload.params)
+            : await jobsService.runJob(payload.jobId, payload.params);
         sendResponse(ws, { id: message.id, success: true, data: job });
         break;
       }

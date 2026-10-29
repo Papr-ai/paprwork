@@ -3606,7 +3606,10 @@ export class JobsService {
   }
 
   /** Run on Papr Cloud (memory server) while desktop is awake — for testing cloud execution. */
-  async runJobInCloud(jobId: string): Promise<JobRecord> {
+  async runJobInCloud(
+    jobId: string,
+    params?: Record<string, string>,
+  ): Promise<JobRecord> {
     if (this.cloudRuns.has(jobId)) {
       throw new Error("Job is already running in the cloud");
     }
@@ -3615,7 +3618,7 @@ export class JobsService {
     );
     this.cloudRuns.add(jobId);
     try {
-      return await executeCloudJobRun(this, jobId);
+      return await executeCloudJobRun(this, jobId, params);
     } finally {
       this.cloudRuns.delete(jobId);
     }
