@@ -87,8 +87,13 @@ export class ChatSessionManager {
    * Create a Mastra agent with the specified config
    */
   private async createAgent(config: AgentConfigInternal): Promise<Agent> {
-    // Set API keys in environment for AI SDK providers
-    if (config.provider === "anthropic") {
+    // Set API keys in environment for AI SDK providers.
+    // Not on the Papr proxy: config.apiKey is then the Papr key (sk-org-…), and
+    // leaving it in OPENAI_API_KEY / ANTHROPIC_API_KEY made the next session
+    // resolve it as a real provider key and get a 401 from the provider.
+    if (config.usePaprProxy) {
+      // The proxy model gets the key directly (createProxyModel below).
+    } else if (config.provider === "anthropic") {
       process.env.ANTHROPIC_API_KEY = config.apiKey;
       console.log(
         `[ChatSessionManager] Set ANTHROPIC_API_KEY in env (authType=${config.authType}, length=${config.apiKey?.length || 0})`,
