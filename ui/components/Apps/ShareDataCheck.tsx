@@ -3,12 +3,14 @@
  *
  * One line when shared tables would show every row to everyone who opens the
  * app ("2 tables visible to all visitors"); expands to the per-table list and
- * an Ask agent button that makes them private per person. Silent when every
+ * an Ask Pen button. Like "Set up with Pen", it opens a new chat with the
+ * review prompt already sent; the user and Pen decide table by table there. Silent when every
  * table is already per person, or the app has no database.
  */
 
 import { useEffect, useState } from "react";
 import {
+  DATA_CHECK_CHAT_TITLE,
   dataCheckAgentPrompt,
   scopeTag,
   tableIsShared,
@@ -73,13 +75,15 @@ export function ShareDataCheck(props: {
             <button
               type="button"
               className="ss6-data-fix"
+              title="Opens a new chat with Pen"
               onClick={() =>
                 openCloudSyncAgentChat(dataCheckAgentPrompt(props.appId, shared), {
-                  title: "Make tables private per person",
+                  send: true,
+                  title: DATA_CHECK_CHAT_TITLE,
                 })
               }
             >
-              Ask agent
+              Ask Pen
             </button>
           )}
         </div>

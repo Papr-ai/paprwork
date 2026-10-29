@@ -65,12 +65,18 @@ export function scopeTag(t: ScopedTable, signIn: boolean): string {
   return t.scope === "visitor" ? "Needs sign-in" : "Everyone";
 }
 
+/** "Ask Pen" in the Share sheet: opens a new chat with this already sent, like "Set up with Pen". */
+export const DATA_CHECK_CHAT_TITLE = "Review shared data";
+
 export function dataCheckAgentPrompt(appId: string, shared: ScopedTable[]): string {
-  const names = shared.map((t) => `${t.db}.${t.name}`).join(", ");
+  const names = shared.map((t) => `${t.db}.${t.name}`);
+  const list = names.length > 6 ? `${names.slice(0, 6).join(", ")} and ${names.length - 6} more` : names.join(", ");
+  const n = names.length;
   return (
-    `App ${appId} is shared, and these tables are visible to everyone who opens it: ${names}. ` +
-    "Make each of them private per person: add a papr_user_id column (require Papr sign-in), " +
-    "scope every read and write in the app and its jobs to the signed-in user, and backfill " +
-    "existing rows to me. Tell me first if any table is meant to be shared (e.g. a catalog)."
+    `Help me review what people see when I share app ${appId}. ` +
+    `${n} table${n === 1 ? "" : "s"} show every row to everyone with access: ${list}. ` +
+    "Ask me which should stay shared (catalogs, settings), then make the rest private per person: " +
+    "add _acl and created_by, write new rows with acl_for_caller(), and set existing rows to me. " +
+    "Check the app and its jobs still work after."
   );
 }
