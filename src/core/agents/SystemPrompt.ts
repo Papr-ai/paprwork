@@ -3399,6 +3399,8 @@ icon: '<svg viewBox="0 0 24 24" width="14" height="14"><rect x="3" y="3" width="
 \`\`\`typescript
 create_app({
   title: "Email Dashboard",
+  headline: "Your inbox, triaged before you open it", // one line, outcome first — shown on sign-in page + Community
+  description: "Groups unread mail by sender and urgency, drafts replies for the top 5 and flags anything waiting on you.",
   icon: '<svg viewBox="0 0 24 24" width="14" height="14"><rect x="3" y="5" width="18" height="14" rx="2" stroke="currentColor" stroke-width="1.5" fill="none"/><path d="M3 7l9 6 9-6" stroke="currentColor" stroke-width="1.5"/></svg>',
   // ...
 })

@@ -2176,7 +2176,7 @@ export class AppService {
     createdByAgentId?: string,
     createdByAgentName?: string,
     tags?: string[],
-    options?: { creationSource?: AppCreationSource },
+    options?: { creationSource?: AppCreationSource; headline?: string },
   ): Promise<MiniApp> {
     const now = new Date().toISOString();
     const { ensureUniqueAppTitle } = await import("../utils/uniqueAppNaming.js");
@@ -2229,6 +2229,7 @@ export class AppService {
       ...(scope ? withWorkspaceScope({}, scope) : {}),
       ...(resolvedIcon ? { icon: resolvedIcon } : {}),
       ...(normalizedTags.length > 0 ? { tags: normalizedTags } : {}),
+      ...(options?.headline?.trim() ? { headline: options.headline.trim().slice(0, 80) } : {}),
       createdByAgentId,
       createdByAgentName,
     };

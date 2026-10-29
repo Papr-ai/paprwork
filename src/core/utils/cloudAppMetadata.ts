@@ -8,6 +8,8 @@ export interface CloudAppMetadataFile {
   appId: string;
   title: string;
   description: string;
+  /** One line: what the app does for you. Shown on share gates over the description. */
+  headline?: string;
   icon?: string;
   updatedAt: string;
   /** Papr user id of the app owner (My Apps scope). */
@@ -51,6 +53,12 @@ export function buildDefaultCloudAppDescription(title: string): string {
   return `${title} — ${DEFAULT_CLOUD_APP_DESCRIPTION}`;
 }
 
+/** True when the description is the generated placeholder, not something the author wrote. */
+export function isDefaultCloudAppDescription(title: string, description: string): boolean {
+  const d = description.trim();
+  return d === DEFAULT_CLOUD_APP_DESCRIPTION || d === buildDefaultCloudAppDescription(title.trim());
+}
+
 export function humanizeCloudAppSlug(slug: string): string {
   return slug
     .split("-")
@@ -71,6 +79,9 @@ export function parseCloudAppMetadataFile(raw: string): CloudAppMetadataFile | n
       description:
         parsed.description?.trim() ||
         buildDefaultCloudAppDescription(parsed.title.trim()),
+      ...(typeof parsed.headline === "string" && parsed.headline.trim()
+        ? { headline: parsed.headline.trim() }
+        : {}),
       ...(parsed.icon ? { icon: parsed.icon } : {}),
       ...(parsed.ownerUserId ? { ownerUserId: parsed.ownerUserId.trim() } : {}),
       ...(parsed.organizationId ? { organizationId: parsed.organizationId.trim() } : {}),
