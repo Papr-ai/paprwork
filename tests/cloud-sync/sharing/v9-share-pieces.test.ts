@@ -2,6 +2,8 @@
 import { describe, expect, it } from "vitest";
 
 import {
+  DATA_CHECK_CHAT_TITLE,
+  dataCheckAgentPrompt,
   scopeTables,
   scopeTag,
   tableIsShared,
@@ -15,6 +17,25 @@ import {
 import { formatMergeByline } from "../../../ui/utils/mergeByline.js";
 
 const cols = (...names: string[]) => names.map((name) => ({ name }));
+
+describe("Ask Pen prompt", () => {
+  const t = (name: string) => ({ db: "crm", name, scope: "all" as const });
+  it("asks before changing anything and uses _acl, not papr_user_id", () => {
+    const p = dataCheckAgentPrompt("app-1", [t("deals"), t("partners")]);
+    expect(p).toContain("2 tables show every row");
+    expect(p).toContain("crm.deals, crm.partners");
+    expect(p).toContain("Ask me which should stay shared");
+    expect(p).toContain("acl_for_caller()");
+    expect(p).not.toContain("papr_user_id");
+    expect(DATA_CHECK_CHAT_TITLE).toBe("Review shared data");
+  });
+  it("caps the table list", () => {
+    const p = dataCheckAgentPrompt("a", Array.from({ length: 9 }, (_, i) => t(`t${i}`)));
+    expect(p).toContain("9 tables");
+    expect(p).toContain("and 3 more");
+    expect(p).not.toContain("crm.t8");
+  });
+});
 
 describe("table scope", () => {
   it("reads owner columns", () => {
