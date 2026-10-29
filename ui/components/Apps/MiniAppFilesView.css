@@ -333,6 +333,8 @@
 .mini-app-files__readonly-note {
   flex: 1;
   display: flex;
+  flex-direction: column;
+  gap: 2px;
   align-items: center;
   justify-content: center;
   color: var(--text-secondary);
@@ -459,4 +461,14 @@
   font-size: 11px;
   line-height: 1.45;
   color: var(--text-secondary);
+}
+
+.mini-app-files__placeholder p {
+  margin: 0;
+  max-width: 280px;
+}
+
+/* Linked database rows line up with the tree rows (which pad 12px inline). */
+.mini-app-files__db-row {
+  padding-left: 12px;
 }
