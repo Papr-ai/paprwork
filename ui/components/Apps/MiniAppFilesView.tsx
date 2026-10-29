@@ -26,6 +26,9 @@ import "./WorkspaceFileTree.css";
 interface MiniAppFilesViewProps {
   appId: string;
   panel: AppWorkspacePanel;
+  /** Table to open on arrival (Share sheet pill). Cleared via onTableOpened. */
+  openTable?: { db: string; table: string } | null;
+  onTableOpened?: () => void;
 }
 
 function AppIcon() {
@@ -59,8 +62,15 @@ function JobIcon() {
   );
 }
 
-export function MiniAppFilesView({ appId, panel }: MiniAppFilesViewProps) {
+export function MiniAppFilesView({ appId, panel, openTable, onTableOpened }: MiniAppFilesViewProps) {
   const workspace = useAppWorkspace(appId);
+  const { openDbTable } = workspace;
+
+  useEffect(() => {
+    if (!openTable || !workspace.workspace) return;
+    setSelectedAppFile(null);
+    void openDbTable(openTable.db, openTable.table).finally(() => onTableOpened?.());
+  }, [openTable, workspace.workspace, openDbTable, onTableOpened]);
   const [selectedAppFile, setSelectedAppFile] = useState<AppFileRow | null>(null);
 
   const language = workspace.selected
