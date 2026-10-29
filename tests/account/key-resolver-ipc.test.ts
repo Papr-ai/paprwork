@@ -76,6 +76,17 @@ describe("keyResolver IPC flow", () => {
     expect(keys.ANTHROPIC_API_KEY).toBeUndefined();
   });
 
+  test("a ChatGPT sign-in token left in OPENAI_API_KEY is not resolved as a Platform key", async () => {
+    // A ChatGPT sign-in session writes its access token (a JWT) into
+    // OPENAI_API_KEY; a later job read it as a Platform key and got a 401.
+    process.env.NODE_ENV = "development";
+    process.env.OPENAI_API_KEY = "eyJhbGciOiJSUzI1NiIsInR5cCI6IkpXVCJ9.payload.sig";
+
+    const keys = await getApiKeys(["OPENAI_API_KEY"]);
+
+    expect(keys.OPENAI_API_KEY).toBeUndefined();
+  });
+
   test("Settings key wins over .env when IPC is available, even in development", async () => {
     // npm start sets NODE_ENV=development. The previous shortcut returned
     // process.env and never asked main for the key the user pasted in Settings.
