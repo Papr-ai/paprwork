@@ -9,7 +9,6 @@ on:
 
 permissions:
   contents: write
-  actions: write
 
 jobs:
   auto-tag:
@@ -59,8 +58,3 @@ jobs:
           git tag -a "v$VERSION" -m "Release v$VERSION"
           git push origin "v$VERSION"
           echo "✅ Created and pushed tag v$VERSION"
-          # A GITHUB_TOKEN tag push does not start Release; dispatch it on the tag.
-          gh workflow run release.yml --ref "v$VERSION"
-          echo "🚀 Dispatched Release for v$VERSION"
-        env:
-          GH_TOKEN: ${{ github.token }}
