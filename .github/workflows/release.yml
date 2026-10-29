@@ -4,6 +4,9 @@ on:
   push:
     tags:
       - 'v*'
+  # Auto Tag dispatches this with --ref vX.Y.Z: tags pushed with GITHUB_TOKEN
+  # do not trigger push workflows, but workflow_dispatch is allowed.
+  workflow_dispatch:
 
 permissions:
   contents: write
