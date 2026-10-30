@@ -17,6 +17,8 @@ export type AccessVisibility =
 export interface AccessGrant {
   userId?: string;
   email?: string;
+  /** Anyone signed in with an email at this domain (e.g. "acme.com"); up to Maintainer. */
+  domain?: string;
   role: AppRole;
 }
 
@@ -77,6 +79,7 @@ export const ROLE_COPY: Record<AppRole, { label: string; sub: string }> = {
 /** Highest role each audience can be given (server enforces the same caps). */
 export const AUDIENCE_CAP = {
   person: "admin",
+  domain: "maintainer",
   workspace: "maintainer",
   link: "contributor",
   community: "contributor",
@@ -91,11 +94,11 @@ export function rank(role: AppRole | undefined | null): number {
 /** Choices for an audience's dropdown, lowest first. People never offer "none". */
 export function roleOptions(audience: AccessAudience): AppRole[] {
   const cap = rank(AUDIENCE_CAP[audience]);
-  return ORDER.filter((r, i) => i <= cap && !(audience === "person" && r === "none"));
+  return ORDER.filter((r, i) => i <= cap && !((audience === "person" || audience === "domain") && r === "none"));
 }
 
 export function grantKey(g: AccessGrant): string {
-  return g.userId || (g.email ?? "").toLowerCase();
+  return g.userId || (g.email ?? "").toLowerCase() || (g.domain ? `@${g.domain.toLowerCase()}` : "");
 }
 
 export function setGrantRole(
@@ -113,12 +116,13 @@ export function removeGrant(grants: AccessGrant[], key: string): AccessGrant[] {
 /** Adds a person once (default Contributor); a repeat add is a no-op. */
 export function addGrant(
   grants: AccessGrant[],
-  person: { userId?: string; email?: string },
+  person: { userId?: string; email?: string; domain?: string },
   role: AppRole = "contributor",
 ): AccessGrant[] {
   const next: AccessGrant = {
     ...(person.userId ? { userId: person.userId } : {}),
     ...(person.email ? { email: person.email.toLowerCase() } : {}),
+    ...(!person.userId && !person.email && person.domain ? { domain: person.domain.toLowerCase().replace(/^@/, "") } : {}),
     role,
   };
   const key = grantKey(next);
