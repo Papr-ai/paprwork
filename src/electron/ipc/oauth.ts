@@ -858,10 +858,6 @@ export async function initializeOAuthIPC(
         kind === "auth-login"
           ? await claudeSetupTokenService!.writeAuthLoginLauncherScript()
           : await claudeSetupTokenService!.writeSetupTokenLauncherScript();
-      const setupCmd =
-        kind === "auth-login"
-          ? await claudeSetupTokenService!.getAuthLoginShellCommand()
-          : await claudeSetupTokenService!.getSetupTokenShellCommand();
 
       if (process.platform === "darwin") {
         const escapedForAppleScript = scriptPath.replace(/\\/g, "\\\\").replace(/"/g, '\\"');
@@ -871,7 +867,12 @@ export async function initializeOAuthIPC(
         return true;
       }
       if (process.platform === "win32") {
-        await execAsync(`start cmd.exe /k "${setupCmd.replace(/"/g, '\\"')}"`);
+        // Real PowerShell window (what the UI says), running the .ps1 launcher
+        // which sets claude.exe on PATH. -NoExit keeps the token
+        // on screen so the user can copy it.
+        await execAsync(
+          `start "" powershell.exe -NoExit -NoProfile -ExecutionPolicy Bypass -File "${scriptPath}"`,
+        );
         return true;
       }
       await execAsync(

@@ -25,9 +25,10 @@ export interface AutoLadder {
 }
 
 const OPENAI_LADDER: AutoLadder = {
-  models: { basic: "gpt-5.4-mini", strong: "gpt-5.5", frontier: "gpt-5.5" },
+  // Basic is Luna: it runs on ChatGPT sign-in and a Platform key alike.
+  models: { basic: "gpt-5-6-luna", strong: "gpt-5.5", frontier: "gpt-5.5" },
   alternates: {
-    basic: ["gpt-5-6-luna", "gpt-5-6-terra", "gpt-5-6-sol"],
+    basic: ["gpt-5-6-terra", "gpt-5-6-sol"],
     strong: ["gpt-5-6-sol", "gpt-5-6-terra", "gpt-6-astra"],
     frontier: ["gpt-6-astra", "gpt-5-6-sol"],
   },

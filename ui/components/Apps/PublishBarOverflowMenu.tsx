@@ -37,6 +37,9 @@ interface PublishBarOverflowMenuProps {
   onAppInfo?: () => void;
   /** Copy into another org or workspace (same dialog as the Apps page card menu). */
   onCopyToWorkspace?: () => void;
+  /** Reload the preview iframe (moved here from the old URL row). */
+  onRefreshPreview?: () => void;
+  refreshPreviewLabel?: string;
 }
 
 /**
@@ -75,6 +78,8 @@ export function PublishBarOverflowMenu({
   onShowInFinder,
   onCopyToWorkspace,
   onAppInfo,
+  onRefreshPreview,
+  refreshPreviewLabel = "Refresh preview",
 }: PublishBarOverflowMenuProps) {
   const [open, setOpen] = useState(false);
   const wrapRef = useRef<HTMLDivElement>(null);
@@ -124,11 +129,26 @@ export function PublishBarOverflowMenu({
               setOpen(false);
             }}
           >
-            {isPreview ? "Browse app files" : "Back to preview"}
+            {isPreview ? "Data & code" : "Close data & code"}
             <span className="pb-overflow__hint">
-              {isPreview ? "Code, DB, jobs" : "Run the live app"}
+              {isPreview ? "Data, jobs, code and files beside the app" : "Back to just the app"}
             </span>
           </button>
+
+          {onRefreshPreview ? (
+            <button
+              type="button"
+              role="menuitem"
+              className="pb-overflow__item"
+              onClick={() => {
+                onRefreshPreview();
+                setOpen(false);
+              }}
+            >
+              {refreshPreviewLabel}
+              <span className="pb-overflow__hint">Reload the app</span>
+            </button>
+          ) : null}
 
           {onAppInfo ? (
             <button

@@ -73,3 +73,23 @@ After `npm run dist:mac` (or CI artifact):
 - [ ] Manual table completed on macOS (cached CLI + Terminal path)
 - [ ] Optional: manual on Windows (PowerShell sign-in)
 - [ ] PKG tested on clean install (release candidate only)
+
+## Windows smoke test (GitHub Actions, no VM needed)
+
+`.github/workflows/windows-claude-smoke.yml` runs the Windows onboarding path on a
+real GitHub `windows-latest` machine: official `install.ps1` exactly as Papr runs it,
+`claude.exe` in `%USERPROFILE%\.local\bin`, PowerShell 5.1 check command, paths with
+spaces, and Claude Code running with **no Git installed**. It does not cover the
+browser sign-in or Papr's own UI — do those on a Windows VM or PC.
+
+Run it whenever `install.ps1`, Claude Code, or this onboarding code changes:
+
+```bash
+# from any branch that has the workflow file
+git push origin HEAD:ci/windows-smoke-$(date +%Y%m%d)
+gh run list --workflow windows-claude-smoke.yml --limit 1   # watch it
+git push origin --delete ci/windows-smoke-$(date +%Y%m%d)   # clean up after
+```
+
+Once the workflow is on the default branch you can also use
+`gh workflow run windows-claude-smoke.yml --ref <branch>` or the Actions tab → Run workflow.

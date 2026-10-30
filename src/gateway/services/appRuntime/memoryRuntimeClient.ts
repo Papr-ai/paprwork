@@ -171,6 +171,63 @@ export async function fetchRuntimeFileUrl(
   return (await res.json()) as { url: string; expiresInSeconds: number };
 }
 
+/** Error carrying the memory status, so callers can fall back on 404 (older server). */
+export class RuntimeFilesError extends Error {
+  constructor(message: string, readonly status: number) {
+    super(message);
+  }
+}
+
+async function runtimeFilesPost<T>(
+  auth: AppRuntimeRouteAuth,
+  path: string,
+  body: Record<string, unknown>,
+): Promise<T> {
+  const res = await runtimeFetch(`${getMemoryServerBaseUrl()}${path}`, {
+    method: "POST",
+    headers: runtimeHeaders(auth),
+    body: JSON.stringify({ ...runtimeAuthPayload(auth), ...body }),
+  });
+  if (!res.ok) {
+    const text = (await res.text()).slice(0, 300);
+    let detail = text;
+    try {
+      detail = (JSON.parse(text) as { detail?: string }).detail ?? text;
+    } catch {
+      // not JSON
+    }
+    throw new RuntimeFilesError(detail, res.status);
+  }
+  return (await res.json()) as T;
+}
+
+/**
+ * Upload URL for a published-app visitor. Memory checks the APP's sharing
+ * rules (canWrite) and its per-app size cap, and derives the key from the
+ * app's own namespace — so a signed-out visitor of a writable public app
+ * (e.g. a job application form) can upload without a key in that workspace.
+ */
+export function fetchRuntimeFileUpload(
+  auth: AppRuntimeRouteAuth,
+  args: { sha256: string; sizeBytes: number; mime?: string | null; scope?: "app" | "user" },
+): Promise<{ objectKey: string; uploadUrl: string | null; alreadyExists: boolean; scope: string; maxBytes: number }> {
+  return runtimeFilesPost(auth, "/v1/cloud/apps/runtime/file-upload", {
+    sha256: args.sha256,
+    sizeBytes: args.sizeBytes,
+    mime: args.mime ?? null,
+    scope: args.scope ?? "app",
+  });
+}
+
+/** Verify a published-app upload under the same app-access rules. */
+export function fetchRuntimeFileCommit(
+  auth: AppRuntimeRouteAuth,
+  objectKey: string,
+  sizeBytes: number,
+): Promise<{ objectKey: string; verified: boolean; sizeBytes?: number; md5?: string; reason?: string }> {
+  return runtimeFilesPost(auth, "/v1/cloud/apps/runtime/file-commit", { objectKey, sizeBytes });
+}
+
 export async function fetchRuntimeRepoCredentials(
   auth: AppRuntimeRouteAuth,
 ): Promise<AppRuntimeRepoCredentials> {

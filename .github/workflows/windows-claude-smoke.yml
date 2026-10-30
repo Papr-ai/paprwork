@@ -1,0 +1,86 @@
+name: Windows Claude onboarding smoke
+
+# On-demand check of the Windows Claude Code onboarding path on a real
+# Windows machine: install.ps1, claude.exe location, PowerShell quoting,
+# and running with no Git installed. Not part of normal PR CI.
+#
+# How to run (see docs/CLAUDE_ONBOARDING_TEST_CHECKLIST.md):
+#   git push origin HEAD:ci/windows-smoke-<anything>
+#   or, once this file is on the default branch:
+#   gh workflow run windows-claude-smoke.yml --ref <branch>
+on:
+  workflow_dispatch:
+  push:
+    branches: ['ci/windows-smoke-**']
+
+permissions:
+  contents: read
+
+jobs:
+  smoke:
+    runs-on: windows-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+
+      - name: Unit tests for Windows helpers (real win32 paths)
+        shell: pwsh
+        run: |
+          npm ci --ignore-scripts --no-audit --no-fund
+          npx vitest run tests/providers/claude-windows-setup.test.ts tests/providers/claude-manual-connection.test.ts
+
+      - name: Check command shown in UI parses in Windows PowerShell 5.1
+        shell: powershell
+        run: |
+          $PSVersionTable.PSVersion
+          # Same string as getClaudeCliCheckCommand("windows").
+          $null = [ScriptBlock]::Create('Get-Command claude; claude --version')
+          Write-Host 'OK: parses in Windows PowerShell 5.1'
+
+      - name: Official install.ps1 exactly as Papr runs it
+        shell: cmd
+        run: >
+          powershell.exe -NoProfile -NonInteractive -ExecutionPolicy Bypass -Command
+          "[Net.ServicePointManager]::SecurityProtocol = [Net.SecurityProtocolType]::Tls12; irm https://claude.ai/install.ps1 | iex"
+
+      - name: claude.exe is where Papr looks and runs from a path with spaces
+        shell: powershell
+        run: |
+          $exe = Join-Path $env:USERPROFILE '.local\bin\claude.exe'
+          if (-not (Test-Path $exe)) { throw "claude.exe not at $exe" }
+          Write-Host "OK: found $exe"
+          & $exe --version
+          if ($LASTEXITCODE -ne 0) { throw "claude --version failed" }
+          $spaced = Join-Path $env:RUNNER_TEMP 'Jane Doe\bin'
+          New-Item -ItemType Directory -Force $spaced | Out-Null
+          Copy-Item $exe (Join-Path $spaced 'claude.exe')
+          $line = "& '" + (Join-Path $spaced 'claude.exe') + "' --version"
+          Write-Host "Running: $line"
+          Invoke-Expression $line
+          if ($LASTEXITCODE -ne 0) { throw "spaced-path invocation failed" }
+
+      - name: No Git installed - claude runs and setup-token starts
+        shell: powershell
+        timeout-minutes: 4
+        run: |
+          $exe = Join-Path $env:USERPROFILE '.local\bin\claude.exe'
+          foreach ($d in 'C:\Program Files\Git','C:\Program Files (x86)\Git') { if (Test-Path $d) { Rename-Item $d ($d + '-hidden') } }
+          $env:Path = ($env:Path -split ';' | Where-Object { $_ -notmatch '\\Git' }) -join ';'
+          Remove-Item Env:CLAUDE_CODE_GIT_BASH_PATH -ErrorAction SilentlyContinue
+          Write-Host "git on PATH: $((Get-Command git -ErrorAction SilentlyContinue).Source)"
+          & $exe --version
+          if ($LASTEXITCODE -ne 0) { throw "claude --version failed without Git" }
+          # setup-token waits for a browser sign-in; just make sure it starts.
+          $p = Start-Process -FilePath $exe -ArgumentList 'setup-token' -NoNewWindow -PassThru `
+                 -RedirectStandardOutput "$env:RUNNER_TEMP\st.out" -RedirectStandardError "$env:RUNNER_TEMP\st.err"
+          Start-Sleep 20
+          $exited = $p.HasExited
+          if (-not $exited) { Stop-Process -Id $p.Id -Force }
+          $out = (Get-Content "$env:RUNNER_TEMP\st.out" -Raw) + (Get-Content "$env:RUNNER_TEMP\st.err" -Raw)
+          Write-Host "setup-token exited early: $exited"
+          Write-Host $out
+          if ($out -match 'requires git-bash|requires a shell tool|No suitable shell') { throw 'Claude Code refuses to run without Git' }
+          Write-Host 'OK: claude runs and setup-token starts with no Git installed'

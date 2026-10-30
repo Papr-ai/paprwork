@@ -17,7 +17,9 @@ export interface SimpleTextSelection {
 
 const ANTHROPIC_MODELS = ["claude-haiku-4-5"] as const;
 const OPENAI_API_KEY_MODELS = ["gpt-5-nano", "gpt-4o-mini"] as const;
-const OPENAI_OAUTH_MODELS = ["gpt-5.4-mini", "gpt-5.1-codex-mini"] as const;
+// Only models ChatGPT sign-in serves. gpt-5.4-mini is Platform-key only, so it
+// failed every time here and wasted a round trip before the real attempt.
+const OPENAI_OAUTH_MODELS = ["gpt-5.6-luna", "gpt-5.1-codex-mini"] as const;
 const GOOGLE_MODELS = ["gemini-2.0-flash-lite"] as const;
 
 type PiAiProvider = "anthropic" | "openai-codex";
@@ -103,13 +105,24 @@ async function generateWithPiAi(
       piProvider,
       modelId,
     );
-    if (!piModel) {
+    // pi-ai's registry lags ChatGPT (no GPT-5.6 yet): reuse a listed Codex model
+    // with the id swapped, the same way AgentService builds unlisted models.
+    const base =
+      piModel ??
+      (piProvider === "openai-codex"
+        ? (getModel as (provider: string, id: string) => ReturnType<typeof getModel>)(
+            piProvider,
+            "gpt-5.4",
+          )
+        : undefined);
+    if (!base) {
       console.warn(`${logPrefix} pi-ai model not found: ${piProvider}/${modelId}`);
       return null;
     }
+    const resolvedModel = piModel ? base : { ...base, id: modelId, name: modelId };
 
     const message = await completeSimple(
-      piModel,
+      resolvedModel,
       {
         systemPrompt,
         messages: [{ role: "user", content: userPrompt, timestamp: Date.now() }],

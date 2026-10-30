@@ -19,6 +19,20 @@ export interface ScopedTable {
   db: string;
   name: string;
   scope: TableScope;
+  /** Up to COLUMN_CAP user-facing column names for the Share sheet hover card. */
+  columns?: string[];
+  /** How many more columns the table has beyond `columns`. */
+  moreColumns?: number;
+}
+
+/** Columns kept per table: enough for the hover card, keeps the response small. */
+export const COLUMN_CAP = 12;
+/** Bookkeeping columns that mean nothing to the person sharing. */
+const HIDDEN_COLS = /^(id|_acl|_rowid_|rowid|papr_user_id|owner_session|created_by)$/i;
+
+function shownColumns(columns: Array<{ name: string }>): Pick<ScopedTable, "columns" | "moreColumns"> {
+  const names = columns.map((c) => c.name).filter((n) => !HIDDEN_COLS.test(n) && !n.startsWith("_"));
+  return { columns: names.slice(0, COLUMN_CAP), moreColumns: Math.max(0, names.length - COLUMN_CAP) };
 }
 
 export interface SchemaSourceLike {
@@ -48,7 +62,7 @@ export function scopeTables(sources: SchemaSourceLike[]): ScopedTable[] {
     for (const t of s.tables) {
       if (INTERNAL.test(t.table)) continue;
       const scope = priv.has(t.table.toLowerCase()) ? "private" : tableScope(t.columns, s.perUser);
-      out.push({ db: s.alias, name: t.table, scope });
+      out.push({ db: s.alias, name: t.table, scope, ...shownColumns(t.columns) });
     }
   }
   return out;
@@ -59,18 +73,36 @@ export function tableIsShared(t: ScopedTable, signIn: boolean): boolean {
   return t.scope === "all" || (t.scope === "visitor" && !signIn);
 }
 
+/** Hover-card line: which rows someone with access sees. */
+export function rowsLine(t: ScopedTable, signIn: boolean): string {
+  if (tableIsShared(t, signIn)) return "Every row";
+  if (t.scope === "private") return "Rows shared with them";
+  return "Their own rows";
+}
+
+/** Table name as a person reads it: deal_notes -> deal notes. */
+export function humanTable(name: string): string {
+  return name.replace(/[_-]+/g, " ").trim();
+}
+
 export function scopeTag(t: ScopedTable, signIn: boolean): string {
   if (t.scope === "private") return "Private";
   if (!tableIsShared(t, signIn)) return "Per person";
   return t.scope === "visitor" ? "Needs sign-in" : "Everyone";
 }
 
+/** "Ask Pen" in the Share sheet: opens a new chat with this already sent, like "Set up with Pen". */
+export const DATA_CHECK_CHAT_TITLE = "Review shared data";
+
 export function dataCheckAgentPrompt(appId: string, shared: ScopedTable[]): string {
-  const names = shared.map((t) => `${t.db}.${t.name}`).join(", ");
+  const names = shared.map((t) => `${t.db}.${t.name}`);
+  const list = names.length > 6 ? `${names.slice(0, 6).join(", ")} and ${names.length - 6} more` : names.join(", ");
+  const n = names.length;
   return (
-    `App ${appId} is shared, and these tables are visible to everyone who opens it: ${names}. ` +
-    "Make each of them private per person: add a papr_user_id column (require Papr sign-in), " +
-    "scope every read and write in the app and its jobs to the signed-in user, and backfill " +
-    "existing rows to me. Tell me first if any table is meant to be shared (e.g. a catalog)."
+    `Help me review what people see when I share app ${appId}. ` +
+    `${n} table${n === 1 ? "" : "s"} show every row to everyone with access: ${list}. ` +
+    "Ask me which should stay shared (catalogs, settings), then make the rest private per person: " +
+    "add _acl and created_by, write new rows with acl_for_caller(), and set existing rows to me. " +
+    "Check the app and its jobs still work after."
   );
 }

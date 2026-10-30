@@ -39,6 +39,17 @@ export interface McpServerDefinition {
   custom?: boolean;
 }
 
+/**
+ * Papr Work's Client ID Metadata Document (CIMD). Hosted copy of
+ * docs/oauth/papr-work-client.json; the URL itself is the client_id for servers
+ * that advertise `client_id_metadata_document_supported` (e.g. heyBTW).
+ * Off until the document is live: set PAPR_MCP_CLIENT_METADATA_URL to enable.
+ */
+export const PAPR_CLIENT_METADATA_URL = process.env.PAPR_MCP_CLIENT_METADATA_URL?.trim() || undefined;
+
+/** heyBTW's pre-registered public (PKCE) client for Papr Work, once issued. */
+const HEYBTW_CLIENT_ID = process.env.PAPR_HEYBTW_CLIENT_ID?.trim() || undefined;
+
 /** Papr's Google OAuth web client (project papr-connectors). Public; the secret lives on the memory server. */
 const GOOGLE_DRIVE_CLIENT_ID = process.env.PAPR_GOOGLEDRIVE_CLIENT_ID || "650055379473-7j2rg39vgc3dusu9fuoich9msajc893d.apps.googleusercontent.com";
 
@@ -68,6 +79,8 @@ export const BUILTIN_MCP_SERVERS: readonly McpServerDefinition[] = [
   { id: "close", name: "Close", url: "https://mcp.close.com/mcp", transport: "streamable-http", category: "CRM", description: "Leads, opportunities, calls" },
   { id: "apollo", name: "Apollo", url: "https://mcp.apollo.io/mcp", transport: "streamable-http", category: "CRM", description: "Prospecting, contacts, sequences" },
   { id: "klaviyo", name: "Klaviyo", url: "https://mcp.klaviyo.com/mcp", transport: "streamable-http", category: "Marketing", description: "Campaigns, flows, profiles" },
+  // No DCR; signs in via a pre-registered client id or CIMD. Workspace URLs (/w/<id>/mcp) inherit this entry's client.
+  { id: "heybtw", name: "heyBTW", url: "https://mcp.heybtw.com/mcp", transport: "streamable-http", category: "Marketing", description: "Co-marketing events, attendees, pipeline attribution", ...(HEYBTW_CLIENT_ID ? { clientId: HEYBTW_CLIENT_ID } : PAPR_CLIENT_METADATA_URL ? {} : { requiresClientId: true }) },
   { id: "bitly", name: "Bitly", url: "https://api-ssl.bitly.com/v4/mcp", transport: "streamable-http", category: "Marketing", description: "Short links, analytics" },
   { id: "stripe", name: "Stripe", url: "https://mcp.stripe.com", transport: "streamable-http", category: "Finance", description: "Customers, payments, billing" },
   { id: "paypal", name: "PayPal", url: "https://mcp.paypal.com/mcp", transport: "streamable-http", category: "Finance", description: "Payments, invoices, orders" },
@@ -119,6 +132,12 @@ export function deriveMcpServerId(url: string): string {
   const parts = host.split(".").filter((p) => !["mcp", "www", "api", "com", "app", "dev", "io", "ai", "net", "org", "co"].includes(p));
   const base = (parts[0] ?? host).replace(/[^a-z0-9-]/g, "-").replace(/^[^a-z]+/, "");
   return (base || "custom").slice(0, 31);
+}
+
+/** Built-in entry on the same host as `url` (e.g. a heyBTW workspace URL), if any. */
+export function builtinForHost(url: string): McpServerDefinition | undefined {
+  const host = new URL(url).hostname.toLowerCase();
+  return BUILTIN_MCP_SERVERS.find((s) => new URL(s.url).hostname.toLowerCase() === host);
 }
 
 export function inferMcpTransport(url: string): McpTransportKind {

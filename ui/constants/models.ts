@@ -694,7 +694,7 @@ export const MID_TIER_MODEL_IDS = [
   "claude-sonnet-4-6", // Anthropic mid (legacy)
   "gpt-5-6-sol", // OpenAI flagship
   "gpt-5-6-terra", // OpenAI balanced
-  "gpt-5.4-mini", // OpenAI mini
+  "gpt-5-6-luna", // OpenAI fast (ChatGPT sign-in and API key)
   "gpt-5.3-codex", // OpenAI Codex (API key only)
   "gemini-3.8-flash", // Google mid
 ];

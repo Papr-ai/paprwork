@@ -497,6 +497,14 @@ const createAppSchema = z.preprocess(
   coerceCreateAppAliases,
   z.object({
   title: z.string().min(1),
+  headline: z
+    .string()
+    .max(80)
+    .optional()
+    .describe(
+      "One line (≤80 chars) saying what the app does for the user, outcome first — e.g. \"Write docs together, live\". " +
+        "Shown on the sign-in page, link previews and Community. Always set it; keep the longer detail in description.",
+    ),
   description: z.string().optional(),
   tags: z
     .array(z.string().min(2).max(24))
@@ -754,6 +762,12 @@ const runJobSchema = z.object({
     .describe(
       "Where to execute: local (default) = desktop gateway; cloud = Papr Cloud runtime (syncs git first, then POST /v1/cloud/runtime/job-run). Use cloud to test jobs while the Mac is awake.",
     ),
+  params: z
+    .record(z.string(), z.string())
+    .optional()
+    .describe(
+      "Run parameters, passed to the job as env vars (same as a mini-app's runJob params), e.g. { PROJECT_ID: 'p1', MODE: 'sample' }. Works for local and cloud runs.",
+    ),
 });
 
 const linkAppDataSourceSchema = z
@@ -937,7 +951,7 @@ export const createAppTool = createTool({
       // This is the create_app agent tool. It has no createdByAgentId (that is
       // only set for sub-agent runs), so without an explicit source every
       // agent-built app was counted as human builder activity.
-      { creationSource: "agent" },
+      { creationSource: "agent", headline: args.headline },
     );
 
     let wikiEntity: { entityId: string; created: boolean } | undefined;
@@ -1656,8 +1670,8 @@ export const runJobTool = createTool({
 
     const job =
       args.runtime === "cloud"
-        ? await jobsService.runJobInCloud(args.jobId)
-        : await gatewayBackgroundBudget.runInteractive(() => jobsService.runJob(args.jobId));
+        ? await jobsService.runJobInCloud(args.jobId, args.params)
+        : await gatewayBackgroundBudget.runInteractive(() => jobsService.runJob(args.jobId, args.params));
     const apiKeys = getApiKeysForSanitization();
     const logs = sanitizeError(
       await jobsService.getLogs(args.jobId, args.logBytes ?? 12000),

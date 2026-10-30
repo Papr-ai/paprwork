@@ -138,11 +138,28 @@ describe("cloudAppPreview", () => {
       iconSvg: '<svg viewBox="0 0 24 24"><circle cx="12" cy="12" r="10"/></svg>',
     });
     expect(html).toContain('class="app-brand"');
-    expect(html).toContain('class="app-description"');
+    // Slug fallback has no real copy: the generated placeholder is hidden, not shown.
+    expect(html).not.toContain('class="app-description"');
     expect(html).toContain(CLOUD_APP_SIGN_IN_HEADLINE);
     expect(html).toContain(CLOUD_APP_LOGIN_BUTTON_LABEL);
     expect(html).toContain(CLOUD_APP_SIGNUP_BUTTON_LABEL);
     expect(html).toContain("mode=signup");
-    expect(html).toContain("font-style: italic");
+    expect(html).toContain('class="gate-status"');
+    expect(html).toContain("/discover/_/drop-light.png");
+    expect(html).not.toContain("font-style: italic");
+  });
+
+  it("shows the headline instead of the long description on the gate", () => {
+    const base = buildPreviewMetaFromSlug("papr-docs", "https://apps.papr.ai/ns/papr-docs/", "https://x/i", "https://x/i");
+    const meta = { ...base, title: "Papr Docs", description: "Write docs together. Live co-editing by paragraph, suggesting mode and more.", headline: "Write docs together, live" };
+    const html = buildPreviewLandingHtml(meta, "", { loginUrl: "/auth/login" });
+    expect(html).toContain('<p class="app-description">Write docs together, live</p>');
+    expect(html).toContain('name="description" content="Write docs together. Live co-editing');
+  });
+
+  it("falls back to the author description when there is no headline", () => {
+    const base = buildPreviewMetaFromSlug("papr-docs", "https://apps.papr.ai/ns/papr-docs/", "https://x/i", "https://x/i");
+    const html = buildPreviewLandingHtml({ ...base, title: "Papr Docs", description: "Write docs together." }, "", { loginUrl: "/auth/login" });
+    expect(html).toContain('<p class="app-description">Write docs together.</p>');
   });
 });

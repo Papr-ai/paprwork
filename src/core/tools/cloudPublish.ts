@@ -104,6 +104,15 @@ const publishCloudAppSchema = z.object({
     .describe(
       "Public Community or link sharing: when true, visitors must sign in with Papr before using the live app.",
     ),
+  uploadMaxMb: z
+    .number()
+    .int()
+    .min(1)
+    .max(5120)
+    .optional()
+    .describe(
+      "Largest file (MB) a visitor of the published app can upload. Default 50. Raise it only if the owner accepts larger uploads counting toward their storage.",
+    ),
   perUserIsolation: z
     .boolean()
     .optional()
@@ -402,6 +411,9 @@ If Cloud Sync is disabled, returns an error with fallbackTool=export_app_bundle 
         config = await publishService.getPublishConfig(args.appId);
       } else if (config.enabled) {
         audiences = await readAudiences(args.appId);
+      }
+      if (config.enabled && args.uploadMaxMb !== undefined) {
+        audiences = await saveAudiences(args.appId, { uploadMaxMb: args.uploadMaxMb }, { current: audiences });
       }
 
       // Publishing was previously invisible in analytics: live apps could only
