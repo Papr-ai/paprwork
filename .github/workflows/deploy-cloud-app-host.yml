@@ -5,12 +5,14 @@ name: Deploy Cloud App Host
 #   development  --push-->  test -> build -> deploy to papr-cloud-app-host-dev (100% traffic) -> health check
 #   master       --push-->  test -> build -> deploy to papr-cloud-app-host as a 0% "candidate" revision
 #                           -> health check on the candidate URL
-#                           -> WAIT for approval (environment: cloud-app-host-production, a reviewer other than the merger)
-#                           -> shift 100% traffic to the candidate
+#                           -> shift 100% traffic to the candidate automatically (the health check is the gate)
+#                           -> unless held: repo variable CLOUD_PROMOTE_HOLD=true (or the `hold` input on a
+#                              manual run) leaves it at 0% until "Promote Cloud Services" is run, so several
+#                              services can go live together.
 #
-# Code only reaches master through a reviewed PR (branch protection), so every production
-# change has: a PR review, passing tests, a GitHub-logged deploy, and a second human approval.
-# Emergency changes: label the PR `emergency` (see docs/CHANGE_MANAGEMENT.md); the approval step still applies.
+# Code only reaches master through a reviewed PR (branch protection: 1 approval from someone other
+# than the author, passing checks, admins included), so every production change has a PR review,
+# passing tests, a health-checked candidate and a GitHub-logged deploy. See docs/CHANGE_MANAGEMENT.md.
 # Rollback: re-run the "promote" job of an earlier successful run, or
 #   gcloud run services update-traffic papr-cloud-app-host --to-revisions=<previous-revision>=100
 
@@ -27,6 +29,11 @@ on:
       - "scripts/verify-mini-app-sdk-bundles.mjs"
       - ".github/workflows/deploy-cloud-app-host.yml"
   workflow_dispatch:
+    inputs:
+      hold:
+        description: "Leave the production candidate at 0% (promote later with Promote Cloud Services)"
+        type: boolean
+        default: false
 
 concurrency:
   group: deploy-cloud-app-host-${{ github.ref_name }}
@@ -171,17 +178,24 @@ jobs:
           done
           echo "::error::Candidate health check failed; production traffic was not changed"; exit 1
       - name: Summary
+        env:
+          HOLD: ${{ vars.CLOUD_PROMOTE_HOLD == 'true' || inputs.hold == true }}
         run: |
           {
             echo "### Production candidate ready"
             echo "- Revision: \`${{ steps.deploy.outputs.revision }}\` (0% traffic)"
             echo "- Test it: ${{ steps.deploy.outputs.candidate_url }}"
-            echo "- Approve the **Promote** job to send 100% of apps.papr.ai traffic to it."
+            if [ "${HOLD}" = "true" ]; then
+              echo "- **Held at 0%.** Run **Promote Cloud Services** with commit \`${GITHUB_SHA::8}\` to send apps.papr.ai traffic to it."
+            else
+              echo "- Promoting to 100% of apps.papr.ai traffic now."
+            fi
           } >> "$GITHUB_STEP_SUMMARY"
 
   promote:
-    name: Promote to 100% traffic (requires approval)
-    if: github.ref_name == 'master'
+    name: Promote to 100% traffic
+    # Skipped (candidate stays at 0%) while a coordinated launch is being held.
+    if: github.ref_name == 'master' && vars.CLOUD_PROMOTE_HOLD != 'true' && inputs.hold != true
     needs: deploy-candidate
     runs-on: ubuntu-latest
     environment:

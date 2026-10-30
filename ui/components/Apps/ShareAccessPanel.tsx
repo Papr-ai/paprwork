@@ -136,7 +136,7 @@ export function ShareAccessPanel(props: ShareAccessPanelProps) {
             }}
             allowedEmails={people.filter((g) => !g.userId && g.email).map((g) => g.email as string)}
             onEmailsChange={(emails) => {
-              let grants = draft.grants.filter((g) => g.userId || emails.includes(g.email ?? ""));
+              let grants = draft.grants.filter((g) => g.userId || g.domain || emails.includes(g.email ?? ""));
               for (const email of emails) grants = addGrant(grants, { email });
               set({ grants });
             }}
@@ -148,8 +148,8 @@ export function ShareAccessPanel(props: ShareAccessPanelProps) {
           <span className="ss6-role ss6-role--fixed">Admin</span>
         </AccessRow>
         {people.map((g) => (
-          <AccessRow key={grantKey(g)} label={g.userId ? nameOf(g.userId) : (g.email ?? "")}>
-            {select("person", g.role, (r) => set({ grants: setGrantRole(draft.grants, grantKey(g), r) }))}
+          <AccessRow key={grantKey(g)} label={g.userId ? nameOf(g.userId) : g.domain ? `@${g.domain}` : (g.email ?? "")}>
+            {select(g.domain ? "domain" : "person", g.role, (r) => set({ grants: setGrantRole(draft.grants, grantKey(g), r) }))}
             {edit ? (
               <button
                 type="button"

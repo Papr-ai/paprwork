@@ -3,6 +3,7 @@ import {
   accessPatch,
   addGrant,
   editableGrants,
+  grantKey,
   removeGrant,
   roleOptions,
   setGrantRole,
@@ -105,6 +106,19 @@ describe("v9 audiences", () => {
     const v9 = { ...base, accessModel: "audiences" } as never;
     expect(audiencesPatch(v9, d)).toEqual({ linkRole: "viewer" });
     expect(audiencesDirty(base as never, draftFromAccess(base as never))).toBe(false);
+  });
+
+  it("an email domain is a grant with its own role (capped at Maintainer)", () => {
+    const v9 = { ...base, accessModel: "audiences" } as never;
+    const d = draftFromAccess(v9);
+    const grants = addGrant(d.grants, { domain: "@LeadEdge.com" }, "viewer");
+    expect(grants.at(-1)).toEqual({ domain: "leadedge.com", role: "viewer" });
+    expect(grantKey(grants.at(-1)!)).toBe("@leadedge.com");
+    const up = setGrantRole(grants, "@leadedge.com", "contributor");
+    expect(audiencesPatch(v9, { ...d, grants: up })).toEqual({ grants: up });
+    expect(summarizeAudiences({ ...d, grants: up }, "pub")).toBe("Workspace: Contributor · 1 person");
+    expect(roleOptions("domain")).toEqual(["viewer", "contributor", "maintainer"]);
+    expect(addGrant(grants, { domain: "leadedge.com" })).toBe(grants);
   });
 });
 

@@ -21,6 +21,8 @@ export interface AudiencesPatch {
   requireSignIn?: boolean;
   /** Largest visitor upload in MB (server default 50). */
   uploadMaxMb?: number;
+  /** People by id, email, or whole email domain ({ domain: "acme.com" }), each with a role. */
+  grants?: { userId?: string; email?: string; domain?: string; role: AudienceRole }[];
 }
 
 export interface AudiencesAccess extends AccessStateLike {
@@ -126,6 +128,7 @@ export function syncAudiencePrefs(appId: string, a: AudiencesAccess | null): voi
     // People are grants now; the old allowlists were folded in server-side.
     allowedUserIds: undefined,
     allowedEmails: undefined,
+    allowedEmailDomains: undefined,
   });
 }
 

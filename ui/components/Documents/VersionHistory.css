@@ -133,15 +133,18 @@
 }
 
 .version-history__item-date {
-  font-size: 12px;
-  font-weight: 500;
-  color: var(--text-primary);
+  flex-shrink: 0;
+  font-size: 11px;
+  color: var(--text-tertiary);
 }
 
 .version-history__item-reason {
-  font-size: 11px;
-  color: var(--text-tertiary);
-  text-transform: capitalize;
+  font-size: 12px;
+  font-weight: 500;
+  color: var(--text-secondary);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
 .version-history__item-preview {
@@ -151,6 +154,65 @@
   text-overflow: ellipsis;
   white-space: nowrap;
   margin-top: 2px;
+}
+
+/* ===== Save named version ===== */
+
+.version-history__save {
+  display: flex;
+  gap: 6px;
+  padding: 10px 12px;
+  border-bottom: 1px solid var(--border-color, #e5e5e5);
+}
+
+.version-history__save-input {
+  flex: 1;
+  min-width: 0;
+  padding: 6px 8px;
+  border: 1px solid var(--border-color, #e5e5e5);
+  border-radius: 6px;
+  background: var(--input-bg, transparent);
+  color: var(--text-primary);
+  font-size: 12px;
+}
+
+.version-history__save-btn {
+  padding: 6px 10px;
+  border: none;
+  border-radius: 6px;
+  background: var(--accent-color, #007aff);
+  color: #fff;
+  font-size: 12px;
+  font-weight: 500;
+  cursor: pointer;
+}
+
+.version-history__save-btn:disabled {
+  opacity: 0.4;
+  cursor: default;
+}
+
+.version-history__section {
+  margin: 8px 12px 4px;
+  font-size: 10px;
+  font-weight: 600;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+  color: var(--text-tertiary);
+}
+
+.version-history__item-row {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 8px;
+}
+
+.version-history__item--named .version-history__item-reason {
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--text-primary);
+  text-transform: none;
 }
 
 /* ===== Dark mode ===== */

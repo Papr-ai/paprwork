@@ -9,6 +9,7 @@ on:
 
 permissions:
   contents: write
+  actions: write
 
 jobs:
   auto-tag:
@@ -58,3 +59,13 @@ jobs:
           git tag -a "v$VERSION" -m "Release v$VERSION"
           git push origin "v$VERSION"
           echo "✅ Created and pushed tag v$VERSION"
+
+      # A tag pushed with GITHUB_TOKEN does not start the tag-push Release workflow, so start it explicitly.
+      - name: Start the Release build
+        if: steps.version-check.outputs.changed == 'true' && steps.tag-check.outputs.exists == 'false'
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          VERSION="${{ steps.version-check.outputs.current }}"
+          gh workflow run release.yml --repo "${{ github.repository }}" --ref "v$VERSION"
+          echo "Started Release for v$VERSION"

@@ -34,6 +34,30 @@ describe("cloudInstallDbPolicy", () => {
     expect(() =>
       resolveInstallDbPolicy("track", [], "global", "shared_primary"),
     ).toThrow(CloudInstallDbPolicyError);
+    expect(() =>
+      resolveInstallDbPolicy("track", [], "global", "shared_primary", "public_read"),
+    ).toThrow(CloudInstallDbPolicyError);
+  });
+
+  it("teammate installing from Community lands on the team's data", () => {
+    // Same person, same app, either tab: data follows verified access.
+    for (const access of ["team", "owner", "people"]) {
+      expect(resolveInstallDbPolicy("track", ["shared"], "global", undefined, access)).toBe("shared_primary");
+      expect(resolveInstallDbPolicy("track", ["shared"], "namespace", undefined, access)).toBe("shared_primary");
+    }
+    expect(resolveInstallDbPolicy("track", ["shared"], "global", "shared_primary", "team")).toBe("shared_primary");
+    // A teammate can still choose their own data.
+    expect(resolveInstallDbPolicy("track", ["shared"], "global", "fork_empty", "team")).toBe("fork_empty");
+  });
+
+  it("Community strangers, link holders and older servers never reach team data", () => {
+    for (const access of ["public_read", "link_read", "link_read_write", undefined, null, ""]) {
+      expect(resolveInstallDbPolicy("track", ["shared"], "global", undefined, access)).toBe("fork_empty");
+    }
+  });
+
+  it("Community teammate on per-user databases gets own data", () => {
+    expect(resolveInstallDbPolicy("track", ["per-user"], "global", undefined, "team")).toBe("fork_empty");
   });
 
   it("track + per-user starts on own data by default, refuses explicit shared", () => {
