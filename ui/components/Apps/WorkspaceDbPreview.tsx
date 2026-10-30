@@ -2,7 +2,7 @@
  * WorkspaceDbPreview — table browser for job SQLite databases.
  */
 
-import React, { useEffect, useRef } from "react";
+import { useEffect, useRef } from "react";
 import type { JobDbPreviewResult } from "../../hooks/useAppWorkspace";
 import { rowsLine, type ScopedTable } from "../../../src/core/utils/tableScope";
 import "./WorkspaceDbPreview.css";
@@ -50,9 +50,10 @@ export function WorkspaceDbPreview({
   if (!activeTable) {
     return (
       <div className="workspace-db-preview__empty">
-        <p>No user tables found in this database yet.</p>
+        <p>No tables yet</p>
         <p className="workspace-db-preview__hint">
-          Run the linked job to populate data.
+          This job hasn&apos;t saved any data of its own. Papr&apos;s run history is kept here
+          too but hidden.
         </p>
       </div>
     );

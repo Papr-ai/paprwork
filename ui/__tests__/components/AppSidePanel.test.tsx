@@ -136,7 +136,7 @@ describe("AppSidePanel", () => {
     expect(card.className).toContain("ajp-card--failed");
     expect(screen.queryByText("Ask Pen to fix")).toBeNull();
     fireEvent.click(card);
-    const detail = screen.getByRole("region", { name: "Search Scraper" });
+    const detail = screen.getByRole("dialog", { name: "Search Scraper" });
     expect(within(detail).getByText(/KeyError/)).toBeTruthy();
     fireEvent.click(within(detail).getByText("Ask Pen to fix"));
     expect(openChat).toHaveBeenCalledWith(expect.stringContaining("Search Scraper"), expect.anything());
@@ -144,7 +144,7 @@ describe("AppSidePanel", () => {
 
   it("focusJobId (the Job failing chip) opens that job's details", async () => {
     renderPanel({ wide: true, focusJobId: "ss" });
-    const detail = await screen.findByRole("region", { name: "Search Scraper" });
+    const detail = await screen.findByRole("dialog", { name: "Search Scraper" });
     expect(within(detail).getByText("Ask Pen to fix")).toBeTruthy();
     expect(loadLogs).toHaveBeenCalledWith("ss");
   });
@@ -154,5 +154,28 @@ describe("AppSidePanel", () => {
     await waitFor(() => screen.getByRole("region", { name: "Scheduled" }));
     expect(document.querySelector(".wf-node-action")).toBeNull();
     expect(document.querySelector(".ajp--compact")).toBeTruthy();
+  });
+
+  it("the job details are a modal: Escape closes it", async () => {
+    renderPanel({ wide: true, focusJobId: "ss" });
+    await screen.findByRole("dialog", { name: "Search Scraper" });
+    fireEvent.keyDown(window, { key: "Escape" });
+    await waitFor(() => expect(screen.queryByRole("dialog", { name: "Search Scraper" })).toBeNull());
+  });
+});
+
+describe("latestRunLog", () => {
+  it("keeps only the last run", async () => {
+    const { latestRunLog } = await import("../../components/Apps/AppJobsPanel");
+    const log = [
+      "[t1] [attempt 1/1] Waiting for execution capacity run-a",
+      "[t1] manual-ok",
+      "[t2] [attempt 1/1] Waiting for execution capacity run-b",
+      "[t2] boom",
+    ].join("\n");
+    expect(latestRunLog(log)).toBe(
+      "[t2] [attempt 1/1] Waiting for execution capacity run-b\n[t2] boom",
+    );
+    expect(latestRunLog("plain text")).toBe("plain text");
   });
 });
