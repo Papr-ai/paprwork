@@ -622,13 +622,37 @@ export async function* createPiCodexStreamWithToolLoop(
     });
   };
 
-  stepLoop: while (step < maxSteps) {
+  // `<=` leaves room for one text-only step after the budget is spent (below).
+  stepLoop: while (step <= maxSteps) {
     // Only the step right after a length-stop recovery runs at low effort.
     const stepLowEffort = lowEffortStep;
     lowEffortStep = false;
     if (streamOptions.signal?.aborted) {
       emitTurnEnd("aborted");
       break stepLoop;
+    }
+
+    // The step budget ran out on a tool step. The fixed force-stop threshold
+    // (95) never fires for a small budget — an agent job with maxTurns 4 — so
+    // without this the turn ends on its last tool result with no reply, and
+    // the job fails with "produced no output" (#675). Spend one extra step,
+    // tools removed, so the model writes its answer from what it already has.
+    if (step >= maxSteps) {
+      if (textOnlyWrapUpStepUsed) {
+        break stepLoop;
+      }
+      console.warn(
+        `[PiCodexToolLoop] Step budget (${maxSteps}) spent on tool calls. Text-only wrap-up.`,
+      );
+      textOnlyWrapUpStepUsed = true;
+      applyForcedTextOnlyWrapUpStep(context, WRAP_UP_AFTER_TOOLS_NO_TEXT);
+      logWrapUpTrigger({
+        chatId: toolContext?.chatId,
+        sessionId: streamOptions.sessionId,
+        trigger: "step_budget_spent",
+        step,
+        totalToolCalls,
+      });
     }
 
     // CIRCUIT BREAKER 1: Check validation error count (Issue 65)
