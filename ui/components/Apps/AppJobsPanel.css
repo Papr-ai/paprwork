@@ -131,14 +131,28 @@
 }
 
 /* Details: only after a card is clicked. */
+.ajp-modal {
+  position: fixed;
+  inset: 0;
+  z-index: 1000;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 24px;
+  background: rgba(0, 0, 0, 0.32);
+}
+
 .ajp-detail {
+  width: min(640px, 100%);
+  max-height: min(80vh, 720px);
   border: 1px solid var(--border-color);
-  border-radius: 12px;
+  border-radius: 14px;
   background: var(--background-color);
-  padding: 12px 14px;
+  box-shadow: 0 24px 64px rgba(0, 0, 0, 0.24);
+  padding: 16px 18px;
   display: flex;
   flex-direction: column;
-  gap: 10px;
+  gap: 12px;
 }
 
 .ajp-detail--failed {
@@ -193,17 +207,25 @@
   font-weight: 500;
 }
 
+.ajp-detail__error {
+  margin: 0;
+  color: #ef4444;
+  font-size: 12px;
+  white-space: pre-wrap;
+}
+
 .ajp-detail__log {
+  flex: 1 1 auto;
+  min-height: 80px;
+  overflow: auto;
   margin: 0;
   padding: 8px 10px;
   border-radius: 8px;
-  background: color-mix(in srgb, #ef4444 6%, var(--background-secondary));
+  background: var(--background-secondary);
   color: var(--text-primary);
   font-size: 11px;
   line-height: 1.45;
   white-space: pre-wrap;
-  max-height: 160px;
-  overflow: auto;
 }
 
 .ajp-detail__acts {
@@ -258,4 +280,15 @@
 
 .ajp-empty__desc {
   margin: 0;
+}
+
+.ajp-detail__log.is-bad {
+  background: color-mix(in srgb, #ef4444 6%, var(--background-secondary));
+}
+
+.ajp-btn--quiet {
+  margin-left: auto;
+  border-color: transparent;
+  background: transparent;
+  color: var(--text-secondary);
 }

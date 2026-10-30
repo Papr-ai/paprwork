@@ -3,11 +3,12 @@
  *
  * Two sections (Scheduled / One off), each a small canvas of
  * the live workflow cards and curved edges. Nothing opens until a card is
- * clicked; a failed job is already red, and its details carry the error and
- * "Ask Pen to fix".
+ * clicked; a failed job is already red. Clicking a card opens its details in a
+ * modal: the latest run's log, Run now, and "Ask Pen to fix" when it failed.
  */
 
 import { useCallback, useEffect, useMemo, useState } from "react";
+import { createPortal } from "react-dom";
 import { useJobs, type JobRecord } from "../../hooks/useJobs";
 import { openJobInJobsTab } from "../../stores/jobNavigationStore";
 import { jobTriggerLabel } from "../../utils/jobTriggerLabel";
@@ -261,6 +262,13 @@ function SectionCanvas({
   );
 }
 
+/** Only the latest run: logs append every attempt, oldest first. */
+export function latestRunLog(logs: string): string {
+  const marks = [...logs.matchAll(/^.*\[attempt \d+\/\d+\] Waiting for execution capacity.*$/gm)];
+  const from = marks.length ? (marks[marks.length - 1].index ?? 0) : 0;
+  return logs.slice(from).trim();
+}
+
 function JobDetail({
   job,
   trigger,
@@ -276,7 +284,15 @@ function JobDetail({
 }) {
   const failed = jobFailed(job);
   const when = relativeWhen(job.completedAt ?? job.lastRunAt);
+  useEffect(() => {
+    const onKey = (e: KeyboardEvent): void => {
+      if (e.key === "Escape") onClose();
+    };
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
+  }, [onClose]);
   const askPen = (): void => {
+    onClose();
     openCloudSyncAgentChat(
       [
         `The job "${job.name}" (id ${job.id}) failed${when ? ` ${when}` : ""}.`,
@@ -288,38 +304,56 @@ function JobDetail({
       { send: true, title: `Fix ${job.name}` },
     );
   };
-  return (
-    <div className={`ajp-detail${failed ? " ajp-detail--failed" : ""}`} role="region" aria-label={job.name}>
-      <div className="ajp-detail__head">
-        <b>{job.name}</b>
-        <span className={`ajp-detail__status${failed ? " is-bad" : ""}`}>
-          {failed ? `Failed ${when}` : job.lastRunAt ? `Last run ${when}` : "Not run yet"}
-        </span>
-        <button type="button" className="ajp-detail__close" aria-label="Close" onClick={onClose}>
-          ×
-        </button>
-      </div>
-      <div className="ajp-detail__kv">
-        <span>Starts</span>
-        <b>{trigger}</b>
-      </div>
-      {failed && (job.error || logs) ? (
-        <pre className="ajp-detail__log">{(job.error || logs || "").trim().slice(-1200)}</pre>
-      ) : null}
-      <div className="ajp-detail__acts">
-        <button type="button" className="ajp-btn" onClick={onRun}>
-          Run now
-        </button>
-        <button type="button" className="ajp-btn" onClick={() => openJobInJobsTab(job.id)}>
-          Logs
-        </button>
-        {failed ? (
-          <button type="button" className="ajp-btn ajp-btn--primary" onClick={askPen}>
-            Ask Pen to fix
+  const log = latestRunLog(logs ?? "");
+  return createPortal(
+    <div className="ajp-modal" onClick={onClose}>
+      <div
+        className={`ajp-detail${failed ? " ajp-detail--failed" : ""}`}
+        role="dialog"
+        aria-modal="true"
+        aria-label={job.name}
+        onClick={(e) => e.stopPropagation()}
+      >
+        <div className="ajp-detail__head">
+          <b>{job.name}</b>
+          <span className={`ajp-detail__status${failed ? " is-bad" : ""}`}>
+            {failed ? `Failed ${when}` : job.lastRunAt ? `Last run ${when}` : "Not run yet"}
+          </span>
+          <button type="button" className="ajp-detail__close" aria-label="Close" onClick={onClose}>
+            ×
           </button>
-        ) : null}
+        </div>
+        <div className="ajp-detail__kv">
+          <span>Starts</span>
+          <b>{trigger}</b>
+        </div>
+        {failed && job.error ? <p className="ajp-detail__error">{job.error.trim()}</p> : null}
+        <pre className={`ajp-detail__log${failed ? " is-bad" : ""}`}>
+          {log || (job.lastRunAt ? "Loading log…" : "No runs yet.")}
+        </pre>
+        <div className="ajp-detail__acts">
+          {failed ? (
+            <button type="button" className="ajp-btn ajp-btn--primary" onClick={askPen}>
+              Ask Pen to fix
+            </button>
+          ) : null}
+          <button type="button" className="ajp-btn" onClick={onRun}>
+            Run now
+          </button>
+          <button
+            type="button"
+            className="ajp-btn ajp-btn--quiet"
+            onClick={() => {
+              onClose();
+              openJobInJobsTab(job.id);
+            }}
+          >
+            All runs
+          </button>
+        </div>
       </div>
-    </div>
+    </div>,
+    document.body,
   );
 }
 
@@ -362,6 +396,7 @@ export function AppJobsPanel({ appId, compact, focusJobId }: AppJobsPanelProps) 
     [loadLogs],
   );
 
+  const closeDetail = useCallback(() => setSelectedId(null), []);
   const selected = selectedId ? appJobs.find((j) => j.id === selectedId) : undefined;
   const dims = compact ? NARROW_CARD : WIDE_CARD;
 
@@ -401,15 +436,13 @@ export function AppJobsPanel({ appId, compact, focusJobId }: AppJobsPanelProps) 
         </section>
       ))}
       {selected ? (
-        <div onClick={(e) => e.stopPropagation()}>
-          <JobDetail
-            job={selected}
-            trigger={triggerText(selected, jobs)}
-            logs={logsByJobId[selected.id]}
-            onClose={() => setSelectedId(null)}
-            onRun={() => void runJob(selected.id)}
-          />
-        </div>
+        <JobDetail
+          job={selected}
+          trigger={triggerText(selected, jobs)}
+          logs={logsByJobId[selected.id]}
+          onClose={closeDetail}
+          onRun={() => void runJob(selected.id).then(() => loadLogs(selected.id))}
+        />
       ) : null}
     </div>
   );
