@@ -4,6 +4,9 @@ on:
   push:
     tags:
       - 'v*'
+  # Started by auto-tag.yml with --ref v<version>: tags pushed with GITHUB_TOKEN do not trigger
+  # push workflows, but workflow_dispatch is allowed. GITHUB_REF_NAME is the tag either way.
+  workflow_dispatch:
 
 permissions:
   contents: write
@@ -15,7 +18,7 @@ jobs:
       matrix:
         include:
           - arch: arm64
-            runner: macos-14
+            runner: macos-15
             app_path: release/mac-arm64/Papr Work.app
             builder_flag: --arm64
           - arch: x64

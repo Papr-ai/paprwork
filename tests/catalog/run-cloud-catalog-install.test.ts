@@ -23,15 +23,19 @@ describe("runCloudCatalogInstall", () => {
     expect(resolveInstallDbPolicy(input.mode!, ["shared"], input.catalogScope, input.installDbPolicy, "link_read")).toBe("fork_empty");
   });
 
-  it("community app without mode: linked copy on its own data, never shared", () => {
-    expect(
-      buildCloudCatalogInstallInput({
-        namespaceId: "ns-1",
-        slug: "community-app",
-        catalogScope: "community",
-        visibility: "public_read",
-      }),
-    ).toMatchObject({ mode: "track", installDbPolicy: "fork_empty" });
+  it("community app without mode: linked copy, data decided by verified access", () => {
+    const input = buildCloudCatalogInstallInput({
+      namespaceId: "ns-1",
+      slug: "community-app",
+      catalogScope: "community",
+      visibility: "public_read",
+    });
+    expect(input).toMatchObject({ mode: "track", catalogScope: "global" });
+    expect(input.installDbPolicy).toBeUndefined();
+    // Stranger → own data; teammate (server says team) → the team's data.
+    expect(resolveInstallDbPolicy(input.mode!, ["shared"], input.catalogScope, input.installDbPolicy, "public_read")).toBe("fork_empty");
+    expect(resolveInstallDbPolicy(input.mode!, ["shared"], input.catalogScope, input.installDbPolicy, undefined)).toBe("fork_empty");
+    expect(resolveInstallDbPolicy(input.mode!, ["shared"], input.catalogScope, input.installDbPolicy, "team")).toBe("shared_primary");
   });
 
   it("explicit fork still installs a detached copy for older callers", () => {

@@ -737,7 +737,7 @@ Record: decisions, user preferences, project milestones, mistakes to avoid`);
           has("list_documents") ||
           has("import_document"),
         details:
-          "create/read/list/import documents — ALWAYS use create_document for writing documents, import_document for device files",
+          "create/read/list/import/version documents — ALWAYS use create_document for writing documents, import_document for device files, save_document_version before big rewrites",
       },
       {
         area: "Memory",
@@ -1442,6 +1442,8 @@ curl https://api.openai.com/v1/models \\
 - \`create_document({ title, content })\` - Create new document (returns \`{ id, filePath }\`)
 - \`read_document({ documentId })\` - Read document by ID
 - \`list_documents({ query })\` - List/search documents
+- \`save_document_version({ documentId, label })\` - Snapshot current content as a named version (\"v1\", \"v2 after review\")
+- \`list_document_versions({ documentId })\` - List saved versions
 
 ## Markdown in documents (tables)
 
@@ -1459,7 +1461,13 @@ User asks to "import ~/Documents/notes.md":
 
 ## Editing
 
-Use \`bash\` to edit the Markdown file directly at \`filePath\`. Document editor auto-updates.`;
+Use \`bash\` to edit the Markdown file directly at \`filePath\`. Document editor auto-updates.
+
+**Versioning a rewrite** (\"make a v2\", big restructure): \`save_document_version({ documentId, label: \"v1\" })\` → edit the file → \`save_document_version({ documentId, label: \"v2\" })\`. Keep the same document — don't create a copy. Users preview/restore from the clock icon.
+
+## Mermaid diagrams
+
+Fenced \`\`\`mermaid blocks render as diagrams in the editor (click to open full screen with zoom/pan). Prefer them over ASCII art.`;
   }
 
   /**

@@ -157,11 +157,11 @@ export function resolveOneInstallSelection(input: {
     return { mode: "fork", installDbPolicy: "fork_empty" };
   }
   // Data is decided by the gateway after prepare, where it can see the
-  // databases' isolation and the server-verified access mode: Community →
-  // own data; team-shared with team/owner access → team data; per-user
-  // databases or non-team access → own data. Sending an explicit
-  // shared_primary here would turn those fallbacks into install failures.
-  return input.catalogScope === "global"
-    ? { mode: "track", installDbPolicy: "fork_empty" }
-    : { mode: "track" };
+  // databases' isolation and the server-verified access mode: team/owner/
+  // people access → team data (from either tab — a teammate who installs from
+  // Community is still on the team); public/link access, older servers on
+  // Community, or per-user databases → own data. Sending an explicit policy
+  // here would either force a teammate onto a private fork or turn those
+  // fallbacks into install failures.
+  return { mode: "track" };
 }
