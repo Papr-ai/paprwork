@@ -78,6 +78,10 @@ vi.mock("../../../src/gateway/services/tursoSyncSession.js", () => ({ reconcileL
 import { getPaprAppsRoot } from "../../../src/core/utils/paprRoot.js";
 import { pullAppCodeFromRepo } from "../../../src/gateway/services/syncV3/pullAppCodeFromRepo.js";
 import { pullAppFromCloud } from "../../../src/gateway/services/syncV3/pullAppFromCloud.js";
+import {
+  getPendingAppUpdate,
+  resetPendingAppUpdatesForTests,
+} from "../../../src/gateway/services/syncV3/appRepoPendingUpdate.js";
 
 const appFile = (rel: string) => path.join(getPaprAppsRoot(), APP_ID, rel);
 const read = (rel: string) => fs.readFile(appFile(rel), "utf8");
@@ -95,6 +99,7 @@ const BASE_CHART = lines("const title = 'Sales';", "", "const axis = 'x';");
 beforeEach(async () => {
   process.env.PAPR_HOME = await fs.mkdtemp(path.join(os.tmpdir(), "merge-home-"));
   state.published = [];
+  resetPendingAppUpdatesForTests();
   publish({ "app.ts": BASE_APP, "chart.ts": BASE_CHART, "index.html": "<div></div>" }, "sha-1");
   await pullAppCodeFromRepo(APP_ID, { token: "t", allowRecentSkip: false });
 });
@@ -176,5 +181,27 @@ describe("Get updates merges non-overlapping edits", () => {
     expect(res.code.conflictFiles).toEqual([]);
     expect(res.code.mergedFiles).toEqual(["app.ts"]);
     expect(await read("app.ts")).toMatch(/mine[\s\S]*theirs/);
+  });
+});
+
+describe("the waiting-update chip clears once the update is in", () => {
+  it("held update, then Theirs with a clean merge: no update left waiting", async () => {
+    await divergeBothSides();
+    await pullAppFromCloud(APP_ID, { token: "t", allowRecentSkip: false, preferCloudOverLocal: true });
+    expect(getPendingAppUpdate(APP_ID)?.commitSha).toBe("sha-2");
+
+    const res = await pullAppFromCloud(APP_ID, {
+      token: "t", allowRecentSkip: false, preferCloudOverLocal: true, fileResolutions: { "chart.ts": "theirs" },
+    });
+
+    expect(res.code.mergedFiles).toEqual(["app.ts"]);
+    expect(getPendingAppUpdate(APP_ID)).toBeNull();
+  });
+
+  it("still held: the chip stays", async () => {
+    await divergeBothSides();
+    await pullAppFromCloud(APP_ID, { token: "t", allowRecentSkip: false, preferCloudOverLocal: true });
+    await pullAppFromCloud(APP_ID, { token: "t", allowRecentSkip: false, preferCloudOverLocal: true });
+    expect(getPendingAppUpdate(APP_ID)?.commitSha).toBe("sha-2");
   });
 });

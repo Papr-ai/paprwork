@@ -38,6 +38,14 @@ function shouldMarkAppCodeBaselineSynced(code: PullAppCodeFromRepoResult): boole
   return code.reason === "already at remote head";
 }
 
+/** The pull applied the remote head (nothing held back for a decision). */
+function pullReachedRemoteHead(code: PullAppCodeFromRepoResult): boolean {
+  if (code.heldForConflicts || code.conflictFiles.length > 0) {
+    return false;
+  }
+  return !code.skipped || code.reason === "already at remote head";
+}
+
 /** After Get updates, clear stale git fingerprint so sync UI stops showing pending upload. */
 function markAppCodeBaselineSynced(appId: string, code: PullAppCodeFromRepoResult): void {
   if (!shouldMarkAppCodeBaselineSynced(code)) {
@@ -89,7 +97,10 @@ async function pullAppFromCloudLocked(
     return { appId, code, tursoScheduled: false };
   }
 
-  if ((code.keptLocalFiles?.length ?? 0) > 0) {
+  if (pullReachedRemoteHead(code)) {
+    // The waiting update is now in local code. Clear it whether or not the
+    // pull merged or kept files: those still need publishing, but they are no
+    // longer an update waiting on the web.
     clearPendingAppUpdate(appId);
   }
   if (code.heldForConflicts && code.commitSha) {
