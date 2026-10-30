@@ -45,6 +45,9 @@ export function databasePolicyFromInstallPolicy(
  *   fork                     → fork_empty     (no lineage, own data)
  *   track + team app         → shared_primary (teammates share one database)
  *   track + community app    → fork_empty     (own data, upstream code link)
+ *     …unless the server says the caller is on the publisher's team
+ *     (accessMode team/owner/people) → shared_primary. Data follows the
+ *     caller's verified access, not which tab they clicked Install in.
  *
  * Community collaborate therefore keeps the lineage that powers Get updates
  * and Propose changes, while every installer still gets their own rows. The
@@ -65,6 +68,7 @@ function assertExplicitInstallDbPolicyAllowed(input: {
   mode: CloudAppInstallMode;
   catalogScope?: "global" | "namespace";
   explicitPolicy: InstallDbPolicy;
+  accessMode?: string | null;
 }): void {
   if (input.mode === "fork") {
     if (input.explicitPolicy !== "fork_empty") {
@@ -77,7 +81,10 @@ function assertExplicitInstallDbPolicyAllowed(input: {
   }
 
   if (input.catalogScope === "global") {
-    if (input.explicitPolicy !== "fork_empty") {
+    if (
+      input.explicitPolicy !== "fork_empty" &&
+      !serverConfirmsTeamData(input.accessMode)
+    ) {
       throw new CloudInstallDbPolicyError(
         "invalid_install_db_policy",
         "Community collaborate never shares the publisher's database.",
@@ -110,6 +117,16 @@ export function serverAllowsTeamData(accessMode?: string | null): boolean {
   return !access || SHARED_DATA_ACCESS_MODES.has(access);
 }
 
+/**
+ * Strict form for Community installs: the server must SAY the caller is on the
+ * publisher's team. A missing accessMode (older server) never reaches the
+ * publisher's data from the public catalog.
+ */
+export function serverConfirmsTeamData(accessMode?: string | null): boolean {
+  const access = accessMode?.trim();
+  return Boolean(access && SHARED_DATA_ACCESS_MODES.has(access));
+}
+
 export function resolveInstallDbPolicy(
   mode: CloudAppInstallMode,
   linkedIsolations: readonly DatabaseIsolation[],
@@ -126,6 +143,7 @@ export function resolveInstallDbPolicy(
       mode,
       catalogScope,
       explicitPolicy,
+      accessMode,
     });
     // Per-user databases can't be one shared team database; a linked copy
     // with its own data is fine.
@@ -136,6 +154,15 @@ export function resolveInstallDbPolicy(
   }
 
   if (catalogScope === "global") {
+    // A teammate who opens a Community app from Community instead of Team Apps
+    // is still on the publisher's team: same shared data either way. Everyone
+    // else (public readers, link holders, older servers) gets their own data.
+    if (
+      serverConfirmsTeamData(accessMode) &&
+      !linkedIsolations.some((isolation) => isolation === "per-user")
+    ) {
+      return "shared_primary";
+    }
     return "fork_empty";
   }
 
