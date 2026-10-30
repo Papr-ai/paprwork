@@ -298,7 +298,7 @@
     "@types/ws": "^8.18.1",
     "@vitejs/plugin-react": "^4.7.0",
     "@vitest/coverage-v8": "^2.0.0",
-    "@vitest/ui": "^2.1.9",
+    "@vitest/ui": "^5.0.5",
     "concurrently": "^9.2.1",
     "cross-env": "^7.0.3",
     "dotenv": "^17.2.4",
@@ -315,6 +315,6 @@
     "typescript": "^5.9.3",
     "vite": "^6.4.1",
     "vite-plugin-node-polyfills": "^0.25.0",
-    "vitest": "^2.1.9"
+    "vitest": "^5.0.5"
   }
 }
