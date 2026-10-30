@@ -1,0 +1,106 @@
+name: Promote Cloud Services
+
+# Sends production traffic to candidates that were deployed at 0% and held
+# (repo variable CLOUD_PROMOTE_HOLD=true, or the `hold` input on a manual deploy run).
+# Promotes the chosen services in parallel so a coordinated launch goes live together.
+# Also works as a rollback: pass an older commit whose revision still exists.
+
+on:
+  workflow_dispatch:
+    inputs:
+      commit:
+        description: "Commit to promote (first 8 characters of the SHA, as shown in the deploy run summary)"
+        required: true
+        type: string
+      app_host:
+        description: "Promote the cloud app host (apps.papr.ai)"
+        type: boolean
+        default: true
+      agent_gateway:
+        description: "Promote the cloud agent gateway"
+        type: boolean
+        default: true
+
+concurrency:
+  group: promote-cloud-services
+  cancel-in-progress: false
+
+permissions:
+  contents: read
+
+env:
+  GCP_PROJECT_ID: gen-lang-client-0873281406
+  GCP_REGION: us-west1
+
+jobs:
+  promote:
+    name: Promote ${{ matrix.service }}
+    if: github.ref_name == 'master'
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: true
+      matrix:
+        include:
+          - service: papr-cloud-app-host
+            environment: cloud-app-host-production
+            enabled: ${{ inputs.app_host }}
+          - service: papr-cloud-agent-gateway
+            environment: cloud-agent-gateway-production
+            enabled: ${{ inputs.agent_gateway }}
+    environment:
+      name: ${{ matrix.environment }}
+    permissions:
+      contents: read
+      id-token: write
+    steps:
+      - name: Skip
+        if: matrix.enabled != true
+        run: echo "Not selected; ${{ matrix.service }} unchanged."
+      - if: matrix.enabled == true
+        uses: google-github-actions/auth@v2
+        with:
+          workload_identity_provider: ${{ vars.GCP_WIF_PROVIDER }}
+          service_account: ${{ vars.GCP_DEPLOYER_SA }}
+      - if: matrix.enabled == true
+        uses: google-github-actions/setup-gcloud@v2
+      - name: Shift traffic
+        if: matrix.enabled == true
+        env:
+          SERVICE: ${{ matrix.service }}
+          COMMIT: ${{ inputs.commit }}
+        run: |
+          C="${COMMIT:0:8}"
+          if ! [[ "$C" =~ ^[0-9a-f]{8}$ ]]; then echo "::error::commit must be 8 hex characters"; exit 1; fi
+          REV=$(gcloud run revisions list --service="${SERVICE}" --region="${GCP_REGION}" --project="${GCP_PROJECT_ID}" \
+            --filter="metadata.labels.commit=${C}" --sort-by=~metadata.creationTimestamp --limit=1 --format='value(metadata.name)')
+          if [ -z "$REV" ]; then echo "::error::No ${SERVICE} revision for commit ${C}. Deploy it first."; exit 1; fi
+          PREV=$(gcloud run services describe "${SERVICE}" --region="${GCP_REGION}" --project="${GCP_PROJECT_ID}" --format='value(status.traffic[0].revisionName)')
+          echo "Previous: ${PREV} -> ${REV}"
+          gcloud run services update-traffic "${SERVICE}" --to-revisions="${REV}=100" \
+            --region="${GCP_REGION}" --project="${GCP_PROJECT_ID}"
+          {
+            echo "### ${SERVICE}: ${REV} now at 100%"
+            echo "Rollback: gcloud run services update-traffic ${SERVICE} --to-revisions=${PREV}=100 --region=${GCP_REGION} --project=${GCP_PROJECT_ID}"
+          } >> "$GITHUB_STEP_SUMMARY"
+          echo "URL=$(gcloud run services describe "${SERVICE}" --region="${GCP_REGION}" --project="${GCP_PROJECT_ID}" --format='value(status.url)')" >> "$GITHUB_ENV"
+      - id: idtoken
+        if: matrix.enabled == true && matrix.service == 'papr-cloud-agent-gateway'
+        uses: google-github-actions/auth@v2
+        with:
+          workload_identity_provider: ${{ vars.GCP_WIF_PROVIDER }}
+          service_account: ${{ vars.GCP_DEPLOYER_SA }}
+          token_format: id_token
+          id_token_audience: ${{ env.URL }}
+          id_token_include_email: true
+          create_credentials_file: false
+      - name: Verify
+        if: matrix.enabled == true
+        env:
+          TOKEN: ${{ steps.idtoken.outputs.id_token }}
+        run: |
+          sleep 15
+          if [ -n "$TOKEN" ]; then
+            curl -sf --max-time 15 -H "Authorization: Bearer ${TOKEN}" "${URL}/health"
+          else
+            curl -sf --max-time 15 https://apps.papr.ai/health
+          fi
