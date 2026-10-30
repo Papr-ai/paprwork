@@ -18,6 +18,8 @@ import { MiniAppDataSourcesPanel } from "./MiniAppDataSourcesPanel";
 import { AppFilesPanel } from "./AppFilesPanel";
 import { AppFilePreview } from "./AppFilePreview";
 import { MiniAppCodeSearch } from "./MiniAppCodeSearch";
+import { fetchTableScopes } from "../../utils/v9CloudApi";
+import type { ScopedTable } from "../../../src/core/utils/tableScope";
 import "./MiniAppFilesView.css";
 import "./WorkspaceCodeEditor.css";
 import "./WorkspaceDbPreview.css";
@@ -72,6 +74,16 @@ export function MiniAppFilesView({ appId, panel, openTable, onTableOpened }: Min
     void openDbTable(openTable.db, openTable.table).finally(() => onTableOpened?.());
   }, [openTable, workspace.workspace, openDbTable, onTableOpened]);
   const [selectedAppFile, setSelectedAppFile] = useState<AppFileRow | null>(null);
+  // Who can see each table (Public / Private), shown on the table tabs.
+  const [scopes, setScopes] = useState<ScopedTable[]>([]);
+  useEffect(() => {
+    if (panel !== "db") return;
+    let cancelled = false;
+    void fetchTableScopes(appId).then((t) => !cancelled && setScopes(t ?? []));
+    return () => {
+      cancelled = true;
+    };
+  }, [appId, panel]);
 
   const language = workspace.selected
     ? detectWorkspaceLanguage(workspace.selected.path)
@@ -91,6 +103,15 @@ export function MiniAppFilesView({ appId, panel, openTable, onTableOpened }: Min
     () => workspace.workspace?.databases ?? [],
     [workspace.workspace],
   );
+
+  const sel = workspace.selected;
+  const selectedDbAlias =
+    sel?.scope === "registry"
+      ? sel.alias
+      : sel?.scope === "job"
+        ? jobGroups.find((j) => j.jobId === sel.jobId)?.alias
+        : undefined;
+  const tableScopes = scopes.filter((t) => t.db === selectedDbAlias);
 
   const canSave =
     workspace.selected != null &&
@@ -228,7 +249,7 @@ export function MiniAppFilesView({ appId, panel, openTable, onTableOpened }: Min
                   <li key={db.alias}>
                     <button
                       type="button"
-                      className={`workspace-file-tree__file${
+                      className={`workspace-file-tree__file mini-app-files__db-row${
                         workspace.selectedKey === `registry:${db.alias}`
                           ? " workspace-file-tree__file--active"
                           : ""
@@ -387,6 +408,7 @@ export function MiniAppFilesView({ appId, panel, openTable, onTableOpened }: Min
             {workspace.viewMode === "database" && workspace.dbPreview ? (
               <WorkspaceDbPreview
                 preview={workspace.dbPreview}
+                scopes={tableScopes}
                 loading={workspace.loadingDb}
                 onSelectTable={(tableName) =>
                   void workspace.selectDbTable(tableName)

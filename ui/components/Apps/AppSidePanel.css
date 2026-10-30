@@ -1,0 +1,157 @@
+/* AppSidePanel — beside the app (460px) or full width. */
+
+.mini-app-view__stage {
+  flex: 1;
+  min-height: 0;
+  display: flex;
+}
+
+.mini-app-view__stage > .mini-app-view__frame-wrap {
+  flex: 1;
+  min-width: 0;
+}
+
+/* Full width: the app stays mounted (keeps its state), just hidden. */
+.mini-app-view__stage--wide > .mini-app-view__frame-wrap {
+  display: none;
+}
+
+.asp {
+  width: 460px;
+  max-width: 60%;
+  flex-shrink: 0;
+  display: flex;
+  flex-direction: column;
+  min-height: 0;
+  border-left: 1px solid var(--border-color);
+  background: var(--background-color);
+}
+
+.asp--wide {
+  width: auto;
+  max-width: none;
+  flex: 1;
+  border-left: 0;
+}
+
+.asp-head {
+  display: flex;
+  align-items: center;
+  gap: 2px;
+  height: 40px;
+  padding: 0 8px;
+  border-bottom: 1px solid var(--border-color);
+  flex-shrink: 0;
+}
+
+.asp-back {
+  display: inline-flex;
+  align-items: center;
+  gap: 3px;
+  height: 26px;
+  padding: 0 9px 0 5px;
+  border: 0;
+  border-radius: 7px;
+  background: transparent;
+  color: var(--text-secondary);
+  font: inherit;
+  font-size: 12px;
+  font-weight: 500;
+  cursor: pointer;
+}
+
+.asp-back:hover {
+  background: var(--background-secondary);
+  color: var(--text-primary);
+}
+
+.asp-sep {
+  width: 1px;
+  height: 16px;
+  margin: 0 4px;
+  background: var(--border-color);
+  flex: none;
+}
+
+.asp-tabs {
+  display: flex;
+  gap: 2px;
+  min-width: 0;
+}
+
+.asp-tab {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  height: 27px;
+  padding: 0 10px;
+  border: 0;
+  border-radius: 7px;
+  background: transparent;
+  color: var(--text-secondary);
+  font: inherit;
+  font-size: 12.5px;
+  font-weight: 500;
+  cursor: pointer;
+}
+
+.asp-tab:hover {
+  color: var(--text-primary);
+}
+
+.asp-tab.is-on {
+  background: var(--background-secondary);
+  color: var(--text-primary);
+}
+
+.asp-count {
+  font-size: 10.5px;
+  color: var(--text-secondary);
+}
+
+.asp-tools {
+  margin-left: auto;
+  display: flex;
+  gap: 2px;
+}
+
+.asp-icon-btn {
+  display: inline-grid;
+  place-items: center;
+  width: 26px;
+  height: 26px;
+  border: 0;
+  border-radius: 7px;
+  background: transparent;
+  color: var(--text-secondary);
+  cursor: pointer;
+}
+
+.asp-icon-btn:hover {
+  background: var(--background-secondary);
+  color: var(--text-primary);
+}
+
+.asp-body {
+  flex: 1;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+  overflow: auto;
+}
+
+/* Beside the app the files tree gets less room. */
+.asp:not(.asp--wide) .mini-app-files__sidebar {
+  width: 180px;
+}
+
+@media (max-width: 760px) {
+  .asp {
+    max-width: none;
+    width: 100%;
+  }
+
+  .mini-app-view__stage:has(.asp) > .mini-app-view__frame-wrap {
+    display: none;
+  }
+}

@@ -1,0 +1,294 @@
+/* AppJobsPanel — Scheduled / One off, live workflow cards. */
+
+.ajp {
+  display: flex;
+  flex-direction: column;
+  gap: 18px;
+  padding: 18px 20px 20px;
+  box-sizing: border-box;
+  min-height: 100%;
+}
+
+.ajp--compact {
+  gap: 14px;
+  padding: 14px 14px 16px;
+}
+
+.ajp-section__title {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  margin: 0 0 8px 2px;
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--text-secondary);
+}
+
+.ajp-canvas {
+  overflow-x: auto;
+  overflow-y: hidden;
+  border-radius: 12px;
+  border: 1px solid var(--border-color);
+  background-color: var(--background-secondary);
+}
+
+.ajp-canvas .wf-canvas-content {
+  min-height: 0;
+}
+
+/* Cards: the live card, narrower and packed closer. */
+.ajp .wf-node-body {
+  flex: 1;
+  min-width: 0;
+  padding: 8px 10px;
+  display: flex;
+  flex-direction: column;
+  justify-content: center;
+  gap: 3px;
+}
+
+.ajp .wf-node-header {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  min-width: 0;
+}
+
+.ajp .wf-node-title {
+  font-size: 12.5px;
+}
+
+.ajp .wf-node-meta {
+  padding-left: 0;
+  gap: 5px;
+  min-width: 0;
+}
+
+.ajp .wf-node-trigger {
+  max-width: 100px;
+}
+
+.ajp .wf-node-action {
+  width: 24px;
+  height: 20px;
+  margin-right: 6px;
+}
+
+.ajp-agent-icon {
+  background: rgba(0, 140, 240, 0.06);
+  border-color: rgba(0, 140, 240, 0.22);
+}
+
+.ajp-trigger {
+  color: var(--text-secondary);
+  background: var(--background-secondary);
+}
+
+.ajp-card--failed {
+  border-color: rgba(239, 68, 68, 0.5);
+  border-left-color: #ef4444;
+  background: color-mix(in srgb, #ef4444 4%, var(--background-color));
+}
+
+.ajp-fail {
+  font-size: 10px;
+  font-weight: 600;
+  color: #ef4444;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+/* Beside the app: name on up to two lines, trigger below, no type label. */
+.ajp--compact .wf-node-body {
+  padding: 6px 8px;
+  gap: 2px;
+}
+
+.ajp--compact .wf-node-header {
+  gap: 5px;
+  align-items: flex-start;
+}
+
+.ajp--compact .wf-node-type-icon {
+  width: 18px;
+  height: 18px;
+  border-radius: 5px;
+}
+
+.ajp--compact .wf-node-title {
+  font-size: 11.5px;
+  line-height: 1.2;
+  white-space: normal;
+  display: -webkit-box;
+  -webkit-line-clamp: 2;
+  -webkit-box-orient: vertical;
+}
+
+.ajp--compact .wf-node-trigger {
+  max-width: 92px;
+  font-size: 9.5px;
+}
+
+/* Details: only after a card is clicked. */
+.ajp-modal {
+  position: fixed;
+  inset: 0;
+  z-index: 1000;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 24px;
+  background: rgba(0, 0, 0, 0.32);
+}
+
+.ajp-detail {
+  width: min(640px, 100%);
+  max-height: min(80vh, 720px);
+  border: 1px solid var(--border-color);
+  border-radius: 14px;
+  background: var(--background-color);
+  box-shadow: 0 24px 64px rgba(0, 0, 0, 0.24);
+  padding: 16px 18px;
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+
+.ajp-detail--failed {
+  border-color: rgba(239, 68, 68, 0.35);
+}
+
+.ajp-detail__head {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-size: 13px;
+}
+
+.ajp-detail__status {
+  font-size: 11px;
+  color: var(--text-secondary);
+}
+
+.ajp-detail__status.is-bad {
+  color: #ef4444;
+  font-weight: 600;
+}
+
+.ajp-detail__close {
+  margin-left: auto;
+  border: 0;
+  background: transparent;
+  color: var(--text-secondary);
+  font-size: 16px;
+  line-height: 1;
+  cursor: pointer;
+  padding: 2px 4px;
+  border-radius: 6px;
+}
+
+.ajp-detail__close:hover {
+  background: var(--background-secondary);
+}
+
+.ajp-detail__kv {
+  display: grid;
+  grid-template-columns: 60px 1fr;
+  gap: 4px 10px;
+  font-size: 12px;
+}
+
+.ajp-detail__kv span {
+  color: var(--text-secondary);
+}
+
+.ajp-detail__kv b {
+  font-weight: 500;
+}
+
+.ajp-detail__error {
+  margin: 0;
+  color: #ef4444;
+  font-size: 12px;
+  white-space: pre-wrap;
+}
+
+.ajp-detail__log {
+  flex: 1 1 auto;
+  min-height: 80px;
+  overflow: auto;
+  margin: 0;
+  padding: 8px 10px;
+  border-radius: 8px;
+  background: var(--background-secondary);
+  color: var(--text-primary);
+  font-size: 11px;
+  line-height: 1.45;
+  white-space: pre-wrap;
+}
+
+.ajp-detail__acts {
+  display: flex;
+  gap: 6px;
+  flex-wrap: wrap;
+}
+
+.ajp-btn {
+  height: 26px;
+  padding: 0 10px;
+  border-radius: 7px;
+  border: 1px solid var(--border-color);
+  background: var(--background-color);
+  color: var(--text-primary);
+  font: inherit;
+  font-size: 12px;
+  cursor: pointer;
+}
+
+.ajp-btn:hover {
+  background: var(--background-secondary);
+}
+
+.ajp-btn--primary {
+  background: var(--primary-color);
+  border-color: var(--primary-color);
+  color: #fff;
+}
+
+.ajp-btn--primary:hover {
+  background: var(--primary-color);
+  filter: brightness(1.06);
+}
+
+.ajp-status,
+.ajp-empty {
+  margin: 24px;
+  font-size: 13px;
+  color: var(--text-secondary);
+}
+
+.ajp-status--error {
+  color: var(--danger, #c0392b);
+}
+
+.ajp-empty__title {
+  margin: 0 0 4px;
+  font-weight: 600;
+  color: var(--text-primary);
+}
+
+.ajp-empty__desc {
+  margin: 0;
+}
+
+.ajp-detail__log.is-bad {
+  background: color-mix(in srgb, #ef4444 6%, var(--background-secondary));
+}
+
+.ajp-btn--quiet {
+  margin-left: auto;
+  border-color: transparent;
+  background: transparent;
+  color: var(--text-secondary);
+}

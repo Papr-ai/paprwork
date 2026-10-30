@@ -47,9 +47,9 @@ describe("jobTriggerKind", () => {
 });
 
 describe("jobTriggerLabel", () => {
-  it("returns Manual for on-demand jobs", () => {
+  it("returns One off for on-demand jobs", () => {
     const job = makeJob({ id: "c", name: "On demand" });
-    expect(jobTriggerLabel(job, [])).toBe("Manual");
+    expect(jobTriggerLabel(job, [])).toBe("One off");
   });
 });
 

@@ -10,9 +10,8 @@ import {
   MiniAppPublishBar,
   type AppPreviewMode,
 } from "./MiniAppPublishBar";
-import { MiniAppFilesView } from "./MiniAppFilesView";
 import { onOpenAppTable } from "../../utils/openAppTable";
-import { MiniAppJobsView } from "./MiniAppJobsView";
+import { AppSidePanel, type AppSideTab } from "./AppSidePanel";
 import type { AppWorkspaceMode, AppWorkspacePanel } from "../../hooks/useAppWorkspace";
 import { useAppLinkedJobCount } from "../../stores/jobsStore";
 import { useTabs } from "../../hooks/useTabs";
@@ -83,8 +82,13 @@ export function MiniAppView({
   const [appTitle, setAppTitle] = useState("Mini-app");
   const [cloudLineage, setCloudLineage] = useState<ArtifactCloudLineage | null>(null);
   const [viewMode, setViewMode] = useState<AppPreviewMode>("local");
-  const [workspaceMode, setWorkspaceMode] = useState<AppWorkspaceMode>("preview");
+  // The app is always on screen now; Data & code opens beside it (sideTab).
+  const workspaceMode: AppWorkspaceMode = "preview";
   const [workspacePanel, setWorkspacePanel] = useState<AppWorkspacePanel>("code");
+  // Data & code panel: opens beside the app; null = closed.
+  const [sideTab, setSideTab] = useState<AppSideTab | null>(null);
+  const [sideWide, setSideWide] = useState(false);
+  const [focusJobId, setFocusJobId] = useState<string | null>(null);
   const linkedJobCount = useAppLinkedJobCount(appId);
   const [previewShellLoaded, setPreviewShellLoaded] = useState(false);
   const [iframeLoadKey, setIframeLoadKey] = useState(0);
@@ -112,6 +116,8 @@ export function MiniAppView({
 
   useEffect(() => {
     setWorkspacePanel("code");
+    setSideTab(null);
+    setSideWide(false);
   }, [appId]);
 
   // Share sheet table pill: show that table in this app's DB panel.
@@ -120,8 +126,7 @@ export function MiniAppView({
   useEffect(
     () =>
       onOpenAppTable(appId, ({ db, table }) => {
-        setWorkspaceMode("files");
-        setWorkspacePanel("db");
+        setSideTab("data");
         setPendingTable({ db, table });
       }),
     [appId],
@@ -892,12 +897,16 @@ export function MiniAppView({
           onViewModeChange={handleViewModeChange}
           workspaceMode={workspaceMode}
           onWorkspaceModeChange={(mode) => {
-            setWorkspaceMode(mode);
+            // "Data & code" opens the panel beside the app; the bar stays put.
             if (mode === "files") {
-              setWorkspacePanel("code");
+              setSideTab((cur) => cur ?? "data");
+            } else {
+              setSideTab(null);
+              setSideWide(false);
             }
           }}
           workspacePanel={workspacePanel}
+          dataPanelOpen={sideTab !== null}
           onWorkspacePanelChange={setWorkspacePanel}
           linkedJobCount={linkedJobCount}
           onTrackPullComplete={() => void refreshAppMetadata()}
@@ -905,24 +914,19 @@ export function MiniAppView({
           onRefreshPreview={handleRefreshPreview}
           previewTabVisible={previewTabVisible}
           previewShellLoaded={previewShellLoaded}
+          onOpenFailingJob={(jobId) => {
+            setFocusJobId(jobId);
+            setSideTab("jobs");
+          }}
           onOpenDependencyApp={(dependencyAppId, title) => {
             const tabId = createTab("app", dependencyAppId, title ?? "App");
             switchToTab(tabId);
           }}
         />
       ) : null}
-      {!embedded && workspaceMode === "files" ? (
-        workspacePanel === "jobs" ? (
-          <MiniAppJobsView appId={appId} appTitle={appTitle} />
-        ) : (
-          <MiniAppFilesView
-            appId={appId}
-            panel={workspacePanel}
-            openTable={pendingTable}
-            onTableOpened={clearPendingTable}
-          />
-        )
-      ) : (
+      <div
+        className={`mini-app-view__stage${sideTab && sideWide ? " mini-app-view__stage--wide" : ""}`}
+      >
         <div className="mini-app-view__frame-wrap">
           {waitingForGateway ? (
             <div className="mini-app-view__overlay">
@@ -1065,7 +1069,25 @@ export function MiniAppView({
             </div>
           ) : null}
         </div>
-      )}
+        {!embedded && sideTab ? (
+          <AppSidePanel
+            appId={appId}
+            tab={sideTab}
+            wide={sideWide}
+            jobCount={linkedJobCount}
+            focusJobId={focusJobId}
+            openTable={pendingTable}
+            onTableOpened={clearPendingTable}
+            onTabChange={setSideTab}
+            onWideChange={setSideWide}
+            onClose={() => {
+              setSideTab(null);
+              setSideWide(false);
+              setFocusJobId(null);
+            }}
+          />
+        ) : null}
+      </div>
     </div>
   );
 }

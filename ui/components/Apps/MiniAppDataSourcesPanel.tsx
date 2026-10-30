@@ -5,7 +5,10 @@
 import React, { useCallback, useEffect, useState } from "react";
 import "./MiniAppDataSourcesPanel.css";
 
-const GATEWAY = "http://localhost:18789";
+const GATEWAY =
+  typeof import.meta !== "undefined" && import.meta.env?.VITE_GATEWAY_PORT
+    ? `http://${import.meta.env.VITE_GATEWAY_HOST || "localhost"}:${import.meta.env.VITE_GATEWAY_PORT}`
+    : "http://localhost:18789";
 
 interface LinkedSource {
   alias: string;
