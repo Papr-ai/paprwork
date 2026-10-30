@@ -4,6 +4,9 @@ on:
   push:
     tags:
       - 'v*'
+  # Started by auto-tag.yml with --ref v<version>: tags pushed with GITHUB_TOKEN do not trigger
+  # push workflows, but workflow_dispatch is allowed. GITHUB_REF_NAME is the tag either way.
+  workflow_dispatch:
 
 permissions:
   contents: write
