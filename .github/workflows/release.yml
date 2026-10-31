@@ -115,7 +115,7 @@ jobs:
           rm -f $RUNNER_TEMP/app_certificate.p12 $RUNNER_TEMP/installer_certificate.p12
 
       - name: Upload Mac artifacts (${{ matrix.arch }})
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: mac-builds-${{ matrix.arch }}
           path: |
@@ -178,7 +178,7 @@ jobs:
           node scripts/verify-packaged-turso-sync.mjs release/win-unpacked/resources win32 x64
 
       - name: Upload Windows artifacts
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: windows-builds
           path: |
@@ -224,7 +224,7 @@ jobs:
           node scripts/verify-packaged-job-sdk.mjs release/linux-unpacked
 
       - name: Upload Linux artifacts
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: linux-builds
           path: |
