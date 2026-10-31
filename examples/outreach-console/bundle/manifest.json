@@ -1,0 +1,74 @@
+{
+  "schemaVersion": "1.0.0",
+  "bundleId": "bundle-splitin-outreach",
+  "name": "Outreach Console",
+  "version": "0.1.0",
+  "createdAt": "2026-09-28T00:00:00.000Z",
+  "createdBy": "SplitInTech",
+  "minPaprworkVersion": "2.6.0",
+  "description": "Operator console for the MIT outreach engine: what goes out next, approvals, review, manual tasks and kill switches. The engine runs outside Papr's databases (ADR 0004).",
+  "requirements": [
+    {
+      "name": "OUTREACH_API_URL",
+      "service": "outreach-engine",
+      "category": "other",
+      "description": "Loopback URL of `outreach serve`, e.g. http://127.0.0.1:8787",
+      "credentialScope": "user",
+      "clientAccess": "server"
+    },
+    {
+      "name": "OUTREACH_API_TOKEN",
+      "service": "outreach-engine",
+      "category": "other",
+      "description": "Token from `outreach token create <principal> --role approver` (viewer for read-only).",
+      "credentialScope": "user",
+      "clientAccess": "server"
+    }
+  ],
+  "platform": [
+    "macos",
+    "windows",
+    "linux"
+  ],
+  "app": {
+    "id": "outreach-console",
+    "name": "Outreach Console",
+    "version": "0.1.0",
+    "entryFile": "index.html",
+    "appPath": "apps/outreach-console",
+    "description": "What leaves the building next, and the one control that stops it."
+  },
+  "jobs": [
+    {
+      "id": "outreach-worker",
+      "name": "Outreach worker",
+      "type": "node",
+      "entryPoint": "code/run.mjs",
+      "command": "node code/run.mjs",
+      "schedule": {
+        "enabled": false,
+        "intervalMs": 60000,
+        "catchUpMissed": false
+      },
+      "folder": "outreach",
+      "appIds": [
+        "outreach-console"
+      ],
+      "env": {}
+    }
+  ],
+  "deploymentProfiles": [
+    {
+      "id": "local-desktop",
+      "name": "Desktop pilot",
+      "runtimeTarget": "local",
+      "environment": {},
+      "notes": "Desktop-only pilot. Keep publishing and the job schedule disabled. Configure absolute OUTREACH_CLI_ENTRY and OUTREACH_DB in the trusted local Papr gateway process environment; bundle job env metadata is not applied by the pinned importer. Verify local execution before enabling scheduling."
+    }
+  ],
+  "sync": {
+    "preferredRoot": "~/Papr",
+    "bundleSubpath": "bundles",
+    "cloudReady": false
+  }
+}

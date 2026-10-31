@@ -1,0 +1,20 @@
+{
+  "name": "@splitin/outreach-e2e",
+  "version": "0.0.0",
+  "private": true,
+  "description": "End-to-end suite: import to campaign to replies, opt-outs, bounces, notifications and audit, on fake providers.",
+  "license": "MIT",
+  "type": "module",
+  "scripts": {
+    "typecheck": "tsc --noEmit -p tsconfig.json"
+  },
+  "devDependencies": {
+    "@splitin/outreach-contracts": "0.0.0",
+    "@splitin/outreach-core": "0.0.0",
+    "@splitin/outreach-fakes": "0.0.0",
+    "@splitin/outreach-import": "0.0.0",
+    "@splitin/outreach-provider-email-gmail": "0.0.0",
+    "@splitin/outreach-provider-email-outlook": "0.0.0",
+    "@splitin/outreach-store-sqlite": "0.0.0"
+  }
+}

@@ -1,0 +1,21 @@
+{
+  "schemaVersion": "1.0.0",
+  "requirements": [
+    {
+      "name": "OUTREACH_API_URL",
+      "service": "outreach-engine",
+      "category": "other",
+      "description": "Loopback URL of `outreach serve`, e.g. http://127.0.0.1:8787",
+      "credentialScope": "user",
+      "clientAccess": "server"
+    },
+    {
+      "name": "OUTREACH_API_TOKEN",
+      "service": "outreach-engine",
+      "category": "other",
+      "description": "Token from `outreach token create <principal> --role approver` (viewer for read-only).",
+      "credentialScope": "user",
+      "clientAccess": "server"
+    }
+  ]
+}
