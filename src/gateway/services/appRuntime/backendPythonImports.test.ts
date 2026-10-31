@@ -85,3 +85,32 @@ describe.each(["0", "1"])("runPythonHandlerFromSource with extraFiles (worker=%s
     }
   }, 30_000);
 });
+
+describe("dotted lib imports (from lib.X import y)", () => {
+  const SRC = "import sys\nfrom lib.common import params\nfrom lib.github import gh_comment\nimport lib.extra\n";
+  it("keeps lib.X dotted so backend/lib/X.py is found", () => {
+    expect(pythonImportNames(SRC).sort()).toEqual(["lib.common", "lib.extra", "lib.github"]);
+  });
+
+  it("fetches backend/lib/X.py and recurses into it", async () => {
+    const repo: Record<string, string> = {
+      "backend/lib/common.py": "from lib.roles import R\n",
+      "backend/lib/roles.py": "R = 1\n",
+      "backend/lib/github.py": "SLUGS = {}\n",
+    };
+    const out = await resolveBackendPythonModules(SRC, async (p) => repo[p] ?? null, "review.py");
+    expect(Object.keys(out).sort()).toEqual(["lib/common.py", "lib/github.py", "lib/roles.py"]);
+  });
+
+  it("runs a handler using from lib.X import from the temp dir", async () => {
+    const res = await runPythonHandlerFromSource(
+      "import json\nfrom lib.common import who\nprint(json.dumps({'who': who()}))\n",
+      { PATH: process.env.PATH ?? "" },
+      20_000,
+      { "lib/common.py": "def who():\n    return 'elliott'\n" },
+    );
+    expect(res.stderr).toBe("");
+    expect(res.exitCode).toBe(0);
+    expect(JSON.parse(res.stdout)).toEqual({ who: "elliott" });
+  });
+});
