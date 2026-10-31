@@ -177,7 +177,30 @@ export class HybridStorageProvider implements IStorageProvider {
     }
   }
 
-  private async syncMessageToPapr(
+  /**
+   * Papr sends currently running, keyed by local message id. A message stays
+   * sync_pending until its send returns, so bulkSyncToPapr (run at the start of
+   * every summary refresh) used to send it a second time and Papr stored two
+   * PostMessages. Concurrent callers now share the one send.
+   */
+  private readonly inFlightSyncs = new Map<string, Promise<void>>();
+
+  private syncMessageToPapr(
+    chatId: string,
+    message: StoredMessage,
+  ): Promise<void> {
+    const running = this.inFlightSyncs.get(message.id);
+    if (running) {
+      return running;
+    }
+    const send = this.sendMessageToPapr(chatId, message).finally(() => {
+      this.inFlightSyncs.delete(message.id);
+    });
+    this.inFlightSyncs.set(message.id, send);
+    return send;
+  }
+
+  private async sendMessageToPapr(
     chatId: string,
     message: StoredMessage,
   ): Promise<void> {
