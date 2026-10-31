@@ -1,0 +1,16 @@
+[project]
+name = "scout-commons"
+version = "0.1.0"
+description = "Shared public-data lookups for Scout: link-graph lookalikes from the Common Crawl web graph"
+requires-python = ">=3.11"
+
+[tool.ruff]
+line-length = 120
+target-version = "py311"
+
+[tool.ruff.lint]
+select = ["E", "F", "I", "UP", "B"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+filterwarnings = ["ignore::DeprecationWarning"]
