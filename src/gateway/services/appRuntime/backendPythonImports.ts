@@ -26,6 +26,7 @@ const SKIP = new Set([
 const MAX_MODULES = 24;
 const MAX_DEPTH = 4;
 const NAME = /^[A-Za-z_][A-Za-z0-9_]*$/;
+const LIB_NAME = /^lib\.[A-Za-z_][A-Za-z0-9_]*$/;
 
 /** Top-level module names a Python source imports (absolute imports only). */
 export function pythonImportNames(source: string): string[] {
@@ -34,18 +35,27 @@ export function pythonImportNames(source: string): string[] {
     const line = raw.replace(/#.*$/, "").trim();
     const from = /^from\s+([A-Za-z_][\w.]*)\s+import\b/.exec(line);
     if (from) {
-      names.add(from[1].split(".")[0]);
+      names.add(moduleKey(from[1]));
       continue;
     }
     const imp = /^import\s+(.+)$/.exec(line);
     if (imp) {
       for (const part of imp[1].split(",")) {
-        const name = part.trim().split(/\s+/)[0]?.split(".")[0];
-        if (name) names.add(name);
+        const name = part.trim().split(/\s+/)[0];
+        if (name) names.add(moduleKey(name));
       }
     }
   }
-  return [...names].filter((n) => NAME.test(n) && !SKIP.has(n));
+  return [...names].filter((n) => (NAME.test(n) || LIB_NAME.test(n)) && !SKIP.has(n));
+}
+
+/**
+ * Top-level name, except `lib.X` stays dotted: `from lib.common import y` needs
+ * backend/lib/common.py, which a bare "lib" lookup (backend/lib.py) never finds.
+ */
+function moduleKey(dotted: string): string {
+  const [top, sub] = dotted.split(".");
+  return top === "lib" && sub ? `lib.${sub}` : top;
 }
 
 /** Only flat X.py or lib/X.py — never anything that could leave the temp dir. */
@@ -74,7 +84,8 @@ export async function resolveBackendPythonModules(
       for (const name of pythonImportNames(source)) {
         if (seen.has(name) || Object.keys(out).length >= MAX_MODULES) continue;
         seen.add(name);
-        for (const rel of [`${name}.py`, `lib/${name}.py`]) {
+        const candidates = name.startsWith("lib.") ? [`lib/${name.slice(4)}.py`] : [`${name}.py`, `lib/${name}.py`];
+        for (const rel of candidates) {
           const content = await fetchFile(`backend/${rel}`);
           if (content === null) continue;
           out[rel] = content;
