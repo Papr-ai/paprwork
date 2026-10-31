@@ -338,7 +338,13 @@ export async function syncLinkedSourceFromCloud(
     };
   }
 
+  // Replica DBs: the replica's own pull() is the source of truth for "is the
+  // cloud ahead" — it fetches only new frames and is a cheap no-op otherwise.
+  // The legacy _papr_sync_meta/_papr_sync_log probe only sees writers that
+  // bump those side tables (job DB proxy, cloud agent don't), so it answered
+  // "unchanged" and silently dropped sync-index signals for replica DBs.
   const shouldPull =
+    isReplica ||
     options?.assumeRemoteChanged === true ||
     (await isLinkedSourceRemoteAhead(bridge, linked));
 
