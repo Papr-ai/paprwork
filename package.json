@@ -287,7 +287,7 @@
   "devDependencies": {
     "@electron/rebuild": "^4.0.3",
     "@testing-library/jest-dom": "^6.9.1",
-    "@testing-library/react": "^14.3.1",
+    "@testing-library/react": "^16.3.3",
     "@types/better-sqlite3": "^7.6.13",
     "@types/electron": "^1.6.12",
     "@types/express": "^5.0.6",
