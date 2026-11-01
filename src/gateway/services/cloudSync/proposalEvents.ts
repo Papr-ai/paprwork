@@ -9,7 +9,7 @@
  * notification.
  */
 
-import { promises as fs } from "fs";
+import { promises as fs, readFileSync } from "fs";
 import path from "path";
 import { cloudApiFetch } from "../../utils/cloudApiClient.js";
 import { broadcast } from "../../websocket/index.js";
@@ -255,11 +255,11 @@ function refreshConnections(events: ProposalEvent[]): void {
 const proposals = { type: "platform" as const, id: "proposals", name: "Proposals" };
 
 /** One notice per request (or connection), so a later status updates it in place instead of pinging again. */
-export function noticeInputFor(n: ProposalNotice): NoticeInput {
+export function noticeInputFor(n: ProposalNotice, appName = "App"): NoticeInput {
   const owner = n.openSettings
     ? { kind: "account" as const, id: "settings", name: "Connections", section: n.openSettings }
     : n.appId
-      ? { kind: "app" as const, id: n.appId, name: "App" }
+      ? { kind: "app" as const, id: n.appId, name: appName }
       : { kind: "account" as const, id: "proposals", name: "Proposals" };
   const key = n.requestId ? `proposal:${n.requestId}` : `${proposals.id}:${n.openSettings ?? "app"}:${n.title}:${n.body}`;
   return {
@@ -268,10 +268,29 @@ export function noticeInputFor(n: ProposalNotice): NoticeInput {
   };
 }
 
+/** The app's title on this machine, so its tab and the notice say its real name. */
+function localAppTitle(appId: string | undefined, appsRoot: string): string {
+  if (!appId) return "App";
+  try {
+    const m = JSON.parse(readFileSync(path.join(appsRoot, appId, "metadata.json"), "utf8")) as { title?: unknown };
+    return typeof m.title === "string" && m.title.trim() ? m.title.trim() : "App";
+  } catch {
+    return "App";
+  }
+}
+
 /** Through notify(): route() decides OS vs dot (nothing pops while you're in Paprwork). */
 function defaultNotify(notices: ProposalNotice[]): void {
-  for (const n of notices) {
-    const input = noticeInputFor(n);
+  if (!notices.length) return;
+  void import("../../../core/utils/paprRoot.js").then(({ getPaprAppsRoot }) => {
+    const root = getPaprAppsRoot();
+    for (const n of notices) notifyOne(n, localAppTitle(n.appId, root));
+  }).catch((e) => console.warn("[proposalEvents] notify failed:", e));
+}
+
+function notifyOne(n: ProposalNotice, appName: string): void {
+  {
+    const input = noticeInputFor(n, appName);
     // A new status (needs update -> accepted) replaces the old one and is news, not a repeat.
     tryResolve(input.key);
     tryNotify(input);

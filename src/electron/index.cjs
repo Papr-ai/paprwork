@@ -2498,9 +2498,21 @@ function initializeSystemInvokeHandler(mainWindow) {
 
   // OS notification decided by route() in the gateway. macOS, Windows and Linux (libnotify).
   // Not in ALLOWED_APIS: mini-apps go through notifications:app, which caps and dedupes them.
+  // Open OS notifications by notice key. Holding them also keeps macOS from garbage
+  // collecting the object, which silently drops its click handler.
+  const openNotices = new Map();
+  ipcMain.handle('notice:close-os', async (_event, keys) => {
+    for (const key of Array.isArray(keys) ? keys : []) {
+      const n = openNotices.get(key);
+      if (n) { openNotices.delete(key); try { n.close(); } catch { /* already gone */ } }
+    }
+    return { ok: true };
+  });
   ipcMain.handle('notice:show-os', async (_event, payload) => {
     const { Notification } = require('electron');
     if (!Notification.isSupported() || !payload || typeof payload.title !== 'string') return { shown: false };
+    const key = typeof payload.key === 'string' ? payload.key : '';
+    if (key && openNotices.has(key)) { try { openNotices.get(key).close(); } catch { /* gone */ } }
     const n = new Notification({
       title: payload.title.slice(0, 200),
       body: typeof payload.body === 'string' ? payload.body.slice(0, 500) : '',
@@ -2512,8 +2524,10 @@ function initializeSystemInvokeHandler(mainWindow) {
       if (mainWindow.isMinimized()) mainWindow.restore();
       mainWindow.show();
       mainWindow.focus();
-      mainWindow.webContents.send('notice:open', { owner: payload.owner });
+      mainWindow.webContents.send('notice:open', { key, owner: payload.owner });
     });
+    n.on('close', () => { if (key && openNotices.get(key) === n) openNotices.delete(key); });
+    if (key) openNotices.set(key, n);
     n.show();
     return { shown: true };
   });

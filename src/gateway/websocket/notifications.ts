@@ -6,6 +6,8 @@
  *   notifications:resolve  → clear one notice by key (e.g. "Not now" on a request)
  *   notifications:app      → a mini-app's notification.show (source = that app, capped at Priority)
  *   notifications:update   → update downloaded (ready) or gone (anything else); a platform condition
+ *   notifications:clicked  → you clicked its OS notification (events done, conditions seen)
+ *   notifications:center / set-prefs / reset-prefs → Settings → Notifications
  */
 import type { WebSocket } from "ws";
 import type { WSMessage } from "./index.js";
@@ -70,6 +72,20 @@ export async function setupNotificationHandlers(ws: WebSocket, message: WSMessag
         sendResponse(ws, { id: message.id, success: true });
         return;
       }
+      case "notifications:clicked": {
+        if (typeof p.key !== "string" || !p.key) throw new Error("key required");
+        sendResponse(ws, { id: message.id, success: true, data: service.markSeenKey(p.key) });
+        return;
+      }
+      case "notifications:center":
+        sendResponse(ws, { id: message.id, success: true, data: service.center() });
+        return;
+      case "notifications:set-prefs":
+        sendResponse(ws, { id: message.id, success: true, data: service.setPrefs(p.prefs) });
+        return;
+      case "notifications:reset-prefs":
+        sendResponse(ws, { id: message.id, success: true, data: service.resetPrefs() });
+        return;
       case "notifications:resolve": {
         if (typeof p.key !== "string") throw new Error("key required");
         sendResponse(ws, { id: message.id, success: true, data: service.resolve(p.key) });

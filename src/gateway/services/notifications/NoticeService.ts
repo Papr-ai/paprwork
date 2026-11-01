@@ -16,6 +16,7 @@ import { getPaprRoot } from "../../../core/utils/paprRoot.js";
 import { openDiagnosticDatabase } from "../databaseDiagnostics/sqlite.js";
 import { DEFAULT_NOTICE_PREFS, effectiveLevel, route, type NoticePrefs, type RoutedNotice } from "../../../core/notifications/route.js";
 import { DeliveryLog, OS_CAP_PER_SOURCE } from "./noticeDeliveries.js";
+import { PrefsStore } from "./noticePrefs.js";
 import {
   NOTICE_MARK,
   type Notice,
@@ -66,7 +67,8 @@ export class NoticeService {
   private db: Database.Database;
   private viewing: Viewing = { owners: [], foreground: true };
   private deliveries: DeliveryLog;
-  /** Settings later (Stage 2); defaults until then. */
+  private prefsStore: PrefsStore;
+  /** Defaults with your Settings → Notifications changes on top. */
   prefs: NoticePrefs = DEFAULT_NOTICE_PREFS;
 
   constructor(dbPath = path.join(getPaprRoot(), "data", "notices.db")) {
@@ -76,6 +78,8 @@ export class NoticeService {
     this.db.pragma("synchronous = NORMAL");
     this.db.exec(NOTICES_SCHEMA);
     this.deliveries = new DeliveryLog(this.db);
+    this.prefsStore = new PrefsStore(this.db);
+    this.prefs = this.prefsStore.effective();
     const cutoff = new Date(Date.now() - RESOLVED_KEEP_MS).toISOString();
     this.db.prepare("DELETE FROM notices WHERE resolved_at IS NOT NULL AND resolved_at < ?").run(cutoff);
     this.deliveries.prune(cutoff);
@@ -124,6 +128,32 @@ export class NoticeService {
     const stored = this.openByKey(input.key);
     if (stored && delivery.os) this.deliverOs(stored, delivery.why);
     return stored;
+  }
+
+  /** Settings → Notifications: your settings, the defaults, apps that sent you something, recent pops. */
+  center() {
+    const apps = this.db.prepare(`SELECT source_id AS id, MAX(source_name) AS name FROM notices
+      WHERE source_type='app' GROUP BY source_id ORDER BY MAX(updated_at) DESC LIMIT 50`).all() as { id: string; name: string }[];
+    return { prefs: this.prefs, defaults: DEFAULT_NOTICE_PREFS, apps, recent: this.deliveries.recent(30) };
+  }
+
+  setPrefs(patch: unknown) {
+    this.prefs = this.prefsStore.set(patch);
+    return this.center();
+  }
+
+  resetPrefs() {
+    this.prefs = this.prefsStore.reset();
+    return this.center();
+  }
+
+  /** You clicked its OS notification: an event is done, a condition is seen (stays until fixed). */
+  markSeenKey(key: string): boolean {
+    const now = new Date().toISOString();
+    const r = this.db.prepare(`UPDATE notices SET seen_at=@now,
+      resolved_at=CASE WHEN type='event' THEN @now ELSE resolved_at END
+      WHERE key=@key AND resolved_at IS NULL`).run({ now, key });
+    return this.changedIf(r.changes);
   }
 
   /** Why a notice reached you (or didn't), channel by channel. */

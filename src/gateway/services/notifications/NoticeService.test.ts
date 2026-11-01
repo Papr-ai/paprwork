@@ -165,3 +165,59 @@ describe("NoticeService OS delivery", () => {
     expect(shown).toEqual(["chat.done:c"]);
   });
 });
+
+describe("NoticeService settings + clicks", () => {
+  let dir: string;
+  let svc: NoticeService;
+  const shown: string[] = [];
+  let off: () => void;
+  beforeEach(async () => {
+    const { onNoticeOs } = await import("./NoticeService.js");
+    dir = mkdtempSync(path.join(tmpdir(), "notices-prefs-"));
+    svc = new NoticeService(path.join(dir, "notices.db"));
+    shown.length = 0;
+    off = onNoticeOs(({ notice }) => shown.push(notice.key));
+  });
+  afterEach(() => {
+    off();
+    svc.close();
+    rmSync(dir, { recursive: true, force: true });
+  });
+
+  it("turning off 'Pen finished a reply' stops the pop but keeps the dot", () => {
+    svc.setPrefs({ chatDoneOs: false });
+    svc.setViewing({ owners: [], foreground: false });
+    svc.notify(done("c"));
+    expect(shown).toEqual([]);
+    expect(svc.listOpen()).toHaveLength(1);
+  });
+
+  it("settings survive a restart and reset back to defaults", () => {
+    svc.setPrefs({ priorityOs: false, apps: { crm: "off" } });
+    svc.close();
+    svc = new NoticeService(path.join(dir, "notices.db"));
+    expect(svc.center().prefs).toMatchObject({ priorityOs: false, apps: { crm: "off" } });
+    expect(svc.resetPrefs().prefs).toEqual(svc.center().defaults);
+  });
+
+  it("clicking an OS notification: event done, condition seen but still open", () => {
+    svc.setViewing({ owners: [], foreground: false });
+    svc.notify(done("c"));
+    svc.notify(needsKey("c"));
+    svc.markSeenKey("chat.done:c");
+    svc.markSeenKey("key.request:c:GITHUB_TOKEN");
+    const open = svc.listOpen();
+    expect(open.map((n) => n.key)).toEqual(["key.request:c:GITHUB_TOKEN"]);
+    expect(open[0].seenAt).toBeTruthy();
+  });
+
+  it("the center lists apps that sent you something and recent pops with their why", () => {
+    svc.setViewing({ owners: [], foreground: false });
+    svc.notify({ key: "app:crm:1", kind: "app.notification", type: "event", level: "priority", title: "Deal moved", forYou: true,
+      source: { type: "app", id: "crm", name: "CRM" }, owner: { kind: "app", id: "crm", name: "CRM" } } as NoticeInput);
+    const c = svc.center();
+    expect(c.apps).toEqual([{ id: "crm", name: "CRM" }]);
+    expect(c.recent[0]).toMatchObject({ title: "Deal moved", source: "CRM", status: "sent" });
+    expect(c.recent[0].why.length).toBeGreaterThan(0);
+  });
+});

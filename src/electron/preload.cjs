@@ -431,6 +431,7 @@ contextBridge.exposeInMainWorld("electronAPI", {
   // Notices: show an OS notification route() already decided on (renderer only).
   notices: {
     showOs: (payload) => ipcRenderer.invoke("notice:show-os", payload),
+    closeOs: (keys) => ipcRenderer.invoke("notice:close-os", keys),
   },
 
   // System integration for mini-apps (generic invoke)

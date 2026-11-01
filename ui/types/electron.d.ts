@@ -702,7 +702,8 @@ export interface ElectronAPI {
 
   /** OS notification for a notice route() already decided on (renderer only). */
   notices?: {
-    showOs: (payload: { title: string; body?: string; level?: string; owner?: unknown }) => Promise<{ shown: boolean }>;
+    showOs: (payload: { key: string; title: string; body?: string; level?: string; owner?: unknown }) => Promise<{ shown: boolean }>;
+    closeOs: (keys: string[]) => Promise<{ ok: boolean }>;
   };
 
   // System integration for mini-apps (generic invoke)

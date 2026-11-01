@@ -64,6 +64,15 @@ export class DeliveryLog {
     return rows.map((r) => ({ channel: r.channel, status: r.status, why: JSON.parse(r.why) as string[], createdAt: r.created_at }));
   }
 
+  /** Latest desktop notifications, shown or held back, with the notice they were about. */
+  recent(limit: number) {
+    const rows = this.db.prepare(`SELECT d.status, d.why, d.created_at, n.title, n.source_name, n.level
+      FROM deliveries d JOIN notices n ON n.id = d.notice_id ORDER BY d.created_at DESC LIMIT ?`).all(limit) as
+      { status: DeliveryStatus; why: string; created_at: string; title: string; source_name: string; level: string }[];
+    return rows.map((r) => ({ title: r.title, source: r.source_name, level: r.level, status: r.status,
+      why: JSON.parse(r.why) as string[], at: r.created_at }));
+  }
+
   /** Drop delivery history older than the notice history we keep. */
   prune(olderThanIso: string): void {
     this.db.prepare("DELETE FROM deliveries WHERE created_at < ?").run(olderThanIso);

@@ -10,20 +10,25 @@
 import { gateway } from "../src/lib/gateway";
 import { useTabStore } from "./tabStore";
 import { ensureSettingsTab } from "../lib/ensureSettingsTab";
-import type { Notice, NoticeOwner } from "../../src/core/types/notices";
+import { openJobInJobsTab } from "./jobNavigationStore";
+import { NOTICES_CHANGED_EVENT, type Notice, type NoticeOwner } from "../../src/core/types/notices";
 import type { SettingsTab } from "../types/settings";
 
 /** Proposal / connection notices land on these Settings sections. */
 const SECTION_EVENT: Record<string, string> = { "connections-requests": "papr:connections-show-requests" };
 
-export function openNoticeOwner(owner: NoticeOwner | undefined): void {
+export function openNoticeOwner(owner: NoticeOwner | undefined, key?: string): void {
+  // Clicking it is seeing it, wherever you land.
+  if (key) void gateway.send("notifications:clicked", { key }).catch(() => {});
   if (!owner) return;
   const { tabs, createTab, switchToTab } = useTabStore.getState();
+  if (owner.kind === "app" && owner.id.startsWith("job:")) {
+    openJobInJobsTab(owner.id.slice(4));
+    return;
+  }
   if (owner.kind === "chat" || owner.kind === "app") {
-    const id = owner.kind === "app" && owner.id.startsWith("job:") ? null : owner.id;
-    if (!id) return;
-    const existing = tabs.find((t) => t.type === owner.kind && t.entityId === id);
-    switchToTab(existing?.id ?? createTab(owner.kind, id, owner.name));
+    const existing = tabs.find((t) => t.type === owner.kind && t.entityId === owner.id);
+    switchToTab(existing?.id ?? createTab(owner.kind, owner.id, owner.name));
     return;
   }
   const section = owner.section === "connections-requests" ? "connections" : owner.section;
@@ -32,10 +37,25 @@ export function openNoticeOwner(owner: NoticeOwner | undefined): void {
   if (evt) window.setTimeout(() => window.dispatchEvent(new CustomEvent(evt)), 50);
 }
 
+/** Keys with an OS notification still on screen (or in Notification Center). */
+const shownKeys = new Set<string>();
+
 function showOs(notice: Notice): void {
   const show = window.electronAPI?.notices?.showOs;
   if (!show) return;
-  void show({ title: notice.title, body: notice.body ?? "", level: notice.level, owner: notice.owner }).catch(() => {});
+  shownKeys.add(notice.key);
+  void show({ key: notice.key, title: notice.title, body: notice.body ?? "", level: notice.level, owner: notice.owner }).catch(() => {});
+}
+
+/** Seen in the app, answered or fixed: take its OS notification away too. */
+function closeSeen(open: Notice[]): void {
+  const close = window.electronAPI?.notices?.closeOs;
+  if (!close || !shownKeys.size) return;
+  const stillNew = new Set(open.filter((n) => !n.seenAt).map((n) => n.key));
+  const gone = [...shownKeys].filter((k) => !stillNew.has(k));
+  if (!gone.length) return;
+  for (const k of gone) shownKeys.delete(k);
+  void close(gone).catch(() => {});
 }
 
 let lastUpdateSent = "";
@@ -58,11 +78,13 @@ export function noticeFromApp(appId: string, appName: string, opts: { title?: un
 /** Call once at app root. */
 export function initNoticeOs(): void {
   window.addEventListener("gateway-broadcast", (event: Event) => {
-    const { type, data } = (event as CustomEvent<{ type?: string; data?: { notice?: Notice } }>).detail ?? {};
+    const { type, data } = (event as CustomEvent<{ type?: string; data?: { notice?: Notice; notices?: Notice[] } }>).detail ?? {};
     if (type === "notifications:os" && data?.notice) showOs(data.notice);
+    if (type === NOTICES_CHANGED_EVENT && Array.isArray(data?.notices)) closeSeen(data.notices);
   });
   window.addEventListener("papr-notice-open", (event: Event) => {
-    openNoticeOwner((event as CustomEvent<{ owner?: NoticeOwner }>).detail?.owner);
+    const d = (event as CustomEvent<{ key?: string; owner?: NoticeOwner }>).detail;
+    openNoticeOwner(d?.owner, d?.key);
   });
   const updater = window.electronAPI?.updater;
   if (updater) {

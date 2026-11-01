@@ -83,6 +83,7 @@ export type SettingsTab =
   | "profile"
   | "team"
   | "billing"
+  | "notifications"
   | "permissions"
   | "privacy"
   | "migration"
