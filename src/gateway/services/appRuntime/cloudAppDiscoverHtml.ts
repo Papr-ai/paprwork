@@ -210,6 +210,14 @@ export interface DiscoverHtmlInput {
   publicBaseUrl: string;
 }
 
+/** Search-snippet text: the app's own About copy first (richer than the one-line tagline), cut at a word boundary. */
+function metaDescription(about: string | undefined, headline: string | undefined, fallback: string, max = 300): string {
+  const text = (about?.trim() || headline?.trim() || fallback).replace(/\s+/g, " ");
+  if (text.length <= max) return text;
+  const cut = text.slice(0, max - 1);
+  return `${cut.slice(0, Math.max(cut.lastIndexOf(" "), 120)).replace(/[\s,;:.-]+$/, "")}…`;
+}
+
 export function buildDiscoverHtml(input: DiscoverHtmlInput): string {
   const base = input.publicBaseUrl.replace(/\/$/, "");
   const me = input.userId;
@@ -242,7 +250,7 @@ export function buildDiscoverHtml(input: DiscoverHtmlInput): string {
   const f = input.focused;
   const title = f ? `${name(f)} · Papr Work apps` : view === "mine" ? "My apps · Papr Work" : "Discover apps built with Papr Work";
   const desc = f
-    ? (f.catalogHeadline?.trim() || f.description?.trim() || `${name(f)}, an app built with Papr Work.`).slice(0, 300)
+    ? metaDescription(f.description, f.catalogHeadline, `${name(f)}, an app built with Papr Work.`)
     : "Discover apps built and shared by the Papr Work community: AI agents, dashboards and automations you can open in your browser or make your own.";
   const canonical = f ? `${base}${detailPath(f)}` : view === "mine" ? `${base}/my-apps` : `${base}/`;
   const ogImage = f ? `${base}${appPath(f)}opengraph-image` : null;
