@@ -47,15 +47,16 @@ export function parseMarksKey(key: string): Map<string, NoticeMark> {
   return out;
 }
 
-/** Chat ids on screen right now: the active tab, or every chat half of an active split. */
+/**
+ * Chat ids on screen right now. A split is a parent tab (the left half, itself a chat or
+ * app) plus its child tabs, so both the parent and every child count as on screen.
+ */
 export function visibleChatIds(): string[] {
   const { tabs, activeTabId } = useTabStore.getState();
   const active = tabs.find((t) => t.id === activeTabId);
   if (!active) return [];
-  const shown = active.childTabIds?.length
-    ? active.childTabIds.map((id) => tabs.find((t) => t.id === id)).filter((t) => !!t)
-    : [active];
-  return shown.filter((t) => t.type === "chat" && t.entityId).map((t) => t.entityId);
+  const kids = (active.childTabIds ?? []).map((id) => tabs.find((t) => t.id === id)).filter((t) => !!t);
+  return [active, ...kids].filter((t) => t.type === "chat" && t.entityId).map((t) => t.entityId);
 }
 
 let lastViewing = "";
