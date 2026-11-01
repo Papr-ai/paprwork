@@ -35,6 +35,47 @@ function mergeBashEnv(inputEnv?: Record<string, string>): Record<string, string>
   return { ...getJobToolEnv(), ...(inputEnv ?? {}) };
 }
 
+const KEY_REF_PATTERN = /\$\{[A-Z_][A-Z0-9_]*\}/;
+const ENV_SEPARATOR = "\u0000PAPR_ENV\u0000";
+
+/** True when any `env` value references a custom key (e.g. "$" + "{KEY_NAME}"). */
+function envHasKeyRef(env: Record<string, string>): boolean {
+  return Object.values(env).some((v) => typeof v === "string" && KEY_REF_PATTERN.test(v));
+}
+
+function keyRefUsed(keyName: string, command: string, env: Record<string, string>): boolean {
+  const ref = `\${${keyName}}`;
+  return command.includes(ref) || Object.values(env).some((v) => typeof v === "string" && v.includes(ref));
+}
+
+/**
+ * Key refs used to be substituted in `command` only, so `env: { S: "${KEY}" }`
+ * reached the process as the literal 28-char string "${KEY}" — silently, with a
+ * successful exit. Join command + env values so one permission-aware pass covers both.
+ */
+function joinForSubstitution(command: string, env: Record<string, string>): string {
+  const names = Object.keys(env);
+  return [command, ...names.map((n) => env[n] ?? "")].join(ENV_SEPARATOR);
+}
+
+/** Inverse of joinForSubstitution: writes substituted env values back in place, returns the command. */
+function splitAfterSubstitution(combined: string, env: Record<string, string>): string {
+  const names = Object.keys(env);
+  const parts = combined.split(ENV_SEPARATOR);
+  names.forEach((n, i) => {
+    env[n] = parts[i + 1] ?? env[n];
+  });
+  return parts[0];
+}
+
+function substituteEnvKeyRefs(env: Record<string, string>, customKeys: Record<string, string>): void {
+  for (const name of Object.keys(env)) {
+    if (typeof env[name] === "string" && KEY_REF_PATTERN.test(env[name])) {
+      env[name] = substituteCustomKeys(env[name], customKeys);
+    }
+  }
+}
+
 /**
  * Papr user identity for shell commands. A raw memory-server call with the
  * workspace PAPR_API_KEY must send user_id / external_user_id or it routes to the
@@ -645,6 +686,8 @@ async function captureGitChangesIfChanged(
 /**
  * Execute bash command with timeout and safety
  */
+export const __testing = { joinForSubstitution, splitAfterSubstitution, envHasKeyRef, keyRefUsed, substituteEnvKeyRefs };
+
 export async function executeBashCommand(
   input: BashInput,
 ): Promise<ToolResult<BashOutput>> {
@@ -711,7 +754,7 @@ async function executeBashCommandInner(
     const apiKeys = [...getApiKeysForSanitization(), ...jobSecretValues()];
 
     // Quick check: does the command even use custom keys?
-    const hasKeyPattern = /\$\{[A-Z_]+\}/.test(command);
+    const hasKeyPattern = KEY_REF_PATTERN.test(command) || envHasKeyRef(env);
     
     // Build custom keys map only if needed
     const customKeys: Record<string, string> = {};
@@ -740,7 +783,7 @@ async function executeBashCommandInner(
 
     // Check if command uses any keys - if so, request permission
     const usesKeys = Object.keys(customKeys).some((keyName) =>
-      command.includes(`\${${keyName}}`),
+      keyRefUsed(keyName, command, env),
     );
 
     if (usesKeys) {
@@ -750,8 +793,10 @@ async function executeBashCommandInner(
         const { requestKeyPermission } =
           await import("../../gateway/permissions/PermissionRequester.js");
 
-        command = await substituteCustomKeysWithPermission(
-          command,
+        // Permission is checked once per key, whether it is referenced in the
+        // command or in an env value (the `env` parameter).
+        const combined = await substituteCustomKeysWithPermission(
+          joinForSubstitution(command, env),
           customKeys,
           { toolName: "bash", command: input.command },
           async (keyName, context) => {
@@ -763,6 +808,7 @@ async function executeBashCommandInner(
             });
           },
         );
+        command = splitAfterSubstitution(combined, env);
       } catch (error) {
         // Permission denied or error requesting permission
         return {
@@ -774,6 +820,7 @@ async function executeBashCommandInner(
     } else {
       // No keys used, simple substitution
       command = substituteCustomKeys(command, customKeys);
+      substituteEnvKeyRefs(env, customKeys);
     }
 
     // Check if this is a backgrounded command
@@ -1030,7 +1077,7 @@ async function executeBashCommandStreamingInner(
   const apiKeys = [...getApiKeysForSanitization(), ...jobSecretValues()];
 
   // Quick check: does the command even use custom keys?
-  const hasKeyPattern = /\$\{[A-Z_]+\}/.test(command);
+  const hasKeyPattern = KEY_REF_PATTERN.test(command) || envHasKeyRef(env);
 
   // Build custom keys map only if needed
   const customKeys: Record<string, string> = {};
@@ -1059,7 +1106,7 @@ async function executeBashCommandStreamingInner(
 
   // Check if command uses any keys - if so, request permission
   const usesKeys = Object.keys(customKeys).some((keyName) =>
-    command.includes(`\${${keyName}}`),
+    keyRefUsed(keyName, command, env),
   );
 
   if (usesKeys) {
@@ -1068,8 +1115,10 @@ async function executeBashCommandStreamingInner(
       const { requestKeyPermission } =
         await import("../../gateway/permissions/PermissionRequester.js");
 
-      command = await substituteCustomKeysWithPermission(
-        command,
+      // Permission is checked once per key, whether it is referenced in the
+      // command or in an env value (the `env` parameter).
+      const combined = await substituteCustomKeysWithPermission(
+        joinForSubstitution(command, env),
         customKeys,
         { toolName: "bash", command: input.command },
         async (keyName, context) => {
@@ -1081,6 +1130,7 @@ async function executeBashCommandStreamingInner(
           });
         },
       );
+      command = splitAfterSubstitution(combined, env);
     } catch (error) {
       // Permission denied - return error immediately
       return {
@@ -1092,6 +1142,7 @@ async function executeBashCommandStreamingInner(
   } else {
     // No keys used, simple substitution
     command = substituteCustomKeys(command, customKeys);
+    substituteEnvKeyRefs(env, customKeys);
   }
 
   return new Promise((resolve) => {
