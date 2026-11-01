@@ -14,6 +14,8 @@ import path from "path";
 import { cloudApiFetch } from "../../utils/cloudApiClient.js";
 import { broadcast } from "../../websocket/index.js";
 import { notifyCloudSyncItemsStale } from "./cloudSyncBroadcast.js";
+import { tryNotify, tryResolve } from "../notifications/NoticeService.js";
+import type { NoticeInput, NoticeLevel } from "../../../core/types/notices.js";
 import { recordLastMerges, type LastMerge } from "./lastMerge.js";
 
 export type ProposalEventType =
@@ -51,6 +53,8 @@ export interface ProposalNotice {
   /** Connections notices open Settings → Connections (org requests for admins). */
   openSettings?: "connections" | "connections-requests";
   requestId?: string;
+  /** Priority = someone waits on you (review, re-propose, approve). FYI = news. */
+  level?: NoticeLevel;
 }
 
 /** Local app ids to refresh: the owner's source app or the contributor's copy. */
@@ -74,7 +78,7 @@ function connectionNotice(e: ProposalEvent): ProposalNotice | null {
   const reason = typeof e.detail?.reason === "string" && e.detail.reason ? ` "${e.detail.reason}"` : "";
   switch (e.type) {
     case "connection.requested":
-      return { title: `${name} requested`, body: `A teammate asked to connect ${name}. Review it in Connections.`, openSettings: "connections-requests" };
+      return { title: `${name} requested`, body: `A teammate asked to connect ${name}. Review it in Connections.`, openSettings: "connections-requests", level: "priority" };
     case "connection.approved":
       return { title: `${name} approved`, body: `You can connect ${name} now.`, openSettings: "connections" };
     case "connection.declined":
@@ -109,6 +113,7 @@ export function noticeForEvent(e: ProposalEvent): ProposalNotice | null {
       case "proposal.needs_update":
         return {
           title: "Proposal needs an update",
+          level: "priority",
           body: `The app${app} changed since you sent ${quoted(e.title)}. Open it and choose Update & re-propose.`,
           appId,
           requestId,
@@ -122,6 +127,7 @@ export function noticeForEvent(e: ProposalEvent): ProposalNotice | null {
   if (e.role === "owner" && e.type === "proposal.received") {
     return {
       title: "New proposal",
+      level: "priority",
       body: `${quoted(e.title)} was proposed for your app${app}.`,
       appId,
       requestId,
@@ -246,9 +252,30 @@ function refreshConnections(events: ProposalEvent[]): void {
   }
 }
 
+const proposals = { type: "platform" as const, id: "proposals", name: "Proposals" };
+
+/** One notice per request (or connection), so a later status updates it in place instead of pinging again. */
+export function noticeInputFor(n: ProposalNotice): NoticeInput {
+  const owner = n.openSettings
+    ? { kind: "account" as const, id: "settings", name: "Connections", section: n.openSettings }
+    : n.appId
+      ? { kind: "app" as const, id: n.appId, name: "App" }
+      : { kind: "account" as const, id: "proposals", name: "Proposals" };
+  const key = n.requestId ? `proposal:${n.requestId}` : `${proposals.id}:${n.openSettings ?? "app"}:${n.title}:${n.body}`;
+  return {
+    key, kind: n.openSettings ? "connection" : "proposal", type: "event", level: n.level ?? "fyi",
+    title: n.title, body: n.body, source: proposals, owner, actions: [{ label: "Open", intent: "open" }],
+  };
+}
+
+/** Through notify(): route() decides OS vs dot (nothing pops while you're in Paprwork). */
 function defaultNotify(notices: ProposalNotice[]): void {
-  if (notices.length === 0) return;
-  broadcast({ type: "cloud-proposal:notify", data: { notices } });
+  for (const n of notices) {
+    const input = noticeInputFor(n);
+    // A new status (needs update -> accepted) replaces the old one and is news, not a repeat.
+    tryResolve(input.key);
+    tryNotify(input);
+  }
 }
 
 /**
@@ -307,7 +334,7 @@ export async function pollProposalEvents(
     if (page.events.length > 0) {
       (deps.onRefresh ?? defaultRefresh)(appIdsToRefresh(page.events));
       if (!deps.onRefresh) refreshConnections(page.events);
-      (deps.onNotify ?? defaultNotify)(summarizeNotices(page.events));
+      (deps.onNotify ?? defaultNotify)(summarizeNotices(page.events, Number.POSITIVE_INFINITY));
       const merged = mergedSourceAppIds(page.events);
       if (merged.length > 0) {
         await (deps.recordMerges ?? ((m) => recordLastMerges(paprDir, m)))(

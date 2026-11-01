@@ -59,3 +59,14 @@ describe("noticeSources", () => {
     expect(getNoticeService().listOpen()).toHaveLength(0);
   });
 });
+
+describe("proposal notices", () => {
+  it("keys by request so later statuses update one notice; reviews are Priority", async () => {
+    const { noticeInputFor, noticeForEvent } = await import("../cloudSync/proposalEvents.js");
+    const received = noticeForEvent({ id: "1", type: "proposal.received", role: "owner", requestId: "r1", sourceAppId: "app1", title: "Fix", createdAt: "" } as never)!;
+    const input = noticeInputFor(received);
+    expect(input).toMatchObject({ key: "proposal:r1", level: "priority", owner: { kind: "app", id: "app1" }, source: { type: "platform" } });
+    const accepted = noticeForEvent({ id: "2", type: "proposal.accepted", role: "contributor", requestId: "r1", installedAppId: "a2", title: "Fix", createdAt: "" } as never)!;
+    expect(noticeInputFor(accepted)).toMatchObject({ key: "proposal:r1", level: "fyi" });
+  });
+});

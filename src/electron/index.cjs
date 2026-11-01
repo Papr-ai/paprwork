@@ -2321,25 +2321,8 @@ function setupAutoUpdater() {
 
   autoUpdater.on("update-downloaded", (info) => {
     console.log(`[AutoUpdater] Update downloaded: v${info.version}`);
+    // The renderer raises an app.update_ready notice; route() decides whether the OS pops.
     sendUpdateStatus("ready", { version: info.version });
-    try {
-      const { Notification } = require("electron");
-      if (Notification.isSupported()) {
-        const notification = new Notification({
-          title: "Papr Work update ready",
-          body: `Version ${info.version} is downloaded. Restart to update.`,
-        });
-        notification.on("click", () => {
-          if (mainWindow && !mainWindow.isDestroyed()) {
-            mainWindow.show();
-            mainWindow.focus();
-          }
-        });
-        notification.show();
-      }
-    } catch (notificationError) {
-      console.warn("[AutoUpdater] Could not show update notification:", notificationError.message);
-    }
   });
 
   autoUpdater.on("error", (err) => {
@@ -2487,24 +2470,8 @@ function initializeSystemInvokeHandler(mainWindow) {
       return { text: clipboard.readText() };
     },
     
-    'notification.show': async (options) => {
-      const notification = new Notification({
-        title: options.title || 'Notification',
-        body: options.body || '',
-        urgency: options.urgency || 'normal'
-      });
-      // Optional click-through, e.g. a connection request opens Settings → Connections.
-      if (options.openSettings && typeof options.openSettings === 'string') {
-        notification.on('click', () => {
-          if (!mainWindow || mainWindow.isDestroyed()) return;
-          if (mainWindow.isMinimized()) mainWindow.restore();
-          mainWindow.focus();
-          mainWindow.webContents.send('notification:open-settings', { target: options.openSettings });
-        });
-      }
-      notification.show();
-      return { success: true };
-    },
+    // notification.show is handled in the renderer: it becomes a notice (notifications:app) so
+    // route() caps it at Priority, dedupes it and only pops the OS when Paprwork is in the background.
     
     'app.getPath': async (name) => {
       return { path: app.getPath(name) };
@@ -2528,6 +2495,28 @@ function initializeSystemInvokeHandler(mainWindow) {
       throw new Error('Main window not available');
     },
   };
+
+  // OS notification decided by route() in the gateway. macOS, Windows and Linux (libnotify).
+  // Not in ALLOWED_APIS: mini-apps go through notifications:app, which caps and dedupes them.
+  ipcMain.handle('notice:show-os', async (_event, payload) => {
+    const { Notification } = require('electron');
+    if (!Notification.isSupported() || !payload || typeof payload.title !== 'string') return { shown: false };
+    const n = new Notification({
+      title: payload.title.slice(0, 200),
+      body: typeof payload.body === 'string' ? payload.body.slice(0, 500) : '',
+      urgency: payload.level === 'urgent' ? 'critical' : 'normal',
+      silent: payload.level === 'fyi',
+    });
+    n.on('click', () => {
+      if (!mainWindow || mainWindow.isDestroyed()) return;
+      if (mainWindow.isMinimized()) mainWindow.restore();
+      mainWindow.show();
+      mainWindow.focus();
+      mainWindow.webContents.send('notice:open', { owner: payload.owner });
+    });
+    n.show();
+    return { shown: true };
+  });
 
   // Register IPC handler
   ipcMain.handle('system:invoke', async (event, method, args) => {
@@ -2758,6 +2747,9 @@ if (!gotTheLock) {
     queueDeepLink(url);
   });
 }
+
+// Windows shows no toast without an AppUserModelID matching the installer (electron-builder appId).
+if (process.platform === "win32") app.setAppUserModelId("com.paprwork.v2");
 
 app.whenReady().then(async () => {
   const appStartTime = Date.now();
