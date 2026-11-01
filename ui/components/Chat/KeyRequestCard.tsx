@@ -6,6 +6,7 @@
 
 import { useMemo, useState } from "react";
 import { useChatStore } from "../../stores/chatStore";
+import { gateway } from "../../src/lib/gateway";
 import { useProfileStore } from "../../stores/profileStore";
 import { OrgMark } from "../Sidebar/OrgMark";
 import { defaultOrgSite, orgLogoSrc, useOrgLogos } from "../Sidebar/orgLogoStore";
@@ -54,6 +55,12 @@ export function checkKeyValue(raw: string): { value: string; error?: string; kin
   } catch (e) {
     return { value, error: `Not valid JSON: ${(e as Error).message}` };
   }
+}
+
+/** "Not now" answers the request: clear its amber dot (the gateway raised it when Pen asked). */
+function dismissKeyNotice(chatId: string | undefined, name: string): void {
+  if (!chatId) return;
+  void gateway.send("notifications:resolve", { key: `key.request:${chatId}:${name}` }).catch(() => {});
 }
 
 export function KeyRequestCard({ data, chatId, onSubmit, onCancel }: Props) {
@@ -152,7 +159,7 @@ export function KeyRequestCard({ data, chatId, onSubmit, onCancel }: Props) {
 
       {failed && <small className="key-card__hint is-error">{failed}</small>}
       <div className="key-card__actions">
-        <button type="button" className="key-card__btn" onClick={() => { setStatus("cancelled"); onCancel(); }} disabled={busy}>Not now</button>
+        <button type="button" className="key-card__btn" onClick={() => { setStatus("cancelled"); dismissKeyNotice(chatId, data.name); onCancel(); }} disabled={busy}>Not now</button>
         <button type="button" className="key-card__btn key-card__btn--primary" onClick={save} disabled={!canSave}>{busy ? "Saving…" : "Save key"}</button>
       </div>
     </div>

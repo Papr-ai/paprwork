@@ -2413,7 +2413,7 @@ export function useAgent() {
       console.log("[useAgent.sendMessage] Message:", message);
       console.log("[useAgent.sendMessage] ChatId:", chatId);
 
-      const { setTabStreaming, setTabUnread, updateTabId } =
+      const { setTabStreaming, updateTabId } =
         useTabStore.getState();
 
       const isFirstMessage = chatId.startsWith("temp-");
@@ -2601,13 +2601,8 @@ export function useAgent() {
         );
         console.log("[useAgent] gateway.stream completed successfully");
 
-        // Set tab unread status if not active (green dot)
-        // The streaming status (blue dot) was already cleared by the "done" chunk
-        const currentActiveTabId = useTabStore.getState().activeTabId;
-        const newTabId = `chat-${finalChatId}`;
-        if (currentActiveTabId !== newTabId) {
-          setTabUnread(newTabId, true);
-        }
+        // The green "done" dot is a notice now: the gateway raises chat.done when the turn
+        // completes (and skips it if you're looking at this chat). See noticeSources.ts.
       } catch (error) {
         const errorMessage =
           error instanceof Error ? error.message : String(error);

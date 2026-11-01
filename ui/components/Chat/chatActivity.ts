@@ -1,38 +1,59 @@
 /**
  * chatActivity — one source of truth for a chat's status across the tab bar, the rail
- * Chats peek, and the tab-bar history dropdown.
+ * Chats icon and peek, the tab overview and the tab-bar history dropdown.
  *
  * - working: the agent is mid-turn (same signal as the Replay glyph / composer Stop button)
- * - done:    the turn finished while you were elsewhere — the tab's green dot (tab.hasUnread)
+ * - needs:   an open Priority/Urgent notice on the chat (a job or Pen waiting on you) — amber
+ * - done:    an open FYI notice (a reply finished while you were elsewhere) — green
+ *
+ * needs/done come from the gateway's notices table (noticeStore), so they survive restarts
+ * and show for chats that have no open tab.
  */
 import { useMemo } from "react";
-import { useTabStore } from "../../stores/tabStore";
+import { chatMarksKey, parseMarksKey, useNoticeStore } from "../../stores/noticeStore";
 import { useWorkingChatIds } from "../Agent/agentWork";
+import type { NoticeMark } from "../../../src/core/types/notices";
 
-export type ChatActivity = "working" | "done" | undefined;
+export type ChatActivity = "working" | "needs" | "done" | undefined;
 
-/** Sorted id string so the selector result stays stable between unrelated tab updates. */
-function unreadKey(s: ReturnType<typeof useTabStore.getState>): string {
-  return s.tabs
-    .filter((t) => t.type === "chat" && t.hasUnread)
-    .map((t) => t.entityId)
-    .sort()
-    .join("|");
+export function activityFromMark(mark: NoticeMark | undefined): ChatActivity {
+  if (mark === "amber" || mark === "red") return "needs";
+  if (mark === "green") return "done";
+  return undefined;
 }
 
-/** Chat ids whose tab shows the green "done" dot. */
+/** Strongest open notice mark per chat id. */
+export function useChatMarks(): ReadonlyMap<string, NoticeMark> {
+  const key = useNoticeStore(chatMarksKey);
+  return useMemo(() => parseMarksKey(key), [key]);
+}
+
+/** Chat ids with a finished reply you haven't looked at (green). */
 export function useDoneChatIds(): ReadonlySet<string> {
-  const key = useTabStore(unreadKey);
-  return useMemo(() => new Set(key ? key.split("|") : []), [key]);
+  const marks = useChatMarks();
+  return useMemo(() => new Set([...marks].filter(([, m]) => m === "green").map(([id]) => id)), [marks]);
 }
 
-/** Resolver for a chat's activity — working wins over done. */
+/** What the Chats rail icon shows: amber if any chat needs you, else green if any reply is new. */
+export function useChatsBadge(): "needs" | "done" | undefined {
+  const marks = useChatMarks();
+  return useMemo(() => {
+    let best: "needs" | "done" | undefined;
+    for (const m of marks.values()) {
+      const a = activityFromMark(m);
+      if (a === "needs") return "needs";
+      if (a === "done") best = "done";
+    }
+    return best;
+  }, [marks]);
+}
+
+/** Resolver for a chat's activity — working wins, then needs, then done. */
 export function useChatActivity(): (chatId: string) => ChatActivity {
   const working = useWorkingChatIds();
-  const done = useDoneChatIds();
+  const marks = useChatMarks();
   return useMemo(
-    () => (chatId: string) =>
-      working.has(chatId) ? "working" : done.has(chatId) ? "done" : undefined,
-    [working, done],
+    () => (chatId: string) => (working.has(chatId) ? "working" : activityFromMark(marks.get(chatId))),
+    [working, marks],
   );
 }

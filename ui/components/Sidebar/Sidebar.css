@@ -165,6 +165,16 @@
   }
 }
 
+.rail-btn__badge.rail-btn__badge--needs {
+  background: #f59e0b;
+}
+
+@media (prefers-color-scheme: dark) {
+  .rail-btn__badge.rail-btn__badge--needs {
+    background: #fbbf24;
+  }
+}
+
 .rail-btn__badge--warn {
   top: 0;
   right: 0;
