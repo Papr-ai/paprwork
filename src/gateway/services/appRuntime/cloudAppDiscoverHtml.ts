@@ -194,7 +194,8 @@ function mineBody(mine: DiscoverEntry[], me?: string): string {
 
 const PAPR_MARK = `<svg class="logo__mark" viewBox="0 0 105 124" width="20" height="24" fill="none" aria-hidden="true"><path d="M28 101.5C-11.5 158 7 51 43.4 60.5c55.9 14.6 71.8-39.7 40.3-52.2C40.3-8.9 52 65 28 101.5Z" stroke="url(#pl)" stroke-width="10" stroke-linecap="round" stroke-linejoin="round"/><defs><linearGradient id="pl" x1="17.2" y1="89.4" x2="68.9" y2="35.8" gradientUnits="userSpaceOnUse"><stop stop-color="#0060E0"/><stop offset=".6" stop-color="#00ACFA"/><stop offset="1" stop-color="#0BCDFF"/></linearGradient></defs></svg>`;
 
-const FAVICON = `data:image/svg+xml,${encodeURIComponent(PAPR_MARK.replace(' class="logo__mark"', "").replace(' width="20" height="24"', ""))}`;
+export const FAVICON_SVG = PAPR_MARK.replace(' class="logo__mark"', "").replace(' width="20" height="24"', ' width="96" height="96"').replace("<svg ", '<svg xmlns="http://www.w3.org/2000/svg" ');
+const FAVICON = "/favicon.svg";
 
 export interface DiscoverHtmlInput {
   view: DiscoverView;
@@ -275,7 +276,7 @@ export function buildDiscoverHtml(input: DiscoverHtmlInput): string {
   const tabs = `${input.signedIn ? tab("/my-apps", "My apps", view === "mine") : ""}${tab("/", "Discover", view === "discover")}`;
 
   return `<!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
-<title>${esc(title)}</title><meta name="description" content="${esc(desc)}"><link rel="canonical" href="${esc(canonical)}"><link rel="icon" href="${FAVICON}">
+<title>${esc(title)}</title><meta name="description" content="${esc(desc)}"><link rel="canonical" href="${esc(canonical)}"><link rel="icon" type="image/svg+xml" href="${FAVICON}">
 ${noindex ? '<meta name="robots" content="noindex">' : ""}
 <meta property="og:type" content="website"><meta property="og:site_name" content="Papr Work"><meta property="og:title" content="${esc(title)}"><meta property="og:description" content="${esc(desc)}"><meta property="og:url" content="${esc(canonical)}">
 ${ogImage ? `<meta property="og:image" content="${esc(ogImage)}"><meta name="twitter:image" content="${esc(ogImage)}">` : ""}
