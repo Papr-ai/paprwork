@@ -72,10 +72,26 @@ function reportViewing(): void {
   });
 }
 
+/**
+ * Safety net: an open event on a chat that's on screen while the window is in front gets
+ * marked seen. The tab hides its dot whenever it's active, so if "seen" ever misses a case
+ * (a reply landing as you switch back, a reconnect), the rail would keep a dot the tab
+ * dropped. This makes the two always agree.
+ */
+function reconcileSeen(notices: Notice[]): void {
+  if (!document.hasFocus() || document.visibilityState !== "visible" || !gateway.isConnected()) return;
+  const onScreen = new Set(visibleChatIds());
+  const stale = new Set(notices.filter((n) => n.owner.kind === "chat" && n.type === "event" && onScreen.has(n.owner.id)).map((n) => n.owner.id));
+  for (const id of stale) void gateway.send("notifications:seen", { ownerKind: "chat", ownerId: id }).catch(() => {});
+}
+
 async function refresh(): Promise<void> {
   try {
     const res = await gateway.send("notifications:list");
-    if (res.success && Array.isArray(res.data)) useNoticeStore.getState().setNotices(res.data as Notice[]);
+    if (res.success && Array.isArray(res.data)) {
+      useNoticeStore.getState().setNotices(res.data as Notice[]);
+      reconcileSeen(res.data as Notice[]);
+    }
   } catch {
     /* gateway not ready; the next connect or broadcast fills it */
   }
@@ -87,6 +103,7 @@ export function initNoticeListener(): void {
     const { type, data } = (event as CustomEvent<{ type?: string; data?: { notices?: Notice[] } }>).detail ?? {};
     if (type === NOTICES_CHANGED_EVENT && Array.isArray(data?.notices)) {
       useNoticeStore.getState().setNotices(data.notices);
+      reconcileSeen(data.notices);
     }
   });
   gateway.onConnectionChange((connected) => {
@@ -98,7 +115,15 @@ export function initNoticeListener(): void {
   useTabStore.subscribe((s, prev) => {
     if (s.activeTabId !== prev.activeTabId || s.tabs !== prev.tabs) reportViewing();
   });
-  window.addEventListener("focus", reportViewing);
+  const recheck = () => { reportViewing(); reconcileSeen(useNoticeStore.getState().notices); };
+  // Clicking or typing anywhere means you're here, even if no window focus event fired.
+  window.addEventListener("pointerdown", recheck, true);
+  window.addEventListener("keydown", recheck, true);
+  window.addEventListener("focus", recheck);
   window.addEventListener("blur", reportViewing);
-  document.addEventListener("visibilitychange", reportViewing);
+  // Coming back from another app by clicking straight into a mini-app (an iframe) fires no
+  // focus event on this window, so "in front" would stay false and nothing gets marked seen.
+  // Check focus once a second; it only talks to the gateway when the answer changes.
+  window.setInterval(recheck, 1000);
+  document.addEventListener("visibilitychange", recheck);
 }
