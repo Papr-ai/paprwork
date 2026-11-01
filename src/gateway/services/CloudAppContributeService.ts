@@ -827,9 +827,38 @@ async function pushContributeBranch(
   }
 }
 
+/** Best effort: tell the server a prepared proposal will never be submitted. */
+async function abandonPreparedProposal(requestId: string, reason: string): Promise<void> {
+  try {
+    const resp = await cloudApiFetch(
+      `/v1/cloud/apps/changes/${encodeURIComponent(requestId)}/abandon`,
+      { method: "POST", body: { reason: reason.slice(0, 300) } },
+    );
+    if (!resp.ok) {
+      console.warn(`[CloudContribute] abandon ${requestId} failed (${resp.status})`);
+    }
+  } catch (err) {
+    // Older servers have no abandon route; their TTL sweep cleans it up.
+    console.warn(`[CloudContribute] abandon ${requestId} failed: ${(err as Error).message.slice(0, 120)}`);
+  }
+}
+
 export class CloudAppContributeService {
   async propose(input: ProposeContributeInput): Promise<ProposeContributeResult> {
     const lineageId = await readLineageId(input.installedAppId);
+
+    // Nothing edited since the last sync (e.g. a Publish now already merged
+    // these edits and the copy caught up): stop before the server records a
+    // proposal that could never be submitted.
+    {
+      const { getCloudAppTrackSyncService } = await import("./CloudAppTrackSyncService.js");
+      const edits = await getCloudAppTrackSyncService()
+        .localEdits(input.installedAppId)
+        .catch(() => null);
+      if (edits?.known && edits.files.length === 0) {
+        throw new Error("No changes to contribute — your copy matches the publisher's");
+      }
+    }
 
     const { getPaprCallerIdentity } = await import("../utils/paprUserId.js");
     const proposer = getPaprCallerIdentity();
@@ -871,11 +900,18 @@ export class CloudAppContributeService {
       );
     }
 
-    const { headSha, stagedPaths, migrations, baseCommit } = await pushContributeBranch(
-      prepare,
-      input.installedAppId,
-      { includeBuildOutputs: input.publishNow === true },
-    );
+    let pushed: Awaited<ReturnType<typeof pushContributeBranch>>;
+    try {
+      pushed = await pushContributeBranch(prepare, input.installedAppId, {
+        includeBuildOutputs: input.publishNow === true,
+      });
+    } catch (err) {
+      // The server already holds this proposal as "preparing". Without this it
+      // stays there forever with no branch — owners see a phantom proposal.
+      await abandonPreparedProposal(prepare.id, (err as Error).message);
+      throw err;
+    }
+    const { headSha, stagedPaths, migrations, baseCommit } = pushed;
 
     // Publish now with a schema change: same order as the publisher's own
     // publish — the team's database first (verified), then the code. If the

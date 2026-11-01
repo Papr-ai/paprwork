@@ -90,7 +90,7 @@ const listPrsSchema = z.object({
     .uuid()
     .optional()
     .describe("Filter to PRs for this owner upstream app id"),
-  status: z.enum(["preparing", "pending", "approved", "rejected"]).optional(),
+  status: z.enum(["preparing", "pending", "approved", "rejected", "abandoned"]).optional(),
 });
 
 const checkContributionsSchema = z.object({
@@ -352,7 +352,7 @@ export const checkCloudAppContributionsTool = createTool({
   id: CLOUD_APP_PR_TOOL_IDS.check,
   description: `Check whether an app you own has incoming contributor PRs (OWNER ONLY). Lightweight first step before loading full PR review tools.
 
-Returns pending/preparing counts and request summaries. If PRs exist, use ${CLOUD_APP_PR_TOOL_IDS.review} for diffs (not inspect_cloud_repo or local edit_file). If PR tools are deferred this turn, call find_tools({ query: "${CLOUD_APP_PR_DEFERRED_FIND_QUERY}" }) then run_deferred_tool.`,
+Returns pending counts and request summaries ("preparing" proposals have no branch yet and are not counted). If PRs exist, use ${CLOUD_APP_PR_TOOL_IDS.review} for diffs (not inspect_cloud_repo or local edit_file). If PR tools are deferred this turn, call find_tools({ query: "${CLOUD_APP_PR_DEFERRED_FIND_QUERY}" }) then run_deferred_tool.`,
   inputSchema: checkContributionsSchema,
   execute: async (input) => {
     const args =
@@ -363,9 +363,8 @@ Returns pending/preparing counts and request summaries. If PRs exist, use ${CLOU
       await requirePaprCloudLogin();
       const service = getCloudAppChangeRequestService();
       const forApp = await service.listIncoming({ appId: args.appId });
-      const pending = forApp.filter(
-        (r) => r.status === "pending" || r.status === "preparing",
-      );
+      // "preparing" has no branch yet — nothing to review, so not pending.
+      const pending = forApp.filter((r) => r.status === "pending");
       return {
         success: true,
         data: {
