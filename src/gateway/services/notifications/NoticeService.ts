@@ -14,7 +14,9 @@ import path from "node:path";
 import Database from "better-sqlite3";
 import { getPaprRoot } from "../../../core/utils/paprRoot.js";
 import { openDiagnosticDatabase } from "../databaseDiagnostics/sqlite.js";
-import { effectiveLevel } from "../../../core/notifications/route.js";
+import { DEFAULT_NOTICE_PREFS, effectiveLevel, route, type NoticePrefs, type RoutedNotice } from "../../../core/notifications/route.js";
+import { DeliveryLog, OS_CAP_PER_SOURCE } from "./noticeDeliveries.js";
+import { PrefsStore } from "./noticePrefs.js";
 import {
   NOTICE_MARK,
   type Notice,
@@ -37,6 +39,19 @@ export function onNoticesChanged(listener: NoticesListener): () => void {
   return () => listeners.delete(listener);
 }
 
+/** An OS notification route() decided to send. The UI shows it (it owns the window). */
+export interface OsDelivery {
+  notice: Notice;
+  why: string[];
+}
+export type OsListener = (d: OsDelivery) => void;
+const osListeners = new Set<OsListener>();
+
+export function onNoticeOs(listener: OsListener): () => void {
+  osListeners.add(listener);
+  return () => osListeners.delete(listener);
+}
+
 export interface ViewedOwner {
   kind: NoticeOwnerKind;
   id: string;
@@ -51,6 +66,10 @@ export interface Viewing {
 export class NoticeService {
   private db: Database.Database;
   private viewing: Viewing = { owners: [], foreground: true };
+  private deliveries: DeliveryLog;
+  private prefsStore: PrefsStore;
+  /** Defaults with your Settings → Notifications changes on top. */
+  prefs: NoticePrefs = DEFAULT_NOTICE_PREFS;
 
   constructor(dbPath = path.join(getPaprRoot(), "data", "notices.db")) {
     mkdirSync(path.dirname(dbPath), { recursive: true });
@@ -58,13 +77,16 @@ export class NoticeService {
     this.db.pragma("journal_mode = WAL");
     this.db.pragma("synchronous = NORMAL");
     this.db.exec(NOTICES_SCHEMA);
-    this.db
-      .prepare("DELETE FROM notices WHERE resolved_at IS NOT NULL AND resolved_at < ?")
-      .run(new Date(Date.now() - RESOLVED_KEEP_MS).toISOString());
+    this.deliveries = new DeliveryLog(this.db);
+    this.prefsStore = new PrefsStore(this.db);
+    this.prefs = this.prefsStore.effective();
+    const cutoff = new Date(Date.now() - RESOLVED_KEEP_MS).toISOString();
+    this.db.prepare("DELETE FROM notices WHERE resolved_at IS NOT NULL AND resolved_at < ?").run(cutoff);
+    this.deliveries.prune(cutoff);
   }
 
   /** Raise or update a notice. Returns null when nothing is stored (status, or an FYI on what you're looking at). */
-  notify(input: NoticeInput): Notice | null {
+  notify(input: NoticeInput | RoutedNotice): Notice | null {
     const level = effectiveLevel(input);
     if (level === "status") return null;
     const type = input.type ?? "event";
@@ -82,6 +104,13 @@ export class NoticeService {
       now, expires_at: expiresAt,
     };
     const existing = this.openByKey(input.key);
+    // Decide delivery before writing: an open notice with the same key never pings twice.
+    const delivery = route(input, {
+      prefs: this.prefs, foreground: this.viewing.foreground, dnd: false,
+      viewingOwner: this.isViewing(input.owner.kind, input.owner.id),
+      existing: existing ? { count: existing.count } : undefined,
+    });
+    if (delivery.level === "status") return null;
     if (existing) {
       this.db.prepare(`UPDATE notices SET kind=@kind, type=@type, level=@level, mark=@mark, title=@title, body=@body,
         source_type=@source_type, source_id=@source_id, source_name=@source_name, owner_kind=@owner_kind,
@@ -96,7 +125,52 @@ export class NoticeService {
         @now, @now, @expires_at)`).run({ ...values, id: randomUUID() });
     }
     this.changed();
-    return this.openByKey(input.key);
+    const stored = this.openByKey(input.key);
+    if (stored && delivery.os) this.deliverOs(stored, delivery.why);
+    return stored;
+  }
+
+  /** Settings → Notifications: your settings, the defaults, apps that sent you something, recent pops. */
+  center() {
+    const apps = this.db.prepare(`SELECT source_id AS id, MAX(source_name) AS name FROM notices
+      WHERE source_type='app' GROUP BY source_id ORDER BY MAX(updated_at) DESC LIMIT 50`).all() as { id: string; name: string }[];
+    return { prefs: this.prefs, defaults: DEFAULT_NOTICE_PREFS, apps, recent: this.deliveries.recent(30) };
+  }
+
+  setPrefs(patch: unknown) {
+    this.prefs = this.prefsStore.set(patch);
+    return this.center();
+  }
+
+  resetPrefs() {
+    this.prefs = this.prefsStore.reset();
+    return this.center();
+  }
+
+  /** You clicked its OS notification: an event is done, a condition is seen (stays until fixed). */
+  markSeenKey(key: string): boolean {
+    const now = new Date().toISOString();
+    const r = this.db.prepare(`UPDATE notices SET seen_at=@now,
+      resolved_at=CASE WHEN type='event' THEN @now ELSE resolved_at END
+      WHERE key=@key AND resolved_at IS NULL`).run({ now, key });
+    return this.changedIf(r.changes);
+  }
+
+  /** Why a notice reached you (or didn't), channel by channel. */
+  deliveriesFor(noticeId: string) {
+    return this.deliveries.forNotice(noticeId);
+  }
+
+  private deliverOs(notice: Notice, why: string[]): void {
+    const base = { noticeId: notice.id, noticeKey: notice.key, sourceId: notice.source.id, channel: "os" as const };
+    if (this.deliveries.recentSent(notice.source.id) >= OS_CAP_PER_SOURCE) {
+      this.deliveries.record({ ...base, status: "capped", why: [...why, `${notice.source.name} hit ${OS_CAP_PER_SOURCE} OS notifications in 10 min: kept as a dot`] });
+      return;
+    }
+    this.deliveries.record({ ...base, status: "sent", why });
+    for (const l of osListeners) {
+      try { l({ notice, why }); } catch (e) { console.warn("[NoticeService] os listener failed:", e); }
+    }
   }
 
   /** The sender clears a notice when it's fixed or answered. */

@@ -428,6 +428,12 @@ contextBridge.exposeInMainWorld("electronAPI", {
     GATEWAY_PORT: process.env.GATEWAY_PORT || "18789",
   },
 
+  // Notices: show an OS notification route() already decided on (renderer only).
+  notices: {
+    showOs: (payload) => ipcRenderer.invoke("notice:show-os", payload),
+    closeOs: (keys) => ipcRenderer.invoke("notice:close-os", keys),
+  },
+
   // System integration for mini-apps (generic invoke)
   system: {
     invoke: (method, args) => ipcRenderer.invoke("system:invoke", method, args),
@@ -436,6 +442,9 @@ contextBridge.exposeInMainWorld("electronAPI", {
 
 // Initialize chat IPC listener (forward to DOM event)
 console.log("[Preload] Initializing chat listener");
+ipcRenderer.on("notice:open", (_event, data) => {
+  window.dispatchEvent(new CustomEvent("papr-notice-open", { detail: data }));
+});
 ipcRenderer.on("notification:open-settings", (_event, data) => {
   window.dispatchEvent(new CustomEvent("papr-notification-open-settings", { detail: data }));
 });
