@@ -7,7 +7,7 @@ import { useChat } from "../../hooks/useChat";
 import { useArtifacts } from "../../hooks/useArtifacts";
 import { useTabs } from "../../hooks/useTabs";
 import { isUserFacingChatId } from "../../utils/chatVisibility";
-import { useChatActivity, useDoneChatIds } from "../Chat/chatActivity";
+import { useChatActivity, useChatsBadge } from "../Chat/chatActivity";
 import type { Artifact } from "../../stores/artifactsStore";
 import type { SidebarFavorite } from "./useSidebarFavorites";
 import { relativeTime, type PeekGroup, type PeekRow } from "./RailPeek";
@@ -102,9 +102,8 @@ export function useRailPeeks({ favorites, openFavorite, removeFavorite }: Args) 
 
   const appGroups = useMemo(() => artifactGroups("app"), [artifactGroups]);
   const docGroups = useMemo(() => artifactGroups("document"), [artifactGroups]);
-  // Same signal as the tab bar's green dot — chat.hasUnread is never set, tab.hasUnread is.
-  const doneIds = useDoneChatIds();
-  const hasUnreadChats = doneIds.size > 0;
+  // Same notices as the tab bar: amber if a chat needs you, green if a reply is new.
+  const chatsBadge = useChatsBadge();
 
   // Re-read the chat list when the Chats peek opens (throttled) so chats touched elsewhere —
   // other windows, jobs, sync — are there too, not only ones this window saw change.
@@ -116,5 +115,5 @@ export function useRailPeeks({ favorites, openFavorite, removeFavorite }: Args) 
     void loadChats(true);
   }, [loadChats]);
 
-  return { chatGroups, appGroups, docGroups, hasUnreadChats, refreshChats };
+  return { chatGroups, appGroups, docGroups, chatsBadge, refreshChats };
 }

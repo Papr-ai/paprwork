@@ -47,6 +47,7 @@ import {
   initializePlanService,
   resetPlanServiceForWorkspaceSwitch,
 } from "./PlanService.js";
+import { resetNoticeServiceForWorkspaceSwitch } from "./notifications/NoticeService.js";
 import {
   initializeSkillService,
   resetSkillServiceForWorkspaceSwitch,
@@ -218,6 +219,7 @@ async function resetPathBoundSingletons(): Promise<void> {
 
   resetCommunityCatalogServiceForWorkspaceSwitch();
   resetPlanServiceForWorkspaceSwitch();
+  resetNoticeServiceForWorkspaceSwitch();
   resetSkillServiceForWorkspaceSwitch();
   resetWorkspaceServiceForWorkspaceSwitch();
   resetSubAgentServiceForWorkspaceSwitch();

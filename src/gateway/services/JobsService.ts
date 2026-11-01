@@ -66,6 +66,7 @@ import {
   getErrorClassificationReason,
 } from "./jobs/errorClassifier.js";
 import { getJobEventHub } from "./JobEventHub.js";
+import { syncJobPermissionNotice } from "./notifications/noticeSources.js";
 import {
   parseJobProgressLine,
   toJobProgressData,
@@ -2555,6 +2556,7 @@ export class JobsService {
   }
 
   private broadcastJobStatus(job: JobRecord): void {
+    syncJobPermissionNotice(job);
     getJobEventHub().publish({
       type: "jobs:status-changed",
       data: {
