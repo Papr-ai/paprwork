@@ -17,6 +17,14 @@ describe("notice prefs", () => {
     expect(s.effective()).toEqual(DEFAULT_NOTICE_PREFS);
   });
 
+  it("stores Sound off sparse and drops it when set back", () => {
+    const s = new PrefsStore(new Database(":memory:"));
+    s.set({ sources: { chats: { sound: false } } });
+    expect(s.effective().sources).toEqual({ chats: { sound: false } });
+    s.set({ sources: { chats: { sound: true } } });
+    expect(s.effective()).toEqual(DEFAULT_NOTICE_PREFS);
+  });
+
   it("drops junk instead of breaking routing", () => {
     expect(cleanPrefs({ version: 2, sources: { chats: { allow: "no", needs: { desktop: false, loud: true } }, "": {} }, types: { x: false, "a/b": "off" }, evil: 1 }))
       .toEqual({ version: 2, sources: { chats: { needs: { desktop: false } } }, types: {} });
@@ -28,7 +36,7 @@ describe("notice prefs", () => {
     db.prepare("INSERT INTO notice_prefs (id, json, updated_at) VALUES (1, ?, '')")
       .run(JSON.stringify({ priorityOs: false, chatDoneOs: false, apps: { crm: "off", notes: "all" } }));
     const p = s.effective();
-    expect(sourcePref(p, "chats")).toEqual({ allow: true, needs: { desktop: false, badge: true }, done: { desktop: false, badge: true } });
+    expect(sourcePref(p, "chats")).toEqual({ allow: true, sound: true, needs: { desktop: false, badge: true }, done: { desktop: false, badge: true } });
     expect(sourcePref(p, "apps").needs.desktop).toBe(false);
     expect(sourcePref(p, "app:crm").allow).toBe(false);
     expect(sourcePref(p, "app:notes").needs.desktop).toBe(false);

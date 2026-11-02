@@ -105,11 +105,13 @@
 .notif-dot { width: 7px; height: 7px; border-radius: 50%; flex: none; }
 .notif-dot--blue { background: #0161e0; }
 .notif-dot--green { background: #10b981; }
-.notif-chips { display: flex; flex-wrap: wrap; gap: 6px; margin-top: 8px; }
-.notif-chip { padding: 3px 9px; border-radius: 999px; border: 1px solid var(--border-color); background: transparent; color: var(--text-secondary);
-  font: inherit; font-size: 12px; cursor: pointer; text-decoration: line-through; }
+.notif-chips { display: flex; flex-wrap: wrap; gap: 4px; margin-top: 6px; }
+.notif-chip { padding: 1px 8px; border-radius: 999px; border: 1px solid var(--border-color); background: transparent; color: var(--text-secondary);
+  font: inherit; font-size: 11.5px; line-height: 18px; white-space: nowrap; cursor: pointer; text-decoration: line-through; }
 .notif-chip.is-on { background: rgba(var(--accent-rgb), 0.1); border-color: transparent; color: var(--text-primary); text-decoration: none; }
 .notif-chip:disabled, .notif-cb:disabled { cursor: not-allowed; }
 .notif-cb { width: 18px; height: 18px; border-radius: 5px; border: 1.5px solid var(--border-color); background: transparent; cursor: pointer; position: relative; }
 .notif-cb.is-on { background: rgb(var(--accent-rgb)); border-color: rgb(var(--accent-rgb)); }
 .notif-cb.is-on::after { content: ""; position: absolute; left: 5px; top: 1px; width: 4px; height: 9px; border: solid #fff; border-width: 0 2px 2px 0; transform: rotate(45deg); }
+.notif-group.is-dim { opacity: 0.5; }
+.notif-group > .setting-row { padding: 10px 12px; margin: 0; }

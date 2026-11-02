@@ -3,14 +3,15 @@
  * Stored sparse: only what you changed. Everything else follows the defaults, so a better default
  * reaches everyone who never touched it, and Reset just deletes your changes.
  *
- * Per source: allow, and for each kind (waiting on you / done) where it appears. Per type: on/off.
+ * Per source: allow, sound for its desktop notifications, and for each kind (waiting on you / done)
+ * where it appears. Per type: on/off.
  * Settings only ever take things away (no desktop, no dot, kept inside); they never raise a level.
  */
 export type Surface = "desktop" | "badge";
 export const SURFACES: Surface[] = ["desktop", "badge"];
 export type Where = Record<Surface, boolean>;
-export interface SourcePref { allow: boolean; needs: Where; done: Where }
-export interface SourcePrefPatch { allow?: boolean; needs?: Partial<Where>; done?: Partial<Where> }
+export interface SourcePref { allow: boolean; sound: boolean; needs: Where; done: Where }
+export interface SourcePrefPatch { allow?: boolean; sound?: boolean; needs?: Partial<Where>; done?: Partial<Where> }
 export interface NoticePrefs {
   version: 2;
   sources: Record<string, SourcePrefPatch>;
@@ -18,7 +19,7 @@ export interface NoticePrefs {
   types: Record<string, boolean>;
 }
 
-const BASE: SourcePref = { allow: true, needs: { desktop: true, badge: true }, done: { desktop: false, badge: true } };
+const BASE: SourcePref = { allow: true, sound: true, needs: { desktop: true, badge: true }, done: { desktop: false, badge: true } };
 /** Finished replies pop while you're away (same as before Stage 2). */
 const SOURCE_DEFAULTS: Record<string, SourcePrefPatch> = { chats: { done: { desktop: true } } };
 
@@ -26,12 +27,12 @@ export const DEFAULT_NOTICE_PREFS: NoticePrefs = { version: 2, sources: {}, type
 
 export function defaultSourcePref(id: string): SourcePref {
   const d = SOURCE_DEFAULTS[id] ?? {};
-  return { allow: d.allow ?? BASE.allow, needs: { ...BASE.needs, ...d.needs }, done: { ...BASE.done, ...d.done } };
+  return { allow: d.allow ?? BASE.allow, sound: d.sound ?? BASE.sound, needs: { ...BASE.needs, ...d.needs }, done: { ...BASE.done, ...d.done } };
 }
 
 export function sourcePref(p: NoticePrefs, id: string): SourcePref {
   const d = defaultSourcePref(id), u = p.sources[id] ?? {};
-  return { allow: u.allow ?? d.allow, needs: { ...d.needs, ...u.needs }, done: { ...d.done, ...u.done } };
+  return { allow: u.allow ?? d.allow, sound: u.sound ?? d.sound, needs: { ...d.needs, ...u.needs }, done: { ...d.done, ...u.done } };
 }
 
 export const typeKey = (source: string, type: string) => `${source}/${type}`;
@@ -70,6 +71,7 @@ export function cleanPrefs(raw: unknown): NoticePrefs {
     if (!id || !v || typeof v !== "object") continue;
     const s = v as Record<string, unknown>, patch: SourcePrefPatch = {};
     if (bool(s.allow) !== undefined) patch.allow = s.allow as boolean;
+    if (bool(s.sound) !== undefined) patch.sound = s.sound as boolean;
     const needs = cleanWhere(s.needs), done = cleanWhere(s.done);
     if (needs) patch.needs = needs;
     if (done) patch.done = done;
@@ -85,6 +87,7 @@ export function compactPrefs(p: NoticePrefs): NoticePrefs {
   for (const [id, s] of Object.entries(p.sources)) {
     const d = defaultSourcePref(id), patch: SourcePrefPatch = {};
     if (s.allow !== undefined && s.allow !== d.allow) patch.allow = s.allow;
+    if (s.sound !== undefined && s.sound !== d.sound) patch.sound = s.sound;
     for (const cat of ["needs", "done"] as const) {
       const w: Partial<Where> = {};
       for (const k of SURFACES) if (s[cat]?.[k] !== undefined && s[cat]![k] !== d[cat][k]) w[k] = s[cat]![k];
@@ -104,6 +107,7 @@ export function mergePrefs(cur: NoticePrefs, patch: unknown): NoticePrefs {
     if (!id || !v || typeof v !== "object") continue;
     const raw = v as Record<string, unknown>, c: SourcePrefPatch = { ...sources[id] };
     if (typeof raw.allow === "boolean") c.allow = raw.allow;
+    if (typeof raw.sound === "boolean") c.sound = raw.sound;
     for (const cat of ["needs", "done"] as const) {
       const w = cleanWhere(raw[cat]);
       if (w) c[cat] = { ...c[cat], ...w };

@@ -73,4 +73,17 @@ describe("route(): sources and types", () => {
     expect(pick(route(n({ level: "urgent", source: billing, owner: { kind: "account", id: "billing", name: "Billing" } }), ctx({ prefs: p, foreground: false }))))
       .toEqual(["blue", true, true, "now"]);
   });
+  it("sound: waiting on you rings, done stays quiet", () => {
+    expect(route(n(), ctx({ foreground: false })).sound).toBe(true);
+    expect(route(done(), ctx({ foreground: false })).sound).toBe(false);
+  });
+  it("Sound off for a source: still pops, silently", () => {
+    const d = route(n(), ctx({ foreground: false, prefs: with_({ sources: { apps: { sound: false } } }) }));
+    expect([d.os, d.sound]).toEqual([true, false]);
+  });
+  it("Sound off never silences Urgent", () => {
+    const d = route(n({ level: "urgent", source: billing, owner: { kind: "account", id: "billing", name: "Billing" } }),
+      ctx({ foreground: false, prefs: with_({ sources: { account: { sound: false } } }) }));
+    expect([d.os, d.sound]).toEqual([true, true]);
+  });
 });
