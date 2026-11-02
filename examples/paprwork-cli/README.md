@@ -1,31 +1,25 @@
 # paprwork
 
-Local launcher for a pinned [Papr Work](https://github.com/Papr-ai/paprwork) checkout.
+`@splitin/paprwork-cli` is a local launcher for the pinned [Papr Work](https://github.com/Papr-ai/paprwork) desktop app.
 
-Papr Work does not ship a `bin`. Its own instructions are: clone the repo, use Node 24, then `npm start`. That opens the Electron desktop app. This launcher records the commit the Outreach Console was checked against and runs those same steps.
+Pinned commit: b34b6c4090adfb64109004d1a25645a3d3a2bd66
 
-| | |
-| --- | --- |
-| Repository | https://github.com/Papr-ai/paprwork |
-| Commit | `b34b6c4090adfb64109004d1a25645a3d3a2bd66` |
-| Branch | `development` |
-| Release baseline | 2.7.2 |
-| Recorded | `outreach-engine/apps/papr/compatibility.json`, 2026-10-20 |
+- Branch recorded for the Outreach Console: `development`
+- Release baseline: `2.7.2`
+- Source: `outreach-engine/apps/papr/compatibility.json`, dated 2026-10-20
+- Required Node version: 24 or newer
+- Default checkout: `~/Papr/src/paprwork`
 
-The Papr Work source stays in that checkout. This package does not vendor it. Papr Work is AGPL-3.0. This launcher is MIT.
+Papr Work source remains in its own checkout; this launcher does not vendor it. Papr Work is AGPL-3.0. The launcher is MIT.
 
 ## Commands
 
-```bash
-node --experimental-strip-types src/cli.ts version
-node --experimental-strip-types src/cli.ts doctor
-node --experimental-strip-types src/cli.ts checkout
-node --experimental-strip-types src/cli.ts start --print-only
-```
+- `paprwork version`
+- `paprwork doctor [--dir <checkout>]`
+- `paprwork checkout [--dir <checkout>] [--commit <40-char sha>]`
+- `paprwork start [--dir <checkout>] [--print-only]`
 
-`checkout` clones into `~/Papr/src/paprwork` and detaches the pinned commit. `doctor` checks Node 24+ and that the checkout is that commit. `start` runs `npm start` only after `npm install` has been run in the checkout. Pass `--dir` to use another directory.
-
-`start` opens the desktop app. Install dependencies yourself in the checkout first. The launcher does not print secrets.
+`checkout` clones Papr Work and detaches the recorded commit. It does not install dependencies. The person runs `npm install` in the checkout. `start` runs `npm start` after dependencies are installed and opens the Papr Work desktop app. The launcher does not print secrets.
 
 ## Test
 

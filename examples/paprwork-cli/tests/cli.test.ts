@@ -111,3 +111,25 @@ describe('redaction', () => {
     assert.equal(text.includes('eyJhbGciOi'), false);
   });
 });
+
+describe('argument validation and stderr redaction', () => {
+  it('refuses a relative checkout directory and the filesystem root', async () => {
+    for (const dir of ['relative/path', '/']) {
+      const result = await run(['node', 'paprwork', 'checkout', '--dir', dir]);
+      assert.equal(result.exitCode, 1);
+      assert.equal(result.stderr, 'Checkout directory must be an absolute path and not the filesystem root.\n');
+    }
+  });
+
+  it('does not let boolean flags consume following tokens', async () => {
+    const result = await run(['node', 'paprwork', '--print-only', 'version']);
+    assert.equal(result.exitCode, 0);
+    assert.match(result.stdout, /paprwork 0\.1\.0/);
+  });
+
+  it('redacts secrets from failures', async () => {
+    const result = await run(['node', 'paprwork', 'Bearer secret-token']);
+    assert.equal(result.exitCode, 1);
+    assert.doesNotMatch(result.stderr, /secret-token/);
+  });
+});
