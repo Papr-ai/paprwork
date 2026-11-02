@@ -229,7 +229,8 @@ export async function mergeContributeDataIndexesIntoRepo(
     } catch {
       /* new file */
     }
-    if (previous !== next) {
+    const emptyNewFile = previous === "" && merged.length === 0;
+    if (previous !== next && !emptyNewFile) {
       await fs.writeFile(jobsPath, next, "utf8");
       written.push(path.join("data", "jobs.json").replace(/\\/g, "/"));
     }
@@ -256,7 +257,10 @@ export async function mergeContributeDataIndexesIntoRepo(
     } catch {
       /* new file */
     }
-    if (previous !== next) {
+    // An empty index the publisher never had is not a change: without this an
+    // untouched copy proposes a new `{ databases: {} }` file.
+    const emptyNewFile = previous === "" && Object.keys(merged.databases).length === 0;
+    if (previous !== next && !emptyNewFile) {
       await fs.writeFile(databasesPath, next, "utf8");
       written.push(path.join("data", "databases.json").replace(/\\/g, "/"));
     }
