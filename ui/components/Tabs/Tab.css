@@ -345,7 +345,7 @@
   background-color: #8E9CC7; /* Muted periwinkle */
 }
 
-/* Needs you: a job or Pen is waiting on you in this chat (open Priority notice). Amber, same as the rail. */
+/* Needs you: a job or Pen is waiting on you in this chat (open Priority notice). Solid blue, same as the rail. */
 .tab.tab--needs::before {
   content: '';
   position: absolute;
@@ -355,7 +355,7 @@
   width: 6px;
   height: 6px;
   border-radius: 50%;
-  background-color: #F59E0B; /* Amber */
+  background-color: #0161E0; /* Papr blue: waiting on you */
 }
 
 /* Shift icon to make room for dot */
@@ -391,7 +391,7 @@
     background-color: #A8B4D4; /* Soft lavender for dark mode */
   }
   .tab.tab--needs::before {
-    background-color: #FBBF24; /* Lighter amber for dark mode */
+    background-color: #4D9BFF; /* Papr blue, dark mode */
   }
 }
 

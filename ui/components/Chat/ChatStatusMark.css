@@ -21,15 +21,15 @@
   }
 }
 
-/* Needs you: a job or Pen is waiting on you (open Priority notice). Same amber as the tab. */
+/* Needs you: a job or Pen is waiting on you (open Priority notice). Solid blue, same as the tab. */
 .chat-status-mark__needs {
-  background: #f59e0b;
-  box-shadow: 0 0 0 3px rgba(245, 158, 11, 0.18);
+  background: #0161e0;
+  box-shadow: 0 0 0 3px rgba(1, 97, 224, 0.16);
 }
 
 @media (prefers-color-scheme: dark) {
   .chat-status-mark__needs {
-    background: #fbbf24;
-    box-shadow: 0 0 0 3px rgba(251, 191, 36, 0.2);
+    background: #4d9bff;
+    box-shadow: 0 0 0 3px rgba(77, 155, 255, 0.2);
   }
 }

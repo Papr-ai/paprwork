@@ -3,11 +3,11 @@ import type {
   Notice,
   NoticeAction,
   NoticeLevel,
-  NoticeMark,
   NoticeOwnerKind,
   NoticeSourceType,
   NoticeType,
 } from "../../../core/types/notices.js";
+import { normalizeMark } from "../../../core/types/notices.js";
 
 export const NOTICES_SCHEMA = `
   CREATE TABLE IF NOT EXISTS notices (
@@ -83,7 +83,7 @@ export function rowToNotice(r: NoticeRow): Notice {
     kind: r.kind,
     type: r.type as NoticeType,
     level: r.level as NoticeLevel,
-    mark: r.mark as NoticeMark,
+    mark: normalizeMark(r.mark),
     title: r.title,
     ...(r.body ? { body: r.body } : {}),
     source: { type: r.source_type as NoticeSourceType, id: r.source_id, name: r.source_name },

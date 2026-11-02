@@ -45,8 +45,8 @@ describe("NoticeService", () => {
     expect(svc.listOpen()).toHaveLength(0);
   });
 
-  it("caps urgent from jobs and agents at priority (amber)", () => {
-    expect(svc.notify({ ...needsKey("a"), level: "urgent" })?.mark).toBe("amber");
+  it("caps urgent from jobs and agents at priority (blue)", () => {
+    expect(svc.notify({ ...needsKey("a"), level: "urgent" })?.mark).toBe("blue");
   });
 
   it("skips an FYI on the chat you're looking at, but not when the window is in the back", () => {
@@ -185,7 +185,7 @@ describe("NoticeService settings + clicks", () => {
   });
 
   it("turning off 'Pen finished a reply' stops the pop but keeps the dot", () => {
-    svc.setPrefs({ chatDoneOs: false });
+    svc.setPrefs({ sources: { chats: { done: { desktop: false } } } });
     svc.setViewing({ owners: [], foreground: false });
     svc.notify(done("c"));
     expect(shown).toEqual([]);
@@ -193,10 +193,10 @@ describe("NoticeService settings + clicks", () => {
   });
 
   it("settings survive a restart and reset back to defaults", () => {
-    svc.setPrefs({ priorityOs: false, apps: { crm: "off" } });
+    svc.setPrefs({ sources: { apps: { needs: { desktop: false } }, "app:crm": { allow: false } } });
     svc.close();
     svc = new NoticeService(path.join(dir, "notices.db"));
-    expect(svc.center().prefs).toMatchObject({ priorityOs: false, apps: { crm: "off" } });
+    expect(svc.center().prefs).toMatchObject({ sources: { apps: { needs: { desktop: false } }, "app:crm": { allow: false } } });
     expect(svc.resetPrefs().prefs).toEqual(svc.center().defaults);
   });
 
@@ -216,7 +216,8 @@ describe("NoticeService settings + clicks", () => {
     svc.notify({ key: "app:crm:1", kind: "app.notification", type: "event", level: "priority", title: "Deal moved", forYou: true,
       source: { type: "app", id: "crm", name: "CRM" }, owner: { kind: "app", id: "crm", name: "CRM" } } as NoticeInput);
     const c = svc.center();
-    expect(c.apps).toEqual([{ id: "crm", name: "CRM" }]);
+    expect(c.apps).toEqual([{ id: "app:crm", name: "CRM" }]);
+    expect(c.sources.map((s) => s.id)).toEqual(["chats", "apps", "account", "updates"]);
     expect(c.recent[0]).toMatchObject({ title: "Deal moved", source: "CRM", status: "sent" });
     expect(c.recent[0].why.length).toBeGreaterThan(0);
   });

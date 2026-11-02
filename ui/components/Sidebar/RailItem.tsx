@@ -16,7 +16,7 @@ interface RailItemProps {
   /** Anchor the peek to the bottom of the item (for items near the bottom of the rail). */
   peekFromBottom?: boolean;
   badge?: boolean;
-  /** Default green (done). "needs" = amber: something here is waiting on you. */
+  /** Default green (done). "needs" = blue: something here is waiting on you. */
   badgeTone?: "needs";
   variant?: "default" | "agent" | "new";
   testId?: string;

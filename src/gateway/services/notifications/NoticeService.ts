@@ -15,6 +15,7 @@ import Database from "better-sqlite3";
 import { getPaprRoot } from "../../../core/utils/paprRoot.js";
 import { openDiagnosticDatabase } from "../databaseDiagnostics/sqlite.js";
 import { DEFAULT_NOTICE_PREFS, effectiveLevel, route, type NoticePrefs, type RoutedNotice } from "../../../core/notifications/route.js";
+import { PAPR_SOURCES, appSourceId } from "../../../core/notifications/sources.js";
 import { DeliveryLog, OS_CAP_PER_SOURCE } from "./noticeDeliveries.js";
 import { PrefsStore } from "./noticePrefs.js";
 import {
@@ -130,11 +131,12 @@ export class NoticeService {
     return stored;
   }
 
-  /** Settings → Notifications: your settings, the defaults, apps that sent you something, recent pops. */
+  /** Settings → Notifications: the sources (Papr Work's, then apps that sent you something), your settings, recent pops. */
   center() {
-    const apps = this.db.prepare(`SELECT source_id AS id, MAX(source_name) AS name FROM notices
-      WHERE source_type='app' GROUP BY source_id ORDER BY MAX(updated_at) DESC LIMIT 50`).all() as { id: string; name: string }[];
-    return { prefs: this.prefs, defaults: DEFAULT_NOTICE_PREFS, apps, recent: this.deliveries.recent(30) };
+    const apps = (this.db.prepare(`SELECT source_id AS id, MAX(source_name) AS name FROM notices
+      WHERE source_type='app' GROUP BY source_id ORDER BY MAX(updated_at) DESC LIMIT 50`).all() as { id: string; name: string }[])
+      .map((a) => ({ id: appSourceId(a.id), name: a.name }));
+    return { prefs: this.prefs, defaults: DEFAULT_NOTICE_PREFS, sources: PAPR_SOURCES, apps, recent: this.deliveries.recent(30) };
   }
 
   setPrefs(patch: unknown) {

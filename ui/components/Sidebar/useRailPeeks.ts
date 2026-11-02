@@ -102,7 +102,7 @@ export function useRailPeeks({ favorites, openFavorite, removeFavorite }: Args) 
 
   const appGroups = useMemo(() => artifactGroups("app"), [artifactGroups]);
   const docGroups = useMemo(() => artifactGroups("document"), [artifactGroups]);
-  // Same notices as the tab bar: amber if a chat needs you, green if a reply is new.
+  // Same notices as the tab bar: blue if a chat needs you, green if a reply is new.
   const chatsBadge = useChatsBadge();
 
   // Re-read the chat list when the Chats peek opens (throttled) so chats touched elsewhere —

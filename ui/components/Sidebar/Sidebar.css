@@ -166,12 +166,12 @@
 }
 
 .rail-btn__badge.rail-btn__badge--needs {
-  background: #f59e0b;
+  background: #0161e0;
 }
 
 @media (prefers-color-scheme: dark) {
   .rail-btn__badge.rail-btn__badge--needs {
-    background: #fbbf24;
+    background: #4d9bff;
   }
 }
 
