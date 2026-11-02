@@ -211,7 +211,7 @@ export interface DiscoverHtmlInput {
 }
 
 /** Search-snippet text: the app's own About copy first (richer than the one-line tagline), cut at a word boundary. */
-function metaDescription(about: string | undefined, headline: string | undefined, fallback: string, max = 300): string {
+function metaDescription(about: string | null | undefined, headline: string | null | undefined, fallback: string, max = 300): string {
   const text = (about?.trim() || headline?.trim() || fallback).replace(/\s+/g, " ");
   if (text.length <= max) return text;
   const cut = text.slice(0, max - 1);
