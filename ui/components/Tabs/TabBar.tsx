@@ -311,7 +311,7 @@ export function TabBar() {
           // For merged display, show the first child as the "right tab"
           const displayRightTab = leftChild || rightChild;
 
-          // Streaming status for chat tabs (green/amber dots come from notices, inside Tab)
+          // Streaming status for chat tabs (green/blue dots come from notices, inside Tab)
           const chatMetadata =
             tab.type === "chat"
               ? chats.find((c) => c.id === tab.entityId)

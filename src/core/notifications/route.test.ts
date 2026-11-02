@@ -1,48 +1,76 @@
-/** Same cases as the Notifications UX prototype's route() tests, minus Pen lanes (stage 2). */
+/** Same cases as the Notifications UX prototype's route() tests: facts first, then your settings per source and type. */
 import { describe, expect, it } from "vitest";
 import { DEFAULT_NOTICE_PREFS, route, type RouteCtx, type RoutedNotice } from "./route.js";
+import { mergePrefs } from "./prefs.js";
 
 const prefs = DEFAULT_NOTICE_PREFS;
 const ctx = (o: Partial<RouteCtx> = {}): RouteCtx => ({ prefs, foreground: true, dnd: false, viewingOwner: false, ...o });
 const n = (o: Partial<RoutedNotice> = {}): RoutedNotice => ({
-  key: "k", kind: "x", level: "priority", title: "t", forYou: true,
+  key: "k", kind: "job.permission", level: "priority", title: "t", forYou: true,
   source: { type: "job", id: "a", name: "Job" }, owner: { kind: "app", id: "a", name: "App" }, ...o,
 });
 const billing = { type: "billing" as const, id: "b", name: "Billing" };
 const crm = { type: "app" as const, id: "crm", name: "CRM" };
 const chat = { kind: "chat" as const, id: "c", name: "Chat" };
+const done = (o: Partial<RoutedNotice> = {}) => n({ kind: "chat.done", level: "fyi", source: { type: "agent", id: "pen", name: "Pen" }, owner: chat, ...o });
 const pick = (d: ReturnType<typeof route>) => [d.mark, d.lean, d.os, d.email];
+const with_ = (patch: object) => mergePrefs(prefs, patch);
 
-describe("route()", () => {
-  it("fyi: green dot only", () => expect(pick(route(n({ level: "fyi" }), ctx()))).toEqual(["green", false, false, "none"]));
-  it("fyi chat while away: OS", () => expect(route(n({ level: "fyi", owner: chat }), ctx({ foreground: false })).os).toBe(true));
-  it("fyi chat while away, OS pref off: no OS", () =>
-    expect(route(n({ level: "fyi", owner: chat }), ctx({ foreground: false, prefs: { ...prefs, chatDoneOs: false } })).os).toBe(false));
-  it("fyi job while away: no OS", () => expect(route(n({ level: "fyi" }), ctx({ foreground: false })).os).toBe(false));
-  it("fyi while looking: nothing", () => expect(route(n({ level: "fyi" }), ctx({ viewingOwner: true })).mark).toBe("none"));
-  it("priority in app: amber dot, nothing pops", () => expect(pick(route(n(), ctx()))).toEqual(["amber", false, false, "none"]));
-  it("priority away: OS", () => expect(pick(route(n(), ctx({ foreground: false })))).toEqual(["amber", false, true, "none"]));
-  it("priority while looking: in place", () => expect(pick(route(n(), ctx({ viewingOwner: true })))).toEqual(["amber", false, false, "none"]));
-  it("priority in DND: dot only", () => expect(pick(route(n(), ctx({ dnd: true, foreground: false })))).toEqual(["amber", false, false, "none"]));
-  it("priority digest pref", () => expect(route(n(), ctx({ prefs: { ...prefs, priorityEmail: true } })).email).toBe("digest"));
+describe("route(): facts", () => {
+  it("fyi: green dot only", () => expect(pick(route(n({ level: "fyi", kind: "proposal" }), ctx()))).toEqual(["green", false, false, "none"]));
+  it("chat reply while away: desktop", () => expect(route(done(), ctx({ foreground: false })).os).toBe(true));
+  it("fyi from an app's job while away: no desktop (Done › Desktop is off by default)", () =>
+    expect(route(n({ level: "fyi" }), ctx({ foreground: false })).os).toBe(false));
+  it("fyi while looking: nothing", () => expect(route(done(), ctx({ viewingOwner: true })).mark).toBe("none"));
+  it("priority in app: blue dot, nothing pops", () => expect(pick(route(n(), ctx()))).toEqual(["blue", false, false, "none"]));
+  it("priority away: desktop", () => expect(pick(route(n(), ctx({ foreground: false })))).toEqual(["blue", false, true, "none"]));
+  it("priority while looking: in place", () => expect(pick(route(n(), ctx({ viewingOwner: true })))).toEqual(["blue", false, false, "none"]));
+  it("priority in DND: dot only", () => expect(pick(route(n(), ctx({ dnd: true, foreground: false })))).toEqual(["blue", false, false, "none"]));
   it("jobs and apps can't send urgent", () => expect(route(n({ level: "urgent" }), ctx()).level).toBe("priority"));
-  it("urgent in app: red + Pen leans out", () => expect(pick(route(n({ level: "urgent", source: billing }), ctx()))).toEqual(["red", true, false, "none"]));
-  it("urgent billing away + DND: OS + email", () =>
-    expect(pick(route(n({ level: "urgent", source: billing }), ctx({ foreground: false, dnd: true })))).toEqual(["red", true, true, "now"]));
-  it("urgent platform away: OS, no email", () =>
-    expect(route(n({ level: "urgent", source: { type: "platform", id: "p", name: "Papr Work" } }), ctx({ foreground: false })).email).toBe("none"));
-  it("dedupe: no second ping", () => expect(pick(route(n(), ctx({ foreground: false, existing: { count: 1 } })))).toEqual(["amber", false, false, "none"]));
+  it("urgent in app: blue + Pen leans out", () => expect(pick(route(n({ level: "urgent", source: billing }), ctx()))).toEqual(["blue", true, false, "none"]));
+  it("urgent billing away + DND: desktop + email", () =>
+    expect(pick(route(n({ level: "urgent", source: billing }), ctx({ foreground: false, dnd: true })))).toEqual(["blue", true, true, "now"]));
+  it("dedupe: no second ping", () => expect(pick(route(n(), ctx({ foreground: false, existing: { count: 1 } })))).toEqual(["blue", false, false, "none"]));
   it("dedupe keeps urgent leaning out", () => expect(route(n({ level: "urgent", source: billing }), ctx({ existing: { count: 1 } })).lean).toBe(true));
   it("status: nothing outside the thing", () => expect(pick(route(n({ level: "status" }), ctx({ foreground: false })))).toEqual(["none", false, false, "none"]));
-  it("app default: update not for you stays inside", () => expect(route(n({ level: "fyi", source: crm, forYou: false }), ctx()).level).toBe("status"));
-  it("app default: mention gets through", () => expect(route(n({ source: crm, forYou: true }), ctx()).mark).toBe("amber"));
-  it("app off: even a mention stays inside", () =>
-    expect(route(n({ source: crm, forYou: true }), ctx({ prefs: { ...prefs, apps: { crm: "off" } } })).level).toBe("status"));
-  it("app everything: update is a green dot", () =>
-    expect(route(n({ level: "fyi", source: crm, forYou: false }), ctx({ prefs: { ...prefs, apps: { crm: "all" } } })).mark).toBe("green"));
-  it("app asks urgent: priority", () => expect(route(n({ level: "urgent", source: crm, forYou: true }), ctx()).level).toBe("priority"));
-  it("offline (ambient): no dot, no OS", () => {
+  it("app notice not addressed to you stays inside", () => expect(route(n({ level: "fyi", source: crm, forYou: false }), ctx()).level).toBe("status"));
+  it("app asks urgent: priority", () => expect(route(n({ level: "urgent", source: crm }), ctx()).level).toBe("priority"));
+  it("offline (ambient): no dot, no desktop", () => {
     const d = route(n({ level: "fyi", ambient: true, source: { type: "platform", id: "p", name: "Papr Work" } }), ctx({ foreground: false }));
     expect([d.mark, d.os]).toEqual(["none", false]);
+  });
+  it("check-ins never pop, whatever the settings", () =>
+    expect(route(n({ kind: "focus.checkin", source: { type: "agent", id: "pen", name: "Pen" } }), ctx({ foreground: false })).os).toBe(false));
+});
+
+describe("route(): sources and types", () => {
+  it("maps each notice to its settings row and chip", () => {
+    expect([route(done(), ctx()).source, route(done(), ctx()).type]).toEqual(["chats", "chat.done"]);
+    expect(route(n({ owner: chat }), ctx()).source).toBe("chats");
+    expect(route(n(), ctx()).source).toBe("apps");
+    expect(route(n({ kind: "proposal" }), ctx()).type).toBe("proposal.review");
+    expect(route(n({ kind: "proposal", level: "fyi" }), ctx()).type).toBe("proposal.result");
+    expect(route(n({ source: crm }), ctx()).source).toBe("app:crm");
+    expect(route(n({ kind: "app.update_ready", source: { type: "platform", id: "updater", name: "Papr Work" } }), ctx()).source).toBe("updates");
+  });
+  it("source off: kept inside, no dot", () =>
+    expect(pick(route(n({ source: crm }), ctx({ prefs: with_({ sources: { "app:crm": { allow: false } } }) })))).toEqual(["none", false, false, "none"]));
+  it("type off: only that type is kept inside", () => {
+    const p = with_({ types: { "chats/chat.done": false } });
+    expect(route(done(), ctx({ prefs: p })).level).toBe("status");
+    expect(route(n({ owner: chat }), ctx({ prefs: p })).mark).toBe("blue");
+  });
+  it("Desktop off for Done: dot stays, no pop", () => {
+    const d = route(done(), ctx({ foreground: false, prefs: with_({ sources: { chats: { done: { desktop: false } } } }) }));
+    expect([d.mark, d.os]).toEqual(["green", false]);
+  });
+  it("Badges off: pops, no dot", () => {
+    const d = route(n(), ctx({ foreground: false, prefs: with_({ sources: { apps: { needs: { badge: false } } } }) }));
+    expect([d.mark, d.os]).toEqual(["none", true]);
+  });
+  it("settings never touch Urgent", () => {
+    const p = with_({ sources: { account: { allow: false } } });
+    expect(pick(route(n({ level: "urgent", source: billing, owner: { kind: "account", id: "billing", name: "Billing" } }), ctx({ prefs: p, foreground: false }))))
+      .toEqual(["blue", true, true, "now"]);
   });
 });

@@ -169,7 +169,7 @@ export function Tab({
 
   const getIcon = () => <TabGlyph tab={tab} />;
 
-  // Green / amber come from the notices table (chat done, waiting on you), same as the rail and lists.
+  // Green / blue come from the notices table (chat done, waiting on you), same as the rail and lists.
   const activity = tab.type === "chat" ? activityOf(tab.entityId) : undefined;
   const tabStatusClass = isActive
     ? ""

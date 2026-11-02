@@ -30,12 +30,12 @@ describe("noticeSources", () => {
     expect(open.map((n) => [n.key, n.mark, n.owner.name])).toEqual([["chat.done:abc", "green", "Chat abc"]]);
   });
 
-  it("job waiting for a key raises amber on its report chat, and clears when it runs", async () => {
+  it("job waiting for a key raises a blue dot on its report chat, and clears when it runs", async () => {
     const src = await import("./noticeSources.js");
     const { getNoticeService } = await import("./NoticeService.js");
     const job = { id: "j1", name: "Daily digest", reportChatId: "c1", waitingPermissionKeys: ["SLACK_TOKEN"] };
     src.syncJobPermissionNotice({ ...job, status: "waiting_permission" });
-    expect(getNoticeService().listOpen()[0]).toMatchObject({ mark: "amber", owner: { kind: "chat", id: "c1" } });
+    expect(getNoticeService().listOpen()[0]).toMatchObject({ mark: "blue", owner: { kind: "chat", id: "c1" } });
     src.syncJobPermissionNotice({ ...job, status: "running" });
     expect(getNoticeService().listOpen()).toHaveLength(0);
   });

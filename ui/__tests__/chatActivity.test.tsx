@@ -1,6 +1,6 @@
 /**
  * Chat dots come from the notices table: a chat.done FYI → green "done"; an open
- * Priority notice (job or Pen waiting on you) → amber "needs"; working wins over both.
+ * Priority notice (job or Pen waiting on you) → blue "needs"; working wins over both.
  * Same answer on the tab bar, the Chats rail icon and every chat list.
  */
 import { beforeEach, describe, expect, it } from "vitest";
@@ -36,9 +36,9 @@ describe("useChatActivity (notices)", () => {
     expect(result.current("b")).toBeUndefined();
   });
 
-  it("amber beats green on the same chat", () => {
+  it("blue beats green on the same chat", () => {
     const { result } = renderHook(() => useChatActivity());
-    set(notice("b", "green"), notice("b", "amber"));
+    set(notice("b", "green"), notice("b", "blue"));
     expect(result.current("b")).toBe("needs");
   });
 
@@ -50,7 +50,7 @@ describe("useChatActivity (notices)", () => {
 
   it("shows working over needs while the agent is mid-turn", () => {
     const { result } = renderHook(() => useChatActivity());
-    set(notice("b", "amber"));
+    set(notice("b", "blue"));
     act(() => {
       const s = useChatStore.getState();
       const next = new Map(s.chatStates);
@@ -60,12 +60,12 @@ describe("useChatActivity (notices)", () => {
     expect(result.current("b")).toBe("working");
   });
 
-  it("Chats icon: amber if any chat needs you, else green", () => {
+  it("Chats icon: blue if any chat needs you, else green", () => {
     const { result } = renderHook(() => useChatsBadge());
     expect(result.current).toBeUndefined();
     set(notice("a", "green"));
     expect(result.current).toBe("done");
-    set(notice("a", "green"), notice("b", "amber"));
+    set(notice("a", "green"), notice("b", "blue"));
     expect(result.current).toBe("needs");
   });
 });

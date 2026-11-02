@@ -5,13 +5,14 @@
  * Levels (only these four exist):
  *   status   lives where it happens. Never stored as a notice.
  *   fyi      done / good to know: green dot on the thing.
- *   priority needs you soon: amber dot on the thing and its rail icon.
- *   urgent   you're blocked or must act now: red. Only Papr itself may send it.
+ *   priority needs you soon: solid blue dot on the thing and its rail icon.
+ *   urgent   you're blocked or must act now: blue dot, and Pen leans out. Only Papr itself may send it.
+ * One dot color for "waiting on you" (blue) and one for "done" (green). No amber, no red.
  */
 export type NoticeLevel = "status" | "fyi" | "priority" | "urgent";
 export type NoticeSourceType = "platform" | "billing" | "app" | "job" | "agent";
 export type NoticeOwnerKind = "chat" | "app" | "account";
-export type NoticeMark = "none" | "green" | "amber" | "red";
+export type NoticeMark = "none" | "green" | "blue";
 /** condition = true until fixed; the sender clears it by key. event = happened once; seeing it clears it. */
 export type NoticeType = "condition" | "event";
 
@@ -71,11 +72,16 @@ export const NOTICES_CHANGED_EVENT = "notifications:changed";
 export const NOTICE_MARK: Record<NoticeLevel, NoticeMark> = {
   status: "none",
   fyi: "green",
-  priority: "amber",
-  urgent: "red",
+  priority: "blue",
+  urgent: "blue",
 };
 
-export const NOTICE_MARK_RANK: Record<NoticeMark, number> = { none: 0, green: 1, amber: 2, red: 3 };
+export const NOTICE_MARK_RANK: Record<NoticeMark, number> = { none: 0, green: 1, blue: 2 };
+
+/** Rows written before Stage 2 say amber/red: both mean "waiting on you" now. */
+export function normalizeMark(m: string): NoticeMark {
+  return m === "amber" || m === "red" ? "blue" : m === "green" || m === "blue" ? m : "none";
+}
 
 /** Strongest mark wins when a thing has several open notices. */
 export function strongestMark(marks: Iterable<NoticeMark>): NoticeMark {

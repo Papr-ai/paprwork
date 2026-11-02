@@ -1,7 +1,7 @@
 /**
  * ChatStatusMark — the single status glyph for a chat row, shared by the rail Chats peek and
  * the tab-bar history dropdown so both read exactly like the tab bar:
- * working → the agent's Replay mark; needs → amber dot (waiting on you); done → green dot (new reply).
+ * working → the agent's Replay mark; needs → blue dot (waiting on you); done → green dot (new reply).
  */
 import { AgentGlyph } from "../Agent/AgentGlyph";
 import { useAgentIdentity, useAgentName } from "../Agent/agentIdentityStore";

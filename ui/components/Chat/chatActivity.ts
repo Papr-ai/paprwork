@@ -3,7 +3,7 @@
  * Chats icon and peek, the tab overview and the tab-bar history dropdown.
  *
  * - working: the agent is mid-turn (same signal as the Replay glyph / composer Stop button)
- * - needs:   an open Priority/Urgent notice on the chat (a job or Pen waiting on you) — amber
+ * - needs:   an open Priority/Urgent notice on the chat (a job or Pen waiting on you) — blue
  * - done:    an open FYI notice (a reply finished while you were elsewhere) — green
  *
  * needs/done come from the gateway's notices table (noticeStore), so they survive restarts
@@ -17,7 +17,7 @@ import type { NoticeMark } from "../../../src/core/types/notices";
 export type ChatActivity = "working" | "needs" | "done" | undefined;
 
 export function activityFromMark(mark: NoticeMark | undefined): ChatActivity {
-  if (mark === "amber" || mark === "red") return "needs";
+  if (mark === "blue") return "needs";
   if (mark === "green") return "done";
   return undefined;
 }
@@ -34,7 +34,7 @@ export function useDoneChatIds(): ReadonlySet<string> {
   return useMemo(() => new Set([...marks].filter(([, m]) => m === "green").map(([id]) => id)), [marks]);
 }
 
-/** What the Chats rail icon shows: amber if any chat needs you, else green if any reply is new. */
+/** What the Chats rail icon shows: blue if any chat needs you, else green if any reply is new. */
 export function useChatsBadge(): "needs" | "done" | undefined {
   const marks = useChatMarks();
   return useMemo(() => {

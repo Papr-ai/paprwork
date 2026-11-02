@@ -57,7 +57,7 @@ export function checkKeyValue(raw: string): { value: string; error?: string; kin
   }
 }
 
-/** "Not now" answers the request: clear its amber dot (the gateway raised it when Pen asked). */
+/** "Not now" answers the request: clear its blue dot (the gateway raised it when Pen asked). */
 function dismissKeyNotice(chatId: string | undefined, name: string): void {
   if (!chatId) return;
   void gateway.send("notifications:resolve", { key: `key.request:${chatId}:${name}` }).catch(() => {});
