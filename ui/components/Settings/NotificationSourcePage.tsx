@@ -1,6 +1,7 @@
 /**
  * One source's page in Settings → Notifications (like one app in iOS Settings → Notifications):
- * allow, a small table of where each kind appears, and chips to turn single types off.
+ * allow, a small table of where each kind appears, chips to turn single types off, and how its
+ * desktop notifications behave.
  */
 import type { NoticeSourceDef, NoticeCategory } from "../../../src/core/notifications/sources";
 import { SURFACES, sourcePref, typeOn, typeKey, type NoticePrefs, type Surface } from "../../../src/core/notifications/prefs";
@@ -21,6 +22,7 @@ export function NotificationSourcePage({ src, prefs, onSet, onBack }: {
   const p = sourcePref(prefs, src.id), off = !p.allow;
   const cats = (["needs", "done"] as const).filter((c) => src.types.some((t) => t.cat === c));
   const setSurf = (c: NoticeCategory, k: Surface) => onSet({ sources: { [src.id]: { [c]: { [k]: !p[c][k] } } } });
+  const desk = cats.some((c) => p[c].desktop), loud = cats.includes("needs") && p.needs.desktop;
   return (
     <div className="settings-section notif-src">
       <button type="button" className="notif-src__back" onClick={onBack}>&larr; Notifications</button>
@@ -42,7 +44,8 @@ export function NotificationSourcePage({ src, prefs, onSet, onBack }: {
                     const on = typeOn(prefs, src.id, t.id);
                     return (
                       <button key={t.id} type="button" className={`notif-chip${on ? " is-on" : ""}`} aria-pressed={on} disabled={off}
-                        onClick={() => onSet({ types: { [typeKey(src.id, t.id)]: !on } })}>{t.label}</button>
+                        title={`${t.label}${on ? "" : " (off)"}`} aria-label={t.label}
+                        onClick={() => onSet({ types: { [typeKey(src.id, t.id)]: !on } })}>{t.chip}</button>
                     );
                   })}
                 </span>
@@ -60,6 +63,13 @@ export function NotificationSourcePage({ src, prefs, onSet, onBack }: {
       <p className="notif-settings__note">
         Tap a type to turn just that one off. {SURFACES.map((k) => `${SURFACE_LABEL[k][0]}: ${SURFACE_LABEL[k][1]}`).join(" ")}
       </p>
+      <h3 className="notif-settings__h">Desktop notifications</h3>
+      <div className={`notif-group${off || !desk ? " is-dim" : ""}`}>
+        <SettingRow label="Sound" disabled={off || !loud}
+          hint={!loud ? "Done and updates are always quiet" : p.sound ? "Plays for things waiting on you. Done and updates stay quiet." : "Off: they show without a sound"}>
+          <Toggle checked={p.sound} onChange={(v) => onSet({ sources: { [src.id]: { sound: v } } })} ariaLabel={`Sound for ${src.name}`} disabled={off || !loud} />
+        </SettingRow>
+      </div>
     </div>
   );
 }

@@ -702,7 +702,7 @@ export interface ElectronAPI {
 
   /** OS notification for a notice route() already decided on (renderer only). */
   notices?: {
-    showOs: (payload: { key: string; title: string; body?: string; level?: string; owner?: unknown }) => Promise<{ shown: boolean }>;
+    showOs: (payload: { key: string; title: string; body?: string; level?: string; sound?: boolean; owner?: unknown }) => Promise<{ shown: boolean }>;
     closeOs: (keys: string[]) => Promise<{ ok: boolean }>;
   };
 

@@ -40,11 +40,11 @@ export function openNoticeOwner(owner: NoticeOwner | undefined, key?: string): v
 /** Keys with an OS notification still on screen (or in Notification Center). */
 const shownKeys = new Set<string>();
 
-function showOs(notice: Notice): void {
+function showOs(notice: Notice, sound?: boolean): void {
   const show = window.electronAPI?.notices?.showOs;
   if (!show) return;
   shownKeys.add(notice.key);
-  void show({ key: notice.key, title: notice.title, body: notice.body ?? "", level: notice.level, owner: notice.owner }).catch(() => {});
+  void show({ key: notice.key, title: notice.title, body: notice.body ?? "", level: notice.level, sound, owner: notice.owner }).catch(() => {});
 }
 
 /** Seen in the app, answered or fixed: take its OS notification away too. */
@@ -78,8 +78,8 @@ export function noticeFromApp(appId: string, appName: string, opts: { title?: un
 /** Call once at app root. */
 export function initNoticeOs(): void {
   window.addEventListener("gateway-broadcast", (event: Event) => {
-    const { type, data } = (event as CustomEvent<{ type?: string; data?: { notice?: Notice; notices?: Notice[] } }>).detail ?? {};
-    if (type === "notifications:os" && data?.notice) showOs(data.notice);
+    const { type, data } = (event as CustomEvent<{ type?: string; data?: { notice?: Notice; notices?: Notice[]; sound?: boolean } }>).detail ?? {};
+    if (type === "notifications:os" && data?.notice) showOs(data.notice, data.sound);
     if (type === NOTICES_CHANGED_EVENT && Array.isArray(data?.notices)) closeSeen(data.notices);
   });
   window.addEventListener("papr-notice-open", (event: Event) => {

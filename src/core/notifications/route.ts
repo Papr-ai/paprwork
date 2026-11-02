@@ -32,6 +32,8 @@ export interface Delivery {
   /** Pen leans out with one fix. Urgent only. */
   lean: boolean;
   os: boolean;
+  /** Desktop notification plays a sound: waiting on you (unless the source's Sound is off) and Urgent. Done is quiet. */
+  sound: boolean;
   email: "none" | "now" | "digest";
   coalesced: boolean;
   /** Settings row and chip it obeyed, e.g. "chats" / "chat.done". */
@@ -54,7 +56,7 @@ export function route(n: RoutedNotice, c: RouteCtx): Delivery {
   const capped = effectiveLevel(n);
   const source = sourceOf(n), type = typeOf(n);
   const why: string[] = capped !== n.level ? [`${n.source.name} can't send Urgent: treated as Priority`] : [];
-  const d: Delivery = { level: capped, mark: NOTICE_MARK[capped], lean: false, os: false, email: "none", coalesced: false, source, type, why };
+  const d: Delivery = { level: capped, mark: NOTICE_MARK[capped], lean: false, os: false, sound: false, email: "none", coalesced: false, source, type, why };
   if (n.ambient) {
     d.mark = "none";
     why.push("about the whole app: Pen's icon and Focus's top line, no dot, no desktop notification");
@@ -81,7 +83,11 @@ export function route(n: RoutedNotice, c: RouteCtx): Delivery {
   else if (c.dnd) why.push("Do Not Disturb: nothing pops");
   else if (FOCUS_ONLY.has(n.kind)) why.push("check-ins stay in Focus: never a desktop notification");
   else if (!p[cat].desktop) why.push(`${name} › Desktop is off: no desktop notification`);
-  else { d.os = true; why.push("Paprwork in background: desktop notification"); }
+  else {
+    d.os = true;
+    d.sound = cat === "needs" && p.sound;
+    why.push(cat === "needs" && !p.sound ? `Paprwork in background: desktop notification, no sound (${name} › Sound is off)` : "Paprwork in background: desktop notification");
+  }
   return dedupe(d, c);
 }
 
@@ -90,6 +96,7 @@ function urgent(d: Delivery, n: NoticeInput, c: RouteCtx): void {
   d.why.push("Always on: blue dot and Pen leans out with one fix until it's fixed");
   if (!c.foreground) {
     d.os = true;
+    d.sound = true;
     if (n.source.type === "billing") d.email = "now";
     d.why.push("Paprwork not in front: desktop notification");
   }
@@ -99,6 +106,6 @@ function urgent(d: Delivery, n: NoticeInput, c: RouteCtx): void {
 /** Same key already open: update in place, never ping twice. */
 function dedupe(d: Delivery, c: RouteCtx): Delivery {
   if (!c.existing) return d;
-  return { ...d, coalesced: true, os: false, email: "none",
+  return { ...d, coalesced: true, os: false, sound: false, email: "none",
     why: [...d.why, `already showing (x${c.existing.count}): updated in place, no second ping`] };
 }

@@ -2517,7 +2517,8 @@ function initializeSystemInvokeHandler(mainWindow) {
       title: payload.title.slice(0, 200),
       body: typeof payload.body === 'string' ? payload.body.slice(0, 500) : '',
       urgency: payload.level === 'urgent' ? 'critical' : 'normal',
-      silent: payload.level === 'fyi',
+      // route() decides sound (per source); older gateways only sent the level.
+      silent: typeof payload.sound === 'boolean' ? !payload.sound : payload.level === 'fyi',
     });
     n.on('click', () => {
       if (!mainWindow || mainWindow.isDestroyed()) return;

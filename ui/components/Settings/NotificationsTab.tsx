@@ -4,9 +4,10 @@
  * leave alone follows the defaults as they improve, and Reset drops all your changes. Urgent (billing,
  * your account) is Always on and has no setting. Nothing pops while Papr Work is in front.
  */
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import { gateway } from "../../src/lib/gateway";
-import type { NoticeSourceDef } from "../../../src/core/notifications/sources";
+import { NOTICES_CHANGED_EVENT, type Notice } from "../../../src/core/types/notices";
+import { appSourceId, type NoticeSourceDef } from "../../../src/core/notifications/sources";
 import { SURFACES, sourcePref, type NoticePrefs, type SourcePref } from "../../../src/core/notifications/prefs";
 import { NotificationSourcePage, SURFACE_LABEL, type Patch } from "./NotificationSourcePage";
 import "./NotificationsTab.css";
@@ -14,7 +15,7 @@ import "./NotificationsTab.css";
 interface Recent { title: string; source: string; level: string; status: "sent" | "capped"; why: string[]; at: string }
 interface Center { prefs: NoticePrefs; sources: NoticeSourceDef[]; apps: { id: string; name: string }[]; recent: Recent[] }
 
-const APP_TYPES = [{ id: "app.notification", label: "Notifications from this app", cat: "needs" as const }];
+const APP_TYPES = [{ id: "app.notification", label: "Notifications from this app", chip: "Notifications", cat: "needs" as const }];
 const changed = (p: NoticePrefs) => Object.keys(p.sources).length > 0 || Object.keys(p.types).length > 0;
 
 /** "Desktop, Badges · Done: Badges": what this source does, from the rows it has. */
@@ -47,6 +48,18 @@ export function NotificationsTab() {
     }
   }, []);
   useEffect(() => { void call("notifications:center"); }, [call]);
+  // An app that sends its first notification while this page is open gets its row right away.
+  const knownApps = useRef(new Set<string>());
+  knownApps.current = new Set(c?.apps.map((a) => a.id) ?? []);
+  useEffect(() => {
+    const onBroadcast = (event: Event) => {
+      const { type, data } = (event as CustomEvent<{ type?: string; data?: { notices?: Notice[] } }>).detail ?? {};
+      if (type !== NOTICES_CHANGED_EVENT || !Array.isArray(data?.notices)) return;
+      if (data.notices.some((n) => n.source.type === "app" && !knownApps.current.has(appSourceId(n.source.id)))) void call("notifications:center");
+    };
+    window.addEventListener("gateway-broadcast", onBroadcast);
+    return () => window.removeEventListener("gateway-broadcast", onBroadcast);
+  }, [call]);
   const set = (prefs: Patch) => void call("notifications:set-prefs", { prefs });
 
   if (!c) return <div className="settings-content"><div className="settings-section">{error || "Loading…"}</div></div>;

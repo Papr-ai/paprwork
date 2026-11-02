@@ -44,6 +44,8 @@ export function onNoticesChanged(listener: NoticesListener): () => void {
 export interface OsDelivery {
   notice: Notice;
   why: string[];
+  /** false: show it silently (done, or the source's Sound is off). */
+  sound: boolean;
 }
 export type OsListener = (d: OsDelivery) => void;
 const osListeners = new Set<OsListener>();
@@ -127,7 +129,7 @@ export class NoticeService {
     }
     this.changed();
     const stored = this.openByKey(input.key);
-    if (stored && delivery.os) this.deliverOs(stored, delivery.why);
+    if (stored && delivery.os) this.deliverOs(stored, delivery.why, delivery.sound);
     return stored;
   }
 
@@ -163,7 +165,7 @@ export class NoticeService {
     return this.deliveries.forNotice(noticeId);
   }
 
-  private deliverOs(notice: Notice, why: string[]): void {
+  private deliverOs(notice: Notice, why: string[], sound: boolean): void {
     const base = { noticeId: notice.id, noticeKey: notice.key, sourceId: notice.source.id, channel: "os" as const };
     if (this.deliveries.recentSent(notice.source.id) >= OS_CAP_PER_SOURCE) {
       this.deliveries.record({ ...base, status: "capped", why: [...why, `${notice.source.name} hit ${OS_CAP_PER_SOURCE} OS notifications in 10 min: kept as a dot`] });
@@ -171,7 +173,7 @@ export class NoticeService {
     }
     this.deliveries.record({ ...base, status: "sent", why });
     for (const l of osListeners) {
-      try { l({ notice, why }); } catch (e) { console.warn("[NoticeService] os listener failed:", e); }
+      try { l({ notice, why, sound }); } catch (e) { console.warn("[NoticeService] os listener failed:", e); }
     }
   }
 

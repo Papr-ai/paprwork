@@ -649,8 +649,8 @@ async function startGateway(): Promise<void> {
         broadcast({ type: NOTICES_CHANGED_EVENT, data: { notices: open } });
       });
       // route() said pop the OS; the window process owns Notification, so the UI shows it.
-      onNoticeOs(({ notice, why }) => {
-        broadcast({ type: "notifications:os", data: { notice, why } });
+      onNoticeOs(({ notice, why, sound }) => {
+        broadcast({ type: "notifications:os", data: { notice, why, sound } });
       });
     });
     console.log("[Gateway] WebSocket server created");
