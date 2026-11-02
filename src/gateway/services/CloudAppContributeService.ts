@@ -847,18 +847,10 @@ export class CloudAppContributeService {
   async propose(input: ProposeContributeInput): Promise<ProposeContributeResult> {
     const lineageId = await readLineageId(input.installedAppId);
 
-    // Nothing edited since the last sync (e.g. a Publish now already merged
-    // these edits and the copy caught up): stop before the server records a
-    // proposal that could never be submitted.
-    {
-      const { getCloudAppTrackSyncService } = await import("./CloudAppTrackSyncService.js");
-      const edits = await getCloudAppTrackSyncService()
-        .localEdits(input.installedAppId)
-        .catch(() => null);
-      if (edits?.known && edits.files.length === 0) {
-        throw new Error("No changes to contribute — your copy matches the publisher's");
-      }
-    }
+    // No early "nothing changed" check here: a proposal also carries linked
+    // Jobs/{id} code and unapplied migrations, which app-folder edits can't
+    // see. pushContributeBranch decides emptiness over the full change set,
+    // and an empty one is abandoned below.
 
     const { getPaprCallerIdentity } = await import("../utils/paprUserId.js");
     const proposer = getPaprCallerIdentity();

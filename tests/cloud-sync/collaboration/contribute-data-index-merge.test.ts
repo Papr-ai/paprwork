@@ -196,3 +196,31 @@ describe("mergeContributeDataIndexesIntoRepo", () => {
     expect(registry.databases["db-new"]?.localPath).toBe("");
   });
 });
+
+describe("mergeContributeDataIndexesIntoRepo: untouched copy", () => {
+  it("does not add an empty databases.json / jobs.json the publisher never had", async () => {
+    const forkAppId = "fork-app";
+    const repoDir = makeDir("papr-contrib-repo-");
+    const contributorDir = makeDir("papr-contrib-local-");
+    // Linked job db with no registry record on this machine (a job-owned db) —
+    // nothing to index, so the merged registry is empty.
+    fs.mkdirSync(path.join(contributorDir, "apps", forkAppId), { recursive: true });
+    writeJson(path.join(contributorDir, "apps", forkAppId, "data-sources.json"), {
+      version: 1,
+      sources: [{ jobId: "job-a", dbId: "db-a" }],
+    });
+    writeJson(path.join(contributorDir, "data", "databases.json"), { version: 1, databases: {} });
+
+    const result = await mergeContributeDataIndexesIntoRepo({
+      repoDir,
+      contributorPaprDir: contributorDir,
+      forkAppId,
+      targetAppId: "owner-app",
+      newJobIds: [],
+    });
+
+    expect(result.paths).toEqual([]);
+    expect(fs.existsSync(path.join(repoDir, "data", "databases.json"))).toBe(false);
+    expect(fs.existsSync(path.join(repoDir, "data", "jobs.json"))).toBe(false);
+  });
+});
