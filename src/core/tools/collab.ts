@@ -23,7 +23,13 @@ export function matchTeammate(query: string, team: Teammate[]): Teammate | { err
     : { error: `No one called "${query}" in this workspace.` };
 }
 
-async function team(): Promise<Teammate[]> {
+/** Teammates you can mention. Server list first (same backend as mentions); dashboard team list as fallback. */
+export async function team(): Promise<Teammate[]> {
+  try {
+    const { listMembers } = await import("../../gateway/services/collab/mentions.js");
+    const m = await listMembers();
+    if (m.length) return m;
+  } catch { /* older server: fall back */ }
   const { listNamespaceUsersForAgent } = await import("../../gateway/services/namespaceUsersService.js");
   const r = await listNamespaceUsersForAgent();
   return r.members.map((m) => ({ userId: m.externalUserId, displayName: m.displayName || m.email, email: m.email }));

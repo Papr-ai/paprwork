@@ -14,13 +14,10 @@ export async function setupCollabHandlers(ws: WebSocket, message: WSMessage): Pr
     const p = (message.payload ?? {}) as Record<string, unknown>;
     switch (message.type) {
       case "collab:members": {
-        const { listNamespaceUsersForAgent } = await import("../services/namespaceUsersService.js");
+        const { team } = await import("../../core/tools/collab.js");
         const { getPaprUserId } = await import("../utils/paprUserId.js");
         const me = getPaprUserId();
-        const r = await listNamespaceUsersForAgent();
-        const members = r.members
-          .filter((m) => m.externalUserId !== me)
-          .map((m) => ({ userId: m.externalUserId, displayName: m.displayName || m.email, email: m.email }));
+        const members = (await team()).filter((m) => m.userId !== me);
         sendResponse(ws, { id: message.id, success: true, data: { members } });
         return;
       }

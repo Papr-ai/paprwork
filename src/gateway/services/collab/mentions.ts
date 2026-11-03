@@ -71,6 +71,9 @@ export async function sendMention(input: {
 export const notifyMentions = (ids: string[], note?: string) =>
   call<{ mentions: MentionItem[] }>("/mentions/notify", "POST", { ids, note }).then((r) => r.mentions);
 
+export const listMembers = () =>
+  call<{ members: Array<{ userId: string; displayName: string; email: string }> }>("/members").then((r) => r.members);
+
 export const getMention = (id: string) => call<{ mention: MentionItem }>(`/mentions/${encodeURIComponent(id)}`).then((r) => r.mention);
 export const listMentions = (box: "inbox" | "sent" = "inbox", status: string | null = "open") =>
   call<{ mentions: MentionItem[] }>(`/mentions?box=${box}${status ? `&status=${status}` : "&status="}`).then((r) => r.mentions);
