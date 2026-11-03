@@ -101,6 +101,9 @@ export const MEASURED_CORE_TOOL_IDS: readonly string[] = [
   // Hand-placed: lets the agent check what's connected and offer to connect a
   // service, instead of claiming it has no integration.
   "connect_mcp",
+  // Hand-placed: Pen pings teammates proactively when a decision creates work for
+  // them. Deferred, it would never be offered unprompted.
+  "mention_person",
 ];
 
 /** Discovery and dispatch. Never deferred, or deferred tools are unreachable. */

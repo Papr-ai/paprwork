@@ -63,6 +63,7 @@ import { assistantMessageHasVisibleContent } from "../../utils/assistantMessageV
 import { AgentLoadingDots } from "./AgentLoadingDots";
 import { AgentGlyph } from "../Agent/AgentGlyph";
 import { useAgentIdentity, useAgentName } from "../Agent/agentIdentityStore";
+import { MentionCard, parseMentionCard } from "./MentionCard";
 import "./MessageItem.css";
 
 function resolveDelegationAgentDisplay(
@@ -769,6 +770,15 @@ const MessageItemInner: React.FC<MessageItemProps> = ({
   const copyText = !isUser && !message.isStreaming ? getAssistantCopyText(message) : "";
   const showCopyButton = copyText.length > 0;
 
+  // A teammate's mention: the card replaces the text (the text is for Pen's context).
+  const mentionCards = isUser
+    ? []
+    : (message.toolCalls ?? []).flatMap((tc) => {
+        const d = parseMentionCard(tc.toolName, tc.result);
+        return d ? [d] : [];
+      });
+  const isMention = mentionCards.length > 0;
+
   // Check if message has V1-style sequence
   const hasSequence = message.sequence && message.sequence.length > 0;
   const showStreamingPlaceholder =
@@ -896,8 +906,10 @@ const MessageItemInner: React.FC<MessageItemProps> = ({
                 ));
               })()}
 
+            {mentionCards.map((d) => <MentionCard key={`mention-${d.itemId}`} data={d} />)}
+
             {/* Tool calls - only for assistant messages */}
-            {!isUser && message.toolCalls && message.toolCalls.length > 0 && (
+            {!isUser && !isMention && message.toolCalls && message.toolCalls.length > 0 && (
               <>
                 <ExploringCard
                   toolCalls={message.toolCalls}
@@ -1050,7 +1062,7 @@ const MessageItemInner: React.FC<MessageItemProps> = ({
             )}
 
             {/* Main message text */}
-            {content && (
+            {content && !isMention && (
               <div className="message-text">
                 <Markdown>{content}</Markdown>
                 {message.isStreaming && !message.streamingReasoning && (

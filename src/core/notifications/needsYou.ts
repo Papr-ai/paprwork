@@ -64,7 +64,7 @@ export const PROMOTE_AFTER_MS = 24 * 60 * 60 * 1000;
 export const hasHome = (n: Notice) => (n.owner.kind === "chat" || n.owner.kind === "app") && n.source.type !== "billing";
 
 /** Sources whose items have a home elsewhere (a chat or an app), so Focus is a choice: Pen decides, Always, Never. */
-export const hasFocusMode = (sourceId: string) => sourceId === "chats" || sourceId === "apps" || sourceId.startsWith("app:");
+export const hasFocusMode = (sourceId: string) => sourceId === "chats" || sourceId === "apps" || sourceId === "people" || sourceId.startsWith("app:");
 
 /** Why this notice is in Focus, or null if it stays on its dot. Shown on the Focus line. */
 export function focusReason(n: Notice, prefs: NoticePrefs, now = Date.now()): string | null {
@@ -72,6 +72,8 @@ export function focusReason(n: Notice, prefs: NoticePrefs, now = Date.now()): st
   const mode = sourcePref(prefs, sourceOf(n)).focus;
   if (mode === "always") return "";
   if (mode === "never") return null;
+  // A person asked you directly: that's worth your time now, not tomorrow.
+  if (sourceOf(n) === "people") return "Asked of you";
   return now - Date.parse(n.createdAt) >= PROMOTE_AFTER_MS ? "Waiting since yesterday" : null;
 }
 

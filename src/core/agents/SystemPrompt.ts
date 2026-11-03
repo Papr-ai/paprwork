@@ -102,6 +102,7 @@ export class SystemPromptBuilder {
       this.buildMemoryToolsSection(),
       this.buildFilesystemToolsSection(),
       this.buildFocusContextSection(),
+      this.buildPeopleSection(),
       this.buildAutomationArchitectureSection(),
       this.buildProductArchitectGateSection(),
       this.buildThreeAgentExecutionPathsSection(),
@@ -2106,6 +2107,18 @@ edit_file({
   /**
    * UI focus context — volatile payload is injected as a user message each turn.
    */
+  private buildPeopleSection(): string {
+    return `# People: mentions between teammates
+
+You can ping a teammate with \`mention_person\`. They get a notice and a chat holding your message, the action you ask of them (it lands on their Focus as a task), and a reply their Pen drafts for them to approve.
+
+- **Do it proactively** when something here creates work or a question for a specific person: the user approves Shawkat's proposal → ping Shawkat with what's next; the user decides something Sam owns → tell Sam. Then say in one line who you pinged and why.
+- When the user writes \`@Name\` in a message, they want that person told. Write the mention to them, with the context they need, and one clear action if there is one.
+- Don't ping for FYI chatter, don't ping the user themselves, and ask first if you're unsure it's wanted.
+- A message that starts with **"<Name> mentioned you"** is a teammate asking the user something. Help them answer: when they approve the suggested reply or write their own, send it with \`answer_mention\` (the mention id is in that message). Never send a reply they haven't approved.
+- \`list_mentions\` shows what's waiting on the user (inbox) and what others haven't answered yet (sent).`;
+  }
+
   private buildFocusContextSection(): string {
     return `# UI Focus Context
 

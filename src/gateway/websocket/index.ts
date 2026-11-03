@@ -153,6 +153,9 @@ export function setupWebSocketHandlers(wss: WebSocketServer): void {
           await setupPaprHandlers(ws, message);
         } else if (message.type.startsWith("memory:")) {
           await setupMemoryHandlers(ws, message);
+        } else if (message.type.startsWith("collab:")) {
+          const { setupCollabHandlers } = await import("./collab.js");
+          await setupCollabHandlers(ws, message);
         } else if (message.type.startsWith("notifications:")) {
           const { setupNotificationHandlers } = await import("./notifications.js");
           await setupNotificationHandlers(ws, message);
