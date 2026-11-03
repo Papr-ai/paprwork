@@ -29,6 +29,7 @@ export const PAPR_SOURCES: NoticeSourceDef[] = [
   { id: "people", name: "People", desc: "Teammates who mention you or ask you to do something", types: [
     { id: "mention", label: "A teammate mentioned you or asked you to do something", chip: "Mentions", cat: "needs" },
     { id: "mention.replied", label: "A teammate answered your mention", chip: "Replies", cat: "done" },
+    { id: "mention.done", label: "A teammate finished (or can't do) what you asked: your turn", chip: "Your turn", cat: "needs" },
   ] },
   { id: "account", name: "Account & team", desc: "Billing, your team and the accounts you connected", types: [
     { id: "connection.request", label: "A teammate asked to connect an account", chip: "Connect requests", cat: "needs" },
@@ -57,7 +58,7 @@ export function sourceOf(n: NoticeInput): string {
     case "proposal": return "apps";
     case "connection": return "account";
     case "app.update_ready": return "updates";
-    case "mention": case "mention.replied": return "people";
+    case "mention": case "mention.replied": case "mention.done": return "people";
   }
   if (n.source.type === "billing" || n.owner.kind === "account") return "account";
   return n.owner.kind === "chat" ? "chats" : "apps";

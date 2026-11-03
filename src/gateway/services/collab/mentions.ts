@@ -3,10 +3,12 @@
  *
  *   Send:    you @-mention a teammate, or Pen tags one (mention_person): recorded quietly.
  *   Notify:  you or Pen tell them when it matters (notify_people → /mentions/notify).
- *   Receive: the heartbeat event feed brings `mention`; we open a chat "@Amir: …" holding the
- *            mention, the action (also a Focus task on the server), and Pen's suggested reply.
- *            One notice, priority, owned by that chat. You approve the reply from the card.
- *   Reply:   `mention.replied` comes back to the sender as a line in the chat they mentioned from.
+ *   Suggest: an @ is context for Pen. When Pen thinks someone should do something it tags them quietly
+ *            with the ask; the sender's chat shows "Ask Shawkat?" and nothing is sent until they say yes.
+ *   Receive: the heartbeat event feed brings `mention`; it lands in Focus (Needs you) as the sender's ask
+ *            with Pen's drafted reply: Take it and reply, Can't, Later. A chat holds it for Pen's help.
+ *   Track:   the sender's Focus lists open asks under "Waiting on" (Asked, Took it, Done).
+ *   Back:    `mention.replied` posts in the chat it came from. Done or can't = "Your turn" in Focus.
  */
 import { readFileSync, writeFileSync, mkdirSync } from "fs";
 import path from "path";
@@ -81,7 +83,8 @@ export const listMentions = (box: "inbox" | "sent" = "inbox", status: string | n
 /** Answer a mention: send the reply (optional) and close it. Updates the card and clears the notice. */
 export async function answerMention(itemId: string, status: "open" | "done" | "dismissed", reply?: string): Promise<MentionItem> {
   const out = await call<{ mention: MentionItem }>(`/mentions/${encodeURIComponent(itemId)}/resolve`, "POST", { status, reply });
-  if (status !== "open" || reply) tryResolve(mentionNoticeKey(itemId));
+  // "Take it and reply" keeps it open: it stays on Focus as your task until you mark it done.
+  if (status !== "open") tryResolve(mentionNoticeKey(itemId));
   await updateCard(itemId, { status: out.mention.status, ...(reply ? { sentReply: reply } : {}) });
   return out.mention;
 }
@@ -169,6 +172,17 @@ async function saveCards(): Promise<void> {
   catch (e) { console.warn("[Mentions] could not save cards:", (e as Error).message); }
 }
 
+/** The Focus card's data for a mention that arrived here (the ask, the action, Pen's draft, what you sent). */
+export async function mentionCard(itemId: string): Promise<(MentionCardData & { chatId: string }) | null> {
+  const hit = (await cards()).get(itemId);
+  return hit ? { ...hit.card, chatId: hit.chatId } : null;
+}
+
+/** The sender's open asks that were sent, for "Waiting on" in Focus. */
+export async function waitingOn(): Promise<MentionItem[]> {
+  return (await listMentions("sent", "open")).filter((m) => m.notified !== false);
+}
+
 /** The chat a mention's card lives in, if it arrived on this machine. */
 export async function mentionChatId(itemId: string): Promise<string | undefined> {
   return (await cards()).get(itemId)?.chatId;
@@ -218,25 +232,30 @@ async function receiveMention(e: CollabEvent): Promise<void> {
 async function receiveReply(e: CollabEvent): Promise<void> {
   const d = (e.detail ?? {}) as { fromName?: string; text?: string; status?: string; context?: MentionContext; action?: MentionAction | null };
   const who = d.fromName || "Someone";
-  const what = d.text ? `: “${d.text}”` : d.status === "done" ? " and marked it done." : ".";
+  const first = who.split(" ")[0];
+  const what = d.action?.title ?? "what you asked";
+  const turn = d.status === "done" || d.status === "dismissed"; // your move now
   const chatId = d.context?.chatId;
   const { getAgentService } = await import("../AgentService.js");
   const storage = getAgentService().getStorageManager();
   const local = chatId ? await storage.getChat(chatId).catch(() => null) : null;
+  const said = d.text ? `\n\n> ${d.text.split("\n").join("\n> ")}` : "";
+  const content = d.status === "done" ? `**${first} finished: ${what}.**${said}\n\nYour turn. Pick up where you left off, or tell me what's next.`
+    : d.status === "dismissed" ? `**${first} can't take it: ${what}.**${said}\n\nWant me to ask someone else, or should we do it here?`
+    : `**${first} took it: ${what}.**${said}`;
   if (local && chatId) {
-    const msg: StoredMessage = {
-      id: `msg-${uuidv4()}`, chat_id: chatId, role: "assistant", sync_status: "local", timestamp: new Date().toISOString(),
-      content: `**${who} replied**${what}${d.action?.title ? `\n\n_${d.status === "done" ? "Done" : "About"}: ${d.action.title}_` : ""}`,
-    };
+    const msg: StoredMessage = { id: `msg-${uuidv4()}`, chat_id: chatId, role: "assistant", sync_status: "local", timestamp: new Date().toISOString(), content };
     await storage.saveMessage(chatId, msg);
     broadcast({ type: "chat:message-received", data: { chatId, message: msg } });
   }
+  if (e.requestId) broadcast({ type: "collab:mention", data: { itemId: e.requestId } });
+  const owner = local && chatId ? { kind: "chat" as const, id: chatId, name: local.title } : { kind: "account" as const, id: "people", name: "People" };
+  if (!turn) return; // "took it" is status, not a notice: it shows under Waiting on and in the chat
   tryNotify({
-    key: `mention.reply:${e.id}`, kind: "mention.replied", type: "event", level: "fyi",
-    title: `${who} replied`, body: d.text || (d.status === "done" ? `Done: ${d.action?.title ?? ""}` : undefined),
-    source: { type: "platform", id: "people", name: "People" },
-    owner: local && chatId ? { kind: "chat", id: chatId, name: local.title } : { kind: "account", id: "people", name: "People" },
-    actions: [{ label: "Open", intent: "open" }],
+    key: `mention.done:${e.requestId ?? e.id}`, kind: "mention.done", type: "event", level: "priority",
+    title: d.status === "done" ? `Your turn: ${first} finished ${lowerFirst(what)}` : `${first} can't take it: ${lowerFirst(what)}`,
+    body: d.text || undefined, source: { type: "platform", id: "people", name: "People" }, owner,
+    actions: [{ label: "Continue in chat", intent: "open" }],
   });
 }
 

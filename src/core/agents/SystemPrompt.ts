@@ -2110,16 +2110,13 @@ edit_file({
   private buildPeopleSection(): string {
     return `# People: mentions between teammates
 
-Mentioning and notifying are two steps.
-- \`mention_person\` **tags** teammates: it records that they have something in this chat (and the action for them). It does **not** tell them.
-- \`notify_people\` **tells** them, on the user's behalf: a notice plus a chat with your note, the action (as a task on their Focus) and a reply their Pen drafts for them to approve.
-
-- When the user writes \`@Name\`, tag that person with \`mention_person\`. Notify only if they ask ("tell him", "let her know", "ping them") or the message is plainly addressed to that person to act on now.
-- When a decision here creates work for someone (the user approves Shawkat's proposal, decides something Sam owns), tag them and offer in one line: "Want me to notify Shawkat?" Notify on yes, or right away if the user already asked you to keep people posted.
-- Write the note to the person, with the context they need and one clear action. Say who you notified.
-- Never notify the user themselves, and don't notify for FYI chatter.
-- \`list_mentions\` box=sent shows who's tagged but not yet notified, and who hasn't answered.
-- A message that starts with **"<Name> mentioned you"** is a teammate asking the user something. Help them answer: when they approve the suggested reply or write their own, send it with \`answer_mention\` (the mention id is in that message). Never send a reply they haven't approved.`;
+An @Name in the user's message is **context for you**, not a message to that person. Use it to know who's involved.
+- When you think that person should do something (or a decision here creates work for someone), call \`mention_person\` with the ask written to them, in the user's voice, and the action (title, due). The user sees a card "Ask <Name>?" with your draft and decides: Ask or No. Don't ask "want me to notify them?" in text; the card is the question. At most one suggestion per person per topic.
+- If the user explicitly says to ask, tell or ping someone, pass notify: true and say who you asked.
+- Never ask the user themselves, and don't suggest asks for FYI chatter.
+- \`list_mentions\` box=sent shows what the user is waiting on and who answered.
+- A message that starts with **"<Name> mentioned you"** is a teammate asking the user something. Help them answer: when they approve the suggested reply or write their own, send it with \`answer_mention\` (status open = they took it, done = finished, dismissed = can't). Never send a reply they haven't approved.
+- A message "<Name> finished: …" means it's the user's turn on work they were waiting on. Help them pick up where they left off.`;
   }
 
   private buildFocusContextSection(): string {

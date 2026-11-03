@@ -73,7 +73,7 @@ export function focusReason(n: Notice, prefs: NoticePrefs, now = Date.now()): st
   if (mode === "always") return "";
   if (mode === "never") return null;
   // A person asked you directly: that's worth your time now, not tomorrow.
-  if (sourceOf(n) === "people") return "Asked of you";
+  if (sourceOf(n) === "people") return n.kind === "mention.done" ? "Your turn" : "Asked of you";
   return now - Date.parse(n.createdAt) >= PROMOTE_AFTER_MS ? "Waiting since yesterday" : null;
 }
 

@@ -1,16 +1,16 @@
 /**
- * The @ picker: typing "@" in the composer lists teammates (you excluded). Picking one inserts
- * "@Full Name"; Pen tags that person (quietly) and notifies them only when asked (People section of its prompt).
- * Same keyboard and look as the slash menu.
+ * The @ picker: one quiet row of at most 3 name chips above the composer, best match first.
+ * More matches show as a count ("+11 · keep typing"): typing narrows, arrows walk them, Tab/Enter picks.
+ * Picking inserts "@Full Name". An @ is context for Pen; nobody is told unless the user says yes.
  */
 import { useEffect, useState } from "react";
 import { gateway } from "../../src/lib/gateway";
-import "./SlashCommandMenu.css";
+import "./MentionMenu.css";
 
-import { filterTeammates, type Teammate } from "./mentionText";
+import { rankTeammates, type Teammate } from "./mentionText";
 
 export type { Teammate };
-export { filterTeammates, insertMention, mentionQueryAt } from "./mentionText";
+export { filterTeammates, insertMention, mentionQueryAt, rankTeammates } from "./mentionText";
 
 let cache: Teammate[] | null = null;
 let inflight: Promise<Teammate[]> | null = null;
@@ -25,6 +25,8 @@ export function loadTeammates(): Promise<Teammate[]> {
   return inflight;
 }
 
+const initials = (n: string) => n.split(/\s+/).filter(Boolean).slice(0, 2).map((w) => w[0]!.toUpperCase()).join("") || "@";
+
 export function MentionMenu({ query, onSelect, onClose, onVisible }: {
   query: string; onSelect: (m: Teammate) => void; onClose: () => void;
   /** Whether any teammate is listed, so the composer only yields Enter/arrows when there's a pick. */
@@ -32,7 +34,7 @@ export function MentionMenu({ query, onSelect, onClose, onVisible }: {
 }) {
   const [team, setTeam] = useState<Teammate[]>(cache ?? []);
   const [index, setIndex] = useState(0);
-  const shown = filterTeammates(team, query);
+  const { shown, more } = rankTeammates(team, query);
 
   useEffect(() => { void loadTeammates().then(setTeam); }, []);
   useEffect(() => setIndex(0), [query]);
@@ -40,8 +42,8 @@ export function MentionMenu({ query, onSelect, onClose, onVisible }: {
   useEffect(() => {
     const on = (e: KeyboardEvent) => {
       if (!shown.length) return;
-      if (e.key === "ArrowDown") { e.preventDefault(); setIndex((i) => Math.min(i + 1, shown.length - 1)); }
-      else if (e.key === "ArrowUp") { e.preventDefault(); setIndex((i) => Math.max(i - 1, 0)); }
+      if (e.key === "ArrowRight" || e.key === "ArrowDown") { e.preventDefault(); setIndex((i) => Math.min(i + 1, shown.length - 1)); }
+      else if (e.key === "ArrowLeft" || e.key === "ArrowUp") { e.preventDefault(); setIndex((i) => Math.max(i - 1, 0)); }
       else if (e.key === "Enter" || e.key === "Tab") { e.preventDefault(); onSelect(shown[index]); }
       else if (e.key === "Escape") { e.preventDefault(); onClose(); }
     };
@@ -51,18 +53,16 @@ export function MentionMenu({ query, onSelect, onClose, onVisible }: {
 
   if (!shown.length) return null;
   return (
-    <div className="slash-command-menu" role="listbox" aria-label="Mention a teammate">
+    <div className="mention-chips" role="listbox" aria-label="Mention a teammate">
       {shown.map((m, i) => (
-        <button key={m.userId} type="button" role="option" aria-selected={i === index}
-          className={`slash-command-item${i === index ? " slash-command-item--active" : ""}`}
+        <button key={m.userId} type="button" role="option" aria-selected={i === index} title={m.email}
+          className={`mention-chip${i === index ? " is-on" : ""}`}
           onMouseDown={(e) => e.preventDefault()} onClick={() => onSelect(m)} onMouseEnter={() => setIndex(i)}>
-          <span className="slash-command-icon">{(m.displayName[0] ?? "@").toUpperCase()}</span>
-          <div className="slash-command-content">
-            <span className="slash-command-label">{m.displayName}</span>
-            <span className="slash-command-desc">{m.email}</span>
-          </div>
+          <i aria-hidden="true">{initials(m.displayName)}</i>{m.displayName}
         </button>
       ))}
+      {more ? <span className="mention-chips__more">+{more} · keep typing</span> : null}
+      <kbd className="mention-chips__key">Tab</kbd>
     </div>
   );
 }

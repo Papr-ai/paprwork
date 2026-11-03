@@ -1,10 +1,12 @@
 /**
  * FocusView — the agent's page, opened from the rail agent. One job: what matters today.
- * Needs you sits on top (everything waiting on you); below it the Home mini-app owns the Daily Brief.
+ * Needs you sits on top (everything waiting on you), then Waiting on (what you asked others);
+ * below it the Home mini-app owns the Daily Brief.
  */
 import { useEffect, useState } from "react";
 import { HomeTodayView } from "../Memory/HomeTodayView";
 import { NeedsYou } from "./NeedsYou";
+import { WaitingOn } from "./MentionFocus";
 import "../Memory/WikiLibrary.css";
 
 export function FocusView() {
@@ -19,6 +21,7 @@ export function FocusView() {
   return (
     <div className="memory-view focus-view" data-testid="focus-view">
       <NeedsYou />
+      <WaitingOn />
       <HomeTodayView refreshToken={refreshToken} />
     </div>
   );

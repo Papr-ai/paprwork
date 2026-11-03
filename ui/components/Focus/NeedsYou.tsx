@@ -13,6 +13,7 @@ import { openNoticeOwner } from "../../stores/noticeOs";
 import { ensureSettingsTab } from "../../lib/ensureSettingsTab";
 import { bringBack, muteSource, putOff, setFocusMode, turnOffType, unmuteSource, useNeedsYou } from "../../stores/useNeedsYou";
 import { NeedsYouMenu } from "./NeedsYouMenu";
+import { MentionAskFocus, mentionItemId } from "./MentionFocus";
 import "./NeedsYou.css";
 
 const MAX_ROWS = 4;
@@ -51,7 +52,9 @@ export function NeedsYou() {
   return (
     <section className="needs-you" aria-label="Needs you">
       <h2 className="needs-you__h">Needs you{needs.length ? <em>{needs.length}</em> : null}</h2>
-      {first ? (
+      {first && mentionItemId(first) ? (
+        <MentionAskFocus key={first.key} notice={first} menu={menu(first)} onLater={() => onLater(first)} />
+      ) : first ? (
         <article className={`needs-you__hero${isUrgent(first) ? " is-urgent" : ""}`}>
           <header><small>{isUrgent(first) ? "You're blocked" : "Do this first"}</small><span className="needs-you__from">{first.owner.name}{reasons[first.key] ? ` · ${reasons[first.key]}` : ""}</span>{menu(first)}</header>
           <h3>{first.title}</h3>

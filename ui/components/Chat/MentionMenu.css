@@ -1,0 +1,23 @@
+/* The @ picker: one row of name chips sitting on top of the composer. */
+.mention-chips {
+  position: absolute; bottom: 100%; left: 12px; right: 12px; margin-bottom: 6px; z-index: 100;
+  display: flex; align-items: center; gap: 6px; flex-wrap: wrap;
+}
+.mention-chip {
+  display: inline-flex; align-items: center; gap: 6px; padding: 3px 10px 3px 3px; border-radius: 999px;
+  border: 1px solid var(--border-color, rgba(0, 0, 0, 0.1)); background: var(--glass-bg, #fff);
+  color: var(--text-secondary, #6e6e73); font: inherit; font-size: 12.5px; cursor: pointer;
+  box-shadow: 0 2px 8px rgba(0, 0, 0, 0.06);
+}
+.mention-chip i {
+  font-style: normal; font-size: 9.5px; font-weight: 600; width: 20px; height: 20px; border-radius: 50%;
+  display: grid; place-items: center; background: var(--text-secondary, #8e8e93); color: #fff;
+}
+.mention-chip.is-on { background: color-mix(in srgb, #0161e0 10%, var(--glass-bg, #fff)); color: #0161e0; border-color: transparent; font-weight: 600; }
+.mention-chip.is-on i { background: #0161e0; }
+.mention-chips__more { font-size: 12px; color: var(--text-secondary, #8e8e93); }
+.mention-chips__key {
+  margin-left: auto; font: 11px ui-monospace, Menlo, monospace; color: var(--text-secondary, #8e8e93);
+  border: 1px solid var(--border-color, rgba(0, 0, 0, 0.12)); border-radius: 5px; padding: 1px 5px; background: var(--glass-bg, #fff);
+}
+@media (prefers-color-scheme: dark) { .mention-chip.is-on { color: #6cb2ff; } .mention-chip.is-on i { background: #4d9bff; } }

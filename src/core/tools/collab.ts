@@ -52,13 +52,13 @@ async function pickPeople(people: string[]): Promise<Teammate[] | { error: strin
 export const mentionPersonTool = createTool({
   id: "mention_person",
   description:
-    "Tag teammates on something in this chat: records that they have something here (with the action for them, if any). " +
-    "It does NOT tell them. They're only told when you call notify_people, or now if notify is true. " +
-    "Use it when the user writes @Name, or when a decision here creates work for someone. " +
-    "Set notify: true only if the user asked to tell them now. people: names, emails or user ids.",
+    "Suggest asking a teammate to do something. Records the ask quietly and shows the user a card: \"Ask Shawkat?\" " +
+    "with your drafted ask, which they can edit, then Ask or No. Nothing reaches the teammate until the user says yes. " +
+    "Use it when the user mentions someone and you think that person should do something, or a decision creates work for them. " +
+    "Set notify: true only when the user explicitly said to ask/tell/ping them. people: names, emails or user ids.",
   inputSchema: z.object({
     people: z.array(z.string().min(1)).min(1).max(10).describe("Teammates: name, email or user id"),
-    message: z.string().min(1).max(4000).describe("What they have here, written to them, with the context they need"),
+    message: z.string().min(1).max(4000).describe("The ask, written to them in the user's voice: one clear request with the context they need"),
     action: z.object({ title: z.string().min(1).max(200), due: z.string().optional().describe("YYYY-MM-DD") }).optional()
       .describe("The one thing you're asking them to do. Lands on their Focus when they're notified."),
     notify: z.boolean().default(false).describe("Tell them now. Default false: tag quietly, notify later with notify_people."),
@@ -74,8 +74,9 @@ export const mentionPersonTool = createTool({
         action: args.action ?? null, notify: args.notify,
       });
       return { success: true, data: {
+        type: "mention_ask", ask: args.message,
         mentioned: sent.map((s) => ({ name: s.toName, mentionId: s.id })), notified: args.notify, action: args.action ?? null,
-        ...(args.notify ? {} : { next: "Not told yet. Call notify_people with these mentionIds when the user wants them told." }),
+        ...(args.notify ? {} : { next: "Not sent. The user sees an Ask card and decides. Don't call notify_people for these unless they say so in chat." }),
       } };
     } catch (e) {
       return { success: false, error: (e as Error).message };

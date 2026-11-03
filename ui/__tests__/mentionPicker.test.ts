@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { filterTeammates, insertMention, mentionQueryAt } from "../components/Chat/mentionText";
+import { filterTeammates, insertMention, mentionQueryAt, rankTeammates } from "../components/Chat/mentionText";
 
 const team = [
   { userId: "u1", displayName: "Shawkat Kabbara", email: "shawkat@papr.ai" },
@@ -23,3 +23,14 @@ describe("@ picker", () => {
   });
 });
 
+
+describe("compact picker", () => {
+  const many = Array.from({ length: 14 }, (_, i) => ({ userId: `s${i}`, displayName: `Sam ${String.fromCharCode(65 + i)}`, email: `sam${i}@x.ai` }));
+  it("shows at most 3, best first, and counts the rest", () => {
+    const r = rankTeammates([...team, ...many], "s");
+    expect(r.shown).toHaveLength(3);
+    expect(r.more).toBe(13); // Shawkat, Sam Lee and 14 Sams match "s"; Amir does not
+    expect(rankTeammates(team, "sha").shown.map((m) => m.userId)).toEqual(["u1"]);
+    expect(rankTeammates(team, "kab").shown.map((m) => m.userId)).toEqual(["u2", "u1"]);
+  });
+});

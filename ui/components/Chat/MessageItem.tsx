@@ -64,6 +64,7 @@ import { AgentLoadingDots } from "./AgentLoadingDots";
 import { AgentGlyph } from "../Agent/AgentGlyph";
 import { useAgentIdentity, useAgentName } from "../Agent/agentIdentityStore";
 import { MentionCard, parseMentionCard } from "./MentionCard";
+import { MentionAskCard, parseMentionAsk, type MentionAskData } from "./MentionAskCard";
 import "./MessageItem.css";
 
 function resolveDelegationAgentDisplay(
@@ -778,6 +779,20 @@ const MessageItemInner: React.FC<MessageItemProps> = ({
         return d ? [d] : [];
       });
   const isMention = mentionCards.length > 0;
+  // Pen's "Ask Shawkat?" suggestions (mention_person results), from the stored tool calls or the live sequence.
+  const askCards = (() => {
+    if (isUser) return [] as MentionAskData[];
+    const seen = new Map<string, MentionAskData>();
+    const add = (name: string | undefined, result: unknown) => {
+      const d = name ? parseMentionAsk(name, result) : null;
+      if (d) seen.set(d.mentioned.map((m) => m.mentionId).join(","), d);
+    };
+    (message.toolCalls ?? []).forEach((tc) => add(tc.toolName, tc.result));
+    (message.sequence ?? []).forEach((it) => {
+      if (it.type === "tool" && typeof it.data === "object") add((it.data as { name?: string }).name, (it.data as { output?: unknown }).output);
+    });
+    return [...seen.values()];
+  })();
 
   // Check if message has V1-style sequence
   const hasSequence = message.sequence && message.sequence.length > 0;
@@ -1086,6 +1101,8 @@ const MessageItemInner: React.FC<MessageItemProps> = ({
             })}
           </>
         )}
+
+        {askCards.map((d) => <MentionAskCard key={`ask-${d.mentioned[0].mentionId}`} data={d} />)}
 
         {showCopyButton && <MessageCopyButton text={copyText} />}
 
