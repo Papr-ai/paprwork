@@ -133,12 +133,12 @@ export class NoticeService {
     return stored;
   }
 
-  /** Settings → Notifications: the sources (Papr Work's, then apps that sent you something), your settings, recent pops. */
+  /** Settings → Notifications: the sources (Papr Work's, then apps that sent you something), your settings. (The delivery log stays: Focus will use it to say why something reached you.) */
   center() {
     const apps = (this.db.prepare(`SELECT source_id AS id, MAX(source_name) AS name FROM notices
       WHERE source_type='app' GROUP BY source_id ORDER BY MAX(updated_at) DESC LIMIT 50`).all() as { id: string; name: string }[])
       .map((a) => ({ id: appSourceId(a.id), name: a.name }));
-    return { prefs: this.prefs, defaults: DEFAULT_NOTICE_PREFS, sources: PAPR_SOURCES, apps, recent: this.deliveries.recent(30) };
+    return { prefs: this.prefs, defaults: DEFAULT_NOTICE_PREFS, sources: PAPR_SOURCES, apps };
   }
 
   setPrefs(patch: unknown) {

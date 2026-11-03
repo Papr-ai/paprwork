@@ -1167,7 +1167,7 @@
   left: 0;
   right: 0;
   bottom: 0;
-  background-color: var(--background-tertiary);
+  background-color: var(--bg-tertiary, rgba(120, 120, 128, 0.16));
   transition: var(--dur-2) var(--ease);
   border-radius: 24px;
   border: 1px solid var(--border-color);
@@ -1213,8 +1213,12 @@
     color: #ff453a;
   }
 
+  /* The knob stays white in dark mode (as on macOS); only the track darkens. */
+  .toggle-switch__slider {
+    background-color: var(--bg-tertiary, rgba(120, 120, 128, 0.32));
+  }
   .toggle-switch__slider:before {
-    background-color: var(--background-color);
+    box-shadow: 0 1px 3px rgba(0, 0, 0, 0.4);
   }
 }
 
