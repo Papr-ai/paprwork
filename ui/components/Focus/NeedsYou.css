@@ -1,10 +1,10 @@
 /* Needs you: top of Focus. One blue for "waiting on you"; Urgent gets a stronger edge, not a new color. */
 .needs-you {
   --ny-blue: #0161e0;
-  --ny-ink: var(--text, #1d1d1f);
-  --ny-mute: var(--text-mute, rgba(29, 29, 31, 0.62));
-  --ny-card: var(--bg-panel, #fff);
-  --ny-line: var(--line, rgba(0, 0, 0, 0.1));
+  --ny-ink: var(--text-primary, #1d1d1f);
+  --ny-mute: var(--text-secondary, #6e6e73);
+  --ny-card: var(--glass-bg, #fff);
+  --ny-line: var(--border-color, rgba(0, 0, 0, 0.1));
   flex: none;
   width: 100%;
   max-width: 760px;
@@ -25,7 +25,7 @@
 .needs-you__hero h3 { margin: 6px 0 2px; font-size: 16px; font-weight: 600; color: var(--ny-ink); letter-spacing: -0.01em; }
 .needs-you__hero p { margin: 0; font-size: 13px; line-height: 1.45; color: var(--ny-mute); }
 .needs-you__hero footer { margin-top: 12px; }
-.needs-you__from { font-size: 12px; color: var(--ny-mute); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.needs-you__from { max-width: 16em; font-size: 12px; color: var(--ny-mute); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 .needs-you__hero .needs-you__from { flex: 1; min-width: 0; }
 
 .needs-you__go { border: none; border-radius: 9px; padding: 7px 14px; background: var(--ny-blue); color: #fff; font: inherit; font-size: 13px; font-weight: 500; cursor: pointer; white-space: nowrap; }

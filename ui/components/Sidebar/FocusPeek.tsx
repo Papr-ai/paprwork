@@ -102,10 +102,9 @@ export function FocusPeek({ status, onOpen }: FocusPeekProps) {
           <ul>
             {needs.slice(0, 4).map((n) => (
               <li key={n.key}>
-                <button type="button" role="menuitem" onClick={() => openNoticeOwner(n.owner, n.key)} title={n.body ?? n.title}>
+                <button type="button" role="menuitem" onClick={() => openNoticeOwner(n.owner, n.key)} title={[n.title, n.body, n.owner.name].filter(Boolean).join(" · ")}>
                   <i aria-hidden="true" />
                   <span className="focus-peek__title">{n.title}</span>
-                  <small>{n.owner.name}</small>
                 </button>
               </li>
             ))}
