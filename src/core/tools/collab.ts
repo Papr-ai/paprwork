@@ -1,5 +1,5 @@
 /**
- * People tools: mention a teammate (with an optional action for them), answer a mention, list mentions.
+ * People tools: tag a teammate (quiet), notify them on the user's behalf, answer a mention, list mentions.
  * Backed by the memory server's /v1/cloud/collab/mentions; delivery rides the heartbeat event feed.
  */
 import { createTool } from "@mastra/core/tools";
@@ -29,37 +29,84 @@ async function team(): Promise<Teammate[]> {
   return r.members.map((m) => ({ userId: m.externalUserId, displayName: m.displayName || m.email, email: m.email }));
 }
 
+async function pickPeople(people: string[]): Promise<Teammate[] | { error: string }> {
+  const members = await team();
+  const { getPaprUserId } = await import("../../gateway/utils/paprUserId.js");
+  const me = getPaprUserId();
+  const picked: Teammate[] = [];
+  for (const p of people) {
+    const m = matchTeammate(p, members);
+    if ("error" in m) return m;
+    if (m.userId === me) return { error: "That's you. Mention someone else." };
+    if (!picked.some((x) => x.userId === m.userId)) picked.push(m);
+  }
+  return picked;
+}
+
 export const mentionPersonTool = createTool({
   id: "mention_person",
   description:
-    "Ping a teammate in Papr Work: they get a notice and a chat with your message, the action you ask of them, and a reply their Pen drafts for them to approve. " +
-    "Use it PROACTIVELY when a decision or approval in this chat creates work or a question for a specific person (e.g. the user approves Shawkat's proposal → tell Shawkat what's next). " +
-    "Say who you're pinging and why in your reply. Don't ping for FYI chatter, and don't ping the user themselves. " +
-    "people: names, emails or user ids (one teammate each). action: the one thing you need them to do, if any.",
+    "Tag teammates on something in this chat: records that they have something here (with the action for them, if any). " +
+    "It does NOT tell them. They're only told when you call notify_people, or now if notify is true. " +
+    "Use it when the user writes @Name, or when a decision here creates work for someone. " +
+    "Set notify: true only if the user asked to tell them now. people: names, emails or user ids.",
   inputSchema: z.object({
-    people: z.array(z.string().min(1)).min(1).max(10).describe("Teammates to ping: name, email or user id"),
-    message: z.string().min(1).max(4000).describe("What to tell them, written to them, with the context they need"),
+    people: z.array(z.string().min(1)).min(1).max(10).describe("Teammates: name, email or user id"),
+    message: z.string().min(1).max(4000).describe("What they have here, written to them, with the context they need"),
     action: z.object({ title: z.string().min(1).max(200), due: z.string().optional().describe("YYYY-MM-DD") }).optional()
-      .describe("The one thing you're asking them to do. Becomes a task on their Focus."),
+      .describe("The one thing you're asking them to do. Lands on their Focus when they're notified."),
+    notify: z.boolean().default(false).describe("Tell them now. Default false: tag quietly, notify later with notify_people."),
   }),
   execute: async (args) => {
     try {
-      const members = await team();
-      const { getPaprUserId } = await import("../../gateway/utils/paprUserId.js");
-      const me = getPaprUserId();
-      const picked: Teammate[] = [];
-      for (const p of args.people) {
-        const m = matchTeammate(p, members);
-        if ("error" in m) return { success: false, error: m.error };
-        if (m.userId === me) return { success: false, error: "That's you. Mention someone else." };
-        if (!picked.some((x) => x.userId === m.userId)) picked.push(m);
-      }
+      const picked = await pickPeople(args.people);
+      if ("error" in picked) return { success: false, error: picked.error };
       const { getCurrentChatId } = await import("./context.js");
       const { sendMention } = await import("../../gateway/services/collab/mentions.js");
       const sent = await sendMention({
-        toUserIds: picked.map((m) => m.userId), text: args.message, chatId: getCurrentChatId() ?? undefined, action: args.action ?? null,
+        toUserIds: picked.map((m) => m.userId), text: args.message, chatId: getCurrentChatId() ?? undefined,
+        action: args.action ?? null, notify: args.notify,
       });
-      return { success: true, data: { sentTo: picked.map((m) => m.displayName), mentionIds: sent.map((s) => s.id), action: args.action ?? null } };
+      return { success: true, data: {
+        mentioned: sent.map((s) => ({ name: s.toName, mentionId: s.id })), notified: args.notify, action: args.action ?? null,
+        ...(args.notify ? {} : { next: "Not told yet. Call notify_people with these mentionIds when the user wants them told." }),
+      } };
+    } catch (e) {
+      return { success: false, error: (e as Error).message };
+    }
+  },
+});
+
+export const notifyPeopleTool = createTool({
+  id: "notify_people",
+  description:
+    "Notify teammates on the user's behalf: they get a notice and a chat with the message, the action for them (as a Focus task) and a reply their Pen drafts. " +
+    "Pass mentionIds of mentions the user already made (from mention_person or list_mentions box=sent), or people to tag and notify in one step. " +
+    "note replaces the message they'll see, so write it to them. Only call when the user asks, or when they've clearly approved telling them; say who you notified.",
+  inputSchema: z.object({
+    mentionIds: z.array(z.string().min(1)).max(20).optional().describe("Mentions the user sent that haven't been notified"),
+    people: z.array(z.string().min(1)).max(10).optional().describe("Or: teammates to tag and notify now"),
+    note: z.string().max(4000).optional().describe("Message they'll see. Required with people."),
+    action: z.object({ title: z.string().min(1).max(200), due: z.string().optional() }).optional().describe("With people: the one thing for them to do"),
+  }),
+  execute: async (args) => {
+    try {
+      const svc = await import("../../gateway/services/collab/mentions.js");
+      const out: Array<{ name: string; mentionId: string }> = [];
+      if (args.mentionIds?.length) {
+        const r = await svc.notifyMentions(args.mentionIds, args.note);
+        out.push(...r.map((m) => ({ name: m.toName, mentionId: m.id })));
+      }
+      if (args.people?.length) {
+        if (!args.note?.trim()) return { success: false, error: "Write the note they'll see." };
+        const picked = await pickPeople(args.people);
+        if ("error" in picked) return { success: false, error: picked.error };
+        const { getCurrentChatId } = await import("./context.js");
+        const r = await svc.sendMention({ toUserIds: picked.map((m) => m.userId), text: args.note, chatId: getCurrentChatId() ?? undefined, action: args.action ?? null, notify: true });
+        out.push(...r.map((m) => ({ name: m.toName, mentionId: m.id })));
+      }
+      if (!out.length) return { success: false, error: "Pass mentionIds or people." };
+      return { success: true, data: { notified: out } };
     } catch (e) {
       return { success: false, error: (e as Error).message };
     }
@@ -89,17 +136,17 @@ export const answerMentionTool = createTool({
 
 export const listMentionsTool = createTool({
   id: "list_mentions",
-  description: "List mentions: inbox = teammates asking the user something (open by default), sent = what the user (or you) asked of others and whether they answered.",
+  description: "List mentions: inbox = teammates asking the user something (open by default), sent = what the user (or you) tagged others on, whether they've been notified yet, and whether they answered.",
   inputSchema: z.object({ box: z.enum(["inbox", "sent"]).default("inbox"), status: z.enum(["open", "done", "dismissed", "all"]).default("open") }),
   execute: async (args) => {
     try {
       const { listMentions } = await import("../../gateway/services/collab/mentions.js");
       const rows = await listMentions(args.box, args.status === "all" ? null : args.status);
-      return { success: true, data: rows.map((m) => ({ id: m.id, from: m.fromName, to: m.toName, text: m.text.slice(0, 300), action: m.action, status: m.status, reply: m.reply?.text ?? null, at: m.createdAt })) };
+      return { success: true, data: rows.map((m) => ({ id: m.id, from: m.fromName, to: m.toName, text: m.text.slice(0, 300), action: m.action, status: m.status, notified: m.notified !== false, reply: m.reply?.text ?? null, at: m.createdAt })) };
     } catch (e) {
       return { success: false, error: (e as Error).message };
     }
   },
 });
 
-export const collabTools = [mentionPersonTool, answerMentionTool, listMentionsTool];
+export const collabTools = [mentionPersonTool, notifyPeopleTool, answerMentionTool, listMentionsTool];

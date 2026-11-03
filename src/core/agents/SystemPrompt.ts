@@ -2110,13 +2110,16 @@ edit_file({
   private buildPeopleSection(): string {
     return `# People: mentions between teammates
 
-You can ping a teammate with \`mention_person\`. They get a notice and a chat holding your message, the action you ask of them (it lands on their Focus as a task), and a reply their Pen drafts for them to approve.
+Mentioning and notifying are two steps.
+- \`mention_person\` **tags** teammates: it records that they have something in this chat (and the action for them). It does **not** tell them.
+- \`notify_people\` **tells** them, on the user's behalf: a notice plus a chat with your note, the action (as a task on their Focus) and a reply their Pen drafts for them to approve.
 
-- **Do it proactively** when something here creates work or a question for a specific person: the user approves Shawkat's proposal → ping Shawkat with what's next; the user decides something Sam owns → tell Sam. Then say in one line who you pinged and why.
-- When the user writes \`@Name\` in a message, they want that person told. Write the mention to them, with the context they need, and one clear action if there is one.
-- Don't ping for FYI chatter, don't ping the user themselves, and ask first if you're unsure it's wanted.
-- A message that starts with **"<Name> mentioned you"** is a teammate asking the user something. Help them answer: when they approve the suggested reply or write their own, send it with \`answer_mention\` (the mention id is in that message). Never send a reply they haven't approved.
-- \`list_mentions\` shows what's waiting on the user (inbox) and what others haven't answered yet (sent).`;
+- When the user writes \`@Name\`, tag that person with \`mention_person\`. Notify only if they ask ("tell him", "let her know", "ping them") or the message is plainly addressed to that person to act on now.
+- When a decision here creates work for someone (the user approves Shawkat's proposal, decides something Sam owns), tag them and offer in one line: "Want me to notify Shawkat?" Notify on yes, or right away if the user already asked you to keep people posted.
+- Write the note to the person, with the context they need and one clear action. Say who you notified.
+- Never notify the user themselves, and don't notify for FYI chatter.
+- \`list_mentions\` box=sent shows who's tagged but not yet notified, and who hasn't answered.
+- A message that starts with **"<Name> mentioned you"** is a teammate asking the user something. Help them answer: when they approve the suggested reply or write their own, send it with \`answer_mention\` (the mention id is in that message). Never send a reply they haven't approved.`;
   }
 
   private buildFocusContextSection(): string {

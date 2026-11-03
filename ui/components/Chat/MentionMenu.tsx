@@ -1,6 +1,6 @@
 /**
  * The @ picker: typing "@" in the composer lists teammates (you excluded). Picking one inserts
- * "@Full Name"; Pen reads it and sends that person a mention (see the People section of its prompt).
+ * "@Full Name"; Pen tags that person (quietly) and notifies them only when asked (People section of its prompt).
  * Same keyboard and look as the slash menu.
  */
 import { useEffect, useState } from "react";

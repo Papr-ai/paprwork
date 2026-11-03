@@ -1,7 +1,8 @@
 /**
  * Mentions between people (memory server /v1/cloud/collab/mentions).
  *
- *   Send:    you @-mention a teammate in a chat, or Pen pings one (mention_person).
+ *   Send:    you @-mention a teammate, or Pen tags one (mention_person): recorded quietly.
+ *   Notify:  you or Pen tell them when it matters (notify_people → /mentions/notify).
  *   Receive: the heartbeat event feed brings `mention`; we open a chat "@Amir: …" holding the
  *            mention, the action (also a Focus task on the server), and Pen's suggested reply.
  *            One notice, priority, owned by that chat. You approve the reply from the card.
@@ -20,7 +21,7 @@ export interface MentionContext { chatId?: string; chatTitle?: string; appId?: s
 export interface MentionItem {
   id: string; fromUserId: string; fromName: string; toUserId: string; toName: string; text: string;
   context: MentionContext; action: MentionAction | null; status: "open" | "done" | "dismissed";
-  reply: { text: string; at: string } | null; createdAt: string;
+  reply: { text: string; at: string } | null; createdAt: string; notified?: boolean;
 }
 /** What the chat card renders. Stored as the result of a `mention_inbox` tool call on the message. */
 export interface MentionCardData {
@@ -54,16 +55,21 @@ async function chatTitle(chatId?: string): Promise<string | undefined> {
   return (await getStorageManager().getChat(chatId).catch(() => null))?.title || undefined;
 }
 
+/** Record a mention. Quiet unless notify: the person isn't told until notifyMentions (or notify: true). */
 export async function sendMention(input: {
-  toUserIds: string[]; text: string; chatId?: string; action?: MentionAction | null; context?: MentionContext;
+  toUserIds: string[]; text: string; chatId?: string; action?: MentionAction | null; context?: MentionContext; notify?: boolean;
 }): Promise<MentionItem[]> {
   const context: MentionContext = { ...input.context };
   if (input.chatId) { context.chatId = input.chatId; context.chatTitle ??= await chatTitle(input.chatId); }
   const out = await call<{ mentions: MentionItem[] }>("/mentions", "POST", {
-    toUserIds: input.toUserIds, text: input.text, context, action: input.action ?? undefined,
+    toUserIds: input.toUserIds, text: input.text, context, action: input.action ?? undefined, notify: !!input.notify,
   });
   return out.mentions;
 }
+
+/** Tell the people on mentions the user sent. A note replaces the message they'll see. */
+export const notifyMentions = (ids: string[], note?: string) =>
+  call<{ mentions: MentionItem[] }>("/mentions/notify", "POST", { ids, note }).then((r) => r.mentions);
 
 export const getMention = (id: string) => call<{ mention: MentionItem }>(`/mentions/${encodeURIComponent(id)}`).then((r) => r.mention);
 export const listMentions = (box: "inbox" | "sent" = "inbox", status: string | null = "open") =>
