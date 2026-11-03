@@ -60,6 +60,7 @@ describe("NotificationsTab", () => {
     await screen.findByText("Chats");
     expect(screen.queryByText(/Last 7 days/)).toBeNull();
     expect(screen.queryByLabelText("Pause desktop notifications")).toBeNull();
+    expect(screen.queryByText(/No source can pop/)).toBeNull();
     expect(screen.getByRole("radio", { name: "When unlocked" }).getAttribute("aria-checked")).toBe("true");
     fireEvent.click(screen.getByRole("radio", { name: "Never" }));
     await waitFor(() => expect(send).toHaveBeenCalledWith("notifications:set-prefs", { prefs: { previews: "never" } }));

@@ -76,4 +76,10 @@
 .notif-top > .setting-row:first-child { border-top: 0; }
 .notif-seg { display: inline-flex; padding: 2px; gap: 2px; border-radius: 8px; background: var(--bg-secondary); border: 1px solid var(--border-color); }
 .notif-seg button { padding: 3px 10px; border: 0; border-radius: 6px; background: transparent; color: var(--text-secondary); font: inherit; font-size: 12px; cursor: pointer; white-space: nowrap; }
-.notif-seg button.is-on { background: var(--bg-primary); color: var(--text-primary); box-shadow: 0 1px 2px rgba(0,0,0,.12); }
+.notif-seg button:hover:not(.is-on) { color: var(--text-primary); }
+.notif-seg button.is-on { background: rgba(var(--accent-rgb), 0.18); color: var(--text-primary); font-weight: 500; box-shadow: inset 0 0 0 1px rgba(var(--accent-rgb), 0.35); }
+.notif-access { display: inline-flex; align-items: center; gap: 7px; }
+.notif-access__dot { width: 8px; height: 8px; border-radius: 50%; flex: none; background: var(--text-secondary); opacity: .6; }
+.notif-access__dot.is-on { background: #10b981; opacity: 1; }
+.notif-access__dot.is-off { background: #ef4444; opacity: 1; }
+.notif-always { margin-top: 12px; }

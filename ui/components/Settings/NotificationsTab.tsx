@@ -81,9 +81,6 @@ export function NotificationsTab() {
           <h3 className="notif-settings__h">Apps</h3>
           {apps.length ? <div className="notif-group">{rows(apps)}</div>
             : <p className="settings-section__description">Apps that send you notifications show up here.</p>}
-          <p className="notif-settings__note">
-            Urgent (billing, your account) is always on: Papr Work is stopped until it's fixed. No source can pop more than 5 times in 10 minutes.
-          </p>
         </div>
       )}
 

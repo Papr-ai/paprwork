@@ -2511,6 +2511,22 @@ function initializeSystemInvokeHandler(mainWindow) {
     if (url) await shell.openExternal(url).catch(() => {});
     return { ok: !!url };
   });
+  // Are Papr Work's notifications allowed in macOS? Electron has no API for it, so read Notification
+  // Center's prefs: the entry whose path is this app bundle. `auth` holds what macOS granted (alert = 4);
+  // 0 means not allowed. No entry: macOS hasn't been asked yet. Elsewhere we can't tell (gray dot).
+  ipcMain.handle('notice:os-access', async () => {
+    if (process.platform !== 'darwin') return { state: 'unknown' };
+    try {
+      const bundle = process.execPath.replace(/\/Contents\/MacOS\/[^/]+$/, '');
+      const xml = execSync('/usr/bin/defaults export com.apple.ncprefs -', { encoding: 'utf8', timeout: 3000, maxBuffer: 16 * 1024 * 1024 });
+      const at = xml.indexOf(`<string>${bundle}</string>`);
+      if (at < 0) return { state: 'unknown' };
+      const start = xml.lastIndexOf('<dict>', at); // keys are sorted: auth comes before bundle-id
+      const m = /<key>auth<\/key>\s*<integer>(\d+)<\/integer>/.exec(xml.slice(start, at));
+      if (!m) return { state: 'unknown' };
+      return { state: Number(m[1]) & 4 ? 'on' : 'off' };
+    } catch { return { state: 'unknown' }; }
+  });
   ipcMain.handle('notice:close-os', async (_event, keys) => {
     for (const key of Array.isArray(keys) ? keys : []) {
       const n = openNotices.get(key);
