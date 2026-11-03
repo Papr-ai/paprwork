@@ -108,6 +108,8 @@ import { getJobsScheduler } from "./services/JobsScheduler.js";
 import { initializeWorkspaceService } from "./services/WorkspaceService.js";
 import { setupWebSocketHandlers, broadcast } from "./websocket/index.js";
 import { getJobEventHub } from "./services/JobEventHub.js";
+import { onNoticeOs, onNoticesChanged } from "./services/notifications/NoticeService.js";
+import { NOTICES_CHANGED_EVENT } from "../core/types/notices.js";
 import { registerJobEventsSseRoutes } from "./services/registerJobEventsSse.js";
 import { registerPaprMiniAppSdkRoutes } from "./utils/registerPaprMiniAppSdkRoutes.js";
 import { registerAppAgentChatRoutes } from "./services/appAgentChat/registerAppAgentChatRoutes.js";
@@ -642,6 +644,13 @@ async function startGateway(): Promise<void> {
       setupWebSocketHandlers(wss);
       getJobEventHub().subscribe((event) => {
         broadcast({ type: event.type, data: event.data });
+      });
+      onNoticesChanged((open) => {
+        broadcast({ type: NOTICES_CHANGED_EVENT, data: { notices: open } });
+      });
+      // route() said pop the OS; the window process owns Notification, so the UI shows it.
+      onNoticeOs(({ notice, why, sound }) => {
+        broadcast({ type: "notifications:os", data: { notice, why, sound } });
       });
     });
     console.log("[Gateway] WebSocket server created");

@@ -1,4 +1,5 @@
 import { useMemo, useEffect, useRef, useState, useCallback } from "react";
+import { noticeFromApp } from "../../stores/noticeOs";
 import { useApp } from "../../hooks/useApp";
 import { useCloudPublish } from "../../hooks/useCloudPublish";
 import { useGatewaySupervisorStatus } from "../../hooks/useGatewaySupervisorStatus";
@@ -613,7 +614,7 @@ export function MiniAppView({
         surface,
       } as Record<string, unknown>);
     };
-  }, [appId, isPublishedPreview]);
+  }, [appId, appTitle, isPublishedPreview]);
 
   // Inject paprAPI + runtime console forwarding for local preview only
   useEffect(() => {
@@ -823,7 +824,11 @@ export function MiniAppView({
         if (!window.electronAPI?.system?.invoke) {
           throw new Error("electronAPI.system.invoke not available");
         }
-        const result = await window.electronAPI.system.invoke(method, args);
+        // OS notifications go through notify(): this app is the source, capped at Priority, deduped.
+        const result =
+          method === "notification.show"
+            ? await noticeFromApp(appId, appTitle, (Array.isArray(args) ? args[0] : args) ?? {})
+            : await window.electronAPI.system.invoke(method, args);
         iframeRef.current?.contentWindow?.postMessage(
           { type: "papr-invoke-response", id, result },
           "*",

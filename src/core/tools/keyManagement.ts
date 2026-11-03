@@ -332,6 +332,17 @@ export const requestKeyTool = createTool({
         };
       }
 
+      // Raise a "needs you" notice on this chat; cleared when the key is added anywhere.
+      try {
+        const [{ getCurrentChatId }, { noticeKeyRequested }] = await Promise.all([
+          import("./context.js"),
+          import("../../gateway/services/notifications/noticeSources.js"),
+        ]);
+        await noticeKeyRequested(getCurrentChatId(), args.name, args.description);
+      } catch {
+        /* notices are best-effort */
+      }
+
       // Create key request that will show UI card
       // This is a special return format that the UI recognizes and renders as an input card
       return {

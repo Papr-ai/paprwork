@@ -581,7 +581,15 @@ let customKeysServiceInstance: CustomKeysService | null = null;
  */
 export function getCustomKeysService(): CustomKeysService {
   if (!customKeysServiceInstance) {
-    customKeysServiceInstance = new CustomKeysService();
+    const service = new CustomKeysService();
+    customKeysServiceInstance = service;
+    // A key now exists: answer every open request for it (any chat). Deletes don't resolve.
+    service.onKeyChange((name) => {
+      if (!name) return;
+      void service.getKeyByName(name).then((key) => {
+        if (key) void import("./notifications/noticeSources.js").then((m) => m.noticeKeyAdded(name));
+      }).catch(() => {});
+    });
   }
   return customKeysServiceInstance;
 }

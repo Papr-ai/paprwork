@@ -571,6 +571,9 @@ export class AgentStreamRegistry {
 
   private broadcastComplete(entry: ActiveStream): void {
     if (!entry.completeData) return;
+    if (!entry.cancelled) {
+      void import("./notifications/noticeSources.js").then((m) => m.noticeChatDone(entry.chatId)).catch(() => {});
+    }
     const tracked = entry.subscribers.size;
     let delivered = 0;
     for (const sub of entry.subscribers.values()) {
