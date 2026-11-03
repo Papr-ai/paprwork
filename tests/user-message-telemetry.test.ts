@@ -1,4 +1,5 @@
 import { describe, expect, it } from "vitest";
+import { HIDDEN_CONTINUE_PREFIX } from "../src/core/constants/hiddenContinue.js";
 import { userMessageSentProperties } from "../src/gateway/services/userMessageTelemetry.js";
 
 const base = {
@@ -28,6 +29,14 @@ describe("userMessageSentProperties", () => {
         ...base,
         userMessage: "[__papr_continue__] Continue your previous response.",
       }),
+    ).toBeNull();
+  });
+});
+
+describe("hidden continue prefix", () => {
+  it("excludes the exact marker the UI sends", () => {
+    expect(
+      userMessageSentProperties({ ...base, userMessage: `${HIDDEN_CONTINUE_PREFIX} Continue.` }),
     ).toBeNull();
   });
 });

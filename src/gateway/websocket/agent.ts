@@ -296,27 +296,23 @@ export async function setupAgentHandlers(
         // synthetic recovery turns while the legacy event remains unchanged.
         const { getGatewayTelemetry } = await import("../services/gatewayTelemetry.js");
         const { TelemetryEvents } = await import("../../core/telemetry/events.js");
-        const { userMessageSentProperties } = await import(
+        const { messageSentProperties, userMessageSentProperties } = await import(
           "../services/userMessageTelemetry.js"
         );
-        const messageProperties = {
-          chat_id: chatId,
-          message_length: userMessage.length,
-          model: config.model,
-          provider: config.provider,
-          auth_type: authType ?? "apiKey",
-          uses_papr_proxy: usePaprProxy,
-        };
-        const telemetry = getGatewayTelemetry();
-        telemetry.trackFireAndForget(TelemetryEvents.MESSAGE_SENT, messageProperties);
-        const userMessageProperties = userMessageSentProperties({
+        const telemetryContext = {
           chatId,
           userMessage,
           model: config.model,
           provider: config.provider,
           authType,
           usesPaprProxy: usePaprProxy,
-        });
+        };
+        const telemetry = getGatewayTelemetry();
+        telemetry.trackFireAndForget(
+          TelemetryEvents.MESSAGE_SENT,
+          messageSentProperties(telemetryContext),
+        );
+        const userMessageProperties = userMessageSentProperties(telemetryContext);
 
         wsStreamProfiler?.mark("ws.authResolved");
 

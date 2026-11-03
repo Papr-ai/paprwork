@@ -1,4 +1,4 @@
-const HIDDEN_CONTINUE_PREFIX = "[__papr_continue__]";
+import { isHiddenContinueMessage } from "../../core/constants/hiddenContinue.js";
 
 export type UserMessageTelemetryContext = {
   chatId: string;
@@ -9,14 +9,10 @@ export type UserMessageTelemetryContext = {
   usesPaprProxy: boolean;
 };
 
-/**
- * Build the canonical active-use event after gateway auth succeeds.
- * Synthetic recovery turns are intentionally excluded from active-user KPIs.
- */
-export function userMessageSentProperties(
+/** Properties shared by message_sent and user_message_sent. No message content. */
+export function messageSentProperties(
   context: UserMessageTelemetryContext,
-): Record<string, unknown> | null {
-  if (context.userMessage.startsWith(HIDDEN_CONTINUE_PREFIX)) return null;
+): Record<string, unknown> {
   return {
     chat_id: context.chatId,
     message_length: context.userMessage.length,
@@ -25,4 +21,16 @@ export function userMessageSentProperties(
     auth_type: context.authType ?? "apiKey",
     uses_papr_proxy: context.usesPaprProxy,
   };
+}
+
+/**
+ * Properties for the canonical active-use event, sent once the gateway has
+ * accepted the message and queued its stream (not when the model replies).
+ * Synthetic recovery turns are excluded from active-user KPIs.
+ */
+export function userMessageSentProperties(
+  context: UserMessageTelemetryContext,
+): Record<string, unknown> | null {
+  if (isHiddenContinueMessage(context.userMessage)) return null;
+  return messageSentProperties(context);
 }
