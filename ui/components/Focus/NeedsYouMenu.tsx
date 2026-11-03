@@ -4,9 +4,11 @@ import { useEffect, useRef, useState } from "react";
 interface Props {
   urgent: boolean; source: string; type: string; laterWhen: string;
   onLater: () => void; onMute: () => void; onTurnOff: () => void; onSettings: () => void;
+  /** Only for items that live on a chat or app: change whether that source comes into Focus. */
+  focus?: { always: () => void; never: () => void };
 }
 
-export function NeedsYouMenu({ urgent, source, type, laterWhen, onLater, onMute, onTurnOff, onSettings }: Props) {
+export function NeedsYouMenu({ urgent, source, type, laterWhen, onLater, onMute, onTurnOff, onSettings, focus }: Props) {
   const [open, setOpen] = useState(false);
   const ref = useRef<HTMLDivElement>(null);
   useEffect(() => {
@@ -27,6 +29,12 @@ export function NeedsYouMenu({ urgent, source, type, laterWhen, onLater, onMute,
             <>
               <button type="button" role="menuitem" onClick={pick(onLater)}>Later<em>Back {laterWhen}</em></button>
               <button type="button" role="menuitem" onClick={pick(onMute)}>Mute {source} for 1 hour<em>No desktop notifications, out of this list</em></button>
+              {focus ? (
+                <>
+                  <button type="button" role="menuitem" onClick={pick(focus.always)}>Always show {source} in Focus<em>Right away, without waiting for Pen</em></button>
+                  <button type="button" role="menuitem" onClick={pick(focus.never)}>Keep {source} off Focus<em>Stays as a dot on {source}</em></button>
+                </>
+              ) : null}
               <button type="button" role="menuitem" onClick={pick(onTurnOff)}>Turn off {type}</button>
             </>
           )}
