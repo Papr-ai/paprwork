@@ -17,6 +17,8 @@ export interface NoticePrefs {
   sources: Record<string, SourcePrefPatch>;
   /** "source/type" → false when that type is off. */
   types: Record<string, boolean>;
+  /** Do Not Disturb: no desktop notifications until this time (ISO). Urgent still comes through. */
+  pauseUntil?: string;
 }
 
 const BASE: SourcePref = { allow: true, sound: true, needs: { desktop: true, badge: true }, done: { desktop: false, badge: true } };
@@ -37,6 +39,11 @@ export function sourcePref(p: NoticePrefs, id: string): SourcePref {
 
 export const typeKey = (source: string, type: string) => `${source}/${type}`;
 export const typeOn = (p: NoticePrefs, source: string, type: string) => p.types[typeKey(source, type)] !== false;
+
+/** Paused right now (Do Not Disturb set in Papr Work). */
+export const pausedAt = (p: NoticePrefs, now = Date.now()) => !!p.pauseUntil && Date.parse(p.pauseUntil) > now;
+const cleanPause = (v: unknown, now = Date.now()) =>
+  typeof v === "string" && Number.isFinite(Date.parse(v)) && Date.parse(v) > now ? new Date(Date.parse(v)).toISOString() : undefined;
 
 const bool = (v: unknown) => (typeof v === "boolean" ? v : undefined);
 function cleanWhere(raw: unknown): Partial<Where> | undefined {
@@ -78,6 +85,8 @@ export function cleanPrefs(raw: unknown): NoticePrefs {
     out.sources[id] = patch;
   }
   for (const [k, v] of Object.entries((r.types ?? {}) as Record<string, unknown>)) if (k.includes("/") && v === false) out.types[k] = false;
+  const pause = cleanPause(r.pauseUntil);
+  if (pause) out.pauseUntil = pause;
   return compactPrefs(out);
 }
 
@@ -96,7 +105,8 @@ export function compactPrefs(p: NoticePrefs): NoticePrefs {
     if (Object.keys(patch).length) sources[id] = patch;
   }
   const types = Object.fromEntries(Object.entries(p.types).filter(([, v]) => v === false));
-  return { version: 2, sources, types };
+  const pause = cleanPause(p.pauseUntil);
+  return { version: 2, sources, types, ...(pause ? { pauseUntil: pause } : {}) };
 }
 
 /** Apply a change from Settings on top of what you already changed. Junk is ignored. */
@@ -119,5 +129,7 @@ export function mergePrefs(cur: NoticePrefs, patch: unknown): NoticePrefs {
     if (!k.includes("/") || typeof v !== "boolean") continue;
     if (v) delete types[k]; else types[k] = false;
   }
-  return compactPrefs({ version: 2, sources, types });
+  // pauseUntil: a time pauses desktop notifications until then; null resumes.
+  const pauseUntil = "pauseUntil" in r ? (r.pauseUntil === null ? undefined : cleanPause(r.pauseUntil) ?? cur.pauseUntil) : cur.pauseUntil;
+  return compactPrefs({ version: 2, sources, types, ...(pauseUntil ? { pauseUntil } : {}) });
 }

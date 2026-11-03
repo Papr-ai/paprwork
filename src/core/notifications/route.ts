@@ -18,7 +18,7 @@ export interface RouteCtx {
   prefs: NoticePrefs;
   /** Paprwork window focused. */
   foreground: boolean;
-  /** OS focus mode / quiet hours (macOS only today; false elsewhere). */
+  /** Do Not Disturb: paused in Settings → Notifications. (macOS Focus is applied by macOS itself.) */
   dnd: boolean;
   /** You're looking at the owner right now. */
   viewingOwner: boolean;
@@ -36,6 +36,10 @@ export interface Delivery {
   sound: boolean;
   email: "none" | "now" | "digest";
   coalesced: boolean;
+  /** Your settings turned it off (counted, so we can see what people mute). */
+  muted: boolean;
+  /** Do Not Disturb held back its desktop notification. */
+  paused: boolean;
   /** Settings row and chip it obeyed, e.g. "chats" / "chat.done". */
   source: string;
   type: string;
@@ -56,7 +60,7 @@ export function route(n: RoutedNotice, c: RouteCtx): Delivery {
   const capped = effectiveLevel(n);
   const source = sourceOf(n), type = typeOf(n);
   const why: string[] = capped !== n.level ? [`${n.source.name} can't send Urgent: treated as Priority`] : [];
-  const d: Delivery = { level: capped, mark: NOTICE_MARK[capped], lean: false, os: false, sound: false, email: "none", coalesced: false, source, type, why };
+  const d: Delivery = { level: capped, mark: NOTICE_MARK[capped], lean: false, os: false, sound: false, email: "none", coalesced: false, muted: false, paused: false, source, type, why };
   if (n.ambient) {
     d.mark = "none";
     why.push("about the whole app: Pen's icon and Focus's top line, no dot, no desktop notification");
@@ -70,7 +74,7 @@ export function route(n: RoutedNotice, c: RouteCtx): Delivery {
   const def = sourceDef(source, n.source.name), name = def?.name ?? n.source.name;
   const p = sourcePref(c.prefs, source), cat = categoryOf(n);
   if (!p.allow || !typeOn(c.prefs, source, type)) {
-    return { ...d, level: "status", mark: "none", why: [...why, `you turned this off in ${name}: shown only inside ${n.owner.name}`] };
+    return { ...d, level: "status", mark: "none", muted: true, why: [...why, `you turned this off in ${name}: shown only inside ${n.owner.name}`] };
   }
   if (c.viewingOwner && c.foreground) {
     if (cat === "done") d.mark = "none";
@@ -80,7 +84,7 @@ export function route(n: RoutedNotice, c: RouteCtx): Delivery {
   why.push(cat === "needs" ? "blue dot until it's handled" : "green dot until you look");
   if (!p[cat].badge) { d.mark = "none"; why.push(`${name} › Badges is off: no dot`); }
   if (c.foreground) why.push("Paprwork is in front: nothing pops");
-  else if (c.dnd) why.push("Do Not Disturb: nothing pops");
+  else if (c.dnd) { d.paused = p[cat].desktop && !FOCUS_ONLY.has(n.kind); why.push("Do Not Disturb is on: kept as a dot, no desktop notification"); }
   else if (FOCUS_ONLY.has(n.kind)) why.push("check-ins stay in Focus: never a desktop notification");
   else if (!p[cat].desktop) why.push(`${name} › Desktop is off: no desktop notification`);
   else {

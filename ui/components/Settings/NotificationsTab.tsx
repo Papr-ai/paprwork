@@ -10,6 +10,7 @@ import { NOTICES_CHANGED_EVENT, type Notice } from "../../../src/core/types/noti
 import { appSourceId, type NoticeSourceDef } from "../../../src/core/notifications/sources";
 import { SURFACES, sourcePref, type NoticePrefs, type SourcePref } from "../../../src/core/notifications/prefs";
 import { NotificationSourcePage, SURFACE_LABEL, type Patch } from "./NotificationSourcePage";
+import { NotificationsPause } from "./NotificationsPause";
 import "./NotificationsTab.css";
 
 interface Center { prefs: NoticePrefs; sources: NoticeSourceDef[]; apps: { id: string; name: string }[] }
@@ -52,7 +53,7 @@ export function NotificationsTab() {
     window.addEventListener("gateway-broadcast", onBroadcast);
     return () => window.removeEventListener("gateway-broadcast", onBroadcast);
   }, [call]);
-  const set = (prefs: Patch) => void call("notifications:set-prefs", { prefs });
+  const set = (prefs: Patch & { pauseUntil?: string | null }) => void call("notifications:set-prefs", { prefs });
 
   if (!c) return <div className="settings-content"><div className="settings-section">{error || "Loading…"}</div></div>;
   const apps: NoticeSourceDef[] = c.apps.map((a) => ({ id: a.id, name: a.name, desc: "Mini-app", types: APP_TYPES }));
@@ -74,6 +75,7 @@ export function NotificationsTab() {
             While you're in Papr Work you only see dots: blue when something's waiting on you, green when it's done.
             Choose, for each source, what reaches you when you're not.
           </p>
+          <NotificationsPause prefs={c.prefs} onSet={set} />
           <h3 className="notif-settings__h">Papr Work</h3>
           <div className="notif-group">{rows(c.sources)}</div>
           <h3 className="notif-settings__h">Apps</h3>
