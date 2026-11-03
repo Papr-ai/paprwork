@@ -43,9 +43,9 @@ function Pen() {
 describe("Needs you", () => {
   beforeEach(() => { sent.length = 0; useNoticeStore.setState({ notices: [], prefs: DEFAULT_NOTICE_PREFS }); });
 
-  it("empty: one line, and no count on Pen", () => {
+  it("empty: no section at all, and no count on Pen", () => {
     const { container } = render(<><NeedsYou /><Pen /></>);
-    expect(screen.getByText("Nothing is waiting on you.")).toBeTruthy();
+    expect(container.querySelector(".needs-you")).toBeNull();
     expect(container.querySelector(".rail-btn__count")).toBeNull();
   });
 
@@ -80,7 +80,7 @@ describe("Needs you", () => {
   it("a Later item leaves the list and the count, and shows under Later", () => {
     const { container } = render(<><NeedsYou /><Pen /></>);
     set([n({ laterUntil: new Date(Date.now() + 3_600_000).toISOString() })]);
-    expect(screen.getByText("Nothing is waiting on you.")).toBeTruthy();
+    expect(document.querySelector(".needs-you__hero")).toBeNull();
     expect(screen.getByText("Bring back now")).toBeTruthy();
     expect(container.querySelector(".rail-btn__count")).toBeNull();
   });
@@ -89,7 +89,7 @@ describe("Needs you", () => {
     render(<NeedsYou />);
     const until = new Date(Date.now() + 3_600_000).toISOString();
     set([n()], mergePrefs(DEFAULT_NOTICE_PREFS, { sources: { chats: { muteUntil: until } } }));
-    expect(screen.getByText("Nothing is waiting on you.")).toBeTruthy();
+    expect(document.querySelector(".needs-you__hero")).toBeNull();
     fireEvent.click(screen.getByText("Unmute"));
     expect(sent).toContainEqual(["notifications:unmute", { sourceId: "chats" }]);
   });
