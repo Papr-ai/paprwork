@@ -550,6 +550,8 @@ export async function projectGoalsAndTasks(reason = "manual"): Promise<
     console.log(
       `[GoalsTasksProjection] ${reason}: goals written=${res.goalsUpserted} history+${res.historyRows} tasks=${res.tasksUpserted} dropped=${res.tasksDropped} links=${res.links} unchanged=${res.skipped}`,
     );
+    // Mirror to the memory server (debounced; skips when signed out or offline).
+    void import("./focusCloud/focusCloudSync.js").then((m) => m.scheduleFocusCloudSync(`projection: ${reason}`)).catch(() => undefined);
     return { ok: true as const, ...res };
   })();
   running = run;

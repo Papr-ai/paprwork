@@ -162,12 +162,14 @@ export class NoticeService {
     this.stats.bump("settings", "mute", countOffs(patch));
     this.prefs = this.prefsStore.set(patch);
     this.changed();
+    syncPrefsToCloud();
     return this.center();
   }
 
   resetPrefs() {
     this.prefs = this.prefsStore.reset();
     this.changed();
+    syncPrefsToCloud();
     return this.center();
   }
 
@@ -303,6 +305,11 @@ let instance: NoticeService | null = null;
 export function getNoticeService(): NoticeService {
   if (!instance) instance = new NoticeService();
   return instance;
+}
+
+/** Your settings follow you to the web: mirror them to the memory server (debounced, best-effort). */
+function syncPrefsToCloud(): void {
+  void import("../focusCloud/focusCloudSync.js").then((m) => m.scheduleFocusCloudSync("notification settings")).catch(() => undefined);
 }
 
 /** Best-effort: notices must never break the work that raises them. */

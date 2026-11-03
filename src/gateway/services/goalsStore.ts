@@ -230,6 +230,7 @@ async function writeRow(prev: Row | undefined, next: Row, actor: string): Promis
       next.next_milestone ?? null, next.owner ?? null, next.evidence ?? null, next.mentions ?? null, next.outcome ?? null, next.archived ?? 0, 0, next.source_file ?? "IDENTITY.md", prev?.created_at ?? now, now],
   );
   console.log(`[GoalsStore] ${actor}: ${prev ? "updated" : "created"} ${next.id} (${next.status})`);
+  void import("./focusCloud/focusCloudSync.js").then((m) => m.scheduleFocusCloudSync(`goal ${next.id}`)).catch(() => undefined);
 }
 
 async function setEntities(id: string, refs: string[]): Promise<void> {
