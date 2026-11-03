@@ -2501,6 +2501,16 @@ function initializeSystemInvokeHandler(mainWindow) {
   // Open OS notifications by notice key. Holding them also keeps macOS from garbage
   // collecting the object, which silently drops its click handler.
   const openNotices = new Map();
+  // Show previews "When unlocked": hide the text while the screen is locked.
+  let screenLocked = false;
+  powerMonitor.on('lock-screen', () => { screenLocked = true; });
+  powerMonitor.on('unlock-screen', () => { screenLocked = false; });
+  ipcMain.handle('notice:open-os-settings', async () => {
+    const url = process.platform === 'darwin' ? 'x-apple.systempreferences:com.apple.Notifications-Settings.extension'
+      : process.platform === 'win32' ? 'ms-settings:notifications' : '';
+    if (url) await shell.openExternal(url).catch(() => {});
+    return { ok: !!url };
+  });
   ipcMain.handle('notice:close-os', async (_event, keys) => {
     for (const key of Array.isArray(keys) ? keys : []) {
       const n = openNotices.get(key);
@@ -2515,7 +2525,8 @@ function initializeSystemInvokeHandler(mainWindow) {
     if (key && openNotices.has(key)) { try { openNotices.get(key).close(); } catch { /* gone */ } }
     const n = new Notification({
       title: payload.title.slice(0, 200),
-      body: typeof payload.body === 'string' ? payload.body.slice(0, 500) : '',
+      body: typeof payload.body === 'string' && payload.previews !== 'never' && !(payload.previews === 'unlocked' && screenLocked)
+        ? payload.body.slice(0, 500) : '',
       urgency: payload.level === 'urgent' ? 'critical' : 'normal',
       // route() decides sound (per source); older gateways only sent the level.
       silent: typeof payload.sound === 'boolean' ? !payload.sound : payload.level === 'fyi',

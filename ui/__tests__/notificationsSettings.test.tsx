@@ -55,16 +55,13 @@ describe("NotificationsTab", () => {
     await waitFor(() => expect(send).toHaveBeenCalledWith("notifications:set-prefs", { prefs: { sources: { chats: { sound: false } } } }));
   });
 
-  it("Do Not Disturb: Pause for 1 hour saves a time about an hour out; the week's count shows", async () => {
-    raised = 14;
+  it("top group: Show previews saves the choice; no pause timer or counts line", async () => {
     render(<NotificationsTab />);
-    expect(await screen.findByText(/Last 7 days: 14 notices \(about 2 a day\), 3 desktop notifications, 1 held by Do Not Disturb\. Usually handled within 12 min\./)).toBeTruthy();
-    const before = Date.now();
-    fireEvent.change(screen.getByLabelText("Pause desktop notifications"), { target: { value: "1" } });
-    await waitFor(() => expect(send).toHaveBeenCalledWith("notifications:set-prefs", expect.anything()));
-    const call = send.mock.calls.find((c) => c[0] === "notifications:set-prefs")!;
-    const until = Date.parse((call[1] as { prefs: { pauseUntil: string } }).prefs.pauseUntil);
-    expect(until - before).toBeGreaterThan(59 * 60_000);
-    expect(until - before).toBeLessThan(61 * 60_000);
+    await screen.findByText("Chats");
+    expect(screen.queryByText(/Last 7 days/)).toBeNull();
+    expect(screen.queryByLabelText("Pause desktop notifications")).toBeNull();
+    expect(screen.getByRole("radio", { name: "When unlocked" }).getAttribute("aria-checked")).toBe("true");
+    fireEvent.click(screen.getByRole("radio", { name: "Never" }));
+    await waitFor(() => expect(send).toHaveBeenCalledWith("notifications:set-prefs", { prefs: { previews: "never" } }));
   });
 });

@@ -432,6 +432,7 @@ contextBridge.exposeInMainWorld("electronAPI", {
   notices: {
     showOs: (payload) => ipcRenderer.invoke("notice:show-os", payload),
     closeOs: (keys) => ipcRenderer.invoke("notice:close-os", keys),
+    openOsSettings: () => ipcRenderer.invoke("notice:open-os-settings"),
   },
 
   // System integration for mini-apps (generic invoke)

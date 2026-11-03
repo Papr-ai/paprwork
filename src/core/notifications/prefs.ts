@@ -19,7 +19,13 @@ export interface NoticePrefs {
   types: Record<string, boolean>;
   /** Do Not Disturb: no desktop notifications until this time (ISO). Urgent still comes through. */
   pauseUntil?: string;
+  /** Message text in desktop notifications. Default: when unlocked. */
+  previews?: Previews;
 }
+export type Previews = "always" | "unlocked" | "never";
+export const PREVIEWS: Previews[] = ["always", "unlocked", "never"];
+export const previewsOf = (p: NoticePrefs): Previews => p.previews ?? "unlocked";
+const cleanPreviews = (v: unknown) => (PREVIEWS.includes(v as Previews) && v !== "unlocked" ? (v as Previews) : undefined);
 
 const BASE: SourcePref = { allow: true, sound: true, needs: { desktop: true, badge: true }, done: { desktop: false, badge: true } };
 /** Finished replies pop while you're away (same as before Stage 2). */
@@ -87,6 +93,8 @@ export function cleanPrefs(raw: unknown): NoticePrefs {
   for (const [k, v] of Object.entries((r.types ?? {}) as Record<string, unknown>)) if (k.includes("/") && v === false) out.types[k] = false;
   const pause = cleanPause(r.pauseUntil);
   if (pause) out.pauseUntil = pause;
+  const pv = cleanPreviews(r.previews);
+  if (pv) out.previews = pv;
   return compactPrefs(out);
 }
 
@@ -106,7 +114,8 @@ export function compactPrefs(p: NoticePrefs): NoticePrefs {
   }
   const types = Object.fromEntries(Object.entries(p.types).filter(([, v]) => v === false));
   const pause = cleanPause(p.pauseUntil);
-  return { version: 2, sources, types, ...(pause ? { pauseUntil: pause } : {}) };
+  const pv = cleanPreviews(p.previews);
+  return { version: 2, sources, types, ...(pause ? { pauseUntil: pause } : {}), ...(pv ? { previews: pv } : {}) };
 }
 
 /** Apply a change from Settings on top of what you already changed. Junk is ignored. */
@@ -131,5 +140,6 @@ export function mergePrefs(cur: NoticePrefs, patch: unknown): NoticePrefs {
   }
   // pauseUntil: a time pauses desktop notifications until then; null resumes.
   const pauseUntil = "pauseUntil" in r ? (r.pauseUntil === null ? undefined : cleanPause(r.pauseUntil) ?? cur.pauseUntil) : cur.pauseUntil;
-  return compactPrefs({ version: 2, sources, types, ...(pauseUntil ? { pauseUntil } : {}) });
+  const previews = "previews" in r ? (PREVIEWS.includes(r.previews as Previews) ? (r.previews as Previews) : cur.previews) : cur.previews;
+  return compactPrefs({ version: 2, sources, types, ...(pauseUntil ? { pauseUntil } : {}), ...(previews ? { previews } : {}) });
 }
