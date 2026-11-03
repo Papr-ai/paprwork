@@ -2,7 +2,7 @@
  * Mentions between people (memory server /v1/cloud/collab/mentions).
  *
  *   Send:    you @-mention a teammate, or Pen tags one (mention_person): recorded quietly.
- *   Notify:  you or Pen tell them when it matters (notify_people → /mentions/notify).
+ *   Notify:  only after the user says yes: the Ask card (collab:notify) or notify_people with those ids.
  *   Suggest: an @ is context for Pen. When Pen thinks someone should do something it tags them quietly
  *            with the ask; the sender's chat shows "Ask Shawkat?" and nothing is sent until they say yes.
  *   Receive: the heartbeat event feed brings `mention`; it lands in Focus (Needs you) as the sender's ask

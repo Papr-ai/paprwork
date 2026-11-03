@@ -55,7 +55,7 @@ export const mentionPersonTool = createTool({
     "Suggest asking a teammate to do something. Records the ask quietly and shows the user a card: \"Ask Shawkat?\" " +
     "with your drafted ask, which they can edit, then Ask or No. Nothing reaches the teammate until the user says yes. " +
     "Use it when the user mentions someone and you think that person should do something, or a decision creates work for them. " +
-    "Set notify: true only when the user explicitly said to ask/tell/ping them. people: names, emails or user ids.",
+    "Set notify: true only when the user explicitly told you to ask, tell or ping them (\"ask Shawkat to…\"). Saying someone should do something is not that: suggest. people: names, emails or user ids.",
   inputSchema: z.object({
     people: z.array(z.string().min(1)).min(1).max(10).describe("Teammates: name, email or user id"),
     message: z.string().min(1).max(4000).describe("The ask, written to them in the user's voice: one clear request with the context they need"),
@@ -87,33 +87,18 @@ export const mentionPersonTool = createTool({
 export const notifyPeopleTool = createTool({
   id: "notify_people",
   description:
-    "Notify teammates on the user's behalf: they get a notice and a chat with the message, the action for them (as a Focus task) and a reply their Pen drafts. " +
-    "Pass mentionIds of mentions the user already made (from mention_person or list_mentions box=sent), or people to tag and notify in one step. " +
-    "note replaces the message they'll see, so write it to them. Only call when the user asks, or when they've clearly approved telling them; say who you notified.",
+    "Send asks the user already approved. Pass the mentionIds from mention_person (or list_mentions box=sent). " +
+    "Only call when the user says yes in chat (\"yes, ask him\"); the Ask card's button does the same thing. " +
+    "To suggest an ask, use mention_person instead: never send one the user hasn't seen. note replaces the message they'll see.",
   inputSchema: z.object({
-    mentionIds: z.array(z.string().min(1)).max(20).optional().describe("Mentions the user sent that haven't been notified"),
-    people: z.array(z.string().min(1)).max(10).optional().describe("Or: teammates to tag and notify now"),
-    note: z.string().max(4000).optional().describe("Message they'll see. Required with people."),
-    action: z.object({ title: z.string().min(1).max(200), due: z.string().optional() }).optional().describe("With people: the one thing for them to do"),
+    mentionIds: z.array(z.string().min(1)).min(1).max(20).describe("Asks the user approved, from mention_person"),
+    note: z.string().max(4000).optional().describe("Optional: the edited ask, written to them"),
   }),
   execute: async (args) => {
     try {
       const svc = await import("../../gateway/services/collab/mentions.js");
-      const out: Array<{ name: string; mentionId: string }> = [];
-      if (args.mentionIds?.length) {
-        const r = await svc.notifyMentions(args.mentionIds, args.note);
-        out.push(...r.map((m) => ({ name: m.toName, mentionId: m.id })));
-      }
-      if (args.people?.length) {
-        if (!args.note?.trim()) return { success: false, error: "Write the note they'll see." };
-        const picked = await pickPeople(args.people);
-        if ("error" in picked) return { success: false, error: picked.error };
-        const { getCurrentChatId } = await import("./context.js");
-        const r = await svc.sendMention({ toUserIds: picked.map((m) => m.userId), text: args.note, chatId: getCurrentChatId() ?? undefined, action: args.action ?? null, notify: true });
-        out.push(...r.map((m) => ({ name: m.toName, mentionId: m.id })));
-      }
-      if (!out.length) return { success: false, error: "Pass mentionIds or people." };
-      return { success: true, data: { notified: out } };
+      const r = await svc.notifyMentions(args.mentionIds, args.note);
+      return { success: true, data: { notified: r.map((m) => ({ name: m.toName, mentionId: m.id })) } };
     } catch (e) {
       return { success: false, error: (e as Error).message };
     }
