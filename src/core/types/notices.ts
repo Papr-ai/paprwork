@@ -64,6 +64,8 @@ export interface Notice extends NoticeInput {
   seenAt?: string;
   resolvedAt?: string;
   expiresAt?: string;
+  /** You pressed Later: out of Needs you and the Pen count until then. The dot stays. */
+  laterUntil?: string;
 }
 
 /** Broadcast whenever the open set changes. Carries the full open list (small by design). */

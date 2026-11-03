@@ -15,7 +15,7 @@ import Database from "better-sqlite3";
 import { getPaprRoot } from "../../../core/utils/paprRoot.js";
 import { openDiagnosticDatabase } from "../databaseDiagnostics/sqlite.js";
 import { DEFAULT_NOTICE_PREFS, effectiveLevel, route, type NoticePrefs, type RoutedNotice } from "../../../core/notifications/route.js";
-import { PAPR_SOURCES, appSourceId } from "../../../core/notifications/sources.js";
+import { PAPR_SOURCES, appSourceId, sourceOf } from "../../../core/notifications/sources.js";
 import { DeliveryLog, OS_CAP_PER_SOURCE } from "./noticeDeliveries.js";
 import { PrefsStore } from "./noticePrefs.js";
 import { StatsLog, countOffs } from "./noticeStats.js";
@@ -26,14 +26,15 @@ import {
   type NoticeInput,
   type NoticeOwnerKind,
 } from "../../../core/types/notices.js";
-import { NOTICES_SCHEMA, rowToNotice, type NoticeRow } from "./noticeRows.js";
+import { NOTICES_SCHEMA, migrateNotices, rowToNotice, type NoticeRow } from "./noticeRows.js";
+import { MUTE_MS, laterUntil } from "../../../core/notifications/needsYou.js";
 
 /** Events nobody looked at expire after 14 days; conditions stay until resolved. */
 const EVENT_TTL_MS = 14 * 24 * 60 * 60 * 1000;
 /** Resolved rows are kept a while for history, then dropped. */
 const RESOLVED_KEEP_MS = 30 * 24 * 60 * 60 * 1000;
 
-export type NoticesListener = (open: Notice[]) => void;
+export type NoticesListener = (open: Notice[], prefs: NoticePrefs) => void;
 const listeners = new Set<NoticesListener>();
 
 /** Gateway wires this to the WebSocket broadcast. Module-level so it survives workspace switches. */
@@ -85,6 +86,7 @@ export class NoticeService {
     this.db.pragma("journal_mode = WAL");
     this.db.pragma("synchronous = NORMAL");
     this.db.exec(NOTICES_SCHEMA);
+    migrateNotices(this.db);
     this.deliveries = new DeliveryLog(this.db);
     this.prefsStore = new PrefsStore(this.db);
     this.stats = new StatsLog(this.db);
@@ -159,12 +161,47 @@ export class NoticeService {
   setPrefs(patch: unknown) {
     this.stats.bump("settings", "mute", countOffs(patch));
     this.prefs = this.prefsStore.set(patch);
+    this.changed();
     return this.center();
   }
 
   resetPrefs() {
     this.prefs = this.prefsStore.reset();
+    this.changed();
     return this.center();
+  }
+
+  /** Later (from Focus): out of Needs you and the Pen count until 3 PM (morning) or 9 AM tomorrow. Urgent can't be put off. */
+  later(key: string, now = new Date()): string | null {
+    const n = this.openByKey(key);
+    if (!n || effectiveLevel(n) === "urgent") return null;
+    const until = laterUntil(now).toISOString();
+    this.db.prepare("UPDATE notices SET later_until=? WHERE key=? AND resolved_at IS NULL").run(until, key);
+    this.stats.bump(sourceOf(n), "later");
+    this.changed();
+    return until;
+  }
+
+  /** Bring a Later item back now. */
+  unlater(key: string): boolean {
+    return this.changedIf(this.db.prepare("UPDATE notices SET later_until=NULL WHERE key=? AND resolved_at IS NULL").run(key).changes);
+  }
+
+  /** Mute a source for an hour (from Focus): no desktop notifications, out of Needs you. Dots stay. */
+  muteSource(sourceId: string, now = Date.now()): string {
+    const until = new Date(now + MUTE_MS).toISOString();
+    this.stats.bump(sourceId, "mute1h");
+    this.setPrefs({ sources: { [sourceId]: { muteUntil: until } } });
+    return until;
+  }
+
+  unmuteSource(sourceId: string) {
+    return this.setPrefs({ sources: { [sourceId]: { muteUntil: null } } });
+  }
+
+  /** What the UI needs to draw Needs you: open notices and your settings (for mutes). */
+  snapshot() {
+    return { notices: this.listOpen(), prefs: this.prefs };
   }
 
   /** You clicked its OS notification: an event is done, a condition is seen (stays until fixed). */
@@ -256,7 +293,7 @@ export class NoticeService {
     if (!listeners.size) return;
     const open = this.listOpen();
     for (const l of listeners) {
-      try { l(open); } catch (e) { console.warn("[NoticeService] listener failed:", e); }
+      try { l(open, this.prefs); } catch (e) { console.warn("[NoticeService] listener failed:", e); }
     }
   }
 }

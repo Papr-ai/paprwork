@@ -10,6 +10,7 @@ import { useChat } from "../../hooks/useChat";
 import { useTabs } from "../../hooks/useTabs";
 import type { TabType } from "../../types/tabs";
 import { FocusPeek, openFocusGoal } from "./FocusPeek";
+import { useNeedsYouCount } from "../../stores/useNeedsYou";
 import { ProfileFooter } from "./ProfileFooter";
 import { RailItem } from "./RailItem";
 import { RailPeek } from "./RailPeek";
@@ -151,6 +152,8 @@ export function Sidebar() {
   const agentName = useAgentName();
   const agentLook = useAgentIdentity((s) => s.look);
   const work = useAgentWork();
+  const needsCount = useNeedsYouCount();
+  const needsLabel = needsCount ? ` · ${needsCount} ${needsCount === 1 ? "needs" : "need"} you` : "";
   const workingLabel = `${agentName} is working · ${work.count} ${work.count === 1 ? "chat" : "chats"}`;
   const nudge = useAgentNudge(work.state, (action: NudgeAction) => {
     if (action.type === "chat") void handleOnboardingSendMessage(action.prompt);
@@ -178,7 +181,8 @@ export function Sidebar() {
       <RailItem
         variant="agent"
         label={work.state === "working" ? workingLabel : `Focus · ${agentName}`}
-        ariaLabel={work.state === "working" ? `Focus · ${workingLabel}` : "Focus"}
+        ariaLabel={`${work.state === "working" ? `Focus · ${workingLabel}` : "Focus"}${needsLabel}`}
+        count={needsCount}
         busy={work.state === "working"}
         active={activeView === "focus"}
         onClick={() => handleNavClick("focus")}

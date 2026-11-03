@@ -33,7 +33,8 @@ export const NOTICES_SCHEMA = `
     updated_at TEXT NOT NULL,
     seen_at TEXT,
     resolved_at TEXT,
-    expires_at TEXT
+    expires_at TEXT,
+    later_until TEXT
   );
   CREATE UNIQUE INDEX IF NOT EXISTS idx_notices_open_key ON notices(key) WHERE resolved_at IS NULL;
   CREATE INDEX IF NOT EXISTS idx_notices_open_owner ON notices(owner_kind, owner_id) WHERE resolved_at IS NULL;
@@ -64,6 +65,7 @@ export interface NoticeRow {
   seen_at: string | null;
   resolved_at: string | null;
   expires_at: string | null;
+  later_until?: string | null;
 }
 
 function parseActions(raw: string | null): NoticeAction[] | undefined {
@@ -101,5 +103,12 @@ export function rowToNotice(r: NoticeRow): Notice {
     ...(r.seen_at ? { seenAt: r.seen_at } : {}),
     ...(r.resolved_at ? { resolvedAt: r.resolved_at } : {}),
     ...(r.expires_at ? { expiresAt: r.expires_at } : {}),
+    ...(r.later_until ? { laterUntil: r.later_until } : {}),
   };
+}
+
+/** Tables made before Later existed get the column. */
+export function migrateNotices(db: { prepare: (sql: string) => { all: () => unknown[] }; exec: (sql: string) => void }): void {
+  const cols = (db.prepare("PRAGMA table_info(notices)").all() as { name: string }[]).map((c) => c.name);
+  if (!cols.includes("later_until")) db.exec("ALTER TABLE notices ADD COLUMN later_until TEXT");
 }

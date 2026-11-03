@@ -11,15 +11,22 @@ import { gateway } from "../src/lib/gateway";
 import { useTabStore } from "./tabStore";
 import type { Notice, NoticeMark } from "../../src/core/types/notices";
 import { NOTICES_CHANGED_EVENT, strongestMark } from "../../src/core/types/notices";
+import { DEFAULT_NOTICE_PREFS, type NoticePrefs } from "../../src/core/notifications/prefs";
 
 interface NoticeState {
   notices: Notice[];
-  setNotices: (notices: Notice[]) => void;
+  /** Your notification settings (Needs you reads mutes from here). */
+  prefs: NoticePrefs;
+  /** Bumped when a Later or a mute runs out, so Needs you and the count recompute. */
+  tick: number;
+  setNotices: (notices: Notice[], prefs?: NoticePrefs) => void;
 }
 
 export const useNoticeStore = create<NoticeState>((set) => ({
   notices: [],
-  setNotices: (notices) => set({ notices }),
+  prefs: DEFAULT_NOTICE_PREFS,
+  tick: 0,
+  setNotices: (notices, prefs) => set((s) => ({ notices, prefs: prefs ?? s.prefs })),
 }));
 
 /** Strongest open mark per chat id, as a stable "id:mark|id:mark" key for selectors. */
@@ -87,10 +94,11 @@ function reconcileSeen(notices: Notice[]): void {
 
 async function refresh(): Promise<void> {
   try {
-    const res = await gateway.send("notifications:list");
-    if (res.success && Array.isArray(res.data)) {
-      useNoticeStore.getState().setNotices(res.data as Notice[]);
-      reconcileSeen(res.data as Notice[]);
+    const res = await gateway.send("notifications:snapshot");
+    const data = res.data as { notices?: Notice[]; prefs?: NoticePrefs } | undefined;
+    if (res.success && Array.isArray(data?.notices)) {
+      useNoticeStore.getState().setNotices(data.notices, data.prefs);
+      reconcileSeen(data.notices);
     }
   } catch {
     /* gateway not ready; the next connect or broadcast fills it */
@@ -100,9 +108,9 @@ async function refresh(): Promise<void> {
 /** Call once at app root. */
 export function initNoticeListener(): void {
   window.addEventListener("gateway-broadcast", (event: Event) => {
-    const { type, data } = (event as CustomEvent<{ type?: string; data?: { notices?: Notice[] } }>).detail ?? {};
+    const { type, data } = (event as CustomEvent<{ type?: string; data?: { notices?: Notice[]; prefs?: NoticePrefs } }>).detail ?? {};
     if (type === NOTICES_CHANGED_EVENT && Array.isArray(data?.notices)) {
-      useNoticeStore.getState().setNotices(data.notices);
+      useNoticeStore.getState().setNotices(data.notices, data.prefs);
       reconcileSeen(data.notices);
     }
   });
@@ -125,5 +133,7 @@ export function initNoticeListener(): void {
   // focus event on this window, so "in front" would stay false and nothing gets marked seen.
   // Check focus once a second; it only talks to the gateway when the answer changes.
   window.setInterval(recheck, 1000);
+  // Later and Mute end on the clock, not on an event: recompute Needs you once a minute.
+  window.setInterval(() => useNoticeStore.setState((s) => ({ tick: s.tick + 1 })), 60_000);
   document.addEventListener("visibilitychange", recheck);
 }

@@ -7,6 +7,8 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import { getGatewayHttpBase } from "../../utils/gatewayHttpBase";
 import { RailIcons } from "./railIcons";
+import { useNeedsYou } from "../../stores/useNeedsYou";
+import { openNoticeOwner } from "../../stores/noticeOs";
 import "./FocusPeek.css";
 
 interface FocusGoalLite {
@@ -87,12 +89,30 @@ interface FocusPeekProps {
 export function FocusPeek({ status, onOpen }: FocusPeekProps) {
   const { state, refresh } = useFocusState();
   const three = state?.three ?? [];
+  const { needs } = useNeedsYou();
   return (
     <div className="focus-peek" onMouseEnter={() => void refresh()} onFocus={() => void refresh()}>
       <header className="rail-peek__header">
         <b>Focus</b>
         <span>{status}</span>
       </header>
+      {needs.length ? (
+        <div className="focus-peek__needs">
+          <h4>Needs you<em>{needs.length}</em></h4>
+          <ul>
+            {needs.slice(0, 4).map((n) => (
+              <li key={n.key}>
+                <button type="button" role="menuitem" onClick={() => openNoticeOwner(n.owner, n.key)} title={n.body ?? n.title}>
+                  <i aria-hidden="true" />
+                  <span className="focus-peek__title">{n.title}</span>
+                  <small>{n.owner.name}</small>
+                </button>
+              </li>
+            ))}
+          </ul>
+          {needs.length > 4 ? <p className="rail-peek__empty">+ {needs.length - 4} more in Focus</p> : null}
+        </div>
+      ) : null}
       {three.length ? (
         <ul className="focus-peek__three">
           {three.map((g) => (
