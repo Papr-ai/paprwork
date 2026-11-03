@@ -8,6 +8,7 @@
  *   notifications:update   → update downloaded (ready) or gone (anything else); a platform condition
  *   notifications:clicked  → you clicked its OS notification (events done, conditions seen)
  *   notifications:center / set-prefs / reset-prefs → Settings → Notifications
+ *   notifications:stats    → how much reached you in the last N days (counts only)
  */
 import type { WebSocket } from "ws";
 import type { WSMessage } from "./index.js";
@@ -80,6 +81,11 @@ export async function setupNotificationHandlers(ws: WebSocket, message: WSMessag
       case "notifications:center":
         sendResponse(ws, { id: message.id, success: true, data: service.center() });
         return;
+      case "notifications:stats": {
+        const days = typeof p.days === "number" && p.days >= 1 && p.days <= 90 ? Math.floor(p.days) : 7;
+        sendResponse(ws, { id: message.id, success: true, data: service.statsSummary(days) });
+        return;
+      }
       case "notifications:set-prefs":
         sendResponse(ws, { id: message.id, success: true, data: service.setPrefs(p.prefs) });
         return;

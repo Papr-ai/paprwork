@@ -14,6 +14,9 @@ import { NotificationsTab } from "../components/Settings/NotificationsTab";
 let apps: { id: string; name: string }[] = [];
 let prefs = DEFAULT_NOTICE_PREFS;
 const center = () => ({ success: true, data: { prefs, defaults: DEFAULT_NOTICE_PREFS, sources: PAPR_SOURCES, apps } });
+let raised = 0;
+const stats = () => ({ success: true, data: { days: 7, perDay: raised / 7, medianMinutesToDone: 12,
+  totals: { raised, os: 3, capped: 0, paused: 1, muted: 0, mute: 0 }, bySource: [] } });
 const broadcast = (notices: unknown[]) => act(() => {
   window.dispatchEvent(new CustomEvent("gateway-broadcast", { detail: { type: "notifications:changed", data: { notices } } }));
 });
@@ -23,8 +26,9 @@ afterEach(cleanup);
 
 describe("NotificationsTab", () => {
   beforeEach(() => {
-    apps = []; prefs = DEFAULT_NOTICE_PREFS; send.mockReset();
+    apps = []; prefs = DEFAULT_NOTICE_PREFS; raised = 0; send.mockReset();
     send.mockImplementation(async (type: string, payload?: { prefs?: { sources?: Record<string, { sound?: boolean }> } }) => {
+      if (type === "notifications:stats") return stats();
       if (type === "notifications:set-prefs") prefs = { ...prefs, sources: { ...prefs.sources, ...payload?.prefs?.sources } };
       return center();
     });
@@ -49,5 +53,18 @@ describe("NotificationsTab", () => {
     expect(screen.getByText("Desktop notifications")).toBeTruthy();
     fireEvent.click(screen.getByLabelText("Sound for Chats"));
     await waitFor(() => expect(send).toHaveBeenCalledWith("notifications:set-prefs", { prefs: { sources: { chats: { sound: false } } } }));
+  });
+
+  it("Do Not Disturb: Pause for 1 hour saves a time about an hour out; the week's count shows", async () => {
+    raised = 14;
+    render(<NotificationsTab />);
+    expect(await screen.findByText(/Last 7 days: 14 notices \(about 2 a day\), 3 desktop notifications, 1 held by Do Not Disturb\. Usually handled within 12 min\./)).toBeTruthy();
+    const before = Date.now();
+    fireEvent.change(screen.getByLabelText("Pause desktop notifications"), { target: { value: "1" } });
+    await waitFor(() => expect(send).toHaveBeenCalledWith("notifications:set-prefs", expect.anything()));
+    const call = send.mock.calls.find((c) => c[0] === "notifications:set-prefs")!;
+    const until = Date.parse((call[1] as { prefs: { pauseUntil: string } }).prefs.pauseUntil);
+    expect(until - before).toBeGreaterThan(59 * 60_000);
+    expect(until - before).toBeLessThan(61 * 60_000);
   });
 });

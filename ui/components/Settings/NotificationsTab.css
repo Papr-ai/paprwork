@@ -71,3 +71,5 @@
 .notif-cb.is-on::after { content: ""; position: absolute; left: 5px; top: 1px; width: 4px; height: 9px; border: solid #fff; border-width: 0 2px 2px 0; transform: rotate(45deg); }
 .notif-group.is-dim { opacity: 0.5; }
 .notif-group > .setting-row { padding: 10px 12px; margin: 0; }
+.notif-pause { margin-top: 12px; }
+.notif-stats { margin-top: 6px; }
