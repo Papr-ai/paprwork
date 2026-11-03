@@ -10,8 +10,10 @@
 export type Surface = "desktop" | "badge";
 export const SURFACES: Surface[] = ["desktop", "badge"];
 export type Where = Record<Surface, boolean>;
-export interface SourcePref { allow: boolean; sound: boolean; needs: Where; done: Where }
-export interface SourcePrefPatch { allow?: boolean; sound?: boolean; needs?: Partial<Where>; done?: Partial<Where> }
+export interface SourcePref { allow: boolean; sound: boolean; needs: Where; done: Where; muteUntil?: string }
+export interface SourcePrefPatch { allow?: boolean; sound?: boolean; needs?: Partial<Where>; done?: Partial<Where>;
+  /** Mute for an hour (from Focus): no desktop notifications and out of Needs you until then. Urgent ignores it. */
+  muteUntil?: string }
 export interface NoticePrefs {
   version: 2;
   sources: Record<string, SourcePrefPatch>;
@@ -40,7 +42,8 @@ export function defaultSourcePref(id: string): SourcePref {
 
 export function sourcePref(p: NoticePrefs, id: string): SourcePref {
   const d = defaultSourcePref(id), u = p.sources[id] ?? {};
-  return { allow: u.allow ?? d.allow, sound: u.sound ?? d.sound, needs: { ...d.needs, ...u.needs }, done: { ...d.done, ...u.done } };
+  return { allow: u.allow ?? d.allow, sound: u.sound ?? d.sound, needs: { ...d.needs, ...u.needs }, done: { ...d.done, ...u.done },
+    ...(u.muteUntil ? { muteUntil: u.muteUntil } : {}) };
 }
 
 export const typeKey = (source: string, type: string) => `${source}/${type}`;
@@ -88,6 +91,8 @@ export function cleanPrefs(raw: unknown): NoticePrefs {
     const needs = cleanWhere(s.needs), done = cleanWhere(s.done);
     if (needs) patch.needs = needs;
     if (done) patch.done = done;
+    const mute = cleanPause(s.muteUntil);
+    if (mute) patch.muteUntil = mute;
     out.sources[id] = patch;
   }
   for (const [k, v] of Object.entries((r.types ?? {}) as Record<string, unknown>)) if (k.includes("/") && v === false) out.types[k] = false;
@@ -110,6 +115,8 @@ export function compactPrefs(p: NoticePrefs): NoticePrefs {
       for (const k of SURFACES) if (s[cat]?.[k] !== undefined && s[cat]![k] !== d[cat][k]) w[k] = s[cat]![k];
       if (Object.keys(w).length) patch[cat] = w;
     }
+    const mute = cleanPause(s.muteUntil);
+    if (mute) patch.muteUntil = mute;
     if (Object.keys(patch).length) sources[id] = patch;
   }
   const types = Object.fromEntries(Object.entries(p.types).filter(([, v]) => v === false));
@@ -131,6 +138,9 @@ export function mergePrefs(cur: NoticePrefs, patch: unknown): NoticePrefs {
       const w = cleanWhere(raw[cat]);
       if (w) c[cat] = { ...c[cat], ...w };
     }
+    // muteUntil: a time mutes this source until then; null unmutes.
+    if (raw.muteUntil === null) delete c.muteUntil;
+    else if (raw.muteUntil !== undefined) { const m = cleanPause(raw.muteUntil); if (m) c.muteUntil = m; }
     sources[id] = c;
   }
   const types = { ...cur.types };

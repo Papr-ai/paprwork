@@ -24,6 +24,8 @@ export interface RouteCtx {
   viewingOwner: boolean;
   /** Same key already open. */
   existing?: { count: number };
+  /** For tests; defaults to Date.now(). */
+  now?: number;
 }
 
 export interface Delivery {
@@ -84,6 +86,7 @@ export function route(n: RoutedNotice, c: RouteCtx): Delivery {
   why.push(cat === "needs" ? "blue dot until it's handled" : "green dot until you look");
   if (!p[cat].badge) { d.mark = "none"; why.push(`${name} › Badges is off: no dot`); }
   if (c.foreground) why.push("Paprwork is in front: nothing pops");
+  else if (p.muteUntil && Date.parse(p.muteUntil) > (c.now ?? Date.now())) { d.paused = p[cat].desktop; why.push(`${name} is muted for an hour: kept as a dot, no desktop notification`); }
   else if (c.dnd) { d.paused = p[cat].desktop && !FOCUS_ONLY.has(n.kind); why.push("Do Not Disturb is on: kept as a dot, no desktop notification"); }
   else if (FOCUS_ONLY.has(n.kind)) why.push("check-ins stay in Focus: never a desktop notification");
   else if (!p[cat].desktop) why.push(`${name} › Desktop is off: no desktop notification`);

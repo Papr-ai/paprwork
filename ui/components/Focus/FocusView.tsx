@@ -1,9 +1,10 @@
 /**
  * FocusView — the agent's page, opened from the rail agent. One job: what matters today.
- * No in-page chrome: the Home mini-app owns Today | All tasks, the rail owns Memory and Search.
+ * Needs you sits on top (everything waiting on you); below it the Home mini-app owns the Daily Brief.
  */
 import { useEffect, useState } from "react";
 import { HomeTodayView } from "../Memory/HomeTodayView";
+import { NeedsYou } from "./NeedsYou";
 import "../Memory/WikiLibrary.css";
 
 export function FocusView() {
@@ -17,6 +18,7 @@ export function FocusView() {
 
   return (
     <div className="memory-view focus-view" data-testid="focus-view">
+      <NeedsYou />
       <HomeTodayView refreshToken={refreshToken} />
     </div>
   );

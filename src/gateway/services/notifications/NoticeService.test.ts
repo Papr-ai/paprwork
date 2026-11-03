@@ -219,4 +219,35 @@ describe("NoticeService settings + clicks", () => {
     expect(c.apps).toEqual([{ id: "app:crm", name: "CRM" }]);
     expect(c.sources.map((s) => s.id)).toEqual(["chats", "apps", "account", "updates"]);
   });
+
+  describe("Later and Mute (Focus)", () => {
+    it("Later stores when it comes back and keeps the notice open (dot stays)", () => {
+      svc.notify(needsKey("a"));
+      const until = svc.later("key.request:a:GITHUB_TOKEN", new Date(2026, 10, 3, 10, 40));
+      expect(until).toBe(new Date(2026, 10, 3, 15).toISOString());
+      const [open] = svc.listOpen();
+      expect(open).toMatchObject({ laterUntil: until, mark: "blue" });
+      expect(open.resolvedAt).toBeUndefined();
+      expect(svc.unlater("key.request:a:GITHUB_TOKEN")).toBe(true);
+      expect(svc.listOpen()[0].laterUntil).toBeUndefined();
+    });
+    it("Urgent can't be put off", () => {
+      svc.notify({ ...needsKey("a"), key: "billing.out", kind: "billing.out", level: "urgent", source: { type: "billing", id: "credits", name: "Billing" } });
+      expect(svc.later("billing.out")).toBeNull();
+    });
+    it("Mute sets an hour on the source, shows in the snapshot, and Unmute clears it", () => {
+      const until = svc.muteSource("chats", Date.parse("2026-11-03T10:00:00Z"));
+      expect(until).toBe("2026-11-03T11:00:00.000Z");
+      expect(svc.snapshot().prefs.sources.chats?.muteUntil).toBe(until);
+      svc.unmuteSource("chats");
+      expect(svc.snapshot().prefs.sources.chats?.muteUntil).toBeUndefined();
+    });
+    it("Later and mutes are counted", () => {
+      svc.notify(needsKey("a"));
+      svc.later("key.request:a:GITHUB_TOKEN");
+      svc.muteSource("chats");
+      const t = svc.statsSummary(1).totals;
+      expect([t.later, t.mute1h, t.mute]).toEqual([1, 1, 0]);
+    });
+  });
 });
