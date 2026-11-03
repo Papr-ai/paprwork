@@ -19,7 +19,7 @@ import { PAPR_SOURCES, appSourceId } from "../../../core/notifications/sources.j
 import { DeliveryLog, OS_CAP_PER_SOURCE } from "./noticeDeliveries.js";
 import { PrefsStore } from "./noticePrefs.js";
 import { StatsLog, countOffs } from "./noticeStats.js";
-import { pausedAt } from "../../../core/notifications/prefs.js";
+import { pausedAt, previewsOf, type Previews } from "../../../core/notifications/prefs.js";
 import {
   NOTICE_MARK,
   type Notice,
@@ -48,6 +48,8 @@ export interface OsDelivery {
   why: string[];
   /** false: show it silently (done, or the source's Sound is off). */
   sound: boolean;
+  /** Show previews setting: the window process hides the text when it says so. */
+  previews: Previews;
 }
 export type OsListener = (d: OsDelivery) => void;
 const osListeners = new Set<OsListener>();
@@ -189,7 +191,7 @@ export class NoticeService {
     this.deliveries.record({ ...base, status: "sent", why });
     this.stats.bump(statSource, "os");
     for (const l of osListeners) {
-      try { l({ notice, why, sound }); } catch (e) { console.warn("[NoticeService] os listener failed:", e); }
+      try { l({ notice, why, sound, previews: previewsOf(this.prefs) }); } catch (e) { console.warn("[NoticeService] os listener failed:", e); }
     }
   }
 

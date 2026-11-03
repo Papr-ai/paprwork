@@ -41,7 +41,7 @@ export class PrefsStore {
   }
 
   private write(p: NoticePrefs): NoticePrefs {
-    if (!Object.keys(p.sources).length && !Object.keys(p.types).length && !p.pauseUntil) return this.reset();
+    if (!Object.keys(p.sources).length && !Object.keys(p.types).length && !p.pauseUntil && !p.previews) return this.reset();
     this.db.prepare(`INSERT INTO notice_prefs (id, json, updated_at) VALUES (1, ?, ?)
       ON CONFLICT(id) DO UPDATE SET json=excluded.json, updated_at=excluded.updated_at`)
       .run(JSON.stringify(p), new Date().toISOString());

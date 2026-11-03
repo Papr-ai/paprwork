@@ -71,5 +71,9 @@
 .notif-cb.is-on::after { content: ""; position: absolute; left: 5px; top: 1px; width: 4px; height: 9px; border: solid #fff; border-width: 0 2px 2px 0; transform: rotate(45deg); }
 .notif-group.is-dim { opacity: 0.5; }
 .notif-group > .setting-row { padding: 10px 12px; margin: 0; }
-.notif-pause { margin-top: 12px; }
-.notif-stats { margin-top: 6px; }
+.notif-top { margin-top: 12px; }
+.notif-top > .setting-row { padding: 10px 12px; margin: 0; border-top: 1px solid var(--border-color); }
+.notif-top > .setting-row:first-child { border-top: 0; }
+.notif-seg { display: inline-flex; padding: 2px; gap: 2px; border-radius: 8px; background: var(--bg-secondary); border: 1px solid var(--border-color); }
+.notif-seg button { padding: 3px 10px; border: 0; border-radius: 6px; background: transparent; color: var(--text-secondary); font: inherit; font-size: 12px; cursor: pointer; white-space: nowrap; }
+.notif-seg button.is-on { background: var(--bg-primary); color: var(--text-primary); box-shadow: 0 1px 2px rgba(0,0,0,.12); }

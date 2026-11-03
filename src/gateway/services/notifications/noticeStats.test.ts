@@ -2,7 +2,7 @@ import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
-import { NoticeService } from "./NoticeService.js";
+import { NoticeService, onNoticeOs } from "./NoticeService.js";
 import { countOffs } from "./noticeStats.js";
 import type { NoticeInput } from "../../../core/types/notices.js";
 
@@ -72,5 +72,18 @@ describe("notification stats + Do Not Disturb", () => {
   it("countOffs counts each false in a patch", () => {
     expect(countOffs({ sources: { a: { allow: false, needs: { desktop: false, badge: true } } }, types: { "a/b": true } })).toBe(2);
     expect(countOffs({ pauseUntil: "x" })).toBe(0);
+  });
+
+  it("Show previews is saved sparse, travels with each desktop notification, and resets", () => {
+    const seen: string[] = [];
+    const off = onNoticeOs((d) => seen.push(d.previews));
+    svc.notify(needsKey("a"));
+    svc.setPrefs({ previews: "never" });
+    expect(svc.prefs.previews).toBe("never");
+    svc.notify(needsKey("b"));
+    svc.setPrefs({ previews: "unlocked" });
+    expect(svc.prefs.previews).toBeUndefined();
+    off();
+    expect(seen).toEqual(["unlocked", "never"]);
   });
 });
