@@ -1,8 +1,9 @@
 /**
- * Needs you: the top of Focus. Everything waiting on you, one list. The first is a card with its one
+ * Needs you: the top of Focus. What's waiting on you that has no other home, plus what was promoted
+ * off its dot (with the reason). One list. The first is a card with its one
  * fix; the rest are rows. Each has a … menu: Later, Mute this source for an hour, Turn off this type,
  * and its settings. Urgent can't be put off or muted. Later items sit in a quiet list below, and a
- * muted source shows one line with Unmute. The section keeps its place when empty.
+ * muted source shows one line with Unmute. Nothing at all when empty.
  */
 import { useState } from "react";
 import type { Notice } from "../../../src/core/types/notices";
@@ -21,7 +22,7 @@ type Toast = { text: string; undo: () => void } | null;
 const actionLabel = (n: Notice) => (n.actions ?? []).find((a) => a.intent !== "open")?.label ?? n.actions?.[0]?.label ?? "Open";
 
 export function NeedsYou() {
-  const { needs, later, muted } = useNeedsYou();
+  const { needs, reasons, later, muted } = useNeedsYou();
   const [more, setMore] = useState(false);
   const [toast, setToast] = useState<Toast>(null);
   const flash = (t: Toast) => { setToast(t); if (t) window.setTimeout(() => setToast((c) => (c === t ? null : c)), 6000); };
@@ -47,7 +48,7 @@ export function NeedsYou() {
       <h2 className="needs-you__h">Needs you{needs.length ? <em>{needs.length}</em> : null}</h2>
       {first ? (
         <article className={`needs-you__hero${isUrgent(first) ? " is-urgent" : ""}`}>
-          <header><small>{isUrgent(first) ? "You're blocked" : "Do this first"}</small><span className="needs-you__from">{first.owner.name}</span>{menu(first)}</header>
+          <header><small>{isUrgent(first) ? "You're blocked" : "Do this first"}</small><span className="needs-you__from">{first.owner.name}{reasons[first.key] ? ` · ${reasons[first.key]}` : ""}</span>{menu(first)}</header>
           <h3>{first.title}</h3>
           {first.body ? <p>{first.body}</p> : null}
           <footer><button type="button" className="needs-you__go" onClick={() => open(first)}>{actionLabel(first)}</button></footer>
@@ -58,7 +59,7 @@ export function NeedsYou() {
           {shown.map((n) => (
             <div key={n.key} className="needs-you__row">
               <i className="needs-you__dot" aria-hidden="true" />
-              <div className="needs-you__rt"><b>{n.title}</b><span className="needs-you__from">{n.owner.name}</span></div>
+              <div className="needs-you__rt"><b>{n.title}</b><span className="needs-you__from">{n.owner.name}{reasons[n.key] ? ` · ${reasons[n.key]}` : ""}</span></div>
               <button type="button" className="needs-you__go is-small" onClick={() => open(n)}>{actionLabel(n)}</button>
               {menu(n)}
             </div>

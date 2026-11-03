@@ -30,8 +30,10 @@ import type { Notice } from "../../src/core/types/notices";
 const n = (o: Partial<Notice> = {}): Notice => ({
   id: o.key ?? "k", key: "key.request:c:GITHUB_TOKEN", kind: "key.request", type: "condition", level: "priority", mark: "blue", count: 1,
   title: "Pen needs GITHUB_TOKEN", source: { type: "agent", id: "pen", name: "Pen" }, owner: { kind: "chat", id: "c", name: "Outreach" },
-  actions: [{ label: "Add key", intent: "open" }], createdAt: new Date().toISOString(), updatedAt: new Date().toISOString(), ...o,
+  actions: [{ label: "Add key", intent: "open" }], createdAt: DAY_AGO(), updatedAt: new Date().toISOString(), ...o,
 });
+/** A chat's key request only comes into Focus once it has waited a day; fixtures default to that. */
+function DAY_AGO() { return new Date(Date.now() - 25 * 3_600_000).toISOString(); }
 const billing = n({ key: "billing.out", kind: "billing.out", level: "urgent", title: "Out of Papr credit", source: { type: "billing", id: "credits", name: "Billing" },
   owner: { kind: "account", id: "settings", name: "Billing" }, actions: [{ label: "Top up", intent: "billing.topup" }] });
 const set = (notices: Notice[], prefs = DEFAULT_NOTICE_PREFS) => act(() => useNoticeStore.getState().setNotices(notices, prefs));
@@ -43,6 +45,17 @@ function Pen() {
 describe("Needs you", () => {
   beforeEach(() => { sent.length = 0; useNoticeStore.setState({ notices: [], prefs: DEFAULT_NOTICE_PREFS }); });
 
+  it("a fresh key request in a chat stays on the chat's dot: not in Focus, no count on Pen", () => {
+    set([n({ createdAt: new Date().toISOString() })]);
+    const { container } = render(<><NeedsYou /><Pen /></>);
+    expect(container.querySelector(".needs-you")).toBeNull();
+    expect(container.querySelector(".rail-btn__count")).toBeNull();
+  });
+  it("promoted after a day, with the reason", () => {
+    set([n()]);
+    render(<NeedsYou />);
+    expect(screen.getByText(/Waiting since yesterday/)).toBeTruthy();
+  });
   it("empty: no section at all, and no count on Pen", () => {
     const { container } = render(<><NeedsYou /><Pen /></>);
     expect(container.querySelector(".needs-you")).toBeNull();

@@ -36,7 +36,7 @@ describe("notice prefs", () => {
     db.prepare("INSERT INTO notice_prefs (id, json, updated_at) VALUES (1, ?, '')")
       .run(JSON.stringify({ priorityOs: false, chatDoneOs: false, apps: { crm: "off", notes: "all" } }));
     const p = s.effective();
-    expect(sourcePref(p, "chats")).toEqual({ allow: true, sound: true, needs: { desktop: false, badge: true }, done: { desktop: false, badge: true } });
+    expect(sourcePref(p, "chats")).toEqual({ allow: true, sound: true, needs: { desktop: false, badge: true }, done: { desktop: false, badge: true }, focus: "pen" });
     expect(sourcePref(p, "apps").needs.desktop).toBe(false);
     expect(sourcePref(p, "app:crm").allow).toBe(false);
     expect(sourcePref(p, "app:notes").needs.desktop).toBe(false);
