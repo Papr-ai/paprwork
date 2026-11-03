@@ -1,10 +1,11 @@
 /**
  * collab:* — mentions between people.
  *   collab:members → teammates for the @ picker (you excluded)
- *   collab:answer  → { itemId, status, reply? } send the (approved) reply; open = took it, done, dismissed = can't
+ *   collab:answer  → { itemId, status, reply? } send the (approved) reply; open = I'm on it (in progress), done, dismissed = can't
  *   collab:notify  → { ids, note? } the user said yes to Pen's "Ask Shawkat?": tell them now
  *   collab:card    → { itemId } the Focus card for a mention that arrived here
  *   collab:waiting → what the user asked others that's still open (Waiting on, in Focus)
+ *   collab:followup → { itemId, kind: reply|nudge|close, text? } the asker follows up from Waiting on
  */
 import type { WebSocket } from "ws";
 import type { WSMessage } from "./index.js";
@@ -53,8 +54,21 @@ export async function setupCollabHandlers(ws: WebSocket, message: WSMessage): Pr
         const rows = await waitingOn().catch(() => []);
         sendResponse(ws, { id: message.id, success: true, data: { waiting: rows.map((m) => ({
           id: m.id, toName: m.toName, title: m.action?.title ?? m.text.slice(0, 120), due: m.action?.due ?? null,
-          state: m.reply ? "took" : "asked", reply: m.reply?.text ?? null, chatId: m.context?.chatId ?? null, chatTitle: m.context?.chatTitle ?? null, at: m.createdAt,
+          state: m.progress === "in_progress" || (m.progress == null && m.reply) ? "in_progress" : "asked",
+          reply: m.reply?.text ?? null, replyAt: m.reply?.at ?? null,
+          mine: [...(m.thread ?? [])].reverse().find((t) => t.by === "from") ?? null,
+          nudgedAt: m.nudgedAt ?? null, chatId: m.context?.chatId ?? null, chatTitle: m.context?.chatTitle ?? null, at: m.createdAt,
         })) } });
+        return;
+      }
+      case "collab:followup": {
+        const kind = p.kind === "reply" || p.kind === "nudge" || p.kind === "close" ? p.kind : null;
+        if (typeof p.itemId !== "string" || !p.itemId || !kind) throw new Error("itemId and kind (reply, nudge, close) required");
+        const text = typeof p.text === "string" && p.text.trim() ? p.text.trim().slice(0, 4000) : undefined;
+        if (kind === "reply" && !text) throw new Error("Write something to send");
+        const { followUp } = await import("../services/collab/mentions.js");
+        const m = await followUp(p.itemId, kind, text);
+        sendResponse(ws, { id: message.id, success: true, data: { status: m.status, progress: m.progress ?? null } });
         return;
       }
       default:

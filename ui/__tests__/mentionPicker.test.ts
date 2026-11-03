@@ -24,13 +24,19 @@ describe("@ picker", () => {
 });
 
 
-describe("compact picker", () => {
+describe("@ dropdown", () => {
   const many = Array.from({ length: 14 }, (_, i) => ({ userId: `s${i}`, displayName: `Sam ${String.fromCharCode(65 + i)}`, email: `sam${i}@x.ai` }));
-  it("shows at most 3, best first, and counts the rest", () => {
+  it("shows at most 6, best first, and counts the rest", () => {
     const r = rankTeammates([...team, ...many], "s");
-    expect(r.shown).toHaveLength(3);
-    expect(r.more).toBe(13); // Shawkat, Sam Lee and 14 Sams match "s"; Amir does not
+    expect(r.shown).toHaveLength(6);
+    expect(r.more).toBe(10); // Shawkat, Sam Lee and 14 Sams match "s"; Amir does not
     expect(rankTeammates(team, "sha").shown.map((m) => m.userId)).toEqual(["u1"]);
     expect(rankTeammates(team, "kab").shown.map((m) => m.userId)).toEqual(["u2", "u1"]);
+  });
+  it("puts people you picked recently first, most recent first", () => {
+    const r = rankTeammates([...team, ...many], "s", 6, ["s9", "u1"]);
+    expect(r.shown.slice(0, 2).map((m) => m.userId)).toEqual(["s9", "u1"]);
+    expect(r.recentCount).toBe(2);
+    expect(rankTeammates(team, "sam", 6, ["u1"]).recentCount).toBe(0); // recent but not a match
   });
 });

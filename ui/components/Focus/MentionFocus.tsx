@@ -1,8 +1,10 @@
 /**
  * Mentions in Focus, both sides.
- *  - AskCard: a teammate's ask, as a Needs you card with Pen's draft. Take it and reply (stays on Focus
- *    as your task until Mark done), Can't, or Later. Same card shape as every other Needs you item.
- *  - WaitingOn: what you asked others that's still open. Quiet rows, no pings; "Your turn" arrives as a notice.
+ *  - AskCard: a teammate's ask, as a Needs you card with Pen's draft. I'm on it (stays on Focus as
+ *    In progress until Mark done), Can't, or Later. Same card shape as every other Needs you item.
+ *  - WaitingOn: what you asked others that's still open. This is where you check progress, not the chat:
+ *    status (Asked / In progress), their latest reply, and Reply / Nudge / Close / Open chat on the row.
+ *    You're only notified when it's your move (done, can't, a question); In progress changes the row quietly.
  */
 import { useCallback, useEffect, useState } from "react";
 import type { Notice } from "../../../src/core/types/notices";
@@ -43,7 +45,7 @@ export function MentionAskFocus({ notice, menu, onLater }: { notice: Notice; men
   const due = card?.action?.due ? ` · due ${card.action.due}` : "";
   return (
     <article className="needs-you__hero mention-focus">
-      <header><small>{took ? "On your Focus" : "Do this first"}</small><span className="needs-you__from">{from} asked you{due}</span>{menu}</header>
+      <header><small>{took ? "In progress" : "Do this first"}</small><span className="needs-you__from">{from} asked you{due}</span>{menu}</header>
       <h3>{card?.action?.title ?? notice.title}</h3>
       {card ? <p>{card.text}</p> : notice.body ? <p>{notice.body}</p> : null}
       {took ? (
@@ -57,10 +59,13 @@ export function MentionAskFocus({ notice, menu, onLater }: { notice: Notice; men
       {error ? <p className="mention-focus__err" role="alert">{error}</p> : null}
       <footer className="mention-focus__acts">
         {took ? (
-          <button type="button" className="needs-you__go" disabled={busy} onClick={() => void answer("done")}>Mark done</button>
+          <>
+            <button type="button" className="needs-you__go" disabled={busy} onClick={() => void answer("done")}>Mark done</button>
+            <button type="button" className="mention-focus__quiet" disabled={busy} onClick={() => void answer("dismissed")}>Can't anymore</button>
+          </>
         ) : (
           <button type="button" className="needs-you__go" disabled={busy || !card || !draft.trim()} onClick={() => void answer("open", draft.trim())}>
-            {busy ? "Sending…" : "Take it and reply"}
+            {busy ? "Sending…" : "I'm on it"}
           </button>
         )}
         {!took ? <button type="button" className="mention-focus__quiet" disabled={busy || !card} onClick={() => void answer("dismissed", draft.trim() && draft !== card?.suggestedReply ? draft.trim() : undefined)}>Can't</button> : null}
@@ -71,7 +76,77 @@ export function MentionAskFocus({ notice, menu, onLater }: { notice: Notice; men
   );
 }
 
-interface Waiting { id: string; toName: string; title: string; due: string | null; state: "asked" | "took"; reply: string | null; chatId: string | null; chatTitle: string | null }
+interface Waiting {
+  id: string; toName: string; title: string; due: string | null; state: "asked" | "in_progress"; reply: string | null; replyAt: string | null;
+  mine: { text: string; at: string } | null; nudgedAt: string | null; chatId: string | null; chatTitle: string | null; at: string;
+}
+
+const ago = (iso: string | null) => {
+  if (!iso) return "";
+  const m = Math.max(0, Math.round((Date.now() - Date.parse(iso)) / 60000));
+  return m < 1 ? "just now" : m < 60 ? `${m}m ago` : m < 1440 ? `${Math.round(m / 60)}h ago` : `${Math.round(m / 1440)}d ago`;
+};
+const NUDGE_MS = 6 * 3600_000;
+
+function openChat(w: Waiting) {
+  if (!w.chatId) return;
+  const { tabs, createTab, switchToTab } = useTabStore.getState();
+  const t = tabs.find((x) => x.type === "chat" && x.entityId === w.chatId);
+  switchToTab(t?.id ?? createTab("chat", w.chatId, w.chatTitle ?? "Chat"));
+}
+
+function WaitingRow({ w, onChanged }: { w: Waiting; onChanged: () => void }) {
+  const [writing, setWriting] = useState(false);
+  const [text, setText] = useState("");
+  const [busy, setBusy] = useState<string | null>(null);
+  const [note, setNote] = useState<string | null>(null);
+  const name = first(w.toName);
+  const act = async (kind: "reply" | "nudge" | "close", body?: string) => {
+    setBusy(kind); setNote(null);
+    const r = await gateway.send("collab:followup", { itemId: w.id, kind, text: body }).catch((e: Error) => ({ success: false, error: e.message }));
+    setBusy(null);
+    if (!r.success) { setNote(typeof r.error === "string" ? r.error : "Couldn't send. Try again."); return; }
+    if (kind === "reply") { setWriting(false); setText(""); }
+    setNote(kind === "nudge" ? `Nudged ${name}` : null);
+    onChanged();
+  };
+  const nudgedRecently = !!w.nudgedAt && Date.now() - Date.parse(w.nudgedAt) < NUDGE_MS;
+  const prog = w.state === "in_progress";
+  return (
+    <div className="mention-waiting__row">
+      <i className="mention-waiting__av" aria-hidden="true">{initials(w.toName)}</i>
+      <div className="mention-waiting__main">
+        <div className="mention-waiting__top">
+          <b>{name} · {w.title}</b>
+          <span className={`mention-state${prog ? " is-prog" : ""}`}>{prog ? "In progress" : "Asked"}</span>
+        </div>
+        <span className="mention-waiting__meta">Asked {ago(w.at)}{w.due ? ` · due ${w.due}` : ""}{!w.reply && !prog ? " · no reply yet" : ""}</span>
+        {w.reply ? <q className="mention-waiting__q">{w.reply}<small>{name} · {ago(w.replyAt)}</small></q> : null}
+        {w.mine && (!w.replyAt || w.mine.at > w.replyAt) ? <q className="mention-waiting__q is-mine">{w.mine.text}<small>You · {ago(w.mine.at)}</small></q> : null}
+        {writing ? (
+          <div className="mention-waiting__write">
+            <textarea value={text} onChange={(e) => setText(e.target.value)} rows={2} autoFocus aria-label={`Reply to ${name}`}
+              onKeyDown={(e) => { if (e.key === "Enter" && (e.metaKey || e.ctrlKey) && text.trim()) void act("reply", text.trim()); if (e.key === "Escape") setWriting(false); }} />
+            <div className="mention-waiting__acts">
+              <button type="button" className="needs-you__go" disabled={!!busy || !text.trim()} onClick={() => void act("reply", text.trim())}>{busy === "reply" ? "Sending…" : `Send to ${name}`}</button>
+              <button type="button" className="mention-focus__quiet" onClick={() => setWriting(false)}>Cancel</button>
+            </div>
+          </div>
+        ) : (
+          <div className="mention-waiting__acts">
+            <button type="button" className="mention-focus__quiet" onClick={() => setWriting(true)}>Reply</button>
+            {!prog ? <button type="button" className="mention-focus__quiet" disabled={!!busy || nudgedRecently} onClick={() => void act("nudge")}>{nudgedRecently ? "Nudged" : "Nudge"}</button> : null}
+            <button type="button" className="mention-focus__quiet" disabled={!!busy} onClick={() => void act("close")} title={`Tell ${name} you don't need it anymore`}>Close</button>
+            {w.chatId ? <button type="button" className="mention-focus__quiet" onClick={() => openChat(w)}>Open chat</button> : null}
+          </div>
+        )}
+        {note ? <p className="mention-waiting__note" role="status">{note}</p> : null}
+      </div>
+    </div>
+  );
+}
+
+const initials = (n: string) => n.split(/\s+/).filter(Boolean).slice(0, 2).map((x) => x[0]!.toUpperCase()).join("") || "?";
 
 export function WaitingOn() {
   const [rows, setRows] = useState<Waiting[]>([]);
@@ -86,24 +161,11 @@ export function WaitingOn() {
     return () => { window.removeEventListener("gateway-broadcast", on); window.removeEventListener("papr-workspace-switch-complete", load); };
   }, [load]);
   if (!rows.length) return null;
-  const open = (w: Waiting) => {
-    if (!w.chatId) return;
-    const { tabs, createTab, switchToTab } = useTabStore.getState();
-    const t = tabs.find((x) => x.type === "chat" && x.entityId === w.chatId);
-    switchToTab(t?.id ?? createTab("chat", w.chatId, w.chatTitle ?? "Chat"));
-  };
   return (
     <section className="needs-you mention-waiting" aria-label="Waiting on">
       <h2 className="needs-you__h">Waiting on<em>{rows.length}</em></h2>
-      {rows.map((w) => (
-        <button key={w.id} type="button" className="mention-waiting__row" onClick={() => open(w)} disabled={!w.chatId}>
-          <b>{first(w.toName)} · {w.title}</b>
-          <span>{w.due ? `due ${w.due}` : ""}{w.chatTitle ? `${w.due ? " · " : ""}${w.chatTitle}` : ""}</span>
-          <ol className="mention-trail" aria-label={w.state === "took" ? "Took it" : "Asked"}>
-            <li className="on">Asked</li><li className={w.state === "took" ? "on" : ""}>Took it</li><li>Done</li>
-          </ol>
-        </button>
-      ))}
+      {rows.map((w) => <WaitingRow key={w.id} w={w} onChanged={load} />)}
+      <p className="mention-waiting__foot">You're notified only when it's your move: done, can't, or a question.</p>
     </section>
   );
 }

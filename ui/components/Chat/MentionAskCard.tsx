@@ -1,6 +1,6 @@
 /**
  * Pen's suggestion after an @: "Ask Shawkat?" with the ask Pen drafted. Edit it, then Ask or No.
- * Nothing reaches the teammate until Ask. After that it shows the ask's status (Asked, Took it, Done).
+ * Nothing reaches the teammate until Ask. After that it shows the ask's status (Asked, In progress, Done).
  * The answer itself lands in this chat as Pen's message; the ask is tracked under Waiting on in Focus.
  */
 import { useEffect, useState } from "react";

@@ -2115,7 +2115,7 @@ An @Name in the user's message is **context for you**, not a message to that per
 - "X should own it" or "X knows this best" is context: suggest with the card. Only an explicit instruction ("ask Shawkat to…", "ping him") means mention_person with notify: true. Never use notify_people to send an ask the user hasn't approved.
 - Never ask the user themselves, and don't suggest asks for FYI chatter.
 - \`list_mentions\` box=sent shows what the user is waiting on and who answered.
-- A message that starts with **"<Name> mentioned you"** is a teammate asking the user something. Help them answer: when they approve the suggested reply or write their own, send it with \`answer_mention\` (status open = they took it, done = finished, dismissed = can't). Never send a reply they haven't approved.
+- A message that starts with **"<Name> mentioned you"** is a teammate asking the user something. Help them answer: when they approve the suggested reply or write their own, send it with \`answer_mention\` (status open = they're on it / in progress, done = finished, dismissed = can't). Never send a reply they haven't approved.
 - A message "<Name> finished: …" means it's the user's turn on work they were waiting on. Help them pick up where they left off.`;
   }
 

@@ -1,13 +1,14 @@
 /**
- * The @ picker: one quiet row of at most 3 name chips above the composer, best match first.
- * More matches show as a count ("+11 · keep typing"): typing narrows, arrows walk them, Tab/Enter picks.
- * Picking inserts "@Full Name". An @ is context for Pen; nobody is told unless the user says yes.
+ * The @ picker: one compact dropdown above the composer, the same every time (no style switching).
+ * Up to 6 rows: Recent first, then everyone else; initials, name, email in grey. More matches show as
+ * "N more · keep typing". Arrows or Tab move, Enter picks, Esc closes. Picking inserts "@Full Name",
+ * which renders as a name chip in the sent message. An @ is context for Pen; nobody is told unless the user says yes.
  */
 import { useEffect, useState } from "react";
 import { gateway } from "../../src/lib/gateway";
 import "./MentionMenu.css";
 
-import { rankTeammates, type Teammate } from "./mentionText";
+import { rankTeammates, recentMentions, rememberMention, type Teammate } from "./mentionText";
 
 export type { Teammate };
 export { filterTeammates, insertMention, mentionQueryAt, rankTeammates } from "./mentionText";
@@ -34,7 +35,9 @@ export function MentionMenu({ query, onSelect, onClose, onVisible }: {
 }) {
   const [team, setTeam] = useState<Teammate[]>(cache ?? []);
   const [index, setIndex] = useState(0);
-  const { shown, more } = rankTeammates(team, query);
+  const [recent] = useState(recentMentions);
+  const { shown, more, recentCount } = rankTeammates(team, query, 6, recent);
+  const pick = (m: Teammate) => { rememberMention(m.userId); onSelect(m); };
 
   useEffect(() => { void loadTeammates().then(setTeam); }, []);
   useEffect(() => setIndex(0), [query]);
@@ -42,27 +45,35 @@ export function MentionMenu({ query, onSelect, onClose, onVisible }: {
   useEffect(() => {
     const on = (e: KeyboardEvent) => {
       if (!shown.length) return;
-      if (e.key === "ArrowRight" || e.key === "ArrowDown") { e.preventDefault(); setIndex((i) => Math.min(i + 1, shown.length - 1)); }
-      else if (e.key === "ArrowLeft" || e.key === "ArrowUp") { e.preventDefault(); setIndex((i) => Math.max(i - 1, 0)); }
-      else if (e.key === "Enter" || e.key === "Tab") { e.preventDefault(); onSelect(shown[index]); }
+      const step = (d: number) => { e.preventDefault(); setIndex((i) => (i + d + shown.length) % shown.length); };
+      if (e.key === "ArrowDown" || (e.key === "Tab" && !e.shiftKey)) step(1);
+      else if (e.key === "ArrowUp" || (e.key === "Tab" && e.shiftKey)) step(-1);
+      else if (e.key === "Enter") { e.preventDefault(); pick(shown[index]); }
       else if (e.key === "Escape") { e.preventDefault(); onClose(); }
     };
     window.addEventListener("keydown", on);
     return () => window.removeEventListener("keydown", on);
-  }, [shown, index, onSelect, onClose]);
+  });
 
   if (!shown.length) return null;
+  const row = (m: Teammate, i: number) => (
+    <button key={m.userId} type="button" role="option" aria-selected={i === index} id={`mention-opt-${i}`}
+      className={`mention-dd__row${i === index ? " is-on" : ""}`}
+      onMouseDown={(e) => e.preventDefault()} onClick={() => pick(m)} onMouseEnter={() => setIndex(i)}>
+      <i aria-hidden="true">{initials(m.displayName)}</i><b>{m.displayName}</b><span>{m.email}</span>
+    </button>
+  );
+  const split = recentCount > 0 && recentCount < shown.length;
   return (
-    <div className="mention-chips" role="listbox" aria-label="Mention a teammate">
-      {shown.map((m, i) => (
-        <button key={m.userId} type="button" role="option" aria-selected={i === index} title={m.email}
-          className={`mention-chip${i === index ? " is-on" : ""}`}
-          onMouseDown={(e) => e.preventDefault()} onClick={() => onSelect(m)} onMouseEnter={() => setIndex(i)}>
-          <i aria-hidden="true">{initials(m.displayName)}</i>{m.displayName}
-        </button>
-      ))}
-      {more ? <span className="mention-chips__more">+{more} · keep typing</span> : null}
-      <kbd className="mention-chips__key">Tab</kbd>
+    <div className="mention-dd" role="listbox" aria-label="Mention a teammate" aria-activedescendant={`mention-opt-${index}`}>
+      {split ? <div className="mention-dd__h">Recent</div> : null}
+      {shown.slice(0, split ? recentCount : shown.length).map((m, i) => row(m, i))}
+      {split ? <div className="mention-dd__h">In your org</div> : null}
+      {split ? shown.slice(recentCount).map((m, i) => row(m, i + recentCount)) : null}
+      <div className="mention-dd__foot">
+        <span>{more ? `${more} more · keep typing` : ""}</span>
+        <span aria-hidden="true"><kbd>↑↓</kbd><kbd>↵</kbd><kbd>esc</kbd></span>
+      </div>
     </div>
   );
 }

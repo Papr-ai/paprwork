@@ -6,8 +6,9 @@
  *   Suggest: an @ is context for Pen. When Pen thinks someone should do something it tags them quietly
  *            with the ask; the sender's chat shows "Ask Shawkat?" and nothing is sent until they say yes.
  *   Receive: the heartbeat event feed brings `mention`; it lands in Focus (Needs you) as the sender's ask
- *            with Pen's drafted reply: Take it and reply, Can't, Later. A chat holds it for Pen's help.
- *   Track:   the sender's Focus lists open asks under "Waiting on" (Asked, Took it, Done).
+ *            with Pen's drafted reply: I'm on it, Can't, Later. A chat holds it for Pen's help.
+ *   Track:   the sender's Focus lists open asks under "Waiting on" (Asked, In progress) with the latest reply,
+ *            and Reply / Nudge / Close right on the row (followUp → mention.followup to them).
  *   Back:    `mention.replied` posts in the chat it came from. Done or can't = "Your turn" in Focus.
  */
 import { readFileSync, writeFileSync, mkdirSync } from "fs";
@@ -24,6 +25,8 @@ export interface MentionItem {
   id: string; fromUserId: string; fromName: string; toUserId: string; toName: string; text: string;
   context: MentionContext; action: MentionAction | null; status: "open" | "done" | "dismissed";
   reply: { text: string; at: string } | null; createdAt: string; notified?: boolean;
+  progress?: "asked" | "in_progress" | "done" | "cant" | "closed";
+  thread?: Array<{ by: "from" | "to"; text: string; at: string }>; nudgedAt?: string | null; updatedAt?: string;
 }
 /** What the chat card renders. Stored as the result of a `mention_inbox` tool call on the message. */
 export interface MentionCardData {
@@ -37,7 +40,8 @@ export interface CollabEvent {
 }
 
 export const MENTION_TOOL = "mention_inbox";
-export const isCollabEvent = (e: { type: string }) => e.type === "mention" || e.type === "mention.replied";
+export const COLLAB_EVENTS = new Set(["mention", "mention.replied", "mention.followup"]);
+export const isCollabEvent = (e: { type: string }) => COLLAB_EVENTS.has(e.type);
 export const mentionNoticeKey = (itemId: string) => `mention:${itemId}`;
 
 async function call<T>(path: string, method = "GET", body?: unknown): Promise<T> {
@@ -83,10 +87,31 @@ export const listMentions = (box: "inbox" | "sent" = "inbox", status: string | n
 /** Answer a mention: send the reply (optional) and close it. Updates the card and clears the notice. */
 export async function answerMention(itemId: string, status: "open" | "done" | "dismissed", reply?: string): Promise<MentionItem> {
   const out = await call<{ mention: MentionItem }>(`/mentions/${encodeURIComponent(itemId)}/resolve`, "POST", { status, reply });
-  // "Take it and reply" keeps it open: it stays on Focus as your task until you mark it done.
+  // "I'm on it" keeps it open: it stays on Focus (In progress) until you mark it done.
   if (status !== "open") tryResolve(mentionNoticeKey(itemId));
   await updateCard(itemId, { status: out.mention.status, ...(reply ? { sentReply: reply } : {}) });
   return out.mention;
+}
+
+/** The asker, from Waiting on: reply to them, nudge them, or close the ask ("don't need it anymore"). */
+export async function followUp(itemId: string, kind: "reply" | "nudge" | "close", text?: string): Promise<MentionItem> {
+  const out = await call<{ mention: MentionItem }>(`/mentions/${encodeURIComponent(itemId)}/followup`, "POST", { kind, text });
+  const chatId = out.mention.context?.chatId;
+  if (chatId && kind !== "nudge") {
+    const first = out.mention.toName.split(" ")[0];
+    await postToChat(chatId, kind === "reply" ? `**You replied to ${first}:**\n\n> ${text!.split("\n").join("\n> ")}` : `**Closed.** ${first} was told you don't need it anymore.`);
+  }
+  broadcast({ type: "collab:mention", data: { itemId } });
+  return out.mention;
+}
+
+async function postToChat(chatId: string, content: string): Promise<void> {
+  const { getAgentService } = await import("../AgentService.js");
+  const storage = getAgentService().getStorageManager();
+  if (!(await storage.getChat(chatId).catch(() => null))) return;
+  const msg: StoredMessage = { id: `msg-${uuidv4()}`, chat_id: chatId, role: "assistant", sync_status: "local", timestamp: new Date().toISOString(), content };
+  await storage.saveMessage(chatId, msg);
+  broadcast({ type: "chat:message-received", data: { chatId, message: msg } });
 }
 
 // ── Pen's suggestion ──────────────────────────────────────────────────────────
@@ -242,7 +267,7 @@ async function receiveReply(e: CollabEvent): Promise<void> {
   const said = d.text ? `\n\n> ${d.text.split("\n").join("\n> ")}` : "";
   const content = d.status === "done" ? `**${first} finished: ${what}.**${said}\n\nYour turn. Pick up where you left off, or tell me what's next.`
     : d.status === "dismissed" ? `**${first} can't take it: ${what}.**${said}\n\nWant me to ask someone else, or should we do it here?`
-    : `**${first} took it: ${what}.**${said}`;
+    : `**${first} is working on it: ${what}.**${said}`;
   if (local && chatId) {
     const msg: StoredMessage = { id: `msg-${uuidv4()}`, chat_id: chatId, role: "assistant", sync_status: "local", timestamp: new Date().toISOString(), content };
     await storage.saveMessage(chatId, msg);
@@ -250,7 +275,7 @@ async function receiveReply(e: CollabEvent): Promise<void> {
   }
   if (e.requestId) broadcast({ type: "collab:mention", data: { itemId: e.requestId } });
   const owner = local && chatId ? { kind: "chat" as const, id: chatId, name: local.title } : { kind: "account" as const, id: "people", name: "People" };
-  if (!turn) return; // "took it" is status, not a notice: it shows under Waiting on and in the chat
+  if (!turn) return; // "in progress" is status, not a notice: it shows under Waiting on and in the chat
   tryNotify({
     key: `mention.done:${e.requestId ?? e.id}`, kind: "mention.done", type: "event", level: "priority",
     title: d.status === "done" ? `Your turn: ${first} finished ${lowerFirst(what)}` : `${first} can't take it: ${lowerFirst(what)}`,
@@ -259,12 +284,40 @@ async function receiveReply(e: CollabEvent): Promise<void> {
   });
 }
 
+/** The asker followed up (reply, nudge, close). Shows on your ask's card and chat; close takes it off Focus. */
+async function receiveFollowUp(e: CollabEvent): Promise<void> {
+  const d = (e.detail ?? {}) as { kind?: string; fromName?: string; text?: string; what?: string };
+  const itemId = e.requestId ?? "";
+  const who = (d.fromName || "Someone").split(" ")[0];
+  const hit = itemId ? (await cards()).get(itemId) : undefined;
+  if (hit) {
+    const line = d.kind === "reply" ? `**${who} replied:**\n\n> ${(d.text || "").split("\n").join("\n> ")}`
+      : d.kind === "nudge" ? `**${who} is checking in** on ${lowerFirst(d.what || "this")}.`
+      : `**${who} doesn't need this anymore:** ${d.what || ""}. Nothing more to do.`;
+    await postToChat(hit.chatId, line);
+  }
+  if (d.kind === "close") {
+    tryResolve(mentionNoticeKey(itemId));
+    await updateCard(itemId, { status: "dismissed" });
+  } else {
+    tryNotify({
+      key: mentionNoticeKey(itemId), kind: "mention", type: "event", level: "priority",
+      title: d.kind === "reply" ? `${who} replied: ${d.what ?? ""}` : `${who} is checking in: ${d.what ?? ""}`,
+      body: d.text || undefined, source: { type: "platform", id: "people", name: "People" },
+      owner: hit ? { kind: "chat", id: hit.chatId, name: hit.card.action?.title ?? "Mention" } : { kind: "account", id: "people", name: "People" },
+      actions: [{ label: "Reply", intent: "open" }],
+    });
+  }
+  if (itemId) broadcast({ type: "collab:mention", data: { itemId } });
+}
+
 /** Called from the heartbeat event poll with this page's mention events. Never throws. */
 export async function handleCollabEvents(events: CollabEvent[]): Promise<void> {
   for (const e of events) {
     try {
       if (e.type === "mention") await receiveMention(e);
       else if (e.type === "mention.replied") await receiveReply(e);
+      else if (e.type === "mention.followup") await receiveFollowUp(e);
     } catch (err) {
       console.warn("[Mentions] event failed:", (err as Error).message.slice(0, 160));
     }

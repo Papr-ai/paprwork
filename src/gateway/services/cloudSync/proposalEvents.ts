@@ -359,7 +359,7 @@ export async function pollProposalEvents(
     if (!page) return 0;
     if (page.events.length > 0) {
       // Mentions between people ride the same feed; they open a chat instead of a share bar.
-      const collab = page.events.filter((e) => e.type === "mention" || e.type === "mention.replied");
+      const collab = page.events.filter((e) => e.type === "mention" || e.type === "mention.replied" || e.type === "mention.followup");
       if (collab.length) await (deps.onCollab ?? defaultCollab)(collab);
       // Goals/tasks/briefs/settings changed on another device (or a teammate assigned a task): pull.
       if (!deps.fetchEvents && page.events.some((e) => e.type === "focus.changed")) {
