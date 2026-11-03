@@ -12,8 +12,7 @@ import { SURFACES, sourcePref, type NoticePrefs, type SourcePref } from "../../.
 import { NotificationSourcePage, SURFACE_LABEL, type Patch } from "./NotificationSourcePage";
 import "./NotificationsTab.css";
 
-interface Recent { title: string; source: string; level: string; status: "sent" | "capped"; why: string[]; at: string }
-interface Center { prefs: NoticePrefs; sources: NoticeSourceDef[]; apps: { id: string; name: string }[]; recent: Recent[] }
+interface Center { prefs: NoticePrefs; sources: NoticeSourceDef[]; apps: { id: string; name: string }[] }
 
 const APP_TYPES = [{ id: "app.notification", label: "Notifications from this app", chip: "Notifications", cat: "needs" as const }];
 const changed = (p: NoticePrefs) => Object.keys(p.sources).length > 0 || Object.keys(p.types).length > 0;
@@ -25,13 +24,6 @@ function summary(src: NoticeSourceDef, p: SourcePref): string {
   const has = (c: string) => src.types.some((t) => t.cat === c);
   if (has("needs") && has("done")) return `Waiting: ${part("needs")} · Done: ${part("done")}`;
   return part(has("needs") ? "needs" : "done");
-}
-
-function when(iso: string): string {
-  const d = new Date(iso);
-  return d.toDateString() === new Date().toDateString()
-    ? d.toLocaleTimeString([], { hour: "numeric", minute: "2-digit" })
-    : d.toLocaleDateString([], { month: "short", day: "numeric" });
 }
 
 export function NotificationsTab() {
@@ -92,25 +84,6 @@ export function NotificationsTab() {
           </p>
         </div>
       )}
-
-      <div className="settings-section">
-        <h2 className="settings-section__title">Recent</h2>
-        {c.recent.length === 0 ? <p className="settings-section__description">Nothing has popped yet.</p> : (
-          <ul className="notif-settings__recent">
-            {c.recent.map((r, i) => (
-              <li key={`${r.at}-${i}`}>
-                <details>
-                  <summary>
-                    <span className="notif-settings__title">{r.title}</span>
-                    <span className="notif-settings__meta">{r.source} · {r.status === "sent" ? "shown" : "held back"} · {when(r.at)}</span>
-                  </summary>
-                  <ul className="notif-settings__why">{r.why.map((w) => <li key={w}>{w}</li>)}</ul>
-                </details>
-              </li>
-            ))}
-          </ul>
-        )}
-      </div>
 
       <div className="notif-settings__footer">
         {error && <span className="notif-settings__error">{error}</span>}

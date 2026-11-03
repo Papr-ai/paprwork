@@ -70,3 +70,15 @@ describe("proposal notices", () => {
     expect(noticeInputFor(accepted)).toMatchObject({ key: "proposal:r1", level: "fyi" });
   });
 });
+
+describe("chatName", () => {
+  it("never shows an id: untitled chats read Chat", async () => {
+    const { chatName } = await import("./noticeSources.js");
+    const id = "7a5a52dc-687e-48fc-ab2b-e7b7138dd641";
+    expect(chatName(undefined, id)).toBe("Chat");
+    expect(chatName("  ", id)).toBe("Chat");
+    expect(chatName(id, id)).toBe("Chat");
+    expect(chatName("da910b65-8ec5-4fd0-88a0-f38b27ba74c2", id)).toBe("Chat");
+    expect(chatName("Launch plan", id)).toBe("Launch plan");
+  });
+});

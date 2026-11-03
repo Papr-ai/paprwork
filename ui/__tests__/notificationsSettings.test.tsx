@@ -13,7 +13,7 @@ import { NotificationsTab } from "../components/Settings/NotificationsTab";
 
 let apps: { id: string; name: string }[] = [];
 let prefs = DEFAULT_NOTICE_PREFS;
-const center = () => ({ success: true, data: { prefs, defaults: DEFAULT_NOTICE_PREFS, sources: PAPR_SOURCES, apps, recent: [] } });
+const center = () => ({ success: true, data: { prefs, defaults: DEFAULT_NOTICE_PREFS, sources: PAPR_SOURCES, apps } });
 const broadcast = (notices: unknown[]) => act(() => {
   window.dispatchEvent(new CustomEvent("gateway-broadcast", { detail: { type: "notifications:changed", data: { notices } } }));
 });

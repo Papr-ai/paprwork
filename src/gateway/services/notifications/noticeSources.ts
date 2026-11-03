@@ -10,11 +10,18 @@ import { tryNotify, tryResolve, tryResolveGroup, getNoticeService } from "./Noti
 
 const pen = { type: "agent" as const, id: "pen", name: "Pen" };
 
+/** A chat's name for a notice. Untitled chats (empty, or the title is just an id) read "Chat", never an id. */
+export function chatName(title: string | undefined | null, chatId: string): string {
+  const t = title?.trim() ?? "";
+  const idLike = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+  return !t || t === chatId || idLike.test(t) ? "Chat" : t;
+}
+
 async function chatTitle(chatId: string): Promise<string> {
   try {
     const { getStorageManager } = await import("../StorageManager.js");
     const chat = await getStorageManager().getChat(chatId);
-    return chat?.title?.trim() || "Chat";
+    return chatName(chat?.title, chatId);
   } catch {
     return "Chat";
   }

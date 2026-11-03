@@ -211,14 +211,12 @@ describe("NoticeService settings + clicks", () => {
     expect(open[0].seenAt).toBeTruthy();
   });
 
-  it("the center lists apps that sent you something and recent pops with their why", () => {
+  it("the center lists apps that sent you something", () => {
     svc.setViewing({ owners: [], foreground: false });
     svc.notify({ key: "app:crm:1", kind: "app.notification", type: "event", level: "priority", title: "Deal moved", forYou: true,
       source: { type: "app", id: "crm", name: "CRM" }, owner: { kind: "app", id: "crm", name: "CRM" } } as NoticeInput);
     const c = svc.center();
     expect(c.apps).toEqual([{ id: "app:crm", name: "CRM" }]);
     expect(c.sources.map((s) => s.id)).toEqual(["chats", "apps", "account", "updates"]);
-    expect(c.recent[0]).toMatchObject({ title: "Deal moved", source: "CRM", status: "sent" });
-    expect(c.recent[0].why.length).toBeGreaterThan(0);
   });
 });
