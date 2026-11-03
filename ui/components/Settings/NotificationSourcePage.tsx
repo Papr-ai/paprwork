@@ -60,9 +60,13 @@ export function NotificationSourcePage({ src, prefs, onSet, onBack }: {
           ))}
         </tbody>
       </table>
-      <p className="notif-settings__note">
-        Tap a type to turn just that one off. {SURFACES.map((k) => `${SURFACE_LABEL[k][0]}: ${SURFACE_LABEL[k][1]}`).join(" ")}
-      </p>
+      {src.id === "account" && (
+        <div className="notif-group notif-always">
+          <SettingRow label="Billing and sign-in problems" hint="Papr Work stops until they're fixed, so these always reach you">
+            <span className="notif-settings__fixed">Always on</span>
+          </SettingRow>
+        </div>
+      )}
       <h3 className="notif-settings__h">Desktop notifications</h3>
       <div className={`notif-group${off || !desk ? " is-dim" : ""}`}>
         <SettingRow label="Sound" disabled={off || !loud}

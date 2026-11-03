@@ -10,12 +10,13 @@ import { NOTICES_CHANGED_EVENT, type Notice } from "../../../src/core/types/noti
 import { appSourceId, type NoticeSourceDef } from "../../../src/core/notifications/sources";
 import { SURFACES, sourcePref, type NoticePrefs, type SourcePref } from "../../../src/core/notifications/prefs";
 import { NotificationSourcePage, SURFACE_LABEL, type Patch } from "./NotificationSourcePage";
+import { NotificationsTop } from "./NotificationsTop";
 import "./NotificationsTab.css";
 
 interface Center { prefs: NoticePrefs; sources: NoticeSourceDef[]; apps: { id: string; name: string }[] }
 
 const APP_TYPES = [{ id: "app.notification", label: "Notifications from this app", chip: "Notifications", cat: "needs" as const }];
-const changed = (p: NoticePrefs) => Object.keys(p.sources).length > 0 || Object.keys(p.types).length > 0;
+const changed = (p: NoticePrefs) => Object.keys(p.sources).length > 0 || Object.keys(p.types).length > 0 || !!p.previews;
 
 /** "Desktop, Badges · Done: Badges": what this source does, from the rows it has. */
 function summary(src: NoticeSourceDef, p: SourcePref): string {
@@ -52,7 +53,7 @@ export function NotificationsTab() {
     window.addEventListener("gateway-broadcast", onBroadcast);
     return () => window.removeEventListener("gateway-broadcast", onBroadcast);
   }, [call]);
-  const set = (prefs: Patch) => void call("notifications:set-prefs", { prefs });
+  const set = (prefs: Patch & { previews?: string }) => void call("notifications:set-prefs", { prefs });
 
   if (!c) return <div className="settings-content"><div className="settings-section">{error || "Loading…"}</div></div>;
   const apps: NoticeSourceDef[] = c.apps.map((a) => ({ id: a.id, name: a.name, desc: "Mini-app", types: APP_TYPES }));
@@ -74,14 +75,12 @@ export function NotificationsTab() {
             While you're in Papr Work you only see dots: blue when something's waiting on you, green when it's done.
             Choose, for each source, what reaches you when you're not.
           </p>
+          <NotificationsTop prefs={c.prefs} onSet={set} />
           <h3 className="notif-settings__h">Papr Work</h3>
           <div className="notif-group">{rows(c.sources)}</div>
           <h3 className="notif-settings__h">Apps</h3>
           {apps.length ? <div className="notif-group">{rows(apps)}</div>
             : <p className="settings-section__description">Apps that send you notifications show up here.</p>}
-          <p className="notif-settings__note">
-            Urgent (billing, your account) is always on: Papr Work is stopped until it's fixed. No source can pop more than 5 times in 10 minutes.
-          </p>
         </div>
       )}
 

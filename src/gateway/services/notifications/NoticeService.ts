@@ -18,6 +18,8 @@ import { DEFAULT_NOTICE_PREFS, effectiveLevel, route, type NoticePrefs, type Rou
 import { PAPR_SOURCES, appSourceId } from "../../../core/notifications/sources.js";
 import { DeliveryLog, OS_CAP_PER_SOURCE } from "./noticeDeliveries.js";
 import { PrefsStore } from "./noticePrefs.js";
+import { StatsLog, countOffs } from "./noticeStats.js";
+import { pausedAt, previewsOf, type Previews } from "../../../core/notifications/prefs.js";
 import {
   NOTICE_MARK,
   type Notice,
@@ -46,6 +48,8 @@ export interface OsDelivery {
   why: string[];
   /** false: show it silently (done, or the source's Sound is off). */
   sound: boolean;
+  /** Show previews setting: the window process hides the text when it says so. */
+  previews: Previews;
 }
 export type OsListener = (d: OsDelivery) => void;
 const osListeners = new Set<OsListener>();
@@ -71,6 +75,7 @@ export class NoticeService {
   private viewing: Viewing = { owners: [], foreground: true };
   private deliveries: DeliveryLog;
   private prefsStore: PrefsStore;
+  private stats: StatsLog;
   /** Defaults with your Settings → Notifications changes on top. */
   prefs: NoticePrefs = DEFAULT_NOTICE_PREFS;
 
@@ -82,6 +87,8 @@ export class NoticeService {
     this.db.exec(NOTICES_SCHEMA);
     this.deliveries = new DeliveryLog(this.db);
     this.prefsStore = new PrefsStore(this.db);
+    this.stats = new StatsLog(this.db);
+    this.stats.prune();
     this.prefs = this.prefsStore.effective();
     const cutoff = new Date(Date.now() - RESOLVED_KEEP_MS).toISOString();
     this.db.prepare("DELETE FROM notices WHERE resolved_at IS NOT NULL AND resolved_at < ?").run(cutoff);
@@ -109,11 +116,14 @@ export class NoticeService {
     const existing = this.openByKey(input.key);
     // Decide delivery before writing: an open notice with the same key never pings twice.
     const delivery = route(input, {
-      prefs: this.prefs, foreground: this.viewing.foreground, dnd: false,
+      prefs: this.prefs, foreground: this.viewing.foreground, dnd: pausedAt(this.prefs),
       viewingOwner: this.isViewing(input.owner.kind, input.owner.id),
       existing: existing ? { count: existing.count } : undefined,
     });
+    if (delivery.muted && !existing) this.stats.bump(delivery.source, "muted");
     if (delivery.level === "status") return null;
+    if (!existing) this.stats.bump(delivery.source, "raised");
+    if (delivery.paused) this.stats.bump(delivery.source, "paused");
     if (existing) {
       this.db.prepare(`UPDATE notices SET kind=@kind, type=@type, level=@level, mark=@mark, title=@title, body=@body,
         source_type=@source_type, source_id=@source_id, source_name=@source_name, owner_kind=@owner_kind,
@@ -129,7 +139,7 @@ export class NoticeService {
     }
     this.changed();
     const stored = this.openByKey(input.key);
-    if (stored && delivery.os) this.deliverOs(stored, delivery.why, delivery.sound);
+    if (stored && delivery.os) this.deliverOs(stored, delivery.why, delivery.sound, delivery.source);
     return stored;
   }
 
@@ -141,7 +151,13 @@ export class NoticeService {
     return { prefs: this.prefs, defaults: DEFAULT_NOTICE_PREFS, sources: PAPR_SOURCES, apps };
   }
 
+  /** How much reached you over the last `days` days. Counts only; nothing leaves the device. */
+  statsSummary(days = 7) {
+    return this.stats.summary(days);
+  }
+
   setPrefs(patch: unknown) {
+    this.stats.bump("settings", "mute", countOffs(patch));
     this.prefs = this.prefsStore.set(patch);
     return this.center();
   }
@@ -165,15 +181,17 @@ export class NoticeService {
     return this.deliveries.forNotice(noticeId);
   }
 
-  private deliverOs(notice: Notice, why: string[], sound: boolean): void {
+  private deliverOs(notice: Notice, why: string[], sound: boolean, statSource = notice.source.id): void {
     const base = { noticeId: notice.id, noticeKey: notice.key, sourceId: notice.source.id, channel: "os" as const };
     if (this.deliveries.recentSent(notice.source.id) >= OS_CAP_PER_SOURCE) {
       this.deliveries.record({ ...base, status: "capped", why: [...why, `${notice.source.name} hit ${OS_CAP_PER_SOURCE} OS notifications in 10 min: kept as a dot`] });
+      this.stats.bump(statSource, "capped");
       return;
     }
     this.deliveries.record({ ...base, status: "sent", why });
+    this.stats.bump(statSource, "os");
     for (const l of osListeners) {
-      try { l({ notice, why, sound }); } catch (e) { console.warn("[NoticeService] os listener failed:", e); }
+      try { l({ notice, why, sound, previews: previewsOf(this.prefs) }); } catch (e) { console.warn("[NoticeService] os listener failed:", e); }
     }
   }
 
