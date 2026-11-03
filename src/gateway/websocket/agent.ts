@@ -227,7 +227,7 @@ export async function setupAgentHandlers(
                 apiKey = auth.type === "oauth" ? auth.token : auth.key;
                 authType = auth.type;
               }
-              
+
               console.log(
                 `[Agent WS] Auth resolved for ${config.provider}: type=${authType} tokenLength=${apiKey?.length || 0} ` +
                 `tokenPrefix=${apiKey?.substring(0, 15)}...`
@@ -292,15 +292,30 @@ export async function setupAgentHandlers(
           );
         }
 
-        // Track message_sent event
+        // Track gateway-accepted messages. The recurring active-use event excludes
+        // synthetic recovery turns while the legacy event remains unchanged.
         const { getGatewayTelemetry } = await import("../services/gatewayTelemetry.js");
-        getGatewayTelemetry().trackFireAndForget("paprwork_message_sent", {
+        const { TelemetryEvents } = await import("../../core/telemetry/events.js");
+        const { userMessageSentProperties } = await import(
+          "../services/userMessageTelemetry.js"
+        );
+        const messageProperties = {
           chat_id: chatId,
           message_length: userMessage.length,
           model: config.model,
           provider: config.provider,
           auth_type: authType ?? "apiKey",
           uses_papr_proxy: usePaprProxy,
+        };
+        const telemetry = getGatewayTelemetry();
+        telemetry.trackFireAndForget(TelemetryEvents.MESSAGE_SENT, messageProperties);
+        const userMessageProperties = userMessageSentProperties({
+          chatId,
+          userMessage,
+          model: config.model,
+          provider: config.provider,
+          authType,
+          usesPaprProxy: usePaprProxy,
         });
 
         wsStreamProfiler?.mark("ws.authResolved");
@@ -320,6 +335,12 @@ export async function setupAgentHandlers(
           reuseAssistantMessageId,
           ws,
         });
+        if (userMessageProperties) {
+          telemetry.trackFireAndForget(
+            TelemetryEvents.USER_MESSAGE_SENT,
+            userMessageProperties,
+          );
+        }
         break;
       }
 

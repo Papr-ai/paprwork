@@ -51,6 +51,8 @@ export const TelemetryEvents = {
   // Chat Events
   CHAT_CREATED: "paprwork_chat_created",
   MESSAGE_SENT: "paprwork_message_sent",
+  /** Canonical recurring activity: a visible user-authored message accepted by the gateway. */
+  USER_MESSAGE_SENT: "paprwork_user_message_sent",
   MESSAGE_RECEIVED: "paprwork_message_received",
   CHAT_DELETED: "paprwork_chat_deleted",
   CHAT_RENAMED: "paprwork_chat_renamed",
