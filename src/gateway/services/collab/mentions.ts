@@ -197,7 +197,7 @@ async function receiveMention(e: CollabEvent): Promise<void> {
   broadcast({ type: "chat:list-updated" });
   broadcast({ type: "chat:message-received", data: { chatId, message: msg } });
   tryNotify({
-    key: mentionNoticeKey(itemId), kind: "mention", type: "event", level: "priority", forYou: true,
+    key: mentionNoticeKey(itemId), kind: "mention", type: "event", level: "priority",
     title: item.action ? `${item.fromName}: ${item.action.title}` : `${item.fromName} mentioned you`,
     body: item.text.slice(0, 200),
     source: { type: "platform", id: "people", name: "People" },
@@ -223,7 +223,7 @@ async function receiveReply(e: CollabEvent): Promise<void> {
     broadcast({ type: "chat:message-received", data: { chatId, message: msg } });
   }
   tryNotify({
-    key: `mention.reply:${e.id}`, kind: "mention.replied", type: "event", level: "fyi", forYou: true,
+    key: `mention.reply:${e.id}`, kind: "mention.replied", type: "event", level: "fyi",
     title: `${who} replied`, body: d.text || (d.status === "done" ? `Done: ${d.action?.title ?? ""}` : undefined),
     source: { type: "platform", id: "people", name: "People" },
     owner: local && chatId ? { kind: "chat", id: chatId, name: local.title } : { kind: "account", id: "people", name: "People" },
