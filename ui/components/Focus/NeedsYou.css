@@ -32,7 +32,6 @@
 .needs-you__go:hover { filter: brightness(1.08); }
 .needs-you__go.is-small { padding: 5px 11px; font-size: 12.5px; background: transparent; color: var(--ny-blue); box-shadow: inset 0 0 0 1px var(--ny-line); }
 
-.needs-you__clear { margin: 0; padding: 14px 16px; border-radius: 14px; background: var(--ny-card); box-shadow: 0 0 0 1px var(--ny-line); color: var(--ny-mute); font-size: 13px; }
 
 .needs-you__list { margin-top: 8px; }
 .needs-you__row { display: flex; align-items: center; gap: 10px; padding: 9px 4px; border-top: 1px solid var(--ny-line); }
@@ -73,3 +72,6 @@
   .needs-you__lrow { grid-template-columns: 1fr auto; }
   .needs-you__when, .needs-you__row .needs-you__from { display: none; }
 }
+
+/* Needs you sits on the same page background as the Daily Brief below it, not its own strip. */
+.focus-view { background: var(--bg); }

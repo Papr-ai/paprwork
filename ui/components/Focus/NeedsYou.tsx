@@ -39,6 +39,8 @@ export function NeedsYou() {
   const open = (n: Notice) => openNoticeOwner(n.owner, n.key);
   const [first, ...rest] = needs;
   const shown = more ? rest : rest.slice(0, MAX_ROWS);
+  // Nothing waiting, nothing put off, nothing muted: no section at all (an empty box is just noise).
+  if (!first && !later.length && !muted.length && !toast) return null;
 
   return (
     <section className="needs-you" aria-label="Needs you">
@@ -50,9 +52,7 @@ export function NeedsYou() {
           {first.body ? <p>{first.body}</p> : null}
           <footer><button type="button" className="needs-you__go" onClick={() => open(first)}>{actionLabel(first)}</button></footer>
         </article>
-      ) : (
-        <p className="needs-you__clear">Nothing is waiting on you.</p>
-      )}
+      ) : null}
       {shown.length ? (
         <div className="needs-you__list">
           {shown.map((n) => (
