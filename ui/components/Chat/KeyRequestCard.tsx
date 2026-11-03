@@ -90,6 +90,8 @@ export function KeyRequestCard({ data, chatId, onSubmit, onCancel }: Props) {
     setFailed(null);
     try {
       await onSubmit(data.name, check.value, permission, { vaultAudience: audience, orgScope: "organization", organizationId: org?.id });
+      // Saved: answer every "Pen needs <name>" (any chat) so Needs you, the count and the dot clear now.
+      void gateway.send("notifications:resolve", { group: `key:${data.name}` }).catch(() => {});
       setRaw("");
       setStatus("submitted");
     } catch (e) {
