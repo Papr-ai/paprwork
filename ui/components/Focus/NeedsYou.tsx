@@ -7,11 +7,11 @@
  */
 import { useState } from "react";
 import type { Notice } from "../../../src/core/types/notices";
-import { isUrgent, laterUntil, muteEndLabel, noticeLabels, whenLabel } from "../../../src/core/notifications/needsYou";
+import { hasFocusMode, isUrgent, laterUntil, muteEndLabel, noticeLabels, whenLabel } from "../../../src/core/notifications/needsYou";
 import { sourceDef } from "../../../src/core/notifications/sources";
 import { openNoticeOwner } from "../../stores/noticeOs";
 import { ensureSettingsTab } from "../../lib/ensureSettingsTab";
-import { bringBack, muteSource, putOff, turnOffType, unmuteSource, useNeedsYou } from "../../stores/useNeedsYou";
+import { bringBack, muteSource, putOff, setFocusMode, turnOffType, unmuteSource, useNeedsYou } from "../../stores/useNeedsYou";
 import { NeedsYouMenu } from "./NeedsYouMenu";
 import "./NeedsYou.css";
 
@@ -31,11 +31,16 @@ export function NeedsYou() {
   const onMute = (id: string, name: string) => {
     void muteSource(id).then((r) => flash({ text: `${name} muted until ${r?.until ? muteEndLabel(r.until) : "in an hour"}`, undo: () => void unmuteSource(id) }));
   };
+  const onFocus = (id: string, name: string, mode: "always" | "never") => {
+    void setFocusMode(id, mode);
+    flash({ text: mode === "always" ? `${name} always shows in Focus` : `${name} stays as dots`, undo: () => void setFocusMode(id, "pen") });
+  };
   const menu = (n: Notice) => {
     const l = noticeLabels(n);
+    const focus = hasFocusMode(l.sourceId) ? { always: () => onFocus(l.sourceId, l.source, "always"), never: () => onFocus(l.sourceId, l.source, "never") } : undefined;
     return <NeedsYouMenu urgent={isUrgent(n)} source={l.source} type={l.type} laterWhen={whenLabel(laterUntil())}
       onLater={() => onLater(n)} onMute={() => onMute(l.sourceId, l.source)} onTurnOff={() => void turnOffType(l.sourceId, l.typeId)}
-      onSettings={() => ensureSettingsTab({ section: "notifications" })} />;
+      onSettings={() => ensureSettingsTab({ section: "notifications" })} focus={focus} />;
   };
   const open = (n: Notice) => openNoticeOwner(n.owner, n.key);
   const [first, ...rest] = needs;

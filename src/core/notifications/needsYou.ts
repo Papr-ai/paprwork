@@ -63,6 +63,9 @@ export const PROMOTE_AFTER_MS = 24 * 60 * 60 * 1000;
 /** Focus is the home of anything not owned by a chat or an app. */
 export const hasHome = (n: Notice) => (n.owner.kind === "chat" || n.owner.kind === "app") && n.source.type !== "billing";
 
+/** Sources whose items have a home elsewhere (a chat or an app), so Focus is a choice: Pen decides, Always, Never. */
+export const hasFocusMode = (sourceId: string) => sourceId === "chats" || sourceId === "apps" || sourceId.startsWith("app:");
+
 /** Why this notice is in Focus, or null if it stays on its dot. Shown on the Focus line. */
 export function focusReason(n: Notice, prefs: NoticePrefs, now = Date.now()): string | null {
   if (isUrgent(n) || !hasHome(n)) return "";

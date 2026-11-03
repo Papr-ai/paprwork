@@ -56,6 +56,22 @@ describe("Needs you", () => {
     render(<NeedsYou />);
     expect(screen.getByText(/Waiting since yesterday/)).toBeTruthy();
   });
+  it("… on a chat item: Keep Chats off Focus saves never, with Undo back to Pen decides", async () => {
+    set([n()]);
+    render(<NeedsYou />);
+    fireEvent.click(screen.getByLabelText("Options"));
+    fireEvent.click(screen.getByText(/Keep Chats off Focus/));
+    await act(async () => {});
+    expect(sent).toContainEqual(["notifications:set-prefs", { prefs: { sources: { chats: { focus: "never" } } } }]);
+    fireEvent.click(screen.getByText("Undo"));
+    expect(sent).toContainEqual(["notifications:set-prefs", { prefs: { sources: { chats: { focus: "pen" } } } }]);
+  });
+  it("… on billing: no Focus choice (Focus is its home)", () => {
+    set([n({ key: "acct", kind: "billing.low", level: "priority", source: { type: "billing", id: "credits", name: "Billing" }, owner: { kind: "account", id: "settings", name: "Billing" } })]);
+    render(<NeedsYou />);
+    fireEvent.click(screen.getByLabelText("Options"));
+    expect(screen.queryByText(/off Focus/)).toBeNull();
+  });
   it("empty: no section at all, and no count on Pen", () => {
     const { container } = render(<><NeedsYou /><Pen /></>);
     expect(container.querySelector(".needs-you")).toBeNull();

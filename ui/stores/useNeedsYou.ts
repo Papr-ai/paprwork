@@ -6,7 +6,7 @@ import { useMemo } from "react";
 import { useNoticeStore } from "./noticeStore";
 import { gateway } from "../src/lib/gateway";
 import { focusReason, laterList, mutedSources, needsYou } from "../../src/core/notifications/needsYou";
-import { typeKey } from "../../src/core/notifications/prefs";
+import { typeKey, type FocusMode } from "../../src/core/notifications/prefs";
 
 export function useNeedsYou() {
   const notices = useNoticeStore((s) => s.notices);
@@ -33,5 +33,7 @@ export const putOff = (key: string) => send("notifications:later", { key });
 export const bringBack = (key: string) => send("notifications:unlater", { key });
 export const muteSource = (sourceId: string) => send("notifications:mute", { sourceId });
 export const unmuteSource = (sourceId: string) => send("notifications:unmute", { sourceId });
+export const setFocusMode = (sourceId: string, focus: FocusMode) =>
+  send("notifications:set-prefs", { prefs: { sources: { [sourceId]: { focus } } } });
 export const turnOffType = (sourceId: string, typeId: string) =>
   send("notifications:set-prefs", { prefs: { types: { [typeKey(sourceId, typeId)]: false } } });

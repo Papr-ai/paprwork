@@ -55,6 +55,17 @@ describe("NotificationsTab", () => {
     await waitFor(() => expect(send).toHaveBeenCalledWith("notifications:set-prefs", { prefs: { sources: { chats: { sound: false } } } }));
   });
 
+  it("Chats has In Focus (Pen decides by default) and saves Always; Account has no such setting", async () => {
+    render(<NotificationsTab />);
+    fireEvent.click(await screen.findByText("Chats"));
+    expect(screen.getByRole("radio", { name: "Pen decides" }).getAttribute("aria-checked")).toBe("true");
+    fireEvent.click(screen.getByRole("radio", { name: "Always" }));
+    await waitFor(() => expect(send).toHaveBeenCalledWith("notifications:set-prefs", { prefs: { sources: { chats: { focus: "always" } } } }));
+    fireEvent.click(screen.getByRole("button", { name: /← Notifications/ }));
+    fireEvent.click(await screen.findByText("Account & team"));
+    expect(screen.queryByText("In Focus")).toBeNull();
+  });
+
   it("top group: Show previews saves the choice; no pause timer or counts line", async () => {
     render(<NotificationsTab />);
     await screen.findByText("Chats");
