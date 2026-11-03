@@ -10,10 +10,16 @@
 export type Surface = "desktop" | "badge";
 export const SURFACES: Surface[] = ["desktop", "badge"];
 export type Where = Record<Surface, boolean>;
-export interface SourcePref { allow: boolean; sound: boolean; needs: Where; done: Where; muteUntil?: string }
+/** Focus for an owned source (chats, apps): "pen" = Pen promotes what matters (default), "always", or "never". */
+export type FocusMode = "pen" | "always" | "never";
+export const FOCUS_MODES: FocusMode[] = ["pen", "always", "never"];
+const cleanFocus = (v: unknown) => (FOCUS_MODES.includes(v as FocusMode) && v !== "pen" ? (v as FocusMode) : undefined);
+export interface SourcePref { allow: boolean; sound: boolean; needs: Where; done: Where; muteUntil?: string; focus: FocusMode }
 export interface SourcePrefPatch { allow?: boolean; sound?: boolean; needs?: Partial<Where>; done?: Partial<Where>;
   /** Mute for an hour (from Focus): no desktop notifications and out of Needs you until then. Urgent ignores it. */
-  muteUntil?: string }
+  muteUntil?: string;
+  /** Owned sources only: whether its waiting items go to Focus. Default "pen". */
+  focus?: FocusMode }
 export interface NoticePrefs {
   version: 2;
   sources: Record<string, SourcePrefPatch>;
@@ -29,7 +35,7 @@ export const PREVIEWS: Previews[] = ["always", "unlocked", "never"];
 export const previewsOf = (p: NoticePrefs): Previews => p.previews ?? "unlocked";
 const cleanPreviews = (v: unknown) => (PREVIEWS.includes(v as Previews) && v !== "unlocked" ? (v as Previews) : undefined);
 
-const BASE: SourcePref = { allow: true, sound: true, needs: { desktop: true, badge: true }, done: { desktop: false, badge: true } };
+const BASE: Omit<SourcePref, "focus"> = { allow: true, sound: true, needs: { desktop: true, badge: true }, done: { desktop: false, badge: true } };
 /** Finished replies pop while you're away (same as before Stage 2). */
 const SOURCE_DEFAULTS: Record<string, SourcePrefPatch> = { chats: { done: { desktop: true } } };
 
@@ -37,13 +43,13 @@ export const DEFAULT_NOTICE_PREFS: NoticePrefs = { version: 2, sources: {}, type
 
 export function defaultSourcePref(id: string): SourcePref {
   const d = SOURCE_DEFAULTS[id] ?? {};
-  return { allow: d.allow ?? BASE.allow, sound: d.sound ?? BASE.sound, needs: { ...BASE.needs, ...d.needs }, done: { ...BASE.done, ...d.done } };
+  return { allow: d.allow ?? BASE.allow, sound: d.sound ?? BASE.sound, needs: { ...BASE.needs, ...d.needs }, done: { ...BASE.done, ...d.done }, focus: "pen" };
 }
 
 export function sourcePref(p: NoticePrefs, id: string): SourcePref {
   const d = defaultSourcePref(id), u = p.sources[id] ?? {};
   return { allow: u.allow ?? d.allow, sound: u.sound ?? d.sound, needs: { ...d.needs, ...u.needs }, done: { ...d.done, ...u.done },
-    ...(u.muteUntil ? { muteUntil: u.muteUntil } : {}) };
+    focus: u.focus ?? "pen", ...(u.muteUntil ? { muteUntil: u.muteUntil } : {}) };
 }
 
 export const typeKey = (source: string, type: string) => `${source}/${type}`;
@@ -93,6 +99,8 @@ export function cleanPrefs(raw: unknown): NoticePrefs {
     if (done) patch.done = done;
     const mute = cleanPause(s.muteUntil);
     if (mute) patch.muteUntil = mute;
+    const focus = cleanFocus(s.focus);
+    if (focus) patch.focus = focus;
     out.sources[id] = patch;
   }
   for (const [k, v] of Object.entries((r.types ?? {}) as Record<string, unknown>)) if (k.includes("/") && v === false) out.types[k] = false;
@@ -117,6 +125,8 @@ export function compactPrefs(p: NoticePrefs): NoticePrefs {
     }
     const mute = cleanPause(s.muteUntil);
     if (mute) patch.muteUntil = mute;
+    const focus = cleanFocus(s.focus);
+    if (focus) patch.focus = focus;
     if (Object.keys(patch).length) sources[id] = patch;
   }
   const types = Object.fromEntries(Object.entries(p.types).filter(([, v]) => v === false));
@@ -141,6 +151,7 @@ export function mergePrefs(cur: NoticePrefs, patch: unknown): NoticePrefs {
     // muteUntil: a time mutes this source until then; null unmutes.
     if (raw.muteUntil === null) delete c.muteUntil;
     else if (raw.muteUntil !== undefined) { const m = cleanPause(raw.muteUntil); if (m) c.muteUntil = m; }
+    if (FOCUS_MODES.includes(raw.focus as FocusMode)) c.focus = raw.focus as FocusMode;
     sources[id] = c;
   }
   const types = { ...cur.types };

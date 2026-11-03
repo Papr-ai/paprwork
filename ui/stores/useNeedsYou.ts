@@ -5,7 +5,7 @@
 import { useMemo } from "react";
 import { useNoticeStore } from "./noticeStore";
 import { gateway } from "../src/lib/gateway";
-import { laterList, mutedSources, needsYou } from "../../src/core/notifications/needsYou";
+import { focusReason, laterList, mutedSources, needsYou } from "../../src/core/notifications/needsYou";
 import { typeKey } from "../../src/core/notifications/prefs";
 
 export function useNeedsYou() {
@@ -14,7 +14,10 @@ export function useNeedsYou() {
   const tick = useNoticeStore((s) => s.tick);
   return useMemo(() => {
     const now = Date.now();
-    return { needs: needsYou(notices, prefs, now), later: laterList(notices, now), muted: mutedSources(prefs, now) };
+    const needs = needsYou(notices, prefs, now);
+    /** Why each promoted item is here ("Waiting since yesterday"); empty when Focus is its home. */
+    const reasons = Object.fromEntries(needs.map((n) => [n.key, focusReason(n, prefs, now) ?? ""]));
+    return { needs, reasons, later: laterList(notices, now), muted: mutedSources(prefs, now) };
     // tick: recompute when a Later or mute runs out
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [notices, prefs, tick]);
