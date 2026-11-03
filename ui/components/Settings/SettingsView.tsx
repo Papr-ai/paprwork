@@ -25,6 +25,7 @@ import { CloudSyncTab } from "./CloudSyncTab";
 import { DatabasesTab } from "./DatabasesTab";
 import { ConnectionsView, type ConnectionsSubTab } from "./ConnectionsView";
 import { BillingTab } from "./BillingTab";
+import { NotificationsTab } from "./NotificationsTab";
 import { PaprLoginSection } from "./PaprLoginSection";
 import { resizeProfilePhoto } from "../../utils/profilePhoto";
 import {
@@ -120,6 +121,16 @@ const SETTINGS_NAV: SettingsNavItem[] = [
         <ellipse cx="12" cy="5" rx="9" ry="3" />
         <path d="M3 5v6c0 1.66 4 3 9 3s9-1.34 9-3V5" />
         <path d="M3 11v6c0 1.66 4 3 9 3s9-1.34 9-3v-6" />
+      </svg>
+    ),
+  },
+  {
+    id: "notifications",
+    label: "Notifications",
+    icon: (
+      <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
+        <path d="M18 8a6 6 0 0 0-12 0c0 7-3 9-3 9h18s-3-2-3-9" />
+        <path d="M13.73 21a2 2 0 0 1-3.46 0" />
       </svg>
     ),
   },
@@ -309,6 +320,7 @@ export function SettingsView() {
             </div>
           )}
           {activeTab === "billing" && <BillingTab />}
+          {activeTab === "notifications" && <NotificationsTab />}
           {activeTab === "permissions" && <PermissionsTab />}
           {activeTab === "privacy" && <PrivacyTab />}
           {activeTab === "about" && <AboutTab />}

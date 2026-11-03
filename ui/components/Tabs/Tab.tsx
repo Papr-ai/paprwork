@@ -6,6 +6,7 @@ import React, { useState, useRef } from "react";
 import { useTabs } from "../../hooks/useTabs";
 import type { Tab as TabType } from "../../stores/tabStore";
 import { FocusTabIcon } from "./FocusTabIcon";
+import { useChatActivity } from "../Chat/chatActivity";
 import { MemoryIcon } from "../Memory/MemoryIcon";
 import "./Tab.css";
 
@@ -16,7 +17,6 @@ interface TabProps {
   rightTab?: TabType;
   tabIndex: number;
   isStreaming?: boolean;
-  hasUnread?: boolean;
   onDragPositionChange?: (
     position: "before" | "after" | "on-top" | null,
     targetElement: HTMLElement | null,
@@ -30,11 +30,11 @@ export function Tab({
   rightTab,
   tabIndex,
   isStreaming = false,
-  hasUnread = false,
   onDragPositionChange,
 }: TabProps) {
   const { switchToTab, closeTab, moveTab, enableSplitView, disableSplitView } =
     useTabs();
+  const activityOf = useChatActivity();
   const [isDragging, setIsDragging] = useState(false);
   const [dragPosition, setDragPosition] = useState<
     "before" | "after" | "on-top" | null
@@ -169,15 +169,19 @@ export function Tab({
 
   const getIcon = () => <TabGlyph tab={tab} />;
 
+  // Green / blue come from the notices table (chat done, waiting on you), same as the rail and lists.
+  const activity = tab.type === "chat" ? activityOf(tab.entityId) : undefined;
   const tabStatusClass = isActive
     ? ""
     : tab.isStreaming
       ? "tab--streaming"
-      : tab.hasUnread
-        ? "tab--unread"
-        : tab.pendingRefresh
-          ? "tab--pending-refresh"
-          : "";
+      : activity === "needs"
+        ? "tab--needs"
+        : activity === "done"
+          ? "tab--unread"
+          : tab.pendingRefresh
+            ? "tab--pending-refresh"
+            : "";
 
   return (
     <div

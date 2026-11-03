@@ -9,6 +9,7 @@ import { createPortal } from "react-dom";
 import { useTabStore, type Tab } from "../../stores/tabStore";
 import { useChatStore } from "../../stores/chatStore";
 import { TabGlyph } from "./Tab";
+import { useChatActivity } from "../Chat/chatActivity";
 import "./TabOverview.css";
 
 type DropPos = "before" | "after" | "merge";
@@ -30,6 +31,7 @@ export function TabOverview({ onClose }: { onClose: () => void }) {
   const tabs = useTabStore((s) => s.tabs);
   const activeTabId = useTabStore((s) => s.activeTabId);
   const chats = useChatStore((s) => s.chats);
+  const activityOf = useChatActivity();
   const [query, setQuery] = useState("");
   const [dragId, setDragId] = useState<string | null>(null);
   const [drop, setDrop] = useState<{ id: string; pos: DropPos } | null>(null);
@@ -109,7 +111,8 @@ export function TabOverview({ onClose }: { onClose: () => void }) {
   const unmerge = (t: Tab) => t.childTabIds.forEach((id) => store().promoteToStandalone(id));
   const statusOf = (t: Tab) => {
     const c = t.type === "chat" ? chats.find((x) => x.id === t.entityId) : undefined;
-    return c?.isStreaming ? "streaming" : c?.hasUnread ? "unread" : null;
+    const a = t.type === "chat" ? activityOf(t.entityId) : undefined;
+    return c?.isStreaming ? "streaming" : a === "needs" ? "needs" : a === "done" ? "unread" : null;
   };
 
   const posFor = (e: React.DragEvent<HTMLElement>): DropPos => {

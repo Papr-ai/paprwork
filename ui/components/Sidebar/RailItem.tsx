@@ -16,6 +16,8 @@ interface RailItemProps {
   /** Anchor the peek to the bottom of the item (for items near the bottom of the rail). */
   peekFromBottom?: boolean;
   badge?: boolean;
+  /** Default green (done). "needs" = blue: something here is waiting on you. */
+  badgeTone?: "needs";
   variant?: "default" | "agent" | "new";
   testId?: string;
   ariaLabel?: string;
@@ -38,6 +40,7 @@ export function RailItem({
   peek,
   peekFromBottom = false,
   badge = false,
+  badgeTone,
   variant = "default",
   testId,
   ariaLabel,
@@ -64,7 +67,7 @@ export function RailItem({
         data-testid={testId}
       >
         {icon}
-        {badge ? <i className="rail-btn__badge" aria-hidden="true" /> : null}
+        {badge ? <i className={`rail-btn__badge${badgeTone ? ` rail-btn__badge--${badgeTone}` : ""}`} aria-hidden="true" /> : null}
       </button>
       {overlay}
       {peek ? (

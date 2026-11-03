@@ -1,0 +1,73 @@
+/* Settings → Notifications. Rows reuse .setting-row and .toggle-switch from SettingsView.css. */
+.notif-settings__fixed {
+  font-size: 12px;
+  color: var(--text-secondary);
+  white-space: nowrap;
+}
+
+.notif-settings__note {
+  margin: 8px 0 0;
+  font-size: 12px;
+  color: var(--text-secondary);
+}
+
+.notif-settings__select {
+  font: inherit;
+  font-size: 13px;
+  padding: 4px 8px;
+  border-radius: 6px;
+  border: 1px solid var(--border-color);
+  background: var(--bg-secondary);
+  color: var(--text-primary);
+}
+
+.notif-settings__footer {
+  display: flex;
+  justify-content: flex-end;
+  align-items: center;
+  gap: 12px;
+  padding-top: 4px;
+}
+
+.notif-settings__error {
+  font-size: 12px;
+  color: var(--color-error, #d33);
+}
+
+/* Stage 2: sources list + one source's page. */
+.notif-settings__h { margin: 18px 0 8px; font-size: 12px; font-weight: 600; color: var(--text-secondary); text-transform: none; }
+.notif-group { border: 1px solid var(--border-color); border-radius: 10px; overflow: hidden; }
+.notif-row { display: flex; align-items: center; gap: 12px; width: 100%; padding: 10px 12px; border: 0; border-top: 1px solid var(--border-color);
+  background: transparent; color: var(--text-primary); font: inherit; text-align: left; cursor: pointer; }
+.notif-row:first-child { border-top: 0; }
+.notif-row:hover { background: var(--bg-secondary); }
+.notif-row__tile { flex: none; display: grid; place-items: center; width: 28px; height: 28px; border-radius: 8px;
+  background: rgba(var(--accent-rgb), 0.12); color: rgb(var(--accent-rgb)); font-weight: 600; font-size: 13px; }
+.notif-row__text { flex: 1; min-width: 0; display: flex; flex-direction: column; gap: 2px; }
+.notif-row__text b { font-size: 13px; font-weight: 500; }
+.notif-row__text small { font-size: 12px; color: var(--text-secondary); }
+.notif-row__chev { color: var(--text-secondary); font-size: 18px; }
+.notif-src__back { margin: 0 0 10px; padding: 0; border: 0; background: none; color: rgb(var(--accent-rgb)); font: inherit; font-size: 13px; cursor: pointer; }
+.notif-grid { width: 100%; border-collapse: collapse; }
+.notif-grid.is-dim { opacity: 0.5; }
+.notif-grid th, .notif-grid td { padding: 10px 6px; border-top: 1px solid var(--border-color); vertical-align: top; }
+.notif-grid thead th { border-top: 0; font-size: 11.5px; font-weight: 500; color: var(--text-secondary); text-align: center; width: 84px; }
+.notif-grid tbody th { text-align: left; font-weight: 400; }
+.notif-grid tbody th b { display: flex; align-items: center; gap: 6px; font-size: 13px; font-weight: 500; color: var(--text-primary); }
+.notif-grid td { text-align: center; }
+.notif-art { display: block; width: 34px; height: 22px; margin: 0 auto 4px; border-radius: 5px; border: 1px solid var(--border-color); position: relative; background: var(--bg-secondary); }
+.notif-art--desktop::after { content: ""; position: absolute; top: 3px; right: 3px; width: 14px; height: 6px; border-radius: 2px; background: rgb(var(--accent-rgb)); }
+.notif-art--badge::after { content: ""; position: absolute; top: 4px; left: 6px; width: 6px; height: 6px; border-radius: 50%; background: #0161e0; }
+.notif-dot { width: 7px; height: 7px; border-radius: 50%; flex: none; }
+.notif-dot--blue { background: #0161e0; }
+.notif-dot--green { background: #10b981; }
+.notif-chips { display: flex; flex-wrap: wrap; gap: 4px; margin-top: 6px; }
+.notif-chip { padding: 1px 8px; border-radius: 999px; border: 1px solid var(--border-color); background: transparent; color: var(--text-secondary);
+  font: inherit; font-size: 11.5px; line-height: 18px; white-space: nowrap; cursor: pointer; text-decoration: line-through; }
+.notif-chip.is-on { background: rgba(var(--accent-rgb), 0.1); border-color: transparent; color: var(--text-primary); text-decoration: none; }
+.notif-chip:disabled, .notif-cb:disabled { cursor: not-allowed; }
+.notif-cb { width: 18px; height: 18px; border-radius: 5px; border: 1.5px solid var(--border-color); background: transparent; cursor: pointer; position: relative; }
+.notif-cb.is-on { background: rgb(var(--accent-rgb)); border-color: rgb(var(--accent-rgb)); }
+.notif-cb.is-on::after { content: ""; position: absolute; left: 5px; top: 1px; width: 4px; height: 9px; border: solid #fff; border-width: 0 2px 2px 0; transform: rotate(45deg); }
+.notif-group.is-dim { opacity: 0.5; }
+.notif-group > .setting-row { padding: 10px 12px; margin: 0; }
