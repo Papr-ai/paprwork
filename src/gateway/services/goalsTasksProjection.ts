@@ -508,7 +508,8 @@ export async function applySnapshot(
   const existingTasks = new Map<string, Record<string, unknown>>();
   for (const row of await query("SELECT * FROM tasks")) existingTasks.set(String(row.id), row);
   for (const [id, row] of existingTasks) {
-    if (row.status === "open" && !seenTasks.has(id)) {
+    // Tasks that came from another device (source "cloud") have no markdown here; don't drop them.
+    if (row.status === "open" && !seenTasks.has(id) && row.source !== "cloud") {
       tasksDropped += 1;
       await exec("UPDATE tasks SET status = 'dropped', updated_at = ? WHERE id = ?", [now, id]);
     }

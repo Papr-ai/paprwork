@@ -166,6 +166,12 @@ export class NoticeService {
     return this.center();
   }
 
+  /** Settings changed on another device. Not sent back up (the sync already has this copy). */
+  applyRemotePrefs(p: unknown) {
+    this.prefs = this.prefsStore.replace(p);
+    this.changed();
+  }
+
   resetPrefs() {
     this.prefs = this.prefsStore.reset();
     this.changed();

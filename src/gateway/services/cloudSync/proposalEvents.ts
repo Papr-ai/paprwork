@@ -361,6 +361,10 @@ export async function pollProposalEvents(
       // Mentions between people ride the same feed; they open a chat instead of a share bar.
       const collab = page.events.filter((e) => e.type === "mention" || e.type === "mention.replied");
       if (collab.length) await (deps.onCollab ?? defaultCollab)(collab);
+      // Goals/tasks/briefs/settings changed on another device (or a teammate assigned a task): pull.
+      if (!deps.fetchEvents && page.events.some((e) => e.type === "focus.changed")) {
+        void import("../focusCloud/focusCloudSync.js").then((m) => m.scheduleFocusCloudSync("changed elsewhere", 500)).catch(() => undefined);
+      }
       (deps.onRefresh ?? defaultRefresh)(appIdsToRefresh(page.events));
       if (!deps.onRefresh) refreshConnections(page.events);
       (deps.onNotify ?? defaultNotify)(summarizeNotices(page.events, Number.POSITIVE_INFINITY));
