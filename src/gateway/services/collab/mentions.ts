@@ -18,6 +18,7 @@ import { cloudApiFetch } from "../../utils/cloudApiClient.js";
 import { broadcast } from "../../websocket/index.js";
 import { tryNotify, tryResolve } from "../notifications/NoticeService.js";
 import type { StoredMessage } from "../storage/IStorageProvider.js";
+import { parsePromise, promiseLabel } from "../../../core/collab/promised.js";
 
 export interface MentionAction { title: string; due?: string | null }
 export interface MentionContext { chatId?: string; chatTitle?: string; appId?: string; appName?: string; goalId?: string }
@@ -27,12 +28,15 @@ export interface MentionItem {
   reply: { text: string; at: string } | null; createdAt: string; notified?: boolean;
   progress?: "asked" | "in_progress" | "done" | "cant" | "closed";
   thread?: Array<{ by: "from" | "to"; text: string; at: string }>; nudgedAt?: string | null; updatedAt?: string;
+  /** When they said they'd have it ("Thursday morning" → ISO). Both sides track it. */
+  promisedAt?: string | null;
 }
 /** What the chat card renders. Stored as the result of a `mention_inbox` tool call on the message. */
 export interface MentionCardData {
   type: "mention_inbox"; itemId: string; fromName: string; text: string; context: MentionContext;
   action: MentionAction | null; suggestedReply: string; nextStep?: string;
   status: "open" | "done" | "dismissed"; sentReply?: string;
+  promisedAt?: string | null; remindedAt?: string | null;
 }
 export interface CollabEvent {
   id: string; type: string; requestId?: string | null; actorUserId?: string | null;
@@ -86,10 +90,14 @@ export const listMentions = (box: "inbox" | "sent" = "inbox", status: string | n
 
 /** Answer a mention: send the reply (optional) and close it. Updates the card and clears the notice. */
 export async function answerMention(itemId: string, status: "open" | "done" | "dismissed", reply?: string): Promise<MentionItem> {
-  const out = await call<{ mention: MentionItem }>(`/mentions/${encodeURIComponent(itemId)}/resolve`, "POST", { status, reply });
+  // "I'll have it Thursday morning" → the date both sides track. Read here, in the replier's own time zone.
+  const promised = status === "open" && reply ? parsePromise(reply) : null;
+  const out = await call<{ mention: MentionItem }>(`/mentions/${encodeURIComponent(itemId)}/resolve`, "POST",
+    { status, reply, ...(promised ? { promisedAt: promised.toISOString() } : {}) });
   // "I'm on it" keeps it open: it stays on Focus (In progress) until you mark it done.
-  if (status !== "open") tryResolve(mentionNoticeKey(itemId));
-  await updateCard(itemId, { status: out.mention.status, ...(reply ? { sentReply: reply } : {}) });
+  if (status !== "open") { tryResolve(mentionNoticeKey(itemId)); tryResolve(`mention.due:${itemId}`); }
+  await updateCard(itemId, { status: out.mention.status, ...(reply ? { sentReply: reply } : {}),
+    ...(promised ? { promisedAt: promised.toISOString(), remindedAt: null } : {}) });
   return out.mention;
 }
 
@@ -255,7 +263,7 @@ async function receiveMention(e: CollabEvent): Promise<void> {
 }
 
 async function receiveReply(e: CollabEvent): Promise<void> {
-  const d = (e.detail ?? {}) as { fromName?: string; text?: string; status?: string; context?: MentionContext; action?: MentionAction | null };
+  const d = (e.detail ?? {}) as { fromName?: string; text?: string; status?: string; context?: MentionContext; action?: MentionAction | null; promisedAt?: string | null };
   const who = d.fromName || "Someone";
   const first = who.split(" ")[0];
   const what = d.action?.title ?? "what you asked";
@@ -265,9 +273,11 @@ async function receiveReply(e: CollabEvent): Promise<void> {
   const storage = getAgentService().getStorageManager();
   const local = chatId ? await storage.getChat(chatId).catch(() => null) : null;
   const said = d.text ? `\n\n> ${d.text.split("\n").join("\n> ")}` : "";
-  const content = d.status === "done" ? `**${first} finished: ${what}.**${said}\n\nYour turn. Pick up where you left off, or tell me what's next.`
-    : d.status === "dismissed" ? `**${first} can't take it: ${what}.**${said}\n\nWant me to ask someone else, or should we do it here?`
-    : `**${first} is working on it: ${what}.**${said}`;
+  // Short, in the chat the ask came from: Pen picks the work back up from here.
+  const by = d.promisedAt ? ` · by ${promiseLabel(d.promisedAt)}` : "";
+  const content = d.status === "done" ? `**${first} finished:** ${what}${said}`
+    : d.status === "dismissed" ? `**${first} can't take it:** ${what}${said}\n\nAsk someone else, or do it here?`
+    : `**${first} is on it**${by}${said}`;
   if (local && chatId) {
     const msg: StoredMessage = { id: `msg-${uuidv4()}`, chat_id: chatId, role: "assistant", sync_status: "local", timestamp: new Date().toISOString(), content };
     await storage.saveMessage(chatId, msg);
@@ -323,3 +333,28 @@ export async function handleCollabEvents(events: CollabEvent[]): Promise<void> {
     }
   }
 }
+
+/** Hold people to what they said: an hour before the time they promised, re-raise the ask in their Focus.
+ *  Runs on the desktop heartbeat. One reminder per promise (a new promise resets it). */
+export async function remindPromises(now = new Date()): Promise<number> {
+  let n = 0;
+  for (const [itemId, ref] of await cards()) {
+    const c = ref.card;
+    if (c.status !== "open" || !c.promisedAt || c.remindedAt) continue;
+    const due = new Date(c.promisedAt);
+    if (now.getTime() < due.getTime() - 3_600_000) continue;
+    c.remindedAt = now.toISOString(); n++;
+    const what = c.action?.title ?? c.text.slice(0, 80);
+    tryNotify({
+      key: `mention.due:${itemId}`, kind: "mention.due", type: "condition", level: "priority",
+      title: `${now > due ? "Was due" : "Due"} ${promiseLabel(due, now)}: ${what}`,
+      body: `You told ${c.fromName.split(" ")[0]} ${promiseLabel(due, now)}.`,
+      source: { type: "platform", id: "people", name: "People" },
+      owner: { kind: "chat", id: ref.chatId, name: what },
+      actions: [{ label: "Open", intent: "open" }],
+    });
+  }
+  if (n) await saveCards();
+  return n;
+}
+

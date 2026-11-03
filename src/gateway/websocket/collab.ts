@@ -57,7 +57,7 @@ export async function setupCollabHandlers(ws: WebSocket, message: WSMessage): Pr
           state: m.progress === "in_progress" || (m.progress == null && m.reply) ? "in_progress" : "asked",
           reply: m.reply?.text ?? null, replyAt: m.reply?.at ?? null,
           mine: [...(m.thread ?? [])].reverse().find((t) => t.by === "from") ?? null,
-          nudgedAt: m.nudgedAt ?? null, chatId: m.context?.chatId ?? null, chatTitle: m.context?.chatTitle ?? null, at: m.createdAt,
+          nudgedAt: m.nudgedAt ?? null, promisedAt: m.promisedAt ?? null, chatId: m.context?.chatId ?? null, chatTitle: m.context?.chatTitle ?? null, at: m.createdAt,
         })) } });
         return;
       }

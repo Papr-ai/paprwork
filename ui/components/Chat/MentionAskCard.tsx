@@ -51,7 +51,7 @@ export function MentionAskCard({ data }: { data: MentionAskData }) {
   if (state === "asked") {
     return (
       <p className="mention-ask__note">
-        <span className="mention-ask__dot" aria-hidden="true" />Asked {names}{data.action?.due ? ` · due ${data.action.due}` : ""}. You'll see it under Waiting on in Focus.
+        <span className="mention-ask__dot" aria-hidden="true" />Asked {names}{data.action?.due ? ` · due ${data.action.due}` : ""}
       </p>
     );
   }

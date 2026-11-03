@@ -11,10 +11,11 @@ import type { Notice } from "../../../src/core/types/notices";
 import { gateway } from "../../src/lib/gateway";
 import { openNoticeOwner } from "../../stores/noticeOs";
 import { useTabStore } from "../../stores/tabStore";
+import { promiseLabel } from "../../../src/core/collab/promised";
 
 interface Card {
   itemId: string; fromName: string; text: string; chatId: string; suggestedReply: string; nextStep?: string;
-  action: { title: string; due?: string | null } | null; status: "open" | "done" | "dismissed"; sentReply?: string;
+  action: { title: string; due?: string | null } | null; status: "open" | "done" | "dismissed"; sentReply?: string; promisedAt?: string | null;
 }
 const first = (n: string) => n.split(" ")[0] || n;
 export const mentionItemId = (n: Notice) => (n.kind === "mention" && n.key.startsWith("mention:") ? n.key.slice(8) : null);
@@ -38,19 +39,19 @@ export function MentionAskFocus({ notice, menu, onLater }: { notice: Notice; men
     setBusy(false);
     if (!r.success) { setError(typeof r.error === "string" ? r.error : "Couldn't send. Try again."); return; }
     setCard((c) => (c ? { ...c, status, ...(reply ? { sentReply: reply } : {}) } : c));
+    void gateway.send("collab:card", { itemId }).then((x) => { const c = x.success ? (x.data as { card: Card | null }).card : null; if (c) setCard(c); }).catch(() => {});
   };
 
   const from = card?.fromName ?? notice.title.split(":")[0];
   const took = !!card?.sentReply && card.status === "open";
-  const due = card?.action?.due ? ` · due ${card.action.due}` : "";
+  // Once they're on it, the date that matters is the one they said, not the one they were asked for.
+  const when = took && card?.promisedAt ? ` · you said ${promiseLabel(card.promisedAt)}` : card?.action?.due ? ` · due ${card.action.due}` : "";
   return (
     <article className="needs-you__hero mention-focus">
-      <header><small>{took ? "In progress" : "Do this first"}</small><span className="needs-you__from">{from} asked you{due}</span>{menu}</header>
+      <header><small>{took ? "In progress" : "Do this first"}</small><span className="needs-you__from">{took ? first(from) : `${from} asked you`}{when}</span>{menu}</header>
       <h3>{card?.action?.title ?? notice.title}</h3>
-      {card ? <p>{card.text}</p> : notice.body ? <p>{notice.body}</p> : null}
-      {took ? (
-        <p className="mention-focus__sent">You replied: “{card!.sentReply}”{card!.nextStep ? ` · Next: ${card!.nextStep}` : ""}</p>
-      ) : card ? (
+      {took ? null : card ? <p>{card.text}</p> : notice.body ? <p>{notice.body}</p> : null}
+      {took ? null : card ? (
         <div className="mention-focus__pen">
           <small>Pen drafted your reply</small>
           <textarea value={draft} onChange={(e) => setDraft(e.target.value)} rows={2} aria-label="Your reply" />
@@ -60,8 +61,8 @@ export function MentionAskFocus({ notice, menu, onLater }: { notice: Notice; men
       <footer className="mention-focus__acts">
         {took ? (
           <>
-            <button type="button" className="needs-you__go" disabled={busy} onClick={() => void answer("done")}>Mark done</button>
-            <button type="button" className="mention-focus__quiet" disabled={busy} onClick={() => void answer("dismissed")}>Can't anymore</button>
+            <button type="button" className="needs-you__go" disabled={busy} onClick={() => void answer("done")}>Done</button>
+            <button type="button" className="mention-focus__quiet" disabled={busy} onClick={() => void answer("dismissed")}>Can't</button>
           </>
         ) : (
           <button type="button" className="needs-you__go" disabled={busy || !card || !draft.trim()} onClick={() => void answer("open", draft.trim())}>
@@ -69,7 +70,7 @@ export function MentionAskFocus({ notice, menu, onLater }: { notice: Notice; men
           </button>
         )}
         {!took ? <button type="button" className="mention-focus__quiet" disabled={busy || !card} onClick={() => void answer("dismissed", draft.trim() && draft !== card?.suggestedReply ? draft.trim() : undefined)}>Can't</button> : null}
-        <button type="button" className="mention-focus__quiet" onClick={onLater}>Later</button>
+        {!took ? <button type="button" className="mention-focus__quiet" onClick={onLater}>Later</button> : null}
         <button type="button" className="mention-focus__quiet" onClick={() => openNoticeOwner(notice.owner, notice.key)}>Open chat</button>
       </footer>
     </article>
@@ -77,7 +78,7 @@ export function MentionAskFocus({ notice, menu, onLater }: { notice: Notice; men
 }
 
 interface Waiting {
-  id: string; toName: string; title: string; due: string | null; state: "asked" | "in_progress"; reply: string | null; replyAt: string | null;
+  id: string; toName: string; title: string; due: string | null; state: "asked" | "in_progress"; reply: string | null; replyAt: string | null; promisedAt: string | null;
   mine: { text: string; at: string } | null; nudgedAt: string | null; chatId: string | null; chatTitle: string | null; at: string;
 }
 
@@ -112,6 +113,7 @@ function WaitingRow({ w, onChanged }: { w: Waiting; onChanged: () => void }) {
   };
   const nudgedRecently = !!w.nudgedAt && Date.now() - Date.parse(w.nudgedAt) < NUDGE_MS;
   const prog = w.state === "in_progress";
+  const late = !!w.promisedAt && Date.parse(w.promisedAt) < Date.now();
   return (
     <div className="mention-waiting__row">
       <i className="mention-waiting__av" aria-hidden="true">{initials(w.toName)}</i>
@@ -120,7 +122,9 @@ function WaitingRow({ w, onChanged }: { w: Waiting; onChanged: () => void }) {
           <b>{name} · {w.title}</b>
           <span className={`mention-state${prog ? " is-prog" : ""}`}>{prog ? "In progress" : "Asked"}</span>
         </div>
-        <span className="mention-waiting__meta">Asked {ago(w.at)}{w.due ? ` · due ${w.due}` : ""}{!w.reply && !prog ? " · no reply yet" : ""}</span>
+        <span className={`mention-waiting__meta${late ? " is-late" : ""}`}>{w.promisedAt
+          ? `${late ? "Was due" : "Promised"} ${promiseLabel(w.promisedAt)}`
+          : `Asked ${ago(w.at)}${w.due ? ` · due ${w.due}` : ""}${!w.reply && !prog ? " · no reply yet" : ""}`}</span>
         {w.reply ? <q className="mention-waiting__q">{w.reply}<small>{name} · {ago(w.replyAt)}</small></q> : null}
         {w.mine && (!w.replyAt || w.mine.at > w.replyAt) ? <q className="mention-waiting__q is-mine">{w.mine.text}<small>You · {ago(w.mine.at)}</small></q> : null}
         {writing ? (
@@ -135,7 +139,7 @@ function WaitingRow({ w, onChanged }: { w: Waiting; onChanged: () => void }) {
         ) : (
           <div className="mention-waiting__acts">
             <button type="button" className="mention-focus__quiet" onClick={() => setWriting(true)}>Reply</button>
-            {!prog ? <button type="button" className="mention-focus__quiet" disabled={!!busy || nudgedRecently} onClick={() => void act("nudge")}>{nudgedRecently ? "Nudged" : "Nudge"}</button> : null}
+            {!prog || late ? <button type="button" className="mention-focus__quiet" disabled={!!busy || nudgedRecently} onClick={() => void act("nudge")}>{nudgedRecently ? "Nudged" : "Nudge"}</button> : null}
             <button type="button" className="mention-focus__quiet" disabled={!!busy} onClick={() => void act("close")} title={`Tell ${name} you don't need it anymore`}>Close</button>
             {w.chatId ? <button type="button" className="mention-focus__quiet" onClick={() => openChat(w)}>Open chat</button> : null}
           </div>
@@ -165,7 +169,6 @@ export function WaitingOn() {
     <section className="needs-you mention-waiting" aria-label="Waiting on">
       <h2 className="needs-you__h">Waiting on<em>{rows.length}</em></h2>
       {rows.map((w) => <WaitingRow key={w.id} w={w} onChanged={load} />)}
-      <p className="mention-waiting__foot">You're notified only when it's your move: done, can't, or a question.</p>
     </section>
   );
 }
