@@ -5,6 +5,7 @@ Ticket: #
 
 
 ## How I tested it
+- [ ] Branch is up to date with `development` and CI passed on the latest run
 
 
 ## Impact
