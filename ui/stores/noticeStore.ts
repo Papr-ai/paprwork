@@ -105,8 +105,18 @@ async function refresh(): Promise<void> {
   }
 }
 
+/** Offline: one condition in the gateway (Focus's top line), and every dot goes gray (data-offline on <html>). */
+function reportOnline(): void {
+  const online = navigator.onLine;
+  document.documentElement.toggleAttribute("data-offline", !online);
+  if (gateway.isConnected()) void gateway.send("notifications:online", { online }).catch(() => {});
+}
+
 /** Call once at app root. */
 export function initNoticeListener(): void {
+  window.addEventListener("online", reportOnline);
+  window.addEventListener("offline", reportOnline);
+  reportOnline();
   window.addEventListener("gateway-broadcast", (event: Event) => {
     const { type, data } = (event as CustomEvent<{ type?: string; data?: { notices?: Notice[]; prefs?: NoticePrefs } }>).detail ?? {};
     if (type === NOTICES_CHANGED_EVENT && Array.isArray(data?.notices)) {
@@ -118,6 +128,7 @@ export function initNoticeListener(): void {
     if (!connected) return;
     lastViewing = "";
     reportViewing();
+    reportOnline();
     void refresh();
   });
   useTabStore.subscribe((s, prev) => {

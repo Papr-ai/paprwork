@@ -112,6 +112,13 @@ export async function setupNotificationHandlers(ws: WebSocket, message: WSMessag
       case "notifications:reset-prefs":
         sendResponse(ws, { id: message.id, success: true, data: service.resetPrefs() });
         return;
+      case "notifications:online": {
+        // The window knows (navigator.onLine): one net.offline condition, cleared on reconnect.
+        const { setOnline } = await import("../services/notifications/rootConditions.js");
+        setOnline(p.online !== false);
+        sendResponse(ws, { id: message.id, success: true });
+        return;
+      }
       case "notifications:resolve": {
         // { group } clears every notice in it, e.g. "key:NAME" once that key exists.
         if (typeof p.group === "string") { sendResponse(ws, { id: message.id, success: true, data: service.resolveGroup(p.group) }); return; }

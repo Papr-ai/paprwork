@@ -130,7 +130,6 @@ export function ProfileFooter({ onOpenProfile, onOpenSettings }: ProfileFooterPr
       >
         <UserAvatar imageUrl={imageUrl} displayName={name} alt={displayName} size={32} />
         {badge}
-        {planAttention ? <i className="rail-btn__badge rail-btn__badge--warn" aria-hidden="true" /> : null}
       </button>
 
       <div className="rail-peek rail-account__card" role="menu" aria-label="Account">

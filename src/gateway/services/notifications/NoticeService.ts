@@ -124,6 +124,7 @@ export class NoticeService {
     });
     if (delivery.muted && !existing) this.stats.bump(delivery.source, "muted");
     if (delivery.level === "status") return null;
+    if ((input as RoutedNotice).ambient) values.mark = "none"; // about the whole app: no dot anywhere
     if (!existing) this.stats.bump(delivery.source, "raised");
     if (delivery.paused) this.stats.bump(delivery.source, "paused");
     if (existing) {
@@ -319,7 +320,7 @@ function syncPrefsToCloud(): void {
 }
 
 /** Best-effort: notices must never break the work that raises them. */
-export function tryNotify(input: NoticeInput): void {
+export function tryNotify(input: NoticeInput | RoutedNotice): void {
   try { getNoticeService().notify(input); } catch (e) { console.warn("[NoticeService] notify failed:", e); }
 }
 
