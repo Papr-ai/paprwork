@@ -1,0 +1,3 @@
+/* content-pane is overflow: hidden, so the page's own scroller (.fpage-shell) needs a bounded height. */
+.focus-view { flex: 1 1 auto; min-height: 0; display: flex; flex-direction: column; }
+.focus-view > .fpage-shell { flex: 1 1 auto; min-height: 0; overflow-y: auto; }
