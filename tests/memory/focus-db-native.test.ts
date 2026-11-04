@@ -28,14 +28,8 @@ describe("Focus DB is native", () => {
     expect(src).toMatch(/focusDb\.js/);
   });
 
-  it("ships the schema with Papr Work, same files as the Home bundle had", () => {
+  it("ships the schema with Papr Work", () => {
     const native = readdirSync(join(root, "src", "resources", "focus", "db-migrations")).sort();
-    const home = readdirSync(join(root, "src", "resources", "default-apps", "home-dashboard", "db-migrations")).sort();
-    expect(native).toEqual(home);
-    for (const f of native) {
-      expect(readFileSync(join(root, "src", "resources", "focus", "db-migrations", f), "utf8")).toBe(
-        readFileSync(join(root, "src", "resources", "default-apps", "home-dashboard", "db-migrations", f), "utf8"),
-      );
-    }
+    expect(native).toEqual(["0001_init.sql", "0002_brief_reviews.sql", "0003_goals_tasks.sql", "0004_goal_entities.sql"]);
   });
 });

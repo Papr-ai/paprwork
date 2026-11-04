@@ -4,7 +4,6 @@
  */
 
 import { checkHtmlTagBalance } from "../utils/htmlTagBalance.js";
-import { openDiagnosticDatabase } from "./databaseDiagnostics/sqlite.js";
 
 import { existsSync, promises as fs } from "fs";
 import { TreeWatcher } from "./TreeWatcher.js";
@@ -32,7 +31,6 @@ import {
   type AppDataSourcesFile,
   buildAppDbTsContent,
   dbHasOnlyBaselineTables,
-  isUnlinkedDataSource,
   omitUnlinkedDataSources,
   parseDataSourcesFile,
   resolveDataSourcesForWorkspace,
@@ -94,26 +92,6 @@ import {
   AppWorkspaceAssignError,
   type AssignAppToWorkspaceResult,
 } from "./appWorkspaceAssignment.js";
-import { resolveBundledResourcesDir } from "../../core/utils/bundledResourcesPath.js";
-import {
-  mergeDailyBriefDataSource,
-  dailyBriefDataSourceNeedsUpdate,
-  DEFAULT_HOME_APP_ID,
-  DEFAULT_HOME_BRIEFS_DB_ISOLATION,
-  DEFAULT_HOME_BRIEFS_DB_LABEL,
-  DEFAULT_HOME_BRIEFS_DB_SLUG,
-  cleanupLegacyHomeJobArtifacts,
-  DEFAULT_HOME_DB_MIGRATIONS_DIR,
-  DEFAULT_HOME_JOB_ASSETS_DIR,
-  findHomeDailyBriefJobIdInRegistry,
-  readHomeDailyBriefJobIdFromAppDir,
-  resolveHomeBriefsRegistryDbPath,
-  resolveHomeDailyBriefJobId,
-  resolveOrAllocateHomeDailyBriefJobId,
-  writeHomeDailyBriefJobIdToAppDir,
-  type BundledDefaultJobDef,
-} from "./defaultHomeBundle.js";
-import type { JobRecord } from "./jobs/types.js";
 import {
   canPerformWorkspaceWrite,
   getWorkspaceWriteGeneration,
@@ -126,11 +104,6 @@ export type { AppDataSource, AppDataSourceRole, AppDataSourcesFile };
 /** Written by rebuildIndexIfCorrupted when metadata.json was not read (legacy). */
 export const RECOVERED_INDEX_DESCRIPTION = "Recovered app (index was corrupted)";
 
-export { DEFAULT_HOME_APP_ID };
-
-// ESM compatibility: get __dirname equivalent
-const __filename = fileURLToPath(import.meta.url);
-const __dirname = path.dirname(__filename);
 
 /**
  * Budget for the pre-delete cloud publish check. cloudApiFetch allows itself
@@ -346,7 +319,6 @@ export class AppService {
   private buildInFlight: Map<string, Promise<MiniAppBuildResult>>;
   /** Apps where a sibling write landed mid-build; the finished build is superseded. */
   private buildRerunRequested: Set<string>;
-  private pendingDefaultJobs: Array<{ sourceDir: string; targetDir: string; appId: string }>;
   private lastBuildResult: Map<string, MiniAppBuildResult>;
   private saveLock: Promise<void> | null = null;
   private initPromise: Promise<void> | null = null;
@@ -407,7 +379,6 @@ export class AppService {
     this.reloadBroadcastTimers = new Map();
     this.buildInFlight = new Map();
     this.buildRerunRequested = new Set();
-    this.pendingDefaultJobs = [];
     this.lastBuildResult = new Map();
   }
 
@@ -452,7 +423,6 @@ export class AppService {
     this.boundPaprDir = null;
     this.boundWriteGeneration = null;
     this.apps.clear();
-    this.pendingDefaultJobs = [];
     this.lastBuildResult.clear();
   }
 
@@ -496,769 +466,6 @@ export class AppService {
     }
   }
 
-  /**
-   * Install default apps from src/resources/default-apps/ if they don't exist yet.
-   * Called on first launch to provide pre-built apps like the home dashboard.
-   */
-  private async installDefaultApps(): Promise<void> {
-    try {
-      const defaultAppsDir = await resolveBundledResourcesDir(
-        __dirname,
-        "resources/default-apps",
-      );
-      if (!defaultAppsDir) {
-        console.log("[AppService] No default apps directory found, skipping installation");
-        return;
-      }
-
-      // Get list of default apps
-      const defaultAppDirs = await fs.readdir(defaultAppsDir);
-      let installedCount = 0;
-      
-      for (const appDirName of defaultAppDirs) {
-        const sourceDir = path.join(defaultAppsDir, appDirName);
-        const stat = await fs.stat(sourceDir);
-        
-        if (!stat.isDirectory()) continue;
-
-        // Read app ID from app-id.txt
-        const appIdPath = path.join(sourceDir, "app-id.txt");
-        let appId: string;
-        try {
-          appId = (await fs.readFile(appIdPath, "utf-8")).trim();
-        } catch {
-          console.warn(`[AppService] Skipping default app ${appDirName}: no app-id.txt`);
-          continue;
-        }
-
-        // Check if app already exists (both in registry and on disk)
-        if (this.apps.has(appId)) {
-          const targetDir2 = path.join(this.appsDir, appId);
-
-          // Check if bundled version is newer and update app files if so
-          await this.updateDefaultAppIfNewer(sourceDir, targetDir2, appId);
-
-          // Ensure the associated job exists (handles upgrades)
-          await this.installDefaultJobForApp(sourceDir, targetDir2, appId);
-          continue;
-        }
-
-        const targetDir = path.join(this.appsDir, appId);
-        let needsInstall = false;
-        try {
-          await fs.access(targetDir);
-          console.log(`[AppService] Default app files exist but not in registry: ${appId}`);
-          // Files exist but not registered - add to registry below
-        } catch {
-          // App doesn't exist, install files
-          needsInstall = true;
-        }
-
-        if (needsInstall) {
-          // Copy app files
-          await fs.mkdir(targetDir, { recursive: true });
-          await fs.cp(sourceDir, targetDir, { recursive: true });
-          console.log(`[AppService] Copied default app files: ${appId} (${appDirName})`);
-        }
-
-        // Read metadata.json to get app details
-        const metadataPath = path.join(sourceDir, "metadata.json");
-        let metadata: Partial<MiniApp> & { defaultHomeApp?: boolean; isDefault?: boolean };
-        try {
-          const metadataContent = await fs.readFile(metadataPath, "utf-8");
-          metadata = JSON.parse(metadataContent);
-        } catch {
-          console.warn(`[AppService] No metadata.json found for default app ${appId}, using defaults`);
-          metadata = {
-            id: appId,
-            title: appDirName,
-            description: "Default app",
-            type: "app",
-          };
-        }
-
-        // Read icon from directory if not in metadata
-        let icon: string | undefined = metadata.icon;
-        if (!icon) {
-          const resolvedIcon = await this.resolveIconFromAppDir(targetDir);
-          if (resolvedIcon) {
-            icon = resolvedIcon;
-          }
-        }
-
-        // Create app entry in registry
-        const now = new Date().toISOString();
-        const scope = readActiveAppWorkspaceScope();
-        const app: MiniApp = {
-          id: appId,
-          title: metadata.title || appDirName,
-          description: metadata.description || "Default app",
-          type: "app",
-          createdAt: metadata.createdAt || now,
-          updatedAt: now,
-          favorite: metadata.favorite || false,
-          ...(getPaprUserId()?.trim()
-            ? { ownerUserId: getPaprUserId()!.trim() }
-            : {}),
-          ...(scope ? withWorkspaceScope({}, scope) : {}),
-          ...(icon ? { icon } : {}),
-        };
-
-        this.apps.set(appId, app);
-        installedCount++;
-        
-        console.log(`[AppService] Registered default app: ${appId} - ${app.title}`);
-
-        // Install associated default job if bundled with the app
-        await this.installDefaultJobForApp(sourceDir, targetDir, appId);
-      }
-
-      // Save apps index if any apps were installed
-      if (installedCount > 0) {
-        await this.saveApps();
-        console.log(`[AppService] Installed and registered ${installedCount} default app(s)`);
-      }
-    } catch (error) {
-      console.error("[AppService] Failed to install default apps:", error);
-      // Don't throw - default apps are nice-to-have, not critical
-    }
-  }
-
-  /**
-   * Install a default job bundled with an app (default-job.json) and link its
-   * database into the app's data-sources.json so queries work immediately.
-   *
-   * IMPORTANT: This is deferred so it doesn't trigger a full JobsService.initialize()
-   * during AppService init — with 300+ jobs that scan takes longer than the
-   * supervisor health-check timeout, causing an infinite restart loop.
-   */
-  private async installDefaultJobForApp(
-    sourceDir: string,
-    targetDir: string,
-    appId: string,
-  ): Promise<void> {
-    const jobDefPath = path.join(sourceDir, "default-job.json");
-    try {
-      await fs.access(jobDefPath);
-    } catch {
-      return; // No default job bundled — nothing to do
-    }
-
-    // Schedule deferred installation after Gateway finishes all service inits.
-    // JobsService.initialize() is called by Gateway AFTER AppService, so we
-    // wait for it to be ready instead of triggering a redundant heavy init.
-    this.pendingDefaultJobs.push({ sourceDir, targetDir, appId });
-  }
-
-  /**
-   * Run deferred default-job installations. Called by Gateway after
-   * JobsService has been fully initialized.
-   */
-  async installPendingDefaultJobs(): Promise<void> {
-    if (this.pendingDefaultJobs.length === 0) {
-      return;
-    }
-
-    const pending = [...this.pendingDefaultJobs];
-    this.pendingDefaultJobs = [];
-
-    for (const { sourceDir, targetDir, appId } of pending) {
-      try {
-        await this.doInstallDefaultJobForApp(sourceDir, targetDir, appId);
-      } catch (err) {
-        console.warn(`[AppService] Failed to install default job for app ${appId}:`, err);
-      }
-    }
-  }
-
-  /** Cheap Home data-source checks — no replica migrations. */
-  async homeLinkedSourcesInvariantsOk(): Promise<boolean> {
-    try {
-      const { getJobsService } = await import("./JobsService.js");
-      const jobsService = getJobsService();
-      const { homeLinkedSourcesInvariantsOk } = await import(
-        "./homeWorkspaceBootInvariants.js"
-      );
-      return homeLinkedSourcesInvariantsOk({
-        appsDir: this.appsDir,
-        jobExists: (jobId) => jobsService.hasJob(jobId),
-        resolveBriefReadTarget: async (jobId) => {
-          const registryPath = resolveHomeBriefsRegistryDbPath(getPaprDataDir());
-          const { initializeDatabaseRegistry } = await import(
-            "./DatabaseRegistryService.js"
-          );
-          if (existsSync(registryPath)) {
-            const registry = await initializeDatabaseRegistry();
-            const record = registry.getByPath(registryPath);
-            return { dbPath: registryPath, dbId: record?.dbId };
-          }
-          const job = await jobsService.getJob(jobId);
-          const writeDbId = job?.writeDbIds?.[0]?.trim();
-          if (writeDbId) {
-            const registry = await initializeDatabaseRegistry();
-            const record = registry.getById(writeDbId);
-            if (record?.localPath && existsSync(record.localPath)) {
-              return { dbPath: record.localPath, dbId: writeDbId };
-            }
-          }
-          const jobDbPath = path.join(
-            jobsService.getJobsRootPath(),
-            jobId,
-            "data",
-            "data.db",
-          );
-          return { dbPath: existsSync(jobDbPath) ? jobDbPath : "" };
-        },
-      });
-    } catch {
-      return false;
-    }
-  }
-
-  /**
-   * Idempotent startup repair for the bundled Home app in the active namespace.
-   * Rewrites foreign dbPath pointers and persists default-job-id.txt — no file copies.
-   */
-  async repairHomeAndWorkspaceOnStartup(): Promise<void> {
-    // Cloud sandbox never repairs Home: it would rewrite Home's files and the run
-    // would publish them (see JobsService Home guards).
-    if (process.env.GATEWAY_MODE === "cloud_agent") {
-      return;
-    }
-    try {
-      const { getJobsService } = await import("./JobsService.js");
-      const jobsService = getJobsService();
-      const allJobs = await jobsService.listJobs();
-
-      const homeAppDir = path.join(this.appsDir, DEFAULT_HOME_APP_ID);
-      const preferJobId = await readHomeDailyBriefJobIdFromAppDir(homeAppDir);
-
-      const { repairDefaultHomeAppLinkedSources } = await import(
-        "./defaultHomeAppRepair.js"
-      );
-      const { initializeDatabaseRegistry } = await import(
-        "./DatabaseRegistryService.js"
-      );
-      const homeRepair = await repairDefaultHomeAppLinkedSources({
-        appsDir: this.appsDir,
-        workspaceRoot: getPaprRoot(),
-        jobExists: (jobId) => jobsService.hasJob(jobId),
-        resolveJobDbPath: (jobId) =>
-          path.join(jobsService.getJobsRootPath(), jobId, "data", "data.db"),
-        findLinkedDailyBriefJobId: () =>
-          findHomeDailyBriefJobIdInRegistry(allJobs, { preferJobId }),
-        resolveBriefReadTarget: async (jobId) => {
-          const registryPath = resolveHomeBriefsRegistryDbPath(getPaprDataDir());
-          const registry = await initializeDatabaseRegistry();
-
-          if (existsSync(registryPath)) {
-            const record = registry.getByPath(registryPath);
-            return { dbPath: registryPath, dbId: record?.dbId };
-          }
-
-          const job = await jobsService.getJob(jobId);
-          const writeDbId = job?.writeDbIds?.[0]?.trim();
-          if (writeDbId) {
-            const record = registry.getById(writeDbId);
-            if (record?.localPath && existsSync(record.localPath)) {
-              return { dbPath: record.localPath, dbId: writeDbId };
-            }
-          }
-
-          const jobDbPath = path.join(
-            jobsService.getJobsRootPath(),
-            jobId,
-            "data",
-            "data.db",
-          );
-          return { dbPath: existsSync(jobDbPath) ? jobDbPath : "" };
-        },
-      });
-
-      const totalRepairs =
-        homeRepair.prunedSources +
-        homeRepair.schemaRepaired +
-        homeRepair.dbPathsUpdated +
-        homeRepair.jobIdPersisted +
-        homeRepair.registryUpgraded;
-
-      if (totalRepairs > 0) {
-        console.log(
-          `[AppService] Startup home repair: dbPaths=${homeRepair.dbPathsUpdated} registry=${homeRepair.registryUpgraded} jobId=${homeRepair.jobIdPersisted} pruned=${homeRepair.prunedSources} schema=${homeRepair.schemaRepaired}`,
-        );
-      }
-    } catch (err) {
-      console.warn("[AppService] Startup home repair failed:", err);
-    }
-  }
-
-  private async doInstallDefaultJobForApp(
-    sourceDir: string,
-    targetDir: string,
-    appId: string,
-  ): Promise<void> {
-    const jobDefPath = path.join(sourceDir, "default-job.json");
-    const jobDefContent = await fs.readFile(jobDefPath, "utf-8");
-    const jobDef = JSON.parse(jobDefContent) as BundledDefaultJobDef;
-
-    const { getJobsService } = await import("./JobsService.js");
-    const jobsService = getJobsService();
-    await jobsService.initialize();
-
-    const allJobs = await jobsService.listJobs();
-    const jobId = await resolveOrAllocateHomeDailyBriefJobId({
-      appDir: targetDir,
-      jobExists: (id) => jobsService.hasJob(id),
-      findLinkedJobId: () => findHomeDailyBriefJobIdInRegistry(allJobs),
-    });
-
-    const { installed, dbPath } = await jobsService.installDefaultJob(
-      {
-        id: jobId,
-        name: jobDef.name,
-        type: jobDef.type,
-        command: jobDef.command,
-        schedule: jobDef.schedule,
-        retries: jobDef.retries,
-        outputMode: jobDef.outputMode as JobRecord["outputMode"] | undefined,
-        memoryPolicy: jobDef.memoryPolicy as JobRecord["memoryPolicy"] | undefined,
-        provider: jobDef.provider,
-        model: jobDef.model,
-        appIds: [appId],
-      },
-      [
-        `CREATE TABLE IF NOT EXISTS briefs (
-          date TEXT PRIMARY KEY,
-          brief_json TEXT NOT NULL,
-          created_at TEXT DEFAULT (datetime('now'))
-        )`,
-      ],
-    );
-
-    await this.installHomeJobAssets(sourceDir, jobId, dbPath);
-
-    // Briefs live in a real registry database (data/databases/{slug}/data.db),
-    // not the job's scratch data.db: job writes it via writeDbIds, app reads it
-    // as an attached source. Falls back to the job DB if provisioning fails so
-    // Home still installs.
-    const briefsDb = await this.provisionHomeBriefsRegistryDb(
-      sourceDir,
-      jobId,
-      dbPath,
-      appId,
-    );
-    const briefsDbId = briefsDb?.dbId;
-    const briefsDbPath = briefsDb?.dbPath ?? dbPath;
-
-    if (briefsDb) {
-      try {
-        // writeDbIds injects PAPR_DB_* (and APP_DB for a single target) so the
-        // job writes the registry DB instead of its own scratch database.
-        const existingJob = await jobsService.getJob(jobId);
-        if (!existingJob?.writeDbIds?.includes(briefsDb.dbId)) {
-          await jobsService.updateJob(jobId, { writeDbIds: [briefsDb.dbId] });
-        }
-      } catch (writeDbErr) {
-        console.warn(
-          `[AppService] Could not set writeDbIds for Home job ${jobId}:`,
-          writeDbErr instanceof Error ? writeDbErr.message : writeDbErr,
-        );
-      }
-    }
-
-    const dataSourcesPath = path.join(targetDir, "data-sources.json");
-    try {
-      const dsContent = await fs.readFile(dataSourcesPath, "utf-8");
-      const config = parseDataSourcesFile(dsContent);
-      let updated = false;
-      const kept = (config.sources ?? []).filter((ds) => {
-        if (!ds.tables?.includes("briefs")) {
-          return true;
-        }
-        if (ds.jobId && ds.jobId !== jobId) {
-          updated = true;
-          return false;
-        }
-        return true;
-      });
-
-      const briefIndex = kept.findIndex(
-        (ds) => ds.jobId === jobId || ds.tables?.includes("briefs"),
-      );
-      if (briefIndex >= 0) {
-        const existing = kept[briefIndex];
-        const merged = mergeDailyBriefDataSource(
-          existing,
-          jobId,
-          briefsDbPath,
-          briefsDbId,
-        );
-        if (dailyBriefDataSourceNeedsUpdate(existing, merged)) {
-          kept[briefIndex] = merged;
-          updated = true;
-        }
-      } else {
-        kept.unshift(
-          mergeDailyBriefDataSource(undefined, jobId, briefsDbPath, briefsDbId),
-        );
-        updated = true;
-      }
-
-      if (updated) {
-        await fs.writeFile(
-          dataSourcesPath,
-          serializeDataSourcesFile({ ...config, sources: kept }),
-          "utf8",
-        );
-        console.log(
-          `[AppService] Linked Daily Brief data-source for app ${appId} → ${briefsDbPath}` +
-            (briefsDbId ? ` (registry ${briefsDbId})` : " (legacy job DB)"),
-        );
-      }
-    } catch (dsErr) {
-      console.warn(`[AppService] Could not update data-sources.json for ${appId}:`, dsErr);
-    }
-
-    if (installed) {
-      console.log(`[AppService] Installed default job ${jobId} for app ${appId}`);
-    }
-
-    const bundledRecipePath = path.join(sourceDir, "recipe.md");
-    try {
-      const markdown = await fs.readFile(bundledRecipePath, "utf8");
-      const { getRecipeService } = await import("./jobs/RecipeService.js");
-      await getRecipeService().writeRecipe(jobId, markdown);
-      if (jobDef.recipe?.enabled) {
-        await jobsService.updateJob(jobId, { recipe: jobDef.recipe });
-      }
-    } catch (recipeErr) {
-      const code = (recipeErr as NodeJS.ErrnoException).code;
-      if (code !== "ENOENT") {
-        console.warn(
-          `[AppService] Could not install bundled recipe for ${jobId}:`,
-          recipeErr instanceof Error ? recipeErr.message : recipeErr,
-        );
-      }
-    }
-  }
-
-  /**
-   * Install bundled job assets (save_brief.py) into the job directory.
-   *
-   * save_brief.py is the ONLY supported write path for the briefs table; the
-   * job prompt invokes "$JOB_DIR/save_brief.py". Refreshed on every boot so
-   * the prompt and the script can never drift apart across app updates.
-   */
-  private async installHomeJobAssets(
-    sourceDir: string,
-    jobId: string,
-    jobDbPath: string,
-  ): Promise<void> {
-    // jobDbPath is "{jobDir}/data/data.db" (canonicalJobDatabasePath).
-    const jobDir = path.dirname(path.dirname(jobDbPath));
-    const assetsDir = path.join(sourceDir, DEFAULT_HOME_JOB_ASSETS_DIR);
-    try {
-      const assets = await fs.readdir(assetsDir);
-      for (const asset of assets) {
-        await fs.copyFile(
-          path.join(assetsDir, asset),
-          path.join(jobDir, asset),
-        );
-      }
-      if (assets.length > 0) {
-        console.log(
-          `[AppService] Installed ${assets.length} Home job asset(s) for ${jobId}`,
-        );
-      }
-
-      const removed = await cleanupLegacyHomeJobArtifacts(jobDir);
-      if (removed.length > 0) {
-        console.log(
-          `[AppService] Removed ${removed.length} legacy Home job artifact(s) for ${jobId}: ${removed.join(", ")}`,
-        );
-      }
-    } catch (assetErr) {
-      const code = (assetErr as NodeJS.ErrnoException).code;
-      if (code !== "ENOENT") {
-        console.warn(
-          `[AppService] Could not install Home job assets for ${jobId}:`,
-          assetErr instanceof Error ? assetErr.message : assetErr,
-        );
-      }
-    }
-  }
-
-  /**
-   * Provision the Home briefs database as a real registry database.
-   *
-   * Path is `$PAPR_HOME/data/databases/home-daily-briefs/data.db` — NOT the
-   * job's `data/data.db`. That distinction is load-bearing:
-   * registrySlugFromLocalPath() only matches `/data/databases/{slug}/data.db`,
-   * and register() derives the Turso instance from ownerJobId when set. A job
-   * path therefore yields a `j-*` instance with no migrations dir; only this
-   * layout yields a `d-*` replica-synced registry DB.
-   *
-   * Ownership after this runs: job writes (writeDbIds → PAPR_DB_* env), app
-   * reads (attached data source). The job's own data.db stays scratch.
-   *
-   * Existing users: rows are backfilled once from the legacy job DB, and only
-   * into dates the registry DB does not already have — never overwriting newer
-   * data. The legacy DB is left untouched as a safety net.
-   *
-   * Best-effort: on failure we return undefined and the caller falls back to
-   * linking the job DB, so Home still installs.
-   *
-   * @returns the registry dbId and its local path when available.
-   */
-  private async provisionHomeBriefsRegistryDb(
-    sourceDir: string,
-    jobId: string,
-    legacyJobDbPath: string,
-    appId: string,
-  ): Promise<{ dbId: string; dbPath: string } | undefined> {
-    try {
-      const dbDir = path.join(
-        getPaprDataDir(),
-        "databases",
-        DEFAULT_HOME_BRIEFS_DB_SLUG,
-      );
-      const dbPath = path.join(dbDir, "data.db");
-
-      const { syncBundledHomeMigrationsToRegistry } = await import(
-        "./defaultHomeAppRepair.js"
-      );
-      await syncBundledHomeMigrationsToRegistry(dbPath, {
-        bundledMigrationsDir: path.join(
-          sourceDir,
-          DEFAULT_HOME_DB_MIGRATIONS_DIR,
-        ),
-      });
-
-      const { ensureRegistryDatabase, applyRegistryDatabaseMigrations } =
-        await import("./jobs/databaseMigrations.js");
-      const { shouldDeferRegistrySqliteFileForReplica } = await import(
-        "../utils/tursoReplicaEnabled.js"
-      );
-      await ensureRegistryDatabase(dbPath, {
-        deferSqliteFile: shouldDeferRegistrySqliteFileForReplica(),
-      });
-
-      const { initializeDatabaseRegistry } = await import(
-        "./DatabaseRegistryService.js"
-      );
-      const registry = await initializeDatabaseRegistry();
-      let record = await registry.register({
-        localPath: dbPath,
-        label: DEFAULT_HOME_BRIEFS_DB_LABEL,
-        schemaOwnerAppId: appId,
-        isolation: DEFAULT_HOME_BRIEFS_DB_ISOLATION,
-        // No ownerJobId: that would name the Turso instance j-{jobId} and tie
-        // a shared registry DB to one job. This DB outlives the job.
-      });
-
-      if (record.isolation !== DEFAULT_HOME_BRIEFS_DB_ISOLATION) {
-        record = await registry.setIsolation(
-          record.dbId,
-          DEFAULT_HOME_BRIEFS_DB_ISOLATION,
-        );
-      }
-
-      await applyRegistryDatabaseMigrations(dbPath);
-      await this.backfillHomeBriefsFromLegacyDb(
-        legacyJobDbPath,
-        record.dbId,
-        record.localPath,
-      );
-
-      return { dbId: record.dbId, dbPath: record.localPath };
-    } catch (registryErr) {
-      console.warn(
-        `[AppService] Could not provision Home briefs registry DB for ${jobId}:`,
-        registryErr instanceof Error ? registryErr.message : registryErr,
-      );
-      return undefined;
-    }
-  }
-
-  /**
-   * One-time backfill of briefs from a legacy job database.
-   *
-   * Uses INSERT OR IGNORE so existing rows always win — a re-run can never
-   * overwrite a newer brief with a stale one. Opens the legacy file read-only:
-   * it may be replica-managed, where a read-write handle truncates the WAL on
-   * close and wedges sync in both directions.
-   */
-  private async backfillHomeBriefsFromLegacyDb(
-    legacyJobDbPath: string,
-    dbId: string,
-    registryDbPath: string,
-  ): Promise<void> {
-    if (!existsSync(legacyJobDbPath)) {
-      return;
-    }
-    if (path.resolve(legacyJobDbPath) === path.resolve(registryDbPath)) {
-      return;
-    }
-
-    let rows: Array<{ date: string; brief_json: string }> = [];
-    try {
-      const { default: Database } = await import("better-sqlite3");
-      // better-sqlite3 takes a plain path — it does NOT parse file: URIs, so
-      // `file:...?mode=ro` throws "unable to open database file". readonly:true
-      // is the real guard, and it matters: the legacy DB may be
-      // replica-managed, where a read-write handle truncates the WAL on close
-      // and wedges sync in both directions.
-      const legacy = openDiagnosticDatabase(Database, "services/AppService", legacyJobDbPath, { readonly: true });
-      try {
-        const hasTable = legacy
-          .prepare(
-            "SELECT name FROM sqlite_master WHERE type='table' AND name='briefs' LIMIT 1",
-          )
-          .get();
-        if (!hasTable) {
-          return;
-        }
-        rows = legacy
-          .prepare(
-            "SELECT date, brief_json FROM briefs WHERE brief_json IS NOT NULL",
-          )
-          .all() as Array<{ date: string; brief_json: string }>;
-      } finally {
-        legacy.close();
-      }
-    } catch (readErr) {
-      console.warn(
-        "[AppService] Could not read legacy Home briefs for backfill:",
-        readErr instanceof Error ? readErr.message : readErr,
-      );
-      return;
-    }
-
-    if (rows.length === 0) {
-      return;
-    }
-
-    const sql =
-      "INSERT OR IGNORE INTO briefs (date, brief_json, created_at) " +
-      "VALUES (?, ?, datetime('now'))";
-
-    try {
-      const { isTursoReplicaSyncFeatureEnabled } = await import(
-        "../utils/tursoReplicaEnabled.js"
-      );
-      let migrated = 0;
-
-      if (isTursoReplicaSyncFeatureEnabled()) {
-        // Replica-managed: must route through paprDbExec. Opening the file
-        // directly would truncate the WAL and wedge sync.
-        const { paprDbExec } = await import(
-          "./tursoReplica/PaprDbService.js"
-        );
-        for (const row of rows) {
-          const result = await paprDbExec({
-            dbId,
-            sql,
-            params: [row.date, row.brief_json],
-          });
-          migrated += result.changes ?? 0;
-        }
-      } else {
-        // Legacy sync: plain local write is safe and much faster.
-        const { default: Database } = await import("better-sqlite3");
-        const target = openDiagnosticDatabase(Database, "services/AppService", registryDbPath);
-        try {
-          const stmt = target.prepare(sql);
-          const insertAll = target.transaction(
-            (items: Array<{ date: string; brief_json: string }>) => {
-              let count = 0;
-              for (const row of items) {
-                count += stmt.run(row.date, row.brief_json).changes;
-              }
-              return count;
-            },
-          );
-          migrated = insertAll(rows);
-        } finally {
-          target.close();
-        }
-      }
-
-      if (migrated > 0) {
-        console.log(
-          `[AppService] Backfilled ${migrated} Home brief(s) from legacy job DB into ${dbId}`,
-        );
-      }
-    } catch (writeErr) {
-      console.warn(
-        "[AppService] Could not backfill Home briefs into registry DB:",
-        writeErr instanceof Error ? writeErr.message : writeErr,
-      );
-    }
-  }
-
-  /**
-   * Compare bundled metadata version with installed version and re-copy
-   * app files if the bundle is newer (preserves user's data-sources.json).
-   */
-  private async updateDefaultAppIfNewer(
-    sourceDir: string,
-    targetDir: string,
-    appId: string,
-  ): Promise<void> {
-    try {
-      const srcMeta = JSON.parse(
-        await fs.readFile(path.join(sourceDir, "metadata.json"), "utf-8"),
-      ) as { version?: number };
-      const bundledVersion = srcMeta.version ?? 0;
-      if (bundledVersion <= 0) return;
-
-      let installedVersion = 0;
-      try {
-        const tgtMeta = JSON.parse(
-          await fs.readFile(path.join(targetDir, "metadata.json"), "utf-8"),
-        ) as { version?: number };
-        installedVersion = tgtMeta.version ?? 0;
-      } catch {
-        // metadata missing — treat as version 0
-      }
-
-      if (bundledVersion <= installedVersion) return;
-
-      // Preserve user-specific files before overwrite
-      let savedDataSources: string | null = null;
-      const dsPath = path.join(targetDir, "data-sources.json");
-      try {
-        savedDataSources = await fs.readFile(dsPath, "utf-8");
-      } catch { /* no data-sources to preserve */ }
-
-      await fs.cp(sourceDir, targetDir, { recursive: true });
-
-      // Restore user's dbPath values for bundled default apps; full restore for others
-      if (savedDataSources) {
-        const bundledMeta = await this.readBundledDefaultAppMetadata(sourceDir);
-        if (
-          bundledMeta?.isDefault ||
-          bundledMeta?.defaultHomeApp ||
-          appId === DEFAULT_HOME_APP_ID
-        ) {
-          await this.mergeBundledDefaultAppDataSources(
-            targetDir,
-            sourceDir,
-            savedDataSources,
-          );
-        } else {
-          await fs.writeFile(dsPath, savedDataSources);
-        }
-      }
-
-      console.log(
-        `[AppService] Updated default app ${appId} from v${installedVersion} → v${bundledVersion}`,
-      );
-    } catch (err) {
-      console.warn(`[AppService] Could not check/update default app ${appId}:`, err);
-    }
-  }
-
   async initialize(): Promise<void> {
     if (this.initialized) return;
     if (this.initPromise) {
@@ -1288,16 +495,7 @@ export class AppService {
     await this.backfillAppAgentChatFromDisk(); // Sidecar + registry from metadata/registry
     await this.backfillAppWorkspaceScope(); // Stamp org/ns only for truly unassigned apps
     await this.repairRecoveredAppEntries(); // Fix legacy "Recovered" labels from metadata.json
-    // Cloud sandbox: the workspace comes from the cloud repos. Installing the
-    // bundled Home there made the sandbox push a fresh Home over the real one.
-    const cloudSandbox = process.env.GATEWAY_MODE === "cloud_agent";
-    if (!cloudSandbox) {
-      await this.syncBundledDefaultAppRegistry(); // Keep prebuilt apps (Home) in sync with bundled metadata
-    }
     await this.pruneStaleAppEntries(); // Index entries whose folders were removed (e.g. bash rm)
-    if (!cloudSandbox) {
-      await this.installDefaultApps(); // Then install defaults (won't overwrite existing)
-    }
     const { initializeDatabaseRegistry } = await import(
       "./DatabaseRegistryService.js"
     );
@@ -1325,8 +523,7 @@ export class AppService {
 
   /**
    * Safety net: detect if apps.json is missing apps that exist on disk.
-   * This handles corruption from updates, crashes, or the previous bug where
-   * installDefaultApps() could overwrite apps.json before loadApps() ran.
+   * This handles corruption from updates and crashes.
    * Scans ~/Papr/apps/ for app directories not in the index and re-adds them.
    */
   /** Remove teammate / team-catalog apps from local index; stamp owner on legacy entries. */
@@ -1512,161 +709,6 @@ export class AppService {
     if (dirty) {
       await this.saveApps();
     }
-  }
-
-  private async readBundledDefaultAppMetadata(
-    sourceDir: string,
-  ): Promise<{
-    isDefault?: boolean;
-    defaultHomeApp?: boolean;
-    version?: number;
-  } | null> {
-    try {
-      const raw = await fs.readFile(
-        path.join(sourceDir, "metadata.json"),
-        "utf-8",
-      );
-      return JSON.parse(raw) as {
-        isDefault?: boolean;
-        defaultHomeApp?: boolean;
-        version?: number;
-      };
-    } catch {
-      return null;
-    }
-  }
-
-  /** Sync registry title/description for prebuilt apps from on-disk metadata.json. */
-  private async syncBundledDefaultAppRegistry(): Promise<void> {
-    let dirty = false;
-
-    for (const app of this.apps.values()) {
-      const appDir = path.join(this.appsDir, app.id);
-      let metadata: {
-        isDefault?: boolean;
-        defaultHomeApp?: boolean;
-        title?: string;
-        description?: string;
-        icon?: string;
-        updatedAt?: string;
-      };
-      try {
-        const raw = await fs.readFile(
-          path.join(appDir, "metadata.json"),
-          "utf-8",
-        );
-        metadata = JSON.parse(raw) as typeof metadata;
-      } catch {
-        continue;
-      }
-
-      if (!metadata.isDefault && !metadata.defaultHomeApp) {
-        continue;
-      }
-
-      let appDirty = false;
-      if (metadata.title && app.title !== metadata.title) {
-        app.title = metadata.title;
-        appDirty = true;
-      }
-      if (
-        metadata.description &&
-        (app.description === RECOVERED_INDEX_DESCRIPTION ||
-          app.description !== metadata.description)
-      ) {
-        app.description = metadata.description;
-        appDirty = true;
-      }
-      if (metadata.icon && !app.icon) {
-        app.icon = metadata.icon;
-        appDirty = true;
-      }
-      if (metadata.updatedAt && app.updatedAt !== metadata.updatedAt) {
-        app.updatedAt = metadata.updatedAt;
-        appDirty = true;
-      }
-
-      const scope = readActiveAppWorkspaceScope();
-      if (
-        scope &&
-        (app.organizationId !== scope.organizationId ||
-          app.namespaceId !== scope.namespaceId)
-      ) {
-        app.organizationId = scope.organizationId;
-        app.namespaceId = scope.namespaceId;
-        appDirty = true;
-      }
-
-      if (appDirty) {
-        dirty = true;
-        console.log(
-          `[AppService] Synced bundled default app registry: ${app.id} - ${app.title}`,
-        );
-      }
-    }
-
-    if (dirty) {
-      await this.saveApps();
-    }
-  }
-
-  private async mergeBundledDefaultAppDataSources(
-    targetDir: string,
-    sourceDir: string,
-    savedDataSources: string,
-  ): Promise<void> {
-    const bundledPath = path.join(sourceDir, "data-sources.json");
-    const targetPath = path.join(targetDir, "data-sources.json");
-
-    let bundledConfig: AppDataSourcesFile;
-    try {
-      bundledConfig = parseDataSourcesFile(
-        await fs.readFile(bundledPath, "utf-8"),
-      );
-    } catch {
-      await fs.writeFile(targetPath, savedDataSources);
-      return;
-    }
-
-    const savedDbPaths = new Map<string, string>();
-    try {
-      const savedConfig = parseDataSourcesFile(savedDataSources);
-      for (const source of savedConfig.sources ?? []) {
-        if (source.jobId && source.dbPath?.trim()) {
-          savedDbPaths.set(source.jobId, source.dbPath.trim());
-        }
-      }
-    } catch {
-      // Use bundled template as-is
-    }
-
-    const activeHome = path.resolve(getPaprRoot());
-    for (const source of bundledConfig.sources ?? []) {
-      const savedPath = source.jobId
-        ? savedDbPaths.get(source.jobId)
-        : undefined;
-      if (!savedPath) {
-        continue;
-      }
-      // Same app id is installed in every org/namespace — only keep dbPath values
-      // that belong to the active workspace (not a sibling namespace copy).
-      const normalizedSaved = path.resolve(savedPath);
-      if (
-        normalizedSaved.startsWith(`${activeHome}${path.sep}`) ||
-        normalizedSaved === activeHome
-      ) {
-        source.dbPath = savedPath;
-      }
-    }
-
-    await fs.writeFile(
-      targetPath,
-      serializeDataSourcesFile(bundledConfig),
-      "utf8",
-    );
-    console.log(
-      `[AppService] Merged bundled data-sources for default app in ${path.basename(targetDir)}`,
-    );
   }
 
   private async rebuildIndexIfCorrupted(): Promise<void> {
@@ -2860,6 +1902,42 @@ export class AppService {
       deletedRegistryDbCount,
       deletedRegistryTursoCount,
     };
+  }
+
+  /**
+   * Take a retired built-in app (the old Home dashboard) off this device without the
+   * deleteApp side effects: its folder moves to backups/retired-apps, its jobs and
+   * databases stay (Papr Work owns them now). Returns true when something was removed.
+   */
+  async removeRetiredApp(id: string): Promise<boolean> {
+    await this.initialize();
+    const appPath = path.join(this.appsDir, id);
+    const inIndex = this.apps.has(id);
+    if (!inIndex && !existsSync(appPath)) return false;
+    try {
+      const { deleteAppSyncArtifacts } = await import("./deleteAppSyncArtifacts.js");
+      await deleteAppSyncArtifacts(id, this.paprRootDir, { skipSchemaOwnerRegistryTombstone: true });
+    } catch (error) {
+      console.warn(`[AppService] Sync cleanup for retired app ${id} failed:`, error instanceof Error ? error.message : error);
+    }
+    this.unwatchApp(id);
+    if (existsSync(appPath)) {
+      const dest = path.join(this.paprRootDir, "backups", "retired-apps", `${id}-${new Date().toISOString().replace(/[:.]/g, "-")}`);
+      await fs.mkdir(path.dirname(dest), { recursive: true });
+      try {
+        await fs.rename(appPath, dest);
+      } catch {
+        await fs.cp(appPath, dest, { recursive: true });
+        await fs.rm(appPath, { recursive: true, force: true });
+      }
+    }
+    if (inIndex) {
+      this.apps.delete(id);
+      await this.saveApps();
+      this.broadcastAppListUpdated();
+    }
+    console.log(`[AppService] Removed retired app ${id}`);
+    return true;
   }
 
   /**
@@ -4713,76 +3791,6 @@ export class AppService {
       ...workspaceConfig,
       sources,
     });
-  }
-
-  /**
-   * Lazy first-run setup for the bundled Home dashboard: install Daily Brief job,
-   * provision the briefs database, and link data-sources.json on demand.
-   */
-  async ensureHomeDailyBriefReady(
-    appId: string,
-  ): Promise<{ jobId: string; created: boolean }> {
-    const targetDir = path.join(this.appsDir, appId);
-    try {
-      await fs.access(path.join(targetDir, "default-job.json"));
-    } catch {
-      throw new Error(
-        `App ${appId} does not support on-demand Daily Brief setup`,
-      );
-    }
-
-    const { getJobsService } = await import("./JobsService.js");
-    const jobsService = getJobsService();
-    await jobsService.initialize();
-
-    const jobIdFromFile = await readHomeDailyBriefJobIdFromAppDir(targetDir);
-    const allJobs = await jobsService.listJobs();
-    const existingJobId = resolveHomeDailyBriefJobId({
-      appDir: targetDir,
-      jobIdFromFile,
-      jobExists: (id) => jobsService.hasJob(id),
-      findLinkedJobId: () =>
-        findHomeDailyBriefJobIdInRegistry(allJobs, {
-          preferJobId: jobIdFromFile,
-        }),
-    });
-
-    const config = await this.readDataSourcesConfigFromDisk(appId);
-    const hasBriefLink = config.sources.some(
-      (source) =>
-        !isUnlinkedDataSource(source) &&
-        source.tables?.includes("briefs") &&
-        Boolean(
-          source.jobId?.trim() || source.dbPath?.trim() || source.dbId?.trim(),
-        ),
-    );
-
-    if (existingJobId && hasBriefLink) {
-      if (!jobIdFromFile) {
-        await writeHomeDailyBriefJobIdToAppDir(targetDir, existingJobId);
-      }
-      return { jobId: existingJobId, created: false };
-    }
-
-    await this.doInstallDefaultJobForApp(targetDir, targetDir, appId);
-
-    const refreshedJobs = await jobsService.listJobs();
-    const jobId =
-      (await readHomeDailyBriefJobIdFromAppDir(targetDir)) ??
-      resolveHomeDailyBriefJobId({
-        appDir: targetDir,
-        jobExists: (id) => jobsService.hasJob(id),
-        findLinkedJobId: () =>
-          findHomeDailyBriefJobIdInRegistry(refreshedJobs, {
-            preferJobId: jobIdFromFile,
-          }),
-      });
-
-    if (!jobId) {
-      throw new Error("Daily Brief Generator job could not be created");
-    }
-
-    return { jobId, created: true };
   }
 
   async listAppDataSources(appId: string): Promise<AppDataSource[]> {

@@ -647,6 +647,21 @@ export class DatabaseRegistryService {
     });
   }
 
+  /** Drop an app's schema ownership (the database outlives the app). Returns how many changed. */
+  async releaseSchemaOwner(appId: string): Promise<number> {
+    const owned = this.listBySchemaOwnerApp(appId);
+    if (!owned.length) return 0;
+    const state = this.getState();
+    const now = new Date().toISOString();
+    for (const record of owned) {
+      const next = { ...state.databases[record.dbId]!, updatedAt: now };
+      delete next.schemaOwnerAppId;
+      state.databases[record.dbId] = next;
+    }
+    await this.save(state);
+    return owned.length;
+  }
+
   /** Registry DBs whose migration SQL ships in this app's repo (schema owner). */
   listBySchemaOwnerApp(appId: string): DatabaseRecord[] {
     const trimmed = appId.trim();

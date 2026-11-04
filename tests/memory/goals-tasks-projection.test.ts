@@ -277,7 +277,7 @@ describe("task completion write-back", () => {
 
 describe("Home migration + contract", () => {
   const brief = join(process.cwd(), "src/resources/focus/daily-brief");
-  const home = join(process.cwd(), "src/resources/default-apps/home-dashboard");
+  const home = join(process.cwd(), "src/resources/focus");
   it("0003 creates goals, goal_history, tasks and adds task_id to brief_reviews", () => {
     const sql = readFileSync(join(home, "db-migrations/0003_goals_tasks.sql"), "utf8");
     for (const t of ["goals", "goal_history", "tasks"]) expect(sql).toMatch(new RegExp(`CREATE TABLE IF NOT EXISTS ${t} \\(`));
@@ -297,9 +297,6 @@ describe("Home migration + contract", () => {
     expect(py).toMatch(/open-tasks/);
     const routes = readFileSync(join(process.cwd(), "src/gateway/services/focusRoutes.ts"), "utf8");
     expect(routes).toMatch(/FROM tasks t LEFT JOIN goals g/);
-    const reviews = readFileSync(join(home, "reviews.js"), "utf8");
-    expect(reviews).toMatch(/\/api\/workspace\/tasks\/\$\{encodeURIComponent\(taskId\)\}\/done/);
-    expect(reviews).toMatch(/task_id = excluded\.task_id/);
   });
 });
 

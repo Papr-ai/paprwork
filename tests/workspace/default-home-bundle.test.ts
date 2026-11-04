@@ -316,7 +316,7 @@ describe("defaultHomeBundle", () => {
     const sql = readFileSync(
       path.join(
         process.cwd(),
-        "src/resources/default-apps/home-dashboard/db-migrations/0001_init.sql",
+        "src/resources/focus/db-migrations/0001_init.sql",
       ),
       "utf8",
     );
