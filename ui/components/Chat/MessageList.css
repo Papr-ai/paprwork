@@ -12,6 +12,45 @@
   flex-direction: column;
 }
 
+.message-list__jump {
+  position: sticky;
+  bottom: 16px;
+  height: 0;
+  display: flex;
+  justify-content: center;
+  overflow: visible;
+  pointer-events: none;
+  z-index: 5;
+}
+
+.message-list__jump-btn {
+  transform: translateY(-100%);
+  pointer-events: auto;
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 6px 12px;
+  border-radius: 999px;
+  border: 1px solid var(--border-color, rgba(127, 127, 127, 0.25));
+  background: var(--bg-elevated, var(--bg-primary, #fff));
+  color: var(--text-primary);
+  font-size: 12px;
+  font-weight: 500;
+  cursor: pointer;
+  box-shadow: 0 4px 16px rgba(0, 0, 0, 0.12);
+  backdrop-filter: blur(12px);
+  animation: message-list-jump-in 160ms ease-out;
+}
+
+.message-list__jump-btn:hover {
+  background: var(--bg-hover, var(--bg-elevated, #fff));
+}
+
+@keyframes message-list-jump-in {
+  from { opacity: 0; transform: translateY(-80%); }
+  to { opacity: 1; transform: translateY(-100%); }
+}
+
 .message-list-empty {
   display: flex;
   align-items: center;
