@@ -233,7 +233,7 @@ function renderSequence(
           // Text before/between tools → goes inside exploring card
           exploringItems.push(
             <div key={`text-${index}`} className="exploring-narration">
-              <Markdown>{item.data.trim()}</Markdown>
+              <Markdown mentions>{item.data.trim()}</Markdown>
             </div>,
           );
         }
@@ -677,7 +677,7 @@ function renderSequence(
     if (finalTextAfterAllTools) {
       elements.push(
         <div key="final-text" className="message-text">
-          <Markdown>{finalTextAfterAllTools}</Markdown>
+          <Markdown mentions>{finalTextAfterAllTools}</Markdown>
         </div>,
       );
     }
@@ -691,7 +691,7 @@ function renderSequence(
           key={`delegation-followup-${followUp.id}`}
           className="message-text"
         >
-          <Markdown>{followUpText}</Markdown>
+          <Markdown mentions>{followUpText}</Markdown>
         </div>,
       );
     }
@@ -702,7 +702,7 @@ function renderSequence(
     if (fullText.trim()) {
       elements.push(
         <div key="text" className="message-text">
-          <Markdown>{fullText}</Markdown>
+          <Markdown mentions>{fullText}</Markdown>
         </div>,
       );
     }
@@ -1079,7 +1079,7 @@ const MessageItemInner: React.FC<MessageItemProps> = ({
             {/* Main message text */}
             {content && !isMention && (
               <div className="message-text">
-                <Markdown>{content}</Markdown>
+                <Markdown mentions>{content}</Markdown>
                 {message.isStreaming && !message.streamingReasoning && (
                   <span className="streaming-cursor">▊</span>
                 )}
@@ -1095,7 +1095,7 @@ const MessageItemInner: React.FC<MessageItemProps> = ({
                   key={`delegation-followup-fallback-${followUp.id}`}
                   className="message-text"
                 >
-                  <Markdown>{followUpText}</Markdown>
+                  <Markdown mentions>{followUpText}</Markdown>
                 </div>
               );
             })}

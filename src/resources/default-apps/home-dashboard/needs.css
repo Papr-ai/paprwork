@@ -1,0 +1,78 @@
+/* Needs you + Waiting on: same type, spacing and rows as Your three (three.css). One blue, no new colors. */
+.hneeds { margin-top: 0; }
+.hneed { display: grid; gap: 6px; padding: 12px 8px 14px; border-radius: 12px; }
+.hneed.is-urgent { box-shadow: inset 3px 0 0 var(--blue); padding-left: 14px; }
+.hneed header { display: flex; align-items: center; gap: 8px; min-width: 0; }
+.hneed header small { flex: none; font-size: 12px; font-weight: 600; color: var(--blue); }
+.hneed-from { flex: 1; min-width: 0; display: flex; align-items: center; gap: 6px; font-size: 12.5px; color: var(--soft); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.hneed-t { font-size: 14px; font-weight: 600; line-height: 1.35; letter-spacing: -.005em; color: var(--ink); }
+.hneed > p { margin: 0; font-size: 13.5px; line-height: 1.5; color: var(--mid); }
+.hneed .t3btns { flex-wrap: wrap; align-items: center; margin-top: 4px; }
+.hneed-err { margin: 0; font-size: 12.5px; color: #c4352b; }
+.hneed-row { align-items: center; }
+.hneed-row .hrt span { display: flex; align-items: center; gap: 6px; }
+.hneed-dot { width: 7px; height: 7px; margin: 0 6px; border-radius: 50%; flex: none; background: var(--blue); }
+.hneed-more { margin: 2px 0 0 4px; justify-self: start; }
+.hneed-note { display: flex; align-items: center; justify-content: space-between; gap: 10px; margin: 0 0 18px; padding: 9px 12px; border-radius: 12px; background: rgba(10,16,32,.04); font-size: 12.5px; color: var(--mid); }
+
+/* Pen's draft: an input, not a quote. */
+.hdraft { display: grid; gap: 4px; margin-top: 4px; padding: 9px 11px; border-radius: 12px; background: rgba(0,96,224,.06); }
+.hdraft small { font-size: 11.5px; font-weight: 600; color: var(--blue); }
+.hdraft textarea { width: 100%; resize: vertical; border: none; background: transparent; outline: none; padding: 0;
+  font: 13.5px/1.5 var(--font); color: var(--ink); }
+.hwait .hdraft { background: transparent; padding: 0; }
+.hwait .hdraft textarea { padding: 8px 10px; border-radius: 9px; border: 1px solid #dfe5ee; background: #fff; }
+.hwait .hdraft textarea:focus { border-color: var(--blue); box-shadow: 0 0 0 3px rgba(0,96,224,.12); }
+
+/* A person is a pill: initials + name, everywhere. */
+.hpill { display: inline-flex; align-items: center; gap: 5px; max-width: 100%; padding: 1px 8px 1px 2px; border-radius: 999px; vertical-align: baseline;
+  background: rgba(0,96,224,.08); color: var(--blue); font-size: 12.5px; font-weight: 600; line-height: 1.5; white-space: nowrap; }
+.hpill i { flex: none; width: 17px; height: 17px; border-radius: 50%; display: grid; place-items: center; font-style: normal; font-size: 9px; font-weight: 700; background: var(--blue); color: #fff; }
+.hneed > p .hpill { font-size: 12.5px; }
+
+/* … menu: solid card, the brief's font, readable over anything. */
+.hmenu { position: relative; flex: none; margin-left: auto; }
+.hmenu-dots { border: none; background: none; padding: 1px 8px; border-radius: 7px; font: 600 15px/1 var(--font); color: var(--soft); cursor: pointer; }
+.hmenu-dots:hover, .hmenu-dots[aria-expanded="true"] { background: rgba(10,16,32,.05); color: var(--ink); }
+.hmenu-pop { position: absolute; right: 0; top: calc(100% + 4px); z-index: 30; width: 264px; padding: 6px; display: grid; border-radius: 14px;
+  background: var(--body-bg); border: 1px solid var(--line); box-shadow: 0 14px 34px rgba(10,16,32,.14); }
+.hmenu-pop button { border: none; background: none; text-align: left; padding: 8px 10px; border-radius: 9px; cursor: pointer; font: 500 13px var(--font); color: var(--ink); }
+.hmenu-pop button:hover { background: rgba(10,16,32,.05); }
+.hmenu-pop button em { display: block; margin-top: 1px; font-style: normal; font-weight: 400; font-size: 12px; color: var(--soft); }
+.hmenu-pop .is-link { color: var(--blue); font-weight: 600; }
+.hmenu-pop p { margin: 4px 10px 6px; font-size: 12.5px; color: var(--mid); }
+
+/* Waiting on */
+.hwait-row { display: grid; gap: 4px; padding: 10px 8px; border-radius: 12px; }
+.hwait-row:hover { background: rgba(10,16,32,.035); }
+.hwait-top { display: flex; align-items: center; justify-content: space-between; gap: 10px; min-width: 0; }
+.hwait-top b { display: flex; align-items: center; gap: 8px; min-width: 0; font-size: 14px; font-weight: 600; color: var(--ink); }
+.hwait-top b > span { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.hstate { flex: none; font-style: normal; font-size: 11px; font-weight: 600; padding: 2px 7px; border-radius: 6px; color: var(--soft); background: rgba(10,16,32,.05); }
+.hstate.is-prog { color: #b7791f; background: rgba(245,158,11,.1); }
+.hwait-meta { font-size: 12.5px; color: var(--soft); }
+.hwait-meta.is-late { color: #b7791f; }
+.hwait-q { quotes: none; display: block; margin-top: 2px; padding: 7px 10px; border-radius: 10px; font-size: 13px; line-height: 1.45; color: var(--ink); background: rgba(0,96,224,.06); }
+.hwait-q.is-mine { background: none; box-shadow: inset 0 0 0 1px var(--line); }
+.hwait-q small { display: block; margin-top: 2px; font-size: 11.5px; color: var(--soft); }
+.hwait-acts { display: flex; flex-wrap: wrap; gap: 2px; margin-left: -8px; }
+.hwait-acts .t3link { color: var(--mid); font-weight: 500; }
+.hwait-acts .t3link:hover { color: var(--ink); }
+.hwait-acts .t3link[disabled] { opacity: .5; pointer-events: none; }
+.hwait .t3note { margin: 6px 8px 0; }
+
+.hneed-toast { position: fixed; left: 50%; bottom: 24px; transform: translateX(-50%); z-index: 40; display: flex; gap: 14px; align-items: center;
+  padding: 9px 14px; border-radius: 12px; background: #1d1d1f; color: #fff; font: 13px var(--font); box-shadow: 0 10px 30px rgba(0,0,0,.25); }
+.hneed-toast button { border: none; background: none; padding: 0; font: 600 13px var(--font); color: #6cb2ff; cursor: pointer; }
+
+@media (prefers-color-scheme: dark) {
+  .hpill, .hdraft, .hwait-q { background: rgba(76,157,255,.14); }
+  .hstate, .hneed-note, .hmenu-dots:hover, .hmenu-pop button:hover, .hwait-row:hover { background: rgba(255,255,255,.06); }
+  .hmenu-pop { box-shadow: 0 14px 34px rgba(0,0,0,.5); }
+  .hwait .hdraft textarea { background: #151a22; border-color: #2c3442; }
+  .hneed-toast { background: #f2f2f4; color: #111; } .hneed-toast button { color: #0161e0; }
+}
+@media (max-width: 520px) {
+  .hneed-from span:not(.hpill) { display: none; }
+  .hwait-top { flex-wrap: wrap; }
+}

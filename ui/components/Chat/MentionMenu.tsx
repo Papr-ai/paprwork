@@ -16,6 +16,9 @@ export { filterTeammates, insertMention, mentionQueryAt, rankTeammates } from ".
 let cache: Teammate[] | null = null;
 let inflight: Promise<Teammate[]> | null = null;
 
+/** Teammates already loaded this session (for pills); [] before the first @. */
+export const cachedTeammates = (): Teammate[] => cache ?? [];
+
 /** Teammates, fetched once per session. Empty if not signed in or offline. */
 export function loadTeammates(): Promise<Teammate[]> {
   if (cache) return Promise.resolve(cache);

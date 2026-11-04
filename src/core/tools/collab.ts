@@ -98,7 +98,8 @@ export const notifyPeopleTool = createTool({
     try {
       const svc = await import("../../gateway/services/collab/mentions.js");
       const r = await svc.notifyMentions(args.mentionIds, args.note);
-      return { success: true, data: { notified: r.map((m) => ({ name: m.toName, mentionId: m.id })) } };
+      return { success: true, data: { notified: r.map((m) => ({ name: m.toName, mentionId: m.id })),
+        say: "Confirm in one short line and write each person as @Name (it shows as their pill), e.g. \"Asked @" + (r[0]?.toName ?? "Name") + " to …\"." } };
     } catch (e) {
       return { success: false, error: (e as Error).message };
     }

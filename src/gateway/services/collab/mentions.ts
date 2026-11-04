@@ -107,7 +107,7 @@ export async function followUp(itemId: string, kind: "reply" | "nudge" | "close"
   const chatId = out.mention.context?.chatId;
   if (chatId && kind !== "nudge") {
     const first = out.mention.toName.split(" ")[0];
-    await postToChat(chatId, kind === "reply" ? `**You replied to ${first}:**\n\n> ${text!.split("\n").join("\n> ")}` : `**Closed.** ${first} was told you don't need it anymore.`);
+    await postToChat(chatId, kind === "reply" ? `**You replied to** @${first}\n\n> ${text!.split("\n").join("\n> ")}` : `**Closed.** @${first} was told you don't need it anymore.`);
   }
   broadcast({ type: "collab:mention", data: { itemId } });
   return out.mention;
@@ -275,9 +275,11 @@ async function receiveReply(e: CollabEvent): Promise<void> {
   const said = d.text ? `\n\n> ${d.text.split("\n").join("\n> ")}` : "";
   // Short, in the chat the ask came from: Pen picks the work back up from here.
   const by = d.promisedAt ? ` · by ${promiseLabel(d.promisedAt)}` : "";
-  const content = d.status === "done" ? `**${first} finished:** ${what}${said}`
-    : d.status === "dismissed" ? `**${first} can't take it:** ${what}${said}\n\nAsk someone else, or do it here?`
-    : `**${first} is on it**${by}${said}`;
+  // "@name" renders as a person pill in chat. One status line, then their words.
+  const at = `@${who.split(" ").length > 1 ? who : first}`;
+  const content = d.status === "done" ? `${at} **finished** · ${what}${said}`
+    : d.status === "dismissed" ? `${at} **can't take it** · ${what}${said}\n\nAsk someone else, or do it here?`
+    : `${at} **is on it**${by} · ${what}${said}`;
   if (local && chatId) {
     const msg: StoredMessage = { id: `msg-${uuidv4()}`, chat_id: chatId, role: "assistant", sync_status: "local", timestamp: new Date().toISOString(), content };
     await storage.saveMessage(chatId, msg);
