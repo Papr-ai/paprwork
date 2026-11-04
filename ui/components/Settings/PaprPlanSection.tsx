@@ -17,6 +17,7 @@ import { planNeedsAttention } from "../../utils/cloudMemoryStatus";
 import { refreshPaprBillingStatus } from "../../utils/refreshPaprBillingStatus";
 import { useSettingsNavigationStore } from "../../stores/settingsNavigationStore";
 import { CreditPlanCards, type CreditPlanAction } from "./CreditPlanCards";
+import { CreditsUsagePanel } from "./CreditsUsagePanel";
 import type {
   PaprCreditPlanId,
   PaprExpertBuildSize,
@@ -105,7 +106,14 @@ function meterToneForSummary(
   return meterTone(exceeded, near);
 }
 
+function creditsCurrentPlan(summary: PaprPlanSummary): PaprCreditPlanId | null {
+  const plan = summary.credits?.plan;
+  return plan === "cloud" || plan === "cloud_plus" || plan === "cloud_max" ? plan : null;
+}
+
 function shouldShowUpgradeOptions(summary: PaprPlanSummary): boolean {
+  // Credits orgs always see the plan cards (current plan marked) so they can switch.
+  if (summary.credits) return true;
   return (
     summary.planTier === "developer" ||
     !hasActivePaprSubscription(summary) ||
@@ -344,8 +352,9 @@ export function PaprPlanSection() {
                   Billing changes require the workspace owner
                 </p>
                 <p className="papr-plan__callout-body">
-                  You can still view usage here. Contact your workspace owner to
-                  resubscribe, upgrade, or enable metered billing.
+                  {summary.credits
+                    ? "You can still view your usage here. Ask your workspace owner to change the plan or buy more credits."
+                    : "You can still view usage here. Contact your workspace owner to resubscribe, upgrade, or enable metered billing."}
                 </p>
               </div>
             )}
@@ -388,6 +397,10 @@ export function PaprPlanSection() {
               ) : null}
             </div>
 
+            {summary.credits ? (
+              <CreditsUsagePanel credits={summary.credits} />
+            ) : (
+              <>
             {summary.isTrialPeriod && (
               <div className="papr-plan__plan-meta">
                 Trial active — Builder limits apply until your trial ends.
@@ -487,6 +500,9 @@ export function PaprPlanSection() {
               )}
             />
 
+              </>
+            )}
+
             <button
               type="button"
               className="papr-plan__secondary-btn papr-plan__dashboard-btn"
@@ -509,6 +525,7 @@ export function PaprPlanSection() {
                 </div>
                 <CreditPlanCards
                   canManageBilling={summary.canManageBilling}
+                  currentPlan={creditsCurrentPlan(summary)}
                   pending={creditAction}
                   onChoosePlan={(plan, track) => void handleCreditsCheckout(plan, track)}
                   onBuyExpertBuild={(size) => void handleExpertBuild(size)}
@@ -522,6 +539,8 @@ export function PaprPlanSection() {
               </div>
             ) : null}
 
+            {summary.credits ? null : (
+              <>
             <div className="papr-plan__metered">
               {meteredNeedsPaymentMethod ? (
                 <div className="papr-plan__payment-banner">
@@ -589,6 +608,9 @@ export function PaprPlanSection() {
                 )}
               </>
             ) : null}
+
+              </>
+            )}
 
             {actionMessage && <p className="papr-plan__message">{actionMessage}</p>}
           </>

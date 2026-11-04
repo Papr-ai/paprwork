@@ -165,6 +165,42 @@ export async function fetchBuilders(
   return (await credits(baseUrl, sessionToken, "/builders", {}, fetchImpl)) as BuildersView;
 }
 
+/** One allowance (a seat, or the org summary) from /v1/credits/usage. */
+export interface CreditAllowance {
+  plan: string;
+  grant: number;
+  used: number;
+  ratio: number | null;
+  state: "ok" | "warn" | "overage" | "blocked" | string;
+  reason?: string | null;
+  notice?: string | null;
+  seat?: boolean;
+  seats?: number;
+  memberCap?: number;
+  overageCredits?: number;
+  overageUsd?: number;
+  topupBalanceUsd?: number;
+}
+
+export interface CreditUsageView {
+  period: string;
+  credits: number;
+  usd: number;
+  userId: string;
+  organizationId: string;
+  /** null = this org is not billed in credits (legacy plan) or the ledger is off. */
+  allowance: CreditAllowance | null;
+  org: CreditAllowance | null;
+}
+
+export async function fetchCreditUsage(
+  baseUrl: string,
+  sessionToken: string,
+  fetchImpl?: typeof fetch,
+): Promise<CreditUsageView> {
+  return (await credits(baseUrl, sessionToken, "/usage", {}, fetchImpl)) as CreditUsageView;
+}
+
 export type SetBuilderResult = {
   builder?: boolean;
   when?: "now" | "period_end";
