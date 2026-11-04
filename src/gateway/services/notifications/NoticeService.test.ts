@@ -217,7 +217,7 @@ describe("NoticeService settings + clicks", () => {
       source: { type: "app", id: "crm", name: "CRM" }, owner: { kind: "app", id: "crm", name: "CRM" } } as NoticeInput);
     const c = svc.center();
     expect(c.apps).toEqual([{ id: "app:crm", name: "CRM" }]);
-    expect(c.sources.map((s) => s.id)).toEqual(["chats", "apps", "account", "updates"]);
+    expect(c.sources.map((s) => s.id)).toEqual(["chats", "apps", "people", "account", "updates"]);
   });
 
   describe("Later and Mute (Focus)", () => {
