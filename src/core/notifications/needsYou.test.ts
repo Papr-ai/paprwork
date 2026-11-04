@@ -1,5 +1,5 @@
 /** Needs you: what counts, Later timing, mutes. The list in Focus and the count on Pen both read this. */
-import { describe, expect, it } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { focusReason, laterList, laterUntil, mutedSources, needsYou, noticeLabels, whenLabel } from "./needsYou.js";
 import { DEFAULT_NOTICE_PREFS, mergePrefs } from "./prefs.js";
 import type { Notice } from "../types/notices.js";
@@ -11,6 +11,17 @@ const n = (o: Partial<Notice> = {}): Notice => ({
   createdAt: "2026-11-03T10:00:00Z", updatedAt: "2026-11-03T10:00:00Z", ...o,
 });
 const billing = { type: "billing" as const, id: "credits", name: "Billing" };
+
+
+// The fixtures use fixed Nov 3 2026 times, and mergePrefs drops a muteUntil
+// that is already past by the real clock. Freeze Date so they don't expire.
+beforeEach(() => {
+  vi.useFakeTimers({ toFake: ["Date"] });
+  vi.setSystemTime(new Date("2026-11-03T00:00:00Z"));
+});
+afterEach(() => {
+  vi.useRealTimers();
+});
 
 describe("laterUntil", () => {
   it("morning: back at 3 PM today", () => expect(laterUntil(at(10, 40))).toEqual(at(15)));
