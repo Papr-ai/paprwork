@@ -87,6 +87,7 @@ describe("Focus on the web: home page", () => {
     expect(html).toContain('href="/focus/_/focus.css"');
     expect(html).toMatch(/<a href="\/" class="on" aria-current="page">Focus<\/a><a href="\/my-apps">My apps<\/a><a href="\/discover">Discover<\/a>/);
     expect(html).toContain('<meta name="robots" content="noindex">');
+    expect(html).not.toContain('class="btn btn--solid get"');
   });
 
   it("signed out: Discover stays at / with no Focus tab or bundle", () => {
@@ -94,6 +95,7 @@ describe("Focus on the web: home page", () => {
     expect(html).not.toContain("focus.js");
     expect(html).not.toContain(">Focus<");
     expect(html).toContain('<a href="/" class="on" aria-current="page">Discover</a>');
+    expect(html).toContain('class="btn btn--solid get"');
   });
 
   it("focus and focus-api can't be taken as a namespace", () => {

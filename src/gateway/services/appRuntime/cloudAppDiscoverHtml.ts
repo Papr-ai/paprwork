@@ -301,7 +301,7 @@ ${jsonLd ? `<script type="application/ld+json">${JSON.stringify(jsonLd).replace(
 <div class="nprog" aria-hidden="true"></div>
 <header class="top"><a class="logo" href="${PAPR_URL}" title="Learn about Papr">${PAPR_MARK}<span>Papr</span></a>
 <nav class="tabs" aria-label="Sections">${tabs}</nav>
-<span class="right">${account}<a class="btn btn--solid get" href="${DOWNLOAD_URL}">Get Papr Work</a></span></header>
+<span class="right">${account}${input.signedIn ? "" : `<a class="btn btn--solid get" href="${DOWNLOAD_URL}">Get Papr Work</a>`}</span></header>
 <main${view === "mine" ? ' class="narrow"' : view === "focus" ? ' class="fmain"' : ""}>${view === "focus" ? "" : view === "mine" ? '<h1 class="mh1">My apps</h1>' : '<h1 class="h1">Discover</h1><p class="sub">Apps built and shared by the Papr Work community.</p>'}
 ${body}</main>
 <footer class="foot"><a href="${PAPR_URL}">Papr</a> · <a href="${DOWNLOAD_URL}">Download Papr Work</a></footer>
