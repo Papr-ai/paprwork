@@ -1,5 +1,5 @@
 /**
- * Goals store — the Home DB `goals` table is the source of truth.
+ * Goals store — the Focus DB `goals` table (focusDb.ts) is the source of truth.
  *
  * Every goal write (Home buttons, chat agent, Sleep) goes through
  * `updateGoal` / `createGoal` (exposed as PATCH/POST /api/workspace/goals).
@@ -18,7 +18,7 @@
 import { promises as fs } from "fs";
 import path from "path";
 import { getPaprWorkspaceDir } from "../../core/utils/paprRoot.js";
-import { DEFAULT_HOME_APP_ID } from "./defaultHomeBundle.js";
+import { focusDb } from "./focusDb.js";
 import {
   buildGoalTree,
   normalizeGoalStatus,
@@ -29,7 +29,6 @@ import {
   type WorkspaceGoalsResult,
 } from "./workspaceGoals.js";
 
-const GATEWAY_PORT = Number(process.env.GATEWAY_PORT ?? 18789);
 const CANONICAL: ReadonlySet<string> = new Set(["proposed", "on-track", "at-risk", "blocked", "done", "dropped"]);
 const LEVELS: ReadonlySet<string> = new Set(["L1", "L2", "L3"]);
 const CONFIDENCE: ReadonlySet<string> = new Set(["high", "medium", "low"]);
@@ -40,16 +39,7 @@ export class GoalValidationError extends Error {
 
 type Row = Record<string, unknown>;
 
-async function homeDb(endpoint: "query" | "write", sql: string, params: unknown[] = []): Promise<Row[]> {
-  const res = await fetch(`http://127.0.0.1:${GATEWAY_PORT}/api/db/${endpoint}`, {
-    method: "POST",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ appId: DEFAULT_HOME_APP_ID, sql, params }),
-  });
-  const data = (await res.json().catch(() => ({}))) as { error?: string; rows?: Row[] };
-  if (!res.ok || data.error) throw new Error(data.error ?? `gateway ${endpoint} HTTP ${res.status}`);
-  return data.rows ?? [];
-}
+const homeDb = (endpoint: "query" | "write", sql: string, params: unknown[] = []): Promise<Row[]> => focusDb(endpoint, sql, params);
 
 export interface GoalPatch {
   title?: string;

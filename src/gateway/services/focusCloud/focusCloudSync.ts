@@ -1,5 +1,5 @@
 /**
- * Focus data lives in Mongo (/v1/cloud/collab/focus/*). Each device keeps a local copy in Home's SQLite
+ * Focus data lives in Mongo (/v1/cloud/collab/focus/*). Each device keeps a local copy in the Focus DB (focusDb.ts)
  * so the app is fast and works offline; IDENTITY.md goal blocks are generated from it.
  *
  * One cycle = pull, then push:
@@ -16,26 +16,18 @@ import { mkdirSync, readFileSync, writeFileSync } from "fs";
 import path from "path";
 import { cloudApiFetch } from "../../utils/cloudApiClient.js";
 import { cloudActingUserId } from "../../utils/cloudActingUser.js";
-import { DEFAULT_HOME_APP_ID } from "../defaultHomeBundle.js";
+import { focusDb } from "../focusDb.js";
 import {
   BRIEF_KEYS, GOAL_KEYS, TASK_KEYS, fromCloudGoal, mergeOnConflict, shape, sharedPrefs, toCloudBrief, toCloudGoal, toCloudTask,
   withLocalPrefs, type Row,
 } from "./focusCloudMap.js";
 
-const GATEWAY_PORT = Number(process.env.GATEWAY_PORT ?? 18789);
 const BRIEF_DAYS = 14;
 
 interface Base { rev?: number; key?: string; data: Row }
 interface State { v: 2; deviceId: string; cursor?: string; base: Record<string, Base> }
 
-async function home(endpoint: "query" | "write", sql: string, params: unknown[] = []): Promise<Row[]> {
-  const res = await fetch(`http://127.0.0.1:${GATEWAY_PORT}/api/db/${endpoint}`, {
-    method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ appId: DEFAULT_HOME_APP_ID, sql, params }),
-  });
-  const data = (await res.json().catch(() => ({}))) as { error?: string; rows?: Row[] };
-  if (!res.ok || data.error) throw new Error(data.error ?? `home db HTTP ${res.status}`);
-  return data.rows ?? [];
-}
+const home = (endpoint: "query" | "write", sql: string, params: unknown[] = []): Promise<Row[]> => focusDb(endpoint, sql, params);
 const q = (sql: string, params: unknown[] = []) => home("query", sql, params).catch(() => [] as Row[]);
 
 async function stateFile(): Promise<string> {
