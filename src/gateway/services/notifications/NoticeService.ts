@@ -60,6 +60,29 @@ export function onNoticeOs(listener: OsListener): () => void {
   return () => osListeners.delete(listener);
 }
 
+/** You did something with notices on this device: seen, later, done, or brought back. The cloud sync sends it up. */
+export type NoticeMarkState = "seen" | "later" | "done" | "open";
+export interface NoticeMarkChange { keys: string[]; state: NoticeMarkState; laterUntil?: string }
+type MarkListener = (m: NoticeMarkChange) => void;
+const markListeners = new Set<MarkListener>();
+export function onNoticeMarked(listener: MarkListener): () => void {
+  markListeners.add(listener);
+  return () => markListeners.delete(listener);
+}
+function emitMark(m: NoticeMarkChange): void {
+  if (!m.keys.length) return;
+  for (const l of markListeners) {
+    try { l(m); } catch (e) { console.warn("[NoticeService] mark listener failed:", e); }
+  }
+}
+
+/** A notice from your server list (another device, a teammate, a proposal). */
+export interface RemoteNotice extends NoticeInput {
+  state: "open" | "seen" | "later" | "done";
+  laterUntil?: string | null;
+  updatedAt?: string;
+}
+
 export interface ViewedOwner {
   kind: NoticeOwnerKind;
   id: string;
@@ -98,7 +121,7 @@ export class NoticeService {
   }
 
   /** Raise or update a notice. Returns null when nothing is stored (status, or an FYI on what you're looking at). */
-  notify(input: NoticeInput | RoutedNotice): Notice | null {
+  notify(input: NoticeInput | RoutedNotice, opts: { silent?: boolean } = {}): Notice | null {
     const level = effectiveLevel(input);
     if (level === "status") return null;
     const type = input.type ?? "event";
@@ -142,8 +165,34 @@ export class NoticeService {
     }
     this.changed();
     const stored = this.openByKey(input.key);
-    if (stored && delivery.os) this.deliverOs(stored, delivery.why, delivery.sound, delivery.source);
+    if (stored && delivery.os && !opts.silent) this.deliverOs(stored, delivery.why, delivery.sound, delivery.source);
     return stored;
+  }
+
+  /**
+   * Apply one notice from the server list. Never echoed back up (no mark listeners).
+   * New or refreshed + open: through notify() so route() decides a ping (silent on a first full pull).
+   * A chat this desktop opened for it beats the server's generic owner ("People").
+   */
+  applyRemote(r: RemoteNotice, opts: { silent?: boolean } = {}): boolean {
+    const local = this.openByKey(r.key);
+    if (r.state === "done") {
+      if (!local) return false;
+      const now = new Date().toISOString();
+      this.db.prepare("UPDATE notices SET resolved_at=?, seen_at=COALESCE(seen_at, ?) WHERE key=? AND resolved_at IS NULL").run(now, now, r.key);
+      this.changed();
+      return true;
+    }
+    const owner = local && local.owner.kind === "chat" && r.owner.kind !== "chat" ? local.owner : r.owner;
+    const newer = !local || (r.updatedAt ?? "") > local.updatedAt;
+    if (newer && (!local || r.state === "open")) this.notify({ ...r, owner }, { silent: opts.silent || !!local });
+    const later = r.state === "later" ? r.laterUntil ?? null : null;
+    const seen = r.state === "seen" ? new Date().toISOString() : null;
+    const res = this.db.prepare(`UPDATE notices SET later_until=@later,
+      seen_at=CASE WHEN @seen IS NOT NULL THEN COALESCE(seen_at, @seen) WHEN @open=1 THEN NULL ELSE seen_at END
+      WHERE key=@key AND resolved_at IS NULL`).run({ later, seen, open: r.state === "open" && newer ? 1 : 0, key: r.key });
+    this.changedIf(res.changes);
+    return true;
   }
 
   /** Settings → Notifications: the sources (Papr Work's, then apps that sent you something), your settings. (The delivery log stays: Focus will use it to say why something reached you.) */
@@ -188,12 +237,15 @@ export class NoticeService {
     this.db.prepare("UPDATE notices SET later_until=? WHERE key=? AND resolved_at IS NULL").run(until, key);
     this.stats.bump(sourceOf(n), "later");
     this.changed();
+    emitMark({ keys: [key], state: "later", laterUntil: until });
     return until;
   }
 
   /** Bring a Later item back now. */
   unlater(key: string): boolean {
-    return this.changedIf(this.db.prepare("UPDATE notices SET later_until=NULL WHERE key=? AND resolved_at IS NULL").run(key).changes);
+    const ok = this.changedIf(this.db.prepare("UPDATE notices SET later_until=NULL WHERE key=? AND resolved_at IS NULL").run(key).changes);
+    if (ok) emitMark({ keys: [key], state: "open" });
+    return ok;
   }
 
   /** Mute a source for an hour (from Focus): no desktop notifications, out of Needs you. Dots stay. */
@@ -215,10 +267,12 @@ export class NoticeService {
 
   /** You clicked its OS notification: an event is done, a condition is seen (stays until fixed). */
   markSeenKey(key: string): boolean {
+    const n = this.openByKey(key);
     const now = new Date().toISOString();
     const r = this.db.prepare(`UPDATE notices SET seen_at=@now,
       resolved_at=CASE WHEN type='event' THEN @now ELSE resolved_at END
       WHERE key=@key AND resolved_at IS NULL`).run({ now, key });
+    if (n && r.changes) emitMark({ keys: [key], state: n.type === "event" ? "done" : "seen" });
     return this.changedIf(r.changes);
   }
 
@@ -245,6 +299,7 @@ export class NoticeService {
   resolve(key: string): boolean {
     const r = this.db.prepare("UPDATE notices SET resolved_at=? WHERE key=? AND resolved_at IS NULL")
       .run(new Date().toISOString(), key);
+    if (r.changes) emitMark({ keys: [key], state: "done" });
     return this.changedIf(r.changes);
   }
 
@@ -258,6 +313,8 @@ export class NoticeService {
   /** You looked at the thing: its events are done; its conditions stay until fixed. */
   markSeen(ownerKind: NoticeOwnerKind, ownerId: string): boolean {
     const now = new Date().toISOString();
+    const before = (this.db.prepare(`SELECT key, type FROM notices WHERE owner_kind=? AND owner_id=? AND resolved_at IS NULL
+      AND (type='event' OR seen_at IS NULL)`).all(ownerKind, ownerId) as { key: string; type: string }[]);
     const tx = this.db.transaction(() => {
       const a = this.db.prepare(`UPDATE notices SET seen_at=@now, resolved_at=@now WHERE owner_kind=@k AND owner_id=@id
         AND type='event' AND resolved_at IS NULL`).run({ now, k: ownerKind, id: ownerId });
@@ -265,7 +322,12 @@ export class NoticeService {
         AND type='condition' AND resolved_at IS NULL AND seen_at IS NULL`).run({ now, k: ownerKind, id: ownerId });
       return a.changes + b.changes;
     });
-    return this.changedIf(tx());
+    const n = tx();
+    if (n) {
+      emitMark({ keys: before.filter((x) => x.type === "event").map((x) => x.key), state: "done" });
+      emitMark({ keys: before.filter((x) => x.type !== "event").map((x) => x.key), state: "seen" });
+    }
+    return this.changedIf(n);
   }
 
   /** What you're looking at. Looking at a thing (window in front) marks it seen. */

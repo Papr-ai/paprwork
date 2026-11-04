@@ -6,7 +6,7 @@ import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import type { Notice } from "../../../src/core/types/notices";
 import { hasFocusMode, isUrgent, laterUntil, muteEndLabel, noticeLabels, whenLabel } from "../../../src/core/notifications/needsYou";
 import { sourceDef } from "../../../src/core/notifications/sources";
-import { promiseLabel } from "../../../src/core/collab/promised";
+import { dueLabel, promiseLabel } from "../../../src/core/collab/promised";
 import { gateway } from "../../src/lib/gateway";
 import { loadTeammates } from "../Chat/MentionMenu";
 import { findTeammate, type Teammate } from "../Chat/mentionText";
@@ -35,7 +35,7 @@ function item(n: Notice, reason: string, card: Card | undefined, goal: string | 
     from: card?.fromName ?? n.owner.name, reason, action: (n.actions ?? []).find((a) => a.intent !== "open")?.label ?? n.actions?.[0]?.label ?? "Open",
     menu: { source: l.source, type: l.type, focus: hasFocusMode(l.sourceId), laterWhen: whenLabel(laterUntil()) },
     mention: id ? { itemId: id, ready: !!card, took, draft: card?.suggestedReply ?? "",
-      when: took && card?.promisedAt ? `you said ${promiseLabel(card.promisedAt)}` : card?.action?.due ? `due ${card.action.due}` : "" } : null,
+      when: took && card?.promisedAt ? `you said ${promiseLabel(card.promisedAt)}` : card?.action?.due ? `due ${dueLabel(card.action.due)}` : "" } : null,
   };
 }
 
