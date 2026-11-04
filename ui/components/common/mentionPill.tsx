@@ -46,7 +46,7 @@ export function MentionPill({ name }: { name: string }) {
       {m?.imageUrl
         ? <UserAvatar imageUrl={m.imageUrl} displayName={m.displayName} email={m.email} size={18} className="mention-pill__av" />
         : <i aria-hidden="true">{initials(name)}</i>}
-      {name}
+      <span className="mention-pill__name">{name}</span>
     </span>
   );
 }
