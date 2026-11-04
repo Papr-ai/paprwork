@@ -63,4 +63,14 @@ describe("cloudPublishLineageHints", () => {
       trackCollaboratorPublishWarning({ ...trackShared, databasePolicy: "forked", sourceAudience: "team" }),
     ).toBeNull();
   });
+
+  it("tells the agent a Maintainer/Admin can publishNow instead of waiting for review", () => {
+    // Regression: Adam (Admin on the source app) was told his code reaches the
+    // team "only through a proposal" because this text never mentioned roles.
+    const w = trackCollaboratorPublishWarning(trackShared)!;
+    expect(w).toContain("publishNow: true");
+    expect(w).toMatch(/Maintainer or Admin/);
+    expect(w).toMatch(/Check the role/);
+    expect(w).not.toMatch(/only through a proposal/);
+  });
 });

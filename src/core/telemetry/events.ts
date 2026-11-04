@@ -82,6 +82,7 @@ export const TelemetryEvents = {
   APP_OPENED: "paprwork_app_opened",
   APP_CLOSED: "paprwork_app_closed",
   APP_PUBLISHED: "paprwork_app_published",
+  CLOUD_PROPOSE_FAILED: "paprwork_cloud_propose_failed",
   APP_EDITED: "paprwork_app_edited",
   APP_DELETED: "paprwork_app_deleted",
   HOME_APP_SET: "paprwork_home_app_set",

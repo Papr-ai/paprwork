@@ -139,8 +139,9 @@ export function sharedCoverCatalogFields(appId: string): { catalogMedia: Catalog
 export class TeamDataCopyPublishError extends Error {
   constructor(appId: string) {
     super(
-      `App ${appId} is a copy on the team's live data. Its code reaches the team only through a proposal; ` +
-        "switch to your own data to publish it to its own link.",
+      `App ${appId} is a copy on the team's live data, so publish_cloud_app can't ship it. ` +
+        "Use submit_cloud_app_pr instead. A Maintainer or Admin of the source app can pass publishNow: true to publish " +
+        "straight to the live app without review. Everyone else sends a proposal. To publish to a separate link, switch the copy to its own data.",
     );
     this.name = "TeamDataCopyPublishError";
   }

@@ -230,6 +230,7 @@ async function writeRow(prev: Row | undefined, next: Row, actor: string): Promis
       next.next_milestone ?? null, next.owner ?? null, next.evidence ?? null, next.mentions ?? null, next.outcome ?? null, next.archived ?? 0, 0, next.source_file ?? "IDENTITY.md", prev?.created_at ?? now, now],
   );
   console.log(`[GoalsStore] ${actor}: ${prev ? "updated" : "created"} ${next.id} (${next.status})`);
+  void import("./focusCloud/focusCloudSync.js").then((m) => m.scheduleFocusCloudSync(`goal ${next.id}`)).catch(() => undefined);
 }
 
 async function setEntities(id: string, refs: string[]): Promise<void> {
@@ -310,6 +311,23 @@ export async function createGoal(rawPatch: GoalPatch, actor = "api"): Promise<Ro
   if (patch.entities?.length) await setEntities(String(next.id), patch.entities);
   await mirrorToIdentity({ ...next, entities: patch.entities?.join(", ") });
   return next;
+}
+
+/**
+ * Apply a goal that changed on another device (from Mongo). Writes the row, its links and the
+ * IDENTITY.md block, so the markdown stays generated from the shared copy. Not sent back up:
+ * the sync records this as the last-synced copy first, so the diff is empty.
+ */
+export async function applyRemoteGoal(row: Row, entities: string[]): Promise<void> {
+  const id = String(row.id);
+  const prev = await getRow(id);
+  const next = { ...(prev ?? {}), ...row };
+  await writeRow(prev, next, "another device");
+  if (prev && Number(prev.archived ?? 0) !== Number(next.archived ?? 0)) {
+    await homeDb("write", "UPDATE goals SET archived = ?, source_file = ? WHERE id = ?", [next.archived, next.source_file, id]);
+  }
+  await setEntities(id, entities);
+  if (!Number(next.archived)) await mirrorToIdentity({ ...next, entities: entities.join(", ") || undefined });
 }
 
 /* ---------------- reads ---------------- */

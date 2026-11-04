@@ -89,6 +89,7 @@ async function pollProposalEventsForCurrentUser(paprDir: string): Promise<void> 
   if (!userId) return;
   const { pollProposalEvents } = await import("./proposalEvents.js");
   await pollProposalEvents(paprDir, userId);
+  await import("../collab/mentions.js").then((m) => m.remindPromises()).catch(() => undefined);
 }
 
 export function startDesktopHeartbeat(host: CloudSyncPeriodicHost): void {
