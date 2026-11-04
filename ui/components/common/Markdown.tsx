@@ -11,12 +11,15 @@ import rehypeKatex from "rehype-katex";
 import { escapeNumericEmphasis } from "../../lib/markdown/escapeNumericEmphasis";
 import { remarkMathGate } from "../../lib/markdown/remarkMathGate";
 import { CodeBlock } from "./CodeBlock";
+import { linkMentions, MENTION_HREF, MentionPill } from "./mentionPill";
 import "katex/dist/katex.min.css";
 import "./Markdown.css";
 
 interface MarkdownProps {
   children: string;
   className?: string;
+  /** Chat: "@Name" renders as a person pill (initials + name). */
+  mentions?: boolean;
 }
 
 const components: Partial<Components> = {
@@ -41,8 +44,10 @@ const components: Partial<Components> = {
   // Emphasis/italic — inherit body font so accidental mid-number emphasis stays readable
   em: ({ children }) => <em className="markdown-em">{children}</em>,
 
-  // Links
-  a: ({ href, children }) => (
+  // Links ("#mention:Name" is a person pill, from linkMentions)
+  a: ({ href, children }) => href?.startsWith(MENTION_HREF) ? (
+    <MentionPill name={decodeURIComponent(href.slice(MENTION_HREF.length))} />
+  ) : (
     <a
       href={href}
       target="_blank"
@@ -71,8 +76,9 @@ const components: Partial<Components> = {
 };
 
 export const Markdown: React.FC<MarkdownProps> = memo(
-  ({ children, className }) => {
-    const cleanedContent = escapeNumericEmphasis(children?.trim() || "");
+  ({ children, className, mentions }) => {
+    const text = escapeNumericEmphasis(children?.trim() || "");
+    const cleanedContent = mentions ? linkMentions(text) : text;
 
     return (
       <div className={`markdown-content ${className || ""}`}>

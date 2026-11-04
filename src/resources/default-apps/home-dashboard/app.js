@@ -205,7 +205,7 @@ const App = {
     this.ready = true; // a rail deep link that arrived during load opens now
     if (Three.pendingOpen) setTimeout(() => Three.openGoal(Three.pendingOpen), 0);
     document.getElementById('view-today').addEventListener('click', async (e) => {
-      if (e.target.closest('#goals, #three')) return; // Goals and Your three have their own handlers
+      if (e.target.closest('#goals, #three, #needs, #alsoneeds, #waiting')) return; // Goals and Your three have their own handlers
       const reviewBtn = e.target.closest('[data-review]');
       if (reviewBtn) { e.stopPropagation(); await this.review(reviewBtn); return; }
       const agentEl = e.target.closest('[data-agent]');
@@ -268,6 +268,8 @@ const App = {
     document.getElementById('hero').innerHTML = banner + R.hero(this.brief.hero);
     document.getElementById('focus').innerHTML = R.focus(focus);
     document.getElementById('three').innerHTML = this.idx === 0 ? Three.section() : '';
+    Three.review(this.idx === 0);
+    if (typeof Needs !== 'undefined') Needs.paint();
     document.getElementById('goals').innerHTML = this.idx === 0 ? this.goalsBlock() : '';
     document.getElementById('sections').innerHTML = sections.map((s) => R.section(s)).join('');
     if (this.loadError) {

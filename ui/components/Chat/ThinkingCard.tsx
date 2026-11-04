@@ -52,7 +52,8 @@ export const ThinkingCard: React.FC<ThinkingCardProps> = ({
     
     // Get last line or last 60 chars, whichever is shorter
     const lines = content.trim().split('\n');
-    const lastLine = lines[lines.length - 1].trim();
+    // A preview is plain words: no **bold** or `code` marks leaking through.
+    const lastLine = lines[lines.length - 1].replace(/[*_`#>]+/g, "").trim();
     
     if (lastLine.length <= 60) {
       return lastLine;

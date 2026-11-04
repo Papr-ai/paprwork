@@ -27,6 +27,7 @@ import type { ProviderNotice } from "../../utils/providerErrorPresentation";
 import type { ContextInfo } from "./ContextInspectorModal";
 import { ContextPills } from "./ContextPills";
 import { SlashCommandMenu } from "./SlashCommandMenu";
+import { MentionMenu, insertMention, mentionQueryAt, type Teammate } from "./MentionMenu";
 import type { Artifact } from "../../stores/artifactsStore";
 import {
   createArtifactsFromIncomingFiles,
@@ -163,6 +164,9 @@ export const InputBar = forwardRef<InputBarRef, InputBarProps>(
     const [showModelSettings, setShowModelSettings] = useState(false);
     const [showSlashMenu, setShowSlashMenu] = useState(false);
     const [slashQuery, setSlashQuery] = useState("");
+    /** Text after "@" at the cursor while picking a teammate; null when not picking. */
+    const [mentionQuery, setMentionQuery] = useState<string | null>(null);
+    const [mentionOpen, setMentionOpen] = useState(false);
     const [selectedArtifacts, setSelectedArtifacts] = useState<Artifact[]>([]);
     const [isSavingAttachments, setIsSavingAttachments] = useState(false);
     const [attachmentError, setAttachmentError] = useState<string | null>(null);
@@ -478,6 +482,9 @@ export const InputBar = forwardRef<InputBarRef, InputBarProps>(
     };
 
     const handleKeyDown = (e: KeyboardEvent<HTMLTextAreaElement>) => {
+      // The @ picker handles its own keys (window listener), like the slash menu.
+      if (mentionOpen && ["ArrowUp", "ArrowDown", "Tab", "Enter"].includes(e.key)) return;
+      if (mentionQuery !== null && e.key === "Escape") { setMentionQuery(null); return; }
       // Let the slash command menu handle navigation keys
       if (
         showSlashMenu &&
@@ -517,6 +524,8 @@ export const InputBar = forwardRef<InputBarRef, InputBarProps>(
       const value = e.target.value;
       setMessage(value);
 
+      setMentionQuery(value.startsWith("/") ? null : mentionQueryAt(value, e.target.selectionStart ?? value.length));
+
       // Detect slash commands: must start with "/" and have no spaces before the query
       if (value.startsWith("/") && !value.includes(" ")) {
         setSlashQuery(value.slice(1));
@@ -528,6 +537,14 @@ export const InputBar = forwardRef<InputBarRef, InputBarProps>(
 
       // Auto-resize textarea (deferred to next frame to avoid blocking input paint)
       scheduleTextareaResize();
+    };
+
+    const handleMentionSelect = (m: Teammate) => {
+      const el = textareaRef.current;
+      const next = insertMention(message, el?.selectionStart ?? message.length, m.displayName);
+      setMessage(next.text);
+      setMentionQuery(null);
+      requestAnimationFrame(() => { el?.focus(); el?.setSelectionRange(next.cursor, next.cursor); });
     };
 
     // Handle blur - only hide if clicking outside the entire input bar
@@ -547,6 +564,10 @@ export const InputBar = forwardRef<InputBarRef, InputBarProps>(
         ref={inputBarRef}
         style={{ position: "relative" }}
       >
+        {mentionQuery !== null && !showSlashMenu && (
+          <MentionMenu query={mentionQuery} onSelect={handleMentionSelect} onClose={() => setMentionQuery(null)} onVisible={setMentionOpen} />
+        )}
+
         {/* Slash command menu */}
         {showSlashMenu && (
           <SlashCommandMenu

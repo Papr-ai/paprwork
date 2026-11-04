@@ -9,7 +9,13 @@ import { getGatewayHttpBase } from "../../utils/gatewayHttpBase";
 import { RailIcons } from "./railIcons";
 import { useNeedsYou } from "../../stores/useNeedsYou";
 import { openNoticeOwner } from "../../stores/noticeOs";
+import { MentionPill } from "../common/mentionPill";
+import type { Notice } from "../../../src/core/types/notices";
 import "./FocusPeek.css";
+
+/** Mention notices read "Amir: Own the pricing copy"; the peek shows the ask and the person as a pill. */
+const peekFrom = (n: Notice) => (n.kind.startsWith("mention") && n.title.includes(": ") ? n.title.split(": ")[0] : n.owner.name);
+const peekTitle = (n: Notice) => (n.kind.startsWith("mention") && n.title.includes(": ") ? n.title.slice(n.title.indexOf(": ") + 2) : n.title);
 
 interface FocusGoalLite {
   id: string;
@@ -98,18 +104,18 @@ export function FocusPeek({ status, onOpen }: FocusPeekProps) {
       </header>
       {needs.length ? (
         <div className="focus-peek__needs">
-          <h4>Needs you<em>{needs.length}</em></h4>
-          <ul>
-            {needs.slice(0, 4).map((n) => (
-              <li key={n.key}>
-                <button type="button" role="menuitem" onClick={() => openNoticeOwner(n.owner, n.key)} title={[n.title, n.body, n.owner.name].filter(Boolean).join(" · ")}>
-                  <i aria-hidden="true" />
-                  <span className="focus-peek__title">{n.title}</span>
-                </button>
-              </li>
-            ))}
-          </ul>
-          {needs.length > 4 ? <p className="rail-peek__empty">+ {needs.length - 4} more in Focus</p> : null}
+          {/* One thing, not a truncated list: the top item, then the rest is one tap away in Focus. */}
+          <button type="button" role="menuitem" className="focus-peek__need" onClick={() => openNoticeOwner(needs[0].owner, needs[0].key)}
+            title={[needs[0].title, needs[0].body].filter(Boolean).join(" · ")}>
+            <i aria-hidden="true" />
+            <span className="focus-peek__title">{shortTitle(peekTitle(needs[0]), 34)}</span>
+            {needs[0].kind.startsWith("mention") ? <MentionPill name={peekFrom(needs[0])} /> : null}
+          </button>
+          {needs.length > 1 ? (
+            <button type="button" role="menuitem" className="focus-peek__more" onClick={() => onOpen()}>
+              {needs.length - 1} more need you
+            </button>
+          ) : null}
         </div>
       ) : null}
       {three.length ? (

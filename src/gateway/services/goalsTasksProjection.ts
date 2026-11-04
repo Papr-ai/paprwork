@@ -508,7 +508,8 @@ export async function applySnapshot(
   const existingTasks = new Map<string, Record<string, unknown>>();
   for (const row of await query("SELECT * FROM tasks")) existingTasks.set(String(row.id), row);
   for (const [id, row] of existingTasks) {
-    if (row.status === "open" && !seenTasks.has(id)) {
+    // Tasks that came from another device (source "cloud") have no markdown here; don't drop them.
+    if (row.status === "open" && !seenTasks.has(id) && row.source !== "cloud") {
       tasksDropped += 1;
       await exec("UPDATE tasks SET status = 'dropped', updated_at = ? WHERE id = ?", [now, id]);
     }
@@ -550,6 +551,8 @@ export async function projectGoalsAndTasks(reason = "manual"): Promise<
     console.log(
       `[GoalsTasksProjection] ${reason}: goals written=${res.goalsUpserted} history+${res.historyRows} tasks=${res.tasksUpserted} dropped=${res.tasksDropped} links=${res.links} unchanged=${res.skipped}`,
     );
+    // Mirror to the memory server (debounced; skips when signed out or offline).
+    void import("./focusCloud/focusCloudSync.js").then((m) => m.scheduleFocusCloudSync(`projection: ${reason}`)).catch(() => undefined);
     return { ok: true as const, ...res };
   })();
   running = run;

@@ -28,6 +28,7 @@ import { connectPlatformTool } from "./platformConnect.js";
 import { codeIndexTools } from "./codeIndex.js";
 import { cloudPublishTools } from "./cloudPublish.js";
 import { cloudInstallTools } from "./cloudInstall.js";
+import { collabTools } from "./collab.js";
 import { cloudObservabilityTools } from "./cloudObservability.js";
 import { cloudPullTools } from "./cloudPull.js";
 import { mediaGenerationTools } from "./generateMedia.js";
@@ -93,6 +94,7 @@ export const allTools = [
   ...appAgentChatTools,
   ...platformFeedbackTools,
   ...paprApiReferenceTools,
+  ...collabTools,
 ];
 
 /**

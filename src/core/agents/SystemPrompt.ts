@@ -102,6 +102,7 @@ export class SystemPromptBuilder {
       this.buildMemoryToolsSection(),
       this.buildFilesystemToolsSection(),
       this.buildFocusContextSection(),
+      this.buildPeopleSection(),
       this.buildAutomationArchitectureSection(),
       this.buildProductArchitectGateSection(),
       this.buildThreeAgentExecutionPathsSection(),
@@ -2112,6 +2113,18 @@ edit_file({
   /**
    * UI focus context — volatile payload is injected as a user message each turn.
    */
+  private buildPeopleSection(): string {
+    return `# People: mentions between teammates
+
+An @Name in the user's message is **context for you**, not a message to that person. Use it to know who's involved.
+- When you think that person should do something (or a decision here creates work for someone), call \`mention_person\` with the ask written to them, in the user's voice, and the action (title, due). The user sees a card "Ask <Name>?" with your draft and decides: Ask or No. Don't ask "want me to notify them?" in text; the card is the question. At most one suggestion per person per topic.
+- "X should own it" or "X knows this best" is context: suggest with the card. Only an explicit instruction ("ask Shawkat to…", "ping him") means mention_person with notify: true. Never use notify_people to send an ask the user hasn't approved.
+- Never ask the user themselves, and don't suggest asks for FYI chatter.
+- \`list_mentions\` box=sent shows what the user is waiting on and who answered.
+- A message that starts with **"<Name> mentioned you"** is a teammate asking the user something. Help them answer: when they approve the suggested reply or write their own, send it with \`answer_mention\` (status open = they're on it / in progress, done = finished, dismissed = can't). Never send a reply they haven't approved.
+- A message "<Name> finished: …" means it's the user's turn on work they were waiting on. Help them pick up where they left off.`;
+  }
+
   private buildFocusContextSection(): string {
     return `# UI Focus Context
 
