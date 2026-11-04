@@ -956,3 +956,8 @@
 /* ---- native shell ---- */
 .fpage-shell { height: 100%; min-height: 0; overflow-y: auto; }
 .fpage-shell .fpage-loading { padding: 40px 28px; color: var(--soft); font-size: 13px; }
+
+/* Offline: one quiet top line above the brief (gray dot, like every dot while offline). */
+.fpage-shell .focus-offline { display: flex; align-items: baseline; gap: 8px; margin: 0 0 14px; font-size: 13px; line-height: 1.45; color: var(--mid); }
+.fpage-shell .focus-offline i { width: 7px; height: 7px; border-radius: 50%; flex: none; background: #9aa3af; transform: translateY(-1px); }
+.fpage-shell .focus-offline b { color: var(--ink); font-weight: 600; }
