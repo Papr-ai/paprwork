@@ -1,5 +1,11 @@
 /** Pure helpers for the @ picker (no React), shared with gateway tests. */
-export interface Teammate { userId: string; displayName: string; email: string }
+export interface Teammate { userId: string; displayName: string; email: string; imageUrl?: string | null }
+
+/** The teammate a pill names: display name, email, or email local part ("amir+1"). */
+export function findTeammate(name: string, team: Teammate[]): Teammate | undefined {
+  const q = name.trim().replace(/^@/, "").toLowerCase();
+  return team.find((m) => m.displayName.toLowerCase() === q || m.email.toLowerCase() === q || m.email.toLowerCase().split("@")[0] === q);
+}
 
 /** "@sha" right before the cursor → "sha". Null when the cursor isn't in an @word. */
 export function mentionQueryAt(text: string, cursor: number): string | null {

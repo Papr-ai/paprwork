@@ -205,7 +205,7 @@ const App = {
     this.ready = true; // a rail deep link that arrived during load opens now
     if (Three.pendingOpen) setTimeout(() => Three.openGoal(Three.pendingOpen), 0);
     document.getElementById('view-today').addEventListener('click', async (e) => {
-      if (e.target.closest('#goals, #three, #needs, #waiting')) return; // Goals and Your three have their own handlers
+      if (e.target.closest('#goals, #three, #needs, #alsoneeds, #waiting')) return; // Goals and Your three have their own handlers
       const reviewBtn = e.target.closest('[data-review]');
       if (reviewBtn) { e.stopPropagation(); await this.review(reviewBtn); return; }
       const agentEl = e.target.closest('[data-agent]');

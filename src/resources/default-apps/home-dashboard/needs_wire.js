@@ -54,7 +54,7 @@ const Waiting = {
     if (t.dataset?.draft) N.drafts[t.dataset.draft] = t.value;
     if (t.dataset?.wtext) N.drafts['w:' + t.dataset.wtext] = t.value;
   });
-  document.addEventListener('focusout', () => setTimeout(() => { if (N.dirty && !document.activeElement?.closest?.('#needs, #waiting')) { N.dirty = false; N.paint(); } }, 0));
+  document.addEventListener('focusout', () => setTimeout(() => { if (N.dirty && !document.activeElement?.closest?.('#needs, #alsoneeds, #waiting')) { N.dirty = false; N.paint(); } }, 0));
   document.addEventListener('mousedown', (e) => { if (N.open && !e.target.closest('.hmenu')) { N.open = null; N.paint(); } });
   document.addEventListener('keydown', (e) => { if (e.key === 'Escape' && N.open) { N.open = null; N.paint(); } });
   document.addEventListener('click', (e) => {

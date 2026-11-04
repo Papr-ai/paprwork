@@ -8,6 +8,7 @@ import { useEffect, useState } from "react";
 import { gateway } from "../../src/lib/gateway";
 import "./MentionMenu.css";
 
+import { UserAvatar } from "../common/UserAvatar";
 import { rankTeammates, recentMentions, rememberMention, type Teammate } from "./mentionText";
 
 export type { Teammate };
@@ -63,7 +64,9 @@ export function MentionMenu({ query, onSelect, onClose, onVisible }: {
     <button key={m.userId} type="button" role="option" aria-selected={i === index} id={`mention-opt-${i}`}
       className={`mention-dd__row${i === index ? " is-on" : ""}`}
       onMouseDown={(e) => e.preventDefault()} onClick={() => pick(m)} onMouseEnter={() => setIndex(i)}>
-      <i aria-hidden="true">{initials(m.displayName)}</i><b>{m.displayName}</b><span>{m.email}</span>
+      {m.imageUrl
+        ? <UserAvatar imageUrl={m.imageUrl} displayName={m.displayName} email={m.email} size={24} className="mention-dd__av" />
+        : <i aria-hidden="true">{initials(m.displayName)}</i>}<b>{m.displayName}</b><span>{m.email}</span>
     </button>
   );
   const split = recentCount > 0 && recentCount < shown.length;

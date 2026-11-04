@@ -9,6 +9,7 @@
   display: grid; grid-template-columns: 22px auto minmax(0, 1fr); gap: 8px; align-items: center; width: 100%; padding: 5px 8px;
   border: none; border-radius: 8px; background: none; text-align: left; font: inherit; font-size: 13px; color: var(--text-primary, #1d1d1f); cursor: pointer;
 }
+.mention-dd__row .mention-dd__av { flex: none; }
 .mention-dd__row i {
   font-style: normal; font-size: 9px; font-weight: 600; width: 22px; height: 22px; border-radius: 50%;
   display: grid; place-items: center; background: var(--text-secondary, #8e8e93); color: #fff;

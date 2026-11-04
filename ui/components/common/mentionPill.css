@@ -9,4 +9,5 @@
   flex: none; width: 1.3em; height: 1.3em; border-radius: 50%; display: grid; place-items: center;
   font-style: normal; font-size: 0.68em; font-weight: 700; background: var(--primary-color, #0161e0); color: #fff;
 }
+.mention-pill .mention-pill__av { flex: none; width: 1.3em !important; height: 1.3em !important; }
 .markdown-strong .mention-pill { font-weight: 600; }

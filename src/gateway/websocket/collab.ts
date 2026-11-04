@@ -6,6 +6,7 @@
  *   collab:card    → { itemId } the Focus card for a mention that arrived here
  *   collab:waiting → what the user asked others that's still open (Waiting on, in Focus)
  *   collab:followup → { itemId, kind: reply|nudge|close, text? } the asker follows up from Waiting on
+ *   collab:goals   → { items: [{ key, text }] } which of Your three each Needs-you item moves (Jev; null = none)
  */
 import type { WebSocket } from "ws";
 import type { WSMessage } from "./index.js";
@@ -69,6 +70,16 @@ export async function setupCollabHandlers(ws: WebSocket, message: WSMessage): Pr
         const { followUp } = await import("../services/collab/mentions.js");
         const m = await followUp(p.itemId, kind, text);
         sendResponse(ws, { id: message.id, success: true, data: { status: m.status, progress: m.progress ?? null } });
+        return;
+      }
+      case "collab:goals": {
+        const items = (Array.isArray(p.items) ? p.items : [])
+          .filter((x): x is { key: string; text: string } => !!x && typeof (x as { key?: unknown }).key === "string" && typeof (x as { text?: unknown }).text === "string")
+          .slice(0, 60).map((x) => ({ key: x.key, text: x.text.slice(0, 500) }));
+        const { getFocus } = await import("../services/focusGoals.js");
+        const goals = (await getFocus()).three.map((g) => ({ id: g.id, title: g.title, scope: g.scope ?? g.target }));
+        const { goalsForNeeds } = await import("../services/needsGoals.js");
+        sendResponse(ws, { id: message.id, success: true, data: { goals: items.length ? await goalsForNeeds(goals, items) : {} } });
         return;
       }
       default:

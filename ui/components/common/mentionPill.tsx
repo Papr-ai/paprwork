@@ -1,10 +1,12 @@
 /**
- * A person in chat is a pill: initials + name, never plain "@name" text.
+ * A person in chat is a pill: photo (or initials) + name, never plain "@name" text.
  * linkMentions turns "@Name" into a markdown link with a #mention: href (fragments survive
  * react-markdown's URL filter); Markdown renders those links as <MentionPill>.
  * Full teammate names ("@Shawkat Kabbara") match first, then any single @token. Emails and code are left alone.
  */
 import { cachedTeammates, loadTeammates } from "../Chat/MentionMenu";
+import { findTeammate } from "../Chat/mentionText";
+import { UserAvatar } from "./UserAvatar";
 import "./mentionPill.css";
 
 // Full names ("@Shawkat Kabbara") need the team list; load it once, early.
@@ -34,9 +36,12 @@ export function linkMentions(text: string, names: string[] = cachedTeammates().m
 }
 
 export function MentionPill({ name }: { name: string }) {
+  const m = findTeammate(name, cachedTeammates());
   return (
-    <span className="mention-pill" title={name}>
-      <i aria-hidden="true">{initials(name)}</i>
+    <span className="mention-pill" title={m?.email ? `${name} · ${m.email}` : name}>
+      {m?.imageUrl
+        ? <UserAvatar imageUrl={m.imageUrl} displayName={m.displayName} email={m.email} size={18} className="mention-pill__av" />
+        : <i aria-hidden="true">{initials(name)}</i>}
       {name}
     </span>
   );

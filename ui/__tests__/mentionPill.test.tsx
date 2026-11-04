@@ -21,3 +21,21 @@ describe("@ names render as pills", () => {
     expect(container.querySelector("a")).toBeNull();
   });
 });
+
+describe("pill photo", () => {
+  it("uses the teammate's photo when there is one, initials otherwise", async () => {
+    const { gateway } = await import("../src/lib/gateway");
+    (gateway.send as ReturnType<typeof vi.fn>).mockResolvedValueOnce({ success: true, data: { members: [
+      { userId: "u1", displayName: "Shawkat Kabbara", email: "shawkat@papr.ai", imageUrl: "https://img.example/s.png" },
+    ] } });
+    vi.resetModules();
+    const mod = await import("../components/common/mentionPill");
+    const menu = await import("../components/Chat/MentionMenu");
+    await menu.loadTeammates();
+    const withPhoto = render(<mod.MentionPill name="Shawkat Kabbara" />).container;
+    expect(withPhoto.querySelector("img")?.getAttribute("src")).toBe("https://img.example/s.png");
+    const noPhoto = render(<mod.MentionPill name="amir+1" />).container;
+    expect(noPhoto.querySelector("img")).toBeNull();
+    expect(noPhoto.querySelector("i")?.textContent).toBe("A");
+  });
+});

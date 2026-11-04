@@ -10,6 +10,8 @@ import { hasFocusMode, isUrgent, laterUntil, muteEndLabel, noticeLabels, whenLab
 import { sourceDef } from "../../../src/core/notifications/sources";
 import { promiseLabel } from "../../../src/core/collab/promised";
 import { gateway } from "../../src/lib/gateway";
+import { loadTeammates } from "../Chat/MentionMenu";
+import { findTeammate, type Teammate } from "../Chat/mentionText";
 import { openNoticeOwner } from "../../stores/noticeOs";
 import { ensureSettingsTab } from "../../lib/ensureSettingsTab";
 import { useTabStore } from "../../stores/tabStore";
@@ -22,12 +24,16 @@ type Ack = { ok: boolean; error?: string; toast?: { text: string; undo?: { op: s
 const mentionId = (n: Notice) => (n.kind === "mention" && n.key.startsWith("mention:") ? n.key.slice(8) : null);
 const err = (r: { success: boolean; error?: unknown }) => (typeof r.error === "string" ? r.error : "Couldn't send. Try again.");
 
-function item(n: Notice, reason: string, card: Card | undefined) {
+const peopleOf = (waiting: Waiting[], cards: Record<string, Card>): string[] =>
+  [...new Set([...waiting.map((w) => w.toName), ...Object.values(cards).map((c) => c.fromName)].filter(Boolean))];
+
+/** goal: the one of Your three Jev says this moves (null = none, undefined = not asked yet). */
+function item(n: Notice, reason: string, card: Card | undefined, goal: string | null | undefined) {
   const l = noticeLabels(n);
   const id = mentionId(n);
   const took = !!card?.sentReply && card.status === "open";
   return {
-    key: n.key, urgent: isUrgent(n), title: card?.action?.title ?? n.title, body: card ? card.text : n.body ?? "",
+    key: n.key, goal, urgent: isUrgent(n), title: card?.action?.title ?? n.title, body: card ? card.text : n.body ?? "",
     from: card?.fromName ?? n.owner.name, reason, action: (n.actions ?? []).find((a) => a.intent !== "open")?.label ?? n.actions?.[0]?.label ?? "Open",
     menu: { source: l.source, type: l.type, focus: hasFocusMode(l.sourceId), laterWhen: whenLabel(laterUntil()) },
     mention: id ? { itemId: id, ready: !!card, took, draft: card?.suggestedReply ?? "",
@@ -39,6 +45,9 @@ export function useFocusBridge(root: React.RefObject<HTMLElement | null>) {
   const { needs, reasons, later, muted } = useNeedsYou();
   const [cards, setCards] = useState<Record<string, Card>>({});
   const [waiting, setWaiting] = useState<Waiting[]>([]);
+  const [goals, setGoals] = useState<Record<string, string | null>>({});
+  const [team, setTeam] = useState<Teammate[]>([]);
+  useEffect(() => { void loadTeammates().then(setTeam).catch(() => {}); }, []);
   const ids = needs.map(mentionId).filter((x): x is string => !!x).join(",");
 
   const loadCard = (itemId: string) => void gateway.send("collab:card", { itemId }).then((r) => {
@@ -48,6 +57,19 @@ export function useFocusBridge(root: React.RefObject<HTMLElement | null>) {
   const loadWaiting = () => void gateway.send("collab:waiting", {}).then((r) => setWaiting(r.success ? (r.data as { waiting: Waiting[] }).waiting : [])).catch(() => {});
 
   useEffect(() => { ids.split(",").filter(Boolean).forEach(loadCard); }, [ids]);
+  // Goal chips: Jev tags each item with the one of Your three it moves (cached server-side per text).
+  const goalAsk = JSON.stringify(needs.map((n) => { const c = cards[mentionId(n) ?? ""]; return { key: n.key, text: [c?.action?.title ?? n.title, c?.text ?? n.body ?? ""].filter(Boolean).join(" — ") }; }));
+  useEffect(() => {
+    const items = JSON.parse(goalAsk) as { key: string; text: string }[];
+    if (!items.length) return;
+    let live = true;
+    void gateway.send("collab:goals", { items }).then((r) => {
+      if (!live || !r.success) return;
+      const g = (r.data as { goals: Record<string, { title: string } | null> }).goals;
+      setGoals((m) => ({ ...m, ...Object.fromEntries(Object.entries(g).map(([k, v]) => [k, v?.title ?? null])) }));
+    }).catch(() => {});
+    return () => { live = false; };
+  }, [goalAsk]);
   useEffect(() => {
     loadWaiting();
     const on = (e: Event) => {
@@ -61,12 +83,14 @@ export function useFocusBridge(root: React.RefObject<HTMLElement | null>) {
   }, []);
 
   const feed = useMemo(() => ({
-    needs: needs.map((n) => item(n, reasons[n.key] ?? "", cards[mentionId(n) ?? ""])),
+    needs: needs.map((n) => item(n, reasons[n.key] ?? "", cards[mentionId(n) ?? ""], goals[n.key])),
     later: later.map((n) => ({ key: n.key, title: n.title, when: whenLabel(n.laterUntil!) })),
     muted: muted.map((m) => ({ id: m.id, name: sourceDef(m.id)?.name ?? "This source", until: muteEndLabel(m.until) })),
-    people: [...new Set([...waiting.map((w) => w.toName), ...Object.values(cards).map((c) => c.fromName)].filter(Boolean))],
+    people: peopleOf(waiting, cards),
+    // Photos for the pills: name → https URL (initials when missing or it fails to load).
+    avatars: Object.fromEntries(peopleOf(waiting, cards).map((n) => [n, findTeammate(n, team)?.imageUrl]).filter(([, u]) => !!u)),
     waiting: waiting.map((w) => ({ ...w, promised: w.promisedAt ? promiseLabel(w.promisedAt) : null, late: !!w.promisedAt && Date.parse(w.promisedAt) < Date.now() })),
-  }), [needs, reasons, later, muted, cards, waiting]);
+  }), [needs, reasons, later, muted, cards, waiting, goals, team]);
 
   const refresh = useRef(loadWaiting);
   refresh.current = loadWaiting;

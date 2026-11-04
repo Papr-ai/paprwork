@@ -5,7 +5,7 @@
 import { createTool } from "@mastra/core/tools";
 import { z } from "zod";
 
-export interface Teammate { userId: string; displayName: string; email: string }
+export interface Teammate { userId: string; displayName: string; email: string; imageUrl?: string | null }
 
 /** Match "Shawkat", "shawkat@papr.ai", or a user id to exactly one teammate. */
 export function matchTeammate(query: string, team: Teammate[]): Teammate | { error: string } {
