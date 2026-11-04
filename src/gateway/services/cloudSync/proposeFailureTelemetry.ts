@@ -30,6 +30,8 @@ export function scrubProposeErrorMessage(message: string): string {
     .replace(/\b(ghs|ghp|gho|ghu|ghr)_[A-Za-z0-9]+/g, "<token>")
     .replace(/github_pat_[A-Za-z0-9_]+/g, "<token>")
     .replace(/x-access-token:[^@\s]+/g, "x-access-token:<token>")
+    // Local paths (temp clones, home folders) say nothing useful and can carry a username.
+    .replace(/(?:\/(?:Users|home|var|private|tmp)|[A-Za-z]:\\)[^\s'"]*/g, "<path>")
     .replace(/\s+/g, " ")
     .trim()
     .slice(0, 200);

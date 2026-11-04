@@ -134,4 +134,12 @@ describe("scrubProposeErrorMessage", () => {
     expect(out).toContain("<url>");
     expect(out.length).toBeLessThanOrEqual(200);
   });
+
+  it("removes local paths", () => {
+    const out = scrubProposeErrorMessage(
+      "git clone failed (128): Cloning into '/var/folders/hg/T/papr-contrib-x/repo' from /Users/adam/x and C:\\Users\\adam\\y",
+    );
+    expect(out).not.toMatch(/folders|adam/);
+    expect(out).toContain("<path>");
+  });
 });
