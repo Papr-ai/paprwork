@@ -18,9 +18,11 @@ const escRe = (s: string) => s.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
 const link = (name: string) => `[@${name.replace(/[[\]]/g, "")}](${MENTION_HREF}${encodeURIComponent(name)})`;
 
 export function linkMentions(text: string, names: string[] = cachedTeammates().map((m) => m.displayName)): string {
-  if (!text.includes("@")) return text;
+  if (!text.includes("@") && !text.includes("**")) return text;
   const full = [...new Set(names.filter((n) => n && /\s/.test(n)))].sort((a, b) => b.length - a.length);
   const fullRe = full.length ? new RegExp(`(^|[\\s(*_])@(${full.map(escRe).join("|")})(?![\\p{L}\\p{N}])`, "gu") : null;
+  const known = [...new Set(names.filter(Boolean))].sort((a, b) => b.length - a.length);
+  const boldRe = known.length ? new RegExp(`\\*\\*@?(${known.map(escRe).join("|")})\\*\\*`, "gu") : null;
   let fence = false;
   return text.split("\n").map((line) => {
     if (/^\s*```/.test(line)) { fence = !fence; return line; }
@@ -29,6 +31,8 @@ export function linkMentions(text: string, names: string[] = cachedTeammates().m
     return line.split(/(`[^`]*`)/).map((part) => {
       if (part.startsWith("`")) return part;
       let out = fullRe ? part.replace(fullRe, (_, pre: string, n: string) => pre + link(n)) : part;
+      // Pen bolds people ("Notified **Shawkat**"): a bold exact teammate name becomes a pill.
+      if (boldRe) out = out.replace(boldRe, (_, n: string) => link(n));
       out = out.replace(/(^|[\s(*_])@([\p{L}\p{N}][\p{L}\p{N}._+-]*[\p{L}\p{N}+])(?![\]\p{L}\p{N}@])/gu, (_, pre: string, n: string) => pre + link(n));
       return out;
     }).join("");
