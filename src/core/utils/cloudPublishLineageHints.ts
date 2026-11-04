@@ -31,7 +31,7 @@ export function toPublishLineageSummary(
 }
 
 const TRACK_COLLABORATOR_WARNING =
-  "This copy is on the team's live data, so its code reaches the team only through a proposal. publish_cloud_app is refused for it. " +
+  "This copy is on the team's live data, so publish_cloud_app is refused for it. Its code reaches the team through submit_cloud_app_pr. " +
   "To ship code: push_cloud_sync({ appId }) then submit_cloud_app_pr. " +
   "If the user is a Maintainer or Admin of the source app (their Papr sharing role on the original, not a role inside the app's own UI), " +
   "submit_cloud_app_pr({ publishNow: true }) publishes straight to the live app with no owner review. Check the role before telling them they must wait for the owner. " +
