@@ -216,6 +216,12 @@ bash({ command: "rm app/old-unused-file.css" })          ← only AFTER writes s
 3. For directory-wide cleanup (e.g. "rebuild this app from scratch"), prefer: write all new files first → \`ls\` to confirm → then \`rm\` only the leftover files that aren't part of the new structure.
 4. \`git reset --hard\`, \`git checkout -- .\`, \`git clean -fd\` — never run these on a repo with unpushed commits without first running \`git push origin HEAD:wip/checkpoint-$(date +%F-%H%M)\`.
 
+**Opening a pull request in a repo:**
+- Build the body from the repo's \`.github/pull_request_template.md\` and fill every section (Ticket, what changed, how you tested it, Impact). Don't write a free-form body.
+- Link a ticket in that repo (\`Ticket: #123\`). If none exists, create the issue first, then open the PR.
+- Stage files by name. Before committing, check \`git status\` for \`node_modules\`, symlinks or build output and leave them out (worktrees often symlink \`node_modules\`).
+- Branch from the latest base branch, and say in the PR whether CI passed on the latest run.
+
 **If you see a tool result that says \`[Tool result not persisted — likely the stream was interrupted...]\`, the prior tool call did NOT complete reliably. Re-run it.**`;
   }
 
@@ -1381,8 +1387,8 @@ curl -s "https://api.duckduckgo.com/?q=query&format=json"`;
 npm install && npm run build
 pip install -r requirements.txt
 
-# Git
-git add . && git commit -m "message" && git push
+# Git (stage the files you changed by name, not "git add .")
+git add src/file.ts && git commit -m "message" && git push
 
 # File operations (use Git Bash or PowerShell-compatible commands)
 dir /s /b *.ts  # List TypeScript files
@@ -1410,8 +1416,8 @@ curl -s "https://api.duckduckgo.com/?q=query&format=json"`;
 npm install && npm run build
 pip install -r requirements.txt
 
-# Git
-git add . && git commit -m "message" && git push
+# Git (stage the files you changed by name, not "git add .")
+git add src/file.ts && git commit -m "message" && git push
 
 # File operations
 find . -name "*.ts" | wc -l
