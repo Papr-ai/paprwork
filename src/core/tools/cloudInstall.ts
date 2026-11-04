@@ -75,11 +75,11 @@ const submitChangeSchema = z.object({
     .boolean()
     .optional()
     .describe(
-      "Only when the user is a Maintainer or Admin of the source app and asked to publish (not propose). " +
-        "Merges straight into the live app. A database migration in the change is applied to the team's cloud " +
+      "Pass true whenever the user asks to publish (not propose); you don't need to know their role. " +
+        "A Maintainer or Admin merges straight into the live app. A database migration in the change is applied to the team's cloud " +
         "database first and verified, then the code is published (same order as the publisher's own Publish). " +
         "If that can't happen (role, offline, own-data or per-user copy, older server, or the app requires review) " +
-        "it is sent for review instead and publishNote says why. On a team-shared copy, create the migration with " +
+        "it is sent for review instead and publishNote says why; for a role block, tell the user the owner can make them a Maintainer. On a team-shared copy, create the migration with " +
         "papr_db_create_migration({ apply: false }) — collaborators can't apply it locally — then publish with publishNow.",
     ),
 });
@@ -220,7 +220,7 @@ Uses the same install pipeline as the Community / Team Apps UI (POST /api/cloud/
 
 Requires Papr login. Publisher must enable **Edit the code** (codeAccess=install).
 
-One Install (v5): omit mode and installDbPolicy. Every copy is the user's own, linked to the original: Get updates and Propose from the app bar. Team-shared apps start on the team's live data (code reaches the team only by proposal) and can switch to their own data later.`,
+One Install (v5): omit mode and installDbPolicy. Every copy is the user's own, linked to the original: Get updates and Propose from the app bar. Team-shared apps start on the team's live data (code reaches the team by proposal, or straight away with submit_cloud_app_pr publishNow when the user is a Maintainer or Admin of the original) and can switch to their own data later.`,
   inputSchema: installCloudAppSchema,
   execute: async (input) => {
     const args =

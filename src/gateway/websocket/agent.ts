@@ -227,7 +227,7 @@ export async function setupAgentHandlers(
                 apiKey = auth.type === "oauth" ? auth.token : auth.key;
                 authType = auth.type;
               }
-              
+
               console.log(
                 `[Agent WS] Auth resolved for ${config.provider}: type=${authType} tokenLength=${apiKey?.length || 0} ` +
                 `tokenPrefix=${apiKey?.substring(0, 15)}...`
@@ -292,16 +292,27 @@ export async function setupAgentHandlers(
           );
         }
 
-        // Track message_sent event
+        // Track gateway-accepted messages. The recurring active-use event excludes
+        // synthetic recovery turns while the legacy event remains unchanged.
         const { getGatewayTelemetry } = await import("../services/gatewayTelemetry.js");
-        getGatewayTelemetry().trackFireAndForget("paprwork_message_sent", {
-          chat_id: chatId,
-          message_length: userMessage.length,
+        const { TelemetryEvents } = await import("../../core/telemetry/events.js");
+        const { messageSentProperties, userMessageSentProperties } = await import(
+          "../services/userMessageTelemetry.js"
+        );
+        const telemetryContext = {
+          chatId,
+          userMessage,
           model: config.model,
           provider: config.provider,
-          auth_type: authType ?? "apiKey",
-          uses_papr_proxy: usePaprProxy,
-        });
+          authType,
+          usesPaprProxy: usePaprProxy,
+        };
+        const telemetry = getGatewayTelemetry();
+        telemetry.trackFireAndForget(
+          TelemetryEvents.MESSAGE_SENT,
+          messageSentProperties(telemetryContext),
+        );
+        const userMessageProperties = userMessageSentProperties(telemetryContext);
 
         wsStreamProfiler?.mark("ws.authResolved");
 
@@ -319,6 +330,17 @@ export async function setupAgentHandlers(
           attachments,
           reuseAssistantMessageId,
           ws,
+          // Active-use KPI: count the message only once its reply succeeds,
+          // so failed sends (bad key, model error) aren't counted.
+          ...(userMessageProperties
+            ? {
+                onSucceeded: () =>
+                  telemetry.trackFireAndForget(
+                    TelemetryEvents.USER_MESSAGE_SENT,
+                    userMessageProperties,
+                  ),
+              }
+            : {}),
         });
         break;
       }

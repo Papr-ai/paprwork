@@ -18,6 +18,7 @@ import * as path from "path";
 import { streamText } from "ai";
 import type { LanguageModel, ModelMessage, ToolSet, StepResult } from "ai";
 import { ToolRegistry } from "../../core/agents/ToolRegistry.js";
+import { HIDDEN_CONTINUE_PREFIX } from "../../core/constants/hiddenContinue.js";
 import {
   initializeMemorySearchGate,
   wrapToolsWithMemorySearchFirstGate,
@@ -500,8 +501,6 @@ export class AgentService {
     broadcast({ type: "chat:list-updated" });
   }
 
-  private static readonly HIDDEN_CONTINUE_PREFIX = "[__papr_continue__]";
-
   private async assistantMessageRowExists(
     chatId: string,
     messageId: string,
@@ -543,7 +542,7 @@ export class AgentService {
       return { messageId: explicitReuse, checkpointInserted: exists };
     }
 
-    if (userMessage.startsWith(AgentService.HIDDEN_CONTINUE_PREFIX)) {
+    if (userMessage.startsWith(HIDDEN_CONTINUE_PREFIX)) {
       const reused = await this.findLastResumableAssistantMessageId(chatId);
       if (reused) {
         return { messageId: reused, checkpointInserted: true };
@@ -812,7 +811,7 @@ export class AgentService {
       ? { steerFollowUp: false }
       : consumeTurnStart(chatId, {
           hiddenContinue: userMessage.startsWith(
-            AgentService.HIDDEN_CONTINUE_PREFIX,
+            HIDDEN_CONTINUE_PREFIX,
           ),
         });
     if (steerFollowUp) {
