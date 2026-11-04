@@ -220,7 +220,7 @@ Uses the same install pipeline as the Community / Team Apps UI (POST /api/cloud/
 
 Requires Papr login. Publisher must enable **Edit the code** (codeAccess=install).
 
-One Install (v5): omit mode and installDbPolicy. Every copy is the user's own, linked to the original: Get updates and Propose from the app bar. Team-shared apps start on the team's live data (code reaches the team only by proposal) and can switch to their own data later.`,
+One Install (v5): omit mode and installDbPolicy. Every copy is the user's own, linked to the original: Get updates and Propose from the app bar. Team-shared apps start on the team's live data (code reaches the team by proposal, or straight away with submit_cloud_app_pr publishNow when the user is a Maintainer or Admin of the original) and can switch to their own data later.`,
   inputSchema: installCloudAppSchema,
   execute: async (input) => {
     const args =
