@@ -114,9 +114,10 @@ export async function setupNotificationHandlers(ws: WebSocket, message: WSMessag
         return;
       case "notifications:resolve": {
         // { group } clears every notice in it, e.g. "key:NAME" once that key exists.
-        if (typeof p.group === "string") { sendResponse(ws, { id: message.id, success: true, data: service.resolveGroup(p.group) }); return; }
+        // From the UI = your click fixed it, so it never counts as "Pen handled".
+        if (typeof p.group === "string") { sendResponse(ws, { id: message.id, success: true, data: service.resolveGroup(p.group, "you") }); return; }
         if (typeof p.key !== "string") throw new Error("key required");
-        sendResponse(ws, { id: message.id, success: true, data: service.resolve(p.key) });
+        sendResponse(ws, { id: message.id, success: true, data: service.resolve(p.key, "you") });
         return;
       }
       default:

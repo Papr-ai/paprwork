@@ -13,15 +13,18 @@ import { gateway } from "../../src/lib/gateway";
 import { loadTeammates } from "../Chat/MentionMenu";
 import { findTeammate, type Teammate } from "../Chat/mentionText";
 import { openNoticeOwner } from "../../stores/noticeOs";
+import { useNoticeStore } from "../../stores/noticeStore";
 import { ensureSettingsTab } from "../../lib/ensureSettingsTab";
 import { useTabStore } from "../../stores/tabStore";
 import { bringBack, muteSource, putOff, setFocusMode, turnOffType, unmuteSource, useNeedsYou } from "../../stores/useNeedsYou";
 
 interface Card { itemId: string; fromName: string; text: string; suggestedReply: string; action: { title: string; due?: string | null } | null; status: string; sentReply?: string; promisedAt?: string | null }
-interface Waiting { id: string; toName: string; title: string; due: string | null; state: "asked" | "in_progress"; reply: string | null; replyAt: string | null; promisedAt: string | null; mine: { text: string; at: string } | null; nudgedAt: string | null; chatId: string | null; chatTitle: string | null; at: string }
+interface Waiting { id: string; toName: string; title: string; due: string | null; blocks: string | null; state: "asked" | "in_progress"; reply: string | null; replyAt: string | null; promisedAt: string | null; mine: { text: string; at: string } | null; nudgedAt: string | null; chatId: string | null; chatTitle: string | null; at: string }
 type Ack = { ok: boolean; error?: string; toast?: { text: string; undo?: { op: string; args: Record<string, unknown> } } };
 
 const mentionId = (n: Notice) => (n.kind === "mention" && n.key.startsWith("mention:") ? n.key.slice(8) : null);
+/** The ask behind a notice: the mention itself, or the reminder that your promise on it is due. */
+const askId = (n: Notice) => mentionId(n) ?? (n.kind === "mention.due" && n.key.startsWith("mention.due:") ? n.key.slice(12) : null);
 const err = (r: { success: boolean; error?: unknown }) => (typeof r.error === "string" ? r.error : "Couldn't send. Try again.");
 
 const peopleOf = (waiting: Waiting[], cards: Record<string, Card>): string[] =>
@@ -43,12 +46,13 @@ function item(n: Notice, reason: string, card: Card | undefined, goal: string | 
 
 export function useFocusBridge(root: React.RefObject<HTMLElement | null>) {
   const { needs, reasons, later, muted } = useNeedsYou();
+  const handled = useNoticeStore((s) => s.handled);
   const [cards, setCards] = useState<Record<string, Card>>({});
   const [waiting, setWaiting] = useState<Waiting[]>([]);
   const [goals, setGoals] = useState<Record<string, string | null>>({});
   const [team, setTeam] = useState<Teammate[]>([]);
   useEffect(() => { void loadTeammates().then(setTeam).catch(() => {}); }, []);
-  const ids = needs.map(mentionId).filter((x): x is string => !!x).join(",");
+  const ids = needs.map(askId).filter((x): x is string => !!x).join(",");
 
   const loadCard = (itemId: string) => void gateway.send("collab:card", { itemId }).then((r) => {
     const c = r.success ? (r.data as { card: Card | null }).card : null;
@@ -58,7 +62,7 @@ export function useFocusBridge(root: React.RefObject<HTMLElement | null>) {
 
   useEffect(() => { ids.split(",").filter(Boolean).forEach(loadCard); }, [ids]);
   // Goal chips: Jev tags each item with the one of Your three it moves (cached server-side per text).
-  const goalAsk = JSON.stringify(needs.map((n) => { const c = cards[mentionId(n) ?? ""]; return { key: n.key, text: [c?.action?.title ?? n.title, c?.text ?? n.body ?? ""].filter(Boolean).join(" — ") }; }));
+  const goalAsk = JSON.stringify(needs.map((n) => { const c = cards[askId(n) ?? ""]; return { key: n.key, text: [c?.action?.title ?? n.title, c?.text ?? n.body ?? ""].filter(Boolean).join(" — ") }; }));
   useEffect(() => {
     const items = JSON.parse(goalAsk) as { key: string; text: string }[];
     if (!items.length) return;
@@ -85,12 +89,14 @@ export function useFocusBridge(root: React.RefObject<HTMLElement | null>) {
   const feed = useMemo(() => ({
     needs: needs.map((n) => item(n, reasons[n.key] ?? "", cards[mentionId(n) ?? ""], goals[n.key])),
     later: later.map((n) => ({ key: n.key, title: n.title, when: whenLabel(n.laterUntil!) })),
+    // Cleared before you saw them today (a failed run that re-ran fine, a request answered elsewhere).
+    handled: handled.map((n) => ({ key: n.key, title: n.title, from: n.owner.name })),
     muted: muted.map((m) => ({ id: m.id, name: sourceDef(m.id)?.name ?? "This source", until: muteEndLabel(m.until) })),
     people: peopleOf(waiting, cards),
     // Photos for the pills: name → https URL (initials when missing or it fails to load).
     avatars: Object.fromEntries(peopleOf(waiting, cards).map((n) => [n, findTeammate(n, team)?.imageUrl]).filter(([, u]) => !!u)),
     waiting: waiting.map((w) => ({ ...w, promised: w.promisedAt ? promiseLabel(w.promisedAt) : null, late: !!w.promisedAt && Date.parse(w.promisedAt) < Date.now() })),
-  }), [needs, reasons, later, muted, cards, waiting, goals, team]);
+  }), [needs, reasons, later, muted, handled, cards, waiting, goals, team]);
 
   const refresh = useRef(loadWaiting);
   refresh.current = loadWaiting;

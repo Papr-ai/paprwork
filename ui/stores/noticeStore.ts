@@ -17,16 +17,19 @@ interface NoticeState {
   notices: Notice[];
   /** Your notification settings (Needs you reads mutes from here). */
   prefs: NoticePrefs;
+  /** Cleared today before you looked: Focus's "Pen handled N without you". */
+  handled: Notice[];
   /** Bumped when a Later or a mute runs out, so Needs you and the count recompute. */
   tick: number;
-  setNotices: (notices: Notice[], prefs?: NoticePrefs) => void;
+  setNotices: (notices: Notice[], prefs?: NoticePrefs, handled?: Notice[]) => void;
 }
 
 export const useNoticeStore = create<NoticeState>((set) => ({
   notices: [],
   prefs: DEFAULT_NOTICE_PREFS,
+  handled: [],
   tick: 0,
-  setNotices: (notices, prefs) => set((s) => ({ notices, prefs: prefs ?? s.prefs })),
+  setNotices: (notices, prefs, handled) => set((s) => ({ notices, prefs: prefs ?? s.prefs, handled: handled ?? s.handled })),
 }));
 
 /** Strongest open mark per chat id, as a stable "id:mark|id:mark" key for selectors. */
@@ -95,9 +98,9 @@ function reconcileSeen(notices: Notice[]): void {
 async function refresh(): Promise<void> {
   try {
     const res = await gateway.send("notifications:snapshot");
-    const data = res.data as { notices?: Notice[]; prefs?: NoticePrefs } | undefined;
+    const data = res.data as { notices?: Notice[]; prefs?: NoticePrefs; handled?: Notice[] } | undefined;
     if (res.success && Array.isArray(data?.notices)) {
-      useNoticeStore.getState().setNotices(data.notices, data.prefs);
+      useNoticeStore.getState().setNotices(data.notices, data.prefs, data.handled);
       reconcileSeen(data.notices);
     }
   } catch {
@@ -108,9 +111,9 @@ async function refresh(): Promise<void> {
 /** Call once at app root. */
 export function initNoticeListener(): void {
   window.addEventListener("gateway-broadcast", (event: Event) => {
-    const { type, data } = (event as CustomEvent<{ type?: string; data?: { notices?: Notice[]; prefs?: NoticePrefs } }>).detail ?? {};
+    const { type, data } = (event as CustomEvent<{ type?: string; data?: { notices?: Notice[]; prefs?: NoticePrefs; handled?: Notice[] } }>).detail ?? {};
     if (type === NOTICES_CHANGED_EVENT && Array.isArray(data?.notices)) {
-      useNoticeStore.getState().setNotices(data.notices, data.prefs);
+      useNoticeStore.getState().setNotices(data.notices, data.prefs, data.handled);
       reconcileSeen(data.notices);
     }
   });

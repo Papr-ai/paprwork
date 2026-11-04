@@ -34,7 +34,7 @@ const EVENT_TTL_MS = 14 * 24 * 60 * 60 * 1000;
 /** Resolved rows are kept a while for history, then dropped. */
 const RESOLVED_KEEP_MS = 30 * 24 * 60 * 60 * 1000;
 
-export type NoticesListener = (open: Notice[], prefs: NoticePrefs) => void;
+export type NoticesListener = (open: Notice[], prefs: NoticePrefs, handled: Notice[]) => void;
 const listeners = new Set<NoticesListener>();
 
 /** Gateway wires this to the WebSocket broadcast. Module-level so it survives workspace switches. */
@@ -209,7 +209,7 @@ export class NoticeService {
 
   /** What the UI needs to draw Needs you: open notices and your settings (for mutes). */
   snapshot() {
-    return { notices: this.listOpen(), prefs: this.prefs };
+    return { notices: this.listOpen(), prefs: this.prefs, handled: this.listHandledToday() };
   }
 
   /** You clicked its OS notification: an event is done, a condition is seen (stays until fixed). */
@@ -240,18 +240,28 @@ export class NoticeService {
     }
   }
 
-  /** The sender clears a notice when it's fixed or answered. */
-  resolve(key: string): boolean {
-    const r = this.db.prepare("UPDATE notices SET resolved_at=? WHERE key=? AND resolved_at IS NULL")
-      .run(new Date().toISOString(), key);
+  /** The sender clears a notice when it's fixed or answered. by: "you" when it was your click that fixed it. */
+  resolve(key: string, by?: "you"): boolean {
+    const r = this.db.prepare("UPDATE notices SET resolved_at=?, resolved_by=? WHERE key=? AND resolved_at IS NULL")
+      .run(new Date().toISOString(), by ?? null, key);
     return this.changedIf(r.changes);
   }
 
   /** Clear every open notice in a group, e.g. all requests for one key name across chats. */
-  resolveGroup(group: string): boolean {
-    const r = this.db.prepare("UPDATE notices SET resolved_at=? WHERE resolve_group=? AND resolved_at IS NULL")
-      .run(new Date().toISOString(), group);
+  resolveGroup(group: string, by?: "you"): boolean {
+    const r = this.db.prepare("UPDATE notices SET resolved_at=?, resolved_by=? WHERE resolve_group=? AND resolved_at IS NULL")
+      .run(new Date().toISOString(), by ?? null, group);
     return this.changedIf(r.changes);
+  }
+
+  /** "Pen handled N without you": things that waited on you (blue) and cleared today before you
+   *  looked or acted (a failed run that re-ran fine, a key someone else added). Proof, not noise.
+   *  Not people: a teammate closing their ask isn't Pen's work. */
+  listHandledToday(now = new Date()): Notice[] {
+    const start = new Date(now); start.setHours(0, 0, 0, 0);
+    const rows = this.db.prepare(`SELECT * FROM notices WHERE resolved_at >= ? AND resolved_by IS NULL AND seen_at IS NULL
+      AND mark='blue' AND source_id <> 'people' ORDER BY resolved_at DESC LIMIT 20`).all(start.toISOString()) as NoticeRow[];
+    return rows.map(rowToNotice);
   }
 
   /** You looked at the thing: its events are done; its conditions stay until fixed. */
@@ -299,9 +309,9 @@ export class NoticeService {
 
   private changed(): void {
     if (!listeners.size) return;
-    const open = this.listOpen();
+    const open = this.listOpen(), handled = this.listHandledToday();
     for (const l of listeners) {
-      try { l(open, this.prefs); } catch (e) { console.warn("[NoticeService] listener failed:", e); }
+      try { l(open, this.prefs, handled); } catch (e) { console.warn("[NoticeService] listener failed:", e); }
     }
   }
 }
@@ -323,8 +333,8 @@ export function tryNotify(input: NoticeInput): void {
   try { getNoticeService().notify(input); } catch (e) { console.warn("[NoticeService] notify failed:", e); }
 }
 
-export function tryResolve(key: string): void {
-  try { getNoticeService().resolve(key); } catch (e) { console.warn("[NoticeService] resolve failed:", e); }
+export function tryResolve(key: string, by?: "you"): void {
+  try { getNoticeService().resolve(key, by); } catch (e) { console.warn("[NoticeService] resolve failed:", e); }
 }
 
 export function tryResolveGroup(group: string): void {

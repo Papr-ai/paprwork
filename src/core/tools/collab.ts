@@ -59,7 +59,8 @@ export const mentionPersonTool = createTool({
   inputSchema: z.object({
     people: z.array(z.string().min(1)).min(1).max(10).describe("Teammates: name, email or user id"),
     message: z.string().min(1).max(4000).describe("The ask, written to them in the user's voice: one clear request with the context they need"),
-    action: z.object({ title: z.string().min(1).max(200), due: z.string().optional().describe("YYYY-MM-DD") }).optional()
+    action: z.object({ title: z.string().min(1).max(200), due: z.string().optional().describe("YYYY-MM-DD"),
+      blocks: z.string().max(120).optional().describe("What the user can't do until this is done, in a few words (\"Publish pricing page\"). Only when the chat says so; never guess.") }).optional()
       .describe("The one thing you're asking them to do. Lands on their Focus when they're notified."),
     notify: z.boolean().default(false).describe("Tell them now. Default false: tag quietly, notify later with notify_people."),
   }),

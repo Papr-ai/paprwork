@@ -20,7 +20,8 @@ import { tryNotify, tryResolve } from "../notifications/NoticeService.js";
 import type { StoredMessage } from "../storage/IStorageProvider.js";
 import { parsePromise, promiseLabel } from "../../../core/collab/promised.js";
 
-export interface MentionAction { title: string; due?: string | null }
+/** blocks: what the ask unblocks for the sender ("Publish pricing page"), shown on their Waiting on line. */
+export interface MentionAction { title: string; due?: string | null; blocks?: string | null }
 export interface MentionContext { chatId?: string; chatTitle?: string; appId?: string; appName?: string; goalId?: string }
 export interface MentionItem {
   id: string; fromUserId: string; fromName: string; toUserId: string; toName: string; text: string;
@@ -95,7 +96,7 @@ export async function answerMention(itemId: string, status: "open" | "done" | "d
   const out = await call<{ mention: MentionItem }>(`/mentions/${encodeURIComponent(itemId)}/resolve`, "POST",
     { status, reply, ...(promised ? { promisedAt: promised.toISOString() } : {}) });
   // "I'm on it" keeps it open: it stays on Focus (In progress) until you mark it done.
-  if (status !== "open") { tryResolve(mentionNoticeKey(itemId)); tryResolve(`mention.due:${itemId}`); }
+  if (status !== "open") { tryResolve(mentionNoticeKey(itemId), "you"); tryResolve(`mention.due:${itemId}`, "you"); }
   await updateCard(itemId, { status: out.mention.status, ...(reply ? { sentReply: reply } : {}),
     ...(promised ? { promisedAt: promised.toISOString(), remindedAt: null } : {}) });
   return out.mention;

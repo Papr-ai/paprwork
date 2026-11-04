@@ -645,8 +645,8 @@ async function startGateway(): Promise<void> {
       getJobEventHub().subscribe((event) => {
         broadcast({ type: event.type, data: event.data });
       });
-      onNoticesChanged((open, prefs) => {
-        broadcast({ type: NOTICES_CHANGED_EVENT, data: { notices: open, prefs } });
+      onNoticesChanged((open, prefs, handled) => {
+        broadcast({ type: NOTICES_CHANGED_EVENT, data: { notices: open, prefs, handled } });
       });
       // route() said pop the OS; the window process owns Notification, so the UI shows it.
       onNoticeOs(({ notice, why, sound, previews }) => {

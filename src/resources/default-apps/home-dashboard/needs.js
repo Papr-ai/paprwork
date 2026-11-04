@@ -95,16 +95,21 @@ const Needs = {
     const also = rest.length ? `<section class="hsec halso"><h4>Also needs you <em>${rest.length}</em></h4>${vis.map((i) => this.row(i)).join('')}
       ${rest.length > 3 ? `<button type="button" class="t3link hneed-more" data-need="more">${this.more ? 'Show less' : `Show ${rest.length - 3} more`}</button>` : ''}</section>` : '';
     const muted = f.muted.map((m) => `<p class="hneed-note"><span>${this.esc(m.name)} muted until ${this.esc(m.until)}. Dots still show on the things.</span><button type="button" class="t3link" data-need="unmute" data-src="${this.esc(m.id)}">Unmute</button></p>`).join('');
-    const later = f.later.length ? `<section class="hsec"><h4>Later <em>${f.later.length}</em></h4>${f.later.map((l) => `<div class="hrow"><span class="hrt"><b>${this.esc(l.title)}</b><span>Back ${this.esc(l.when)}</span></span>
+    return also + muted;
+  },
+  /** Later sits at the bottom, under Waiting on (the Focus order): what you put off and when it's back. */
+  laterHtml() {
+    const f = this.feed;
+    if (!f) return '';
+    return f.later.length ? `<section class="hsec"><h4>Later <em>${f.later.length}</em></h4>${f.later.map((l) => `<div class="hrow"><span class="hrt"><b>${this.esc(l.title)}</b><span>Back ${this.esc(l.when)}</span></span>
       <button type="button" class="t3link" data-need="unlater" data-key="${this.esc(l.key)}">Bring back now</button></div>`).join('')}</section>` : '';
-    return also + muted + later;
   },
   /** The brief's counts are from last night; once Papr Work feeds us, show live ones (same as the proposal). */
   stats(today) {
     const el = document.querySelector('#hero .hero-stats'), f = this.feed;
     if (!el || !f || !today) return;
     const n = (v, l) => `<span class="stat"><b class="stat-num">${v}</b> <span class="stat-label">${l}</span></span>`;
-    el.innerHTML = n(f.needs.length, 'need you') + n((f.waiting || []).length, 'waiting on') + n(f.later.length, 'coming up');
+    el.innerHTML = n(f.needs.length, 'need you') + n((f.waiting || []).length, 'waiting on') + n(f.later.length, 'later');
   },
   paint() {
     const n = document.getElementById('needs'), al = document.getElementById('alsoneeds'), w = document.getElementById('waiting');
@@ -117,7 +122,7 @@ const Needs = {
     if (slot) slot.hidden = today && this.has(); // one "Do this first", never two
     this.stats(today);
     al.innerHTML = today ? this.alsoHtml() : '';
-    w.innerHTML = today && typeof Waiting !== 'undefined' ? Waiting.html() : '';
+    w.innerHTML = today && typeof Waiting !== 'undefined' ? Waiting.html() + this.laterHtml() + Waiting.handled() : '';
     const t = document.getElementById('hneed-toast');
     if (t) t.remove();
     if (this.toast) document.body.insertAdjacentHTML('beforeend', `<div id="hneed-toast" class="hneed-toast" role="status"><span>${this.esc(this.toast.text)}</span>${this.toast.undo ? '<button type="button" data-need="undo">Undo</button>' : ''}</div>`);

@@ -34,7 +34,8 @@ export const NOTICES_SCHEMA = `
     seen_at TEXT,
     resolved_at TEXT,
     expires_at TEXT,
-    later_until TEXT
+    later_until TEXT,
+    resolved_by TEXT
   );
   CREATE UNIQUE INDEX IF NOT EXISTS idx_notices_open_key ON notices(key) WHERE resolved_at IS NULL;
   CREATE INDEX IF NOT EXISTS idx_notices_open_owner ON notices(owner_kind, owner_id) WHERE resolved_at IS NULL;
@@ -111,4 +112,6 @@ export function rowToNotice(r: NoticeRow): Notice {
 export function migrateNotices(db: { prepare: (sql: string) => { all: () => unknown[] }; exec: (sql: string) => void }): void {
   const cols = (db.prepare("PRAGMA table_info(notices)").all() as { name: string }[]).map((c) => c.name);
   if (!cols.includes("later_until")) db.exec("ALTER TABLE notices ADD COLUMN later_until TEXT");
+  // "you" when you cleared it (answered, saved the key); null when the sender cleared it on its own.
+  if (!cols.includes("resolved_by")) db.exec("ALTER TABLE notices ADD COLUMN resolved_by TEXT");
 }

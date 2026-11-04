@@ -9,7 +9,7 @@ const Waiting = {
       thread right there (reply, nudge, close, open chat). */
   row(w) {
     const N = Needs, e = (s) => N.esc(s), name = N.first(w.toName), prog = w.state === 'in_progress', id = e(w.id), open = N.wopen === w.id || N.writing === w.id;
-    const due = w.promised ? ` · ${w.late ? 'was due' : 'due'} ${e(w.promised)}` : w.due ? ` · due ${e(w.due)}` : '';
+    const due = (w.promised ? ` · ${w.late ? 'was due' : 'due'} ${e(w.promised)}` : w.due ? ` · due ${e(w.due)}` : '') + (w.blocks ? ` · blocks ${e(w.blocks)}` : '');
     const said = w.reply ? `${e(name)}: \u201c${e(w.reply)}\u201d` : !prog ? `asked ${this.ago(w.at)} · no reply yet` : '';
     const sub = `<span class="${w.late ? 'is-late' : ''}">${prog ? 'In progress' : 'Asked'}${said ? ` · ${said}` : ''}</span>`;
     const line = `<button type="button" class="hwait-line" data-need="wopen" data-id="${id}" aria-expanded="${open}"><span class="hwait-who">${e(name)}</span><b>${e(w.title)}${due}</b>${sub}</button>`;
@@ -31,6 +31,14 @@ const Waiting = {
     const rows = Needs.feed?.waiting || [];
     if (!rows.length) return '';
     return `<section class="hsec hwait"><h4>Waiting on <em>${rows.length}</em></h4>${rows.map((w) => this.row(w)).join('')}</section>`;
+  },
+  /** Proof, not noise: one quiet line you can open. What cleared today before you had to touch it. */
+  handled() {
+    const h = Needs.feed?.handled || [], e = (s) => Needs.esc(s);
+    if (!h.length) return '';
+    const open = Needs.hopen;
+    return `<section class="hsec hhandled"><button type="button" class="hhandled-line" data-need="hopen" aria-expanded="${!!open}"><span>Pen handled ${h.length} without you</span><em>${open ? 'Hide' : 'Show'}</em></button>
+      ${open ? h.map((i) => `<p class="hhandled-row"><b>${e(i.from)}</b>${e(i.title)}</p>`).join('') : ''}</section>`;
   },
 };
 
@@ -69,6 +77,7 @@ const Waiting = {
     switch (op) {
       case 'menu': N.open = N.open === key ? null : key; return N.paint();
       case 'more': N.more = !N.more; return N.paint();
+      case 'hopen': N.hopen = !N.hopen; return N.paint();
       case 'undo': { const u = N.toast?.undo; N.toast = null; N.paint(); if (u) N.act(u.op, u.args); return; }
       case 'answer': {
         const m = item?.mention; if (!m) return;

@@ -80,6 +80,16 @@ describe("NoticeService", () => {
     expect(svc.listOpen().map((n) => n.key)).toEqual(["key.request:b:OPENAI_API_KEY"]);
   });
 
+  it("Pen handled: blue things that cleared on their own today, not ones you fixed or saw", () => {
+    svc.notify(needsKey("a", "A")); svc.notify(needsKey("b", "B")); svc.notify(needsKey("c", "C")); svc.notify(done("d"));
+    svc.resolve("key.request:a:A");          // the sender fixed it on its own
+    svc.resolve("key.request:b:B", "you");   // your click fixed it
+    svc.markSeen("chat", "c"); svc.resolve("key.request:c:C"); // you had already looked
+    svc.markSeen("chat", "d");               // green: never counts
+    expect(svc.listHandledToday().map((n) => n.key)).toEqual(["key.request:a:A"]);
+    expect(svc.snapshot().handled).toHaveLength(1);
+  });
+
   it("a resolved key can be raised again as a new row", () => {
     svc.notify(needsKey("a"));
     svc.resolve("key.request:a:GITHUB_TOKEN");
