@@ -89,6 +89,8 @@ async function runDeferredHomeWorkspaceRepair(): Promise<void> {
     console.log(
       "[GoalsTasksProjection] boot skipped (epoch current, workspace unchanged, home links ok)",
     );
+    // Mongo is the shared copy: pull what changed on other devices even when nothing changed here.
+    void import("../focusCloud/focusCloudSync.js").then((m) => m.scheduleFocusCloudSync("boot", 5000)).catch(() => undefined);
   } else if (goalsReady) {
     await projectGoalsAndTasks("boot");
     projectionOutcome = "ran";
