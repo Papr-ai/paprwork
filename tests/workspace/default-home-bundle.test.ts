@@ -248,7 +248,7 @@ describe("defaultHomeBundle", () => {
   it("bundled Daily Brief default-job.json passes app-linked architecture validation", () => {
     const jobDefPath = path.join(
       process.cwd(),
-      "src/resources/default-apps/home-dashboard/default-job.json",
+      "src/resources/focus/daily-brief/job.json",
     );
     const bundled = JSON.parse(readFileSync(jobDefPath, "utf8")) as {
       command?: string;
@@ -274,7 +274,7 @@ describe("defaultHomeBundle", () => {
       readFileSync(
         path.join(
           process.cwd(),
-          "src/resources/default-apps/home-dashboard/default-job.json",
+          "src/resources/focus/daily-brief/job.json",
         ),
         "utf8",
       ),
@@ -325,17 +325,20 @@ describe("defaultHomeBundle", () => {
     expect(sql).toMatch(/date\s+TEXT\s+PRIMARY KEY/i);
   });
 
-  it("bundled save_brief.py never hardcodes a sourceId and checks the error field", () => {
+  it("bundled save_brief.py writes through /api/focus (no app id) and checks the error field", () => {
     const script = readFileSync(
       path.join(
         process.cwd(),
-        "src/resources/default-apps/home-dashboard/job-assets/save_brief.py",
+        "src/resources/focus/daily-brief/save_brief.py",
       ),
       "utf8",
     );
 
-    // Resolves the source from data-sources.json rather than guessing.
-    expect(script).toContain("def resolve_source_id");
+    // Focus is native: no Home app id, no data-sources lookup, no raw SQL writes.
+    expect(script).not.toContain("bbb7e17e");
+    expect(script).not.toContain("data-sources");
+    expect(script).not.toContain("/api/db/");
+    expect(script).toContain("/api/focus/");
     expect(script).not.toContain("Daily Brief Generator (");
     // The check that was missing and caused the silent no-op.
     expect(script).toContain('parsed.get("error")');

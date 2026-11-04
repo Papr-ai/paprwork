@@ -88,7 +88,7 @@ export function useFocusState() {
 
 interface FocusPeekProps {
   status: React.ReactNode;
-  /** Open Focus; with a goal id, Home opens that goal's detail view. */
+  /** Open Focus; with a goal id, Focus opens that goal's detail view. */
   onOpen: (goalId?: string) => void;
 }
 
@@ -160,19 +160,5 @@ export function FocusPeek({ status, onOpen }: FocusPeekProps) {
   );
 }
 
-/**
- * Ask the Home mini-app to open one goal. Home lives in a cross-origin iframe, so post to every
- * iframe (only Home listens for this type) and retry briefly while a freshly-shown Home loads.
- */
-export function openFocusGoal(goalId: string): void {
-  const nonce = `${Date.now()}-${Math.random().toString(36).slice(2)}`;
-  const post = () =>
-    document.querySelectorAll("iframe").forEach((f) => {
-      try {
-        f.contentWindow?.postMessage({ type: "papr-focus-open", goalId, nonce }, "*");
-      } catch {
-        /* detached frame */
-      }
-    });
-  [0, 300, 900, 2000].forEach((ms) => window.setTimeout(post, ms));
-}
+/** Open one goal on the native Focus page (re-exported for the rail and nudges). */
+export { openFocusGoal } from "../Focus/page/focusNav";

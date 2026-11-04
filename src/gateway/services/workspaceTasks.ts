@@ -1,7 +1,7 @@
 /**
  * Unified tasks — read side + completion write-back.
  *
- * The `tasks` table (Home DB) is a projection of L3 goal blocks in IDENTITY.md
+ * The `tasks` table (Focus DB, focusDb.ts) is a projection of L3 goal blocks in IDENTITY.md
  * and `## Open Items` checkboxes on entity pages. Reads come from the table;
  * completing a task writes back to the *source markdown* (tick the checkbox /
  * set the L3 block's Status: done) and then re-projects, so markdown stays
@@ -11,9 +11,8 @@
 import { promises as fs } from "fs";
 import path from "path";
 import { getPaprWorkspaceDir } from "../../core/utils/paprRoot.js";
-import { DEFAULT_HOME_APP_ID } from "./defaultHomeBundle.js";
+import { focusQuery } from "./focusDb.js";
 
-const GATEWAY_PORT = Number(process.env.GATEWAY_PORT ?? 18789);
 
 export interface TaskRecord {
   id: string;
@@ -30,15 +29,8 @@ export interface TaskRecord {
   completed_at: string | null;
 }
 
-async function homeQuery(sql: string, params: unknown[] = []): Promise<Record<string, unknown>[]> {
-  const res = await fetch(`http://127.0.0.1:${GATEWAY_PORT}/api/db/query`, {
-    method: "POST",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ appId: DEFAULT_HOME_APP_ID, sql, params }),
-  });
-  const data = (await res.json().catch(() => ({}))) as { error?: string; rows?: Record<string, unknown>[] };
-  if (!res.ok || data.error) throw new Error(data.error ?? `HTTP ${res.status}`);
-  return data.rows ?? [];
+function homeQuery(sql: string, params: unknown[] = []): Promise<Record<string, unknown>[]> {
+  return focusQuery(sql, params);
 }
 
 export async function readWorkspaceTasks(opts: { status?: string } = {}): Promise<{

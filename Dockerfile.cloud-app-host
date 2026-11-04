@@ -28,10 +28,16 @@ COPY scripts/generate-papr-api-catalog.mjs scripts/generate-papr-api-catalog.mjs
 COPY scripts/build-mini-app-sdk-browser-bundles.mjs scripts/build-mini-app-sdk-browser-bundles.mjs
 COPY scripts/verify-mini-app-sdk-bundles.mjs scripts/verify-mini-app-sdk-bundles.mjs
 COPY src ./src
+# Focus page for signed-in visitors (same React components as Papr Work).
+COPY scripts/build-focus-web.mjs scripts/build-focus-web.mjs
+COPY ui/web ./ui/web
+COPY ui/components/Focus ./ui/components/Focus
+COPY ui/utils/gatewayHttpBase.ts ./ui/utils/gatewayHttpBase.ts
 # Skip generate-papr-api-catalog (tsx loads full tool graph + libsql); catalog is committed under src/resources.
 RUN npx shx rm -rf dist/resources && npx shx mkdir -p dist && npx shx cp -r src/resources dist/ && \
   npx tsc -p tsconfig.gateway.json && npx tsc -p tsconfig.mini-app-sdk-node.json && \
   node scripts/build-mini-app-sdk-browser-bundles.mjs && node scripts/verify-mini-app-sdk-bundles.mjs && \
+  node scripts/build-focus-web.mjs && \
   npx shx cp src/gateway/services/appRuntime/backendDbHelper.py dist/gateway/services/appRuntime/backendDbHelper.py
 
 FROM node:24-bookworm-slim

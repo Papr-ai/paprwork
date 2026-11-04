@@ -13,6 +13,7 @@ import type { Express, Request, Response } from "express";
 import { getMemoryServerBaseUrl } from "../../utils/cloudApiClient.js";
 import { getCloudAppHostKey, runtimeFetch } from "./memoryRuntimeClient.js";
 import { getCloudAppPublicBaseUrl } from "./CloudAppPreviewService.js";
+import { registerFocusRoutes } from "./cloudAppFocusRoutes.js";
 import { FAVICON_SVG, buildDiscoverHtml, buildRobotsTxt, buildSitemapXml, type DiscoverView } from "./cloudAppDiscoverHtml.js";
 
 export interface DiscoverMedia {
@@ -154,17 +155,30 @@ function loadAsset(file: string): Buffer | null {
   return buf;
 }
 
+/** The Focus bundle from scripts/build-focus-web.mjs. Read once; a missing bundle is a 404, not a crash. */
+function loadFocusAsset(file: string): Buffer | null {
+  const key = `focus-web/${file}`;
+  if (assetCache.has(key)) return assetCache.get(key)!;
+  const here = path.dirname(fileURLToPath(import.meta.url));
+  let buf: Buffer | null = null;
+  for (const p of [path.join(here, "../../../resources/focus-web", file), path.join(process.cwd(), "dist/resources/focus-web", file)]) {
+    try { buf = fs.readFileSync(p); break; } catch { /* next */ }
+  }
+  assetCache.set(key, buf);
+  return buf;
+}
+
 export function registerDiscoverRoutes(app: Express, session: DiscoverSessionReader): void {
   const render = async (req: Request, res: Response, view: DiscoverView, focus?: { ns: string; slug: string }) => {
     try {
       const sessionToken = session.getSessionToken(req);
-      if (view === "mine" && !focus && !sessionToken) {
-        res.redirect(302, "/auth/login?returnTo=%2Fmy-apps");
+      if ((view === "mine" || view === "focus") && !focus && !sessionToken) {
+        res.redirect(302, `/auth/login?returnTo=${encodeURIComponent(view === "mine" ? "/my-apps" : "/")}`);
         return;
       }
       const [apps, mine, profile] = await Promise.all([
-        fetchDiscoverEntries(),
-        sessionToken ? fetchMyApps(sessionToken) : Promise.resolve(null),
+        view === "focus" ? Promise.resolve([] as DiscoverEntry[]) : fetchDiscoverEntries(),
+        sessionToken && view !== "focus" ? fetchMyApps(sessionToken) : Promise.resolve(null),
         sessionToken ? fetchDiscoverProfile(sessionToken) : Promise.resolve({} as DiscoverProfile),
       ]);
       let focused: DiscoverEntry | undefined;
@@ -203,7 +217,18 @@ export function registerDiscoverRoutes(app: Express, session: DiscoverSessionRea
     }
   };
 
-  app.get("/", (req, res) => void render(req, res, "discover"));
+  // Signed in, the home page is Focus (same page as Papr Work); Discover is one tab away.
+  app.get("/", (req, res) => void render(req, res, session.getSessionToken(req) ? "focus" : "discover"));
+  app.get("/focus", (_req, res) => res.redirect(302, "/"));
+  app.get("/focus/_/:file", (req, res) => {
+    const file = String(req.params.file ?? "");
+    const buf = /^focus\.(js|css)$/.test(file) ? loadFocusAsset(file) : null;
+    if (!buf) { res.status(404).end(); return; }
+    res.type(file.endsWith(".js") ? "text/javascript" : "text/css");
+    res.setHeader("Cache-Control", "public, max-age=300");
+    res.send(buf);
+  });
+  registerFocusRoutes(app, session);
   app.get("/discover", (req, res) => void render(req, res, "discover"));
   app.get("/my-apps", (req, res) => void render(req, res, "mine"));
   app.get("/discover/_/:file", (req, res) => {

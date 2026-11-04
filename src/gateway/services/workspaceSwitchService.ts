@@ -221,6 +221,7 @@ async function resetPathBoundSingletons(): Promise<void> {
   resetPlanServiceForWorkspaceSwitch();
   resetNoticeServiceForWorkspaceSwitch();
   await import("./focusCloud/focusCloudSync.js").then((m) => m.resetFocusCloudSyncForWorkspaceSwitch()).catch(() => undefined);
+  await import("./focusDb.js").then((m) => m.resetFocusDbForWorkspaceSwitch()).catch(() => undefined);
   resetSkillServiceForWorkspaceSwitch();
   resetWorkspaceServiceForWorkspaceSwitch();
   resetSubAgentServiceForWorkspaceSwitch();

@@ -103,6 +103,9 @@ async function runDeferredHomeWorkspaceRepair(): Promise<void> {
   const { getWorkspaceService } = await import("../WorkspaceService.js");
   await getWorkspaceService().ensureSleepJob();
   await getWorkspaceService().ensureWikiWriterJob();
+  // Daily Brief + trackers are Papr Work's own jobs now (re-links ones Home used to own).
+  const { ensureFocusSystemJobs } = await import("../focusSystemJobs.js");
+  await ensureFocusSystemJobs();
 
   await saveGatewayDeferredBootState({
     appliedEpoch: DEFERRED_HOME_WORKSPACE_BOOT_EPOCH,
