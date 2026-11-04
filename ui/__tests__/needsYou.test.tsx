@@ -20,7 +20,9 @@ vi.mock("../stores/noticeOs", () => ({ openNoticeOwner: vi.fn() }));
 vi.mock("../lib/ensureSettingsTab", () => ({ ensureSettingsTab: vi.fn() }));
 
 import { useNoticeStore } from "../stores/noticeStore";
-import { NeedsYou } from "../components/Focus/NeedsYou";
+import { useFocusFeed } from "../components/Focus/focusBridge";
+import { useNeedsUi } from "../components/Focus/page/useNeedsUi";
+import { AlsoNeeds, NeedHero, useMenu } from "../components/Focus/page/NeedsSection";
 import { RailItem } from "../components/Sidebar/RailItem";
 import { useNeedsYouCount } from "../stores/useNeedsYou";
 import { openNoticeOwner } from "../stores/noticeOs";
@@ -38,6 +40,21 @@ const billing = n({ key: "billing.out", kind: "billing.out", level: "urgent", ti
   owner: { kind: "account", id: "settings", name: "Billing" }, actions: [{ label: "Top up", intent: "billing.topup" }] });
 const set = (notices: Notice[], prefs = DEFAULT_NOTICE_PREFS) => act(() => useNoticeStore.getState().setNotices(notices, prefs));
 
+/** Needs you exactly as the Focus page draws it: Do this first, Also needs you, muted, Later, toast. */
+function NeedsYou() {
+  const { feed, run } = useFocusFeed();
+  const { ui, toast, undo } = useNeedsUi(run);
+  const menu = useMenu();
+  return (
+    <div className="needs-you-test">
+      {feed.needs[0] ? <NeedHero i={feed.needs[0]} feed={feed} ui={ui} goal="" menu={menu} /> : null}
+      <AlsoNeeds feed={feed} ui={ui} goalOf={() => ""} menu={menu} />
+      {toast ? <div role="status">{toast.text}{toast.undo ? <button onClick={undo}>Undo</button> : null}</div> : null}
+    </div>
+  );
+}
+const hasNeeds = (c: HTMLElement) => !!c.querySelector(".hneed-hero, .hcard, .hneed-note, .hrow");
+
 function Pen() {
   return <RailItem label="Focus" icon={<span />} onClick={() => {}} count={useNeedsYouCount()} />;
 }
@@ -48,11 +65,11 @@ describe("Needs you", () => {
   it("a fresh key request in a chat stays on the chat's dot: not in Focus, no count on Pen", () => {
     set([n({ createdAt: new Date().toISOString() })]);
     const { container } = render(<><NeedsYou /><Pen /></>);
-    expect(container.querySelector(".needs-you")).toBeNull();
+    expect(hasNeeds(container)).toBe(false);
     expect(container.querySelector(".rail-btn__count")).toBeNull();
   });
   it("promoted after a day, with the reason", () => {
-    set([n()]);
+    set([billing, n()]);
     render(<NeedsYou />);
     expect(screen.getByText(/Waiting since yesterday/)).toBeTruthy();
   });
@@ -74,7 +91,7 @@ describe("Needs you", () => {
   });
   it("empty: no section at all, and no count on Pen", () => {
     const { container } = render(<><NeedsYou /><Pen /></>);
-    expect(container.querySelector(".needs-you")).toBeNull();
+    expect(hasNeeds(container)).toBe(false);
     expect(container.querySelector(".rail-btn__count")).toBeNull();
   });
 
@@ -100,7 +117,7 @@ describe("Needs you", () => {
     set([n()]);
     fireEvent.click(screen.getByLabelText("Options"));
     expect(screen.getByText(/^Back (3 PM today|tomorrow 9 AM)$/)).toBeTruthy();
-    fireEvent.click(screen.getByText("Later"));
+    fireEvent.click(screen.getByRole("menuitem", { name: /^Later/ }));
     expect(sent).toContainEqual(["notifications:later", { key: "key.request:c:GITHUB_TOKEN" }]);
     fireEvent.click(await screen.findByText("Undo"));
     expect(sent).toContainEqual(["notifications:unlater", { key: "key.request:c:GITHUB_TOKEN" }]);
@@ -109,7 +126,7 @@ describe("Needs you", () => {
   it("a Later item leaves the list and the count, and shows under Later", () => {
     const { container } = render(<><NeedsYou /><Pen /></>);
     set([n({ laterUntil: new Date(Date.now() + 3_600_000).toISOString() })]);
-    expect(document.querySelector(".needs-you__hero")).toBeNull();
+    expect(document.querySelector(".hneed-hero")).toBeNull();
     expect(screen.getByText("Bring back now")).toBeTruthy();
     expect(container.querySelector(".rail-btn__count")).toBeNull();
   });
@@ -118,7 +135,7 @@ describe("Needs you", () => {
     render(<NeedsYou />);
     const until = new Date(Date.now() + 3_600_000).toISOString();
     set([n()], mergePrefs(DEFAULT_NOTICE_PREFS, { sources: { chats: { muteUntil: until } } }));
-    expect(document.querySelector(".needs-you__hero")).toBeNull();
+    expect(document.querySelector(".hneed-hero")).toBeNull();
     fireEvent.click(screen.getByText("Unmute"));
     expect(sent).toContainEqual(["notifications:unmute", { sourceId: "chats" }]);
   });
@@ -127,6 +144,7 @@ describe("Needs you", () => {
     render(<NeedsYou />);
     set([billing]);
     fireEvent.click(screen.getByLabelText("Options"));
+    expect(screen.queryByRole("menuitem", { name: /^Later/ })).toBeNull();
     expect(screen.queryByText("Later")).toBeNull();
     expect(screen.getByText(/Always on/)).toBeTruthy();
   });

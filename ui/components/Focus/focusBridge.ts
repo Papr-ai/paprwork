@@ -1,10 +1,8 @@
 /**
- * Needs you + Waiting on live inside the Home brief (same page, same type and spacing as Your three).
- * This hook is the native half: it builds the feed from the notice store and the mention cards, posts it
- * to the Home iframe (`papr-focus-feed`), and runs what the brief asks for (`papr-focus-act` → ack).
- * Only the ops below are accepted, and only from an iframe inside the Focus view.
+ * Needs you + Waiting on, as data for the native Focus page. Builds the feed from the notice store and
+ * the mention cards, and runs every action the page asks for (same ops the Home iframe used to send).
  */
-import { useEffect, useMemo, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import type { Notice } from "../../../src/core/types/notices";
 import { hasFocusMode, isUrgent, laterUntil, muteEndLabel, noticeLabels, whenLabel } from "../../../src/core/notifications/needsYou";
 import { sourceDef } from "../../../src/core/notifications/sources";
@@ -41,7 +39,26 @@ function item(n: Notice, reason: string, card: Card | undefined, goal: string | 
   };
 }
 
-export function useFocusBridge(root: React.RefObject<HTMLElement | null>) {
+function buildFeed(needs: Notice[], reasons: Record<string, string>, later: Notice[], muted: { id: string; until: string | null }[],
+  cards: Record<string, Card>, waiting: Waiting[], goals: Record<string, string | null>, team: Teammate[]) {
+  const people = peopleOf(waiting, cards);
+  return {
+    needs: needs.map((n) => item(n, reasons[n.key] ?? "", cards[mentionId(n) ?? ""], goals[n.key])),
+    later: later.map((n) => ({ key: n.key, title: n.title, when: whenLabel(n.laterUntil!) })),
+    muted: muted.map((m) => ({ id: m.id, name: sourceDef(m.id)?.name ?? "This source", until: muteEndLabel(m.until as string) })),
+    people,
+    // Photos for the pills: name → https URL (initials when missing or it fails to load).
+    avatars: Object.fromEntries(people.map((n) => [n, findTeammate(n, team)?.imageUrl]).filter(([, u]) => !!u)) as Record<string, string>,
+    waiting: waiting.map((w) => ({ ...w, promised: w.promisedAt ? promiseLabel(w.promisedAt) : null, late: !!w.promisedAt && Date.parse(w.promisedAt) < Date.now() })),
+  };
+}
+
+export type FocusFeed = ReturnType<typeof buildFeed>;
+export type FeedItem = FocusFeed["needs"][number];
+export type FeedWaiting = FocusFeed["waiting"][number];
+export type FocusAck = Ack;
+
+export function useFocusFeed() {
   const { needs, reasons, later, muted } = useNeedsYou();
   const [cards, setCards] = useState<Record<string, Card>>({});
   const [waiting, setWaiting] = useState<Waiting[]>([]);
@@ -54,7 +71,7 @@ export function useFocusBridge(root: React.RefObject<HTMLElement | null>) {
     const c = r.success ? (r.data as { card: Card | null }).card : null;
     if (c) setCards((m) => ({ ...m, [itemId]: c }));
   }).catch(() => {});
-  const loadWaiting = () => void gateway.send("collab:waiting", {}).then((r) => setWaiting(r.success ? (r.data as { waiting: Waiting[] }).waiting : [])).catch(() => {});
+  const loadWaiting = () => void gateway.send("collab:waiting", {}).then((r) => setWaiting(r.success ? (r.data as { waiting?: Waiting[] }).waiting ?? [] : [])).catch(() => {});
 
   useEffect(() => { ids.split(",").filter(Boolean).forEach(loadCard); }, [ids]);
   // Goal chips: Jev tags each item with the one of Your three it moves (cached server-side per text).
@@ -65,7 +82,7 @@ export function useFocusBridge(root: React.RefObject<HTMLElement | null>) {
     let live = true;
     void gateway.send("collab:goals", { items }).then((r) => {
       if (!live || !r.success) return;
-      const g = (r.data as { goals: Record<string, { title: string } | null> }).goals;
+      const g = (r.data as { goals?: Record<string, { title: string } | null> }).goals ?? {};
       setGoals((m) => ({ ...m, ...Object.fromEntries(Object.entries(g).map(([k, v]) => [k, v?.title ?? null])) }));
     }).catch(() => {});
     return () => { live = false; };
@@ -82,29 +99,12 @@ export function useFocusBridge(root: React.RefObject<HTMLElement | null>) {
     return () => { window.removeEventListener("gateway-broadcast", on); window.removeEventListener("papr-workspace-switch-complete", loadWaiting); };
   }, []);
 
-  const feed = useMemo(() => ({
-    needs: needs.map((n) => item(n, reasons[n.key] ?? "", cards[mentionId(n) ?? ""], goals[n.key])),
-    later: later.map((n) => ({ key: n.key, title: n.title, when: whenLabel(n.laterUntil!) })),
-    muted: muted.map((m) => ({ id: m.id, name: sourceDef(m.id)?.name ?? "This source", until: muteEndLabel(m.until) })),
-    people: peopleOf(waiting, cards),
-    // Photos for the pills: name → https URL (initials when missing or it fails to load).
-    avatars: Object.fromEntries(peopleOf(waiting, cards).map((n) => [n, findTeammate(n, team)?.imageUrl]).filter(([, u]) => !!u)),
-    waiting: waiting.map((w) => ({ ...w, promised: w.promisedAt ? promiseLabel(w.promisedAt) : null, late: !!w.promisedAt && Date.parse(w.promisedAt) < Date.now() })),
-  }), [needs, reasons, later, muted, cards, waiting, goals, team]);
+  const feed = useMemo(() => buildFeed(needs, reasons, later, muted, cards, waiting, goals, team), [needs, reasons, later, muted, cards, waiting, goals, team]);
 
-  const refresh = useRef(loadWaiting);
-  refresh.current = loadWaiting;
-  const latest = useRef(feed);
-  latest.current = feed;
   const byKey = useRef(new Map<string, Notice>());
   byKey.current = new Map([...needs, ...later].map((n) => [n.key, n]));
 
-  const frames = () => [...(root.current?.querySelectorAll("iframe") ?? [])];
-  const post = (msg: unknown) => frames().forEach((f) => { try { f.contentWindow?.postMessage(msg, "*"); } catch { /* detached */ } });
-  useEffect(() => { post({ type: "papr-focus-feed", feed }); }, [feed]);
-
-  useEffect(() => {
-    const run = async (op: string, a: Record<string, unknown>): Promise<Ack> => {
+  const run = useCallback(async (op: string, a: Record<string, unknown>): Promise<Ack> => {
       const n = typeof a.key === "string" ? byKey.current.get(a.key) : undefined;
       const l = n ? noticeLabels(n) : null;
       switch (op) {
@@ -138,16 +138,6 @@ export function useFocusBridge(root: React.RefObject<HTMLElement | null>) {
         }
       }
       return { ok: false, error: "That item is gone. Refresh Focus." };
-    };
-    const onMsg = (e: MessageEvent) => {
-      const m = e.data as { type?: string; id?: string; op?: string; args?: Record<string, unknown> } | null;
-      if (!m?.type?.startsWith("papr-focus-") || !frames().some((f) => f.contentWindow === e.source)) return;
-      const reply = (x: unknown) => (e.source as Window | null)?.postMessage(x, "*");
-      // The brief (re)loaded = Focus opened: send what we have, and refresh Waiting on (a cold server can miss the first load).
-      if (m.type === "papr-focus-ready") { reply({ type: "papr-focus-feed", feed: latest.current }); refresh.current(); }
-      if (m.type === "papr-focus-act" && m.op) void run(m.op, m.args ?? {}).catch((x: Error) => ({ ok: false, error: x.message })).then((ack) => reply({ type: "papr-focus-ack", id: m.id, ...ack }));
-    };
-    window.addEventListener("message", onMsg);
-    return () => window.removeEventListener("message", onMsg);
   }, []);
+  return { feed, run };
 }

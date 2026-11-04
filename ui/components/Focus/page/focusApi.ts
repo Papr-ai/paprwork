@@ -41,11 +41,10 @@ const base = () => getGatewayHttpBase();
 
 async function call<T>(path: string, init?: RequestInit & { json?: unknown }): Promise<T> {
   const { json, ...rest } = init ?? {};
-  const res = await fetch(`${base()}${path}`, {
-    ...rest,
-    headers: { "Content-Type": "application/json", "x-papr-actor": "focus", ...(rest.headers ?? {}) },
-    ...(json !== undefined ? { body: JSON.stringify(json) } : {}),
-  });
+  // Reads stay "simple" requests (no preflight). Writes say who made them, for goal history.
+  const headers: Record<string, string> = json !== undefined ? { "Content-Type": "application/json" } : {};
+  if (rest.method && rest.method !== "GET") headers["x-papr-actor"] = "focus";
+  const res = await fetch(`${base()}${path}`, { ...rest, headers, ...(json !== undefined ? { body: JSON.stringify(json) } : {}) });
   const data = (await res.json().catch(() => ({}))) as T & { error?: string };
   // Gateway errors can arrive with HTTP 200 and an { error } body; treat both the same.
   if (!res.ok || (data && typeof data === "object" && "error" in data && data.error)) {
