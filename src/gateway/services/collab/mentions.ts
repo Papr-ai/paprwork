@@ -252,6 +252,9 @@ async function receiveMention(e: CollabEvent): Promise<void> {
   await saveCards();
   broadcast({ type: "chat:list-updated" });
   broadcast({ type: "chat:message-received", data: { chatId, message: msg } });
+  // Focus may already show this ask (its notice can sync from another device first) and
+  // looked the card up before it existed: send it so the item fills in without a reload.
+  broadcast({ type: "collab:card", data: { itemId, card } });
   tryNotify({
     key: mentionNoticeKey(itemId), kind: "mention", type: "event", level: "priority",
     title: item.action ? `${item.fromName}: ${item.action.title}` : `${item.fromName} mentioned you`,
