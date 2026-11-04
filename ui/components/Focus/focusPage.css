@@ -910,6 +910,7 @@
 .fpage-shell .hwait-line:hover b { color: var(--blue); }
 .fpage-shell .hwait-who { grid-row: span 2; font-weight: 600; color: var(--blue); min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .fpage-shell .hwait-line b { font-weight: 600; min-width: 0; }
+.fpage-shell .hwait-blocks { margin-left: 8px; padding: 1px 7px; border-radius: 999px; font-style: normal; font-size: 11.5px; font-weight: 500; color: #b7791f; background: rgba(183,121,31,.1); white-space: nowrap; }
 .fpage-shell .hwait-line > span:last-child { font-size: 12.5px; color: var(--mid); min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .fpage-shell .hwait-line > span.is-late { color: #b7791f; }
 .fpage-shell .hwait-more { display: grid; gap: 6px; padding: 0 2px 12px 110px; }

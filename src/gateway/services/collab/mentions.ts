@@ -20,7 +20,7 @@ import { tryNotify, tryResolve } from "../notifications/NoticeService.js";
 import type { StoredMessage } from "../storage/IStorageProvider.js";
 import { dueDate, parsePromise, promiseLabel } from "../../../core/collab/promised.js";
 
-export interface MentionAction { title: string; due?: string | null }
+export interface MentionAction { title: string; due?: string | null; blocks?: string | null }
 export interface MentionContext { chatId?: string; chatTitle?: string; appId?: string; appName?: string; goalId?: string }
 export interface MentionItem {
   id: string; fromUserId: string; fromName: string; toUserId: string; toName: string; text: string;

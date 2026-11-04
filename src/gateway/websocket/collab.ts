@@ -54,7 +54,7 @@ export async function setupCollabHandlers(ws: WebSocket, message: WSMessage): Pr
         const { waitingOn } = await import("../services/collab/mentions.js");
         const rows = await waitingOn().catch(() => []);
         sendResponse(ws, { id: message.id, success: true, data: { waiting: rows.map((m) => ({
-          id: m.id, toName: m.toName, title: m.action?.title ?? m.text.slice(0, 120), due: m.action?.due ?? null,
+          id: m.id, toName: m.toName, title: m.action?.title ?? m.text.slice(0, 120), due: m.action?.due ?? null, blocks: m.action?.blocks ?? null,
           state: m.progress === "in_progress" || (m.progress == null && m.reply) ? "in_progress" : "asked",
           reply: m.reply?.text ?? null, replyAt: m.reply?.at ?? null,
           mine: [...(m.thread ?? [])].reverse().find((t) => t.by === "from") ?? null,

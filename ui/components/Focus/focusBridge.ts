@@ -16,7 +16,7 @@ import { useTabStore } from "../../stores/tabStore";
 import { bringBack, muteSource, putOff, setFocusMode, turnOffType, unmuteSource, useNeedsYou } from "../../stores/useNeedsYou";
 
 interface Card { itemId: string; fromName: string; text: string; suggestedReply: string; action: { title: string; due?: string | null } | null; status: string; sentReply?: string; promisedAt?: string | null }
-interface Waiting { id: string; toName: string; title: string; due: string | null; state: "asked" | "in_progress"; reply: string | null; replyAt: string | null; promisedAt: string | null; mine: { text: string; at: string } | null; nudgedAt: string | null; chatId: string | null; chatTitle: string | null; at: string }
+interface Waiting { id: string; toName: string; title: string; due: string | null; blocks?: string | null; state: "asked" | "in_progress"; reply: string | null; replyAt: string | null; promisedAt: string | null; mine: { text: string; at: string } | null; nudgedAt: string | null; chatId: string | null; chatTitle: string | null; at: string }
 type Ack = { ok: boolean; error?: string; toast?: { text: string; undo?: { op: string; args: Record<string, unknown> } } };
 
 const mentionId = (n: Notice) => (n.kind === "mention" && n.key.startsWith("mention:") ? n.key.slice(8) : null);

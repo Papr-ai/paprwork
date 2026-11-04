@@ -7,6 +7,7 @@ import { useEffect, useState } from "react";
 import { gateway } from "../../src/lib/gateway";
 import "./MentionCard.css";
 import { dueLabel } from "../../../src/core/collab/promised";
+import { MentionPill } from "../common/mentionPill";
 
 export interface MentionAskData {
   type: "mention_ask"; ask: string; notified: boolean;
@@ -50,10 +51,16 @@ export function MentionAskCard({ data }: { data: MentionAskData }) {
     );
   }
   if (state === "asked") {
+    // A small sent card: who (as pills), what, when. Same glass as the Ask card, quieter.
     return (
-      <p className="mention-ask__note">
-        <span className="mention-ask__dot" aria-hidden="true" />Asked {names}{data.action?.due ? ` · due ${dueLabel(data.action.due)}` : ""}
-      </p>
+      <section className="mention-sent" aria-label={`Asked ${names}`}>
+        <header>
+          <span className="mention-ask__dot" aria-hidden="true" /><small>Asked</small>
+          {data.mentioned.map((m) => <MentionPill key={m.mentionId} name={m.name} />)}
+          {data.action?.due ? <em className="mention-sent__due">due {dueLabel(data.action.due)}</em> : null}
+        </header>
+        {data.action?.title ? <p>{data.action.title}</p> : null}
+      </section>
     );
   }
   return (

@@ -12,6 +12,8 @@ describe("@ names render as pills", () => {
     expect(linkMentions("Ask @Shawkat Kabbara today", ["Shawkat Kabbara"])).toBe("Ask [@Shawkat Kabbara](#mention:Shawkat%20Kabbara) today");
     expect(linkMentions("mail amir@papr.ai")).toBe("mail amir@papr.ai");
     expect(linkMentions("run `@foo` now")).toBe("run `@foo` now");
+    // Pen bolds people: an exact teammate name in ** ** is a pill; other bold text stays bold.
+    expect(linkMentions("Notified **amirkabbara+110** by **tomorrow**", ["amirkabbara+110"])).toBe("Notified [@amirkabbara+110](#mention:amirkabbara%2B110) by **tomorrow**");
     expect(linkMentions("```\n@foo\n```")).toBe("```\n@foo\n```");
   });
   it("chat Markdown shows initials + name", () => {

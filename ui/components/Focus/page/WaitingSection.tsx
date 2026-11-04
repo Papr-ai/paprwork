@@ -22,7 +22,7 @@ function Row({ w, ui, open, setOpen }: { w: FeedWaiting; ui: NeedsUi; open: bool
   return (
     <div className={`hwait-row${open || writing ? " is-open" : ""}`}>
       <button type="button" className="hwait-line" aria-expanded={open} onClick={() => { setOpen(open ? null : w.id); setWriting(false); }}>
-        <span className="hwait-who">{name}</span><b>{w.title}{due}</b>
+        <span className="hwait-who">{name}</span><b>{w.title}{due}{w.blocks ? <em className="hwait-blocks">blocks {w.blocks}</em> : null}</b>
         <span className={w.late ? "is-late" : ""}>{prog ? "In progress" : "Asked"}{said ? ` · ${said}` : ""}</span>
       </button>
       {open || writing ? (
