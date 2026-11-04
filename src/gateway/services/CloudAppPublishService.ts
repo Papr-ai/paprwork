@@ -140,8 +140,8 @@ export class TeamDataCopyPublishError extends Error {
   constructor(appId: string) {
     super(
       `App ${appId} is a copy on the team's live data, so publish_cloud_app can't ship it. ` +
-        "Use submit_cloud_app_pr instead. A Maintainer or Admin of the source app can pass publishNow: true to publish " +
-        "straight to the live app without review. Everyone else sends a proposal. To publish to a separate link, switch the copy to its own data.",
+        "Use submit_cloud_app_pr({ publishNow: true }) instead. A Maintainer or Admin of the source app publishes straight to the live app; " +
+        "anyone else is sent for review automatically and publishNote says why. To publish to a separate link, switch the copy to its own data.",
     );
     this.name = "TeamDataCopyPublishError";
   }

@@ -24,8 +24,8 @@ export function messageSentProperties(
 }
 
 /**
- * Properties for the canonical active-use event, sent once the gateway has
- * accepted the message and queued its stream (not when the model replies).
+ * Properties for the canonical active-use event. Sent only after the reply
+ * succeeds (finished or stopped by the user), never for failed sends.
  * Synthetic recovery turns are excluded from active-user KPIs.
  */
 export function userMessageSentProperties(
