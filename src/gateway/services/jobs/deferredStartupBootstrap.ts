@@ -56,16 +56,12 @@ async function runDeferredHomeWorkspaceRepair(): Promise<void> {
   const workspaceFp = await computeGoalsWorkspaceFingerprint();
   const workspaceFpOk = prior?.goalsWorkspaceFingerprint === workspaceFp;
 
-  const { getAppService } = await import("../AppService.js");
-  const appService = getAppService();
-  await appService.installPendingDefaultJobs();
-
-  const homeOk = await appService.homeLinkedSourcesInvariantsOk();
-  let repairRan = false;
-  if (!epochOk || !homeOk) {
-    await appService.repairHomeAndWorkspaceOnStartup();
-    repairRan = true;
-  }
+  // The Home dashboard app is retired (Focus is native). Take it off this device; keep its data.
+  const { retireHomeApp } = await import("../retireHomeApp.js");
+  const repairRan = await retireHomeApp().catch((err) => {
+    console.warn("[Gateway] Retiring the Home app failed:", err instanceof Error ? err.message : err);
+    return false;
+  });
 
   let goalsReady = await probeHomeGoalsTableExists();
   let schemaApplied: string[] = [];

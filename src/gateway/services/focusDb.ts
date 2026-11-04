@@ -109,6 +109,11 @@ async function applyFocusMigrations(dbPath: string): Promise<string[]> {
   return applied;
 }
 
+/** Replica reported a missing table/column on the Focus DB: apply what is missing. */
+export function healFocusDbSchema(dbPath: string): Promise<string[]> {
+  return applyFocusMigrations(dbPath);
+}
+
 /** True when the database file exists and has the goals table. No provisioning. */
 export async function focusDbReady(): Promise<boolean> {
   if (!existsSync(focusDbPath())) return false;
@@ -134,24 +139,12 @@ export async function focusWrite(sql: string, params: unknown[] = []): Promise<{
   const { getDbRouter } = await import("./appRuntime/DbRouter.js");
   const { writeLinkedDbRowLocalFirst } = await import("./syncV3/localFirstDbWrite.js");
   const result = await writeLinkedDbRowLocalFirst(getDbPool(), getDbRouter(), FOCUS_DB_SCOPE, src, sql, params);
-  await dropHomeReadCache();
   return { changes: result.changes, lastInsertRowid: result.lastInsertRowid };
 }
 
 /** Same signature the services used for their /api/db loopback: one place to swap. */
 export function focusDb(endpoint: "query" | "write", sql: string, params: unknown[] = []): Promise<Row[]> {
   return endpoint === "query" ? focusQuery(sql, params) : focusWrite(sql, params).then(() => []);
-}
-
-/** While a Home app still reads this file through /api/db, its cached reads must not go stale. */
-async function dropHomeReadCache(): Promise<void> {
-  try {
-    const { DEFAULT_HOME_APP_ID } = await import("./defaultHomeBundle.js");
-    const { invalidateLocalDbReadCacheForApp } = await import("./appRuntime/localDbReadCache.js");
-    invalidateLocalDbReadCacheForApp(DEFAULT_HOME_APP_ID);
-  } catch {
-    /* cache is best effort */
-  }
 }
 
 /** Workspace switch: the next call provisions the new workspace's database. */

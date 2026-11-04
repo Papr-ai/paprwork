@@ -18,7 +18,6 @@ import { describe, expect, it } from "vitest";
 const root = process.cwd();
 const templates = join(root, "src/resources/workspace-templates");
 const brief = join(process.cwd(), "src/resources/focus/daily-brief");
-const home = join(root, "src/resources/default-apps/home-dashboard");
 
 const read = (p: string) => readFileSync(p, "utf8");
 
@@ -94,82 +93,15 @@ describe("Chief-of-staff brief pipeline contract", () => {
     expect(cmd).toMatch(/\*\*L3s with a date this week are your priority candidates\*\*/);
     expect(cmd).toMatch(/\(G7 → G3 → G1\)/);
     expect(cmd).toMatch(/Do \*\*not\*\* call `list_jobs\(\)`/);
-    // Section types must still be ones render.js knows how to draw.
-    const render = read(join(home, "render.js"));
-    for (const type of ["priorities", "alerts", "timeline", "intel", "freeform"]) {
-      expect(render, `render.js cannot draw ${type}`).toMatch(new RegExp(`\\b${type}\\(`));
-      expect(cmd).toContain(`"type": "${type}"`);
-    }
-    // tracker is optional (numeric goal milestones only) — must still be renderable.
-    expect(render).toMatch(/\btracker\(/);
+    for (const type of ["priorities", "alerts", "timeline", "intel", "freeform"]) expect(cmd).toContain(`"type": "${type}"`);
     expect(cmd).toMatch(/`tracker` — optional/);
   });
 
-  it("Home app surfaces goals and lets the user set them through chat", () => {
-    const index = read(join(home, "index.html"));
-    const goals = read(join(home, "goals.js"));
-    const app = read(join(home, "app.js"));
-    const css = read(join(home, "styles.css"));
-    expect(index).toContain('<div id="goals"></div>');
-    expect(index).toContain('<script src="goals.js"></script>');
-    expect(goals).toContain("/api/workspace/goals");
-    // Goals are edited via the main agent (chat.open), never written by the app directly.
-    expect(goals).toMatch(/paprAPI\.invoke\('chat\.open'/);
-    expect(goals).not.toMatch(/\/api\/db\/write|fetch\([^)]*method:\s*'P/);
-    expect(goals).toMatch(/IDENTITY\.md/);
-    expect(goals).toMatch(/data-goals="set"/);
-    expect(goals).toMatch(/data-goals="edit"/);
-    // Draft → confirm flow: Sleep proposes, user confirms/rejects from the strip.
-    expect(goals).toMatch(/data-goals="draft"/);
-    expect(goals).toMatch(/data-goals="confirm"/);
-    expect(goals).toMatch(/data-goals="reject"/);
-    expect(goals).toMatch(/Status: proposed/);
-    expect(css).toContain(".goal.proposed");
-    // Hierarchy + confidence rendered; tree comes from the API.
-    expect(goals).toMatch(/d\.tree/);
-    expect(goals).toMatch(/goal-conf/);
-    expect(goals).toMatch(/mutually exclusive/);
-    expect(goals).toMatch(/data-goals="close"/);
-    expect(goals).toMatch(/entityChips/);
-    expect(goals).toMatch(/data-entity=/);
-    expect(css).toContain(".goal-entity");
-    expect(goals).toMatch(/Past goals/);
-    expect(goals).toMatch(/d\.archive/);
-    expect(css).toContain(".goals-past");
-    for (const cls of [".goal.L1", ".goal.L2", ".goal.L3", ".goal-conf"]) expect(css).toContain(cls);
-    expect(app).toMatch(/Goals\.load\(\)/);
-    expect(app).toMatch(/Goals\.render\(\)/);
-    expect(app).toMatch(/Goals\.bind\(/);
-    for (const cls of ["goals-empty", "goals-btn", "goal-next", "goals-grid"]) {
-      expect(css, `styles.css missing .${cls}`).toContain(`.${cls}`);
-    }
-    const meta = JSON.parse(read(join(home, "metadata.json"))) as { version: number };
-    expect(meta.version).toBeGreaterThanOrEqual(13);
-  });
-
   it("review feedback (check / x + note) is persisted and fed back into the brief", () => {
-    const migration = read(join(home, "db-migrations/0002_brief_reviews.sql"));
+    const migration = read(join(root, "src/resources/focus/db-migrations/0002_brief_reviews.sql"));
     expect(migration).toMatch(/CREATE TABLE IF NOT EXISTS brief_reviews/);
     expect(migration).toMatch(/item_key TEXT PRIMARY KEY/);
     expect(migration).toMatch(/status IN \('complete', 'irrelevant'\)/);
-
-    const contract = JSON.parse(read(join(home, "data-contract.json"))) as {
-      tables: Record<string, { writers: string[] }>;
-    };
-    expect(contract.tables.brief_reviews.writers).toContain("bbb7e17e-c810-47ef-b9ce-c8a83c0cd16c");
-
-    // App writes through the gateway (never localStorage-only), hydrates on load.
-    const reviews = read(join(home, "reviews.js"));
-    const app = read(join(home, "app.js"));
-    const index = read(join(home, "index.html"));
-    expect(index).toContain('<script src="reviews.js"></script>');
-    expect(reviews).toContain("/api/db/write");
-    expect(reviews).toMatch(/INSERT INTO brief_reviews/);
-    expect(reviews).toMatch(/ON CONFLICT\(item_key\) DO UPDATE/);
-    expect(app).toMatch(/Reviews\.hydrate\(\)/);
-    expect(app).toMatch(/Reviews\.upsert\(/);
-    expect(app).toMatch(/Reviews\.remove\(/);
-    expect(app).not.toMatch(/localStorage\.setItem/); // moved behind Reviews.setCache
 
     // Brief job reads feedback via save_brief.py --reviews as a hard input.
     const def = JSON.parse(read(join(brief, "job.json"))) as { command: string };

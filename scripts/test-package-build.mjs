@@ -314,7 +314,7 @@ function checkAsarContents(appPath) {
     ];
 
     const requiredUnpackedDirs = [
-      'dist/resources/default-apps/home-dashboard/app-id.txt',
+      'dist/resources/focus/daily-brief/job.json',
       'dist/resources/default-jobs',
       'dist/resources/job-sdk/papr_platform_browser.py',
       'dist/resources/mini-app-sdk/papr-sdk.ts',

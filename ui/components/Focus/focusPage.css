@@ -1,6 +1,6 @@
 /* Focus page styles: the former Home mini-app CSS, scoped. body/:root → .fpage-shell (full-bleed
    background + theme vars), main → .fpage (the centered column). Generated once from
-   src/resources/default-apps/home-dashboard/*.css when Focus went native; edit here from now on. */
+   the retired Home app CSS when Focus went native; this is the only copy. */
 
 /* ---- styles.css ---- */
 .fpage-shell {
