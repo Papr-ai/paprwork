@@ -68,6 +68,8 @@ export function useFocusBridge(root: React.RefObject<HTMLElement | null>) {
     waiting: waiting.map((w) => ({ ...w, promised: w.promisedAt ? promiseLabel(w.promisedAt) : null, late: !!w.promisedAt && Date.parse(w.promisedAt) < Date.now() })),
   }), [needs, reasons, later, muted, cards, waiting]);
 
+  const refresh = useRef(loadWaiting);
+  refresh.current = loadWaiting;
   const latest = useRef(feed);
   latest.current = feed;
   const byKey = useRef(new Map<string, Notice>());
@@ -117,7 +119,8 @@ export function useFocusBridge(root: React.RefObject<HTMLElement | null>) {
       const m = e.data as { type?: string; id?: string; op?: string; args?: Record<string, unknown> } | null;
       if (!m?.type?.startsWith("papr-focus-") || !frames().some((f) => f.contentWindow === e.source)) return;
       const reply = (x: unknown) => (e.source as Window | null)?.postMessage(x, "*");
-      if (m.type === "papr-focus-ready") reply({ type: "papr-focus-feed", feed: latest.current });
+      // The brief (re)loaded = Focus opened: send what we have, and refresh Waiting on (a cold server can miss the first load).
+      if (m.type === "papr-focus-ready") { reply({ type: "papr-focus-feed", feed: latest.current }); refresh.current(); }
       if (m.type === "papr-focus-act" && m.op) void run(m.op, m.args ?? {}).catch((x: Error) => ({ ok: false, error: x.message })).then((ack) => reply({ type: "papr-focus-ack", id: m.id, ...ack }));
     };
     window.addEventListener("message", onMsg);
