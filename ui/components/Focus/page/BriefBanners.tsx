@@ -24,8 +24,8 @@ export function SampleBanner({ busy, onGenerate }: { busy: string | null; onGene
       <div className="sample-data-icon" aria-hidden="true">
         <svg viewBox="0 0 24 24" width="20" height="20" fill="none"><path d="M9 18h6M10 22h4M12 2a6 6 0 0 0-3.4 11c.6.4 1 1 1.1 1.7V16h4.6v-1.3c.1-.7.5-1.3 1.1-1.7A6 6 0 0 0 12 2z" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round" /></svg>
       </div>
-      <div className="sample-data-text"><strong>This is sample data</strong> — showing what your dashboard will look like when populated.</div>
-      {focusEnv.web ? <span className="sample-data-text">Papr Work on your computer writes it each morning.</span> : <GenButton label="Generate My Real Brief" busy={busy} onClick={onGenerate} />}
+      <div className="sample-data-text">{focusEnv.web ? <><strong>This is a sample brief.</strong> Papr Work on your computer writes your real one each morning.</> : <><strong>This is sample data</strong> — showing what your dashboard will look like when populated.</>}</div>
+      {focusEnv.web ? <a className="gen-real-brief-btn" href="https://papr.ai/download" target="_blank" rel="noopener" title="Papr Work on your computer writes your brief each morning">Get Papr Work</a> : <GenButton label="Generate My Real Brief" busy={busy} onClick={onGenerate} />}
     </div></div>
   );
 }
