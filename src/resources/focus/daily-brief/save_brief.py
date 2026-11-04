@@ -28,7 +28,13 @@ import sys
 import urllib.error
 import urllib.request
 
-GATEWAY = os.environ.get("PAPR_GATEWAY", "http://localhost:18789")
+# This gateway, not the default port: dev profiles (and a second install) run on other ports,
+# and 18789 may be a different Papr Work. Jobs get PAPR_GATEWAY_URL; agent shells inherit GATEWAY_PORT.
+GATEWAY = (
+    os.environ.get("PAPR_GATEWAY_URL")
+    or os.environ.get("PAPR_GATEWAY")
+    or f"http://127.0.0.1:{os.environ.get('GATEWAY_PORT') or 18789}"
+).rstrip("/")
 DATE_KEY = os.environ.get("BRIEF_DATE_KEY") or datetime.date.today().isoformat()
 
 
