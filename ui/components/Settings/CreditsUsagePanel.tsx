@@ -4,10 +4,11 @@
  */
 import type { PaprCreditsSummary } from "../../../src/core/types/paprBilling";
 import { usageBarPercent } from "../../../src/core/utils/paprPlanLimits";
-import { formatCredits } from "../../../src/core/utils/paprCreditSeats";
+import { formatCredits, type MemberRequestKind } from "../../../src/core/utils/paprCreditSeats";
+import { useState } from "react";
 
 const BLOCK_COPY: Record<string, string> = {
-  member_cap: "You've reached your monthly limit as a member. Ask an admin to make you a builder or raise your limit.",
+  member_cap: "You've reached your monthly limit as a member.",
   member_approval: "An admin needs to approve your usage first.",
   topup_or_upgrade: "You've used your credits for this period. Upgrade the plan, or buy more credits, to keep going.",
 };
@@ -35,6 +36,36 @@ function Meter(props: { label: string; used: number; grant: number; state: strin
   );
 }
 
+/** What a blocked member can ask for, by block reason. */
+const ASKS: Record<string, Array<{ kind: MemberRequestKind; label: string; primary?: boolean }>> = {
+  member_cap: [{ kind: "limit", label: "Ask for a higher limit" }, { kind: "seat", label: "Ask to become a builder", primary: true }],
+  member_approval: [{ kind: "access", label: "Ask for access", primary: true }],
+};
+
+function AskButtons({ reason, requested }: { reason: string; requested: string[] }) {
+  const [sent, setSent] = useState<string[]>(requested);
+  const [error, setError] = useState<string | null>(null);
+  const asks = ASKS[reason] ?? [];
+  if (!asks.length) return null;
+  const ask = async (kind: MemberRequestKind) => {
+    setError(null);
+    const r = await window.electronAPI.papr.requestMember({ kind });
+    if (r.success) setSent((s) => [...s, kind]);
+    else setError(r.error ?? "Couldn't send the request");
+  };
+  return (
+    <div className="papr-plan__asks">
+      {asks.map((a) => sent.includes(a.kind) ? (
+        <span key={a.kind} className="papr-plan__asked">Requested · {a.label.replace(/^Ask (for |to )?/, "")}</span>
+      ) : (
+        <button key={a.kind} type="button" onClick={() => void ask(a.kind)}
+          className={a.primary ? "papr-plan__primary-btn" : "papr-plan__secondary-btn"}>{a.label}</button>
+      ))}
+      {error && <span className="papr-plan__hint">{error}</span>}
+    </div>
+  );
+}
+
 export function CreditsUsagePanel({ credits }: { credits: PaprCreditsSummary }) {
   const { you, org } = credits;
   const blocked = you.state === "blocked";
@@ -46,6 +77,7 @@ export function CreditsUsagePanel({ credits }: { credits: PaprCreditsSummary }) 
       {blocked ? (
         <div className="papr-plan__alert" data-tone="exceeded">
           {BLOCK_COPY[you.reason ?? ""] ?? "Your monthly credits are used up."} Local chat still works.
+          {!you.seat && <AskButtons reason={you.reason ?? ""} requested={you.requests ?? []} />}
         </div>
       ) : you.state === "overage" ? (
         <div className="papr-plan__alert" data-tone="warning">

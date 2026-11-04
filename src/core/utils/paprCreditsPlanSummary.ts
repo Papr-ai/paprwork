@@ -32,6 +32,7 @@ export function creditsSummaryFromUsage(view: CreditUsageView | null | undefined
       reason: you.reason ?? null,
       seat: you.seat !== false,
       memberCap: you.memberCap,
+      requests: you.requests ?? [],
     },
     org: org ? { grant: org.grant ?? 0, used: org.used ?? 0, state: org.state, seats: org.seats ?? 1 } : null,
     topupBalanceUsd: you.topupBalanceUsd ?? null,

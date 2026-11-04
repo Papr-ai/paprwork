@@ -448,3 +448,14 @@
 .papr-plan__toggle-btn--on .papr-plan__toggle-knob {
   transform: translateX(18px);
 }
+
+/* Members (credits orgs): member ask buttons and the admin requests card */
+.papr-plan__asks { display: flex; flex-wrap: wrap; gap: 8px; margin-top: 10px; align-items: center; }
+.papr-plan__asked { font-size: 12px; color: var(--text-secondary); }
+.papr-plan__members { margin-top: 16px; padding-top: 12px; border-top: 1px solid var(--border-subtle, rgba(127,127,127,0.18)); display: flex; flex-direction: column; gap: 10px; }
+.papr-plan__members-head { font-size: 13px; font-weight: 600; color: var(--text-primary); }
+.papr-plan__request { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; padding: 8px 10px; border-radius: 8px; background: rgba(245, 158, 11, 0.08); }
+.papr-plan__request-text { flex: 1 1 200px; font-size: 12px; color: var(--text-primary); }
+.papr-plan__member-row { display: flex; justify-content: space-between; align-items: center; gap: 12px; font-size: 12px; color: var(--text-secondary); }
+.papr-plan__member-row select { font-size: 12px; }
+.papr-plan__cap-input { width: 84px; font-size: 12px; padding: 4px 6px; border-radius: 6px; border: 1px solid var(--border-subtle, rgba(127,127,127,0.3)); background: transparent; color: var(--text-primary); }
