@@ -71,5 +71,6 @@ describe("cloudPublishLineageHints", () => {
     expect(w).toContain("publishNow: true");
     expect(w).toMatch(/Maintainer or Admin/);
     expect(w).toMatch(/Check the role/);
+    expect(w).not.toMatch(/only through a proposal/);
   });
 });
