@@ -94,6 +94,14 @@ body.is-nav main{opacity:.6;transition:opacity .2s .15s}
 .facts{grid-auto-flow:row;grid-template-columns:repeat(3,1fr);row-gap:12px}.facts li:nth-child(4){border-left:0}.two{grid-template-columns:1fr}}
 @media (max-width:640px){.feat{height:auto;aspect-ratio:4/5}.feat__big{place-items:start center;padding:14% 0 0}.grid{grid-template-columns:1fr}.get{display:none}.tabs{margin-left:0}.logo span{display:none}}
 @media (prefers-reduced-motion:reduce){.modal,.modal__card{animation:none}}
+/* Focus (signed-in home): the Papr Work page, full width under the header; it brings its own background. */
+body.is-focus{background:#f2f3f5}
+@media (prefers-color-scheme:dark){body.is-focus{background:#0b0c10}}
+.fmain{max-width:none;padding:0}
+.fmain .fpage-shell{height:auto;min-height:calc(100vh - 51px);overflow:visible}
+.fmain .fpage{padding-top:24px}
+.fload{text-align:center;color:var(--tx2);padding:80px 16px}
+body.is-focus .foot{display:none}
 `;
 
 /** Category pills + open/close the details modal without a page load (links still work without JS). */

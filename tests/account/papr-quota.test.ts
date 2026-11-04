@@ -166,3 +166,26 @@ describe("paprQuota", () => {
     expect(listener).toHaveBeenCalledOnce();
   });
 });
+
+describe("paprQuota credits billing (429 Credit allowance used up)", () => {
+  const cases: Array<[string, string, string]> = [
+    ["member_cap", "You've reached your monthly usage limit as a member. Ask an admin to make you a builder or raise your limit.", "Monthly usage limit reached"],
+    ["member_approval", "An admin needs to approve your usage first. Request access from your organization's admins.", "Waiting for admin approval"],
+    ["topup_or_upgrade", "You've used your credits for this period. Upgrade the plan, or buy more credits, to keep going.", "Out of credits"],
+  ];
+  for (const [reason, message, title] of cases) {
+    it(`shows a banner for ${reason} with the server's message`, () => {
+      const error = Object.assign(new Error(`429 ${JSON.stringify({ code: 429, status: "error", error: message, details: { error: "Credit allowance used up", message } })}`), { status: 429 });
+      const status = parsePaprQuotaError(error, "test");
+      expect(status?.kind).toBe("credits");
+      expect(status?.title).toBe(title);
+      expect(status?.detail).toBe(message);
+      expect(status?.suggestMeteredBilling).toBe(false);
+    });
+  }
+  it("recognises the bare error code", () => {
+    const status = parsePaprQuotaError({ name: "RateLimitError", status: 429, message: "Credit allowance used up" });
+    expect(status?.kind).toBe("credits");
+    expect(status?.title).toBe("Out of credits");
+  });
+});

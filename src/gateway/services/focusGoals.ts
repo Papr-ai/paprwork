@@ -537,12 +537,19 @@ export async function setFocus(input: SetFocusInput, now = Date.now()): Promise<
     confirmedAt: input.confirm === false ? (prev?.confirmedAt ?? null) : new Date(now).toISOString(),
     picks,
   });
+  scheduleCloud("your three");
   return getFocus(now);
+}
+
+/** The web shows the same three: post the new state (debounced; no-op when signed out). */
+function scheduleCloud(reason: string): void {
+  void import("./focusCloud/focusCloudSync.js").then((m) => m.scheduleFocusCloudSync(reason)).catch(() => undefined);
 }
 
 /** Throw away the saved three and let Pen pick again from today's evidence. */
 export async function repickFocus(now = Date.now()): Promise<FocusState> {
   await fs.rm(focusPath(), { force: true });
+  scheduleCloud("repick");
   return getFocus(now);
 }
 

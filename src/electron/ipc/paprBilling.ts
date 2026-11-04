@@ -29,7 +29,8 @@ import {
 } from "../../core/utils/paprPlanLimits.js";
 import { countSeatHolders, fetchWorkspaceMembers } from "../../core/utils/paprWorkspaceTeam.js";
 import { PAPR_USAGE_URL } from "../../core/utils/paprQuota.js";
-import { fetchBuilders, setBuilder } from "../../core/utils/paprCreditSeats.js";
+import { fetchBuilders, fetchCreditUsage, setBuilder } from "../../core/utils/paprCreditSeats.js";
+import { buildCreditsPlanSummary, creditsSummaryFromUsage } from "../../core/utils/paprCreditsPlanSummary.js";
 import { memoryBaseUrl } from "./paprHandoff.js";
 
 type GraphQLRunner = (
@@ -329,6 +330,15 @@ export interface EnsureDeveloperSubscriptionResponse {
  * Calls dashboard ensure-developer-subscription API (mirrors web onboarding).
  * Non-throwing — login and plan summary should continue if billing setup fails.
  */
+/** True when memory bills this caller's org in credits. Lookup failure = false (legacy path). */
+export async function isCreditsBillingOrg(sessionToken: string): Promise<boolean> {
+  try {
+    return creditsSummaryFromUsage(await fetchCreditUsage(memoryBaseUrl(), sessionToken)) !== null;
+  } catch {
+    return false;
+  }
+}
+
 export async function ensureDeveloperStripeSubscription(input: {
   sessionToken: string;
   workspaceId: string;
@@ -525,6 +535,24 @@ async function buildPlanSummary(services: BillingServices): Promise<PaprPlanSumm
     workspaceOrgPlanTier,
     stripeCustomerId: stripeCustomerId ? `${stripeCustomerId.slice(0, 12)}…` : null,
   });
+
+  // Credits orgs: memory is the source of truth. Skip the legacy dashboard metrics and
+  // never lazily create a Developer subscription for them.
+  const creditsView = await fetchCreditUsage(memoryBaseUrl(), profile.sessionToken!).catch((err) => {
+    console.warn("[PaprBilling] credits usage lookup failed; using legacy plan summary:", err);
+    return null;
+  });
+  const credits = creditsSummaryFromUsage(creditsView);
+  if (credits) {
+    const creditsRole = await resolveWorkspaceRole(profile.sessionToken!, workspaceId, profile.userId)
+      .catch(() => "member");
+    return buildCreditsPlanSummary({
+      credits,
+      isWorkspaceOwner: creditsRole === "owner",
+      isWorkspaceAdmin: creditsRole === "owner" || creditsRole === "admin",
+      stripeCustomerId,
+    });
+  }
 
   const usageMetricsResult = await fetchUsageMetrics(
     profile.sessionToken!,

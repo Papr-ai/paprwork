@@ -330,13 +330,18 @@ export async function setupAgentHandlers(
           attachments,
           reuseAssistantMessageId,
           ws,
+          // Active-use KPI: count the message only once its reply succeeds,
+          // so failed sends (bad key, model error) aren't counted.
+          ...(userMessageProperties
+            ? {
+                onSucceeded: () =>
+                  telemetry.trackFireAndForget(
+                    TelemetryEvents.USER_MESSAGE_SENT,
+                    userMessageProperties,
+                  ),
+              }
+            : {}),
         });
-        if (userMessageProperties) {
-          telemetry.trackFireAndForget(
-            TelemetryEvents.USER_MESSAGE_SENT,
-            userMessageProperties,
-          );
-        }
         break;
       }
 

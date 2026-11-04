@@ -8,6 +8,8 @@
  *  - Push: anything whose local copy differs from the last synced copy (`base`) is PUT with base.rev.
  *    409 = changed on another device: three-way merge (fields only we changed win; same field on both
  *    sides → theirs, and you get a notice), PUT again with their rev, apply the result locally.
+ * Your three (/focus/three): this device scores it (chats, logs) and posts the result for the web to show;
+ * picks the web made (picksBy "web", newer picksAt) are applied here first, then the fresh state goes up.
  * Cycles run after local writes (debounced), on focus.changed events from the feed, and at boot.
  * Never throws: signed out, offline or an older server skips and the next cycle retries.
  */
@@ -105,10 +107,24 @@ async function applyLocal(kind: string, doc: Row, me?: string): Promise<void> {
   } else if (kind === "brief") {
     await home("write", "INSERT INTO briefs (date, brief_json) VALUES (?, ?) ON CONFLICT(date) DO UPDATE SET brief_json = excluded.brief_json",
       [doc.date, JSON.stringify(doc.brief ?? null)]);
+    await applyRemoteReviews(String(doc.date), Array.isArray(doc.reviews) ? (doc.reviews as Row[]) : []);
   } else if (kind === "prefs") {
     const { getNoticeService } = await import("../notifications/NoticeService.js");
     const svc = getNoticeService();
     svc.applyRemotePrefs(withLocalPrefs(doc, svc.prefs as unknown as Row));
+  }
+}
+
+/** Checks and x's made elsewhere (the web, another desktop) for one brief day: theirs replace ours. */
+async function applyRemoteReviews(date: string, reviews: Row[]): Promise<void> {
+  const now = new Date().toISOString();
+  const keep = reviews.filter((r) => r?.itemKey && (r.status === "complete" || r.status === "irrelevant"));
+  await home("write", `DELETE FROM brief_reviews WHERE brief_date = ?${keep.length ? ` AND item_key NOT IN (${keep.map(() => "?").join(",")})` : ""}`,
+    [date, ...keep.map((r) => String(r.itemKey))]);
+  for (const r of keep) {
+    await home("write", `INSERT INTO brief_reviews (item_key, brief_date, section, item_type, title, status, note, task_id, created_at, updated_at)
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?) ON CONFLICT(item_key) DO UPDATE SET status = excluded.status, note = excluded.note, updated_at = excluded.updated_at`,
+    [String(r.itemKey), date, String(r.section ?? ""), String(r.itemType ?? ""), String(r.title ?? ""), r.status, r.note ?? null, r.taskId ?? null, now, now]);
   }
 }
 
@@ -119,7 +135,7 @@ const localTaskId = (doc: Row, me?: string) => (doc.userId && me && doc.userId !
 
 export interface CycleResult { pulled: number; pushed: number; conflicts: string[] }
 
-async function pull(state: State, local: Map<string, { kind: string; data: Row }>): Promise<number> {
+async function pull(state: State, local: Map<string, { kind: string; data: Row }>, seen: { three?: Row | null } = {}): Promise<number> {
   const me = cloudActingUserId();
   let n = 0;
   for (let page = 0; page < 20; page++) {
@@ -129,6 +145,7 @@ async function pull(state: State, local: Map<string, { kind: string; data: Row }
     for (const g of (r.goals as Row[]) ?? []) items.push(["goal", `goal:${g.goalId}`, g, shape(GOAL_KEYS, g)]);
     for (const t of (r.tasks as Row[]) ?? []) items.push(["task", `task:${localTaskId(t, me)}`, t, shape(TASK_KEYS, t)]);
     for (const b of (r.briefs as Row[]) ?? []) items.push(["brief", `brief:${b.date}`, b, shape(BRIEF_KEYS, b)]);
+    if (r.three) seen.three = r.three as Row;
     if (r.prefs) items.push(["prefs", "prefs", (r.prefs as Row).prefs as Row, sharedPrefs((r.prefs as Row).prefs as Row)]);
     for (const [kind, key, doc, data] of items) {
       const base = state.base[key];
@@ -183,6 +200,28 @@ async function push(state: State, local: Map<string, { kind: string; data: Row }
   return n;
 }
 
+/** Apply picks made on the web, then post this device's scored three (only when it changed). */
+export async function syncThree(state: State, remote: Row | null | undefined): Promise<boolean> {
+  const { getFocus, setFocus, repickFocus } = await import("../focusGoals.js");
+  const base = state.base.three;
+  const webAt = remote?.picksBy === "web" ? String(remote.picksAt ?? "") : "";
+  if (webAt && webAt !== base?.data.appliedAt) {
+    if (remote?.repick) await repickFocus();
+    else if (Array.isArray(remote?.picks) && remote.picks.length) await setFocus({ picks: remote.picks as never, confirm: true });
+    state.base.three = { rev: remote?.rev as number | undefined, data: { ...(base?.data ?? {}), appliedAt: webAt } };
+  }
+  const focus = await getFocus();
+  const cur = state.base.three;
+  if (cur && same(cur.data.state, focus)) return false;
+  const put = (rev: unknown) => call("/focus/three", "PUT", { state: focus, rev: rev ?? null, deviceId: state.deviceId });
+  let r = must(await put(cur?.rev ?? remote?.rev), "push three");
+  if (r.status === 409) r = must(await put((r.json.current as Row)?.rev), "push three again");
+  if (r.status === 409) return false;
+  const doc = (r.json.three ?? {}) as Row;
+  state.base.three = { rev: doc.rev as number | undefined, data: { state: focus, appliedAt: state.base.three?.data.appliedAt ?? webAt } };
+  return true;
+}
+
 function tellConflicts(conflicts: string[]): void {
   if (!conflicts.length) return;
   void import("../notifications/NoticeService.js").then(({ tryNotify }) => tryNotify({
@@ -200,7 +239,8 @@ export async function syncFocus(reason = "manual"): Promise<CycleResult | null> 
   try {
     const local = await localItems();
     const firstRun = !state.cursor;
-    const pulled = await pull(state, local);
+    const seen: { three?: Row | null } = {};
+    const pulled = await pull(state, local, seen);
     if (firstRun && !Object.keys(state.base).length) {
       // Empty server: send what we have once, history included (import keeps anything already there).
       const history = await q("SELECT goal_id, field, old_value, new_value, changed_at FROM goal_history ORDER BY changed_at LIMIT 2000");
@@ -212,6 +252,7 @@ export async function syncFocus(reason = "manual"): Promise<CycleResult | null> 
       await pull(state, local); // picks up revs for what we just sent
     }
     const pushed = await push(state, local, conflicts);
+    await syncThree(state, seen.three).catch((e: Error) => console.warn(`[FocusCloud] three: ${e.message.slice(0, 120)}`));
     tellConflicts(conflicts);
     if (pulled || pushed) console.log(`[FocusCloud] ${reason}: pulled=${pulled} pushed=${pushed}${conflicts.length ? ` conflicts=${conflicts.length}` : ""}`);
     return { pulled, pushed, conflicts };

@@ -18,7 +18,7 @@ import { cloudApiFetch } from "../../utils/cloudApiClient.js";
 import { broadcast } from "../../websocket/index.js";
 import { tryNotify, tryResolve } from "../notifications/NoticeService.js";
 import type { StoredMessage } from "../storage/IStorageProvider.js";
-import { parsePromise, promiseLabel } from "../../../core/collab/promised.js";
+import { dueDate, parsePromise, promiseLabel } from "../../../core/collab/promised.js";
 
 export interface MentionAction { title: string; due?: string | null }
 export interface MentionContext { chatId?: string; chatTitle?: string; appId?: string; appName?: string; goalId?: string }
@@ -137,7 +137,7 @@ export function parseSuggestion(raw: string | null): { reply: string; nextStep?:
 }
 
 async function suggest(item: MentionItem): Promise<{ reply: string; nextStep?: string }> {
-  const fallback = { reply: item.action ? `On it. I'll ${lowerFirst(item.action.title)}${item.action.due ? ` by ${item.action.due}` : ""}.` : "Thanks, got it." };
+  const fallback = { reply: item.action ? `On it. I'll ${lowerFirst(item.action.title)}${item.action.due ? ` by ${dueDate(item.action.due)}` : ""}.` : "Thanks, got it." };
   try {
     const { generateSimpleText } = await import("../../utils/simpleTextGeneration.js");
     const raw = await generateSimpleText(
@@ -147,7 +147,7 @@ async function suggest(item: MentionItem): Promise<{ reply: string; nextStep?: s
       [
         `${item.fromName} wrote to ${item.toName}${item.context.chatTitle ? ` (from the chat "${item.context.chatTitle}")` : ""}:`,
         item.text,
-        item.action ? `Action asked of ${item.toName}: ${item.action.title}${item.action.due ? ` (due ${item.action.due})` : ""}` : "",
+        item.action ? `Action asked of ${item.toName}: ${item.action.title}${item.action.due ? ` (due ${dueDate(item.action.due)})` : ""}` : "",
       ].filter(Boolean).join("\n"),
       300,
       "[Mentions]",
@@ -167,7 +167,7 @@ export function mentionMessageText(c: MentionCardData): string {
   return [
     `**${c.fromName} mentioned you${where}**`,
     `> ${c.text.split("\n").join("\n> ")}`,
-    c.action ? `**For you:** ${c.action.title}${c.action.due ? ` (due ${c.action.due})` : ""}` : "",
+    c.action ? `**For you:** ${c.action.title}${c.action.due ? ` (due ${dueDate(c.action.due)})` : ""}` : "",
     `**Suggested reply:** ${c.suggestedReply}`,
     c.nextStep ? `**Next step:** ${c.nextStep}` : "",
     `_Mention id: ${c.itemId}. To answer it, use answer_mention._`,

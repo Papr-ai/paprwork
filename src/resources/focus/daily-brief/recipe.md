@@ -1,6 +1,6 @@
 ## Intent
 
-Act as the user's chief of staff: produce one daily brief row in the Home app's linked database that tells the user what to do today to move their **goals**, what they are **waiting on**, and what only they can **decide** — grounded in the daily log, entity commitments, and goals in `IDENTITY.md`. Papr's own plumbing (jobs, sync, app fixes) is not the user's work and must not fill the brief.
+Act as the user's chief of staff: produce one daily brief row in the user's Focus database that tells the user what to do today to move their **goals**, what they are **waiting on**, and what only they can **decide** — grounded in the daily log, entity commitments, and goals in `IDENTITY.md`. Papr's own plumbing (jobs, sync, app fixes) is not the user's work and must not fill the brief.
 
 ## Success Criteria
 
@@ -35,7 +35,7 @@ A brief scoring below the threshold is most often one whose priorities are chore
 - Ranking untagged, `[agent]`, `[papr]`, or `(no-goal)` open items as priorities.
 - Resurfacing an item the user checked off or dismissed, or treating an irrelevance note as applying only to that one exact title.
 - Skipping `save_brief.py --reviews` (or reading `brief_reviews` via sqlite3).
-- Writing `briefs` via `sqlite3`, a hand-rolled `/api/db/write` call, or `$JOB_DB`; claiming success without the `SUCCESS:` line.
+- Writing `briefs` via `sqlite3`, a hand-rolled gateway call, or `$JOB_DB`; claiming success without the `SUCCESS:` line.
 
 ## Edge Cases
 
@@ -43,7 +43,7 @@ A brief scoring below the threshold is most often one whose priorities are chore
 - **No calendar / CRM** → omit `timeline`; never fabricate meetings.
 - **Only system work in the daily log** → "Quiet day" hero; one Overnight sentence; no priorities padded from tooling.
 - **Re-run same day** → `save_brief.py` upserts; do not fail on duplicate key.
-- **Cloud scheduler run** → `save_brief.py` resolves the Home app data source for this workspace.
+- **Desktop asleep at 6am** → the job runs on this desktop only (Focus lives here); it runs when the desktop wakes. Do not try another write path.
 
 ## Expected Output
 

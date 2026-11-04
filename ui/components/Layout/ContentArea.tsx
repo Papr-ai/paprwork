@@ -27,7 +27,6 @@ import { ChatGPTConvHistoryView } from "../ChatGPT/ChatGPTConvHistoryView";
 import { MemoryView } from "../Memory/MemoryView";
 import { FocusView } from "../Focus/FocusView";
 import { PlatformBrowserTab } from "../Platform/PlatformBrowserTab";
-import { gateway } from "../../src/lib/gateway";
 import { PaneErrorBoundary } from "./PaneErrorBoundary";
 import "./ContentArea.css";
 
@@ -37,54 +36,6 @@ function isAppTab(tab: Tab | undefined): tab is Tab {
   return tab?.type === "app";
 }
 
-// Component that redirects home tab to default app if configured
-function HomeRedirect() {
-  const { createTab, closeTab, activeTabId } = useTabs();
-  const [redirecting, setRedirecting] = useState(true);
-
-  useEffect(() => {
-    const checkAndRedirect = async () => {
-      try {
-        const response = await gateway.send('settings:get', {});
-        const defaultHomeAppId = response?.data?.preferences?.defaultHomeAppId;
-        
-        if (defaultHomeAppId) {
-          // Get app details (just to verify it exists)
-          const appsResponse = await gateway.send('app:list', {});
-          const app = appsResponse?.data?.find((a: any) => a.id === defaultHomeAppId);
-          
-          if (app) {
-            // Close current home tab and open app tab with "Home" as title
-            if (activeTabId) {
-              closeTab(activeTabId);
-            }
-            // Use home icon for the tab
-            const homeIcon = `<svg width="14" height="14" viewBox="0 0 24 24" fill="none"><path d="M3 9l9-7 9 7v11a2 2 0 01-2 2H5a2 2 0 01-2-2z" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/></svg>`;
-            createTab("app", defaultHomeAppId, "Home", { icon: homeIcon });
-            return;
-          }
-        }
-      } catch (error) {
-        console.error('[HomeRedirect] Failed to check default home app:', error);
-      }
-      
-      // No redirect needed, show placeholder
-      setRedirecting(false);
-    };
-
-    checkAndRedirect();
-  }, [createTab, closeTab, activeTabId]);
-
-  if (redirecting) {
-    return <div className="content-area__empty">Loading...</div>;
-  }
-
-  return (
-    <div className="content-area__placeholder">
-      Agent Lounge (Coming Soon)
-    </div>
-  );
-}
 
 export function ContentArea() {
   const {
@@ -400,7 +351,8 @@ export function ContentArea() {
         return null;
       }
       case "home":
-        return <HomeRedirect />;
+        // Home is Focus (the custom Home app setting is gone).
+        return <FocusView />;
       case "jobs":
         return <JobsView />;
       case "agents":
