@@ -1,6 +1,7 @@
 /* Needs you + Waiting on, inside the brief. Papr Work feeds the list (papr-focus-feed) and runs every
    action (papr-focus-act → papr-focus-ack); this file only draws it with the brief's own styles.
-   Needs you takes the "Do this first" slot; Your three, then Also needs you, then Waiting on. Outside Papr Work: nothing. */
+   Order = the Focus proposal: stats, Monday review, Do this first (top need, else the brief's top priority),
+   Your three, Also needs you, Waiting on. Outside Papr Work: nothing. */
 const Needs = {
   feed: null, more: false, open: null, drafts: {}, writing: null, busy: null, errors: {}, toast: null, seq: 0, wait: {},
   esc(s) { return String(s ?? '').replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c])); },
@@ -37,24 +38,26 @@ const Needs = {
     return `<div class="hmenu"><button type="button" class="hmenu-dots" data-need="menu" data-key="${k}" aria-label="Options" aria-expanded="${this.open === i.key}">&hellip;</button>
       ${this.open === i.key ? `<div class="hmenu-pop" role="menu">${body}<button type="button" role="menuitem" class="is-link" data-need="settings" data-key="${k}">${this.esc(m.source)} notification settings</button></div>` : ''}</div>`;
   },
+  /** The one "Do this first" slot (the Focus proposal's hero): what it is · who, the ask, Pen's work, one action + Later. */
   hero(i) {
     const m = i.mention, k = this.esc(i.key), busy = this.busy === i.key, err = this.errors[i.key];
-    const label = i.urgent ? "You're blocked" : m?.took ? 'In progress' : m ? 'Asked of you' : 'Do this first';
-    const who = m ? `${this.pill(i.from)}<span>${m.took ? '' : 'asked you'}${m.when ? ` · ${this.esc(m.when)}` : ''}</span>` : `<span>${this.esc(i.from)}${i.reason ? ` · ${this.esc(i.reason)}` : ''}</span>`;
+    const kind = m?.took ? 'In progress' : m ? 'Asked of you' : '';
+    const fromDup = !i.from || String(i.title).includes(String(i.from).replace(/\s*·.*$/, ''));
+    const who = m ? `${this.pill(i.from)}${m.when ? `<span>${this.esc(m.when)}</span>` : ''}` : fromDup ? '' : `<span>${this.esc(i.from)}</span>`;
+    const g = this.goal(i);
     let body = !m?.took && i.body ? `<p>${m ? this.pills(i.body) : this.esc(i.body)}</p>` : '';
+    const P = (op, l, extra = '', dis = false) => `<button type="button" class="hfocus-primary" data-need="${op}" data-key="${k}"${extra}${dis ? ' disabled' : ''}>${l}</button>`;
+    const Q = (op, l, extra = '', dis = false) => `<button type="button" class="hfocus-ghost" data-need="${op}" data-key="${k}"${extra}${dis ? ' disabled' : ''}>${l}</button>`;
     let acts;
-    if (m && m.took) acts = `<button type="button" class="t3save" data-need="answer" data-status="done" data-key="${k}"${busy ? ' disabled' : ''}>Done</button>
-      <button type="button" class="t3cancel" data-need="answer" data-status="dismissed" data-key="${k}"${busy ? ' disabled' : ''}>Can't</button>`;
+    if (m && m.took) acts = P('answer', 'Done', ' data-status="done"', busy) + Q('answer', "Can't", ' data-status="dismissed"', busy);
     else if (m) {
       const d = this.drafts[m.itemId] ?? m.draft;
       body += m.ready ? `<label class="hdraft"><small>Pen drafted your reply</small><textarea rows="2" data-draft="${this.esc(m.itemId)}">${this.esc(d)}</textarea></label>` : '';
-      acts = `<button type="button" class="t3save" data-need="answer" data-status="open" data-key="${k}"${busy || !m.ready ? ' disabled' : ''}>${busy ? 'Sending…' : "I'm on it"}</button>
-        <button type="button" class="t3cancel" data-need="answer" data-status="dismissed" data-key="${k}"${busy || !m.ready ? ' disabled' : ''}>Can't</button>
-        <button type="button" class="t3cancel" data-need="later" data-key="${k}">Later</button>`;
-    } else acts = `<button type="button" class="t3save" data-need="open" data-key="${k}">${this.esc(i.action)}</button>${i.urgent ? '' : `<button type="button" class="t3cancel" data-need="later" data-key="${k}">Later</button>`}`;
-    if (m) acts += `<button type="button" class="t3cancel" data-need="open" data-key="${k}">Open chat</button>`;
-    return `<div class="hneed${i.urgent ? ' is-urgent' : ''}"><header><small>${label}</small><span class="hneed-from">${who}</span>${this.menu(i)}</header>
-      <b class="hneed-t">${this.esc(i.title)}</b>${body}${err ? `<p class="hneed-err" role="alert">${this.esc(err)}</p>` : ''}<div class="t3btns">${acts}</div></div>`;
+      acts = P('answer', busy ? 'Sending…' : "I'm on it", ' data-status="open"', busy || !m.ready) + Q('answer', "Can't", ' data-status="dismissed"', busy || !m.ready) + Q('later', 'Later');
+    } else acts = P('open', this.esc(i.action)) + (i.urgent ? '' : Q('later', 'Later'));
+    if (m) acts += Q('open', 'Open chat');
+    return `<section class="hfocus hneed-hero${i.urgent ? ' is-urgent' : ''}"><header><small>${i.urgent ? "You're blocked" : 'Do this first'}</small>${g ? `<em class="hchip" title="Moves ${this.esc(g)}">${this.esc(g)}</em>` : ''}${this.menu(i)}</header>
+      <h3>${this.esc(i.title)}</h3>${kind || who ? `<span class="hneed-from"><b>${this.esc(kind)}</b>${who}</span>` : ''}${body}${err ? `<p class="hneed-err" role="alert">${this.esc(err)}</p>` : ''}<div class="hfocus-acts">${acts}</div></section>`;
   },
   /** Which of Your three this moves. Papr Work asks Jev (i.goal: title, or null = none); until it answers,
       shared words between the item and a goal title. */
@@ -83,7 +86,7 @@ const Needs = {
   /** "Do this first" sits above Your three; the rest (Also needs you, muted, Later) sits under it. */
   needsHtml() {
     const f = this.feed;
-    return f?.needs?.length ? `<section class="hsec hneeds"><h4>Needs you <em>${f.needs.length}</em></h4>${this.hero(f.needs[0])}</section>` : '';
+    return f?.needs?.length ? this.hero(f.needs[0]) : '';
   },
   alsoHtml() {
     const f = this.feed;
@@ -96,6 +99,13 @@ const Needs = {
       <button type="button" class="t3link" data-need="unlater" data-key="${this.esc(l.key)}">Bring back now</button></div>`).join('')}</section>` : '';
     return also + muted + later;
   },
+  /** The brief's counts are from last night; once Papr Work feeds us, show live ones (same as the proposal). */
+  stats(today) {
+    const el = document.querySelector('#hero .hero-stats'), f = this.feed;
+    if (!el || !f || !today) return;
+    const n = (v, l) => `<span class="stat"><b class="stat-num">${v}</b> <span class="stat-label">${l}</span></span>`;
+    el.innerHTML = n(f.needs.length, 'need you') + n((f.waiting || []).length, 'waiting on') + n(f.later.length, 'coming up');
+  },
   paint() {
     const n = document.getElementById('needs'), al = document.getElementById('alsoneeds'), w = document.getElementById('waiting');
     if (!n || !al || !w) return;
@@ -103,6 +113,9 @@ const Needs = {
     const a = document.activeElement;
     if (a && a.tagName === 'TEXTAREA' && (n.contains(a) || al.contains(a) || w.contains(a))) { this.dirty = true; return; }
     n.innerHTML = today ? this.needsHtml() : '';
+    const slot = document.getElementById('focus');
+    if (slot) slot.hidden = today && this.has(); // one "Do this first", never two
+    this.stats(today);
     al.innerHTML = today ? this.alsoHtml() : '';
     w.innerHTML = today && typeof Waiting !== 'undefined' ? Waiting.html() : '';
     const t = document.getElementById('hneed-toast');

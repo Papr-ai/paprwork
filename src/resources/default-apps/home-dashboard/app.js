@@ -268,6 +268,7 @@ const App = {
     document.getElementById('hero').innerHTML = banner + R.hero(this.brief.hero);
     document.getElementById('focus').innerHTML = R.focus(focus);
     document.getElementById('three').innerHTML = this.idx === 0 ? Three.section() : '';
+    Three.review(this.idx === 0);
     if (typeof Needs !== 'undefined') Needs.paint();
     document.getElementById('goals').innerHTML = this.idx === 0 ? this.goalsBlock() : '';
     document.getElementById('sections').innerHTML = sections.map((s) => R.section(s)).join('');

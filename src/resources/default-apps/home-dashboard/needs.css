@@ -65,24 +65,35 @@
 .hmenu-pop .is-link { color: var(--blue); font-weight: 600; }
 .hmenu-pop p { margin: 4px 10px 6px; font-size: 12.5px; color: var(--mid); }
 
-/* Waiting on */
-.hwait-row { display: grid; gap: 4px; padding: 10px 8px; border-radius: 12px; }
-.hwait-row:hover { background: rgba(10,16,32,.035); }
-.hwait-top { display: flex; align-items: center; justify-content: space-between; gap: 10px; min-width: 0; }
-.hwait-top b { display: flex; align-items: center; gap: 8px; min-width: 0; font-size: 14px; font-weight: 600; color: var(--ink); }
-.hwait-top b > span { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-.hstate { flex: none; font-style: normal; font-size: 11px; font-weight: 600; padding: 2px 7px; border-radius: 6px; color: var(--soft); background: rgba(10,16,32,.05); }
-.hstate.is-prog { color: #b7791f; background: rgba(245,158,11,.1); }
-.hwait-meta { font-size: 12.5px; color: var(--soft); }
-.hwait-meta.is-late { color: #b7791f; }
-.hwait-q { quotes: none; display: block; margin-top: 2px; padding: 7px 10px; border-radius: 10px; font-size: 13px; line-height: 1.45; color: var(--ink); background: rgba(0,96,224,.06); }
+/* Waiting on: one line per ask (the Focus proposal). Name · what · due / state · their latest word. Click opens it. */
+.hwait-row { border-top: 1px solid var(--line); }
+.hwait-line { display: grid; grid-template-columns: 96px 1fr; gap: 2px 12px; width: 100%; padding: 11px 2px; border: none; background: none;
+  text-align: left; cursor: pointer; font: 13px/1.4 var(--font); color: var(--ink); border-radius: 0; }
+.hwait-line:hover b { color: var(--blue); }
+.hwait-who { grid-row: span 2; font-weight: 600; color: var(--blue); min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.hwait-line b { font-weight: 600; min-width: 0; }
+.hwait-line > span:last-child { font-size: 12.5px; color: var(--mid); min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.hwait-line > span.is-late { color: #b7791f; }
+.hwait-more { display: grid; gap: 6px; padding: 0 2px 12px 110px; }
+.hwait-q { quotes: none; display: block; padding: 7px 10px; border-radius: 10px; font-size: 13px; line-height: 1.45; color: var(--ink); background: rgba(0,96,224,.06); }
 .hwait-q.is-mine { background: none; box-shadow: inset 0 0 0 1px var(--line); }
 .hwait-q small { display: block; margin-top: 2px; font-size: 11.5px; color: var(--soft); }
 .hwait-acts { display: flex; flex-wrap: wrap; gap: 2px; margin-left: -8px; }
 .hwait-acts .t3link { color: var(--mid); font-weight: 500; }
 .hwait-acts .t3link:hover { color: var(--ink); }
 .hwait-acts .t3link[disabled] { opacity: .5; pointer-events: none; }
-.hwait .t3note { margin: 6px 8px 0; }
+
+/* Do this first, when a need takes the slot: the brief's own hero card (.hfocus) + who and the goal chip. */
+.hneed-hero header { display: flex; align-items: center; gap: 8px; min-width: 0; }
+.hneed-hero .hchip { margin-left: auto; }
+.hneed-hero .hmenu { margin-left: 4px; }
+.hneed-hero .hchip + .hmenu { margin-left: 4px; }
+.hneed-hero header > small + .hmenu { margin-left: auto; }
+.hneed-hero .hneed-from { flex: none; gap: 8px; font-size: 12.5px; }
+.hneed-hero .hneed-from b { color: #b8741a; font-weight: 600; }
+.hneed-hero .hfocus-acts { flex-wrap: wrap; }
+.hfocus-primary[disabled], .hfocus-ghost[disabled] { opacity: .5; pointer-events: none; }
+.hneed-hero.is-urgent { box-shadow: inset 3px 0 0 var(--blue); }
 
 .hneed-toast { position: fixed; left: 50%; bottom: 24px; transform: translateX(-50%); z-index: 40; display: flex; gap: 14px; align-items: center;
   padding: 9px 14px; border-radius: 12px; background: #1d1d1f; color: #fff; font: 13px var(--font); box-shadow: 0 10px 30px rgba(0,0,0,.25); }
@@ -91,13 +102,13 @@
 @media (prefers-color-scheme: dark) {
   .hpill, .hdraft, .hwait-q { background: rgba(76,157,255,.14); }
   .hcard { background: rgba(255,255,255,.02); } .hchip { background: rgba(76,157,255,.14); } .hpen { background: rgba(76,157,255,.1); } .hcard-meta b { color: #d39a4a; }
-  .hstate, .hneed-note, .hmenu-dots:hover, .hmenu-pop button:hover, .hwait-row:hover { background: rgba(255,255,255,.06); }
+  .hneed-note, .hmenu-dots:hover, .hmenu-pop button:hover { background: rgba(255,255,255,.06); }
   .hmenu-pop { box-shadow: 0 14px 34px rgba(0,0,0,.5); }
   .hwait .hdraft textarea { background: #151a22; border-color: #2c3442; }
   .hneed-toast { background: #f2f2f4; color: #111; } .hneed-toast button { color: #0161e0; }
 }
 @media (max-width: 520px) {
   .hneed-from span:not(.hpill) { display: none; }
-  .hwait-top { flex-wrap: wrap; }
+  .hwait-line { grid-template-columns: 1fr; } .hwait-who { grid-row: auto; } .hwait-more { padding-left: 2px; }
   .hcard { flex-direction: column; align-items: stretch; gap: 12px; padding: 14px; }
 }

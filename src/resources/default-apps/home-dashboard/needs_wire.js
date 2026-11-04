@@ -5,13 +5,18 @@ const Waiting = {
     const m = Math.max(0, Math.round((Date.now() - Date.parse(iso)) / 60000));
     return m < 1 ? 'just now' : m < 60 ? `${m}m ago` : m < 1440 ? `${Math.round(m / 60)}h ago` : `${Math.round(m / 1440)}d ago`;
   },
+  /** One line like the Focus proposal: who · what · due, then state and their latest word. Click to open the
+      thread right there (reply, nudge, close, open chat). */
   row(w) {
-    const N = Needs, e = (s) => N.esc(s), name = N.first(w.toName), prog = w.state === 'in_progress', id = e(w.id);
-    const meta = w.promised ? `${w.late ? 'Was due' : 'Promised'} ${e(w.promised)}` : `Asked ${this.ago(w.at)}${w.due ? ` · due ${e(w.due)}` : ''}${!w.reply && !prog ? ' · no reply yet' : ''}`;
-    const nudged = w.nudgedAt && Date.now() - Date.parse(w.nudgedAt) < 6 * 3600e3;
+    const N = Needs, e = (s) => N.esc(s), name = N.first(w.toName), prog = w.state === 'in_progress', id = e(w.id), open = N.wopen === w.id || N.writing === w.id;
+    const due = w.promised ? ` · ${w.late ? 'was due' : 'due'} ${e(w.promised)}` : w.due ? ` · due ${e(w.due)}` : '';
+    const said = w.reply ? `${e(name)}: \u201c${e(w.reply)}\u201d` : !prog ? `asked ${this.ago(w.at)} · no reply yet` : '';
+    const sub = `<span class="${w.late ? 'is-late' : ''}">${prog ? 'In progress' : 'Asked'}${said ? ` · ${said}` : ''}</span>`;
+    const line = `<button type="button" class="hwait-line" data-need="wopen" data-id="${id}" aria-expanded="${open}"><span class="hwait-who">${e(name)}</span><b>${e(w.title)}${due}</b>${sub}</button>`;
+    if (!open) return `<div class="hwait-row">${line}</div>`;
+    const nudged = w.nudgedAt && Date.now() - Date.parse(w.nudgedAt) < 6 * 3600e3, busy = N.busy === w.id;
     const q = w.reply ? `<q class="hwait-q">${e(w.reply)}<small>${e(name)} · ${this.ago(w.replyAt)}</small></q>` : '';
     const mine = w.mine && (!w.replyAt || w.mine.at > w.replyAt) ? `<q class="hwait-q is-mine">${e(w.mine.text)}<small>You · ${this.ago(w.mine.at)}</small></q>` : '';
-    const busy = N.busy === w.id;
     const acts = N.writing === w.id
       ? `<label class="hdraft"><textarea rows="2" data-wtext="${id}" placeholder="Write to ${e(name)}">${e(N.drafts['w:' + w.id] || '')}</textarea></label>
         <div class="t3btns"><button type="button" class="t3save" data-need="wsend" data-id="${id}"${busy ? ' disabled' : ''}>${busy ? 'Sending…' : `Send to ${e(name)}`}</button>
@@ -20,14 +25,12 @@ const Waiting = {
         ${!prog || w.late ? `<button type="button" class="t3link" data-need="nudge" data-id="${id}" data-name="${e(name)}"${nudged || busy ? ' disabled' : ''}>${nudged ? 'Nudged' : 'Nudge'}</button>` : ''}
         <button type="button" class="t3link" data-need="close" data-id="${id}" title="Tell ${e(name)} you don't need it anymore">Close</button>
         ${w.chatId ? `<button type="button" class="t3link" data-need="chat" data-chat="${e(w.chatId)}" data-title="${e(w.chatTitle || 'Chat')}">Open chat</button>` : ''}</div>`;
-    return `<div class="hwait-row"><span class="hwait-top"><b>${N.pill(w.toName)}<span>${e(w.title)}</span></b><em class="hstate${prog ? ' is-prog' : ''}">${prog ? 'In progress' : 'Asked'}</em></span>
-      <span class="hwait-meta${w.late ? ' is-late' : ''}">${meta}</span>${q}${mine}${N.errors[w.id] ? `<p class="hneed-err" role="alert">${e(N.errors[w.id])}</p>` : ''}${acts}</div>`;
+    return `<div class="hwait-row is-open">${line}<div class="hwait-more">${q}${mine}${N.errors[w.id] ? `<p class="hneed-err" role="alert">${e(N.errors[w.id])}</p>` : ''}${acts}</div></div>`;
   },
   html() {
     const rows = Needs.feed?.waiting || [];
     if (!rows.length) return '';
-    return `<section class="hsec hwait"><h4>Waiting on <em>${rows.length}</em></h4>${rows.map((w) => this.row(w)).join('')}
-      <p class="t3note">You're told only when it's your move: done, can't, or a question.</p></section>`;
+    return `<section class="hsec hwait"><h4>Waiting on <em>${rows.length}</em></h4>${rows.map((w) => this.row(w)).join('')}</section>`;
   },
 };
 
@@ -74,6 +77,7 @@ const Waiting = {
         if (status === 'open' && !reply) return;
         return run(key, 'answer', { itemId: m.itemId, status, reply });
       }
+      case 'wopen': N.wopen = N.wopen === id ? null : id; if (N.writing && N.writing !== N.wopen) N.writing = null; return N.paint();
       case 'wreply': N.writing = id; N.paint(); return document.querySelector(`[data-wtext="${CSS.escape(id)}"]`)?.focus();
       case 'wcancel': N.writing = null; return N.paint();
       case 'wsend': { const t = (N.drafts['w:' + id] || '').trim(); if (!t) return; return run(id, 'followup', { itemId: id, kind: 'reply', text: t }, () => { N.writing = null; delete N.drafts['w:' + id]; }); }
