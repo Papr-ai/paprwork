@@ -33,8 +33,10 @@ export function toPublishLineageSummary(
 const TRACK_COLLABORATOR_WARNING =
   "This copy is on the team's live data, so publish_cloud_app is refused for it. Its code reaches the team through submit_cloud_app_pr. " +
   "To ship code: push_cloud_sync({ appId }) then submit_cloud_app_pr. " +
-  "If the user is a Maintainer or Admin of the source app (their Papr sharing role on the original, not a role inside the app's own UI), " +
-  "submit_cloud_app_pr({ publishNow: true }) publishes straight to the live app with no owner review. Check the role before telling them they must wait for the owner. " +
+  "When the user asks to publish (not just propose), always call submit_cloud_app_pr({ publishNow: true }); you can't look up their role, so don't guess it. " +
+  "A Maintainer or Admin of the source app goes straight to the live app with no owner review. " +
+  "Anyone else is sent for review automatically and publishNote says why (\"You can propose changes to this app, but not publish them directly.\" means their role). " +
+  "Then tell them it went to the owner for review, and that the owner can make them a Maintainer in the app's sharing settings if they want to publish directly. " +
   "To ship shared database rows: push_cloud_sync({ appId }) (or targets: ['turso']) and confirm turso.sources[].pendingPush is clear in get_cloud_sync_status. " +
   "The live team URL stays on the publisher's slug. A proposal reaches it once the owner approves it. A publishNow from a Maintainer/Admin reaches it right away.";
 

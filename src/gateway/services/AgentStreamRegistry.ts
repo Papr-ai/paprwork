@@ -16,6 +16,7 @@ import {
 import {
   isExpectedStreamCancellation,
   STREAM_REPLACED_REASON,
+  STREAM_STOPPED_BY_USER_REASON,
   STREAM_STOPPED_REASON,
 } from "../../core/constants/streamCancellation.js";
 
@@ -69,6 +70,10 @@ interface ActiveStream {
   subscribers: Map<WebSocket, StreamSubscriber>;
   status: "running" | "complete" | "error";
   cancelled?: boolean;
+  /** Why the stream was cancelled (STREAM_STOPPED_BY_USER_REASON = user pressed stop). */
+  cancelReason?: string;
+  /** Runs once when the reply ends without an error (see startStream). */
+  onSucceeded?: () => void;
   completeData?: {
     chatId: string;
     done: boolean;
@@ -256,6 +261,7 @@ export class AgentStreamRegistry {
 
     if (entry.status === "running") {
       entry.cancelled = true;
+      entry.cancelReason = reason;
       const silent =
         options?.silent === true || isExpectedStreamCancellation(reason);
       if (!silent) {
@@ -287,6 +293,11 @@ export class AgentStreamRegistry {
     attachments?: import("./storage/IStorageProvider.js").StoredMessageAttachment[];
     reuseAssistantMessageId?: string;
     ws: WebSocket;
+    /**
+     * Runs once when the reply ends without a model or stream error
+     * (finished, or stopped by the user). Never runs for failed replies.
+     */
+    onSucceeded?: () => void;
   }): void {
     const {
       chatId,
@@ -297,6 +308,7 @@ export class AgentStreamRegistry {
       attachments,
       reuseAssistantMessageId,
       ws,
+      onSucceeded,
     } = params;
 
     let previousStreamStopped: Promise<void> = Promise.resolve();
@@ -324,6 +336,7 @@ export class AgentStreamRegistry {
       bufferedBytes: 0,
       subscribers: new Map(),
       status: "running",
+      ...(onSucceeded ? { onSucceeded } : {}),
     };
 
     entry.subscribers.set(ws, { ws, responseId: requestId });
@@ -414,10 +427,24 @@ export class AgentStreamRegistry {
         }),
       );
 
+      const succeeded = reportedModelError === undefined;
+      const notifySucceeded = () => {
+        const callback = entry.onSucceeded;
+        if (!succeeded || !callback) return;
+        entry.onSucceeded = undefined;
+        try {
+          callback();
+        } catch {
+          /* telemetry callbacks must never affect the stream */
+        }
+      };
+
       if (entry.cancelled) {
         console.log(
           `[AgentStreamRegistry] Stream ${requestId} aborted for chat ${chatId}`,
         );
+        // A user stop still counts as a real turn; replaced/timed-out streams don't.
+        if (entry.cancelReason === STREAM_STOPPED_BY_USER_REASON) notifySucceeded();
         try {
           const messages = await agentService.getChatHistory(chatId);
           const finalMessage = messages[messages.length - 1];
@@ -452,6 +479,7 @@ export class AgentStreamRegistry {
 
         this.broadcastComplete(entry);
       }
+      notifySucceeded();
       console.log(
         `[AgentStreamRegistry] Stream complete for chat ${chatId} (${entry.chunks.length} chunks buffered)`,
       );
