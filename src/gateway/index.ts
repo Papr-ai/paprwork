@@ -587,7 +587,7 @@ async function startGateway(): Promise<void> {
             );
             res.setHeader(
               "Access-Control-Allow-Headers",
-              "Content-Type,Authorization",
+              "Content-Type,Authorization,x-papr-actor",
             );
           }
         } catch {
