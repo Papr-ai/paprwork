@@ -17,6 +17,7 @@ import { describe, expect, it } from "vitest";
 
 const root = process.cwd();
 const templates = join(root, "src/resources/workspace-templates");
+const brief = join(process.cwd(), "src/resources/focus/daily-brief");
 const home = join(root, "src/resources/default-apps/home-dashboard");
 
 const read = (p: string) => readFileSync(p, "utf8");
@@ -75,7 +76,7 @@ describe("Chief-of-staff brief pipeline contract", () => {
   });
 
   it("brief prompt reads goals first and confines Papr infra to one Overnight line", () => {
-    const def = JSON.parse(read(join(home, "default-job.json"))) as {
+    const def = JSON.parse(read(join(brief, "job.json"))) as {
       command: string;
     };
     const cmd = def.command;
@@ -171,17 +172,18 @@ describe("Chief-of-staff brief pipeline contract", () => {
     expect(app).not.toMatch(/localStorage\.setItem/); // moved behind Reviews.setCache
 
     // Brief job reads feedback via save_brief.py --reviews as a hard input.
-    const def = JSON.parse(read(join(home, "default-job.json"))) as { command: string };
+    const def = JSON.parse(read(join(brief, "job.json"))) as { command: string };
     expect(def.command).toContain('python3 "$JOB_DIR/save_brief.py" --reviews');
     expect(def.command).toMatch(/the note is a \*\*standing rule\*\*/);
     expect(def.command).toMatch(/\*\*Respect feedback\.\*\*/);
-    const saveBrief = read(join(home, "job-assets/save_brief.py"));
+    const saveBrief = read(join(brief, "save_brief.py"));
     expect(saveBrief).toMatch(/def print_reviews/);
-    expect(saveBrief).toMatch(/FROM brief_reviews/);
+    expect(saveBrief).toMatch(/brief-reviews/);
+    expect(read(join(root, "src/gateway/services/focusRoutes.ts"))).toMatch(/FROM brief_reviews/);
     expect(saveBrief).toMatch(/sys\.argv\[1\] == "--reviews"/);
 
     // Recipe and Sleep close the loop.
-    const recipe = read(join(home, "recipe.md"));
+    const recipe = read(join(brief, "recipe.md"));
     expect(recipe).toMatch(/Respects feedback/);
     expect(recipe).toMatch(/save_brief\.py --reviews/);
     const sleep = read(join(templates, "SLEEP.md"));
@@ -190,7 +192,7 @@ describe("Chief-of-staff brief pipeline contract", () => {
   });
 
   it("recipe weights goal traceability highest and names chore-list briefs as failing", () => {
-    const recipe = read(join(home, "recipe.md"));
+    const recipe = read(join(brief, "recipe.md"));
     const weights = [...recipe.matchAll(/\|\s*([^|]+?)\s*\|\s*(0\.\d+)\s*\|/g)].map(
       (m) => [m[1], Number(m[2])] as const,
     );

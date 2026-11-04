@@ -276,6 +276,7 @@ describe("task completion write-back", () => {
 });
 
 describe("Home migration + contract", () => {
+  const brief = join(process.cwd(), "src/resources/focus/daily-brief");
   const home = join(process.cwd(), "src/resources/default-apps/home-dashboard");
   it("0003 creates goals, goal_history, tasks and adds task_id to brief_reviews", () => {
     const sql = readFileSync(join(home, "db-migrations/0003_goals_tasks.sql"), "utf8");
@@ -287,13 +288,15 @@ describe("Home migration + contract", () => {
     expect(sql4).toMatch(/ALTER TABLE tasks ADD COLUMN goal_source TEXT/);
   });
   it("brief reads tasks as the candidate pool and stamps task_id; Home completes tasks at source", () => {
-    const def = JSON.parse(readFileSync(join(home, "default-job.json"), "utf8")) as { command: string };
+    const def = JSON.parse(readFileSync(join(brief, "job.json"), "utf8")) as { command: string };
     expect(def.command).toContain('python3 "$JOB_DIR/save_brief.py" --tasks');
     expect(def.command).toMatch(/\*\*Stamp `task_id` on every priority/);
     expect(def.command).toMatch(/"task_id": "item:/);
-    const py = readFileSync(join(home, "job-assets/save_brief.py"), "utf8");
+    const py = readFileSync(join(brief, "save_brief.py"), "utf8");
     expect(py).toMatch(/def print_tasks/);
-    expect(py).toMatch(/FROM tasks t LEFT JOIN goals g/);
+    expect(py).toMatch(/open-tasks/);
+    const routes = readFileSync(join(process.cwd(), "src/gateway/services/focusRoutes.ts"), "utf8");
+    expect(routes).toMatch(/FROM tasks t LEFT JOIN goals g/);
     const reviews = readFileSync(join(home, "reviews.js"), "utf8");
     expect(reviews).toMatch(/\/api\/workspace\/tasks\/\$\{encodeURIComponent\(taskId\)\}\/done/);
     expect(reviews).toMatch(/task_id = excluded\.task_id/);

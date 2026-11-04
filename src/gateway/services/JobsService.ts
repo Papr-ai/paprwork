@@ -907,6 +907,9 @@ export class JobsService {
     const job = this.jobs.get(jobId);
     if (!job) return;
     if (jobBelongsToApp(job.appIds, appId)) return;
+    // Focus jobs (Daily Brief, trackers) belong to Papr Work. An old Home data-sources.json
+    // still names the brief job; re-attaching it here would undo the re-link every boot.
+    if (job.folder === "focus" || job.folder === "focus-trackers") return;
 
     const appIds = mergeJobAppIds(job.appIds, [appId]);
     await this.validateAppIdsExist(

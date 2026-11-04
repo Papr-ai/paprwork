@@ -135,6 +135,7 @@ import {
 import { ensureTursoSyncBridge } from "./services/TursoSyncBridge.js";
 import { buildTursoSyncItemsReport } from "./services/tursoSyncStatus.js";
 import { isLoopbackRequest } from "./utils/isLoopbackRequest.js";
+import { registerFocusRoutes } from "./services/focusRoutes.js";
 import { buildCloudLinkSyncReport } from "./services/cloudPublishStatus.js";
 import {
   getCachedCloudLinkSyncReport,
@@ -3887,15 +3888,19 @@ async function startGateway(): Promise<void> {
       }
     });
 
+    // Focus DB for jobs/scripts (save_brief.py, trackers): no app id, loopback only.
+    registerFocusRoutes(app);
+
     // Lazy first-run setup for the bundled Home dashboard (job + DB + data-sources).
     app.post("/api/home/ensure-brief-setup", async (req, res) => {
       try {
         const { appId: bodyAppId } = (req.body ?? {}) as { appId?: string };
-        const { DEFAULT_HOME_APP_ID } =
-          await import("./services/defaultHomeBundle.js");
-        const appId = bodyAppId?.trim() || DEFAULT_HOME_APP_ID;
-        const result = await getAppService().ensureHomeDailyBriefReady(appId);
-        res.json(result);
+        // The Daily Brief job belongs to Papr Work now; old Home builds still call this.
+        void bodyAppId;
+        const { ensureDailyBriefJob } = await import("./services/focusSystemJobs.js");
+        const jobId = await ensureDailyBriefJob();
+        if (!jobId) throw new Error("Daily Brief job bundle not found");
+        res.json({ jobId, created: false });
       } catch (error) {
         const message = error instanceof Error ? error.message : String(error);
         const status = message.includes("not found") ? 404 : 500;
