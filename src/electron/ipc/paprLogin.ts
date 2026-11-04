@@ -14,7 +14,7 @@
  *   7. Store the API key as PAPR_API_KEY in keychain
  */
 
-import { ipcMain, BrowserWindow, shell, dialog } from "electron";
+import { app, ipcMain, BrowserWindow, shell, dialog } from "electron";
 import {
   decideHandoffAccount,
   handoffLanding,
@@ -39,6 +39,7 @@ import {
   isCreditsBillingOrg,
 } from "./paprBilling.js";
 import {
+  paprSignedInFunnel,
   startPaprAuthCallbackServer,
   stopPaprAuthCallbackServer,
 } from "./paprAuthCallbackServer.js";
@@ -4156,7 +4157,8 @@ export function initializePaprLoginIPC(
 
       if (!useDeepLinkOnly) {
         try {
-          redirectUri = await startPaprAuthCallbackServer(async (params, verificationCode) => {
+          redirectUri = await startPaprAuthCallbackServer(
+            async (params, verificationCode) => {
             const oauthError = params.get("error");
             if (oauthError) {
               notifyLoginError(
@@ -4189,7 +4191,9 @@ export function initializePaprLoginIPC(
                   : "Login failed";
               notifyLoginError(undefined, message);
             }
-          });
+          },
+            paprSignedInFunnel(settingsStorage, app.isPackaged),
+          );
           console.log("[PaprLogin] Using localhost callback:", redirectUri);
         } catch (callbackServerError) {
           stopPaprAuthCallbackServer();

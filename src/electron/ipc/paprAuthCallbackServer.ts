@@ -66,8 +66,63 @@ export function verifyCode(code: string): { valid: boolean; sessionData?: unknow
   return { valid: true, sessionData: data.sessionData };
 }
 
-export function buildPaprAuthSuccessHtml(verificationCode?: string): string {
+/** Where the success page continues to, so papr.ai can link the visitor to this install. */
+export const PAPR_SIGNED_IN_URL = "https://papr.ai/desktop/signed-in";
+const PAPR_SIGNED_IN_PROBE_TIMEOUT_MS = 1500;
+
+export type PaprSignedInFunnel = { installId: string; baseUrl?: string };
+
+/**
+ * papr.ai URL for the signed-in page. Only the random install id goes in the
+ * query; the backup code goes in the fragment so it never reaches a server.
+ */
+export function buildPaprSignedInUrl(
+  funnel: PaprSignedInFunnel,
+  formattedCode: string | null,
+): string | null {
+  if (!/^[0-9a-f-]{36}$/i.test(funnel.installId)) return null;
+  const url = new URL(funnel.baseUrl ?? PAPR_SIGNED_IN_URL);
+  url.searchParams.set("install", funnel.installId);
+  if (formattedCode) url.hash = `code=${encodeURIComponent(formattedCode)}`;
+  return url.toString();
+}
+
+/**
+ * Funnel link for the success page: packaged builds only (dev builds stay on
+ * the local page), only with telemetry on, and never throws.
+ */
+export function paprSignedInFunnel(
+  settings: { getTelemetryEnabled(): boolean; getOrCreateTelemetryInstallId(): string },
+  isPackaged: boolean,
+): PaprSignedInFunnel | null {
+  if (!isPackaged || process.env.PAPR_AUTH_SIGNED_IN_REDIRECT === "false") return null;
+  try {
+    if (!settings.getTelemetryEnabled()) return null;
+    const installId = settings.getOrCreateTelemetryInstallId();
+    return installId ? { installId } : null;
+  } catch {
+    return null;
+  }
+}
+
+export function buildPaprAuthSuccessHtml(
+  verificationCode?: string,
+  funnel?: PaprSignedInFunnel | null,
+): string {
   const formattedCode = verificationCode ? formatVerificationCode(verificationCode) : null;
+  const signedInUrl = funnel ? buildPaprSignedInUrl(funnel, formattedCode) : null;
+  // Continue to papr.ai only if it answers quickly; otherwise this local page stays.
+  const continueScript = signedInUrl
+    ? `
+      (function () {
+        var target = ${JSON.stringify(signedInUrl)};
+        var done = false;
+        var timer = setTimeout(function () { done = true; }, ${PAPR_SIGNED_IN_PROBE_TIMEOUT_MS});
+        fetch(new URL(target).origin + "/favicon.ico", { mode: "no-cors", cache: "no-store" })
+          .then(function () { if (!done) { clearTimeout(timer); location.replace(target); } })
+          .catch(function () { clearTimeout(timer); });
+      })();`
+    : "";
 
   // People skim this page. One big instruction, one button, code last.
   return `<!DOCTYPE html>
@@ -174,6 +229,7 @@ export function buildPaprAuthSuccessHtml(verificationCode?: string): string {
       ` : ""}
     </div>
     <script>
+      ${continueScript}
       ${formattedCode ? `
       document.querySelector('.code-display')?.addEventListener('click', function() {
         navigator.clipboard.writeText('${formattedCode}');
@@ -236,12 +292,13 @@ export function getCurrentVerificationCode(): string | null {
 
 export async function startPaprAuthCallbackServer(
   onCallback: (params: URLSearchParams, verificationCode: string) => void | Promise<void>,
+  funnel?: PaprSignedInFunnel | null,
 ): Promise<string> {
   stopPaprAuthCallbackServer();
 
   // Generate a verification code for this session
   currentVerificationCode = generateVerificationCode();
-  const successHtml = buildPaprAuthSuccessHtml(currentVerificationCode);
+  const successHtml = buildPaprAuthSuccessHtml(currentVerificationCode, funnel);
 
   const server = new OAuthCallbackServer({
     port: PAPR_AUTH_CALLBACK_PORT,
