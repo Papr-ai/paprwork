@@ -8,7 +8,7 @@ import { escapeHtmlAttribute as esc } from "../../../core/utils/cloudAppPreview.
 import type { DiscoverEntry } from "./cloudAppDiscoverPage.js";
 import { DISCOVER_CSS, DISCOVER_JS } from "./cloudAppDiscoverAssets.js";
 
-export type DiscoverView = "discover" | "mine";
+export type DiscoverView = "discover" | "mine" | "focus";
 
 const PAPR_URL = "https://papr.ai";
 const DOWNLOAD_URL = "https://papr.ai/download";
@@ -196,6 +196,8 @@ const PAPR_MARK = `<svg class="logo__mark" viewBox="0 0 105 124" width="20" heig
 
 export const FAVICON_SVG = PAPR_MARK.replace(' class="logo__mark"', "").replace(' width="20" height="24"', ' width="96" height="96"').replace("<svg ", '<svg xmlns="http://www.w3.org/2000/svg" ');
 const FAVICON = "/favicon.svg";
+/** The Focus page bundle (scripts/build-focus-web.mjs), served by cloudAppFocusPage.ts. */
+export const FOCUS_ASSETS = "/focus/_";
 
 export interface DiscoverHtmlInput {
   view: DiscoverView;
@@ -223,13 +225,17 @@ export function buildDiscoverHtml(input: DiscoverHtmlInput): string {
   const base = input.publicBaseUrl.replace(/\/$/, "");
   const me = input.userId;
   const view = input.focused && !input.focusedIsPublic ? "mine" : input.view;
-  const listPath = view === "mine" ? "/my-apps" : "/";
+  // Signed in, "/" is Focus and Discover lives at /discover.
+  const discoverPath = input.signedIn ? "/discover" : "/";
+  const listPath = view === "mine" ? "/my-apps" : discoverPath;
   const apps = sortApps(input.apps);
   const mine = input.mine ? sortApps(input.mine) : null;
   const feat = view === "discover" ? pickFeatured(apps) : null;
 
   let body: string;
-  if (view === "mine") {
+  if (view === "focus") {
+    body = `<div id="focus-root"><p class="fload">Loading your Focus…</p></div>`;
+  } else if (view === "mine") {
     body = !mine
       ? `<section class="empty"><h2>Couldn't load your apps</h2><p>Try again in a moment.</p></section>`
       : !mine.length
@@ -249,13 +255,13 @@ export function buildDiscoverHtml(input: DiscoverHtmlInput): string {
   const openModal = modal(input.focused, me, listPath);
 
   const f = input.focused;
-  const title = f ? `${name(f)} · Papr Work apps` : view === "mine" ? "My apps · Papr Work" : "Discover apps built with Papr Work";
+  const title = f ? `${name(f)} · Papr Work apps` : view === "focus" ? "Focus · Papr Work" : view === "mine" ? "My apps · Papr Work" : "Discover apps built with Papr Work";
   const desc = f
     ? metaDescription(f.description, f.catalogHeadline, `${name(f)}, an app built with Papr Work.`)
     : "Discover apps built and shared by the Papr Work community: AI agents, dashboards and automations you can open in your browser or make your own.";
-  const canonical = f ? `${base}${detailPath(f)}` : view === "mine" ? `${base}/my-apps` : `${base}/`;
+  const canonical = f ? `${base}${detailPath(f)}` : view === "mine" ? `${base}/my-apps` : view === "focus" ? `${base}/focus` : `${base}/`;
   const ogImage = f ? `${base}${appPath(f)}opengraph-image` : null;
-  const noindex = view === "mine" || (f && !input.focusedIsPublic);
+  const noindex = view === "mine" || view === "focus" || (f && !input.focusedIsPublic);
   const jsonLd = f && input.focusedIsPublic
     ? {
         "@context": "https://schema.org", "@type": "SoftwareApplication", name: name(f), description: desc,
@@ -278,10 +284,10 @@ export function buildDiscoverHtml(input: DiscoverHtmlInput): string {
   const account = input.signedIn
     ? `<details class="acct"><summary class="acct__btn" aria-label="Account" title="${esc(who)}">${avatar}</summary>
 <div class="acct__menu" role="menu"><div class="acct__who">${input.displayName?.trim() ? `<b>${esc(input.displayName.trim())}</b>` : ""}${input.email ? `<small>${esc(input.email)}</small>` : ""}</div>
-<a role="menuitem" href="/my-apps">My apps</a><a role="menuitem" href="${DOWNLOAD_URL}">Get Papr Work</a><hr><a role="menuitem" href="/auth/logout?returnTo=%2F">Sign out</a></div></details>`
+<a role="menuitem" href="/">Focus</a><a role="menuitem" href="/my-apps">My apps</a><a role="menuitem" href="${DOWNLOAD_URL}">Get Papr Work</a><hr><a role="menuitem" href="/auth/logout?returnTo=%2F">Sign out</a></div></details>`
     : `<a class="link" href="/auth/login?returnTo=${encodeURIComponent(f ? detailPath(f) : "/")}">Sign in</a>`;
   const tab = (href: string, label: string, on: boolean) => `<a href="${href}"${on ? ' class="on" aria-current="page"' : ""}>${label}</a>`;
-  const tabs = `${input.signedIn ? tab("/my-apps", "My apps", view === "mine") : ""}${tab("/", "Discover", view === "discover")}`;
+  const tabs = `${input.signedIn ? `${tab("/", "Focus", view === "focus")}${tab("/my-apps", "My apps", view === "mine")}` : ""}${tab(discoverPath, "Discover", view === "discover")}`;
 
   return `<!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
 <title>${esc(title)}</title><meta name="description" content="${esc(desc)}"><link rel="canonical" href="${esc(canonical)}"><link rel="icon" type="image/svg+xml" href="${FAVICON}">
@@ -291,16 +297,16 @@ ${ogImage ? `<meta property="og:image" content="${esc(ogImage)}"><meta name="twi
 <meta name="twitter:card" content="${ogImage ? "summary_large_image" : "summary"}"><meta name="twitter:title" content="${esc(title)}"><meta name="twitter:description" content="${esc(desc)}">
 <meta name="theme-color" content="#f5f5f7" media="(prefers-color-scheme: light)"><meta name="theme-color" content="#0b0c10" media="(prefers-color-scheme: dark)">
 ${jsonLd ? `<script type="application/ld+json">${JSON.stringify(jsonLd).replace(/</g, "\\u003c")}</script>` : ""}
-<style>${DISCOVER_CSS}</style></head><body>
+<style>${DISCOVER_CSS}</style>${view === "focus" ? `<link rel="stylesheet" href="${FOCUS_ASSETS}/focus.css">` : ""}</head><body${view === "focus" ? ' class="is-focus"' : ""}>
 <div class="nprog" aria-hidden="true"></div>
 <header class="top"><a class="logo" href="${PAPR_URL}" title="Learn about Papr">${PAPR_MARK}<span>Papr</span></a>
 <nav class="tabs" aria-label="Sections">${tabs}</nav>
 <span class="right">${account}<a class="btn btn--solid get" href="${DOWNLOAD_URL}">Get Papr Work</a></span></header>
-<main${view === "mine" ? ' class="narrow"' : ""}>${view === "mine" ? '<h1 class="mh1">My apps</h1>' : '<h1 class="h1">Discover</h1><p class="sub">Apps built and shared by the Papr Work community.</p>'}
+<main${view === "mine" ? ' class="narrow"' : view === "focus" ? ' class="fmain"' : ""}>${view === "focus" ? "" : view === "mine" ? '<h1 class="mh1">My apps</h1>' : '<h1 class="h1">Discover</h1><p class="sub">Apps built and shared by the Papr Work community.</p>'}
 ${body}</main>
 <footer class="foot"><a href="${PAPR_URL}">Papr</a> · <a href="${DOWNLOAD_URL}">Download Papr Work</a></footer>
 ${openModal}${templates}
-<script>${DISCOVER_JS}</script></body></html>`;
+<script>${DISCOVER_JS}</script>${view === "focus" ? `<script type="module" src="${FOCUS_ASSETS}/focus.js"></script>` : ""}</body></html>`;
 }
 
 export function buildRobotsTxt(base: string): string {

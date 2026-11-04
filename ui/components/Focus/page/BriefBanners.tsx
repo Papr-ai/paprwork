@@ -1,5 +1,5 @@
 /** The brief's three banners (load error, sample data, stale) and the hero. Port of app.js render*Banner + R.hero. */
-import { openChat } from "./focusApi";
+import { focusEnv, openChat } from "./focusApi";
 import { fmtDay, type Hero } from "./brief";
 
 export function LoadErrorBanner({ message }: { message: string }) {
@@ -25,7 +25,7 @@ export function SampleBanner({ busy, onGenerate }: { busy: string | null; onGene
         <svg viewBox="0 0 24 24" width="20" height="20" fill="none"><path d="M9 18h6M10 22h4M12 2a6 6 0 0 0-3.4 11c.6.4 1 1 1.1 1.7V16h4.6v-1.3c.1-.7.5-1.3 1.1-1.7A6 6 0 0 0 12 2z" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round" /></svg>
       </div>
       <div className="sample-data-text"><strong>This is sample data</strong> — showing what your dashboard will look like when populated.</div>
-      <GenButton label="Generate My Real Brief" busy={busy} onClick={onGenerate} />
+      {focusEnv.web ? <span className="sample-data-text">Papr Work on your computer writes it each morning.</span> : <GenButton label="Generate My Real Brief" busy={busy} onClick={onGenerate} />}
     </div></div>
   );
 }
@@ -34,7 +34,7 @@ export function StaleBanner({ date, busy, onGenerate }: { date: string; busy: st
   return (
     <div className="stale-brief-banner"><div className="stale-brief-content">
       <div className="stale-brief-text"><strong>Today&apos;s brief isn&apos;t ready yet</strong><span>Showing your latest brief from {fmtDay(date)}.</span></div>
-      <GenButton label="Generate today's brief" busy={busy} onClick={onGenerate} />
+      {focusEnv.web ? null : <GenButton label="Generate today's brief" busy={busy} onClick={onGenerate} />}
     </div></div>
   );
 }

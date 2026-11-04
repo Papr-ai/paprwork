@@ -5,6 +5,7 @@
 import { useEffect, useState } from "react";
 import type { FeedItem, FocusAck, FocusFeed } from "../focusBridge";
 import { AgentIcon } from "./icons";
+import { focusEnv } from "./focusApi";
 
 export type Run = (op: string, args: Record<string, unknown>) => Promise<FocusAck>;
 export interface NeedsUi { run: (key: string, op: string, args: Record<string, unknown>, after?: () => void) => Promise<void>; busy: string | null; errors: Record<string, string>; drafts: Record<string, string>; setDraft: (id: string, v: string) => void }
@@ -85,25 +86,26 @@ export function NeedHero({ i, feed, ui, goal, menu }: { i: FeedItem; feed: Focus
   const P = (label: string, on: () => void, dis = false) => <button type="button" className="hfocus-primary" disabled={dis} onClick={on}>{label}</button>;
   const Q = (label: string, on: () => void, dis = false) => <button type="button" className="hfocus-ghost" disabled={dis} onClick={on}>{label}</button>;
   const later = () => void ui.run(i.key, "later", { key: i.key });
+  const web = focusEnv.web;
   const open = () => void ui.run(i.key, "open", { key: i.key });
   return (
     <section className={`hfocus hneed-hero${i.urgent ? " is-urgent" : ""}`}>
       <header><small>{i.urgent ? "You're blocked" : "Do this first"}</small>{goal ? <em className="hchip" title={`Moves ${goal}`}>{goal}</em> : null}
-        <Menu i={i} run={ui.run} openKey={menu.openKey} setOpen={menu.setOpen} /></header>
+        {web ? null : <Menu i={i} run={ui.run} openKey={menu.openKey} setOpen={menu.setOpen} />}</header>
       <h3>{i.title}</h3>
       {kind || (!m && !fromDup) ? (
         <span className="hneed-from"><b>{kind}</b>{m ? <><Pill name={i.from} feed={feed} />{m.when ? <span>{m.when}</span> : null}</> : <span>{i.from}</span>}</span>
       ) : null}
       {!m?.took && i.body ? <p>{m ? <Pills text={i.body} feed={feed} /> : i.body}</p> : null}
       {m && !m.took && m.ready ? (
-        <label className="hdraft"><small>Pen drafted your reply</small>
+        <label className="hdraft"><small>{focusEnv.web ? "Your reply" : "Pen drafted your reply"}</small>
           <textarea rows={2} value={draft} onChange={(e) => ui.setDraft(m.itemId, e.target.value)} /></label>
       ) : null}
       {err ? <p className="hneed-err" role="alert">{err}</p> : null}
       <div className="hfocus-acts">
         {m?.took ? <>{P("Done", () => answer("done"), busy)}{Q("Can't", () => answer("dismissed"), busy)}</>
-          : m ? <>{P(busy ? "Sending…" : "I'm on it", () => answer("open"), busy || !m.ready)}{Q("Can't", () => answer("dismissed"), busy || !m.ready)}{Q("Later", later)}</>
-          : <>{P(i.action, open)}{i.urgent ? null : Q("Later", later)}</>}
+          : m ? <>{P(busy ? "Sending…" : "I'm on it", () => answer("open"), busy || !m.ready)}{Q("Can't", () => answer("dismissed"), busy || !m.ready)}{web ? null : Q("Later", later)}</>
+          : <>{P(i.action, open)}{i.urgent || web ? null : Q("Later", later)}</>}
         {m ? Q("Open chat", open) : null}
       </div>
     </section>
@@ -130,8 +132,8 @@ export function AlsoNeeds({ feed, ui, goalOf, menu }: { feed: FocusFeed; ui: Nee
                 </div>
                 <div className="hcard-a">
                   <button type="button" className="hgo" onClick={() => void ui.run(i.key, "open", { key: i.key })}>{m ? "Reply" : i.action}</button>
-                  {i.urgent ? null : <button type="button" className="hquiet" onClick={() => void ui.run(i.key, "later", { key: i.key })}>Later</button>}
-                  <Menu i={i} run={ui.run} openKey={menu.openKey} setOpen={menu.setOpen} />
+                  {i.urgent || focusEnv.web ? null : <button type="button" className="hquiet" onClick={() => void ui.run(i.key, "later", { key: i.key })}>Later</button>}
+                  {focusEnv.web ? null : <Menu i={i} run={ui.run} openKey={menu.openKey} setOpen={menu.setOpen} />}
                 </div>
               </article>
             );

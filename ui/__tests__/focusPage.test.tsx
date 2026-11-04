@@ -31,7 +31,9 @@ beforeEach(() => {
   }));
 });
 
-import { FocusPage } from "../components/Focus/page/FocusPage";
+import { FocusPage as Page } from "../components/Focus/page/FocusPage";
+import { useFocusFeed } from "../components/Focus/focusBridge";
+const FocusPage = () => <Page useFeed={useFocusFeed} />;
 
 describe("Focus page (native)", () => {
   it("draws the brief, Do this first, Your three and Up next — no iframe", async () => {

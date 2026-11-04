@@ -27,6 +27,9 @@ on:
       - "tsconfig*.json"
       - "scripts/build-mini-app-sdk-browser-bundles.mjs"
       - "scripts/verify-mini-app-sdk-bundles.mjs"
+      - "scripts/build-focus-web.mjs"
+      - "ui/web/**"
+      - "ui/components/Focus/**"
       - ".github/workflows/deploy-cloud-app-host.yml"
   workflow_dispatch:
     inputs:

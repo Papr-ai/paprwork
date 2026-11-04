@@ -61,7 +61,7 @@ export function useBrief() {
     if (isSample) return;
     try {
       if (next === "active") {
-        await focusApi.unreview(key);
+        await focusApi.unreview(key, brief?.date ?? todayKey());
         if (i.task_id) await focusApi.setTaskDone(i.task_id, false).catch(() => undefined);
       } else {
         await focusApi.review(key, { briefDate: brief?.date ?? todayKey(), section: i._section, itemType: i._type, title: itemTitle(i), status: next, note, taskId: i.task_id });

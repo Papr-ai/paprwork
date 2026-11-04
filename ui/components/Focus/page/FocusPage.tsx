@@ -7,7 +7,7 @@ import { askText } from "../../../../src/resources/mini-app-sdk/papr-dialog";
 import { fmtDay, itemTitle, type BriefItem } from "./brief";
 import { useBrief } from "./useBrief";
 import { useFocusData } from "./useFocusData";
-import { useFocusFeed } from "../focusBridge";
+import type { FocusAck, FocusFeed } from "../focusBridge";
 import { useNeedsUi } from "./useNeedsUi";
 import { TodayView } from "./TodayView";
 import { TasksView } from "./TasksView";
@@ -20,10 +20,13 @@ import "../focusPage.css";
 
 type Sub = { view: "goal" | "edit" | "review"; id?: string; own?: boolean; promote?: string } | null;
 
-export function FocusPage() {
+/** Needs you + Waiting on. Papr Work: notices + mention cards (focusBridge). Web: mentions from the server. */
+export type UseFeed = () => { feed: FocusFeed; run: (op: string, args: Record<string, unknown>) => Promise<FocusAck> };
+
+export function FocusPage({ useFeed }: { useFeed: UseFeed }) {
   const b = useBrief();
   const d = useFocusData();
-  const { feed, run } = useFocusFeed();
+  const { feed, run } = useFeed();
   const { ui, toast, undo } = useNeedsUi(run);
   const [tab, setTab] = useState<"today" | "tasks">("today");
   const [sub, setSub] = useState<Sub>(null);

@@ -37,7 +37,21 @@ export interface TasksResult { tasks: Task[]; counts: { open: number; done: numb
 export interface BriefRow { date: string; brief_json: string }
 export interface ReviewRow { item_key: string; status: "complete" | "irrelevant"; note: string | null; updated_at: string }
 
-const base = () => getGatewayHttpBase();
+/**
+ * Where the page runs. Papr Work: the local gateway + in-app chat. apps.papr.ai sets its own
+ * (web/main.tsx): same routes under /focus-api, chat opens in the desktop app.
+ */
+export const focusEnv: {
+  base: () => string; web: boolean;
+  openChat: (message: string) => void;
+  openEntity?: (ref: string) => void;
+} = {
+  base: () => getGatewayHttpBase(),
+  web: false,
+  openChat: (message) => window.dispatchEvent(new CustomEvent("papr-chat-open", { detail: { message } })),
+};
+
+const base = () => focusEnv.base();
 
 async function call<T>(path: string, init?: RequestInit & { json?: unknown }): Promise<T> {
   const { json, ...rest } = init ?? {};
@@ -65,12 +79,13 @@ export const focusApi = {
   startTracker: (goalId: string) => call("/api/workspace/focus/tracker", { method: "POST", json: { goalId } }),
   review: (key: string, body: { briefDate: string; section: string; itemType: string; title: string; status: string; note?: string; taskId?: string }) =>
     call(`/api/focus/reviews/${encodeURIComponent(key)}`, { method: "PUT", json: body }),
-  unreview: (key: string) => call(`/api/focus/reviews/${encodeURIComponent(key)}`, { method: "DELETE" }),
+  unreview: (key: string, briefDate?: string) =>
+    call(`/api/focus/reviews/${encodeURIComponent(key)}${briefDate ? `?date=${encodeURIComponent(briefDate)}` : ""}`, { method: "DELETE" }),
   briefJob: () => call<{ jobId: string }>("/api/focus/brief-job", { method: "POST" }),
   runJob: (jobId: string) => call("/api/jobs/run", { method: "POST", json: { jobId, wait: false } }),
 };
 
-/** Open a new chat with a drafted message (same event mini-apps use via chat.open). */
+/** Open a new chat with a drafted message (same event mini-apps use via chat.open; the desktop app from the web). */
 export function openChat(message: string): void {
-  window.dispatchEvent(new CustomEvent("papr-chat-open", { detail: { message } }));
+  focusEnv.openChat(message);
 }

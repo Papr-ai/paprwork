@@ -4,9 +4,7 @@
  * Port of goals.js + goals_api.js + focus_start.js (first run stays on Focus).
  */
 import { useState } from "react";
-import { focusApi, openChat, type GoalsResult, type WsGoal } from "./focusApi";
-import { requestMemoryEntity } from "../../../lib/memoryNav";
-import { switchToMemoryTab } from "../../../lib/ensureDefaultChatTab";
+import { focusApi, focusEnv, openChat, type GoalsResult, type WsGoal } from "./focusApi";
 
 const STATUS: Record<string, string> = { proposed: "Draft", "on-track": "On track", "at-risk": "At risk", blocked: "Blocked", done: "Done" };
 const FMT = 'Keep the block format in IDENTITY.md "## Goals" (Level / Status / Confidence / Priority / Parent / Entities / Next milestone / Owner / Evidence), keep L1s mutually exclusive, name the projects/companies/people each goal runs through (Entities: line, using real entities/** slugs), and show me the final tree.';
@@ -32,11 +30,6 @@ export function goalPrompt(mode: string, goals: WsGoal[], gid = ""): string {
   }
 }
 
-function openEntity(ref: string) {
-  const [type, ...rest] = ref.split("/");
-  switchToMemoryTab();
-  requestMemoryEntity({ id: ref, type: type.replace(/s$/, ""), label: rest.join("/").replace(/-/g, " "), description: "", props: {} });
-}
 
 interface Props { data: GoalsResult; canOpen: (id: string) => boolean; onOpen: (id: string) => void; onChanged: () => void }
 
@@ -80,7 +73,9 @@ export function GoalsTree({ data, canOpen, onOpen, onChanged }: Props) {
         <div className="goal-head"><Title g={g} /><Badges g={g} /></div>
         {g.nextMilestone ? <div className="goal-next">Next: {g.nextMilestone}</div> : null}
         {g.entities?.length ? <div className="goal-entities">{g.entities.map((r) => (
-          <a key={r} className={`goal-entity ${r.split("/")[0]}`} href="#" title={r} onClick={(e) => { e.preventDefault(); openEntity(r); }}>{(r.split("/")[1] ?? r).replace(/-/g, " ")}</a>
+          focusEnv.openEntity
+            ? <a key={r} className={`goal-entity ${r.split("/")[0]}`} href="#" title={r} onClick={(e) => { e.preventDefault(); focusEnv.openEntity?.(r); }}>{(r.split("/")[1] ?? r).replace(/-/g, " ")}</a>
+            : <span key={r} className={`goal-entity ${r.split("/")[0]}`} title={r}>{(r.split("/")[1] ?? r).replace(/-/g, " ")}</span>
         ))}</div> : null}
         <Actions g={g} />
         {l2.length ? <details className="goal-l2s"><summary>{l2.length} sub-goal{l2.length > 1 ? "s" : ""}</summary><div className="goal-children">{l2.map((k) => <Node key={k.id} g={k} />)}</div></details> : null}
