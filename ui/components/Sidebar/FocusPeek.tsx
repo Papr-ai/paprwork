@@ -14,8 +14,19 @@ import type { Notice } from "../../../src/core/types/notices";
 import "./FocusPeek.css";
 
 /** Mention notices read "Amir: Own the pricing copy"; the peek shows the ask and the person as a pill. */
-const peekFrom = (n: Notice) => (n.kind.startsWith("mention") && n.title.includes(": ") ? n.title.split(": ")[0] : n.owner.name);
-const peekTitle = (n: Notice) => (n.kind.startsWith("mention") && n.title.includes(": ") ? n.title.slice(n.title.indexOf(": ") + 2) : n.title);
+// Mention notices name the person in the title. Pull it out so the pill is the person, not "Your turn".
+const PEEK_PATTERNS: Array<[RegExp, (m: RegExpMatchArray) => [string, string]]> = [
+  [/^Your turn: (\S+) finished (.+)$/, (m) => [m[1], `Your turn: ${m[2]}`]],
+  [/^(\S+) can't take it: (.+)$/, (m) => [m[1], `Can't take it: ${m[2]}`]],
+  [/^(\S+) is checking in: (.+)$/, (m) => [m[1], `Checking in: ${m[2]}`]],
+  [/^(\S+) replied: (.+)$/, (m) => [m[1], `Replied: ${m[2]}`]],
+  [/^([^:]+): (.+)$/, (m) => [m[1], m[2]]],
+];
+export function peekParts(n: Notice): { from: string | null; title: string } {
+  if (!n.kind.startsWith("mention")) return { from: null, title: n.title };
+  for (const [re, f] of PEEK_PATTERNS) { const m = n.title.match(re); if (m) { const [from, title] = f(m); return { from, title }; } }
+  return { from: null, title: n.title };
+}
 
 interface FocusGoalLite {
   id: string;
@@ -108,8 +119,8 @@ export function FocusPeek({ status, onOpen }: FocusPeekProps) {
           <button type="button" role="menuitem" className="focus-peek__need" onClick={() => openNoticeOwner(needs[0].owner, needs[0].key)}
             title={[needs[0].title, needs[0].body].filter(Boolean).join(" · ")}>
             <i aria-hidden="true" />
-            <span className="focus-peek__title">{shortTitle(peekTitle(needs[0]), 34)}</span>
-            {needs[0].kind.startsWith("mention") ? <MentionPill name={peekFrom(needs[0])} /> : null}
+            <span className="focus-peek__title">{shortTitle(peekParts(needs[0]).title, 34)}</span>
+            {peekParts(needs[0]).from ? <MentionPill name={peekParts(needs[0]).from!} /> : null}
           </button>
           {needs.length > 1 ? (
             <button type="button" role="menuitem" className="focus-peek__more" onClick={() => onOpen()}>
