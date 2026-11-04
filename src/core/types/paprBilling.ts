@@ -76,7 +76,7 @@ export interface PaprCreditsSummary {
   plan: string;
   period: string;
   /** This person's allowance. */
-  you: { grant: number; used: number; state: string; reason?: string | null; seat: boolean; memberCap?: number };
+  you: { grant: number; used: number; state: string; reason?: string | null; seat: boolean; memberCap?: number; requests?: string[] };
   /** Whole org, all seats. */
   org: { grant: number; used: number; state: string; seats: number } | null;
   /** Prepaid top-up balance in USD, when known. */

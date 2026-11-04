@@ -45,6 +45,21 @@ export interface BuildersView {
   /** {plan: seats on it}. */
   seatPlans?: Record<string, number>;
   planOptions?: SeatPlanOption[];
+  /** auto = members use credits right away; approve = an admin approves each member first. */
+  memberPolicy?: MemberPolicy;
+  memberRequests?: MemberRequest[];
+}
+
+export type MemberPolicy = "auto" | "approve";
+export type MemberRequestKind = "access" | "seat" | "limit";
+
+export interface MemberRequest {
+  userId: string;
+  kind: MemberRequestKind;
+  requestedAt?: string;
+  currentCapCredits?: number;
+  /** Prefill for a limit request: 2x today's limit. */
+  suggestedCapCredits?: number;
 }
 
 /** What a person's seat is: "member" or a plan key. */
@@ -180,6 +195,8 @@ export interface CreditAllowance {
   overageCredits?: number;
   overageUsd?: number;
   topupBalanceUsd?: number;
+  /** Blocked members: request kinds already sent to admins. */
+  requests?: string[];
 }
 
 export interface CreditUsageView {
@@ -220,4 +237,41 @@ export async function setBuilder(
   if (plan !== undefined && (!builder || !/^[a-z_]{1,32}$/.test(plan))) throw new Error("Invalid plan");
   const body = plan ? { builder, plan } : { builder };
   return (await credits(baseUrl, sessionToken, `/builders/${userId}`, { method: "POST", body }, fetchImpl)) as SetBuilderResult;
+}
+
+
+const USER_ID = /^[A-Za-z0-9]{1,40}$/;
+const KINDS = new Set<MemberRequestKind>(["access", "seat", "limit"]);
+
+/** A member asks the admins for access, a seat, or a higher limit. */
+export async function requestMember(
+  baseUrl: string, sessionToken: string, kind: MemberRequestKind, fetchImpl?: typeof fetch,
+): Promise<{ status: string; kind: MemberRequestKind }> {
+  if (!KINDS.has(kind)) throw new Error("Invalid request");
+  return (await credits(baseUrl, sessionToken, "/members/request", { method: "POST", body: { kind } }, fetchImpl)) as {
+    status: string; kind: MemberRequestKind;
+  };
+}
+
+/** Admin answers a request. seat: plan for the new seat. limit: capCredits (required, above today's). */
+export async function decideMemberRequest(
+  baseUrl: string, sessionToken: string,
+  input: { userId: string; kind: MemberRequestKind; approve: boolean; capCredits?: number; plan?: string },
+  fetchImpl?: typeof fetch,
+): Promise<unknown> {
+  if (!USER_ID.test(input.userId) || !KINDS.has(input.kind)) throw new Error("Invalid request");
+  const body: Record<string, unknown> = { approve: input.approve };
+  if (input.capCredits !== undefined) body.capCredits = input.capCredits;
+  if (input.plan) body.plan = input.plan;
+  return credits(baseUrl, sessionToken, `/members/${input.userId}/requests/${input.kind}/decide`, { method: "POST", body }, fetchImpl);
+}
+
+export async function setMemberPolicy(baseUrl: string, sessionToken: string, policy: MemberPolicy, fetchImpl?: typeof fetch) {
+  if (policy !== "auto" && policy !== "approve") throw new Error("Invalid policy");
+  return credits(baseUrl, sessionToken, "/member-usage", { method: "POST", body: { policy } }, fetchImpl);
+}
+
+export async function setMemberCap(baseUrl: string, sessionToken: string, capCredits: number, fetchImpl?: typeof fetch) {
+  if (!Number.isFinite(capCredits) || capCredits < 0) throw new Error("Invalid limit");
+  return credits(baseUrl, sessionToken, "/member-cap", { method: "POST", body: { capCredits } }, fetchImpl);
 }

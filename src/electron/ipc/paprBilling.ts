@@ -29,7 +29,17 @@ import {
 } from "../../core/utils/paprPlanLimits.js";
 import { countSeatHolders, fetchWorkspaceMembers } from "../../core/utils/paprWorkspaceTeam.js";
 import { PAPR_USAGE_URL } from "../../core/utils/paprQuota.js";
-import { fetchBuilders, fetchCreditUsage, setBuilder } from "../../core/utils/paprCreditSeats.js";
+import {
+  decideMemberRequest,
+  fetchBuilders,
+  fetchCreditUsage,
+  requestMember,
+  setBuilder,
+  setMemberCap,
+  setMemberPolicy,
+  type MemberPolicy,
+  type MemberRequestKind,
+} from "../../core/utils/paprCreditSeats.js";
 import { buildCreditsPlanSummary, creditsSummaryFromUsage } from "../../core/utils/paprCreditsPlanSummary.js";
 import { memoryBaseUrl } from "./paprHandoff.js";
 
@@ -950,6 +960,22 @@ export function registerPaprBillingHandlers(deps: {
       }
     },
   );
+
+  const creditsCall = (name: string, fn: (token: string, input: any) => Promise<unknown>) =>
+    ipcMain.handle(name, async (_event, input) => {
+      try {
+        const profile = requireLoggedInProfile(deps.settingsStorage);
+        const result = await fn(profile.sessionToken!, input);
+        invalidatePlanSummaryCache();
+        return { success: true, result };
+      } catch (error) {
+        return { success: false, error: error instanceof Error ? error.message : "Request failed" };
+      }
+    });
+  creditsCall("papr:request-member", (t, i: { kind: MemberRequestKind }) => requestMember(memoryBaseUrl(), t, i?.kind));
+  creditsCall("papr:decide-member-request", (t, i) => decideMemberRequest(memoryBaseUrl(), t, i));
+  creditsCall("papr:set-member-policy", (t, i: { policy: MemberPolicy }) => setMemberPolicy(memoryBaseUrl(), t, i?.policy));
+  creditsCall("papr:set-member-cap", (t, i: { capCredits: number }) => setMemberCap(memoryBaseUrl(), t, Number(i?.capCredits)));
 
   ipcMain.handle(
     "papr:start-expert-build-checkout",

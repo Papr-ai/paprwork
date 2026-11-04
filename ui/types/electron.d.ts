@@ -487,6 +487,15 @@ export interface ElectronAPI {
       result?: import("../../src/core/utils/paprCreditSeats").SetBuilderResult;
       error?: string;
     }>;
+    requestMember: (input: { kind: import("../../src/core/utils/paprCreditSeats").MemberRequestKind }) => Promise<{
+      success: boolean; result?: { status: string }; error?: string;
+    }>;
+    decideMemberRequest: (input: {
+      userId: string; kind: import("../../src/core/utils/paprCreditSeats").MemberRequestKind;
+      approve: boolean; capCredits?: number; plan?: string;
+    }) => Promise<{ success: boolean; error?: string }>;
+    setMemberPolicy: (input: { policy: import("../../src/core/utils/paprCreditSeats").MemberPolicy }) => Promise<{ success: boolean; error?: string }>;
+    setMemberCap: (input: { capCredits: number }) => Promise<{ success: boolean; error?: string }>;
     startExpertBuildCheckout: (input: {
       size: import("../../src/core/types/paprCreditPlans").PaprExpertBuildSize;
       notes?: string;

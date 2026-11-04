@@ -18,6 +18,7 @@ import { refreshPaprBillingStatus } from "../../utils/refreshPaprBillingStatus";
 import { useSettingsNavigationStore } from "../../stores/settingsNavigationStore";
 import { CreditPlanCards, type CreditPlanAction } from "./CreditPlanCards";
 import { CreditsUsagePanel } from "./CreditsUsagePanel";
+import { MemberRequestsCard } from "./MemberRequestsCard";
 import type {
   PaprCreditPlanId,
   PaprExpertBuildSize,
@@ -132,6 +133,16 @@ export function PaprPlanSection() {
     "developer" | null
   >(null);
   const [creditAction, setCreditAction] = useState<CreditPlanAction>(null);
+  // userId -> display name, for the Members card (admins on credits orgs only).
+  const [memberNames, setMemberNames] = useState<Record<string, string>>({});
+  useEffect(() => {
+    if (!summary?.credits || !summary.isWorkspaceAdmin) return;
+    void window.electronAPI.papr.listWorkspaceMembers().then((r) => {
+      const out: Record<string, string> = {};
+      for (const m of r.members ?? []) out[m.user.objectId] = m.user.displayName || m.user.email;
+      setMemberNames(out);
+    }).catch(() => undefined);
+  }, [summary?.credits, summary?.isWorkspaceAdmin]);
   const navigationToken = useSettingsNavigationStore((state) => state.token);
   const pendingPlanFocus = useSettingsNavigationStore(
     (state) => state.pendingPlanFocus,
@@ -398,7 +409,10 @@ export function PaprPlanSection() {
             </div>
 
             {summary.credits ? (
-              <CreditsUsagePanel credits={summary.credits} />
+              <>
+                <CreditsUsagePanel credits={summary.credits} />
+                {summary.isWorkspaceAdmin && <MemberRequestsCard names={memberNames} />}
+              </>
             ) : (
               <>
             {summary.isTrialPeriod && (

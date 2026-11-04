@@ -260,6 +260,10 @@ contextBridge.exposeInMainWorld("electronAPI", {
         ipcRenderer.invoke("papr:start-credits-checkout", input),
       getBuilderSeats: () => ipcRenderer.invoke("papr:get-builder-seats"),
       setBuilder: (input) => ipcRenderer.invoke("papr:set-builder", input),
+      requestMember: (input) => ipcRenderer.invoke("papr:request-member", input),
+      decideMemberRequest: (input) => ipcRenderer.invoke("papr:decide-member-request", input),
+      setMemberPolicy: (input) => ipcRenderer.invoke("papr:set-member-policy", input),
+      setMemberCap: (input) => ipcRenderer.invoke("papr:set-member-cap", input),
       startExpertBuildCheckout: (input) =>
         ipcRenderer.invoke("papr:start-expert-build-checkout", input),
       subscribeDeveloperPlan: () =>
