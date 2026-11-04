@@ -37,7 +37,7 @@ describe("mention card text", () => {
       action: { title: "Ship pricing", due: "2026-11-05" }, suggestedReply: "On it.", status: "open" };
     const t = mentionMessageText(c);
     expect(t).toContain("Amir mentioned you in “Q4”");
-    expect(t).toContain("Ship pricing (due 2026-11-05)");
+    expect(t).toContain("Ship pricing (due Thu, Nov 5)");
     expect(t).toContain("Mention id: m1");
     expect(isCollabEvent({ type: "mention.replied" })).toBe(true);
     expect(isCollabEvent({ type: "proposal.accepted" })).toBe(false);

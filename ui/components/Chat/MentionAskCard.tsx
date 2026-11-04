@@ -6,6 +6,7 @@
 import { useEffect, useState } from "react";
 import { gateway } from "../../src/lib/gateway";
 import "./MentionCard.css";
+import { dueLabel } from "../../../src/core/collab/promised";
 
 export interface MentionAskData {
   type: "mention_ask"; ask: string; notified: boolean;
@@ -51,7 +52,7 @@ export function MentionAskCard({ data }: { data: MentionAskData }) {
   if (state === "asked") {
     return (
       <p className="mention-ask__note">
-        <span className="mention-ask__dot" aria-hidden="true" />Asked {names}{data.action?.due ? ` · due ${data.action.due}` : ""}
+        <span className="mention-ask__dot" aria-hidden="true" />Asked {names}{data.action?.due ? ` · due ${dueLabel(data.action.due)}` : ""}
       </p>
     );
   }
@@ -60,7 +61,7 @@ export function MentionAskCard({ data }: { data: MentionAskData }) {
       <header className="mention-card__from"><b>Ask {data.mentioned.map((m) => m.name).join(", ")}?</b></header>
       <textarea value={draft} onChange={(e) => setDraft(e.target.value)} rows={2} aria-label="The ask" />
       <p className="mention-card__next">
-        {data.action ? `${data.action.title}${data.action.due ? ` · due ${data.action.due}` : ""} · ` : ""}goes to {names}'s Focus as your ask
+        {data.action ? `${data.action.title}${data.action.due ? ` · due ${dueLabel(data.action.due)}` : ""} · ` : ""}goes to {names}'s Focus as your ask
       </p>
       {error ? <p className="mention-card__error" role="alert">{error}</p> : null}
       <footer>

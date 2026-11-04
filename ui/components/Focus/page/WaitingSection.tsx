@@ -6,6 +6,7 @@ import { useState } from "react";
 import type { FocusFeed, FeedWaiting } from "../focusBridge";
 import type { NeedsUi } from "./NeedsSection";
 import { ago } from "./fmt";
+import { dueLabel } from "../../../../src/core/collab/promised";
 
 const first = (n: string) => String(n || "").split(/\s+/)[0] || n;
 const since = (iso?: string | null) => (iso ? (Date.now() - Date.parse(iso) < 60_000 ? "just now" : ago(iso)) : "");
@@ -13,7 +14,7 @@ const since = (iso?: string | null) => (iso ? (Date.now() - Date.parse(iso) < 60
 function Row({ w, ui, open, setOpen }: { w: FeedWaiting; ui: NeedsUi; open: boolean; setOpen: (id: string | null) => void }) {
   const [writing, setWriting] = useState(false);
   const name = first(w.toName), prog = w.state === "in_progress", busy = ui.busy === w.id;
-  const due = w.promised ? ` · ${w.late ? "was due" : "due"} ${w.promised}` : w.due ? ` · due ${w.due}` : "";
+  const due = w.promised ? ` · ${w.late ? "was due" : "due"} ${w.promised}` : w.due ? ` · due ${dueLabel(w.due)}` : "";
   const said = w.reply ? `${name}: “${w.reply}”` : !prog ? `asked ${since(w.at)} · no reply yet` : "";
   const nudged = !!w.nudgedAt && Date.now() - Date.parse(w.nudgedAt) < 6 * 3600e3;
   const text = ui.drafts[`w:${w.id}`] ?? "";

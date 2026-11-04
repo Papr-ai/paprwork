@@ -286,9 +286,17 @@ function localAppTitle(appId: string | undefined, appsRoot: string): string {
   }
 }
 
+let cloudNotices: (() => boolean) | null = null;
+void import("../notifications/noticeCloudSync.js").then((m) => { cloudNotices = m.cloudNoticesAvailable; }).catch(() => undefined);
+function cloudNoticesAvailableSync(): boolean {
+  return cloudNotices?.() ?? false;
+}
+
 /** Through notify(): route() decides OS vs dot (nothing pops while you're in Paprwork). */
 function defaultNotify(notices: ProposalNotice[]): void {
   if (!notices.length) return;
+  // The server's notices list has these now (memory notice_mirrors): one copy, synced across devices.
+  if (cloudNoticesAvailableSync()) return;
   void import("../../../core/utils/paprRoot.js").then(({ getPaprAppsRoot }) => {
     const root = getPaprAppsRoot();
     for (const n of notices) notifyOne(n, localAppTitle(n.appId, root));
@@ -362,6 +370,10 @@ export async function pollProposalEvents(
       const collab = page.events.filter((e) => e.type === "mention" || e.type === "mention.replied" || e.type === "mention.followup");
       if (collab.length) await (deps.onCollab ?? defaultCollab)(collab);
       // Goals/tasks/briefs/settings changed on another device (or a teammate assigned a task): pull.
+      // Your notices changed (another device, a teammate, a proposal): pull them now.
+      if (!deps.fetchEvents && page.events.some((e) => (e.type as string) === "notices.changed")) {
+        void import("../notifications/noticeCloudSync.js").then((m) => m.scheduleNoticePull("changed elsewhere", 200)).catch(() => undefined);
+      }
       if (!deps.fetchEvents && page.events.some((e) => e.type === "focus.changed")) {
         void import("../focusCloud/focusCloudSync.js").then((m) => m.scheduleFocusCloudSync("changed elsewhere", 500)).catch(() => undefined);
       }

@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { parsePromise, promiseLabel } from "./promised";
+import { parsePromise, promiseLabel , dueLabel, dueDate } from "./promised";
 
 // Tue Nov 3 2026, 3:00pm local
 const now = new Date(2026, 10, 3, 15, 0);
@@ -35,5 +35,24 @@ describe("promiseLabel", () => {
     expect(promiseLabel(new Date(2026, 10, 4, 14, 30), now)).toBe("tomorrow 2:30pm");
     expect(promiseLabel(new Date(2026, 10, 3, 17), now)).toBe("today 5pm");
     expect(promiseLabel(new Date(2026, 10, 12, 9), now)).toBe("Nov 12 9am");
+  });
+});
+
+describe("dueLabel", () => {
+  const now = new Date(2026, 10, 4, 10, 0); // Wed Nov 4
+  it("says the day in words", () => {
+    expect(dueLabel("2026-11-04", now)).toBe("today");
+    expect(dueLabel("2026-11-05", now)).toBe("tomorrow");
+    expect(dueLabel("2026-11-06", now)).toBe("Fri");
+    expect(dueLabel("2026-11-20", now)).toBe("Nov 20");
+    expect(dueLabel("Friday 5pm", now)).toBe("Friday 5pm");
+    expect(dueLabel(null, now)).toBe("");
+  });
+});
+
+describe("dueDate", () => {
+  it("is absolute, for stored text", () => {
+    expect(dueDate("2026-11-05")).toBe("Thu, Nov 5");
+    expect(dueDate("soon")).toBe("soon");
   });
 });

@@ -58,3 +58,24 @@ export function promiseLabel(iso: string | Date, now = new Date()): string {
     : d.toLocaleDateString("en-US", { month: "short", day: "numeric" });
   return `${day} ${time}`;
 }
+
+/** An ask's due date ("2026-11-06") in words: "today", "tomorrow", "Fri", "Nov 12". Anything else passes through. */
+export function dueLabel(due: string | null | undefined, now = new Date()): string {
+  if (!due) return "";
+  const m = /^(\d{4})-(\d{2})-(\d{2})$/.exec(due.trim().slice(0, 10));
+  if (!m) return due;
+  const d = new Date(Number(m[1]), Number(m[2]) - 1, Number(m[3]));
+  const days = Math.round((d.getTime() - new Date(now).setHours(0, 0, 0, 0)) / 86_400_000);
+  if (days === 0) return "today";
+  if (days === 1) return "tomorrow";
+  if (days > 1 && days < 7) return d.toLocaleDateString("en-US", { weekday: "short" });
+  return d.toLocaleDateString("en-US", { month: "short", day: "numeric" });
+}
+
+/** For text that's stored (chat messages, Pen's context): a date that never goes stale, "Thu, Nov 5". */
+export function dueDate(due: string | null | undefined): string {
+  if (!due) return "";
+  const m = /^(\d{4})-(\d{2})-(\d{2})$/.exec(due.trim().slice(0, 10));
+  if (!m) return due;
+  return new Date(Number(m[1]), Number(m[2]) - 1, Number(m[3])).toLocaleDateString("en-US", { weekday: "short", month: "short", day: "numeric" });
+}
