@@ -51,15 +51,15 @@ export function MentionAskCard({ data }: { data: MentionAskData }) {
     );
   }
   if (state === "asked") {
-    // A small sent card: who (as pills), what, when. Same glass as the Ask card, quieter.
+    // Same card as a Focus item: status label, the ask as the title, then who and when.
     return (
       <section className="mention-sent" aria-label={`Asked ${names}`}>
-        <header>
-          <span className="mention-ask__dot" aria-hidden="true" /><small>Asked</small>
+        <small>Asked</small>
+        <b className="mention-sent__title">{data.action?.title ?? draft}</b>
+        <span className="mention-sent__who">
           {data.mentioned.map((m) => <MentionPill key={m.mentionId} name={m.name} />)}
-          {data.action?.due ? <em className="mention-sent__due">due {dueLabel(data.action.due)}</em> : null}
-        </header>
-        {data.action?.title ? <p>{data.action.title}</p> : null}
+          {data.action?.due ? <span>due {dueLabel(data.action.due)}</span> : null}
+        </span>
       </section>
     );
   }

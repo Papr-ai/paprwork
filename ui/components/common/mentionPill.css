@@ -1,7 +1,7 @@
 /* A person: initials + name in a soft blue pill. Same look in chat, Focus and the brief. */
 .mention-pill {
   display: inline-flex; align-items: center; gap: 5px; max-width: 100%;
-  padding: 0 8px 0 2px; border-radius: 999px; vertical-align: baseline;
+  padding: 0 9px 0 2px; min-width: 0; border-radius: 999px; vertical-align: baseline;
   background: color-mix(in srgb, var(--primary-color, #0161e0) 9%, transparent);
   color: var(--primary-color, #0161e0); font-size: 0.93em; font-weight: 600; line-height: 1.55; white-space: nowrap;
 }
@@ -11,3 +11,4 @@
 }
 .mention-pill .mention-pill__av { flex: none; width: max(16px, 1.3em) !important; height: max(16px, 1.3em) !important; }
 .markdown-strong .mention-pill { font-weight: 600; }
+.mention-pill__name { min-width: 0; overflow: hidden; text-overflow: ellipsis; }
