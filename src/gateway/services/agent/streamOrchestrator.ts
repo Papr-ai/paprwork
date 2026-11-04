@@ -320,7 +320,13 @@ function extractFromRetryError(error: Record<string, unknown>): string | null {
     return "API key does not have permission for this model. Check your Anthropic plan.";
   }
   if (statusCode === 402) {
-    return "Credit balance too low. Please add credits to your Anthropic account.";
+    const via = providerFromRequestUrl(extractRequestUrl(err));
+    const ours = !via; // no provider host = Papr's own AI service (memory.papr.ai)
+    const name = via ? via[0].toUpperCase() + via.slice(1) : "";
+    void import("../notifications/rootConditions.js").then((m) => m.creditsOut(ours ? "papr" : name)).catch(() => {});
+    return ours
+      ? "You're out of AI credits. Add credits in Settings → Plan & usage to keep chatting."
+      : `Your ${name} account is out of credits. Add credits there, or switch to another model.`;
   }
   if (statusCode && statusCode >= 500) {
     return `Anthropic server error (${statusCode}). Please try again in a moment.`;

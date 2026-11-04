@@ -13,6 +13,7 @@ import { openNoticeOwner } from "../../stores/noticeOs";
 import { ensureSettingsTab } from "../../lib/ensureSettingsTab";
 import { bringBack, muteSource, putOff, setFocusMode, turnOffType, unmuteSource, useNeedsYou } from "../../stores/useNeedsYou";
 import { NeedsYouMenu } from "./NeedsYouMenu";
+import { useNoticeStore } from "../../stores/noticeStore";
 import "./NeedsYou.css";
 
 const MAX_ROWS = 4;
@@ -23,6 +24,7 @@ const actionLabel = (n: Notice) => (n.actions ?? []).find((a) => a.intent !== "o
 
 export function NeedsYou() {
   const { needs, reasons, later, muted } = useNeedsYou();
+  const offline = useNoticeStore((s) => s.notices.find((n) => n.key === "net.offline") ?? null);
   const [more, setMore] = useState(false);
   const [toast, setToast] = useState<Toast>(null);
   const flash = (t: Toast) => { setToast(t); if (t) window.setTimeout(() => setToast((c) => (c === t ? null : c)), 6000); };
@@ -46,10 +48,11 @@ export function NeedsYou() {
   const [first, ...rest] = needs;
   const shown = more ? rest : rest.slice(0, MAX_ROWS);
   // Nothing waiting, nothing put off, nothing muted: no section at all (an empty box is just noise).
-  if (!first && !later.length && !muted.length && !toast) return null;
+  if (!first && !later.length && !muted.length && !toast && !offline) return null;
 
   return (
     <section className="needs-you" aria-label="Needs you">
+      {offline ? <p className="needs-you__ambient" role="status"><i aria-hidden="true" /><b>{offline.title}.</b> {offline.body}</p> : null}
       <h2 className="needs-you__h">Needs you{needs.length ? <em>{needs.length}</em> : null}</h2>
       {first ? (
         <article className={`needs-you__hero${isUrgent(first) ? " is-urgent" : ""}`}>

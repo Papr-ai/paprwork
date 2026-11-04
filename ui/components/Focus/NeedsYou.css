@@ -75,3 +75,8 @@
 
 /* Needs you sits on the same page background as the Daily Brief below it, not its own strip. */
 .focus-view { background: var(--bg); }
+
+/* About the whole app (offline): one quiet top line, no card, no count. */
+.needs-you__ambient { display: flex; align-items: baseline; gap: 8px; margin: 0 0 12px; font-size: 13px; color: var(--ny-mute); }
+.needs-you__ambient i { width: 7px; height: 7px; border-radius: 50%; flex: none; background: #9aa3af; transform: translateY(-1px); }
+.needs-you__ambient b { color: var(--ny-ink); font-weight: 600; }

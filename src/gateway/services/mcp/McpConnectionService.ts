@@ -74,6 +74,8 @@ interface Live {
   pending?: Promise<McpServerStatus>;
   /** Abort an in-flight interactive sign-in (frees its loopback port). */
   cancelSignIn?: () => void;
+  name?: string;
+  lastState?: McpConnectionState;
 }
 
 // Generous: users often have to log in to the service first, then approve.
@@ -88,6 +90,8 @@ export interface McpConnectionServiceOptions {
   penGate?: import("./mcpPenGate.js").PenGate;
   /** Server sign-in (team connections, org client IDs). Omitted = loopback only. */
   serverSignIn?: McpServerSignIn;
+  /** Names of accounts whose sign-in expired, whenever that list changes (the gateway raises one notice). */
+  onSignedOut?: (names: string[]) => void;
 }
 
 export interface McpConnectOptions {
@@ -207,8 +211,19 @@ export class McpConnectionService {
     return l;
   }
 
+  /** One root cause, one notice: every account whose sign-in expired folds into account.connectors. */
+  private signedOutSig = "";
+  private syncSignedOut(): void {
+    const names = [...this.live.entries()].filter(([, l]) => l.state === "needs_reauth").map(([id, l]) => l.name ?? id).sort();
+    const sig = names.join("|");
+    if (sig === this.signedOutSig) return;
+    this.signedOutSig = sig;
+    try { this.opts.onSignedOut?.(names); } catch { /* a notice must never break a connection */ }
+  }
+
   private statusOf(def: McpServerDefinition): McpServerStatus {
     const l = this.live.get(def.id);
+    if (l) { l.name = def.name; if (l.state !== l.lastState) { l.lastState = l.state; this.syncSignedOut(); } }
     return {
       id: def.id,
       name: def.name,
