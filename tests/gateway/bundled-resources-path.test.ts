@@ -5,15 +5,6 @@ import { resolveBundledResourcesDir } from "../../src/core/utils/bundledResource
 describe("resolveBundledResourcesDir", () => {
   const servicesDir = path.join(process.cwd(), "src/gateway/services");
 
-  test("finds default-apps under dist/ in dev builds", async () => {
-    const resolved = await resolveBundledResourcesDir(
-      servicesDir,
-      "resources/default-apps",
-    );
-    expect(resolved).toBeTruthy();
-    expect(resolved).toContain(`${path.sep}default-apps`);
-  });
-
   test("finds default-jobs under dist/ in dev builds", async () => {
     const resolved = await resolveBundledResourcesDir(
       servicesDir,
@@ -36,12 +27,12 @@ describe("resolveBundledResourcesDir", () => {
       "/Applications/Papr Work.app/Contents/Resources/app.asar/dist/gateway/services";
     const resolved = await resolveBundledResourcesDir(
       asarServicesDir,
-      "resources/default-apps",
+      "resources/default-jobs",
     );
     if (!resolved) {
       return;
     }
     expect(resolved).toContain("app.asar.unpacked");
-    expect(resolved).toContain("default-apps");
+    expect(resolved).toContain("default-jobs");
   });
 });

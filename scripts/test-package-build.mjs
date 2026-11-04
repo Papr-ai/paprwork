@@ -101,7 +101,6 @@ function checkBuilderConfig() {
   ];
 
   const requiredAsarUnpack = [
-    'dist/resources/default-apps/**',
     'dist/resources/default-jobs/**',
     'dist/resources/job-sdk/**',
     'dist/resources/mini-app-sdk/**',
