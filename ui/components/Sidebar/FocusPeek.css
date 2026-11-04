@@ -84,11 +84,11 @@
   width: auto;
 }
 
-/* Needs you in Pen's peek: same list as Focus, at most four rows. */
-.focus-peek__needs { padding-bottom: 6px; margin-bottom: 6px; border-bottom: 1px solid var(--rail-line, rgba(10, 16, 32, 0.08)); }
-.focus-peek__needs h4 { display: flex; gap: 6px; margin: 4px 10px 4px; font-size: 11.5px; font-weight: 600; color: var(--rail-soft); }
-.focus-peek__needs h4 em { font-style: normal; color: var(--rail-blue); }
-.focus-peek__needs ul { list-style: none; margin: 0; padding: 0; }
-.focus-peek__needs button { display: grid; grid-template-columns: 7px 1fr; gap: 10px; align-items: center; width: 100%; padding: 8px 10px; border: none; border-radius: 10px; background: transparent; text-align: left; font: inherit; cursor: pointer; }
-.focus-peek__needs button:hover { background: var(--rail-row-hover); }
-.focus-peek__needs i { width: 7px; height: 7px; border-radius: 50%; background: var(--rail-blue); }
+/* Needs you in Pen's peek: the top item in the same row style as Your three, then "N more". */
+.focus-peek__needs { display: grid; padding-bottom: 6px; margin-bottom: 6px; border-bottom: 1px solid var(--rail-line, rgba(10, 16, 32, 0.08)); }
+.focus-peek__need, .focus-peek__more { display: grid; grid-template-columns: 7px minmax(0, 1fr) auto; gap: 10px; align-items: center; width: 100%; padding: 9px 10px;
+  border: none; border-radius: 10px; background: transparent; text-align: left; font: inherit; cursor: pointer; }
+.focus-peek__need:hover, .focus-peek__more:hover { background: var(--rail-row-hover); }
+.focus-peek__need i { width: 7px; height: 7px; border-radius: 50%; background: var(--rail-blue); }
+.focus-peek__need .mention-pill { font-size: 11.5px; max-width: 110px; overflow: hidden; text-overflow: ellipsis; }
+.focus-peek__more { display: block; padding: 5px 10px 5px 27px; font-size: 12px; font-weight: 500; color: var(--rail-blue); }

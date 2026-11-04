@@ -2,7 +2,7 @@
 
 # Paprwork V2
 
-**AI-Powered Desktop Assistant** — Rebuilt with TypeScript and Mastra
+**Build software that runs your work, and gets smarter the more you use it**
 
 [![License: AGPL v3](https://img.shields.io/badge/License-AGPL%20v3-blue.svg)](https://www.gnu.org/licenses/agpl-3.0)
 [![Node Version](https://img.shields.io/badge/node-%3E%3D24.0.0-brightgreen)](https://nodejs.org/)

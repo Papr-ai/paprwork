@@ -1,0 +1,40 @@
+/* Mention card: the same glass card as KeyRequestCard. */
+.mention-card {
+  display: flex; flex-direction: column; gap: 6px;
+  width: 100%; max-width: 460px; margin: 10px 0; padding: 12px 14px;
+  border-radius: 16px; background: var(--rail-card);
+  backdrop-filter: blur(22px) saturate(1.6); -webkit-backdrop-filter: blur(22px) saturate(1.6);
+  border: 1px solid rgba(255, 255, 255, 0.7);
+  box-shadow: 0 18px 50px rgba(10, 16, 32, 0.12), 0 0 0 1px var(--rail-card-line);
+  color: var(--rail-ink); font-size: 13.5px; line-height: 1.45;
+}
+.mention-card.is-closed { opacity: 0.85; }
+.mention-card__from { color: var(--text-secondary); font-size: 12.5px; }
+.mention-card__from b { color: var(--rail-ink); font-weight: 600; }
+.mention-card__text { margin: 0; white-space: pre-wrap; }
+.mention-card small { display: block; font-size: 11px; font-weight: 600; letter-spacing: 0.02em; text-transform: uppercase; color: var(--text-secondary); margin-bottom: 2px; }
+.mention-card__action { margin: 2px 0 0; padding: 8px 10px; border-radius: 10px; background: color-mix(in srgb, var(--rail-blue) 9%, transparent); font-weight: 500; }
+.mention-card__action em { font-style: normal; color: var(--text-secondary); font-weight: 400; }
+.mention-card__reply { margin-top: 4px; padding-top: 8px; border-top: 1px solid var(--rail-card-line); }
+.mention-card__reply p { margin: 0; }
+.mention-card__reply textarea {
+  width: 100%; box-sizing: border-box; resize: vertical; font: inherit; color: inherit;
+  padding: 8px 10px; border-radius: 10px; border: 1px solid var(--rail-card-line); background: transparent;
+}
+.mention-card__next { margin-top: 6px !important; color: var(--text-secondary); font-size: 12.5px; }
+.mention-card__error { margin-top: 6px !important; color: var(--danger, #d33); font-size: 12.5px; }
+.mention-card footer { display: flex; gap: 6px; margin-top: 10px; flex-wrap: wrap; }
+.mention-card footer button {
+  border: 1px solid var(--rail-card-line); background: transparent; color: inherit;
+  font: inherit; font-size: 12.5px; padding: 5px 12px; border-radius: 999px; cursor: pointer;
+}
+.mention-card footer button:disabled { opacity: 0.55; cursor: default; }
+.mention-card footer .mention-card__send { background: var(--rail-blue); border-color: var(--rail-blue); color: #fff; font-weight: 600; }
+.mention-card__done { margin: 4px 0 0; padding-top: 8px; border-top: 1px solid var(--rail-card-line); color: var(--text-secondary); }
+.mention-ask textarea {
+  width: 100%; box-sizing: border-box; resize: vertical; font: inherit; color: inherit;
+  padding: 8px 10px; border-radius: 10px; border: 1px solid var(--rail-card-line); background: transparent;
+}
+.mention-ask__note { display: flex; align-items: center; gap: 8px; margin: 8px 0; font-size: 13px; color: var(--text-secondary); }
+.mention-ask__note button { border: none; background: none; padding: 0; font: inherit; color: var(--rail-blue); cursor: pointer; }
+.mention-ask__dot { width: 7px; height: 7px; border-radius: 50%; background: var(--rail-blue); flex: none; }

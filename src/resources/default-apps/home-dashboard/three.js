@@ -58,6 +58,11 @@ const Three = {
     const when = g.repeat ? this.every(g) : this.fmtDue(g.due);
     return [g.target, when].filter(Boolean).join(' · ') || (g.nextStep ? `Next: ${g.nextStep}` : '');
   },
+  /** The Monday review banner sits right under the date and stats, above Do this first (the Focus proposal order). */
+  review(onToday = true) {
+    const el = document.getElementById('review');
+    if (el) el.innerHTML = onToday && typeof WeekReview !== 'undefined' ? WeekReview.banner() : '';
+  },
   /** Today: the three rows under "Do this first". */
   section() {
     if (!this.has()) return '';
@@ -70,8 +75,7 @@ const Three = {
     }).join('');
     const aligned = d.alignedPct == null ? '' : `<p class="t3aligned"><span class="t3bar"><i style="width:${Math.min(100, d.alignedPct)}%"></i></span><b>${d.alignedPct}%</b> of this week's chat time went to these</p>`;
     const pick = d.source === 'pen' && !d.confirmed ? '<em class="t3pick" title="Pen picked these from your goals and activity. Edit any time.">Pen\'s picks</em>' : '';
-    const review = typeof WeekReview !== 'undefined' ? WeekReview.banner() : '';
-    return `${review}<section class="hthree"><header><h2 class="section-title">Your three ${pick}</h2>
+    return `<section class="hthree"><header><h2 class="section-title">Your three ${pick}</h2>
       <button type="button" class="t3link" data-three="edit">Edit</button></header>${rows}${aligned}</section>`;
   },
   /** One goal: where it stands, what moves it, and one tap to work on it. */
@@ -124,6 +128,7 @@ const Three = {
     const el = document.getElementById('three');
     const onToday = typeof App === 'undefined' || App.idx === 0;
     if (el) el.innerHTML = onToday ? this.section() : '';
+    this.review(onToday);
     // The first-run "What are you working toward?" prompt folds away once there is a three.
     const goals = document.getElementById('goals');
     if (goals && onToday && typeof App !== 'undefined') goals.innerHTML = App.goalsBlock();

@@ -226,6 +226,13 @@ export interface PollDeps {
   onMerged?: (sourceAppIds: string[]) => void;
   /** Persist who merged what, for the status dialog. */
   recordMerges?: (merges: LastMerge[]) => Promise<void>;
+  /** Mentions from teammates (mention, mention.replied). */
+  onCollab?: (events: ProposalEvent[]) => Promise<void>;
+}
+
+async function defaultCollab(events: ProposalEvent[]): Promise<void> {
+  const { handleCollabEvents } = await import("../collab/mentions.js");
+  await handleCollabEvents(events);
 }
 
 async function defaultFetchEvents(
@@ -351,6 +358,13 @@ export async function pollProposalEvents(
     const page = await (deps.fetchEvents ?? defaultFetchEvents)(since);
     if (!page) return 0;
     if (page.events.length > 0) {
+      // Mentions between people ride the same feed; they open a chat instead of a share bar.
+      const collab = page.events.filter((e) => e.type === "mention" || e.type === "mention.replied" || e.type === "mention.followup");
+      if (collab.length) await (deps.onCollab ?? defaultCollab)(collab);
+      // Goals/tasks/briefs/settings changed on another device (or a teammate assigned a task): pull.
+      if (!deps.fetchEvents && page.events.some((e) => e.type === "focus.changed")) {
+        void import("../focusCloud/focusCloudSync.js").then((m) => m.scheduleFocusCloudSync("changed elsewhere", 500)).catch(() => undefined);
+      }
       (deps.onRefresh ?? defaultRefresh)(appIdsToRefresh(page.events));
       if (!deps.onRefresh) refreshConnections(page.events);
       (deps.onNotify ?? defaultNotify)(summarizeNotices(page.events, Number.POSITIVE_INFINITY));

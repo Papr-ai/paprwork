@@ -63,6 +63,8 @@ import { assistantMessageHasVisibleContent } from "../../utils/assistantMessageV
 import { AgentLoadingDots } from "./AgentLoadingDots";
 import { AgentGlyph } from "../Agent/AgentGlyph";
 import { useAgentIdentity, useAgentName } from "../Agent/agentIdentityStore";
+import { MentionCard, parseMentionCard } from "./MentionCard";
+import { MentionAskCard, parseMentionAsk, type MentionAskData } from "./MentionAskCard";
 import "./MessageItem.css";
 
 function resolveDelegationAgentDisplay(
@@ -231,7 +233,7 @@ function renderSequence(
           // Text before/between tools → goes inside exploring card
           exploringItems.push(
             <div key={`text-${index}`} className="exploring-narration">
-              <Markdown>{item.data.trim()}</Markdown>
+              <Markdown mentions>{item.data.trim()}</Markdown>
             </div>,
           );
         }
@@ -675,7 +677,7 @@ function renderSequence(
     if (finalTextAfterAllTools) {
       elements.push(
         <div key="final-text" className="message-text">
-          <Markdown>{finalTextAfterAllTools}</Markdown>
+          <Markdown mentions>{finalTextAfterAllTools}</Markdown>
         </div>,
       );
     }
@@ -689,7 +691,7 @@ function renderSequence(
           key={`delegation-followup-${followUp.id}`}
           className="message-text"
         >
-          <Markdown>{followUpText}</Markdown>
+          <Markdown mentions>{followUpText}</Markdown>
         </div>,
       );
     }
@@ -700,7 +702,7 @@ function renderSequence(
     if (fullText.trim()) {
       elements.push(
         <div key="text" className="message-text">
-          <Markdown>{fullText}</Markdown>
+          <Markdown mentions>{fullText}</Markdown>
         </div>,
       );
     }
@@ -768,6 +770,29 @@ const MessageItemInner: React.FC<MessageItemProps> = ({
 
   const copyText = !isUser && !message.isStreaming ? getAssistantCopyText(message) : "";
   const showCopyButton = copyText.length > 0;
+
+  // A teammate's mention: the card replaces the text (the text is for Pen's context).
+  const mentionCards = isUser
+    ? []
+    : (message.toolCalls ?? []).flatMap((tc) => {
+        const d = parseMentionCard(tc.toolName, tc.result);
+        return d ? [d] : [];
+      });
+  const isMention = mentionCards.length > 0;
+  // Pen's "Ask Shawkat?" suggestions (mention_person results), from the stored tool calls or the live sequence.
+  const askCards = (() => {
+    if (isUser) return [] as MentionAskData[];
+    const seen = new Map<string, MentionAskData>();
+    const add = (name: string | undefined, result: unknown) => {
+      const d = name ? parseMentionAsk(name, result) : null;
+      if (d) seen.set(d.mentioned.map((m) => m.mentionId).join(","), d);
+    };
+    (message.toolCalls ?? []).forEach((tc) => add(tc.toolName, tc.result));
+    (message.sequence ?? []).forEach((it) => {
+      if (it.type === "tool" && typeof it.data === "object") add((it.data as { name?: string }).name, (it.data as { output?: unknown }).output);
+    });
+    return [...seen.values()];
+  })();
 
   // Check if message has V1-style sequence
   const hasSequence = message.sequence && message.sequence.length > 0;
@@ -896,8 +921,10 @@ const MessageItemInner: React.FC<MessageItemProps> = ({
                 ));
               })()}
 
+            {mentionCards.map((d) => <MentionCard key={`mention-${d.itemId}`} data={d} />)}
+
             {/* Tool calls - only for assistant messages */}
-            {!isUser && message.toolCalls && message.toolCalls.length > 0 && (
+            {!isUser && !isMention && message.toolCalls && message.toolCalls.length > 0 && (
               <>
                 <ExploringCard
                   toolCalls={message.toolCalls}
@@ -1050,9 +1077,9 @@ const MessageItemInner: React.FC<MessageItemProps> = ({
             )}
 
             {/* Main message text */}
-            {content && (
+            {content && !isMention && (
               <div className="message-text">
-                <Markdown>{content}</Markdown>
+                <Markdown mentions>{content}</Markdown>
                 {message.isStreaming && !message.streamingReasoning && (
                   <span className="streaming-cursor">▊</span>
                 )}
@@ -1068,12 +1095,14 @@ const MessageItemInner: React.FC<MessageItemProps> = ({
                   key={`delegation-followup-fallback-${followUp.id}`}
                   className="message-text"
                 >
-                  <Markdown>{followUpText}</Markdown>
+                  <Markdown mentions>{followUpText}</Markdown>
                 </div>
               );
             })}
           </>
         )}
+
+        {askCards.map((d) => <MentionAskCard key={`ask-${d.mentioned[0].mentionId}`} data={d} />)}
 
         {showCopyButton && <MessageCopyButton text={copyText} />}
 
