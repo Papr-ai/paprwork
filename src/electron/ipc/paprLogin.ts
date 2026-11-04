@@ -33,7 +33,11 @@ import {
   notifyGatewayPaprApiKeyUpdate,
   registerPaprWorkspaceHandlers,
 } from "./paprWorkspace.js";
-import { ensureDeveloperStripeSubscription, invalidatePlanSummaryCache } from "./paprBilling.js";
+import {
+  ensureDeveloperStripeSubscription,
+  invalidatePlanSummaryCache,
+  isCreditsBillingOrg,
+} from "./paprBilling.js";
 import {
   startPaprAuthCallbackServer,
   stopPaprAuthCallbackServer,
@@ -3524,7 +3528,13 @@ async function finalizeLoginWithProvisioning(
   );
   trackLoginStep("profile_synced");
 
-  if (workspaceInfo.workspaceId && activeOrganizationId) {
+  // Credits orgs have no legacy Developer subscription (Local is free; paid plans go
+  // through credits checkout), so don't create one at sign-in.
+  if (
+    workspaceInfo.workspaceId &&
+    activeOrganizationId &&
+    !(await isCreditsBillingOrg(parseSessionToken))
+  ) {
     await ensureDeveloperStripeSubscription({
       sessionToken: parseSessionToken,
       workspaceId: workspaceInfo.workspaceId,
