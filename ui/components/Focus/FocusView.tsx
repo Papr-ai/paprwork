@@ -2,6 +2,7 @@
  * FocusView — the agent's page, opened from the rail agent. One job: what matters today.
  * Native: the brief, Needs you, Your three, Waiting on, goals and tasks (Focus/page). No iframe.
  */
+import "./FocusView.css";
 import { FocusPage } from "./page/FocusPage";
 import { focusEnv } from "./page/focusApi";
 import { useFocusFeed } from "./focusBridge";
