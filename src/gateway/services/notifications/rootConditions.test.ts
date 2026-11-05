@@ -7,7 +7,7 @@ import { NoticeService } from "./NoticeService.js";
 let svc: NoticeService;
 vi.mock("./NoticeService.js", async (orig) => {
   const m = await orig<typeof import("./NoticeService.js")>();
-  return { ...m, tryNotify: (i: Parameters<NoticeService["notify"]>[0]) => svc.notify(i), tryResolve: (k: string) => svc.resolve(k) };
+  return { ...m, tryNotify: (i: Parameters<NoticeService["notify"]>[0]) => svc.notify(i), tryResolve: (k: string) => svc.resolve(k), tryListOpen: () => svc.listOpen() };
 });
 const root = await import("./rootConditions.js");
 
@@ -40,5 +40,13 @@ describe("one root cause, one notice", () => {
     expect(svc.listOpen()[0]).toMatchObject({ level: "urgent", mark: "blue", title: "You're out of AI credits" });
     root.creditsBack();
     expect(svc.listOpen()).toHaveLength(0);
+  });
+
+  it("server credits-out replaces the desktop one: no second notice for the same problem", () => {
+    svc.applyRemote({ key: "billing.out:o", kind: "billing.credits_out", type: "condition", level: "urgent", title: "Your team is out of AI credits",
+      source: { type: "billing", id: "billing", name: "Billing" }, owner: { kind: "account", id: "billing", name: "Billing", section: "billing" },
+      state: "open", updatedAt: new Date().toISOString() } as never, { silent: true });
+    root.creditsOut("papr");
+    expect(svc.listOpen().map((x) => x.key)).toEqual(["billing.out:o"]);
   });
 });
