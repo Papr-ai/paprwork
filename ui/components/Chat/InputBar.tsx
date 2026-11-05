@@ -27,7 +27,8 @@ import type { ProviderNotice } from "../../utils/providerErrorPresentation";
 import type { ContextInfo } from "./ContextInspectorModal";
 import { ContextPills } from "./ContextPills";
 import { SlashCommandMenu } from "./SlashCommandMenu";
-import { MentionMenu, insertMention, mentionQueryAt, type Teammate } from "./MentionMenu";
+import { MentionMenu, cachedTeammates, insertMention, mentionQueryAt, type Teammate } from "./MentionMenu";
+import { mentionSegments } from "./mentionText";
 import type { Artifact } from "../../stores/artifactsStore";
 import {
   createArtifactsFromIncomingFiles,
@@ -166,6 +167,9 @@ export const InputBar = forwardRef<InputBarRef, InputBarProps>(
     const [slashQuery, setSlashQuery] = useState("");
     /** Text after "@" at the cursor while picking a teammate; null when not picking. */
     const [mentionQuery, setMentionQuery] = useState<string | null>(null);
+    /** Names picked from the @ menu this session (the team cache may still be loading). */
+    const [pickedNames, setPickedNames] = useState<string[]>([]);
+    const mirrorRef = useRef<HTMLDivElement>(null);
     const [mentionOpen, setMentionOpen] = useState(false);
     const [selectedArtifacts, setSelectedArtifacts] = useState<Artifact[]>([]);
     const [isSavingAttachments, setIsSavingAttachments] = useState(false);
@@ -543,6 +547,7 @@ export const InputBar = forwardRef<InputBarRef, InputBarProps>(
       const el = textareaRef.current;
       const next = insertMention(message, el?.selectionStart ?? message.length, m.displayName);
       setMessage(next.text);
+      setPickedNames((p) => (p.includes(m.displayName) ? p : [...p, m.displayName]));
       setMentionQuery(null);
       requestAnimationFrame(() => { el?.focus(); el?.setSelectionRange(next.cursor, next.cursor); });
     };
@@ -615,8 +620,20 @@ export const InputBar = forwardRef<InputBarRef, InputBarProps>(
 
           {/* Input row */}
           <div className="input-row">
+            {(() => {
+              const segs = mentionSegments(message, [...pickedNames, ...cachedTeammates().map((m) => m.displayName)]);
+              const hasPill = segs.some((x) => x.mention);
+              return (
+            <div className={`input-textarea-wrap${hasPill ? " input-textarea-wrap--pills" : ""}`}>
+            {hasPill ? (
+              <div ref={mirrorRef} className="input-mirror" aria-hidden="true">
+                {segs.map((x, i) => (x.mention ? <span key={i} className="input-mirror__pill">{x.text}</span> : <span key={i}>{x.text}</span>))}
+                {"\u200b"}
+              </div>
+            ) : null}
             <textarea
               ref={textareaRef}
+              onScroll={(e) => { if (mirrorRef.current) mirrorRef.current.scrollTop = e.currentTarget.scrollTop; }}
               className="input-textarea"
               data-testid="chat-input"
               value={message}
@@ -630,6 +647,9 @@ export const InputBar = forwardRef<InputBarRef, InputBarProps>(
               placeholder={placeholder}
               rows={1}
             />
+            </div>
+              );
+            })()}
             {providerNotice ? (
               <ProviderErrorChip
                 notice={providerNotice}
