@@ -351,8 +351,18 @@ const PUBLISH_STATUS_NOT_FOUND_TTL_MS = 60 * 60 * 1000;
 const PUBLISH_STATUS_FOUND_TTL_MS = 30 * 1000;
 const publishStatusCache = new Map<
   string,
-  { expiresAt: number; value: Promise<PublishApiResponse | null> }
+  {
+    expiresAt: number;
+    value: Promise<PublishApiResponse | null>;
+    /** PAPR_API_KEY that fetched it. A 404 from another org's key says nothing
+     *  about this org — without this, an app read mid-switch showed "draft" for 1h. */
+    key: string;
+  }
 >();
+
+function publishStatusCacheKey(): string {
+  return (process.env.PAPR_API_KEY ?? "").trim();
+}
 
 export function invalidatePublishStatusCache(appId?: string): void {
   if (appId) publishStatusCache.delete(appId);
@@ -384,16 +394,17 @@ export class CloudAppPublishService {
   private fetchMemoryPublishResponse(
     appId: string,
   ): Promise<PublishApiResponse | null> {
+    const key = publishStatusCacheKey();
     const hit = publishStatusCache.get(appId);
-    if (hit && hit.expiresAt > Date.now()) return hit.value;
+    if (hit && hit.key === key && hit.expiresAt > Date.now()) return hit.value;
     const value = this.fetchMemoryPublishResponseUncached(appId);
     // Concurrent callers share one request; errors are never cached.
-    publishStatusCache.set(appId, { expiresAt: Date.now() + PUBLISH_STATUS_FOUND_TTL_MS, value });
+    publishStatusCache.set(appId, { expiresAt: Date.now() + PUBLISH_STATUS_FOUND_TTL_MS, value, key });
     value.then(
       (data) => {
         if (publishStatusCache.get(appId)?.value !== value) return;
         const ttl = data ? PUBLISH_STATUS_FOUND_TTL_MS : PUBLISH_STATUS_NOT_FOUND_TTL_MS;
-        publishStatusCache.set(appId, { expiresAt: Date.now() + ttl, value });
+        publishStatusCache.set(appId, { expiresAt: Date.now() + ttl, value, key });
       },
       () => {
         if (publishStatusCache.get(appId)?.value === value) publishStatusCache.delete(appId);

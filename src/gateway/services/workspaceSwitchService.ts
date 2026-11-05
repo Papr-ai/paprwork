@@ -545,6 +545,7 @@ export async function applyGatewayPaprApiKey(apiKey: string): Promise<void> {
   clearKeyCache("PAPR_API_KEY");
   invalidatePaprUserIdCache();
   getCustomKeysService().invalidateCache();
+  await import("./CloudAppPublishService.js").then((m) => m.invalidatePublishStatusCache()).catch(() => undefined);
 
   // Key rotated within the same workspace. Turso tokens belong to databases,
   // not to the API key, and are keyed by org/namespace/user — keep them.
@@ -706,6 +707,9 @@ export async function switchActiveWorkspace(
     process.env.PAPR_API_KEY = paprApiKey;
     clearKeyCache("PAPR_API_KEY");
     invalidatePaprUserIdCache();
+    // Publish status is per org: a cached "not published" from the old org
+    // made live apps show as Draft after switching.
+    await import("./CloudAppPublishService.js").then((m) => m.invalidatePublishStatusCache()).catch(() => undefined);
 
     broadcast({
       type: "workspace:switch-started",

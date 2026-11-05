@@ -12,7 +12,7 @@
 
 import React, { useEffect, useMemo, useRef, useState } from "react";
 import { saveAppAccess } from "../../utils/appAccessApi";
-import type { AppAccess } from "../../utils/appRolesModel";
+import { rank, type AppAccess } from "../../utils/appRolesModel";
 import {
   audiencesDirty,
   audiencesPatch,
@@ -47,7 +47,7 @@ export interface ShareSheetV9Props {
   body: ShareSheetBodyProps;
   access: AppAccess;
   onAccessSaved: (a: AppAccess) => void;
-  /** Team copy: no link of its own, just who has access to the original. */
+  /** Team copy: no link or gallery of its own, just who has access to the original. */
   hideLink?: boolean;
 }
 
@@ -61,7 +61,10 @@ export function ShareSheetV9({ body, access, onAccessSaved, hideLink }: ShareShe
   const [error, setError] = useState<string | null>(null);
   const [keysReload, setKeysReload] = useState(0);
   const keySpecs = useKeySpecs(body.appId, keysReload);
-  const hasKeys = !hideLink && (keySpecs?.length ?? 0) > 0;
+  // Contributors and up always get the link (a team copy's is the original's);
+  // Admins of a team copy also get its API keys.
+  const showLink = !hideLink || (Boolean(body.linkUrl) && (access.canManage || rank(access.callerRole) >= rank("contributor")));
+  const hasKeys = (!hideLink || access.canManage) && (keySpecs?.length ?? 0) > 0;
   const [keysDirty, setKeysDirty] = useState(false);
   const saveRef = useRef<(() => Promise<boolean>) | null>(null);
   const keys: KeysDraft = {
@@ -123,7 +126,7 @@ export function ShareSheetV9({ body, access, onAccessSaved, hideLink }: ShareShe
     return (
       <div className="ss6">
         {body.notices}
-        {hideLink ? null : <Hero body={body} audience={widestAudience(live, pub)} summary={summarizeAudiences(live, pub)} />}
+        {showLink ? <Hero body={body} audience={widestAudience(live, pub)} summary={summarizeAudiences(live, pub)} /> : null}
         <ShareWhoV9 access={access} draft={live} onChange={() => undefined} members={members}
           membersLoading={body.access?.membersLoading} workspaceName={body.access?.workspaceName} dataCheck={dataCheck} />
       </div>
@@ -181,7 +184,7 @@ export function ShareSheetV9({ body, access, onAccessSaved, hideLink }: ShareShe
   return (
     <div className="ss6">
       {body.notices}
-      {hideLink ? null : <Hero body={body} audience={widestAudience(live, pub)} summary={summary} />}
+      {showLink ? <Hero body={body} audience={widestAudience(live, pub)} summary={summary} /> : null}
       <div className="ss6-summary">
         <Row label="Who has access" value={summary} icon={ICON_PATHS.roles} onClick={() => setStep("who")} />
         {hasKeys ? (
@@ -249,16 +252,25 @@ function Hero({ body, audience, summary }: {
  */
 export function ShareAccessSheet(props: {
   appId: string;
+  appTitle?: string;
   members: SharePeopleMember[];
   membersLoading?: boolean;
   onClose: () => void;
   fallback: React.ReactNode;
+  /** The original's link — shown to Contributors and up. */
+  linkUrl?: string | null;
+  onCopyLink?: () => void;
+  onOpenLink?: () => void;
 }) {
   const { access, loading, setAccess } = useAppAccess(props.appId);
   if (loading) return <p className="ss6-note">Loading access…</p>;
   if (!supportsAudiences(access)) return <>{props.fallback}</>;
   const body = {
     appId: props.appId,
+    appTitle: props.appTitle,
+    linkUrl: props.linkUrl ?? null,
+    onCopyLink: props.onCopyLink ?? (() => undefined),
+    onOpenLink: props.onOpenLink ?? (() => undefined),
     missingKeys: [],
     busy: false,
     access: { members: props.members, membersLoading: props.membersLoading },
