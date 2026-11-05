@@ -1663,7 +1663,9 @@ export class JobsService {
       return JSON.parse(raw) as JobGraph;
     } catch (error) {
       const err = error as NodeJS.ErrnoException;
-      if (err.code === "ENOENT") {
+      // Missing, or unreadable from an older non-atomic write: the graph is
+      // derived data, so rebuild it rather than failing the caller.
+      if (err.code === "ENOENT" || error instanceof SyntaxError) {
         await this.rebuildGraph();
         try {
           const raw = await fs.readFile(this.graphPath, "utf8");
@@ -1775,11 +1777,11 @@ export class JobsService {
       }
 
       await fs.mkdir(path.dirname(this.graphPath), { recursive: true });
-      await fs.writeFile(
-        this.graphPath,
-        JSON.stringify(graph, null, 2),
-        "utf8",
-      );
+      // rebuildGraph runs fire-and-forget after every mutation, so overlapping
+      // rebuilds and readers are normal. A plain writeFile truncates first, and a
+      // reader landing in that window saw an empty file ("Unexpected end of JSON
+      // input"). Temp file + rename: readers see the old graph or the new one.
+      await writeJsonAtomic(this.graphPath, graph);
     } catch (error) {
       console.warn("[JobsService] Failed to rebuild graph:", error);
     }
