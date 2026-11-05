@@ -648,6 +648,12 @@ export function ShareSheetBody(props: ShareSheetBodyProps) {
   // v9: when the server can open several audiences at once, the whole sheet
   // is the new one (Who has access → API keys). Older servers keep this one.
   const v9 = useAppAccess(props.access ? props.appId : null);
+  // Loading access re-syncs the link and invite token from the server, so the
+  // bar's Copy link must re-read them rather than keep a stale link.
+  const onAccessLoaded = props.access?.onSaved;
+  useEffect(() => {
+    if (v9.access) onAccessLoaded?.();
+  }, [v9.access]); // eslint-disable-line react-hooks/exhaustive-deps
   if (v9.loading && props.access) {
     return <div className="ss6">{notices}<p className="ss6-note">Loading…</p></div>;
   }
@@ -656,10 +662,7 @@ export function ShareSheetBody(props: ShareSheetBodyProps) {
       <ShareSheetV9
         body={props}
         access={v9.access}
-        onAccessSaved={(a) => {
-          v9.setAccess(a);
-          props.access?.onSaved?.();
-        }}
+        onAccessSaved={v9.setAccess}
       />
     );
   }
