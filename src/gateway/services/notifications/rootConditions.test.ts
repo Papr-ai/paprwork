@@ -49,4 +49,12 @@ describe("one root cause, one notice", () => {
     root.creditsOut("papr");
     expect(svc.listOpen().map((x) => x.key)).toEqual(["billing.out:o"]);
   });
+
+  it("server Cloud-paused replaces the desktop plan-paused notice", () => {
+    svc.applyRemote({ key: "billing.cloud_paused:o", kind: "billing.cloud_paused", type: "condition", level: "priority", title: "Papr Cloud is paused for your team",
+      source: { type: "billing", id: "billing", name: "Billing" }, owner: { kind: "account", id: "billing", name: "Billing", section: "billing" },
+      state: "open", updatedAt: new Date().toISOString() } as never, { silent: true });
+    root.planPaused("Papr Cloud paused", "Plan limit");
+    expect(svc.listOpen().map((x) => x.key)).toEqual(["billing.cloud_paused:o"]);
+  });
 });
