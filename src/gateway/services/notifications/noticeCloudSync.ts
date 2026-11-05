@@ -48,9 +48,15 @@ async function defaultFetch(since?: string) {
   return { status: res.status, body: (await res.json()) as { notices: RemoteNotice[]; cursor: string; more: boolean } };
 }
 
+/** Server notices that replace a desktop one for the same problem (one problem, one notice). */
+const REPLACES: Record<string, string> = { "billing.credits_out": "account.credits" };
+
 async function defaultApply(n: RemoteNotice, silent: boolean): Promise<void> {
   const { getNoticeService } = await import("./NoticeService.js");
-  getNoticeService().applyRemote(n, { silent });
+  const svc = getNoticeService();
+  svc.applyRemote(n, { silent });
+  const local = REPLACES[n.kind];
+  if (local && n.state !== "done") svc.resolve(local);
 }
 
 /** One pull, all pages. Returns how many notices were applied, or null when skipped. */

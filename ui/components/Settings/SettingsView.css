@@ -98,6 +98,10 @@
   flex-shrink: 0;
 }
 
+.settings-tab__notice { margin-left: auto; }
+.settings-tab .notif-dot--blue { background: #0161e0; }
+.settings-tab .notif-dot--green { background: #10b981; }
+
 .settings-tab__attention--paused {
   background: rgb(249, 115, 22);
   box-shadow: 0 0 6px rgba(249, 115, 22, 0.4);

@@ -386,6 +386,10 @@ export function tryNotify(input: NoticeInput | RoutedNotice): void {
   try { getNoticeService().notify(input); } catch (e) { console.warn("[NoticeService] notify failed:", e); }
 }
 
+export function tryListOpen(): Notice[] {
+  try { return getNoticeService().listOpen(); } catch { return []; }
+}
+
 export function tryResolve(key: string): void {
   try { getNoticeService().resolve(key); } catch (e) { console.warn("[NoticeService] resolve failed:", e); }
 }
