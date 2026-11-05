@@ -108,6 +108,13 @@ describe("server billing notices obey the Account & team chips", () => {
       expect(account).toContain(typeOf(mk(k, k.endsWith("ok") || k.includes("plan_") || k.includes("declined") ? "fyi" : "priority")));
     }
   });
+  it("the newer server billing kinds land on existing chips", () => {
+    expect(typeOf(mk("billing.team_low", "priority"))).toBe("billing.low");
+    expect(typeOf(mk("billing.topup_low", "priority"))).toBe("billing.low");
+    expect(typeOf(mk("billing.cloud_paused", "priority"))).toBe("billing.payment");
+    expect(typeOf(mk("billing.topup_using", "fyi"))).toBe("billing.topup_ok");
+    expect(typeOf(mk("billing.topup_expired", "fyi"))).toBe("billing.topup_ok");
+  });
   it("turning a chip off mutes it; urgent ignores it", () => {
     const prefs = mergePrefs(DEFAULT_NOTICE_PREFS, { types: { "account/billing.low": false } });
     expect(route(mk("billing.low", "priority"), { ...ctx(), prefs }).muted).toBe(true);
