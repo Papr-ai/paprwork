@@ -17,6 +17,20 @@ import type { SettingsTab } from "../types/settings";
 /** Proposal / connection notices land on these Settings sections. */
 const SECTION_EVENT: Record<string, string> = { "connections-requests": "papr:connections-show-requests" };
 
+/** Settings sections an account notice can land on. */
+const ACCOUNT_SECTIONS = new Set<string>(["billing", "connections", "connections-requests", "team", "keys", "notifications", "cloud", "profile"]);
+
+/**
+ * Where an account notice opens. Cloud notices (member requests, connection requests) carry
+ * owner.id ("billing", "connections") but no section, so fall back to the id instead of
+ * landing on the Settings default (Profile). Connection requests go to the Requests list.
+ */
+export function accountSection(owner: NoticeOwner, key?: string): string | undefined {
+  if (owner.section) return owner.section;
+  if (owner.id === "connections" && key?.startsWith("connection:")) return "connections-requests";
+  return ACCOUNT_SECTIONS.has(owner.id) ? owner.id : undefined;
+}
+
 export function openNoticeOwner(owner: NoticeOwner | undefined, key?: string): void {
   // Clicking it is seeing it, wherever you land.
   if (key) void gateway.send("notifications:clicked", { key }).catch(() => {});
@@ -31,9 +45,10 @@ export function openNoticeOwner(owner: NoticeOwner | undefined, key?: string): v
     switchToTab(existing?.id ?? createTab(owner.kind, owner.id, owner.name));
     return;
   }
-  const section = owner.section === "connections-requests" ? "connections" : owner.section;
+  const target = accountSection(owner, key);
+  const section = target === "connections-requests" ? "connections" : target;
   ensureSettingsTab(section ? { section: section as SettingsTab } : undefined);
-  const evt = owner.section ? SECTION_EVENT[owner.section] : undefined;
+  const evt = target ? SECTION_EVENT[target] : undefined;
   if (evt) window.setTimeout(() => window.dispatchEvent(new CustomEvent(evt)), 50);
 }
 
