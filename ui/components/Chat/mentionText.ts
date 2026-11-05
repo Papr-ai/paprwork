@@ -53,3 +53,22 @@ export function filterTeammates(team: Teammate[], q: string): Teammate[] {
   const s = q.toLowerCase();
   return team.filter((m) => !s || m.displayName.toLowerCase().split(/\s+/).some((w) => w.startsWith(s)) || m.email.toLowerCase().startsWith(s)).slice(0, 6);
 }
+
+/** Split composer text into plain runs and "@Name" runs for known teammates, so the input can
+ *  draw people as pills. Longest names first; the @ must start a word. */
+export function mentionSegments(text: string, names: string[]): Array<{ text: string; mention: boolean }> {
+  const known = [...new Set(names.filter(Boolean))].sort((a, b) => b.length - a.length);
+  if (!known.length || !text.includes("@")) return [{ text, mention: false }];
+  const esc = known.map((n) => n.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")).join("|");
+  const re = new RegExp(`(^|\\s)(@(?:${esc}))(?![\\p{L}\\p{N}])`, "giu");
+  const out: Array<{ text: string; mention: boolean }> = [];
+  let last = 0;
+  for (const m of text.matchAll(re)) {
+    const start = m.index! + m[1].length;
+    if (start > last) out.push({ text: text.slice(last, start), mention: false });
+    out.push({ text: m[2], mention: true });
+    last = start + m[2].length;
+  }
+  if (last < text.length) out.push({ text: text.slice(last), mention: false });
+  return out.length ? out : [{ text, mention: false }];
+}

@@ -7,7 +7,6 @@ import { useEffect, useState } from "react";
 import { gateway } from "../../src/lib/gateway";
 import "./MentionCard.css";
 import { dueLabel } from "../../../src/core/collab/promised";
-import { MentionPill } from "../common/mentionPill";
 
 export interface MentionAskData {
   type: "mention_ask"; ask: string; notified: boolean;
@@ -50,19 +49,8 @@ export function MentionAskCard({ data }: { data: MentionAskData }) {
       <p className="mention-ask__note">Okay, I won't ask {names}. <button type="button" onClick={() => setState("suggested")}>Undo</button></p>
     );
   }
-  if (state === "asked") {
-    // Same card as a Focus item: status label, the ask as the title, then who and when.
-    return (
-      <section className="mention-sent" aria-label={`Asked ${names}`}>
-        <small>Asked</small>
-        <b className="mention-sent__title">{data.action?.title ?? draft}</b>
-        <span className="mention-sent__who">
-          {data.mentioned.map((m) => <MentionPill key={m.mentionId} name={m.name} />)}
-          {data.action?.due ? <span>due {dueLabel(data.action.due)}</span> : null}
-        </span>
-      </section>
-    );
-  }
+  // Once asked, Pen's own sentence ("Notified @Amir to review …") already says it; no second card.
+  if (state === "asked") return null;
   return (
     <section className="mention-card mention-ask" aria-label={`Ask ${names}?`}>
       <header className="mention-card__from"><b>Ask {data.mentioned.map((m) => m.name).join(", ")}?</b></header>

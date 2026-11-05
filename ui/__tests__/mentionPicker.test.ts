@@ -40,3 +40,15 @@ describe("@ dropdown", () => {
     expect(rankTeammates(team, "sam", 6, ["u1"]).recentCount).toBe(0); // recent but not a match
   });
 });
+
+import { mentionSegments } from "../components/Chat/mentionText";
+describe("mentionSegments (pills in the composer)", () => {
+  it("marks known teammates, longest name first", () => {
+    const s = mentionSegments("ask @Shawkat Kabbara and @amir+1 now", ["Shawkat", "Shawkat Kabbara", "amir+1"]);
+    expect(s.filter((x) => x.mention).map((x) => x.text)).toEqual(["@Shawkat Kabbara", "@amir+1"]);
+    expect(s.map((x) => x.text).join("")).toBe("ask @Shawkat Kabbara and @amir+1 now");
+  });
+  it("leaves unknown names, emails and mid-word @ alone", () => {
+    expect(mentionSegments("mail a@Shawkat or @bob", ["Shawkat"]).some((x) => x.mention)).toBe(false);
+  });
+});

@@ -587,3 +587,23 @@
     background: #2f7fed;
   }
 }
+
+/* @mentions show as pills while typing: a mirror behind a see-through textarea draws the text,
+   with teammates highlighted. The pill adds no width (box-shadow, no padding) so the caret lines up. */
+.input-textarea-wrap { position: relative; flex: 1; display: flex; min-width: 0; }
+.input-mirror {
+  position: absolute; inset: 0; overflow: hidden; pointer-events: none;
+  font-family: var(--font-body); font-size: 15px; line-height: 1.5; color: var(--text-color);
+  white-space: pre-wrap; overflow-wrap: break-word; word-break: break-word;
+}
+.input-mirror__pill {
+  border-radius: 999px; font-weight: inherit;
+  background: color-mix(in srgb, var(--primary-color, #0161e0) 14%, transparent);
+  box-shadow: 0 0 0 3px color-mix(in srgb, var(--primary-color, #0161e0) 14%, transparent);
+  color: var(--primary-color, #0161e0);
+  -webkit-box-decoration-break: clone; box-decoration-break: clone;
+}
+.input-textarea-wrap--pills .input-textarea {
+  position: relative; color: transparent; caret-color: var(--text-color);
+  white-space: pre-wrap; overflow-wrap: break-word; word-break: break-word;
+}
