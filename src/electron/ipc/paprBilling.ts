@@ -40,7 +40,7 @@ import {
   type MemberPolicy,
   type MemberRequestKind,
 } from "../../core/utils/paprCreditSeats.js";
-import { buildCreditsPlanSummary, creditsSummaryFromUsage } from "../../core/utils/paprCreditsPlanSummary.js";
+import { buildCreditsPlanSummary, creditsRoleFromBuilders, creditsSummaryFromUsage } from "../../core/utils/paprCreditsPlanSummary.js";
 import { memoryBaseUrl } from "./paprHandoff.js";
 
 type GraphQLRunner = (
@@ -556,15 +556,17 @@ async function buildPlanSummary(services: BillingServices): Promise<PaprPlanSumm
   if (credits) {
     const creditsRole = await resolveWorkspaceRole(profile.sessionToken!, workspaceId, profile.userId)
       .catch(() => "member");
-    // Memory decides who is an org admin for credits orgs. The Parse workspace role can be
-    // missing (no workspace membership, Forbidden), so ask memory when Parse says "member":
-    // /builders answers only for owners and admins.
-    const memoryAdmin = creditsRole === "owner" || creditsRole === "admin"
-      || await fetchBuilders(memoryBaseUrl(), profile.sessionToken!).then(() => true, () => false);
+    // Memory decides who is an org owner/admin for credits orgs. The Parse workspace role can
+    // be missing (member list Forbidden), so ask memory when Parse says "member":
+    // /builders answers only for owners and admins, and its rows carry each user's roles.
+    const role = creditsRole === "owner" || creditsRole === "admin"
+      ? creditsRole
+      : await fetchBuilders(memoryBaseUrl(), profile.sessionToken!)
+        .then((view) => creditsRoleFromBuilders(view, profile.userId), () => null);
     return buildCreditsPlanSummary({
       credits,
-      isWorkspaceOwner: creditsRole === "owner",
-      isWorkspaceAdmin: memoryAdmin,
+      isWorkspaceOwner: role === "owner",
+      isWorkspaceAdmin: role === "owner" || role === "admin",
       stripeCustomerId,
     });
   }
