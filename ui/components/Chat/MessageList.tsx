@@ -3,6 +3,7 @@
  */
 
 import React, {
+  useCallback,
   useLayoutEffect,
   useRef,
   useEffect,
@@ -54,6 +55,9 @@ function isSubAgentDeliveryPlaceholder(content: string): boolean {
   );
 }
 
+/** Within this many px of the bottom counts as "at the latest message". */
+const AT_BOTTOM_PX = 4;
+
 export const MessageList: React.FC<MessageListProps> = ({
   chatId,
   messages,
@@ -71,6 +75,8 @@ export const MessageList: React.FC<MessageListProps> = ({
   const messagesEndRef = useRef<HTMLDivElement>(null);
   const activeRequest = usePermissionStore((s) => s.activeRequest);
   const autoScrollEnabled = useRef(true);
+  /** User scrolled away from the live bottom — show "Jump to latest". */
+  const [detached, setDetached] = useState(false);
   const lastScrollHeight = useRef(0);
   const previousMessageCount = useRef(messages.length);
   /** True when the viewport is at the start of loaded history (older pages not yet shown). */
@@ -172,21 +178,111 @@ export const MessageList: React.FC<MessageListProps> = ({
     const listElement = listRef.current;
     if (!listElement) return;
 
+    // Follow mode is driven by user INTENT, not position. A position threshold
+    // (old: "within 100px = follow") trapped trackpad users: each small upward
+    // tick stayed inside the threshold, so the next streamed token yanked them
+    // back down. Now: any upward user scroll detaches immediately; only
+    // reaching the real bottom (or sending a message) re-attaches.
+    let lastScrollTop = listElement.scrollTop;
+    const detach = () => {
+      autoScrollEnabled.current = false;
+      setDetached(true);
+    };
+    const attach = () => {
+      autoScrollEnabled.current = true;
+      setDetached(false);
+    };
+
     const handleScroll = () => {
       const { scrollTop, scrollHeight, clientHeight } = listElement;
       const distanceFromBottom = scrollHeight - (scrollTop + clientHeight);
-      const atHistoryStart = scrollTop < historyStartThresholdPx;
+      setNearHistoryStart(scrollTop < historyStartThresholdPx);
 
-      setNearHistoryStart(atHistoryStart);
-
-      // If user scrolled more than 100px from bottom, disable auto-scroll
-      // If they scroll back to within 100px of bottom, re-enable
-      autoScrollEnabled.current = distanceFromBottom < 100;
+      // Programmatic follow only ever moves down; content shrink clamps to the
+      // bottom (distance ~0). So "moved up and not at bottom" = the user.
+      // Upward movement never re-attaches (else a 1px tick at the bottom would).
+      const movedUp = scrollTop < lastScrollTop - 1;
+      // Far from the bottom (e.g. scrollbar drag) also means the user left.
+      if (distanceFromBottom > AT_BOTTOM_PX && (movedUp || distanceFromBottom > 150)) {
+        detach();
+      } else if (!movedUp && distanceFromBottom <= AT_BOTTOM_PX) {
+        attach();
+      }
+      lastScrollTop = scrollTop;
+    };
+    // Catch intent before any scroll happens (also works when already pinned).
+    // Skip when the wheel is consumed by a nested scroller (tool logs, mini-chat).
+    const nestedCanScrollUp = (target: EventTarget | null) => {
+      let el = target instanceof HTMLElement ? target : null;
+      while (el && el !== listElement) {
+        if (el.scrollHeight > el.clientHeight && el.scrollTop > 0) {
+          const oy = getComputedStyle(el).overflowY;
+          if (oy === "auto" || oy === "scroll") return true;
+        }
+        el = el.parentElement;
+      }
+      return false;
+    };
+    const handleWheel = (e: WheelEvent) => {
+      if (e.deltaY < 0 && listElement.scrollTop > 0 && !nestedCanScrollUp(e.target)) {
+        detach();
+      }
+    };
+    let touchY = 0;
+    const handleTouchStart = (e: TouchEvent) => {
+      touchY = e.touches[0]?.clientY ?? 0;
+    };
+    const handleTouchMove = (e: TouchEvent) => {
+      if ((e.touches[0]?.clientY ?? 0) > touchY + 2) detach(); // finger down = content up
+    };
+    const handleKeyDown = (e: KeyboardEvent) => {
+      if (["ArrowUp", "PageUp", "Home"].includes(e.key)) detach();
     };
 
-    listElement.addEventListener("scroll", handleScroll);
-    return () => listElement.removeEventListener("scroll", handleScroll);
+    listElement.addEventListener("scroll", handleScroll, { passive: true });
+    listElement.addEventListener("wheel", handleWheel, { passive: true });
+    listElement.addEventListener("touchstart", handleTouchStart, { passive: true });
+    listElement.addEventListener("touchmove", handleTouchMove, { passive: true });
+    listElement.addEventListener("keydown", handleKeyDown);
+    return () => {
+      listElement.removeEventListener("scroll", handleScroll);
+      listElement.removeEventListener("wheel", handleWheel);
+      listElement.removeEventListener("touchstart", handleTouchStart);
+      listElement.removeEventListener("touchmove", handleTouchMove);
+      listElement.removeEventListener("keydown", handleKeyDown);
+    };
   }, []);
+
+  const jumpToLatest = useCallback(() => {
+    const listElement = listRef.current;
+    if (!listElement) return;
+    autoScrollEnabled.current = true;
+    setDetached(false);
+    listElement.scrollTop = listElement.scrollHeight;
+    lastScrollHeight.current = listElement.scrollHeight;
+  }, []);
+
+  // Coming back to a chat (switching chats) starts pinned to the latest.
+  useLayoutEffect(() => {
+    jumpToLatest();
+  }, [chatId, jumpToLatest]);
+
+  // The user sent a new message: re-attach so they see the reply stream in.
+  const lastUserMessageKey = (() => {
+    for (let i = messages.length - 1; i >= 0; i -= 1) {
+      if (messages[i].role === "user") return messages[i].id;
+    }
+    return "";
+  })();
+  const prevUserMessageKey = useRef(lastUserMessageKey);
+  useLayoutEffect(() => {
+    const changed = lastUserMessageKey !== prevUserMessageKey.current;
+    prevUserMessageKey.current = lastUserMessageKey;
+    // Ignore older history being prepended (index shifts but it's not new).
+    const lastIsUser = messages[messages.length - 1]?.role === "user";
+    if (changed && lastIsUser) jumpToLatest();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [lastUserMessageKey]);
 
   // Preserve scroll position when older messages are loaded (prepended to top)
   useEffect(() => {
@@ -523,6 +619,22 @@ export const MessageList: React.FC<MessageListProps> = ({
       )}
       {pendingFollowUps}
       <div ref={messagesEndRef} />
+      {detached && (
+        <div className="message-list__jump">
+          <button
+            type="button"
+            className="message-list__jump-btn"
+            data-testid="jump-to-latest"
+            aria-label="Jump to latest message"
+            onClick={jumpToLatest}
+          >
+            <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+              <path d="M12 5v14M5 12l7 7 7-7" />
+            </svg>
+            {streamUiActive || hasStreamingAssistantMessage ? "New activity" : "Latest"}
+          </button>
+        </div>
+      )}
     </div>
   );
 };

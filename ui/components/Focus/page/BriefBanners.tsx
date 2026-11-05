@@ -1,6 +1,7 @@
 /** The brief's three banners (load error, sample data, stale) and the hero. Port of app.js render*Banner + R.hero. */
 import { focusEnv, openChat } from "./focusApi";
 import { fmtDay, type Hero } from "./brief";
+import { useNoticeStore } from "../../../stores/noticeStore";
 
 export function LoadErrorBanner({ message }: { message: string }) {
   return (
@@ -53,4 +54,11 @@ export function BriefHero({ hero, live }: { hero: Hero; live?: { need: number; w
       ) : null}
     </>
   );
+}
+
+/** About the whole app (offline): one quiet top line, no card, no count. Cleared by the gateway when you're back. */
+export function OfflineLine() {
+  const offline = useNoticeStore((s) => s.notices.find((n) => n.key === "net.offline") ?? null);
+  if (!offline) return null;
+  return <p className="focus-offline" role="status"><i aria-hidden="true" /><b>{offline.title}.</b> {offline.body}</p>;
 }

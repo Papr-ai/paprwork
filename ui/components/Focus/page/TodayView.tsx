@@ -3,9 +3,9 @@
  * brief's top priority), Your three, Also needs you, Waiting on, the brief's sections, Goals.
  */
 import { agentPrompt, pickFocus, type BriefItem } from "./brief";
-import { openChat } from "./focusApi";
+import { focusEnv, openChat } from "./focusApi";
 import { ArrowIcon, CheckIcon } from "./icons";
-import { BriefHero, LoadErrorBanner, SampleBanner, StaleBanner } from "./BriefBanners";
+import { BriefHero, LoadErrorBanner, OfflineLine, SampleBanner, StaleBanner } from "./BriefBanners";
 import { BriefSection, type OnReview } from "./BriefCards";
 import { YourThree } from "./YourThree";
 import { ReviewBanner, reviewDue } from "./WeekReview";
@@ -47,6 +47,7 @@ export function TodayView({ b, d, feed, ui, onReview, open }: Props) {
   return (
     <div id="view-today">
       <header className="hero">
+        {focusEnv.web ? null : <OfflineLine />}
         {b.error ? <LoadErrorBanner message={b.error} />
           : b.isSample ? <SampleBanner busy={b.generating} onGenerate={() => void b.generate()} />
           : brief?.stale && today ? <StaleBanner date={brief.date} busy={b.generating} onGenerate={() => void b.generate()} /> : null}
