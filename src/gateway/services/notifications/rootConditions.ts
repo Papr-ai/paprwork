@@ -10,6 +10,8 @@
 import { tryListOpen, tryNotify, tryResolve } from "./NoticeService.js";
 
 const serverSaysOut = () => tryListOpen().some((n) => n.kind === "billing.credits_out");
+/** The server already said Papr Cloud stopped (members: cloud_paused; admins: payment failed + plan stopped). */
+const serverSaysPaused = () => tryListOpen().some((n) => n.kind === "billing.cloud_paused" || (n.kind === "billing.payment_failed" && n.level === "urgent"));
 
 const papr = { type: "platform" as const, id: "papr", name: "Papr Work" };
 const billing = { type: "billing" as const, id: "billing", name: "Billing" };
@@ -55,6 +57,7 @@ export function creditsOut(via: "papr" | string): void {
 export const creditsBack = () => tryResolve(ROOT_KEYS.credits);
 
 export function planPaused(title: string, detail: string): void {
+  if (serverSaysPaused()) return;
   tryNotify({
     key: ROOT_KEYS.plan, kind: "account.plan", type: "condition", level: "urgent", title, body: detail,
     source: billing, owner: { kind: "account", id: "billing", name: "Plan & usage", section: "billing" },

@@ -49,7 +49,10 @@ async function defaultFetch(since?: string) {
 }
 
 /** Server notices that replace a desktop one for the same problem (one problem, one notice). */
-const REPLACES: Record<string, string> = { "billing.credits_out": "account.credits" };
+const REPLACES: Record<string, string> = {
+  "billing.credits_out": "account.credits",
+  "billing.cloud_paused": "account.plan", "billing.payment_failed": "account.plan",
+};
 
 async function defaultApply(n: RemoteNotice, silent: boolean): Promise<void> {
   const { getNoticeService } = await import("./NoticeService.js");

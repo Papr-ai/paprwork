@@ -35,12 +35,12 @@ export const PAPR_SOURCES: NoticeSourceDef[] = [
   { id: "account", name: "Account & team", desc: "Billing, your team and the accounts you connected", types: [
     { id: "connection.request", label: "A teammate asked to connect an account", chip: "Connect requests", cat: "needs" },
     { id: "member.request", label: "A member asked for credits, a builder seat or a higher limit", chip: "Member requests", cat: "needs" },
-    { id: "billing.low", label: "You've used 80% of your credits", chip: "Credits low", cat: "needs" },
+    { id: "billing.low", label: "You or your team used 80% of credits, or prepaid credit is low", chip: "Credits low", cat: "needs" },
     { id: "billing.limit", label: "You hit your member limit or need an admin's approval", chip: "Your limit", cat: "needs" },
-    { id: "billing.payment", label: "A plan payment failed, or the plan is set to end", chip: "Payment", cat: "needs" },
+    { id: "billing.payment", label: "A plan payment failed, Papr Cloud paused, or the plan is set to end", chip: "Payment", cat: "needs" },
     { id: "connection.update", label: "Connection request updates", chip: "Request updates", cat: "done" },
     { id: "member.result", label: "An admin answered your request", chip: "Request answers", cat: "done" },
-    { id: "billing.topup_ok", label: "Auto top-up charged the card", chip: "Top-ups", cat: "done" },
+    { id: "billing.topup_ok", label: "Auto top-up charged the card, prepaid credit in use or expired", chip: "Top-ups", cat: "done" },
     { id: "billing.plan", label: "Plan or seats changed, or the plan ended", chip: "Plan changes", cat: "done" },
   ] },
   { id: "updates", name: "App updates", desc: "New versions of Papr Work", types: [
@@ -78,6 +78,9 @@ const BILLING_TYPES: Record<string, string> = {
   "billing.member_cap": "billing.limit", "billing.member_approval": "billing.limit",
   "billing.payment_failed": "billing.payment", "billing.cancel_scheduled": "billing.payment",
   "billing.plan_changed": "billing.plan", "billing.ended": "billing.plan",
+  "billing.team_low": "billing.low", "billing.topup_low": "billing.low",
+  "billing.cloud_paused": "billing.payment",
+  "billing.topup_using": "billing.topup_ok", "billing.topup_expired": "billing.topup_ok",
 };
 
 /** Which chip inside the row. One kind can be two types when its level says which (proposal review vs result). */
