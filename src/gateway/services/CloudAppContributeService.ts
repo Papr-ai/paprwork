@@ -63,6 +63,10 @@ import {
   isAppRepoRootPath,
   linkedJobRepoRelativeDir,
 } from "./cloudSync/cloudGitClone.js";
+import {
+  proposeFailureProps,
+  type ProposeStep,
+} from "./cloudSync/proposeFailureTelemetry.js";
 
 export interface ProposeContributeInput {
   sourceNamespaceId: string;
@@ -827,9 +831,61 @@ async function pushContributeBranch(
   }
 }
 
+/** Best effort: tell the server a prepared proposal will never be submitted. */
+async function abandonPreparedProposal(requestId: string, reason: string): Promise<void> {
+  try {
+    const resp = await cloudApiFetch(
+      `/v1/cloud/apps/changes/${encodeURIComponent(requestId)}/abandon`,
+      { method: "POST", body: { reason: reason.slice(0, 300) } },
+    );
+    if (!resp.ok) {
+      console.warn(`[CloudContribute] abandon ${requestId} failed (${resp.status})`);
+    }
+  } catch (err) {
+    // Older servers have no abandon route; their TTL sweep cleans it up.
+    console.warn(`[CloudContribute] abandon ${requestId} failed: ${(err as Error).message.slice(0, 120)}`);
+  }
+}
+
 export class CloudAppContributeService {
   async propose(input: ProposeContributeInput): Promise<ProposeContributeResult> {
+    const stage: { step: ProposeStep; requestId?: string } = { step: "lineage" };
+    try {
+      return await this.proposeSteps(input, stage);
+    } catch (err) {
+      // The error only reaches the user's screen otherwise; record which step
+      // failed and why so a stuck or missing proposal can be explained.
+      try {
+        const { getGatewayTelemetry } = await import("./gatewayTelemetry.js");
+        const { TelemetryEvents } = await import("../../core/telemetry/events.js");
+        const props = proposeFailureProps(err, {
+          step: stage.step,
+          publishNow: input.publishNow === true,
+          installedAppId: input.installedAppId,
+          requestId: stage.requestId,
+        });
+        // Not trackFireAndForget: a background rejection there is unhandled.
+        void getGatewayTelemetry()
+          .track(TelemetryEvents.CLOUD_PROPOSE_FAILED, { ...props })
+          .catch(() => undefined);
+      } catch {
+        // Telemetry must never change the outcome.
+      }
+      throw err;
+    }
+  }
+
+  private async proposeSteps(
+    input: ProposeContributeInput,
+    stage: { step: ProposeStep; requestId?: string },
+  ): Promise<ProposeContributeResult> {
     const lineageId = await readLineageId(input.installedAppId);
+    stage.step = "prepare";
+
+    // No early "nothing changed" check here: a proposal also carries linked
+    // Jobs/{id} code and unapplied migrations, which app-folder edits can't
+    // see. pushContributeBranch decides emptiness over the full change set,
+    // and an empty one is abandoned below.
 
     const { getPaprCallerIdentity } = await import("../utils/paprUserId.js");
     const proposer = getPaprCallerIdentity();
@@ -863,6 +919,8 @@ export class CloudAppContributeService {
     }
 
     const prepare = (await prepareResp.json()) as PrepareResponse;
+    stage.requestId = prepare.id;
+    stage.step = "push";
 
     const ownerRepo = await resolveAppRepoForSync(prepare.targetAppId);
     if (ownerRepo && !cloneUrlMatchesAppRepo(prepare.cloneUrl, ownerRepo)) {
@@ -871,11 +929,18 @@ export class CloudAppContributeService {
       );
     }
 
-    const { headSha, stagedPaths, migrations, baseCommit } = await pushContributeBranch(
-      prepare,
-      input.installedAppId,
-      { includeBuildOutputs: input.publishNow === true },
-    );
+    let pushed: Awaited<ReturnType<typeof pushContributeBranch>>;
+    try {
+      pushed = await pushContributeBranch(prepare, input.installedAppId, {
+        includeBuildOutputs: input.publishNow === true,
+      });
+    } catch (err) {
+      // The server already holds this proposal as "preparing". Without this it
+      // stays there forever with no branch — owners see a phantom proposal.
+      await abandonPreparedProposal(prepare.id, (err as Error).message);
+      throw err;
+    }
+    const { headSha, stagedPaths, migrations, baseCommit } = pushed;
 
     // Publish now with a schema change: same order as the publisher's own
     // publish — the team's database first (verified), then the code. If the
@@ -883,6 +948,7 @@ export class CloudAppContributeService {
     let databasePublished = false;
     let databaseNote: string | undefined;
     if (input.publishNow && migrations.length > 0) {
+      stage.step = "publish_database";
       const { publishProposalMigrations, defaultPublishMigrationsDeps } = await import(
         "./cloudSync/publishProposalMigrations.js"
       );
@@ -900,6 +966,7 @@ export class CloudAppContributeService {
       }
     }
 
+    stage.step = "submit";
     const submitResp = await cloudApiFetch(
       `/v1/cloud/apps/changes/${encodeURIComponent(prepare.id)}/submit`,
       {
@@ -927,6 +994,7 @@ export class CloudAppContributeService {
       );
     }
 
+    stage.step = "after_submit";
     const submitted = (await submitResp.json()) as {
       id: string;
       prUrl?: string;

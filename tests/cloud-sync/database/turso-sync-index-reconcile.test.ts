@@ -146,6 +146,36 @@ describe("reconcileFromSyncIndex", () => {
     );
   });
 
+  it("replica DB pulls on index bump without the legacy remote-ahead probe", async () => {
+    const { loadSyncIndexSnapshot } = await import(
+      "../../../src/gateway/services/tursoSyncIndex.js"
+    );
+    const { remoteAheadOfLocal } = await import(
+      "../../../src/gateway/services/tursoSyncBridgeCore.js"
+    );
+    const { shouldUseTursoReplicaForSource } = await import(
+      "../../../src/gateway/services/tursoReplica/tursoReplicaRouting.js"
+    );
+    const { recordTursoIndexVersion } = await import(
+      "../../../src/gateway/services/tursoSyncState.js"
+    );
+    // Cloud job wrote via the DB proxy: index bumped, no _papr_sync_meta.
+    vi.mocked(loadSyncIndexSnapshot).mockResolvedValue([
+      { shortName: "j-jobabc", version: 112, updatedAt: "2026-10-31" },
+    ]);
+    vi.mocked(shouldUseTursoReplicaForSource).mockReturnValue(true);
+    vi.mocked(remoteAheadOfLocal).mockResolvedValue(false);
+
+    const bridge = makeBridge();
+    const results = await reconcileFromSyncIndex(bridge);
+
+    expect(results[0]?.action).toBe("pulled");
+    expect(bridge.pullJob).toHaveBeenCalledWith("job-abc");
+    expect(remoteAheadOfLocal).not.toHaveBeenCalled();
+    expect(recordTursoIndexVersion).toHaveBeenCalledWith("job-abc", jobLinked.dbPath, 112);
+    vi.mocked(shouldUseTursoReplicaForSource).mockReturnValue(false);
+  });
+
   it("dedupes multiple app links to the same sync key", async () => {
     const { loadSyncIndexSnapshot } = await import(
       "../../../src/gateway/services/tursoSyncIndex.js"

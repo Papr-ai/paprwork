@@ -13,7 +13,7 @@ import type { Express, Request, Response } from "express";
 import { getMemoryServerBaseUrl } from "../../utils/cloudApiClient.js";
 import { getCloudAppHostKey, runtimeFetch } from "./memoryRuntimeClient.js";
 import { getCloudAppPublicBaseUrl } from "./CloudAppPreviewService.js";
-import { buildDiscoverHtml, buildRobotsTxt, buildSitemapXml, type DiscoverView } from "./cloudAppDiscoverHtml.js";
+import { FAVICON_SVG, buildDiscoverHtml, buildRobotsTxt, buildSitemapXml, type DiscoverView } from "./cloudAppDiscoverHtml.js";
 
 export interface DiscoverMedia {
   kind?: string;
@@ -220,6 +220,12 @@ export function registerDiscoverRoutes(app: Express, session: DiscoverSessionRea
   app.get("/discover/:ns/:slug", (req, res) =>
     void render(req, res, "discover", { ns: String(req.params.ns), slug: String(req.params.slug) }),
   );
+  const sendIcon = (_req: Request, res: Response) => {
+    res.setHeader("Cache-Control", "public, max-age=86400");
+    res.type("image/svg+xml").send(FAVICON_SVG);
+  };
+  app.get("/favicon.svg", sendIcon);
+  app.get("/favicon.ico", sendIcon);
   app.get("/robots.txt", (req, res) => {
     res.type("text/plain").send(buildRobotsTxt(getCloudAppPublicBaseUrl(req)));
   });

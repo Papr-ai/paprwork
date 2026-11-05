@@ -2321,25 +2321,8 @@ function setupAutoUpdater() {
 
   autoUpdater.on("update-downloaded", (info) => {
     console.log(`[AutoUpdater] Update downloaded: v${info.version}`);
+    // The renderer raises an app.update_ready notice; route() decides whether the OS pops.
     sendUpdateStatus("ready", { version: info.version });
-    try {
-      const { Notification } = require("electron");
-      if (Notification.isSupported()) {
-        const notification = new Notification({
-          title: "Papr Work update ready",
-          body: `Version ${info.version} is downloaded. Restart to update.`,
-        });
-        notification.on("click", () => {
-          if (mainWindow && !mainWindow.isDestroyed()) {
-            mainWindow.show();
-            mainWindow.focus();
-          }
-        });
-        notification.show();
-      }
-    } catch (notificationError) {
-      console.warn("[AutoUpdater] Could not show update notification:", notificationError.message);
-    }
   });
 
   autoUpdater.on("error", (err) => {
@@ -2487,24 +2470,8 @@ function initializeSystemInvokeHandler(mainWindow) {
       return { text: clipboard.readText() };
     },
     
-    'notification.show': async (options) => {
-      const notification = new Notification({
-        title: options.title || 'Notification',
-        body: options.body || '',
-        urgency: options.urgency || 'normal'
-      });
-      // Optional click-through, e.g. a connection request opens Settings → Connections.
-      if (options.openSettings && typeof options.openSettings === 'string') {
-        notification.on('click', () => {
-          if (!mainWindow || mainWindow.isDestroyed()) return;
-          if (mainWindow.isMinimized()) mainWindow.restore();
-          mainWindow.focus();
-          mainWindow.webContents.send('notification:open-settings', { target: options.openSettings });
-        });
-      }
-      notification.show();
-      return { success: true };
-    },
+    // notification.show is handled in the renderer: it becomes a notice (notifications:app) so
+    // route() caps it at Priority, dedupes it and only pops the OS when Paprwork is in the background.
     
     'app.getPath': async (name) => {
       return { path: app.getPath(name) };
@@ -2528,6 +2495,70 @@ function initializeSystemInvokeHandler(mainWindow) {
       throw new Error('Main window not available');
     },
   };
+
+  // OS notification decided by route() in the gateway. macOS, Windows and Linux (libnotify).
+  // Not in ALLOWED_APIS: mini-apps go through notifications:app, which caps and dedupes them.
+  // Open OS notifications by notice key. Holding them also keeps macOS from garbage
+  // collecting the object, which silently drops its click handler.
+  const openNotices = new Map();
+  // Show previews "When unlocked": hide the text while the screen is locked.
+  let screenLocked = false;
+  powerMonitor.on('lock-screen', () => { screenLocked = true; });
+  powerMonitor.on('unlock-screen', () => { screenLocked = false; });
+  ipcMain.handle('notice:open-os-settings', async () => {
+    const url = process.platform === 'darwin' ? 'x-apple.systempreferences:com.apple.Notifications-Settings.extension'
+      : process.platform === 'win32' ? 'ms-settings:notifications' : '';
+    if (url) await shell.openExternal(url).catch(() => {});
+    return { ok: !!url };
+  });
+  // Are Papr Work's notifications allowed in macOS? Electron has no API for it, so read Notification
+  // Center's prefs: the entry whose path is this app bundle. `auth` holds what macOS granted (alert = 4);
+  // 0 means not allowed. No entry: macOS hasn't been asked yet. Elsewhere we can't tell (gray dot).
+  ipcMain.handle('notice:os-access', async () => {
+    if (process.platform !== 'darwin') return { state: 'unknown' };
+    try {
+      const bundle = process.execPath.replace(/\/Contents\/MacOS\/[^/]+$/, '');
+      const xml = execSync('/usr/bin/defaults export com.apple.ncprefs -', { encoding: 'utf8', timeout: 3000, maxBuffer: 16 * 1024 * 1024 });
+      const at = xml.indexOf(`<string>${bundle}</string>`);
+      if (at < 0) return { state: 'unknown' };
+      const start = xml.lastIndexOf('<dict>', at); // keys are sorted: auth comes before bundle-id
+      const m = /<key>auth<\/key>\s*<integer>(\d+)<\/integer>/.exec(xml.slice(start, at));
+      if (!m) return { state: 'unknown' };
+      return { state: Number(m[1]) & 4 ? 'on' : 'off' };
+    } catch { return { state: 'unknown' }; }
+  });
+  ipcMain.handle('notice:close-os', async (_event, keys) => {
+    for (const key of Array.isArray(keys) ? keys : []) {
+      const n = openNotices.get(key);
+      if (n) { openNotices.delete(key); try { n.close(); } catch { /* already gone */ } }
+    }
+    return { ok: true };
+  });
+  ipcMain.handle('notice:show-os', async (_event, payload) => {
+    const { Notification } = require('electron');
+    if (!Notification.isSupported() || !payload || typeof payload.title !== 'string') return { shown: false };
+    const key = typeof payload.key === 'string' ? payload.key : '';
+    if (key && openNotices.has(key)) { try { openNotices.get(key).close(); } catch { /* gone */ } }
+    const n = new Notification({
+      title: payload.title.slice(0, 200),
+      body: typeof payload.body === 'string' && payload.previews !== 'never' && !(payload.previews === 'unlocked' && screenLocked)
+        ? payload.body.slice(0, 500) : '',
+      urgency: payload.level === 'urgent' ? 'critical' : 'normal',
+      // route() decides sound (per source); older gateways only sent the level.
+      silent: typeof payload.sound === 'boolean' ? !payload.sound : payload.level === 'fyi',
+    });
+    n.on('click', () => {
+      if (!mainWindow || mainWindow.isDestroyed()) return;
+      if (mainWindow.isMinimized()) mainWindow.restore();
+      mainWindow.show();
+      mainWindow.focus();
+      mainWindow.webContents.send('notice:open', { key, owner: payload.owner });
+    });
+    n.on('close', () => { if (key && openNotices.get(key) === n) openNotices.delete(key); });
+    if (key) openNotices.set(key, n);
+    n.show();
+    return { shown: true };
+  });
 
   // Register IPC handler
   ipcMain.handle('system:invoke', async (event, method, args) => {
@@ -2758,6 +2789,9 @@ if (!gotTheLock) {
     queueDeepLink(url);
   });
 }
+
+// Windows shows no toast without an AppUserModelID matching the installer (electron-builder appId).
+if (process.platform === "win32") app.setAppUserModelId("com.paprwork.v2");
 
 app.whenReady().then(async () => {
   const appStartTime = Date.now();

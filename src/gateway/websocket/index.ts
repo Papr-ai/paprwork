@@ -153,6 +153,9 @@ export function setupWebSocketHandlers(wss: WebSocketServer): void {
           await setupPaprHandlers(ws, message);
         } else if (message.type.startsWith("memory:")) {
           await setupMemoryHandlers(ws, message);
+        } else if (message.type.startsWith("notifications:")) {
+          const { setupNotificationHandlers } = await import("./notifications.js");
+          await setupNotificationHandlers(ws, message);
         } else if (message.type.startsWith("platform:")) {
           await setupPlatformHandlers(ws, message);
         } else if (message.type.startsWith("custom-keys:")) {

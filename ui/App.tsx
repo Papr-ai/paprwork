@@ -30,6 +30,8 @@ import {
 import { initJobPermissionListener } from "./stores/jobPermissionStore";
 import { initPaprQuotaListener } from "./stores/paprQuotaStore";
 import { initProposalNoticeListener } from "./stores/proposalNoticeListener";
+import { initNoticeListener } from "./stores/noticeStore";
+import { initNoticeOs } from "./stores/noticeOs";
 import { initJobLiveLogsListener } from "./stores/jobLiveLogsStore";
 import { initSubagentJobStore } from "./stores/subagentJobStore";
 import { PaprQuotaBanner } from "./components/PaprQuotaBanner/PaprQuotaBanner";
@@ -496,6 +498,8 @@ export function App() {
     initJobPermissionListener();
     initPaprQuotaListener();
     initProposalNoticeListener();
+    initNoticeListener();
+    initNoticeOs();
     initJobLiveLogsListener();
     initSubagentJobStore();
     initPlatformConnectListener();

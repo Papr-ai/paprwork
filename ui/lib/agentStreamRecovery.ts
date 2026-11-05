@@ -16,6 +16,7 @@ import type {
 import type { ToolCall } from "../types/core";
 import { dedupeChatMessages } from "../utils/messageDedup";
 import { isExpectedStreamCancellation } from "../../src/core/constants/streamCancellation.js";
+import { HIDDEN_CONTINUE_PREFIX } from "../../src/core/constants/hiddenContinue.js";
 import { disarmFirstChunkWatchdog } from "./agentFirstChunkWatchdog";
 import { recoveryBannerSurvivesStreamEnd } from "./streamRecoveryPersistence";
 import { AGENT_INTERRUPT_TIMEOUT_MS } from "../utils/agentSendLifecycle";
@@ -123,7 +124,7 @@ export function rehydrateStreamingRefsForChat(
 }
 
 /** Hidden user message sent when Resume must start a new agent turn */
-export const HIDDEN_CONTINUE_USER_PREFIX = "[__papr_continue__]";
+export const HIDDEN_CONTINUE_USER_PREFIX = HIDDEN_CONTINUE_PREFIX;
 
 export const HIDDEN_CONTINUE_USER_MESSAGE = `${HIDDEN_CONTINUE_USER_PREFIX} Continue your previous response from where you left off. Do not repeat work you already completed. Pick up seamlessly.`;
 

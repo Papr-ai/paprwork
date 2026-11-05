@@ -700,6 +700,14 @@ export interface ElectronAPI {
     getStatus: () => Promise<UpdateStatus | null>;
   };
 
+  /** OS notification for a notice route() already decided on (renderer only). */
+  notices?: {
+    showOs: (payload: { key: string; title: string; body?: string; level?: string; sound?: boolean; previews?: string; owner?: unknown }) => Promise<{ shown: boolean }>;
+    closeOs: (keys: string[]) => Promise<{ ok: boolean }>;
+    openOsSettings?: () => Promise<{ ok: boolean }>;
+    osAccess?: () => Promise<{ state: "on" | "off" | "unknown" }>;
+  };
+
   // System integration for mini-apps (generic invoke)
   system: {
     /**

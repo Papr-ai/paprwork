@@ -24,6 +24,9 @@ import "./PlatformConnectModal.css";
 
 type ConnectPhase = "idle" | "opening" | "waiting" | "connected" | "needs_chrome";
 
+/** Gateway navigation budget is 60s; allow a cold Chrome spawn on top. */
+const PLATFORM_CONNECT_TIMEOUT_MS = 90_000;
+
 // SVG icons for each platform
 const PLATFORM_ICONS: Record<BuiltinPlatformId, React.ReactNode> = {
   linkedin: (
@@ -177,9 +180,14 @@ function PlatformConnectModalInner() {
     setError(null);
 
     try {
-      const response = await gateway.send("platform:connect", {
-        platformId: activeRequest.platform,
-      });
+      // Opening the login page can take up to the gateway's 60s navigation
+      // budget (plus a cold Chrome spawn), so the default 30s WS deadline fired
+      // "Request timeout" while Chrome was still loading the page.
+      const response = await gateway.send(
+        "platform:connect",
+        { platformId: activeRequest.platform },
+        { timeoutMs: PLATFORM_CONNECT_TIMEOUT_MS },
+      );
 
       const data = response.data as PlatformConnectData;
 
@@ -211,7 +219,14 @@ function PlatformConnectModalInner() {
         setPhase("waiting");
       }
     } catch (err) {
-      setError(err instanceof Error ? err.message : "Connection failed");
+      const message = err instanceof Error ? err.message : "Connection failed";
+      if (message === "Request timeout") {
+        // The gateway keeps polling Chrome cookies after a slow open, so the
+        // sign-in can still succeed. Let the user finish in Chrome and Check now.
+        setPhase("waiting");
+        return;
+      }
+      setError(message);
       setPhase("idle");
     }
   };

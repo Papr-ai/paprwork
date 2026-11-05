@@ -75,11 +75,11 @@ const submitChangeSchema = z.object({
     .boolean()
     .optional()
     .describe(
-      "Only when the user is a Maintainer or Admin of the source app and asked to publish (not propose). " +
-        "Merges straight into the live app. A database migration in the change is applied to the team's cloud " +
+      "Pass true whenever the user asks to publish (not propose); you don't need to know their role. " +
+        "A Maintainer or Admin merges straight into the live app. A database migration in the change is applied to the team's cloud " +
         "database first and verified, then the code is published (same order as the publisher's own Publish). " +
         "If that can't happen (role, offline, own-data or per-user copy, older server, or the app requires review) " +
-        "it is sent for review instead and publishNote says why. On a team-shared copy, create the migration with " +
+        "it is sent for review instead and publishNote says why; for a role block, tell the user the owner can make them a Maintainer. On a team-shared copy, create the migration with " +
         "papr_db_create_migration({ apply: false }) — collaborators can't apply it locally — then publish with publishNow.",
     ),
 });
@@ -90,7 +90,7 @@ const listPrsSchema = z.object({
     .uuid()
     .optional()
     .describe("Filter to PRs for this owner upstream app id"),
-  status: z.enum(["preparing", "pending", "approved", "rejected"]).optional(),
+  status: z.enum(["preparing", "pending", "approved", "rejected", "abandoned"]).optional(),
 });
 
 const checkContributionsSchema = z.object({
@@ -220,7 +220,7 @@ Uses the same install pipeline as the Community / Team Apps UI (POST /api/cloud/
 
 Requires Papr login. Publisher must enable **Edit the code** (codeAccess=install).
 
-One Install (v5): omit mode and installDbPolicy. Every copy is the user's own, linked to the original: Get updates and Propose from the app bar. Team-shared apps start on the team's live data (code reaches the team only by proposal) and can switch to their own data later.`,
+One Install (v5): omit mode and installDbPolicy. Every copy is the user's own, linked to the original: Get updates and Propose from the app bar. Team-shared apps start on the team's live data (code reaches the team by proposal, or straight away with submit_cloud_app_pr publishNow when the user is a Maintainer or Admin of the original) and can switch to their own data later.`,
   inputSchema: installCloudAppSchema,
   execute: async (input) => {
     const args =
@@ -352,7 +352,7 @@ export const checkCloudAppContributionsTool = createTool({
   id: CLOUD_APP_PR_TOOL_IDS.check,
   description: `Check whether an app you own has incoming contributor PRs (OWNER ONLY). Lightweight first step before loading full PR review tools.
 
-Returns pending/preparing counts and request summaries. If PRs exist, use ${CLOUD_APP_PR_TOOL_IDS.review} for diffs (not inspect_cloud_repo or local edit_file). If PR tools are deferred this turn, call find_tools({ query: "${CLOUD_APP_PR_DEFERRED_FIND_QUERY}" }) then run_deferred_tool.`,
+Returns pending counts and request summaries ("preparing" proposals have no branch yet and are not counted). If PRs exist, use ${CLOUD_APP_PR_TOOL_IDS.review} for diffs (not inspect_cloud_repo or local edit_file). If PR tools are deferred this turn, call find_tools({ query: "${CLOUD_APP_PR_DEFERRED_FIND_QUERY}" }) then run_deferred_tool.`,
   inputSchema: checkContributionsSchema,
   execute: async (input) => {
     const args =
@@ -363,9 +363,8 @@ Returns pending/preparing counts and request summaries. If PRs exist, use ${CLOU
       await requirePaprCloudLogin();
       const service = getCloudAppChangeRequestService();
       const forApp = await service.listIncoming({ appId: args.appId });
-      const pending = forApp.filter(
-        (r) => r.status === "pending" || r.status === "preparing",
-      );
+      // "preparing" has no branch yet — nothing to review, so not pending.
+      const pending = forApp.filter((r) => r.status === "pending");
       return {
         success: true,
         data: {

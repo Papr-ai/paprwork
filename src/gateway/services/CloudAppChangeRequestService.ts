@@ -62,7 +62,8 @@ export type IncomingChangeRequestStatus =
   | "preparing"
   | "pending"
   | "approved"
-  | "rejected";
+  | "rejected"
+  | "abandoned";
 
 export interface ListIncomingChangeRequestsOptions {
   status?: IncomingChangeRequestStatus;
