@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { buildCreditsPlanSummary, creditsSummaryFromUsage } from "./paprCreditsPlanSummary.js";
+import { buildCreditsPlanSummary, creditsRoleFromBuilders, creditsSummaryFromUsage } from "./paprCreditsPlanSummary.js";
 import { hasActivePaprSubscription } from "./paprPlanLimits.js";
 
 const base = { period: "2026-11", credits: 0, usd: 0, userId: "u", organizationId: "o" };
@@ -35,5 +35,19 @@ describe("credits plan summary", () => {
     expect(credits.topupBalanceUsd).toBe(24.93);
     const s = buildCreditsPlanSummary({ credits, isWorkspaceOwner: false, isWorkspaceAdmin: false });
     expect(s.canManageBilling).toBe(false);
+  });
+});
+
+describe("creditsRoleFromBuilders", () => {
+  const row = (userId: string, roles: string[]) => ({ userId, roles, seat: true, grant: 0, used: 0, state: "ok", overageCredits: 0, overageUsd: 0 });
+  it("owner role in memory -> owner (Parse member list Forbidden case)", () => {
+    expect(creditsRoleFromBuilders({ builderUsage: [row("me", ["expert", "member", "owner"])], memberUsage: [] }, "me")).toBe("owner");
+  });
+  it("view readable but no owner role -> admin", () => {
+    expect(creditsRoleFromBuilders({ builderUsage: [row("me", ["admin"])], memberUsage: [] }, "me")).toBe("admin");
+    expect(creditsRoleFromBuilders({ builderUsage: [], memberUsage: [] }, "me")).toBe("admin");
+  });
+  it("no view (403) -> null", () => {
+    expect(creditsRoleFromBuilders(null, "me")).toBeNull();
   });
 });

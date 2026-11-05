@@ -4,7 +4,7 @@
  * limits, so those fields are neutral and the Billing screen reads `credits`.
  */
 import type { PaprCreditsSummary, PaprPlanSummary } from "../types/paprBilling.js";
-import type { CreditUsageView } from "./paprCreditSeats.js";
+import type { BuildersView, CreditUsageView } from "./paprCreditSeats.js";
 
 const PLAN_NAMES: Record<string, string> = {
   local: "Local",
@@ -37,6 +37,22 @@ export function creditsSummaryFromUsage(view: CreditUsageView | null | undefined
     org: org ? { grant: org.grant ?? 0, used: org.used ?? 0, state: org.state, seats: org.seats ?? 1 } : null,
     topupBalanceUsd: you.topupBalanceUsd ?? null,
   };
+}
+
+/**
+ * This user's org role from memory's /builders view (owner/admin only can read it).
+ * Used when the Parse workspace member list is unavailable (e.g. Forbidden), so an org
+ * owner isn't shown the member view. null = no owner/admin role found.
+ */
+export function creditsRoleFromBuilders(
+  view: Pick<BuildersView, "builderUsage" | "memberUsage"> | null | undefined,
+  userId: string,
+): "owner" | "admin" | null {
+  if (!view) return null;
+  const row = [...(view.builderUsage ?? []), ...(view.memberUsage ?? [])].find((r) => r.userId === userId);
+  if (row?.roles.includes("owner")) return "owner";
+  // /builders answered, so memory already treats this user as an owner or admin.
+  return "admin";
 }
 
 export function buildCreditsPlanSummary(input: {
