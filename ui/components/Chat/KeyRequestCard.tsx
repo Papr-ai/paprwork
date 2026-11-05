@@ -89,7 +89,9 @@ export function KeyRequestCard({ data, chatId, onSubmit, onCancel }: Props) {
     setBusy(true);
     setFailed(null);
     try {
-      await onSubmit(data.name, check.value, permission, { vaultAudience: audience, orgScope: "organization", organizationId: org?.id });
+      // org.id is the workspace id; the key vault is keyed by the Parse organization id.
+      // Undefined falls back to the active org vault — the one get_key / ${KEY} read from.
+      await onSubmit(data.name, check.value, permission, { vaultAudience: audience, orgScope: "organization", organizationId: org?.organizationId });
       // Saved: answer every "Pen needs <name>" (any chat) so Needs you, the count and the dot clear now.
       void gateway.send("notifications:resolve", { group: `key:${data.name}` }).catch(() => {});
       setRaw("");
