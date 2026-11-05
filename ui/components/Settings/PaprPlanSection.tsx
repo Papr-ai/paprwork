@@ -293,13 +293,6 @@ export function PaprPlanSection() {
     }
   };
 
-  const handleUsageDashboard = async () => {
-    setActionMessage(null);
-    const result = await window.electronAPI.papr.openUsageDashboard();
-    if (!result.success) {
-      setActionMessage(result.error || "Could not open usage dashboard");
-    }
-  };
 
   const canEnableMeteredBilling =
     summary?.subscriptionStatus === "active" ||
@@ -358,15 +351,12 @@ export function PaprPlanSection() {
         {summary && (
           <>
             {summary.canManageBilling ? null : (
-              <div className="papr-plan__callout" role="status">
-                <p className="papr-plan__callout-title">
-                  Billing changes require the workspace owner
-                </p>
-                <p className="papr-plan__callout-body">
-                  {summary.credits
-                    ? "You can still view your usage here. Ask your workspace owner to change the plan or buy more credits."
-                    : "You can still view usage here. Contact your workspace owner to resubscribe, upgrade, or enable metered billing."}
-                </p>
+              <div className="papr-plan__owner-note" role="status">
+                <svg viewBox="0 0 24 24" aria-hidden="true"><rect x="5" y="11" width="14" height="9" rx="2" /><path d="M8 11V8a4 4 0 0 1 8 0v3" /></svg>
+                <span>
+                  Your workspace owner manages the plan.{" "}
+                  {summary.credits ? "Ask them if you need more credits." : "Ask them to upgrade or resubscribe."}
+                </span>
               </div>
             )}
 
@@ -402,7 +392,7 @@ export function PaprPlanSection() {
                       <Spinner /> Opening…
                     </>
                   ) : (
-                    "Manage billing"
+                    "Payment & invoices"
                   )}
                 </button>
               ) : null}
@@ -517,15 +507,8 @@ export function PaprPlanSection() {
               </>
             )}
 
-            <button
-              type="button"
-              className="papr-plan__secondary-btn papr-plan__dashboard-btn"
-              onClick={() => void handleUsageDashboard()}
-            >
-              View usage dashboard
-            </button>
 
-            {showUpgradeOptions ? (
+            {showUpgradeOptions && summary.canManageBilling ? (
               <div className="papr-plan__upgrade-section">
                 <div className="papr-plan__upgrade-heading">
                   <span className="papr-plan__upgrade-label">
