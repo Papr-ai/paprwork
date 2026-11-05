@@ -1119,7 +1119,7 @@ function AboutTab() {
                 <line x1="12" y1="16" x2="12.01" y2="16" />
               </svg>
               <div>
-                <strong>Update check failed</strong>
+                <strong>{updateStatus.transient ? "Update check will retry" : "Update check failed"}</strong>
                 <p>{updateStatus.error}</p>
                 {updateStatus.recoveryHint && (
                   <p className="update-recovery-hint">{updateStatus.recoveryHint}</p>
