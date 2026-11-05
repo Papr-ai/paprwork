@@ -21,6 +21,7 @@
     "src/electron/main.cjs",
     "src/electron/index.cjs",
     "src/electron/updaterStatusCache.cjs",
+    "src/electron/updateErrorFormat.cjs",
     "src/electron/supervisor-logic.cjs",
     "src/electron/preload.cjs",
     "src/electron/geolocationPermission.cjs",

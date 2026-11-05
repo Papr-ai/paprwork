@@ -15,6 +15,12 @@ import {
   type SentProposal,
 } from "../../utils/cloudContributeApi";
 import { draftProposal } from "../../utils/v9CloudApi";
+import { openCloudSyncAgentChat } from "../../utils/openCloudSyncAgentChat";
+import {
+  buildProposeFailureAgentPrompt,
+  describeProposeError,
+  type ProposeErrorDisplay,
+} from "../../utils/proposeErrorDisplay";
 
 export interface ForkLineageInfo {
   mode: "fork" | "track";
@@ -59,6 +65,8 @@ export function CloudContributeBackPanel({
   const [submitting, setSubmitting] = useState(false);
   const [sent, setSent] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  // A failed Publish now / Send: plain message, full text, and Ask Pen.
+  const [failure, setFailure] = useState<(ProposeErrorDisplay & { raw: string; publishNow: boolean }) | null>(null);
   const [proposals, setProposals] = useState<SentProposal[] | null>(null);
   const [role, setRole] = useState<SourceAppRole | null>(null);
   const [note, setNote] = useState<string | null>(null);
@@ -105,6 +113,7 @@ export function CloudContributeBackPanel({
     }
     setSubmitting(true);
     setError(null);
+    setFailure(null);
     setSent(false);
     setNote(null);
     try {
@@ -130,7 +139,8 @@ export function CloudContributeBackPanel({
         const more = err.conflictFiles.length > 3 ? ` +${err.conflictFiles.length - 3} more` : "";
         setError(`${err.message} (${files}${more})`);
       } else {
-        setError((err as Error).message.slice(0, 160));
+        const raw = (err as Error).message ?? String(err);
+        setFailure({ ...describeProposeError(raw), raw, publishNow });
       }
     } finally {
       setSubmitting(false);
@@ -184,6 +194,34 @@ export function CloudContributeBackPanel({
       />
 
       {error ? <p className="share-sheet__error">{error}</p> : null}
+      {failure ? (
+        <div className="share-sheet__error propose-failure" role="alert">
+          <p className="propose-failure__message">{failure.message}</p>
+          {failure.detail ? (
+            <details className="share-sheet__error-details">
+              <summary>View full error</summary>
+              <p>{failure.detail}</p>
+            </details>
+          ) : null}
+          <button
+            type="button"
+            className="share-sheet__link-btn propose-failure__ask"
+            onClick={() =>
+              openCloudSyncAgentChat(
+                buildProposeFailureAgentPrompt({
+                  appId: lineage.installedAppId,
+                  appTitle,
+                  error: failure.raw,
+                  publishNow: failure.publishNow,
+                }),
+                { send: true, title: `Fix publish: ${appTitle}` },
+              )
+            }
+          >
+            Ask Pen to fix this
+          </button>
+        </div>
+      ) : null}
       {note ? <p className="share-sheet__section-desc">{note}</p> : null}
 
       {canPublish ? (
