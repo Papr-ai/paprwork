@@ -67,6 +67,7 @@ export function CloudContributeBackPanel({
   const [error, setError] = useState<string | null>(null);
   // A failed Publish now / Send: plain message, full text, and Ask Pen.
   const [failure, setFailure] = useState<(ProposeErrorDisplay & { raw: string; publishNow: boolean }) | null>(null);
+  const [showFullError, setShowFullError] = useState(false);
   const [proposals, setProposals] = useState<SentProposal[] | null>(null);
   const [role, setRole] = useState<SourceAppRole | null>(null);
   const [note, setNote] = useState<string | null>(null);
@@ -114,6 +115,7 @@ export function CloudContributeBackPanel({
     setSubmitting(true);
     setError(null);
     setFailure(null);
+    setShowFullError(false);
     setSent(false);
     setNote(null);
     try {
@@ -197,29 +199,40 @@ export function CloudContributeBackPanel({
       {failure ? (
         <div className="share-sheet__error propose-failure" role="alert">
           <p className="propose-failure__message">{failure.message}</p>
-          {failure.detail ? (
-            <details className="share-sheet__error-details">
-              <summary>View full error</summary>
-              <p>{failure.detail}</p>
-            </details>
+          <div className="propose-failure__actions">
+            {failure.detail ? (
+              <button
+                type="button"
+                className="propose-failure__toggle"
+                aria-expanded={showFullError}
+                onClick={() => setShowFullError((v) => !v)}
+              >
+                {showFullError ? "Hide full error" : "View full error"}
+              </button>
+            ) : (
+              <span />
+            )}
+            <button
+              type="button"
+              className="propose-failure__ask"
+              onClick={() =>
+                openCloudSyncAgentChat(
+                  buildProposeFailureAgentPrompt({
+                    appId: lineage.installedAppId,
+                    appTitle,
+                    error: failure.raw,
+                    publishNow: failure.publishNow,
+                  }),
+                  { send: true, title: `Fix publish: ${appTitle}` },
+                )
+              }
+            >
+              Ask Pen to fix this
+            </button>
+          </div>
+          {failure.detail && showFullError ? (
+            <p className="propose-failure__detail">{failure.detail}</p>
           ) : null}
-          <button
-            type="button"
-            className="share-sheet__link-btn propose-failure__ask"
-            onClick={() =>
-              openCloudSyncAgentChat(
-                buildProposeFailureAgentPrompt({
-                  appId: lineage.installedAppId,
-                  appTitle,
-                  error: failure.raw,
-                  publishNow: failure.publishNow,
-                }),
-                { send: true, title: `Fix publish: ${appTitle}` },
-              )
-            }
-          >
-            Ask Pen to fix this
-          </button>
         </div>
       ) : null}
       {note ? <p className="share-sheet__section-desc">{note}</p> : null}
