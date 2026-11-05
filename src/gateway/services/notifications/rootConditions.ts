@@ -7,7 +7,9 @@
  *   account.credits      Urgent: AI credits ran out. Pen leans out. Clears on the next finished reply.
  *   account.plan         Urgent: Papr Cloud paused (plan limit or subscription). Clears when billing is back.
  */
-import { tryNotify, tryResolve } from "./NoticeService.js";
+import { tryListOpen, tryNotify, tryResolve } from "./NoticeService.js";
+
+const serverSaysOut = () => tryListOpen().some((n) => n.kind === "billing.credits_out");
 
 const papr = { type: "platform" as const, id: "papr", name: "Papr Work" };
 const billing = { type: "billing" as const, id: "billing", name: "Billing" };
@@ -39,6 +41,8 @@ export function setConnectorsSignedOut(names: string[]): void {
 /** via: which service said 402. Papr's own AI service gets Papr copy; a key you added gets that provider's. */
 export function creditsOut(via: "papr" | string): void {
   const ours = via === "papr";
+  // The server already told you (and your admins): don't say it twice.
+  if (ours && serverSaysOut()) return;
   tryNotify({
     key: ROOT_KEYS.credits, kind: "account.credits", type: "condition", level: "urgent",
     title: ours ? "You're out of AI credits" : `Your ${via} account is out of credits`,

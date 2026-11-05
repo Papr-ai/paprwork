@@ -29,6 +29,19 @@ export const useNoticeStore = create<NoticeState>((set) => ({
   setNotices: (notices, prefs) => set((s) => ({ notices, prefs: prefs ?? s.prefs })),
 }));
 
+/** Open notices that live on Settings › Billing (server billing notices, member requests, credits out). */
+export const isBillingNotice = (n: Notice) => n.owner.kind === "account" && (n.owner.section ?? n.owner.id) === "billing";
+
+/** The Billing tab's dot: blue while something there waits on you, green for news (top-up charged). */
+export function billingMark(s: NoticeState): NoticeMark {
+  return strongestMark(s.notices.filter(isBillingNotice).map((n) => n.mark));
+}
+
+/** The avatar only lights for what waits on you (Priority and Urgent), never for news. */
+export function billingNeedsYou(s: NoticeState): boolean {
+  return billingMark(s) === "blue";
+}
+
 /** Strongest open mark per chat id, as a stable "id:mark|id:mark" key for selectors. */
 export function chatMarksKey(s: NoticeState): string {
   const byChat = new Map<string, NoticeMark[]>();
