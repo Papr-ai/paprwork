@@ -3034,7 +3034,14 @@ async function startGateway(): Promise<void> {
           const { cloudApiFetch } = await import("./utils/cloudApiClient.js");
           const target = await aud.accessTargetAppId(appId);
           const upstream = await cloudApiFetch(`/v1/cloud/apps/${encodeURIComponent(target)}/access`, { method: "GET", timeoutMs: 20_000 });
-          res.status(upstream.status).type("application/json").send((await upstream.text()) || "{}");
+          const text = (await upstream.text()) || "{}";
+          // The bar builds Copy link from local prefs. Follow the server on every
+          // read, so a failed save or a change made elsewhere can't leave
+          // "Anyone with the link" on with a link that has no invite token.
+          if (upstream.ok && target === appId) {
+            try { aud.syncAudiencePrefs(appId, JSON.parse(text)); } catch { /* not JSON */ }
+          }
+          res.status(upstream.status).type("application/json").send(text);
           return;
         }
         const { sharedCoverKind } = await import("./services/appDemoVideos.js");
