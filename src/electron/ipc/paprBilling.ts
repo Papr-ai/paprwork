@@ -556,10 +556,15 @@ async function buildPlanSummary(services: BillingServices): Promise<PaprPlanSumm
   if (credits) {
     const creditsRole = await resolveWorkspaceRole(profile.sessionToken!, workspaceId, profile.userId)
       .catch(() => "member");
+    // Memory decides who is an org admin for credits orgs. The Parse workspace role can be
+    // missing (no workspace membership, Forbidden), so ask memory when Parse says "member":
+    // /builders answers only for owners and admins.
+    const memoryAdmin = creditsRole === "owner" || creditsRole === "admin"
+      || await fetchBuilders(memoryBaseUrl(), profile.sessionToken!).then(() => true, () => false);
     return buildCreditsPlanSummary({
       credits,
       isWorkspaceOwner: creditsRole === "owner",
-      isWorkspaceAdmin: creditsRole === "owner" || creditsRole === "admin",
+      isWorkspaceAdmin: memoryAdmin,
       stripeCustomerId,
     });
   }
