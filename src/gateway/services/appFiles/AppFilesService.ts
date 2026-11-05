@@ -9,7 +9,7 @@
 import { randomUUID } from "node:crypto";
 import { basename } from "node:path";
 import { stat } from "node:fs/promises";
-import { existsSync } from "node:fs";
+import { closeSync, existsSync, openSync } from "node:fs";
 
 import {
   commitUpload,
@@ -688,6 +688,16 @@ export async function getFile(db: FilesDb, id: string): Promise<AppFileRow | nul
  * Local when we have it, otherwise a short-lived signed URL. Callers get one
  * answer and never branch on storage state.
  */
+/** True when the local copy exists AND this process may open it (TCC blocks reads, not stat). */
+export function canReadLocal(path: string): boolean {
+  try {
+    closeSync(openSync(path, "r"));
+    return true;
+  } catch {
+    return false;
+  }
+}
+
 export async function resolveFileUrl(
   db: FilesDb,
   id: string,
@@ -699,9 +709,11 @@ export async function resolveFileUrl(
   // local_path is a path on the machine that uploaded the file. app_files rows
   // sync to teammates through the shared DB, so on any other desktop that path
   // does not exist — fall through to the cloud copy instead of a dead path.
-  const { existsSync } = await import("node:fs");
+  // Existence is not enough: macOS privacy (TCC) lets stat() see a file in
+  // ~/Documents while open() fails with EPERM, so check it can actually be read.
+  // A verified cloud copy then serves it instead of a broken image.
   const usable =
-    row.local_path && !existsSync(row.local_path) ? { ...row, local_path: null } : row;
+    row.local_path && !canReadLocal(row.local_path) ? { ...row, local_path: null } : row;
   const location = resolveLocation(usable);
   if (location.kind === "cloud") {
     const { url } = await createReadUrl(row.app_id, row.object_key, {
