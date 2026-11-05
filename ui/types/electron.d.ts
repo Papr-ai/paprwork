@@ -51,6 +51,8 @@ export interface UpdateStatus {
   percent?: number;
   error?: string;
   recoveryHint?: string;
+  /** Fixes itself (server busy, network): the banner stays quiet, Settings still shows it. */
+  transient?: boolean;
 }
 
 export interface ElectronAPI {
