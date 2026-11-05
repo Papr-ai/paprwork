@@ -2193,10 +2193,7 @@ class GatewayProcessSupervisor {
 
 const { mergeUpdateStatusCache } = require("./updaterStatusCache.cjs");
 
-const UPDATE_RECOVERY_HINT =
-  "If the app won't open after updating: quit Papr Work, delete " +
-  "~/Library/Caches/com.paprwork.v2.ShipIt, remove /Applications/Papr Work.app, " +
-  "then reinstall the latest arm64 .pkg from GitHub Releases.";
+const { formatUpdateError } = require("./updateErrorFormat.cjs");
 
 /** @type {import("./updaterStatusCache.cjs").UpdateStatusPayload | null} */
 let cachedUpdateStatusPayload = null;
@@ -2204,57 +2201,6 @@ let cachedUpdateStatusPayload = null;
 /** Register before the renderer loads — UpdateBanner calls getStatus on mount. */
 function registerUpdaterIpcHandlers() {
   ipcMain.handle("updater:get-status", () => cachedUpdateStatusPayload);
-}
-
-function formatUpdateError(rawMessage) {
-  const message =
-    typeof rawMessage === "string" ? rawMessage : String(rawMessage ?? "Unknown error");
-  const lower = message.toLowerCase();
-
-  if (lower.includes("read-only volume") || lower.includes("readonly")) {
-    return {
-      error:
-        "Update cannot install while Papr Work is on a read-only volume. " +
-        "Install to /Applications using the .pkg installer.",
-      recoveryHint: UPDATE_RECOVERY_HINT,
-    };
-  }
-
-  if (
-    lower.includes("shipit") ||
-    lower.includes("signature") ||
-    lower.includes("codesign") ||
-    lower.includes("seckey") ||
-    lower.includes("corrupt") ||
-    lower.includes("damaged")
-  ) {
-    return {
-      error: `Update installation failed: ${message}`,
-      recoveryHint: UPDATE_RECOVERY_HINT,
-    };
-  }
-
-  if (
-    lower.includes("enotfound") ||
-    lower.includes("network") ||
-    lower.includes("net::") ||
-    lower.includes("econnrefused") ||
-    lower.includes("timed out")
-  ) {
-    return {
-      error: `Could not reach the update server: ${message}`,
-      recoveryHint: "Check your internet connection and try again.",
-    };
-  }
-
-  if (lower.includes("not packaged")) {
-    return {
-      error: message,
-      recoveryHint: "Auto-updates only work in packaged builds from GitHub Releases.",
-    };
-  }
-
-  return { error: message };
 }
 
 /**

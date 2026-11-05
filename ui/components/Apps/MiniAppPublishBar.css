@@ -2777,3 +2777,23 @@ button.cloud-compat-badge--paused:hover {
   border-radius: 50%;
   background: #ef4444;
 }
+
+/* Propose sheet: a failed Publish now / Send for review */
+.propose-failure {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.propose-failure__message {
+  margin: 0;
+}
+
+.propose-failure .share-sheet__error-details {
+  margin-top: 0;
+}
+
+.propose-failure__ask {
+  align-self: flex-start;
+  font-weight: 600;
+}
