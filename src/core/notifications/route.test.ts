@@ -2,6 +2,7 @@
 import { describe, expect, it } from "vitest";
 import { DEFAULT_NOTICE_PREFS, route, type RouteCtx, type RoutedNotice } from "./route.js";
 import { mergePrefs } from "./prefs.js";
+import { PAPR_SOURCES, sourceOf, typeOf } from "./sources.js";
 
 const prefs = DEFAULT_NOTICE_PREFS;
 const ctx = (o: Partial<RouteCtx> = {}): RouteCtx => ({ prefs, foreground: true, dnd: false, viewingOwner: false, ...o });
@@ -85,5 +86,38 @@ describe("route(): sources and types", () => {
     const d = route(n({ level: "urgent", source: billing, owner: { kind: "account", id: "billing", name: "Billing" } }),
       ctx({ foreground: false, prefs: with_({ sources: { account: { sound: false } } }) }));
     expect([d.os, d.sound]).toEqual([true, true]);
+  });
+});
+
+describe("server billing notices obey the Account & team chips", () => {
+  const bill = { type: "billing" as const, id: "billing", name: "Billing" };
+  const owner = { kind: "account" as const, id: "billing", name: "Billing", section: "billing" };
+  const mk = (kind: string, level: "fyi" | "priority" | "urgent") => ({ key: kind, kind, level, title: "t", source: bill, owner });
+  it("maps each kind to a Settings row and chip", () => {
+    expect([sourceOf(mk("billing.low", "priority")), typeOf(mk("billing.low", "priority"))]).toEqual(["account", "billing.low"]);
+    expect(typeOf(mk("member.request.seat", "priority"))).toBe("member.request");
+    expect(typeOf(mk("member.approved", "fyi"))).toBe("member.result");
+    expect(typeOf(mk("billing.payment_failed", "priority"))).toBe("billing.payment");
+    expect(typeOf(mk("billing.ended", "fyi"))).toBe("billing.plan");
+    expect(typeOf({ ...mk("connection.requested", "priority"), source: { type: "platform" as const, id: "connections", name: "Connections" } })).toBe("connection.request");
+    expect(typeOf({ ...mk("proposal.accepted", "fyi"), source: { type: "platform" as const, id: "proposals", name: "Proposals" } })).toBe("proposal.result");
+  });
+  it("every chip a server kind maps to exists in Settings", () => {
+    const account = PAPR_SOURCES.find((s) => s.id === "account")!.types.map((t) => t.id);
+    for (const k of ["billing.low", "member.request.limit", "member.declined", "billing.member_cap", "billing.cancel_scheduled", "billing.topup_ok", "billing.plan_changed"]) {
+      expect(account).toContain(typeOf(mk(k, k.endsWith("ok") || k.includes("plan_") || k.includes("declined") ? "fyi" : "priority")));
+    }
+  });
+  it("the newer server billing kinds land on existing chips", () => {
+    expect(typeOf(mk("billing.team_low", "priority"))).toBe("billing.low");
+    expect(typeOf(mk("billing.topup_low", "priority"))).toBe("billing.low");
+    expect(typeOf(mk("billing.cloud_paused", "priority"))).toBe("billing.payment");
+    expect(typeOf(mk("billing.topup_using", "fyi"))).toBe("billing.topup_ok");
+    expect(typeOf(mk("billing.topup_expired", "fyi"))).toBe("billing.topup_ok");
+  });
+  it("turning a chip off mutes it; urgent ignores it", () => {
+    const prefs = mergePrefs(DEFAULT_NOTICE_PREFS, { types: { "account/billing.low": false } });
+    expect(route(mk("billing.low", "priority"), { ...ctx(), prefs }).muted).toBe(true);
+    expect(route(mk("billing.topup_failed", "urgent"), { ...ctx(), prefs }).level).toBe("urgent");
   });
 });

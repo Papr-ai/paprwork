@@ -68,7 +68,7 @@ describe("proposal notices", () => {
     expect(input).toMatchObject({ key: "proposal:r1", level: "priority", owner: { kind: "app", id: "app1" }, source: { type: "platform" } });
     const accepted = noticeForEvent({ id: "2", type: "proposal.accepted", role: "contributor", requestId: "r1", installedAppId: "a2", title: "Fix", createdAt: "" } as never)!;
     expect(noticeInputFor(accepted)).toMatchObject({ key: "proposal:r1", level: "fyi" });
-  });
+  }, 20_000); // cold import of the gateway modules takes ~5s on a busy machine
 });
 
 describe("chatName", () => {

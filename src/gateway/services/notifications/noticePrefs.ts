@@ -35,6 +35,11 @@ export class PrefsStore {
     return this.write(mergePrefs(this.effective(), patch));
   }
 
+  /** Replace everything (settings that changed on another device). */
+  replace(p: unknown): NoticePrefs {
+    return this.write(cleanPrefs(p));
+  }
+
   reset(): NoticePrefs {
     this.db.prepare("DELETE FROM notice_prefs").run();
     return DEFAULT_NOTICE_PREFS;

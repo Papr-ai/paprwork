@@ -10,6 +10,7 @@ import { useChat } from "../../hooks/useChat";
 import { useTabs } from "../../hooks/useTabs";
 import type { TabType } from "../../types/tabs";
 import { FocusPeek, openFocusGoal } from "./FocusPeek";
+import { useNeedsYouCount } from "../../stores/useNeedsYou";
 import { ProfileFooter } from "./ProfileFooter";
 import { RailItem } from "./RailItem";
 import { RailPeek } from "./RailPeek";
@@ -21,6 +22,9 @@ import { useAgentIdentity, useAgentName } from "../Agent/agentIdentityStore";
 import { useAgentWork } from "../Agent/agentWork";
 import { AgentNudge } from "../Agent/AgentNudge";
 import { useAgentNudge, type NudgeAction } from "../Agent/useAgentNudge";
+import { useUrgentLean } from "../Agent/useUrgentLean";
+import { openNoticeOwner } from "../../stores/noticeOs";
+import { useNoticeStore } from "../../stores/noticeStore";
 import { switchToChatTab, switchToFocusTab, switchToMemoryTab } from "../../lib/ensureDefaultChatTab";
 import "./Sidebar.css";
 
@@ -151,15 +155,22 @@ export function Sidebar() {
   const agentName = useAgentName();
   const agentLook = useAgentIdentity((s) => s.look);
   const work = useAgentWork();
+  const needsCount = useNeedsYouCount();
+  const needsLabel = needsCount ? ` · ${needsCount} ${needsCount === 1 ? "needs" : "need"} you` : "";
   const workingLabel = `${agentName} is working · ${work.count} ${work.count === 1 ? "chat" : "chats"}`;
   const nudge = useAgentNudge(work.state, (action: NudgeAction) => {
-    if (action.type === "chat") void handleOnboardingSendMessage(action.prompt);
+    if (action.type === "notice") {
+      const n = useNoticeStore.getState().notices.find((x) => x.key === action.key);
+      if (n) openNoticeOwner(n.owner, n.key);
+    } else if (action.type === "chat") void handleOnboardingSendMessage(action.prompt);
     else if (action.type === "app") switchToTab(createTab("app", action.appId, "App"));
     else {
       handleNavClick("focus");
       if (action.goalId) openFocusGoal(action.goalId);
     }
   });
+
+  useUrgentLean(nudge);
 
   const openSearch = () => window.dispatchEvent(new CustomEvent("papr-open-command-palette"));
   const openChatHistory = () => {
@@ -178,7 +189,8 @@ export function Sidebar() {
       <RailItem
         variant="agent"
         label={work.state === "working" ? workingLabel : `Focus · ${agentName}`}
-        ariaLabel={work.state === "working" ? `Focus · ${workingLabel}` : "Focus"}
+        ariaLabel={`${work.state === "working" ? `Focus · ${workingLabel}` : "Focus"}${needsLabel}`}
+        count={needsCount}
         busy={work.state === "working"}
         active={activeView === "focus"}
         onClick={() => handleNavClick("focus")}

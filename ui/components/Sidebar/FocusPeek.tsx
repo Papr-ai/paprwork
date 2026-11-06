@@ -7,7 +7,26 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import { getGatewayHttpBase } from "../../utils/gatewayHttpBase";
 import { RailIcons } from "./railIcons";
+import { useNeedsYou } from "../../stores/useNeedsYou";
+import { openNoticeOwner } from "../../stores/noticeOs";
+import { MentionPill } from "../common/mentionPill";
+import type { Notice } from "../../../src/core/types/notices";
 import "./FocusPeek.css";
+
+/** Mention notices read "Amir: Own the pricing copy"; the peek shows the ask and the person as a pill. */
+// Mention notices name the person in the title. Pull it out so the pill is the person, not "Your turn".
+const PEEK_PATTERNS: Array<[RegExp, (m: RegExpMatchArray) => [string, string]]> = [
+  [/^Your turn: (\S+) finished (.+)$/, (m) => [m[1], `Your turn: ${m[2]}`]],
+  [/^(\S+) can't take it: (.+)$/, (m) => [m[1], `Can't take it: ${m[2]}`]],
+  [/^(\S+) is checking in: (.+)$/, (m) => [m[1], `Checking in: ${m[2]}`]],
+  [/^(\S+) replied: (.+)$/, (m) => [m[1], `Replied: ${m[2]}`]],
+  [/^([^:]+): (.+)$/, (m) => [m[1], m[2]]],
+];
+export function peekParts(n: Notice): { from: string | null; title: string } {
+  if (!n.kind.startsWith("mention")) return { from: null, title: n.title };
+  for (const [re, f] of PEEK_PATTERNS) { const m = n.title.match(re); if (m) { const [from, title] = f(m); return { from, title }; } }
+  return { from: null, title: n.title };
+}
 
 interface FocusGoalLite {
   id: string;
@@ -80,19 +99,36 @@ export function useFocusState() {
 
 interface FocusPeekProps {
   status: React.ReactNode;
-  /** Open Focus; with a goal id, Home opens that goal's detail view. */
+  /** Open Focus; with a goal id, Focus opens that goal's detail view. */
   onOpen: (goalId?: string) => void;
 }
 
 export function FocusPeek({ status, onOpen }: FocusPeekProps) {
   const { state, refresh } = useFocusState();
   const three = state?.three ?? [];
+  const { needs } = useNeedsYou();
   return (
     <div className="focus-peek" onMouseEnter={() => void refresh()} onFocus={() => void refresh()}>
       <header className="rail-peek__header">
         <b>Focus</b>
         <span>{status}</span>
       </header>
+      {needs.length ? (
+        <div className="focus-peek__needs">
+          {/* One thing, not a truncated list: the top item, then the rest is one tap away in Focus. */}
+          <button type="button" role="menuitem" className="focus-peek__need" onClick={() => openNoticeOwner(needs[0].owner, needs[0].key)}
+            title={[needs[0].title, needs[0].body].filter(Boolean).join(" · ")}>
+            <i aria-hidden="true" />
+            <span className="focus-peek__title">{shortTitle(peekParts(needs[0]).title, 34)}</span>
+            {peekParts(needs[0]).from ? <MentionPill name={peekParts(needs[0]).from!} /> : null}
+          </button>
+          {needs.length > 1 ? (
+            <button type="button" role="menuitem" className="focus-peek__more" onClick={() => onOpen()}>
+              {needs.length - 1} more need you
+            </button>
+          ) : null}
+        </div>
+      ) : null}
       {three.length ? (
         <ul className="focus-peek__three">
           {three.map((g) => (
@@ -135,19 +171,5 @@ export function FocusPeek({ status, onOpen }: FocusPeekProps) {
   );
 }
 
-/**
- * Ask the Home mini-app to open one goal. Home lives in a cross-origin iframe, so post to every
- * iframe (only Home listens for this type) and retry briefly while a freshly-shown Home loads.
- */
-export function openFocusGoal(goalId: string): void {
-  const nonce = `${Date.now()}-${Math.random().toString(36).slice(2)}`;
-  const post = () =>
-    document.querySelectorAll("iframe").forEach((f) => {
-      try {
-        f.contentWindow?.postMessage({ type: "papr-focus-open", goalId, nonce }, "*");
-      } catch {
-        /* detached frame */
-      }
-    });
-  [0, 300, 900, 2000].forEach((ms) => window.setTimeout(post, ms));
-}
+/** Open one goal on the native Focus page (re-exported for the rail and nudges). */
+export { openFocusGoal } from "../Focus/page/focusNav";

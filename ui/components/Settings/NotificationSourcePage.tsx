@@ -4,13 +4,19 @@
  * desktop notifications behave.
  */
 import type { NoticeSourceDef, NoticeCategory } from "../../../src/core/notifications/sources";
-import { SURFACES, sourcePref, typeOn, typeKey, type NoticePrefs, type Surface } from "../../../src/core/notifications/prefs";
+import { FOCUS_MODES, SURFACES, sourcePref, typeOn, typeKey, type FocusMode, type NoticePrefs, type Surface } from "../../../src/core/notifications/prefs";
+import { hasFocusMode } from "../../../src/core/notifications/needsYou";
 import { SettingRow } from "./SettingRow";
 import { Toggle } from "./Toggle";
 
 export const SURFACE_LABEL: Record<Surface, [string, string]> = {
   desktop: ["Desktop", "A macOS or Windows notification. Only when Papr Work isn't in front."],
   badge: ["Badges", "A dot on the thing and on its icon in the sidebar."],
+};
+const FOCUS: Record<FocusMode, [string, string]> = {
+  pen: ["Pen decides", "A dot here. Pen brings it into Focus when it matters, like when it's waited a day."],
+  always: ["Always", "Everything waiting on you here also shows in Focus and counts on Pen."],
+  never: ["Never", "Only the dot here. Never in Focus, unless it's urgent."],
 };
 const ROW: Record<NoticeCategory, [string, string]> = { needs: ["Waiting on you", "blue"], done: ["Done and updates", "green"] };
 
@@ -60,6 +66,21 @@ export function NotificationSourcePage({ src, prefs, onSet, onBack }: {
           ))}
         </tbody>
       </table>
+      {hasFocusMode(src.id) && (
+        <>
+          <h3 className="notif-settings__h">In Focus</h3>
+          <div className={`notif-group${off ? " is-dim" : ""}`}>
+            <SettingRow label="Show in Focus" hint={FOCUS[p.focus][1]} disabled={off}>
+              <span className="notif-seg" role="radiogroup" aria-label={`${src.name} in Focus`}>
+                {FOCUS_MODES.map((m) => (
+                  <button key={m} type="button" role="radio" aria-checked={p.focus === m} className={p.focus === m ? "is-on" : ""} disabled={off}
+                    onClick={() => onSet({ sources: { [src.id]: { focus: m } } })}>{FOCUS[m][0]}</button>
+                ))}
+              </span>
+            </SettingRow>
+          </div>
+        </>
+      )}
       {src.id === "account" && (
         <div className="notif-group notif-always">
           <SettingRow label="Billing and sign-in problems" hint="Papr Work stops until they're fixed, so these always reach you">

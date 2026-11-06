@@ -45,5 +45,5 @@ describe("notifications:* websocket", () => {
 
     await setupNotificationHandlers(ws, { id: "4", type: "notifications:seen", payload: {} });
     expect(sent.at(-1)).toMatchObject({ id: "4", success: false });
-  });
+  }, 20_000); // cold import of the gateway modules takes ~5s on a busy machine
 });

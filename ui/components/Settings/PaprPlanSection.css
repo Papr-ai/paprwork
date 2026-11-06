@@ -343,10 +343,6 @@
   margin-top: 4px;
 }
 
-.papr-plan__dashboard-btn {
-  align-self: flex-start;
-}
-
 .papr-plan__upgrade-label {
   font-size: 12px;
   font-weight: 600;
@@ -448,3 +444,31 @@
 .papr-plan__toggle-btn--on .papr-plan__toggle-knob {
   transform: translateX(18px);
 }
+
+/* Members (credits orgs): member ask buttons and the admin requests card */
+.papr-plan__asks { display: flex; flex-wrap: wrap; gap: 8px; margin-top: 10px; align-items: center; }
+.papr-plan__asked { font-size: 12px; color: var(--text-secondary); }
+.papr-plan__members { margin-top: 16px; padding-top: 12px; border-top: 1px solid var(--border-subtle, rgba(127,127,127,0.18)); display: flex; flex-direction: column; gap: 10px; }
+.papr-plan__members-head { font-size: 13px; font-weight: 600; color: var(--text-primary); }
+.papr-plan__request { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; padding: 8px 10px; border-radius: 8px; background: rgba(245, 158, 11, 0.08); }
+.papr-plan__request-text { flex: 1 1 200px; font-size: 12px; color: var(--text-primary); }
+.papr-plan__member-row { display: flex; justify-content: space-between; align-items: center; gap: 12px; font-size: 12px; color: var(--text-secondary); }
+.papr-plan__cap-input { width: 84px; font-size: 12px; padding: 4px 6px; border-radius: 6px; border: 1px solid var(--border-subtle, rgba(127,127,127,0.3)); background: transparent; color: var(--text-primary); }
+
+/* Read-only note for members: quiet, one line, no warning colour. */
+.papr-plan__owner-note { display: flex; align-items: center; gap: 10px; padding: 10px 14px; border-radius: 12px; background: var(--bg-secondary); border: 1px solid var(--border-color); font-size: 13px; color: var(--text-secondary); }
+.papr-plan__owner-note svg { flex: none; width: 16px; height: 16px; fill: none; stroke: currentColor; stroke-width: 1.8; stroke-linecap: round; stroke-linejoin: round; opacity: 0.8; }
+
+/* Same select as the rest of Settings (Connections). */
+.papr-plan__select { appearance: none; -webkit-appearance: none; max-width: 220px; padding: 6px 28px 6px 10px; border-radius: 8px; border: 1px solid var(--border-color); color: var(--text-primary); font: inherit; font-size: 12.5px; cursor: pointer;
+  background: var(--bg-secondary) url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='%23888' stroke-width='2.4' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpath d='m6 9 6 6 6-6'/%3E%3C/svg%3E") no-repeat right 9px center / 12px; }
+.papr-plan__select:focus { outline: none; border-color: var(--accent); box-shadow: 0 0 0 3px rgba(var(--accent-rgb), 0.18); }
+.papr-plan__select:disabled { opacity: 0.6; cursor: not-allowed; }
+
+/* Money input: $ amount, credits beside it. */
+.papr-plan__money { display: inline-flex; align-items: center; gap: 10px; }
+.papr-plan__money-field { display: inline-flex; align-items: center; gap: 4px; padding: 5px 10px; border-radius: 8px; border: 1px solid var(--border-color); background: var(--bg-secondary); color: var(--text-secondary); font-size: 12.5px; }
+.papr-plan__money-field:focus-within { border-color: var(--accent); box-shadow: 0 0 0 3px rgba(var(--accent-rgb), 0.18); }
+.papr-plan__money-field input { width: 56px; border: 0; outline: none; background: transparent; color: var(--text-primary); font: inherit; text-align: right; }
+.papr-plan__money-unit { color: var(--text-tertiary); }
+.papr-plan__money-credits { font-size: 12px; color: var(--text-tertiary); white-space: nowrap; }

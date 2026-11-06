@@ -9,6 +9,24 @@ jobs:
     name: Change control
     runs-on: ubuntu-latest
     steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - name: No dependencies or symlinks committed
+        env:
+          BASE: ${{ github.base_ref }}
+        run: |
+          set -e
+          added=$(git diff --diff-filter=A --raw "origin/$BASE...HEAD")
+          deps=$(printf "%s\n" "$added" | awk -F'\t' 'NF>1{print $2}' | grep -E '(^|/)(node_modules|\.venv|__pycache__)(/|$)' || true)
+          links=$(printf "%s\n" "$added" | awk '$2=="120000"{print $NF}')
+          if [ -n "$deps$links" ]; then
+            [ -n "$deps" ] && printf "%s\n" "$deps" | head -20 | sed 's/^/::error::Dependency folder committed: /'
+            [ -n "$links" ] && printf "%s\n" "$links" | head -20 | sed 's/^/::error::Symlink committed: /'
+            echo "::error::Remove them with git rm --cached <path>. Worktrees often symlink node_modules; stage files by name instead of git add ."
+            exit 1
+          fi
+          echo "No dependencies or symlinks: ok"
       - name: Ticket linked and branch flow
         env:
           BODY: ${{ github.event.pull_request.body }}

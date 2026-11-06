@@ -2497,6 +2497,10 @@ export function MiniAppPublishBar({
           <div className="share-sheet__panel">
             <ShareAccessSheet
               appId={appId}
+              appTitle={appTitle}
+              linkUrl={copyUrl ?? webDisplayUrl ?? null}
+              onCopyLink={() => void cloud.copyLink(copyUrl ?? webDisplayUrl)}
+              onOpenLink={() => void cloud.openInBrowser(copyUrl ?? webDisplayUrl)}
               members={workspacePeople}
               membersLoading={workspacePeopleLoading}
               onClose={() => setAccessOpen(false)}

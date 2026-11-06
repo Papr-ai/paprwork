@@ -601,6 +601,8 @@ export class AgentStreamRegistry {
     if (!entry.completeData) return;
     if (!entry.cancelled) {
       void import("./notifications/noticeSources.js").then((m) => m.noticeChatDone(entry.chatId)).catch(() => {});
+      // A reply finished, so the model has credit again.
+      void import("./notifications/rootConditions.js").then((m) => m.creditsBack()).catch(() => {});
     }
     const tracked = entry.subscribers.size;
     let delivered = 0;

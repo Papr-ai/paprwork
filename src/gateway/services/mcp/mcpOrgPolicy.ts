@@ -9,6 +9,7 @@
  */
 import type { Express, Request, Response } from "express";
 import { cloudApiFetch } from "../../utils/cloudApiClient.js";
+import { appendCloudActingUserQuery } from "../../utils/cloudActingUser.js";
 
 export type ConnectMode = "all" | "approved" | "none";
 
@@ -61,7 +62,10 @@ export async function assertOrgAllows(serverId: string, name: string): Promise<v
 
 async function forward(res: Response, path: string, init: { method?: string; body?: unknown } = {}): Promise<void> {
   try {
-    const r = await cloudApiFetch(`/v1/cloud/connections${path}`, {
+    // These routes read the acting user from the query only. cloudApiFetch puts it in the body on
+    // POST/PATCH, so without this a request or decision is recorded as the workspace key's owner.
+    const url = `/v1/cloud/connections${path}`;
+    const r = await cloudApiFetch(init.body !== undefined ? appendCloudActingUserQuery(url) : url, {
       method: init.method ?? "GET",
       ...(init.body !== undefined ? { body: init.body } : {}),
       timeoutMs: 15_000,

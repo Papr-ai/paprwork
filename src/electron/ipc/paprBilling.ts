@@ -29,7 +29,18 @@ import {
 } from "../../core/utils/paprPlanLimits.js";
 import { countSeatHolders, fetchWorkspaceMembers } from "../../core/utils/paprWorkspaceTeam.js";
 import { PAPR_USAGE_URL } from "../../core/utils/paprQuota.js";
-import { fetchBuilders, setBuilder } from "../../core/utils/paprCreditSeats.js";
+import {
+  decideMemberRequest,
+  fetchBuilders,
+  fetchCreditUsage,
+  requestMember,
+  setBuilder,
+  setMemberCap,
+  setMemberPolicy,
+  type MemberPolicy,
+  type MemberRequestKind,
+} from "../../core/utils/paprCreditSeats.js";
+import { buildCreditsPlanSummary, creditsRoleFromBuilders, creditsSummaryFromUsage } from "../../core/utils/paprCreditsPlanSummary.js";
 import { memoryBaseUrl } from "./paprHandoff.js";
 
 type GraphQLRunner = (
@@ -329,6 +340,15 @@ export interface EnsureDeveloperSubscriptionResponse {
  * Calls dashboard ensure-developer-subscription API (mirrors web onboarding).
  * Non-throwing — login and plan summary should continue if billing setup fails.
  */
+/** True when memory bills this caller's org in credits. Lookup failure = false (legacy path). */
+export async function isCreditsBillingOrg(sessionToken: string): Promise<boolean> {
+  try {
+    return creditsSummaryFromUsage(await fetchCreditUsage(memoryBaseUrl(), sessionToken)) !== null;
+  } catch {
+    return false;
+  }
+}
+
 export async function ensureDeveloperStripeSubscription(input: {
   sessionToken: string;
   workspaceId: string;
@@ -525,6 +545,31 @@ async function buildPlanSummary(services: BillingServices): Promise<PaprPlanSumm
     workspaceOrgPlanTier,
     stripeCustomerId: stripeCustomerId ? `${stripeCustomerId.slice(0, 12)}…` : null,
   });
+
+  // Credits orgs: memory is the source of truth. Skip the legacy dashboard metrics and
+  // never lazily create a Developer subscription for them.
+  const creditsView = await fetchCreditUsage(memoryBaseUrl(), profile.sessionToken!).catch((err) => {
+    console.warn("[PaprBilling] credits usage lookup failed; using legacy plan summary:", err);
+    return null;
+  });
+  const credits = creditsSummaryFromUsage(creditsView);
+  if (credits) {
+    const creditsRole = await resolveWorkspaceRole(profile.sessionToken!, workspaceId, profile.userId)
+      .catch(() => "member");
+    // Memory decides who is an org owner/admin for credits orgs. The Parse workspace role can
+    // be missing (member list Forbidden), so ask memory when Parse says "member":
+    // /builders answers only for owners and admins, and its rows carry each user's roles.
+    const role = creditsRole === "owner" || creditsRole === "admin"
+      ? creditsRole
+      : await fetchBuilders(memoryBaseUrl(), profile.sessionToken!)
+        .then((view) => creditsRoleFromBuilders(view, profile.userId), () => null);
+    return buildCreditsPlanSummary({
+      credits,
+      isWorkspaceOwner: role === "owner",
+      isWorkspaceAdmin: role === "owner" || role === "admin",
+      stripeCustomerId,
+    });
+  }
 
   const usageMetricsResult = await fetchUsageMetrics(
     profile.sessionToken!,
@@ -922,6 +967,22 @@ export function registerPaprBillingHandlers(deps: {
       }
     },
   );
+
+  const creditsCall = (name: string, fn: (token: string, input: any) => Promise<unknown>) =>
+    ipcMain.handle(name, async (_event, input) => {
+      try {
+        const profile = requireLoggedInProfile(deps.settingsStorage);
+        const result = await fn(profile.sessionToken!, input);
+        invalidatePlanSummaryCache();
+        return { success: true, result };
+      } catch (error) {
+        return { success: false, error: error instanceof Error ? error.message : "Request failed" };
+      }
+    });
+  creditsCall("papr:request-member", (t, i: { kind: MemberRequestKind }) => requestMember(memoryBaseUrl(), t, i?.kind));
+  creditsCall("papr:decide-member-request", (t, i) => decideMemberRequest(memoryBaseUrl(), t, i));
+  creditsCall("papr:set-member-policy", (t, i: { policy: MemberPolicy }) => setMemberPolicy(memoryBaseUrl(), t, i?.policy));
+  creditsCall("papr:set-member-cap", (t, i: { capCredits: number }) => setMemberCap(memoryBaseUrl(), t, Number(i?.capCredits)));
 
   ipcMain.handle(
     "papr:start-expert-build-checkout",

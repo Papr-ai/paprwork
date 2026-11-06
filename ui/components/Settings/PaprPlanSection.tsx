@@ -17,6 +17,8 @@ import { planNeedsAttention } from "../../utils/cloudMemoryStatus";
 import { refreshPaprBillingStatus } from "../../utils/refreshPaprBillingStatus";
 import { useSettingsNavigationStore } from "../../stores/settingsNavigationStore";
 import { CreditPlanCards, type CreditPlanAction } from "./CreditPlanCards";
+import { CreditsUsagePanel } from "./CreditsUsagePanel";
+import { MemberRequestsCard } from "./MemberRequestsCard";
 import type {
   PaprCreditPlanId,
   PaprExpertBuildSize,
@@ -105,7 +107,14 @@ function meterToneForSummary(
   return meterTone(exceeded, near);
 }
 
+function creditsCurrentPlan(summary: PaprPlanSummary): PaprCreditPlanId | null {
+  const plan = summary.credits?.plan;
+  return plan === "cloud" || plan === "cloud_plus" || plan === "cloud_max" ? plan : null;
+}
+
 function shouldShowUpgradeOptions(summary: PaprPlanSummary): boolean {
+  // Credits orgs always see the plan cards (current plan marked) so they can switch.
+  if (summary.credits) return true;
   return (
     summary.planTier === "developer" ||
     !hasActivePaprSubscription(summary) ||
@@ -124,6 +133,16 @@ export function PaprPlanSection() {
     "developer" | null
   >(null);
   const [creditAction, setCreditAction] = useState<CreditPlanAction>(null);
+  // userId -> display name, for the Members card (admins on credits orgs only).
+  const [memberNames, setMemberNames] = useState<Record<string, string>>({});
+  useEffect(() => {
+    if (!summary?.credits || !summary.isWorkspaceAdmin) return;
+    void window.electronAPI.papr.listWorkspaceMembers().then((r) => {
+      const out: Record<string, string> = {};
+      for (const m of r.members ?? []) out[m.user.objectId] = m.user.displayName || m.user.email;
+      setMemberNames(out);
+    }).catch(() => undefined);
+  }, [summary?.credits, summary?.isWorkspaceAdmin]);
   const navigationToken = useSettingsNavigationStore((state) => state.token);
   const pendingPlanFocus = useSettingsNavigationStore(
     (state) => state.pendingPlanFocus,
@@ -274,13 +293,6 @@ export function PaprPlanSection() {
     }
   };
 
-  const handleUsageDashboard = async () => {
-    setActionMessage(null);
-    const result = await window.electronAPI.papr.openUsageDashboard();
-    if (!result.success) {
-      setActionMessage(result.error || "Could not open usage dashboard");
-    }
-  };
 
   const canEnableMeteredBilling =
     summary?.subscriptionStatus === "active" ||
@@ -339,14 +351,12 @@ export function PaprPlanSection() {
         {summary && (
           <>
             {summary.canManageBilling ? null : (
-              <div className="papr-plan__callout" role="status">
-                <p className="papr-plan__callout-title">
-                  Billing changes require the workspace owner
-                </p>
-                <p className="papr-plan__callout-body">
-                  You can still view usage here. Contact your workspace owner to
-                  resubscribe, upgrade, or enable metered billing.
-                </p>
+              <div className="papr-plan__owner-note" role="status">
+                <svg viewBox="0 0 24 24" aria-hidden="true"><rect x="5" y="11" width="14" height="9" rx="2" /><path d="M8 11V8a4 4 0 0 1 8 0v3" /></svg>
+                <span>
+                  Your workspace owner manages the plan.{" "}
+                  {summary.credits ? "Ask them if you need more credits." : "Ask them to upgrade or resubscribe."}
+                </span>
               </div>
             )}
 
@@ -382,12 +392,19 @@ export function PaprPlanSection() {
                       <Spinner /> Opening…
                     </>
                   ) : (
-                    "Manage billing"
+                    "Payment & invoices"
                   )}
                 </button>
               ) : null}
             </div>
 
+            {summary.credits ? (
+              <>
+                <CreditsUsagePanel credits={summary.credits} />
+                {summary.isWorkspaceAdmin && <MemberRequestsCard names={memberNames} />}
+              </>
+            ) : (
+              <>
             {summary.isTrialPeriod && (
               <div className="papr-plan__plan-meta">
                 Trial active — Builder limits apply until your trial ends.
@@ -487,15 +504,11 @@ export function PaprPlanSection() {
               )}
             />
 
-            <button
-              type="button"
-              className="papr-plan__secondary-btn papr-plan__dashboard-btn"
-              onClick={() => void handleUsageDashboard()}
-            >
-              View usage dashboard
-            </button>
+              </>
+            )}
 
-            {showUpgradeOptions ? (
+
+            {showUpgradeOptions && summary.canManageBilling ? (
               <div className="papr-plan__upgrade-section">
                 <div className="papr-plan__upgrade-heading">
                   <span className="papr-plan__upgrade-label">
@@ -509,6 +522,7 @@ export function PaprPlanSection() {
                 </div>
                 <CreditPlanCards
                   canManageBilling={summary.canManageBilling}
+                  currentPlan={creditsCurrentPlan(summary)}
                   pending={creditAction}
                   onChoosePlan={(plan, track) => void handleCreditsCheckout(plan, track)}
                   onBuyExpertBuild={(size) => void handleExpertBuild(size)}
@@ -522,6 +536,8 @@ export function PaprPlanSection() {
               </div>
             ) : null}
 
+            {summary.credits ? null : (
+              <>
             <div className="papr-plan__metered">
               {meteredNeedsPaymentMethod ? (
                 <div className="papr-plan__payment-banner">
@@ -589,6 +605,9 @@ export function PaprPlanSection() {
                 )}
               </>
             ) : null}
+
+              </>
+            )}
 
             {actionMessage && <p className="papr-plan__message">{actionMessage}</p>}
           </>

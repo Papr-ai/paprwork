@@ -34,7 +34,6 @@ import { initNoticeListener } from "./stores/noticeStore";
 import { initNoticeOs } from "./stores/noticeOs";
 import { initJobLiveLogsListener } from "./stores/jobLiveLogsStore";
 import { initSubagentJobStore } from "./stores/subagentJobStore";
-import { PaprQuotaBanner } from "./components/PaprQuotaBanner/PaprQuotaBanner";
 import { ConnectionIndicator } from "./components/ConnectionIndicator/ConnectionIndicator";
 import { useAppStatePersistence } from "./hooks/useAppStatePersistence";
 import { useCloudMemoryStatus } from "./hooks/useCloudMemoryStatus";
@@ -689,7 +688,6 @@ export function App() {
         onClose={() => setCommandPaletteOpen(false)}
       />
       <AgentPersonalizeSheet />
-      <PaprQuotaBanner />
       <CloudFeatureLockModal />
       <ConnectionIndicator />
     </>

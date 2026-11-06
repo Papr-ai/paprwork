@@ -26,9 +26,22 @@ export const PAPR_SOURCES: NoticeSourceDef[] = [
     { id: "proposal.review", label: "Proposals to review", chip: "Proposals", cat: "needs" },
     { id: "proposal.result", label: "Your proposal was accepted or declined", chip: "Proposal results", cat: "done" },
   ] },
+  { id: "people", name: "People", desc: "Teammates who mention you or ask you to do something", types: [
+    { id: "mention", label: "A teammate mentioned you or asked you to do something", chip: "Mentions", cat: "needs" },
+    { id: "mention.replied", label: "A teammate answered your mention", chip: "Replies", cat: "done" },
+    { id: "mention.due", label: "Something you told a teammate you'd do is due", chip: "Due", cat: "needs" },
+    { id: "mention.done", label: "A teammate finished (or can't do) what you asked: your turn", chip: "Your turn", cat: "needs" },
+  ] },
   { id: "account", name: "Account & team", desc: "Billing, your team and the accounts you connected", types: [
     { id: "connection.request", label: "A teammate asked to connect an account", chip: "Connect requests", cat: "needs" },
+    { id: "member.request", label: "A member asked for credits, a builder seat or a higher limit", chip: "Member requests", cat: "needs" },
+    { id: "billing.low", label: "You or your team used 80% of credits, or prepaid credit is low", chip: "Credits low", cat: "needs" },
+    { id: "billing.limit", label: "You hit your member limit or need an admin's approval", chip: "Your limit", cat: "needs" },
+    { id: "billing.payment", label: "A plan payment failed, Papr Cloud paused, or the plan is set to end", chip: "Payment", cat: "needs" },
     { id: "connection.update", label: "Connection request updates", chip: "Request updates", cat: "done" },
+    { id: "member.result", label: "An admin answered your request", chip: "Request answers", cat: "done" },
+    { id: "billing.topup_ok", label: "Auto top-up charged the card, prepaid credit in use or expired", chip: "Top-ups", cat: "done" },
+    { id: "billing.plan", label: "Plan or seats changed, or the plan ended", chip: "Plan changes", cat: "done" },
   ] },
   { id: "updates", name: "App updates", desc: "New versions of Papr Work", types: [
     { id: "app.update_ready", label: "New version ready to install", chip: "New version", cat: "needs" },
@@ -53,17 +66,30 @@ export function sourceOf(n: NoticeInput): string {
     case "proposal": return "apps";
     case "connection": return "account";
     case "app.update_ready": return "updates";
+    case "mention": case "mention.replied": case "mention.done": case "mention.due": return "people";
   }
   if (n.source.type === "billing" || n.owner.kind === "account") return "account";
   return n.owner.kind === "chat" ? "chats" : "apps";
 }
 
+/** Server billing kinds -> the chip they obey. Urgent ones (out of credits, top-up failed) are Always on. */
+const BILLING_TYPES: Record<string, string> = {
+  "member.approved": "member.result", "member.declined": "member.result",
+  "billing.member_cap": "billing.limit", "billing.member_approval": "billing.limit",
+  "billing.payment_failed": "billing.payment", "billing.cancel_scheduled": "billing.payment",
+  "billing.plan_changed": "billing.plan", "billing.ended": "billing.plan",
+  "billing.team_low": "billing.low", "billing.topup_low": "billing.low",
+  "billing.cloud_paused": "billing.payment",
+  "billing.topup_using": "billing.topup_ok", "billing.topup_expired": "billing.topup_ok",
+};
+
 /** Which chip inside the row. One kind can be two types when its level says which (proposal review vs result). */
 export function typeOf(n: NoticeInput): string {
   const done = effectiveLevel(n) === "fyi";
-  if (n.kind === "proposal") return done ? "proposal.result" : "proposal.review";
-  if (n.kind === "connection") return done ? "connection.update" : "connection.request";
-  return n.kind;
+  // Desktop sends "proposal" / "connection"; the server sends proposal.received, connection.requested, ...
+  if (n.kind === "proposal" || n.kind.startsWith("proposal.")) return done ? "proposal.result" : "proposal.review";
+  if (n.kind === "connection" || n.kind.startsWith("connection.")) return done ? "connection.update" : "connection.request";
+  return BILLING_TYPES[n.kind] ?? (n.kind.startsWith("member.request.") ? "member.request" : n.kind);
 }
 
 /** Done or waiting on you comes from the level (FYI is done), so a sender can't make a status update look urgent.

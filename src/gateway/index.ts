@@ -135,6 +135,7 @@ import {
 import { ensureTursoSyncBridge } from "./services/TursoSyncBridge.js";
 import { buildTursoSyncItemsReport } from "./services/tursoSyncStatus.js";
 import { isLoopbackRequest } from "./utils/isLoopbackRequest.js";
+import { registerFocusRoutes } from "./services/focusRoutes.js";
 import { buildCloudLinkSyncReport } from "./services/cloudPublishStatus.js";
 import {
   getCachedCloudLinkSyncReport,
@@ -273,6 +274,7 @@ async function initializeServices(): Promise<void> {
       const { cloudApiFetch } = await import("./utils/cloudApiClient.js");
       const mcp = initializeMcpConnectionService({
         store: createKeychainMcpCredentialStore(mcpName),
+        onSignedOut: (names) => void import("./services/notifications/rootConditions.js").then((m) => m.setConnectorsSignedOut(names)).catch(() => {}),
         serverSignIn: new McpServerSignIn({
           cloud: (p, init) => cloudApiFetch(p, { method: init?.method ?? "GET", ...(init?.body !== undefined ? { body: init.body } : {}), timeoutMs: 20_000 }),
           redirectUri: process.env.PAPR_OAUTH_REDIRECT_URI,
@@ -547,7 +549,10 @@ async function startGateway(): Promise<void> {
         await import("../core/utils/paprQuota.js");
       const { broadcastPaprQuotaStatus } =
         await import("./utils/paprQuotaNotify.js");
-      setPaprQuotaExceededListener(broadcastPaprQuotaStatus);
+      setPaprQuotaExceededListener((status) => {
+        broadcastPaprQuotaStatus(status);
+        if (status.severity === "exceeded") void import("./services/notifications/rootConditions.js").then((m) => m.planPaused(status.title, status.detail)).catch(() => {});
+      });
     });
     console.log("[Gateway] Papr quota status listener ready");
 
@@ -582,7 +587,7 @@ async function startGateway(): Promise<void> {
             );
             res.setHeader(
               "Access-Control-Allow-Headers",
-              "Content-Type,Authorization",
+              "Content-Type,Authorization,x-papr-actor",
             );
           }
         } catch {
@@ -645,8 +650,8 @@ async function startGateway(): Promise<void> {
       getJobEventHub().subscribe((event) => {
         broadcast({ type: event.type, data: event.data });
       });
-      onNoticesChanged((open) => {
-        broadcast({ type: NOTICES_CHANGED_EVENT, data: { notices: open } });
+      onNoticesChanged((open, prefs) => {
+        broadcast({ type: NOTICES_CHANGED_EVENT, data: { notices: open, prefs } });
       });
       // route() said pop the OS; the window process owns Notification, so the UI shows it.
       onNoticeOs(({ notice, why, sound, previews }) => {
@@ -3029,7 +3034,14 @@ async function startGateway(): Promise<void> {
           const { cloudApiFetch } = await import("./utils/cloudApiClient.js");
           const target = await aud.accessTargetAppId(appId);
           const upstream = await cloudApiFetch(`/v1/cloud/apps/${encodeURIComponent(target)}/access`, { method: "GET", timeoutMs: 20_000 });
-          res.status(upstream.status).type("application/json").send((await upstream.text()) || "{}");
+          const text = (await upstream.text()) || "{}";
+          // The bar builds Copy link from local prefs. Follow the server on every
+          // read, so a failed save or a change made elsewhere can't leave
+          // "Anyone with the link" on with a link that has no invite token.
+          if (upstream.ok && target === appId) {
+            try { aud.syncAudiencePrefs(appId, JSON.parse(text)); } catch { /* not JSON */ }
+          }
+          res.status(upstream.status).type("application/json").send(text);
           return;
         }
         const { sharedCoverKind } = await import("./services/appDemoVideos.js");
@@ -3883,21 +3895,8 @@ async function startGateway(): Promise<void> {
       }
     });
 
-    // Lazy first-run setup for the bundled Home dashboard (job + DB + data-sources).
-    app.post("/api/home/ensure-brief-setup", async (req, res) => {
-      try {
-        const { appId: bodyAppId } = (req.body ?? {}) as { appId?: string };
-        const { DEFAULT_HOME_APP_ID } =
-          await import("./services/defaultHomeBundle.js");
-        const appId = bodyAppId?.trim() || DEFAULT_HOME_APP_ID;
-        const result = await getAppService().ensureHomeDailyBriefReady(appId);
-        res.json(result);
-      } catch (error) {
-        const message = error instanceof Error ? error.message : String(error);
-        const status = message.includes("not found") ? 404 : 500;
-        res.status(status).json({ error: message });
-      }
-    });
+    // Focus DB for jobs/scripts (save_brief.py, trackers): no app id, loopback only.
+    registerFocusRoutes(app);
 
     // Unified tasks (L3 goals + entity Open Items), projected into the Home DB.
     app.get("/api/workspace/tasks", async (req, res) => {

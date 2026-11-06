@@ -33,3 +33,12 @@
     box-shadow: 0 0 0 3px rgba(77, 155, 255, 0.2);
   }
 }
+
+/* Offline: every dot goes gray (noticeStore sets data-offline on <html>). Nothing is "done" or
+   "waiting" for sure until we're back. */
+html[data-offline] .chat-status-mark__done,
+html[data-offline] .chat-status-mark__needs,
+html[data-offline] .rail-btn__badge,
+html[data-offline] .needs-you__dot { background: #9aa3af !important; box-shadow: none !important; }
+html[data-offline] .tab.tab--needs::before,
+html[data-offline] .tab.tab--unread::before { background-color: #9aa3af !important; }

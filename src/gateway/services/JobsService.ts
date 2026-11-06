@@ -460,134 +460,6 @@ export class JobsService {
     }
   }
 
-  /**
-   * Sync Home Daily Brief agent prompt from bundled default-job.json.
-   * Each workspace owns its own job UUID — match by Home app link + job name.
-   */
-  private async syncHomeDailyBriefFromBundle(): Promise<void> {
-    // Cloud sandbox: Home and its Daily Brief job come from the cloud repos. Re-running
-    // the desktop Home setup there minted a new job id and rewrote default-job-id.txt /
-    // data-sources.json on every run, and the run pushed that over the real Home.
-    if (isCloudAgentGatewayMode()) {
-      return;
-    }
-    const bundledAppsDir = await resolveBundledResourcesDir(
-      __dirname,
-      "resources/default-apps/home-dashboard",
-    );
-    if (!bundledAppsDir) {
-      return;
-    }
-
-    const jobDefPath = path.join(bundledAppsDir, "default-job.json");
-    let bundledDef: {
-      command?: string;
-      appIds?: string[];
-      name?: string;
-      recipe?: JobRecord["recipe"];
-      retries?: JobRecord["retries"];
-    };
-    try {
-      bundledDef = JSON.parse(
-        await fs.readFile(jobDefPath, "utf8"),
-      ) as typeof bundledDef;
-    } catch {
-      return;
-    }
-
-    const { findHomeDailyBriefJobIdInRegistry, DEFAULT_HOME_APP_ID, readHomeDailyBriefJobIdFromAppDir } =
-      await import("./defaultHomeBundle.js");
-    const { normalizePortableJobPrompt } = await import(
-      "./jobs/normalizePortableJobPrompt.js"
-    );
-
-    const homeAppDir = path.join(getPaprAppsRoot(), DEFAULT_HOME_APP_ID);
-    const preferJobId = await readHomeDailyBriefJobIdFromAppDir(homeAppDir);
-    const jobId = findHomeDailyBriefJobIdInRegistry(this.jobs.values(), {
-      preferJobId,
-    });
-    if (!jobId) {
-      return;
-    }
-
-    const job = this.jobs.get(jobId);
-    if (!job) {
-      return;
-    }
-
-    const nextCommand = bundledDef.command?.trim();
-    if (!nextCommand) {
-      return;
-    }
-
-    const normalizedCommand = normalizePortableJobPrompt(nextCommand);
-    const nextAppIds = bundledDef.appIds?.length
-      ? bundledDef.appIds
-      : [DEFAULT_HOME_APP_ID];
-    const commandChanged = normalizedCommand !== (job.command ?? "");
-    const appIdsChanged =
-      JSON.stringify(nextAppIds) !== JSON.stringify(job.appIds ?? []);
-    const bundledRecipe = bundledDef.recipe;
-    const recipeChanged =
-      bundledRecipe !== undefined &&
-      JSON.stringify(bundledRecipe) !== JSON.stringify(job.recipe ?? null);
-    // Retries only fill a gap: an install that never had a retry policy gets
-    // the bundled one (so transient model-stream drops are retried), but a
-    // user-tuned policy is left alone.
-    const bundledRetries = bundledDef.retries;
-    const retriesChanged =
-      bundledRetries !== undefined && !job.retries;
-
-    if (!commandChanged && !appIdsChanged && !recipeChanged && !retriesChanged) {
-      return;
-    }
-
-    const updated: JobRecord = {
-      ...job,
-      ...(commandChanged ? { command: normalizedCommand } : {}),
-      ...(appIdsChanged ? { appIds: nextAppIds } : {}),
-      ...(recipeChanged ? { recipe: bundledRecipe } : {}),
-      ...(retriesChanged ? { retries: bundledRetries } : {}),
-      updatedAt: new Date().toISOString(),
-    };
-
-    this.setJobInMemory(updated);
-    try {
-      await this.persistJobRecord(updated);
-      await this.syncBundledHomeDailyBriefRecipe(bundledAppsDir, jobId);
-      await this.saveJobs();
-      console.log(
-        `[JobsService] Synced Home Daily Brief job ${jobId} from bundled default-job.json`,
-      );
-    } catch (err) {
-      console.warn(
-        `[JobsService] Could not sync Home Daily Brief job ${jobId}:`,
-        err instanceof Error ? err.message : err,
-      );
-    }
-  }
-
-  /** Copy bundled recipe.md into the workspace Daily Brief job folder when present. */
-  private async syncBundledHomeDailyBriefRecipe(
-    bundledAppDir: string,
-    jobId: string,
-  ): Promise<void> {
-    const recipePath = path.join(bundledAppDir, "recipe.md");
-    try {
-      const markdown = await fs.readFile(recipePath, "utf8");
-      const { getRecipeService } = await import("./jobs/RecipeService.js");
-      await getRecipeService().writeRecipe(jobId, markdown);
-    } catch (err) {
-      const code = (err as NodeJS.ErrnoException).code;
-      if (code !== "ENOENT") {
-        console.warn(
-          `[JobsService] Could not sync bundled recipe for ${jobId}:`,
-          err instanceof Error ? err.message : err,
-        );
-      }
-    }
-  }
-
   async initialize(): Promise<void> {
     if (this.initialized) {
       return;
@@ -672,8 +544,6 @@ export class JobsService {
       await this.installDefaultJobs();
       logJobsStartupStep("Maintenance", "install workspace chat job");
       await this.installWorkspaceChatJob();
-      logJobsStartupStep("Maintenance", "sync Home Daily Brief bundle");
-      await this.syncHomeDailyBriefFromBundle();
       logJobsStartupStep("Maintenance", "reconcile duplicate Home Daily Brief");
       await this.reconcileDuplicateHomeDailyBriefJobsIfNeeded();
       logJobsStartupStep("Maintenance", "filter tombstones after hydrate");
@@ -907,6 +777,9 @@ export class JobsService {
     const job = this.jobs.get(jobId);
     if (!job) return;
     if (jobBelongsToApp(job.appIds, appId)) return;
+    // Focus jobs (Daily Brief, trackers) belong to Papr Work. An old Home data-sources.json
+    // still names the brief job; re-attaching it here would undo the re-link every boot.
+    if (job.folder === "focus" || job.folder === "focus-trackers") return;
 
     const appIds = mergeJobAppIds(job.appIds, [appId]);
     await this.validateAppIdsExist(
@@ -1186,7 +1059,7 @@ export class JobsService {
     return removed.length;
   }
 
-  /** After cloud/git sync — dedupe Home Daily Brief, repair links, respect tombstones. */
+  /** After cloud/git sync — dedupe old Home Daily Brief jobs, respect tombstones. */
   async reconcileRegistryAfterSync(): Promise<{
     tombstonesRemoved: number;
     duplicatesReconciled: boolean;
@@ -1223,16 +1096,6 @@ export class JobsService {
         await this.deleteJob(jobId, true, false);
       },
     });
-
-    try {
-      const { getAppService } = await import("./AppService.js");
-      await getAppService().repairHomeAndWorkspaceOnStartup();
-    } catch (err) {
-      console.warn(
-        "[JobsService] Home repair after sync failed:",
-        (err as Error).message.slice(0, 120),
-      );
-    }
 
     return {
       tombstonesRemoved,
@@ -1800,7 +1663,9 @@ export class JobsService {
       return JSON.parse(raw) as JobGraph;
     } catch (error) {
       const err = error as NodeJS.ErrnoException;
-      if (err.code === "ENOENT") {
+      // Missing, or unreadable from an older non-atomic write: the graph is
+      // derived data, so rebuild it rather than failing the caller.
+      if (err.code === "ENOENT" || error instanceof SyntaxError) {
         await this.rebuildGraph();
         try {
           const raw = await fs.readFile(this.graphPath, "utf8");
@@ -1912,11 +1777,11 @@ export class JobsService {
       }
 
       await fs.mkdir(path.dirname(this.graphPath), { recursive: true });
-      await fs.writeFile(
-        this.graphPath,
-        JSON.stringify(graph, null, 2),
-        "utf8",
-      );
+      // rebuildGraph runs fire-and-forget after every mutation, so overlapping
+      // rebuilds and readers are normal. A plain writeFile truncates first, and a
+      // reader landing in that window saw an empty file ("Unexpected end of JSON
+      // input"). Temp file + rename: readers see the old graph or the new one.
+      await writeJsonAtomic(this.graphPath, graph);
     } catch (error) {
       console.warn("[JobsService] Failed to rebuild graph:", error);
     }

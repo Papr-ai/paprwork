@@ -14,7 +14,7 @@
  *   7. Store the API key as PAPR_API_KEY in keychain
  */
 
-import { ipcMain, BrowserWindow, shell, dialog } from "electron";
+import { app, ipcMain, BrowserWindow, shell, dialog } from "electron";
 import {
   decideHandoffAccount,
   handoffLanding,
@@ -33,8 +33,13 @@ import {
   notifyGatewayPaprApiKeyUpdate,
   registerPaprWorkspaceHandlers,
 } from "./paprWorkspace.js";
-import { ensureDeveloperStripeSubscription, invalidatePlanSummaryCache } from "./paprBilling.js";
 import {
+  ensureDeveloperStripeSubscription,
+  invalidatePlanSummaryCache,
+  isCreditsBillingOrg,
+} from "./paprBilling.js";
+import {
+  paprSignedInFunnel,
   startPaprAuthCallbackServer,
   stopPaprAuthCallbackServer,
 } from "./paprAuthCallbackServer.js";
@@ -3524,7 +3529,13 @@ async function finalizeLoginWithProvisioning(
   );
   trackLoginStep("profile_synced");
 
-  if (workspaceInfo.workspaceId && activeOrganizationId) {
+  // Credits orgs have no legacy Developer subscription (Local is free; paid plans go
+  // through credits checkout), so don't create one at sign-in.
+  if (
+    workspaceInfo.workspaceId &&
+    activeOrganizationId &&
+    !(await isCreditsBillingOrg(parseSessionToken))
+  ) {
     await ensureDeveloperStripeSubscription({
       sessionToken: parseSessionToken,
       workspaceId: workspaceInfo.workspaceId,
@@ -4146,7 +4157,8 @@ export function initializePaprLoginIPC(
 
       if (!useDeepLinkOnly) {
         try {
-          redirectUri = await startPaprAuthCallbackServer(async (params, verificationCode) => {
+          redirectUri = await startPaprAuthCallbackServer(
+            async (params, verificationCode) => {
             const oauthError = params.get("error");
             if (oauthError) {
               notifyLoginError(
@@ -4179,7 +4191,9 @@ export function initializePaprLoginIPC(
                   : "Login failed";
               notifyLoginError(undefined, message);
             }
-          });
+          },
+            paprSignedInFunnel(settingsStorage, app.isPackaged),
+          );
           console.log("[PaprLogin] Using localhost callback:", redirectUri);
         } catch (callbackServerError) {
           stopPaprAuthCallbackServer();

@@ -88,7 +88,10 @@ async function pollProposalEventsForCurrentUser(paprDir: string): Promise<void> 
   const userId = getPaprUserId();
   if (!userId) return;
   const { pollProposalEvents } = await import("./proposalEvents.js");
+  // Your notices from the server list: boot pull once, then a catch-up pull every heartbeat (notices.changed pulls sooner).
+  await import("../notifications/noticeCloudSync.js").then(async (m) => { await m.startNoticeCloudSync(); m.scheduleNoticePull("heartbeat", 0); }).catch(() => undefined);
   await pollProposalEvents(paprDir, userId);
+  await import("../collab/mentions.js").then((m) => m.remindPromises()).catch(() => undefined);
 }
 
 export function startDesktopHeartbeat(host: CloudSyncPeriodicHost): void {

@@ -17,7 +17,6 @@ const DOC_GLOBS = [
   "src/resources/agent-docs",
   "src/resources/skills",
   "src/resources/workspace-templates",
-  "src/resources/default-apps",
 ];
 
 const ROOT_MD_FILES = ["CLAUDE.md", "TESTING_LINKEDIN_AUTOPILOT_FIX.md"];

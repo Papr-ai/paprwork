@@ -36,6 +36,7 @@ import {
   describeAudiences,
   fetchAudiences,
   saveAudiences,
+  syncAudiencePrefs,
   type AudiencesAccess,
 } from "../../gateway/services/cloudAppAudiences.js";
 import { sharedCoverKind } from "../../gateway/services/appDemoVideos.js";
@@ -404,10 +405,17 @@ If Cloud Sync is disabled, returns an error with fallbackTool=export_app_bundle 
           },
           current,
         );
-        audiences = await saveAudiences(args.appId, patch, {
-          current,
-          hasGallery: sharedCoverKind(args.appId) === "video",
-        });
+        try {
+          audiences = await saveAudiences(args.appId, patch, {
+            current,
+            hasGallery: sharedCoverKind(args.appId) === "video",
+          });
+        } catch (err) {
+          // publishOrUpdateSharing already wrote the new sharing to local prefs.
+          // Put them back to what the server has, or Copy link loses its token.
+          syncAudiencePrefs(args.appId, current);
+          throw err;
+        }
         config = await publishService.getPublishConfig(args.appId);
       } else if (config.enabled) {
         audiences = await readAudiences(args.appId);

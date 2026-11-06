@@ -4,6 +4,7 @@
  *   raised  a new notice (a repeat of an open one isn't counted again)
  *   os      a desktop notification shown;  capped  held back by the 5-per-10-minutes limit
  *   paused  held back by Do Not Disturb;   muted   dropped by your settings;  mute  you turned something off
+ *   later   you pressed Later in Focus;     mute1h  you muted a source for an hour from Focus
  */
 import type Database from "better-sqlite3";
 
@@ -17,8 +18,8 @@ export const STATS_SCHEMA = `
   );
 `;
 
-export type Metric = "raised" | "os" | "capped" | "paused" | "muted" | "mute";
-export const METRICS: Metric[] = ["raised", "os", "capped", "paused", "muted", "mute"];
+export type Metric = "raised" | "os" | "capped" | "paused" | "muted" | "mute" | "later" | "mute1h";
+export const METRICS: Metric[] = ["raised", "os", "capped", "paused", "muted", "mute", "later", "mute1h"];
 const DAY_MS = 24 * 60 * 60 * 1000;
 
 /** Local calendar day, so "today" matches the person's day. */
@@ -81,5 +82,5 @@ export class StatsLog {
 export function countOffs(patch: unknown): number {
   if (patch === false) return 1;
   if (!patch || typeof patch !== "object") return 0;
-  return Object.entries(patch as Record<string, unknown>).reduce((n, [k, v]) => n + (k === "pauseUntil" ? 0 : countOffs(v)), 0);
+  return Object.entries(patch as Record<string, unknown>).reduce((n, [k, v]) => n + (k === "pauseUntil" || k === "muteUntil" ? 0 : countOffs(v)), 0);
 }

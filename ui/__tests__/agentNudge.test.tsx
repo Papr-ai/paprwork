@@ -153,3 +153,16 @@ describe("AgentNudge", () => {
     expect(screen.queryByRole("status")).toBeNull();
   });
 });
+
+describe("Urgent leans out (replaces the quota banner)", () => {
+  it("turns an Urgent notice into a Lean with its one fix, off the nudge ledger", async () => {
+    const { urgentNudge } = await import("../components/Agent/useUrgentLean");
+    const n = urgentNudge({
+      id: "1", key: "account.credits", kind: "account.credits", type: "condition", level: "urgent", mark: "blue", count: 1,
+      title: "You're out of AI credits", body: "Add credits to keep chatting with Pen.", createdAt: "", updatedAt: "",
+      source: { type: "billing", id: "billing", name: "Billing" }, owner: { kind: "account", id: "billing", name: "Plan & usage", section: "billing" },
+      actions: [{ label: "Add credits", intent: "open" }],
+    });
+    expect(n).toMatchObject({ key: "urgent:account.credits", line: "You're out of AI credits", go: "Add credits", action: { type: "notice", key: "account.credits" } });
+  });
+});

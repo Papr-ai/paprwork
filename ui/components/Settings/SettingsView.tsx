@@ -9,6 +9,7 @@ import {
   paprCloudStatusDotVariant,
 } from "../../utils/cloudMemoryStatus";
 import { useSettingsNavigationStore } from "../../stores/settingsNavigationStore";
+import { billingMark, useNoticeStore } from "../../stores/noticeStore";
 import { useProfileStore } from "../../stores/profileStore";
 import { useAppUpdater } from "../../hooks/useAppUpdater";
 import { gateway } from "../../src/lib/gateway";
@@ -195,6 +196,7 @@ export function SettingsView() {
   const planAttentionHint = planStatus
     ? `${planStatus.label} — review Plan & usage`
     : "Billing needs attention — review Plan & usage";
+  const billingDot = useNoticeStore(billingMark);
   const navigationToken = useSettingsNavigationStore((state) => state.token);
   const pendingSettingsTab = useSettingsNavigationStore((state) => state.pendingTab);
   // Key Vault and Platform Connections now live inside Connections; old deep links still work.
@@ -263,6 +265,12 @@ export function SettingsView() {
     useSettingsNavigationStore.getState().acknowledgeTab();
   }, [navigationToken, pendingSettingsTab, setActiveTab]);
 
+  // Opening Billing is seeing what's there: news clears, things waiting on you stay until handled.
+  useEffect(() => {
+    if (activeTab !== "billing") return;
+    void gateway.send("notifications:seen", { ownerKind: "account", ownerId: "billing" }).catch(() => {});
+  }, [activeTab, billingDot]);
+
   useEffect(() => {
     useSettingsNavigationStore.getState().setCurrentTab(activeTab);
     return () => {
@@ -293,7 +301,9 @@ export function SettingsView() {
             >
               {item.icon}
               <span className="settings-tab__label">{item.label}</span>
-              {item.id === "billing" && planAttention && planStatus ? (
+              {item.id === "billing" && billingDot !== "none" ? (
+                <span className={`notif-dot notif-dot--${billingDot} settings-tab__notice`} aria-label="Billing has something for you" />
+              ) : item.id === "billing" && planAttention && planStatus ? (
                 <span
                   className={`settings-tab__attention settings-tab__attention--${paprCloudStatusDotVariant(planStatus)}`}
                   aria-label={planAttentionHint}
@@ -1109,7 +1119,7 @@ function AboutTab() {
                 <line x1="12" y1="16" x2="12.01" y2="16" />
               </svg>
               <div>
-                <strong>Update check failed</strong>
+                <strong>{updateStatus.transient ? "Update check will retry" : "Update check failed"}</strong>
                 <p>{updateStatus.error}</p>
                 {updateStatus.recoveryHint && (
                   <p className="update-recovery-hint">{updateStatus.recoveryHint}</p>

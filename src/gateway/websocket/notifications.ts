@@ -1,6 +1,9 @@
 /**
  * notifications:* — the UI reads and clears notices.
  *   notifications:list     → open notices
+ *   notifications:snapshot → open notices + your settings (Focus › Needs you, the count on Pen)
+ *   notifications:later / unlater   → put one off until 3 PM / 9 AM tomorrow, or bring it back
+ *   notifications:mute / unmute     → mute a source for an hour, or undo it
  *   notifications:viewing  → what's on screen (marks it seen, suppresses FYI on it)
  *   notifications:seen     → you looked at a thing
  *   notifications:resolve  → clear one notice by key (e.g. "Not now" on a request)
@@ -30,6 +33,23 @@ export async function setupNotificationHandlers(ws: WebSocket, message: WSMessag
       case "notifications:list":
         sendResponse(ws, { id: message.id, success: true, data: service.listOpen() });
         return;
+      case "notifications:snapshot":
+        sendResponse(ws, { id: message.id, success: true, data: service.snapshot() });
+        return;
+      case "notifications:later":
+      case "notifications:unlater": {
+        if (typeof p.key !== "string" || !p.key) throw new Error("key required");
+        const data = message.type === "notifications:later" ? { until: service.later(p.key) } : { ok: service.unlater(p.key) };
+        sendResponse(ws, { id: message.id, success: true, data });
+        return;
+      }
+      case "notifications:mute":
+      case "notifications:unmute": {
+        if (typeof p.sourceId !== "string" || !p.sourceId) throw new Error("sourceId required");
+        if (message.type === "notifications:mute") sendResponse(ws, { id: message.id, success: true, data: { until: service.muteSource(p.sourceId) } });
+        else { service.unmuteSource(p.sourceId); sendResponse(ws, { id: message.id, success: true, data: { ok: true } }); }
+        return;
+      }
       case "notifications:viewing": {
         const owners = (Array.isArray(p.owners) ? p.owners : []).flatMap((o: unknown) => {
           const r = (o ?? {}) as Record<string, unknown>;
@@ -92,7 +112,16 @@ export async function setupNotificationHandlers(ws: WebSocket, message: WSMessag
       case "notifications:reset-prefs":
         sendResponse(ws, { id: message.id, success: true, data: service.resetPrefs() });
         return;
+      case "notifications:online": {
+        // The window knows (navigator.onLine): one net.offline condition, cleared on reconnect.
+        const { setOnline } = await import("../services/notifications/rootConditions.js");
+        setOnline(p.online !== false);
+        sendResponse(ws, { id: message.id, success: true });
+        return;
+      }
       case "notifications:resolve": {
+        // { group } clears every notice in it, e.g. "key:NAME" once that key exists.
+        if (typeof p.group === "string") { sendResponse(ws, { id: message.id, success: true, data: service.resolveGroup(p.group) }); return; }
         if (typeof p.key !== "string") throw new Error("key required");
         sendResponse(ws, { id: message.id, success: true, data: service.resolve(p.key) });
         return;

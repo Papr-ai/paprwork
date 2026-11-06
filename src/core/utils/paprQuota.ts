@@ -11,6 +11,7 @@ export type PaprQuotaKind =
   | "storage"
   | "rate_limit"
   | "subscription"
+  | "credits"
   | "unknown";
 
 export type PaprQuotaSeverity = "warning" | "exceeded";
@@ -73,6 +74,16 @@ const QUOTA_SIGNAL_PATTERNS = [
   /dashboard\.papr\.ai/i,
   /operations limit/i,
   /memories limit/i,
+];
+
+// Credits billing (memory server 429 "Credit allowance used up"): out of credits,
+// member over their monthly cap, or member waiting for admin approval.
+const CREDITS_PATTERNS = [
+  /credit allowance used up/i,
+  /used your credits for this period/i,
+  /monthly credits are used up/i,
+  /usage limit as a member/i,
+  /approve your usage/i,
 ];
 
 const NON_QUOTA_403_PATTERNS = [
@@ -189,6 +200,7 @@ export function extractErrorMessage(error: unknown): string {
 function isLikelyQuotaMessage(message: string): boolean {
   const normalized = message.trim();
   if (!normalized) return false;
+  if (CREDITS_PATTERNS.some((pattern) => pattern.test(normalized))) return true;
   if (SUBSCRIPTION_PATTERNS.some((pattern) => pattern.test(normalized))) {
     return true;
   }
@@ -230,9 +242,17 @@ function defaultDetail(kind: PaprQuotaKind): string {
       return "Papr Memory is rate-limiting requests on your account.";
     case "subscription":
       return "Papr Cloud features paused. Local chat works.";
+    case "credits":
+      return "You've used your credits for this period. Upgrade the plan, or buy more credits, to keep going.";
     default:
       return "Your Papr Memory plan limit has been reached.";
   }
+}
+
+function creditsTitle(message: string): string {
+  if (/usage limit as a member/i.test(message)) return "Monthly usage limit reached";
+  if (/approve your usage/i.test(message)) return "Waiting for admin approval";
+  return "Out of credits";
 }
 
 function titleForKind(kind: PaprQuotaKind): string {
@@ -247,12 +267,15 @@ function titleForKind(kind: PaprQuotaKind): string {
       return "Papr Memory rate limited";
     case "subscription":
       return "Subscription cancelled.";
+    case "credits":
+      return "Out of credits";
     default:
       return "Papr Memory limit reached";
   }
 }
 
 function classifyKind(message: string): PaprQuotaKind {
+  if (CREDITS_PATTERNS.some((pattern) => pattern.test(message))) return "credits";
   if (SUBSCRIPTION_PATTERNS.some((pattern) => pattern.test(message))) {
     return "subscription";
   }
@@ -298,6 +321,7 @@ export function parsePaprQuotaError(
   const kind = classifyKind(rawMessage);
   const suggestMeteredBilling =
     kind !== "subscription" &&
+    kind !== "credits" &&
     (/metered billing/i.test(rawMessage) ||
       kind === "operations" ||
       kind === "unknown");
@@ -307,7 +331,7 @@ export function parsePaprQuotaError(
   return {
     kind,
     severity: "exceeded",
-    title: titleForKind(kind),
+    title: kind === "credits" ? creditsTitle(rawMessage) : titleForKind(kind),
     detail,
     suggestMeteredBilling,
     billingUrl: PAPR_USAGE_URL,

@@ -54,6 +54,12 @@ export function UpdateBanner() {
         setDismissed(false);
         break;
       case "error":
+        // Server busy / network: retried on its own, so don't interrupt with a
+        // banner (Settings → About still shows it).
+        if (data.transient) {
+          setState("hidden");
+          break;
+        }
         setState("error");
         setErrorMessage(data.error || "Update failed");
         setRecoveryHint(data.recoveryHint || "");

@@ -56,16 +56,12 @@ async function runDeferredHomeWorkspaceRepair(): Promise<void> {
   const workspaceFp = await computeGoalsWorkspaceFingerprint();
   const workspaceFpOk = prior?.goalsWorkspaceFingerprint === workspaceFp;
 
-  const { getAppService } = await import("../AppService.js");
-  const appService = getAppService();
-  await appService.installPendingDefaultJobs();
-
-  const homeOk = await appService.homeLinkedSourcesInvariantsOk();
-  let repairRan = false;
-  if (!epochOk || !homeOk) {
-    await appService.repairHomeAndWorkspaceOnStartup();
-    repairRan = true;
-  }
+  // The Home dashboard app is retired (Focus is native). Take it off this device; keep its data.
+  const { retireHomeApp } = await import("../retireHomeApp.js");
+  const repairRan = await retireHomeApp().catch((err) => {
+    console.warn("[Gateway] Retiring the Home app failed:", err instanceof Error ? err.message : err);
+    return false;
+  });
 
   let goalsReady = await probeHomeGoalsTableExists();
   let schemaApplied: string[] = [];
@@ -89,6 +85,8 @@ async function runDeferredHomeWorkspaceRepair(): Promise<void> {
     console.log(
       "[GoalsTasksProjection] boot skipped (epoch current, workspace unchanged, home links ok)",
     );
+    // Mongo is the shared copy: pull what changed on other devices even when nothing changed here.
+    void import("../focusCloud/focusCloudSync.js").then((m) => m.scheduleFocusCloudSync("boot", 5000)).catch(() => undefined);
   } else if (goalsReady) {
     await projectGoalsAndTasks("boot");
     projectionOutcome = "ran";
@@ -101,6 +99,9 @@ async function runDeferredHomeWorkspaceRepair(): Promise<void> {
   const { getWorkspaceService } = await import("../WorkspaceService.js");
   await getWorkspaceService().ensureSleepJob();
   await getWorkspaceService().ensureWikiWriterJob();
+  // Daily Brief + trackers are Papr Work's own jobs now (re-links ones Home used to own).
+  const { ensureFocusSystemJobs } = await import("../focusSystemJobs.js");
+  await ensureFocusSystemJobs();
 
   await saveGatewayDeferredBootState({
     appliedEpoch: DEFERRED_HOME_WORKSPACE_BOOT_EPOCH,
