@@ -1,0 +1,1696 @@
+{
+  "components": {
+    "schemas": {
+      "AllOf": {
+        "additionalProperties": false,
+        "properties": {
+          "all": {
+            "items": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "integer"
+                },
+                {
+                  "type": "number"
+                },
+                {
+                  "type": "boolean"
+                }
+              ]
+            },
+            "minItems": 1,
+            "title": "All",
+            "type": "array"
+          }
+        },
+        "required": [
+          "all"
+        ],
+        "title": "AllOf",
+        "type": "object"
+      },
+      "DatedFact": {
+        "additionalProperties": false,
+        "description": "e.g. tech_added: { vendor: hubspot, since: 90d } \u2014 a fact first seen inside the window.",
+        "properties": {
+          "since": {
+            "anyOf": [
+              {
+                "format": "date",
+                "type": "string"
+              },
+              {
+                "pattern": "^\\d+[dwmy]$",
+                "type": "string"
+              }
+            ],
+            "title": "Since"
+          },
+          "vendor": {
+            "title": "Vendor",
+            "type": "string"
+          }
+        },
+        "required": [
+          "vendor",
+          "since"
+        ],
+        "title": "DatedFact",
+        "type": "object"
+      },
+      "EntitiesData": {
+        "properties": {
+          "not_found": {
+            "description": "Invalid domains, or allow_live=false misses.",
+            "items": {
+              "type": "string"
+            },
+            "title": "Not Found",
+            "type": "array"
+          },
+          "pending": {
+            "description": "Misses computing live; poll task_id or await ready event.",
+            "items": {
+              "type": "string"
+            },
+            "title": "Pending",
+            "type": "array"
+          },
+          "results": {
+            "description": "Found or provisional records, each with Freshness fields.",
+            "items": {
+              "additionalProperties": true,
+              "type": "object"
+            },
+            "title": "Results",
+            "type": "array"
+          },
+          "task_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Task Id"
+          }
+        },
+        "required": [
+          "results"
+        ],
+        "title": "EntitiesData",
+        "type": "object"
+      },
+      "EntitiesRequest": {
+        "additionalProperties": false,
+        "properties": {
+          "allow_live": {
+            "default": true,
+            "title": "Allow Live",
+            "type": "boolean"
+          },
+          "external_user_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "External User Id"
+          },
+          "fields": {
+            "items": {
+              "type": "string"
+            },
+            "title": "Fields",
+            "type": "array"
+          },
+          "ids": {
+            "description": "Entity IDs or domains (normalized).",
+            "items": {
+              "type": "string"
+            },
+            "maxItems": 1000,
+            "minItems": 1,
+            "title": "Ids",
+            "type": "array"
+          },
+          "max_age": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Max Age"
+          },
+          "namespace_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Namespace Id"
+          },
+          "organization_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Organization Id"
+          },
+          "updated_since": {
+            "anyOf": [
+              {
+                "format": "date-time",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "Return only entities that changed since.",
+            "title": "Updated Since"
+          }
+        },
+        "required": [
+          "ids"
+        ],
+        "title": "EntitiesRequest",
+        "type": "object"
+      },
+      "Envelope_EntitiesData_": {
+        "properties": {
+          "code": {
+            "default": 200,
+            "title": "Code",
+            "type": "integer"
+          },
+          "data": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/EntitiesData"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "details": {
+            "anyOf": [
+              {
+                "additionalProperties": true,
+                "type": "object"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Details"
+          },
+          "error": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/ErrorCode"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "search_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "Only on /search; pass to POST /v1/feedback.",
+            "title": "Search Id"
+          },
+          "status": {
+            "default": "success",
+            "enum": [
+              "success",
+              "accepted",
+              "error"
+            ],
+            "title": "Status",
+            "type": "string"
+          }
+        },
+        "title": "Envelope[EntitiesData]",
+        "type": "object"
+      },
+      "Envelope_FieldsData_": {
+        "properties": {
+          "code": {
+            "default": 200,
+            "title": "Code",
+            "type": "integer"
+          },
+          "data": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/FieldsData"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "details": {
+            "anyOf": [
+              {
+                "additionalProperties": true,
+                "type": "object"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Details"
+          },
+          "error": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/ErrorCode"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "search_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "Only on /search; pass to POST /v1/feedback.",
+            "title": "Search Id"
+          },
+          "status": {
+            "default": "success",
+            "enum": [
+              "success",
+              "accepted",
+              "error"
+            ],
+            "title": "Status",
+            "type": "string"
+          }
+        },
+        "title": "Envelope[FieldsData]",
+        "type": "object"
+      },
+      "Envelope_FilterData_": {
+        "properties": {
+          "code": {
+            "default": 200,
+            "title": "Code",
+            "type": "integer"
+          },
+          "data": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/FilterData"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "details": {
+            "anyOf": [
+              {
+                "additionalProperties": true,
+                "type": "object"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Details"
+          },
+          "error": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/ErrorCode"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "search_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "Only on /search; pass to POST /v1/feedback.",
+            "title": "Search Id"
+          },
+          "status": {
+            "default": "success",
+            "enum": [
+              "success",
+              "accepted",
+              "error"
+            ],
+            "title": "Status",
+            "type": "string"
+          }
+        },
+        "title": "Envelope[FilterData]",
+        "type": "object"
+      },
+      "Envelope_SearchData_": {
+        "properties": {
+          "code": {
+            "default": 200,
+            "title": "Code",
+            "type": "integer"
+          },
+          "data": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/SearchData"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "details": {
+            "anyOf": [
+              {
+                "additionalProperties": true,
+                "type": "object"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Details"
+          },
+          "error": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/ErrorCode"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "search_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "Only on /search; pass to POST /v1/feedback.",
+            "title": "Search Id"
+          },
+          "status": {
+            "default": "success",
+            "enum": [
+              "success",
+              "accepted",
+              "error"
+            ],
+            "title": "Status",
+            "type": "string"
+          }
+        },
+        "title": "Envelope[SearchData]",
+        "type": "object"
+      },
+      "Envelope_TaskData_": {
+        "properties": {
+          "code": {
+            "default": 200,
+            "title": "Code",
+            "type": "integer"
+          },
+          "data": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/TaskData"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "details": {
+            "anyOf": [
+              {
+                "additionalProperties": true,
+                "type": "object"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Details"
+          },
+          "error": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/ErrorCode"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "search_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "Only on /search; pass to POST /v1/feedback.",
+            "title": "Search Id"
+          },
+          "status": {
+            "default": "success",
+            "enum": [
+              "success",
+              "accepted",
+              "error"
+            ],
+            "title": "Status",
+            "type": "string"
+          }
+        },
+        "title": "Envelope[TaskData]",
+        "type": "object"
+      },
+      "ErrorCode": {
+        "enum": [
+          "invalid_request",
+          "unknown_field",
+          "unauthorized",
+          "quota_exceeded",
+          "not_found",
+          "rate_limited",
+          "internal"
+        ],
+        "title": "ErrorCode",
+        "type": "string"
+      },
+      "Exclude": {
+        "additionalProperties": false,
+        "properties": {
+          "filters": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/Filters"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "ids": {
+            "items": {
+              "type": "string"
+            },
+            "maxItems": 10000,
+            "title": "Ids",
+            "type": "array"
+          },
+          "in_private_layer": {
+            "default": false,
+            "description": "Skip companies already in the caller's Papr memory.",
+            "title": "In Private Layer",
+            "type": "boolean"
+          }
+        },
+        "title": "Exclude",
+        "type": "object"
+      },
+      "FieldInfo": {
+        "properties": {
+          "facetable": {
+            "default": false,
+            "title": "Facetable",
+            "type": "boolean"
+          },
+          "in_vector_store": {
+            "default": false,
+            "description": "Copied into Qdrant payload; cheap with /search.",
+            "title": "In Vector Store",
+            "type": "boolean"
+          },
+          "name": {
+            "title": "Name",
+            "type": "string"
+          },
+          "operators": {
+            "items": {
+              "enum": [
+                "eq",
+                "any",
+                "all",
+                "not",
+                "range",
+                "since",
+                "has"
+              ],
+              "type": "string"
+            },
+            "title": "Operators",
+            "type": "array"
+          },
+          "sortable": {
+            "default": false,
+            "title": "Sortable",
+            "type": "boolean"
+          },
+          "type": {
+            "enum": [
+              "keyword",
+              "number",
+              "date",
+              "bool",
+              "dated_vendor",
+              "role"
+            ],
+            "title": "Type",
+            "type": "string"
+          },
+          "values": {
+            "anyOf": [
+              {
+                "items": {
+                  "type": "string"
+                },
+                "type": "array"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "Allowed values when the field is an enum.",
+            "title": "Values"
+          }
+        },
+        "required": [
+          "name",
+          "type",
+          "operators"
+        ],
+        "title": "FieldInfo",
+        "type": "object"
+      },
+      "FieldsData": {
+        "properties": {
+          "entity": {
+            "const": "company",
+            "title": "Entity",
+            "type": "string"
+          },
+          "fields": {
+            "items": {
+              "$ref": "#/components/schemas/FieldInfo"
+            },
+            "title": "Fields",
+            "type": "array"
+          },
+          "release": {
+            "title": "Release",
+            "type": "string"
+          }
+        },
+        "required": [
+          "entity",
+          "release",
+          "fields"
+        ],
+        "title": "FieldsData",
+        "type": "object"
+      },
+      "FilterData": {
+        "properties": {
+          "facets": {
+            "additionalProperties": {
+              "additionalProperties": {
+                "type": "integer"
+              },
+              "type": "object"
+            },
+            "title": "Facets",
+            "type": "object"
+          },
+          "next_cursor": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Next Cursor"
+          },
+          "results": {
+            "items": {
+              "additionalProperties": true,
+              "type": "object"
+            },
+            "title": "Results",
+            "type": "array"
+          },
+          "total": {
+            "title": "Total",
+            "type": "integer"
+          },
+          "total_is_estimate": {
+            "default": false,
+            "description": "true once total exceeds 10,000.",
+            "title": "Total Is Estimate",
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "results",
+          "total"
+        ],
+        "title": "FilterData",
+        "type": "object"
+      },
+      "FilterRequest": {
+        "additionalProperties": false,
+        "properties": {
+          "cursor": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Cursor"
+          },
+          "entity": {
+            "const": "company",
+            "default": "company",
+            "title": "Entity",
+            "type": "string"
+          },
+          "exclude": {
+            "$ref": "#/components/schemas/Exclude"
+          },
+          "external_user_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "External User Id"
+          },
+          "facets": {
+            "items": {
+              "type": "string"
+            },
+            "maxItems": 10,
+            "title": "Facets",
+            "type": "array"
+          },
+          "fields": {
+            "items": {
+              "type": "string"
+            },
+            "title": "Fields",
+            "type": "array"
+          },
+          "filters": {
+            "$ref": "#/components/schemas/Filters"
+          },
+          "namespace_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Namespace Id"
+          },
+          "organization_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Organization Id"
+          },
+          "sort": {
+            "items": {
+              "$ref": "#/components/schemas/Sort"
+            },
+            "maxItems": 3,
+            "title": "Sort",
+            "type": "array"
+          }
+        },
+        "title": "FilterRequest",
+        "type": "object"
+      },
+      "Filters": {
+        "additionalProperties": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "integer"
+            },
+            {
+              "type": "number"
+            },
+            {
+              "type": "boolean"
+            },
+            {
+              "items": {
+                "anyOf": [
+                  {
+                    "type": "string"
+                  },
+                  {
+                    "type": "integer"
+                  },
+                  {
+                    "type": "number"
+                  },
+                  {
+                    "type": "boolean"
+                  }
+                ]
+              },
+              "type": "array"
+            },
+            {
+              "$ref": "#/components/schemas/Range"
+            },
+            {
+              "$ref": "#/components/schemas/AllOf"
+            },
+            {
+              "$ref": "#/components/schemas/NoneOf"
+            },
+            {
+              "$ref": "#/components/schemas/DatedFact"
+            }
+          ]
+        },
+        "description": "Keys must come from GET /v1/commons/fields; the server rejects unknown keys with unknown_field.\n\n`has` is reserved: list of fields that must exist (e.g. [\"open_jobs\", \"logo\"]).",
+        "title": "Filters",
+        "type": "object"
+      },
+      "HTTPValidationError": {
+        "properties": {
+          "detail": {
+            "items": {
+              "$ref": "#/components/schemas/ValidationError"
+            },
+            "title": "Detail",
+            "type": "array"
+          }
+        },
+        "title": "HTTPValidationError",
+        "type": "object"
+      },
+      "NoneOf": {
+        "additionalProperties": false,
+        "properties": {
+          "not": {
+            "items": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "integer"
+                },
+                {
+                  "type": "number"
+                },
+                {
+                  "type": "boolean"
+                }
+              ]
+            },
+            "minItems": 1,
+            "title": "Not",
+            "type": "array"
+          }
+        },
+        "required": [
+          "not"
+        ],
+        "title": "NoneOf",
+        "type": "object"
+      },
+      "Range": {
+        "additionalProperties": false,
+        "properties": {
+          "gt": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Gt"
+          },
+          "gte": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Gte"
+          },
+          "lt": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Lt"
+          },
+          "lte": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Lte"
+          }
+        },
+        "title": "Range",
+        "type": "object"
+      },
+      "RerankingConfig": {
+        "additionalProperties": false,
+        "properties": {
+          "reranking_model": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Reranking Model"
+          },
+          "reranking_provider": {
+            "default": "none",
+            "enum": [
+              "none",
+              "cohere",
+              "openai",
+              "papr_enhanced",
+              "papr_max"
+            ],
+            "title": "Reranking Provider",
+            "type": "string"
+          }
+        },
+        "title": "RerankingConfig",
+        "type": "object"
+      },
+      "SearchData": {
+        "properties": {
+          "pending_seeds": {
+            "description": "Seeds still computing live; see task_id.",
+            "items": {
+              "type": "string"
+            },
+            "title": "Pending Seeds",
+            "type": "array"
+          },
+          "results": {
+            "items": {
+              "$ref": "#/components/schemas/SearchResult"
+            },
+            "title": "Results",
+            "type": "array"
+          },
+          "routed": {
+            "enum": [
+              "qdrant",
+              "mongo\u2192qdrant",
+              "precomputed+qdrant"
+            ],
+            "title": "Routed",
+            "type": "string"
+          },
+          "task_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Task Id"
+          },
+          "total_considered": {
+            "title": "Total Considered",
+            "type": "integer"
+          }
+        },
+        "required": [
+          "results",
+          "total_considered",
+          "routed"
+        ],
+        "title": "SearchData",
+        "type": "object"
+      },
+      "SearchRequest": {
+        "additionalProperties": false,
+        "properties": {
+          "allow_live": {
+            "default": true,
+            "description": "false = batch only; misses return coverage: pending.",
+            "title": "Allow Live",
+            "type": "boolean"
+          },
+          "entity": {
+            "const": "company",
+            "default": "company",
+            "title": "Entity",
+            "type": "string"
+          },
+          "exclude": {
+            "$ref": "#/components/schemas/Exclude"
+          },
+          "explain": {
+            "default": false,
+            "title": "Explain",
+            "type": "boolean"
+          },
+          "external_user_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "External User Id"
+          },
+          "fields": {
+            "items": {
+              "type": "string"
+            },
+            "title": "Fields",
+            "type": "array"
+          },
+          "filters": {
+            "$ref": "#/components/schemas/Filters"
+          },
+          "max_age": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "Freshness the caller needs, e.g. 30d.",
+            "title": "Max Age"
+          },
+          "min_score": {
+            "default": 0,
+            "maximum": 1.0,
+            "minimum": 0.0,
+            "title": "Min Score",
+            "type": "number"
+          },
+          "namespace_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Namespace Id"
+          },
+          "organization_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Organization Id"
+          },
+          "query": {
+            "anyOf": [
+              {
+                "maxLength": 2000,
+                "minLength": 2,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Query"
+          },
+          "query_weight": {
+            "default": 0.5,
+            "description": "Blend when both query and seeds are given.",
+            "maximum": 1.0,
+            "minimum": 0.0,
+            "title": "Query Weight",
+            "type": "number"
+          },
+          "reranking_config": {
+            "$ref": "#/components/schemas/RerankingConfig"
+          },
+          "seeds": {
+            "description": "Entity IDs or domains.",
+            "items": {
+              "type": "string"
+            },
+            "maxItems": 50,
+            "title": "Seeds",
+            "type": "array"
+          }
+        },
+        "title": "SearchRequest",
+        "type": "object"
+      },
+      "SearchResult": {
+        "properties": {
+          "entity_id": {
+            "title": "Entity Id",
+            "type": "string"
+          },
+          "record": {
+            "additionalProperties": true,
+            "description": "Requested fields + every Freshness field.",
+            "title": "Record",
+            "type": "object"
+          },
+          "score": {
+            "title": "Score",
+            "type": "number"
+          },
+          "why": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/Why"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          }
+        },
+        "required": [
+          "entity_id",
+          "score",
+          "record"
+        ],
+        "title": "SearchResult",
+        "type": "object"
+      },
+      "Sort": {
+        "additionalProperties": false,
+        "properties": {
+          "field": {
+            "title": "Field",
+            "type": "string"
+          },
+          "order": {
+            "default": "desc",
+            "enum": [
+              "asc",
+              "desc"
+            ],
+            "title": "Order",
+            "type": "string"
+          }
+        },
+        "required": [
+          "field"
+        ],
+        "title": "Sort",
+        "type": "object"
+      },
+      "TaskData": {
+        "properties": {
+          "entities": {
+            "items": {
+              "type": "string"
+            },
+            "title": "Entities",
+            "type": "array"
+          },
+          "error": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Error"
+          },
+          "finished_at": {
+            "anyOf": [
+              {
+                "format": "date-time",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Finished At"
+          },
+          "retry_after_s": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "Hint while queued or running.",
+            "title": "Retry After S"
+          },
+          "state": {
+            "enum": [
+              "queued",
+              "running",
+              "done",
+              "failed"
+            ],
+            "title": "State",
+            "type": "string"
+          },
+          "task_id": {
+            "title": "Task Id",
+            "type": "string"
+          }
+        },
+        "required": [
+          "task_id",
+          "state",
+          "entities"
+        ],
+        "title": "TaskData",
+        "type": "object"
+      },
+      "ValidationError": {
+        "properties": {
+          "ctx": {
+            "title": "Context",
+            "type": "object"
+          },
+          "input": {
+            "title": "Input"
+          },
+          "loc": {
+            "items": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "integer"
+                }
+              ]
+            },
+            "title": "Location",
+            "type": "array"
+          },
+          "msg": {
+            "title": "Message",
+            "type": "string"
+          },
+          "type": {
+            "title": "Error Type",
+            "type": "string"
+          }
+        },
+        "required": [
+          "loc",
+          "msg",
+          "type"
+        ],
+        "title": "ValidationError",
+        "type": "object"
+      },
+      "Why": {
+        "properties": {
+          "filters_matched": {
+            "items": {
+              "type": "string"
+            },
+            "title": "Filters Matched",
+            "type": "array"
+          },
+          "matched_text": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Matched Text"
+          },
+          "seed_overlap": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Seed Overlap"
+          }
+        },
+        "title": "Why",
+        "type": "object"
+      }
+    }
+  },
+  "info": {
+    "description": "Public people and company layer. See 'Scout Commons \u2014 Long-term Architecture (v2)' \u00a77.",
+    "title": "Scout Commons API",
+    "version": "0.1.0"
+  },
+  "openapi": "3.1.0",
+  "paths": {
+    "/v1/commons/entities": {
+      "post": {
+        "operationId": "get_entities_v1_commons_entities_post",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/EntitiesRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Envelope_EntitiesData_"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "202": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Envelope_EntitiesData_"
+                }
+              }
+            },
+            "description": "Some entities are computing live; see data.task_id."
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Get Entities",
+        "tags": [
+          "commons"
+        ]
+      }
+    },
+    "/v1/commons/entities/{entity_id}": {
+      "get": {
+        "operationId": "get_entity_v1_commons_entities__entity_id__get",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "entity_id",
+            "required": true,
+            "schema": {
+              "title": "Entity Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "query",
+            "name": "max_age",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Max Age"
+            }
+          },
+          {
+            "in": "query",
+            "name": "allow_live",
+            "required": false,
+            "schema": {
+              "default": true,
+              "title": "Allow Live",
+              "type": "boolean"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Envelope_EntitiesData_"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "202": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Envelope_EntitiesData_"
+                }
+              }
+            },
+            "description": "Some entities are computing live; see data.task_id."
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Get Entity",
+        "tags": [
+          "commons"
+        ]
+      }
+    },
+    "/v1/commons/fields": {
+      "get": {
+        "operationId": "fields_v1_commons_fields_get",
+        "parameters": [
+          {
+            "in": "query",
+            "name": "entity",
+            "required": false,
+            "schema": {
+              "default": "company",
+              "title": "Entity",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Envelope_FieldsData_"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Fields",
+        "tags": [
+          "commons"
+        ]
+      }
+    },
+    "/v1/commons/filter": {
+      "post": {
+        "operationId": "filter__v1_commons_filter_post",
+        "parameters": [
+          {
+            "in": "query",
+            "name": "max_results",
+            "required": false,
+            "schema": {
+              "default": 100,
+              "maximum": 1000,
+              "minimum": 0,
+              "title": "Max Results",
+              "type": "integer"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/FilterRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Envelope_FilterData_"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Filter ",
+        "tags": [
+          "commons"
+        ]
+      }
+    },
+    "/v1/commons/search": {
+      "post": {
+        "operationId": "search_v1_commons_search_post",
+        "parameters": [
+          {
+            "in": "query",
+            "name": "max_results",
+            "required": false,
+            "schema": {
+              "default": 20,
+              "maximum": 200,
+              "minimum": 10,
+              "title": "Max Results",
+              "type": "integer"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/SearchRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Envelope_SearchData_"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "202": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Envelope_SearchData_"
+                }
+              }
+            },
+            "description": "Some entities are computing live; see data.task_id."
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Search",
+        "tags": [
+          "commons"
+        ]
+      }
+    },
+    "/v1/commons/tasks/{task_id}": {
+      "get": {
+        "operationId": "task_v1_commons_tasks__task_id__get",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "task_id",
+            "required": true,
+            "schema": {
+              "title": "Task Id",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Envelope_TaskData_"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Task",
+        "tags": [
+          "commons"
+        ]
+      }
+    }
+  }
+}
