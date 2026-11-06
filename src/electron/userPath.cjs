@@ -62,7 +62,7 @@ function mergeLoginShellPath(opts = {}) {
   const shell = env.SHELL;
   if (platform === "win32" || !shell || !SHELLS.has(path.basename(shell))) return Promise.resolve(null);
   return new Promise((resolve) => {
-    run(shell, ["-lc", `printf '%s' "${MARK}$PATH${MARK}"`], { timeout: timeoutMs, env }, (err, stdout) => {
+    run(shell, ["-lc", "printf '%s' \"" + MARK + "${PATH}" + MARK + "\""], { timeout: timeoutMs, env }, (err, stdout) => {
       const shellPath = err ? null : parseShellPath(stdout);
       if (shellPath) env.PATH = mergePath(shellPath, String(env.PATH || "").split(":"));
       resolve(shellPath ? env.PATH : null);

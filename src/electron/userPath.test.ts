@@ -65,4 +65,11 @@ describe("login shell PATH", () => {
     const fish: Record<string, string> = { PATH: LAUNCHD, SHELL: "/opt/homebrew/bin/fish" };
     expect(await mergeLoginShellPath({ platform: "darwin", env: fish })).toBeNull();
   });
+
+  it("works against a real login shell (guards the ${PATH} quoting)", async () => {
+    const env: Record<string, string> = { PATH: LAUNCHD, SHELL: "/bin/sh", HOME: "/tmp" };
+    const merged = await mergeLoginShellPath({ platform: "darwin", env, timeoutMs: 10000 });
+    expect(merged).toContain("/usr/bin");
+    expect(merged).not.toContain("__PAPR_PATH__");
+  });
 });
