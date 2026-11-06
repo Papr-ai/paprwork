@@ -64,7 +64,7 @@
       "EntitiesData": {
         "properties": {
           "not_found": {
-            "description": "Invalid domains, or allow_live=false misses.",
+            "description": "Invalid domains, or misses when max_age_hours=-1.",
             "items": {
               "type": "string"
             },
@@ -72,7 +72,7 @@
             "type": "array"
           },
           "pending": {
-            "description": "Misses computing live; poll task_id or await ready event.",
+            "description": "Misses computing live; poll task_id or subscribe to commons.task.completed.",
             "items": {
               "type": "string"
             },
@@ -109,20 +109,17 @@
       "EntitiesRequest": {
         "additionalProperties": false,
         "properties": {
-          "allow_live": {
-            "default": true,
-            "title": "Allow Live",
-            "type": "boolean"
-          },
           "external_user_id": {
             "anyOf": [
               {
+                "maxLength": 128,
                 "type": "string"
               },
               {
                 "type": "null"
               }
             ],
+            "description": "Opaque ID your app assigns to the end user (e.g. a UUID), used for per-user quotas. Must not contain personal information: no email, phone, username or name. Never logged alongside the entities in the request.",
             "title": "External User Id"
           },
           "fields": {
@@ -142,16 +139,19 @@
             "title": "Ids",
             "type": "array"
           },
-          "max_age": {
+          "max_age_hours": {
             "anyOf": [
               {
-                "type": "string"
+                "maximum": 8760.0,
+                "minimum": -1.0,
+                "type": "integer"
               },
               {
                 "type": "null"
               }
             ],
-            "title": "Max Age"
+            "description": "Freshness the caller needs, in hours (max 8760). Stored facts younger than this are served; older ones are refreshed live within the time limit. 0 = always refresh live (subject to quotas). -1 = never compute live: batch only, misses come back with coverage: pending. Omitted = serve stored facts, refresh live only for misses and facts past their default max age (\u00a75.4).",
+            "title": "Max Age Hours"
           },
           "namespace_id": {
             "anyOf": [
@@ -222,17 +222,33 @@
                 "type": "null"
               }
             ],
+            "description": "On errors: { message, path? }.",
             "title": "Details"
           },
           "error": {
             "anyOf": [
               {
-                "$ref": "#/components/schemas/ErrorCode"
+                "type": "string"
               },
               {
                 "type": "null"
               }
-            ]
+            ],
+            "description": "Machine-readable code; open set, known values in ErrorCode.",
+            "title": "Error"
+          },
+          "notices": {
+            "description": "How results were produced. Pass them to the model or user with the results.",
+            "items": {
+              "$ref": "#/components/schemas/Message"
+            },
+            "title": "Notices",
+            "type": "array"
+          },
+          "request_id": {
+            "description": "Unique per request. Include it when reporting a problem.",
+            "title": "Request Id",
+            "type": "string"
           },
           "search_id": {
             "anyOf": [
@@ -255,9 +271,112 @@
             ],
             "title": "Status",
             "type": "string"
+          },
+          "warnings": {
+            "description": "About the request. Log them; don't show them to a model.",
+            "items": {
+              "$ref": "#/components/schemas/Message"
+            },
+            "title": "Warnings",
+            "type": "array"
           }
         },
+        "required": [
+          "request_id"
+        ],
         "title": "Envelope[EntitiesData]",
+        "type": "object"
+      },
+      "Envelope_EventsData_": {
+        "properties": {
+          "code": {
+            "default": 200,
+            "title": "Code",
+            "type": "integer"
+          },
+          "data": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/EventsData"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "details": {
+            "anyOf": [
+              {
+                "additionalProperties": true,
+                "type": "object"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "On errors: { message, path? }.",
+            "title": "Details"
+          },
+          "error": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "Machine-readable code; open set, known values in ErrorCode.",
+            "title": "Error"
+          },
+          "notices": {
+            "description": "How results were produced. Pass them to the model or user with the results.",
+            "items": {
+              "$ref": "#/components/schemas/Message"
+            },
+            "title": "Notices",
+            "type": "array"
+          },
+          "request_id": {
+            "description": "Unique per request. Include it when reporting a problem.",
+            "title": "Request Id",
+            "type": "string"
+          },
+          "search_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "Only on /search; pass to POST /v1/feedback.",
+            "title": "Search Id"
+          },
+          "status": {
+            "default": "success",
+            "enum": [
+              "success",
+              "accepted",
+              "error"
+            ],
+            "title": "Status",
+            "type": "string"
+          },
+          "warnings": {
+            "description": "About the request. Log them; don't show them to a model.",
+            "items": {
+              "$ref": "#/components/schemas/Message"
+            },
+            "title": "Warnings",
+            "type": "array"
+          }
+        },
+        "required": [
+          "request_id"
+        ],
+        "title": "Envelope[EventsData]",
         "type": "object"
       },
       "Envelope_FieldsData_": {
@@ -287,17 +406,33 @@
                 "type": "null"
               }
             ],
+            "description": "On errors: { message, path? }.",
             "title": "Details"
           },
           "error": {
             "anyOf": [
               {
-                "$ref": "#/components/schemas/ErrorCode"
+                "type": "string"
               },
               {
                 "type": "null"
               }
-            ]
+            ],
+            "description": "Machine-readable code; open set, known values in ErrorCode.",
+            "title": "Error"
+          },
+          "notices": {
+            "description": "How results were produced. Pass them to the model or user with the results.",
+            "items": {
+              "$ref": "#/components/schemas/Message"
+            },
+            "title": "Notices",
+            "type": "array"
+          },
+          "request_id": {
+            "description": "Unique per request. Include it when reporting a problem.",
+            "title": "Request Id",
+            "type": "string"
           },
           "search_id": {
             "anyOf": [
@@ -320,8 +455,19 @@
             ],
             "title": "Status",
             "type": "string"
+          },
+          "warnings": {
+            "description": "About the request. Log them; don't show them to a model.",
+            "items": {
+              "$ref": "#/components/schemas/Message"
+            },
+            "title": "Warnings",
+            "type": "array"
           }
         },
+        "required": [
+          "request_id"
+        ],
         "title": "Envelope[FieldsData]",
         "type": "object"
       },
@@ -352,17 +498,33 @@
                 "type": "null"
               }
             ],
+            "description": "On errors: { message, path? }.",
             "title": "Details"
           },
           "error": {
             "anyOf": [
               {
-                "$ref": "#/components/schemas/ErrorCode"
+                "type": "string"
               },
               {
                 "type": "null"
               }
-            ]
+            ],
+            "description": "Machine-readable code; open set, known values in ErrorCode.",
+            "title": "Error"
+          },
+          "notices": {
+            "description": "How results were produced. Pass them to the model or user with the results.",
+            "items": {
+              "$ref": "#/components/schemas/Message"
+            },
+            "title": "Notices",
+            "type": "array"
+          },
+          "request_id": {
+            "description": "Unique per request. Include it when reporting a problem.",
+            "title": "Request Id",
+            "type": "string"
           },
           "search_id": {
             "anyOf": [
@@ -385,8 +547,19 @@
             ],
             "title": "Status",
             "type": "string"
+          },
+          "warnings": {
+            "description": "About the request. Log them; don't show them to a model.",
+            "items": {
+              "$ref": "#/components/schemas/Message"
+            },
+            "title": "Warnings",
+            "type": "array"
           }
         },
+        "required": [
+          "request_id"
+        ],
         "title": "Envelope[FilterData]",
         "type": "object"
       },
@@ -417,17 +590,33 @@
                 "type": "null"
               }
             ],
+            "description": "On errors: { message, path? }.",
             "title": "Details"
           },
           "error": {
             "anyOf": [
               {
-                "$ref": "#/components/schemas/ErrorCode"
+                "type": "string"
               },
               {
                 "type": "null"
               }
-            ]
+            ],
+            "description": "Machine-readable code; open set, known values in ErrorCode.",
+            "title": "Error"
+          },
+          "notices": {
+            "description": "How results were produced. Pass them to the model or user with the results.",
+            "items": {
+              "$ref": "#/components/schemas/Message"
+            },
+            "title": "Notices",
+            "type": "array"
+          },
+          "request_id": {
+            "description": "Unique per request. Include it when reporting a problem.",
+            "title": "Request Id",
+            "type": "string"
           },
           "search_id": {
             "anyOf": [
@@ -450,8 +639,19 @@
             ],
             "title": "Status",
             "type": "string"
+          },
+          "warnings": {
+            "description": "About the request. Log them; don't show them to a model.",
+            "items": {
+              "$ref": "#/components/schemas/Message"
+            },
+            "title": "Warnings",
+            "type": "array"
           }
         },
+        "required": [
+          "request_id"
+        ],
         "title": "Envelope[SearchData]",
         "type": "object"
       },
@@ -482,17 +682,33 @@
                 "type": "null"
               }
             ],
+            "description": "On errors: { message, path? }.",
             "title": "Details"
           },
           "error": {
             "anyOf": [
               {
-                "$ref": "#/components/schemas/ErrorCode"
+                "type": "string"
               },
               {
                 "type": "null"
               }
-            ]
+            ],
+            "description": "Machine-readable code; open set, known values in ErrorCode.",
+            "title": "Error"
+          },
+          "notices": {
+            "description": "How results were produced. Pass them to the model or user with the results.",
+            "items": {
+              "$ref": "#/components/schemas/Message"
+            },
+            "title": "Notices",
+            "type": "array"
+          },
+          "request_id": {
+            "description": "Unique per request. Include it when reporting a problem.",
+            "title": "Request Id",
+            "type": "string"
           },
           "search_id": {
             "anyOf": [
@@ -515,23 +731,366 @@
             ],
             "title": "Status",
             "type": "string"
+          },
+          "warnings": {
+            "description": "About the request. Log them; don't show them to a model.",
+            "items": {
+              "$ref": "#/components/schemas/Message"
+            },
+            "title": "Warnings",
+            "type": "array"
           }
         },
+        "required": [
+          "request_id"
+        ],
         "title": "Envelope[TaskData]",
         "type": "object"
       },
-      "ErrorCode": {
-        "enum": [
-          "invalid_request",
-          "unknown_field",
-          "unauthorized",
-          "quota_exceeded",
-          "not_found",
-          "rate_limited",
-          "internal"
+      "Envelope_Webhook_": {
+        "properties": {
+          "code": {
+            "default": 200,
+            "title": "Code",
+            "type": "integer"
+          },
+          "data": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/Webhook"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "details": {
+            "anyOf": [
+              {
+                "additionalProperties": true,
+                "type": "object"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "On errors: { message, path? }.",
+            "title": "Details"
+          },
+          "error": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "Machine-readable code; open set, known values in ErrorCode.",
+            "title": "Error"
+          },
+          "notices": {
+            "description": "How results were produced. Pass them to the model or user with the results.",
+            "items": {
+              "$ref": "#/components/schemas/Message"
+            },
+            "title": "Notices",
+            "type": "array"
+          },
+          "request_id": {
+            "description": "Unique per request. Include it when reporting a problem.",
+            "title": "Request Id",
+            "type": "string"
+          },
+          "search_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "Only on /search; pass to POST /v1/feedback.",
+            "title": "Search Id"
+          },
+          "status": {
+            "default": "success",
+            "enum": [
+              "success",
+              "accepted",
+              "error"
+            ],
+            "title": "Status",
+            "type": "string"
+          },
+          "warnings": {
+            "description": "About the request. Log them; don't show them to a model.",
+            "items": {
+              "$ref": "#/components/schemas/Message"
+            },
+            "title": "Warnings",
+            "type": "array"
+          }
+        },
+        "required": [
+          "request_id"
         ],
-        "title": "ErrorCode",
-        "type": "string"
+        "title": "Envelope[Webhook]",
+        "type": "object"
+      },
+      "Envelope_dict_": {
+        "properties": {
+          "code": {
+            "default": 200,
+            "title": "Code",
+            "type": "integer"
+          },
+          "data": {
+            "anyOf": [
+              {
+                "additionalProperties": true,
+                "type": "object"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Data"
+          },
+          "details": {
+            "anyOf": [
+              {
+                "additionalProperties": true,
+                "type": "object"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "On errors: { message, path? }.",
+            "title": "Details"
+          },
+          "error": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "Machine-readable code; open set, known values in ErrorCode.",
+            "title": "Error"
+          },
+          "notices": {
+            "description": "How results were produced. Pass them to the model or user with the results.",
+            "items": {
+              "$ref": "#/components/schemas/Message"
+            },
+            "title": "Notices",
+            "type": "array"
+          },
+          "request_id": {
+            "description": "Unique per request. Include it when reporting a problem.",
+            "title": "Request Id",
+            "type": "string"
+          },
+          "search_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "Only on /search; pass to POST /v1/feedback.",
+            "title": "Search Id"
+          },
+          "status": {
+            "default": "success",
+            "enum": [
+              "success",
+              "accepted",
+              "error"
+            ],
+            "title": "Status",
+            "type": "string"
+          },
+          "warnings": {
+            "description": "About the request. Log them; don't show them to a model.",
+            "items": {
+              "$ref": "#/components/schemas/Message"
+            },
+            "title": "Warnings",
+            "type": "array"
+          }
+        },
+        "required": [
+          "request_id"
+        ],
+        "title": "Envelope[dict]",
+        "type": "object"
+      },
+      "Envelope_list_Webhook__": {
+        "properties": {
+          "code": {
+            "default": 200,
+            "title": "Code",
+            "type": "integer"
+          },
+          "data": {
+            "anyOf": [
+              {
+                "items": {
+                  "$ref": "#/components/schemas/Webhook"
+                },
+                "type": "array"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Data"
+          },
+          "details": {
+            "anyOf": [
+              {
+                "additionalProperties": true,
+                "type": "object"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "On errors: { message, path? }.",
+            "title": "Details"
+          },
+          "error": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "Machine-readable code; open set, known values in ErrorCode.",
+            "title": "Error"
+          },
+          "notices": {
+            "description": "How results were produced. Pass them to the model or user with the results.",
+            "items": {
+              "$ref": "#/components/schemas/Message"
+            },
+            "title": "Notices",
+            "type": "array"
+          },
+          "request_id": {
+            "description": "Unique per request. Include it when reporting a problem.",
+            "title": "Request Id",
+            "type": "string"
+          },
+          "search_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "Only on /search; pass to POST /v1/feedback.",
+            "title": "Search Id"
+          },
+          "status": {
+            "default": "success",
+            "enum": [
+              "success",
+              "accepted",
+              "error"
+            ],
+            "title": "Status",
+            "type": "string"
+          },
+          "warnings": {
+            "description": "About the request. Log them; don't show them to a model.",
+            "items": {
+              "$ref": "#/components/schemas/Message"
+            },
+            "title": "Warnings",
+            "type": "array"
+          }
+        },
+        "required": [
+          "request_id"
+        ],
+        "title": "Envelope[list[Webhook]]",
+        "type": "object"
+      },
+      "Event": {
+        "properties": {
+          "created_at": {
+            "format": "date-time",
+            "title": "Created At",
+            "type": "string"
+          },
+          "data": {
+            "additionalProperties": true,
+            "title": "Data",
+            "type": "object"
+          },
+          "id": {
+            "title": "Id",
+            "type": "string"
+          },
+          "type": {
+            "enum": [
+              "commons.task.completed",
+              "commons.task.failed",
+              "commons.entity.updated",
+              "commons.release.activated"
+            ],
+            "title": "Type",
+            "type": "string"
+          }
+        },
+        "required": [
+          "id",
+          "type",
+          "created_at",
+          "data"
+        ],
+        "title": "Event",
+        "type": "object"
+      },
+      "EventsData": {
+        "properties": {
+          "next_cursor": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Next Cursor"
+          },
+          "results": {
+            "items": {
+              "$ref": "#/components/schemas/Event"
+            },
+            "title": "Results",
+            "type": "array"
+          }
+        },
+        "required": [
+          "results"
+        ],
+        "title": "EventsData",
+        "type": "object"
       },
       "Exclude": {
         "additionalProperties": false,
@@ -740,12 +1299,14 @@
           "external_user_id": {
             "anyOf": [
               {
+                "maxLength": 128,
                 "type": "string"
               },
               {
                 "type": "null"
               }
             ],
+            "description": "Opaque ID your app assigns to the end user (e.g. a UUID), used for per-user quotas. Must not contain personal information: no email, phone, username or name. Never logged alongside the entities in the request.",
             "title": "External User Id"
           },
           "facets": {
@@ -863,6 +1424,38 @@
           }
         },
         "title": "HTTPValidationError",
+        "type": "object"
+      },
+      "Message": {
+        "properties": {
+          "code": {
+            "description": "UPPER_SNAKE. Open set: tolerate codes you don't recognize.",
+            "title": "Code",
+            "type": "string"
+          },
+          "message": {
+            "description": "Complete on its own.",
+            "title": "Message",
+            "type": "string"
+          },
+          "path": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "JSON Pointer to the request field this is about, e.g. /filters/uses.",
+            "title": "Path"
+          }
+        },
+        "required": [
+          "code",
+          "message"
+        ],
+        "title": "Message",
         "type": "object"
       },
       "NoneOf": {
@@ -1030,12 +1623,6 @@
       "SearchRequest": {
         "additionalProperties": false,
         "properties": {
-          "allow_live": {
-            "default": true,
-            "description": "false = batch only; misses return coverage: pending.",
-            "title": "Allow Live",
-            "type": "boolean"
-          },
           "entity": {
             "const": "company",
             "default": "company",
@@ -1053,12 +1640,14 @@
           "external_user_id": {
             "anyOf": [
               {
+                "maxLength": 128,
                 "type": "string"
               },
               {
                 "type": "null"
               }
             ],
+            "description": "Opaque ID your app assigns to the end user (e.g. a UUID), used for per-user quotas. Must not contain personal information: no email, phone, username or name. Never logged alongside the entities in the request.",
             "title": "External User Id"
           },
           "fields": {
@@ -1071,17 +1660,19 @@
           "filters": {
             "$ref": "#/components/schemas/Filters"
           },
-          "max_age": {
+          "max_age_hours": {
             "anyOf": [
               {
-                "type": "string"
+                "maximum": 8760.0,
+                "minimum": -1.0,
+                "type": "integer"
               },
               {
                 "type": "null"
               }
             ],
-            "description": "Freshness the caller needs, e.g. 30d.",
-            "title": "Max Age"
+            "description": "Freshness the caller needs, in hours (max 8760). Stored facts younger than this are served; older ones are refreshed live within the time limit. 0 = always refresh live (subject to quotas). -1 = never compute live: batch only, misses come back with coverage: pending. Omitted = serve stored facts, refresh live only for misses and facts past their default max age (\u00a75.4).",
+            "title": "Max Age Hours"
           },
           "min_score": {
             "default": 0,
@@ -1314,6 +1905,89 @@
         "title": "ValidationError",
         "type": "object"
       },
+      "Webhook": {
+        "properties": {
+          "created_at": {
+            "format": "date-time",
+            "title": "Created At",
+            "type": "string"
+          },
+          "events": {
+            "items": {
+              "enum": [
+                "commons.task.completed",
+                "commons.task.failed",
+                "commons.entity.updated",
+                "commons.release.activated"
+              ],
+              "type": "string"
+            },
+            "title": "Events",
+            "type": "array"
+          },
+          "id": {
+            "title": "Id",
+            "type": "string"
+          },
+          "secret": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "Returned once on create; used to verify signatures.",
+            "title": "Secret"
+          },
+          "url": {
+            "title": "Url",
+            "type": "string"
+          }
+        },
+        "required": [
+          "id",
+          "url",
+          "events",
+          "created_at"
+        ],
+        "title": "Webhook",
+        "type": "object"
+      },
+      "WebhookCreate": {
+        "additionalProperties": false,
+        "properties": {
+          "events": {
+            "items": {
+              "enum": [
+                "commons.task.completed",
+                "commons.task.failed",
+                "commons.entity.updated",
+                "commons.release.activated"
+              ],
+              "type": "string"
+            },
+            "minItems": 1,
+            "title": "Events",
+            "type": "array"
+          },
+          "url": {
+            "description": "HTTPS endpoint. Deliveries are signed (HMAC-SHA256 in Commons-Signature).",
+            "format": "uri",
+            "maxLength": 2083,
+            "minLength": 1,
+            "title": "Url",
+            "type": "string"
+          }
+        },
+        "required": [
+          "url",
+          "events"
+        ],
+        "title": "WebhookCreate",
+        "type": "object"
+      },
       "Why": {
         "properties": {
           "filters_matched": {
@@ -1392,6 +2066,15 @@
             },
             "description": "Some entities are computing live; see data.task_id."
           },
+          "400": {
+            "description": "Invalid request (error: invalid_request | unknown_field)."
+          },
+          "401": {
+            "description": "Missing or invalid credentials."
+          },
+          "402": {
+            "description": "Live-compute budget exceeded (live_budget_exceeded). Retry-After header set."
+          },
           "422": {
             "content": {
               "application/json": {
@@ -1401,6 +2084,12 @@
               }
             },
             "description": "Validation Error"
+          },
+          "429": {
+            "description": "Rate limited. Retry-After header set."
+          },
+          "503": {
+            "description": "Temporarily unavailable. Not processed and not counted against quotas."
           }
         },
         "summary": "Get Entities",
@@ -1424,28 +2113,20 @@
           },
           {
             "in": "query",
-            "name": "max_age",
+            "name": "max_age_hours",
             "required": false,
             "schema": {
               "anyOf": [
                 {
-                  "type": "string"
+                  "maximum": 8760,
+                  "minimum": -1,
+                  "type": "integer"
                 },
                 {
                   "type": "null"
                 }
               ],
-              "title": "Max Age"
-            }
-          },
-          {
-            "in": "query",
-            "name": "allow_live",
-            "required": false,
-            "schema": {
-              "default": true,
-              "title": "Allow Live",
-              "type": "boolean"
+              "title": "Max Age Hours"
             }
           }
         ],
@@ -1470,6 +2151,108 @@
             },
             "description": "Some entities are computing live; see data.task_id."
           },
+          "400": {
+            "description": "Invalid request (error: invalid_request | unknown_field)."
+          },
+          "401": {
+            "description": "Missing or invalid credentials."
+          },
+          "402": {
+            "description": "Live-compute budget exceeded (live_budget_exceeded). Retry-After header set."
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          },
+          "429": {
+            "description": "Rate limited. Retry-After header set."
+          },
+          "503": {
+            "description": "Temporarily unavailable. Not processed and not counted against quotas."
+          }
+        },
+        "summary": "Get Entity",
+        "tags": [
+          "commons"
+        ]
+      }
+    },
+    "/v1/commons/events": {
+      "get": {
+        "operationId": "list_events_v1_commons_events_get",
+        "parameters": [
+          {
+            "in": "query",
+            "name": "type",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "enum": [
+                    "commons.task.completed",
+                    "commons.task.failed",
+                    "commons.entity.updated",
+                    "commons.release.activated"
+                  ],
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Type"
+            }
+          },
+          {
+            "in": "query",
+            "name": "since",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Since"
+            }
+          },
+          {
+            "in": "query",
+            "name": "cursor",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Cursor"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Envelope_EventsData_"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
           "422": {
             "content": {
               "application/json": {
@@ -1481,9 +2264,9 @@
             "description": "Validation Error"
           }
         },
-        "summary": "Get Entity",
+        "summary": "List Events",
         "tags": [
-          "commons"
+          "events"
         ]
       }
     },
@@ -1568,6 +2351,15 @@
             },
             "description": "Successful Response"
           },
+          "400": {
+            "description": "Invalid request (error: invalid_request | unknown_field)."
+          },
+          "401": {
+            "description": "Missing or invalid credentials."
+          },
+          "402": {
+            "description": "Live-compute budget exceeded (live_budget_exceeded). Retry-After header set."
+          },
           "422": {
             "content": {
               "application/json": {
@@ -1577,6 +2369,12 @@
               }
             },
             "description": "Validation Error"
+          },
+          "429": {
+            "description": "Rate limited. Retry-After header set."
+          },
+          "503": {
+            "description": "Temporarily unavailable. Not processed and not counted against quotas."
           }
         },
         "summary": "Filter ",
@@ -1633,6 +2431,15 @@
             },
             "description": "Some entities are computing live; see data.task_id."
           },
+          "400": {
+            "description": "Invalid request (error: invalid_request | unknown_field)."
+          },
+          "401": {
+            "description": "Missing or invalid credentials."
+          },
+          "402": {
+            "description": "Live-compute budget exceeded (live_budget_exceeded). Retry-After header set."
+          },
           "422": {
             "content": {
               "application/json": {
@@ -1642,6 +2449,12 @@
               }
             },
             "description": "Validation Error"
+          },
+          "429": {
+            "description": "Rate limited. Retry-After header set."
+          },
+          "503": {
+            "description": "Temporarily unavailable. Not processed and not counted against quotas."
           }
         },
         "summary": "Search",
@@ -1689,6 +2502,123 @@
         "summary": "Task",
         "tags": [
           "commons"
+        ]
+      }
+    },
+    "/v1/commons/webhooks": {
+      "get": {
+        "operationId": "list_webhooks_v1_commons_webhooks_get",
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Envelope_list_Webhook__"
+                }
+              }
+            },
+            "description": "Successful Response"
+          }
+        },
+        "summary": "List Webhooks",
+        "tags": [
+          "events"
+        ]
+      },
+      "post": {
+        "operationId": "create_webhook_v1_commons_webhooks_post",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/WebhookCreate"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Envelope_Webhook_"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "400": {
+            "description": "Invalid request (error: invalid_request | unknown_field)."
+          },
+          "401": {
+            "description": "Missing or invalid credentials."
+          },
+          "402": {
+            "description": "Live-compute budget exceeded (live_budget_exceeded). Retry-After header set."
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          },
+          "429": {
+            "description": "Rate limited. Retry-After header set."
+          },
+          "503": {
+            "description": "Temporarily unavailable. Not processed and not counted against quotas."
+          }
+        },
+        "summary": "Create Webhook",
+        "tags": [
+          "events"
+        ]
+      }
+    },
+    "/v1/commons/webhooks/{webhook_id}": {
+      "delete": {
+        "operationId": "delete_webhook_v1_commons_webhooks__webhook_id__delete",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "webhook_id",
+            "required": true,
+            "schema": {
+              "title": "Webhook Id",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Envelope_dict_"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Delete Webhook",
+        "tags": [
+          "events"
         ]
       }
     }

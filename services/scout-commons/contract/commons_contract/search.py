@@ -4,10 +4,10 @@ from __future__ import annotations
 
 from typing import Any, Literal
 
-from pydantic import BaseModel, Field, field_validator, model_validator
+from pydantic import BaseModel, Field, model_validator
 
-from .envelope import Scope, Strict
-from .filters import Entity, Exclude, Filters, check_duration
+from .envelope import MAX_AGE_DOC, Scope, Strict
+from .filters import Entity, Exclude, Filters
 
 
 class RerankingConfig(Strict):
@@ -26,10 +26,7 @@ class SearchRequest(Strict, Scope):
     min_score: float = Field(0, ge=0, le=1)
     explain: bool = False
     fields: list[str] = Field(default_factory=lambda: ["domain", "name"])
-    max_age: str | None = Field(None, description="Freshness the caller needs, e.g. 30d.")
-    allow_live: bool = Field(True, description="false = batch only; misses return coverage: pending.")
-
-    _v_age = field_validator("max_age")(lambda v: v if v is None else check_duration(v))
+    max_age_hours: int | None = Field(None, ge=-1, le=8760, description=MAX_AGE_DOC)
 
     @model_validator(mode="after")
     def _needs_meaning(self) -> "SearchRequest":

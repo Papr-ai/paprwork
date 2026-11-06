@@ -22,6 +22,7 @@ class DatedVendor(BaseModel):
     vendor: str
     first_seen: date
     last_seen: date
+    evidence_url: str | None = Field(None, description="Page where the vendor was detected.")
 
 
 class OpenRole(BaseModel):
@@ -29,6 +30,7 @@ class OpenRole(BaseModel):
     count: int
     board: str | None = None
     as_of: datetime
+    evidence_url: str | None = Field(None, description="Job posting or board page behind this role.")
 
 
 class Lookalike(BaseModel):
@@ -39,6 +41,8 @@ class Lookalike(BaseModel):
 
 
 class Company(Freshness):
+    type: Literal["company"] = Field("company", description="Entity discriminator; 'person' arrives in Phase 2.")
+    schema_version: int = Field(1, ge=1, description="Bumped on breaking record-shape changes.")
     entity_id: str
     domain: str
     name: str | None = None
