@@ -259,7 +259,7 @@ export function McpConnectionsTab({
         key={`site:${p.id}`}
         server={siteLogoServer(p)}
         tone="warn"
-        status={`Sign-in expired · Pen can't use ${p.name}`}
+        status={st === "needs_reauth" || st === "expired" ? `Sign-in expired · Pen can't use ${p.name}` : `Not signed in · Pen can't use ${p.name}`}
         onOpen={open}
         action={<RowButton primary disabled={busySite} onClick={() => void sites.connect(p.id)}>Reconnect</RowButton>}
       />
