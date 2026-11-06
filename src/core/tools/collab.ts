@@ -32,7 +32,7 @@ export async function team(): Promise<Teammate[]> {
   } catch { /* older server: fall back */ }
   const { listNamespaceUsersForAgent } = await import("../../gateway/services/namespaceUsersService.js");
   const r = await listNamespaceUsersForAgent();
-  return r.members.map((m) => ({ userId: m.externalUserId, displayName: m.displayName || m.email, email: m.email }));
+  return r.members.map((m) => ({ userId: m.externalUserId, displayName: m.displayName || m.email, email: m.email, imageUrl: m.imageUrl }));
 }
 
 async function pickPeople(people: string[]): Promise<Teammate[] | { error: string }> {
