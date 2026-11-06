@@ -2782,18 +2782,67 @@ button.cloud-compat-badge--paused:hover {
 .propose-failure {
   display: flex;
   flex-direction: column;
-  gap: 6px;
+  gap: 10px;
+  margin: 12px 0 16px;
+  padding: 12px 14px;
+  border-radius: 12px;
+  border: 1px solid color-mix(in srgb, var(--danger, #dc2626) 25%, transparent);
+  background: color-mix(in srgb, var(--danger, #dc2626) 6%, transparent);
+  font-size: 13px;
+  line-height: 1.45;
 }
 
 .propose-failure__message {
   margin: 0;
 }
 
-.propose-failure .share-sheet__error-details {
-  margin-top: 0;
+.propose-failure__actions {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+}
+
+.propose-failure__toggle {
+  padding: 0;
+  border: 0;
+  background: none;
+  font: inherit;
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--danger, #dc2626);
+  cursor: pointer;
+}
+
+.propose-failure__toggle:hover {
+  text-decoration: underline;
 }
 
 .propose-failure__ask {
-  align-self: flex-start;
+  flex-shrink: 0;
+  padding: 6px 12px;
+  border-radius: 999px;
+  border: 1px solid color-mix(in srgb, var(--accent, #0a84ff) 35%, transparent);
+  background: color-mix(in srgb, var(--accent, #0a84ff) 10%, transparent);
+  color: var(--accent, #0a84ff);
+  font: inherit;
+  font-size: 12px;
   font-weight: 600;
+  cursor: pointer;
+  transition: background 0.15s ease;
+}
+
+.propose-failure__ask:hover {
+  background: color-mix(in srgb, var(--accent, #0a84ff) 18%, transparent);
+}
+
+.propose-failure__detail {
+  margin: 0;
+  padding: 8px 10px;
+  border-radius: 8px;
+  background: var(--hover, rgba(0, 0, 0, 0.04));
+  color: var(--text-secondary);
+  font-size: 12px;
+  white-space: pre-wrap;
+  word-break: break-word;
 }
