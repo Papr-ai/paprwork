@@ -3,13 +3,22 @@
  */
 
 import fs from "fs/promises";
+import { createReadStream } from "fs";
+import readline from "readline";
 import path from "path";
 import { spawn } from "child_process";
 import { getPaprAppsRoot, getPaprJobsRoot, getPaprRoot } from "../utils/paprRoot.js";
 import { parseMiniAppIdFromAgentPath } from "../utils/paprAgentPaths.js";
 import { formatPaprPathForAgent } from "../utils/paprAgentPaths.js";
 
-export const SEARCH_MAX_FILE_BYTES = 512 * 1024;
+/**
+ * Files above this are skipped and REPORTED in `skipped` (never silently). Walk streams files
+ * larger than SEARCH_STREAM_THRESHOLD_BYTES, so this only bounds the 30s wall budget.
+ */
+export const SEARCH_MAX_FILE_BYTES = 50 * 1024 * 1024;
+/** Up to this size a file is read whole and split (fastest); larger files stream line by line. */
+export const SEARCH_STREAM_THRESHOLD_BYTES = 8 * 1024 * 1024;
+export const SEARCH_MAX_SKIPPED_LISTED = 20;
 export const SEARCH_MAX_FILES_SCANNED = 2000;
 export const SEARCH_WALL_MS = 30_000;
 export const SEARCH_MAX_DEPTH = 12;
@@ -58,6 +67,16 @@ export interface FileSearchResult {
   engine: "rg" | "walk";
   scopedFrom?: string;
   hint?: string;
+  /** Files that were NOT searched (too large / unreadable). Absent when nothing was skipped. */
+  skipped?: SearchSkippedFile[];
+  /** Total skipped, including any beyond the listed SEARCH_MAX_SKIPPED_LISTED. */
+  skippedCount?: number;
+}
+
+export interface SearchSkippedFile {
+  file: string;
+  reason: "too_large" | "unreadable";
+  sizeBytes?: number;
 }
 
 export interface FileSearchOptions {
@@ -225,6 +244,7 @@ async function searchWithRipgrep(
   const matches: SearchMatch[] = [];
   let truncated = false;
   let truncatedReason: SearchTruncatedReason | undefined;
+  let searchedFiles: number | undefined;
 
   const args = [
     "--json",
@@ -269,8 +289,12 @@ async function searchWithRipgrep(
               line_number?: number;
               lines?: { text?: string };
               submatches?: Array<{ match?: { text?: string } }>;
+              stats?: { searches?: number };
             };
           };
+          if (row.type === "summary") {
+            searchedFiles = row.data?.stats?.searches;
+          }
           if (row.type !== "match" || !row.data?.path?.text) {
             continue;
           }
@@ -301,7 +325,7 @@ async function searchWithRipgrep(
         count: matches.length,
         truncated,
         truncatedReason,
-        filesScanned: matches.length,
+        filesScanned: searchedFiles ?? matches.length,
         elapsedMs: Date.now() - start,
         engine: "rg",
       });
@@ -340,7 +364,7 @@ export async function runGuardedFileSearch(
   return searchWithWalk({ ...options, searchPath }, deadline, scope);
 }
 
-async function searchWithWalk(
+export async function searchWithWalk(
   options: FileSearchOptions,
   deadlineMs: number,
   scope: PaprScopeAssessment,
@@ -366,8 +390,63 @@ async function searchWithWalk(
         )
       : null;
 
+  const skipped: SearchSkippedFile[] = [];
+  let skippedCount = 0;
+  function noteSkip(file: string, reason: SearchSkippedFile["reason"], sizeBytes?: number): void {
+    skippedCount += 1;
+    if (skipped.length < SEARCH_MAX_SKIPPED_LISTED) {
+      skipped.push({ file, reason, ...(sizeBytes !== undefined ? { sizeBytes } : {}) });
+    }
+  }
+
+  /** True when scanning should stop (deadline hit or maxResults reached). */
+  function checkLine(filePath: string, line: string, lineNo: number): boolean {
+    if (Date.now() >= deadlineMs) {
+      truncated = true;
+      truncatedReason = truncatedReason ?? "timeout";
+      return true;
+    }
+    const match = line.match(regex);
+    if (!match) {
+      return false;
+    }
+    matches.push({ file: filePath, line: lineNo, content: line.trim(), match: match[0] });
+    if (matches.length >= options.maxResults) {
+      truncated = true;
+      truncatedReason = truncatedReason ?? "max_results";
+      return true;
+    }
+    return false;
+  }
+
+  async function isBinary(filePath: string): Promise<boolean> {
+    const handle = await fs.open(filePath, "r");
+    try {
+      const buf = Buffer.alloc(4096);
+      const { bytesRead } = await handle.read(buf, 0, 4096, 0);
+      return buf.subarray(0, bytesRead).includes(0);
+    } finally {
+      await handle.close();
+    }
+  }
+
   async function searchInFile(filePath: string): Promise<void> {
     if (truncated || Date.now() >= deadlineMs) {
+      return;
+    }
+    let size: number;
+    try {
+      const stat = await fs.stat(filePath);
+      if (!stat.isFile()) {
+        return;
+      }
+      size = stat.size;
+    } catch {
+      noteSkip(filePath, "unreadable");
+      return;
+    }
+    if (size > SEARCH_MAX_FILE_BYTES) {
+      noteSkip(filePath, "too_large", size);
       return;
     }
     filesScanned += 1;
@@ -378,36 +457,40 @@ async function searchWithWalk(
     }
 
     try {
-      const stat = await fs.stat(filePath);
-      if (!stat.isFile() || stat.size > SEARCH_MAX_FILE_BYTES) {
-        return;
-      }
-      const content = await fs.readFile(filePath, "utf8");
-      const lines = content.split("\n");
-      for (let i = 0; i < lines.length; i++) {
-        if (Date.now() >= deadlineMs) {
-          truncated = true;
-          truncatedReason = truncatedReason ?? "timeout";
+      if (size <= SEARCH_STREAM_THRESHOLD_BYTES) {
+        const content = await fs.readFile(filePath, "utf8");
+        if (content.slice(0, 4096).includes("\0")) {
+          filesScanned -= 1; // like rg: binary files are not text-searched (not counted, not an error)
           return;
         }
-        const line = lines[i];
-        const match = line.match(regex);
-        if (match) {
-          matches.push({
-            file: filePath,
-            line: i + 1,
-            content: line.trim(),
-            match: match[0],
-          });
-          if (matches.length >= options.maxResults) {
-            truncated = true;
-            truncatedReason = truncatedReason ?? "max_results";
+        const lines = content.split("\n");
+        for (let i = 0; i < lines.length; i++) {
+          if (checkLine(filePath, lines[i], i + 1)) {
             return;
           }
         }
+        return;
+      }
+      if (await isBinary(filePath)) {
+        filesScanned -= 1;
+        return;
+      }
+      const stream = createReadStream(filePath, { encoding: "utf8" });
+      const rl = readline.createInterface({ input: stream, crlfDelay: Infinity });
+      let lineNo = 0;
+      try {
+        for await (const line of rl) {
+          lineNo += 1;
+          if (checkLine(filePath, line, lineNo)) {
+            break;
+          }
+        }
+      } finally {
+        rl.close();
+        stream.destroy();
       }
     } catch {
-      // unreadable file
+      noteSkip(filePath, "unreadable");
     }
   }
 
@@ -464,6 +547,17 @@ async function searchWithWalk(
     elapsedMs: Date.now() - start,
     engine: "walk",
     scopedFrom: scope.autoScoped ? options.searchPath : undefined,
-    hint: scope.hint,
+    hint: skippedNote(scope.hint, skippedCount),
+    ...(skippedCount > 0 ? { skipped, skippedCount } : {}),
   };
+}
+
+function skippedNote(hint: string | undefined, skippedCount: number): string | undefined {
+  if (skippedCount === 0) {
+    return hint;
+  }
+  const note =
+    `${skippedCount} file(s) were NOT searched (too large or unreadable; see "skipped"). ` +
+    `Zero matches does not cover them. Use bash grep/rg on those files, or read_file with offset/limit.`;
+  return hint ? `${hint} ${note}` : note;
 }
