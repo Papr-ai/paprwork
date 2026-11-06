@@ -17,6 +17,14 @@ if ((process.env.PAPR_PROFILE || "").trim().toLowerCase() === "dev") {
 require("dotenv").config({ path: require("path").join(__dirname, "../../.env.local") });
 require("dotenv").config({ path: require("path").join(__dirname, "../../.env") });
 
+// GUI launches (Finder/Dock) get launchd's bare PATH, hiding Homebrew tools (rg, gh) from the
+// gateway and every child it spawns. Repair it before anything is spawned.
+try {
+  const userPath = require("./userPath.cjs");
+  userPath.ensureUserPath();
+  userPath.mergeLoginShellPath().catch(() => {});
+} catch {}
+
 const { app, BrowserWindow, Menu, shell, dialog, ipcMain, powerMonitor, nativeTheme, session } = require("electron");
 const { spawn, execSync } = require("child_process");
 const path = require("path");

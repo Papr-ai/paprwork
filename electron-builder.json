@@ -26,6 +26,7 @@
     "src/electron/preload.cjs",
     "src/electron/geolocationPermission.cjs",
     "src/electron/webviewSessionCap.cjs",
+    "src/electron/userPath.cjs",
     "src/electron/ipc/**/*.cjs",
     "src/resources/**/*",
     "node_modules/playwright/**/*",
