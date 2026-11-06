@@ -103,7 +103,7 @@ export const MEASURED_CORE_TOOL_IDS: readonly string[] = [
   "connect_mcp",
   // Hand-placed: Pen pings teammates proactively when a decision creates work for
   // them. Deferred, it would never be offered unprompted.
-  "mention_person", "notify_people",
+  "mention_person", "notify_people", "follow_up_mention",
 ];
 
 /** Discovery and dispatch. Never deferred, or deferred tools are unreachable. */

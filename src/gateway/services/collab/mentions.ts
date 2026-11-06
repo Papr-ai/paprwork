@@ -26,7 +26,7 @@ export interface MentionItem {
   id: string; fromUserId: string; fromName: string; toUserId: string; toName: string; text: string;
   context: MentionContext; action: MentionAction | null; status: "open" | "done" | "dismissed";
   reply: { text: string; at: string } | null; createdAt: string; notified?: boolean;
-  progress?: "asked" | "in_progress" | "done" | "cant" | "closed";
+  progress?: "asked" | "in_progress" | "needs_reply" | "done" | "cant" | "closed";
   thread?: Array<{ by: "from" | "to"; text: string; at: string }>; nudgedAt?: string | null; updatedAt?: string;
   /** When they said they'd have it ("Thursday morning" → ISO). Both sides track it. */
   promisedAt?: string | null;
@@ -89,11 +89,13 @@ export const listMentions = (box: "inbox" | "sent" = "inbox", status: string | n
   call<{ mentions: MentionItem[] }>(`/mentions?box=${box}${status ? `&status=${status}` : "&status="}`).then((r) => r.mentions);
 
 /** Answer a mention: send the reply (optional) and close it. Updates the card and clears the notice. */
-export async function answerMention(itemId: string, status: "open" | "done" | "dismissed", reply?: string): Promise<MentionItem> {
+export async function answerMention(
+  itemId: string, status: "open" | "done" | "dismissed", reply?: string, needsReply = false,
+): Promise<MentionItem> {
   // "I'll have it Thursday morning" → the date both sides track. Read here, in the replier's own time zone.
   const promised = status === "open" && reply ? parsePromise(reply) : null;
   const out = await call<{ mention: MentionItem }>(`/mentions/${encodeURIComponent(itemId)}/resolve`, "POST",
-    { status, reply, ...(promised ? { promisedAt: promised.toISOString() } : {}) });
+    { status, reply, ...(promised ? { promisedAt: promised.toISOString() } : {}), ...(needsReply && status === "open" ? { needsReply: true } : {}) });
   // "I'm on it" keeps it open: it stays on Focus (In progress) until you mark it done.
   if (status !== "open") { tryResolve(mentionNoticeKey(itemId)); tryResolve(`mention.due:${itemId}`); }
   await updateCard(itemId, { status: out.mention.status, ...(reply ? { sentReply: reply } : {}),
@@ -266,7 +268,7 @@ async function receiveMention(e: CollabEvent): Promise<void> {
 }
 
 async function receiveReply(e: CollabEvent): Promise<void> {
-  const d = (e.detail ?? {}) as { fromName?: string; text?: string; status?: string; context?: MentionContext; action?: MentionAction | null; promisedAt?: string | null };
+  const d = (e.detail ?? {}) as { fromName?: string; text?: string; status?: string; progress?: string; context?: MentionContext; action?: MentionAction | null; promisedAt?: string | null };
   const who = d.fromName || "Someone";
   const first = who.split(" ")[0];
   const what = d.action?.title ?? "what you asked";
@@ -282,6 +284,7 @@ async function receiveReply(e: CollabEvent): Promise<void> {
   const at = `@${who.split(" ").length > 1 ? who : first}`;
   const content = d.status === "done" ? `${at} **finished** · ${what}${said}`
     : d.status === "dismissed" ? `${at} **can't take it** · ${what}${said}\n\nAsk someone else, or do it here?`
+    : d.progress === "needs_reply" ? `${at} **needs your reply** · ${what}${said}\n\nAnswer them here and I'll send it.`
     : `${at} **is on it**${by} · ${what}${said}`;
   if (local && chatId) {
     const msg: StoredMessage = { id: `msg-${uuidv4()}`, chat_id: chatId, role: "assistant", sync_status: "local", timestamp: new Date().toISOString(), content };
@@ -290,6 +293,15 @@ async function receiveReply(e: CollabEvent): Promise<void> {
   }
   if (e.requestId) broadcast({ type: "collab:mention", data: { itemId: e.requestId } });
   const owner = local && chatId ? { kind: "chat" as const, id: chatId, name: local.title } : { kind: "account" as const, id: "people", name: "People" };
+  if (d.progress === "needs_reply") {
+    // Their move, not a status: it sits on your Focus until you answer (the server clears it when you reply).
+    tryNotify({
+      key: `mention.needs_reply:${e.requestId ?? e.id}`, kind: "mention.needs_reply", type: "event", level: "priority",
+      title: `${first} needs your reply: ${lowerFirst(what)}`, body: d.text || undefined,
+      source: { type: "platform", id: "people", name: "People" }, owner, actions: [{ label: "Reply", intent: "open" }],
+    });
+    return;
+  }
   if (!turn) return; // "in progress" is status, not a notice: it shows under Waiting on and in the chat
   tryNotify({
     key: `mention.done:${e.requestId ?? e.id}`, kind: "mention.done", type: "event", level: "priority",
