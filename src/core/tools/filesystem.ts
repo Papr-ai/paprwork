@@ -9,6 +9,8 @@
  * - File info (stats, permissions)
  */
 
+import { createReadStream } from "fs";
+import readline from "readline";
 import fs from "fs/promises";
 import path from "path";
 import { z } from "zod";
@@ -77,6 +79,61 @@ export interface ReadFileOutput {
   truncated?: boolean;
 }
 
+/**
+ * Stream a line range out of a file of any size. Memory stays flat and the
+ * returned text never exceeds maxBytes, so range reads cost the same context
+ * as reading a small file. Stops reading as soon as the range or budget is hit.
+ */
+async function readLineRange(
+  filePath: string,
+  offset: number,
+  limit: number | undefined,
+  maxBytes: number,
+): Promise<string> {
+  const stream = createReadStream(filePath, { encoding: "utf8" });
+  const rl = readline.createInterface({ input: stream, crlfDelay: Infinity });
+  const out: string[] = [];
+  let lineNo = 0;
+  let bytes = 0;
+  let hitBudget = false;
+  let more = false;
+  try {
+    for await (const line of rl) {
+      lineNo += 1;
+      if (lineNo < offset) continue;
+      if (limit !== undefined && out.length >= limit) {
+        more = true;
+        break;
+      }
+      const room = maxBytes - bytes;
+      if (room <= 0) {
+        hitBudget = more = true;
+        break;
+      }
+      const b = Buffer.byteLength(line) + 1;
+      if (b > room) {
+        out.push(Buffer.from(line).subarray(0, room).toString("utf8"));
+        bytes = maxBytes;
+        hitBudget = more = true;
+        break;
+      }
+      out.push(line);
+      bytes += b;
+    }
+  } finally {
+    rl.close();
+    stream.destroy();
+  }
+  const last = offset + out.length - 1;
+  const note = hitBudget
+    ? ` Output capped at ${Math.round(maxBytes / 1024)}KB; continue with offset=${last + 1}.`
+    : more
+      ? ` More lines follow; continue with offset=${last + 1}.`
+      : " End of file.";
+  const range = out.length ? `${offset}-${last}` : `${offset}-(none)`;
+  return `${out.join("\n")}\n\n[Read lines ${range}.${note}]`;
+}
+
 async function readFile(
   input: ReadFileInput,
 ): Promise<ToolResult<ReadFileOutput>> {
@@ -98,6 +155,7 @@ async function readFile(
     // Read file (partial when oversized and no line-based slice requested)
     let content: string | Buffer;
     let truncated = false;
+    let rangeRead = false;
     if (
       stats.size > maxSize &&
       offset === undefined &&
@@ -115,6 +173,9 @@ async function readFile(
       } finally {
         await handle.close();
       }
+    } else if (stats.size > maxSize && encoding === "utf8") {
+      content = await readLineRange(filePath, offset ?? 1, limit, maxSize);
+      rangeRead = true;
     } else if (stats.size > maxSize) {
       const sizeKB = Math.round(stats.size / 1024);
       const maxKB = Math.round(maxSize / 1024);
@@ -128,7 +189,7 @@ async function readFile(
     }
 
     // Apply line-based offset/limit if requested
-    if (offset !== undefined || limit !== undefined) {
+    if (!rangeRead && (offset !== undefined || limit !== undefined)) {
       const lines = content.toString().split("\n");
       const startLine = (offset ?? 1) - 1; // Convert to 0-indexed
       const endLine = limit !== undefined ? startLine + limit : undefined;
