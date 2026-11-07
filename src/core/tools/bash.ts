@@ -250,6 +250,15 @@ import {
   detectNamespaceGitTrapCommand,
 } from "../utils/namespaceGitTrapGuard.js";
 import { isPaprAppsOrJobsSearchPath } from "../utils/paprAgentPaths.js";
+import {
+  buildGateRequest,
+  filterCandidates,
+  formatPointerBlock,
+  gateCandidates,
+  grepHitFiles,
+  isRepoWideSearch,
+  type HookCandidate,
+} from "./grepHook.js";
 import { getShellCommand } from "../utils/platform.js";
 import { classifyChildProcessError, isSpawnResourceError } from "../utils/childProcessErrors.js";
 import { notifySpawnResourceError } from "../utils/spawnResourceErrorHandler.js";
@@ -370,7 +379,8 @@ function detectPaprGrepCommand(command: string): { pattern: string; path: string
   const pattern = match[1];
   const grepPath = match[2].trim();
 
-  if (isPaprAppsOrJobsSearchPath(grepPath)) {
+  // Only repo-wide searches get pointers; grep inside one file or as a pipe filter is left alone.
+  if (isPaprAppsOrJobsSearchPath(grepPath) && isRepoWideSearch(command)) {
     return { pattern, path: grepPath };
   }
 
@@ -416,7 +426,7 @@ export function buildHybridMemorySearchQuery(
 async function searchPaprMemoryForCode(
   query: string,
   grepPath: string,
-): Promise<string | null> {
+): Promise<HookCandidate[] | null> {
   try {
     // Check if PAPR_API_KEY is available
     const { getApiKey } = await import("../../gateway/utils/keyResolver.js");
@@ -472,22 +482,15 @@ async function searchPaprMemoryForCode(
       return null;
     }
     
-    let output = '=== Memory Search Results (Semantic) ===\n';
-    output += `Found ${response.data.memories.length} relevant code files:\n\n`;
-    
-    for (const memory of response.data.memories) {
+    return response.data.memories.map((memory, i) => {
       const metadata = memory.customMetadata as Record<string, string> | undefined;
-      const filePath = metadata?.file_path || 'unknown';
-      const projectId = metadata?.project_id || 'unknown';
-      const language = metadata?.language || 'unknown';
-      
-      output += `📄 ${filePath}\n`;
-      output += `   Project: ${projectId}\n`;
-      output += `   Language: ${language}\n`;
-      output += `   Match: ${memory.content.substring(0, 200)}...\n\n`;
-    }
-    
-    return output;
+      return {
+        id: `c${i + 1}`,
+        path: metadata?.file_path || "unknown",
+        why: `matches "${query.slice(0, 60)}"`,
+        snippet: String(memory.content ?? "").slice(0, 800),
+      };
+    });
     
   } catch (error) {
     // Papr returns HTTP 404 "No relevant items found" for zero hits — that's an empty result, not a failure.
@@ -737,7 +740,7 @@ async function executeBashCommandInner(
     
     // Check if this is a grep command in PAPR folders
     const grepInfo = detectPaprGrepCommand(command);
-    let memoryPromise: Promise<string | null> | null = null;
+    let memoryPromise: Promise<HookCandidate[] | null> | null = null;
     
     if (grepInfo) {
       const memoryQuery = buildHybridMemorySearchQuery(
@@ -867,12 +870,12 @@ async function executeBashCommandInner(
     }
     
     // If we started a memory search, wait for it now
-    let memoryResults: string | null = null;
+    let memoryResults: HookCandidate[] | null = null;
     if (grepInfo && memoryPromise) {
       try {
         memoryResults = await memoryPromise;
         if (memoryResults) {
-          console.log(`[Bash Tool] Memory search returned ${memoryResults.split('\n').length} lines`);
+          console.log(`[Bash Tool] Memory search returned ${memoryResults.length} candidates`);
         }
       } catch (error) {
         console.warn('[Bash Tool] Memory search error:', error);
@@ -886,11 +889,31 @@ async function executeBashCommandInner(
     let sanitizedStdout = sanitizeError(stdout || "", apiKeys);
     const sanitizedStderr = sanitizeError(stderr || "", apiKeys);
     
-    // Combine memory results with grep results if available
-    if (memoryResults && sanitizedStdout) {
-      sanitizedStdout = `${memoryResults}\n\n=== Grep Results (Exact Match) ===\n${sanitizedStdout}`;
-    } else if (memoryResults) {
-      sanitizedStdout = `${memoryResults}\n\n=== Grep Results ===\nNo exact matches found.\n`;
+    // Grep output stays exactly as grep printed it. Pointers to code grep did not show are appended
+    // only when the Jev gate is confident; when Jev is unavailable nothing is added.
+    if (memoryResults && memoryResults.length > 0 && grepInfo) {
+      try {
+        const hits = grepHitFiles(sanitizedStdout);
+        const cands = filterCandidates(memoryResults, hits);
+        if (cands.length > 0) {
+          const intent = buildHybridMemorySearchQuery(grepInfo.pattern, grepInfo.path);
+          const { evaluateJevWithAuth } = await import("./jevAuth.js");
+          const { state, questions } = buildGateRequest(intent, cands);
+          let probs: Record<string, number> | null = null;
+          try {
+            const r = await evaluateJevWithAuth({ state, questions, timeoutMs: 8_000 });
+            probs = Object.fromEntries(
+              Object.entries(r.answers).map(([k, v]) => [k, Number((v as { noul?: number })?.noul ?? 0)]),
+            );
+          } catch {
+            probs = null;
+          }
+          const block = formatPointerBlock(gateCandidates(cands, probs), hits);
+          if (block) sanitizedStdout = `${sanitizedStdout}${sanitizedStdout.endsWith("\n") ? "" : "\n"}${block}`;
+        }
+      } catch (error) {
+        console.warn("[Bash Tool] Grep hook failed:", error);
+      }
     }
 
     // Wrap stdout from curl/wget/python - external content may contain prompt injections
