@@ -954,6 +954,16 @@ async function executeBashCommandInner(
       sanitizedStdout += formatSqlitePathWarningBlock(sqliteWarnings);
     }
 
+    // papr-code-harness v1.2: note when the agent repeats the same command with the same output
+    try {
+      const { checkLoop } = await import("./loopBreaker.js");
+      const { getCurrentChatId, getCurrentDelegationJobId } = await import("./context.js");
+      const sid = getCurrentDelegationJobId() ?? getCurrentChatId() ?? "";
+      sanitizedStdout += checkLoop(sid, input.command, `${stdout ?? ""}\u0000${stderr ?? ""}`);
+    } catch {
+      // best-effort only
+    }
+
     const appDbGuidance = buildAppDbBashGuidance(command);
     if (appDbGuidance) {
       sanitizedStdout += formatAppDbGuidanceBlock(appDbGuidance);
