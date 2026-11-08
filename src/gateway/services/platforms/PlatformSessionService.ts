@@ -616,7 +616,28 @@ export class PlatformSessionService {
       return null;
     }
 
-    await this.persistChromeSession(platformId, config, values, cookies);
+    let cookiesToStore = cookies;
+    if (config.isCustom) {
+      // Custom sites declare no required cookies, so `cookiesComplete` is always true.
+      // Without these guards we mark the site connected before the user has signed in
+      // (or when the tab/cookies could not be read), and getStatus() then reverts it to
+      // "disconnected" because cookies.json is empty.
+      if (!urlMatches) {
+        return null;
+      }
+      const domain = (config.cookieDomain ?? "").replace(/^\./, "");
+      cookiesToStore = domain
+        ? cookies.filter((c) => {
+            const d = c.domain.replace(/^\./, "");
+            return d === domain || d.endsWith(`.${domain}`) || domain.endsWith(`.${d}`);
+          })
+        : cookies;
+      if (cookiesToStore.length === 0) {
+        return null;
+      }
+    }
+
+    await this.persistChromeSession(platformId, config, values, cookiesToStore);
 
     this.stopChromeCookiePolling(platformId);
     const state = await this.markConnected(platformId, config);
