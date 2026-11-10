@@ -413,17 +413,23 @@ export function buildHybridMemorySearchQuery(
 /**
  * Search PAPR Memory for code matching the hybrid query (semantic, not literal grep pattern).
  */
+export interface MemoryCodeSearch {
+  block: string | null;
+  hits: Array<{ path: string; score: number }>;
+}
+
 async function searchPaprMemoryForCode(
   query: string,
   grepPath: string,
-): Promise<string | null> {
+): Promise<MemoryCodeSearch> {
+  const none: MemoryCodeSearch = { block: null, hits: [] };
   try {
     // Check if PAPR_API_KEY is available
     const { getApiKey } = await import("../../gateway/utils/keyResolver.js");
     const paprKey = await getApiKey('PAPR_API_KEY');
     
     if (!paprKey) {
-      return null; // No PAPR key, skip memory search
+      return none; // No PAPR key: code pointers still run without memory
     }
     
     // Import Papr client
@@ -469,35 +475,16 @@ async function searchPaprMemoryForCode(
     
     // Format results - response.data.memories
     if (!response?.data?.memories || response.data.memories.length === 0) {
-      return null;
+      return none;
     }
     
-    // papr-code-harness v1.1: re-rank the memory hits with the project's code graph (definitions + import links)
-    // and lead with ≤3 line-ranged pointers. Falls back silently to the plain list below.
-    let pointers = "";
-    try {
-      const { fusedPointers } = await import("./codeFusion.js");
-      const { getPaprAppsRoot, getPaprJobsRoot } = await import("../utils/paprRoot.js");
-      const pathMod = await import("path");
-      const fsMod = await import("fs");
-      if (projectId) {
-        const root = [getPaprAppsRoot(), getPaprJobsRoot()]
-          .map((r) => pathMod.join(r, projectId))
-          .find((r) => fsMod.existsSync(r));
-        if (root) {
-          const hits = response.data.memories.map((m) => {
-            const md = m.customMetadata as Record<string, string> | undefined;
-            return { path: md?.file_path ?? "", score: typeof m.score === "number" ? m.score : 0 };
-          });
-          pointers = await fusedPointers(root, hits, query);
-        }
-      }
-    } catch (fuseError) {
-      console.warn("[Bash Tool] Code fusion skipped:", (fuseError as Error)?.message ?? fuseError);
-    }
+    // papr-code-search v2 ranks these hits (with the code graph and link sources) after grep finishes.
+    const hits = response.data.memories.map((m) => {
+      const md = m.customMetadata as Record<string, string> | undefined;
+      return { path: md?.file_path ?? "", score: typeof m.score === "number" ? m.score : 0 };
+    });
 
-    let output = pointers ? `${pointers}\n` : "";
-    output += '=== Memory Search Results (Semantic) ===\n';
+    let output = '=== Memory Search Results (Semantic) ===\n';
     output += `Found ${response.data.memories.length} relevant code files:\n\n`;
     
     for (const memory of response.data.memories) {
@@ -512,16 +499,16 @@ async function searchPaprMemoryForCode(
       output += `   Match: ${memory.content.substring(0, 200)}...\n\n`;
     }
     
-    return output;
+    return { block: output, hits };
     
   } catch (error) {
     // Papr returns HTTP 404 "No relevant items found" for zero hits — that's an empty result, not a failure.
     const err = error as { status?: number; message?: string };
     if (err?.status === 404 && /no relevant items/i.test(err.message ?? "")) {
-      return null;
+      return none;
     }
     console.warn('[Bash Tool] Memory search failed:', err?.message ?? error);
-    return null; // Fail gracefully
+    return none; // Fail gracefully
   }
 }
 
@@ -762,7 +749,7 @@ async function executeBashCommandInner(
     
     // Check if this is a grep command in PAPR folders
     const grepInfo = detectPaprGrepCommand(command);
-    let memoryPromise: Promise<string | null> | null = null;
+    let memoryPromise: Promise<MemoryCodeSearch> | null = null;
     
     if (grepInfo) {
       const memoryQuery = buildHybridMemorySearchQuery(
@@ -893,9 +880,10 @@ async function executeBashCommandInner(
     
     // If we started a memory search, wait for it now
     let memoryResults: string | null = null;
+    let memoryHits: MemoryCodeSearch["hits"] = [];
     if (grepInfo && memoryPromise) {
       try {
-        memoryResults = await memoryPromise;
+        ({ block: memoryResults, hits: memoryHits } = await memoryPromise);
         if (memoryResults) {
           console.log(`[Bash Tool] Memory search returned ${memoryResults.split('\n').length} lines`);
         }
@@ -911,6 +899,15 @@ async function executeBashCommandInner(
     let sanitizedStdout = sanitizeError(stdout || "", apiKeys);
     const sanitizedStderr = sanitizeError(stderr || "", apiKeys);
     
+    // papr-code-search v2: ≤5 ranked pointers (papr-embed + code graph + bm25 + command/load/table/entity links).
+    // Runs even when memory returned nothing; "" on any failure.
+    if (grepInfo) {
+      const { codePointersForGrep } = await import("./codeSearchV2.js");
+      // Lexical/link sources use the grep pattern, not the boilerplate memory query ("Find Papr mini-apps code…").
+      const pointers = await codePointersForGrep(grepInfo.path, command, grepInfo.pattern, grepInfo.pattern, memoryHits, stdout || "");
+      if (pointers) memoryResults = memoryResults ? `${pointers}\n${memoryResults}` : pointers;
+    }
+
     // Combine memory results with grep results if available
     if (memoryResults && sanitizedStdout) {
       sanitizedStdout = `${memoryResults}\n\n=== Grep Results (Exact Match) ===\n${sanitizedStdout}`;
