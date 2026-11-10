@@ -3,6 +3,7 @@
  */
 
 import { create } from "zustand";
+import { useTabStore } from "./tabStore";
 
 export type ArtifactType = "document" | "app" | "file";
 
@@ -110,10 +111,19 @@ export const useArtifactsStore = create<ArtifactsState>((set, get) => ({
       ),
     })),
 
-  removeArtifact: (id) =>
+  removeArtifact: (id) => {
+    // Close any open tab for this artifact so a chat merged with it is
+    // unmerged instead of stuck on "Document not found".
+    const tabStore = useTabStore.getState();
+    for (const tab of tabStore.tabs.filter(
+      (t) => t.entityId === id && (t.type === "document" || t.type === "app"),
+    )) {
+      useTabStore.getState().closeTab(tab.id);
+    }
     set((state) => ({
       artifacts: state.artifacts.filter((a) => a.id !== id),
-    })),
+    }));
+  },
 
   setLoading: (loading) => set({ loading }),
 
