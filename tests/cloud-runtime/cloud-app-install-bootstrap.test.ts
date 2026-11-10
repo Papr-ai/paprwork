@@ -220,6 +220,53 @@ describe("cloud app install bootstrap", () => {
     },
   );
 
+  it.skipIf(!canUseBetterSqlite)(
+    "shared_primary never runs migrations against the team database",
+    async () => {
+      const bootstrap = await bootstrapInstalledAppDatabases(appId, {
+        installDbPolicy: "shared_primary",
+      });
+
+      expect(syncTursoAfterAppInstall).toHaveBeenCalledTimes(1);
+      expect(bootstrap.sharedDatabase).toBe(true);
+      expect(bootstrap.linkedDbs[0]?.migrationsApplied).toEqual([]);
+      const dbPath = path.join(
+        paprHome,
+        "data",
+        "databases",
+        "gtm-foundations",
+        "data.db",
+      );
+      if (existsSync(dbPath)) {
+        const db = new Database(dbPath, { readonly: true });
+        const row = db
+          .prepare("SELECT name FROM sqlite_master WHERE name = 'audits'")
+          .get();
+        db.close();
+        expect(row).toBeUndefined();
+      }
+    },
+  );
+
+  it.skipIf(!canUseBetterSqlite)(
+    "shared_primary reports a failed pull as an error, not a migration task",
+    async () => {
+      const bootstrap = await bootstrapInstalledAppDatabases(appId, {
+        installDbPolicy: "shared_primary",
+      });
+
+      expect(bootstrap.ready).toBe(false);
+      expect(bootstrap.errors.join(" ")).toMatch(/team's shared database/);
+      const message = buildCloudInstallAgentSetupMessage({
+        appTitle: "GTM Foundations",
+        appId,
+        bootstrap,
+      });
+      expect(message).toContain("Do NOT apply migrations");
+      expect(message).not.toContain("Apply pending migrations");
+    },
+  );
+
   it("builds agent setup message with bootstrap details", () => {
     const message = buildCloudInstallAgentSetupMessage({
       appTitle: "GTM Foundations",
