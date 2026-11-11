@@ -1,6 +1,6 @@
 {
   "name": "paprwork",
-  "version": "2.7.2",
+  "version": "2.7.8",
   "description": "Papr Work — build software that runs your work, and gets smarter the more you use it",
   "main": "./src/electron/main.cjs",
   "type": "module",
