@@ -136,6 +136,13 @@ const MODEL_CAPABILITIES: Record<string, ModelCapabilities> = {
     cost: "expensive",
     specialties: ["reasoning", "agentic", "coding", "long-horizon"],
   },
+  "claude-fable-5-2": {
+    reasoningLevel: "advanced",
+    contextWindow: 1000000,
+    speed: "slow",
+    cost: "expensive",
+    specialties: ["reasoning", "agentic", "long-horizon", "coding"],
+  },
   "claude-fable-5-1": {
     reasoningLevel: "advanced",
     contextWindow: 1000000,
@@ -386,8 +393,8 @@ export function getUpgradeModelForTask(
       general: "gpt-5.3-codex",
     },
     anthropic: {
-      reasoning: "claude-fable-5-1",
-      coding: "claude-fable-5-1",
+      reasoning: "claude-fable-5-2",
+      coding: "claude-fable-5-2",
       writing: "claude-sonnet-5-5",
       general: "claude-sonnet-5-5",
     },

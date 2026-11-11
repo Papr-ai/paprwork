@@ -23,13 +23,14 @@ describe("modelPicker", () => {
     ]);
   });
 
-  test("default list includes Sonnet 5.5, Opus 5.5, Fable 5.1, and cloud models", () => {
+  test("default list includes Sonnet 5.5, Opus 5.5, Fable 5.2, and cloud models", () => {
     expect(PICKER_DEFAULT_MODEL_IDS).toHaveLength(12);
     expect(PICKER_DEFAULT_MODEL_IDS[0]).toBe("auto");
     expect(PICKER_DEFAULT_MODEL_IDS).toContain("claude-sonnet-5-5");
     expect(PICKER_DEFAULT_MODEL_IDS).not.toContain("claude-sonnet-5");
     expect(PICKER_DEFAULT_MODEL_IDS).toContain("claude-opus-5-5");
-    expect(PICKER_DEFAULT_MODEL_IDS).toContain("claude-fable-5-1");
+    expect(PICKER_DEFAULT_MODEL_IDS).toContain("claude-fable-5-2");
+    expect(PICKER_DEFAULT_MODEL_IDS).not.toContain("claude-fable-5-1");
     expect(PICKER_DEFAULT_MODEL_IDS).not.toContain("claude-sonnet-4-6");
     expect(PICKER_DEFAULT_MODEL_IDS).not.toContain("claude-opus-4-6");
     expect(PICKER_DEFAULT_MODEL_IDS).toContain("gpt-5-6-sol");
@@ -114,10 +115,32 @@ describe("modelPicker", () => {
     ]);
   });
 
-  test("migrates retired Fable 5 picker id to Fable 5.1", () => {
+  test("migrates Fable 5 and 5.1 picker ids to Fable 5.2", () => {
     expect(resolveEnabledPickerModelIds(["claude-fable-5"])).toEqual([
-      "claude-fable-5-1",
+      "claude-fable-5-2",
     ]);
+    expect(resolveEnabledPickerModelIds(["claude-fable-5-1"])).toEqual([
+      "claude-fable-5-2",
+    ]);
+  });
+
+  test("upgrades the pre-Fable-5.2 default list to current defaults", () => {
+    expect(
+      resolveEnabledPickerModelIds([
+        "auto",
+        "claude-sonnet-5-5",
+        "claude-opus-5",
+        "claude-opus-5-5",
+        "claude-fable-5-1",
+        "gpt-5-6-sol",
+        "gpt-6-astra",
+        "glm-5.2",
+        "qwen/qwen3-32b",
+        "gemini-3.5-flash-lite",
+        "gemini-3.8-flash",
+        "gemini-3.1-pro-preview",
+      ]),
+    ).toEqual([...PICKER_DEFAULT_MODEL_IDS]);
   });
 
   test("migrates retired Gemini picker ids to latest Flash defaults", () => {
@@ -208,7 +231,8 @@ describe("modelPicker", () => {
     expect(toggleIds).toContain("claude-sonnet-4-6");
     expect(isPickerDefaultModelId("claude-sonnet-4-6")).toBe(false);
     expect(isPickerDefaultModelId("claude-opus-5-5")).toBe(true);
-    expect(isPickerDefaultModelId("claude-fable-5-1")).toBe(true);
+    expect(isPickerDefaultModelId("claude-fable-5-2")).toBe(true);
+    expect(isPickerDefaultModelId("claude-fable-5-1")).toBe(false);
     expect(isPickerDefaultModelId("claude-sonnet-5-5")).toBe(true);
     expect(isPickerDefaultModelId("claude-sonnet-5")).toBe(false);
     expect(isPickerDefaultModelId("glm-5.2")).toBe(true);
@@ -239,7 +263,7 @@ describe("modelPicker", () => {
       "claude-sonnet-5-5",
       "claude-opus-4-6",
       "claude-opus-5-5",
-      "claude-fable-5-1",
+      "claude-fable-5-2",
       "gpt-5-6-sol",
     ]);
   });
