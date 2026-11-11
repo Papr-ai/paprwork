@@ -437,9 +437,16 @@ export async function pullAppCodeFromRepo(
         continue;
       }
 
+      // The manifest only records bytes both sides provably held. When the
+      // OID cache was stamped ahead of disk (older publishes realigned it to
+      // HEAD without pulling), a local file still equal to the manifest entry
+      // is untouched here: take the web's version instead of reporting a
+      // conflict on a file nobody edited on this computer.
+      const unchangedSinceAgreed = baseOid !== undefined && localOid === baseOid;
       const localUnchanged =
         localContent === undefined ||
-        (lastSyncedOid !== null && localOid === lastSyncedOid);
+        (lastSyncedOid !== null && localOid === lastSyncedOid) ||
+        unchangedSinceAgreed;
 
       if (!localUnchanged && remoteOid && localOid !== remoteOid && filePath === "metadata.json") {
         // metadata.json is rebuilt from this machine's app record on every

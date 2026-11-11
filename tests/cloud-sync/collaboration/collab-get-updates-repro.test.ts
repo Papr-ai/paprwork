@@ -282,3 +282,69 @@ describe("Bug 5 — migration filename collision", () => {
     expect(await read(regMigration("0002_add_notes.sql"))).toContain("INTEGER");
   });
 });
+
+describe("Publisher baseline — accepted merges are not marked synced before they are pulled", () => {
+  const readCache = async () => {
+    const { readOidCache } = await import("../../../src/gateway/services/syncV3/OidCache.js");
+    return (await readOidCache()).apps[APP_ID] ?? {};
+  };
+  const oid = async (c: string) => {
+    const { computeBlobOidForContent } = await import("../../../src/gateway/services/syncV3/computeParentHash.js");
+    return computeBlobOidForContent(c);
+  };
+
+  it("realign after publish keeps the old baseline for a file still waiting to be pulled", async () => {
+    const { realignLocalAppCodeBaseline } = await import(
+      "../../../src/gateway/services/syncV3/appRepoHeadSyncCheck.js"
+    );
+    // A proposal was accepted on the web (index.html), never pulled here.
+    // This desktop publishes app.ts on top of it.
+    await fs.writeFile(appFile("app.ts"), "render(v1) // owner edit");
+    state.commitSha = "sha-2";
+    state.remoteFiles = {
+      ...state.remoteFiles,
+      "index.html": "<div id=app class=merged></div>",
+      "app.ts": "render(v1) // owner edit",
+    };
+
+    const res = await realignLocalAppCodeBaseline(APP_ID);
+
+    expect(res?.unpulledPaths).toEqual(["index.html"]);
+    const cache = await readCache();
+    expect(cache["index.html"]).toBe(await oid("<div id=app></div>"));
+    expect(cache["app.ts"]).toBe(await oid("render(v1) // owner edit"));
+
+    // Next Get updates applies the merge cleanly — no false conflict.
+    const pulled = await pullAppFromCloud(APP_ID, { token: "t", allowRecentSkip: false, preferCloudOverLocal: true });
+    expect(pulled.code.conflictFiles).toEqual([]);
+    expect(await read(appFile("index.html"))).toBe("<div id=app class=merged></div>");
+  });
+
+  it("heals a cache already stamped ahead of disk (pre-fix installs)", async () => {
+    // Old behaviour left the OID cache at a merge this computer never pulled,
+    // while the manifest still records the bytes actually on disk.
+    const { applyAckedBlobOids } = await import("../../../src/gateway/services/syncV3/OidCache.js");
+    await applyAckedBlobOids(APP_ID, [
+      { path: "index.html", blobOid: await oid("<div id=app class=merge-1></div>") },
+    ]);
+    state.commitSha = "sha-3";
+    state.remoteFiles = { ...state.remoteFiles, "index.html": "<div id=app class=merge-2></div>" };
+
+    const pulled = await pullAppFromCloud(APP_ID, { token: "t", allowRecentSkip: false, preferCloudOverLocal: true });
+
+    expect(pulled.code.conflictFiles).toEqual([]);
+    expect(pulled.code.heldForConflicts).toBeFalsy();
+    expect(await read(appFile("index.html"))).toBe("<div id=app class=merge-2></div>");
+  });
+
+  it("a real local edit still conflicts", async () => {
+    await fs.writeFile(appFile("index.html"), "<div id=app data-mine></div>");
+    state.commitSha = "sha-4";
+    state.remoteFiles = { ...state.remoteFiles, "index.html": "<section id=app></section>" };
+
+    const pulled = await pullAppFromCloud(APP_ID, { token: "t", allowRecentSkip: false, preferCloudOverLocal: true });
+
+    expect(pulled.code.conflictFiles).toEqual(["index.html"]);
+    expect(await read(appFile("index.html"))).toBe("<div id=app data-mine></div>");
+  });
+});
