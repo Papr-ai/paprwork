@@ -93,6 +93,27 @@ export function stripDirectDbCredentials(env: Record<string, string>): Record<st
   return out;
 }
 
+/**
+ * Compare a handler against its backend/bundle.json fingerprint.
+ *
+ * Both files come from the same commit of the same repo, so a mismatch means
+ * the bundle is stale — e.g. an accepted proposal changed the handler (proposals
+ * never carry build outputs) and the publisher has not rebuilt yet. It is not a
+ * tamper signal: anyone who can commit the handler can commit bundle.json.
+ * Refusing to run turned every accepted backend change into a broken action
+ * until the publisher's desktop republished, so this only reports staleness.
+ */
+export function checkBundleFingerprint(
+  actionName: string,
+  handlerContent: string,
+  bundle: { actions?: Record<string, { sha256: string }> } | null,
+): { stale: false } | { stale: true; expected: string; actual: string } {
+  const expected = bundle?.actions?.[actionName]?.sha256;
+  if (!expected) return { stale: false };
+  const actual = sha256(handlerContent);
+  return actual === expected ? { stale: false } : { stale: true, expected, actual };
+}
+
 export class CloudAppBackendService {
   async runAction(
     auth: AppRuntimeRouteAuth,
@@ -154,18 +175,13 @@ export class CloudAppBackendService {
         : Promise.resolve({ env: {}, missing: [] } satisfies RuntimeVaultResolveResult),
     ]);
 
-    if (artifacts.bundle) {
-      const expected = artifacts.bundle.actions?.[actionName];
-      if (expected) {
-        const actualHash = sha256(handlerContent);
-        if (actualHash !== expected.sha256) {
-          throw new Error(
-            `Backend handler hash mismatch for ${actionName}. ` +
-              "The synced handler differs from backend/bundle.json — run Sync now in Paprwork " +
-              "(rebuilds bundle.json) or republish the app.",
-          );
-        }
-      }
+    const fingerprint = checkBundleFingerprint(actionName, handlerContent, artifacts.bundle);
+    if (fingerprint.stale) {
+      console.warn(
+        `[CloudAppBackend] ${auth.namespaceId}/${auth.slug}: backend/bundle.json is stale for ` +
+          `${actionName} (bundle ${fingerprint.expected.slice(0, 12)}, handler ${fingerprint.actual.slice(0, 12)}) — ` +
+          "running the committed handler; the next publish rebuilds bundle.json.",
+      );
     }
 
     const { env: vaultEnv, missing } = vaultResult;

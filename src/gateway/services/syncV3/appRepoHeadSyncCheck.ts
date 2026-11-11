@@ -98,17 +98,79 @@ export async function isLocalAppCodeAtRemoteHead(
   return true;
 }
 
-/** After a no-op push or publish, align OID cache + commit cursor with writer HEAD. */
+/**
+ * After a push or publish, align the OID cache + commit cursor with writer HEAD
+ * — but only for files this computer provably has.
+ *
+ * HEAD can hold commits this desktop never pulled (an accepted proposal, a
+ * Maintainer publish, another device). Stamping HEAD's OID onto a path whose
+ * bytes on disk are older told the next pull "you already have this", so the
+ * real update read as a local edit: a false conflict on a file nobody touched,
+ * and Publish (pull first) stopped there for good. Same rule as
+ * reconcileOidCacheWithRemoteHead: never replace a known OID with HEAD's
+ * unless disk matches it.
+ */
 export async function realignLocalAppCodeBaseline(
   appId: string,
-): Promise<{ commitSha: string; pathsReseeded: number } | null> {
+): Promise<{ commitSha: string; pathsReseeded: number; unpulledPaths: string[] } | null> {
   const trimmed = appId.trim();
   if (!trimmed) {
     return null;
   }
   const head = await fetchAppRepoHead(trimmed, { seedOidCache: false });
-  const pathsReseeded = await overwriteOidCacheFromHead(trimmed, head.files);
-  const { writeAppRepoCommitCursor } = await import("./appRepoCommittedFanout.js");
-  await writeAppRepoCommitCursor(trimmed, head.commitSha);
-  return { commitSha: head.commitSha, pathsReseeded };
+  const { plan, unpulledPaths } = await planBaselineFromHead(trimmed, head.files);
+  const pathsReseeded = await overwriteOidCacheFromHead(trimmed, plan);
+  // The cursor says "this computer is at HEAD". Only true when nothing in HEAD
+  // is still waiting to be pulled; otherwise Get updates must still see it.
+  if (unpulledPaths.length === 0) {
+    const { writeAppRepoCommitCursor } = await import("./appRepoCommittedFanout.js");
+    await writeAppRepoCommitCursor(trimmed, head.commitSha);
+  }
+  return { commitSha: head.commitSha, pathsReseeded, unpulledPaths };
+}
+
+/**
+ * New OID cache for an app given writer HEAD. A path takes HEAD's OID only
+ * when the local file has exactly those bytes (or we had no baseline at all
+ * and the file is absent here — nothing to protect). Otherwise the previous
+ * baseline is kept, and the path is reported as not yet pulled.
+ */
+export async function planBaselineFromHead(
+  appId: string,
+  headFiles: ReadonlyArray<{ path: string; blobOid: string }>,
+): Promise<{
+  plan: Array<{ path: string; blobOid: string }>;
+  unpulledPaths: string[];
+}> {
+  const { promises: fs } = await import("node:fs");
+  const { getPaprRoot } = await import("../../../core/utils/paprRoot.js");
+  const { localPathForRepoPath } = await import("./syncDeletes.js");
+  const { computeBlobOidForContent } = await import("./computeParentHash.js");
+  const paprDir = getPaprRoot();
+  const appCache = (await readOidCache()).apps[appId] ?? {};
+  const plan: Array<{ path: string; blobOid: string }> = [];
+  const unpulledPaths: string[] = [];
+  for (const file of headFiles) {
+    const known = appCache[file.path];
+    if (known === file.blobOid || isPlatformGeneratedAppPath(file.path)) {
+      plan.push(file);
+      continue;
+    }
+    let localOid: string | null = null;
+    try {
+      const content = await fs.readFile(localPathForRepoPath(paprDir, appId, file.path), "utf8");
+      localOid = await computeBlobOidForContent(content);
+    } catch {
+      localOid = null;
+    }
+    if (localOid === file.blobOid) {
+      plan.push(file);
+      continue;
+    }
+    // Disk differs from HEAD: keep what we last agreed on (if anything) so the
+    // next pull sees "web changed, local unchanged" and applies it cleanly.
+    if (known !== undefined) plan.push({ path: file.path, blobOid: known });
+    if (localOid !== null || known !== undefined) unpulledPaths.push(file.path);
+  }
+  return { plan, unpulledPaths };
 }
