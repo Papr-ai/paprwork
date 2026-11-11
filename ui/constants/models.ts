@@ -142,6 +142,18 @@ export const CHAT_MODELS: AIModel[] = [
     requiresApiKey: "ANTHROPIC_API_KEY",
   },
   {
+    id: "claude-fable-5-2",
+    name: "Claude Fable 5.2",
+    provider: "anthropic",
+    description:
+      "Most capable Claude — adaptive thinking (always on), 1M context, long-horizon agentic coding and research",
+    group: "Anthropic",
+    supportsThinking: true,
+    defaultThinkingBudget: 0,
+    maxTokens: 128000,
+    requiresApiKey: "ANTHROPIC_API_KEY",
+  },
+  {
     id: "claude-fable-5-1",
     name: "Claude Fable 5.1",
     provider: "anthropic",
