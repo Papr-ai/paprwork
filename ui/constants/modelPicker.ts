@@ -64,8 +64,8 @@ export function migratePickerModelId(modelId: string): string {
   if (modelId === "claude-opus-4-8" || modelId === "claude-opus-5") {
     return "claude-opus-5-5";
   }
-  if (modelId === "claude-fable-5") {
-    return "claude-fable-5-1";
+  if (modelId === "claude-fable-5" || modelId === "claude-fable-5-1") {
+    return "claude-fable-5-2";
   }
   if (modelId === "gemini-3.1-flash-lite") {
     return "gemini-3.5-flash-lite";
@@ -81,6 +81,22 @@ export function migratePickerModelId(modelId: string): string {
 
 /** Flat default list shown to new users (cloud models only). */
 export const PICKER_DEFAULT_MODEL_IDS: readonly string[] = [
+  "auto",
+  "claude-sonnet-5-5",
+  "claude-opus-5",
+  "claude-opus-5-5",
+  "claude-fable-5-2",
+  "gpt-5-6-sol",
+  "gpt-6-astra",
+  "glm-5.2",
+  "qwen/qwen3-32b",
+  "gemini-3.5-flash-lite",
+  "gemini-3.8-flash",
+  "gemini-3.1-pro-preview",
+];
+
+/** Pre-Fable-5.2 defaults — upgrade saved picker preferences on next load. */
+export const PRE_FABLE_52_PICKER_DEFAULT_MODEL_IDS: readonly string[] = [
   "auto",
   "claude-sonnet-5-5",
   "claude-opus-5",
@@ -230,6 +246,10 @@ export function migrateEnabledPickerModelIds(
   enabledIds: string[] | null | undefined,
 ): string[] {
   if (!enabledIds || enabledIds.length === 0) {
+    return [...PICKER_DEFAULT_MODEL_IDS];
+  }
+
+  if (sameModelIdSet(enabledIds, PRE_FABLE_52_PICKER_DEFAULT_MODEL_IDS)) {
     return [...PICKER_DEFAULT_MODEL_IDS];
   }
 

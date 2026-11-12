@@ -107,6 +107,31 @@ export function replicaPushTimeoutMs(pendingOps: number): number {
   const ops = Number.isFinite(pendingOps) && pendingOps > 0 ? pendingOps : 0;
   return Math.min(REPLICA_PUSH_TIMEOUT_MAX_MS, REPLICA_SYNC_TIMEOUT_MS + ops * REPLICA_PUSH_MS_PER_OP);
 }
+/**
+ * Pull time per byte of the remote database and the ceiling (see replicaPullTimeoutMs).
+ * 1 MB/s is deliberately pessimistic: a healthy link downloads several times faster.
+ */
+const REPLICA_PULL_BYTES_PER_MS = 1_000;
+const REPLICA_PULL_TIMEOUT_MAX_MS = 10 * 60_000;
+/** How long one remote size probe is reused for the same path. */
+const REPLICA_REMOTE_SIZE_CACHE_MS = 60_000;
+
+/**
+ * Pull time limit for a remote database of `remoteBytes`.
+ *
+ * A fixed 15s limit meant a replica that was far behind could never catch up: a fresh
+ * download of a 192 MB database got ~80 MB in, the worker was killed, and the next pull
+ * started over under the same 15s (the push side had the same bug, see
+ * replicaPushTimeoutMs). The read path keeps the 15s limit so a SELECT never waits
+ * minutes; only background and explicit pulls get the scaled limit.
+ */
+export function replicaPullTimeoutMs(remoteBytes: number): number {
+  const bytes = Number.isFinite(remoteBytes) && remoteBytes > 0 ? remoteBytes : 0;
+  return Math.min(
+    REPLICA_PULL_TIMEOUT_MAX_MS,
+    REPLICA_SYNC_TIMEOUT_MS + Math.ceil(bytes / REPLICA_PULL_BYTES_PER_MS),
+  );
+}
 const REPLICA_QUERY_TIMEOUT_MS = 30_000;
 const REPLICA_OPERATION_TIMEOUT_MS = 30_000;
 
@@ -177,6 +202,8 @@ export class TursoReplicaService {
   private readonly pathScheduler = new TursoReplicaPathScheduler();
   /** Paths the worker has been asked to open at least once this process (for drain logging). */
   private readonly touchedPaths = new Set<string>();
+  /** Last remote size probe per path, so frequent background pulls don't re-probe. */
+  private readonly remoteSizeCache = new Map<string, { bytes: number; at: number }>();
 
   // ---- writes ---------------------------------------------------------------------------
 
@@ -355,7 +382,7 @@ export class TursoReplicaService {
       const spec = await this.openSpec(localPath, tursoDatabase);
       const marker = readBootstrapPendingMarker(localPath);
       try {
-        const synced = await this.syncWithRecovery(spec, "pull");
+        const synced = await this.syncWithRecovery(spec, "pull", { scalePull: true });
         if (marker) {
           const settled = await this.settleBootstrapMarker(localPath, marker);
           if (!settled) {
@@ -371,7 +398,9 @@ export class TursoReplicaService {
         }
         throw error;
       }
-    });
+      // The pull itself is bounded by replicaPullTimeoutMs (scaled to the remote size);
+      // this outer limit only has to leave room for it plus openSpec and the size probe.
+    }, REPLICA_PULL_TIMEOUT_MAX_MS + REPLICA_OPERATION_TIMEOUT_MS);
   }
 
   /**
@@ -452,6 +481,7 @@ export class TursoReplicaService {
   private async syncWithRecovery(
     spec: OpenSpec,
     op: "pull" | "push" | "pullPush",
+    options?: { scalePull?: boolean },
   ): Promise<boolean> {
     if (shouldSkipSyncForHold(spec.localPath)) {
       // Breaking migration waiting for publish: no uploads (sync engine would drop
@@ -470,6 +500,8 @@ export class TursoReplicaService {
         .stats({ ...spec, timeoutMs: REPLICA_STATUS_TIMEOUT_MS })
         .catch(() => 0);
       timeoutMs = replicaPushTimeoutMs(pendingOps);
+    } else if (options?.scalePull) {
+      timeoutMs = replicaPullTimeoutMs(await this.remoteDatabaseBytes(spec));
     }
     const run = () =>
       withTursoReplicaSyncBusy(spec.localPath, `replica_${op}`, () =>
@@ -504,6 +536,41 @@ export class TursoReplicaService {
       const pulled = await run();
       markTursoReplicaReachable();
       return pulled;
+    }
+  }
+
+  /**
+   * Size of the Turso primary in bytes (page_count × page_size), for the pull limit.
+   * One small query; cached briefly per path. 0 on any failure — the pull then keeps
+   * the 15s floor, which is the old behaviour.
+   */
+  private async remoteDatabaseBytes(spec: OpenSpec): Promise<number> {
+    const key = normalizeDbPath(spec.localPath);
+    const cached = this.remoteSizeCache.get(key);
+    if (cached && Date.now() - cached.at < REPLICA_REMOTE_SIZE_CACHE_MS) {
+      return cached.bytes;
+    }
+    const remote = createClient({ url: spec.tursoUrl, authToken: spec.authToken });
+    try {
+      const result = await withTimeout(
+        remote.execute(
+          "SELECT p.page_count * s.page_size AS bytes FROM pragma_page_count() p, pragma_page_size() s",
+        ),
+        REPLICA_STATUS_TIMEOUT_MS,
+        "replica remote size probe",
+      );
+      const bytes = Number(result.rows[0]?.bytes ?? 0);
+      const safe = Number.isFinite(bytes) && bytes > 0 ? bytes : 0;
+      this.remoteSizeCache.set(key, { bytes: safe, at: Date.now() });
+      return safe;
+    } catch (error) {
+      console.warn(
+        `[TursoReplicaService] Remote size probe failed for ${spec.localPath}; ` +
+          `pull keeps the ${REPLICA_SYNC_TIMEOUT_MS}ms limit: ${(error as Error).message.slice(0, 160)}`,
+      );
+      return 0;
+    } finally {
+      remote.close();
     }
   }
 
@@ -763,10 +830,14 @@ export class TursoReplicaService {
     localPath: string,
     tursoDatabase: string,
   ): Promise<boolean> {
-    return this.withBackgroundPath(localPath, async () => {
-      const spec = await this.openSpec(localPath, tursoDatabase);
-      return this.syncWithRecovery(spec, "pull");
-    });
+    return this.withBackgroundPath(
+      localPath,
+      async () => {
+        const spec = await this.openSpec(localPath, tursoDatabase);
+        return this.syncWithRecovery(spec, "pull", { scalePull: true });
+      },
+      REPLICA_PULL_TIMEOUT_MAX_MS + REPLICA_OPERATION_TIMEOUT_MS,
+    );
   }
 
   // ---- status ---------------------------------------------------------------------------

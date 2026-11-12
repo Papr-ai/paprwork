@@ -13,6 +13,7 @@ import * as path from "node:path";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
 const APP_ID = "22222222-3333-4444-5555-666666666666";
+const buildApp = vi.fn(async () => ({ success: true }));
 const state = { remoteFiles: {} as Record<string, string>, commitSha: "sha-1", published: [] as string[] };
 
 vi.mock("../../../src/gateway/services/syncV3/AppOpsClient.js", async () => {
@@ -57,6 +58,7 @@ vi.mock("../../../src/gateway/services/AppService.js", async () => {
     getAppService: () => ({
       getApp: async () => null,
       updateApp: async () => {},
+      buildApp,
       writeAppFile: async (appId: string, rel: string, content: string) => {
         const full = path.join(getPaprAppsRoot(), appId, rel);
         await fs.mkdir(path.dirname(full), { recursive: true });
@@ -205,3 +207,47 @@ describe("the waiting-update chip clears once the update is in", () => {
     expect(getPendingAppUpdate(APP_ID)?.commitSha).toBe("sha-2");
   });
 });
+
+describe("build output is rebuilt locally, never compared", () => {
+  it("merged source + clashing dist/app.js, db.ts, papr_db.py: no conflict, rebuilds", async () => {
+    publish(
+      { "app.ts": BASE_APP, "dist/app.js": "built-v1\n", "db.ts": "db-1\n", "backend/papr_db.py": "v1\n" },
+      "sha-b1",
+    );
+    await pullAppCodeFromRepo(APP_ID, { token: "t", allowRecentSkip: false });
+    // Both sides edit different parts of app.ts and rebuild their own bundle.
+    await fs.writeFile(appFile("app.ts"), BASE_APP.replace("return 1;", "return 2; // mine"));
+    await fs.writeFile(appFile("dist/app.js"), "built-mine\n");
+    await fs.writeFile(appFile("db.ts"), "db-mine-ids\n");
+    await fs.writeFile(appFile("backend/papr_db.py"), "v2-mine\n");
+    publish(
+      {
+        "app.ts": BASE_APP.replace("return 'a';", "return 'b'; // theirs"),
+        "dist/app.js": "built-theirs\n",
+        "db.ts": "db-theirs-ids\n",
+        "backend/papr_db.py": "v2-theirs\n",
+      },
+      "sha-b2",
+    );
+    buildApp.mockClear();
+
+    const res = await pullAppCodeFromRepo(APP_ID, { token: "t", allowRecentSkip: false });
+
+    expect(res.conflictFiles).toEqual([]);
+    expect(res.mergedFiles).toEqual(["app.ts"]);
+    expect(await read("app.ts")).toContain("// mine");
+    expect(await read("app.ts")).toContain("// theirs");
+    // Local build output untouched by the pull, then rebuilt from merged source.
+    expect(await read("dist/app.js")).toBe("built-mine\n");
+    expect(await read("db.ts")).toBe("db-mine-ids\n");
+    expect(buildApp).toHaveBeenCalledWith(APP_ID);
+  });
+
+  it("a machine with no build yet takes the web's dist", async () => {
+    publish({ "app.ts": BASE_APP, "dist/app.js": "built-web\n" }, "sha-c1");
+    await fs.rm(appFile("dist"), { recursive: true, force: true });
+    await pullAppCodeFromRepo(APP_ID, { token: "t", allowRecentSkip: false });
+    expect(await read("dist/app.js")).toBe("built-web\n");
+  });
+});
+
