@@ -2999,8 +2999,15 @@ async function startGateway(): Promise<void> {
         const {
           bootstrapInstalledAppDatabases,
           buildCloudInstallAgentSetupMessage,
+          resolveInstalledAppDbPolicy,
         } = await import("./services/cloudAppInstallBootstrap.js");
-        const bootstrap = await bootstrapInstalledAppDatabases(appId);
+        // Team copies on shared data pull the publisher's schema; they must
+        // not run migrations against the shared database on retry.
+        const installDbPolicy = await resolveInstalledAppDbPolicy(appId);
+        const bootstrap = await bootstrapInstalledAppDatabases(
+          appId,
+          installDbPolicy ? { installDbPolicy } : undefined,
+        );
         const appService = getAppService();
         const app = await appService.getApp(appId);
         const agentSetupMessage =
