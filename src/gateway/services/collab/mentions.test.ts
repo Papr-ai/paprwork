@@ -70,3 +70,15 @@ describe("mentionSummary", () => {
     expect(s.promisedAt).toBe("2026-11-07T17:00:00Z");
   });
 });
+
+describe("parseInvestigation", () => {
+  it("keeps findings and typed plan steps", async () => {
+    const { parseInvestigation } = await import("./mentions");
+    const r = parseInvestigation('ok {"findings":"audit db is empty","reply":"Checking now.","plan":[{"step":"Query db","kind":"check"},{"step":"Relink audit","kind":"change"},{"step":""}]}');
+    expect(r).toEqual({ reply: "Checking now.", findings: "audit db is empty", plan: [{ step: "Query db", kind: "check" }, { step: "Relink audit", kind: "change" }] });
+  });
+  it("returns null without a reply", async () => {
+    const { parseInvestigation } = await import("./mentions");
+    expect(parseInvestigation(null)).toBeNull();
+  });
+});
