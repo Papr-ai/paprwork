@@ -15,7 +15,11 @@ import { GoalDetail } from "./GoalDetail";
 import { EditThree } from "./EditThree";
 import { WeekReview } from "./WeekReview";
 import { DayNextIcon, DayPrevIcon } from "./icons";
-import { FOCUS_OPEN_GOAL_EVENT, takePendingFocusGoal } from "./focusNav";
+import { FOCUS_OPEN_GOAL_EVENT, FOCUS_OPEN_ASKS_EVENT, takePendingFocusGoal, takePendingFocusAsks } from "./focusNav";
+import { AskedOfYou } from "./AskedOfYou";
+import { WaitingSection } from "./WaitingSection";
+import { onePlan, pickPlan } from "./asks";
+import { pickWaiting, todayKey } from "./brief";
 import "../focusPage.css";
 
 type Sub = { view: "goal" | "edit" | "review"; id?: string; own?: boolean; promote?: string } | null;
@@ -28,7 +32,15 @@ export function FocusPage({ useFeed }: { useFeed: UseFeed }) {
   const d = useFocusData();
   const { feed, run } = useFeed();
   const { ui, toast, undo } = useNeedsUi(run);
-  const [tab, setTab] = useState<"today" | "tasks">("today");
+  const [tab, setTab] = useState<"today" | "tasks">(() => (takePendingFocusAsks() ? "tasks" : "today"));
+  const [scrollTo, setScrollTo] = useState<string | null>(null);
+  const openAsks = useCallback(() => { setSub(null); setTab("tasks"); setScrollTo(null); setTimeout(() => setScrollTo("asked"), 0); }, []);
+  // The Pen count on the rail opens All tasks at Asked of you.
+  useEffect(() => {
+    const on = () => { if (takePendingFocusAsks()) openAsks(); };
+    window.addEventListener(FOCUS_OPEN_ASKS_EVENT, on);
+    return () => window.removeEventListener(FOCUS_OPEN_ASKS_EVENT, on);
+  }, [openAsks]);
   const [sub, setSub] = useState<Sub>(null);
   const [turn, setTurn] = useState<"" | "turn-prev" | "turn-next" | "turn-in">("");
 
@@ -68,6 +80,11 @@ export function FocusPage({ useFeed }: { useFeed: UseFeed }) {
   };
 
   const g = sub?.view === "goal" && sub.id ? d.find(sub.id) : null;
+  // All tasks needs today's brief too: its Waiting On (promises Pen found) and which asks are in the plan.
+  const latest = b.idx === 0 ? b.brief : null;
+  const notes = latest ? pickWaiting(latest.sections).notes : null;
+  const planIds = new Set(onePlan(latest ? pickPlan(latest.sections).priorities : [], feed.asks, latest && !latest.stale ? latest.date : todayKey())
+    .flatMap((p) => (p.kind === "ask" ? [p.ask.id] : [])));
   const canPrev = b.idx < b.dates.length - 1, canNext = b.idx > 0;
   const peek = (i: number) => (b.dates[i] ? fmtDay(b.dates[i]) : "");
 
@@ -83,7 +100,7 @@ export function FocusPage({ useFeed }: { useFeed: UseFeed }) {
           <div className="hseg" role="tablist" aria-label="Focus view">
             <button type="button" role="tab" className={tab === "today" ? "on" : ""} aria-selected={tab === "today"} onClick={() => setTab("today")}>Today</button>
             <button type="button" role="tab" className={tab === "tasks" ? "on" : ""} aria-selected={tab === "tasks"} onClick={() => { setTab("tasks"); void d.reloadTasks(); }}>
-              All tasks <em>{d.tasks?.counts?.open || ""}</em>
+              All tasks <em>{(d.tasks?.counts?.open ?? 0) + feed.asks.length || ""}</em>
             </button>
           </div>
         </div>
@@ -97,9 +114,12 @@ export function FocusPage({ useFeed }: { useFeed: UseFeed }) {
         ) : sub?.view === "review" && d.state?.three?.length ? (
           <div id="view-three"><WeekReview data={d.state} onClose={close} onChange={() => setSub({ view: "edit" })} onSaved={d.setState} /></div>
         ) : tab === "tasks" ? (
-          <div id="view-tasks"><TasksView data={d.tasks} three={d.three} onChanged={() => void d.reloadTasks()} /></div>
+          <div id="view-tasks"><TasksView data={d.tasks} three={d.three} onChanged={() => void d.reloadTasks()} scrollTo={scrollTo}
+            asks={feed.asks.length} waits={feed.waiting.length + (notes?.items?.filter((i) => !i._review).length ?? 0)}
+            asked={<AskedOfYou feed={feed} ui={ui} planIds={planIds} />}
+            waiting={<WaitingSection feed={feed} ui={ui} notes={notes} onReview={(i, n) => void onReview(i, n)} />} /></div>
         ) : (
-          <TodayView b={b} d={d} feed={feed} ui={ui} onReview={(i, n) => void onReview(i, n)} open={open} />
+          <TodayView b={b} d={d} feed={feed} ui={ui} onReview={(i, n) => void onReview(i, n)} open={open} openAsks={openAsks} />
         )}
       </main>
       {toast ? (

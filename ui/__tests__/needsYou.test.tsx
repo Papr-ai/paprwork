@@ -40,15 +40,15 @@ const billing = n({ key: "billing.out", kind: "billing.out", level: "urgent", ti
   owner: { kind: "account", id: "settings", name: "Billing" }, actions: [{ label: "Top up", intent: "billing.topup" }] });
 const set = (notices: Notice[], prefs = DEFAULT_NOTICE_PREFS) => act(() => useNoticeStore.getState().setNotices(notices, prefs));
 
-/** Needs you exactly as the Focus page draws it: Do this first, Also needs you, muted, Later, toast. */
+/** Needs you exactly as Today draws it: blockers pinned (You're blocked), Updates, muted, Later, toast. Asks go to the plan. */
 function NeedsYou() {
   const { feed, run } = useFocusFeed();
   const { ui, toast, undo } = useNeedsUi(run);
   const menu = useMenu();
   return (
     <div className="needs-you-test">
-      {feed.needs[0] ? <NeedHero i={feed.needs[0]} feed={feed} ui={ui} goal="" menu={menu} /> : null}
-      <AlsoNeeds feed={feed} ui={ui} goalOf={() => ""} menu={menu} />
+      {feed.needs.filter((n) => n.urgent).map((n) => <NeedHero key={n.key} i={n} feed={feed} ui={ui} goal="" menu={menu} />)}
+      <AlsoNeeds items={feed.needs.filter((n) => !n.urgent && !n.mention)} feed={feed} ui={ui} goalOf={() => ""} menu={menu} />
       {toast ? <div role="status">{toast.text}{toast.undo ? <button onClick={undo}>Undo</button> : null}</div> : null}
     </div>
   );

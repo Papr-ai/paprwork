@@ -1,6 +1,6 @@
 /**
- * Needs you, inside the brief: the top item is the "Do this first" card; the rest are "Also needs you"
- * cards, then muted sources and Later. Same markup and classes the Home iframe drew (needs.js).
+ * The reply card ("Do this first" when an ask tops the plan, "You're blocked" when Pen is stuck on you),
+ * Updates (notices that aren't asks or blockers), muted sources and Later. Same markup the Home iframe drew.
  */
 import { useEffect, useState } from "react";
 import type { FeedItem, FocusAck, FocusFeed } from "../focusBridge";
@@ -71,7 +71,7 @@ export function useMenu() {
   return { openKey, setOpen };
 }
 
-export function NeedHero({ i, feed, ui, goal, menu }: { i: FeedItem; feed: FocusFeed; ui: NeedsUi; goal: string; menu: ReturnType<typeof useMenu> }) {
+export function NeedHero({ i, feed, ui, goal, menu, why }: { i: FeedItem; feed: FocusFeed; ui: NeedsUi; goal: string; menu: ReturnType<typeof useMenu>; why?: string }) {
   const m = i.mention, busy = ui.busy === i.key, err = ui.errors[i.key];
   const kind = m?.took ? "In progress" : m ? "Asked of you" : "";
   const fromDup = !i.from || String(i.title).includes(String(i.from).replace(/\s*·.*$/, ""));
@@ -97,6 +97,7 @@ export function NeedHero({ i, feed, ui, goal, menu }: { i: FeedItem; feed: Focus
         <span className="hneed-from"><b>{kind}</b>{m ? <><Pill name={i.from} feed={feed} />{m.when ? <span>{m.when}</span> : null}</> : <span>{i.from}</span>}</span>
       ) : null}
       {!m?.took && i.body ? <p>{m ? <Pills text={i.body} feed={feed} /> : i.body}</p> : null}
+      {why ? <p className="hpen hneed-why"><i className="hpen-mk"><AgentIcon /></i><span>{why}</span></p> : null}
       {m && !m.took && m.ready ? (
         <label className="hdraft"><small>{focusEnv.web ? "Your reply" : "Pen drafted your reply"}</small>
           <textarea rows={2} value={draft} onChange={(e) => ui.setDraft(m.itemId, e.target.value)} /></label>
@@ -112,15 +113,16 @@ export function NeedHero({ i, feed, ui, goal, menu }: { i: FeedItem; feed: Focus
   );
 }
 
-export function AlsoNeeds({ feed, ui, goalOf, menu }: { feed: FocusFeed; ui: NeedsUi; goalOf: (i: FeedItem) => string; menu: ReturnType<typeof useMenu> }) {
+/** Notices that need you but aren't an ask or a blocker (e.g. "Your turn", a key to add). */
+export function AlsoNeeds({ items, feed, ui, goalOf, menu }: { items: FeedItem[]; feed: FocusFeed; ui: NeedsUi; goalOf: (i: FeedItem) => string; menu: ReturnType<typeof useMenu> }) {
   const [more, setMore] = useState(false);
   const [openKeys, setOpenKeys] = useState<Set<string>>(() => new Set());
   const toggle = (k: string) => setOpenKeys((s) => { const n = new Set(s); if (n.has(k)) n.delete(k); else n.add(k); return n; });
-  const rest = feed.needs.slice(1), vis = more ? rest : rest.slice(0, 3);
+  const rest = items, vis = more ? rest : rest.slice(0, 3);
   return (
     <>
       {rest.length ? (
-        <section className="hsec halso"><h4>Also needs you <em>{rest.length}</em></h4>
+        <section className="hsec halso"><h4>Updates <em>{rest.length}</em></h4>
           {vis.map((i) => {
             const m = i.mention, g = goalOf(i);
             const draft = m?.ready && !m.took ? String(ui.drafts[m.itemId] ?? m.draft ?? "").trim() : "";
