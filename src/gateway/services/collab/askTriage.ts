@@ -14,6 +14,9 @@
  * device show the same plan. No Jev (signed out, offline) → no ranking; nothing is guessed.
  */
 import type { MentionItem } from "./mentions.js";
+import { buildPlan, dayKey, type PlanEntry } from "../../../core/collab/askPlan.js";
+
+export { buildPlan, dayKey, type PlanEntry };
 
 export const PLACE = 0.6;
 export const WHEN = ["now", "today", "this_week", "fyi"] as const;
@@ -23,7 +26,6 @@ const NOT_TODAY = "not_today";
 const BATCH = 6;
 const QUEUE_MS = 3_000;
 
-export interface PlanEntry { key: string; title: string }
 export interface TriageGoal { id: string; title: string; scope?: string }
 export interface AskInput { item: MentionItem; findings?: string; why?: string }
 export interface Triage {
@@ -32,9 +34,6 @@ export interface Triage {
 }
 interface Answer { choice?: string; confidence?: number; probabilities?: Record<string, number> }
 export type TriageJev = (state: string, questions: Record<string, { type: "choice"; instructions: string; criteria: Record<string, string> }>) => Promise<Record<string, Answer>>;
-
-/** Local calendar day, the same key the brief uses. */
-export const dayKey = (d = new Date()) => `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}-${String(d.getDate()).padStart(2, "0")}`;
 
 function best(a: Answer | undefined): { choice: string | null; p: number } {
   if (!a) return { choice: null, p: 0 };
@@ -94,17 +93,6 @@ export async function rankAsks(asks: AskInput[], goals: TriageGoal[], plan: Plan
     };
   });
   return out;
-}
-
-/** Today's plan: the brief's priorities, with asks already placed today slotted in. */
-export function buildPlan(priorities: { rank?: number; title?: string; mention_id?: string }[], placedAsks: { id: string; title: string; triage: Pick<Triage, "before" | "planDate"> }[], today = dayKey()): PlanEntry[] {
-  const plan: PlanEntry[] = priorities.map((p, i) => ({ key: p.mention_id ? `ask:${p.mention_id}` : `rank:${p.rank ?? i + 1}`, title: String(p.title ?? "") }));
-  for (const a of placedAsks) {
-    if (a.triage.planDate !== today || plan.some((x) => x.key === `ask:${a.id}`)) continue;
-    const at = plan.findIndex((x) => x.key === a.triage.before);
-    plan.splice(at >= 0 ? at : plan.length, 0, { key: `ask:${a.id}`, title: a.title });
-  }
-  return plan;
 }
 
 // ── Runtime: queue, gather context, save ────────────────────────────────────
