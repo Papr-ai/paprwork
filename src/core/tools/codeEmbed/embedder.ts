@@ -172,3 +172,84 @@ export async function loadBestEmbedder(root: string, opts: { threads?: number; h
     return onnx;
   }
 }
+
+/**
+ * ONNX embedder in a worker thread (see embedWorker.ts). Token counts use a tokenizer on this thread (cheap, sync).
+ * Same vectors as loadEmbedder; use this anywhere the event loop matters (the gateway).
+ */
+export class WorkerOnnxEmbedder implements Embedder {
+  readonly model = CODE_EMBED_MODEL;
+  readonly dim = CODE_EMBED_DIM;
+  private next = 1;
+  private pending = new Map<number, { ok: (v: any) => void; err: (e: Error) => void }>();
+
+  private constructor(private readonly w: import("node:worker_threads").Worker, private readonly tok: any) {
+    w.on("message", (m: any) => {
+      const p = m?.id !== undefined ? this.pending.get(m.id) : undefined;
+      if (!p) return;
+      this.pending.delete(m.id);
+      m.ok ? p.ok(m) : p.err(new Error(m.error ?? "embed worker error"));
+    });
+    const failAll = (e: Error) => { for (const p of this.pending.values()) p.err(e); this.pending.clear(); };
+    w.on("error", failAll);
+    w.on("exit", (c) => failAll(new Error(`embed worker exited (${c})`)));
+  }
+
+  static async start(root: string, opts: { threads?: number; workerUrl?: URL } = {}): Promise<WorkerOnnxEmbedder> {
+    if (!modelInstalled(root)) throw new Error(`model not installed in ${modelDir(root)}`);
+    const { Worker } = await import("node:worker_threads");
+    const { Tokenizer }: any = await import("@huggingface/tokenizers");
+    const dir = modelDir(root);
+    const tok = new Tokenizer(
+      JSON.parse(fs.readFileSync(path.join(dir, "tokenizer.json"), "utf8")),
+      JSON.parse(fs.readFileSync(path.join(dir, "tokenizer_config.json"), "utf8")),
+    );
+    const here = new URL(import.meta.url);
+    // Built JS ships embedWorker.js; under tsx (dev/tests) the .ts source runs with the tsx loader.
+    const ts = here.pathname.endsWith(".ts");
+    const workerData = { root, threads: opts.threads };
+    const w = opts.workerUrl
+      ? new Worker(opts.workerUrl, { workerData })
+      : ts
+        ? // tsx's loader is not inherited by workers: register it, then load the .ts worker.
+          new Worker(
+            `import("tsx/esm/api").then((m) => { m.register(); return import(${JSON.stringify(new URL("./embedWorker.ts", here).href)}); });`,
+            { eval: true, workerData },
+          )
+        : new Worker(new URL("./embedWorker.js", here), { workerData });
+    w.unref();
+    await new Promise<void>((ok, err) => {
+      const t = setTimeout(() => { void w.terminate(); err(new Error("embed worker load timeout")); }, 120_000);
+      w.once("message", (m: any) => { clearTimeout(t); m?.ready ? ok() : (void w.terminate(), err(new Error(m?.error ?? "embed worker failed"))); });
+      w.once("error", (e) => { clearTimeout(t); err(e); });
+    });
+    return new WorkerOnnxEmbedder(w, tok);
+  }
+
+  private call(op: string, body: Record<string, unknown>): Promise<any> {
+    const id = this.next++;
+    return new Promise((ok, err) => {
+      this.pending.set(id, { ok, err });
+      this.w.postMessage({ id, op, ...body });
+    });
+  }
+
+  countTokens(text: string): number {
+    return this.tok.encode(text, { add_special_tokens: false }).ids.length;
+  }
+
+  async embedQuery(text: string): Promise<Float32Array> {
+    if (!text.trim()) throw new Error("empty query");
+    return (await this.call("query", { text })).vecs[0];
+  }
+
+  async embedDocuments(texts: string[]): Promise<Float32Array[]> {
+    if (texts.some((t) => !t.trim())) throw new Error("empty document");
+    return (await this.call("docs", { texts })).vecs;
+  }
+
+  async close(): Promise<void> {
+    await Promise.race([this.call("close", {}).catch(() => undefined), new Promise((r) => setTimeout(r, 2000))]);
+    await this.w.terminate().catch(() => undefined);
+  }
+}

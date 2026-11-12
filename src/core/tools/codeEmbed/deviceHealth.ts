@@ -66,6 +66,27 @@ export function selfTestPasses(totalMs: number): boolean {
   return Number.isFinite(totalMs) && totalMs <= SELF_TEST_BUDGET_MS;
 }
 
+let availCache: { at: number; bytes: number } | null = null;
+
+/**
+ * Memory the OS can hand out now. os.freemem() on macOS counts only "free" pages and leaves out inactive and
+ * speculative pages that macOS reclaims on demand, so a 16 GB Mac routinely reports ~1 GB and would never index.
+ * On macOS this adds those pages from vm_stat (cached 10 s); elsewhere os.freemem() (MemAvailable on Linux).
+ */
+export function availableMemBytes(): number {
+  if (process.platform !== "darwin") return os.freemem();
+  if (availCache && Date.now() - availCache.at < 10_000) return availCache.bytes;
+  let bytes = os.freemem();
+  try {
+    const out = execFileSync("vm_stat", { timeout: 2000 }).toString();
+    const page = Number(out.match(/page size of (\d+) bytes/)?.[1] ?? 16384);
+    const pages = (k: string) => Number(out.match(new RegExp(`Pages ${k}:\\s+(\\d+)`))?.[1] ?? 0);
+    bytes = (pages("free") + pages("inactive") + pages("speculative") + pages("purgeable")) * page;
+  } catch {}
+  availCache = { at: Date.now(), bytes };
+  return bytes;
+}
+
 /** Facts for this process. Disk is filled by the caller (statfs needs a path). */
 export function readDeviceFacts(freeDiskBytes: number | null = null): DeviceFacts {
   const cpus = os.cpus();
@@ -88,7 +109,7 @@ export function readDeviceFacts(freeDiskBytes: number | null = null): DeviceFact
     cpuModel: cpus[0]?.model ?? "",
     physicalCores: physical,
     totalMemBytes: os.totalmem(),
-    freeMemBytes: os.freemem(),
+    freeMemBytes: availableMemBytes(),
     freeDiskBytes,
     translated,
   };

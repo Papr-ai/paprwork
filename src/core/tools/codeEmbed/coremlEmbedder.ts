@@ -112,6 +112,6 @@ export class CoreMLEmbedder implements Embedder {
 
 /** Where the helper binary lives: packaged app resources, else the dev build output. */
 export function helperPath(resourcesDir = (process as any).resourcesPath ?? ""): string {
-  const cands = [path.join(resourcesDir, "bin", "papr-embed-coreml"), path.join(process.cwd(), "native", "papr-embed-coreml", "build", "papr-embed-coreml")];
-  return cands.find((c) => fs.existsSync(c)) ?? cands[0]!;
+  const cands = [process.env.PAPR_CODE_EMBED_HELPER ?? "", path.join(resourcesDir, "bin", "papr-embed-coreml"), path.join(process.cwd(), "native", "papr-embed-coreml", "build", "papr-embed-coreml")];
+  return cands.find((c) => c && fs.existsSync(c)) ?? cands[1]!;
 }
