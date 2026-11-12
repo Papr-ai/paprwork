@@ -25,15 +25,30 @@ export function matchTeammate(query: string, team: Teammate[]): Teammate | { err
 }
 
 /** Teammates you can mention. Server list first (same backend as mentions); dashboard team list as fallback. */
-export async function team(): Promise<Teammate[]> {
-  try {
-    const { listMembers } = await import("../../gateway/services/collab/mentions.js");
-    const m = await listMembers();
-    if (m.length) return m;
-  } catch { /* older server: fall back */ }
+async function workspaceTeam(): Promise<Teammate[]> {
   const { listNamespaceUsersForAgent } = await import("../../gateway/services/namespaceUsersService.js");
   const r = await listNamespaceUsersForAgent();
   return r.members.map((m) => ({ userId: m.externalUserId, displayName: m.displayName || m.email, email: m.email, imageUrl: m.imageUrl }));
+}
+
+/** Fill in each person's photo from the workspace team (Settings → Team, the sidebar): one source for photos. */
+export function withTeamPhotos(members: Teammate[], ws: Teammate[]): Teammate[] {
+  const byId = new Map(ws.filter((w) => w.imageUrl).map((w) => [w.userId, w.imageUrl]));
+  const byEmail = new Map(ws.filter((w) => w.imageUrl && w.email).map((w) => [w.email!.toLowerCase(), w.imageUrl]));
+  return members.map((m) => {
+    const img = byId.get(m.userId) || (m.email ? byEmail.get(m.email.toLowerCase()) : undefined);
+    return img ? { ...m, imageUrl: img } : m;
+  });
+}
+
+export async function team(): Promise<Teammate[]> {
+  let m: Teammate[] = [];
+  try {
+    const { listMembers } = await import("../../gateway/services/collab/mentions.js");
+    m = await listMembers();
+  } catch { /* older server: fall back */ }
+  if (!m.length) return workspaceTeam();
+  try { return withTeamPhotos(m, await workspaceTeam()); } catch { return m; }
 }
 
 async function pickPeople(people: string[]): Promise<Teammate[] | { error: string }> {
