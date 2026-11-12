@@ -1,7 +1,19 @@
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { mkdtempSync, rmSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
+import { afterAll, afterEach, describe, expect, it, vi } from "vitest";
 import { installInProcessSyncWorker } from "../../helpers/inProcessSyncWorker.js";
 import type { AppDataSource } from "../../../src/gateway/services/appDataSources.js";
 import { tursoReplicaBridgeMock } from "../../helpers/tursoReplicaBridgeMock.js";
+
+// The replica service writes real sidecar files next to the db path (e.g. the
+// "-papr-bootstrap-budget" re-download counter). A fixed /tmp path let those files
+// pile up across tests and runs until the 4-per-day budget tripped and tests failed
+// at random. Every test gets its own fresh path instead.
+const TMP_ROOT = mkdtempSync(join(tmpdir(), "turso-replica-phase2-"));
+let tmpSeq = 0;
+const freshDbPath = (): string => join(TMP_ROOT, `replica-${++tmpSeq}.db`);
+afterAll(() => rmSync(TMP_ROOT, { recursive: true, force: true }));
 
 describe("tursoReplicaSchemaLedger", () => {
   afterEach(() => {
@@ -278,7 +290,7 @@ describe("TursoReplicaService.runWrite", () => {
 
     const service = getTursoReplicaService();
     await service.runWrite({
-      localPath: "/tmp/test-replica.db",
+      localPath: freshDbPath(),
       tursoDatabase: "d-abc12345",
       sql: "INSERT INTO t (id) VALUES (?)",
       params: [1],
@@ -330,7 +342,7 @@ describe("TursoReplicaService.push", () => {
     resetTursoReplicaServiceForTests();
 
     const service = getTursoReplicaService();
-    const result = await service.push("/tmp/test-replica.db", "d-abc12345");
+    const result = await service.push(freshDbPath(), "d-abc12345");
 
     expect(result.ok).toBe(true);
     expect(pull).toHaveBeenCalledTimes(1);
@@ -382,7 +394,7 @@ describe("TursoReplicaService.syncStatus", () => {
 
     const service = getTursoReplicaService();
     const status = await service.syncStatus({
-      localPath: "/tmp/test-replica.db",
+      localPath: freshDbPath(),
       tursoDatabase: "d-abc12345",
       syncMode: "replica",
       lastPushError: "REPLICA_GEN_DRIFT: pull first",
@@ -432,7 +444,7 @@ describe("TursoReplicaService.syncStatus", () => {
 
     const service = getTursoReplicaService();
     const status = await service.syncStatus({
-      localPath: "/tmp/test-replica.db",
+      localPath: freshDbPath(),
       tursoDatabase: "d-abc12345",
       syncMode: "replica",
     });
@@ -452,6 +464,9 @@ describe("tursoReplicaReconnect", () => {
   });
 
   it("drains replica DBs on reconnect after transport offline", async () => {
+    // Fresh module graph: the drain imports DatabaseRegistryService lazily, and a copy
+    // cached by an earlier test (with a different mock) made this fail at random.
+    vi.resetModules();
     process.env.PAPR_TURSO_REPLICA_TEST_DRAIN = "1";
     const pushLinkedDbViaTursoReplica = vi.fn(async () => ({ ok: true }));
     vi.doMock("../../../src/gateway/services/tursoReplica/tursoReplicaRouting.js", () => ({
@@ -486,9 +501,11 @@ describe("tursoReplicaReconnect", () => {
     expect(connectivity.isTursoReplicaReachable()).toBe(false);
 
     connectivity.markTursoReplicaReachable();
-    await new Promise((resolve) => setTimeout(resolve, 50));
-
-    expect(pushLinkedDbViaTursoReplica).toHaveBeenCalledTimes(1);
+    // The drain runs after a dynamic import; wait for it instead of a fixed 50ms.
+    await vi.waitFor(() => expect(pushLinkedDbViaTursoReplica).toHaveBeenCalledTimes(1), {
+      timeout: 3000,
+      interval: 20,
+    });
     delete process.env.PAPR_TURSO_REPLICA_TEST_DRAIN;
     connectivity.resetTursoReplicaConnectivityForTests();
   });
