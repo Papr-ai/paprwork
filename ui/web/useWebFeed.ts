@@ -7,8 +7,9 @@ import { useCallback, useEffect, useMemo, useState } from "react";
 import { promiseLabel } from "../../src/core/collab/promised";
 import type { FocusAck, FocusFeed } from "../components/Focus/focusBridge";
 import { openInDesktop } from "./desktop";
+import { toFeedAsk } from "../components/Focus/page/asks";
 
-interface Ask { id: string; fromName: string; title: string; text: string; due: string | null; promisedAt: string | null; took: boolean; chatTitle: string | null }
+interface Ask { id: string; fromName: string; title: string; text: string; due: string | null; promisedAt: string | null; took: boolean; chatTitle: string | null; triage?: Record<string, unknown> | null; at?: string }
 type Waiting = FocusFeed["waiting"][number] extends infer W ? Omit<W, "promised" | "late"> : never;
 
 async function api<T>(path: string, body?: unknown): Promise<T> {
@@ -29,6 +30,7 @@ export function buildWebFeed(asks: Ask[], waiting: Waiting[]): FocusFeed {
       mention: { itemId: a.id, ready: true, took: a.took, draft: "",
         when: a.took && a.promisedAt ? `you said ${promiseLabel(a.promisedAt)}` : a.due ? `due ${a.due}` : "" },
     })),
+    asks: asks.map((a) => toFeedAsk(a as unknown as Record<string, unknown>)),
     later: [], muted: [], people, avatars: {},
     waiting: waiting.map((w) => ({ ...w, promised: w.promisedAt ? promiseLabel(w.promisedAt) : null, late: !!w.promisedAt && Date.parse(w.promisedAt) < Date.now() })),
   };
