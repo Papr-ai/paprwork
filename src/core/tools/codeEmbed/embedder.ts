@@ -14,6 +14,12 @@ export const CODE_EMBED_MODEL = "papr-embed-code-1-0.6b";
 export const CODE_EMBED_DIM = 1024;
 export const HF_REPO = "papr-ai/papr-embed-code-1-0.6b";
 export const MODEL_FILES = ["onnx/model_quantized.onnx", "tokenizer.json", "tokenizer_config.json"] as const;
+/** Apple Silicon only: the Neural Engine build (multifunction .mlpackage = a directory of these files). */
+export const COREML_FILES = [
+  "coreml/papr-embed-code-1-0.6b.mlpackage/Manifest.json",
+  "coreml/papr-embed-code-1-0.6b.mlpackage/Data/com.apple.CoreML/model.mlmodel",
+  "coreml/papr-embed-code-1-0.6b.mlpackage/Data/com.apple.CoreML/weights/weight.bin",
+] as const;
 export const QUERY_INSTRUCTION =
   "Given a code search query about a repository, retrieve the source code file that must be read or edited";
 export const MAX_DOC_TOKENS = 8192;
@@ -48,9 +54,10 @@ export function modelInstalled(root: string): boolean {
 }
 
 /** Download missing model files from Hugging Face into <root>/models/<model>/ (resumable per file, atomic rename). */
-export async function downloadModel(root: string, fetchImpl: typeof fetch = fetch): Promise<void> {
+export async function downloadModel(root: string, fetchImpl: typeof fetch = fetch, opts: { coreml?: boolean } = {}): Promise<void> {
   const dir = modelDir(root);
-  for (const f of MODEL_FILES) {
+  const coreml = opts.coreml ?? (process.platform === "darwin" && process.arch === "arm64");
+  for (const f of [...MODEL_FILES, ...(coreml ? COREML_FILES : [])]) {
     const dest = path.join(dir, f);
     if (fs.existsSync(dest)) continue;
     fs.mkdirSync(path.dirname(dest), { recursive: true });
