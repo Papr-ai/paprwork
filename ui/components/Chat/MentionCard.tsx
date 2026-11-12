@@ -4,6 +4,7 @@
  */
 import { useEffect, useRef, useState } from "react";
 import { gateway } from "../../src/lib/gateway";
+import { MentionPill } from "../common/mentionPill";
 import "./MentionCard.css";
 
 export interface MentionCardData {
@@ -29,11 +30,9 @@ export function parseMentionCard(toolName: string, result: unknown): MentionCard
   }
 }
 
-const initials = (n: string) => String(n || "?").split(/[\s._-]+/).filter(Boolean).slice(0, 2).map((w) => w[0].toUpperCase()).join("") || "?";
-
-/** A person is a pill: initials + name, same as Focus. */
+/** A person is a pill: photo (or initials) + name, same as chat and Focus. */
 export function PersonPill({ name }: { name: string }) {
-  return <span className="mention-pill" title={name}><i>{initials(name)}</i>{name}</span>;
+  return <MentionPill name={name} />;
 }
 
 /** Rows that fit the draft, so it reads as text, not a form field. */
