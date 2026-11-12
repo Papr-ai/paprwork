@@ -198,7 +198,7 @@ describe("tursoReplicaPushScheduler routing", () => {
     expect(publishDbChanged).not.toHaveBeenCalled();
   });
 
-  it("evaluateDbChange stays silent in manual upload mode", async () => {
+  it("evaluateDbChange still announces row changes in manual upload mode", async () => {
     process.env.PAPR_TURSO_REPLICA_SYNC = "force";
     process.env.CLOUD_SYNC_ENABLED = "true";
 
@@ -262,10 +262,11 @@ describe("tursoReplicaPushScheduler routing", () => {
     });
 
     await new Promise((resolve) => setTimeout(resolve, 0));
-    expect(publishDbChanged).not.toHaveBeenCalled();
+    // Manual gates code/schema only — rows still sync in real time.
+    expect(publishDbChanged).toHaveBeenCalled();
   });
 
-  it("scheduleTursoReplicaPushForSyncKey skips watcher push in manual upload mode", async () => {
+  it("scheduleTursoReplicaPushForSyncKey still schedules row push in manual upload mode", async () => {
     vi.doUnmock("../../../src/gateway/services/tursoReplica/tursoReplicaPushScheduler.js");
     vi.resetModules();
 
@@ -292,9 +293,8 @@ describe("tursoReplicaPushScheduler routing", () => {
     scheduleTursoReplicaPushForSyncKey("db-test", "normal", "watcher");
     await new Promise((resolve) => setTimeout(resolve, 0));
 
-    // The skip is silent now (no "manual upload mode" log); assert nothing was
-    // scheduled rather than pinning a log line.
-    expect(logSpy).not.toHaveBeenCalledWith(expect.stringContaining("debounce"));
+    // Rows are real-time regardless of upload mode: the push is scheduled.
+    expect(logSpy).toHaveBeenCalledWith(expect.stringContaining("debounce"));
 
     logSpy.mockRestore();
     resetTursoReplicaPushSchedulerForTests();
