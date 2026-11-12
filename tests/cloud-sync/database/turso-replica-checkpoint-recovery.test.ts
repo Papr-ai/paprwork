@@ -1,4 +1,7 @@
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { mkdtempSync, rmSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
+import { afterAll, afterEach, describe, expect, it, vi } from "vitest";
 import { installInProcessSyncWorker } from "../../helpers/inProcessSyncWorker.js";
 import * as fs from "fs";
 import * as os from "os";
@@ -8,6 +11,13 @@ import {
   tursoReplicaBridgeMock,
 } from "../../helpers/tursoReplicaBridgeMock.js";
 import Database from "better-sqlite3";
+
+// Fresh db path per test: the replica service writes real sidecars (e.g. the
+// re-download budget) next to the path, and a shared /tmp file made runs flaky.
+const TMP_ROOT = mkdtempSync(join(tmpdir(), "turso-replica-test-"));
+let tmpSeq = 0;
+const freshDbPath = (): string => join(TMP_ROOT, `replica-${++tmpSeq}.db`);
+afterAll(() => rmSync(TMP_ROOT, { recursive: true, force: true }));
 
 /**
  * A replica file that holds user rows. Checkpoint recovery only skips the
@@ -103,7 +113,7 @@ describe("turso replica checkpoint wedge — production guarantees", () => {
     resetTursoReplicaServiceForTests();
 
     const service = getTursoReplicaService();
-    const result = await service.push("/tmp/test-replica.db", "d-abc12345");
+    const result = await service.push(freshDbPath(), "d-abc12345");
 
     expect(result.ok).toBe(true);
     expect(pull).toHaveBeenCalledTimes(1);
