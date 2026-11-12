@@ -85,6 +85,8 @@ export async function setupCollabHandlers(ws: WebSocket, message: WSMessage): Pr
         const { openAsks } = await import("../services/collab/mentions.js");
         const { todaysPlan } = await import("../services/collab/askTriage.js");
         const [asks, plan] = await Promise.all([openAsks().catch(() => []), todaysPlan().catch(() => [])]);
+        const { rankMissing } = await import("../services/collab/askTriage.js");
+        rankMissing(asks); // older asks get ranked too; Focus refreshes on collab:mention when they land
         sendResponse(ws, { id: message.id, success: true, data: { asks, plan } });
         return;
       }

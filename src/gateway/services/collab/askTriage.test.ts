@@ -1,4 +1,4 @@
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import { buildPlan, rankAsks, type AskInput, type TriageJev } from "./askTriage";
 import type { MentionItem } from "./mentions";
 
@@ -52,5 +52,16 @@ describe("buildPlan (one plan)", () => {
   it("doesn't add an ask the brief already ranked", () => {
     const p = buildPlan([{ rank: 1, title: "Reply to Shawkat", mention_id: "x" }], [{ id: "x", title: "dup", triage: { before: "end", planDate: "d" } }], "d");
     expect(p).toHaveLength(1);
+  });
+});
+
+describe("rankMissing", () => {
+  it("queues only asks with no ranking, once each", async () => {
+    vi.useFakeTimers();
+    const { rankMissing, _queuedIds } = await import("./askTriage");
+    const a = ask("x1", "old ask").item, b = { ...ask("x2", "ranked").item, triage: { when: "fyi" } } as never;
+    rankMissing([a, b]); rankMissing([a]);
+    expect(_queuedIds()).toEqual(["x1"]);
+    vi.useRealTimers();
   });
 });

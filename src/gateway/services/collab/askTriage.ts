@@ -109,6 +109,22 @@ export function queueTriage(a: AskInput, onDone?: (t: Triage | null) => void): v
 }
 const waiters = new Map<string, ((t: Triage | null) => void) | undefined>();
 
+/**
+ * Rank open asks that never got a ranking (arrived before this version, or while Jev was offline).
+ * Once per ask per run; uses what Pen already found on the card. Called when Focus loads its asks.
+ */
+const tried = new Set<string>();
+export function rankMissing(asks: (MentionItem & { findings?: string })[]): void {
+  for (const a of asks) {
+    if (a.triage || tried.has(a.id)) continue;
+    tried.add(a.id);
+    queueTriage({ item: a, findings: a.findings });
+  }
+}
+
+/** Test hook: ids waiting to be ranked. */
+export const _queuedIds = () => queue.map((a) => a.item.id);
+
 async function flush(): Promise<void> {
   timer = null;
   const batch = queue.splice(0, BATCH);
