@@ -114,6 +114,8 @@ export function NeedHero({ i, feed, ui, goal, menu }: { i: FeedItem; feed: Focus
 
 export function AlsoNeeds({ feed, ui, goalOf, menu }: { feed: FocusFeed; ui: NeedsUi; goalOf: (i: FeedItem) => string; menu: ReturnType<typeof useMenu> }) {
   const [more, setMore] = useState(false);
+  const [openKeys, setOpenKeys] = useState<Set<string>>(() => new Set());
+  const toggle = (k: string) => setOpenKeys((s) => { const n = new Set(s); if (n.has(k)) n.delete(k); else n.add(k); return n; });
   const rest = feed.needs.slice(1), vis = more ? rest : rest.slice(0, 3);
   return (
     <>
@@ -123,12 +125,17 @@ export function AlsoNeeds({ feed, ui, goalOf, menu }: { feed: FocusFeed; ui: Nee
             const m = i.mention, g = goalOf(i);
             const draft = m?.ready && !m.took ? String(ui.drafts[m.itemId] ?? m.draft ?? "").trim() : "";
             return (
-              <article key={i.key} className={`hcard${i.urgent ? " is-urgent" : ""}`}>
-                <div className="hcard-t">
+              <article key={i.key} className={`hcard${i.urgent ? " is-urgent" : ""}${openKeys.has(i.key) ? " is-open" : ""}`}>
+                {/* Click (or Enter) the text to read all of it; the hover title shows it too. */}
+                <div className="hcard-t" role="button" tabIndex={0} aria-expanded={openKeys.has(i.key)}
+                  title={openKeys.has(i.key) ? undefined : [i.title, draft ? `Reply drafted: “${draft}”` : i.body].filter(Boolean).join("\n\n")}
+                  onClick={(e) => { if (!(e.target as HTMLElement).closest("button, a, textarea")) toggle(i.key); }}
+                  onKeyDown={(e) => { if (e.key === "Enter" || e.key === " ") { e.preventDefault(); toggle(i.key); } }}>
                   <span className="hcard-meta"><b>{i.reason || i.menu.source}</b>{m ? <Pill name={i.from} feed={feed} /> : <span>{i.from}</span>}{g ? <em className="hchip" title={`Moves ${g}`}>{g}</em> : null}</span>
                   <h5>{i.title}</h5>
                   {draft ? <p className="hpen"><i className="hpen-mk"><AgentIcon /></i><span>Reply drafted: “{draft}”</span></p>
                     : i.body ? <p className="hcard-body">{m ? <Pills text={i.body} feed={feed} /> : i.body}</p> : null}
+                  {openKeys.has(i.key) && draft && i.body ? <p className="hcard-body">{m ? <Pills text={i.body} feed={feed} /> : i.body}</p> : null}
                 </div>
                 <div className="hcard-a">
                   <button type="button" className="hgo" onClick={() => void ui.run(i.key, "open", { key: i.key })}>{m ? "Reply" : i.action}</button>

@@ -218,6 +218,7 @@ export const MODEL_CONTEXT_WINDOWS: Readonly<Record<string, number>> = {
   "claude-opus-5-5": 1_000_000,
   "claude-opus-5": 1_000_000,
   "claude-fable-5-1": 1_000_000,
+  "claude-fable-5-2": 1_000_000,
   "gpt-5.4-mini": 272_000,
   "gpt-5-6-luna": 1_050_000,
   "gpt-5-6-terra": 1_050_000,

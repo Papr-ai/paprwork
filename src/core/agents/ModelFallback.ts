@@ -77,6 +77,14 @@ const AVAILABLE_MODELS: Record<Provider, ModelInfo[]> = {
       supportsVision: true,
     },
     {
+      id: "claude-fable-5-2",
+      name: "Claude Fable 5.2",
+      provider: "anthropic",
+      contextWindow: 1000000,
+      supportsThinking: true,
+      supportsVision: true,
+    },
+    {
       id: "claude-fable-5-1",
       name: "Claude Fable 5.1",
       provider: "anthropic",

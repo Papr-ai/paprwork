@@ -26,7 +26,7 @@ export interface MentionItem {
   id: string; fromUserId: string; fromName: string; toUserId: string; toName: string; text: string;
   context: MentionContext; action: MentionAction | null; status: "open" | "done" | "dismissed";
   reply: { text: string; at: string } | null; createdAt: string; notified?: boolean;
-  progress?: "asked" | "in_progress" | "done" | "cant" | "closed";
+  progress?: "asked" | "in_progress" | "needs_reply" | "done" | "cant" | "closed";
   thread?: Array<{ by: "from" | "to"; text: string; at: string }>; nudgedAt?: string | null; updatedAt?: string;
   /** When they said they'd have it ("Thursday morning" → ISO). Both sides track it. */
   promisedAt?: string | null;
@@ -36,8 +36,16 @@ export interface MentionCardData {
   type: "mention_inbox"; itemId: string; fromName: string; text: string; context: MentionContext;
   action: MentionAction | null; suggestedReply: string; nextStep?: string;
   status: "open" | "done" | "dismissed"; sentReply?: string;
+  /** Pen is checking the claim (read-only) before the draft is final. */
+  investigating?: boolean;
+  /** What Pen verified, in a sentence or two. */
+  findings?: string;
+  /** Steps for the user to approve: "check" = read-only, "change" = writes something. */
+  plan?: PlanStep[];
+  planStatus?: "approved";
   promisedAt?: string | null; remindedAt?: string | null;
 }
+export interface PlanStep { step: string; kind: "check" | "change" }
 export interface CollabEvent {
   id: string; type: string; requestId?: string | null; actorUserId?: string | null;
   title?: string | null; detail?: Record<string, unknown>; createdAt: string;
@@ -89,11 +97,13 @@ export const listMentions = (box: "inbox" | "sent" = "inbox", status: string | n
   call<{ mentions: MentionItem[] }>(`/mentions?box=${box}${status ? `&status=${status}` : "&status="}`).then((r) => r.mentions);
 
 /** Answer a mention: send the reply (optional) and close it. Updates the card and clears the notice. */
-export async function answerMention(itemId: string, status: "open" | "done" | "dismissed", reply?: string): Promise<MentionItem> {
+export async function answerMention(
+  itemId: string, status: "open" | "done" | "dismissed", reply?: string, needsReply = false,
+): Promise<MentionItem> {
   // "I'll have it Thursday morning" → the date both sides track. Read here, in the replier's own time zone.
   const promised = status === "open" && reply ? parsePromise(reply) : null;
   const out = await call<{ mention: MentionItem }>(`/mentions/${encodeURIComponent(itemId)}/resolve`, "POST",
-    { status, reply, ...(promised ? { promisedAt: promised.toISOString() } : {}) });
+    { status, reply, ...(promised ? { promisedAt: promised.toISOString() } : {}), ...(needsReply && status === "open" ? { needsReply: true } : {}) });
   // "I'm on it" keeps it open: it stays on Focus (In progress) until you mark it done.
   if (status !== "open") { tryResolve(mentionNoticeKey(itemId)); tryResolve(`mention.due:${itemId}`); }
   await updateCard(itemId, { status: out.mention.status, ...(reply ? { sentReply: reply } : {}),
@@ -140,15 +150,12 @@ async function suggest(item: MentionItem): Promise<{ reply: string; nextStep?: s
   const fallback = { reply: item.action ? `On it. I'll ${lowerFirst(item.action.title)}${item.action.due ? ` by ${dueDate(item.action.due)}` : ""}.` : "Thanks, got it." };
   try {
     const { generateSimpleText } = await import("../../utils/simpleTextGeneration.js");
+    const voice = await myVoice();
     const raw = await generateSimpleText(
       "You are Pen, a teammate's work assistant. Someone mentioned your user. Draft the short reply your user would send back " +
-        "(first person, plain, friendly, at most 2 sentences, no greeting fluff) and the one next step they should take. " +
+        "(first person, plain, at most 2 sentences, no greeting fluff), in the user's own voice, and the one next step they should take. " +
         'Answer only JSON: {"reply": "...", "nextStep": "..."}',
-      [
-        `${item.fromName} wrote to ${item.toName}${item.context.chatTitle ? ` (from the chat "${item.context.chatTitle}")` : ""}:`,
-        item.text,
-        item.action ? `Action asked of ${item.toName}: ${item.action.title}${item.action.due ? ` (due ${dueDate(item.action.due)})` : ""}` : "",
-      ].filter(Boolean).join("\n"),
+      [mentionBrief(item), voice].filter(Boolean).join("\n\n"),
       300,
       "[Mentions]",
     );
@@ -156,6 +163,73 @@ async function suggest(item: MentionItem): Promise<{ reply: string; nextStep?: s
   } catch {
     return fallback;
   }
+}
+
+function mentionBrief(item: MentionItem): string {
+  return [
+    `${item.fromName} wrote to ${item.toName}${item.context.chatTitle ? ` (from the chat "${item.context.chatTitle}")` : ""}:`,
+    item.text,
+    item.action ? `Action asked of ${item.toName}: ${item.action.title}${item.action.due ? ` (due ${dueDate(item.action.due)})` : ""}` : "",
+  ].filter(Boolean).join("\n");
+}
+
+/** How the user actually answers teammates: their last few sent replies, as style examples. */
+async function myVoice(): Promise<string> {
+  const rows = await listMentions("inbox", null).catch(() => [] as MentionItem[]);
+  const said = rows.filter((m) => m.reply?.text).slice(0, 6).map((m) => `- to ${m.fromName.split(" ")[0]}: "${m.reply!.text.slice(0, 220)}"`);
+  return said.length ? `How ${rows[0].toName.split(" ")[0]} usually replies (match this tone and length):\n${said.join("\n")}` : "";
+}
+
+/** Read-only tools Pen may use to check a mention before drafting. No writes, no messages sent. */
+export const MENTION_CHECK_TOOLS = [
+  "search_agent_memory", "search_wiki_entities", "get_wiki_entity", "list_mentions", "list_documents", "read_document",
+  "read_file", "search_files", "list_apps", "list_app_files", "read_app_file", "read_app_data_sources", "read_app_data_health",
+  "list_jobs", "read_job_file", "read_job_logs", "papr_db_query", "papr_db_sync_status", "query_cloud_turso",
+  "get_cloud_sync_status", "inspect_cloud_repo",
+];
+
+export function parseInvestigation(raw: string | null): { reply: string; nextStep?: string; findings?: string; plan: PlanStep[] } | null {
+  const base = parseSuggestion(raw);
+  if (!base || !raw) return null;
+  const m = raw.match(/\{[\s\S]*\}/);
+  try {
+    const j = JSON.parse(m ? m[0] : raw) as { findings?: unknown; plan?: unknown };
+    const plan = (Array.isArray(j.plan) ? j.plan : []).flatMap((x): PlanStep[] => {
+      const o = x as { step?: unknown; kind?: unknown };
+      return typeof o?.step === "string" && o.step.trim() ? [{ step: o.step.trim().slice(0, 300), kind: o.kind === "change" ? "change" : "check" }] : [];
+    }).slice(0, 6);
+    return { ...base, ...(typeof j.findings === "string" && j.findings.trim() ? { findings: j.findings.trim().slice(0, 800) } : {}), plan };
+  } catch {
+    return { ...base, plan: [] };
+  }
+}
+
+const INVESTIGATE_MS = 150_000;
+
+/** Pen checks what the teammate reported (read-only), then drafts the reply and a plan for the user to approve. */
+async function investigate(item: MentionItem): Promise<ReturnType<typeof parseInvestigation>> {
+  const { getAgentService } = await import("../AgentService.js");
+  const prompt = [
+    "A teammate mentioned your user. Before drafting a reply, VERIFY what they said using read-only tools:",
+    "search memory and the wiki for context and how the user handled similar things, and if they report a problem (an app, job, database, sync issue),",
+    "look at it with the read/query tools. Never change anything, never send messages. Keep it to a few focused checks.",
+    "",
+    mentionBrief(item),
+    "",
+    await myVoice(),
+    "",
+    "Then answer ONLY with JSON:",
+    '{"findings": "1-2 sentences: what you checked and what is actually true (say plainly if you could not verify)",',
+    ' "reply": "the reply your user would send, first person, in their voice, at most 3 sentences, grounded in the findings",',
+    ' "nextStep": "one line",',
+    ' "plan": [{"step": "concrete step", "kind": "check" | "change"}]}',
+    'Plan: 1-5 steps to resolve it. "check" = read-only, "change" = edits code, data, links or settings. Empty if nothing to do.',
+  ].join("\n");
+  const run = getAgentService().runIsolatedJobSession({
+    jobId: `mention-${item.id}`, runId: `${Date.now()}`, prompt, allowedToolIds: MENTION_CHECK_TOOLS, maxTurns: 12,
+  }).then((r) => parseInvestigation(r.text));
+  const timeout = new Promise<null>((res) => setTimeout(() => res(null), INVESTIGATE_MS));
+  return Promise.race([run, timeout]).catch(() => null);
 }
 
 const lowerFirst = (s: string) => (s ? s[0].toLowerCase() + s.slice(1) : s);
@@ -170,6 +244,8 @@ export function mentionMessageText(c: MentionCardData): string {
     c.action ? `**For you:** ${c.action.title}${c.action.due ? ` (due ${dueDate(c.action.due)})` : ""}` : "",
     `**Suggested reply:** ${c.suggestedReply}`,
     c.nextStep ? `**Next step:** ${c.nextStep}` : "",
+    c.findings ? `**What I checked:** ${c.findings}` : "",
+    c.plan?.length ? `**Plan (needs your OK):**\n${c.plan.map((p, i) => `${i + 1}. ${p.step}${p.kind === "change" ? " _(change)_" : ""}`).join("\n")}` : "",
     `_Mention id: ${c.itemId}. To answer it, use answer_mention._`,
   ].filter(Boolean).join("\n\n");
 }
@@ -206,6 +282,9 @@ async function saveCards(): Promise<void> {
 }
 
 /** The Focus card's data for a mention that arrived here (the ask, the action, Pen's draft, what you sent). */
+/** The user approved Pen's plan: mark it, so the card shows it's underway. */
+export const approvePlan = (itemId: string) => updateCard(itemId, { planStatus: "approved" });
+
 export async function mentionCard(itemId: string): Promise<(MentionCardData & { chatId: string }) | null> {
   const hit = (await cards()).get(itemId);
   return hit ? { ...hit.card, chatId: hit.chatId } : null;
@@ -240,7 +319,7 @@ async function receiveMention(e: CollabEvent): Promise<void> {
   const s = await suggest(item);
   const card: MentionCardData = {
     type: "mention_inbox", itemId, fromName: item.fromName, text: item.text, context: item.context ?? {},
-    action: item.action, suggestedReply: s.reply, ...(s.nextStep ? { nextStep: s.nextStep } : {}), status: "open",
+    action: item.action, suggestedReply: s.reply, ...(s.nextStep ? { nextStep: s.nextStep } : {}), status: "open", investigating: true,
   };
   const { getAgentService } = await import("../AgentService.js");
   const agent = getAgentService();
@@ -263,10 +342,18 @@ async function receiveMention(e: CollabEvent): Promise<void> {
     owner: { kind: "chat", id: chatId, name: title },
     actions: [{ label: "Reply", intent: "open" }],
   });
+  void investigate(item).then(async (r) => {
+    const live = (await cards()).get(itemId);
+    if (!live || live.card.status !== "open") return;
+    // The card keeps the user's own edits (it only swaps the draft if they haven't touched it).
+    await updateCard(itemId, r ? {
+      investigating: false, suggestedReply: r.reply, findings: r.findings, plan: r.plan, ...(r.nextStep ? { nextStep: r.nextStep } : {}),
+    } : { investigating: false });
+  }).catch(() => updateCard(itemId, { investigating: false }));
 }
 
 async function receiveReply(e: CollabEvent): Promise<void> {
-  const d = (e.detail ?? {}) as { fromName?: string; text?: string; status?: string; context?: MentionContext; action?: MentionAction | null; promisedAt?: string | null };
+  const d = (e.detail ?? {}) as { fromName?: string; text?: string; status?: string; progress?: string; context?: MentionContext; action?: MentionAction | null; promisedAt?: string | null };
   const who = d.fromName || "Someone";
   const first = who.split(" ")[0];
   const what = d.action?.title ?? "what you asked";
@@ -282,6 +369,7 @@ async function receiveReply(e: CollabEvent): Promise<void> {
   const at = `@${who.split(" ").length > 1 ? who : first}`;
   const content = d.status === "done" ? `${at} **finished** · ${what}${said}`
     : d.status === "dismissed" ? `${at} **can't take it** · ${what}${said}\n\nAsk someone else, or do it here?`
+    : d.progress === "needs_reply" ? `${at} **needs your reply** · ${what}${said}\n\nAnswer them here and I'll send it.`
     : `${at} **is on it**${by} · ${what}${said}`;
   if (local && chatId) {
     const msg: StoredMessage = { id: `msg-${uuidv4()}`, chat_id: chatId, role: "assistant", sync_status: "local", timestamp: new Date().toISOString(), content };
@@ -290,6 +378,15 @@ async function receiveReply(e: CollabEvent): Promise<void> {
   }
   if (e.requestId) broadcast({ type: "collab:mention", data: { itemId: e.requestId } });
   const owner = local && chatId ? { kind: "chat" as const, id: chatId, name: local.title } : { kind: "account" as const, id: "people", name: "People" };
+  if (d.progress === "needs_reply") {
+    // Their move, not a status: it sits on your Focus until you answer (the server clears it when you reply).
+    tryNotify({
+      key: `mention.needs_reply:${e.requestId ?? e.id}`, kind: "mention.needs_reply", type: "event", level: "priority",
+      title: `${first} needs your reply: ${lowerFirst(what)}`, body: d.text || undefined,
+      source: { type: "platform", id: "people", name: "People" }, owner, actions: [{ label: "Reply", intent: "open" }],
+    });
+    return;
+  }
   if (!turn) return; // "in progress" is status, not a notice: it shows under Waiting on and in the chat
   tryNotify({
     key: `mention.done:${e.requestId ?? e.id}`, kind: "mention.done", type: "event", level: "priority",

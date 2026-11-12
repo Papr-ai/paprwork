@@ -6,6 +6,7 @@
 import { useEffect, useState } from "react";
 import { gateway } from "../../src/lib/gateway";
 import "./MentionCard.css";
+import { PersonPill, draftRows } from "./MentionCard";
 import { dueLabel } from "../../../src/core/collab/promised";
 
 export interface MentionAskData {
@@ -53,18 +54,22 @@ export function MentionAskCard({ data }: { data: MentionAskData }) {
   if (state === "asked") return null;
   return (
     <section className="mention-card mention-ask" aria-label={`Ask ${names}?`}>
-      <header className="mention-card__from"><b>Ask {data.mentioned.map((m) => m.name).join(", ")}?</b></header>
-      <textarea value={draft} onChange={(e) => setDraft(e.target.value)} rows={2} aria-label="The ask" />
-      <p className="mention-card__next">
-        {data.action ? `${data.action.title}${data.action.due ? ` · due ${dueLabel(data.action.due)}` : ""} · ` : ""}goes to {names}'s Focus as your ask
-      </p>
+      <header>
+        <small>Ask {names}?</small>
+        {data.action?.due ? <em className="mention-chip">due {dueLabel(data.action.due)}</em> : null}
+      </header>
+      {data.action ? <h3>{data.action.title}</h3> : null}
+      <span className="mention-card__from">{data.mentioned.map((m) => <PersonPill key={m.mentionId} name={m.name} />)}<span>gets this on their Focus</span></span>
+      <label className="mention-draft"><small>Pen drafted the ask</small>
+        <textarea value={draft} onChange={(e) => setDraft(e.target.value)} rows={draftRows(draft)} aria-label="The ask" />
+      </label>
       {error ? <p className="mention-card__error" role="alert">{error}</p> : null}
-      <footer>
-        <button type="button" className="mention-card__send" disabled={busy || !draft.trim()} onClick={() => void ask()}>
+      <div className="mention-acts">
+        <button type="button" className="mention-primary" disabled={busy || !draft.trim()} onClick={() => void ask()}>
           {busy ? "Asking…" : `Ask ${names}`}
         </button>
-        <button type="button" onClick={() => setState("declined")} disabled={busy}>No</button>
-      </footer>
+        <button type="button" className="mention-ghost" onClick={() => setState("declined")} disabled={busy}>Not now</button>
+      </div>
     </section>
   );
 }

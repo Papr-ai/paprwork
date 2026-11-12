@@ -52,7 +52,7 @@ export const DEFAULT_AUTO_LADDERS: Partial<Record<Provider, AutoLadder>> = {
     alternates: {
       basic: ["claude-sonnet-5-5", "claude-sonnet-5", "claude-sonnet-4-6"],
       strong: ["claude-sonnet-5", "claude-sonnet-4-6", "claude-opus-5-5", "claude-opus-5"],
-      frontier: ["claude-opus-5", "claude-fable-5-1", "claude-sonnet-5-5", "claude-sonnet-5"],
+      frontier: ["claude-opus-5", "claude-fable-5-2", "claude-fable-5-1", "claude-sonnet-5-5", "claude-sonnet-5"],
     },
     effortModels: new Set([
       "claude-sonnet-5-5",
@@ -60,6 +60,7 @@ export const DEFAULT_AUTO_LADDERS: Partial<Record<Provider, AutoLadder>> = {
       "claude-opus-5-5",
       "claude-opus-5",
       "claude-fable-5-1",
+      "claude-fable-5-2",
     ]),
   },
   openai: OPENAI_LADDER,

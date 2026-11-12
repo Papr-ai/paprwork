@@ -256,6 +256,9 @@ describe("always-on thinking", () => {
     expect(anthropicModelRequiresAlwaysOnThinking("claude-fable-5-1")).toBe(
       true,
     );
+    expect(anthropicModelRequiresAlwaysOnThinking("claude-fable-5-2")).toBe(
+      true,
+    );
     expect(anthropicModelRequiresAlwaysOnThinking("claude-sonnet-5")).toBe(
       false,
     );
