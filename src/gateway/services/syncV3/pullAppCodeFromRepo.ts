@@ -654,6 +654,20 @@ export async function pullAppCodeFromRepo(
       }
     }
 
+    // bundle.json / revision are skipped above; bring them in line with the web when
+    // the pulled handlers match it, so a merged proposal leaves nothing to publish.
+    if (updatedFiles.length > 0 || mergedFiles.length > 0) {
+      try {
+        const { adoptPulledBackendBundle } = await import("./pulledBackendBundle.js");
+        const adopted = await adoptPulledBackendBundle(appDir, upstreamFiles, sourceDir);
+        if (adopted.length > 0) {
+          console.log(`[PullAppCode] ${trimmed}: took the web's ${adopted.join(", ")}`);
+        }
+      } catch (err) {
+        console.warn(`[PullAppCode] ${trimmed}: backend bundle refresh skipped:`, err instanceof Error ? err.message : err);
+      }
+    }
+
     if (updatedFiles.length > 0 || head.commitSha) {
       await applyAckedBlobOids(
         trimmed,
