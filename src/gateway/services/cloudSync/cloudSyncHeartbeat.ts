@@ -8,6 +8,8 @@ import type { CloudSyncService } from "../CloudSyncService.js";
 import { readGatewaySyncBusyState } from "./syncBusyState.js";
 import { notifyCloudSyncItemsStale } from "./cloudSyncBroadcast.js";
 import { getPaprUserId } from "../../utils/paprUserId.js";
+import type { DbChangedEvent } from "../syncV3/runtimeDispatchSubscriber.js";
+import type { CloudTursoDbChange } from "../tursoSyncSession.js";
 
 export const PULL_INTERVAL_MS = 5 * 60_000;
 export const DESKTOP_HEARTBEAT_INTERVAL_MS = 60_000;
@@ -62,6 +64,85 @@ export async function handleTrackPullOnPublish(): Promise<void> {
   }
 }
 
+const DB_CHANGED_DEBOUNCE_MS = 400;
+/**
+ * The event can beat the change to the replica we pull from: a pull right after it may find
+ * nothing new yet. Ask again after these waits, then leave it to the heartbeat. Replaces the
+ * fixed 1s sleep memory#474 put in front of every notification.
+ */
+export const DB_CHANGED_RETRY_MS = [250, 1000, 3000];
+let pendingDbChanges: CloudTursoDbChange[] = [];
+let dbChangedTimer: ReturnType<typeof setTimeout> | null = null;
+let dbChangedPulling = false;
+
+/**
+ * Fast path: memory pushed "database X changed" over the dispatch stream. Pull just
+ * that database now instead of waiting for the next heartbeat. A burst becomes one
+ * pull; anything not matched to a linked database here is caught by the heartbeat.
+ */
+function queueDbChangedPull(event: DbChangedEvent): void {
+  if (!event.dbId && !event.jobId) {
+    return;
+  }
+  pendingDbChanges.push({
+    ...(event.dbId ? { dbId: event.dbId } : {}),
+    ...(event.jobId ? { jobId: event.jobId } : {}),
+    ...(event.tables ? { tables: event.tables } : {}),
+  });
+  if (dbChangedTimer) {
+    return;
+  }
+  dbChangedTimer = setTimeout(() => {
+    dbChangedTimer = null;
+    void flushDbChangedPulls();
+  }, DB_CHANGED_DEBOUNCE_MS);
+}
+
+/** Pull until something lands or the waits run out. Exported for tests. */
+export async function pullDbChangesWithRetry(
+  batch: CloudTursoDbChange[],
+  pull: (changes: CloudTursoDbChange[]) => Promise<{ pulled: number; pushed: number; failed: number }>,
+  waits: readonly number[] = DB_CHANGED_RETRY_MS,
+  sleep: (ms: number) => Promise<void> = (ms) => new Promise((r) => setTimeout(r, ms)),
+): Promise<{ pulled: number; pushed: number; attempts: number }> {
+  for (let attempt = 0; ; attempt++) {
+    const s = await pull(batch);
+    // Landed, failed for a real reason, or out of waits: stop. Only an empty pull is retried.
+    if (s.pulled > 0 || s.pushed > 0 || s.failed > 0 || attempt >= waits.length) {
+      return { pulled: s.pulled, pushed: s.pushed, attempts: attempt + 1 };
+    }
+    await sleep(waits[attempt]);
+  }
+}
+
+async function flushDbChangedPulls(): Promise<void> {
+  if (dbChangedPulling || pendingDbChanges.length === 0) {
+    return;
+  }
+  dbChangedPulling = true;
+  const batch = pendingDbChanges;
+  pendingDbChanges = [];
+  try {
+    const { getTursoSyncBridge } = await import("../TursoSyncBridge.js");
+    const bridge = getTursoSyncBridge();
+    if (bridge?.enabled) {
+      const started = Date.now();
+      const r = await pullDbChangesWithRetry(batch, (c) => bridge.reconcileFromCloudDbChanges(c));
+      console.log(
+        `[CloudSync] db-changed push pull: pulled=${r.pulled} pushed=${r.pushed} ` +
+          `attempts=${r.attempts} in ${Date.now() - started}ms`,
+      );
+    }
+  } catch (err) {
+    console.warn("[CloudSync] db-changed push pull failed:", (err as Error).message.slice(0, 120));
+  } finally {
+    dbChangedPulling = false;
+    if (pendingDbChanges.length > 0) {
+      void flushDbChangedPulls();
+    }
+  }
+}
+
 /** SSE push for cloud job runtime patches (Phase 4b). */
 export function startRuntimeDispatchSubscriber(): void {
   void import("../syncV3/runtimeDispatchSubscriber.js").then(
@@ -75,6 +156,7 @@ export function startRuntimeDispatchSubscriber(): void {
           );
           await applyPendingCloudRunPatches([patch], { jobsService });
         },
+        onDbChanged: queueDbChangedPull,
         onError: (message) => {
           console.warn("[CloudSync] Runtime dispatch stream:", message);
         },
