@@ -82,6 +82,11 @@ function Card({ i, type, onReview }: { i: BriefItem; type: string; onReview: OnR
   }
 }
 
+/** The brief's cards for a section without its heading (Waiting on shows them under its own). */
+export function BriefCards({ s, onReview }: { s: Section; onReview: OnReview }) {
+  return <>{(s.items ?? []).map((i) => <Card key={i._id} i={i} type={s.type} onReview={onReview} />)}</>;
+}
+
 export function BriefSection({ s, onReview }: { s: Section; onReview: OnReview }) {
   return (
     <section className="section">
