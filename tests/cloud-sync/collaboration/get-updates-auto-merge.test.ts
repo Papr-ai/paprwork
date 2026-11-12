@@ -205,3 +205,23 @@ describe("the waiting-update chip clears once the update is in", () => {
     expect(getPendingAppUpdate(APP_ID)?.commitSha).toBe("sha-2");
   });
 });
+describe("backend bundle after a merged proposal", () => {
+  it("pulled handler + refreshed bundle on the web: local bundle matches, nothing left to publish", async () => {
+    const { createHash } = await import("node:crypto");
+    const sha = (c: string) => createHash("sha256").update(c, "utf8").digest("hex");
+    const manifest = JSON.stringify({ version: 1, actions: { ping: { handler: "ping.py", runtime: "python" } } });
+    const bundle = (h: string, at: string) =>
+      `${JSON.stringify({ version: 1, builtAt: at, actions: { ping: { handler: "ping.py", sha256: sha(h), bytes: h.length } } }, null, 2)}\n`;
+    publish({ "app.ts": BASE_APP, "backend/manifest.json": manifest, "backend/ping.py": "v1\n", "backend/bundle.json": bundle("v1\n", "a") }, "sha-d1");
+    await pullAppCodeFromRepo(APP_ID, { token: "t", allowRecentSkip: false });
+    await fs.writeFile(appFile("backend/bundle.json"), bundle("v1\n", "a"));
+    // An accepted proposal changed ping.py; memory#477 rebuilt bundle.json on main.
+    publish({ "app.ts": BASE_APP, "backend/manifest.json": manifest, "backend/ping.py": "v2\n", "backend/bundle.json": bundle("v2\n", "b") }, "sha-d2");
+
+    const res = await pullAppCodeFromRepo(APP_ID, { token: "t", allowRecentSkip: false });
+
+    expect(res.conflictFiles).toEqual([]);
+    expect(await read("backend/ping.py")).toBe("v2\n");
+    expect(await read("backend/bundle.json")).toBe(bundle("v2\n", "b"));
+  });
+});
