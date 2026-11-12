@@ -194,10 +194,7 @@ function evaluateDbChangeReplica(watched: WatchedDbDir): void {
     return;
   }
 
-  if (!shouldAutoUploadReplicaSyncKey(watched.syncKey, watcherPaprDir())) {
-    return;
-  }
-
+  // Rows sync in real time regardless of the app's upload mode (manual gates code/schema only).
   const coordinator = getSyncCoordinator();
   if (coordinator) {
     const status = coordinator.getStatus();
