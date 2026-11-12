@@ -966,3 +966,28 @@
 .fpage-shell .focus-offline { display: flex; align-items: baseline; gap: 8px; margin: 0 0 14px; font-size: 13px; line-height: 1.45; color: var(--mid); }
 .fpage-shell .focus-offline i { width: 7px; height: 7px; border-radius: 50%; flex: none; background: #9aa3af; transform: translateY(-1px); }
 .fpage-shell .focus-offline b { color: var(--ink); font-weight: 600; }
+
+/* One plan (Today): plan rows 2+, an ask row (who · Pen's why · Reply), and the link to the asks not in it. */
+.fpage-shell .hplan .card + .card { margin-top: 0; }
+.fpage-shell .hplan-ask .pri-head { align-items: center; }
+.fpage-shell .hplan-meta { display: flex; align-items: center; gap: 8px; min-width: 0; margin-top: 4px; font-size: 12.5px; color: var(--mid); }
+.fpage-shell .hplan-meta span:not(.hpill) { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.fpage-shell .hplan-more { width: 100%; border: none; cursor: pointer; text-align: left; font: inherit; font-size: 12.5px; }
+.fpage-shell .hplan-more b { font-weight: 600; color: var(--ink); }
+.fpage-shell .hplan-more .t3link { display: inline-flex; align-items: center; gap: 4px; flex: none; }
+.fpage-shell .hplan-more .t3link svg { width: 12px; height: 12px; }
+.fpage-shell .hneed-why { margin-top: 2px; }
+
+/* All tasks → Asked of you: Jev's when as the kicker. Now = blue, Pen still checking = soft. */
+.fpage-shell .hask-when { color: #b8741a; }
+.fpage-shell .hask-when.is-now { color: var(--blue); }
+.fpage-shell .hask-when.is-new { color: var(--soft); font-weight: 500; }
+.fpage-shell .hask .hcard-a { align-self: flex-start; }
+
+/* You're waiting on → They said they would: a quiet row with Track it / Not waiting. */
+.fpage-shell .hsaid .hwait-line { display: grid; gap: 2px; cursor: default; }
+.fpage-shell .hsaid .hwait-line span { font-size: 12.5px; color: var(--mid); }
+.fpage-shell #asked, .fpage-shell #waiting { scroll-margin-top: 72px; }
+@media (prefers-color-scheme: dark) {
+  .fpage-shell .hask-when { color: #e0a14a; }
+}
