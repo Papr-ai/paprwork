@@ -96,23 +96,18 @@ describe("decideReplicaMigration", () => {
     }
   });
 
-  it("skips a recorded migration whose schema verifies", () => {
-    expect(replicaMigrationNeedsVerification(true, true)).toBe(true);
-    expect(
-      decideReplicaMigration({ recorded: true, ledgerReadable: true, satisfied: true, rerunSafe: false }),
-    ).toEqual({ action: "skip", reason: "applied" });
-  });
-
-  it("still repairs drift by re-applying a recorded ADDITIVE migration", () => {
-    expect(
-      decideReplicaMigration({ recorded: true, ledgerReadable: true, satisfied: false, rerunSafe: true }),
-    ).toEqual({ action: "apply", reason: "reapply_additive" });
-  });
-
-  it("refuses to re-run a recorded DESTRUCTIVE migration it cannot verify", () => {
-    expect(
-      decideReplicaMigration({ recorded: true, ledgerReadable: true, satisfied: false, rerunSafe: false }),
-    ).toEqual({ action: "refuse", reason: "recorded_unverified" });
+  it("trusts the ledger: a recorded migration is applied, never re-verified or re-run", () => {
+    expect(replicaMigrationNeedsVerification(true, true)).toBe(false);
+    expect(replicaMigrationNeedsVerification(true, false)).toBe(false);
+    for (const satisfied of [true, false, null]) {
+      for (const rerunSafe of [true, false]) {
+        for (const ledgerReadable of [true, false]) {
+          expect(
+            decideReplicaMigration({ recorded: true, ledgerReadable, satisfied, rerunSafe }),
+          ).toEqual({ action: "skip", reason: "applied" });
+        }
+      }
+    }
   });
 
   it("never treats an unreadable ledger as an empty one", () => {
