@@ -19,6 +19,7 @@ import { broadcast } from "../../websocket/index.js";
 import { tryNotify, tryResolve } from "../notifications/NoticeService.js";
 import type { StoredMessage } from "../storage/IStorageProvider.js";
 import { dueDate, parsePromise, promiseLabel } from "../../../core/collab/promised.js";
+import type { Triage } from "./askTriage.js";
 
 export interface MentionAction { title: string; due?: string | null; blocks?: string | null }
 export interface MentionContext { chatId?: string; chatTitle?: string; appId?: string; appName?: string; goalId?: string }
@@ -30,6 +31,8 @@ export interface MentionItem {
   thread?: Array<{ by: "from" | "to"; text: string; at: string }>; nudgedAt?: string | null; updatedAt?: string;
   /** When they said they'd have it ("Thursday morning" → ISO). Both sides track it. */
   promisedAt?: string | null;
+  /** Pen + Jev's ranking (recipient only): when, which goal, why, where it sits in today's plan. */
+  triage?: (Triage & { at?: string }) | null;
 }
 /** What the chat card renders. Stored as the result of a `mention_inbox` tool call on the message. */
 export interface MentionCardData {
@@ -44,6 +47,8 @@ export interface MentionCardData {
   plan?: PlanStep[];
   planStatus?: "approved";
   promisedAt?: string | null; remindedAt?: string | null;
+  /** Pen + Jev's ranking, once it's in. */
+  triage?: Triage | null;
 }
 export interface PlanStep { step: string; kind: "check" | "change" }
 export interface CollabEvent {
@@ -95,6 +100,13 @@ export const listMembers = () =>
 export const getMention = (id: string) => call<{ mention: MentionItem }>(`/mentions/${encodeURIComponent(id)}`).then((r) => r.mention);
 export const listMentions = (box: "inbox" | "sent" = "inbox", status: string | null = "open") =>
   call<{ mentions: MentionItem[] }>(`/mentions?box=${box}${status ? `&status=${status}` : "&status="}`).then((r) => r.mentions);
+
+/** Save Pen + Jev's ranking on the ask (server), and on this machine's card. */
+export async function saveTriage(itemId: string, triage: Triage): Promise<void> {
+  await call(`/mentions/${encodeURIComponent(itemId)}/triage`, "POST", { triage });
+  await updateCard(itemId, { triage });
+  broadcast({ type: "collab:mention", data: { itemId } });
+}
 
 /** Answer a mention: send the reply (optional) and close it. Updates the card and clears the notice. */
 export async function answerMention(
@@ -188,17 +200,18 @@ export const MENTION_CHECK_TOOLS = [
   "get_cloud_sync_status", "inspect_cloud_repo",
 ];
 
-export function parseInvestigation(raw: string | null): { reply: string; nextStep?: string; findings?: string; plan: PlanStep[] } | null {
+export function parseInvestigation(raw: string | null): { reply: string; nextStep?: string; findings?: string; why?: string; plan: PlanStep[] } | null {
   const base = parseSuggestion(raw);
   if (!base || !raw) return null;
   const m = raw.match(/\{[\s\S]*\}/);
   try {
-    const j = JSON.parse(m ? m[0] : raw) as { findings?: unknown; plan?: unknown };
+    const j = JSON.parse(m ? m[0] : raw) as { findings?: unknown; why?: unknown; plan?: unknown };
     const plan = (Array.isArray(j.plan) ? j.plan : []).flatMap((x): PlanStep[] => {
       const o = x as { step?: unknown; kind?: unknown };
       return typeof o?.step === "string" && o.step.trim() ? [{ step: o.step.trim().slice(0, 300), kind: o.kind === "change" ? "change" : "check" }] : [];
     }).slice(0, 6);
-    return { ...base, ...(typeof j.findings === "string" && j.findings.trim() ? { findings: j.findings.trim().slice(0, 800) } : {}), plan };
+    return { ...base, ...(typeof j.findings === "string" && j.findings.trim() ? { findings: j.findings.trim().slice(0, 800) } : {}),
+      ...(typeof j.why === "string" && j.why.trim() ? { why: j.why.trim().slice(0, 300) } : {}), plan };
   } catch {
     return { ...base, plan: [] };
   }
@@ -211,6 +224,7 @@ async function investigate(item: MentionItem): Promise<ReturnType<typeof parseIn
   const { getAgentService } = await import("../AgentService.js");
   const prompt = [
     "A teammate mentioned your user. Before drafting a reply, VERIFY what they said using read-only tools:",
+    "also read the user's goals (workspace/IDENTITY.md → Goals) and what they're working on, so you can say how much this matters to them.",
     "search memory and the wiki for context and how the user handled similar things, and if they report a problem (an app, job, database, sync issue),",
     "look at it with the read/query tools. Never change anything, never send messages. Keep it to a few focused checks.",
     "",
@@ -222,6 +236,7 @@ async function investigate(item: MentionItem): Promise<ReturnType<typeof parseIn
     '{"findings": "1-2 sentences: what you checked and what is actually true (say plainly if you could not verify)",',
     ' "reply": "the reply your user would send, first person, in their voice, at most 3 sentences, grounded in the findings",',
     ' "nextStep": "one line",',
+    ' "why": "one line for the user: how much this matters now and why (who is blocked, which goal, what deadline). Plain words.",',
     ' "plan": [{"step": "concrete step", "kind": "check" | "change"}]}',
     'Plan: 1-5 steps to resolve it. "check" = read-only, "change" = edits code, data, links or settings. Empty if nothing to do.',
   ].join("\n");
@@ -296,6 +311,18 @@ export async function waitingOn(): Promise<MentionItem[]> {
   return (await listMentions("sent", "open")).filter((m) => m.notified !== false && (!m.orgId || !org || m.orgId === org));
 }
 
+/** Every open ask to you in this org, ranked by Pen + Jev: placed first, then now → fyi, then unranked. */
+export async function openAsks(): Promise<(MentionItem & { chatId?: string })[]> {
+  const org = process.env.PAPR_ORG_ID;
+  const order = { now: 0, today: 1, this_week: 2, fyi: 3 } as Record<string, number>;
+  const rows = (await listMentions("inbox", "open")).filter((m) => !m.orgId || !org || m.orgId === org);
+  const c = await cards();
+  return rows
+    .map((m) => ({ ...m, chatId: c.get(m.id)?.chatId }))
+    .sort((a, b) => Number(!!b.triage?.placed) - Number(!!a.triage?.placed)
+      || (order[a.triage?.when ?? ""] ?? 9) - (order[b.triage?.when ?? ""] ?? 9) || b.createdAt.localeCompare(a.createdAt));
+}
+
 /** The chat a mention's card lives in, if it arrived on this machine. */
 export async function mentionChatId(itemId: string): Promise<string | undefined> {
   return (await cards()).get(itemId)?.chatId;
@@ -350,6 +377,9 @@ async function receiveMention(e: CollabEvent): Promise<void> {
     await updateCard(itemId, r ? {
       investigating: false, suggestedReply: r.reply, findings: r.findings, plan: r.plan, ...(r.nextStep ? { nextStep: r.nextStep } : {}),
     } : { investigating: false });
+    // Then Jev ranks it with what Pen found, against your goals and today's plan.
+    const { queueTriage } = await import("./askTriage.js");
+    queueTriage({ item, findings: r?.findings, why: r?.why });
   }).catch(() => updateCard(itemId, { investigating: false }));
 }
 
