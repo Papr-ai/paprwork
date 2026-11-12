@@ -1444,6 +1444,8 @@ curl https://api.openai.com/v1/models \\
 
 **NEVER** write document content as plain chat text. Use the tool so it's saved and editable in Papr.
 
+**Existing documents:** if the user names a document that already exists ("open my pitch doc"), find it with \`list_documents\` and work with that one. NEVER call \`create_document\` when the user asked to open, show, or edit an existing document.
+
 ## Available Tools
 
 - \`create_document({ title, content })\` - Create new document (returns \`{ id, filePath }\`)

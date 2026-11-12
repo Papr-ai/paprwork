@@ -693,6 +693,7 @@ const createJobSchemaCore = z
       "claude-opus-5",
       "claude-opus-5-5",
       "claude-fable-5-1",
+      "claude-fable-5-2",
       // OpenAI
       "gpt-5-6-luna",
       "gpt-5-6-terra",
@@ -2097,6 +2098,7 @@ const updateJobSchema = z.object({
       "claude-opus-5",
       "claude-opus-5-5",
       "claude-fable-5-1",
+      "claude-fable-5-2",
       // OpenAI
       "gpt-5-6-luna",
       "gpt-5-6-terra",

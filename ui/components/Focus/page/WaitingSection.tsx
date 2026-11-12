@@ -7,6 +7,8 @@ import type { FocusFeed, FeedWaiting } from "../focusBridge";
 import type { NeedsUi } from "./NeedsSection";
 import { ago } from "./fmt";
 import { dueLabel } from "../../../../src/core/collab/promised";
+import { BriefCards, type OnReview } from "./BriefCards";
+import type { Section } from "./brief";
 
 const first = (n: string) => String(n || "").split(/\s+/)[0] || n;
 const since = (iso?: string | null) => (iso ? (Date.now() - Date.parse(iso) < 60_000 ? "just now" : ago(iso)) : "");
@@ -52,12 +54,15 @@ function Row({ w, ui, open, setOpen }: { w: FeedWaiting; ui: NeedsUi; open: bool
   );
 }
 
-export function WaitingSection({ feed, ui }: { feed: FocusFeed; ui: NeedsUi }) {
+/** One Waiting on: your asks (live), then what Pen found in your notes (the brief), under a small label. */
+export function WaitingSection({ feed, ui, notes, onReview }: { feed: FocusFeed; ui: NeedsUi; notes?: Section | null; onReview: OnReview }) {
   const [open, setOpen] = useState<string | null>(null);
-  if (!feed.waiting.length) return null;
+  const n = notes?.items?.length ?? 0;
+  if (!feed.waiting.length && !n) return null;
   return (
-    <section className="hsec hwait"><h4>Waiting on <em>{feed.waiting.length}</em></h4>
+    <section className="hsec hwait"><h4>Waiting on <em>{feed.waiting.length + n}</em></h4>
       {feed.waiting.map((w) => <Row key={w.id} w={w} ui={ui} open={open === w.id} setOpen={setOpen} />)}
+      {n ? <>{feed.waiting.length ? <small className="hwait-notes">From your notes</small> : null}<BriefCards s={notes!} onReview={onReview} /></> : null}
     </section>
   );
 }

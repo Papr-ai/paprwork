@@ -867,6 +867,10 @@
 .fpage-shell .hpen { display: flex; gap: 8px; align-items: flex-start; margin: 4px 0 0; padding: 8px 11px; border-radius: 11px; font-size: 13px; line-height: 1.4; color: var(--ink); background: rgba(0,96,224,.05); }
 .fpage-shell .hpen span { display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; overflow: hidden; }
 .fpage-shell .hpen-mk { flex: none; width: 16px; height: 16px; color: var(--blue); } .fpage-shell .hpen-mk svg { width: 16px; height: 16px; }
+.fpage-shell .hcard-t[role="button"] { cursor: pointer; border-radius: 8px; outline: none; }
+.fpage-shell .hcard-t[role="button"]:focus-visible { box-shadow: 0 0 0 2px var(--blue); }
+.fpage-shell .hcard.is-open { align-items: flex-start; }
+.fpage-shell .hcard.is-open .hcard-body, .fpage-shell .hcard.is-open .hpen span { display: block; -webkit-line-clamp: unset; overflow: visible; white-space: pre-wrap; }
 .fpage-shell .hcard-a { flex: none; display: flex; align-items: center; gap: 6px; }
 .fpage-shell .hgo { border: none; cursor: pointer; white-space: nowrap; padding: 8px 18px; border-radius: 999px; background: var(--blue); color: #fff; font: 600 13px var(--font); }
 .fpage-shell .hgo:hover { filter: brightness(.94); }
@@ -905,6 +909,7 @@
 
 /* Waiting on: one line per ask (the Focus proposal). Name · what · due / state · their latest word. Click opens it. */
 .fpage-shell .hwait-row { border-top: 1px solid var(--line); }
+.fpage-shell .hwait-notes { display: block; margin: 14px 0 2px; padding-left: 8px; font-size: 11.5px; font-weight: 500; color: var(--soft); }
 .fpage-shell .hwait-line { display: grid; grid-template-columns: 96px 1fr; gap: 2px 12px; width: 100%; padding: 11px 2px; border: none; background: none;
   text-align: left; cursor: pointer; font: 13px/1.4 var(--font); color: var(--ink); border-radius: 0; }
 .fpage-shell .hwait-line:hover b { color: var(--blue); }

@@ -42,11 +42,15 @@ export function billingNeedsYou(s: NoticeState): boolean {
   return billingMark(s) === "blue";
 }
 
+/** Mentions (asks, replies, due reminders) live in Focus and the Pen count, not as chat dots:
+ *  a chat goes blue only when Pen or a job there waits on your approval / key. */
+export const isChatDotNotice = (n: Notice) => n.owner.kind === "chat" && !n.kind.startsWith("mention");
+
 /** Strongest open mark per chat id, as a stable "id:mark|id:mark" key for selectors. */
 export function chatMarksKey(s: NoticeState): string {
   const byChat = new Map<string, NoticeMark[]>();
   for (const n of s.notices) {
-    if (n.owner.kind !== "chat") continue;
+    if (!isChatDotNotice(n)) continue;
     const list = byChat.get(n.owner.id) ?? [];
     list.push(n.mark);
     byChat.set(n.owner.id, list);

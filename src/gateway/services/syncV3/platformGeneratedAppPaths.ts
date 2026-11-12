@@ -16,6 +16,22 @@ export const PLATFORM_GENERATED_APP_PATHS: ReadonlySet<string> = new Set([
   ".papr-cloud-revision",
 ]);
 
+/**
+ * Build output each machine regenerates from source it already has: the
+ * bundle (dist/), db.ts (from data-sources.json) and the vendored DB helper.
+ * They are still published (the web host serves dist/), but Get updates never
+ * compares them — two machines building the same merged source can produce
+ * different bytes (different esbuild version, different db ids), and a single
+ * bundled file can't be merged line by line. The pull rebuilds them instead.
+ */
+const LOCALLY_REBUILT_PREFIXES = ["dist/"];
+const LOCALLY_REBUILT_FILES: ReadonlySet<string> = new Set(["db.ts", "backend/papr_db.py"]);
+
+export function isLocallyRebuiltAppPath(relativePath: string): boolean {
+  const rel = norm(relativePath);
+  return LOCALLY_REBUILT_FILES.has(rel) || LOCALLY_REBUILT_PREFIXES.some((p) => rel.startsWith(p));
+}
+
 /** Seeded by the writer when it creates the per-app repo. Only noise while we have no local copy. */
 export const WRITER_SCAFFOLD_PATHS: ReadonlySet<string> = new Set(["README.md", ".gitignore"]);
 

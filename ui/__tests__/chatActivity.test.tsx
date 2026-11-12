@@ -60,6 +60,15 @@ describe("useChatActivity (notices)", () => {
     expect(result.current("b")).toBe("working");
   });
 
+  it("a mention never lights its chat: blue is only for approvals and keys", () => {
+    const { result } = renderHook(() => useChatActivity());
+    set(notice("m", "blue", "mention"), notice("d", "blue", "mention.due"));
+    expect(result.current("m")).toBeUndefined();
+    expect(result.current("d")).toBeUndefined();
+    set(notice("k", "blue", "key.request"));
+    expect(result.current("k")).toBe("needs");
+  });
+
   it("Chats icon: blue if any chat needs you, else green", () => {
     const { result } = renderHook(() => useChatsBadge());
     expect(result.current).toBeUndefined();

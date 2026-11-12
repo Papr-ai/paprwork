@@ -78,7 +78,7 @@ export function EditThree({ data, focusId, promoteId, startOwn, onSaved, onClose
   return (
     <div className="t3wrap">
       <p className="hero-date">{first ? "Pen's picks" : "Edit Focus"}</p>
-      <h2 className="hero-title">{first ? "Pen picked your three." : "Your three."}</h2>
+      <h2 className="hero-title">{first ? "Pen picked your priority goals." : "Your priority goals."}</h2>
       <p className="t3sub">{sub}</p>
       <div className="t3cards">
         {draft.map((g, i) => {

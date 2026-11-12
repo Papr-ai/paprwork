@@ -2,7 +2,7 @@
  * Today, in the Focus proposal's order: banners + hero, Monday review, Do this first (top need, else the
  * brief's top priority), Your three, Also needs you, Waiting on, the brief's sections, Goals.
  */
-import { agentPrompt, pickFocus, type BriefItem } from "./brief";
+import { agentPrompt, pickFocus, pickWaiting, type BriefItem } from "./brief";
 import { focusEnv, openChat } from "./focusApi";
 import { ArrowIcon, CheckIcon } from "./icons";
 import { BriefHero, LoadErrorBanner, OfflineLine, SampleBanner, StaleBanner } from "./BriefBanners";
@@ -27,7 +27,9 @@ export function TodayView({ b, d, feed, ui, onReview, open }: Props) {
   const today = b.idx === 0;
   const brief = b.brief;
   if (!brief && !b.error) return <p className="fpage-loading">Loading today&apos;s brief…</p>;
-  const { focus, sections } = brief ? pickFocus(brief.sections) : { focus: null as BriefItem | null, sections: [] };
+  const { focus, sections: all } = brief ? pickFocus(brief.sections) : { focus: null as BriefItem | null, sections: [] };
+  // Today: the brief's Waiting on folds into the live one (one heading). Past days keep it as written.
+  const { notes, sections } = today ? pickWaiting(all) : { notes: null, sections: all };
   const needHero = today && feed.needs.length ? feed.needs[0] : null;
   const hasThree = !!d.three.length;
 
@@ -66,7 +68,7 @@ export function TodayView({ b, d, feed, ui, onReview, open }: Props) {
         ) : null}
       {today ? <YourThree data={d.state} onOpen={(id) => open("goal", id)} onEdit={() => open("edit")} /> : null}
       {today ? <AlsoNeeds feed={feed} ui={ui} goalOf={(i) => goalFor(i, d.three)} menu={menu} /> : null}
-      {today ? <WaitingSection feed={feed} ui={ui} /> : null}
+      {today ? <WaitingSection feed={feed} ui={ui} notes={notes} onReview={onReview} /> : null}
       <div id="sections">{sections.map((s) => <BriefSection key={`${s.type}-${s.title}`} s={s} onReview={onReview} />)}</div>
       <div id="goals">{goals()}</div>
     </div>

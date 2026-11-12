@@ -29,6 +29,36 @@ function emptyBootstrap(
   };
 }
 
+describe("shared team database setup message", () => {
+  it("tells the agent to pull, never to migrate or seed", () => {
+    const msg = buildCloudInstallAgentSetupMessage({
+      appTitle: "Launch Post Studio",
+      appId: "app-1",
+      bootstrap: emptyBootstrap({
+        ready: false,
+        sharedDatabase: true,
+        errors: [
+          "The team's shared database for \"posts\" (dbId db-1) has no tables on this device after the cloud pull.",
+        ],
+      }),
+    });
+    expect(msg).toContain("team's shared database");
+    expect(msg).toContain("repair_cloud_sync strategy pull");
+    expect(msg).toContain("Do NOT apply migrations");
+    expect(msg).not.toContain("Apply pending migrations");
+    expect(msg).not.toContain("run it once");
+  });
+
+  it("keeps the migration guidance for own-data copies", () => {
+    const msg = buildCloudInstallAgentSetupMessage({
+      appTitle: "Launch Post Studio",
+      appId: "app-1",
+      bootstrap: emptyBootstrap({ ready: false, errors: ["Migration failed"] }),
+    });
+    expect(msg).toContain("Apply pending migrations");
+  });
+});
+
 describe("shouldOfferInstallAgentSetup", () => {
   it("returns true when bootstrap recorded migration errors (fork_empty)", () => {
     expect(
