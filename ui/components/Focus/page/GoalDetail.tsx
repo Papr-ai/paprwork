@@ -57,7 +57,7 @@ export function GoalDetail({ g, three, tasks, onClose, onEdit, onPromote, onChan
       <button type="button" className="t3back" onClick={onClose}><BackIcon />Focus</button>
       <div className="t3dh"><h2 className="hero-title">{g.title}</h2><em className={`wrpill is-${pcls}`}>{plabel}</em></div>
       {done ? <p className="t3sub">{done}</p> : null}
-      {inThree ? null : <p className="t3outside">Not one of your three right now.</p>}
+      {inThree ? null : <p className="t3outside">Not one of your priority goals right now.</p>}
       <GoalHero g={g} />
       <Track g={g} onStarted={onChanged} />
       {g.why || g.scope ? (

@@ -23,7 +23,7 @@ import { dueDate, parsePromise, promiseLabel } from "../../../core/collab/promis
 export interface MentionAction { title: string; due?: string | null; blocks?: string | null }
 export interface MentionContext { chatId?: string; chatTitle?: string; appId?: string; appName?: string; goalId?: string }
 export interface MentionItem {
-  id: string; fromUserId: string; fromName: string; toUserId: string; toName: string; text: string;
+  orgId?: string; id: string; fromUserId: string; fromName: string; toUserId: string; toName: string; text: string;
   context: MentionContext; action: MentionAction | null; status: "open" | "done" | "dismissed";
   reply: { text: string; at: string } | null; createdAt: string; notified?: boolean;
   progress?: "asked" | "in_progress" | "needs_reply" | "done" | "cant" | "closed";
@@ -292,7 +292,8 @@ export async function mentionCard(itemId: string): Promise<(MentionCardData & { 
 
 /** The sender's open asks that were sent, for "Waiting on" in Focus. */
 export async function waitingOn(): Promise<MentionItem[]> {
-  return (await listMentions("sent", "open")).filter((m) => m.notified !== false);
+  const org = process.env.PAPR_ORG_ID;
+  return (await listMentions("sent", "open")).filter((m) => m.notified !== false && (!m.orgId || !org || m.orgId === org));
 }
 
 /** The chat a mention's card lives in, if it arrived on this machine. */

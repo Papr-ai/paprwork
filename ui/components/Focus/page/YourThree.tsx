@@ -10,7 +10,7 @@ export function YourThree({ data, onOpen, onEdit }: { data: FocusState | null; o
     <section className="hthree">
       <header>
         <h2 className="section-title">
-          Your three {pick ? <em className="t3pick" title="Pen picked these from your goals and activity. Edit any time.">Pen&apos;s picks</em> : null}
+          Priority goals {pick ? <em className="t3pick" title="Pen picked these from your goals and activity. Edit any time.">Pen&apos;s picks</em> : null}
         </h2>
         <button type="button" className="t3link" onClick={onEdit}>Edit</button>
       </header>
