@@ -144,3 +144,24 @@ export async function loadEmbedder(root: string, opts: { threads?: number } = {}
   );
   return new OnnxEmbedder(ort.Tensor ? ort : ort.default, session, tok, eos);
 }
+
+/**
+ * Best embedder for this machine: CoreML on the Neural Engine (Apple Silicon, helper + coreml/ model present), with ONNX
+ * as the fallback for long documents; otherwise ONNX alone. Never throws for CoreML problems, only if ONNX also fails.
+ */
+export async function loadBestEmbedder(root: string, opts: { threads?: number; helper?: string } = {}): Promise<Embedder> {
+  const onnx = await loadEmbedder(root, opts);
+  if (process.platform !== "darwin" || process.arch !== "arm64") return onnx;
+  try {
+    const { CoreMLEmbedder, COREML_MODEL, helperPath } = await import("./coremlEmbedder.js");
+    const { Tokenizer }: any = await import("@huggingface/tokenizers");
+    const dir = modelDir(root);
+    const tok = new Tokenizer(
+      JSON.parse(fs.readFileSync(path.join(dir, "tokenizer.json"), "utf8")),
+      JSON.parse(fs.readFileSync(path.join(dir, "tokenizer_config.json"), "utf8")),
+    );
+    return await CoreMLEmbedder.start({ helper: opts.helper ?? helperPath(), modelPath: path.join(dir, COREML_MODEL), tok, fallback: onnx });
+  } catch {
+    return onnx;
+  }
+}
