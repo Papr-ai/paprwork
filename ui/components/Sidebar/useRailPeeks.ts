@@ -7,7 +7,7 @@ import { useChat } from "../../hooks/useChat";
 import { useArtifacts } from "../../hooks/useArtifacts";
 import { useTabs } from "../../hooks/useTabs";
 import { isUserFacingChatId } from "../../utils/chatVisibility";
-import { useChatActivity, useChatsBadge } from "../Chat/chatActivity";
+import { useChatActivity, type ChatActivity } from "../Chat/chatActivity";
 import type { Artifact } from "../../stores/artifactsStore";
 import type { SidebarFavorite } from "./useSidebarFavorites";
 import { relativeTime, type PeekGroup, type PeekRow } from "./RailPeek";
@@ -55,9 +55,11 @@ export function useRailPeeks({ favorites, openFavorite, removeFavorite }: Args) 
     // Favorited chats are stored by tab id ("chat-<id>"); compare on the bare chat id so a
     // pinned chat doesn't also show up under Recent.
     const pinnedIds = new Set(favorites.map((f) => f.id.replace(/^chat-/, "")));
+    // A chat with a dot always makes the list, so the Chats icon never lights for a chat you can't find.
+    const lit = (id: string) => (activityOf(id) === "needs" ? 2 : activityOf(id) === "done" ? 1 : 0);
     const recent = chats
       .filter((c) => isUserFacingChatId(c.id) && !pinnedIds.has(c.id))
-      .sort((a, b) => time(b.updatedAt || b.createdAt) - time(a.updatedAt || a.createdAt))
+      .sort((a, b) => lit(b.id) - lit(a.id) || time(b.updatedAt || b.createdAt) - time(a.updatedAt || a.createdAt))
       .slice(0, RECENT_CHATS)
       .map<PeekRow>((c) => ({
         id: c.id,
@@ -102,8 +104,18 @@ export function useRailPeeks({ favorites, openFavorite, removeFavorite }: Args) 
 
   const appGroups = useMemo(() => artifactGroups("app"), [artifactGroups]);
   const docGroups = useMemo(() => artifactGroups("document"), [artifactGroups]);
-  // Same notices as the tab bar: blue if a chat needs you, green if a reply is new.
-  const chatsBadge = useChatsBadge();
+  // Same notices as the tab bar: blue if a chat needs you, green if a reply is new. Only chats in your
+  // list count: a notice for a chat that isn't here (deleted, another workspace) never lights the icon.
+  const chatsBadge = useMemo<"needs" | "done" | undefined>(() => {
+    let best: ChatActivity;
+    for (const c of chats) {
+      if (!isUserFacingChatId(c.id)) continue;
+      const a = activityOf(c.id);
+      if (a === "needs") return "needs";
+      if (a === "done") best = a;
+    }
+    return best === "done" ? "done" : undefined;
+  }, [chats, activityOf]);
 
   // Re-read the chat list when the Chats peek opens (throttled) so chats touched elsewhere —
   // other windows, jobs, sync — are there too, not only ones this window saw change.

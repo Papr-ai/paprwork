@@ -36,14 +36,14 @@ import { useFocusFeed } from "../components/Focus/focusBridge";
 const FocusPage = () => <Page useFeed={useFocusFeed} />;
 
 describe("Focus page (native)", () => {
-  it("draws the brief, Do this first, Your three and Up next — no iframe", async () => {
+  it("draws the brief, Do this first, Priority goals and Next actions — no iframe", async () => {
     const { container } = render(<FocusPage />);
     await act(async () => { await new Promise((r) => setTimeout(r, 20)); });
     expect(container.querySelector("iframe")).toBeNull();
     expect(screen.getByRole("heading", { name: "Your Daily Brief" })).toBeTruthy();
     expect(screen.getByText("Do this first")).toBeTruthy();
     expect(screen.getByRole("heading", { name: "Send metrics to Dale" })).toBeTruthy();
-    expect(screen.getByText("Up next")).toBeTruthy();
+    expect(screen.getByText("Next actions")).toBeTruthy();
     expect(container.querySelector(".hthree .t3row")?.textContent).toContain("Close Tranche 2");
     expect(calls.some((c) => c.includes("/api/db/"))).toBe(false);
   });

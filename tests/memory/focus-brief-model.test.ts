@@ -26,10 +26,10 @@ describe("Focus brief model", () => {
     expect(briefFor([], {}, undefined, now)).toBeNull();
   });
 
-  it("lifts the top priority into Do this first and keeps the rest as Up next", () => {
+  it("lifts the top priority into Do this first and keeps the rest as Next actions", () => {
     const b = briefFor([{ date: "2026-11-04", brief_json: brief("T") }], {}, undefined, now)!;
     const { focus, sections } = pickFocus(b.sections);
     expect(focus?.title).toBe("A");
-    expect(sections[0].title).toBe("Up next");
+    expect(sections[0].title).toBe("Next actions");
   });
 });
