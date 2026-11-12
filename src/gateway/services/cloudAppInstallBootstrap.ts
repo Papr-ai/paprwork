@@ -3,6 +3,7 @@
  * resolve linked DB paths, apply git migrations locally, optional Turso row pull.
  */
 
+import { isCloudSyncEnabled } from "../utils/cloudSyncEnabled.js";
 import { openDiagnosticDatabase } from "./databaseDiagnostics/sqlite.js";
 
 import { existsSync, statSync } from "fs";
@@ -302,13 +303,18 @@ async function bootstrapLinkedSource(
       : countUserTables(localPath);
   const writable = cloudDirect ? cloudDirect.reachable : isLocalDbReadable(localPath);
 
+  const shared = Boolean(options?.sharedDatabase && !options.localOnly);
   if (!writable && errors.length === 0) {
     errors.push(
-      `Database "${source.alias}" is not reachable after setup (${localPath}).`,
+      shared
+        ? `The team's shared database for "${source.alias}"` +
+            (source.dbId ? ` (dbId ${source.dbId})` : "") +
+            ` is not reachable on this device after the cloud pull (pull ${tursoPull}, ${localPath}).`
+        : `Database "${source.alias}" is not reachable after setup (${localPath}).`,
     );
   }
 
-  if (options?.sharedDatabase && !options.localOnly && errors.length === 0) {
+  if (shared && errors.length === 0) {
     // The team's database is the source of truth. If the pull did not bring
     // its schema down, the copy is broken: say so instead of suggesting
     // migrations or seed jobs that would write schema into the shared DB.
@@ -319,10 +325,12 @@ async function bootstrapLinkedSource(
           `: cloud pull ${tursoPull}.`,
       );
     } else if (writable && userTableCount === 0) {
-      errors.push(
+      // Reachable but empty: the replica may still be pulling. Not an error,
+      // and never a cue to migrate or seed the team's database from here.
+      warnings.push(
         `The team's shared database for "${source.alias}"` +
           (source.dbId ? ` (dbId ${source.dbId})` : "") +
-          " has no tables on this device after the cloud pull.",
+          " has no tables on this device yet. Pull it from the cloud; do not run migrations or seed it here.",
       );
     }
   } else if (writable && userTableCount === 0 && errors.length === 0 && !options?.tursoPullOnly) {
@@ -454,8 +462,12 @@ export async function bootstrapInstalledAppDatabases(
   const pullResults = new Map<string, PullResult | undefined>();
   const migrationsByAlias = new Map<string, string[]>();
   const runMigrationsBeforeTurso = shouldRunMigrationsBeforeTurso(options);
+  // Only a cloud-backed copy shares the publisher's database. With cloud sync
+  // off the copy is a local file nobody else sees, so it migrates like any app.
   const sharedDatabase =
-    options?.installDbPolicy === "shared_primary" || options?.tursoPullOnly === true;
+    (options?.installDbPolicy === "shared_primary" || options?.tursoPullOnly === true) &&
+    !localOnly &&
+    isCloudSyncEnabled();
 
   if (runMigrationsBeforeTurso) {
     for (const source of sources) {
