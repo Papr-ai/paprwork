@@ -55,9 +55,16 @@ describe("chunker + hashing", () => {
     expect(long.length).toBeGreaterThan(LONG_CHARS);
     const ch = chunkFile("big.ts", long);
     expect(ch.length).toBeGreaterThan(2);
-    expect(ch[1]!.text.startsWith("File: big.ts\n")).toBe(true);
-    expect(ch[2]!.lineStart).toBeLessThan(ch[1]!.lineEnd); // overlap
+    expect(ch[0]!.text.startsWith("File: big.ts\n")).toBe(true);
+    expect(ch[1]!.lineStart).toBeLessThan(ch[0]!.lineEnd); // overlap
     expect(ch.at(-1)!.lineEnd).toBe(4000);
+    // every chunk fits the Neural Engine's 1024-token function (4 chars/token estimate here)
+    for (const c of ch) expect(Math.ceil(c.text.length / 4) + 1).toBeLessThanOrEqual(1024);
+    // a dense 2.5 chars/token file is split by real token count, not by characters
+    const dense = Array.from({ length: 300 }, (_, i) => `a${i}=[${i},${i + 1}];`).join("\n");
+    const count = (s: string) => Math.ceil(s.length / 2.5);
+    expect(count(dense)).toBeGreaterThan(1000);
+    expect(chunkFile("d.ts", dense, count).length).toBeGreaterThan(1);
   });
   test("secrets and big/binary-ish files are skipped", () => {
     expect(isIndexable(".env", 10)).toBe(false);

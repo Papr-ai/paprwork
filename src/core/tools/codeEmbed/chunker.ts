@@ -1,11 +1,12 @@
 /**
- * Split a file into embedding chunks: chunk 0 is the file head; files over LONG_CHARS also get line-aligned windows
- * (~8k tokens, 1k overlap), each prefixed "File: <path>" like the replay index. Token counts come from the real
+ * Split a file into embedding chunks that each fit the Neural Engine's longest function (1024 tokens), so nothing
+ * on the device path falls back to slow CPU inference. A file that fits is one chunk. A longer file becomes
+ * line-aligned windows (~1000 tokens, ~100 overlap), each prefixed "File: <path>". Token counts come from the real
  * tokenizer when given, else a 4-chars-per-token estimate.
  */
-export const LONG_CHARS = 24_000;
-export const CHUNK_TOKENS = 8192;
-export const OVERLAP_TOKENS = 1024;
+export const LONG_CHARS = 3_500;
+export const CHUNK_TOKENS = 1000;
+export const OVERLAP_TOKENS = 100;
 
 export interface Chunk {
   chunk: number;
@@ -18,10 +19,12 @@ export function chunkFile(path: string, text: string, countTokens: (s: string) =
   if (!text.trim()) return [];
   const lines = text.split("\n");
   const head: Chunk = { chunk: 0, text, lineStart: 1, lineEnd: lines.length };
-  if (text.length <= LONG_CHARS) return [head];
+  // Fits the Neural Engine in one go: a single chunk. Always decided by the token count: code runs 2-3 chars/token,
+  // so a character estimate would let 1,400-token files through.
+  if (countTokens(text) + 1 <= CHUNK_TOKENS) return [head];
   const header = `File: ${path}\n`;
   const budget = CHUNK_TOKENS - countTokens(header) - 1;
-  const out: Chunk[] = [head];
+  const out: Chunk[] = [];
   let start = 0;
   while (start < lines.length) {
     let end = start;
