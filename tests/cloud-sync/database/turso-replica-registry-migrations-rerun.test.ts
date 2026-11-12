@@ -218,29 +218,44 @@ describe.skipIf(!canUseNodeSqlite)("replica migration runner: re-run safety", ()
     expect(count(h, "gpu")).toBe(8);
   });
 
-  it("refuses to re-run a recorded destructive migration whose schema drifted, and says so", async () => {
+  it("trusts the ledger: a recorded migration whose objects a later migration replaced is left alone, silently", async () => {
+    // Release Desk, 2026-11: 0002 created idx_pr_merged; 0003 rebuilt the table
+    // without it. Re-checking 0002 against today's schema warned on every run.
     const h = makeHarness({ "0001_init": INIT, "0002_multi_run": REBUILD });
     h.db.exec(INIT);
     seedTelemetry(h);
     h.db.exec(REBUILD);
     record(h, "schema_migrations", "0001_init", "0002_multi_run");
-    h.db.exec("DROP INDEX idx_health_run_ts"); // drift: verification now fails
+    h.db.exec("DROP INDEX idx_health_run_ts"); // a later change removed an object 0002 created
 
     await expect(runRunner(h)).resolves.toEqual([]);
     expect(h.applyCalls).toEqual([]);
     expect(count(h, "health")).toBe(3);
-    expect(h.warnings.join("\n")).toMatch(/NOT re-running 0002_multi_run .*DROP TABLE health/);
+    expect(h.warnings).toEqual([]);
   });
 
-  it("still repairs drift by re-applying an additive migration", async () => {
-    const h = makeHarness({ "0001_init": INIT });
+  it("does not re-run a recorded additive migration either (no false 'missing' repair)", async () => {
+    const h = makeHarness({ "0001_init": INIT, "0002_drop_gpu": "DROP TABLE gpu;" });
     h.db.exec(INIT);
-    record(h, "schema_migrations", "0001_init");
     h.db.exec("DROP TABLE gpu");
+    record(h, "schema_migrations", "0001_init", "0002_drop_gpu");
 
-    await expect(runRunner(h)).resolves.toEqual(["0001_init.sql"]);
-    expect(count(h, "gpu")).toBe(0); // table is back
-    expect(h.warnings.join("\n")).toMatch(/re-applying/);
+    await expect(runRunner(h)).resolves.toEqual([]);
+    expect(h.applyCalls).toEqual([]);
+    expect(h.warnings).toEqual([]);
+  });
+
+  it("reports a refusal once, not on every run", async () => {
+    const h = makeHarness({ "0001_init": INIT, "0002_multi_run": REBUILD });
+    h.db.exec(INIT);
+    seedTelemetry(h);
+    record(h, "schema_migrations", "0001_init");
+    h.failLedgerReads = true;
+
+    await runRunner(h);
+    await runRunner(h);
+    expect(h.warnings.filter((w) => /NOT re-running 0002_multi_run/.test(w))).toHaveLength(1);
+    expect(h.applyCalls).toEqual([]);
   });
 
   it("with an unreadable ledger: holds destructive migrations, applies additive ones", async () => {

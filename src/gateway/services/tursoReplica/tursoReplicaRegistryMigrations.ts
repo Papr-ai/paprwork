@@ -30,6 +30,13 @@ import {
   replicaMigrationNeedsVerification,
 } from "./tursoReplicaMigrationRerunPolicy.js";
 
+const reportedRefusals = new Set<string>();
+
+/** Tests only. */
+export function resetReportedRefusalsForTests(): void {
+  reportedRefusals.clear();
+}
+
 function recordAsSource(record: DatabaseRecord): AppDataSource {
   return {
     id: record.dbId,
@@ -194,6 +201,10 @@ export async function applyReplicaRegistryDatabaseMigrations(
   for (const fileName of files) {
     const bareId = fileName.replace(/\.sql$/, "");
     const recorded = ledgers.ids.has(fileName) || ledgers.ids.has(bareId);
+    if (recorded) {
+      // The ledger is the record of what ran (see tursoReplicaMigrationRerunPolicy.ts).
+      continue;
+    }
     const safety = migrationRerunSafety(
       await fs.readFile(path.join(migrationsDir, fileName), "utf8"),
     );
@@ -213,20 +224,17 @@ export async function applyReplicaRegistryDatabaseMigrations(
       continue;
     }
     if (decision.action === "refuse") {
-      report(
-        describeRefusedMigration(bareId, dbLabel, decision.reason, safety.hazards),
-        "error",
-      );
+      // Same verdict every run until someone fixes the ledger: say it once per process.
+      const key = `${record.dbId}:${bareId}:${decision.reason}`;
+      if (!reportedRefusals.has(key)) {
+        reportedRefusals.add(key);
+        report(
+          describeRefusedMigration(bareId, dbLabel, decision.reason, safety.hazards),
+          "error",
+        );
+      }
       continue;
     }
-    if (decision.reason === "reapply_additive") {
-      report(
-        `[TursoReplica] Migration ${bareId} is recorded as applied but missing on ` +
-          `the replica handle — re-applying (additive, so re-running is safe)`,
-        "warn",
-      );
-    }
-
     const result = await paprDbApplyMigration({
       dbId: record.dbId,
       migrationId: fileName,

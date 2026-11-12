@@ -41,16 +41,13 @@ async function migrationSchemaSatisfiedOnLocalReplica(
   return migrationSatisfiedOnReplica(source, migrationRoot, migrationId);
 }
 
+/** Recorded = applied: schema + ledger row commit together (no schema re-check). */
 async function migrationAlreadyApplied(
   source: AppDataSource,
-  migrationRoot: string,
+  _migrationRoot: string,
   migrationId: string,
 ): Promise<boolean> {
-  const recorded = await migrationRecordedInLedger(source, migrationId);
-  if (!recorded) {
-    return false;
-  }
-  return migrationSchemaSatisfiedOnLocalReplica(source, migrationRoot, migrationId);
+  return migrationRecordedInLedger(source, migrationId);
 }
 
 /** Apply migrations/{id}.sql on local replica and push when online. */
