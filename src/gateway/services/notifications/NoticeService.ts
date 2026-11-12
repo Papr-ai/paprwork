@@ -78,6 +78,7 @@ function emitMark(m: NoticeMarkChange): void {
 
 /** A notice from your server list (another device, a teammate, a proposal). */
 export interface RemoteNotice extends NoticeInput {
+  orgId?: string | null;
   state: "open" | "seen" | "later" | "done";
   laterUntil?: string | null;
   updatedAt?: string;

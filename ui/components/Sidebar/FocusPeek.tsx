@@ -152,7 +152,7 @@ export function FocusPeek({ status, onOpen }: FocusPeekProps) {
           ))}
         </ul>
       ) : (
-        <p className="rail-peek__empty">{state ? "No goals yet. Open Focus and Pen will draft them." : "Loading your three…"}</p>
+        <p className="rail-peek__empty">{state ? "No goals yet. Open Focus and Pen will draft them." : "Loading your priority goals…"}</p>
       )}
       <footer className="rail-peek__footer focus-peek__foot">
         {state?.alignedPct != null ? (

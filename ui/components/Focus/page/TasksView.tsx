@@ -30,7 +30,7 @@ export function TaskRow({ t, three, onToggled }: { t: Task; three: FocusGoal[]; 
       <div className="hrt"><b>{t.title}</b>{meta ? <span>{meta}</span> : null}</div>
       {owner ? <em className="hk">{owner}</em> : null}
       {t.goal_id ? (
-        <span className={`hg${lab ? " on" : ""}`} title={lab ? `One of your three: ${three.find((g) => g.id === t.goal_id)?.title ?? ""}` : "Not one of your three"}>
+        <span className={`hg${lab ? " on" : ""}`} title={lab ? `Priority goal: ${three.find((g) => g.id === t.goal_id)?.title ?? ""}` : "Not a priority goal"}>
           {lab || t.goal_id}
         </span>
       ) : null}

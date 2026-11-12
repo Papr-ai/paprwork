@@ -909,6 +909,7 @@
 
 /* Waiting on: one line per ask (the Focus proposal). Name · what · due / state · their latest word. Click opens it. */
 .fpage-shell .hwait-row { border-top: 1px solid var(--line); }
+.fpage-shell .hwait-notes { display: block; margin: 14px 0 2px; padding-left: 8px; font-size: 11.5px; font-weight: 500; color: var(--soft); }
 .fpage-shell .hwait-line { display: grid; grid-template-columns: 96px 1fr; gap: 2px 12px; width: 100%; padding: 11px 2px; border: none; background: none;
   text-align: left; cursor: pointer; font: 13px/1.4 var(--font); color: var(--ink); border-radius: 0; }
 .fpage-shell .hwait-line:hover b { color: var(--blue); }

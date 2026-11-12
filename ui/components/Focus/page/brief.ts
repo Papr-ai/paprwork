@@ -84,15 +84,21 @@ export function briefFor(rows: BriefRow[], reviews: Record<string, Review>, date
   return { hero: parsed.hero, sections: decorate(parsed.hero, parsed.sections as never, row.date, reviews), date: row.date, stale: row.date !== today };
 }
 
-/** Lift the top active priority into "Do this first"; the rest stay as "Up next". */
+/** Lift the top active priority into "Do this first"; the rest are "Next actions" (today's other to-dos). */
 export function pickFocus(sections: Section[]): { focus: BriefItem | null; sections: Section[] } {
   const i = sections.findIndex((s) => s.type === "priorities" && s.items?.length);
   if (i < 0) return { focus: null, sections };
   const [focus, ...rest] = sections[i].items!;
   const next = sections.slice();
-  if (rest.length) next[i] = { ...sections[i], title: "Up next", items: rest };
+  if (rest.length) next[i] = { ...sections[i], title: "Next actions", items: rest };
   else next.splice(i, 1);
   return { focus, sections: next };
+}
+
+/** The brief's own "Waiting on" section (from your notes) joins the live one, so Focus has one heading. */
+export function pickWaiting(sections: Section[]): { notes: Section | null; sections: Section[] } {
+  const i = sections.findIndex((s) => /^waiting\s+on\b/i.test(s.title.trim()) && s.items?.length);
+  return i < 0 ? { notes: null, sections } : { notes: sections[i], sections: sections.filter((_, k) => k !== i) };
 }
 
 export const itemTitle = (i: Partial<BriefItem>) => i.title || i.subject || i.label || i.message || "this item";
