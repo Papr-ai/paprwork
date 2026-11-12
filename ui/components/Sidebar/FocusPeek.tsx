@@ -4,6 +4,7 @@
  * hours. Footer: share of the week on these + Open Focus. Each row opens that goal; the next step,
  * evidence and targets live on the Focus page (and in each row's tooltip), not here.
  */
+import { openFocusAsks } from "../Focus/page/focusNav";
 import { useCallback, useEffect, useRef, useState } from "react";
 import { getGatewayHttpBase } from "../../utils/gatewayHttpBase";
 import { RailIcons } from "./railIcons";
@@ -123,7 +124,7 @@ export function FocusPeek({ status, onOpen }: FocusPeekProps) {
             {peekParts(needs[0]).from ? <MentionPill name={peekParts(needs[0]).from!} /> : null}
           </button>
           {needs.length > 1 ? (
-            <button type="button" role="menuitem" className="focus-peek__more" onClick={() => onOpen()}>
+            <button type="button" role="menuitem" className="focus-peek__more" onClick={() => { onOpen(); openFocusAsks(); }}>
               {needs.length - 1} more need you
             </button>
           ) : null}
@@ -152,7 +153,7 @@ export function FocusPeek({ status, onOpen }: FocusPeekProps) {
           ))}
         </ul>
       ) : (
-        <p className="rail-peek__empty">{state ? "No goals yet. Open Focus and Pen will draft them." : "Loading your three…"}</p>
+        <p className="rail-peek__empty">{state ? "No goals yet. Open Focus and Pen will draft them." : "Loading your priority goals…"}</p>
       )}
       <footer className="rail-peek__footer focus-peek__foot">
         {state?.alignedPct != null ? (

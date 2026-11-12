@@ -36,14 +36,15 @@ import { useFocusFeed } from "../components/Focus/focusBridge";
 const FocusPage = () => <Page useFeed={useFocusFeed} />;
 
 describe("Focus page (native)", () => {
-  it("draws the brief, Do this first, Your three and Up next — no iframe", async () => {
+  it("draws the brief, one plan (Do this first, then the rest) and Priority goals — no iframe", async () => {
     const { container } = render(<FocusPage />);
     await act(async () => { await new Promise((r) => setTimeout(r, 20)); });
     expect(container.querySelector("iframe")).toBeNull();
     expect(screen.getByRole("heading", { name: "Your Daily Brief" })).toBeTruthy();
     expect(screen.getByText("Do this first")).toBeTruthy();
     expect(screen.getByRole("heading", { name: "Send metrics to Dale" })).toBeTruthy();
-    expect(screen.getByText("Up next")).toBeTruthy();
+    expect(container.querySelector(".hplan")?.textContent).toContain("Book the review");
+    expect(screen.queryByText("Next actions")).toBeNull();
     expect(container.querySelector(".hthree .t3row")?.textContent).toContain("Close Tranche 2");
     expect(calls.some((c) => c.includes("/api/db/"))).toBe(false);
   });
@@ -59,7 +60,7 @@ describe("Focus page (native)", () => {
   it("a check writes the review to /api/focus/reviews and moves the item to Reviewed", async () => {
     const { container } = render(<FocusPage />);
     await act(async () => { await new Promise((r) => setTimeout(r, 20)); });
-    fireEvent.click(container.querySelector("#sections .hi-btn.check")!);
+    fireEvent.click(container.querySelector(".hplan .hi-btn.check")!);
     await act(async () => { await new Promise((r) => setTimeout(r, 10)); });
     expect(calls.some((c) => c.startsWith("PUT /api/focus/reviews/"))).toBe(true);
     expect(container.querySelector(".reviewed-card")).toBeTruthy();

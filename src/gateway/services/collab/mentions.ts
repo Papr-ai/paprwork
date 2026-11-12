@@ -19,25 +19,38 @@ import { broadcast } from "../../websocket/index.js";
 import { tryNotify, tryResolve } from "../notifications/NoticeService.js";
 import type { StoredMessage } from "../storage/IStorageProvider.js";
 import { dueDate, parsePromise, promiseLabel } from "../../../core/collab/promised.js";
+import type { Triage } from "./askTriage.js";
 
 export interface MentionAction { title: string; due?: string | null; blocks?: string | null }
 export interface MentionContext { chatId?: string; chatTitle?: string; appId?: string; appName?: string; goalId?: string }
 export interface MentionItem {
-  id: string; fromUserId: string; fromName: string; toUserId: string; toName: string; text: string;
+  orgId?: string; id: string; fromUserId: string; fromName: string; toUserId: string; toName: string; text: string;
   context: MentionContext; action: MentionAction | null; status: "open" | "done" | "dismissed";
   reply: { text: string; at: string } | null; createdAt: string; notified?: boolean;
   progress?: "asked" | "in_progress" | "needs_reply" | "done" | "cant" | "closed";
   thread?: Array<{ by: "from" | "to"; text: string; at: string }>; nudgedAt?: string | null; updatedAt?: string;
   /** When they said they'd have it ("Thursday morning" → ISO). Both sides track it. */
   promisedAt?: string | null;
+  /** Pen + Jev's ranking (recipient only): when, which goal, why, where it sits in today's plan. */
+  triage?: (Triage & { at?: string }) | null;
 }
 /** What the chat card renders. Stored as the result of a `mention_inbox` tool call on the message. */
 export interface MentionCardData {
   type: "mention_inbox"; itemId: string; fromName: string; text: string; context: MentionContext;
   action: MentionAction | null; suggestedReply: string; nextStep?: string;
   status: "open" | "done" | "dismissed"; sentReply?: string;
+  /** Pen is checking the claim (read-only) before the draft is final. */
+  investigating?: boolean;
+  /** What Pen verified, in a sentence or two. */
+  findings?: string;
+  /** Steps for the user to approve: "check" = read-only, "change" = writes something. */
+  plan?: PlanStep[];
+  planStatus?: "approved";
   promisedAt?: string | null; remindedAt?: string | null;
+  /** Pen + Jev's ranking, once it's in. */
+  triage?: Triage | null;
 }
+export interface PlanStep { step: string; kind: "check" | "change" }
 export interface CollabEvent {
   id: string; type: string; requestId?: string | null; actorUserId?: string | null;
   title?: string | null; detail?: Record<string, unknown>; createdAt: string;
@@ -87,6 +100,13 @@ export const listMembers = () =>
 export const getMention = (id: string) => call<{ mention: MentionItem }>(`/mentions/${encodeURIComponent(id)}`).then((r) => r.mention);
 export const listMentions = (box: "inbox" | "sent" = "inbox", status: string | null = "open") =>
   call<{ mentions: MentionItem[] }>(`/mentions?box=${box}${status ? `&status=${status}` : "&status="}`).then((r) => r.mentions);
+
+/** Save Pen + Jev's ranking on the ask (server), and on this machine's card. */
+export async function saveTriage(itemId: string, triage: Triage): Promise<void> {
+  await call(`/mentions/${encodeURIComponent(itemId)}/triage`, "POST", { triage });
+  await updateCard(itemId, { triage });
+  broadcast({ type: "collab:mention", data: { itemId } });
+}
 
 /** Answer a mention: send the reply (optional) and close it. Updates the card and clears the notice. */
 export async function answerMention(
@@ -142,15 +162,12 @@ async function suggest(item: MentionItem): Promise<{ reply: string; nextStep?: s
   const fallback = { reply: item.action ? `On it. I'll ${lowerFirst(item.action.title)}${item.action.due ? ` by ${dueDate(item.action.due)}` : ""}.` : "Thanks, got it." };
   try {
     const { generateSimpleText } = await import("../../utils/simpleTextGeneration.js");
+    const voice = await myVoice();
     const raw = await generateSimpleText(
       "You are Pen, a teammate's work assistant. Someone mentioned your user. Draft the short reply your user would send back " +
-        "(first person, plain, friendly, at most 2 sentences, no greeting fluff) and the one next step they should take. " +
+        "(first person, plain, at most 2 sentences, no greeting fluff), in the user's own voice, and the one next step they should take. " +
         'Answer only JSON: {"reply": "...", "nextStep": "..."}',
-      [
-        `${item.fromName} wrote to ${item.toName}${item.context.chatTitle ? ` (from the chat "${item.context.chatTitle}")` : ""}:`,
-        item.text,
-        item.action ? `Action asked of ${item.toName}: ${item.action.title}${item.action.due ? ` (due ${dueDate(item.action.due)})` : ""}` : "",
-      ].filter(Boolean).join("\n"),
+      [mentionBrief(item), voice].filter(Boolean).join("\n\n"),
       300,
       "[Mentions]",
     );
@@ -158,6 +175,76 @@ async function suggest(item: MentionItem): Promise<{ reply: string; nextStep?: s
   } catch {
     return fallback;
   }
+}
+
+function mentionBrief(item: MentionItem): string {
+  return [
+    `${item.fromName} wrote to ${item.toName}${item.context.chatTitle ? ` (from the chat "${item.context.chatTitle}")` : ""}:`,
+    item.text,
+    item.action ? `Action asked of ${item.toName}: ${item.action.title}${item.action.due ? ` (due ${dueDate(item.action.due)})` : ""}` : "",
+  ].filter(Boolean).join("\n");
+}
+
+/** How the user actually answers teammates: their last few sent replies, as style examples. */
+async function myVoice(): Promise<string> {
+  const rows = await listMentions("inbox", null).catch(() => [] as MentionItem[]);
+  const said = rows.filter((m) => m.reply?.text).slice(0, 6).map((m) => `- to ${m.fromName.split(" ")[0]}: "${m.reply!.text.slice(0, 220)}"`);
+  return said.length ? `How ${rows[0].toName.split(" ")[0]} usually replies (match this tone and length):\n${said.join("\n")}` : "";
+}
+
+/** Read-only tools Pen may use to check a mention before drafting. No writes, no messages sent. */
+export const MENTION_CHECK_TOOLS = [
+  "search_agent_memory", "search_wiki_entities", "get_wiki_entity", "list_mentions", "list_documents", "read_document",
+  "read_file", "search_files", "list_apps", "list_app_files", "read_app_file", "read_app_data_sources", "read_app_data_health",
+  "list_jobs", "read_job_file", "read_job_logs", "papr_db_query", "papr_db_sync_status", "query_cloud_turso",
+  "get_cloud_sync_status", "inspect_cloud_repo",
+];
+
+export function parseInvestigation(raw: string | null): { reply: string; nextStep?: string; findings?: string; why?: string; plan: PlanStep[] } | null {
+  const base = parseSuggestion(raw);
+  if (!base || !raw) return null;
+  const m = raw.match(/\{[\s\S]*\}/);
+  try {
+    const j = JSON.parse(m ? m[0] : raw) as { findings?: unknown; why?: unknown; plan?: unknown };
+    const plan = (Array.isArray(j.plan) ? j.plan : []).flatMap((x): PlanStep[] => {
+      const o = x as { step?: unknown; kind?: unknown };
+      return typeof o?.step === "string" && o.step.trim() ? [{ step: o.step.trim().slice(0, 300), kind: o.kind === "change" ? "change" : "check" }] : [];
+    }).slice(0, 6);
+    return { ...base, ...(typeof j.findings === "string" && j.findings.trim() ? { findings: j.findings.trim().slice(0, 800) } : {}),
+      ...(typeof j.why === "string" && j.why.trim() ? { why: j.why.trim().slice(0, 300) } : {}), plan };
+  } catch {
+    return { ...base, plan: [] };
+  }
+}
+
+const INVESTIGATE_MS = 150_000;
+
+/** Pen checks what the teammate reported (read-only), then drafts the reply and a plan for the user to approve. */
+async function investigate(item: MentionItem): Promise<ReturnType<typeof parseInvestigation>> {
+  const { getAgentService } = await import("../AgentService.js");
+  const prompt = [
+    "A teammate mentioned your user. Before drafting a reply, VERIFY what they said using read-only tools:",
+    "also read the user's goals (workspace/IDENTITY.md → Goals) and what they're working on, so you can say how much this matters to them.",
+    "search memory and the wiki for context and how the user handled similar things, and if they report a problem (an app, job, database, sync issue),",
+    "look at it with the read/query tools. Never change anything, never send messages. Keep it to a few focused checks.",
+    "",
+    mentionBrief(item),
+    "",
+    await myVoice(),
+    "",
+    "Then answer ONLY with JSON:",
+    '{"findings": "1-2 sentences: what you checked and what is actually true (say plainly if you could not verify)",',
+    ' "reply": "the reply your user would send, first person, in their voice, at most 3 sentences, grounded in the findings",',
+    ' "nextStep": "one line",',
+    ' "why": "one line for the user: how much this matters now and why (who is blocked, which goal, what deadline). Plain words.",',
+    ' "plan": [{"step": "concrete step", "kind": "check" | "change"}]}',
+    'Plan: 1-5 steps to resolve it. "check" = read-only, "change" = edits code, data, links or settings. Empty if nothing to do.',
+  ].join("\n");
+  const run = getAgentService().runIsolatedJobSession({
+    jobId: `mention-${item.id}`, runId: `${Date.now()}`, prompt, allowedToolIds: MENTION_CHECK_TOOLS, maxTurns: 12,
+  }).then((r) => parseInvestigation(r.text));
+  const timeout = new Promise<null>((res) => setTimeout(() => res(null), INVESTIGATE_MS));
+  return Promise.race([run, timeout]).catch(() => null);
 }
 
 const lowerFirst = (s: string) => (s ? s[0].toLowerCase() + s.slice(1) : s);
@@ -172,6 +259,8 @@ export function mentionMessageText(c: MentionCardData): string {
     c.action ? `**For you:** ${c.action.title}${c.action.due ? ` (due ${dueDate(c.action.due)})` : ""}` : "",
     `**Suggested reply:** ${c.suggestedReply}`,
     c.nextStep ? `**Next step:** ${c.nextStep}` : "",
+    c.findings ? `**What I checked:** ${c.findings}` : "",
+    c.plan?.length ? `**Plan (needs your OK):**\n${c.plan.map((p, i) => `${i + 1}. ${p.step}${p.kind === "change" ? " _(change)_" : ""}`).join("\n")}` : "",
     `_Mention id: ${c.itemId}. To answer it, use answer_mention._`,
   ].filter(Boolean).join("\n\n");
 }
@@ -208,6 +297,9 @@ async function saveCards(): Promise<void> {
 }
 
 /** The Focus card's data for a mention that arrived here (the ask, the action, Pen's draft, what you sent). */
+/** The user approved Pen's plan: mark it, so the card shows it's underway. */
+export const approvePlan = (itemId: string) => updateCard(itemId, { planStatus: "approved" });
+
 export async function mentionCard(itemId: string): Promise<(MentionCardData & { chatId: string }) | null> {
   const hit = (await cards()).get(itemId);
   return hit ? { ...hit.card, chatId: hit.chatId } : null;
@@ -215,7 +307,20 @@ export async function mentionCard(itemId: string): Promise<(MentionCardData & { 
 
 /** The sender's open asks that were sent, for "Waiting on" in Focus. */
 export async function waitingOn(): Promise<MentionItem[]> {
-  return (await listMentions("sent", "open")).filter((m) => m.notified !== false);
+  const org = process.env.PAPR_ORG_ID;
+  return (await listMentions("sent", "open")).filter((m) => m.notified !== false && (!m.orgId || !org || m.orgId === org));
+}
+
+/** Every open ask to you in this org, ranked by Pen + Jev: placed first, then now → fyi, then unranked. */
+export async function openAsks(): Promise<(MentionItem & { chatId?: string; draft?: string; findings?: string })[]> {
+  const org = process.env.PAPR_ORG_ID;
+  const order = { now: 0, today: 1, this_week: 2, fyi: 3 } as Record<string, number>;
+  const rows = (await listMentions("inbox", "open")).filter((m) => !m.orgId || !org || m.orgId === org);
+  const c = await cards();
+  return rows
+    .map((m) => { const r = c.get(m.id); return { ...m, chatId: r?.chatId, draft: r?.card.suggestedReply, findings: r?.card.findings }; })
+    .sort((a, b) => Number(!!b.triage?.placed) - Number(!!a.triage?.placed)
+      || (order[a.triage?.when ?? ""] ?? 9) - (order[b.triage?.when ?? ""] ?? 9) || b.createdAt.localeCompare(a.createdAt));
 }
 
 /** The chat a mention's card lives in, if it arrived on this machine. */
@@ -242,7 +347,7 @@ async function receiveMention(e: CollabEvent): Promise<void> {
   const s = await suggest(item);
   const card: MentionCardData = {
     type: "mention_inbox", itemId, fromName: item.fromName, text: item.text, context: item.context ?? {},
-    action: item.action, suggestedReply: s.reply, ...(s.nextStep ? { nextStep: s.nextStep } : {}), status: "open",
+    action: item.action, suggestedReply: s.reply, ...(s.nextStep ? { nextStep: s.nextStep } : {}), status: "open", investigating: true,
   };
   const { getAgentService } = await import("../AgentService.js");
   const agent = getAgentService();
@@ -265,6 +370,17 @@ async function receiveMention(e: CollabEvent): Promise<void> {
     owner: { kind: "chat", id: chatId, name: title },
     actions: [{ label: "Reply", intent: "open" }],
   });
+  void investigate(item).then(async (r) => {
+    const live = (await cards()).get(itemId);
+    if (!live || live.card.status !== "open") return;
+    // The card keeps the user's own edits (it only swaps the draft if they haven't touched it).
+    await updateCard(itemId, r ? {
+      investigating: false, suggestedReply: r.reply, findings: r.findings, plan: r.plan, ...(r.nextStep ? { nextStep: r.nextStep } : {}),
+    } : { investigating: false });
+    // Then Jev ranks it with what Pen found, against your goals and today's plan.
+    const { queueTriage } = await import("./askTriage.js");
+    queueTriage({ item, findings: r?.findings, why: r?.why });
+  }).catch(() => updateCard(itemId, { investigating: false }));
 }
 
 async function receiveReply(e: CollabEvent): Promise<void> {

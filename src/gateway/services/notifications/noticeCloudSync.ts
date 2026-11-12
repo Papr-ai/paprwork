@@ -13,7 +13,8 @@ import path from "path";
 import { cloudApiFetch } from "../../utils/cloudApiClient.js";
 import type { NoticeMarkChange, RemoteNotice } from "./NoticeService.js";
 
-interface State { v: 1; cursor?: string }
+// v2: one full re-pull so notices from another org that landed here before the org filter clear out.
+interface State { v: 2; cursor?: string }
 let available = false;
 
 /** The server keeps proposal / connection notices now: local copies from the event feed would double them. */
@@ -28,9 +29,9 @@ async function stateFile(): Promise<string> {
 async function loadState(): Promise<State> {
   try {
     const s = JSON.parse(readFileSync(await stateFile(), "utf8")) as State;
-    if (s.v === 1) return s;
+    if (s.v === 2) return s;
   } catch { /* first run */ }
-  return { v: 1 };
+  return { v: 2 };
 }
 async function saveState(s: State): Promise<void> {
   const f = await stateFile();
@@ -54,9 +55,17 @@ const REPLACES: Record<string, string> = {
   "billing.cloud_paused": "account.plan", "billing.payment_failed": "account.plan",
 };
 
+/** Your server list spans every org you're in; this workspace only takes its own org's notices.
+ *  Notices with no orgId (older rows) are kept. The cursor is per workspace, so skipping is safe. */
+export function inThisOrg(n: { orgId?: string | null }, org = process.env.PAPR_ORG_ID): boolean {
+  return !n.orgId || !org || n.orgId === org;
+}
+
 async function defaultApply(n: RemoteNotice, silent: boolean): Promise<void> {
   const { getNoticeService } = await import("./NoticeService.js");
   const svc = getNoticeService();
+  // Another org's notice: drop any copy here, locally only (applyRemote "done" never marks the server).
+  if (!inThisOrg(n)) { svc.applyRemote({ ...n, state: "done" }); return; }
   svc.applyRemote(n, { silent });
   const local = REPLACES[n.kind];
   if (local && n.state !== "done") svc.resolve(local);
@@ -153,5 +162,5 @@ export async function startNoticeCloudSync(): Promise<void> {
 export async function resetNoticeCloudSyncForWorkspaceSwitch(): Promise<void> {
   queue.clear();
   available = false;
-  await saveState({ v: 1 });
+  await saveState({ v: 2 });
 }

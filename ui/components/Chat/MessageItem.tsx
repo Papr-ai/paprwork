@@ -921,7 +921,7 @@ const MessageItemInner: React.FC<MessageItemProps> = ({
                 ));
               })()}
 
-            {mentionCards.map((d) => <MentionCard key={`mention-${d.itemId}`} data={d} />)}
+            {mentionCards.map((d) => <MentionCard key={`mention-${d.itemId}`} data={d} chatId={chatId} />)}
 
             {/* Tool calls - only for assistant messages */}
             {!isUser && !isMention && message.toolCalls && message.toolCalls.length > 0 && (

@@ -25,6 +25,7 @@ export interface NamespaceUserForAgent {
   email: string;
   displayName: string;
   role: string;
+  imageUrl?: string | null;
   memoryReadPrincipal: string;
 }
 
@@ -49,6 +50,7 @@ function mapMemberForAgent(member: WorkspaceMember): NamespaceUserForAgent {
     email: member.user.email,
     displayName: member.user.displayName,
     role: member.user.role,
+    imageUrl: member.user.profileImageUrl,
     memoryReadPrincipal: toUserPrincipal(externalUserId),
   };
 }

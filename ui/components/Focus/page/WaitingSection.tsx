@@ -7,6 +7,9 @@ import type { FocusFeed, FeedWaiting } from "../focusBridge";
 import type { NeedsUi } from "./NeedsSection";
 import { ago } from "./fmt";
 import { dueLabel } from "../../../../src/core/collab/promised";
+import { type OnReview } from "./BriefCards";
+import { itemTitle, type BriefItem, type Section } from "./brief";
+import { openChat } from "./focusApi";
 
 const first = (n: string) => String(n || "").split(/\s+/)[0] || n;
 const since = (iso?: string | null) => (iso ? (Date.now() - Date.parse(iso) < 60_000 ? "just now" : ago(iso)) : "");
@@ -52,12 +55,33 @@ function Row({ w, ui, open, setOpen }: { w: FeedWaiting; ui: NeedsUi; open: bool
   );
 }
 
-export function WaitingSection({ feed, ui }: { feed: FocusFeed; ui: NeedsUi }) {
-  const [open, setOpen] = useState<string | null>(null);
-  if (!feed.waiting.length) return null;
+/** A promise Pen found outside Papr (a meeting, chat, email). Track it = Pen drafts a real ask you approve. */
+function Said({ i, onReview }: { i: BriefItem; onReview: OnReview }) {
+  const what = i.message || itemTitle(i);
+  const track = () => openChat(`Turn this into a tracked ask: "${what}". Use mention_person with the ask written to them in my voice (who it is, what they said they'd do, by when), so I can approve it.`);
   return (
-    <section className="hsec hwait"><h4>Waiting on <em>{feed.waiting.length}</em></h4>
+    <div className="hwait-row hsaid">
+      <div className="hwait-line"><b>{what}</b>{i.action ? <span>{i.action}</span> : null}</div>
+      <div className="hwait-acts">
+        <button type="button" className="t3link" onClick={track}>Track it</button>
+        <button type="button" className="t3link" title="Tell Pen you're not waiting on this; tomorrow's brief learns from it" onClick={() => onReview(i, "irrelevant")}>Not waiting</button>
+      </div>
+    </div>
+  );
+}
+
+/**
+ * You're waiting on: what you asked teammates in Papr (live), then "They said they would": promises
+ * Pen found outside Papr that aren't tracked yet. Track it turns one into a real ask.
+ */
+export function WaitingSection({ feed, ui, notes, onReview }: { feed: FocusFeed; ui: NeedsUi; notes?: Section | null; onReview: OnReview }) {
+  const [open, setOpen] = useState<string | null>(null);
+  const said = (notes?.items ?? []).filter((i) => !i._review);
+  if (!feed.waiting.length && !said.length) return null;
+  return (
+    <section className="hsec hwait" id="waiting"><h4>You&apos;re waiting on <em>{feed.waiting.length + said.length}</em></h4>
       {feed.waiting.map((w) => <Row key={w.id} w={w} ui={ui} open={open === w.id} setOpen={setOpen} />)}
+      {said.length ? <><small className="hwait-notes">They said they would</small>{said.map((i) => <Said key={i._id} i={i} onReview={onReview} />)}</> : null}
     </section>
   );
 }
