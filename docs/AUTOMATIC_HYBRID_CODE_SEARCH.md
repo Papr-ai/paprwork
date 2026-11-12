@@ -2,6 +2,44 @@
 
 **Implemented:** 2026-03-31
 
+## Current version: papr-code-search v2 (2026-11)
+
+> The sections below the line describe the original 2026-03 design (memory results prepended to grep). That still
+> runs; v1.1, v1.2 and v2 add to it. Code: `src/core/tools/{codeFusion,codeCandidates,codeSearchV2,codeSearchGrepHits,loopBreaker}.ts`.
+
+When the agent greps inside one Papr app or job, the output is:
+
+```
+=== Code pointers (papr-code-search v2: papr-embed + code graph) ===
+demos.js:18-21  openDemoViewer  (papr-embed 1.00; defines openDemoViewer)      <- v1.1: memory hits re-ranked by the code graph
+db-queries.js  (papr-embed 0.89)
+deck-ui.js  (papr-embed 0.78)
+also check (not in the semantic results):                                       <- v2: at most 2 files memory could not reach
+index.html  (named in your command)
+demo-api-shim.js  (loaded by the file in your command)
+
+=== Memory Search Results (Semantic) ===   (unchanged, 10 files)
+=== Grep Results (Exact Match) ===         (unchanged, never reordered)
+```
+
+| Layer | What it does | Evidence |
+|---|---|---|
+| v1.0 | Papr Memory code search runs next to grep; results listed first | 2026-03 |
+| v1.1 `codeFusion.ts` | Re-ranks memory hits with a regex code graph (definitions of searched symbols, import links, re-export pass-through); top 3 with line ranges | SWE-bench Pro replay, 348 tasks: fix-file recall@3 42.6% → 44.9%, @10 60.7% → 63.7% |
+| v1.2 `loopBreaker.ts` | Note when the agent repeats the same command with the same output | Loops were 6-8% of SWE-bench Pro runs, ~30% of prompt tokens |
+| v2 `codeCandidates.ts` + `codeSearchV2.ts` | Adds ≤2 "also check" files from sources semantic search cannot reach: files the command names and what they load (`<script src>`, import/require, `fetch()`), files whose SQL touches a named table, wiki entity pages for names used, doc → code mentions, definitions + callers, exact-word search; fused by weighted reciprocal rank | Curation Bench replay (50 hand-graded grep misses + 25 controls, Papr workspace): memory's 10 alone find a needed file for 44/50 misses, 17/25 controls; + 2 also-check files: **47/50, 17/25**, no control lost |
+
+What did not help (tested on the same replay, not shipped): re-ranking memory's list with the new sources, or
+showing the sources without memory hits (9/50 in a top 5, mostly noise). Without memory hits no pointer block is shown.
+
+Fail-closed: any error in v1.1/v2 returns an empty block and the previous output is shown unchanged. Cost: one walk
+of the project folder (cached 60 s, ≤3000 files, ≤400 KB each, skips node_modules/dist/venv/.versions/data);
+measured 30-65 ms per grep on the data room app (~300 files).
+
+Benchmark and replay code: `Papr-ai/swebench-harness` (`harness/fusion.py`, `curation_replay/data/candgen.py`).
+
+---
+
 ## Overview
 
 The bash tool now **automatically** combines Papr Memory semantic search with traditional grep when searching code in `$PAPR_HOME/apps/` or `$PAPR_HOME/Jobs/`. This provides the best of both worlds:
