@@ -312,13 +312,13 @@ export async function waitingOn(): Promise<MentionItem[]> {
 }
 
 /** Every open ask to you in this org, ranked by Pen + Jev: placed first, then now → fyi, then unranked. */
-export async function openAsks(): Promise<(MentionItem & { chatId?: string })[]> {
+export async function openAsks(): Promise<(MentionItem & { chatId?: string; draft?: string; findings?: string })[]> {
   const org = process.env.PAPR_ORG_ID;
   const order = { now: 0, today: 1, this_week: 2, fyi: 3 } as Record<string, number>;
   const rows = (await listMentions("inbox", "open")).filter((m) => !m.orgId || !org || m.orgId === org);
   const c = await cards();
   return rows
-    .map((m) => ({ ...m, chatId: c.get(m.id)?.chatId }))
+    .map((m) => { const r = c.get(m.id); return { ...m, chatId: r?.chatId, draft: r?.card.suggestedReply, findings: r?.card.findings }; })
     .sort((a, b) => Number(!!b.triage?.placed) - Number(!!a.triage?.placed)
       || (order[a.triage?.when ?? ""] ?? 9) - (order[b.triage?.when ?? ""] ?? 9) || b.createdAt.localeCompare(a.createdAt));
 }

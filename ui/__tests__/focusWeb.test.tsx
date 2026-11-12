@@ -16,7 +16,13 @@ const routes: Record<string, unknown> = {
   "/focus-api/api/workspace/goals": { goals: [], tree: [], isEmpty: true, proposedCount: 0 },
   "/focus-api/api/workspace/tasks?status=all": { tasks: [], counts: { open: 0, done: 0 } },
   "/focus-api/feed": {
-    asks: [{ id: "m1", fromName: "Shawkat", title: "Write pricing copy", text: "Can you write it?", due: null, promisedAt: null, took: false, chatTitle: null }],
+    asks: [
+      // Jev put this one first in today's plan → it's the Do this first reply card.
+      { id: "m1", fromName: "Shawkat", title: "Write pricing copy", text: "Can you write it?", due: null, promisedAt: null, took: false, chatTitle: null,
+        triage: { when: "today", why: "Launch page waits on it", placed: true, before: "rank:1", planDate: today } },
+      // Not ranked yet → All tasks, Asked of you.
+      { id: "m3", fromName: "Sam", title: "Look at the logo", text: "When you can", due: null, promisedAt: null, took: false, chatTitle: null },
+    ],
     waiting: [{ id: "m2", toName: "Dale Smith", title: "Q3 metrics", due: null, state: "asked", reply: null, replyAt: null, mine: null, nudgedAt: null, promisedAt: null, chatId: null, chatTitle: null, at: new Date().toISOString() }],
   },
 };
@@ -42,7 +48,22 @@ describe("Focus page (apps.papr.ai)", () => {
     expect(screen.queryByRole("button", { name: "Later" })).toBeNull();
     expect(container.querySelector(".hmenu")).toBeNull();
     expect(screen.getByText("Close Tranche 2")).toBeTruthy();
-    expect(screen.getByText("Q3 metrics")).toBeTruthy();
+    expect(screen.getByText("Launch page waits on it")).toBeTruthy();
+    expect(screen.getByText(/1 ask not in today's plan/)).toBeTruthy();
+    expect(screen.queryByText("Look at the logo")).toBeNull();
+  });
+
+  it("All tasks: Asked of you (in plan first), You're waiting on, Your tasks", async () => {
+    const { container } = render(<FocusPage useFeed={useWebFeed} />);
+    await act(async () => { await new Promise((r) => setTimeout(r, 20)); });
+    fireEvent.click(screen.getByText(/1 ask not in today's plan/));
+    await act(async () => { await new Promise((r) => setTimeout(r, 10)); });
+    const asked = container.querySelector("#asked")!;
+    expect([...asked.querySelectorAll("h5")].map((h) => h.textContent)).toEqual(["Write pricing copy", "Look at the logo"]);
+    expect(asked.textContent).toContain("In today's plan");
+    expect(asked.textContent).toContain("Pen is checking");
+    expect(container.querySelector("#waiting")?.textContent).toContain("Q3 metrics");
+    expect(screen.queryByRole("button", { name: "Not now" })).toBeNull(); // Later is desktop-only
   });
 
   it("I'm on it sends your reply to the server", async () => {

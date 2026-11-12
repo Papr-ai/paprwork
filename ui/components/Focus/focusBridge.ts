@@ -13,6 +13,7 @@ import { findTeammate, type Teammate } from "../Chat/mentionText";
 import { openNoticeOwner } from "../../stores/noticeOs";
 import { ensureSettingsTab } from "../../lib/ensureSettingsTab";
 import { useTabStore } from "../../stores/tabStore";
+import { toFeedAsk, type FeedAsk } from "./page/asks";
 import { bringBack, muteSource, putOff, setFocusMode, turnOffType, unmuteSource, useNeedsYou } from "../../stores/useNeedsYou";
 
 interface Card { itemId: string; fromName: string; text: string; suggestedReply: string; action: { title: string; due?: string | null } | null; status: string; sentReply?: string; promisedAt?: string | null }
@@ -40,9 +41,11 @@ function item(n: Notice, reason: string, card: Card | undefined, goal: string | 
 }
 
 function buildFeed(needs: Notice[], reasons: Record<string, string>, later: Notice[], muted: { id: string; until: string | null }[],
-  cards: Record<string, Card>, waiting: Waiting[], goals: Record<string, string | null>, team: Teammate[]) {
-  const people = peopleOf(waiting, cards);
+  cards: Record<string, Card>, waiting: Waiting[], goals: Record<string, string | null>, team: Teammate[], asks: FeedAsk[] = []) {
+  const people = [...new Set([...peopleOf(waiting, cards), ...asks.map((a) => a.fromName)].filter(Boolean))];
   return {
+    /** Every open ask to you, ranked by Pen + Jev (the server's order). */
+    asks,
     needs: needs.map((n) => item(n, reasons[n.key] ?? "", cards[mentionId(n) ?? ""], goals[n.key])),
     later: later.map((n) => ({ key: n.key, title: n.title, when: whenLabel(n.laterUntil!) })),
     muted: muted.map((m) => ({ id: m.id, name: sourceDef(m.id)?.name ?? "This source", until: muteEndLabel(m.until as string) })),
@@ -64,12 +67,16 @@ export function useFocusFeed() {
   const [waiting, setWaiting] = useState<Waiting[]>([]);
   const [goals, setGoals] = useState<Record<string, string | null>>({});
   const [team, setTeam] = useState<Teammate[]>([]);
+  const [asks, setAsks] = useState<FeedAsk[]>([]);
   useEffect(() => { void loadTeammates().then(setTeam).catch(() => {}); }, []);
   const ids = needs.map(mentionId).filter((x): x is string => !!x).join(",");
 
   const loadCard = (itemId: string) => void gateway.send("collab:card", { itemId }).then((r) => {
     const c = r.success ? (r.data as { card: Card | null }).card : null;
     if (c) setCards((m) => ({ ...m, [itemId]: c }));
+  }).catch(() => {});
+  const loadAsks = () => void gateway.send("collab:asks", {}).then((r) => {
+    if (r.success) setAsks(((r.data as { asks?: Record<string, unknown>[] }).asks ?? []).map(toFeedAsk));
   }).catch(() => {});
   const loadWaiting = () => void gateway.send("collab:waiting", {}).then((r) => setWaiting(r.success ? (r.data as { waiting?: Waiting[] }).waiting ?? [] : [])).catch(() => {});
 
@@ -88,18 +95,19 @@ export function useFocusFeed() {
     return () => { live = false; };
   }, [goalAsk]);
   useEffect(() => {
-    loadWaiting();
+    loadWaiting(); loadAsks();
     const on = (e: Event) => {
       const d = (e as CustomEvent).detail;
-      if (d?.type === "collab:mention" || d?.type === "notifications:changed") loadWaiting();
+      if (d?.type === "collab:mention" || d?.type === "notifications:changed") { loadWaiting(); loadAsks(); }
       if (d?.type === "collab:card" && d.data?.itemId) setCards((m) => ({ ...m, [d.data.itemId]: { ...m[d.data.itemId], ...d.data.card } }));
     };
     window.addEventListener("gateway-broadcast", on);
-    window.addEventListener("papr-workspace-switch-complete", loadWaiting);
-    return () => { window.removeEventListener("gateway-broadcast", on); window.removeEventListener("papr-workspace-switch-complete", loadWaiting); };
+    const sw = () => { loadWaiting(); loadAsks(); };
+    window.addEventListener("papr-workspace-switch-complete", sw);
+    return () => { window.removeEventListener("gateway-broadcast", on); window.removeEventListener("papr-workspace-switch-complete", sw); };
   }, []);
 
-  const feed = useMemo(() => buildFeed(needs, reasons, later, muted, cards, waiting, goals, team), [needs, reasons, later, muted, cards, waiting, goals, team]);
+  const feed = useMemo(() => buildFeed(needs, reasons, later, muted, cards, waiting, goals, team, asks), [needs, reasons, later, muted, cards, waiting, goals, team, asks]);
 
   const byKey = useRef(new Map<string, Notice>());
   byKey.current = new Map([...needs, ...later].map((n) => [n.key, n]));
@@ -108,7 +116,14 @@ export function useFocusFeed() {
       const n = typeof a.key === "string" ? byKey.current.get(a.key) : undefined;
       const l = n ? noticeLabels(n) : null;
       switch (op) {
-        case "open": if (n) openNoticeOwner(n.owner, n.key); return { ok: true };
+        case "open": {
+          if (n) { openNoticeOwner(n.owner, n.key); return { ok: true }; }
+          if (typeof a.chatId !== "string") break; // an ask with no notice here (e.g. Later'd): open its chat
+          const { tabs, createTab, switchToTab } = useTabStore.getState();
+          const t = tabs.find((x) => x.type === "chat" && x.entityId === a.chatId);
+          switchToTab(t?.id ?? createTab("chat", a.chatId, "Chat"));
+          return { ok: true };
+        }
         case "later": if (!n) break; await putOff(n.key); return { ok: true, toast: { text: `Back ${whenLabel(laterUntil())}`, undo: { op: "unlater", args: { key: n.key } } } };
         case "unlater": await bringBack(String(a.key)); return { ok: true };
         case "mute": { if (!l) break; const r = await muteSource(l.sourceId);
@@ -121,7 +136,7 @@ export function useFocusFeed() {
         case "settings": ensureSettingsTab({ section: "notifications" }); return { ok: true };
         case "answer": {
           const r = await gateway.send("collab:answer", { itemId: a.itemId, status: a.status, reply: a.reply }).catch((e: Error) => ({ success: false, error: e.message }));
-          if (r.success) loadCard(String(a.itemId));
+          if (r.success) { loadCard(String(a.itemId)); loadAsks(); }
           return r.success ? { ok: true } : { ok: false, error: err(r) };
         }
         case "followup": {

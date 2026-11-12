@@ -92,6 +92,7 @@ export function toFeed(inbox: Row[], sent: Row[]) {
       id: String(m.id), fromName: String(m.fromName ?? ""), title: words(m), text: String(m.text ?? ""),
       due: s((m.action as Row | null)?.due) ?? null, promisedAt: s(m.promisedAt) ?? null,
       took: m.progress === "in_progress" || (m.progress == null && !!m.reply), chatTitle: s((m.context as Row | null)?.chatTitle) ?? null,
+      triage: (m.triage as Row | null) ?? null, at: String(m.createdAt ?? ""),
     })),
     waiting: sent.filter((m) => m.notified !== false).map((m) => ({
       id: String(m.id), toName: String(m.toName ?? ""), title: words(m), due: s((m.action as Row | null)?.due) ?? null,

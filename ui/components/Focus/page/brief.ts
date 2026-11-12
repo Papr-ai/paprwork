@@ -13,6 +13,8 @@ export interface BriefItem {
   rank?: number; title?: string; why?: string; subject?: string; bullets?: string[]; source?: string;
   message?: string; action?: string; severity?: string; time?: string; tags?: string[]; detail?: Record<string, string>;
   label?: string; current?: number; target?: number; unit?: string; context?: string; task_id?: string;
+  /** A priority the brief built from a teammate's ask: Focus shows that ask's reply card. */
+  mention_id?: string;
   _id: string; _review: Review | null; _section: string; _type: string;
 }
 export interface Section { type: SectionType; title: string; items?: BriefItem[]; content?: string }
