@@ -171,7 +171,7 @@ describe("migration verify integration (joe-like fixture)", () => {
   );
 
   it.skipIf(!canUseBetterSqlite)(
-    "applyPendingDatabaseMigrationsToTurso re-applies when ledger exists but indexes missing",
+    "applyPendingDatabaseMigrationsToTurso trusts the cloud ledger: recorded is not re-applied even if indexes are missing",
     async () => {
       const root = fs.mkdtempSync(path.join(os.tmpdir(), "papr-mig-int-"));
       writeJoeMiniMigration(path.join(root, "migrations"));
@@ -211,7 +211,9 @@ describe("migration verify integration (joe-like fixture)", () => {
         root,
       );
 
-      expect(applied).toEqual(["0001_init.sql"]);
+      // Recorded = applied. A later migration may have dropped those indexes on
+      // purpose; re-running 0001 would be a false positive (see rerun policy).
+      expect(applied).toEqual([]);
     },
   );
 });
