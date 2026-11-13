@@ -19,7 +19,7 @@ import "./ConnectionsView.css";
 export type ConnectionsSubTab = "services" | "keys";
 
 const SUB_KEY = "papr-connections-sub-tab";
-/** AI provider keys live under Models; MCP sign-ins under Services. */
+/** AI provider keys live under Models; MCP sign-ins under Connectors. */
 const HIDDEN_KEY = /^(OPENAI_API_KEY|ANTHROPIC_API_KEY|GOOGLE_API_KEY|PAPR_API_KEY|MCP_.+_OAUTH)$/;
 
 function readSub(): ConnectionsSubTab {
@@ -84,7 +84,7 @@ export function ConnectionsView({ link }: { link?: { sub: ConnectionsSubTab; n: 
       <div className="connections-view__tabs" role="tablist" aria-label="Connection type">
         {(
           [
-            ["services", "Services"],
+            ["services", "Connectors"],
             ["keys", "API keys"],
           ] as const
         ).map(([id, label]) => (
@@ -111,7 +111,7 @@ export function ConnectionsView({ link }: { link?: { sub: ConnectionsSubTab; n: 
       </div>
 
       {sub === "services" ? (
-        <div role="tabpanel" aria-label="Services">
+        <div role="tabpanel" aria-label="Connectors">
           <McpConnectionsTab embedded org={org} onCount={onCount} />
           <div id="connections-org-settings">
             <OrgConnectionsPanel org={org} />
