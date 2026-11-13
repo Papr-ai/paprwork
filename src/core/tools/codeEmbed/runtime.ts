@@ -10,12 +10,16 @@
  * Nothing here ever blocks or fails a grep: search has a hard time budget, indexing runs in the background a few
  * files per tick, and every error degrades to "no on-device hits".
  *
- * Env: PAPR_CODE_EMBED=0 turns it off. PAPR_CODE_EMBED_DOWNLOAD=0 never downloads the model.
+ * Also indexes the Papr Work folder's non-code context (documents/, workspace/, repos/<name>/): adopted at startup,
+ * kept fresh by the existing watchers (cloud-sync workspace watcher for workspace/, a documents/repos watcher here).
+ *
+ * Env: PAPR_CODE_EMBED=0 turns it off. PAPR_CODE_EMBED_CONTEXT=0 skips documents/workspace/repos. PAPR_CODE_EMBED_DOWNLOAD=0 never downloads the model.
  *      PAPR_CODE_EMBED_CLOUD_SYNC=0 never uploads vectors. PAPR_CODE_EMBED_COREML=0 stays on ONNX. PAPR_CODE_EMBED_DATA_DIR overrides <PAPR_HOME>/data. PAPR_CODE_EMBED_HELPER = path to the Swift helper.
  */
 import * as fs from "fs";
 import * as path from "path";
 import { CodeIndexer, SKIP_DIRS } from "./codeIndexer.js";
+import { contextEnabled, contextRootFor, contextRoots, contextSkip } from "./contextRoots.js";
 import type { PostClient } from "./cloudSync.js";
 import { availableMemBytes, canRunNow, readDeviceFacts, selfTestPasses, staticTier, type EmbedTier } from "./deviceHealth.js";
 import { CODE_EMBED_DIM, CODE_EMBED_MODEL, downloadModel, modelDir, WorkerOnnxEmbedder, modelInstalled, type Embedder } from "./embedder.js";
@@ -36,6 +40,8 @@ export interface RuntimeDeps {
   installed?: (root: string) => boolean;
   tierOverride?: EmbedTier;
   canRun?: () => boolean;
+  /** Papr Work folder: documents/, workspace/ and repos/<name>/ under it are indexed too. Omit to skip them. */
+  paprRoot?: string;
 }
 
 export interface DeviceHit {
@@ -81,6 +87,7 @@ export class CodeEmbedRuntime {
       embedder: () => this.embedder(),
       cloud: d.cloud,
       canRun: d.canRun ?? (() => canRunNow({ freeMemBytes: availableMemBytes() }, false).ok),
+      skipFor: contextSkip,
     });
   }
 
@@ -166,10 +173,20 @@ export class CodeEmbedRuntime {
   /** A file under a known root changed on disk (app watcher, agent write, summary/README regenerated): mark it
    *  pending now so it is re-embedded in the background before the next grep, not after the 30 s rescan. */
   noteChange(absPath: string): boolean {
-    const root = [...this.roots].find((r) => absPath.startsWith(r + path.sep));
+    let root = [...this.roots].find((r) => absPath.startsWith(r + path.sep));
+    if (!root && this.d.paprRoot && contextEnabled()) {
+      // A new repo cloned into repos/, or documents/ created after startup: adopt it now.
+      const ctx = contextRootFor(absPath, this.d.paprRoot);
+      if (ctx && fs.existsSync(ctx)) {
+        this.touch(ctx, true);
+        return true;
+      }
+    }
     if (!root) return false;
     const rel = path.relative(root, absPath).split(path.sep);
-    if (rel.some((seg) => SKIP_DIRS.has(seg) || seg.startsWith("."))) return false;
+    const extra = contextSkip(root);
+    if (rel.some((seg) => SKIP_DIRS.has(seg) || seg.startsWith(".") || extra?.dirs.has(seg))) return false;
+    if (extra?.file?.test(rel.join("/"))) return false;
     if (fs.existsSync(absPath)) this.indexer.noteWrite(root, absPath);
     else this.indexer.refresh(root);
     this.kick();
@@ -180,7 +197,13 @@ export class CodeEmbedRuntime {
   warm(): void {
     if (this.tier !== "local") return;
     for (const r of this.store.roots()) if (fs.existsSync(r)) this.roots.add(r);
+    for (const r of this.contextRoots()) this.roots.add(r);
     void this.embedder().then((e) => { if (e) for (const r of this.roots) this.touch(r, true); });
+  }
+
+  /** documents/, workspace/, repos/<name>/ that exist now ([] when off or no Papr root). */
+  contextRoots(): string[] {
+    return this.d.paprRoot && contextEnabled() ? contextRoots(this.d.paprRoot) : [];
   }
 
   info(): { tier: EmbedTier; reasons: string[]; status: string; backend: string; modelInstalled: boolean; roots: number } & ReturnType<CodeVectorStore["stats"]> {
@@ -254,10 +277,11 @@ export function projectIdFromPath(p: string): string | undefined {
 export async function deviceHitsForGrep(grepPath: string, query: string, budgetMs = 2_000): Promise<{ tier: EmbedTier | "disabled"; backend: string; hits: DeviceHit[] }> {
   const none = { tier: "disabled" as const, backend: "none", hits: [] };
   try {
-    const projectId = projectIdFromPath(grepPath);
-    if (!projectId) return none;
     const roots = await import("../../utils/paprRoot.js");
-    const root = [roots.getPaprAppsRoot(), roots.getPaprJobsRoot()].map((r) => path.join(r, projectId)).find((r) => fs.existsSync(r));
+    const ctx = contextEnabled() ? contextRootFor(grepPath, roots.getPaprRoot()) : undefined;
+    const projectId = ctx ? undefined : projectIdFromPath(grepPath);
+    if (!ctx && !projectId) return none;
+    const root = ctx && fs.existsSync(ctx) ? ctx : projectId ? [roots.getPaprAppsRoot(), roots.getPaprJobsRoot()].map((r) => path.join(r, projectId)).find((r) => fs.existsSync(r)) : undefined;
     if (!root) return none;
     const rt = await getCodeEmbedRuntime();
     if (!rt) return none;
@@ -291,7 +315,7 @@ export function getCodeEmbedRuntime(): Promise<CodeEmbedRuntime | null> {
   if (!shared) {
     shared = (async () => {
       try {
-        const [{ getPaprDataDir }, { getApiKey }] = await Promise.all([
+        const [{ getPaprDataDir, getPaprRoot }, { getApiKey }] = await Promise.all([
           import("../../utils/paprRoot.js"),
           import("../../../gateway/utils/keyResolver.js"),
         ]);
@@ -303,7 +327,7 @@ export function getCodeEmbedRuntime(): Promise<CodeEmbedRuntime | null> {
           const c = new Papr({ xAPIKey: k });
           return { post: (p, o) => c.post(p, { body: o.body, timeout: o.timeout }) };
         };
-        const rt = new CodeEmbedRuntime({ dataDir: process.env.PAPR_CODE_EMBED_DATA_DIR || getPaprDataDir(), cloud, cloudAvailable: !!key });
+        const rt = new CodeEmbedRuntime({ dataDir: process.env.PAPR_CODE_EMBED_DATA_DIR || getPaprDataDir(), cloud, cloudAvailable: !!key, paprRoot: getPaprRoot() });
         console.log(`[codeEmbed] tier=${rt.tier} (${rt.tierReasons.join("; ")})`);
         return rt;
       } catch (e) {
@@ -320,9 +344,36 @@ export function getCodeEmbedRuntime(): Promise<CodeEmbedRuntime | null> {
 export function startCodeEmbedInBackground(delayMs = 20_000): void {
   if (process.env.PAPR_CODE_EMBED === "0" || process.env.VITEST) return;
   const t = setTimeout(() => {
-    void getCodeEmbedRuntime().then((rt) => rt?.warm()).catch(() => undefined);
+    void getCodeEmbedRuntime()
+      .then(async (rt) => {
+        if (!rt) return;
+        rt.warm();
+        const { getPaprRoot } = await import("../../utils/paprRoot.js");
+        await watchContextDirs(rt, getPaprRoot());
+      })
+      .catch(() => undefined);
   }, delayMs);
   t.unref?.();
+}
+
+let contextWatcher: { close(): Promise<void> | void } | null = null;
+
+/** One recursive OS watch each on documents/ and repos/ (workspace/ already has the cloud-sync watcher, which calls
+ *  noteCodeEmbedFileChange). Feeds edits into the index; skipped dirs and dotfiles are ignored before any stat. */
+async function watchContextDirs(rt: CodeEmbedRuntime, paprRoot: string): Promise<void> {
+  if (contextWatcher || !contextEnabled()) return;
+  const dirs = ["documents", "repos"].map((d) => path.join(paprRoot, d)).filter((d) => fs.existsSync(d));
+  if (!dirs.length) return;
+  const { TreeWatcher } = await import("../../../gateway/services/TreeWatcher.js");
+  const w = new TreeWatcher({
+    roots: dirs,
+    recursive: true,
+    settleMs: 1000,
+    ignore: (abs) => abs.split(path.sep).some((seg) => SKIP_DIRS.has(seg) || seg === "versions" || (seg.startsWith(".") && seg.length > 1)),
+    onEvent: (e) => void rt.noteChange(e.path),
+    onError: () => undefined,
+  });
+  contextWatcher = w.rootCount > 0 ? w : null;
 }
 
 /** File watcher hook: cheap no-op unless the runtime is already up and the file is under an indexed root. */
@@ -335,5 +386,7 @@ export function noteCodeEmbedFileChange(absPath: string): void {
 export async function resetCodeEmbedRuntime(): Promise<void> {
   const rt = await shared?.catch(() => null);
   shared = null;
+  await contextWatcher?.close();
+  contextWatcher = null;
   await rt?.close().catch(() => undefined);
 }

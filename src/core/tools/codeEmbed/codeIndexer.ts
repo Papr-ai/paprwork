@@ -15,6 +15,7 @@ import * as fs from "fs";
 import * as path from "path";
 import { chunkFile } from "./chunker.js";
 import { cloudDelete, cloudSearch, pushVectors, type PostClient } from "./cloudSync.js";
+import type { ExtraSkip } from "./contextRoots.js";
 import type { EmbedTier } from "./deviceHealth.js";
 import type { Embedder } from "./embedder.js";
 import { gitBlobSha, type CodeHit, type CodeVectorStore } from "./vectorStore.js";
@@ -32,6 +33,8 @@ export interface IndexerDeps {
   cloud: () => Promise<PostClient | null>;
   /** Live gate before each background batch (memory pressure, battery saver). */
   canRun?: () => boolean;
+  /** Extra folders/files to skip for one root (documents/: versions/ and meta.json). */
+  skipFor?: (root: string) => ExtraSkip | undefined;
   now?: () => number;
 }
 
@@ -41,7 +44,7 @@ export function isIndexable(rel: string, size: number): boolean {
   return CODE_EXT.has(path.extname(rel).toLowerCase());
 }
 
-export function listFiles(root: string): Array<{ rel: string; abs: string; mtimeMs: number; size: number }> {
+export function listFiles(root: string, extra?: ExtraSkip): Array<{ rel: string; abs: string; mtimeMs: number; size: number }> {
   const out: Array<{ rel: string; abs: string; mtimeMs: number; size: number }> = [];
   const walk = (dir: string) => {
     if (out.length >= MAX_FILES_PER_ROOT) return;
@@ -55,7 +58,7 @@ export function listFiles(root: string): Array<{ rel: string; abs: string; mtime
       if (e.name.startsWith(".") && e.name !== ".github") continue;
       const abs = path.join(dir, e.name);
       if (e.isDirectory()) {
-        if (!SKIP_DIRS.has(e.name)) walk(abs);
+        if (!SKIP_DIRS.has(e.name) && !extra?.dirs.has(e.name)) walk(abs);
       } else if (e.isFile()) {
         let st: fs.Stats;
         try {
@@ -64,7 +67,7 @@ export function listFiles(root: string): Array<{ rel: string; abs: string; mtime
           continue;
         }
         const rel = path.relative(root, abs).split(path.sep).join("/");
-        if (isIndexable(rel, st.size)) out.push({ rel, abs, mtimeMs: st.mtimeMs, size: st.size });
+        if (isIndexable(rel, st.size) && !extra?.file?.test(rel)) out.push({ rel, abs, mtimeMs: st.mtimeMs, size: st.size });
         if (out.length >= MAX_FILES_PER_ROOT) return;
       }
     }
@@ -84,7 +87,7 @@ export class CodeIndexer {
     const { store } = this.d;
     const seen = new Set<string>();
     const changed: string[] = [];
-    for (const f of listFiles(root)) {
+    for (const f of listFiles(root, this.d.skipFor?.(root))) {
       seen.add(f.rel);
       const prev = store.fileEntry(root, f.rel);
       if (prev && prev.size === f.size && Math.abs(prev.mtimeMs - Math.round(f.mtimeMs)) < 1) {
@@ -112,6 +115,8 @@ export class CodeIndexer {
       const st = fs.statSync(absPath);
       const rel = path.relative(root, absPath).split(path.sep).join("/");
       if (!isIndexable(rel, st.size)) return;
+      const extra = this.d.skipFor?.(root);
+      if (extra && (extra.file?.test(rel) || rel.split("/").some((seg) => extra.dirs.has(seg)))) return;
       const buf = fs.readFileSync(absPath);
       const sha = gitBlobSha(buf);
       this.d.store.setFile(root, rel, sha, st.mtimeMs, st.size);

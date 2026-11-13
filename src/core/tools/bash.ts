@@ -377,6 +377,15 @@ export function detectPaprGrepCommand(command: string): { pattern: string; path:
   return null;
 }
 
+/** grep inside the Papr Work folder's documents/, workspace/ or repos/<name>/ (absolute, ~/ or $PAPR_HOME paths). */
+export function detectPaprContextGrepCommand(command: string): { pattern: string; path: string } | null {
+  const m = command.match(/\bgrep\s+(?:-[a-zA-Z]+\s+)*(?:"([^"]+)"|'([^']+)'|([^"'\s]+))\s+(.+)/i);
+  if (!m) return null;
+  const grepPath = m[4]!.trim().replace(/\\/g, "/");
+  const inPapr = /(?:\/orgs\/[^/]+\/namespaces\/[^/]+|\/Papr|\$\{?PAPR_HOME\}?)\/(?:documents|workspace|repos\/[^/\s"']+)(?:[/\s"']|$)/i;
+  return inPapr.test(grepPath) ? { pattern: m[1] ?? m[2] ?? m[3]!, path: m[4]!.trim() } : null;
+}
+
 const PAPR_PROJECT_ID_REGEX =
   /[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}/i;
 
@@ -774,6 +783,8 @@ async function executeBashCommandInner(
     
     // Check if this is a grep command in PAPR folders
     const grepInfo = detectPaprGrepCommand(command);
+    // grep in documents/, workspace/ or repos/<name>/: on-device semantic hits only (no app/job pointers or memory).
+    const contextGrep = grepInfo ? null : detectPaprContextGrepCommand(command);
     let memoryPromise: Promise<MemoryCodeSearch> | null = null;
     let devicePromise: Promise<DeviceGrepHits> | null = null;
     
@@ -788,6 +799,10 @@ async function executeBashCommandInner(
       console.log(
         `[Bash Tool] Detected grep in Papr folder, running parallel memory search: "${memoryQuery.substring(0, 120)}${memoryQuery.length > 120 ? "..." : ""}"`,
       );
+    }
+
+    if (contextGrep) {
+      devicePromise = import("./codeEmbed/runtime.js").then((m) => m.deviceHitsForGrep(contextGrep.path, contextGrep.pattern));
     }
 
     // Get API keys for sanitization and substitution
@@ -938,7 +953,7 @@ async function executeBashCommandInner(
     }
 
     // On-device hits lead: same model the ranking was tuned on (papr-embed-code), current local files, no network.
-    if (grepInfo && devicePromise) {
+    if ((grepInfo || contextGrep) && devicePromise) {
       const dev = await devicePromise.catch(() => null);
       if (dev && dev.hits.length) {
         memoryHits = mergeDeviceHits(dev.hits, memoryHits);
