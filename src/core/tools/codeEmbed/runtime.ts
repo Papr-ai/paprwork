@@ -42,6 +42,11 @@ export interface RuntimeDeps {
   canRun?: () => boolean;
   /** Papr Work folder: documents/, workspace/ and repos/<name>/ under it are indexed too. Omit to skip them. */
   paprRoot?: string;
+  /** "org:<id>|ns:<id>" this index belongs to. The store is pinned to it, and cloud calls are made only while
+   *  activeScope() still returns it (a workspace switch mid-sync must not upload this org's vectors with the next
+   *  org's key, or search the next org's cloud index). */
+  scope?: string;
+  activeScope?: () => string | null;
 }
 
 export interface DeviceHit {
@@ -73,6 +78,14 @@ export class CodeEmbedRuntime {
     const dir = path.join(d.dataDir, "code-embed");
     fs.mkdirSync(dir, { recursive: true });
     this.store = CodeVectorStore.open(path.join(dir, "index.db"), CODE_EMBED_MODEL, CODE_EMBED_DIM);
+    if (d.scope) {
+      try {
+        this.store.bindScope(d.scope);
+      } catch (e) {
+        this.store.close();
+        throw e;
+      }
+    }
     let freeDisk: number | null = null;
     try {
       const s = fs.statfsSync(d.dataDir);
@@ -85,10 +98,18 @@ export class CodeEmbedRuntime {
       store: this.store,
       tier: () => this.tier,
       embedder: () => this.embedder(),
-      cloud: d.cloud,
+      cloud: () => this.cloudForScope(),
       canRun: d.canRun ?? (() => canRunNow({ freeMemBytes: availableMemBytes() }, false).ok),
       skipFor: contextSkip,
     });
+  }
+
+  /** Cloud client only while the active workspace is still the one this index belongs to. */
+  private async cloudForScope(): Promise<PostClient | null> {
+    if (this.d.scope && this.d.activeScope && this.d.activeScope() !== this.d.scope) return null;
+    const c = await this.d.cloud();
+    if (this.d.scope && this.d.activeScope && this.d.activeScope() !== this.d.scope) return null;
+    return c;
   }
 
   /** The loaded embedder, starting download/load in the background. Resolves null while unavailable. */
@@ -206,8 +227,8 @@ export class CodeEmbedRuntime {
     return this.d.paprRoot && contextEnabled() ? contextRoots(this.d.paprRoot) : [];
   }
 
-  info(): { tier: EmbedTier; reasons: string[]; status: string; backend: string; modelInstalled: boolean; roots: number } & ReturnType<CodeVectorStore["stats"]> {
-    return { tier: this.tier, reasons: this.tierReasons, status: this.status, backend: this.backend, modelInstalled: (this.d.installed ?? modelInstalled)(this.d.dataDir), roots: this.roots.size, ...this.store.stats() };
+  info(): { scope: string | null; tier: EmbedTier; reasons: string[]; status: string; backend: string; modelInstalled: boolean; roots: number } & ReturnType<CodeVectorStore["stats"]> {
+    return { scope: this.store.scope(), tier: this.tier, reasons: this.tierReasons, status: this.status, backend: this.backend, modelInstalled: (this.d.installed ?? modelInstalled)(this.d.dataDir), roots: this.roots.size, ...this.store.stats() };
   }
 
   /** Background: embed pending files a few at a time, then sync vectors to the cloud. One loop at a time. */
@@ -258,6 +279,16 @@ export class CodeEmbedRuntime {
   }
 }
 
+/** A grep path inside another org/namespace's Papr folder (~/Papr/orgs/<org>/namespaces/<ns>/…) than the active one.
+ *  Those never get on-device hits: the index belongs to the active workspace only. */
+export function isForeignWorkspacePath(p: string, activePaprRoot: string): boolean {
+  const n = p.replace(/\\/g, "/");
+  const m = n.match(/\/orgs\/([^/\s"']+)\/namespaces\/([^/\s"']+)/);
+  if (!m) return false;
+  const a = activePaprRoot.replace(/\\/g, "/").match(/\/orgs\/([^/]+)\/namespaces\/([^/]+)/);
+  return !a || a[1] !== m[1] || a[2] !== m[2];
+}
+
 const UUID = "[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}";
 
 /** The app/job id in a grep path: the UUID right after an apps/ or jobs/ segment, else the last UUID in the path
@@ -278,6 +309,7 @@ export async function deviceHitsForGrep(grepPath: string, query: string, budgetM
   const none = { tier: "disabled" as const, backend: "none", hits: [] };
   try {
     const roots = await import("../../utils/paprRoot.js");
+    if (isForeignWorkspacePath(grepPath, roots.getPaprRoot())) return none;
     const ctx = contextEnabled() ? contextRootFor(grepPath, roots.getPaprRoot()) : undefined;
     const projectId = ctx ? undefined : projectIdFromPath(grepPath);
     if (!ctx && !projectId) return none;
@@ -308,11 +340,21 @@ function defaultUpgrade(): ((root: string, base: Embedder) => Promise<Embedder>)
 }
 
 let shared: Promise<CodeEmbedRuntime | null> | null = null;
+/** Bumped on reset (workspace switch): a runtime still being created for the old workspace is discarded. */
+let generation = 0;
+
+/** "org:<id>|ns:<id>" of the active workspace, or null (signed out / legacy flat ~/Papr). */
+export async function activeCodeScope(): Promise<string | null> {
+  const { readActiveWorkspacePointer } = await import("../../utils/paprWorkspace.js");
+  const p = readActiveWorkspacePointer();
+  return p ? `org:${p.organizationId}|ns:${p.namespaceId}` : null;
+}
 
 /** Process-wide runtime, or null when disabled or the store cannot open. */
 export function getCodeEmbedRuntime(): Promise<CodeEmbedRuntime | null> {
   if (process.env.PAPR_CODE_EMBED === "0") return Promise.resolve(null);
   if (!shared) {
+    const gen = generation;
     shared = (async () => {
       try {
         const [{ getPaprDataDir, getPaprRoot }, { getApiKey }] = await Promise.all([
@@ -327,7 +369,21 @@ export function getCodeEmbedRuntime(): Promise<CodeEmbedRuntime | null> {
           const c = new Papr({ xAPIKey: k });
           return { post: (p, o) => c.post(p, { body: o.body, timeout: o.timeout }) };
         };
-        const rt = new CodeEmbedRuntime({ dataDir: process.env.PAPR_CODE_EMBED_DATA_DIR || getPaprDataDir(), cloud, cloudAvailable: !!key, paprRoot: getPaprRoot() });
+        const scope = await activeCodeScope();
+        const { readActiveWorkspacePointer } = await import("../../utils/paprWorkspace.js");
+        const activeScopeSync = () => {
+          const p = readActiveWorkspacePointer();
+          return p ? `org:${p.organizationId}|ns:${p.namespaceId}` : null;
+        };
+        const rt = new CodeEmbedRuntime({
+          dataDir: process.env.PAPR_CODE_EMBED_DATA_DIR || getPaprDataDir(), cloud, cloudAvailable: !!key, paprRoot: getPaprRoot(),
+          scope: scope ?? undefined, activeScope: activeScopeSync,
+        });
+        if (gen !== generation || activeScopeSync() !== scope) {
+          // Workspace switched while this was starting: never hand out the old workspace's index.
+          await rt.close();
+          return null;
+        }
         console.log(`[codeEmbed] tier=${rt.tier} (${rt.tierReasons.join("; ")})`);
         return rt;
       } catch (e) {
@@ -384,6 +440,7 @@ export function noteCodeEmbedFileChange(absPath: string): void {
 
 /** Close the runtime (shutdown, workspace switch: the next use opens the new workspace's index). Also used by tests. */
 export async function resetCodeEmbedRuntime(): Promise<void> {
+  generation++;
   const rt = await shared?.catch(() => null);
   shared = null;
   await contextWatcher?.close();
