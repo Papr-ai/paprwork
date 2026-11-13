@@ -32,6 +32,11 @@ give identical vectors and the event loop stays free; queries get the instructio
 literal match is answered by the model with the right file first; a file just written is found on the next grep;
 `PAPR_CODE_EMBED=0` turns it off and grep still works. Without the model the suite is skipped, not failed.
 
+The live suite runs under Electron's Node (`ELECTRON_RUN_AS_NODE=1 electron …vitest.mjs`), the same runtime as the
+gateway, so it uses the Electron build of `better-sqlite3`. Do not `npm rebuild better-sqlite3` for system Node to
+run it: that breaks `npm run dev` (gateway fails with `NODE_MODULE_VERSION 131 … requires 143`). If that happens,
+`npm run rebuild:native` fixes it, and `npm run dev` now checks and rebuilds automatically.
+
 Paste the `Tests  9 passed (9)` summary (and the `[live] CoreML query latency` line) into the PR.
 
 ## 3. By hand in Papr dev
