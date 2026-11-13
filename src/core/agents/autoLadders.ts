@@ -52,15 +52,21 @@ export const DEFAULT_AUTO_LADDERS: Partial<Record<Provider, AutoLadder>> = {
     alternates: {
       basic: ["claude-sonnet-5-5", "claude-sonnet-5", "claude-sonnet-4-6"],
       strong: ["claude-sonnet-5", "claude-sonnet-4-6", "claude-opus-5-5", "claude-opus-5"],
-      frontier: ["claude-opus-5", "claude-fable-5-2", "claude-fable-5-1", "claude-sonnet-5-5", "claude-sonnet-5"],
+      frontier: [
+        "claude-opus-5",
+        "claude-fable-5-2",
+        "claude-fable-5-1",
+        "claude-sonnet-5-5",
+        "claude-sonnet-5",
+      ],
     },
     effortModels: new Set([
       "claude-sonnet-5-5",
       "claude-sonnet-5",
       "claude-opus-5-5",
       "claude-opus-5",
-      "claude-fable-5-1",
       "claude-fable-5-2",
+      "claude-fable-5-1",
     ]),
   },
   openai: OPENAI_LADDER,
@@ -69,12 +75,12 @@ export const DEFAULT_AUTO_LADDERS: Partial<Record<Provider, AutoLadder>> = {
     models: {
       basic: "gemini-3.5-flash-lite",
       strong: "gemini-3.8-flash",
-      frontier: "gemini-3.1-pro-preview",
+      frontier: "gemini-4-argon",
     },
     alternates: {
       basic: ["gemini-3.8-flash"],
       strong: ["gemini-3.1-pro-preview", "gemini-3.5-flash-lite"],
-      frontier: ["gemini-3.8-flash"],
+      frontier: ["gemini-3.8-flash", "gemini-3.1-pro-preview"],
     },
     effortModels: new Set(),
   },

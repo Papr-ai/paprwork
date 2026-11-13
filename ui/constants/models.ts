@@ -142,11 +142,11 @@ export const CHAT_MODELS: AIModel[] = [
     requiresApiKey: "ANTHROPIC_API_KEY",
   },
   {
-    id: "claude-fable-5-2",
-    name: "Claude Fable 5.2",
+    id: "claude-fable-5-1",
+    name: "Claude Fable 5.1",
     provider: "anthropic",
     description:
-      "Most capable Claude — adaptive thinking (always on), 1M context, long-horizon agentic coding and research",
+      "Previous Fable generation — consider Claude Fable 5.2 for latest long-horizon work",
     group: "Anthropic",
     supportsThinking: true,
     defaultThinkingBudget: 0,
@@ -154,11 +154,11 @@ export const CHAT_MODELS: AIModel[] = [
     requiresApiKey: "ANTHROPIC_API_KEY",
   },
   {
-    id: "claude-fable-5-1",
-    name: "Claude Fable 5.1",
+    id: "claude-fable-5-2",
+    name: "Claude Fable 5.2",
     provider: "anthropic",
     description:
-      "Most capable Claude — adaptive thinking, 1M context, long-horizon agentic coding and research",
+      "Latest Fable — adaptive thinking (always on), 1M context, demanding reasoning and long-horizon agentic work",
     group: "Anthropic",
     supportsThinking: true,
     defaultThinkingBudget: 0,
@@ -464,6 +464,18 @@ export const CHAT_MODELS: AIModel[] = [
     group: "Google",
     supportsThinking: true,
     defaultThinkingBudget: 10000,
+    maxTokens: 65536,
+    requiresApiKey: "GOOGLE_GENERATIVE_AI_API_KEY",
+  },
+  {
+    id: "gemini-4-argon",
+    name: "Gemini 4 Argon",
+    description:
+      "Most capable Gemini — depth and precision for hard software engineering and knowledge work",
+    provider: "google",
+    group: "Google",
+    supportsThinking: true,
+    defaultThinkingBudget: 16000,
     maxTokens: 65536,
     requiresApiKey: "GOOGLE_GENERATIVE_AI_API_KEY",
   },
