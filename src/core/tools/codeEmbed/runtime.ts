@@ -103,12 +103,18 @@ export class CodeEmbedRuntime {
       this.embLoading = (async () => {
         try {
           const e = await (this.d.loadEmbedder ?? ((r) => WorkerOnnxEmbedder.start(r)))(this.d.dataDir);
-          // Speed self-test: catches emulation and throttled laptops the static rules miss.
-          const t = Date.now();
-          for (let i = 0; i < 8; i++) await e.embedQuery(`self test ${i}: where is the retry logic`);
-          if (!selfTestPasses(Date.now() - t)) {
+          // Speed self-test: catches emulation and throttled laptops the static rules miss. One untimed warm-up
+          // (first run allocates and JITs), then up to 2 timed rounds: one busy moment must not disable it all session.
+          await e.embedQuery("warm up");
+          let ms = Infinity;
+          for (let round = 0; round < 2 && !selfTestPasses(ms); round++) {
+            const t = Date.now();
+            for (let i = 0; i < 8; i++) await e.embedQuery(`self test ${i}: where is the retry logic`);
+            ms = Date.now() - t;
+          }
+          if (!selfTestPasses(ms)) {
             this.tier = this.d.cloudAvailable ? "cloud" : "off";
-            this.tierReasons = [`self-test too slow (${Date.now() - t} ms for 8 queries)`];
+            this.tierReasons = [`self-test too slow (${ms} ms for 8 queries, twice)`];
             await e.close();
             this.status = "self-test failed";
             return null;
@@ -205,6 +211,18 @@ export class CodeEmbedRuntime {
   }
 }
 
+const UUID = "[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}";
+
+/** The app/job id in a grep path: the UUID right after an apps/ or jobs/ segment, else the last UUID in the path
+ *  (a UUID earlier in the path, e.g. in a temp or org folder name, is not the project). */
+export function projectIdFromPath(p: string): string | undefined {
+  const n = p.replace(/\\/g, "/");
+  const after = n.match(new RegExp(`/(?:apps|jobs)/(${UUID})(?:/|$|\\s|["'])`, "i"))?.[1];
+  if (after) return after;
+  const all = n.match(new RegExp(UUID, "gi"));
+  return all?.[all.length - 1];
+}
+
 /**
  * On-device hits for a grep inside one Papr app/job, as root-relative paths. Never throws; [] when the path names no
  * project, the runtime is off, or the model is not ready yet (it starts downloading/loading in the background).
@@ -212,7 +230,7 @@ export class CodeEmbedRuntime {
 export async function deviceHitsForGrep(grepPath: string, query: string, budgetMs = 2_000): Promise<{ tier: EmbedTier | "disabled"; backend: string; hits: DeviceHit[] }> {
   const none = { tier: "disabled" as const, backend: "none", hits: [] };
   try {
-    const projectId = grepPath.match(/[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}/i)?.[0];
+    const projectId = projectIdFromPath(grepPath);
     if (!projectId) return none;
     const roots = await import("../../utils/paprRoot.js");
     const root = [roots.getPaprAppsRoot(), roots.getPaprJobsRoot()].map((r) => path.join(r, projectId)).find((r) => fs.existsSync(r));

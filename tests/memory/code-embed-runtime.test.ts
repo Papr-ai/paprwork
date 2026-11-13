@@ -175,6 +175,43 @@ test("available memory on macOS counts reclaimable pages, not just free", async 
   expect(availableMemBytes()).toBeGreaterThanOrEqual(os.freemem());
 });
 
+test("project id is the one after apps/ or Jobs/, not an earlier UUID in the path", async () => {
+  const { projectIdFromPath } = await import("../../src/core/tools/codeEmbed/runtime.js");
+  const app = "0e6b0e6b-1111-4222-8333-444455556666";
+  expect(projectIdFromPath(`/tmp/papr-vitest-1-c1460b5e-7885-42a9-b801-d554add9535d/Papr/apps/${app}`)).toBe(app);
+  expect(projectIdFromPath(`/Users/x/Papr/Jobs/${app}/code/main.py`)).toBe(app);
+  expect(projectIdFromPath(`C:\\Users\\x\\Papr\\apps\\${app}\\src`)).toBe(app);
+  expect(projectIdFromPath("/Users/x/Papr/apps")).toBeUndefined();
+});
+
+test("grep detection keeps the whole quoted phrase (not just its first word)", async () => {
+  const { detectPaprGrepCommand } = await import("../../src/core/tools/bash.js");
+  const dir = "/Users/x/Papr/apps/0e6b0e6b-1111-4222-8333-444455556666";
+  expect(detectPaprGrepCommand(`grep -rn "generate a pdf for an order" ${dir}`)).toEqual({ pattern: "generate a pdf for an order", path: dir });
+  expect(detectPaprGrepCommand(`grep -rn 'retry upload' ${dir}`)?.pattern).toBe("retry upload");
+  expect(detectPaprGrepCommand(`grep -rn reconcileRefunds ${dir}`)?.pattern).toBe("reconcileRefunds");
+  expect(detectPaprGrepCommand(`grep -rn foo /tmp/elsewhere`)).toBeNull();
+});
+
+test("a hybrid grep with no literal match still succeeds (exit 1 is not an error) so semantic results reach the agent", async () => {
+  const fs = await import("fs");
+  const { getPaprAppsRoot } = await import("../../src/core/utils/paprRoot.js");
+  const dir = path.join(getPaprAppsRoot(), "0e6b0e6b-2222-4222-8333-444455556666");
+  fs.mkdirSync(dir, { recursive: true });
+  fs.writeFileSync(path.join(dir, "a.ts"), "export const a = 1\n");
+  process.env.PAPR_CODE_EMBED = "0";
+  try {
+    const { executeBashCommand } = await import("../../src/core/tools/bash.js");
+    const none: any = await executeBashCommand({ command: `grep -rn "no such phrase anywhere" ${dir}` } as any);
+    expect(none.success).toBe(true);
+    expect(none.data.exitCode).toBe(1);
+    const bad: any = await executeBashCommand({ command: `grep -rn foo ${dir}/missing-file.ts` } as any);
+    expect(bad.success).toBe(false); // exit 2 (real error) still fails
+  } finally {
+    delete process.env.PAPR_CODE_EMBED;
+  }
+});
+
 describe("merge into the pointer ranking", () => {
   test("device hits lead, memory hits not already present follow below them", () => {
     const merged = mergeDeviceHits(
