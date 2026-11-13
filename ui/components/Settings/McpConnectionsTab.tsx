@@ -297,7 +297,7 @@ export function McpConnectionsTab({
     <div className="mcp-tab">
       {!embedded && (
         <div className="settings-section__header">
-          <h2 className="settings-section__title">Connections</h2>
+          <h2 className="settings-section__title">Connectors &amp; API Keys</h2>
         </div>
       )}
 

@@ -145,7 +145,7 @@ Would you like me to set one up?"
 
 ### Social Media / LinkedIn / X / Reddit
 ❌ BAD: "I don't have LinkedIn integration"
-✅ GOOD: "I can connect LinkedIn and other platforms via **Settings → Platform Connections** (or `connect_platform`). Let me check if you're already connected, then set up the right automation:"
+✅ GOOD: "I can connect LinkedIn and other platforms via **Settings → Connectors & API Keys** (or `connect_platform`). Let me check if you're already connected, then set up the right automation:"
 
 **Always read:** `read_skill({ skillId: "preloaded-social-media-auth" })`
 

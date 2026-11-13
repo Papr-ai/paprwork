@@ -401,7 +401,7 @@ class PlatformConnectErrorBoundary extends Component<
               <h2 className="platform-title">Connection prompt unavailable</h2>
               <p className="platform-description">
                 Something went wrong showing the sign-in dialog. You can connect
-                this site from Settings → Platform Connections.
+                this site from Settings → Connectors & API Keys.
               </p>
             </div>
             <div className="platform-connect-actions">
