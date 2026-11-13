@@ -90,6 +90,13 @@ describe("piAiAnthropicAdaptiveThinking", () => {
     );
   });
 
+  it("reports at least Claude Code 2.1.290, the minimum for Fable 5.2 on OAuth", () => {
+    const parts = CLAUDE_CODE_OAUTH_USER_AGENT_VERSION.split(".").map(Number);
+    const min = [2, 1, 290];
+    const cmp = parts.reduce((acc, n, i) => acc || Math.sign(n - min[i]), 0);
+    expect(cmp).toBeGreaterThanOrEqual(0);
+  });
+
   it("does not spoof Claude Code headers for direct API keys", () => {
     const opts = augmentPiAiAnthropicStreamOptions(
       "claude-opus-5",
