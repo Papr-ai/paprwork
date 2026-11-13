@@ -20,9 +20,9 @@ import { ConnectionsView } from "../../components/Settings/ConnectionsView";
 describe("ConnectionsView", () => {
   beforeEach(() => sessionStorage.clear());
 
-  it("defaults to Services: one list (website logins live inside it, not a second section)", () => {
+  it("defaults to Connectors: one list (website logins live inside it, not a second section)", () => {
     render(<ConnectionsView />);
-    expect(screen.getByRole("tab", { name: "Services" }).getAttribute("aria-selected")).toBe("true");
+    expect(screen.getByRole("tab", { name: "Connectors" }).getAttribute("aria-selected")).toBe("true");
     expect(screen.getByText("mcp:embedded")).toBeTruthy();
     expect(screen.queryByText("Website logins")).toBeNull();
     expect(screen.queryByText("keys:embedded")).toBeNull();
@@ -41,7 +41,7 @@ describe("ConnectionsView", () => {
     const { rerender } = render(<ConnectionsView />);
     rerender(<ConnectionsView link={{ sub: "keys", n: 1 }} />);
     expect(screen.getByText("keys:embedded")).toBeTruthy();
-    fireEvent.click(screen.getByRole("tab", { name: "Services" }));
+    fireEvent.click(screen.getByRole("tab", { name: "Connectors" }));
     rerender(<ConnectionsView link={{ sub: "keys", n: 2 }} />);
     expect(screen.getByText("keys:embedded")).toBeTruthy();
   });
