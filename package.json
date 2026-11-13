@@ -9,7 +9,7 @@
   ],
   "scripts": {
     "postinstall": "npx @electron/rebuild && node scripts/patch-electron-dev-plist.mjs",
-    "dev": "npm run kill:gateway && npm run build:gateway && concurrently \"npm run ui:dev\" \"npm run electron:dev\"",
+    "dev": "npm run kill:gateway && node scripts/ensure-electron-native.mjs && npm run build:gateway && concurrently \"npm run ui:dev\" \"npm run electron:dev\"",
     "dev:commercial": "npm run build:gateway && concurrently \"cross-env VITE_REQUIRE_PAPR_AUTH=true npm run ui:dev\" \"npm run electron:dev\"",
     "build": "npm run build:gateway && npm run build:electron && npm run build:ui",
     "build:gateway": "shx rm -rf dist/resources && shx rm -f dist/.tsbuildinfo-mini-app-sdk-node && shx mkdir -p dist && shx cp -r src/resources dist/ && node --import tsx scripts/generate-papr-api-catalog.mjs && tsc -p tsconfig.gateway.json && tsc -p tsconfig.mini-app-sdk-node.json && node scripts/build-mini-app-sdk-browser-bundles.mjs && node scripts/verify-mini-app-sdk-bundles.mjs && node scripts/build-focus-web.mjs && shx cp src/gateway/services/appRuntime/backendDbHelper.py dist/gateway/services/appRuntime/backendDbHelper.py",
@@ -54,7 +54,7 @@
     "test:build": "vitest run --project build",
     "test:live": "vitest run --project live",
     "test:code-embed": "vitest run --project unit-backend tests/memory/code-embed.test.ts tests/memory/code-embed-runtime.test.ts tests/memory/code-search-v2.test.ts",
-    "test:code-embed:live": "vitest run -c vitest.config.live.ts tests/memory/code-embed.live.test.ts",
+    "test:code-embed:live": "cross-env ELECTRON_RUN_AS_NODE=1 electron node_modules/vitest/vitest.mjs run -c vitest.config.live.ts tests/memory/code-embed.live.test.ts",
     "test:unit": "vitest run --project unit-backend --reporter=verbose",
     "test:ui": "vitest run --project unit-ui --reporter=verbose",
     "test:integration": "vitest run --project integration --reporter=verbose",
