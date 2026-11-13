@@ -228,6 +228,7 @@ export const MODEL_CONTEXT_WINDOWS: Readonly<Record<string, number>> = {
   "gpt-5.3-codex": 128_000,
   "gemini-3.5-flash-lite": 1_048_576,
   "gemini-3.8-flash": 1_048_576,
+  "gemini-4-argon": 1_048_576,
   "gemini-3.1-pro-preview": 1_048_576,
   "glm-5.2": 1_000_000,
   "qwen/qwen3-32b": 131_072,

@@ -84,8 +84,9 @@ export const MODEL_PRICING: Record<string, ModelPricing> = {
   // Opus 5.5 reads cache at $0.20/M against $4/M input — Anthropic documents it
   // as "0.05x the base input price", half the rate every other model charges.
   "claude-opus-5-5": { input: 4.0, output: 20.0, cacheReadMultiplier: 0.05 },
-  "claude-fable-5-2": { input: 8.0, output: 40.0 },
   "claude-fable-5-1": { input: 10.0, output: 50.0 },
+  // Fable 5.2 cache read at $0.20/M against $8/M input — 0.025x (Anthropic pricing page)
+  "claude-fable-5-2": { input: 8.0, output: 40.0, cacheReadMultiplier: 0.025 },
   "claude-fable-5": { input: 10.0, output: 50.0 }, // deprecated — migrated to fable-5-1
 
   // Google Gemini Series (API format uses dots: gemini-2.5)
@@ -99,6 +100,8 @@ export const MODEL_PRICING: Record<string, ModelPricing> = {
   "gemini-3.7-flash": { input: 1.5, output: 7.5 },
   // Intro pricing through 2026-12-31; standard $1.50/$7.50 from 2027-01-01
   "gemini-3.8-flash": { input: 0.75, output: 3.75 },
+  // Intro through 2026-11-30; standard $4/$20 from 2026-12-01 (ai.google.dev pricing)
+  "gemini-4-argon": { input: 2.0, output: 10.0 },
   "gemini-3.1-pro-preview": { input: 2.0, output: 12.0 },
   // Deprecated IDs — kept for cost lookup on older chats
   "gemini-3-flash-preview": { input: 0.5, output: 3.0 },

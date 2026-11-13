@@ -201,6 +201,13 @@ const MODEL_CAPABILITIES: Record<string, ModelCapabilities> = {
     cost: "medium",
     specialties: ["agentic", "coding", "software-engineering", "frontier-flash"],
   },
+  "gemini-4-argon": {
+    reasoningLevel: "advanced",
+    contextWindow: 1048576,
+    speed: "medium",
+    cost: "expensive",
+    specialties: ["reasoning", "coding", "software-engineering", "knowledge-work"],
+  },
   "gemini-3.7-flash": {
     reasoningLevel: "advanced",
     contextWindow: 1048576,
@@ -399,8 +406,8 @@ export function getUpgradeModelForTask(
       general: "claude-sonnet-5-5",
     },
     google: {
-      reasoning: "gemini-3.1-pro-preview",
-      coding: "gemini-3.8-flash",
+      reasoning: "gemini-4-argon",
+      coding: "gemini-4-argon",
       writing: "gemini-3.1-pro-preview",
       general: "gemini-3.8-flash",
     },
