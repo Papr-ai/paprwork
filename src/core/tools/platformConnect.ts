@@ -231,7 +231,7 @@ IMPORTANT:
                   ? config.isCustom
                     ? `Job keys use prefix ${config.keyPrefix}_ — list keys in Settings`
                     : `Use \${${keyNames[0]}} in job commands`
-                  : `Not connected. Use request_connect or Settings → Platform Connections`,
+                  : `Not connected. Use request_connect or Settings → Connectors & API Keys`,
               rateLimits: {
                 dailyViews: r.dailyViews,
                 dailyMessages: r.dailyMessages,
@@ -270,8 +270,8 @@ IMPORTANT:
               platform: config.name,
               platformId,
               status: "awaiting_user_action",
-              message: `Ask the user to open Settings → Platform Connections and click Connect for ${config.name}.`,
-              settingsPath: "Settings → Platform Connections",
+              message: `Ask the user to open Settings → Connectors & API Keys and click Connect for ${config.name}.`,
+              settingsPath: "Settings → Connectors & API Keys",
             },
             duration: performance.now() - startTime,
             timestamp: new Date().toISOString(),

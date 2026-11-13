@@ -5,7 +5,7 @@ description: Rate limiting guidelines and best practices for social media automa
 ---
 # Social Media & Platform Connections Guide
 
-Use **Settings → Platform Connections** or the `connect_platform` tool for built-in social sites and custom login-required URLs.
+Use **Settings → Connectors & API Keys** or the `connect_platform` tool for built-in social sites and custom login-required URLs.
 
 ## Register a custom site (agent)
 

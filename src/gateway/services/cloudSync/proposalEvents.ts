@@ -50,7 +50,7 @@ export interface ProposalNotice {
   body: string;
   /** App whose share bar / inbox this is about, on this machine. */
   appId?: string;
-  /** Connections notices open Settings → Connections (org requests for admins). */
+  /** Connections notices open Settings → Connectors & API Keys (org requests for admins). */
   openSettings?: "connections" | "connections-requests";
   requestId?: string;
   /** Priority = someone waits on you (review, re-propose, approve). FYI = news. */
@@ -264,7 +264,7 @@ const proposals = { type: "platform" as const, id: "proposals", name: "Proposals
 /** One notice per request (or connection), so a later status updates it in place instead of pinging again. */
 export function noticeInputFor(n: ProposalNotice, appName = "App"): NoticeInput {
   const owner = n.openSettings
-    ? { kind: "account" as const, id: "settings", name: "Connections", section: n.openSettings }
+    ? { kind: "account" as const, id: "settings", name: "Connectors & API Keys", section: n.openSettings }
     : n.appId
       ? { kind: "app" as const, id: n.appId, name: appName }
       : { kind: "account" as const, id: "proposals", name: "Proposals" };
