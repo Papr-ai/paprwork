@@ -38,15 +38,14 @@
   -webkit-user-select: none;
 }
 
-/* No photo: a solid colour per person with white initials (the look of an account tile).
-   Solid, not the translucent surface grey, so it reads the same on any background, light or dark. */
+/* No photo: Papr blue with white initials. Solid, not the translucent surface grey,
+   so it reads the same on any background, light or dark. */
 .papr-avatar--initials {
-  background: var(--papr-avatar-bg, hsl(var(--papr-avatar-hue, 211) 48% 46%));
+  background: var(--papr-avatar-bg, var(--primary-color, #0071E3));
   color: var(--papr-avatar-fg, #fff);
 }
-@media (prefers-color-scheme: dark) {
-  .papr-avatar--initials { background: var(--papr-avatar-bg, hsl(var(--papr-avatar-hue, 211) 42% 52%)); }
-}
+/* Rows (e.g. the @ picker) set a grey text colour; initials must stay white on blue. */
+.papr-avatar--initials .papr-avatar__initials { color: var(--papr-avatar-fg, #fff); }
 
 /* Every child fills the frame and inherits the clip. */
 .papr-avatar__img {
