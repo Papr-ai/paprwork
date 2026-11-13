@@ -10,14 +10,9 @@
   border: none; border-radius: 8px; background: none; text-align: left; font: inherit; font-size: 13px; color: var(--text-primary, #1d1d1f); cursor: pointer;
 }
 .mention-dd__row .mention-dd__av { flex: none; }
-.mention-dd__row i {
-  font-style: normal; font-size: 9px; font-weight: 600; width: 22px; height: 22px; border-radius: 50%;
-  display: grid; place-items: center; background: var(--text-secondary, #8e8e93); color: #fff;
-}
 .mention-dd__row b { font-weight: 500; white-space: nowrap; }
 .mention-dd__row span { font-size: 12px; color: var(--text-secondary, #8e8e93); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .mention-dd__row.is-on { background: color-mix(in srgb, #0161e0 10%, transparent); }
-.mention-dd__row.is-on i { background: #0161e0; }
 .mention-dd__foot {
   display: flex; justify-content: space-between; gap: 8px; margin-top: 3px; padding: 5px 8px 3px;
   border-top: 1px solid var(--border-color, rgba(0, 0, 0, 0.08)); font-size: 11.5px; color: var(--text-secondary, #8e8e93);
