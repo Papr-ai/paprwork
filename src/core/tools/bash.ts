@@ -359,16 +359,16 @@ export interface BashOutput {
  * Detects if command is a grep search in PAPR folders
  * Returns { pattern, path } if detected, null otherwise
  */
-function detectPaprGrepCommand(command: string): { pattern: string; path: string } | null {
-  // Match: grep [options] "pattern" path/to/PAPR/...
-  // Also match: grep [options] pattern path/to/PAPR/... (without quotes)
-  const grepRegex = /\bgrep\s+(?:-[a-zA-Z]+\s+)*["']?([^"'\s]+)["']?\s+(.+)/i;
+export function detectPaprGrepCommand(command: string): { pattern: string; path: string } | null {
+  // Match: grep [options] "multi word pattern" path/to/PAPR/...   (quoted: keep the whole phrase)
+  // Also match: grep [options] pattern path/to/PAPR/...            (unquoted: one word)
+  const grepRegex = /\bgrep\s+(?:-[a-zA-Z]+\s+)*(?:"([^"]+)"|'([^']+)'|([^"'\s]+))\s+(.+)/i;
   const match = command.match(grepRegex);
   
   if (!match) return null;
   
-  const pattern = match[1];
-  const grepPath = match[2].trim();
+  const pattern = match[1] ?? match[2] ?? match[3]!;
+  const grepPath = match[4]!.trim();
 
   if (isPaprAppsOrJobsSearchPath(grepPath)) {
     return { pattern, path: grepPath };
@@ -882,12 +882,28 @@ async function executeBashCommandInner(
         ? { ...process.env, ...(env as Record<string, string>) }
         : process.env;
 
-    const { stdout, stderr } = await execShellCommand(command, {
-      cwd: cwd || process.cwd(),
-      timeout,
-      maxBuffer: 100 * 1024 * 1024,
-      env: mergedExecEnv,
-    });
+    let stdout: string | undefined;
+    let stderr: string | undefined;
+    // grep exits 1 when nothing matches. For a hybrid grep that is exactly when the semantic results matter, so
+    // treat it as an empty result (exitCode 1, success) instead of throwing them away in the error path.
+    let grepNoMatch = false;
+    try {
+      ({ stdout, stderr } = await execShellCommand(command, {
+        cwd: cwd || process.cwd(),
+        timeout,
+        maxBuffer: 100 * 1024 * 1024,
+        env: mergedExecEnv,
+      }));
+    } catch (err) {
+      const e = err as { code?: unknown; stdout?: string; stderr?: string; killed?: boolean };
+      if (grepInfo && e?.code === 1 && !e.killed && !(e.stderr ?? "").trim()) {
+        grepNoMatch = true;
+        stdout = e.stdout ?? "";
+        stderr = "";
+      } else {
+        throw err;
+      }
+    }
     
     // Validate output exists (catch undefined/null from process failures)
     if (stdout === undefined && stderr === undefined) {
@@ -1042,7 +1058,7 @@ async function executeBashCommandInner(
       data: {
         stdout: sanitizedStdout,
         stderr: sanitizedStderr,
-        exitCode: 0,
+        exitCode: grepNoMatch ? 1 : 0,
         command: sanitizeError(command, apiKeys), // Sanitize command too
         duration,
         ...(sqliteWarnings.length > 0
