@@ -38,6 +38,16 @@
   -webkit-user-select: none;
 }
 
+/* No photo: a solid colour per person with white initials (the look of an account tile).
+   Solid, not the translucent surface grey, so it reads the same on any background, light or dark. */
+.papr-avatar--initials {
+  background: var(--papr-avatar-bg, hsl(var(--papr-avatar-hue, 211) 48% 46%));
+  color: var(--papr-avatar-fg, #fff);
+}
+@media (prefers-color-scheme: dark) {
+  .papr-avatar--initials { background: var(--papr-avatar-bg, hsl(var(--papr-avatar-hue, 211) 42% 52%)); }
+}
+
 /* Every child fills the frame and inherits the clip. */
 .papr-avatar__img {
   inline-size: 100%;

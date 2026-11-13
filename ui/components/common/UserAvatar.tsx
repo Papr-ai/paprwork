@@ -19,6 +19,13 @@ export interface UserAvatarProps {
   fallback?: React.ReactNode;
 }
 
+/** Stable hue per person (same person, same colour everywhere), like an account tile. */
+export function avatarHue(key: string): number {
+  let h = 0;
+  for (const ch of key.trim().toLowerCase()) h = (h * 31 + ch.charCodeAt(0)) >>> 0;
+  return h % 360;
+}
+
 /** Person glyph. Lives here so call sites stop pasting their own copy. */
 function PersonGlyph() {
   return (
@@ -64,8 +71,10 @@ export function UserAvatar({
   const initials = getProfileInitials(displayName, email);
   const label = alt || displayName || email || "";
 
+  const tinted = !showImage && Boolean(initials);
   const frameClass = [
     "papr-avatar",
+    tinted ? "papr-avatar--initials" : "",
     ring ? "papr-avatar--ring" : "",
     interactive ? "papr-avatar--interactive" : "",
     className ?? "",
@@ -93,7 +102,10 @@ export function UserAvatar({
   return (
     <span
       className={frameClass}
-      style={{ "--papr-avatar-size": `${size}px` } as React.CSSProperties}
+      style={{
+        "--papr-avatar-size": `${size}px`,
+        ...(tinted ? { "--papr-avatar-hue": String(avatarHue(email || displayName || initials)) } : {}),
+      } as React.CSSProperties}
       // Decorative when the name is already rendered beside it; labelled when
       // the avatar is the only identity cue.
       {...(label ? { role: "img", "aria-label": label } : { "aria-hidden": true })}
