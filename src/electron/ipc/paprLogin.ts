@@ -39,7 +39,9 @@ import {
   isCreditsBillingOrg,
 } from "./paprBilling.js";
 import {
+  loopbackPortFromRedirectUri,
   paprSignedInFunnel,
+  settlePaprAuthCallbackServer,
   startPaprAuthCallbackServer,
   stopPaprAuthCallbackServer,
 } from "./paprAuthCallbackServer.js";
@@ -226,6 +228,8 @@ interface PersistedPkceState {
   codeVerifier: string;
   mode?: PaprAuthMode;
   source?: PaprLoginSource;
+  /** Loopback redirect used for this attempt, so a restart can listen again on it. */
+  redirectUri?: string;
   createdAt: string;
 }
 
@@ -320,6 +324,7 @@ async function restorePkceFromDisk(): Promise<void> {
   loginState.codeVerifier = persisted.codeVerifier;
   loginState.mode = persisted.mode;
   loginState.source = persisted.source;
+  loginState.redirectUri = persisted.redirectUri;
 }
 
 async function hydratePkceForCallback(state: string | null): Promise<void> {
@@ -344,6 +349,93 @@ async function hydratePkceForCallback(state: string | null): Promise<void> {
   loginState.codeVerifier = persisted.codeVerifier;
   loginState.mode = persisted.mode;
   loginState.source = persisted.source;
+  loginState.redirectUri = persisted.redirectUri;
+}
+
+/** Shown in the app when the browser never came back to the loopback listener. */
+export const PAPR_LOGIN_TIMED_OUT_MESSAGE =
+  "Sign-in timed out before your browser came back to Papr Work. Click Sign in to try again.";
+
+/**
+ * Listen on 127.0.0.1 for the browser to hand back the Auth0 code.
+ * Used when starting a login and again after a restart mid-sign-in
+ * (exactPort), so the redirect never lands on a closed port.
+ */
+async function armLoopbackCallback(
+  customKeysStorage: CustomKeysStorage,
+  settingsStorage: SettingsStorage,
+  opts: { expectedState: string; exactPort?: number; windowMs?: number },
+): Promise<string> {
+  return startPaprAuthCallbackServer(
+    async (params, verificationCode) => {
+      const oauthError = params.get("error");
+      if (oauthError) {
+        notifyLoginError(
+          undefined,
+          formatAuth0CallbackError(oauthError, params.get("error_description")),
+        );
+        return;
+      }
+      try {
+        // Store verification code with OAuth params for manual entry fallback
+        const { storeVerificationCode } = await import("./paprAuthCallbackServer.js");
+        storeVerificationCode(verificationCode, {
+          code: params.get("code"),
+          state: params.get("state"),
+        });
+        await completePaprAuthCallback(
+          params.get("code"),
+          params.get("state"),
+          customKeysStorage,
+          settingsStorage,
+        );
+      } catch (callbackError) {
+        notifyLoginError(
+          undefined,
+          callbackError instanceof Error ? callbackError.message : "Login failed",
+        );
+      }
+    },
+    {
+      funnel: paprSignedInFunnel(settingsStorage, app.isPackaged),
+      expectedState: opts.expectedState,
+      exactPort: opts.exactPort,
+      windowMs: opts.windowMs,
+      onTimeout: () => {
+        // Only if this attempt is still the pending one (not cancelled/replaced).
+        if (loginState.pendingState !== opts.expectedState) return;
+        console.warn("[PaprLogin] Browser never returned to the localhost callback");
+        notifyLoginError(undefined, PAPR_LOGIN_TIMED_OUT_MESSAGE);
+        clearInMemoryPkceState();
+        void clearPersistedPkceState();
+      },
+    },
+  );
+}
+
+/**
+ * Papr restarted (crash, update, dev reload) while the user was signing in
+ * in the browser. Listen again on the same port so the redirect still lands.
+ */
+async function rearmPendingLoopbackLogin(
+  customKeysStorage: CustomKeysStorage,
+  settingsStorage: SettingsStorage,
+): Promise<void> {
+  const persisted = await loadPersistedPkceState();
+  const port = loopbackPortFromRedirectUri(persisted?.redirectUri);
+  if (!persisted || !port) return;
+  const remaining = PKCE_TTL_MS - (Date.now() - new Date(persisted.createdAt).getTime());
+  if (remaining < 15_000) return;
+  try {
+    await armLoopbackCallback(customKeysStorage, settingsStorage, {
+      expectedState: persisted.pendingState,
+      exactPort: port,
+      windowMs: remaining,
+    });
+    console.log(`[PaprLogin] Re-armed localhost callback on :${port} for a pending sign-in`);
+  } catch (err) {
+    console.warn("[PaprLogin] Could not re-arm localhost callback:", err);
+  }
 }
 
 function trackLoginStep(
@@ -3709,7 +3801,8 @@ async function completePaprAuthCallback(
     };
   }
   loginCompletionInFlight = true;
-  stopPaprAuthCallbackServer();
+  // Keep answering repeat hits (reload, second tab) instead of refusing them.
+  settlePaprAuthCallbackServer();
 
   try {
   trackLoginStep("callback_received", {
@@ -3841,7 +3934,9 @@ export function initializePaprLoginIPC(
 ) {
   trackLoginEvent = options?.trackLoginEvent;
   mainWindowProvider = options?.getMainWindow;
-  void restorePkceFromDisk();
+  void restorePkceFromDisk().then(() =>
+    rearmPendingLoopbackLogin(customKeysStorage, settingsStorage),
+  );
   registerPaprWorkspaceHandlers();
   // Check if user is already logged in
   ipcMain.handle("papr:check-login-status", async () => {
@@ -4144,56 +4239,14 @@ export function initializePaprLoginIPC(
       loginState.mode = authMode;
       loginState.source = loginSource;
 
-      await persistPkceState({
-        pendingState: state,
-        codeVerifier,
-        mode: authMode,
-        source: loginSource,
-        createdAt: new Date().toISOString(),
-      });
-
       let redirectUri = AUTH0_REDIRECT_URI;
       const useDeepLinkOnly = process.env.PAPR_AUTH_USE_DEEPLINK === "true";
 
       if (!useDeepLinkOnly) {
         try {
-          redirectUri = await startPaprAuthCallbackServer(
-            async (params, verificationCode) => {
-            const oauthError = params.get("error");
-            if (oauthError) {
-              notifyLoginError(
-                undefined,
-                formatAuth0CallbackError(
-                  oauthError,
-                  params.get("error_description"),
-                ),
-              );
-              return;
-            }
-            try {
-              // Store verification code with OAuth params for manual entry fallback
-              const { storeVerificationCode } = await import("./paprAuthCallbackServer.js");
-              storeVerificationCode(verificationCode, {
-                code: params.get("code"),
-                state: params.get("state"),
-              });
-
-              await completePaprAuthCallback(
-                params.get("code"),
-                params.get("state"),
-                customKeysStorage,
-                settingsStorage,
-              );
-            } catch (callbackError) {
-              const message =
-                callbackError instanceof Error
-                  ? callbackError.message
-                  : "Login failed";
-              notifyLoginError(undefined, message);
-            }
-          },
-            paprSignedInFunnel(settingsStorage, app.isPackaged),
-          );
+          redirectUri = await armLoopbackCallback(customKeysStorage, settingsStorage, {
+            expectedState: state,
+          });
           console.log("[PaprLogin] Using localhost callback:", redirectUri);
         } catch (callbackServerError) {
           stopPaprAuthCallbackServer();
@@ -4204,6 +4257,16 @@ export function initializePaprLoginIPC(
           redirectUri = AUTH0_REDIRECT_URI;
         }
       }
+
+      // Persist the redirect too: if Papr restarts mid-sign-in it listens again on it.
+      await persistPkceState({
+        pendingState: state,
+        codeVerifier,
+        mode: authMode,
+        source: loginSource,
+        redirectUri,
+        createdAt: new Date().toISOString(),
+      });
 
       loginState.redirectUri = redirectUri;
 
