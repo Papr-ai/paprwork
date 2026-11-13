@@ -13,7 +13,6 @@ import "./mentionPill.css";
 void loadTeammates().catch(() => undefined);
 
 export const MENTION_HREF = "#mention:";
-const initials = (n: string) => n.replace(/[@+].*$/, "").split(/[\s._-]+/).filter(Boolean).slice(0, 2).map((w) => w[0]!.toUpperCase()).join("") || "@";
 const escRe = (s: string) => s.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
 const link = (name: string) => `[@${name.replace(/[[\]]/g, "")}](${MENTION_HREF}${encodeURIComponent(name)})`;
 
@@ -43,9 +42,8 @@ export function MentionPill({ name }: { name: string }) {
   const m = findTeammate(name, cachedTeammates());
   return (
     <span className="mention-pill" title={m?.email ? `${name} · ${m.email}` : name}>
-      {m?.imageUrl
-        ? <UserAvatar imageUrl={m.imageUrl} displayName={m.displayName} email={m.email} size={18} className="mention-pill__av" />
-        : <i aria-hidden="true">{initials(name)}</i>}
+      {/* The same avatar as Settings → Team and the sidebar: photo, else their initials, same colours. */}
+      <UserAvatar imageUrl={m?.imageUrl} displayName={m?.displayName || name} email={m?.email} size={18} className="mention-pill__av" />
       <span className="mention-pill__name">{name}</span>
     </span>
   );

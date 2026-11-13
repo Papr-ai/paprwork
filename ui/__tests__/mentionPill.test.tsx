@@ -21,6 +21,13 @@ describe("@ names render as pills", () => {
     const pill = container.querySelector(".mention-pill");
     expect(pill?.textContent).toBe("Aamir+1");
     expect(container.querySelector("a")).toBeNull();
+    expect(container.querySelector(".mention-pill .papr-avatar")).not.toBeNull();
+  });
+  it("only common/mentionPill.css styles the pill (no card-scoped vars leaking into chat)", async () => {
+    const fs = await import("node:fs");
+    const path = await import("node:path");
+    const css = fs.readFileSync(path.resolve(__dirname, "../components/Chat/MentionCard.css"), "utf8");
+    expect(css).not.toMatch(/(^|\n)\.mention-pill\b/);
   });
 });
 
@@ -38,6 +45,7 @@ describe("pill photo", () => {
     expect(withPhoto.querySelector("img")?.getAttribute("src")).toBe("https://img.example/s.png");
     const noPhoto = render(<mod.MentionPill name="amir+1" />).container;
     expect(noPhoto.querySelector("img")).toBeNull();
-    expect(noPhoto.querySelector("i")?.textContent).toBe("A");
+    // Same avatar as Settings → Team: UserAvatar initials, not a separate blue dot.
+    expect(noPhoto.querySelector(".papr-avatar__initials")?.textContent).toBe("A");
   });
 });
