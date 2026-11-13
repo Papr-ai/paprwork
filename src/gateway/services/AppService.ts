@@ -2554,6 +2554,8 @@ export class AppService {
           // Every add/change/unlink feeds the dirty flag (compared to the last
           // upload once the burst settles) — including deletes and data/.
           noteAppPathEdited(this.paprRootDir, appId, appRel);
+          // On-device code index: re-embed edited code/markdown (incl. regenerated summaries/READMEs) in the background.
+          void import("../../core/tools/codeEmbed/runtime.js").then((m) => m.noteCodeEmbedFileChange(event.path)).catch(() => undefined);
           // unlink is not routed: the old per-app watcher only subscribed to
           // add/change, and a rebuild on delete would race the deleteApp rm.
           if (event.type === "unlink") return;

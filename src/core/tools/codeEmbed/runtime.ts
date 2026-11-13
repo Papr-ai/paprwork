@@ -15,7 +15,7 @@
  */
 import * as fs from "fs";
 import * as path from "path";
-import { CodeIndexer } from "./codeIndexer.js";
+import { CodeIndexer, SKIP_DIRS } from "./codeIndexer.js";
 import type { PostClient } from "./cloudSync.js";
 import { availableMemBytes, canRunNow, readDeviceFacts, selfTestPasses, staticTier, type EmbedTier } from "./deviceHealth.js";
 import { CODE_EMBED_DIM, CODE_EMBED_MODEL, downloadModel, modelDir, WorkerOnnxEmbedder, modelInstalled, type Embedder } from "./embedder.js";
@@ -163,6 +163,30 @@ export class CodeEmbedRuntime {
     this.kick();
   }
 
+  /** A file under a known root changed on disk (app watcher, agent write, summary/README regenerated): mark it
+   *  pending now so it is re-embedded in the background before the next grep, not after the 30 s rescan. */
+  noteChange(absPath: string): boolean {
+    const root = [...this.roots].find((r) => absPath.startsWith(r + path.sep));
+    if (!root) return false;
+    const rel = path.relative(root, absPath).split(path.sep);
+    if (rel.some((seg) => SKIP_DIRS.has(seg) || seg.startsWith("."))) return false;
+    if (fs.existsSync(absPath)) this.indexer.noteWrite(root, absPath);
+    else this.indexer.refresh(root);
+    this.kick();
+    return true;
+  }
+
+  /** Startup: fetch/load the model in the background and keep previously indexed roots fresh. Never throws. */
+  warm(): void {
+    if (this.tier !== "local") return;
+    for (const r of this.store.roots()) if (fs.existsSync(r)) this.roots.add(r);
+    void this.embedder().then((e) => { if (e) for (const r of this.roots) this.touch(r, true); });
+  }
+
+  info(): { tier: EmbedTier; reasons: string[]; status: string; backend: string; modelInstalled: boolean; roots: number } & ReturnType<CodeVectorStore["stats"]> {
+    return { tier: this.tier, reasons: this.tierReasons, status: this.status, backend: this.backend, modelInstalled: (this.d.installed ?? modelInstalled)(this.d.dataDir), roots: this.roots.size, ...this.store.stats() };
+  }
+
   /** Background: embed pending files a few at a time, then sync vectors to the cloud. One loop at a time. */
   private kick(now = false): void {
     if (this.loop && !now) return;
@@ -291,7 +315,23 @@ export function getCodeEmbedRuntime(): Promise<CodeEmbedRuntime | null> {
   return shared;
 }
 
-/** For tests. */
+/** Gateway startup: download the model (first run, existing users included) and warm it, off the critical path.
+ *  Skipped in tests and cloud-agent mode, when disabled, or when downloads are off and the model is missing. */
+export function startCodeEmbedInBackground(delayMs = 20_000): void {
+  if (process.env.PAPR_CODE_EMBED === "0" || process.env.VITEST) return;
+  const t = setTimeout(() => {
+    void getCodeEmbedRuntime().then((rt) => rt?.warm()).catch(() => undefined);
+  }, delayMs);
+  t.unref?.();
+}
+
+/** File watcher hook: cheap no-op unless the runtime is already up and the file is under an indexed root. */
+export function noteCodeEmbedFileChange(absPath: string): void {
+  if (!shared) return;
+  void shared.then((rt) => rt?.noteChange(absPath)).catch(() => undefined);
+}
+
+/** Close the runtime (shutdown, workspace switch: the next use opens the new workspace's index). Also used by tests. */
 export async function resetCodeEmbedRuntime(): Promise<void> {
   const rt = await shared?.catch(() => null);
   shared = null;

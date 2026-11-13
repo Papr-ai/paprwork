@@ -34,6 +34,21 @@ literal match is answered by the model with the right file first; a file just wr
 
 Paste the `Tests  9 passed (9)` summary (and the `[live] CoreML query latency` line) into the PR.
 
+## Where it lives, and how it gets there
+
+- Model: `<workspace>/data/models/papr-embed-code-1-0.6b/` (ONNX int8 + tokenizer ≈ 1.1 GB; + CoreML ≈ 1.2 GB on Apple Silicon).
+- Index: `<workspace>/data/code-embed/index.db` — tables `files` (root, path, blob_sha, mtime, size) and `chunks`
+  (model, blob_sha, chunk, lines, 1024-d vector). Vectors are keyed by content hash, so renames keep them.
+- Provisioning: ~20 s after the gateway is ready (new installs and existing users alike), the model is downloaded in
+  the background from a **pinned Hugging Face revision**, streamed to `.part` files (resumable with HTTP Range), and
+  each file is checked against a size + sha256 manifest before it is moved into place. A bad file is deleted, never
+  loaded. Nothing ships in the .dmg; no build step is needed. Then roots indexed before are re-scanned.
+- Freshness: the app watcher marks edited files (code, `.md`, regenerated summaries/READMEs) pending right away;
+  a 30 s mtime/size rescan per root catches anything else. Embedding is 4 files per 250 ms tick and pauses under
+  memory pressure or battery saver.
+- Status: `curl localhost:18789/api/code-embed/status` → tier, status, backend, modelInstalled, roots, files, chunks, pending.
+- Workspace switch closes the index; the next grep opens the new workspace's.
+
 ## 3. By hand in Papr dev
 
 1. `npm run build && npm run dev`, sign in, open any mini-app.

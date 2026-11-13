@@ -109,6 +109,11 @@ export class CodeVectorStore {
     return r ? { blobSha: r.blob_sha, mtimeMs: r.mtime_ms, size: r.size } : null;
   }
 
+  /** Roots indexed before (so a restart can keep them fresh without waiting for a grep). */
+  roots(): string[] {
+    return this.db.prepare(`SELECT DISTINCT root FROM files`).all().map((r) => r.root);
+  }
+
   listFiles(root: string): Array<{ path: string; blobSha: string }> {
     return this.db.prepare(`SELECT path, blob_sha FROM files WHERE root=?`).all(root).map((r) => ({ path: r.path, blobSha: r.blob_sha }));
   }
