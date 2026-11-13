@@ -51,7 +51,7 @@ export function McpConnectionsTab({
   embedded?: boolean;
   /** Org rules + requests; when a service isn't approved the row offers Request instead of Connect. */
   org?: Org;
-  /** Connected + team count, for the Services tab label. */
+  /** Connected + team count, for the Connectors tab label. */
   onCount?: (n: number) => void;
 } = {}) {
   const [servers, setServers] = useState<McpServer[]>([]);

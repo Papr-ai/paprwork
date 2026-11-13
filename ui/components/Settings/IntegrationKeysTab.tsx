@@ -18,7 +18,7 @@ import "./McpConnectionsTab.css";
 import "./IntegrationKeyMemberPicker.css";
 
 const AI_KEY_NAMES = ["OPENAI_API_KEY", "ANTHROPIC_API_KEY", "GOOGLE_API_KEY", "PAPR_API_KEY"];
-/** Sign-ins Connections manages itself: shown under Services, not here. */
+/** Sign-ins Connections manages itself: shown under Connectors, not here. */
 const MANAGED = /^MCP_.+_OAUTH$/;
 
 function useVaultPeople(orgId?: string | null) {
@@ -175,7 +175,7 @@ export function IntegrationKeysTab({ embedded = false }: { embedded?: boolean } 
           )}
         </div>
         <p className="svc-hint svc-hint--below">
-          For jobs and app code you write yourself. If the service is under Services, connect it there instead: Pen can
+          For jobs and app code you write yourself. If the service is under Connectors, connect it there instead: Pen can
           then limit what it does.
         </p>
       </section>
