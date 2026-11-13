@@ -1,8 +1,9 @@
 /**
- * All tasks (the Today | All tasks switch) and the task row the goal page reuses. Port of tasks.js.
- * Checking a box edits the source markdown through the done endpoint, so every agent sees it.
+ * All tasks (the Today | All tasks switch): Asked of you (teammates' asks, Pen + Jev ranked),
+ * You're waiting on (your asks + promises Pen found), and Your tasks. Plus the task row the goal page
+ * reuses. Checking a box edits the source markdown through the done endpoint, so every agent sees it.
  */
-import { useState } from "react";
+import { useEffect, useState, type ReactNode } from "react";
 import { focusApi, type FocusGoal, type Task, type TasksResult } from "./focusApi";
 import { goalLabel, taskDue } from "./fmt";
 import { TaskCheckIcon } from "./icons";
@@ -30,7 +31,7 @@ export function TaskRow({ t, three, onToggled }: { t: Task; three: FocusGoal[]; 
       <div className="hrt"><b>{t.title}</b>{meta ? <span>{meta}</span> : null}</div>
       {owner ? <em className="hk">{owner}</em> : null}
       {t.goal_id ? (
-        <span className={`hg${lab ? " on" : ""}`} title={lab ? `One of your three: ${three.find((g) => g.id === t.goal_id)?.title ?? ""}` : "Not one of your three"}>
+        <span className={`hg${lab ? " on" : ""}`} title={lab ? `Priority goal: ${three.find((g) => g.id === t.goal_id)?.title ?? ""}` : "Not a priority goal"}>
           {lab || t.goal_id}
         </span>
       ) : null}
@@ -38,18 +39,15 @@ export function TaskRow({ t, three, onToggled }: { t: Task; three: FocusGoal[]; 
   );
 }
 
-export function TasksView({ data, three, onChanged }: { data: TasksResult | null; three: FocusGoal[]; onChanged: () => void }) {
+export function TasksView({ data, three, onChanged, asked, waiting, asks = 0, waits = 0, scrollTo }: {
+  data: TasksResult | null; three: FocusGoal[]; onChanged: () => void;
+  /** Asked of you / You're waiting on sections (rendered by the page, which has the feed). */
+  asked?: ReactNode; waiting?: ReactNode; asks?: number; waits?: number; scrollTo?: string | null;
+}) {
   const tasks = data?.tasks ?? [];
   const open = tasks.filter((t) => t.status === "open");
   const done = tasks.filter((t) => t.status === "done").slice(0, 20);
-  if (!open.length && !done.length) {
-    return (
-      <section className="hempty">
-        <b>No tasks yet</b>
-        <p>Tasks come from your goals&apos; tactical steps and the Open Items on your wiki pages. Confirm goals on Today, or ask your agent to add one.</p>
-      </section>
-    );
-  }
+  useEffect(() => { if (scrollTo) document.getElementById(scrollTo)?.scrollIntoView?.({ block: "start" }); }, [scrollTo]);
   const group = (title: string, items: Task[]) =>
     items.length ? (
       <section className="hsec">
@@ -61,11 +59,18 @@ export function TasksView({ data, three, onChanged }: { data: TasksResult | null
     <>
       <h2 className="hero-title">All tasks</h2>
       <p className="hero-stats">
-        <span className="stat"><b className="stat-num">{open.length}</b> <span className="stat-label">open</span></span>
-        <span className="stat"><b className="stat-num">{data?.counts?.done ?? 0}</b> <span className="stat-label">done</span></span>
+        <span className="stat"><b className="stat-num">{asks}</b> <span className="stat-label">asked of you</span></span>
+        <span className="stat"><b className="stat-num">{waits}</b> <span className="stat-label">waiting on</span></span>
+        <span className="stat"><b className="stat-num">{open.length}</b> <span className="stat-label">your tasks</span></span>
       </p>
-      {group("Open", open)}
-      {group("Recently done", done)}
+      {asked}
+      {waiting}
+      {open.length || done.length ? <>{group("Your tasks", open)}{group("Recently done", done)}</> : (
+        <section className="hempty">
+          <b>No tasks yet</b>
+          <p>Tasks come from your goals&apos; tactical steps and the Open Items on your wiki pages. Confirm goals on Today, or ask your agent to add one.</p>
+        </section>
+      )}
     </>
   );
 }

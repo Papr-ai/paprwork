@@ -13,6 +13,7 @@ import * as path from "node:path";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
 const APP_ID = "22222222-3333-4444-5555-666666666666";
+const buildApp = vi.fn(async () => ({ success: true }));
 const state = { remoteFiles: {} as Record<string, string>, commitSha: "sha-1", published: [] as string[] };
 
 vi.mock("../../../src/gateway/services/syncV3/AppOpsClient.js", async () => {
@@ -57,6 +58,7 @@ vi.mock("../../../src/gateway/services/AppService.js", async () => {
     getAppService: () => ({
       getApp: async () => null,
       updateApp: async () => {},
+      buildApp,
       writeAppFile: async (appId: string, rel: string, content: string) => {
         const full = path.join(getPaprAppsRoot(), appId, rel);
         await fs.mkdir(path.dirname(full), { recursive: true });
@@ -205,3 +207,67 @@ describe("the waiting-update chip clears once the update is in", () => {
     expect(getPendingAppUpdate(APP_ID)?.commitSha).toBe("sha-2");
   });
 });
+describe("backend bundle after a merged proposal", () => {
+  it("pulled handler + refreshed bundle on the web: local bundle matches, nothing left to publish", async () => {
+    const { createHash } = await import("node:crypto");
+    const sha = (c: string) => createHash("sha256").update(c, "utf8").digest("hex");
+    const manifest = JSON.stringify({ version: 1, actions: { ping: { handler: "ping.py", runtime: "python" } } });
+    const bundle = (h: string, at: string) =>
+      `${JSON.stringify({ version: 1, builtAt: at, actions: { ping: { handler: "ping.py", sha256: sha(h), bytes: h.length } } }, null, 2)}\n`;
+    publish({ "app.ts": BASE_APP, "backend/manifest.json": manifest, "backend/ping.py": "v1\n", "backend/bundle.json": bundle("v1\n", "a") }, "sha-d1");
+    await pullAppCodeFromRepo(APP_ID, { token: "t", allowRecentSkip: false });
+    await fs.writeFile(appFile("backend/bundle.json"), bundle("v1\n", "a"));
+    // An accepted proposal changed ping.py; memory#477 rebuilt bundle.json on main.
+    publish({ "app.ts": BASE_APP, "backend/manifest.json": manifest, "backend/ping.py": "v2\n", "backend/bundle.json": bundle("v2\n", "b") }, "sha-d2");
+
+    const res = await pullAppCodeFromRepo(APP_ID, { token: "t", allowRecentSkip: false });
+
+    expect(res.conflictFiles).toEqual([]);
+    expect(await read("backend/ping.py")).toBe("v2\n");
+    expect(await read("backend/bundle.json")).toBe(bundle("v2\n", "b"));
+  });
+});
+
+describe("build output is rebuilt locally, never compared", () => {
+  it("merged source + clashing dist/app.js, db.ts, papr_db.py: no conflict, rebuilds", async () => {
+    publish(
+      { "app.ts": BASE_APP, "dist/app.js": "built-v1\n", "db.ts": "db-1\n", "backend/papr_db.py": "v1\n" },
+      "sha-b1",
+    );
+    await pullAppCodeFromRepo(APP_ID, { token: "t", allowRecentSkip: false });
+    // Both sides edit different parts of app.ts and rebuild their own bundle.
+    await fs.writeFile(appFile("app.ts"), BASE_APP.replace("return 1;", "return 2; // mine"));
+    await fs.writeFile(appFile("dist/app.js"), "built-mine\n");
+    await fs.writeFile(appFile("db.ts"), "db-mine-ids\n");
+    await fs.writeFile(appFile("backend/papr_db.py"), "v2-mine\n");
+    publish(
+      {
+        "app.ts": BASE_APP.replace("return 'a';", "return 'b'; // theirs"),
+        "dist/app.js": "built-theirs\n",
+        "db.ts": "db-theirs-ids\n",
+        "backend/papr_db.py": "v2-theirs\n",
+      },
+      "sha-b2",
+    );
+    buildApp.mockClear();
+
+    const res = await pullAppCodeFromRepo(APP_ID, { token: "t", allowRecentSkip: false });
+
+    expect(res.conflictFiles).toEqual([]);
+    expect(res.mergedFiles).toEqual(["app.ts"]);
+    expect(await read("app.ts")).toContain("// mine");
+    expect(await read("app.ts")).toContain("// theirs");
+    // Local build output untouched by the pull, then rebuilt from merged source.
+    expect(await read("dist/app.js")).toBe("built-mine\n");
+    expect(await read("db.ts")).toBe("db-mine-ids\n");
+    expect(buildApp).toHaveBeenCalledWith(APP_ID);
+  });
+
+  it("a machine with no build yet takes the web's dist", async () => {
+    publish({ "app.ts": BASE_APP, "dist/app.js": "built-web\n" }, "sha-c1");
+    await fs.rm(appFile("dist"), { recursive: true, force: true });
+    await pullAppCodeFromRepo(APP_ID, { token: "t", allowRecentSkip: false });
+    expect(await read("dist/app.js")).toBe("built-web\n");
+  });
+});
+

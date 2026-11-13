@@ -10,6 +10,7 @@ import {
 describe("piAiAnthropicAdaptiveThinking", () => {
   it("detects Fable 5.1, Opus 5, and Sonnet 5 as override models", () => {
     expect(requiresPiAiAdaptiveThinkingOverride("claude-fable-5-1")).toBe(true);
+    expect(requiresPiAiAdaptiveThinkingOverride("claude-fable-5-2")).toBe(true);
     expect(requiresPiAiAdaptiveThinkingOverride("claude-opus-5-5")).toBe(true);
     expect(requiresPiAiAdaptiveThinkingOverride("claude-opus-5")).toBe(true);
     expect(requiresPiAiAdaptiveThinkingOverride("claude-opus-4-8")).toBe(true);
@@ -87,6 +88,13 @@ describe("piAiAnthropicAdaptiveThinking", () => {
     expect(opts.headers?.["user-agent"]).toBe(
       `claude-cli/${CLAUDE_CODE_OAUTH_USER_AGENT_VERSION}`,
     );
+  });
+
+  it("reports at least Claude Code 2.1.290, the minimum for Fable 5.2 on OAuth", () => {
+    const parts = CLAUDE_CODE_OAUTH_USER_AGENT_VERSION.split(".").map(Number);
+    const min = [2, 1, 290];
+    const cmp = parts.reduce((acc, n, i) => acc || Math.sign(n - min[i]), 0);
+    expect(cmp).toBeGreaterThanOrEqual(0);
   });
 
   it("does not spoof Claude Code headers for direct API keys", () => {

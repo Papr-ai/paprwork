@@ -12,7 +12,7 @@ export function buildPlatformSetupChatPrompt(
 Google Chrome is not installed on this computer yet (or Papr couldn't find it). Please help me:
 
 1. Check whether Google Chrome is installed; if not, install it with the right command for my OS (brew/winget — ask before running installs).
-2. Connect my ${platformName} account using Papr's real Chrome sign-in window (Settings → Platform Connections or connect_platform request_connect — not the embedded Papr browser tab).
+2. Connect my ${platformName} account using Papr's real Chrome sign-in window (Settings → Connectors & API Keys or connect_platform request_connect — not the embedded Papr browser tab).
 3. After ${platformName} shows as connected, help me install and personalize ${entry.name}.
 
 ${rec.connect!.why}
@@ -29,12 +29,12 @@ export function buildSettingsPlatformSetupChatPrompt(
   const reasonBlock = options?.reason?.trim()
     ? `\nWhy I need this: ${options.reason.trim()}`
     : "";
-  return `I need to connect ${platformName} in Papr (Settings → Platform Connections).
+  return `I need to connect ${platformName} in Papr (Settings → Connectors & API Keys).
 
 Google Chrome is not installed on this computer yet (or Papr couldn't find it). Please help me:
 
 1. Check whether Google Chrome is installed; if not, install it with the right command for my OS (brew/winget — ask before running installs).
-2. Connect my ${platformName} account using Papr's real Chrome sign-in (connect_platform with request_connect, or Settings → Platform Connections → Connect — not the embedded Papr browser tab).
+2. Connect my ${platformName} account using Papr's real Chrome sign-in (connect_platform with request_connect, or Settings → Connectors & API Keys → Connect — not the embedded Papr browser tab).
 3. Confirm ${platformName} shows as connected when finished.
 
 Platform id: ${platformId}.${reasonBlock}

@@ -131,6 +131,22 @@ export function registerFocusRoutes(app: Express): void {
     });
   });
 
+  // Open asks: teammates' asks to you (Pen + Jev ranked) and your asks to them. The brief's input for
+  // one plan (asks compete with tasks) and for Waiting on (skip anything already a tracked ask).
+  app.get("/api/focus/open-asks", (req, res) => {
+    if (!guard(req, res)) return;
+    void run(res, async () => {
+      const { openAsks, waitingOn } = await import("./collab/mentions.js");
+      const slim = (m: { id: string; fromName: string; toName: string; text: string; action: { title: string; due?: string | null } | null; createdAt: string }) =>
+        ({ id: m.id, from: m.fromName, to: m.toName, what: m.action?.title ?? m.text.slice(0, 200), due: m.action?.due ?? null, at: m.createdAt });
+      const [toYou, fromYou] = await Promise.all([openAsks().catch(() => []), waitingOn().catch(() => [])]);
+      return {
+        to_you: toYou.map((m) => ({ ...slim(m), triage: m.triage ?? null })),
+        from_you: fromYou.map((m) => ({ ...slim(m), progress: m.progress ?? "asked" })),
+      };
+    });
+  });
+
   // Find or create the Daily Brief job (the "Generate brief" button uses this).
   app.post("/api/focus/brief-job", (req, res) => {
     if (!guard(req, res)) return;

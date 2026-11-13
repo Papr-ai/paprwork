@@ -51,7 +51,7 @@ export function McpConnectionsTab({
   embedded?: boolean;
   /** Org rules + requests; when a service isn't approved the row offers Request instead of Connect. */
   org?: Org;
-  /** Connected + team count, for the Services tab label. */
+  /** Connected + team count, for the Connectors tab label. */
   onCount?: (n: number) => void;
 } = {}) {
   const [servers, setServers] = useState<McpServer[]>([]);
@@ -259,7 +259,7 @@ export function McpConnectionsTab({
         key={`site:${p.id}`}
         server={siteLogoServer(p)}
         tone="warn"
-        status={`Sign-in expired · Pen can't use ${p.name}`}
+        status={st === "needs_reauth" || st === "expired" ? `Sign-in expired · Pen can't use ${p.name}` : `Not signed in · Pen can't use ${p.name}`}
         onOpen={open}
         action={<RowButton primary disabled={busySite} onClick={() => void sites.connect(p.id)}>Reconnect</RowButton>}
       />
@@ -297,7 +297,7 @@ export function McpConnectionsTab({
     <div className="mcp-tab">
       {!embedded && (
         <div className="settings-section__header">
-          <h2 className="settings-section__title">Connections</h2>
+          <h2 className="settings-section__title">Connectors &amp; API Keys</h2>
         </div>
       )}
 

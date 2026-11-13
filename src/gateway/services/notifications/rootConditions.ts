@@ -35,7 +35,7 @@ export function setConnectorsSignedOut(names: string[]): void {
     key: ROOT_KEYS.connectors, kind: "account.connectors", type: "condition", level: "priority",
     title: names.length === 1 ? `Sign in to ${names[0]} again` : `${names.length} accounts need you to sign in again`,
     body: `${list} signed you out. Pen can't use ${names.length === 1 ? "it" : "them"} until you reconnect.`,
-    source: papr, owner: { kind: "account", id: "connections", name: "Connections", section: "connections" },
+    source: papr, owner: { kind: "account", id: "connections", name: "Connectors & API Keys", section: "connections" },
     actions: [{ label: "Reconnect", intent: "open" }],
   });
 }

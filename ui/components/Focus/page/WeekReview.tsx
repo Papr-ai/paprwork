@@ -61,7 +61,7 @@ export function WeekReview({ data, onClose, onChange, onSaved }: { data: FocusSt
     <div className="t3wrap wr">
       <button type="button" className="t3back" onClick={onClose}><BackIcon />Focus</button>
       <p className="hero-date">Monday review · {range()}</p>
-      <h2 className="hero-title">{pct == null ? "Here's where last week went." : `Last week, ${pct}% of your chat time went to your three.`}</h2>
+      <h2 className="hero-title">{pct == null ? "Here's where last week went." : `Last week, ${pct}% of your chat time went to your priority goals.`}</h2>
       {pct == null ? null : (
         <>
           <div className="wrbar"><i style={{ width: `${Math.min(100, pct)}%` }} /><b style={{ left: `${TARGET}%` }} title="Your target" /></div>
@@ -71,7 +71,7 @@ export function WeekReview({ data, onClose, onChange, onSaved }: { data: FocusSt
       <section className="wrlist">{data.three.map((g) => <Row key={g.id} g={g} />)}</section>
       {drift ? (
         <section className="wrdrift"><b>{hours(drift.signals?.hours7)} went to {drift.title}.</b>
-          <p>It isn&apos;t one of your three. Make it one, or let it go this week?</p>
+          <p>It isn&apos;t one of your priority goals. Make it one, or let it go this week?</p>
           <nav><button type="button" className="t3link" onClick={change}>Make it one of three</button>
             <button type="button" className="t3link quiet" onClick={() => setDropped(true)}>Let it go</button></nav>
         </section>

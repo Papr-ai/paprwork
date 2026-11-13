@@ -18,3 +18,12 @@ describe("isStalePlaywrightContextError", () => {
     expect(isStalePlaywrightContextError(new Error("navigation timeout"))).toBe(false);
   });
 });
+
+describe("isCdpAttachUnsupportedError (#811: timeout triggers a Chrome restart)", () => {
+  it("treats a CDP attach timeout as restart-worthy", async () => {
+    const { isCdpAttachUnsupportedError } = await import("../../src/gateway/services/platforms/platformDirectChromeSpawn.js");
+    expect(isCdpAttachUnsupportedError(new Error("browserType.connectOverCDP: Timeout 30000ms exceeded."))).toBe(true);
+    expect(isCdpAttachUnsupportedError(new Error("Browser context management is not supported"))).toBe(true);
+    expect(isCdpAttachUnsupportedError(new Error("net::ERR_CONNECTION_REFUSED"))).toBe(false);
+  });
+});

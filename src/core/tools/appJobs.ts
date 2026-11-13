@@ -693,6 +693,7 @@ const createJobSchemaCore = z
       "claude-opus-5",
       "claude-opus-5-5",
       "claude-fable-5-1",
+      "claude-fable-5-2",
       // OpenAI
       "gpt-5-6-luna",
       "gpt-5-6-terra",
@@ -715,6 +716,7 @@ const createJobSchemaCore = z
       "gemini-3.6-flash",
       "gemini-3.7-flash",
       "gemini-3.8-flash",
+      "gemini-4-argon",
       "gemini-3.1-pro-preview",
       // Ollama - Qwen
       "qwen3.5:0.8b",
@@ -2097,6 +2099,7 @@ const updateJobSchema = z.object({
       "claude-opus-5",
       "claude-opus-5-5",
       "claude-fable-5-1",
+      "claude-fable-5-2",
       // OpenAI
       "gpt-5-6-luna",
       "gpt-5-6-terra",
@@ -2119,6 +2122,7 @@ const updateJobSchema = z.object({
       "gemini-3.6-flash",
       "gemini-3.7-flash",
       "gemini-3.8-flash",
+      "gemini-4-argon",
       "gemini-3.1-pro-preview",
       // Ollama - Qwen
       "qwen3.5:0.8b",

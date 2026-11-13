@@ -2354,13 +2354,22 @@ export class AgentService {
             );
 
             // Map model ID to display name and pricing
-            const modelInfo = piModelId.includes("fable")
+            const modelInfo = piModelId.includes("fable-5-2")
               ? {
-                  name: piModelId.includes("fable-5-1")
-                    ? "Claude Fable 5.1"
-                    : "Claude Fable 5",
-                  inputCost: 10.0,
-                  outputCost: 50.0,
+                  name: "Claude Fable 5.2",
+                  inputCost: 8.0,
+                  outputCost: 40.0,
+                  contextWindow: 1000000,
+                }
+              : piModelId.includes("fable")
+              ? {
+                  name: piModelId.includes("fable-5-2")
+                    ? "Claude Fable 5.2"
+                    : piModelId.includes("fable-5-1")
+                      ? "Claude Fable 5.1"
+                      : "Claude Fable 5",
+                  inputCost: piModelId.includes("fable-5-2") ? 8.0 : 10.0,
+                  outputCost: piModelId.includes("fable-5-2") ? 40.0 : 50.0,
                   contextWindow: 1000000,
                 }
               : piModelId.includes("opus-5-5")
@@ -2416,7 +2425,9 @@ export class AgentService {
 
             const cacheReadMultiplier = piModelId.includes("opus-5-5")
               ? 0.05
-              : 0.1;
+              : piModelId.includes("fable-5-2")
+                ? 0.025
+                : 0.1;
 
             finalModel = {
               id: piModelId,

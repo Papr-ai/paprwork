@@ -26,7 +26,11 @@ import { computeBlobOidForContent } from "./computeParentHash.js";
 import { mergeFileContents, runGit } from "../cloudSync/threeWayMerge.js";
 import { ephemeralGitEnv } from "../../utils/ephemeralGitEnv.js";
 import { fetchAppRepoHead } from "./AppOpsClient.js";
-import { isPlatformGeneratedAppPath, isWriterScaffoldPath } from "./platformGeneratedAppPaths.js";
+import {
+  isLocallyRebuiltAppPath,
+  isPlatformGeneratedAppPath,
+  isWriterScaffoldPath,
+} from "./platformGeneratedAppPaths.js";
 import { MASS_DELETE_THRESHOLD, readSyncManifest, updateSyncManifest } from "./SyncManifest.js";
 import { localPathForRepoPath, planRemoteDeletes } from "./syncDeletes.js";
 import { writeAppRepoCommitCursor, readAppRepoCommitCursors } from "./appRepoCommittedFanout.js";
@@ -380,6 +384,12 @@ export async function pullAppCodeFromRepo(
         plan.push({ action: "skip", filePath });
         continue;
       }
+      // Build output this machine already has is rebuilt from the pulled source
+      // below, never compared. A missing copy (e.g. no build yet) takes the web's.
+      if (isLocallyRebuiltAppPath(filePath) && (await existsLocally(filePath))) {
+        plan.push({ action: "skip", filePath });
+        continue;
+      }
       const remoteOid = remoteOidByPath.get(filePath);
       const lastSyncedOid = cachedPaths[filePath] ?? null;
 
@@ -437,9 +447,16 @@ export async function pullAppCodeFromRepo(
         continue;
       }
 
+      // The manifest only records bytes both sides provably held. When the
+      // OID cache was stamped ahead of disk (older publishes realigned it to
+      // HEAD without pulling), a local file still equal to the manifest entry
+      // is untouched here: take the web's version instead of reporting a
+      // conflict on a file nobody edited on this computer.
+      const unchangedSinceAgreed = baseOid !== undefined && localOid === baseOid;
       const localUnchanged =
         localContent === undefined ||
-        (lastSyncedOid !== null && localOid === lastSyncedOid);
+        (lastSyncedOid !== null && localOid === lastSyncedOid) ||
+        unchangedSinceAgreed;
 
       if (!localUnchanged && remoteOid && localOid !== remoteOid && filePath === "metadata.json") {
         // metadata.json is rebuilt from this machine's app record on every
@@ -637,6 +654,20 @@ export async function pullAppCodeFromRepo(
       }
     }
 
+    // bundle.json / revision are skipped above; bring them in line with the web when
+    // the pulled handlers match it, so a merged proposal leaves nothing to publish.
+    if (updatedFiles.length > 0 || mergedFiles.length > 0) {
+      try {
+        const { adoptPulledBackendBundle } = await import("./pulledBackendBundle.js");
+        const adopted = await adoptPulledBackendBundle(appDir, upstreamFiles, sourceDir);
+        if (adopted.length > 0) {
+          console.log(`[PullAppCode] ${trimmed}: took the web's ${adopted.join(", ")}`);
+        }
+      } catch (err) {
+        console.warn(`[PullAppCode] ${trimmed}: backend bundle refresh skipped:`, err instanceof Error ? err.message : err);
+      }
+    }
+
     if (updatedFiles.length > 0 || head.commitSha) {
       await applyAckedBlobOids(
         trimmed,
@@ -690,6 +721,18 @@ export async function pullAppCodeFromRepo(
       await appService.ensureAppDbTs(trimmed);
     } catch {
       /* regenerated on the next link / pull */
+    }
+    // dist/ is not pulled (see isLocallyRebuiltAppPath): rebuild it from the
+    // source we just merged so the local app runs the combined code.
+    if (updatedFiles.length > 0 || mergedFiles.length > 0) {
+      try {
+        await appService.buildApp(trimmed);
+      } catch (err) {
+        console.warn(
+          `[PullAppCode] Rebuild after pull failed for ${trimmed}:`,
+          err instanceof Error ? err.message : err,
+        );
+      }
     }
 
     const hydratedFromAppTree = await hydrateAppFolderSchemaMigrationsToRegistry({

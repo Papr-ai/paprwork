@@ -85,6 +85,14 @@ const AVAILABLE_MODELS: Record<Provider, ModelInfo[]> = {
       supportsVision: true,
     },
     {
+      id: "claude-fable-5-2",
+      name: "Claude Fable 5.2",
+      provider: "anthropic",
+      contextWindow: 1000000,
+      supportsThinking: true,
+      supportsVision: true,
+    },
+    {
       id: "claude-opus-4-5-thinking",
       name: "Claude Opus 4.5 (Extended Thinking)",
       provider: "anthropic",
@@ -181,6 +189,14 @@ const AVAILABLE_MODELS: Record<Provider, ModelInfo[]> = {
     {
       id: "gemini-3.8-flash",
       name: "Gemini 3.8 Flash",
+      provider: "google",
+      contextWindow: 1048576,
+      supportsThinking: true,
+      supportsVision: true,
+    },
+    {
+      id: "gemini-4-argon",
+      name: "Gemini 4 Argon",
       provider: "google",
       contextWindow: 1048576,
       supportsThinking: true,

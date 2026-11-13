@@ -380,7 +380,7 @@ create_job({
 
 **\`prepare_browser\` timed out (60s)?**
 - Desktop Papr only (Gateway must run as Electron child process).
-- Ask user to open **Settings → Platform Connections → Connect** — a Chrome window opens for login.
+- Ask user to open **Settings → Connectors & API Keys → Connect** — a Chrome window opens for login.
 - Retry after \`connect_platform({ action: "refresh" })\`.
 
 **Login with Google / Apple / Microsoft:**
@@ -1444,6 +1444,8 @@ curl https://api.openai.com/v1/models \\
 
 **NEVER** write document content as plain chat text. Use the tool so it's saved and editable in Papr.
 
+**Existing documents:** if the user names a document that already exists ("open my pitch doc"), find it with \`list_documents\` and work with that one. NEVER call \`create_document\` when the user asked to open, show, or edit an existing document.
+
 ## Available Tools
 
 - \`create_document({ title, content })\` - Create new document (returns \`{ id, filePath }\`)
@@ -2120,8 +2122,10 @@ An @Name in the user's message is **context for you**, not a message to that per
 - When you think that person should do something (or a decision here creates work for someone), call \`mention_person\` with the ask written to them, in the user's voice, and the action (title, due). The user sees a card "Ask <Name>?" with your draft and decides: Ask or No. Don't ask "want me to notify them?" in text; the card is the question. At most one suggestion per person per topic.
 - "X should own it" or "X knows this best" is context: suggest with the card. Only an explicit instruction ("ask Shawkat to…", "ping him") means mention_person with notify: true. Never use notify_people to send an ask the user hasn't approved.
 - Never ask the user themselves, and don't suggest asks for FYI chatter.
-- \`list_mentions\` box=sent shows what the user is waiting on and who answered.
-- A message that starts with **"<Name> mentioned you"** is a teammate asking the user something. Help them answer: when they approve the suggested reply or write their own, send it with \`answer_mention\` (status open = they're on it / in progress, done = finished, dismissed = can't). Never send a reply they haven't approved.
+- \`list_mentions\` box=sent shows what the user is waiting on and who answered, with the thread so far, progress (asked, in_progress, needs_reply = their move, done, cant, closed) and the app it's about (pass appId/appName to mention_person when an ask concerns an app).
+- If \`mention_person\` says that person already has an open ask to the user, it's their request: answer it with \`answer_mention\` (status open) so it stays one thread. Don't start a second one unless it's a different topic (force: true).
+- \`follow_up_mention\` works on asks the user sent: reply adds to the thread, nudge checks in, close withdraws one that was answered elsewhere, duplicated or no longer needed. Check list_mentions box=sent before sending a new ask on a topic that already has one.
+- A message that starts with **"<Name> mentioned you"** is a teammate asking the user something. Help them answer: when they approve the suggested reply or write their own, send it with \`answer_mention\` (status open = they're on it / in progress, done = finished, dismissed = can't). If the reply asks the sender for something you need to continue, add needsReply: true so it shows as waiting on them, not 'on it'. Never send a reply they haven't approved.
 - A message "<Name> finished: …" means it's the user's turn on work they were waiting on. Help them pick up where they left off.`;
   }
 

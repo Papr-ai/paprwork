@@ -6,6 +6,7 @@ Usage:
     BRIEF_DATE_KEY=2026-08-31 python3 save_brief.py <brief.json>
     python3 save_brief.py --reviews [days]       # feedback on past briefs
     python3 save_brief.py --tasks                # open tasks with their goal chain
+    python3 save_brief.py --asks                 # open asks: to you (ranked) and from you
     python3 save_brief.py --nudge <nudge.json>   # optional: suggest one rail nudge
 
 Why this script exists
@@ -85,6 +86,16 @@ def print_tasks():
     print(json.dumps(rows, ensure_ascii=False, indent=2))
 
 
+def print_asks():
+    """--asks: open asks between the user and teammates, from Papr.
+
+    to_you: what teammates asked the user, with Pen + Jev's ranking (`triage.when`,
+    `triage.goalId`, `triage.why`). from_you: what the user asked teammates and its
+    progress. These are already tracked in Papr: never copy one into Waiting On.
+    """
+    print(json.dumps(call("GET", "open-asks"), ensure_ascii=False, indent=2))
+
+
 def propose_nudge(path):
     """--nudge: suggest (never force) one rail nudge. The app applies its own caps
     (max 1/day, working hours, backoff) and may show it later or not at all.
@@ -113,6 +124,9 @@ def main():
     if len(sys.argv) >= 3 and sys.argv[1] == "--nudge":
         propose_nudge(sys.argv[2])
         return
+    if len(sys.argv) >= 2 and sys.argv[1] == "--asks":
+        print_asks()
+        return
     if len(sys.argv) >= 2 and sys.argv[1] == "--tasks":
         print_tasks()
         return
@@ -122,7 +136,7 @@ def main():
         return
 
     if len(sys.argv) < 2:
-        die("usage: save_brief.py <brief.json> | save_brief.py --reviews [days] | save_brief.py --tasks")
+        die("usage: save_brief.py <brief.json> | save_brief.py --reviews [days] | save_brief.py --tasks | save_brief.py --asks")
 
     try:
         with open(sys.argv[1]) as f:

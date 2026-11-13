@@ -63,10 +63,10 @@ export interface PiAiAnthropicStreamOptions {
  * Claude Code CLI version sent on the OAuth (pi-ai) user-agent.
  *
  * Anthropic gates newer API models by minimum CLI version (e.g. Fable 5.1 → 2.1.251,
- * Opus 5.5 → 2.1.280). Keep this at or above the highest requirement among models
+ * Opus 5.5 → 2.1.280, Fable 5.2 → 2.1.290). Keep this at or above the highest requirement among models
  * we expose on subscription login.
  */
-export const CLAUDE_CODE_OAUTH_USER_AGENT_VERSION = "2.1.280";
+export const CLAUDE_CODE_OAUTH_USER_AGENT_VERSION = "2.1.290";
 
 /**
  * Models pi-ai misconfigures (budget thinking) but Anthropic requires adaptive-only.

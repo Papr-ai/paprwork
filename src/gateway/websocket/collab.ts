@@ -4,8 +4,10 @@
  *   collab:answer  → { itemId, status, reply? } send the (approved) reply; open = I'm on it (in progress), done, dismissed = can't
  *   collab:notify  → { ids, note? } the user said yes to Pen's "Ask Shawkat?": tell them now
  *   collab:card    → { itemId } the Focus card for a mention that arrived here
+ *   collab:approve-plan → { itemId } the user OK'd Pen's plan for a mention (the chat then runs it)
  *   collab:waiting → what the user asked others that's still open (Waiting on, in Focus)
  *   collab:followup → { itemId, kind: reply|nudge|close, text? } the asker follows up from Waiting on
+ *   collab:asks    → { asks, plan } every open ask to you with Pen + Jev's ranking; today's plan with placed asks
  *   collab:goals   → { items: [{ key, text }] } which of Your three each Needs-you item moves (Jev; null = none)
  */
 import type { WebSocket } from "ws";
@@ -44,6 +46,13 @@ export async function setupCollabHandlers(ws: WebSocket, message: WSMessage): Pr
         sendResponse(ws, { id: message.id, success: true, data: { notified: out.map((m) => ({ id: m.id, name: m.toName })) } });
         return;
       }
+      case "collab:approve-plan": {
+        if (typeof p.itemId !== "string" || !p.itemId) throw new Error("itemId required");
+        const { approvePlan } = await import("../services/collab/mentions.js");
+        await approvePlan(p.itemId);
+        sendResponse(ws, { id: message.id, success: true, data: { ok: true } });
+        return;
+      }
       case "collab:card": {
         if (typeof p.itemId !== "string" || !p.itemId) throw new Error("itemId required");
         const { mentionCard } = await import("../services/collab/mentions.js");
@@ -70,6 +79,15 @@ export async function setupCollabHandlers(ws: WebSocket, message: WSMessage): Pr
         const { followUp } = await import("../services/collab/mentions.js");
         const m = await followUp(p.itemId, kind, text);
         sendResponse(ws, { id: message.id, success: true, data: { status: m.status, progress: m.progress ?? null } });
+        return;
+      }
+      case "collab:asks": {
+        const { openAsks } = await import("../services/collab/mentions.js");
+        const { todaysPlan } = await import("../services/collab/askTriage.js");
+        const [asks, plan] = await Promise.all([openAsks().catch(() => []), todaysPlan().catch(() => [])]);
+        const { rankMissing } = await import("../services/collab/askTriage.js");
+        rankMissing(asks); // older asks get ranked too; Focus refreshes on collab:mention when they land
+        sendResponse(ws, { id: message.id, success: true, data: { asks, plan } });
         return;
       }
       case "collab:goals": {

@@ -3,7 +3,7 @@
 Connections are one-click OAuth sign-ins to remote MCP servers (Linear, Notion,
 Atlassian, Asana, HubSpot*, Stripe, Airtable, Attio, Intercom, Sentry, Supabase,
 Vercel, Zapier… ~50 built in; `connect_mcp action="status"` lists ids). The user
-signs in once in **Settings → Connections** (or via a Connect button in an app);
+signs in once in **Settings → Connectors & API Keys** (or via a Connect button in an app);
 tokens live in the keychain and never reach app or job code.
 
 Prefer a connection over asking the user for an API key whenever the service is
@@ -61,7 +61,7 @@ Don'ts:
 from papr_mcp import call_json, status, PaprMcpError
 
 if status("linear") != "connected":
-    raise SystemExit("Connect Linear in Settings → Connections")
+    raise SystemExit("Connect Linear in Settings → Connectors & API Keys")
 issues = call_json("linear", "list_issues", {"assignee": "me", "limit": 50})
 ```
 Jobs never open a browser. A dead sign-in raises `PaprMcpError` ("needs to be reconnected").

@@ -32,6 +32,7 @@ const SUBAGENT_MODEL_IDS = [
   "claude-opus-5",
   "claude-opus-5-5",
   "claude-fable-5-1",
+  "claude-fable-5-2",
   "gemini-2.5-flash",
   "gemini-2.5-flash-lite",
   "gemini-3.1-flash-lite",
@@ -39,6 +40,7 @@ const SUBAGENT_MODEL_IDS = [
   "gemini-3.6-flash",
   "gemini-3.7-flash",
   "gemini-3.8-flash",
+  "gemini-4-argon",
   "gemini-3.1-pro-preview",
 ] as const;
 

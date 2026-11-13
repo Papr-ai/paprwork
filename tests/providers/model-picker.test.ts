@@ -3,6 +3,7 @@ import {
   CHAT_PICKER_EXCLUDED_MODEL_IDS,
   PICKER_DEFAULT_MODEL_IDS,
   PRE_GEMINI_36_PICKER_DEFAULT_MODEL_IDS,
+  PRE_FABLE_52_GEMINI_4_PICKER_DEFAULT_MODEL_IDS,
   PRE_GEMINI_38_PICKER_DEFAULT_MODEL_IDS,
   PRE_OPUS_55_PICKER_DEFAULT_MODEL_IDS,
   PRE_SONNET_55_PICKER_DEFAULT_MODEL_IDS,
@@ -10,6 +11,7 @@ import {
   getPickerModels,
   isChatPickerModelId,
   isPickerDefaultModelId,
+  migratePickerModelId,
   resolveEnabledPickerModelIds,
 } from "../../ui/constants/modelPicker";
 
@@ -23,13 +25,15 @@ describe("modelPicker", () => {
     ]);
   });
 
-  test("default list includes Sonnet 5.5, Opus 5.5, Fable 5.1, and cloud models", () => {
-    expect(PICKER_DEFAULT_MODEL_IDS).toHaveLength(12);
+  test("default list includes Sonnet 5.5, Opus 5.5, Fable 5.2, Gemini 4, and cloud models", () => {
+    expect(PICKER_DEFAULT_MODEL_IDS).toHaveLength(13);
     expect(PICKER_DEFAULT_MODEL_IDS[0]).toBe("auto");
     expect(PICKER_DEFAULT_MODEL_IDS).toContain("claude-sonnet-5-5");
     expect(PICKER_DEFAULT_MODEL_IDS).not.toContain("claude-sonnet-5");
     expect(PICKER_DEFAULT_MODEL_IDS).toContain("claude-opus-5-5");
-    expect(PICKER_DEFAULT_MODEL_IDS).toContain("claude-fable-5-1");
+    expect(PICKER_DEFAULT_MODEL_IDS).toContain("claude-fable-5-2");
+    expect(PICKER_DEFAULT_MODEL_IDS).not.toContain("claude-fable-5-1");
+    expect(PICKER_DEFAULT_MODEL_IDS).toContain("gemini-4-argon");
     expect(PICKER_DEFAULT_MODEL_IDS).not.toContain("claude-sonnet-4-6");
     expect(PICKER_DEFAULT_MODEL_IDS).not.toContain("claude-opus-4-6");
     expect(PICKER_DEFAULT_MODEL_IDS).toContain("gpt-5-6-sol");
@@ -114,9 +118,9 @@ describe("modelPicker", () => {
     ]);
   });
 
-  test("migrates retired Fable 5 picker id to Fable 5.1", () => {
+  test("migrates retired Fable 5 picker id to Fable 5.2", () => {
     expect(resolveEnabledPickerModelIds(["claude-fable-5"])).toEqual([
-      "claude-fable-5-1",
+      "claude-fable-5-2",
     ]);
   });
 
@@ -153,9 +157,24 @@ describe("modelPicker", () => {
     ]);
   });
 
+  test("migrates Fable 5.1 picker id to Fable 5.2", () => {
+    expect(migratePickerModelId("claude-fable-5-1")).toBe("claude-fable-5-2");
+    expect(resolveEnabledPickerModelIds(["claude-fable-5-1"])).toEqual([
+      "claude-fable-5-2",
+    ]);
+  });
+
   test("upgrades exact pre-Gemini-3.8 default picker list", () => {
     expect(
       resolveEnabledPickerModelIds([...PRE_GEMINI_38_PICKER_DEFAULT_MODEL_IDS]),
+    ).toEqual([...PICKER_DEFAULT_MODEL_IDS]);
+  });
+
+  test("upgrades exact pre-Fable-5.2 / Gemini-4 default picker list", () => {
+    expect(
+      resolveEnabledPickerModelIds([
+        ...PRE_FABLE_52_GEMINI_4_PICKER_DEFAULT_MODEL_IDS,
+      ]),
     ).toEqual([...PICKER_DEFAULT_MODEL_IDS]);
   });
 
@@ -208,7 +227,8 @@ describe("modelPicker", () => {
     expect(toggleIds).toContain("claude-sonnet-4-6");
     expect(isPickerDefaultModelId("claude-sonnet-4-6")).toBe(false);
     expect(isPickerDefaultModelId("claude-opus-5-5")).toBe(true);
-    expect(isPickerDefaultModelId("claude-fable-5-1")).toBe(true);
+    expect(isPickerDefaultModelId("claude-fable-5-2")).toBe(true);
+    expect(isPickerDefaultModelId("claude-fable-5-1")).toBe(false);
     expect(isPickerDefaultModelId("claude-sonnet-5-5")).toBe(true);
     expect(isPickerDefaultModelId("claude-sonnet-5")).toBe(false);
     expect(isPickerDefaultModelId("glm-5.2")).toBe(true);
@@ -229,7 +249,7 @@ describe("modelPicker", () => {
   test("getPickerModels groups enabled models by catalog provider order", () => {
     const models = getPickerModels([
       "gpt-5-6-sol",
-      "claude-fable-5-1",
+      "claude-fable-5-2",
       "claude-sonnet-5-5",
       "claude-opus-5-5",
       "claude-opus-4-6",
@@ -239,7 +259,7 @@ describe("modelPicker", () => {
       "claude-sonnet-5-5",
       "claude-opus-4-6",
       "claude-opus-5-5",
-      "claude-fable-5-1",
+      "claude-fable-5-2",
       "gpt-5-6-sol",
     ]);
   });

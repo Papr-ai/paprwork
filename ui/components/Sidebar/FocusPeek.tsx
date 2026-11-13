@@ -4,6 +4,7 @@
  * hours. Footer: share of the week on these + Open Focus. Each row opens that goal; the next step,
  * evidence and targets live on the Focus page (and in each row's tooltip), not here.
  */
+import { openFocusAsks } from "../Focus/page/focusNav";
 import { useCallback, useEffect, useRef, useState } from "react";
 import { getGatewayHttpBase } from "../../utils/gatewayHttpBase";
 import { RailIcons } from "./railIcons";
@@ -20,10 +21,11 @@ const PEEK_PATTERNS: Array<[RegExp, (m: RegExpMatchArray) => [string, string]]> 
   [/^(\S+) can't take it: (.+)$/, (m) => [m[1], `Can't take it: ${m[2]}`]],
   [/^(\S+) is checking in: (.+)$/, (m) => [m[1], `Checking in: ${m[2]}`]],
   [/^(\S+) replied: (.+)$/, (m) => [m[1], `Replied: ${m[2]}`]],
+  [/^(\S+) needs your reply: (.+)$/, (m) => [m[1], `Needs reply: ${m[2]}`]],
   [/^([^:]+): (.+)$/, (m) => [m[1], m[2]]],
 ];
 export function peekParts(n: Notice): { from: string | null; title: string } {
-  if (!n.kind.startsWith("mention")) return { from: null, title: n.title };
+  if (!n.kind.startsWith("mention") || n.kind === "mention.due") return { from: null, title: n.title };
   for (const [re, f] of PEEK_PATTERNS) { const m = n.title.match(re); if (m) { const [from, title] = f(m); return { from, title }; } }
   return { from: null, title: n.title };
 }
@@ -123,7 +125,7 @@ export function FocusPeek({ status, onOpen }: FocusPeekProps) {
             {peekParts(needs[0]).from ? <MentionPill name={peekParts(needs[0]).from!} /> : null}
           </button>
           {needs.length > 1 ? (
-            <button type="button" role="menuitem" className="focus-peek__more" onClick={() => onOpen()}>
+            <button type="button" role="menuitem" className="focus-peek__more" onClick={() => { onOpen(); openFocusAsks(); }}>
               {needs.length - 1} more need you
             </button>
           ) : null}
@@ -152,7 +154,7 @@ export function FocusPeek({ status, onOpen }: FocusPeekProps) {
           ))}
         </ul>
       ) : (
-        <p className="rail-peek__empty">{state ? "No goals yet. Open Focus and Pen will draft them." : "Loading your three…"}</p>
+        <p className="rail-peek__empty">{state ? "No goals yet. Open Focus and Pen will draft them." : "Loading your priority goals…"}</p>
       )}
       <footer className="rail-peek__footer focus-peek__foot">
         {state?.alignedPct != null ? (

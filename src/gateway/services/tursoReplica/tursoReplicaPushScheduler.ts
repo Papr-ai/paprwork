@@ -4,8 +4,6 @@
  */
 
 import { getPaprAppsRoot } from "../../../core/utils/paprRoot.js";
-import { shouldAutoUploadReplicaSyncKey } from "../cloudUploadMode.js";
-import * as path from "path";
 import {
   dedupeLinkedSourcesBySyncKey,
   discoverTursoLinkedSources,
@@ -307,32 +305,20 @@ async function replicaSourceNeedsPush(source: AppDataSource): Promise<boolean> {
   }
 }
 
-function replicaPaprDir(): string {
-  const bridge = ensureTursoSyncBridge();
-  const appsRoot = bridge.getAppsRootDir() ?? getPaprAppsRoot();
-  return path.dirname(appsRoot);
-}
-
+/**
+ * Row pushes are real-time for every app. The per-app upload mode (auto/manual)
+ * gates code and schema only — never rows. Schema still waits for publish via
+ * the publish hold (checked in executeReplicaPushForSyncKey).
+ */
 function shouldScheduleReplicaPush(
-  syncKey: string,
-  trigger: TursoPushTrigger,
+  _syncKey: string,
+  _trigger: TursoPushTrigger,
 ): boolean {
-  if (trigger === "manual") {
-    return true;
-  }
-  if (!shouldAutoUploadReplicaSyncKey(syncKey, replicaPaprDir())) {
-    return false;
-  }
   return true;
 }
 
 async function executeReplicaPushForSyncKey(syncKey: string): Promise<void> {
   if (!isTursoReplicaSyncFeatureEnabled()) {
-    clearDirtyTracking(syncKey);
-    return;
-  }
-
-  if (!shouldAutoUploadReplicaSyncKey(syncKey, replicaPaprDir())) {
     clearDirtyTracking(syncKey);
     return;
   }

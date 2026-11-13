@@ -38,6 +38,7 @@ import {
 } from "../../ui/utils/chatModelSettings";
 import {
   PICKER_DEFAULT_MODEL_IDS,
+  PRE_FABLE_52_GEMINI_4_PICKER_DEFAULT_MODEL_IDS,
   isChatPickerModelId,
   migrateEnabledPickerModelIds,
   migratePickerModelId,
@@ -143,7 +144,7 @@ describe("capability gating", () => {
   it("offers Anthropic effort only on adaptive-thinking models", () => {
     for (const id of [
       "claude-opus-5",
-      "claude-fable-5-1",
+      "claude-fable-5-2",
       "claude-sonnet-5",
       "claude-opus-4-8",
     ]) {
@@ -162,7 +163,7 @@ describe("capability gating", () => {
     expect(effortLevelsForModel(model({ id: "claude-opus-5" }))).toContain(
       "max",
     );
-    expect(effortLevelsForModel(model({ id: "claude-fable-5-1" }))).toContain(
+    expect(effortLevelsForModel(model({ id: "claude-fable-5-2" }))).toContain(
       "max",
     );
     // The gateway maps xhigh -> high for Sonnet 5, so max is not on offer.
@@ -439,15 +440,7 @@ describe("picker collapse", () => {
   it("upgrades a saved default list without dropping any row", () => {
     // The list users have today, before the collapse.
     const saved = [
-      "claude-sonnet-5",
-      "claude-opus-5",
-      "claude-fable-5-1",
-      "gpt-5-6-sol",
-      "glm-5.2-max",
-      "qwen/qwen3-32b",
-      "gemini-3.5-flash-lite",
-      "gemini-3.8-flash",
-      "gemini-3.1-pro-preview",
+      ...PRE_FABLE_52_GEMINI_4_PICKER_DEFAULT_MODEL_IDS,
     ];
     const migrated = migrateEnabledPickerModelIds(saved);
     expect(migrated).toEqual([...PICKER_DEFAULT_MODEL_IDS]);

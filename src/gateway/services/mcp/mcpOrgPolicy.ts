@@ -51,7 +51,7 @@ export function canConnect(policy: OrgConnectionPolicy | null, serverId: string)
 export class OrgPolicyBlockedError extends Error {
   readonly status = 403;
   constructor(name: string) {
-    super(`Your organization hasn't approved ${name} yet. Request it in Settings → Connections.`);
+    super(`Your organization hasn't approved ${name} yet. Request it in Settings → Connectors & API Keys.`);
   }
 }
 

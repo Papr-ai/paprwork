@@ -138,6 +138,26 @@ interface PlatformSessionStore {
 
 const STORE_VERSION = 1;
 const CONNECT_TIMEOUT_MS = 5 * 60 * 1000; // 5 minutes for user to log in
+/** Consecutive real logout signals required before a site is marked needs_reauth. */
+const LOGOUT_STRIKES_BEFORE_REAUTH = 2;
+
+/** Thrown only when the site itself says we are signed out (login redirect). Everything else is transient. */
+class SessionLoggedOutError extends Error {}
+
+function buildRequiredCookieValuesFromPlaywrightLocal(
+  config: PlatformConfig,
+  cookies: Cookie[],
+): { values: Record<string, string>; missing: string[] } {
+  const values: Record<string, string> = {};
+  const missing: string[] = [];
+  for (const name of config.requiredCookies) {
+    const c = cookies.find((x) => x.name === name);
+    if (c?.value) values[name] = c.value;
+    else missing.push(name);
+  }
+  return { values, missing };
+}
+
 const REFRESH_TIMEOUT_MS = 60 * 1000; // 60 seconds for headless refresh (some sites are slow)
 function formatPlatformConnectErrorForDisplay(raw: string, platformName: string): string {
   const firstLine = stripAnsi(raw).split(/\n|Call log:/)[0]?.trim() ?? "";
@@ -164,6 +184,9 @@ export class PlatformSessionService {
   private store: PlatformSessionStore = { sessions: {}, version: STORE_VERSION };
   private readonly storePath: string;
   private readonly browserProfilesDir: string;
+  /** Serializes refreshes: they share activeBrowser/activeContext, so concurrent runs closed each other's browser. */
+  private refreshLock: Promise<unknown> = Promise.resolve();
+  private logoutStrikes = new Map<string, number>();
   private activeBrowser: Browser | null = null;
   private activeContext: BrowserContext | null = null;
   private connectingPlatform: PlatformId | null = null;
@@ -1144,6 +1167,55 @@ export class PlatformSessionService {
    * Refresh a platform session - headless cookie extraction
    */
   async refresh(platformId: PlatformId): Promise<PlatformSessionState> {
+    const run = this.refreshLock.then(() => this.refreshUnlocked(platformId));
+    this.refreshLock = run.catch(() => undefined);
+    return run;
+  }
+
+  /**
+   * Cheap, no-network check against the live Papr Chrome profile (a real browser that sites keep
+   * signed in). Never launches Chrome. Returns the new state when the site is signed in, else null.
+   * Also used to recover sites previously marked needs_reauth once the user signs in again.
+   */
+  async syncFromLivePaprChrome(platformId: PlatformId): Promise<PlatformSessionState | null> {
+    if (!this.initialized) await this.initialize();
+    const config = getPlatformConfig(platformId);
+    if (!config) return null;
+    const { getPaprChromeBrowser, getPlatformTab } = await import("./platformPaprChromeSession.js");
+    const browser = getPaprChromeBrowser();
+    if (!browser) return null;
+    const tab = getPlatformTab(platformId);
+    if (tab && isLoggedOutPlatformUrl(tab.url())) return null;
+    const domain = config.cookieDomain.replace(/^\./, "").toLowerCase();
+    const now = Date.now() / 1000;
+    let all: Cookie[];
+    try {
+      all = await browser.context.cookies();
+    } catch {
+      return null;
+    }
+    const live = all.filter((c) => {
+      const d = c.domain.replace(/^\./, "").toLowerCase();
+      return (d === domain || d.endsWith(`.${domain}`)) && (c.expires <= 0 || c.expires > now);
+    });
+    if (live.length === 0) return null;
+    const { values, missing } = buildRequiredCookieValuesFromPlaywrightLocal(config, live);
+    if (missing.length > 0) return null;
+    await this.persistChromeSession(platformId, config, values, live);
+    this.logoutStrikes.delete(platformId);
+    this.store.sessions[platformId] = {
+      ...this.store.sessions[platformId],
+      platformId,
+      status: "connected",
+      lastRefreshedAt: new Date().toISOString(),
+      error: undefined,
+    };
+    await this.saveStore();
+    if (this.store.sessions[platformId]) void this.broadcastStatusChange(this.store.sessions[platformId]).catch(() => {});
+    return this.store.sessions[platformId];
+  }
+
+  private async refreshUnlocked(platformId: PlatformId): Promise<PlatformSessionState> {
     if (!this.initialized) await this.initialize();
 
     const config = getPlatformConfig(platformId);
@@ -1188,9 +1260,15 @@ export class PlatformSessionService {
         }
       }
 
+      const fromChrome = await this.syncFromLivePaprChrome(platformId);
+      if (fromChrome) {
+        console.log(`[PlatformSessionService] Refreshed ${platformId} from live Papr Chrome cookies`);
+        return fromChrome;
+      }
+
       const existingCookies = await this.loadCookiesForPlaywright(platformId, config);
       if (existingCookies.length === 0) {
-        throw new Error("No stored cookies found. Please reconnect.");
+        throw new SessionLoggedOutError("No stored cookies found. Please reconnect.");
       }
 
       const playwright = await loadPlaywright();
@@ -1222,7 +1300,7 @@ export class PlatformSessionService {
         currentUrl.includes("signin") ||
         currentUrl.includes("checkpoint")
       ) {
-        throw new Error("Session expired or requires re-authentication");
+        throw new SessionLoggedOutError("Session expired or requires re-authentication");
       }
 
       // Extract fresh cookies
@@ -1249,13 +1327,24 @@ export class PlatformSessionService {
       const errorMessage = error instanceof Error ? error.message : String(error);
       console.error(`[PlatformSessionService] Refresh failed for ${platformId}:`, errorMessage);
 
-      // Update status to needs_reauth
-      this.store.sessions[platformId] = {
-        ...this.store.sessions[platformId],
-        status: "needs_reauth",
-        error: errorMessage,
-      };
-      await this.saveStore();
+      const prev = this.store.sessions[platformId];
+      if (error instanceof SessionLoggedOutError) {
+        const strikes = (this.logoutStrikes.get(platformId) ?? 0) + 1;
+        this.logoutStrikes.set(platformId, strikes);
+        if (strikes >= LOGOUT_STRIKES_BEFORE_REAUTH) {
+          this.store.sessions[platformId] = { ...prev, platformId, status: "needs_reauth", error: errorMessage };
+        } else {
+          console.warn(`[PlatformSessionService] ${platformId} logout signal ${strikes}/${LOGOUT_STRIKES_BEFORE_REAUTH}; keeping connected`);
+        }
+      } else if (prev) {
+        // Transient (disk full, network, closed browser): keep the sign-in, report the error so the keeper backs off.
+        this.store.sessions[platformId] = { ...prev, error: errorMessage };
+      }
+      try {
+        await this.saveStore();
+      } catch {
+        /* ENOSPC etc.: in-memory state still correct */
+      }
 
       return this.store.sessions[platformId];
     } finally {

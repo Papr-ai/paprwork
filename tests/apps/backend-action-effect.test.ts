@@ -62,3 +62,19 @@ describe("stripDirectDbCredentials", () => {
     expect(stripDirectDbCredentials(env)).toEqual(env);
   });
 });
+
+describe("checkBundleFingerprint", () => {
+  it("reports a stale bundle instead of refusing (accepted proposal changed the handler)", async () => {
+    const { checkBundleFingerprint } = await import(
+      "../../src/gateway/services/appRuntime/CloudAppBackendService.js"
+    );
+    const { createHash } = await import("node:crypto");
+    const h = (s: string) => createHash("sha256").update(s, "utf8").digest("hex");
+    const bundle = { actions: { ping: { sha256: h("def run(): return 1") } } };
+
+    expect(checkBundleFingerprint("ping", "def run(): return 1", bundle)).toEqual({ stale: false });
+    expect(checkBundleFingerprint("ping", "def run(): return 2", bundle)).toMatchObject({ stale: true });
+    expect(checkBundleFingerprint("other", "x", bundle)).toEqual({ stale: false });
+    expect(checkBundleFingerprint("ping", "x", null)).toEqual({ stale: false });
+  });
+});

@@ -136,6 +136,13 @@ const MODEL_CAPABILITIES: Record<string, ModelCapabilities> = {
     cost: "expensive",
     specialties: ["reasoning", "agentic", "coding", "long-horizon"],
   },
+  "claude-fable-5-2": {
+    reasoningLevel: "advanced",
+    contextWindow: 1000000,
+    speed: "slow",
+    cost: "expensive",
+    specialties: ["reasoning", "agentic", "long-horizon", "coding"],
+  },
   "claude-fable-5-1": {
     reasoningLevel: "advanced",
     contextWindow: 1000000,
@@ -193,6 +200,13 @@ const MODEL_CAPABILITIES: Record<string, ModelCapabilities> = {
     speed: "fast",
     cost: "medium",
     specialties: ["agentic", "coding", "software-engineering", "frontier-flash"],
+  },
+  "gemini-4-argon": {
+    reasoningLevel: "advanced",
+    contextWindow: 1048576,
+    speed: "medium",
+    cost: "expensive",
+    specialties: ["reasoning", "coding", "software-engineering", "knowledge-work"],
   },
   "gemini-3.7-flash": {
     reasoningLevel: "advanced",
@@ -386,14 +400,14 @@ export function getUpgradeModelForTask(
       general: "gpt-5.3-codex",
     },
     anthropic: {
-      reasoning: "claude-fable-5-1",
-      coding: "claude-fable-5-1",
+      reasoning: "claude-fable-5-2",
+      coding: "claude-fable-5-2",
       writing: "claude-sonnet-5-5",
       general: "claude-sonnet-5-5",
     },
     google: {
-      reasoning: "gemini-3.1-pro-preview",
-      coding: "gemini-3.8-flash",
+      reasoning: "gemini-4-argon",
+      coding: "gemini-4-argon",
       writing: "gemini-3.1-pro-preview",
       general: "gemini-3.8-flash",
     },
