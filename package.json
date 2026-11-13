@@ -195,9 +195,8 @@
     "fix-app-icons": "node scripts/fix-app-icons.mjs",
     "migrate:v1": "tsx scripts/migrate-v1-data.ts",
     "dist": "npm run build && electron-builder",
-    "build:native:coreml": "node -e \"process.platform==='darwin'&&require('child_process').execFileSync('sh',['native/papr-embed-coreml/build.sh'],{stdio:'inherit'})\"",
-    "dist:mac": "npm run build && npm run build:native:coreml && electron-builder --mac --arm64",
-    "dist:mac:universal": "npm run build && npm run build:native:coreml && electron-builder --mac --arm64 --x64",
+    "dist:mac": "npm run build && electron-builder --mac --arm64",
+    "dist:mac:universal": "npm run build && electron-builder --mac --arm64 --x64",
     "dist:win": "npm run build && electron-builder --win --x64",
     "dist:linux": "npm run build && electron-builder --linux --x64",
     "dev:devenv": "node scripts/dev-devenv.mjs"
@@ -318,9 +317,5 @@
     "vite": "^6.4.1",
     "vite-plugin-node-polyfills": "^0.25.0",
     "vitest": "^2.1.9"
-  },
-  "optionalDependencies": {
-    "@huggingface/tokenizers": "^0.2.0",
-    "onnxruntime-node": "^1.31.1"
   }
 }

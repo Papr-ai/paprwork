@@ -418,31 +418,6 @@ export interface MemoryCodeSearch {
   hits: Array<{ path: string; score: number }>;
 }
 
-export interface DeviceGrepHits {
-  tier: string;
-  backend: string;
-  hits: Array<{ path: string; score: number; lineStart: number; lineEnd: number }>;
-}
-
-/** Device hits first (their cosine order), then memory hits not already present, scored just below the last device hit. */
-export function mergeDeviceHits(
-  device: DeviceGrepHits["hits"],
-  memory: MemoryCodeSearch["hits"],
-): MemoryCodeSearch["hits"] {
-  const norm = (p: string) => p.replace(/\\/g, "/");
-  const have = (p: string) => device.some((d) => norm(p) === d.path || norm(p).endsWith(`/${d.path}`));
-  const floor = Math.min(...device.map((d) => d.score));
-  const rest = memory.filter((m) => m.path && !have(m.path)).map((m, i) => ({ path: m.path, score: floor - 0.001 * (i + 1) }));
-  return [...device.map((d) => ({ path: d.path, score: d.score })), ...rest];
-}
-
-export function deviceHitsBlock(dev: DeviceGrepHits): string {
-  const where = dev.tier === "cloud" ? "Papr Cloud" : dev.backend === "CoreMLEmbedder" ? "Neural Engine" : "on device";
-  let out = `=== Semantic code search (papr-embed-code, ${where}) ===\n`;
-  for (const h of dev.hits.slice(0, 8)) out += `${h.path}:${h.lineStart}-${h.lineEnd}  (${h.score.toFixed(3)})\n`;
-  return out;
-}
-
 async function searchPaprMemoryForCode(
   query: string,
   grepPath: string,
@@ -775,7 +750,6 @@ async function executeBashCommandInner(
     // Check if this is a grep command in PAPR folders
     const grepInfo = detectPaprGrepCommand(command);
     let memoryPromise: Promise<MemoryCodeSearch> | null = null;
-    let devicePromise: Promise<DeviceGrepHits> | null = null;
     
     if (grepInfo) {
       const memoryQuery = buildHybridMemorySearchQuery(
@@ -783,8 +757,6 @@ async function executeBashCommandInner(
         grepInfo.path,
       );
       memoryPromise = searchPaprMemoryForCode(memoryQuery, grepInfo.path);
-      // On-device papr-embed-code (Neural Engine / ONNX) runs alongside; never blocks grep (2 s budget, [] when not ready).
-      devicePromise = import("./codeEmbed/runtime.js").then((m) => m.deviceHitsForGrep(grepInfo.path, grepInfo.pattern));
       console.log(
         `[Bash Tool] Detected grep in Papr folder, running parallel memory search: "${memoryQuery.substring(0, 120)}${memoryQuery.length > 120 ? "..." : ""}"`,
       );
@@ -918,16 +890,6 @@ async function executeBashCommandInner(
       } catch (error) {
         console.warn('[Bash Tool] Memory search error:', error);
         // Continue without memory results
-      }
-    }
-
-    // On-device hits lead: same model the ranking was tuned on (papr-embed-code), current local files, no network.
-    if (grepInfo && devicePromise) {
-      const dev = await devicePromise.catch(() => null);
-      if (dev && dev.hits.length) {
-        memoryHits = mergeDeviceHits(dev.hits, memoryHits);
-        const block = deviceHitsBlock(dev);
-        memoryResults = memoryResults ? `${block}\n${memoryResults}` : block;
       }
     }
 
