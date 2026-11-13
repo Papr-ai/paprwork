@@ -76,13 +76,7 @@
       "NSCameraUsageDescription": "Paprwork needs access to your camera for meeting recording.",
       "NSCalendarsUsageDescription": "Paprwork needs access to your calendar to show upcoming meetings.",
       "NSLocationWhenInUseUsageDescription": "Papr Work uses your location to show local weather in the sidebar."
-    },
-    "extraResources": [
-      {
-        "from": "native/papr-embed-coreml/build/papr-embed-coreml",
-        "to": "bin/papr-embed-coreml"
-      }
-    ]
+    }
   },
   "win": {
     "target": [
