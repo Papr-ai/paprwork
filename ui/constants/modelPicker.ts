@@ -92,11 +92,12 @@ export const PICKER_DEFAULT_MODEL_IDS: readonly string[] = [
   "qwen/qwen3-32b",
   "gemini-3.5-flash-lite",
   "gemini-3.8-flash",
+  "gemini-4-argon",
   "gemini-3.1-pro-preview",
 ];
 
-/** Pre-Fable-5.2 defaults — upgrade saved picker preferences on next load. */
-export const PRE_FABLE_52_PICKER_DEFAULT_MODEL_IDS: readonly string[] = [
+/** Defaults before Fable 5.2 + Gemini 4 Argon — upgrade exact saved lists. */
+export const PRE_FABLE_52_GEMINI_4_PICKER_DEFAULT_MODEL_IDS: readonly string[] = [
   "auto",
   "claude-sonnet-5-5",
   "claude-opus-5",
@@ -249,10 +250,6 @@ export function migrateEnabledPickerModelIds(
     return [...PICKER_DEFAULT_MODEL_IDS];
   }
 
-  if (sameModelIdSet(enabledIds, PRE_FABLE_52_PICKER_DEFAULT_MODEL_IDS)) {
-    return [...PICKER_DEFAULT_MODEL_IDS];
-  }
-
   if (sameModelIdSet(enabledIds, PRE_SONNET_55_PICKER_DEFAULT_MODEL_IDS)) {
     return [...PICKER_DEFAULT_MODEL_IDS];
   }
@@ -274,6 +271,12 @@ export function migrateEnabledPickerModelIds(
   }
 
   if (sameModelIdSet(enabledIds, PRE_GEMINI_36_PICKER_DEFAULT_MODEL_IDS)) {
+    return [...PICKER_DEFAULT_MODEL_IDS];
+  }
+
+  if (
+    sameModelIdSet(enabledIds, PRE_FABLE_52_GEMINI_4_PICKER_DEFAULT_MODEL_IDS)
+  ) {
     return [...PICKER_DEFAULT_MODEL_IDS];
   }
 
@@ -328,6 +331,15 @@ export function migrateEnabledPickerModelIds(
   ) {
     return migrated.map((id) =>
       id === "claude-sonnet-5" ? "claude-sonnet-5-5" : id,
+    );
+  }
+
+  if (
+    migrated.includes("claude-fable-5-1") &&
+    !migrated.includes("claude-fable-5-2")
+  ) {
+    return migrated.map((id) =>
+      id === "claude-fable-5-1" ? "claude-fable-5-2" : id,
     );
   }
 
