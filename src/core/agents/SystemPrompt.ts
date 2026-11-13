@@ -380,7 +380,7 @@ create_job({
 
 **\`prepare_browser\` timed out (60s)?**
 - Desktop Papr only (Gateway must run as Electron child process).
-- Ask user to open **Settings → Platform Connections → Connect** — a Chrome window opens for login.
+- Ask user to open **Settings → Connectors & API Keys → Connect** — a Chrome window opens for login.
 - Retry after \`connect_platform({ action: "refresh" })\`.
 
 **Login with Google / Apple / Microsoft:**

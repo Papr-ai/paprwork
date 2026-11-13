@@ -305,7 +305,7 @@ export async function preparePlatformBrowserSession(
       url: "",
       title: "",
       message: `${config.name} is not connected.`,
-      error: `Status: ${status.status}. Use connect_platform request_connect or Settings → Platform Connections.`,
+      error: `Status: ${status.status}. Use connect_platform request_connect or Settings → Connectors & API Keys.`,
     };
   }
 
@@ -363,7 +363,7 @@ export async function preparePlatformBrowserSession(
       url: "",
       title: "",
       message: `No session cookies found for ${config.name}.`,
-      error: "Reconnect via Settings → Platform Connections.",
+      error: "Reconnect via Settings → Connectors & API Keys.",
     };
   }
 
@@ -426,7 +426,7 @@ export async function preparePlatformBrowserSession(
       error:
         platformId === "linkedin"
           ? "LinkedIn rejected the saved session. Reconnect LinkedIn in Settings → Platforms, then run again."
-          : `Reconnect via Settings → Platform Connections, or try connect_platform action="refresh" then prepare_browser again. ` +
+          : `Reconnect via Settings → Connectors & API Keys, or try connect_platform action="refresh" then prepare_browser again. ` +
             `Injected cookies: ${cookieDomains}. Do NOT fall back to Voyager/GraphQL API calls.`,
     };
   }

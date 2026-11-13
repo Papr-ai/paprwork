@@ -46,7 +46,7 @@ export class PenAccessDeniedError extends Error {
     // Written for the agent: it reads this as the tool result and carries on in the same turn.
     super(
       why === "read_only"
-        ? `${server} is set to Read only, so "${tool}" was not run (it may change something). Do not retry. Tell the user, and mention they can change it in Settings → Connections.`
+        ? `${server} is set to Read only, so "${tool}" was not run (it may change something). Do not retry. Tell the user, and mention they can change it in Settings → Connectors & API Keys.`
         : why === "declined"
           ? `The user declined "${tool}" on ${server}. Nothing was changed. Do not retry it; continue with anything else you can do and ask how they'd like to proceed.`
           : `No answer to the approval for "${tool}" on ${server} within 10 minutes, so it was not run. Nothing was changed. Tell the user and ask whether to try again.`,

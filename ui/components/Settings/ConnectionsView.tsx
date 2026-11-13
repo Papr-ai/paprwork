@@ -69,7 +69,7 @@ export function ConnectionsView({ link }: { link?: { sub: ConnectionsSubTab; n: 
     <div className="settings-content connections-view">
       <header className="connections-view__head">
         <div className="connections-view__title-row">
-          <h2 className="connections-view__h1">Connections</h2>
+          <h2 className="connections-view__h1">Connectors &amp; API Keys</h2>
           {org.isAdmin && org.policy && (
             <button type="button" className="svc-btn" onClick={openOrgSettings}>
               Org settings
