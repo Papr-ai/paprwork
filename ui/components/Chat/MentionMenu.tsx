@@ -1,6 +1,6 @@
 /**
  * The @ picker: one compact dropdown above the composer, the same every time (no style switching).
- * Up to 6 rows: Recent first, then everyone else; initials, name, email in grey. More matches show as
+ * Up to 6 rows: Recent first, then everyone else; avatar (same as Team), name, email in grey. More matches show as
  * "N more · keep typing". Arrows or Tab move, Enter picks, Esc closes. Picking inserts "@Full Name",
  * which renders as a name chip in the sent message. An @ is context for Pen; nobody is told unless the user says yes.
  */
@@ -30,7 +30,6 @@ export function loadTeammates(): Promise<Teammate[]> {
   return inflight;
 }
 
-const initials = (n: string) => n.split(/\s+/).filter(Boolean).slice(0, 2).map((w) => w[0]!.toUpperCase()).join("") || "@";
 
 export function MentionMenu({ query, onSelect, onClose, onVisible }: {
   query: string; onSelect: (m: Teammate) => void; onClose: () => void;
@@ -64,9 +63,8 @@ export function MentionMenu({ query, onSelect, onClose, onVisible }: {
     <button key={m.userId} type="button" role="option" aria-selected={i === index} id={`mention-opt-${i}`}
       className={`mention-dd__row${i === index ? " is-on" : ""}`}
       onMouseDown={(e) => e.preventDefault()} onClick={() => pick(m)} onMouseEnter={() => setIndex(i)}>
-      {m.imageUrl
-        ? <UserAvatar imageUrl={m.imageUrl} displayName={m.displayName} email={m.email} size={24} className="mention-dd__av" />
-        : <i aria-hidden="true">{initials(m.displayName)}</i>}<b>{m.displayName}</b><span>{m.email}</span>
+      {/* Same avatar as Settings → Team and the sidebar. */}
+      <UserAvatar imageUrl={m.imageUrl} displayName={m.displayName} email={m.email} size={24} className="mention-dd__av" /><b>{m.displayName}</b><span>{m.email}</span>
     </button>
   );
   const split = recentCount > 0 && recentCount < shown.length;

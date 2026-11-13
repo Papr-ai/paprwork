@@ -7,10 +7,6 @@
   background: color-mix(in srgb, var(--primary-color, #0161e0) 9%, transparent);
   color: var(--primary-color, #0161e0); font-size: 0.93em; font-weight: 600; line-height: 1.55; white-space: nowrap;
 }
-.mention-pill i {
-  flex: none; align-self: center; width: max(16px, 1.3em); height: max(16px, 1.3em); border-radius: 50%; display: grid; place-items: center;
-  font-style: normal; font-size: max(8.5px, 0.62em); line-height: 1; font-weight: 700; background: var(--primary-color, #0161e0); color: #fff;
-}
-.mention-pill .mention-pill__av { flex: none; align-self: center; width: max(16px, 1.3em) !important; height: max(16px, 1.3em) !important; }
+.mention-pill .mention-pill__av { align-self: center; }
 .markdown-strong .mention-pill { font-weight: 600; }
 .mention-pill__name { min-width: 0; overflow: hidden; text-overflow: ellipsis; }

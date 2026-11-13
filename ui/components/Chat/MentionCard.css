@@ -14,8 +14,9 @@
 .mention-card h3 { margin: 0; font-size: 17px; line-height: 1.3; letter-spacing: -.015em; font-weight: 600; color: var(--mc-ink); }
 .mention-chip { margin-left: auto; padding: 2px 9px; border-radius: 999px; font-size: 11.5px; font-weight: 600; font-style: normal; color: var(--mc-blue); background: var(--mc-soft); white-space: nowrap; }
 .mention-card__from { display: flex; align-items: center; flex-wrap: wrap; gap: 6px; font-size: 12.5px; color: var(--mc-mid); }
-.mention-pill { display: inline-flex; align-items: center; gap: 5px; padding: 1px 8px 1px 2px; border-radius: 999px; background: var(--mc-soft); color: var(--mc-blue); font-size: 12.5px; font-weight: 600; line-height: 1.5; white-space: nowrap; }
-.mention-pill i { width: 17px; height: 17px; border-radius: 50%; display: grid; place-items: center; font-style: normal; font-size: 9px; font-weight: 700; background: var(--mc-blue); color: #fff; }
+/* Person pills come from common/mentionPill.css only. A global .mention-pill here used --mc-* vars that
+   exist only inside .mention-card, so once a card loaded every pill in chat lost its colours and alignment. */
+.mention-card .mention-pill { font-size: 12.5px; }
 .mention-card__text { margin: 0; color: var(--mc-mid); white-space: pre-wrap; overflow-wrap: anywhere; }
 .mention-card__text.is-clamped { display: -webkit-box; -webkit-line-clamp: 4; -webkit-box-orient: vertical; overflow: hidden; }
 .mention-card__more { justify-self: start; margin-top: -4px; padding: 0; border: none; background: none; font-family: inherit; font-size: 12.5px; font-weight: 600; color: var(--mc-blue); cursor: pointer; }
