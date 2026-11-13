@@ -20,6 +20,20 @@ export interface CallbackServerOptions {
   successHtml?: string; // Custom success page HTML
   onCallback?: (params: URLSearchParams) => void;
   maxPortAttempts?: number; // Number of ports to try (default: 10)
+  /**
+   * Reject a callback before showing success (e.g. a stale tab from an older
+   * sign-in attempt). Return a page to show instead, or null to accept.
+   */
+  validateCallback?: (params: URLSearchParams) => { title: string; body: string } | null;
+  /**
+   * Keep answering after the first callback instead of closing. Repeat hits
+   * (reload, second tab) get `repeatHtml` rather than "connection refused".
+   * Call settle()/stop() to end it; the timeout still applies.
+   */
+  keepAliveAfterCallback?: boolean;
+  repeatHtml?: string;
+  /** Fired when the timeout closes the server before any callback arrived. */
+  onTimeout?: () => void;
 }
 
 /**
@@ -119,6 +133,11 @@ export class OAuthCallbackServer {
   private timeoutHandle: NodeJS.Timeout | null = null;
   private onCallback?: (params: URLSearchParams) => void;
   private maxPortAttempts: number;
+  private validateCallback?: CallbackServerOptions["validateCallback"];
+  private keepAliveAfterCallback: boolean;
+  private repeatHtml?: string;
+  private onTimeout?: () => void;
+  private handled = false;
 
   constructor(options: CallbackServerOptions) {
     this.requestedPort = options.port;
@@ -128,6 +147,21 @@ export class OAuthCallbackServer {
     this.successHtml = options.successHtml;
     this.onCallback = options.onCallback;
     this.maxPortAttempts = options.maxPortAttempts || 10;
+    this.validateCallback = options.validateCallback;
+    this.keepAliveAfterCallback = options.keepAliveAfterCallback ?? false;
+    this.repeatHtml = options.repeatHtml;
+    this.onTimeout = options.onTimeout;
+  }
+
+  /**
+   * Stop processing callbacks but keep answering repeat hits for `lingerMs`,
+   * so a reload or a second tab gets a page instead of "connection refused".
+   */
+  settle(lingerMs: number): void {
+    this.handled = true;
+    if (!this.server) return;
+    if (this.timeoutHandle) clearTimeout(this.timeoutHandle);
+    this.timeoutHandle = setTimeout(() => this.stop(), lingerMs);
   }
 
   /**
@@ -222,7 +256,30 @@ export class OAuthCallbackServer {
             return;
           }
 
+          // Already handled (reload, back button, second tab): the code is
+          // single-use, so say so instead of running the flow again.
+          if (this.handled) {
+            res.writeHead(200, HTML_HEADERS);
+            res.end(
+              this.repeatHtml ??
+                oauthResultPage({
+                  ok: true,
+                  title: "This sign-in was already used",
+                  body: "Go back to Papr Work. You can close this tab.",
+                }),
+            );
+            return;
+          }
+
+          const rejection = this.validateCallback?.(params) ?? null;
+          if (rejection) {
+            res.writeHead(400, HTML_HEADERS);
+            res.end(oauthResultPage({ ok: false, title: rejection.title, body: rejection.body }));
+            return;
+          }
+
           // Success! Return success page
+          this.handled = true;
           res.writeHead(200, HTML_HEADERS);
           res.end(
             this.successHtml ??
@@ -239,8 +296,11 @@ export class OAuthCallbackServer {
             this.onCallback(params);
           }
 
-          // Close server after successful callback
-          setTimeout(() => this.stop(), 1000);
+          // Close server after successful callback (unless the owner wants it
+          // to keep answering repeat hits until it calls settle()/stop()).
+          if (!this.keepAliveAfterCallback) {
+            setTimeout(() => this.stop(), 1000);
+          }
         } catch (error) {
           console.error("[OAuthCallback] Error handling request:", error);
           res.writeHead(500, { "Content-Type": "text/plain" });
@@ -261,7 +321,9 @@ export class OAuthCallbackServer {
         // Set timeout to auto-close
         this.timeoutHandle = setTimeout(() => {
           console.log("[OAuthCallback] Timeout reached, closing server");
+          const timedOutWaiting = !this.handled;
           this.stop();
+          if (timedOutWaiting) this.onTimeout?.();
         }, this.timeout);
 
         resolve();
