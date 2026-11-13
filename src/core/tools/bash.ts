@@ -472,7 +472,32 @@ async function searchPaprMemoryForCode(
       return null;
     }
     
-    let output = '=== Memory Search Results (Semantic) ===\n';
+    // papr-code-harness v1.1: re-rank the memory hits with the project's code graph (definitions + import links)
+    // and lead with ≤3 line-ranged pointers. Falls back silently to the plain list below.
+    let pointers = "";
+    try {
+      const { fusedPointers } = await import("./codeFusion.js");
+      const { getPaprAppsRoot, getPaprJobsRoot } = await import("../utils/paprRoot.js");
+      const pathMod = await import("path");
+      const fsMod = await import("fs");
+      if (projectId) {
+        const root = [getPaprAppsRoot(), getPaprJobsRoot()]
+          .map((r) => pathMod.join(r, projectId))
+          .find((r) => fsMod.existsSync(r));
+        if (root) {
+          const hits = response.data.memories.map((m) => {
+            const md = m.customMetadata as Record<string, string> | undefined;
+            return { path: md?.file_path ?? "", score: typeof m.score === "number" ? m.score : 0 };
+          });
+          pointers = await fusedPointers(root, hits, query);
+        }
+      }
+    } catch (fuseError) {
+      console.warn("[Bash Tool] Code fusion skipped:", (fuseError as Error)?.message ?? fuseError);
+    }
+
+    let output = pointers ? `${pointers}\n` : "";
+    output += '=== Memory Search Results (Semantic) ===\n';
     output += `Found ${response.data.memories.length} relevant code files:\n\n`;
     
     for (const memory of response.data.memories) {
@@ -927,6 +952,16 @@ async function executeBashCommandInner(
     });
     if (sqliteWarnings.length > 0) {
       sanitizedStdout += formatSqlitePathWarningBlock(sqliteWarnings);
+    }
+
+    // papr-code-harness v1.2: note when the agent repeats the same command with the same output
+    try {
+      const { checkLoop } = await import("./loopBreaker.js");
+      const { getCurrentChatId, getCurrentDelegationJobId } = await import("./context.js");
+      const sid = getCurrentDelegationJobId() ?? getCurrentChatId() ?? "";
+      sanitizedStdout += checkLoop(sid, input.command, `${stdout ?? ""}\u0000${stderr ?? ""}`);
+    } catch {
+      // best-effort only
     }
 
     const appDbGuidance = buildAppDbBashGuidance(command);
