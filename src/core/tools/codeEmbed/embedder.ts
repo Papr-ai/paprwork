@@ -49,24 +49,89 @@ export function modelDir(root: string): string {
   return path.join(root, "models", CODE_EMBED_MODEL);
 }
 
+/** All base files present at their pinned sizes (a cheap stat; hashes are checked once, at download). */
 export function modelInstalled(root: string): boolean {
-  return MODEL_FILES.every((f) => fs.existsSync(path.join(modelDir(root), f)));
+  return MODEL_FILES.every((f) => sizeIs(path.join(modelDir(root), f), MODEL_MANIFEST[f]!.size));
 }
 
-/** Download missing model files from Hugging Face into <root>/models/<model>/ (resumable per file, atomic rename). */
-export async function downloadModel(root: string, fetchImpl: typeof fetch = fetch, opts: { coreml?: boolean } = {}): Promise<void> {
+/** Pinned model revision. Every file is checked against this manifest (size + sha256, or git blob sha1 for the small
+ *  non-LFS files) so a truncated, corrupted or swapped download is never loaded. Bump both together. */
+export const HF_REVISION = "4596a3478f5bc1898d9fae1afad200201ca741e1";
+export interface ModelFileSpec { size: number; sha256?: string; gitSha1?: string }
+export const MODEL_MANIFEST: Record<string, ModelFileSpec> = {
+  "onnx/model_quantized.onnx": { size: 1118244486, sha256: "ee1bc67100688d06a57887958dd8cf3118b91ace5bae7a1d38d220cca4cdfb07" },
+  "tokenizer.json": { size: 11423705, sha256: "def76fb086971c7867b829c23a26261e38d9d74e02139253b38aeb9df8b4b50a" },
+  "tokenizer_config.json": { size: 9703, gitSha1: "32f1ffc7372877c54ccf3891b37b61189b537263" },
+  "coreml/papr-embed-code-1-0.6b.mlpackage/Manifest.json": { size: 617, gitSha1: "4493337539ec6eefbe9db00abb73d81a65260598" },
+  "coreml/papr-embed-code-1-0.6b.mlpackage/Data/com.apple.CoreML/model.mlmodel": { size: 1883832, sha256: "d7dffa6571e505e83a8afbe5c90c4a4ee5b10313888e77e75b35355e41a6b7d0" },
+  "coreml/papr-embed-code-1-0.6b.mlpackage/Data/com.apple.CoreML/weights/weight.bin": { size: 1194510528, sha256: "293bae84852f91c032a79417a90dd92d0a058df559069f78d34a83d88cf2c1ee" },
+};
+
+/**
+ * Download missing model files from Hugging Face (pinned revision) into <root>/models/<model>/.
+ * Streams to <file>.part (constant memory, not a 1.1 GB buffer), resumes a partial .part with an HTTP Range request,
+ * verifies size + hash, and only then renames into place. A file that fails verification is deleted and the call
+ * throws, so the next attempt starts clean. Files already in place are trusted if their size matches.
+ */
+export async function downloadModel(
+  root: string,
+  fetchImpl: typeof fetch = fetch,
+  opts: { coreml?: boolean; manifest?: Record<string, ModelFileSpec>; revision?: string } = {},
+): Promise<void> {
   const dir = modelDir(root);
+  const manifest = opts.manifest ?? MODEL_MANIFEST;
   const coreml = opts.coreml ?? (process.platform === "darwin" && process.arch === "arm64");
   for (const f of [...MODEL_FILES, ...(coreml ? COREML_FILES : [])]) {
+    const spec = manifest[f];
+    if (!spec) throw new Error(`no manifest entry for ${f}`);
     const dest = path.join(dir, f);
-    if (fs.existsSync(dest)) continue;
+    if (sizeIs(dest, spec.size)) continue;
     fs.mkdirSync(path.dirname(dest), { recursive: true });
-    const res = await fetchImpl(`https://huggingface.co/${HF_REPO}/resolve/main/${f}`);
-    if (!res.ok || !res.body) throw new Error(`download ${f}: HTTP ${res.status}`);
     const tmp = `${dest}.part`;
-    fs.writeFileSync(tmp, Buffer.from(await res.arrayBuffer()));
+    let have = fileSize(tmp);
+    if (have > spec.size) { fs.rmSync(tmp, { force: true }); have = 0; }
+    const url = `https://huggingface.co/${HF_REPO}/resolve/${opts.revision ?? HF_REVISION}/${f}`;
+    const res = await fetchImpl(url, have > 0 && have < spec.size ? { headers: { Range: `bytes=${have}-` } } : undefined);
+    if (res.status === 200) have = 0; // server ignored the range: start over
+    else if (res.status !== 206 && !(have === spec.size && res.status === 416)) throw new Error(`download ${f}: HTTP ${res.status}`);
+    if (res.status !== 416) {
+      if (!res.body) throw new Error(`download ${f}: empty body`);
+      const out = fs.createWriteStream(tmp, { flags: have > 0 ? "a" : "w" });
+      try {
+        for await (const chunk of res.body as any as AsyncIterable<Uint8Array>) {
+          if (!out.write(chunk)) await new Promise<void>((r) => out.once("drain", () => r()));
+        }
+      } finally {
+        await new Promise<void>((r, j) => out.end((e?: Error | null) => (e ? j(e) : r())));
+      }
+    }
+    const err = await verifyFile(tmp, spec);
+    if (err) {
+      fs.rmSync(tmp, { force: true });
+      throw new Error(`download ${f}: ${err}`);
+    }
     fs.renameSync(tmp, dest);
   }
+}
+
+function fileSize(p: string): number {
+  try { return fs.statSync(p).size; } catch { return 0; }
+}
+function sizeIs(p: string, size: number): boolean {
+  try { const st = fs.statSync(p); return st.isFile() && st.size === size; } catch { return false; }
+}
+
+/** null when the file matches its spec, else the reason. Hashes by streaming (never loads the file whole). */
+export async function verifyFile(p: string, spec: ModelFileSpec): Promise<string | null> {
+  const size = fileSize(p);
+  if (size !== spec.size) return `size ${size}, expected ${spec.size}`;
+  const { createHash } = await import("crypto");
+  const h = createHash(spec.sha256 ? "sha256" : "sha1");
+  if (!spec.sha256) h.update(`blob ${size}\0`);
+  for await (const c of fs.createReadStream(p)) h.update(c as Buffer);
+  const got = h.digest("hex");
+  const want = spec.sha256 ?? spec.gitSha1;
+  return got === want ? null : `hash ${got.slice(0, 12)}…, expected ${want?.slice(0, 12)}…`;
 }
 
 class OnnxEmbedder implements Embedder {

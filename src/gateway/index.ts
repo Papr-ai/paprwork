@@ -3614,6 +3614,17 @@ async function startGateway(): Promise<void> {
     lapRouteRegistrationSection("cloud-proxy");
 
     // ── Cloud Sync Status + Triggers ─────────────────────────────────────
+    // On-device code search (papr-embed-code): tier, model, backend, index size. Read-only.
+    app.get("/api/code-embed/status", async (_req, res) => {
+      try {
+        const { getCodeEmbedRuntime } = await import("../core/tools/codeEmbed/runtime.js");
+        const rt = await getCodeEmbedRuntime();
+        res.json(rt ? { enabled: true, ...rt.info() } : { enabled: false });
+      } catch (e) {
+        res.status(500).json({ enabled: false, error: (e as Error).message });
+      }
+    });
+
     app.get("/api/sync/status", (_req, res) => {
       const sync = getCloudSyncService();
       if (!sync) {
@@ -4892,6 +4903,10 @@ async function startGateway(): Promise<void> {
     lapRouteRegistrationSection("mini-app-hosting-and-preview-routes");
 
     gatewayReady = true;
+    if (!isCloudAgentGatewayMode()) {
+      // On-device code search: fetch + verify the model for new and existing users after startup settles.
+      void import("../core/tools/codeEmbed/runtime.js").then((m) => m.startCodeEmbedInBackground()).catch(() => undefined);
+    }
     const { markGatewayRoutesReady } =
       await import("./services/gatewayReadiness.js");
     markGatewayRoutesReady();
@@ -5232,6 +5247,11 @@ async function startGateway(): Promise<void> {
       } catch (error) {
         console.error("[Gateway] Failed to stop background worker:", error);
       }
+
+      try {
+        const { resetCodeEmbedRuntime } = await import("../core/tools/codeEmbed/runtime.js");
+        await resetCodeEmbedRuntime();
+      } catch {}
 
       // Stop code indexing
       try {

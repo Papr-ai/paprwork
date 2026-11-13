@@ -234,6 +234,8 @@ export function resumeCodeIndexingAfterBillingRestore(): void {
 /** Reset code indexing after org/namespace workspace switch. */
 export async function resetCodeIndexingForWorkspaceSwitch(): Promise<void> {
   await stopCodeIndexing();
+  // The on-device index lives under the workspace's data/ dir: close it so the next grep opens the new workspace's.
+  await import("../../core/tools/codeEmbed/runtime.js").then((m) => m.resetCodeEmbedRuntime()).catch(() => undefined);
   if (fallbackTracker) {
     fallbackTracker.close();
     fallbackTracker = null;

@@ -227,3 +227,66 @@ describe("merge into the pointer ranking", () => {
     expect(b).toContain("a.ts:1-20  (0.612)");
   });
 });
+
+describe("model provisioning (new and existing installs)", () => {
+  const body = (b: Buffer) => new Response(new Uint8Array(b));
+  const spec = (b: Buffer) => ({ size: b.length, sha256: require("crypto").createHash("sha256").update(b).digest("hex") });
+  const files = { "onnx/model_quantized.onnx": Buffer.from("x".repeat(5000)), "tokenizer.json": Buffer.from("{\"t\":1}"), "tokenizer_config.json": Buffer.from("{}") };
+  const manifest = Object.fromEntries(Object.entries(files).map(([k, v]) => [k, spec(v)]));
+
+  test("downloads the pinned revision, verifies hashes, and resumes a partial file with Range", async () => {
+    const { downloadModel, modelInstalled, modelDir, HF_REVISION } = await import("../../src/core/tools/codeEmbed/embedder.js");
+    const base = mkdtempSync(path.join(tmpdir(), "cem-")); dirs.push(base);
+    const partial = path.join(modelDir(base), "onnx/model_quantized.onnx.part");
+    mkdirSync(path.dirname(partial), { recursive: true });
+    writeFileSync(partial, files["onnx/model_quantized.onnx"].subarray(0, 1200));
+    const calls: Array<{ url: string; range?: string }> = [];
+    const fetchImpl = (async (url: string, init?: any) => {
+      const f = Object.keys(files).find((k) => url.endsWith("/" + k))! as keyof typeof files;
+      const range = init?.headers?.Range as string | undefined;
+      calls.push({ url, range });
+      if (range) { const from = Number(range.slice(6, -1)); return new Response(new Uint8Array(files[f].subarray(from)), { status: 206 }); }
+      return body(files[f]);
+    }) as any;
+    await downloadModel(base, fetchImpl, { coreml: false, manifest });
+    expect(modelInstalled(base)).toBe(false); // test manifest differs from the real sizes; check files directly
+    for (const [k, v] of Object.entries(files)) expect(require("fs").readFileSync(path.join(modelDir(base), k))).toEqual(v);
+    expect(calls.every((c) => c.url.includes(`/resolve/${HF_REVISION}/`))).toBe(true);
+    expect(calls.find((c) => c.url.endsWith("model_quantized.onnx"))?.range).toBe("bytes=1200-");
+  });
+
+  test("a corrupted download is deleted and never installed", async () => {
+    const { downloadModel, modelDir } = await import("../../src/core/tools/codeEmbed/embedder.js");
+    const base = mkdtempSync(path.join(tmpdir(), "cem-")); dirs.push(base);
+    const bad = (async (url: string) => body(url.endsWith("tokenizer.json") ? Buffer.from("{\"t\":2}") : files[Object.keys(files).find((k) => url.endsWith("/" + k)) as keyof typeof files])) as any;
+    await expect(downloadModel(base, bad, { coreml: false, manifest })).rejects.toThrow(/tokenizer.json: hash/);
+    const fs = require("fs");
+    expect(fs.existsSync(path.join(modelDir(base), "tokenizer.json"))).toBe(false);
+    expect(fs.existsSync(path.join(modelDir(base), "tokenizer.json.part"))).toBe(false);
+  });
+
+  test("restart: warm() re-adopts roots indexed before, without waiting for a grep", async () => {
+    const { base, root } = project();
+    const a = runtime(base); a.touch(root, true); await settle(a, root); await a.close(); rts.splice(rts.indexOf(a), 1);
+    const b = runtime(base);
+    expect(b.info().roots).toBe(0);
+    b.warm();
+    await b.embedder();
+    expect(b.info().roots).toBe(1);
+    expect(b.info().chunks).toBeGreaterThan(0);
+  });
+
+  test("a changed README/summary is re-embedded from the watcher hook; data/ and dot dirs are ignored", async () => {
+    const { base, root } = project();
+    const rt = runtime(base); rt.touch(root, true); await settle(rt, root);
+    writeFileSync(path.join(root, "README.md"), "# Invoice rendering\nHow invoices are rendered to html.\n");
+    expect(rt.noteChange(path.join(root, "README.md"))).toBe(true);
+    await settle(rt, root);
+    const r = await rt.search(root, "invoice render docs", { limit: 5 });
+    expect(r.hits.map((h) => h.path)).toContain("README.md");
+    mkdirSync(path.join(root, "data"), { recursive: true });
+    writeFileSync(path.join(root, "data", "x.md"), "invoice");
+    expect(rt.noteChange(path.join(root, "data", "x.md"))).toBe(false);
+    expect(rt.noteChange("/elsewhere/file.ts")).toBe(false);
+  });
+});
