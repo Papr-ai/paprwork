@@ -53,6 +53,8 @@
     "test:area": "node scripts/test-area.mjs",
     "test:build": "vitest run --project build",
     "test:live": "vitest run --project live",
+    "test:code-embed": "vitest run --project unit-backend tests/memory/code-embed.test.ts tests/memory/code-embed-runtime.test.ts tests/memory/code-search-v2.test.ts",
+    "test:code-embed:live": "vitest run -c vitest.config.live.ts tests/memory/code-embed.live.test.ts",
     "test:unit": "vitest run --project unit-backend --reporter=verbose",
     "test:ui": "vitest run --project unit-ui --reporter=verbose",
     "test:integration": "vitest run --project integration --reporter=verbose",
