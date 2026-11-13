@@ -61,7 +61,25 @@ export class CodeVectorStore {
         PRIMARY KEY (root, path)
       );
       CREATE INDEX IF NOT EXISTS files_blob ON files(blob_sha);
+      CREATE TABLE IF NOT EXISTS meta (key TEXT PRIMARY KEY, value TEXT NOT NULL);
     `);
+  }
+
+  /**
+   * Pin this index to one org + namespace. The first bind stamps it; a later bind for a different scope throws, so an
+   * index can never serve (or upload from) another workspace, e.g. via a shared PAPR_CODE_EMBED_DATA_DIR.
+   */
+  bindScope(scope: string): void {
+    const cur = this.db.prepare(`SELECT value FROM meta WHERE key='scope'`).get();
+    if (!cur) {
+      this.db.prepare(`INSERT INTO meta(key, value) VALUES ('scope', ?)`).run(scope);
+      return;
+    }
+    if (cur.value !== scope) throw new Error(`code index belongs to ${cur.value}, not ${scope}`);
+  }
+
+  scope(): string | null {
+    return this.db.prepare(`SELECT value FROM meta WHERE key='scope'`).get()?.value ?? null;
   }
 
   static open(dbPath: string, model: string, dim: number): CodeVectorStore {
