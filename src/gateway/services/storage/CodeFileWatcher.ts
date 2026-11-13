@@ -76,6 +76,10 @@ export class CodeFileWatcher {
       settleMs: 2000, // was awaitWriteFinish.stabilityThreshold
       ignore: (absPath) => !CodeFileWatcher.isWatchedCodePath(absPath),
       onEvent: (event) => {
+        // On-device index: Jobs/ edits re-embed at once (apps/ is already fed by the AppService tree watcher).
+        if (event.path.startsWith(roots[1] + path.sep)) {
+          void import('../../../core/tools/codeEmbed/runtime.js').then((m) => m.noteCodeEmbedFileChange(event.path)).catch(() => undefined);
+        }
         if (event.type === 'unlink') {
           void this.handleDelete(event.path);
         } else {
