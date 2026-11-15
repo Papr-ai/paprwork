@@ -29,6 +29,8 @@ import {
 } from "../../gateway/utils/cloudPublishGate.js";
 import { formatShareLink } from "../utils/cloudShareLink.js";
 import { appendLineageToPublishData } from "../utils/cloudPublishLineageHints.js";
+import { isAccessOnlyRequest } from "../utils/publishAccessOnly.js";
+import { isOnTeamData } from "../utils/copyAxes.js";
 import { getCloudAppLineageService } from "../../gateway/services/CloudAppLineageService.js";
 import {
   audiencesPatchFromSharing,
@@ -298,7 +300,7 @@ export const publishCloudAppTool = createTool({
   id: "publish_cloud_app",
   description: `Publish or update cloud sharing for a mini-app on apps.papr.ai.
 
-**Installed copies:** a copy on its OWN data (Community installs, per-user team apps, detached copies) publishes to its own link like any app; it never updates the original. A copy on the TEAM's shared data is refused: send code with submit_cloud_app_pr, and shared rows with push_cloud_sync. Check get_cloud_app_publish → lineage.databasePolicy.
+**Installed copies:** a copy on its OWN data (Community installs, per-user team apps, detached copies) publishes to its own link like any app; it never updates the original. A copy on the TEAM's shared data can't publish code: send code with submit_cloud_app_pr, and shared rows with push_cloud_sync. Sharing-only changes (loginAccess, externalLink, requireSignIn, uploadMaxMb) from such a copy are applied to the original app, like the Share sheet; the server allows them for Admins (audiences.myRole / canManageAccess in get_cloud_app_publish). Check get_cloud_app_publish → lineage.databasePolicy.
 
 **Preferred path for sharing** (when Cloud Sync + Papr login are on):
 - **Community + fork/install:** loginAccess=public, codeAccess=install
@@ -351,6 +353,45 @@ If Cloud Sync is disabled, returns an error with fallbackTool=export_app_bundle 
       }
 
       await requireCloudPublishAvailable();
+
+      // A copy on the team's data can't ship code, but an Admin can still
+      // change who opens the original app. Go straight to the audiences API
+      // (same path as the Share sheet) instead of the code publish refusal.
+      if (isAccessOnlyRequest(args)) {
+        const lineage = await readLineageForPublishTool(args.appId).catch(() => null);
+        if (isOnTeamData(lineage)) {
+          const current = await readAudiences(args.appId);
+          let audiences: AudiencesAccess | null = current;
+          if (args.loginAccess !== undefined || args.externalLink !== undefined || args.requireSignIn !== undefined) {
+            const patch = audiencesPatchFromSharing(
+              {
+                loginAccess: args.loginAccess as CloudLoginAccess | undefined,
+                externalLink: args.externalLink as CloudExternalLink | undefined,
+                requireSignIn: args.requireSignIn,
+              },
+              current,
+            );
+            audiences = await saveAudiences(args.appId, patch, { current });
+          }
+          if (args.uploadMaxMb !== undefined) {
+            audiences = await saveAudiences(args.appId, { uploadMaxMb: args.uploadMaxMb }, { current: audiences });
+          }
+          return {
+            success: true,
+            data: appendLineageToPublishData(
+              {
+                appId: args.appId,
+                appliedTo: lineage?.sourceAppId ?? args.appId,
+                audiences: describeAudiences(audiences),
+                message: "Sharing updated on the original app (same as the Share sheet).",
+              },
+              lineage,
+            ),
+            duration: performance.now() - startTime,
+            timestamp: new Date().toISOString(),
+          };
+        }
+      }
 
       // Cloud run: publish the sandbox's pending code first so the live app
       // reflects this turn's edits (there is no desktop sync to do it).
