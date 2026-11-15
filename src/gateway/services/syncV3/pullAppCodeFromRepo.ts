@@ -715,6 +715,23 @@ export async function pullAppCodeFromRepo(
       await writeAppRepoCommitCursor(trimmed, head.commitSha);
     }
 
+    // A merged proposal or the publisher may have linked a database this
+    // workspace has never seen: register it so it resolves (and isn't pruned
+    // as "missing" by the next publish reconcile).
+    try {
+      const linkedRaw = await fs.readFile(
+        path.join(getPaprAppsRoot(), trimmed, "linked-databases.json"),
+        "utf8",
+      );
+      const { getDatabaseRegistryService } = await import("../DatabaseRegistryService.js");
+      const adopted = await getDatabaseRegistryService().adoptLinkedDatabasesFile(linkedRaw);
+      if (adopted.length > 0) {
+        console.log(`[PullAppCode] ${trimmed}: registered linked database(s) ${adopted.join(", ")}`);
+      }
+    } catch {
+      /* no linked-databases.json */
+    }
+
     // db.ts is generated from data-sources.json; rebuild it after every pull so
     // links the publisher added (or a merged proposal brought) are reflected.
     try {
