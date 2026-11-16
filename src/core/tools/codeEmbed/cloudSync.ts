@@ -95,6 +95,9 @@ export async function cloudSearch(
           blob_shas: opts.blobShas?.slice(0, SHAS),
           repo_ids: opts.repoIds,
           limit: opts.limit ?? 10,
+          // Best chunk per file, like the local index; without it one long file fills the top 10 (Curation Bench:
+          // cloud 41/50 vs local 44/50 ungrouped, identical once grouped). Older servers ignore the field.
+          group_by_blob: true,
         },
       },
       timeout: opts.timeout ?? 4000,

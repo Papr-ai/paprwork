@@ -1,5 +1,19 @@
 {
-  "_note": "Harness = gold in semantic top 10 or the 2 also-check files. Set from the e06b replay dense lists ranked by the shipped TypeScript (rankPointers), 0.6B v1.0 int8. Replace with the desktop-chunk numbers once the first full run lands; change only in a PR that explains why.",
-  "local": { "miss": { "harness": 43 }, "ctrl": { "harness": 17 } },
-  "cloud": { "miss": { "harness": 43 }, "ctrl": { "harness": 17 } }
+  "_note": "Desktop chunks, 0.6B v1.0 int8 (HF 4596a347), writer queries, shipped rankPointers. Local and cloud (memory code_search, group_by_blob) identical on all 75 rows. Change only in a PR that explains why.",
+  "local": {
+    "miss": {
+      "harness": 44
+    },
+    "ctrl": {
+      "harness": 15
+    }
+  },
+  "cloud": {
+    "miss": {
+      "harness": 44
+    },
+    "ctrl": {
+      "harness": 15
+    }
+  }
 }
