@@ -19,6 +19,8 @@ ap = argparse.ArgumentParser()
 ap.add_argument("data"); ap.add_argument("out")
 ap.add_argument("--onnx"); ap.add_argument("--trunk"); ap.add_argument("--base", default="Qwen/Qwen3-Embedding-0.6B")
 ap.add_argument("--tokenizer", required=True); ap.add_argument("--tok-budget", type=int, default=32768)
+# ONNX int8 materialises attention (batch x heads x L x L): cap batch * L^2 so 8k-token chunks run one at a time
+ap.add_argument("--attn-budget", type=int, default=8192 * 8192)
 ap.add_argument("--query-field", default="queries", help="queries.json field: writer queries (default)")
 ap.add_argument("--on-shard", help="shell command run after each saved shard (the GPU script uploads progress)")
 a = ap.parse_args()
@@ -92,7 +94,7 @@ def embed(seqs, name=None, shard=4000):
         i = 0
         while i < len(idx):
             j = i
-            while j < len(idx) and (j - i + 1) * len(seqs[idx[j]]) <= a.tok_budget:
+            while j < len(idx) and (j - i + 1) * len(seqs[idx[j]]) <= a.tok_budget and (j - i + 1) * len(seqs[idx[j]]) ** 2 <= a.attn_budget:
                 j += 1
             j = max(j, i + 1)
             out[idx[i:j]] = run([seqs[k] for k in idx[i:j]])
