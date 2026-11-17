@@ -1,7 +1,7 @@
 {
   "name": "paprwork",
   "version": "2.7.2",
-  "description": "Papr Work — build software that runs your work, and gets smarter the more you use it",
+  "description": "Papr Work \u2014 build software that runs your work, and gets smarter the more you use it",
   "main": "./src/electron/main.cjs",
   "type": "module",
   "workspaces": [
@@ -224,6 +224,7 @@
     "@ai-sdk/google": "^3.0.55",
     "@ai-sdk/openai": "^3.0.49",
     "@google-cloud/pubsub": "^5.2.0",
+    "@huggingface/tokenizers": "^0.2.0",
     "@libsql/client": "^0.14.0",
     "@mariozechner/pi-ai": "^0.64.0",
     "@mastra/core": "^1.4.0",
@@ -322,7 +323,6 @@
     "vitest": "^2.1.9"
   },
   "optionalDependencies": {
-    "@huggingface/tokenizers": "^0.2.0",
     "onnxruntime-node": "^1.31.1"
   }
 }

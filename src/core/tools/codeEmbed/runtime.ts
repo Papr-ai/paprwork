@@ -412,7 +412,10 @@ export function getCodeEmbedRuntime(): Promise<CodeEmbedRuntime | null> {
           const k = await getApiKey("PAPR_API_KEY").catch(() => null);
           if (!k) return null;
           const { default: Papr } = await import("@papr/memory");
-          const c = new Papr({ xAPIKey: k });
+          // Same memory server as Jev and the rest of the gateway: PAPR_MEMORY_SERVER_URL (dev sandbox -> dev memory).
+          // Without it the SDK falls back to PAPR_BASE_URL / memory.papr.ai, so a dev cloud agent indexed into prod.
+          const baseURL = process.env.PAPR_MEMORY_SERVER_URL?.replace(/\/$/, "") || undefined;
+          const c = new Papr({ xAPIKey: k, ...(baseURL ? { baseURL } : {}) });
           return { post: (p, o) => c.post(p, { body: o.body, timeout: o.timeout }) };
         };
         const scope = await activeCodeScope();
