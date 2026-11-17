@@ -36,6 +36,53 @@ export async function cloudMissing(client: PostClient, model: string, blobShas: 
   return out;
 }
 
+export interface TextChunk {
+  blobSha: string;
+  chunk: number;
+  lineStart: number;
+  lineEnd: number;
+  text: string;
+  repoId?: string;
+  pathHint?: string;
+}
+
+/**
+ * Cloud-only tier (no model on this machine): send chunk text without a vector so the server embeds it with the same
+ * model (papr-embed-code-1-0.6b on Vertex, fp32; parity with the desktop int8 vectors is cos >= 0.99). The text is
+ * used to embed and is not stored (store_content stays false). Only blobs the cloud lacks are sent.
+ */
+export async function pushTextChunks(
+  client: PostClient,
+  model: string,
+  chunks: TextChunk[],
+  opts: { timeout?: number; batch?: number } = {},
+): Promise<{ uploaded: number; failed: number; skipped: number }> {
+  if (!chunks.length) return { uploaded: 0, failed: 0, skipped: 0 };
+  const missing = new Set(await cloudMissing(client, model, chunks.map((c) => c.blobSha), opts.timeout));
+  const todo = chunks.filter((c) => missing.has(c.blobSha));
+  let uploaded = 0;
+  let failed = 0;
+  const size = opts.batch ?? 32; // server embeds these: keep each request small
+  for (let i = 0; i < todo.length; i += size) {
+    const part = todo.slice(i, i + size);
+    const memories = part.map((c) => ({
+      content: c.text,
+      code_context: {
+        embed_model: model, blob_sha: c.blobSha, chunk: c.chunk, line_start: c.lineStart, line_end: c.lineEnd,
+        repo_id: c.repoId, path_hint: c.pathHint, store_content: false,
+      },
+    }));
+    try {
+      const res: any = await client.post("/v1/memory/batch", { body: { memories }, timeout: opts.timeout ?? 120_000 });
+      uploaded += res?.total_successful ?? 0;
+      failed += res?.total_failed ?? 0;
+    } catch {
+      failed += part.length;
+    }
+  }
+  return { uploaded, failed, skipped: chunks.length - todo.length };
+}
+
 /**
  * Upload vectors the cloud lacks. Only local-source chunks are uploaded (cloud rows came from there). Content is a
  * placeholder unless storeContent is on: the server needs non-empty content, never the code itself.

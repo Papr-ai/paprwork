@@ -13,6 +13,9 @@
  * Also indexes the Papr Work folder's non-code context (documents/, workspace/, repos/<name>/): adopted at startup,
  * kept fresh by the existing watchers (cloud-sync workspace watcher for workspace/, a documents/repos watcher here).
  *
+ * Cloud tier (cloud agent gateway, or a device that fails the on-device checks): no model is loaded. Files the cloud
+ * lacks are chunked with the model's tokenizer (exact boundaries) and sent as text; memory embeds them with the same
+ * model and does not store the text. Search is server-embedded. PAPR_CODE_EMBED_TIER=cloud forces it (tests).
  * Env: PAPR_CODE_EMBED=0 turns it off. PAPR_CODE_EMBED_CONTEXT=0 skips documents/workspace/repos. PAPR_CODE_EMBED_DOWNLOAD=0 never downloads the model.
  *      PAPR_CODE_EMBED_CLOUD_SYNC=0 never uploads vectors. PAPR_CODE_EMBED_COREML=0 stays on ONNX. PAPR_CODE_EMBED_DATA_DIR overrides <PAPR_HOME>/data. PAPR_CODE_EMBED_HELPER = path to the Swift helper.
  */
@@ -22,7 +25,7 @@ import { CodeIndexer, SKIP_DIRS } from "./codeIndexer.js";
 import { contextEnabled, contextRootFor, contextRoots, contextSkip } from "./contextRoots.js";
 import type { PostClient } from "./cloudSync.js";
 import { availableMemBytes, canRunNow, readDeviceFacts, selfTestPasses, staticTier, type EmbedTier } from "./deviceHealth.js";
-import { CODE_EMBED_DIM, CODE_EMBED_MODEL, downloadModel, modelDir, WorkerOnnxEmbedder, modelInstalled, type Embedder } from "./embedder.js";
+import { CODE_EMBED_DIM, CODE_EMBED_MODEL, downloadModel, downloadTokenizer, loadTokenCounter, modelDir, tokenizerInstalled, WorkerOnnxEmbedder, modelInstalled, type Embedder } from "./embedder.js";
 import { CodeVectorStore } from "./vectorStore.js";
 
 export interface RuntimeDeps {
@@ -38,6 +41,8 @@ export interface RuntimeDeps {
   loadUpgrade?: ((root: string, base: Embedder) => Promise<Embedder>) | null;
   download?: (root: string) => Promise<void>;
   installed?: (root: string) => boolean;
+  /** Cloud tier: tokenizer for exact chunk boundaries (default: the model's tokenizer.json, downloaded alone). */
+  loadTokenCounter?: (root: string) => Promise<(s: string) => number>;
   tierOverride?: EmbedTier;
   canRun?: () => boolean;
   /** Papr Work folder: documents/, workspace/ and repos/<name>/ under it are indexed too. Omit to skip them. */
@@ -72,6 +77,8 @@ export class CodeEmbedRuntime {
   private roots = new Set<string>();
   private loop: NodeJS.Timeout | null = null;
   private syncedAt = 0;
+  private counter: ((s: string) => number) | null = null;
+  private counterLoading: Promise<((s: string) => number) | null> | null = null;
   status = "starting";
 
   constructor(private readonly d: RuntimeDeps) {
@@ -98,6 +105,7 @@ export class CodeEmbedRuntime {
       store: this.store,
       tier: () => this.tier,
       embedder: () => this.embedder(),
+      tokenCounter: () => this.tokenCounter(),
       cloud: () => this.cloudForScope(),
       canRun: d.canRun ?? (() => canRunNow({ freeMemBytes: availableMemBytes() }, false).ok),
       skipFor: contextSkip,
@@ -110,6 +118,30 @@ export class CodeEmbedRuntime {
     const c = await this.d.cloud();
     if (this.d.scope && this.d.activeScope && this.d.activeScope() !== this.d.scope) return null;
     return c;
+  }
+
+  /** Cloud tier: the model's tokenizer only (no ONNX), so chunks match what a Mac cuts. null while it downloads. */
+  tokenCounter(): Promise<((s: string) => number) | null> {
+    if (this.counter) return Promise.resolve(this.counter);
+    if (!this.counterLoading) {
+      this.counterLoading = (async () => {
+        try {
+          if (!this.d.loadTokenCounter && !tokenizerInstalled(this.d.dataDir)) {
+            this.status = "downloading tokenizer";
+            await downloadTokenizer(this.d.dataDir);
+          }
+          this.counter = await (this.d.loadTokenCounter ?? loadTokenCounter)(this.d.dataDir);
+          this.status = "ready (cloud tier)";
+          return this.counter;
+        } catch (e) {
+          this.status = `tokenizer failed: ${(e as Error).message}`;
+          return null;
+        } finally {
+          this.counterLoading = null;
+        }
+      })();
+    }
+    return this.counterLoading;
   }
 
   /** The loaded embedder, starting download/load in the background. Resolves null while unavailable. */
@@ -216,9 +248,13 @@ export class CodeEmbedRuntime {
 
   /** Startup: fetch/load the model in the background and keep previously indexed roots fresh. Never throws. */
   warm(): void {
-    if (this.tier !== "local") return;
+    if (this.tier === "off") return;
     for (const r of this.store.roots()) if (fs.existsSync(r)) this.roots.add(r);
     for (const r of this.contextRoots()) this.roots.add(r);
+    if (this.tier === "cloud") {
+      void this.tokenCounter().then((c) => { if (c) for (const r of this.roots) this.touch(r, true); });
+      return;
+    }
     void this.embedder().then((e) => { if (e) for (const r of this.roots) this.touch(r, true); });
   }
 
@@ -237,6 +273,15 @@ export class CodeEmbedRuntime {
     if (this.loop) clearTimeout(this.loop);
     const tick = async () => {
       try {
+        if (this.tier === "cloud") {
+          // No model here: send the text of files the cloud lacks; the server embeds them (papr-embed-code-1-0.6b).
+          if (process.env.PAPR_CODE_EMBED_CLOUD_SYNC === "0") { this.loop = null; return; }
+          const r = await this.indexer.indexInCloud((root) => `paprwork:${path.basename(root)}`);
+          const left = this.store.pendingBlobs().filter((b) => !this.store.isCloudIndexed(b)).length;
+          this.loop = left > 0 && r.failed === 0 && r.files > 0 ? setTimeout(tick, TICK_MS) : left > 0 ? setTimeout(tick, 30_000) : null;
+          this.loop?.unref?.();
+          return;
+        }
         const r = await this.indexer.embedPending(4);
         const pending = this.store.pendingBlobs().length;
         if (r.embedded > 0 || (pending > 0 && r.skipped === null)) {
@@ -376,9 +421,14 @@ export function getCodeEmbedRuntime(): Promise<CodeEmbedRuntime | null> {
           const p = readActiveWorkspacePointer();
           return p ? `org:${p.organizationId}|ns:${p.namespaceId}` : null;
         };
+        const { isCloudAgentGatewayMode } = await import("../../utils/paprRoot.js");
+        // Cloud agent (laptop off): no model in the container. Index the clone by sending text to memory, which embeds
+        // with the same model; search goes to memory too. PAPR_CODE_EMBED_TIER=cloud forces it on a desktop (tests).
+        const forceCloud = isCloudAgentGatewayMode() || process.env.PAPR_CODE_EMBED_TIER === "cloud";
         const rt = new CodeEmbedRuntime({
           dataDir: process.env.PAPR_CODE_EMBED_DATA_DIR || getPaprDataDir(), cloud, cloudAvailable: !!key, paprRoot: getPaprRoot(),
           scope: scope ?? undefined, activeScope: activeScopeSync,
+          ...(forceCloud && key ? { tierOverride: "cloud" as const } : {}),
         });
         if (gen !== generation || activeScopeSync() !== scope) {
           // Workspace switched while this was starting: never hand out the old workspace's index.

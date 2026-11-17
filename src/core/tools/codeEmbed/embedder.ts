@@ -76,12 +76,12 @@ export const MODEL_MANIFEST: Record<string, ModelFileSpec> = {
 export async function downloadModel(
   root: string,
   fetchImpl: typeof fetch = fetch,
-  opts: { coreml?: boolean; manifest?: Record<string, ModelFileSpec>; revision?: string } = {},
+  opts: { coreml?: boolean; manifest?: Record<string, ModelFileSpec>; revision?: string; files?: readonly string[] } = {},
 ): Promise<void> {
   const dir = modelDir(root);
   const manifest = opts.manifest ?? MODEL_MANIFEST;
   const coreml = opts.coreml ?? (process.platform === "darwin" && process.arch === "arm64");
-  for (const f of [...MODEL_FILES, ...(coreml ? COREML_FILES : [])]) {
+  for (const f of opts.files ?? [...MODEL_FILES, ...(coreml ? COREML_FILES : [])]) {
     const spec = manifest[f];
     if (!spec) throw new Error(`no manifest entry for ${f}`);
     const dest = path.join(dir, f);
@@ -191,6 +191,30 @@ class OnnxEmbedder implements Embedder {
   async close(): Promise<void> {
     await this.session?.release?.();
   }
+}
+
+/** Tokenizer files only (~11 MB): enough for a cloud-tier device to cut the exact chunks a Mac would, no model. */
+export const TOKENIZER_FILES = ["tokenizer.json", "tokenizer_config.json"] as const;
+
+export function tokenizerInstalled(root: string): boolean {
+  return TOKENIZER_FILES.every((f) => sizeIs(path.join(modelDir(root), f), MODEL_MANIFEST[f]!.size));
+}
+
+/** Download just the tokenizer (pinned, verified, resumable: same path as the model download). */
+export function downloadTokenizer(root: string, fetchImpl: typeof fetch = fetch): Promise<void> {
+  const manifest = Object.fromEntries(TOKENIZER_FILES.map((f) => [f, MODEL_MANIFEST[f]!]));
+  return downloadModel(root, fetchImpl, { coreml: false, manifest, files: TOKENIZER_FILES });
+}
+
+/** Token counter with the model's tokenizer (pure JS, no onnxruntime). */
+export async function loadTokenCounter(root: string): Promise<(text: string) => number> {
+  const dir = modelDir(root);
+  const { Tokenizer }: any = await import("@huggingface/tokenizers");
+  const tok = new Tokenizer(
+    JSON.parse(fs.readFileSync(path.join(dir, "tokenizer.json"), "utf8")),
+    JSON.parse(fs.readFileSync(path.join(dir, "tokenizer_config.json"), "utf8")),
+  );
+  return (text: string) => tok.encode(text, { add_special_tokens: false }).ids.length;
 }
 
 /** Load the on-device embedder. Throws if packages or model files are missing. */

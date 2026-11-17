@@ -55,11 +55,13 @@ check("local search: chunker", hits[0] === "src/chunker.ts", hits.join(", "), ms
 
 // 2. Cloud sync: vectors only
 const [s1, syncMs] = await timed(() => ix.syncCloud(() => "repo-e2e"));
-check("cloud sync uploads all", s1.uploaded === 6 && s1.failed === 0, JSON.stringify(s1), syncMs);
+// One row per chunk: 6 files, some long enough to split (chunkFile, 1,000-token windows).
+const localChunks = store.stats().chunks;
+check("cloud sync uploads all", s1.uploaded === localChunks && s1.failed === 0, `${JSON.stringify(s1)} of ${localChunks} chunks`, syncMs);
 const s2 = await ix.syncCloud(() => "repo-e2e");
 check("cloud sync is idempotent", s2.uploaded === 0, JSON.stringify(s2));
 const stats1: any = await (await fetch(url + "/e2e/stats")).json();
-check("server never embedded documents", stats1.embed_document === 0 && stats1.points === 6, JSON.stringify(stats1));
+check("server never embedded documents", stats1.embed_document === 0 && stats1.points === localChunks, JSON.stringify(stats1));
 
 // 3. Rename: no re-embed, both tiers return the new path
 fs.renameSync(path.join(root, "src/retry.ts"), path.join(root, "src/net-retry.ts"));

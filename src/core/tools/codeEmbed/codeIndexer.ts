@@ -14,7 +14,7 @@
 import * as fs from "fs";
 import * as path from "path";
 import { chunkFile } from "./chunker.js";
-import { cloudDelete, cloudSearch, pushVectors, type PostClient } from "./cloudSync.js";
+import { cloudDelete, cloudSearch, pushTextChunks, pushVectors, type PostClient, type TextChunk } from "./cloudSync.js";
 import type { ExtraSkip } from "./contextRoots.js";
 import type { EmbedTier } from "./deviceHealth.js";
 import type { Embedder } from "./embedder.js";
@@ -30,6 +30,8 @@ export interface IndexerDeps {
   store: CodeVectorStore;
   tier: () => EmbedTier;
   embedder: () => Promise<Embedder | null>;
+  /** Cloud tier: the model's tokenizer (exact chunk boundaries, same as a Mac) or null while it downloads. */
+  tokenCounter?: () => Promise<((s: string) => number) | null>;
   cloud: () => Promise<PostClient | null>;
   /** Live gate before each background batch (memory pressure, battery saver). */
   canRun?: () => boolean;
@@ -155,6 +157,44 @@ export class CodeIndexer {
       this.busy = false;
     }
     return { embedded, skipped: null };
+  }
+
+  /**
+   * Cloud tier (no model here): chunk files the cloud does not have yet and send their text so the server embeds them.
+   * Blobs are marked "cloud-indexed" locally (no vector kept) so they are not sent again. Never throws.
+   */
+  async indexInCloud(repoIdFor: (root: string) => string, maxFiles = 200): Promise<{ uploaded: number; failed: number; files: number }> {
+    if (this.d.tier() !== "cloud" || this.busy) return { uploaded: 0, failed: 0, files: 0 };
+    const client = await this.d.cloud();
+    const count = await this.d.tokenCounter?.();
+    if (!client || !count) return { uploaded: 0, failed: 0, files: 0 };
+    this.busy = true;
+    try {
+      const shas = this.d.store.pendingBlobs().filter((b) => !this.d.store.isCloudIndexed(b)).slice(0, maxFiles);
+      const chunks: TextChunk[] = [];
+      const done: string[] = [];
+      for (const sha of shas) {
+        const src = this.texts.get(sha);
+        if (!src) continue;
+        let text: string;
+        try {
+          text = fs.readFileSync(src.abs, "utf8");
+        } catch {
+          continue;
+        }
+        if (gitBlobSha(text) !== sha) continue;
+        for (const c of chunkFile(src.rel, text, count))
+          chunks.push({ blobSha: sha, chunk: c.chunk, lineStart: c.lineStart, lineEnd: c.lineEnd, text: c.text, repoId: repoIdFor(src.root), pathHint: src.rel });
+        done.push(sha);
+      }
+      const r = await pushTextChunks(client, this.d.store.model, chunks);
+      if (r.failed === 0) this.d.store.markCloudIndexed(done);
+      return { uploaded: r.uploaded, failed: r.failed, files: done.length };
+    } catch {
+      return { uploaded: 0, failed: -1, files: 0 };
+    } finally {
+      this.busy = false;
+    }
   }
 
   /** Upload what the cloud lacks, then drop orphans locally and remotely. Never throws. */

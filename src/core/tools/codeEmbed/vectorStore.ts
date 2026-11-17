@@ -62,6 +62,7 @@ export class CodeVectorStore {
       );
       CREATE INDEX IF NOT EXISTS files_blob ON files(blob_sha);
       CREATE TABLE IF NOT EXISTS meta (key TEXT PRIMARY KEY, value TEXT NOT NULL);
+      CREATE TABLE IF NOT EXISTS cloud_indexed (model TEXT NOT NULL, blob_sha TEXT NOT NULL, at INTEGER NOT NULL, PRIMARY KEY (model, blob_sha));
     `);
   }
 
@@ -146,14 +147,27 @@ export class CodeVectorStore {
   /** Vectors no current path references (safe to drop locally; ask the cloud to drop them too). */
   orphanBlobs(): string[] {
     return this.db
-      .prepare(`SELECT DISTINCT c.blob_sha AS b FROM chunks c LEFT JOIN files f ON f.blob_sha=c.blob_sha WHERE c.model=? AND f.blob_sha IS NULL`)
-      .all(this.model)
+      .prepare(`SELECT DISTINCT b FROM (SELECT blob_sha AS b FROM chunks WHERE model=? UNION SELECT blob_sha AS b FROM cloud_indexed WHERE model=?)
+                WHERE b NOT IN (SELECT blob_sha FROM files)`)
+      .all(this.model, this.model)
       .map((r) => r.b);
+  }
+
+  /** Cloud tier: blobs whose chunks were sent to the cloud to embed (no local vector). */
+  markCloudIndexed(blobShas: string[]): void {
+    const ins = this.db.prepare(`INSERT OR REPLACE INTO cloud_indexed(model, blob_sha, at) VALUES (?,?,?)`);
+    const now = Date.now();
+    this.db.transaction(() => blobShas.forEach((b) => ins.run(this.model, b, now)))();
+  }
+
+  isCloudIndexed(blobSha: string): boolean {
+    return !!this.db.prepare(`SELECT 1 FROM cloud_indexed WHERE model=? AND blob_sha=?`).get(this.model, blobSha);
   }
 
   dropBlobs(blobShas: string[]): void {
     const del = this.db.prepare(`DELETE FROM chunks WHERE model=? AND blob_sha=?`);
-    this.db.transaction(() => blobShas.forEach((b) => del.run(this.model, b)))();
+    const delC = this.db.prepare(`DELETE FROM cloud_indexed WHERE model=? AND blob_sha=?`);
+    this.db.transaction(() => blobShas.forEach((b) => { del.run(this.model, b); delC.run(this.model, b); }))();
     this.cache = null;
   }
 

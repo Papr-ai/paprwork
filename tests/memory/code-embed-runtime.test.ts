@@ -162,6 +162,69 @@ describe("code embed runtime (agent grep path)", () => {
     expect(r.hits).toHaveLength(1);
   });
 
+  test("cloud-only tier (laptop off): files are sent as text once, server embeds, no model loaded", async () => {
+    const { base, root } = project();
+    const have = new Set<string>();
+    const batches: any[][] = [];
+    const cloud = { post: async (p: string, o: { body: any }) => {
+      if (p === "/v1/memory/code/missing") return { missing: o.body.blob_shas.filter((b: string) => !have.has(b)) };
+      if (p === "/v1/memory/batch") {
+        batches.push(o.body.memories);
+        o.body.memories.forEach((m: any) => have.add(m.code_context.blob_sha));
+        return { total_successful: o.body.memories.length, total_failed: 0 };
+      }
+      return { data: { memories: [] } };
+    } };
+    let loaded = 0;
+    const rt = runtime(base, {
+      tierOverride: "cloud", cloud: async () => cloud, cloudAvailable: true,
+      loadEmbedder: async () => { loaded++; return fakeEmbedder(); },
+      loadTokenCounter: async () => (s: string) => Math.ceil(s.length / 4),
+    });
+    rt.touch(root, true);
+    for (let i = 0; i < 40 && batches.length === 0; i++) await new Promise((r) => setTimeout(r, 25));
+    expect(loaded).toBe(0);
+    const sent = batches.flat();
+    expect(sent).toHaveLength(3);
+    for (const m of sent) {
+      expect(m.code_context.embedding).toBeUndefined(); // the server embeds
+      expect(m.code_context.store_content).toBe(false); // text is used to embed, never stored
+      // Same chunk text a Mac embeds (chunkFile): a small file is one chunk, its full text.
+      expect(m.content).toMatch(/^export (async )?function /);
+      expect(m.code_context.path_hint).toMatch(/^src\//);
+    }
+    // Second pass: nothing new, nothing re-sent.
+    await rt.indexer.indexInCloud(() => "r");
+    expect(batches.flat()).toHaveLength(3);
+    // An agent edit is sent once more, then settles.
+    writeFileSync(path.join(root, "src", "auth.ts"), "export function refreshToken(){ /* auth v2 */ }\n");
+    rt.noteChange(path.join(root, "src", "auth.ts"));
+    for (let i = 0; i < 40 && batches.flat().length === 3; i++) await new Promise((r) => setTimeout(r, 25));
+    expect(batches.flat()).toHaveLength(4);
+    expect(batches.flat()[3].code_context.path_hint).toBe("src/auth.ts");
+  });
+
+  test("cloud-only tier: a failed upload is retried, not marked done", async () => {
+    const { base, root } = project();
+    let fail = true;
+    const sent: string[] = [];
+    const cloud = { post: async (p: string, o: { body: any }) => {
+      if (p === "/v1/memory/code/missing") return { missing: o.body.blob_shas };
+      if (p === "/v1/memory/batch") {
+        if (fail) throw new Error("503");
+        o.body.memories.forEach((m: any) => sent.push(m.code_context.blob_sha));
+        return { total_successful: o.body.memories.length, total_failed: 0 };
+      }
+      return {};
+    } };
+    const rt = runtime(base, { tierOverride: "cloud", cloud: async () => cloud, cloudAvailable: true, loadTokenCounter: async () => (s: string) => s.length });
+    rt.indexer.refresh(root);
+    expect((await rt.indexer.indexInCloud(() => "r")).failed).toBeGreaterThan(0);
+    fail = false;
+    expect((await rt.indexer.indexInCloud(() => "r")).files).toBe(3);
+    expect(new Set(sent).size).toBe(3);
+  });
+
   test("off tier (no model, no cloud): [] and grep carries on", async () => {
     const { base, root } = project();
     const rt = runtime(base, { tierOverride: "off" });
