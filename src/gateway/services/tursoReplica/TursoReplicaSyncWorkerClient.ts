@@ -76,6 +76,60 @@ export function writeWorkerStdinLine(
 }
 
 const WORKER_BOOT_TIMEOUT_MS = 20_000;
+/** Grace for a SIGTERM'd worker to close its handles before we SIGKILL it. */
+const WORKER_SHUTDOWN_GRACE_MS = 4_000;
+/** After SIGKILL the kernel reaps it promptly; this only bounds the await. */
+const WORKER_KILL_WAIT_MS = 2_000;
+
+function hasExited(child: ChildProcess): boolean {
+  return child.exitCode !== null || child.signalCode !== null;
+}
+
+function waitForExit(child: ChildProcess, ms: number): Promise<boolean> {
+  if (hasExited(child)) return Promise.resolve(true);
+  return new Promise((resolve) => {
+    const timer = setTimeout(() => {
+      child.off("exit", onExit);
+      resolve(hasExited(child));
+    }, ms);
+    const onExit = (): void => {
+      clearTimeout(timer);
+      resolve(true);
+    };
+    child.once("exit", onExit);
+  });
+}
+
+/**
+ * Stop a worker and make sure it is gone. Every replica file the worker opened stays
+ * POSIX-locked until the *process* exits, so "asked it to stop" is not enough: a worker
+ * wedged in a native close ignores SIGTERM forever and blocks every later worker from
+ * opening those databases. Escalate to SIGKILL after a grace period.
+ */
+export async function retireChild(
+  child: ChildProcess,
+  graceMs = WORKER_SHUTDOWN_GRACE_MS,
+): Promise<void> {
+  if (hasExited(child)) return;
+  try {
+    child.kill("SIGTERM");
+  } catch {
+    /* already gone */
+  }
+  if (await waitForExit(child, graceMs)) return;
+  console.warn(
+    `[TursoSyncWorker] Worker pid=${child.pid} did not exit ${graceMs}ms after SIGTERM ` +
+      "(likely wedged in a native close); sending SIGKILL so its replica locks are released",
+  );
+  try {
+    child.kill("SIGKILL");
+  } catch {
+    /* already gone */
+  }
+  if (!(await waitForExit(child, WORKER_KILL_WAIT_MS))) {
+    console.error(`[TursoSyncWorker] Worker pid=${child.pid} still running after SIGKILL`);
+  }
+}
 const STDERR_RING_BYTES = 4_000;
 const TIMING_RING_LINES = 400;
 /**
@@ -600,12 +654,15 @@ export class TursoReplicaSyncWorkerClient {
 
   async shutdown(): Promise<void> {
     this.shuttingDown = true;
+    const child = this.child;
     this.rejectAllPending(new Error("Turso sync worker shutting down"));
-    this.killChild("SIGTERM");
     this.child = null;
     this.ownedPaths.clear();
     this.booted = null;
     this.shuttingDown = false;
+    // Callers (reseed, workspace switch, drain) delete or reopen replica files next, so
+    // only return once the process that held their locks is actually gone.
+    if (child) await retireChild(child);
   }
 
   isRunning(): boolean {
@@ -614,7 +671,9 @@ export class TursoReplicaSyncWorkerClient {
 
   private killChild(signal: NodeJS.Signals): void {
     const child = this.child;
-    if (child && child.killed !== true) {
+    // Not `child.killed`: that turns true once *any* signal is delivered, so after a SIGTERM
+    // it silently swallowed the SIGKILL escalation. Only skip a process that has exited.
+    if (child && !hasExited(child)) {
       try {
         child.kill(signal);
       } catch {
@@ -696,6 +755,9 @@ export class TursoReplicaSyncWorkerClient {
           clearTimeout(bootTimer);
           reject(error);
         }
+        // A retired worker exits *after* its replacement is running. Its exit must not
+        // clear the new worker's state or fail the new worker's requests as crashes.
+        if (this.child !== child) return;
         this.handleChildGone(null, null);
       });
 
@@ -709,12 +771,16 @@ export class TursoReplicaSyncWorkerClient {
             ),
           );
         }
+        if (this.child !== child) return;
         this.handleChildGone(code, signal);
       });
     }).catch((error: unknown) => {
+      // A boot that times out was SIGKILLed above; one that errored may still be alive.
+      const failed = this.child;
       this.child = null;
-    this.ownedPaths.clear();
+      this.ownedPaths.clear();
       this.booted = null;
+      if (failed) void retireChild(failed, 0);
       throw error;
     });
 
