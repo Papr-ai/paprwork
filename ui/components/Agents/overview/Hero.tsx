@@ -99,7 +99,7 @@ export function Hero({ data }: { data: AgentsOverview }) {
       <div className="ag-hero-stats">
         <span><b>{usd(t.today)}</b> today</span>
         <span><b>{usd(t.week)}</b> this week</span>
-        <span><b>{usd(t.cost)}</b> {data.days} days</span>
+        <span title="What these turns would cost on API keys. Subscription turns are covered by the plan."><b>{usd(t.cost)}</b> {data.days} days at API prices</span>
         <span><b>{tok(t.tokens)}</b> tokens · {pct(t.cacheRead, t.tokens)}% from cache</span>
       </div>
       <Billing b={data.billing} />

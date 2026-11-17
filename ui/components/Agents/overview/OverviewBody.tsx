@@ -3,6 +3,8 @@ import type { AgentsOverview } from "../../../../src/core/types/agentsOverview";
 import type { DelegationRun, SubAgentProfile } from "../../../hooks/useSubAgents";
 import { ChatRows, ModelRows } from "./ChatRows";
 import { Hero } from "./Hero";
+import { PlanSection } from "./PlanSection";
+import type { PlanReading } from "./usePlanUsage";
 import { Projects, ScheduledJobs, Team, Tools, WorkByType } from "./Sections";
 import { pct, tok, usd } from "./format";
 
@@ -21,17 +23,20 @@ export function OverviewBody({
   agents,
   runs,
   range,
+  plans = null,
 }: {
   data: AgentsOverview;
   agents: SubAgentProfile[];
   runs: DelegationRun[];
   range: React.ReactNode;
+  plans?: PlanReading[] | null;
 }) {
   const t = data.totals;
   const shownCost = data.chats.reduce((a, c) => a + c.cost, 0);
   return (
     <div className="ag-brief">
         <Hero data={data} />
+        <Sec title="What you pay" sub="this month · plan price + anything billed on top"><PlanSection data={data} plans={plans} /></Sec>
         {range}
         <Sec title="Your team" sub="who did the work"><Team data={data} agents={agents} runs={runs} /></Sec>
         {(data.workTypes.length > 0 || data.unclassified.chats > 0) && (
@@ -48,7 +53,8 @@ export function OverviewBody({
           <b>Same numbers as the context meter in each chat.</b> Summed from per-turn usage on every assistant message:
           new input + cache read + cache write + output. Peak context = largest single request in a turn.
           {t.avgSteps && t.avgPeak ? ` Average turn: ${t.avgSteps} steps, ${tok(t.avgPeak)} peak context.` : ""}
-          {" "}Cost is the API-price value of each turn ({usd(t.cost)} total).
+          {" "}Cost is the API-price value of each turn ({usd(t.cost)} total) — what it would cost on API keys.
+          Turns on a subscription are covered by the plan; what you actually pay is under "What you pay".
         </p>
     </div>
   );

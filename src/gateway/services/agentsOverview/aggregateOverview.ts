@@ -47,6 +47,10 @@ function finishProjects(map: Map<string, ProjectAcc>, limit: number): AgentsOver
 }
 
 export interface AggregateInput {
+  /**
+   * Rows since the earlier of the range start and the start of the month.
+   * Rows before the range only feed `month`.
+   */
   rows: OverviewRow[];
   chats: OverviewChatMeta[];
   days: number;
@@ -57,8 +61,31 @@ export interface AggregateInput {
   chatLimit?: number;
 }
 
+/** First instant of `now`'s calendar month, local time — the plan's billing month. */
+export function monthStart(now: Date): Date {
+  return new Date(now.getFullYear(), now.getMonth(), 1);
+}
+
+/** The read window: whichever of the range start and the month start is earlier. */
+export function overviewSince(days: number, now: Date): Date {
+  const rangeStart = new Date(now.getTime() - days * 864e5);
+  const month = monthStart(now);
+  return rangeStart < month ? rangeStart : month;
+}
+
 export function aggregateOverview(input: AggregateInput): AgentsOverview {
-  const { rows, now, appTitles } = input;
+  const { now, appTitles } = input;
+  const rangeStart = new Date(now.getTime() - input.days * 864e5).toISOString();
+  const monthIso = monthStart(now).toISOString();
+  const month = { start: monthIso, apiKey: 0, subscription: 0, papr: 0, unknown: 0 };
+  for (const r of input.rows) {
+    if (r.timestamp < monthIso) continue;
+    if (r.billing === "api_key") month.apiKey += r.cost;
+    else if (r.billing === "subscription") month.subscription += r.cost;
+    else if (r.billing === "papr") month.papr += r.cost;
+    else month.unknown += r.cost;
+  }
+  const rows = input.rows.filter((r) => r.timestamp >= rangeStart);
   const todayStart = new Date(now.getFullYear(), now.getMonth(), now.getDate()).toISOString();
   const weekStart = new Date(now.getTime() - 7 * 864e5).toISOString();
   const titles = new Map(input.chats.map((c) => [c.id, c.title]));
@@ -200,6 +227,7 @@ export function aggregateOverview(input: AggregateInput): AgentsOverview {
       avgSteps: stepN ? Math.round((stepSum / stepN) * 10) / 10 : null,
     },
     billing,
+    month,
     daily: [...daily.entries()].map(([date, cost]) => ({ date, cost })),
     chats: shown,
     longTail: { chats: tail.length, cost: tail.reduce((s, c) => s + c.cost, 0) },

@@ -100,6 +100,30 @@
 .ag-foot { margin-top: 28px; padding: 0 8px; font-size: 12px; color: var(--ag-soft); line-height: 1.5; }
 .ag-foot b { color: var(--ag-mid); font-weight: 500; }
 
+/* What you pay: plan price, limits, and money billed on top */
+.ag-plan { padding: 10px 0 14px; border-bottom: 1px solid var(--ag-line); }
+.ag-plan-h { display: flex; align-items: flex-start; justify-content: space-between; gap: 12px; }
+.ag-plan-status { font-size: 12px; margin-top: 2px; }
+.ag-plan-status.is-ok { color: var(--ag-ok); }
+.ag-plan-status.is-warn { color: var(--ag-warn); }
+.ag-plan-status.is-bad { color: var(--ag-bad); }
+.ag-plan-price { border: none; background: var(--ag-row-hover); border-radius: 999px; padding: 4px 10px; font-size: 13px; font-weight: 600; font-variant-numeric: tabular-nums; cursor: pointer; white-space: nowrap; }
+.ag-plan-price:hover { background: var(--ag-rail-hover); }
+.ag-plan-edit { font-size: 13px; font-weight: 600; white-space: nowrap; }
+.ag-plan-edit input { width: 64px; margin: 0 2px; padding: 3px 6px; border: 1px solid var(--ag-line); border-radius: 8px; background: transparent; color: var(--ag-ink); font: inherit; text-align: right; }
+.ag-plan-bars { display: grid; grid-template-columns: repeat(auto-fit, minmax(150px, 1fr)); gap: 10px 18px; margin-top: 12px; }
+.ag-plan-bar-h { display: flex; justify-content: space-between; font-size: 12px; color: var(--ag-mid); margin-bottom: 5px; }
+.ag-plan-bar-h b { color: var(--ag-ink); font-weight: 600; font-variant-numeric: tabular-nums; }
+.ag-plan-bar .ag-meter { width: 100%; }
+.ag-plan-bar .ag-meter i.is-warn { background: var(--ag-warn); }
+.ag-plan-bar .ag-meter i.is-bad { background: var(--ag-bad); }
+.ag-plan-bar small { display: block; font-size: 11px; color: var(--ag-soft); margin-top: 4px; }
+.ag-plan-total { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 8px; margin-top: 14px; }
+.ag-plan-total > div { padding: 10px 12px; border-radius: 10px; background: var(--ag-row-hover); }
+.ag-plan-total small { display: block; font-size: 11px; color: var(--ag-soft); margin-bottom: 3px; }
+.ag-plan-total b { font-size: 15px; font-weight: 600; font-variant-numeric: tabular-nums; }
+.ag-plan-total .is-total b { color: var(--ag-blue); }
+
 /* rows: transparent until hover, details on click */
 .ag-row {
   display: grid;
@@ -208,6 +232,7 @@
   .ag-trow { grid-template-columns: 30px minmax(0, 1fr) auto; gap: 10px; }
   .ag-trow .ag-row-peak { display: none; }
   .ag-trow .ag-row-cost { min-width: 0; }
+  .ag-plan-total { grid-template-columns: 1fr; }
 }
 @media (prefers-reduced-motion: reduce) {
   .ag-page * { transition: none !important; }
