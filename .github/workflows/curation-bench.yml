@@ -108,8 +108,16 @@ jobs:
           install -m 600 /dev/null ~/.ssh_memory && printf "%s\n" "${{ secrets.MEMORY_DEPLOY_KEY }}" > ~/.ssh_memory
           GIT_SSH_COMMAND="ssh -i ~/.ssh_memory -o StrictHostKeyChecking=accept-new" git clone -q --depth 1 -b development git@github.com:Papr-ai/memory.git cb/memory
           pip install -q "qdrant-client>=1.12,<2" numpy pydantic
-          (cd cb/memory && python scripts/curation_bench_cloud.py ../data ../vecs ../cloud_dense.json)
+          (cd cb/memory && python scripts/curation_bench_cloud.py ../data ../vecs ../cloud_dense.json --k 20)
           npx tsx scripts/curation-bench/rank.mts cb/data cb/vecs cb/cloud.json --dense cb/cloud_dense.json
+
+      - name: Jev rerank (local + cloud)
+        env:
+          PAPR_API_KEY: ${{ secrets.JEV_BENCH_PAPR_API_KEY }}
+        run: |
+          if [ -z "$PAPR_API_KEY" ]; then echo "::warning::JEV_BENCH_PAPR_API_KEY not set: Jev arms skipped"; exit 0; fi
+          npx tsx scripts/curation-bench/rank.mts cb/data cb/vecs cb/local_jev.json --rerank jev
+          npx tsx scripts/curation-bench/rank.mts cb/data cb/vecs cb/cloud_jev.json --dense cb/cloud_dense.json --rerank jev
 
       - name: Gate
         id: gate
@@ -119,17 +127,22 @@ jobs:
             npx tsx scripts/curation-bench/gate.mts cb/local.json --baseline scripts/curation-bench/baseline.json --arm local; L=$?
             echo; echo "### Cloud path"
             npx tsx scripts/curation-bench/gate.mts cb/cloud.json --baseline scripts/curation-bench/baseline.json --arm cloud; C=$?
+            J=0
+            for a in local_jev cloud_jev; do
+              [ -f cb/$a.json ] || continue
+              echo; echo "### $a"; npx tsx scripts/curation-bench/gate.mts cb/$a.json --baseline scripts/curation-bench/baseline.json --arm $a || J=1
+            done
             echo; echo "Floor: 41 of 50 grep misses. Baseline tolerance: 1 row. Vectors: \`${{ steps.key.outputs.key }}\`"
           } > cb/report.md
           cat cb/report.md >> "$GITHUB_STEP_SUMMARY"
-          echo "failed=$(( L || C ))" >> "$GITHUB_OUTPUT"
+          echo "failed=$(( L || C || J ))" >> "$GITHUB_OUTPUT"
 
       # This repo is public: per-row results name private files, so they go to the bench bucket (90-day lifecycle),
       # and only the summary table is posted here.
       - name: Keep the evidence
         if: always()
         run: |
-          gcloud storage cp -q cb/local.json cb/cloud.json cb/report.md "$BENCH/runs/${{ github.run_id }}/" || true
+          gcloud storage cp -q cb/local.json cb/cloud.json cb/*_jev.json cb/report.md "$BENCH/runs/${{ github.run_id }}/" || true
           echo "Rows: \`$BENCH/runs/${{ github.run_id }}/\`" >> "$GITHUB_STEP_SUMMARY"
       - uses: actions/upload-artifact@v4
         if: always()

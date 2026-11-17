@@ -437,12 +437,12 @@ export interface DeviceGrepHits {
 export function mergeDeviceHits(
   device: DeviceGrepHits["hits"],
   memory: MemoryCodeSearch["hits"],
-): MemoryCodeSearch["hits"] {
+): Array<MemoryCodeSearch["hits"][number] & { lineStart?: number; lineEnd?: number }> {
   const norm = (p: string) => p.replace(/\\/g, "/");
   const have = (p: string) => device.some((d) => norm(p) === d.path || norm(p).endsWith(`/${d.path}`));
   const floor = Math.min(...device.map((d) => d.score));
   const rest = memory.filter((m) => m.path && !have(m.path)).map((m, i) => ({ path: m.path, score: floor - 0.001 * (i + 1) }));
-  return [...device.map((d) => ({ path: d.path, score: d.score })), ...rest];
+  return [...device.map((d) => ({ path: d.path, score: d.score, lineStart: d.lineStart, lineEnd: d.lineEnd })), ...rest];
 }
 
 export function deviceHitsBlock(dev: DeviceGrepHits): string {
@@ -939,7 +939,7 @@ async function executeBashCommandInner(
     
     // If we started a memory search, wait for it now
     let memoryResults: string | null = null;
-    let memoryHits: MemoryCodeSearch["hits"] = [];
+    let memoryHits: Array<MemoryCodeSearch["hits"][number] & { lineStart?: number; lineEnd?: number }> = [];
     if (grepInfo && memoryPromise) {
       try {
         ({ block: memoryResults, hits: memoryHits } = await memoryPromise);
@@ -973,7 +973,8 @@ async function executeBashCommandInner(
     if (grepInfo) {
       const { codePointersForGrep } = await import("./codeSearchV2.js");
       // Lexical/link sources use the grep pattern, not the boilerplate memory query ("Find Papr mini-apps code…").
-      const pointers = await codePointersForGrep(grepInfo.path, command, grepInfo.pattern, grepInfo.pattern, memoryHits, stdout || "");
+      const { getUserMessageForTools } = await import("./context.js");
+      const pointers = await codePointersForGrep(grepInfo.path, command, grepInfo.pattern, grepInfo.pattern, memoryHits, stdout || "", getUserMessageForTools());
       if (pointers) memoryResults = memoryResults ? `${pointers}\n${memoryResults}` : pointers;
     }
 

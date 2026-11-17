@@ -4,7 +4,7 @@
 import * as fs from "fs";
 
 export interface Summary { miss: { n: number; top10: number; harness: number; shown: number }; ctrl: { n: number; top10: number; harness: number; shown: number } }
-export interface Baseline { miss: { harness: number }; ctrl: { harness: number } }
+export interface Baseline { miss: { harness: number; top3?: number }; ctrl: { harness: number; top3?: number } }
 
 /** Floor on grep misses recovered; no group may drop more than `tolerance` rows below the baseline. */
 export function gate(r: { summary: Summary }, o: { minMiss: number; baseline?: Baseline; tolerance: number }): { ok: boolean; reasons: string[] } {
@@ -16,6 +16,11 @@ export function gate(r: { summary: Summary }, o: { minMiss: number; baseline?: B
       reasons.push(`misses ${s.miss.harness} < baseline ${o.baseline.miss.harness} - ${o.tolerance}`);
     if (s.ctrl.harness < o.baseline.ctrl.harness - o.tolerance)
       reasons.push(`controls ${s.ctrl.harness} < baseline ${o.baseline.ctrl.harness} - ${o.tolerance}`);
+    // Jev arms also gate the 3 pointers the agent reads first.
+    for (const k of ["miss", "ctrl"] as const) {
+      const want = o.baseline[k].top3; const got = (s[k] as { top3?: number }).top3;
+      if (want !== undefined && (got ?? 0) < want - o.tolerance) reasons.push(`${k} top-3 ${got ?? 0} < baseline ${want} - ${o.tolerance}`);
+    }
   }
   return { ok: reasons.length === 0, reasons };
 }
