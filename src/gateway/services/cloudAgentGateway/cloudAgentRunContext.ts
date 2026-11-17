@@ -179,6 +179,35 @@ function applyVaultKeys(
   }
 }
 
+const RUN_LLM_AUTH_KEY_NAMES: Partial<Record<string, string>> = {
+  openai: "OPENAI_API_KEY",
+  "openai-codex": "OPENAI_API_KEY",
+  anthropic: "ANTHROPIC_API_KEY",
+  google: "GOOGLE_GENERATIVE_AI_API_KEY",
+};
+
+/**
+ * The run's own LLM credential (request.llmAuth) only reaches the parent chat
+ * stream as authOverride. Sub-agents started inside the run (delegate_task →
+ * product-architect, run_job agent jobs) resolve credentials from process.env
+ * like vault keys, so without this they found nothing and fell back to Ollama
+ * — which does not exist on Cloud Run, so the delegation hung until the parent
+ * gave up. Expose it under the provider's key name when the vault has none.
+ */
+function applyRunLlmAuthAsVaultKey(
+  request: CloudAgentRunRequest,
+  snapshot: CloudRunEnvSnapshot,
+): void {
+  const token = request.llmAuth?.token?.trim();
+  const keyName = RUN_LLM_AUTH_KEY_NAMES[request.llmAuth?.provider ?? ""];
+  if (!token || !keyName || process.env[keyName]?.trim()) return;
+  if (!snapshot.previousVaultEnv.has(keyName)) {
+    snapshot.previousVaultEnv.set(keyName, process.env[keyName]);
+  }
+  process.env[keyName] = token;
+  clearKeyCache(keyName);
+}
+
 function applyPaprApiKey(
   request: CloudAgentRunRequest,
   snapshot: CloudRunEnvSnapshot,
@@ -234,6 +263,8 @@ async function restoreCloudRunEnv(snapshot: CloudRunEnvSnapshot): Promise<void> 
   for (const [keyName, previousValue] of snapshot.previousVaultEnv.entries()) {
     if (previousValue === undefined) delete process.env[keyName];
     else process.env[keyName] = previousValue;
+    // Drop resolver caches too, so one run's credential never serves the next run.
+    if (/_API_KEY$/.test(keyName)) clearKeyCache(keyName);
   }
 }
 
@@ -266,6 +297,7 @@ function applyWorkspaceProcessEnv(
   if (request.workspaceScope === "app") process.env.PAPR_SKIP_USER_MEMORY_CONTEXT = "1";
   else delete process.env.PAPR_SKIP_USER_MEMORY_CONTEXT;
   applyVaultKeys(request, envSnapshot);
+  applyRunLlmAuthAsVaultKey(request, envSnapshot);
   applyPaprApiKey(request, envSnapshot);
 }
 
