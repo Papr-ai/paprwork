@@ -10,17 +10,22 @@ import { loadEmbedder, loadTokenCounter } from "../src/core/tools/codeEmbed/embe
 import { CodeVectorStore } from "../src/core/tools/codeEmbed/vectorStore.js";
 
 const [modelRoot, url] = process.argv.slice(2) as [string, string];
+// Deployed server: E2E_KEY (+ E2E_KEY_OTHER, a key in another namespace, for the isolation check). Stub-only counters
+// (/e2e/stats) are skipped there and reported as such.
+const LIVE = !!process.env.E2E_KEY;
+const keyFor = (k: string) => (!LIVE ? k : k === "ns-bob" || k === "ns-dave" ? process.env.E2E_KEY_OTHER ?? "" : process.env.E2E_KEY!);
+const liveStats = { points: -1, embed_document: Infinity, embed_query: Infinity, live: true };
 const client = (key: string) => ({
   post: async (p: string, o: { body: unknown; timeout?: number }) => {
     const r = await fetch(url + p, {
-      method: "POST", headers: { "Content-Type": "application/json", "X-API-Key": key },
+      method: "POST", headers: { "Content-Type": "application/json", "X-API-Key": keyFor(key) },
       body: JSON.stringify(o.body), signal: AbortSignal.timeout(o.timeout ?? 60_000),
     });
     if (!r.ok) throw new Error(`${p} HTTP ${r.status}: ${(await r.text()).slice(0, 200)}`);
     return r.json();
   },
 });
-const stats = async () => (await fetch(url + "/e2e/stats")).json() as Promise<any>;
+const stats = async () => (LIVE ? liveStats : await (await fetch(url + "/e2e/stats")).json()) as Promise<any>;
 const results: Array<{ step: string; ok: boolean; detail: string }> = [];
 const check = (step: string, ok: boolean, detail: string) => { results.push({ step, ok, detail }); console.log(`${ok ? "PASS" : "FAIL"} ${step} - ${detail}`); };
 
@@ -31,6 +36,9 @@ for (const f of ["chunker.ts", "deviceHealth.ts", "vectorStore.ts", "cloudSync.t
 fs.writeFileSync(path.join(clone, "src/invoice.ts"), "// Render a PDF invoice for a customer order with line items, tax and totals\nexport function renderInvoicePdf(order: { items: { price: number; qty: number }[]; taxRate: number }) {\n  const subtotal = order.items.reduce((s, i) => s + i.price * i.qty, 0);\n  return { subtotal, tax: subtotal * order.taxRate, total: subtotal * (1 + order.taxRate) };\n}\n");
 fs.writeFileSync(path.join(clone, "src/retry.ts"), "// Retry an HTTP upload with exponential backoff and jitter\nexport async function uploadWithRetry(send: () => Promise<Response>, attempts = 5) {\n  for (let i = 0; i < attempts; i++) {\n    try { const r = await send(); if (r.ok) return r; } catch {}\n    await new Promise((res) => setTimeout(res, 2 ** i * 200 + Math.random() * 100));\n  }\n  throw new Error('upload failed');\n}\n");
 fs.writeFileSync(path.join(clone, ".env"), "PAPR_API_KEY=secret\n");
+// Deployed server: blobs are content-addressed and outlive a run, so stamp this run's files to start from an empty cloud.
+const NONCE = `// e2e run ${Date.now().toString(36)}\n`;
+if (LIVE) for (const f of fs.readdirSync(path.join(clone, "src"))) fs.appendFileSync(path.join(clone, "src", f), NONCE);
 
 // ---- B. Laptop off: cloud-only device, no model, tokenizer only ----
 const count = await loadTokenCounter(modelRoot);
@@ -67,6 +75,7 @@ check("cloud-only: agent's new file indexed and found", i3.files === 1 && hits[0
 const emb = await loadEmbedder(modelRoot);
 const mac = mk("mac");
 fs.writeFileSync(path.join(mac, "src/geo.ts"), "// Distance in kilometres between two latitude/longitude points (haversine formula)\nexport function haversineKm(a: [number, number], b: [number, number]) {\n  const R = 6371, r = (d: number) => (d * Math.PI) / 180;\n  const dLat = r(b[0] - a[0]), dLon = r(b[1] - a[1]);\n  const h = Math.sin(dLat / 2) ** 2 + Math.cos(r(a[0])) * Math.cos(r(b[0])) * Math.sin(dLon / 2) ** 2;\n  return 2 * R * Math.asin(Math.sqrt(h));\n}\n");
+if (LIVE) fs.appendFileSync(path.join(mac, "src/geo.ts"), NONCE);
 fs.copyFileSync(path.join(clone, "src/retry.ts"), path.join(mac, "src/retry.ts")); // same blob as the cloud already embedded
 const mstore = CodeVectorStore.open(path.join(dir, "mac.db"), emb.model, emb.dim);
 const macIx = new CodeIndexer({ store: mstore, tier: () => "local", embedder: async () => emb, cloud: async () => client("ns-carol") });
@@ -86,7 +95,7 @@ hits = (await macIx.search("great-circle distance between two coordinates", { ro
 check("mixed: local search agrees", hits[0] === "src/geo.ts", hits.join(", "));
 
 // Tenant isolation for server-embedded rows
-const other: any = await client("ns-dave").post("/v1/memory/search", { body: { query: "retry upload", code_search: { embed_model: "papr-embed-code-1-0.6b", limit: 10 } } });
+const other: any = LIVE && !process.env.E2E_KEY_OTHER ? { data: { memories: [] }, skipped: true } : await client("ns-dave").post("/v1/memory/search", { body: { query: "retry upload", code_search: { embed_model: "papr-embed-code-1-0.6b", limit: 10 } } });
 check("tenant isolation (server-embedded rows)", (other?.data?.memories ?? []).length === 0, `dave sees ${(other?.data?.memories ?? []).length}`);
 
 await emb.close(); cstore.close(); mstore.close();

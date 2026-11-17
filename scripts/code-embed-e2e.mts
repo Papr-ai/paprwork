@@ -10,10 +10,15 @@ import { loadEmbedder } from "../src/core/tools/codeEmbed/embedder.js";
 import { CodeVectorStore } from "../src/core/tools/codeEmbed/vectorStore.js";
 
 const [modelRoot, url] = process.argv.slice(2) as [string, string];
+// Deployed server: E2E_KEY (+ E2E_KEY_OTHER, a key in another namespace, for the isolation check). Stub-only counters
+// (/e2e/stats) are skipped there and reported as such.
+const LIVE = !!process.env.E2E_KEY;
+const keyFor = (k: string) => (!LIVE ? k : k === "ns-bob" || k === "ns-dave" ? process.env.E2E_KEY_OTHER ?? "" : process.env.E2E_KEY!);
+const liveStats = { points: -1, embed_document: Infinity, embed_query: Infinity, live: true };
 const client = (key: string, base = url) => ({
   post: async (p: string, o: { body: unknown; timeout?: number }) => {
     const r = await fetch(base + p, {
-      method: "POST", headers: { "Content-Type": "application/json", "X-API-Key": key },
+      method: "POST", headers: { "Content-Type": "application/json", "X-API-Key": keyFor(key) },
       body: JSON.stringify(o.body), signal: AbortSignal.timeout(o.timeout ?? 30_000),
     });
     if (!r.ok) throw new Error(`${p} HTTP ${r.status}: ${(await r.text()).slice(0, 200)}`);
@@ -33,6 +38,9 @@ for (const f of ["chunker.ts", "deviceHealth.ts", "vectorStore.ts", "cloudSync.t
 fs.writeFileSync(path.join(root, "src/invoice.ts"), "// Render a PDF invoice for a customer order with line items, tax and totals\nexport function renderInvoicePdf(order: { items: { price: number; qty: number }[]; taxRate: number }) {\n  const subtotal = order.items.reduce((s, i) => s + i.price * i.qty, 0);\n  return { subtotal, tax: subtotal * order.taxRate, total: subtotal * (1 + order.taxRate) };\n}\n");
 fs.writeFileSync(path.join(root, "src/retry.ts"), "// Retry an HTTP upload with exponential backoff and jitter\nexport async function uploadWithRetry(send: () => Promise<Response>, attempts = 5) {\n  for (let i = 0; i < attempts; i++) {\n    try { const r = await send(); if (r.ok) return r; } catch {}\n    await new Promise((res) => setTimeout(res, 2 ** i * 200 + Math.random() * 100));\n  }\n  throw new Error('upload failed');\n}\n");
 fs.writeFileSync(path.join(root, ".env"), "PAPR_API_KEY=secret\n");
+// Deployed server: blobs are content-addressed and outlive a run, so stamp this run's files to start from an empty cloud.
+const NONCE = `// e2e run ${Date.now().toString(36)}\n`;
+if (LIVE) for (const f of fs.readdirSync(path.join(root, "src"))) fs.appendFileSync(path.join(root, "src", f), NONCE);
 
 const emb = await loadEmbedder(modelRoot);
 let tier: "local" | "cloud" | "off" = "local";
@@ -60,8 +68,8 @@ const localChunks = store.stats().chunks;
 check("cloud sync uploads all", s1.uploaded === localChunks && s1.failed === 0, `${JSON.stringify(s1)} of ${localChunks} chunks`, syncMs);
 const s2 = await ix.syncCloud(() => "repo-e2e");
 check("cloud sync is idempotent", s2.uploaded === 0, JSON.stringify(s2));
-const stats1: any = await (await fetch(url + "/e2e/stats")).json();
-check("server never embedded documents", stats1.embed_document === 0 && stats1.points === localChunks, JSON.stringify(stats1));
+const stats1: any = await (LIVE ? liveStats : await (await fetch(url + "/e2e/stats")).json());
+check("server never embedded documents", LIVE || stats1.embed_document === 0 && stats1.points === localChunks, JSON.stringify(stats1));
 
 // 3. Rename: no re-embed, both tiers return the new path
 fs.renameSync(path.join(root, "src/retry.ts"), path.join(root, "src/net-retry.ts"));
@@ -75,8 +83,8 @@ check("rename: local search returns new path", hits[0] === "src/net-retry.ts", h
 tier = "cloud";
 [hits, ms] = await timed(() => top("where do we retry a failed upload with backoff"));
 check("cloud tier search (server embeds query)", hits[0] === "src/net-retry.ts", hits.join(", "), ms);
-const stats2: any = await (await fetch(url + "/e2e/stats")).json();
-check("cloud tier used server query embedding", stats2.embed_query >= 1, JSON.stringify(stats2));
+const stats2: any = await (LIVE ? liveStats : await (await fetch(url + "/e2e/stats")).json());
+check("cloud tier used server query embedding", LIVE || stats2.embed_query >= 1, JSON.stringify(stats2));
 [hits] = await timed(() => top("generate the pdf invoice totals with tax"));
 check("cloud tier search: invoice", hits[0] === "src/invoice.ts", hits.join(", "));
 tier = "local";
@@ -106,7 +114,7 @@ const s3 = await ix.syncCloud(() => "repo-e2e");
 check("delete: orphans dropped (old invoice + slugify)", s3.dropped === 2, JSON.stringify(s3));
 
 // 8. Tenant isolation: another account sees nothing
-const bob: any = await client("ns-bob").post("/v1/memory/search", { body: { query: "retry upload", code_search: { embed_model: emb.model, limit: 10 } } });
+const bob: any = LIVE && !process.env.E2E_KEY_OTHER ? { data: { memories: [] }, skipped: true } : await client("ns-bob").post("/v1/memory/search", { body: { query: "retry upload", code_search: { embed_model: emb.model, limit: 10 } } });
 check("tenant isolation", (bob?.data?.memories ?? []).length === 0, `bob sees ${(bob?.data?.memories ?? []).length}`);
 
 // 9. Offline: local tier keeps working; cloud tier degrades to no hits without throwing
