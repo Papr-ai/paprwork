@@ -7,7 +7,7 @@ name: Curation Bench
 # Fails under 41 of 50 misses, or more than 1 row below the committed baseline on either group, and opens an issue.
 #
 # Vectors: built once per (model weights, chunker) on a GPU by scripts/curation-bench/run_gpu.sh and cached in GCS.
-# CI only ranks, on CPU, in ~2 minutes. When the chunker or model changes, the cache key changes and the job
+# CI only ranks, on CPU, in ~2 minutes. The key is the model revision + the exported chunks: when the chunks or model change, the job
 # says so: run the GPU step (workflow_dispatch with rebuild=true) before merging.
 
 on:
@@ -65,18 +65,22 @@ jobs:
           service_account: ${{ vars.GCP_BENCH_SA }}
       - uses: google-github-actions/setup-gcloud@v2
 
-      - name: Cache key (model weights + chunker)
-        id: key
-        run: |
-          MODEL=$(node -e "const s=require('fs').readFileSync('src/core/tools/codeEmbed/embedder.ts','utf8');console.log(s.match(/HF_REVISION = \"([0-9a-f]+)\"/)[1])")
-          CHUNKER=$(sha256sum src/core/tools/codeEmbed/chunker.ts src/core/tools/codeEmbed/codeIndexer.ts scripts/curation-bench/export-chunks.mts scripts/curation-bench/embed_chunks.py | sha256sum | cut -c1-12)
-          echo "key=${MODEL:0:12}-${CHUNKER}" >> "$GITHUB_OUTPUT"
-          echo "Vectors key: ${MODEL:0:12}-${CHUNKER}" >> "$GITHUB_STEP_SUMMARY"
-
       - name: Data
         run: |
           mkdir -p cb/data
           gcloud storage cp -q "$BENCH/dataset/v1/*" cb/data/
+
+      # Key on what the GPU actually embeds: the model revision + the exact chunks the shipped chunker cuts (+ the embed
+      # script). Refactors of codeIndexer/chunker that cut the same chunks keep the cache; a real chunking change misses.
+      - name: Cache key (model weights + chunk output)
+        id: key
+        run: |
+          node scripts/curation-bench/download-tokenizer.mjs cb/model
+          npx tsx scripts/curation-bench/export-chunks.mts cb/data cb/model
+          MODEL=$(node -e "const s=require('fs').readFileSync('src/core/tools/codeEmbed/embedder.ts','utf8');console.log(s.match(/HF_REVISION = \"([0-9a-f]+)\"/)[1])")
+          CHUNKS=$( { gunzip -c cb/data/chunks.jsonl.gz; cat scripts/curation-bench/embed_chunks.py; } | sha256sum | cut -c1-12)
+          echo "key=${MODEL:0:12}-c${CHUNKS}" >> "$GITHUB_OUTPUT"
+          echo "Vectors key: ${MODEL:0:12}-c${CHUNKS}" >> "$GITHUB_STEP_SUMMARY"
 
       - name: Vectors (cached, or rebuilt on a spot GPU)
         id: vecs
@@ -88,8 +92,6 @@ jobs:
           if gcloud storage ls "$P/out/$ARM/DONE" >/dev/null 2>&1 && [ "$REBUILD" != "true" ]; then
             echo "cached" >> "$GITHUB_STEP_SUMMARY"
           elif [ "$REBUILD" = "true" ] || [ "${{ github.event_name }}" = "schedule" ]; then
-            node scripts/curation-bench/download-tokenizer.mjs cb/model
-            npx tsx scripts/curation-bench/export-chunks.mts cb/data cb/model
             gcloud storage cp -q cb/data/chunks.jsonl.gz cb/data/queries.json cb/data/set.json "$P/data/"
             gcloud storage cp -q scripts/curation-bench/embed_chunks.py scripts/curation-bench/run_gpu.sh "$P/code/"
             bash scripts/curation-bench/launch_gpu.sh "$P" "$ARM"
