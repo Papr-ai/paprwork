@@ -24,9 +24,12 @@ interface ToolContext {
    * sub-agents, where recording is a no-op.
    */
   turnMetrics?: TurnMetrics;
+  /** The user's message for this turn (code search reranks with it). */
+  userMessage?: string;
 }
 
 interface ToolContextOptions {
+  userMessage?: string;
   activeAppId?: string;
   delegationJobId?: string;
   jobEnv?: Record<string, string>;
@@ -51,6 +54,7 @@ export function runWithToolContext<T>(
       delegationJobId: options?.delegationJobId,
       jobEnv: options?.jobEnv,
       turnMetrics: options?.turnMetrics,
+      userMessage: options?.userMessage,
     },
     fn,
   );
@@ -70,7 +74,13 @@ export function setToolContext(
     delegationJobId: options?.delegationJobId,
     jobEnv: options?.jobEnv,
     turnMetrics: options?.turnMetrics,
+    userMessage: options?.userMessage,
   });
+}
+
+/** The user's message for the current turn, when the agent loop set it. */
+export function getUserMessageForTools(): string | undefined {
+  return asyncLocalStorage.getStore()?.userMessage;
 }
 
 /** Mini-app id from the open app tab (UI focus), when available. */
