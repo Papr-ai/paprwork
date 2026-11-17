@@ -1,19 +1,39 @@
 {
-  "_note": "Desktop chunks, 0.6B v1.0 int8 (HF 4596a347), writer queries, shipped rankPointers. Local and cloud (memory code_search, group_by_blob) identical on all 75 rows. Change only in a PR that explains why.",
+  "_note": "Desktop chunks, 0.6B v1.0 int8 (HF 4596a347), writer queries, shipped rankPointers (+ jevPointers for *_jev). harness = semantic top 10 + 3 pointers + 2 also-check. Local and cloud (memory code_search, group_by_blob) agree. Change only in a PR that explains why.",
   "local": {
     "miss": {
-      "harness": 44
+      "harness": 45
     },
     "ctrl": {
-      "harness": 15
+      "harness": 16
     }
   },
   "cloud": {
     "miss": {
-      "harness": 44
+      "harness": 45
     },
     "ctrl": {
-      "harness": 15
+      "harness": 16
+    }
+  },
+  "local_jev": {
+    "miss": {
+      "harness": 46,
+      "top3": 41
+    },
+    "ctrl": {
+      "harness": 17,
+      "top3": 15
+    }
+  },
+  "cloud_jev": {
+    "miss": {
+      "harness": 46,
+      "top3": 41
+    },
+    "ctrl": {
+      "harness": 17,
+      "top3": 15
     }
   }
 }

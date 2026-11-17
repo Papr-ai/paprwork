@@ -317,7 +317,8 @@ export async function deviceHitsForGrep(grepPath: string, query: string, budgetM
     if (!root) return none;
     const rt = await getCodeEmbedRuntime();
     if (!rt) return none;
-    const r = await rt.search(root, query, { limit: 10, budgetMs });
+    // 20: the formula ranks the first 10, Jev reranks up to 20 (codeJevRerank.ts).
+    const r = await rt.search(root, query, { limit: 20, budgetMs });
     return { tier: r.tier, backend: rt.backend, hits: r.hits };
   } catch {
     return none;

@@ -26,9 +26,12 @@ import {
   fuseRanked,
   type CandidateSource,
 } from "./codeCandidates.js";
+import { JEV_RERANK_MAX, jevRerank, snippetFor, type JevCaller } from "./codeJevRerank.js";
 
 export const MAX_POINTERS = 3;
 export const MAX_ALSO = 2;
+/** Semantic hits the formula ranks (as tuned on the bench); the Jev pool reads up to JEV_RERANK_MAX. */
+export const FORMULA_HITS = 10;
 const TEXT_EXT = [
   ".ts",
   ".tsx",
@@ -154,6 +157,12 @@ export interface PointerInput {
   /** Files grep already printed; they are not repeated as pointers. */
   grepHits?: string[];
   workspaceEntitiesDir?: string;
+  /** Line range of the best-matching chunk per hit path (on-device search), for the snippet Jev reads. */
+  hitLines?: Record<string, { lineStart: number; lineEnd: number }>;
+  /** The user's message this turn; Jev reranks with it. */
+  userRequest?: string;
+  /** Tests / bench: inject the Jev call. */
+  jevCall?: JevCaller;
 }
 
 /**
@@ -168,17 +177,20 @@ export function rankPointers(
   repo: Repo,
   input: Omit<PointerInput, "projectRoot" | "workspaceEntitiesDir">,
   max = MAX_POINTERS,
-): { pointers: RankedPointer[]; alsoCheck: RankedPointer[] } {
+): { pointers: RankedPointer[]; alsoCheck: RankedPointer[]; pool: RankedPointer[] } {
   const known = new Set(files.map((f) => f.path));
-  const dense = new Map<string, number>();
-  for (const h of input.memoryHits) {
-    const rel = h.path.replace(/\\/g, "/");
-    const match = known.has(rel)
-      ? rel
-      : [...known].find((k) => rel.endsWith(`/${k}`));
-    if (match)
-      dense.set(match, Math.max(dense.get(match) ?? -Infinity, h.score));
-  }
+  const toMap = (hits: PointerInput["memoryHits"]) => {
+    const m = new Map<string, number>();
+    for (const h of hits) {
+      const rel = h.path.replace(/\\/g, "/");
+      const match = known.has(rel) ? rel : [...known].find((k) => rel.endsWith(`/${k}`));
+      if (match) m.set(match, Math.max(m.get(match) ?? -Infinity, h.score));
+    }
+    return m;
+  };
+  // The formula keeps the 10 hits it was tuned on; the Jev pool may use up to JEV_RERANK_MAX.
+  const dense = toMap(input.memoryHits.slice(0, FORMULA_HITS));
+  const denseAll = toMap(input.memoryHits);
   const src = files.filter(
     (f) => !SKIP_PATH.test(f.path) && !f.path.startsWith("workspace/"),
   );
@@ -224,7 +236,52 @@ export function rankPointers(
     )
     .slice(0, MAX_ALSO)
     .map((r) => ({ path: r.path, why: r.sources.map((s) => SOURCE_LABEL[s]) }));
-  return { pointers, alsoCheck };
+  // Rerank pool: the semantic order (what Jev was benchmarked on), then the formula's picks, minus grep's own hits.
+  const v11By = new Map(v11.map((h) => [h.path, h]));
+  const seen = new Set<string>();
+  const pool: RankedPointer[] = [];
+  const add = (p: string, why: string[], def?: RankedPointer["def"]) => {
+    if (seen.has(p) || already(p) || SKIP_PATH.test(p)) return;
+    seen.add(p);
+    pool.push({ path: p, why, def });
+  };
+  const formula: RankedPointer[] = [...pointers, ...alsoCheck];
+  const denseOrder = [...denseAll].sort((a, b) => b[1] - a[1]).map(([p]) => p);
+  for (const p of denseOrder.slice(0, JEV_RERANK_MAX - formula.length)) {
+    const h = v11By.get(p);
+    add(p, h?.why?.length ? h.why : ["semantic match"], h?.def);
+  }
+  for (const h of formula) add(h.path, h.why, h.def);
+  return { pointers, alsoCheck, pool: pool.slice(0, JEV_RERANK_MAX) };
+}
+
+/**
+ * v2.1: Jev reranks the pool; pointers become Jev's top 3 ("ranked by Jev" + the formula's reasons).
+ * Returns null (keep the formula's pointers) when Jev is off, offline, slow or malformed.
+ */
+export async function jevPointers(
+  files: SourceFile[],
+  pool: RankedPointer[],
+  input: Pick<PointerInput, "query" | "command" | "pattern" | "hitLines" | "userRequest" | "jevCall">,
+  max = MAX_POINTERS,
+): Promise<RankedPointer[] | null> {
+  if (pool.length < 2) return null;
+  const text = new Map(files.map((f) => [f.path, f.text]));
+  const scored = await jevRerank(
+    {
+      candidates: pool.map((h) => ({ path: h.path, snippet: snippetFor(text.get(h.path) ?? "", input.hitLines?.[h.path]) })),
+      userRequest: input.userRequest,
+      query: input.query === input.pattern ? input.pattern : `${input.query} | ${input.pattern}`,
+      command: input.command,
+    },
+    input.jevCall,
+  );
+  if (!scored) return null;
+  const by = new Map(pool.map((h) => [h.path, h]));
+  return scored.slice(0, max).map(({ path: p, p: prob }) => {
+    const h = by.get(p)!;
+    return { ...h, why: [`Jev ${prob.toFixed(2)}`, ...h.why.filter((w) => w !== "semantic match")].slice(0, 3) };
+  });
 }
 
 export interface RankedPointer {
@@ -247,10 +304,14 @@ export async function codePointerBlock(input: PointerInput): Promise<string> {
       input.workspaceEntitiesDir,
     );
     if (files.length === 0) return "";
-    const { pointers, alsoCheck } = rankPointers(files, repo, input);
+    const ranked = rankPointers(files, repo, input);
+    const { alsoCheck } = ranked;
+    const byJev = await jevPointers(files, ranked.pool, input);
+    const pointers = byJev ?? ranked.pointers;
     if (pointers.length === 0 && alsoCheck.length === 0) return "";
-    let out =
-      "=== Code pointers (papr-code-search v2: papr-embed + code graph) ===\n";
+    let out = byJev
+      ? "=== Code pointers (papr-code-search v2.1: papr-embed + code graph, ranked by Jev) ===\n"
+      : "=== Code pointers (papr-code-search v2: papr-embed + code graph) ===\n";
     out += pointers.map(line).join("\n");
     if (alsoCheck.length)
       out += `${pointers.length ? "\n" : ""}also check (not in the semantic results):\n${alsoCheck.map(line).join("\n")}`;
@@ -275,8 +336,9 @@ export async function codePointersForGrep(
   command: string,
   pattern: string,
   query: string,
-  memoryHits: Array<{ path: string; score: number }>,
+  memoryHits: Array<{ path: string; score: number; lineStart?: number; lineEnd?: number }>,
   grepStdout: string,
+  userRequest?: string,
 ): Promise<string> {
   try {
     const projectId = grepPath.match(
@@ -311,6 +373,12 @@ export async function codePointersForGrep(
       pattern,
       grepHits: grepHitFiles(grepStdout).map(rel),
       workspaceEntitiesDir: fsMod.existsSync(entities) ? entities : undefined,
+      hitLines: Object.fromEntries(
+        memoryHits
+          .filter((h) => h.lineStart && h.lineEnd)
+          .map((h) => [rel(h.path), { lineStart: h.lineStart!, lineEnd: h.lineEnd! }]),
+      ),
+      userRequest,
     });
   } catch (e) {
     console.warn(
