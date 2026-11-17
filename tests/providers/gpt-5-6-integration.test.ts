@@ -50,24 +50,25 @@ describe("GPT-5.6 Cost Calculation", () => {
   it("should have correct pricing for GPT-5.6 Sol", () => {
     const pricing = MODEL_PRICING["gpt-5.6-sol"];
     expect(pricing).toBeDefined();
-    expect(pricing.input).toBe(5.0);
-    expect(pricing.output).toBe(30.0);
+    // Promotional price through 2026-11-30 (developers.openai.com pricing).
+    expect(pricing.input).toBe(4.0);
+    expect(pricing.output).toBe(20.0);
   });
 
   it("should have correct pricing for Terra and Luna", () => {
     expect(MODEL_PRICING["gpt-5.6-terra"]).toEqual({
-      input: 2.5,
-      output: 15.0,
+      input: 2.0,
+      output: 12.0,
     });
     expect(MODEL_PRICING["gpt-5.6-luna"]).toEqual({
-      input: 1.0,
-      output: 6.0,
+      input: 0.2,
+      output: 1.2,
     });
   });
 
   it("should calculate cost correctly for GPT-5.6 Sol", () => {
     const cost = calculateCost("gpt-5-6-sol", 10_000, 5_000);
-    expect(cost).toBeCloseTo(0.2, 4);
+    expect(cost).toBeCloseTo(0.14, 4);
   });
 
   it("should price Luna cheaper than Terra and Sol for same usage", () => {

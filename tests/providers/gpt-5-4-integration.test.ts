@@ -41,8 +41,9 @@ describe("GPT-5.4 Legacy Cost Calculation", () => {
   it("should keep legacy gpt-5.4 pricing entries for old chat logs", () => {
     const pricing = MODEL_PRICING["gpt-5.4"];
     expect(pricing).toBeDefined();
-    expect(pricing.input).toBe(5.0);
-    expect(pricing.output).toBe(30.0);
+    // Legacy ids normalize to gpt-5.6-sol, so they carry Sol's rates.
+    expect(pricing.input).toBe(4.0);
+    expect(pricing.output).toBe(20.0);
   });
 
   it("should have correct pricing for GPT-5.4 mini", () => {

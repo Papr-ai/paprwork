@@ -16,10 +16,19 @@
  *
  * Dry run by default. Pass --apply to write; --undo reverses it.
  *
+ * --reprice (issue #900): re-price every costed turn against the current
+ * MODEL_PRICING at the turn's own timestamp, after a pricing-table change.
+ * Unlike the Issue 90 pass, a repriced turn may go *up* (Haiku 4.5 moved from
+ * $0.80 to $1), so the never-increases guard is off in this mode, and it
+ * writes its own undo journal so it never overwrites the Issue 90 one.
+ *
  *   node --import tsx scripts/recompute-message-costs.ts
  *   node --import tsx scripts/recompute-message-costs.ts --apply
  *   node --import tsx scripts/recompute-message-costs.ts --undo
  *   node --import tsx scripts/recompute-message-costs.ts --db=/path/to/chats.db
+ *   node --import tsx scripts/recompute-message-costs.ts --reprice          (dry run)
+ *   node --import tsx scripts/recompute-message-costs.ts --reprice --apply
+ *   node --import tsx scripts/recompute-message-costs.ts --reprice --undo
  */
 
 // `node:sqlite`, not better-sqlite3: that module is built for Electron's ABI
@@ -51,6 +60,7 @@ const CHUNK_SIZE = 500;
  * what this script changed and nothing else.
  */
 const UNDO_SUFFIX = ".cost-backfill-undo.json";
+const REPRICE_UNDO_SUFFIX = ".cost-reprice-undo.json";
 
 interface UndoJournal {
   database: string;
@@ -66,6 +76,7 @@ interface CostRow {
   cache_read_tokens: number | null;
   cache_write_tokens: number | null;
   cost: number;
+  timestamp: string | null;
 }
 
 interface Outcome {
@@ -118,7 +129,8 @@ function assertNeverIncreases(row: CostRow, recomputed: number): void {
   }
 }
 
-function recompute(dbPath: string, apply: boolean): Outcome {
+function recompute(dbPath: string, apply: boolean, reprice = false): Outcome {
+  const undoSuffix = reprice ? REPRICE_UNDO_SUFFIX : UNDO_SUFFIX;
   const db = new DatabaseSync(dbPath, { readOnly: !apply });
   db.exec("PRAGMA busy_timeout = 10000");
 
@@ -137,11 +149,13 @@ function recompute(dbPath: string, apply: boolean): Outcome {
   const rows = db
     .prepare(
       `SELECT id, model, prompt_tokens, completion_tokens,
-              cache_read_tokens, cache_write_tokens, cost
+              cache_read_tokens, cache_write_tokens, cost, timestamp
          FROM messages
         WHERE role = 'assistant'
-          AND cost IS NOT NULL AND cost > 0
-          AND COALESCE(cache_read_tokens, 0) + COALESCE(cache_write_tokens, 0) > 0`,
+          AND cost IS NOT NULL AND cost > 0` +
+        (reprice
+          ? ""
+          : ` AND COALESCE(cache_read_tokens, 0) + COALESCE(cache_write_tokens, 0) > 0`),
     )
     .all() as CostRow[];
 
@@ -165,12 +179,17 @@ function recompute(dbPath: string, apply: boolean): Outcome {
       continue;
     }
 
-    const recomputed = calculateCostWithCache(row.model, {
-      promptTokens,
-      completionTokens: row.completion_tokens ?? 0,
-      cacheReadTokens: cacheRead,
-      cacheWriteTokens: cacheWrite,
-    });
+    const at = row.timestamp ? new Date(row.timestamp) : new Date();
+    const recomputed = calculateCostWithCache(
+      row.model,
+      {
+        promptTokens,
+        completionTokens: row.completion_tokens ?? 0,
+        cacheReadTokens: cacheRead,
+        cacheWriteTokens: cacheWrite,
+      },
+      Number.isNaN(at.getTime()) ? new Date() : at,
+    );
 
     // An unpriced model returns 0. Writing that would destroy a real figure.
     if (!Number.isFinite(recomputed) || recomputed <= 0) {
@@ -179,7 +198,7 @@ function recompute(dbPath: string, apply: boolean): Outcome {
       continue;
     }
 
-    assertNeverIncreases(row, recomputed);
+    if (!reprice) assertNeverIncreases(row, recomputed);
     outcome.recomputedTotal += recomputed;
 
     if (Math.abs(recomputed - row.cost) <= EPSILON) continue;
@@ -206,8 +225,8 @@ function recompute(dbPath: string, apply: boolean): Outcome {
       generatedAt: new Date().toISOString(),
       rows: pending.map((entry) => ({ id: entry.id, cost: entry.previous })),
     };
-    writeFileSync(`${dbPath}${UNDO_SUFFIX}`, JSON.stringify(journal, null, 2));
-    console.log(`  undo journal -> ${dbPath}${UNDO_SUFFIX}`);
+    writeFileSync(`${dbPath}${undoSuffix}`, JSON.stringify(journal, null, 2));
+    console.log(`  undo journal -> ${dbPath}${undoSuffix}`);
 
     const update = db.prepare(`UPDATE messages SET cost = ? WHERE id = ?`);
     for (let i = 0; i < pending.length; i += CHUNK_SIZE) {
@@ -231,8 +250,8 @@ function usd(value: number): string {
   return `$${value.toFixed(2)}`;
 }
 
-function undo(dbPath: string): void {
-  const journalPath = `${dbPath}${UNDO_SUFFIX}`;
+function undo(dbPath: string, reprice = false): void {
+  const journalPath = `${dbPath}${reprice ? REPRICE_UNDO_SUFFIX : UNDO_SUFFIX}`;
   if (!existsSync(journalPath)) {
     console.log(`\n${dbPath}\n  no undo journal, nothing to restore`);
     return;
@@ -262,6 +281,7 @@ function main(): void {
   const args = process.argv.slice(2);
   const apply = args.includes("--apply");
   const restore = args.includes("--undo");
+  const reprice = args.includes("--reprice");
   const explicit = args
     .filter((arg) => arg.startsWith("--db="))
     .map((arg) => arg.slice("--db=".length));
@@ -274,7 +294,7 @@ function main(): void {
 
   if (restore) {
     console.log("RESTORING original costs from undo journals\n");
-    for (const dbPath of databases) undo(dbPath);
+    for (const dbPath of databases) undo(dbPath, reprice);
     return;
   }
 
@@ -285,13 +305,13 @@ function main(): void {
   let totalRecomputed = 0;
 
   for (const dbPath of databases) {
-    const outcome = recompute(dbPath, apply);
+    const outcome = recompute(dbPath, apply, reprice);
     totalChanged += outcome.changed;
     totalStored += outcome.storedTotal;
     totalRecomputed += outcome.recomputedTotal;
 
     console.log(`\n${dbPath}`);
-    console.log(`  rows with cache tokens : ${outcome.scanned}`);
+    console.log(`  ${reprice ? "costed rows scanned   " : "rows with cache tokens "}: ${outcome.scanned}`);
     console.log(`  rows changed           : ${outcome.changed}`);
     console.log(
       `  unchanged (Issue 85)   : ${outcome.incoherent}  ` +

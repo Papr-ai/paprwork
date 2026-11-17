@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { aggregateOverview, bashIntent } from "../../src/gateway/services/agentsOverview/aggregateOverview.js";
+import { aggregateOverview, bashIntent, overviewSince } from "../../src/gateway/services/agentsOverview/aggregateOverview.js";
 import { computeTurnFact } from "../../src/gateway/services/agentsOverview/turnFacts.js";
 import type { OverviewRow } from "../../src/gateway/services/agentsOverview/overviewRows.js";
 import { billingFor, inferTurnTargets } from "../../src/gateway/services/storage/turnAttribution.js";
@@ -141,5 +141,32 @@ describe("turn facts", () => {
       rows: [row({ bash_intents: '{"Search":2,"git":1}' }), row({ bash_intents: '{"Search":1}' })],
     });
     expect(o.tools.bash).toEqual([["Search", 3], ["git", 1]]);
+  });
+});
+
+describe("month-to-date billing", () => {
+  const now = new Date(2026, 10, 17, 12); // Nov 17, local time
+
+  it("counts only this calendar month, whatever the range", () => {
+    const o = aggregateOverview({
+      ...base,
+      days: 7,
+      now,
+      rows: [
+        row({ timestamp: new Date(2026, 9, 30).toISOString(), billing: "api_key", cost: 50 }),
+        row({ timestamp: new Date(2026, 10, 2).toISOString(), billing: "api_key", cost: 3 }),
+        row({ timestamp: new Date(2026, 10, 2).toISOString(), billing: "subscription", cost: 40 }),
+        row({ timestamp: new Date(2026, 10, 16).toISOString(), billing: "papr", cost: 2 }),
+      ],
+    });
+    expect(o.month).toMatchObject({ apiKey: 3, subscription: 40, papr: 2, unknown: 0 });
+    // The 7-day range still only sees the last row.
+    expect(o.totals.turns).toBe(1);
+    expect(o.billing).toEqual({ apiKey: 0, subscription: 0, papr: 2, unknown: 0 });
+  });
+
+  it("reads back to whichever starts first, range or month", () => {
+    expect(overviewSince(7, now).getTime()).toBe(new Date(2026, 10, 1).getTime());
+    expect(overviewSince(30, now).getTime()).toBe(now.getTime() - 30 * 864e5);
   });
 });

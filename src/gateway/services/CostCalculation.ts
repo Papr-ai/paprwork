@@ -1,7 +1,14 @@
 /**
  * Cost Calculation - Calculate USD cost from token usage
  *
- * Pricing as of 2026-04-24 (per 1M tokens)
+ * Pricing checked against the provider pricing pages on 2026-11-17 (per 1M
+ * tokens). A weekly drift check compares this table with those pages and opens
+ * a `pricing-drift` issue when they disagree — see issue #900.
+ *
+ * Sources:
+ *   https://docs.anthropic.com/en/docs/about-claude/pricing.md
+ *   https://developers.openai.com/api/docs/pricing
+ *   https://ai.google.dev/gemini-api/docs/pricing
  */
 
 import { resolveStepContextTokens } from "./agent/stepContextTokens.js";
@@ -18,7 +25,17 @@ export interface ModelPricing {
   cacheReadMultiplier?: number;
   /** Cache-write rate as a multiple of `input`, where it is not the usual 1.25×. */
   cacheWriteMultiplier?: number;
+  /**
+   * Last day (UTC, inclusive, YYYY-MM-DD) the rates above apply. From the next
+   * day `then` replaces them. Intro and promo prices used to live in comments,
+   * so they never expired in the arithmetic and every turn after the end date
+   * was under-reported until someone noticed and edited the table.
+   */
+  until?: string;
+  then?: PricingRates;
 }
+
+export type PricingRates = Omit<ModelPricing, "until" | "then">;
 
 export interface CostBreakdown {
   inputCost: number;
@@ -30,78 +47,85 @@ export interface CostBreakdown {
 }
 
 /**
- * Model pricing table (USD per 1M tokens)
- * Updated: 2026-04-24
- * Source: Official pricing pages
+ * Model pricing table (USD per 1M tokens). Keep each entry on one line: the
+ * weekly drift check reads this file as text.
+ * Updated: 2026-11-17
  */
 export const MODEL_PRICING: Record<string, ModelPricing> = {
   // OpenAI GPT-5.x (API format uses dots)
   "gpt-5-mini": { input: 0.1, output: 0.4 }, // legacy id; normalizer maps to gpt-5.4-mini
   "gpt-5.4-mini": { input: 0.75, output: 4.5 },
   "gpt-5.3-codex": { input: 15.0, output: 45.0 },
-  // GPT-5.6 Series (released July 2026)
-  "gpt-5.6-luna": { input: 1.0, output: 6.0 },
-  "gpt-5.6-terra": { input: 2.5, output: 15.0 },
-  "gpt-5.6-sol": { input: 5.0, output: 30.0 },
-  "gpt-5.6-sol-low": { input: 5.0, output: 30.0 },
-  "gpt-5.6-sol-high": { input: 5.0, output: 30.0 },
-  "gpt-5.6-sol-xhigh": { input: 5.0, output: 30.0 },
-  "gpt-5.6": { input: 5.0, output: 30.0 },
+  // GPT-5.6 Series (released July 2026). Cached input is 0.1× on all three.
+  "gpt-5.6-luna": { input: 0.2, output: 1.2 },
+  "gpt-5.6-terra": { input: 2.0, output: 12.0 },
+  // Sol is on promotional pricing through 2026-11-30 and OpenAI has not
+  // published the rate after it, so there is no `then`: the drift check flags
+  // the change when the page updates.
+  "gpt-5.6-sol": { input: 4.0, output: 20.0 },
+  "gpt-5.6-sol-low": { input: 4.0, output: 20.0 },
+  "gpt-5.6-sol-high": { input: 4.0, output: 20.0 },
+  "gpt-5.6-sol-xhigh": { input: 4.0, output: 20.0 },
+  "gpt-5.6": { input: 4.0, output: 20.0 },
   // GPT-6 Astra (released September 2026). Cache read $1 and cache write
   // $12.50 against $10 input are exactly the 0.1× / 1.25× defaults, so no
   // override. Known gap: OpenAI charges 2× input and 1.5× output above 272K
   // input tokens and this table has no tiering, so a turn past that threshold
   // is under-reported. Anthropic has no such tier (see Issue 94).
   "gpt-6-astra": { input: 10.0, output: 50.0 },
-  // GPT-5.5 Series (deprecated picker IDs — treated as GPT-5.6 Sol tier)
-  "gpt-5.5-low": { input: 5.0, output: 30.0 },
-  "gpt-5.5": { input: 5.0, output: 30.0 },
-  "gpt-5.5-high": { input: 5.0, output: 30.0 },
-  "gpt-5.5-xhigh": { input: 5.0, output: 30.0 },
+  // GPT-5.5 Series (deprecated picker IDs — normalizeOpenAIModelId sends these to
+  // gpt-5.6-sol, so they are billed at Sol rates)
+  "gpt-5.5-low": { input: 4.0, output: 20.0 },
+  "gpt-5.5": { input: 4.0, output: 20.0 },
+  "gpt-5.5-high": { input: 4.0, output: 20.0 },
+  "gpt-5.5-xhigh": { input: 4.0, output: 20.0 },
   "gpt-5.5-pro": { input: 30.0, output: 180.0 },
   // Deprecated picker IDs / legacy logs (treated as GPT-5.5 tier for forward compatibility)
-  "gpt-5.4-low": { input: 5.0, output: 30.0 },
-  "gpt-5.4": { input: 5.0, output: 30.0 },
-  "gpt-5.4-high": { input: 5.0, output: 30.0 },
-  "gpt-5.4-xhigh": { input: 5.0, output: 30.0 },
-  "gpt-5.4-pro": { input: 5.0, output: 30.0 },
-  "gpt-5.2-low": { input: 5.0, output: 30.0 },
-  "gpt-5.2": { input: 5.0, output: 30.0 },
-  "gpt-5.2-high": { input: 5.0, output: 30.0 },
-  "gpt-5.2-xhigh": { input: 5.0, output: 30.0 },
+  "gpt-5.4-low": { input: 4.0, output: 20.0 },
+  "gpt-5.4": { input: 4.0, output: 20.0 },
+  "gpt-5.4-high": { input: 4.0, output: 20.0 },
+  "gpt-5.4-xhigh": { input: 4.0, output: 20.0 },
+  "gpt-5.4-pro": { input: 4.0, output: 20.0 },
+  "gpt-5.2-low": { input: 4.0, output: 20.0 },
+  "gpt-5.2": { input: 4.0, output: 20.0 },
+  "gpt-5.2-high": { input: 4.0, output: 20.0 },
+  "gpt-5.2-xhigh": { input: 4.0, output: 20.0 },
   "gpt-5.2-codex": { input: 15.0, output: 45.0 },
 
   // Anthropic Claude 4 Series
-  "claude-haiku-4-5": { input: 0.8, output: 4.0 },
+  "claude-haiku-4-5": { input: 1.0, output: 5.0 },
   "claude-sonnet-4-6": { input: 3.0, output: 15.0 },
-  "claude-sonnet-5": { input: 3.0, output: 15.0 },
-  "claude-sonnet-5-5": { input: 2.0, output: 10.0 },
-  "claude-opus-4-6": { input: 15.0, output: 75.0 },
-  "claude-opus-4-5-thinking": { input: 15.0, output: 75.0 },
+  // $2/$10 was launch pricing; Anthropic made it the standard price and
+  // cancelled the scheduled move to $3/$15.
+  "claude-sonnet-5": { input: 2.0, output: 10.0 },
+  // Sonnet 5.5 reads cache at $0.10/M against $2/M input (0.05×).
+  "claude-sonnet-5-5": { input: 2.0, output: 10.0, cacheReadMultiplier: 0.05 },
+  "claude-opus-4-6": { input: 5.0, output: 25.0 },
+  "claude-opus-4-5-thinking": { input: 5.0, output: 25.0 },
   "claude-opus-4-7": { input: 5.0, output: 25.0 },
   "claude-opus-4-8": { input: 5.0, output: 25.0 }, // deprecated — migrated to opus-5-5
   "claude-opus-5": { input: 5.0, output: 25.0 }, // deprecated — migrated to opus-5-5
   // Opus 5.5 reads cache at $0.20/M against $4/M input — Anthropic documents it
   // as "0.05x the base input price", half the rate every other model charges.
   "claude-opus-5-5": { input: 4.0, output: 20.0, cacheReadMultiplier: 0.05 },
-  "claude-fable-5-1": { input: 10.0, output: 50.0 },
+  // Fable 5.1 reads cache at $0.25/M against $10/M input (0.025×).
+  "claude-fable-5-1": { input: 10.0, output: 50.0, cacheReadMultiplier: 0.025 },
   // Fable 5.2 cache read at $0.20/M against $8/M input — 0.025x (Anthropic pricing page)
   "claude-fable-5-2": { input: 8.0, output: 40.0, cacheReadMultiplier: 0.025 },
-  "claude-fable-5": { input: 10.0, output: 50.0 }, // deprecated — migrated to fable-5-1
+  "claude-fable-5": { input: 10.0, output: 50.0 }, // deprecated — migrated to fable-5-1 (cache read $1 = 0.1×)
 
   // Google Gemini Series (API format uses dots: gemini-2.5)
   // Source: https://ai.google.dev/gemini-api/docs/pricing
-  "gemini-2.5-flash-lite": { input: 0.15, output: 0.6 },
-  "gemini-2.5-flash": { input: 0.3, output: 1.2 },
+  "gemini-2.5-flash-lite": { input: 0.1, output: 0.4 },
+  "gemini-2.5-flash": { input: 0.3, output: 2.5 },
   "gemini-3.1-flash-lite": { input: 0.25, output: 1.5 },
   "gemini-3.5-flash-lite": { input: 0.3, output: 2.5 },
   "gemini-3.5-flash": { input: 1.5, output: 9.0 },
-  "gemini-3.6-flash": { input: 1.5, output: 7.5 },
+  "gemini-3.6-flash": { input: 0.75, output: 3.75, until: "2026-12-31", then: { input: 1.5, output: 7.5 } },
   "gemini-3.7-flash": { input: 1.5, output: 7.5 },
-  // Intro pricing through 2026-12-31; standard $1.50/$7.50 from 2027-01-01
-  "gemini-3.8-flash": { input: 0.75, output: 3.75 },
-  // Intro through 2026-11-30; standard $4/$20 from 2026-12-01 (ai.google.dev pricing)
-  "gemini-4-argon": { input: 2.0, output: 10.0 },
+  "gemini-3.8-flash": { input: 0.75, output: 3.75, until: "2026-12-31", then: { input: 1.5, output: 7.5 } },
+  // Context caching is $0.10 on $2 (and $0.20 on $4 after the intro): 0.05×.
+  "gemini-4-argon": { input: 2.0, output: 10.0, cacheReadMultiplier: 0.05, until: "2026-11-30", then: { input: 4.0, output: 20.0, cacheReadMultiplier: 0.05 } },
   "gemini-3.1-pro-preview": { input: 2.0, output: 12.0 },
   // Deprecated IDs — kept for cost lookup on older chats
   "gemini-3-flash-preview": { input: 0.5, output: 3.0 },
@@ -138,6 +162,27 @@ export const MODEL_PRICING: Record<string, ModelPricing> = {
   "kimi-k3": { input: 3.0, output: 15.0 },
   "kimi-3": { input: 3.0, output: 15.0 },
 };
+
+/**
+ * Rates in force at `at`. An entry past its `until` date answers with its
+ * `then` rates; anything else answers as written.
+ */
+export function resolveModelPricing(
+  model: string,
+  at: Date = new Date(),
+): PricingRates | undefined {
+  const entry =
+    MODEL_PRICING[normalizeModelForPricing(model)] ?? MODEL_PRICING[model];
+  if (!entry) return undefined;
+  const { until, then, ...current } = entry;
+  if (until && then && at.getTime() >= endOfUtcDay(until)) return then;
+  return current;
+}
+
+/** First instant after the given UTC calendar day. */
+function endOfUtcDay(isoDate: string): number {
+  return Date.parse(`${isoDate}T00:00:00Z`) + 86_400_000;
+}
 
 /** Normalize model ID for cost lookup (legacy dash format -> dot format) */
 function normalizeModelForPricing(model: string): string {
@@ -195,16 +240,21 @@ function resolveUncachedPromptTokens(
 /**
  * Calculate USD cost with prompt-cache token breakdown.
  *
- * Cache reads bill at 0.1× input and writes at 1.25×; the remaining uncached
- * input bills at 1.0×. When cache tokens are 0, equivalent to
- * {@link calculateCost}.
+ * Cache reads bill at 0.1× input and writes at 1.25× (unless the model
+ * overrides them); the remaining uncached input bills at 1.0×. `at` picks the
+ * rates in force at that moment — callers pricing a stored turn pass its
+ * timestamp. When cache tokens are 0, equivalent to {@link calculateCost}.
+ *
+ * Known gap: Anthropic bills 1-hour cache writes at 2× input, and the system
+ * prompt is cached with a 1h TTL. Providers report one combined cache-write
+ * count, so every write is priced at the 5-minute rate here (issue #900).
  */
 export function calculateCostWithCache(
   model: string,
   usage: TokenUsageForCost,
+  at: Date = new Date(),
 ): number {
-  const normalized = normalizeModelForPricing(model);
-  const pricing = MODEL_PRICING[normalized] ?? MODEL_PRICING[model];
+  const pricing = resolveModelPricing(model, at);
   if (!pricing) {
     console.warn(
       `[CostCalculation] Unknown model: ${model}, cost calculation unavailable`,
@@ -258,8 +308,7 @@ export function calculateCostBreakdown(
   cacheReadTokens = 0,
   cacheWriteTokens = 0,
 ): CostBreakdown {
-  const normalized = normalizeModelForPricing(model);
-  const pricing = MODEL_PRICING[normalized] ?? MODEL_PRICING[model];
+  const pricing = resolveModelPricing(model);
   const inputCost = pricing
     ? calculateCostWithCache(model, {
         promptTokens,
