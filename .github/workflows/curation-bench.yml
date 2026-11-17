@@ -85,7 +85,7 @@ jobs:
           REBUILD: ${{ inputs.rebuild }}
         run: |
           P="$BENCH/vectors/$KEY"
-          if gcloud storage ls "$P/$ARM/DONE" >/dev/null 2>&1 && [ "$REBUILD" != "true" ]; then
+          if gcloud storage ls "$P/out/$ARM/DONE" >/dev/null 2>&1 && [ "$REBUILD" != "true" ]; then
             echo "cached" >> "$GITHUB_STEP_SUMMARY"
           elif [ "$REBUILD" = "true" ] || [ "${{ github.event_name }}" = "schedule" ]; then
             node scripts/curation-bench/download-tokenizer.mjs cb/model
@@ -106,7 +106,13 @@ jobs:
         run: |
           # Read-only deploy key on Papr-ai/memory (private): the cloud path runs memory's real code_context store.
           install -m 600 /dev/null ~/.ssh_memory && printf "%s\n" "${{ secrets.MEMORY_DEPLOY_KEY }}" > ~/.ssh_memory
-          GIT_SSH_COMMAND="ssh -i ~/.ssh_memory -o StrictHostKeyChecking=accept-new" git clone -q --depth 1 -b development git@github.com:Papr-ai/memory.git cb/memory
+          export GIT_SSH_COMMAND="ssh -i ~/.ssh_memory -o StrictHostKeyChecking=accept-new"
+          git clone -q --depth 1 -b development git@github.com:Papr-ai/memory.git cb/memory
+          # Until Papr-ai/memory#498 merges, the cloud bench script only exists on its branch.
+          if [ ! -f cb/memory/scripts/curation_bench_cloud.py ]; then
+            rm -rf cb/memory && git clone -q --depth 1 -b test/code-context-curation-bench git@github.com:Papr-ai/memory.git cb/memory
+            echo "memory: using the #498 branch (script not on development yet)" >> "$GITHUB_STEP_SUMMARY"
+          fi
           pip install -q "qdrant-client>=1.12,<2" numpy pydantic
           (cd cb/memory && python scripts/curation_bench_cloud.py ../data ../vecs ../cloud_dense.json --k 20)
           npx tsx scripts/curation-bench/rank.mts cb/data cb/vecs cb/cloud.json --dense cb/cloud_dense.json
@@ -139,20 +145,28 @@ jobs:
 
       # This repo is public: per-row results name private files, so they go to the bench bucket (90-day lifecycle),
       # and only the summary table is posted here.
+      - name: Report a failure before the gate
+        if: failure() && hashFiles('cb/report.md') == ''
+        run: |
+          mkdir -p cb
+          { echo "## Curation Bench ($ARM)"; echo
+            echo "The bench did not reach the gate: a setup step failed (data, vectors, or a ranking run). No result to compare."
+            echo; echo "Run: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}"; } > cb/report.md
+
       - name: Keep the evidence
         if: always()
         run: |
           gcloud storage cp -q cb/local.json cb/cloud.json cb/*_jev.json cb/report.md "$BENCH/runs/${{ github.run_id }}/" || true
           echo "Rows: \`$BENCH/runs/${{ github.run_id }}/\`" >> "$GITHUB_STEP_SUMMARY"
       - uses: actions/upload-artifact@v4
-        if: always()
+        if: always() && hashFiles('cb/report.md') != ''
         with:
           name: curation-bench-report-${{ github.run_id }}
           path: cb/report.md
           retention-days: 90
 
       - name: Comment on the PR
-        if: always() && github.event_name == 'pull_request'
+        if: always() && github.event_name == 'pull_request' && hashFiles('cb/report.md') != ''
         env:
           GH_TOKEN: ${{ github.token }}
         run: gh pr comment ${{ github.event.pull_request.number }} --body-file cb/report.md --edit-last || gh pr comment ${{ github.event.pull_request.number }} --body-file cb/report.md
