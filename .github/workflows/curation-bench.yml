@@ -1,0 +1,185 @@
+name: Curation Bench
+
+# Regression gate for the code harness (hybrid grep: papr-embed-code-1-0.6b + code graph + "also check").
+# Replays 50 real grep misses + 25 controls from Paprwork sessions through the SHIPPED ranking code
+# (codeSearchV2.rankPointers, codeFusion, codeCandidates) on the local path (best chunk per file, as
+# CodeVectorStore.search) and the cloud path (memory code_search over Qdrant, as cloud agents use it).
+# Fails under 41 of 50 misses, or more than 1 row below the committed baseline on either group, and opens an issue.
+#
+# Vectors: built once per (model weights, chunker) on a GPU by scripts/curation-bench/run_gpu.sh and cached in GCS.
+# CI only ranks, on CPU, in ~2 minutes. The key is the model revision + the exported chunks: when the chunks or model change, the job
+# says so: run the GPU step (workflow_dispatch with rebuild=true) before merging.
+
+on:
+  pull_request:
+    paths:
+      - "src/core/tools/codeSearchV2.ts"
+      - "src/core/tools/codeFusion.ts"
+      - "src/core/tools/codeCandidates.ts"
+      - "src/core/tools/codeSearchGrepHits.ts"
+      - "src/core/tools/codeEmbed/**"
+      - "src/core/tools/bash.ts"
+      - "scripts/curation-bench/**"
+      - ".github/workflows/curation-bench.yml"
+  schedule:
+    - cron: "0 9 * * 1" # weekly, so drift in the cloud path shows up even without code changes
+  workflow_dispatch:
+    inputs:
+      rebuild:
+        description: "Rebuild vectors on a spot GPU (needed when the model or chunker changed)"
+        type: boolean
+        default: false
+
+permissions:
+  contents: read
+  id-token: write
+  issues: write
+  pull-requests: write
+
+concurrency:
+  group: curation-bench-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  BENCH: gs://papr-hne-artifacts/curation_bench
+  ARM: v10_int8
+
+jobs:
+  bench:
+    name: Curation Bench (local + cloud path)
+    runs-on: ubuntu-latest
+    timeout-minutes: 90
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "24"
+          cache: npm
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - run: npm ci
+      - uses: google-github-actions/auth@v2
+        with:
+          workload_identity_provider: ${{ vars.GCP_WIF_PROVIDER }}
+          service_account: ${{ vars.GCP_BENCH_SA }}
+      - uses: google-github-actions/setup-gcloud@v2
+
+      - name: Data
+        run: |
+          mkdir -p cb/data
+          gcloud storage cp -q "$BENCH/dataset/v1/*" cb/data/
+
+      # Key on what the GPU actually embeds: the model revision + the exact chunks the shipped chunker cuts (+ the embed
+      # script). Refactors of codeIndexer/chunker that cut the same chunks keep the cache; a real chunking change misses.
+      - name: Cache key (model weights + chunk output)
+        id: key
+        run: |
+          node scripts/curation-bench/download-tokenizer.mjs cb/model
+          npx tsx scripts/curation-bench/export-chunks.mts cb/data cb/model
+          MODEL=$(node -e "const s=require('fs').readFileSync('src/core/tools/codeEmbed/embedder.ts','utf8');console.log(s.match(/HF_REVISION = \"([0-9a-f]+)\"/)[1])")
+          CHUNKS=$( { gunzip -c cb/data/chunks.jsonl.gz; cat scripts/curation-bench/embed_chunks.py; } | sha256sum | cut -c1-12)
+          echo "key=${MODEL:0:12}-c${CHUNKS}" >> "$GITHUB_OUTPUT"
+          echo "Vectors key: ${MODEL:0:12}-c${CHUNKS}" >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Vectors (cached, or rebuilt on a spot GPU)
+        id: vecs
+        env:
+          KEY: ${{ steps.key.outputs.key }}
+          REBUILD: ${{ inputs.rebuild }}
+        run: |
+          P="$BENCH/vectors/$KEY"
+          if gcloud storage ls "$P/out/$ARM/DONE" >/dev/null 2>&1 && [ "$REBUILD" != "true" ]; then
+            echo "cached" >> "$GITHUB_STEP_SUMMARY"
+          elif [ "$REBUILD" = "true" ] || [ "${{ github.event_name }}" = "schedule" ]; then
+            gcloud storage cp -q cb/data/chunks.jsonl.gz cb/data/queries.json cb/data/set.json "$P/data/"
+            gcloud storage cp -q scripts/curation-bench/embed_chunks.py scripts/curation-bench/run_gpu.sh "$P/code/"
+            bash scripts/curation-bench/launch_gpu.sh "$P" "$ARM"
+          else
+            echo "::error::No vectors for $KEY: the model or chunker changed. Run this workflow with rebuild=true (about 40 minutes on a spot GPU), then re-run."
+            exit 1
+          fi
+          mkdir -p cb/vecs && gcloud storage cp -q -r "$P/out/$ARM/*" cb/vecs/
+
+      - name: Local path (on-device index)
+        run: npx tsx scripts/curation-bench/rank.mts cb/data cb/vecs cb/local.json
+
+      - name: Cloud path (memory code_search over Qdrant)
+        run: |
+          # Read-only deploy key on Papr-ai/memory (private): the cloud path runs memory's real code_context store.
+          install -m 600 /dev/null ~/.ssh_memory && printf "%s\n" "${{ secrets.MEMORY_DEPLOY_KEY }}" > ~/.ssh_memory
+          export GIT_SSH_COMMAND="ssh -i ~/.ssh_memory -o StrictHostKeyChecking=accept-new"
+          git clone -q --depth 1 -b development git@github.com:Papr-ai/memory.git cb/memory
+          # Until Papr-ai/memory#498 merges, the cloud bench script only exists on its branch.
+          if [ ! -f cb/memory/scripts/curation_bench_cloud.py ]; then
+            rm -rf cb/memory && git clone -q --depth 1 -b test/code-context-curation-bench git@github.com:Papr-ai/memory.git cb/memory
+            echo "memory: using the #498 branch (script not on development yet)" >> "$GITHUB_STEP_SUMMARY"
+          fi
+          pip install -q "qdrant-client>=1.12,<2" numpy pydantic
+          (cd cb/memory && python scripts/curation_bench_cloud.py ../data ../vecs ../cloud_dense.json --k 20)
+          npx tsx scripts/curation-bench/rank.mts cb/data cb/vecs cb/cloud.json --dense cb/cloud_dense.json
+
+      - name: Jev rerank (local + cloud)
+        env:
+          PAPR_API_KEY: ${{ secrets.JEV_BENCH_PAPR_API_KEY }}
+        run: |
+          if [ -z "$PAPR_API_KEY" ]; then echo "::warning::JEV_BENCH_PAPR_API_KEY not set: Jev arms skipped"; exit 0; fi
+          npx tsx scripts/curation-bench/rank.mts cb/data cb/vecs cb/local_jev.json --rerank jev
+          npx tsx scripts/curation-bench/rank.mts cb/data cb/vecs cb/cloud_jev.json --dense cb/cloud_dense.json --rerank jev
+
+      - name: Gate
+        id: gate
+        run: |
+          set +e
+          { echo "## Curation Bench ($ARM)"; echo; echo "### Local path"
+            npx tsx scripts/curation-bench/gate.mts cb/local.json --baseline scripts/curation-bench/baseline.json --arm local; L=$?
+            echo; echo "### Cloud path"
+            npx tsx scripts/curation-bench/gate.mts cb/cloud.json --baseline scripts/curation-bench/baseline.json --arm cloud; C=$?
+            J=0
+            for a in local_jev cloud_jev; do
+              [ -f cb/$a.json ] || continue
+              echo; echo "### $a"; npx tsx scripts/curation-bench/gate.mts cb/$a.json --baseline scripts/curation-bench/baseline.json --arm $a || J=1
+            done
+            echo; echo "Floor: 41 of 50 grep misses. Baseline tolerance: 1 row. Vectors: \`${{ steps.key.outputs.key }}\`"
+          } > cb/report.md
+          cat cb/report.md >> "$GITHUB_STEP_SUMMARY"
+          echo "failed=$(( L || C || J ))" >> "$GITHUB_OUTPUT"
+
+      # This repo is public: per-row results name private files, so they go to the bench bucket (90-day lifecycle),
+      # and only the summary table is posted here.
+      - name: Report a failure before the gate
+        if: failure() && hashFiles('cb/report.md') == ''
+        run: |
+          mkdir -p cb
+          { echo "## Curation Bench ($ARM)"; echo
+            echo "The bench did not reach the gate: a setup step failed (data, vectors, or a ranking run). No result to compare."
+            echo; echo "Run: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}"; } > cb/report.md
+
+      - name: Keep the evidence
+        if: always()
+        run: |
+          gcloud storage cp -q cb/local.json cb/cloud.json cb/*_jev.json cb/report.md "$BENCH/runs/${{ github.run_id }}/" || true
+          echo "Rows: \`$BENCH/runs/${{ github.run_id }}/\`" >> "$GITHUB_STEP_SUMMARY"
+      - uses: actions/upload-artifact@v4
+        if: always() && hashFiles('cb/report.md') != ''
+        with:
+          name: curation-bench-report-${{ github.run_id }}
+          path: cb/report.md
+          retention-days: 90
+
+      - name: Comment on the PR
+        if: always() && github.event_name == 'pull_request' && hashFiles('cb/report.md') != ''
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: gh pr comment ${{ github.event.pull_request.number }} --body-file cb/report.md --edit-last || gh pr comment ${{ github.event.pull_request.number }} --body-file cb/report.md
+
+      - name: Open an issue on regression
+        if: steps.gate.outputs.failed == '1'
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          T="Curation Bench regression: ${{ github.event.pull_request.title || github.ref_name }}"
+          { cat cb/report.md; echo; echo "Run: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}"
+            [ -n "${{ github.event.pull_request.number }}" ] && echo "PR: #${{ github.event.pull_request.number }}"; } > cb/issue.md
+          gh issue create --title "$T" --body-file cb/issue.md --label curation-bench || gh issue create --title "$T" --body-file cb/issue.md
+          exit 1

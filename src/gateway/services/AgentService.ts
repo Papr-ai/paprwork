@@ -1532,6 +1532,7 @@ export class AgentService {
       const focusAppId = options?.focusContext?.activeApp?.appId;
       setToolContext(chatId, {
         turnMetrics,
+        userMessage,
         ...(focusAppId ? { activeAppId: focusAppId } : {}),
         ...(Object.keys(mergedJobEnv).length > 0
           ? { jobEnv: mergedJobEnv }
