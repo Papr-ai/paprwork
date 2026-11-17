@@ -472,9 +472,11 @@ async function searchPaprMemoryForCode(
       "../../gateway/utils/paprMemoryPolicy.js"
     );
     const { PAPR_DEFAULT_HEADERS } = await import("./paprSurface.js");
+    const memoryBaseURL = process.env.PAPR_MEMORY_SERVER_URL?.replace(/\/$/, "") || undefined;
     const client = new Papr({
       xAPIKey: paprKey,
       defaultHeaders: PAPR_DEFAULT_HEADERS,
+      ...(memoryBaseURL ? { baseURL: memoryBaseURL } : {}),
     });
 
     const projectId = extractProjectIdFromPaprPath(grepPath);
