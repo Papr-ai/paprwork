@@ -786,7 +786,10 @@ export async function paprDbApplyMigration(options: {
   await ensureReplicaSchemaMigrationsLedger(source);
 
   assertPaprDbMigrationApplyAllowed();
-  await assertNotCollaboratorOnSharedDatabase(options.dbId);
+  // No collaborator refusal here: on the team's shared data the single route
+  // applies on this desktop only (proposal hold) and the shared cloud copy
+  // changes when the publisher approves. Refusing left teammates stuck: the
+  // proposal in turn refuses migrations that never ran on this copy.
 
   const result = await applyRegistryMigrationSingleRoute(
     source,
@@ -1094,7 +1097,7 @@ async function assertNotCollaboratorOnSharedDatabase(dbId: string): Promise<void
   if (isCollaboratorOnSharedDatabase(dbId)) {
     throw new Error(
       `Database ${dbId} is the team's shared data and the publisher owns its schema. ` +
-        "Create it with apply: false, then submit_cloud_app_pr (a Maintainer/Admin can pass publishNow: true to " +
+        "Propose it with submit_cloud_app_pr (a Maintainer/Admin can pass publishNow: true to " +
         "apply it to the team's database and publish), or switch this copy to your own data first.",
     );
   }
