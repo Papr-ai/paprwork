@@ -83,8 +83,18 @@ export function listFiles(root: string, extra?: ExtraSkip): Array<{ rel: string;
 export class CodeIndexer {
   private texts = new Map<string, { root: string; rel: string; abs: string }>();
   private busy = false;
+  private stopped = false;
 
   constructor(private readonly d: IndexerDeps) {}
+
+  /** Shutting down: an embed cut short by close() is not the blob's fault, and the store may already be closed. */
+  stop(): void {
+    this.stopped = true;
+  }
+
+  get isBusy(): boolean {
+    return this.busy;
+  }
 
   /** Bring the manifest for one root up to date. Returns {changed, removed} paths. */
   refresh(root: string): { changed: string[]; removed: string[] } {
@@ -138,6 +148,7 @@ export class CodeIndexer {
   /** Embed up to maxFiles pending blobs on device. Safe to call often; no-op unless tier is local. */
   async embedPending(maxFiles = 8): Promise<{ embedded: number; skipped: string | null }> {
     if (this.busy) return { embedded: 0, skipped: "busy" };
+    if (this.stopped) return { embedded: 0, skipped: "stopped" };
     if (this.d.tier() !== "local") return { embedded: 0, skipped: `tier ${this.d.tier()}` };
     if (this.d.canRun && !this.d.canRun()) return { embedded: 0, skipped: "device busy" };
     const emb = await this.d.embedder();
@@ -158,16 +169,18 @@ export class CodeIndexer {
         const chunks = chunkFile(src.rel, text, (s) => emb.countTokens(s));
         if (!chunks.length) continue;
         // Recorded before the run: if this blob takes the process down, the next start knows which one it was.
-        this.d.store.setInflight(sha);
+        this.d.store.setInflight(sha, { isolated: (emb as { isolated?: boolean }).isolated === true });
         let vecs: Float32Array[];
         try {
           vecs = await emb.embedDocuments(chunks.map((c) => c.text));
         } catch (e) {
+          if (this.stopped) return { embedded, skipped: "stopped" }; // close() ended the embed: not the blob's fault
           // Failed or crashed the embed process: count it, so a bad blob cannot loop the indexer.
           this.d.store.setInflight(null);
           this.d.store.noteEmbedFailure(sha);
           return { embedded, skipped: `embed failed: ${(e as Error)?.message ?? e}` };
         }
+        if (this.stopped) return { embedded, skipped: "stopped" };
         this.d.store.setInflight(null);
         this.d.store.putChunks(chunks.map((c, i) => ({ blobSha: sha, chunk: c.chunk, lineStart: c.lineStart, lineEnd: c.lineEnd, vec: vecs[i]!, source: "local" as const })));
         embedded++;
@@ -217,24 +230,43 @@ export class CodeIndexer {
     }
   }
 
-  /** Upload what the cloud lacks, then drop orphans locally and remotely. Never throws. */
-  async syncCloud(repoIdFor: (root: string) => string): Promise<{ uploaded: number; failed: number; dropped: number }> {
+  /**
+   * Drop orphans locally and queue their cloud delete, send queued deletes, then upload what the cloud lacks.
+   * Never throws. A delete stays queued until the cloud confirms it (offline, signed out, restart), and a queued
+   * delete for a blob some file holds again (restored, reverted) is dropped instead of sent.
+   */
+  async syncCloud(repoIdFor: (root: string) => string, opts: { batch?: number } = {}): Promise<{ uploaded: number; failed: number; dropped: number }> {
+    const { store } = this.d;
+    const orphans = store.orphanBlobs();
+    if (orphans.length) {
+      store.queueCloudDeletes(orphans);
+      store.dropBlobs(orphans);
+    }
     const client = await this.d.cloud();
-    if (!client) return { uploaded: 0, failed: 0, dropped: 0 };
+    if (!client) return { uploaded: 0, failed: 0, dropped: orphans.length };
     try {
+      const queued = store.pendingCloudDeletes();
+      const back = store.referencedBlobs(queued);
+      if (back.size) store.clearCloudDeletes([...back]);
+      const del = queued.filter((b) => !back.has(b));
+      let delFailed = false;
+      if (del.length) {
+        try {
+          await cloudDelete(client, store.model, del);
+          store.clearCloudDeletes(del);
+        } catch {
+          delFailed = true; // stays queued for the next sync
+        }
+      }
       const where = (sha: string) => this.texts.get(sha);
-      const r = await pushVectors(client, this.d.store, {
+      const r = await pushVectors(client, store, {
         repoId: (sha) => (where(sha) ? repoIdFor(where(sha)!.root) : undefined),
         pathHint: (sha) => where(sha)?.rel,
+        batch: opts.batch,
       });
-      const orphans = this.d.store.orphanBlobs();
-      if (orphans.length) {
-        await cloudDelete(client, this.d.store.model, orphans).catch(() => undefined);
-        this.d.store.dropBlobs(orphans);
-      }
-      return { ...r, dropped: orphans.length };
+      return { ...r, failed: delFailed && r.failed === 0 ? -1 : r.failed, dropped: orphans.length };
     } catch {
-      return { uploaded: 0, failed: -1, dropped: 0 };
+      return { uploaded: 0, failed: -1, dropped: orphans.length };
     }
   }
 

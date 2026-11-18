@@ -53,6 +53,8 @@ export interface RuntimeDeps {
    *  org's key, or search the next org's cloud index). */
   scope?: string;
   activeScope?: () => string | null;
+  /** First retry delay after a failed Neural Engine load (default UPGRADE_RETRY_MS; tests use a few ms). */
+  upgradeRetryMs?: number;
 }
 
 export interface DeviceHit {
@@ -73,6 +75,9 @@ export const CRASH_BACKOFF_MAX_MS = 30 * 60_000;
 export const CRASH_LIMIT = 3;
 export const CRASH_WINDOW_MS = 60 * 60_000;
 export const CRASH_DISABLE_MS = 24 * 60 * 60_000;
+/** Neural Engine load failed or the helper died: try again after this, doubling up to the max. */
+export const UPGRADE_RETRY_MS = 60_000;
+export const UPGRADE_RETRY_MAX_MS = 30 * 60_000;
 
 export class CodeEmbedRuntime {
   readonly store: CodeVectorStore;
@@ -90,6 +95,14 @@ export class CodeEmbedRuntime {
   private roots = new Set<string>();
   private loop: NodeJS.Timeout | null = null;
   private syncedAt = 0;
+  private closed = false;
+  /** Something the cloud does not have yet: new local vectors, queued deletes, or a sync that failed. Starts true so
+   *  every app start (restart, crash, update) reconciles once with the cloud. */
+  private syncDirty = true;
+  private upgradeTimer: NodeJS.Timeout | null = null;
+  private upgradeFailures = 0;
+  /** Why the Neural Engine is not in use yet (shown in /api/code-embed/status). */
+  private upgradeNote: string | null = null;
   private counter: ((s: string) => number) | null = null;
   private counterLoading: Promise<((s: string) => number) | null> | null = null;
   status = "starting";
@@ -117,9 +130,11 @@ export class CodeEmbedRuntime {
     const fallback: EmbedTier = d.cloudAvailable ? "cloud" : "off";
     // A blob still marked in flight means the last run died while embedding it (an older build ran ONNX in the
     // gateway, so a native abort took everything down): count it against that blob and as a crash.
+    // An isolated marker (child process) means the app itself stopped mid-embed: quit, restart, sleep kill, power
+    // loss. The child's own crashes are counted live, so this one is not held against the blob or the device.
     const crashed = this.store.takeInflight();
-    if (crashed) {
-      this.store.noteEmbedFailure(crashed);
+    if (crashed && !crashed.isolated) {
+      this.store.noteEmbedFailure(crashed.blobSha);
       this.noteCrash();
     }
     if (this.tier === "local" && process.env.PAPR_CODE_EMBED_LOCAL === "0") {
@@ -271,16 +286,35 @@ export class CodeEmbedRuntime {
   }
 
   /** Swap in the faster backend when it loads. Vectors are interchangeable (CoreML fp16 vs ONNX int8: cosine 0.9998). */
+  /** Swap in the faster backend when it loads. A failed load (helper not built yet, compile timed out under memory
+   *  pressure) is retried with backoff instead of staying on ONNX for the whole session, and a helper that dies later
+   *  hands back to the base embedder and is reloaded the same way. */
   private startUpgrade(base: Embedder): void {
     const up = this.d.loadUpgrade === undefined ? defaultUpgrade() : this.d.loadUpgrade;
-    if (!up) return;
+    if (!up || this.closed) return;
+    if (this.upgradeTimer) { clearTimeout(this.upgradeTimer); this.upgradeTimer = null; }
+    const retry = (why: string) => {
+      if (this.closed || this.base !== base) return;
+      const wait = Math.min(UPGRADE_RETRY_MAX_MS, (this.d.upgradeRetryMs ?? UPGRADE_RETRY_MS) * 2 ** this.upgradeFailures++);
+      this.upgradeNote = `${why}; retrying at ${new Date(Date.now() + wait).toISOString()}`;
+      this.upgradeTimer = setTimeout(() => this.startUpgrade(base), wait);
+      this.upgradeTimer.unref?.();
+    };
     up(this.d.dataDir, base)
       .then((u) => {
-        if (this.emb !== base) return void u.close();
+        if (this.closed || this.emb !== base) return void u.close();
         this.emb = u; // u keeps base as its long-document fallback; do not close base
+        this.upgradeFailures = 0;
+        this.upgradeNote = null;
         this.status = `ready (${u.constructor.name})`;
+        (u as { onExit?: (l: () => void) => void }).onExit?.(() => {
+          if (this.emb !== u) return;
+          this.emb = this.base; // ONNX carries on; the Neural Engine comes back after the backoff
+          if (this.emb) this.status = `ready (${this.emb.constructor.name})`;
+          retry("Neural Engine helper exited");
+        });
       })
-      .catch(() => undefined);
+      .catch((e) => retry(`Neural Engine load failed: ${(e as Error)?.message ?? e}`));
   }
 
   get backend(): string {
@@ -343,7 +377,7 @@ export class CodeEmbedRuntime {
     const f = readDeviceFacts(null);
     const GBf = (b: number) => Math.round((b / 1e9) * 10) / 10;
     return {
-      scope: this.store.scope(), tier: this.tier, reasons: this.tierReasons, status: this.status, backend: this.backend,
+      scope: this.store.scope(), tier: this.tier, reasons: this.tierReasons, status: this.status, backend: this.backend, upgrade: this.upgradeNote,
       modelInstalled: (this.d.installed ?? modelInstalled)(this.d.dataDir), roots: this.roots.size, ...this.store.stats(),
       device: { platform: f.platform, arch: f.arch, os: `${os.type()} ${os.release()}`, cpu: f.cpuModel, cores: f.physicalCores, ramGB: GBf(f.totalMemBytes), availableGB: GBf(f.freeMemBytes), translated: f.translated },
       crashes: { lastHour: this.crashTimes().length, localDisabledUntil: this.localDisabledUntil() || null, quarantined: this.store.quarantined(QUARANTINE_AFTER).size },
@@ -372,16 +406,30 @@ export class CodeEmbedRuntime {
           this.loop = setTimeout(tick, 0); // the local tier just turned off (crashes): carry on in the cloud
           return;
         }
+        if (r.embedded > 0) this.syncDirty = true;
         if (r.embedded > 0 || (pending > 0 && r.skipped === null)) {
           this.loop = setTimeout(tick, TICK_MS);
           return;
         }
-        if (pending === 0 && process.env.PAPR_CODE_EMBED_CLOUD_SYNC !== "0" && Date.now() - this.syncedAt > SYNC_EVERY_MS) {
+        const syncOn = process.env.PAPR_CODE_EMBED_CLOUD_SYNC !== "0";
+        if (pending === 0 && syncOn && this.syncDirty && Date.now() - this.syncedAt > SYNC_EVERY_MS) {
           this.syncedAt = Date.now();
-          await this.indexer.syncCloud((root) => `paprwork:${path.basename(root)}`);
+          const s = await this.indexer.syncCloud((root) => `paprwork:${path.basename(root)}`);
+          // Offline, signed out, server error or cut short: keep it dirty so the next pass retries. Uploads are
+          // idempotent (the cloud is asked what it lacks), and deletes stay queued in the store across restarts.
+          this.syncDirty = s.failed !== 0 || this.store.pendingCloudDeletes(1).length > 0 || !(await this.cloudForScope());
         }
-        // Model still downloading/loading or device busy: check again later.
-        this.loop = pending > 0 && this.tier === "local" ? setTimeout(tick, 5_000) : null;
+        if (this.closed) { this.loop = null; return; }
+        if (pending > 0 && this.tier === "local") {
+          this.loop = setTimeout(tick, 5_000); // model still downloading/loading or device busy: check again later
+        } else if (pending === 0 && syncOn && this.syncDirty) {
+          // New vectors, a failed sync, or deletes still queued: come back when the sync window opens, instead of
+          // waiting for the next file change or grep to restart the loop.
+          this.loop = setTimeout(tick, Math.max(1_000, SYNC_EVERY_MS - (Date.now() - this.syncedAt)));
+          this.loop.unref?.();
+        } else {
+          this.loop = null;
+        }
       } catch {
         this.loop = null;
       }
@@ -405,9 +453,21 @@ export class CodeEmbedRuntime {
     return { tier: res.tier, hits: res.hits.map((h) => ({ path: h.path, score: h.score, lineStart: h.lineStart, lineEnd: h.lineEnd })) };
   }
 
+  /** Shut down (app quit, workspace switch). An embed in progress is abandoned, not counted against its blob, and the
+   *  in-flight marker is cleared so the next start does not treat the quit as a crash. */
   async close(): Promise<void> {
+    if (this.closed) return;
+    this.closed = true;
+    this.indexer.stop();
     if (this.loop) clearTimeout(this.loop);
-    await this.emb?.close();
+    if (this.upgradeTimer) clearTimeout(this.upgradeTimer);
+    const emb = this.emb;
+    const base = this.base;
+    this.emb = null;
+    this.base = null;
+    await emb?.close().catch(() => undefined);
+    if (base && base !== emb) await base.close().catch(() => undefined);
+    try { this.store.setInflight(null); } catch {}
     this.store.close();
   }
 }

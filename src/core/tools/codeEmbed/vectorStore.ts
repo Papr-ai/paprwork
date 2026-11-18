@@ -64,6 +64,7 @@ export class CodeVectorStore {
       CREATE TABLE IF NOT EXISTS meta (key TEXT PRIMARY KEY, value TEXT NOT NULL);
       CREATE TABLE IF NOT EXISTS cloud_indexed (model TEXT NOT NULL, blob_sha TEXT NOT NULL, at INTEGER NOT NULL, PRIMARY KEY (model, blob_sha));
       CREATE TABLE IF NOT EXISTS embed_failures (model TEXT NOT NULL, blob_sha TEXT NOT NULL, failures INTEGER NOT NULL, at INTEGER NOT NULL, PRIMARY KEY (model, blob_sha));
+      CREATE TABLE IF NOT EXISTS cloud_deletes (model TEXT NOT NULL, blob_sha TEXT NOT NULL, at INTEGER NOT NULL, PRIMARY KEY (model, blob_sha));
     `);
   }
 
@@ -91,15 +92,42 @@ export class CodeVectorStore {
 
   /** The blob being embedded on device right now. Written before the run and cleared after, so a blob that takes the
    *  process down is still known on the next start (see takeInflight). */
-  setInflight(blobSha: string | null): void {
-    this.setMeta(`inflight:${this.model}`, blobSha);
+  setInflight(blobSha: string | null, opts: { isolated?: boolean } = {}): void {
+    this.setMeta(`inflight:${this.model}`, blobSha && opts.isolated ? `${blobSha}|child` : blobSha);
   }
 
-  /** A blob left in flight by a crash, cleared as it is read. */
-  takeInflight(): string | null {
+  /** A blob left in flight when the last run stopped, cleared as it is read. isolated: it was being embedded in a
+   *  child process. That child's own crash is caught live (onExit), so a leftover isolated marker means the whole app
+   *  stopped (quit, restart, power loss, force kill) and says nothing about the blob. */
+  takeInflight(): { blobSha: string; isolated: boolean } | null {
     const b = this.getMeta(`inflight:${this.model}`);
-    if (b) this.setInflight(null);
-    return b;
+    if (!b) return null;
+    this.setInflight(null);
+    const [blobSha, tag] = b.split("|");
+    return { blobSha: blobSha!, isolated: tag === "child" };
+  }
+
+  /** Blobs dropped here whose cloud vectors still have to be deleted. Kept until the cloud confirms, so a delete
+   *  is not lost when the device is offline, signed out or restarts before the next sync. */
+  queueCloudDeletes(blobShas: string[]): void {
+    const ins = this.db.prepare(`INSERT OR IGNORE INTO cloud_deletes(model, blob_sha, at) VALUES (?,?,?)`);
+    const now = Date.now();
+    this.db.transaction(() => blobShas.forEach((b) => ins.run(this.model, b, now)))();
+  }
+
+  pendingCloudDeletes(limit = 5000): string[] {
+    return this.db.prepare(`SELECT blob_sha FROM cloud_deletes WHERE model=? ORDER BY at LIMIT ?`).all(this.model, limit).map((r) => r.blob_sha);
+  }
+
+  clearCloudDeletes(blobShas: string[]): void {
+    const del = this.db.prepare(`DELETE FROM cloud_deletes WHERE model=? AND blob_sha=?`);
+    this.db.transaction(() => blobShas.forEach((b) => del.run(this.model, b)))();
+  }
+
+  /** Which of these blobs some current path holds (a file restored before its queued cloud delete ran). */
+  referencedBlobs(blobShas: string[]): Set<string> {
+    const q = this.db.prepare(`SELECT 1 FROM files WHERE blob_sha=? LIMIT 1`);
+    return new Set(blobShas.filter((b) => q.get(b)));
   }
 
   /** One more failed on-device embed for this blob. Returns its failure count. */
