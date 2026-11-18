@@ -4,7 +4,10 @@
 
 import * as crypto from "crypto";
 
-export type PaprAuthMode = "login" | "signup";
+export type PaprAuthMode = "login" | "signup" | "phone";
+
+/** Auth0 passwordless SMS connection (text-code sign-in for phone-first Papr accounts). */
+export const PAPR_AUTH0_SMS_CONNECTION = "sms";
 
 export interface PaprAuth0Config {
   domain: string;
@@ -69,7 +72,12 @@ export function buildAuth0AuthorizeUrl(
   authUrl.searchParams.set("state", params.state);
   authUrl.searchParams.set("audience", `https://${config.domain}/userinfo`);
 
-  if (params.mode === "signup") {
+  if (params.mode === "phone") {
+    // Phone-first users (accounts created by texting Pen) have no email/password;
+    // send them straight to the text-code screen. The post-login Action maps the
+    // sms|… identity to the same Parse user via app_metadata.papr_object_id.
+    authUrl.searchParams.set("connection", PAPR_AUTH0_SMS_CONNECTION);
+  } else if (params.mode === "signup") {
     authUrl.searchParams.set("screen_hint", "signup");
   } else if (params.mode === "login") {
     authUrl.searchParams.set("screen_hint", "login");

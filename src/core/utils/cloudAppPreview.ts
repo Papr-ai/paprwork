@@ -157,19 +157,28 @@ export function injectPreviewHeadTags(html: string, headTags: string): string {
 export const CLOUD_APP_SIGN_IN_HEADLINE = "Sign in is required to access this app.";
 export const CLOUD_APP_LOGIN_BUTTON_LABEL = "Sign in";
 export const CLOUD_APP_SIGNUP_BUTTON_LABEL = "Create Papr account";
+export const CLOUD_APP_PHONE_BUTTON_LABEL = "Continue with phone";
 export const CLOUD_APP_LOGIN_VIA_NOTE =
   "Sign in with an existing Papr account, or create one if you're new.";
 
 /** Cloud App Host Auth0 entry — `mode=signup` opens Auth0 registration. */
 export function buildCloudAuthLoginUrl(
   returnTo: string,
-  mode: "login" | "signup" = "login",
+  mode: "login" | "signup" | "phone" = "login",
 ): string {
   const params = new URLSearchParams({ returnTo });
-  if (mode === "signup") {
-    params.set("mode", "signup");
+  if (mode !== "login") {
+    params.set("mode", mode);
   }
   return `/auth/login?${params.toString()}`;
+}
+
+/** Same /auth/login entry, but straight to Auth0's text-code screen. */
+function phoneLoginUrlFrom(loginUrl: string): string {
+  const [path, query = ""] = loginUrl.split("?");
+  const params = new URLSearchParams(query);
+  params.set("mode", "phone");
+  return `${path}?${params.toString()}`;
 }
 
 /** Papr mark (same gradient as the Discover top bar). */
@@ -204,6 +213,7 @@ export function buildPreviewLandingHtml(
   const signupUrl = options?.signupUrl
     ? escapeHtmlAttribute(options.signupUrl)
     : null;
+  const phoneUrl = loginUrl ? escapeHtmlAttribute(phoneLoginUrlFrom(options!.loginUrl!)) : null;
   const iconUrl = escapeHtmlAttribute(meta.iconUrl);
   // Same glyph as the Discover app page: the app's logo inside the Papr glass droplet.
   const iconMarkup = options?.iconSvg?.trim().startsWith("<svg")
@@ -219,6 +229,11 @@ export function buildPreviewLandingHtml(
         signupUrl
           ? `
         <a class="btn btn--secondary" href="${signupUrl}" target="_blank" rel="noopener noreferrer">${CLOUD_APP_SIGNUP_BUTTON_LABEL}</a>`
+          : ""
+      }${
+        phoneUrl
+          ? `
+        <a class="btn btn--secondary" href="${phoneUrl}" target="_blank" rel="noopener noreferrer">${CLOUD_APP_PHONE_BUTTON_LABEL}</a>`
           : ""
       }
       </div>

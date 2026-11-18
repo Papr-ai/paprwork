@@ -43,6 +43,19 @@ describe("paprAuth0Pkce", () => {
     expect(url.searchParams.get("code_challenge_method")).toBe("S256");
   });
 
+  it("phone mode goes straight to the Auth0 SMS connection", () => {
+    const config = getCloudAppHostAuth0Config("https://apps.papr.ai");
+    const url = buildAuth0AuthorizeUrl(config, {
+      state: "s",
+      codeChallenge: generateCodeChallenge(generateCodeVerifier()),
+      mode: "phone",
+    });
+    expect(url.searchParams.get("connection")).toBe("sms");
+    expect(url.searchParams.get("screen_hint")).toBeNull();
+    const login = buildAuth0AuthorizeUrl(config, { state: "s", codeChallenge: "c", mode: "login" });
+    expect(login.searchParams.get("connection")).toBeNull();
+  });
+
   it("extracts Parse session claims from JWT payload", () => {
     const payload = Buffer.from(
       JSON.stringify({
