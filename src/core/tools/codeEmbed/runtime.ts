@@ -16,7 +16,7 @@
  * Cloud tier (cloud agent gateway, or a device that fails the on-device checks): no model is loaded. Files the cloud
  * lacks are chunked with the model's tokenizer (exact boundaries) and sent as text; memory embeds them with the same
  * model and does not store the text. Search is server-embedded. PAPR_CODE_EMBED_TIER=cloud forces it (tests).
- * Env: PAPR_CODE_EMBED=0 turns it off. PAPR_CODE_EMBED_CONTEXT=0 skips documents/workspace/repos. PAPR_CODE_EMBED_DOWNLOAD=0 never downloads the model.
+ * Env: PAPR_CODE_EMBED=0 turns it off. PAPR_CODE_EMBED_LOCAL=0 never runs the model on this device (cloud tier, or off). PAPR_CODE_EMBED_CONTEXT=0 skips documents/workspace/repos. PAPR_CODE_EMBED_DOWNLOAD=0 never downloads the model.
  *      PAPR_CODE_EMBED_CLOUD_SYNC=0 never uploads vectors. PAPR_CODE_EMBED_COREML=0 stays on ONNX. PAPR_CODE_EMBED_DATA_DIR overrides <PAPR_HOME>/data. PAPR_CODE_EMBED_HELPER = path to the Swift helper.
  */
 import * as fs from "fs";
@@ -64,6 +64,14 @@ export interface DeviceHit {
 const REFRESH_EVERY_MS = 30_000;
 const SYNC_EVERY_MS = 5 * 60_000;
 const TICK_MS = 250;
+/** The on-device embed process died on its own (native abort, OOM kill): wait before loading it again, doubling. */
+export const CRASH_BACKOFF_MS = 30_000;
+export const CRASH_BACKOFF_MAX_MS = 30 * 60_000;
+/** This many crashes within CRASH_WINDOW_MS turns the local tier off for CRASH_DISABLE_MS (persisted across restarts,
+ *  so a crash that also takes the app down cannot loop either). */
+export const CRASH_LIMIT = 3;
+export const CRASH_WINDOW_MS = 60 * 60_000;
+export const CRASH_DISABLE_MS = 24 * 60 * 60_000;
 
 export class CodeEmbedRuntime {
   readonly store: CodeVectorStore;
@@ -71,6 +79,10 @@ export class CodeEmbedRuntime {
   tier: EmbedTier;
   tierReasons: string[];
   private emb: Embedder | null = null;
+  /** The ONNX base process (also the upgrade's long-document fallback). */
+  private base: Embedder | null = null;
+  /** No embedder load before this time (backoff after a crash or failed load). */
+  private retryAt = 0;
   private embLoading: Promise<Embedder | null> | null = null;
   private downloading: Promise<void> | null = null;
   private refreshedAt = new Map<string, number>();
@@ -101,6 +113,21 @@ export class CodeEmbedRuntime {
     const decision = staticTier(readDeviceFacts(freeDisk), { cloudAvailable: d.cloudAvailable });
     this.tier = d.tierOverride ?? decision.tier;
     this.tierReasons = decision.reasons;
+    const fallback: EmbedTier = d.cloudAvailable ? "cloud" : "off";
+    // A blob still marked in flight means the last run died while embedding it (an older build ran ONNX in the
+    // gateway, so a native abort took everything down): count it against that blob and as a crash.
+    const crashed = this.store.takeInflight();
+    if (crashed) {
+      this.store.noteEmbedFailure(crashed);
+      this.noteCrash();
+    }
+    if (this.tier === "local" && process.env.PAPR_CODE_EMBED_LOCAL === "0") {
+      this.tier = fallback;
+      this.tierReasons = ["on-device embedding turned off (PAPR_CODE_EMBED_LOCAL=0)"];
+    } else if (this.tier === "local" && this.localDisabledUntil() > Date.now()) {
+      this.tier = fallback;
+      this.tierReasons = [`on-device embedder crashed ${CRASH_LIMIT} times; off until ${new Date(this.localDisabledUntil()).toISOString()}`];
+    }
     this.indexer = new CodeIndexer({
       store: this.store,
       tier: () => this.tier,
@@ -144,10 +171,50 @@ export class CodeEmbedRuntime {
     return this.counterLoading;
   }
 
+  private crashTimes(): number[] {
+    try {
+      return (JSON.parse(this.store.getMeta("embed_crashes") ?? "[]") as number[]).filter((t) => Date.now() - t < CRASH_WINDOW_MS);
+    } catch {
+      return [];
+    }
+  }
+
+  private localDisabledUntil(): number {
+    return Number(this.store.getMeta("local_disabled_until") ?? 0) || 0;
+  }
+
+  /** Record an embed-process crash; after CRASH_LIMIT in the window, turn the local tier off (persisted). */
+  private noteCrash(): void {
+    const times = [...this.crashTimes(), Date.now()];
+    this.store.setMeta("embed_crashes", JSON.stringify(times));
+    this.retryAt = Date.now() + Math.min(CRASH_BACKOFF_MAX_MS, CRASH_BACKOFF_MS * 2 ** (times.length - 1));
+    if (times.length >= CRASH_LIMIT) {
+      const until = Date.now() + CRASH_DISABLE_MS;
+      this.store.setMeta("local_disabled_until", String(until));
+      if (this.tier === "local") {
+        this.tier = this.d.cloudAvailable ? "cloud" : "off";
+        this.tierReasons = [`on-device embedder crashed ${times.length} times in an hour; off until ${new Date(until).toISOString()}`];
+      }
+    }
+  }
+
+  /** The embed process died on its own: drop it, count the crash, and back off before loading it again. */
+  private onEmbedderDied(e: Embedder, why: string): void {
+    if (this.emb !== e && this.base !== e) return;
+    const up = this.emb !== e ? this.emb : null;
+    this.emb = null;
+    this.base = null;
+    void up?.close().catch(() => undefined);
+    this.noteCrash();
+    this.status = this.tier === "local" ? `embedder crashed (${why}); retrying after ${new Date(this.retryAt).toISOString()}` : `embedder crashed (${why}); ${this.tierReasons[0]}`;
+    console.warn(`[codeEmbed] ${this.status}`);
+  }
+
   /** The loaded embedder, starting download/load in the background. Resolves null while unavailable. */
   embedder(): Promise<Embedder | null> {
     if (this.emb) return Promise.resolve(this.emb);
     if (this.tier !== "local") return Promise.resolve(null);
+    if (Date.now() < this.retryAt) return Promise.resolve(null);
     if (!(this.d.installed ?? modelInstalled)(this.d.dataDir)) {
       if (!this.downloading && process.env.PAPR_CODE_EMBED_DOWNLOAD !== "0") {
         this.status = "downloading model";
@@ -163,6 +230,8 @@ export class CodeEmbedRuntime {
       this.embLoading = (async () => {
         try {
           const e = await (this.d.loadEmbedder ?? ((r) => WorkerOnnxEmbedder.start(r)))(this.d.dataDir);
+          const ex = e as Embedder & { onExit?: (l: (i: { code: number | null; signal: string | null }) => void) => void };
+          ex.onExit?.((i) => this.onEmbedderDied(e, String(i.signal ?? i.code)));
           // Speed self-test: catches emulation and throttled laptops the static rules miss. One untimed warm-up
           // (first run allocates and JITs), then up to 2 timed rounds: one busy moment must not disable it all session.
           await e.embedQuery("warm up");
@@ -179,13 +248,18 @@ export class CodeEmbedRuntime {
             this.status = "self-test failed";
             return null;
           }
+          if ((e as { dead?: boolean }).dead) return null; // died during the self-test (already counted)
           this.emb = e;
+          this.base = e;
           this.status = `ready (${e.constructor.name})`;
           this.kick(true); // index now instead of waiting for the idle re-check
           this.startUpgrade(e);
           return e;
         } catch (err) {
           this.status = `load failed: ${(err as Error).message}`;
+          // A process that died while loading or self-testing counts as a crash too, so it cannot be retried in a loop.
+          if (/exited/.test((err as Error).message ?? "")) this.noteCrash();
+          else this.retryAt = Date.now() + CRASH_BACKOFF_MS;
           return null;
         } finally {
           this.embLoading = null;
@@ -283,7 +357,12 @@ export class CodeEmbedRuntime {
           return;
         }
         const r = await this.indexer.embedPending(4);
-        const pending = this.store.pendingBlobs().length;
+        // Quarantined blobs are not pending on device: counting them would spin this loop forever.
+        const pending = this.tier === "local" ? this.indexer.localPending().length : this.store.pendingBlobs().length;
+        if ((this.tier as EmbedTier) === "cloud") {
+          this.loop = setTimeout(tick, 0); // the local tier just turned off (crashes): carry on in the cloud
+          return;
+        }
         if (r.embedded > 0 || (pending > 0 && r.skipped === null)) {
           this.loop = setTimeout(tick, TICK_MS);
           return;

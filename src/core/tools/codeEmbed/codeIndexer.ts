@@ -25,6 +25,8 @@ export const SKIP_DIRS = new Set(["node_modules", "dist", "build", ".git", "venv
 const SECRET = /(^|\/)(\.env(\..*)?|.*\.(pem|key|p12|pfx)|id_rsa.*|.*secret.*\.json|credentials.*)$/i;
 export const MAX_FILE_BYTES = 400_000;
 export const MAX_FILES_PER_ROOT = 5000;
+/** A blob whose on-device embed failed (or crashed the embed process) this many times is skipped on device. */
+export const QUARANTINE_AFTER = 2;
 
 export interface IndexerDeps {
   store: CodeVectorStore;
@@ -126,6 +128,13 @@ export class CodeIndexer {
     } catch {}
   }
 
+  /** Pending blobs that may still be embedded on device (quarantined ones are left to the cloud tier). */
+  localPending(): string[] {
+    const bad = this.d.store.quarantined(QUARANTINE_AFTER);
+    const all = this.d.store.pendingBlobs();
+    return bad.size ? all.filter((b) => !bad.has(b)) : all;
+  }
+
   /** Embed up to maxFiles pending blobs on device. Safe to call often; no-op unless tier is local. */
   async embedPending(maxFiles = 8): Promise<{ embedded: number; skipped: string | null }> {
     if (this.busy) return { embedded: 0, skipped: "busy" };
@@ -136,7 +145,7 @@ export class CodeIndexer {
     this.busy = true;
     let embedded = 0;
     try {
-      for (const sha of this.d.store.pendingBlobs().slice(0, maxFiles)) {
+      for (const sha of this.localPending().slice(0, maxFiles)) {
         const src = this.texts.get(sha);
         if (!src) continue;
         let text: string;
@@ -148,7 +157,18 @@ export class CodeIndexer {
         if (gitBlobSha(text) !== sha) continue; // changed again since the scan; next refresh picks it up
         const chunks = chunkFile(src.rel, text, (s) => emb.countTokens(s));
         if (!chunks.length) continue;
-        const vecs = await emb.embedDocuments(chunks.map((c) => c.text));
+        // Recorded before the run: if this blob takes the process down, the next start knows which one it was.
+        this.d.store.setInflight(sha);
+        let vecs: Float32Array[];
+        try {
+          vecs = await emb.embedDocuments(chunks.map((c) => c.text));
+        } catch (e) {
+          // Failed or crashed the embed process: count it, so a bad blob cannot loop the indexer.
+          this.d.store.setInflight(null);
+          this.d.store.noteEmbedFailure(sha);
+          return { embedded, skipped: `embed failed: ${(e as Error)?.message ?? e}` };
+        }
+        this.d.store.setInflight(null);
         this.d.store.putChunks(chunks.map((c, i) => ({ blobSha: sha, chunk: c.chunk, lineStart: c.lineStart, lineEnd: c.lineEnd, vec: vecs[i]!, source: "local" as const })));
         embedded++;
         await new Promise((r) => setImmediate(r));

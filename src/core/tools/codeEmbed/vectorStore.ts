@@ -63,6 +63,7 @@ export class CodeVectorStore {
       CREATE INDEX IF NOT EXISTS files_blob ON files(blob_sha);
       CREATE TABLE IF NOT EXISTS meta (key TEXT PRIMARY KEY, value TEXT NOT NULL);
       CREATE TABLE IF NOT EXISTS cloud_indexed (model TEXT NOT NULL, blob_sha TEXT NOT NULL, at INTEGER NOT NULL, PRIMARY KEY (model, blob_sha));
+      CREATE TABLE IF NOT EXISTS embed_failures (model TEXT NOT NULL, blob_sha TEXT NOT NULL, failures INTEGER NOT NULL, at INTEGER NOT NULL, PRIMARY KEY (model, blob_sha));
     `);
   }
 
@@ -77,6 +78,43 @@ export class CodeVectorStore {
       return;
     }
     if (cur.value !== scope) throw new Error(`code index belongs to ${cur.value}, not ${scope}`);
+  }
+
+  getMeta(key: string): string | null {
+    return this.db.prepare(`SELECT value FROM meta WHERE key=?`).get(key)?.value ?? null;
+  }
+
+  setMeta(key: string, value: string | null): void {
+    if (value === null) this.db.prepare(`DELETE FROM meta WHERE key=?`).run(key);
+    else this.db.prepare(`INSERT INTO meta(key, value) VALUES (?, ?) ON CONFLICT(key) DO UPDATE SET value=excluded.value`).run(key, value);
+  }
+
+  /** The blob being embedded on device right now. Written before the run and cleared after, so a blob that takes the
+   *  process down is still known on the next start (see takeInflight). */
+  setInflight(blobSha: string | null): void {
+    this.setMeta(`inflight:${this.model}`, blobSha);
+  }
+
+  /** A blob left in flight by a crash, cleared as it is read. */
+  takeInflight(): string | null {
+    const b = this.getMeta(`inflight:${this.model}`);
+    if (b) this.setInflight(null);
+    return b;
+  }
+
+  /** One more failed on-device embed for this blob. Returns its failure count. */
+  noteEmbedFailure(blobSha: string): number {
+    this.db
+      .prepare(`INSERT INTO embed_failures(model, blob_sha, failures, at) VALUES (?,?,1,?)
+                ON CONFLICT(model, blob_sha) DO UPDATE SET failures=failures+1, at=excluded.at`)
+      .run(this.model, blobSha, Date.now());
+    return this.db.prepare(`SELECT failures FROM embed_failures WHERE model=? AND blob_sha=?`).get(this.model, blobSha)?.failures ?? 1;
+  }
+
+  /** Blobs that failed on device at least `after` times: never embedded locally again (the cloud tier may still take
+   *  them). A new version of the file is a new blob, so an edit gets a fresh try. */
+  quarantined(after: number): Set<string> {
+    return new Set(this.db.prepare(`SELECT blob_sha FROM embed_failures WHERE model=? AND failures>=?`).all(this.model, after).map((r: any) => r.blob_sha));
   }
 
   scope(): string | null {
