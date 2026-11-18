@@ -82,7 +82,8 @@ export function PlanSection({ data, plans }: { data: AgentsOverview; plans: Plan
   const [prices, setPrices] = useState<Record<string, number | null>>({});
   const priceOf = (p: PlanReading) =>
     p.provider in prices ? prices[p.provider] : readPlanPriceOverride(p.provider) ?? p.plan?.monthlyUsd ?? null;
-  const m = data.month;
+  // Older gateways (and payloads cached before plan usage shipped) have no `month`.
+  const m = data.month ?? { apiKey: 0, subscription: 0, papr: 0, unknown: 0, start: new Date(new Date().getFullYear(), new Date().getMonth(), 1).toISOString() };
   const providerExtra = list.reduce((a, p) => a + (p.extraSpentUsd ?? 0), 0);
   const sum = monthTotal({ planUsd: list.map(priceOf), apiKeyUsd: m.apiKey, paprUsd: m.papr, providerExtraUsd: providerExtra });
   const monthName = new Date(m.start).toLocaleDateString(undefined, { month: "long" });
