@@ -148,6 +148,12 @@ const STDERR_LOG_CHUNK_LIMIT = 5;
  */
 const MAX_CONSECUTIVE_PATH_CRASHES = 3;
 
+/**
+ * Consecutive request timeouts on one replica before it is parked. Each timeout SIGKILLs
+ * the shared worker, so an unbounded loop on one slow file fails every database's requests.
+ */
+export const MAX_CONSECUTIVE_PATH_TIMEOUTS = 3;
+
 export interface TursoSyncWorkerCommand {
   command: string;
   args: string[];
@@ -219,6 +225,8 @@ export class TursoReplicaSyncWorkerClient {
   private readonly crashListeners = new Set<TursoSyncWorkerCrashListener>();
   /** Consecutive engine crashes per replica path, cleared by a successful op. */
   private readonly crashStreaks = new Map<string, number>();
+  /** Consecutive request timeouts per replica path, cleared by a successful op. */
+  private readonly timeoutStreaks = new Map<string, number>();
   /**
    * Paths whose engine tables we have already dropped since the last healthy op, and so
    * the evidence that a malformed table reappearing came from the remote rather than
@@ -576,6 +584,28 @@ export class TursoReplicaSyncWorkerClient {
       });
   }
 
+  /**
+   * A path whose requests keep timing out restarts the shared worker every time, failing
+   * every other database's requests with it. After {@link MAX_CONSECUTIVE_PATH_TIMEOUTS}
+   * in a row, park it for the session so the rest keep working; parking hands it to the
+   * self-heal (re-seed from cloud, keeping unpushed rows). `close` never counts.
+   */
+  private noteTimeout(options: SendOptions): void {
+    if (options.op === "close") return;
+    const streak = (this.timeoutStreaks.get(options.localPath) ?? 0) + 1;
+    this.timeoutStreaks.set(options.localPath, streak);
+    if (streak >= MAX_CONSECUTIVE_PATH_TIMEOUTS && !this.parkedPaths.has(options.localPath)) {
+      console.error(
+        `[TursoSyncWorker] Parking ${options.localPath} after ${streak} consecutive timeouts ` +
+          "so it stops restarting the worker for every other database.",
+      );
+      this.parkPath(
+        options.localPath,
+        `its requests timed out ${streak} times in a row, restarting the sync worker each time`,
+      );
+    }
+  }
+
   private noteHealthy(options: SendOptions): void {
     // A `close` on a path that was never opened succeeds without the engine running at
     // all, so it must not be able to launder a streak.
@@ -583,6 +613,7 @@ export class TursoReplicaSyncWorkerClient {
       return;
     }
     this.crashStreaks.delete(options.localPath);
+    this.timeoutStreaks.delete(options.localPath);
     this.engineTableRepairs.delete(options.localPath);
   }
 
@@ -616,6 +647,7 @@ export class TursoReplicaSyncWorkerClient {
         // kill is ours so the requests it takes down with it are not read as aborts.
         if (this.child) this.selfKill = { op: options.op, localPath: options.localPath };
         this.killChild("SIGKILL");
+        this.noteTimeout(options);
         reject(
           new Error(
             `Turso sync worker ${options.op} timed out after ${options.timeoutMs}ms ` +
