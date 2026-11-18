@@ -22,10 +22,10 @@ export const COREML_FILES = [
 ] as const;
 export const QUERY_INSTRUCTION =
   "Given a code search query about a repository, retrieve the source code file that must be read or edited";
-/** Documents are chunked to ~1000 tokens (chunker.ts), so 2048 only trims pathological input. It used to be 8192:
- *  one 8k-token run makes onnxruntime allocate a multi-GB attention buffer, which aborts natively under memory
- *  pressure (Elliott's crash loop, Nov 17). */
-export const MAX_DOC_TOKENS = 2048;
+/** Every chunk is at most CHUNK_TOKENS (1000) tokens, long lines included (chunker.ts), so nothing legitimate reaches
+ *  this. It is the last guard: it used to be 8192, and one 8k-token run makes onnxruntime allocate several GB (measured
+ *  2.3 GB at 4k tokens, in process, CPU arena on), which aborts natively under memory pressure (Nov 17 crash loop). */
+export const MAX_DOC_TOKENS = 1024;
 export const MAX_QUERY_TOKENS = 512;
 
 export interface Embedder {

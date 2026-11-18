@@ -14,6 +14,7 @@ import * as path from "path";
 import { afterEach, describe, expect, test } from "vitest";
 import { CODE_EMBED_DIM, l2normalize, MAX_DOC_TOKENS, WorkerOnnxEmbedder, type Embedder } from "../../src/core/tools/codeEmbed/embedder.js";
 import { QUARANTINE_AFTER } from "../../src/core/tools/codeEmbed/codeIndexer.js";
+import { CHUNK_TOKENS, chunkFile, MAX_CHUNKS_PER_FILE } from "../../src/core/tools/codeEmbed/chunker.js";
 import { CRASH_LIMIT, CodeEmbedRuntime } from "../../src/core/tools/codeEmbed/runtime.js";
 import { gitBlobSha } from "../../src/core/tools/codeEmbed/vectorStore.js";
 
@@ -173,10 +174,43 @@ describe("runtime: no crash loop", () => {
 });
 
 describe("ONNX session limits", () => {
-  test("documents capped at 2048 tokens and the CPU arena is off", () => {
-    expect(MAX_DOC_TOKENS).toBe(2048);
+  test("documents capped at 1024 tokens and the CPU arena is off", () => {
+    expect(MAX_DOC_TOKENS).toBe(1024);
     const src = readFileSync(path.join(__dirname, "../../src/core/tools/codeEmbed/embedder.ts"), "utf8");
     expect(src).toMatch(/enableCpuMemArena: false/);
     expect(src).not.toMatch(/node:worker_threads/);
+  });
+});
+
+
+describe("chunker: no chunk over CHUNK_TOKENS, long lines included", () => {
+  const count = (s: string) => Math.ceil(s.length / 3);
+  test("minified one-line JS is split, not one 30k-token chunk", () => {
+    const text = "var a=" + "function(x){return x*2},".repeat(4000) + "0;\n";
+    const cs = chunkFile("app.min.js", text, count);
+    expect(cs.length).toBeGreaterThan(1);
+    expect(Math.max(...cs.map((c) => count(c.text)))).toBeLessThanOrEqual(CHUNK_TOKENS);
+    expect(cs.every((c) => c.lineStart === 1 && c.lineEnd === 1)).toBe(true);
+  });
+  test("a long line in the middle of a normal file", () => {
+    const text = "const a = 1;\n".repeat(50) + "x".repeat(20000) + "\n" + "const b = 2;\n".repeat(50);
+    const cs = chunkFile("mixed.ts", text, count);
+    expect(Math.max(...cs.map((c) => count(c.text)))).toBeLessThanOrEqual(CHUNK_TOKENS);
+    expect(cs.at(-1)!.lineEnd).toBeGreaterThanOrEqual(101);
+  });
+  test("huge generated files stop at MAX_CHUNKS_PER_FILE", () => {
+    const cs = chunkFile("bundle.js", "y".repeat(3_000_000), count);
+    expect(cs.length).toBe(MAX_CHUNKS_PER_FILE);
+  });
+});
+
+describe("status reports the device", () => {
+  test("info() includes device facts and crash history", async () => {
+    const { base } = project({ "a.ts": "x\n" });
+    const rt = runtime(base);
+    const i = rt.info();
+    expect(i.device.ramGB).toBeGreaterThan(0);
+    expect(i.device.cpu).toBeTruthy();
+    expect(i.crashes).toEqual({ lastHour: 0, localDisabledUntil: null, quarantined: 0 });
   });
 });

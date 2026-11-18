@@ -8,6 +8,26 @@ export const LONG_CHARS = 3_500;
 export const CHUNK_TOKENS = 1000;
 export const OVERLAP_TOKENS = 100;
 
+/** Generated or minified files can be megabytes on a few lines: index their start, not thousands of chunks. */
+export const MAX_CHUNKS_PER_FILE = 64;
+
+/** Cut one long line into pieces of at most `budget` tokens, by characters (binary search on the real count). */
+export function splitLongLine(line: string, budget: number, countTokens: (s: string) => number): string[] {
+  const out: string[] = [];
+  let rest = line;
+  while (rest.length && out.length < MAX_CHUNKS_PER_FILE) {
+    if (countTokens(rest) <= budget) { out.push(rest); break; }
+    let lo = 1, hi = Math.min(rest.length, budget * 8);
+    while (lo < hi) {
+      const mid = (lo + hi + 1) >> 1;
+      if (countTokens(rest.slice(0, mid)) <= budget) lo = mid; else hi = mid - 1;
+    }
+    out.push(rest.slice(0, lo));
+    rest = rest.slice(lo);
+  }
+  return out;
+}
+
 export interface Chunk {
   chunk: number;
   text: string;
@@ -35,7 +55,19 @@ export function chunkFile(path: string, text: string, countTokens: (s: string) =
       tokens += t;
       end++;
     }
+    if (end === start + 1 && tokens > budget) {
+      // One line longer than a whole chunk (minified JS, one-line JSON, a data URI). It used to become a single chunk of
+      // any size: 368k characters in the bench corpus, cut only at MAX_DOC_TOKENS, which made onnxruntime allocate
+      // gigabytes for one run (the Nov 17 gateway crash). Split it into budget-sized pieces of the same line instead.
+      for (const piece of splitLongLine(lines[start]!, budget, countTokens)) {
+        if (out.length >= MAX_CHUNKS_PER_FILE) return out;
+        if (piece.trim()) out.push({ chunk: out.length, text: header + piece, lineStart: start + 1, lineEnd: start + 1 });
+      }
+      start = end;
+      continue;
+    }
     const body = lines.slice(start, end).join("\n");
+    if (out.length >= MAX_CHUNKS_PER_FILE) return out;
     if (body.trim()) out.push({ chunk: out.length, text: header + body, lineStart: start + 1, lineEnd: end });
     if (end >= lines.length) break;
     // step back ~OVERLAP_TOKENS worth of lines

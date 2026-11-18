@@ -21,7 +21,8 @@
  */
 import * as fs from "fs";
 import * as path from "path";
-import { CodeIndexer, SKIP_DIRS } from "./codeIndexer.js";
+import * as os from "os";
+import { CodeIndexer, QUARANTINE_AFTER, SKIP_DIRS } from "./codeIndexer.js";
 import { contextEnabled, contextRootFor, contextRoots, contextSkip } from "./contextRoots.js";
 import type { PostClient } from "./cloudSync.js";
 import { availableMemBytes, canRunNow, readDeviceFacts, selfTestPasses, staticTier, type EmbedTier } from "./deviceHealth.js";
@@ -337,8 +338,16 @@ export class CodeEmbedRuntime {
     return this.d.paprRoot && contextEnabled() ? contextRoots(this.d.paprRoot) : [];
   }
 
-  info(): { scope: string | null; tier: EmbedTier; reasons: string[]; status: string; backend: string; modelInstalled: boolean; roots: number } & ReturnType<CodeVectorStore["stats"]> {
-    return { scope: this.store.scope(), tier: this.tier, reasons: this.tierReasons, status: this.status, backend: this.backend, modelInstalled: (this.d.installed ?? modelInstalled)(this.d.dataDir), roots: this.roots.size, ...this.store.stats() };
+  info() {
+    // Device facts and crash history, so a report like "the gateway keeps crashing" comes with the machine it ran on.
+    const f = readDeviceFacts(null);
+    const GBf = (b: number) => Math.round((b / 1e9) * 10) / 10;
+    return {
+      scope: this.store.scope(), tier: this.tier, reasons: this.tierReasons, status: this.status, backend: this.backend,
+      modelInstalled: (this.d.installed ?? modelInstalled)(this.d.dataDir), roots: this.roots.size, ...this.store.stats(),
+      device: { platform: f.platform, arch: f.arch, os: `${os.type()} ${os.release()}`, cpu: f.cpuModel, cores: f.physicalCores, ramGB: GBf(f.totalMemBytes), availableGB: GBf(f.freeMemBytes), translated: f.translated },
+      crashes: { lastHour: this.crashTimes().length, localDisabledUntil: this.localDisabledUntil() || null, quarantined: this.store.quarantined(QUARANTINE_AFTER).size },
+    };
   }
 
   /** Background: embed pending files a few at a time, then sync vectors to the cloud. One loop at a time. */
