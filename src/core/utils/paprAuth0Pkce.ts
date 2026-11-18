@@ -9,6 +9,33 @@ export type PaprAuthMode = "login" | "signup" | "phone";
 /** Auth0 passwordless SMS connection (text-code sign-in for phone-first Papr accounts). */
 export const PAPR_AUTH0_SMS_CONNECTION = "sms";
 
+export type SignInIdentifier =
+  | { kind: "phone"; value: string }
+  | { kind: "email"; value: string };
+
+/**
+ * What the user typed in the gate's one box: an email, or a phone number
+ * normalized to E.164 (10 digits = US, +1 added). Anything else → null.
+ */
+export function parseSignInIdentifier(raw: unknown): SignInIdentifier | null {
+  if (typeof raw !== "string") return null;
+  const text = raw.trim();
+  if (!text || text.length > 254) return null;
+  if (text.includes("@")) {
+    return /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(text)
+      ? { kind: "email", value: text.toLowerCase() }
+      : null;
+  }
+  if (!/^\+?[\d\s().-]+$/.test(text)) return null;
+  const digits = text.replace(/\D/g, "");
+  if (text.startsWith("+")) {
+    return digits.length >= 8 && digits.length <= 15 ? { kind: "phone", value: `+${digits}` } : null;
+  }
+  if (digits.length === 10) return { kind: "phone", value: `+1${digits}` };
+  if (digits.length === 11 && digits.startsWith("1")) return { kind: "phone", value: `+${digits}` };
+  return null;
+}
+
 export interface PaprAuth0Config {
   domain: string;
   clientId: string;
@@ -60,6 +87,8 @@ export function buildAuth0AuthorizeUrl(
     state: string;
     codeChallenge: string;
     mode?: PaprAuthMode;
+    /** Prefills Auth0: the phone for the SMS screen, or the email. */
+    loginHint?: string;
   },
 ): URL {
   const authUrl = new URL(`https://${config.domain}/authorize`);
@@ -71,6 +100,10 @@ export function buildAuth0AuthorizeUrl(
   authUrl.searchParams.set("scope", config.scope);
   authUrl.searchParams.set("state", params.state);
   authUrl.searchParams.set("audience", `https://${config.domain}/userinfo`);
+
+  if (params.loginHint) {
+    authUrl.searchParams.set("login_hint", params.loginHint);
+  }
 
   if (params.mode === "phone") {
     // Phone-first users (accounts created by texting Pen) have no email/password;

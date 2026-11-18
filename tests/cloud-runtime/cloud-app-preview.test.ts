@@ -11,8 +11,8 @@ import {
   shortAppName,
   buildPreviewLandingHtml,
   buildPreviewMetaFromSlug,
-  CLOUD_APP_LOGIN_BUTTON_LABEL,
-  CLOUD_APP_SIGNUP_BUTTON_LABEL,
+  CLOUD_APP_CONTINUE_LABEL,
+  CLOUD_APP_SIGNUP_LINK_LABEL,
   CLOUD_APP_SIGN_IN_HEADLINE,
   injectPreviewHeadTags,
   isLinkPreviewCrawler,
@@ -141,8 +141,8 @@ describe("cloudAppPreview", () => {
     // Slug fallback has no real copy: the generated placeholder is hidden, not shown.
     expect(html).not.toContain('class="app-description"');
     expect(html).toContain(CLOUD_APP_SIGN_IN_HEADLINE);
-    expect(html).toContain(CLOUD_APP_LOGIN_BUTTON_LABEL);
-    expect(html).toContain(CLOUD_APP_SIGNUP_BUTTON_LABEL);
+    expect(html).toContain(CLOUD_APP_CONTINUE_LABEL);
+    expect(html).toContain(CLOUD_APP_SIGNUP_LINK_LABEL);
     expect(html).toContain("mode=signup");
     expect(html).toContain('class="gate-status"');
     expect(html).toContain("/discover/_/drop-light.png");

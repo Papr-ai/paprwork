@@ -157,9 +157,12 @@ export function injectPreviewHeadTags(html: string, headTags: string): string {
 export const CLOUD_APP_SIGN_IN_HEADLINE = "Sign in is required to access this app.";
 export const CLOUD_APP_LOGIN_BUTTON_LABEL = "Sign in";
 export const CLOUD_APP_SIGNUP_BUTTON_LABEL = "Create Papr account";
-export const CLOUD_APP_PHONE_BUTTON_LABEL = "Continue with phone";
+export const CLOUD_APP_SIGNUP_LINK_LABEL = "New to Papr? Create account";
+export const CLOUD_APP_IDENTIFIER_PLACEHOLDER = "Phone number or email";
+export const CLOUD_APP_CONTINUE_LABEL = "Continue";
+export const CLOUD_APP_OTHER_SIGN_IN_LABEL = "Continue with Google, Apple, or more";
 export const CLOUD_APP_LOGIN_VIA_NOTE =
-  "Sign in with an existing Papr account, or create one if you're new.";
+  "We'll text you a code, or ask for your password.";
 
 /** Cloud App Host Auth0 entry — `mode=signup` opens Auth0 registration. */
 export function buildCloudAuthLoginUrl(
@@ -173,12 +176,10 @@ export function buildCloudAuthLoginUrl(
   return `/auth/login?${params.toString()}`;
 }
 
-/** Same /auth/login entry, but straight to Auth0's text-code screen. */
-function phoneLoginUrlFrom(loginUrl: string): string {
-  const [path, query = ""] = loginUrl.split("?");
-  const params = new URLSearchParams(query);
-  params.set("mode", "phone");
-  return `${path}?${params.toString()}`;
+/** returnTo carried by a /auth/login?returnTo=… URL (for the one-box form). */
+function returnToFromLoginUrl(loginUrl: string): string {
+  const query = loginUrl.split("?")[1] ?? "";
+  return new URLSearchParams(query).get("returnTo") ?? "/";
 }
 
 /** Papr mark (same gradient as the Discover top bar). */
@@ -213,7 +214,7 @@ export function buildPreviewLandingHtml(
   const signupUrl = options?.signupUrl
     ? escapeHtmlAttribute(options.signupUrl)
     : null;
-  const phoneUrl = loginUrl ? escapeHtmlAttribute(phoneLoginUrlFrom(options!.loginUrl!)) : null;
+  const returnTo = loginUrl ? escapeHtmlAttribute(returnToFromLoginUrl(options!.loginUrl!)) : "";
   const iconUrl = escapeHtmlAttribute(meta.iconUrl);
   // Same glyph as the Discover app page: the app's logo inside the Papr glass droplet.
   const iconMarkup = options?.iconSvg?.trim().startsWith("<svg")
@@ -225,19 +226,18 @@ export function buildPreviewLandingHtml(
   const loginBlock =
     showLoginButton && loginUrl
       ? `<div class="gate-actions">
-        <a class="btn btn--primary" href="${loginUrl}" target="_blank" rel="noopener noreferrer">${CLOUD_APP_LOGIN_BUTTON_LABEL}</a>${
-        signupUrl
-          ? `
-        <a class="btn btn--secondary" href="${signupUrl}" target="_blank" rel="noopener noreferrer">${CLOUD_APP_SIGNUP_BUTTON_LABEL}</a>`
-          : ""
-      }${
-        phoneUrl
-          ? `
-        <a class="btn btn--secondary" href="${phoneUrl}" target="_blank" rel="noopener noreferrer">${CLOUD_APP_PHONE_BUTTON_LABEL}</a>`
-          : ""
-      }
+        <form class="gate-form" method="post" action="/auth/login" target="_blank">
+          <input type="hidden" name="returnTo" value="${returnTo}">
+          <input class="gate-input" name="identifier" type="text" inputmode="email" autocomplete="username" autocapitalize="off" spellcheck="false" required maxlength="254" placeholder="${CLOUD_APP_IDENTIFIER_PLACEHOLDER}" aria-label="${CLOUD_APP_IDENTIFIER_PLACEHOLDER}">
+          <button class="btn btn--primary" type="submit">${CLOUD_APP_CONTINUE_LABEL}</button>
+        </form>
+        <a class="btn btn--secondary" href="${loginUrl}" target="_blank" rel="noopener noreferrer">${CLOUD_APP_OTHER_SIGN_IN_LABEL}</a>
       </div>
-      <p class="gate-via">${CLOUD_APP_LOGIN_VIA_NOTE}</p>`
+      <p class="gate-via">${CLOUD_APP_LOGIN_VIA_NOTE}${
+        signupUrl
+          ? ` <a class="gate-link" href="${signupUrl}" target="_blank" rel="noopener noreferrer">${CLOUD_APP_SIGNUP_LINK_LABEL}</a>`
+          : ""
+      }</p>`
       : "";
 
   return `<!DOCTYPE html>
@@ -272,6 +272,10 @@ export function buildPreviewLandingHtml(
     .btn--secondary { color: var(--acc); background: var(--chip); }
     .btn--secondary:hover { background: color-mix(in srgb, var(--tx) 10%, transparent); }
     .btn:focus-visible { outline: 2px solid var(--acc); outline-offset: 2px; }
+    .gate-form { display: grid; gap: 10px; }
+    .gate-input { height: 46px; padding: 0 14px; border-radius: 14px; border: 1px solid var(--line); background: var(--bg); color: var(--tx); font: inherit; font-size: 16px; text-align: center; }
+    .gate-input:focus { outline: 2px solid var(--acc); outline-offset: 1px; border-color: transparent; }
+    .gate-link { color: var(--acc); font-weight: 600; white-space: nowrap; }
     .gate-via { margin: 14px 0 0; font-size: 12.5px; color: var(--tx3); line-height: 1.45; }
     .foot { padding: 0 16px 24px; text-align: center; font-size: 12.5px; color: var(--tx3); }
     .foot a:hover { color: var(--tx); }
