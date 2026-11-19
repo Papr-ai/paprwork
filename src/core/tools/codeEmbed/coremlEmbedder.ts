@@ -10,7 +10,8 @@ import { spawn, type ChildProcessWithoutNullStreams } from "child_process";
 import * as fs from "fs";
 import * as path from "path";
 import * as readline from "readline";
-import { CODE_EMBED_DIM, CODE_EMBED_MODEL, MAX_QUERY_TOKENS, QUERY_INSTRUCTION, l2normalize, type Embedder } from "./embedder.js";
+import { fileURLToPath } from "url";
+import { CODE_EMBED_DIM, CODE_EMBED_MODEL, MAX_QUERY_TOKENS, QUERY_INSTRUCTION, coremlInstalled, l2normalize, type Embedder } from "./embedder.js";
 
 export const EOS_ENDOFTEXT = 151643;
 export const COREML_MODEL = "coreml/papr-embed-code-1-0.6b.mlpackage";
@@ -125,8 +126,24 @@ export class CoreMLEmbedder implements Embedder {
   }
 }
 
-/** Where the helper binary lives: packaged app resources, else the dev build output. */
+/** Where the helper binary lives: PAPR_CODE_EMBED_HELPER, packaged app resources, else the dev build output (found
+ *  from the repo root whatever the gateway's cwd is). */
 export function helperPath(resourcesDir = (process as any).resourcesPath ?? ""): string {
-  const cands = [process.env.PAPR_CODE_EMBED_HELPER ?? "", path.join(resourcesDir, "bin", "papr-embed-coreml"), path.join(process.cwd(), "native", "papr-embed-coreml", "build", "papr-embed-coreml")];
+  const repoRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..", "..", "..", "..");
+  const dev = (root: string) => path.join(root, "native", "papr-embed-coreml", "build", "papr-embed-coreml");
+  const cands = [process.env.PAPR_CODE_EMBED_HELPER ?? "", path.join(resourcesDir, "bin", "papr-embed-coreml"), dev(process.cwd()), dev(repoRoot)];
   return cands.find((c) => c && fs.existsSync(c)) ?? cands[1]!;
+}
+
+/**
+ * Can this machine embed on the Neural Engine right now? Apple Silicon macOS, not turned off, the helper binary and the
+ * CoreML model on disk. When yes the runtime loads CoreML first and never starts the ONNX process unless it has to.
+ */
+export function aneAvailable(root: string, platform = process.platform, arch = process.arch): { ok: boolean; reason: string } {
+  if (platform !== "darwin" || arch !== "arm64") return { ok: false, reason: "not Apple Silicon macOS" };
+  if (process.env.PAPR_CODE_EMBED_COREML === "0") return { ok: false, reason: "turned off (PAPR_CODE_EMBED_COREML=0)" };
+  const h = helperPath();
+  if (!fs.existsSync(h)) return { ok: false, reason: `Neural Engine helper not found (${h})` };
+  if (!coremlInstalled(root)) return { ok: false, reason: "Neural Engine model not downloaded yet" };
+  return { ok: true, reason: "Neural Engine" };
 }

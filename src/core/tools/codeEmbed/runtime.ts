@@ -28,6 +28,7 @@ import type { PostClient } from "./cloudSync.js";
 import { availableMemBytes, canRunNow, readDeviceFacts, selfTestPasses, staticTier, type EmbedTier } from "./deviceHealth.js";
 import { CODE_EMBED_DIM, CODE_EMBED_MODEL, downloadModel, downloadTokenizer, loadTokenCounter, modelDir, tokenizerInstalled, WorkerOnnxEmbedder, modelInstalled, type Embedder } from "./embedder.js";
 import { CodeVectorStore } from "./vectorStore.js";
+import { aneAvailable } from "./coremlEmbedder.js";
 
 export interface RuntimeDeps {
   /** Directory holding models/ and code-embed/index.db (default <PAPR_HOME>/data). */
@@ -55,6 +56,9 @@ export interface RuntimeDeps {
   activeScope?: () => string | null;
   /** First retry delay after a failed Neural Engine load (default UPGRADE_RETRY_MS; tests use a few ms). */
   upgradeRetryMs?: number;
+  /** Load the Neural Engine (loadUpgrade) first and only start ONNX if it fails. Default: aneAvailable() (Apple Silicon
+   *  with the helper and CoreML model on disk). false = ONNX first, Neural Engine swapped in when ready. */
+  aneFirst?: boolean;
 }
 
 export interface DeviceHit {
@@ -103,6 +107,8 @@ export class CodeEmbedRuntime {
   private upgradeFailures = 0;
   /** Why the Neural Engine is not in use yet (shown in /api/code-embed/status). */
   private upgradeNote: string | null = null;
+  /** When the Neural Engine last failed to load or died (0 = never): ONNX is used until the backoff retry succeeds. */
+  private aneFailedAt = 0;
   private counter: ((s: string) => number) | null = null;
   private counterLoading: Promise<((s: string) => number) | null> | null = null;
   status = "starting";
@@ -244,7 +250,13 @@ export class CodeEmbedRuntime {
     if (!this.embLoading) {
       this.status = "loading model";
       this.embLoading = (async () => {
+        // Neural Engine first on Apple Silicon: ~16 ms per short chunk at near-zero CPU, versus ONNX keeping ~4 cores
+        // busy. ONNX only starts if the Neural Engine cannot load (or later, for a document longer than it takes).
         try {
+          if (this.aneFirst && !this.aneFailedAt) {
+            const ane = await this.loadAneFirst();
+            if (ane) return ane;
+          }
           const e = await (this.d.loadEmbedder ?? ((r) => WorkerOnnxEmbedder.start(r)))(this.d.dataDir);
           const ex = e as Embedder & { onExit?: (l: (i: { code: number | null; signal: string | null }) => void) => void };
           ex.onExit?.((i) => this.onEmbedderDied(e, String(i.signal ?? i.code)));
@@ -269,7 +281,9 @@ export class CodeEmbedRuntime {
           this.base = e;
           this.status = `ready (${e.constructor.name})`;
           this.kick(true); // index now instead of waiting for the idle re-check
-          this.startUpgrade(e);
+          // The Neural Engine just failed: try it again after the backoff, not straight away.
+          if (this.aneFailedAt) this.scheduleUpgrade(e, this.upgradeNote ?? "Neural Engine unavailable");
+          else this.startUpgrade(e);
           return e;
         } catch (err) {
           this.status = `load failed: ${(err as Error).message}`;
@@ -285,21 +299,83 @@ export class CodeEmbedRuntime {
     return this.embLoading;
   }
 
-  /** Swap in the faster backend when it loads. Vectors are interchangeable (CoreML fp16 vs ONNX int8: cosine 0.9998). */
   /** Swap in the faster backend when it loads. A failed load (helper not built yet, compile timed out under memory
    *  pressure) is retried with backoff instead of staying on ONNX for the whole session, and a helper that dies later
    *  hands back to the base embedder and is reloaded the same way. */
+  private scheduleUpgrade(base: Embedder, why: string): void {
+    if (this.closed || this.base !== base) return;
+    if (this.upgradeTimer) clearTimeout(this.upgradeTimer);
+    const wait = Math.min(UPGRADE_RETRY_MAX_MS, (this.d.upgradeRetryMs ?? UPGRADE_RETRY_MS) * 2 ** this.upgradeFailures++);
+    this.upgradeNote = `${why}; retrying at ${new Date(Date.now() + wait).toISOString()}`;
+    this.upgradeTimer = setTimeout(() => this.startUpgrade(base), wait);
+    this.upgradeTimer.unref?.();
+  }
+
+  private get aneFirst(): boolean {
+    return this.d.aneFirst ?? aneAvailable(this.d.dataDir).ok;
+  }
+
+  /** ONNX loaded on demand: the Neural Engine's fallback for a document longer than its longest shape. Most sessions
+   *  never start it. */
+  private lazyBase(): Embedder {
+    const load = async (): Promise<Embedder> => {
+      if (this.base) return this.base;
+      const e = await (this.d.loadEmbedder ?? ((r) => WorkerOnnxEmbedder.start(r)))(this.d.dataDir);
+      if (this.closed) { await e.close().catch(() => undefined); throw new Error("closed"); }
+      // Its crash costs one long document, not the Neural Engine: drop it (restarts on the next long document) and
+      // count it like any embed-process crash.
+      (e as { onExit?: (l: () => void) => void }).onExit?.(() => { if (this.base === e) { this.base = null; this.noteCrash(); } });
+      this.base = e;
+      return e;
+    };
+    return {
+      model: CODE_EMBED_MODEL, dim: CODE_EMBED_DIM,
+      embedQuery: async (t) => (await load()).embedQuery(t),
+      embedDocuments: async (ts) => (await load()).embedDocuments(ts),
+      countTokens: () => { throw new Error("lazy fallback does not count tokens"); },
+      close: async () => {}, // the runtime closes this.base itself
+    };
+  }
+
+  /** Load the Neural Engine as the primary embedder. null (and ONNX takes over) if it fails or is too slow. */
+  private async loadAneFirst(): Promise<Embedder | null> {
+    const up = this.d.loadUpgrade === undefined ? defaultUpgrade() : this.d.loadUpgrade;
+    if (!up) return null;
+    this.status = "loading Neural Engine (first compile ~2 min, then under 1 s)";
+    try {
+      const u = await up(this.d.dataDir, this.lazyBase());
+      await u.embedQuery("warm up");
+      const t = Date.now();
+      for (let i = 0; i < 8; i++) await u.embedQuery(`self test ${i}: where is the retry logic`);
+      if (!selfTestPasses(Date.now() - t)) throw new Error(`self-test too slow (${Date.now() - t} ms for 8 queries)`);
+      if (this.closed) { await u.close().catch(() => undefined); return null; }
+      this.emb = u;
+      this.upgradeFailures = 0;
+      this.upgradeNote = null;
+      this.status = `ready (${u.constructor.name})`;
+      (u as { onExit?: (l: () => void) => void }).onExit?.(() => {
+        if (this.emb !== u) return;
+        // Helper died (memory pressure kill, crash): carry on with ONNX now, Neural Engine again after the backoff.
+        this.emb = this.base;
+        this.aneFailedAt = Date.now();
+        this.upgradeNote = "Neural Engine helper exited";
+        if (this.emb) { this.status = `ready (${this.emb.constructor.name})`; this.scheduleUpgrade(this.emb, "Neural Engine helper exited"); }
+        else void this.embedder();
+      });
+      this.kick(true);
+      return u;
+    } catch (e) {
+      this.aneFailedAt = Date.now();
+      this.upgradeNote = `Neural Engine load failed: ${(e as Error)?.message ?? e}`;
+      return null;
+    }
+  }
+
   private startUpgrade(base: Embedder): void {
     const up = this.d.loadUpgrade === undefined ? defaultUpgrade() : this.d.loadUpgrade;
     if (!up || this.closed) return;
     if (this.upgradeTimer) { clearTimeout(this.upgradeTimer); this.upgradeTimer = null; }
-    const retry = (why: string) => {
-      if (this.closed || this.base !== base) return;
-      const wait = Math.min(UPGRADE_RETRY_MAX_MS, (this.d.upgradeRetryMs ?? UPGRADE_RETRY_MS) * 2 ** this.upgradeFailures++);
-      this.upgradeNote = `${why}; retrying at ${new Date(Date.now() + wait).toISOString()}`;
-      this.upgradeTimer = setTimeout(() => this.startUpgrade(base), wait);
-      this.upgradeTimer.unref?.();
-    };
+    const retry = (why: string) => this.scheduleUpgrade(base, why);
     up(this.d.dataDir, base)
       .then((u) => {
         if (this.closed || this.emb !== base) return void u.close();
@@ -378,6 +454,7 @@ export class CodeEmbedRuntime {
     const GBf = (b: number) => Math.round((b / 1e9) * 10) / 10;
     return {
       scope: this.store.scope(), tier: this.tier, reasons: this.tierReasons, status: this.status, backend: this.backend, upgrade: this.upgradeNote,
+      neuralEngine: { ...aneAvailable(this.d.dataDir), first: this.aneFirst, onnxStarted: !!this.base },
       modelInstalled: (this.d.installed ?? modelInstalled)(this.d.dataDir), roots: this.roots.size, ...this.store.stats(),
       device: { platform: f.platform, arch: f.arch, os: `${os.type()} ${os.release()}`, cpu: f.cpuModel, cores: f.physicalCores, ramGB: GBf(f.totalMemBytes), availableGB: GBf(f.freeMemBytes), translated: f.translated },
       crashes: { lastHour: this.crashTimes().length, localDisabledUntil: this.localDisabledUntil() || null, quarantined: this.store.quarantined(QUARANTINE_AFTER).size },
