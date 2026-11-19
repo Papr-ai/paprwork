@@ -29,6 +29,7 @@ import { availableMemBytes, readDeviceFacts, readPowerState, selfTestPasses, sta
 import { CODE_EMBED_DIM, CODE_EMBED_MODEL, downloadModel, downloadTokenizer, loadTokenCounter, modelDir, tokenizerInstalled, WorkerOnnxEmbedder, modelInstalled, type Embedder } from "./embedder.js";
 import { CodeVectorStore } from "./vectorStore.js";
 import { aneAvailable } from "./coremlEmbedder.js";
+import { INDEX_CORES_BUDGET, IndexCpu, QUERY_P50_BUDGET_MS, Samples, cpuSeconds } from "./perfStats.js";
 
 export interface RuntimeDeps {
   /** Directory holding models/ and code-embed/index.db (default <PAPR_HOME>/data). */
@@ -101,6 +102,9 @@ export class CodeEmbedRuntime {
   private syncedAt = 0;
   /** Why background indexing is paused right now (battery, heat, memory), null when it runs. Search is never paused. */
   private paused: string | null = null;
+  private querySamples = new Samples();
+  private chunkSamples = new Samples();
+  private indexCpu = new IndexCpu();
   private lastSwap: number | null = null;
   private closed = false;
   /** Something the cloud does not have yet: new local vectors, queued deletes, or a sync that failed. Starts true so
@@ -468,6 +472,11 @@ export class CodeEmbedRuntime {
     return {
       scope: this.store.scope(), tier: this.tier, reasons: this.tierReasons, status: this.status, backend: this.backend, upgrade: this.upgradeNote,
       indexingPaused: this.paused,
+      perf: {
+        searchMs: { p50: this.querySamples.pct(50), p95: this.querySamples.pct(95), n: this.querySamples.count, budgetP50: QUERY_P50_BUDGET_MS },
+        indexMsPerChunk: { p50: this.chunkSamples.pct(50), n: this.chunkSamples.count },
+        indexCores: { avg: this.indexCpu.cores, budget: INDEX_CORES_BUDGET },
+      },
       neuralEngine: { ...aneAvailable(this.d.dataDir), first: this.aneFirst, onnxStarted: !!this.base },
       modelInstalled: (this.d.installed ?? modelInstalled)(this.d.dataDir), roots: this.roots.size, ...this.store.stats(),
       device: { platform: f.platform, arch: f.arch, os: `${os.type()} ${os.release()}`, cpu: f.cpuModel, cores: f.physicalCores, ramGB: GBf(f.totalMemBytes), availableGB: GBf(f.freeMemBytes), translated: f.translated },
@@ -490,7 +499,15 @@ export class CodeEmbedRuntime {
           this.loop?.unref?.();
           return;
         }
+        const pids = () => [this.emb, this.base].map((e) => (e as { pid?: number } | null)?.pid).filter((p): p is number => !!p);
+        const cpu = () => pids().reduce((s, p) => s + (cpuSeconds(p) ?? 0), 0);
+        const c0 = cpu(), w0 = Date.now(), chunks0 = this.store.stats().chunks;
         const r = await this.indexer.embedPending(4);
+        if (r.embedded > 0) {
+          const wall = (Date.now() - w0) / 1000, made = this.store.stats().chunks - chunks0;
+          this.indexCpu.addBatch(cpu() - c0, wall);
+          if (made > 0) this.chunkSamples.add((wall * 1000) / made);
+        }
         // Quarantined blobs are not pending on device: counting them would spin this loop forever.
         const pending = this.tier === "local" ? this.indexer.localPending().length : this.store.pendingBlobs().length;
         if ((this.tier as EmbedTier) === "cloud") {
@@ -539,7 +556,8 @@ export class CodeEmbedRuntime {
       return { tier: "local", hits: [] };
     }
     if (this.tier === "off") return { tier: "off", hits: [] };
-    const work = this.indexer.search(query, { root, limit: opts.limit ?? 10 });
+    const t0 = Date.now();
+    const work = this.indexer.search(query, { root, limit: opts.limit ?? 10 }).then((r) => { this.querySamples.add(Date.now() - t0); return r; });
     const timeout = new Promise<null>((r) => setTimeout(() => r(null), opts.budgetMs ?? 2_000).unref?.());
     const res = await Promise.race([work.catch(() => null), timeout]);
     if (!res) return { tier: this.tier, hits: [] };
