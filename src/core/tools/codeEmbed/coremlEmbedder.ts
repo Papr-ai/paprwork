@@ -83,6 +83,10 @@ export class CoreMLEmbedder implements Embedder {
     return this.tok.encode(text, { add_special_tokens: false }).ids.length;
   }
 
+  get pid(): number | undefined {
+    return this.proc.pid;
+  }
+
   /** Called once if the helper dies on its own (killed under memory pressure, crash), not after close(). */
   onExit(l: () => void): void {
     this.exitListeners.push(l);
