@@ -10,7 +10,8 @@ for i in $(seq 1 90); do nvidia-smi >/dev/null 2>&1 && break; sleep 10; done
 gcloud storage cp -q -r "$B/data" "$B/code" $W/
 gcloud storage rsync -q -r "$B/out" $W/out 2>/dev/null || true  # resume after a spot preemption
 command -v uv >/dev/null || { curl -LsSf https://astral.sh/uv/install.sh | env UV_INSTALL_DIR=/usr/local/bin sh; }
-[ -x $W/py/bin/python ] || { uv venv -q -p 3.12 $W/py && VIRTUAL_ENV=$W/py uv pip install -q torch "transformers>=4.51" "onnxruntime-gpu>=1.23" numpy tokenizers huggingface_hub; }
+# A spot stop mid-install leaves a venv without packages: trust only the .ok marker written after a full install.
+[ -f $W/py/.ok ] || { rm -rf $W/py && uv venv -q -p 3.12 $W/py && VIRTUAL_ENV=$W/py uv pip install -q torch "transformers>=4.51" "onnxruntime-gpu>=1.23" numpy tokenizers huggingface_hub && touch $W/py/.ok; }
 PY=$W/py/bin/python
 $PY -c "from huggingface_hub import hf_hub_download as d; [print(d('papr-ai/papr-embed-code-1-0.6b',f,revision='4596a3478f5bc1898d9fae1afad200201ca741e1',local_dir='m')) for f in ('onnx/model_quantized.onnx','tokenizer.json')]"
 for arm in $ARMS; do
@@ -22,5 +23,7 @@ for arm in $ARMS; do
   esac
   $PY code/embed_chunks.py data out/$arm --tokenizer m/tokenizer.json $A --on-shard "gcloud storage rsync -q -r $W/out/$arm/parts $B/out/$arm/parts" >> out/embed_$arm.log 2>&1 && touch out/$arm/DONE; up
 done
-echo ALL_DONE > out/ALL_DONE; up
+# ALL_DONE only when every arm finished; otherwise FAILED, so the launcher stops waiting and reports it.
+ok=1; for arm in $ARMS; do [ -f out/$arm/DONE ] || ok=0; done
+if [ $ok = 1 ]; then echo ALL_DONE > out/ALL_DONE; else echo FAILED > out/FAILED; fi; up
 [ "$(md keep)" = 1 ] || shutdown -h now
