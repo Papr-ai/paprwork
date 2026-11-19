@@ -102,3 +102,20 @@ describe("sanitizeGitHubReportForAgents", () => {
     expect(sanitized.appsOmittedReason).toMatch(/appWriterRepo/);
   });
 });
+
+describe("isWorkspaceApp (#929)", () => {
+  it("is false for an id with no registry entry and no app folder", async () => {
+    const { mkdtempSync, mkdirSync, writeFileSync } = await import("node:fs");
+    const { tmpdir } = await import("node:os");
+    const { join } = await import("node:path");
+    const { isWorkspaceApp } = await import("../../../src/gateway/services/CloudObservabilityService.js");
+    const dir = mkdtempSync(join(tmpdir(), "papr-929-"));
+    mkdirSync(join(dir, "data"), { recursive: true });
+    writeFileSync(join(dir, "data", "apps.json"), JSON.stringify([{ id: "listed-app", title: "Listed" }]));
+    mkdirSync(join(dir, "apps", "folder-app"), { recursive: true });
+    writeFileSync(join(dir, "apps", "folder-app", "metadata.json"), "{}");
+    expect(isWorkspaceApp(dir, "listed-app")).toBe(true);
+    expect(isWorkspaceApp(dir, "folder-app")).toBe(true);
+    expect(isWorkspaceApp(dir, "eb2ac665-other-device")).toBe(false);
+  });
+});
