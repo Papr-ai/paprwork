@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { isCollabEvent, mentionMessageText, parseSuggestion, type MentionCardData } from "./mentions";
+import { fullFromThread, isCollabEvent, mentionMessageText, parseSuggestion, type MentionCardData } from "./mentions";
 import { matchTeammate, mentionSummary, openAsksFrom } from "../../../core/tools/collab";
 
 const team = [
@@ -80,5 +80,32 @@ describe("parseInvestigation", () => {
   it("returns null without a reply", async () => {
     const { parseInvestigation } = await import("./mentions");
     expect(parseInvestigation(null)).toBeNull();
+  });
+});
+
+describe("full reply text (never the clipped preview)", () => {
+  const long = "This replaces my earlier message, so please ignore the 100k fallback. " + "Details. ".repeat(60) + "End.";
+  const preview = long.slice(0, 279) + "…";
+  it("reads the whole message back from the thread", () => {
+    const thread = [{ by: "from" as const, text: "Earlier note", at: "t1" }, { by: "from" as const, text: long, at: "t2" }];
+    expect(fullFromThread(preview, thread, "from")).toBe(long);
+  });
+  it("matches across newlines the preview collapsed", () => {
+    const withLines = long.replace("fallback. ", "fallback.\n\n");
+    expect(fullFromThread(preview, [{ by: "from", text: withLines, at: "t" }], "from")).toBe(withLines);
+  });
+  it("uses the reply for the recipient's side, and keeps the preview when nothing matches", () => {
+    expect(fullFromThread(preview, [], "to", long)).toBe(long);
+    expect(fullFromThread(preview, [{ by: "to", text: long, at: "t" }], "from")).toBe(preview);
+  });
+});
+
+describe("mentionSummary keeps full text", () => {
+  it("does not clip the ask or thread", () => {
+    const text = "x".repeat(2000);
+    const s = mentionSummary({ id: "m", fromUserId: "a", fromName: "A", toUserId: "b", toName: "B", text, context: {}, action: null,
+      status: "open", reply: null, createdAt: "t", thread: [{ by: "from", text, at: "t" }] });
+    expect(s.text).toHaveLength(2000);
+    expect(s.thread[0].text).toHaveLength(2000);
   });
 });

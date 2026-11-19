@@ -413,6 +413,26 @@ async function receiveMention(e: CollabEvent): Promise<void> {
   }).catch(() => updateCard(itemId, { investigating: false }));
 }
 
+/**
+ * Event details carry only a short preview of what was said (the server clips it at ~280 chars with "…").
+ * Chat must show the whole message, so read it back from the mention's thread: the newest entry by that
+ * side whose text starts with the preview. Falls back to the preview when the mention can't be read.
+ */
+export function fullFromThread(preview: string, thread: MentionItem["thread"], by: "from" | "to", reply?: string | null): string {
+  const head = preview.replace(/…$/, "").replace(/\s+/g, " ").trim();
+  if (!head) return preview;
+  const flat = (t: string) => t.replace(/\s+/g, " ").trim();
+  const candidates = [...(thread ?? []).filter((t) => t.by === by).map((t) => t.text).reverse(), ...(reply ? [reply] : [])];
+  return candidates.find((t) => flat(t).startsWith(head)) ?? preview;
+}
+
+async function fullEventText(itemId: string | null | undefined, preview: string | undefined, by: "from" | "to"): Promise<string> {
+  const text = preview || "";
+  if (!itemId || !text.endsWith("…")) return text;
+  const item = await getMention(itemId).catch(() => null);
+  return item ? fullFromThread(text, item.thread, by, by === "to" ? item.reply?.text : null) : text;
+}
+
 async function receiveReply(e: CollabEvent): Promise<void> {
   const d = (e.detail ?? {}) as { fromName?: string; text?: string; status?: string; progress?: string; context?: MentionContext; action?: MentionAction | null; promisedAt?: string | null };
   const who = d.fromName || "Someone";
@@ -423,7 +443,8 @@ async function receiveReply(e: CollabEvent): Promise<void> {
   const { getAgentService } = await import("../AgentService.js");
   const storage = getAgentService().getStorageManager();
   const local = chatId ? await storage.getChat(chatId).catch(() => null) : null;
-  const said = d.text ? `\n\n> ${d.text.split("\n").join("\n> ")}` : "";
+  const full = await fullEventText(e.requestId, d.text, "to");
+  const said = full ? `\n\n> ${full.split("\n").join("\n> ")}` : "";
   // Short, in the chat the ask came from: Pen picks the work back up from here.
   const by = d.promisedAt ? ` · by ${promiseLabel(d.promisedAt)}` : "";
   // "@name" renders as a person pill in chat. One status line, then their words.
@@ -464,7 +485,8 @@ async function receiveFollowUp(e: CollabEvent): Promise<void> {
   const who = (d.fromName || "Someone").split(" ")[0];
   const hit = itemId ? (await cards()).get(itemId) : undefined;
   if (hit) {
-    const line = d.kind === "reply" ? `**${who} replied:**\n\n> ${(d.text || "").split("\n").join("\n> ")}`
+    const text = d.kind === "reply" ? await fullEventText(itemId, d.text, "from") : d.text || "";
+    const line = d.kind === "reply" ? `**${who} replied:**\n\n> ${text.split("\n").join("\n> ")}`
       : d.kind === "nudge" ? `**${who} is checking in** on ${lowerFirst(d.what || "this")}.`
       : `**${who} doesn't need this anymore:** ${d.what || ""}. Nothing more to do.`;
     await postToChat(hit.chatId, line);
