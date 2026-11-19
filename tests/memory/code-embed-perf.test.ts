@@ -24,6 +24,8 @@ describe("perf stats", () => {
     expect(c.cores).toBe(0.5);
   });
   test.skipIf(process.platform === "win32")("cpuSeconds reads this process", () => {
+    const end = Date.now() + 300;
+    while (Date.now() < end); // burn CPU so a fresh test worker has measurable time
     const s = cpuSeconds(process.pid);
     expect(s).not.toBeNull();
     expect(s!).toBeGreaterThan(0);

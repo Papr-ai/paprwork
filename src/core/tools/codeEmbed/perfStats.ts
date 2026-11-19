@@ -3,6 +3,7 @@
  * an answer without Activity Monitor. Budget: indexing averages at most 1 core, a search query's embed p50 under 100 ms.
  */
 import { execFileSync } from "child_process";
+import { readFileSync } from "fs";
 
 export const QUERY_P50_BUDGET_MS = 100;
 export const INDEX_CORES_BUDGET = 1;
@@ -25,9 +26,19 @@ export class Samples {
   }
 }
 
-/** CPU seconds a process has used (ps TIME), null when unknown. Not on Windows (no ps). */
+/** CPU seconds a process has used, null when unknown. Linux: /proc/<pid>/stat (ps TIME there is whole seconds only).
+ *  macOS: ps TIME (hundredths). Not on Windows. */
 export function cpuSeconds(pid: number | undefined): number | null {
   if (!pid || process.platform === "win32") return null;
+  if (process.platform === "linux") {
+    try {
+      // Fields after the ")" of comm: state is [0], utime [11], stime [12], in clock ticks (USER_HZ = 100 on Linux).
+      const f = readFileSync(`/proc/${pid}/stat`, "utf8").split(") ")[1]!.split(" ");
+      return (Number(f[11]) + Number(f[12])) / 100;
+    } catch {
+      return null;
+    }
+  }
   try {
     const t = execFileSync("ps", ["-o", "time=", "-p", String(pid)], { timeout: 2000 }).toString().trim();
     // [[dd-]hh:]mm:ss.cc
