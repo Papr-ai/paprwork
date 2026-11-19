@@ -25,7 +25,7 @@ import * as os from "os";
 import { CodeIndexer, QUARANTINE_AFTER, SKIP_DIRS } from "./codeIndexer.js";
 import { contextEnabled, contextRootFor, contextRoots, contextSkip } from "./contextRoots.js";
 import type { PostClient } from "./cloudSync.js";
-import { availableMemBytes, canRunNow, readDeviceFacts, selfTestPasses, staticTier, type EmbedTier } from "./deviceHealth.js";
+import { availableMemBytes, readDeviceFacts, readPowerState, selfTestPasses, staticTier, throttleReason, type EmbedTier } from "./deviceHealth.js";
 import { CODE_EMBED_DIM, CODE_EMBED_MODEL, downloadModel, downloadTokenizer, loadTokenCounter, modelDir, tokenizerInstalled, WorkerOnnxEmbedder, modelInstalled, type Embedder } from "./embedder.js";
 import { CodeVectorStore } from "./vectorStore.js";
 import { aneAvailable } from "./coremlEmbedder.js";
@@ -99,6 +99,9 @@ export class CodeEmbedRuntime {
   private roots = new Set<string>();
   private loop: NodeJS.Timeout | null = null;
   private syncedAt = 0;
+  /** Why background indexing is paused right now (battery, heat, memory), null when it runs. Search is never paused. */
+  private paused: string | null = null;
+  private lastSwap: number | null = null;
   private closed = false;
   /** Something the cloud does not have yet: new local vectors, queued deletes, or a sync that failed. Starts true so
    *  every app start (restart, crash, update) reconciles once with the cloud. */
@@ -156,9 +159,17 @@ export class CodeEmbedRuntime {
       embedder: () => this.embedder(),
       tokenCounter: () => this.tokenCounter(),
       cloud: () => this.cloudForScope(),
-      canRun: d.canRun ?? (() => canRunNow({ freeMemBytes: availableMemBytes() }, false).ok),
+      canRun: d.canRun ?? (() => this.mayIndex()),
       skipFor: contextSkip,
     });
+  }
+
+  /** Background indexing may run now: not on low battery, Low Power Mode, a hot CPU or a machine that is paging. */
+  private mayIndex(): boolean {
+    const s = readPowerState();
+    this.paused = throttleReason(s, availableMemBytes(), this.lastSwap);
+    if (s.swapUsedBytes !== null) this.lastSwap = s.swapUsedBytes;
+    return this.paused === null;
   }
 
   /** Cloud client only while the active workspace is still the one this index belongs to. */
@@ -454,6 +465,7 @@ export class CodeEmbedRuntime {
     const GBf = (b: number) => Math.round((b / 1e9) * 10) / 10;
     return {
       scope: this.store.scope(), tier: this.tier, reasons: this.tierReasons, status: this.status, backend: this.backend, upgrade: this.upgradeNote,
+      indexingPaused: this.paused,
       neuralEngine: { ...aneAvailable(this.d.dataDir), first: this.aneFirst, onnxStarted: !!this.base },
       modelInstalled: (this.d.installed ?? modelInstalled)(this.d.dataDir), roots: this.roots.size, ...this.store.stats(),
       device: { platform: f.platform, arch: f.arch, os: `${os.type()} ${os.release()}`, cpu: f.cpuModel, cores: f.physicalCores, ramGB: GBf(f.totalMemBytes), availableGB: GBf(f.freeMemBytes), translated: f.translated },
@@ -498,7 +510,9 @@ export class CodeEmbedRuntime {
         }
         if (this.closed) { this.loop = null; return; }
         if (pending > 0 && this.tier === "local") {
-          this.loop = setTimeout(tick, 5_000); // model still downloading/loading or device busy: check again later
+          // Paused for battery, heat or memory: look again in 30 s. Model still loading: 5 s.
+          this.loop = setTimeout(tick, r.skipped === "device busy" ? 30_000 : 5_000);
+          this.loop.unref?.();
         } else if (pending === 0 && syncOn && this.syncDirty) {
           // New vectors, a failed sync, or deletes still queued: come back when the sync window opens, instead of
           // waiting for the next file change or grep to restart the loop.

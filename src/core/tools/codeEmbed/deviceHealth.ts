@@ -12,6 +12,8 @@
  */
 import { execFileSync } from "child_process";
 import * as os from "os";
+import * as path from "path";
+import * as fs from "fs";
 
 export type EmbedTier = "local" | "cloud" | "off";
 
@@ -60,6 +62,74 @@ export function canRunNow(f: Pick<DeviceFacts, "freeMemBytes">, onBatterySaver: 
   if (onBatterySaver) return { ok: false, reason: "battery saver" };
   if (f.freeMemBytes < MIN_FREE_MEM_TO_LOAD) return { ok: false, reason: "low free memory" };
   return { ok: true };
+}
+
+/** Live power, heat and memory signals for pausing background indexing. Search is never paused. */
+export interface PowerState {
+  onBattery: boolean;
+  /** 0-100, null when unknown (desktop, or not readable). */
+  batteryPct: number | null;
+  lowPowerMode: boolean;
+  /** macOS CPU_Speed_Limit (100 = not throttled), null when unknown. */
+  cpuSpeedLimit: number | null;
+  /** kern.memorystatus_vm_pressure_level: 1 normal, 2 warning, 4 critical; null when unknown. */
+  memoryPressure: number | null;
+  swapUsedBytes: number | null;
+}
+
+export const PAUSE_BATTERY_PCT = 30;
+/** Swap grew this much since the last check (~30 s): the machine is paging, so indexing waits. */
+export const PAUSE_SWAP_GROWTH = 256 * 1024 * 1024;
+
+/**
+ * Why background indexing should wait right now, or null to go ahead. On battery below 30%, Low Power Mode, the CPU
+ * thermally limited, memory pressure warning or worse, swap growing, or less than 2 GB available.
+ */
+export function throttleReason(s: PowerState, freeMemBytes: number, prevSwapUsed: number | null): string | null {
+  if (s.lowPowerMode) return "Low Power Mode";
+  if (s.onBattery && s.batteryPct !== null && s.batteryPct < PAUSE_BATTERY_PCT) return `on battery at ${s.batteryPct}%`;
+  if (s.cpuSpeedLimit !== null && s.cpuSpeedLimit < 100) return `CPU thermally limited to ${s.cpuSpeedLimit}%`;
+  if (s.memoryPressure !== null && s.memoryPressure >= 2) return s.memoryPressure >= 4 ? "memory pressure critical" : "memory pressure warning";
+  if (s.swapUsedBytes !== null && prevSwapUsed !== null && s.swapUsedBytes - prevSwapUsed > PAUSE_SWAP_GROWTH) return "swap growing";
+  if (freeMemBytes < MIN_FREE_MEM_TO_LOAD) return "low free memory";
+  return null;
+}
+
+let powerCache: { at: number; state: PowerState } | null = null;
+const run = (cmd: string, args: string[]): string => {
+  try { return execFileSync(cmd, args, { timeout: 2000 }).toString(); } catch { return ""; }
+};
+
+/** Read PowerState (cached 30 s). macOS: pmset + sysctl. Linux: /sys/class/power_supply. Elsewhere: unknowns. */
+export function readPowerState(now = Date.now()): PowerState {
+  if (powerCache && now - powerCache.at < 30_000) return powerCache.state;
+  const s: PowerState = { onBattery: false, batteryPct: null, lowPowerMode: false, cpuSpeedLimit: null, memoryPressure: null, swapUsedBytes: null };
+  if (process.platform === "darwin") {
+    const batt = run("pmset", ["-g", "batt"]);
+    s.onBattery = /'Battery Power'/.test(batt);
+    const pct = batt.match(/(\d+)%/);
+    s.batteryPct = pct ? Number(pct[1]) : null;
+    s.lowPowerMode = /lowpowermode\s+1/.test(run("pmset", ["-g"]));
+    const lim = run("pmset", ["-g", "therm"]).match(/CPU_Speed_Limit\s*=\s*(\d+)/);
+    s.cpuSpeedLimit = lim ? Number(lim[1]) : null;
+    const lvl = Number(run("sysctl", ["-n", "kern.memorystatus_vm_pressure_level"]).trim());
+    s.memoryPressure = Number.isFinite(lvl) && lvl > 0 ? lvl : null;
+    const used = run("sysctl", ["-n", "vm.swapusage"]).match(/used = ([\d.]+)M/);
+    s.swapUsedBytes = used ? Number(used[1]) * 1024 * 1024 : null;
+  } else if (process.platform === "linux") {
+    try {
+      const dir = "/sys/class/power_supply";
+      for (const d of fs.readdirSync(dir)) {
+        const read = (f: string) => { try { return fs.readFileSync(path.join(dir, d, f), "utf8").trim(); } catch { return ""; } };
+        if (read("type") === "Battery") {
+          s.batteryPct = Number(read("capacity")) || null;
+          s.onBattery = read("status") === "Discharging";
+        }
+      }
+    } catch {}
+  }
+  powerCache = { at: now, state: s };
+  return s;
 }
 
 export function selfTestPasses(totalMs: number): boolean {
