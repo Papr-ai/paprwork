@@ -78,11 +78,32 @@ async function chatTitle(chatId?: string): Promise<string | undefined> {
   return (await getStorageManager().getChat(chatId).catch(() => null))?.title || undefined;
 }
 
+/** The publisher's app id for an installed copy (from its lineage), else the id itself. */
+export async function canonicalAppId(appId: string, appsDir?: string): Promise<string> {
+  const { getCloudAppLineageService } = await import("../CloudAppLineageService.js");
+  const lineage = await getCloudAppLineageService(appsDir).readLineageForApp(appId).catch(() => null);
+  return lineage?.sourceAppId?.trim() || appId;
+}
+
+/** This device's app for a mention's appId: the app itself, or the installed copy whose source it is. */
+export async function localAppFor(appId?: string, appsDir?: string): Promise<string | null> {
+  if (!appId) return null;
+  const { getCloudAppLineageService } = await import("../CloudAppLineageService.js");
+  const svc = getCloudAppLineageService(appsDir);
+  const { existsSync } = await import("fs");
+  if (existsSync(path.join(svc.appsRoot, appId, "metadata.json"))) return appId;
+  const index = await svc.buildIndex().catch(() => null);
+  const hit = Object.values(index?.byAppId ?? {}).find((e) => e.sourceAppId === appId);
+  return hit?.appId ?? null;
+}
+
 /** Record a mention. Quiet unless notify: the person isn't told until notifyMentions (or notify: true). */
 export async function sendMention(input: {
   toUserIds: string[]; text: string; chatId?: string; action?: MentionAction | null; context?: MentionContext; notify?: boolean;
 }): Promise<MentionItem[]> {
   const context: MentionContext = { ...input.context };
+  // Each install has its own local app id. Send the publisher's id so the other side can find it (#930).
+  if (context.appId) context.appId = await canonicalAppId(context.appId);
   if (input.chatId) { context.chatId = input.chatId; context.chatTitle ??= await chatTitle(input.chatId); }
   const out = await call<{ mentions: MentionItem[] }>("/mentions", "POST", {
     toUserIds: input.toUserIds, text: input.text, context, action: input.action ?? undefined, notify: !!input.notify,
@@ -180,6 +201,9 @@ async function suggest(item: MentionItem): Promise<{ reply: string; nextStep?: s
 function mentionBrief(item: MentionItem): string {
   return [
     `${item.fromName} wrote to ${item.toName}${item.context.chatTitle ? ` (from the chat "${item.context.chatTitle}")` : ""}:`,
+    item.context.appName || item.context.appId
+      ? `About the app ${item.context.appName ?? ""}${item.context.appId ? ` (this device's app id ${item.context.appId})` : " (not installed on this device; find it by name)"}`
+      : "",
     item.text,
     item.action ? `Action asked of ${item.toName}: ${item.action.title}${item.action.due ? ` (due ${dueDate(item.action.due)})` : ""}` : "",
   ].filter(Boolean).join("\n");
@@ -344,6 +368,12 @@ async function receiveMention(e: CollabEvent): Promise<void> {
   if (!itemId) return;
   const item = await getMention(itemId).catch(() => null);
   if (!item || item.status !== "open" || (await cards()).has(itemId)) return;
+  if (item.context?.appId) {
+    const local = await localAppFor(item.context.appId);
+    item.context = local
+      ? { ...item.context, appId: local }
+      : { ...item.context, appId: undefined, appName: item.context.appName ? `${item.context.appName} (not on this device)` : undefined };
+  }
   const s = await suggest(item);
   const card: MentionCardData = {
     type: "mention_inbox", itemId, fromName: item.fromName, text: item.text, context: item.context ?? {},
