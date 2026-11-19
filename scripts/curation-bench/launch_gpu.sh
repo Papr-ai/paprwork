@@ -14,7 +14,9 @@ for z in us-central1-a us-central1-b us-central1-c us-east4-a us-east1-c us-west
 done
 [ -n "$ZONE" ] || { echo "::error::no spot L4 capacity"; exit 1; }
 trap 'gcloud compute instances delete "$NAME" --zone "$ZONE" --quiet >/dev/null 2>&1 || true' EXIT
-for i in $(seq 1 120); do
+# Up to 160 min: a full rebuild is ~44k chunks, longest last (embed_chunks sorts by length), ~70-100 min on one L4.
+# Parts are saved every 4,000 rows, so a timed-out or preempted run resumes where it stopped.
+for i in $(seq 1 320); do
   gcloud storage ls "$P/out/ALL_DONE" >/dev/null 2>&1 && break
   st=$(gcloud compute instances describe "$NAME" --zone "$ZONE" --format="value(status)" 2>/dev/null || echo GONE)
   [ "$st" = "TERMINATED" ] && gcloud compute instances start "$NAME" --zone "$ZONE" --quiet >/dev/null 2>&1 || true

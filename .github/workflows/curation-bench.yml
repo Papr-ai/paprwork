@@ -48,7 +48,7 @@ jobs:
   bench:
     name: Curation Bench (local + cloud path)
     runs-on: ubuntu-latest
-    timeout-minutes: 90
+    timeout-minutes: 200 # a rebuild waits up to 160 min for the GPU (launch_gpu.sh); a normal run takes ~10
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-node@v4
@@ -96,7 +96,7 @@ jobs:
             gcloud storage cp -q scripts/curation-bench/embed_chunks.py scripts/curation-bench/run_gpu.sh "$P/code/"
             bash scripts/curation-bench/launch_gpu.sh "$P" "$ARM"
           else
-            echo "::error::No vectors for $KEY: the model or chunker changed. Run this workflow with rebuild=true (about 40 minutes on a spot GPU), then re-run."
+            echo "::error::No vectors for $KEY: the model or chunker changed. Run this workflow with rebuild=true (about 90 minutes on a spot GPU), then re-run."
             exit 1
           fi
           mkdir -p cb/vecs && gcloud storage cp -q -r "$P/out/$ARM/*" cb/vecs/
