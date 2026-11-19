@@ -24,6 +24,11 @@ export class CoreMLEmbedder implements Embedder {
   readonly dim = CODE_EMBED_DIM;
   private next = 1;
   private pending = new Map<number, { ok: (v: Float32Array) => void; err: (e: Error) => void }>();
+  private exitListeners: Array<() => void> = [];
+  private closing = false;
+  dead = false;
+  /** The helper is its own process: its crash cannot take the app down. */
+  readonly isolated = true;
 
   private constructor(
     private readonly proc: ChildProcessWithoutNullStreams,
@@ -45,9 +50,12 @@ export class CoreMLEmbedder implements Embedder {
       else p.ok(l2normalize(Float32Array.from(m.embedding)));
     });
     proc.on("exit", () => {
+      this.dead = true;
       for (const p of this.pending.values()) p.err(new Error("coreml helper exited"));
       this.pending.clear();
+      if (!this.closing) for (const l of this.exitListeners) l();
     });
+    proc.on("error", () => undefined); // exit follows
   }
 
   /** Spawn the helper and wait for {"ready":true}. Throws if it fails to load within timeoutMs (first ANE compile ~50 s). */
@@ -74,7 +82,13 @@ export class CoreMLEmbedder implements Embedder {
     return this.tok.encode(text, { add_special_tokens: false }).ids.length;
   }
 
+  /** Called once if the helper dies on its own (killed under memory pressure, crash), not after close(). */
+  onExit(l: () => void): void {
+    this.exitListeners.push(l);
+  }
+
   private run(ids: number[]): Promise<Float32Array> {
+    if (this.dead) return Promise.reject(new Error("coreml helper is not running"));
     const id = this.next++;
     return new Promise((ok, err) => {
       this.pending.set(id, { ok, err });
@@ -104,6 +118,7 @@ export class CoreMLEmbedder implements Embedder {
   }
 
   async close(): Promise<void> {
+    this.closing = true;
     this.proc.stdin.end();
     this.proc.kill();
     await this.fallback?.close();

@@ -155,7 +155,8 @@ describe("runtime: no crash loop", () => {
       const rt = runtime(base);
       rt.touch(root, true);
       rt.store.setInflight(bad); // what an old build leaves when ONNX aborts the gateway mid-embed
-      await rt.close(); rts.splice(rts.indexOf(rt), 1);
+      // The process dies: no clean close() (that clears the marker, see code-embed-resilience.test.ts).
+      rt.indexer.stop(); rt.store.close(); rts.splice(rts.indexOf(rt), 1);
     }
     const next = runtime(base);
     expect(next.store.quarantined(QUARANTINE_AFTER).has(bad)).toBe(true);

@@ -283,6 +283,8 @@ export class WorkerOnnxEmbedder implements Embedder {
   private closing = false;
   private exitListeners: Array<(info: { code: number | null; signal: string | null }) => void> = [];
   dead = false;
+  /** Runs in a child process: its crash cannot take the app down (see CodeVectorStore.setInflight). */
+  readonly isolated = true;
 
   private constructor(private readonly child: import("node:child_process").ChildProcess, private readonly tok: any) {
     child.on("message", (m: any) => {
