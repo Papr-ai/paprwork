@@ -10,7 +10,7 @@ for z in us-central1-a us-central1-b us-central1-c us-east4-a us-east1-c us-west
       --image-family pytorch-2-9-cu129-ubuntu-2204-nvidia-580 --image-project deeplearning-platform-release \
       --boot-disk-size 150 --maintenance-policy TERMINATE --scopes cloud-platform \
       --provisioning-model SPOT --instance-termination-action STOP --labels purpose=curation-bench \
-      --metadata "startup-script-url=$P/code/run_gpu.sh,bench=$P,arms=$ARMS,install-nvidia-driver=True" --quiet >/dev/null 2>&1; then
+      --metadata "startup-script-url=$P/code/run_gpu.sh,bench=$P,arms=$ARMS,install-nvidia-driver=True,block-project-ssh-keys=TRUE" --quiet >/dev/null 2>&1; then
     ZONE=$z; break
   fi
 done
