@@ -27,6 +27,8 @@ jobs:
             exit 1
           fi
           echo "No dependencies or symlinks: ok"
+      - name: GCE VM policy (SOC 2 SSH keys + purpose label)
+        run: bash scripts/ci/check-gce-create.sh && bash scripts/ci/test-check-gce-create.sh
       - name: Ticket linked and branch flow
         env:
           BODY: ${{ github.event.pull_request.body }}
