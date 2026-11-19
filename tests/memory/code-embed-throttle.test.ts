@@ -23,6 +23,12 @@ describe("throttleReason", () => {
     expect(health.throttleReason({ ...calm, memoryPressure: 2 }, 4 * GB, null)).toBe("memory pressure warning");
     expect(health.throttleReason({ ...calm, memoryPressure: 4 }, 4 * GB, null)).toBe("memory pressure critical");
   });
+  test("Neural Engine (light) keeps indexing on a memory warning and under 2 GB free; still waits on critical", () => {
+    expect(health.throttleReason({ ...calm, memoryPressure: 2 }, 1 * GB, null, { light: true })).toBeNull();
+    expect(health.throttleReason({ ...calm, memoryPressure: 4 }, 4 * GB, null, { light: true })).toBe("memory pressure critical");
+    expect(health.throttleReason({ ...calm, lowPowerMode: true }, 4 * GB, null, { light: true })).toBe("Low Power Mode");
+    expect(health.throttleReason({ ...calm, swapUsedBytes: 20 * GB }, 4 * GB, 19 * GB, { light: true })).toBe("swap growing");
+  });
   test("swap growing fast, not swap merely large", () => {
     expect(health.throttleReason({ ...calm, swapUsedBytes: 20 * GB }, 4 * GB, 19.9 * GB)).toBeNull();
     expect(health.throttleReason({ ...calm, swapUsedBytes: 20 * GB }, 4 * GB, 19 * GB)).toBe("swap growing");

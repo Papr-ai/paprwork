@@ -167,7 +167,9 @@ export class CodeEmbedRuntime {
   /** Background indexing may run now: not on low battery, Low Power Mode, a hot CPU or a machine that is paging. */
   private mayIndex(): boolean {
     const s = readPowerState();
-    this.paused = throttleReason(s, availableMemBytes(), this.lastSwap);
+    // The Neural Engine is light (no ONNX process running): it only waits for the serious cases.
+    const light = this.backend === "CoreMLEmbedder" && !this.base;
+    this.paused = throttleReason(s, availableMemBytes(), this.lastSwap, { light });
     if (s.swapUsedBytes !== null) this.lastSwap = s.swapUsedBytes;
     return this.paused === null;
   }

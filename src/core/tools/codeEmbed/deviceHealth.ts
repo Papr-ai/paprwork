@@ -82,15 +82,20 @@ export const PAUSE_BATTERY_PCT = 30;
 export const PAUSE_SWAP_GROWTH = 256 * 1024 * 1024;
 
 /**
- * Why background indexing should wait right now, or null to go ahead. On battery below 30%, Low Power Mode, the CPU
- * thermally limited, memory pressure warning or worse, swap growing, or less than 2 GB available.
+ * Why background indexing should wait right now, or null to go ahead: on battery below 30%, Low Power Mode, the CPU
+ * thermally limited, memory pressure critical, or swap growing (the Mac is paging).
+ * light: the Neural Engine is embedding (~60 MB, near-zero CPU). Otherwise it is ONNX (1 GB+, several cores), which
+ * also waits on a memory pressure warning or less than 2 GB available. A Mac with many browser tabs can sit at "warning"
+ * all day; the Neural Engine adds nothing to that, so it keeps indexing.
  */
-export function throttleReason(s: PowerState, freeMemBytes: number, prevSwapUsed: number | null): string | null {
+export function throttleReason(s: PowerState, freeMemBytes: number, prevSwapUsed: number | null, opts: { light?: boolean } = {}): string | null {
   if (s.lowPowerMode) return "Low Power Mode";
   if (s.onBattery && s.batteryPct !== null && s.batteryPct < PAUSE_BATTERY_PCT) return `on battery at ${s.batteryPct}%`;
   if (s.cpuSpeedLimit !== null && s.cpuSpeedLimit < 100) return `CPU thermally limited to ${s.cpuSpeedLimit}%`;
-  if (s.memoryPressure !== null && s.memoryPressure >= 2) return s.memoryPressure >= 4 ? "memory pressure critical" : "memory pressure warning";
+  if (s.memoryPressure !== null && s.memoryPressure >= 4) return "memory pressure critical";
   if (s.swapUsedBytes !== null && prevSwapUsed !== null && s.swapUsedBytes - prevSwapUsed > PAUSE_SWAP_GROWTH) return "swap growing";
+  if (opts.light) return null;
+  if (s.memoryPressure !== null && s.memoryPressure >= 2) return "memory pressure warning";
   if (freeMemBytes < MIN_FREE_MEM_TO_LOAD) return "low free memory";
   return null;
 }
