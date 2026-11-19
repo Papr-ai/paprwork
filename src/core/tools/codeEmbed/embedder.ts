@@ -52,6 +52,11 @@ export function modelDir(root: string): string {
   return path.join(root, "models", CODE_EMBED_MODEL);
 }
 
+/** The Neural Engine build is on disk at its pinned sizes (Apple Silicon downloads it with the base files). */
+export function coremlInstalled(root: string): boolean {
+  return COREML_FILES.every((f) => sizeIs(path.join(modelDir(root), f), MODEL_MANIFEST[f]!.size));
+}
+
 /** All base files present at their pinned sizes (a cheap stat; hashes are checked once, at download). */
 export function modelInstalled(root: string): boolean {
   return MODEL_FILES.every((f) => sizeIs(path.join(modelDir(root), f), MODEL_MANIFEST[f]!.size));
