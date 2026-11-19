@@ -3,6 +3,8 @@
 #   launch_gpu.sh gs://.../vectors/<key> "v10_int8 [v11_pt]"
 set -euo pipefail
 P=$1; ARMS=$2; NAME=cb-$(date +%s); ZONE=""
+# Markers from an earlier attempt would end the wait at once: clear them (finished arms keep their DONE and parts).
+gcloud storage rm -q "$P/out/ALL_DONE" "$P/out/FAILED" >/dev/null 2>&1 || true
 for z in us-central1-a us-central1-b us-central1-c us-east4-a us-east1-c us-west1-a; do
   if gcloud compute instances create "$NAME" --zone "$z" --machine-type g2-standard-8 --accelerator type=nvidia-l4,count=1 \
       --image-family pytorch-2-9-cu129-ubuntu-2204-nvidia-580 --image-project deeplearning-platform-release \
@@ -14,8 +16,11 @@ for z in us-central1-a us-central1-b us-central1-c us-east4-a us-east1-c us-west
 done
 [ -n "$ZONE" ] || { echo "::error::no spot L4 capacity"; exit 1; }
 trap 'gcloud compute instances delete "$NAME" --zone "$ZONE" --quiet >/dev/null 2>&1 || true' EXIT
-for i in $(seq 1 120); do
+# Up to 160 min: a full rebuild is ~44k chunks, longest last (embed_chunks sorts by length), ~70-100 min on one L4.
+# Parts are saved every 4,000 rows, so a timed-out or preempted run resumes where it stopped.
+for i in $(seq 1 320); do
   gcloud storage ls "$P/out/ALL_DONE" >/dev/null 2>&1 && break
+  gcloud storage ls "$P/out/FAILED" >/dev/null 2>&1 && { gcloud storage cat "$P/logs/cb.log" 2>/dev/null | tail -30; echo "::error::GPU step failed (log above)"; exit 1; }
   st=$(gcloud compute instances describe "$NAME" --zone "$ZONE" --format="value(status)" 2>/dev/null || echo GONE)
   [ "$st" = "TERMINATED" ] && gcloud compute instances start "$NAME" --zone "$ZONE" --quiet >/dev/null 2>&1 || true
   sleep 30
