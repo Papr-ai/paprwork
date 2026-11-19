@@ -225,6 +225,37 @@ export async function loadTokenCounter(root: string): Promise<(text: string) => 
   return (text: string) => tok.encode(text, { add_special_tokens: false }).ids.length;
 }
 
+/** Lower a process to background priority. Never throws (already lower, or gone). */
+export function lowerPriority(pid: number | undefined, nice = EMBED_NICE): void {
+  if (!pid) return;
+  try {
+    if (os.getPriority(pid) < nice) os.setPriority(pid, nice);
+  } catch {}
+}
+
+/** Indexing is background work: the embed process runs at this nice level (below the app, above idle). */
+export const EMBED_NICE = 10;
+/** Threads for the ONNX embed process: min(4, cores/2). Measured on an M2 Pro: 2 threads doubles query latency (677 vs
+ *  348 ms) and ONNX is the only search path on Intel and Windows, so the thread count stays; nice 10 plus no spinning
+ *  is what keeps indexing out of the user's way (the kernel gives the app the cores first). */
+export const EMBED_THREADS = Math.max(1, Math.min(4, Math.floor(os.cpus().length / 2)));
+
+/** ONNX session options. allow_spinning off: idle threads sleep instead of busy-waiting between runs (ORT spins by
+ *  default, which shows as CPU use with no work done). */
+export function onnxSessionOptions(threads: number): Record<string, unknown> {
+  return {
+    executionProviders: ["cpu"],
+    graphOptimizationLevel: "all",
+    // No BFC arena: it grows to the largest run ever seen and never gives memory back, and an arena Extend that
+    // fails under memory pressure aborts the process. Plain allocations free after each run.
+    enableCpuMemArena: false,
+    enableMemPattern: false,
+    intraOpNumThreads: threads,
+    interOpNumThreads: 1,
+    extra: { session: { intra_op: { allow_spinning: "0" }, inter_op: { allow_spinning: "0" } } },
+  };
+}
+
 /** Load the on-device embedder. Throws if packages or model files are missing. */
 export async function loadEmbedder(root: string, opts: { threads?: number } = {}): Promise<Embedder> {
   const dir = modelDir(root);
@@ -239,16 +270,7 @@ export async function loadEmbedder(root: string, opts: { threads?: number } = {}
   if (typeof eos !== "number") throw new Error("tokenizer has no <|endoftext|>");
   const session = await (ort.InferenceSession ?? ort.default.InferenceSession).create(
     path.join(dir, "onnx/model_quantized.onnx"),
-    {
-      executionProviders: ["cpu"],
-      graphOptimizationLevel: "all",
-      // No BFC arena: it grows to the largest run ever seen and never gives memory back, and an arena Extend that
-      // fails under memory pressure aborts the process. Plain allocations free after each run.
-      enableCpuMemArena: false,
-      enableMemPattern: false,
-      // Leave cores for the app: indexing is background work.
-      intraOpNumThreads: opts.threads ?? Math.max(1, Math.min(4, Math.floor(os.cpus().length / 2))),
-    },
+    onnxSessionOptions(opts.threads ?? EMBED_THREADS),
   );
   return new OnnxEmbedder(ort.Tensor ? ort : ort.default, session, tok, eos);
 }
@@ -341,12 +363,14 @@ export class WorkerOnnxEmbedder implements Embedder {
       // the gateway already loads onnxruntime-node with.
       execPath: process.execPath,
       execArgv,
-      env: { ...process.env, ELECTRON_RUN_AS_NODE: "1", PAPR_EMBED_ROOT: root, PAPR_EMBED_THREADS: opts.threads ? String(opts.threads) : "", ...opts.env },
+      env: { ...process.env, ELECTRON_RUN_AS_NODE: "1", PAPR_EMBED_ROOT: root, PAPR_EMBED_THREADS: String(opts.threads ?? EMBED_THREADS), ...opts.env },
       serialization: "advanced", // Float32Array crosses as-is
       stdio: ["ignore", "ignore", "inherit", "ipc"],
     });
     child.unref();
     (child as any).channel?.unref?.();
+    // Background priority from the start (the child also lowers itself; this covers test fixtures and races).
+    lowerPriority(child.pid);
     await new Promise<void>((ok, err) => {
       const t = setTimeout(() => { child.kill(); err(new Error("embed process load timeout")); }, 120_000);
       const onExit = (c: number | null, s: string | null) => { clearTimeout(t); err(new Error(`embed process exited during load (${s ?? c})`)); };

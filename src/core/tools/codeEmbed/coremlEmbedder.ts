@@ -88,12 +88,14 @@ export class CoreMLEmbedder implements Embedder {
     this.exitListeners.push(l);
   }
 
-  private run(ids: number[]): Promise<Float32Array> {
+  /** bg: indexing (the helper runs it at utility QoS); queries run at user-initiated QoS so a search is never queued
+   *  behind background priority. */
+  private run(ids: number[], bg = false): Promise<Float32Array> {
     if (this.dead) return Promise.reject(new Error("coreml helper is not running"));
     const id = this.next++;
     return new Promise((ok, err) => {
       this.pending.set(id, { ok, err });
-      this.proc.stdin.write(JSON.stringify({ id, ids }) + "\n");
+      this.proc.stdin.write(JSON.stringify(bg ? { id, ids, bg: true } : { id, ids }) + "\n");
     });
   }
 
@@ -112,7 +114,7 @@ export class CoreMLEmbedder implements Embedder {
         if (!this.fallback) throw new Error(`document has ${n} tokens; CoreML max is ${this.maxTokens} and no fallback`);
         out.push(...(await this.fallback.embedDocuments([t])));
       } else {
-        out.push(await this.run(this.ids(t, this.maxTokens)));
+        out.push(await this.run(this.ids(t, this.maxTokens), true));
       }
     }
     return out;
