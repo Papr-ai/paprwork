@@ -6,7 +6,7 @@
  * Protocol (IPC, advanced serialization): { id, op: "query"|"docs"|"count"|"close", text?, texts? }
  *   -> { id, ok, vecs?, n?, error? }. First message out: { ready: true } or { ready: false, error }.
  */
-import { loadEmbedder, type Embedder } from "./embedder.js";
+import { EMBED_NICE, loadEmbedder, lowerPriority, type Embedder } from "./embedder.js";
 
 type Req = { id: number; op: "query" | "docs" | "count" | "close"; text?: string; texts?: string[] };
 
@@ -17,6 +17,8 @@ let emb: Embedder | null = null;
 process.on("disconnect", () => process.exit(0));
 
 (async () => {
+  // Background work: below the app so indexing never competes with what the user is doing.
+  lowerPriority(process.pid, EMBED_NICE);
   try {
     const threads = Number(process.env.PAPR_EMBED_THREADS) || undefined;
     emb = await loadEmbedder(process.env.PAPR_EMBED_ROOT as string, { threads });

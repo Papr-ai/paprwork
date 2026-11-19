@@ -1,6 +1,6 @@
 // papr-embed-coreml: a tiny long-lived helper that runs papr-embed-code-1-0.6b on the Apple Neural Engine.
 // Protocol: newline-delimited JSON on stdin/stdout.
-//   -> {"id":1,"ids":[...token ids incl. <|endoftext|>...]}
+//   -> {"id":1,"ids":[...token ids incl. <|endoftext|>...],"bg":true}   bg: indexing, run at utility QoS
 //   <- {"id":1,"embedding":[...1024 floats, unit norm...],"fn":"len_64","ms":17.2}
 //   <- {"id":1,"error":"..."}
 // First line on stdout after load: {"ready":true,"functions":["len_64",...],"load_ms":...,"compiled":bool}
@@ -70,6 +70,10 @@ while let line = readLine() {
     guard let L = available.first(where: { $0 >= ids.count }), let model = models[L] else {
         emit(["id": id, "error": "too long: \(ids.count) tokens, max \(available.last ?? 0)"]); continue
     }
+    // Indexing runs at utility QoS (macOS may move it to efficiency cores and defer it under load); a search query runs
+    // at user-initiated QoS. The Neural Engine does the math either way; QoS governs the CPU-side prep and copy.
+    let qos: DispatchQoS.QoSClass = (req["bg"] as? Bool) == true ? .utility : .userInitiated
+    DispatchQueue.global(qos: qos).sync {
     do {
         let t = Date()
         let input = try MLMultiArray(shape: [1, NSNumber(value: L)], dataType: .int32)
@@ -81,8 +85,9 @@ while let line = readLine() {
         guard let e = out.featureValue(for: "embedding")?.multiArrayValue else { throw NSError(domain: "embed", code: 1) }
         var v = [Float](repeating: 0, count: e.count)
         for i in 0..<e.count { v[i] = e[i].floatValue }
-        emit(["id": id, "embedding": v, "fn": "len_\(L)", "ms": Date().timeIntervalSince(t) * 1000])
+        emit(["id": id, "embedding": v, "fn": "len_\(L)", "ms": Date().timeIntervalSince(t) * 1000, "qos": qos == .utility ? "utility" : "userInitiated"])
     } catch {
         emit(["id": id, "error": "\(error)"])
+    }
     }
 }
