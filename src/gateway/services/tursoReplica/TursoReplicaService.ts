@@ -81,6 +81,7 @@ import { TursoReplicaPathScheduler } from "./tursoReplicaPathScheduler.js";
 import { computeReplicaPendingPush } from "./replicaPendingPush.js";
 import { scheduleTursoReplicaPushForSyncKey } from "./tursoReplicaPushScheduler.js";
 import { withTursoReplicaSyncBusy } from "./gatewayTursoSyncBusy.js";
+import { inspectOversizedReplicaWal, scheduleOversizedWalReseed } from "./replicaOversizedWal.js";
 import { createClient } from "@libsql/client";
 import {
   isPrimaryEngineTableTypeError,
@@ -945,6 +946,17 @@ export class TursoReplicaService {
         `[TursoReplicaService] Reset wedged sync sidecars before open: ${localPath} — ` +
           describeReplicaSidecarWedge(report),
       );
+    }
+
+    // Shape 3: a WAL that dwarfs its database. Plan A never checkpoints, so a replica that
+    // is rewritten often accumulates its whole history in -wal; at gigabytes the open alone
+    // outlasts the worker timeout, and the timeout restarts the worker for every database.
+    // A re-seed from cloud (keeping unpushed rows) resets it. Once per path per session.
+    if (!getTursoReplicaSyncWorkerClient().ownsPath(localPath)) {
+      const walReport = inspectOversizedReplicaWal(localPath);
+      if (walReport.oversized && (await scheduleOversizedWalReseed(localPath, walReport))) {
+        this.touchedPaths.delete(key);
+      }
     }
 
     // Shape 2: an engine table present without the unique index the engine seeks during
