@@ -1,7 +1,8 @@
 """Context Bench gate: compare a run against baseline.json, print a markdown table, exit 1 on regression.
 
-A gated arm regresses when its hits at the gated K fall more than `tolerance` below baseline, or its retrieval loss
-rises more than 0.05. Update baseline.json only in a PR that is meant to move the numbers, and say why.
+A gated arm regresses when its hits at the gated K fall more than `tolerance` below baseline, or the tokens it hands the
+agent grow more than 15%. Latency (and so the latency term of retrieval loss) is reported, not gated: runner and
+network noise move it by hundreds of ms between identical runs. Update baseline.json only in a PR that is meant to move the numbers, and say why.
 usage: gate.py <results.json> [more results.json ...] --baseline baseline.json [--report report.md]
 """
 import json, sys
@@ -27,7 +28,7 @@ for g in base["gated"]:
         failed.append(key)
         continue
     tol = g.get("tolerance", base.get("tolerance", 2))
-    bad = r["hits"] < g["hits"] - tol or r["loss"] > g["loss"] + 0.05
+    bad = r["hits"] < g["hits"] - tol or ("tokens" in g and r["tokens"] > g["tokens"] * 1.15)
     if bad:
         failed.append(key)
     lines.append(f"| {g['method']} ({g['expand']}) | {g['K']} | {r['hits']}/{r['n']} | {g['hits']} | {r['p95_ms']} | "
