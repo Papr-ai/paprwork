@@ -1533,6 +1533,7 @@ export class AgentService {
       setToolContext(chatId, {
         turnMetrics,
         userMessage,
+        assistantMessageId,
         ...(focusAppId ? { activeAppId: focusAppId } : {}),
         ...(Object.keys(mergedJobEnv).length > 0
           ? { jobEnv: mergedJobEnv }
@@ -3578,6 +3579,13 @@ export class AgentService {
         usage: tokenUsage,
         delegationFinishFor: delegationFinishFor ?? undefined,
       });
+      // Searches that ran this turn recorded their searchId by toolCallId; copy
+      // them onto the stored tool calls so the local row and the synced row both
+      // name the QueryLog each call produced.
+      {
+        const { applySearchTags } = await import("./storage/trainingSync.js");
+        applySearchTags(assistantMsg.toolCalls);
+      }
       const streamStorage = resolveStreamStorage();
       if (streamStorage) {
         if (checkpointInserted) {

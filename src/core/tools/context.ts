@@ -26,10 +26,13 @@ interface ToolContext {
   turnMetrics?: TurnMetrics;
   /** The user's message for this turn (code search reranks with it). */
   userMessage?: string;
+  /** Stable id of the assistant row this turn writes; joins searches to the stored message. */
+  assistantMessageId?: string;
 }
 
 interface ToolContextOptions {
   userMessage?: string;
+  assistantMessageId?: string;
   activeAppId?: string;
   delegationJobId?: string;
   jobEnv?: Record<string, string>;
@@ -55,6 +58,7 @@ export function runWithToolContext<T>(
       jobEnv: options?.jobEnv,
       turnMetrics: options?.turnMetrics,
       userMessage: options?.userMessage,
+      assistantMessageId: options?.assistantMessageId,
     },
     fn,
   );
@@ -75,12 +79,24 @@ export function setToolContext(
     jobEnv: options?.jobEnv,
     turnMetrics: options?.turnMetrics,
     userMessage: options?.userMessage,
+    assistantMessageId: options?.assistantMessageId,
   });
 }
 
 /** The user's message for the current turn, when the agent loop set it. */
 export function getUserMessageForTools(): string | undefined {
   return asyncLocalStorage.getStore()?.userMessage;
+}
+
+/** Stable id of the assistant message the current turn writes, when known. */
+export function getAssistantMessageIdForTools(): string | undefined {
+  return asyncLocalStorage.getStore()?.assistantMessageId;
+}
+
+/** Mastra passes `{ agent: { toolCallId } }` as execute()'s second argument. */
+export function toolCallIdFromExecuteContext(ctx: unknown): string | undefined {
+  const id = (ctx as { agent?: { toolCallId?: unknown } } | undefined)?.agent?.toolCallId;
+  return typeof id === "string" && id ? id : undefined;
 }
 
 /** Mini-app id from the open app tab (UI focus), when available. */

@@ -42,6 +42,7 @@ import {
   writeSettingsViewTab,
 } from "../../utils/settingsViewTabPersistence";
 import { ExperimentRows } from "./ExperimentsSection";
+import { TrainingConsentRow } from "./TrainingConsent";
 import { SettingRow } from "./SettingRow";
 import { Toggle } from "./Toggle";
 import "./SettingsView.css";
@@ -790,6 +791,8 @@ function PrivacyTab() {
             ariaLabel="Send anonymous usage data"
           />
         </SettingRow>
+
+        <TrainingConsentRow />
 
         <ExperimentRows />
 
