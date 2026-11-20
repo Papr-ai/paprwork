@@ -1,0 +1,108 @@
+name: Context Bench
+
+# Regression gate for how agents get earlier context: earlier in a long chat, other chats, documents, and graph/DB
+# questions. 106 hand-written questions with gold answers (Curation Bench method): short lookups, 2-3 sentence
+# specific questions, "bring back that whole message" questions, and graph/SQL questions.
+# Each retrieval method (grep, BM25, on-device papr-embed, hybrid, + Jev, Papr memory search, SQL/GraphQL) is scored
+# at K = 3/5/10 on Hit@K, p95 latency, tokens read and Retrieval Loss = -log10(Hit@K) + 0.5*p95/100ms + 0.01*tokens/1k.
+#
+# Data is private (chat text, docs, investor rows), so it lives only in GCS (context_bench/dataset/v1) and per-row
+# results go back there; only the summary table is posted on the PR. Corpus + query vectors are cached by data
+# version, so CI only ranks on CPU; the live arms (Jev, memory search, GraphQL) call production with a bench key.
+
+on:
+  pull_request:
+    paths:
+      - "src/core/tools/bash.ts"
+      - "src/core/tools/codeEmbed/**"
+      - "src/core/tools/codeJevRerank.ts"
+      - "src/core/tools/paprMemory.ts"
+      - "src/core/tools/paprClient.ts"
+      - "src/gateway/services/storage/**"
+      - "scripts/context-bench/**"
+      - ".github/workflows/context-bench.yml"
+  push:
+    branches: [main] # release: every merge to main is measured against the baseline
+  schedule:
+    - cron: "0 10 * * 1" # weekly: the memory server and Jev change without a paprwork PR
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  id-token: write
+  issues: write
+  pull-requests: write
+
+concurrency:
+  group: context-bench-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  BENCH: gs://papr-hne-artifacts/curation_bench/context # same prefix the bench service account can read
+  DATA_VERSION: v1
+
+jobs:
+  bench:
+    name: Context Bench (chat, docs, graph)
+    runs-on: ubuntu-latest
+    timeout-minutes: 40
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - run: pip install -q "numpy<3" rank_bm25 requests
+      - uses: google-github-actions/auth@v2
+        with:
+          workload_identity_provider: ${{ vars.GCP_WIF_PROVIDER }}
+          service_account: ${{ vars.GCP_BENCH_SA }}
+      - uses: google-github-actions/setup-gcloud@v2
+
+      - name: Data + cached vectors
+        run: |
+          mkdir -p ctx/data
+          gcloud storage cp -q "$BENCH/dataset/$DATA_VERSION/*" ctx/data/
+
+      - name: Offline arms (grep, BM25, on-device papr-embed, hybrids)
+        env:
+          CTX_BENCH_DATA: ctx/data
+        run: python scripts/context-bench/run.py lex dense
+
+      # Jev and SQL only need a Papr key. Memory search and GraphQL read the memories/graph of the workspace the
+      # dataset came from, so they need that workspace's key (CONTEXT_BENCH_PAPR_API_KEY); without it they're skipped.
+      - name: Live arms (Jev rerank, SQL; memory search + GraphQL with the workspace key)
+        env:
+          CTX_BENCH_DATA: ctx/data
+          PAPR_API_KEY: ${{ secrets.CONTEXT_BENCH_PAPR_API_KEY || secrets.JEV_BENCH_PAPR_API_KEY }}
+          CTX_BENCH_SKIP_MEMORY: ${{ secrets.CONTEXT_BENCH_PAPR_API_KEY == '' && '1' || '0' }}
+        run: |
+          if [ -z "$PAPR_API_KEY" ]; then echo "::warning::no bench Papr key: live arms skipped"; exit 0; fi
+          python scripts/context-bench/run.py jev memory structured
+
+      - name: Gate
+        id: gate
+        run: |
+          set +e
+          python scripts/context-bench/gate.py ctx/data/results_*.json --baseline scripts/context-bench/baseline.json --report ctx/report.md
+          echo "failed=$?" >> "$GITHUB_OUTPUT"
+          cat ctx/report.md >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Keep the evidence
+        if: always()
+        run: gcloud storage cp -q ctx/data/results_*.json ctx/report.md "$BENCH/runs/${{ github.run_id }}/" || true
+
+      - name: Comment on the PR
+        if: always() && github.event_name == 'pull_request' && hashFiles('ctx/report.md') != ''
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: gh pr comment ${{ github.event.pull_request.number }} --body-file ctx/report.md --edit-last || gh pr comment ${{ github.event.pull_request.number }} --body-file ctx/report.md
+
+      - name: Open an issue on regression
+        if: steps.gate.outputs.failed == '1'
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          T="Context Bench regression: ${{ github.event.pull_request.title || github.ref_name }}"
+          { cat ctx/report.md; echo; echo "Run: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}"; } > ctx/issue.md
+          gh issue create --title "$T" --body-file ctx/issue.md --label context-bench || gh issue create --title "$T" --body-file ctx/issue.md
+          exit 1
