@@ -94,4 +94,31 @@ describe("writeLinkedDatabasesForApp", () => {
       fs.rmSync(paprDir, { recursive: true, force: true, maxRetries: 5, retryDelay: 50 });
     }
   });
+  it("keeps a record the app already declares for a dbId not registered here", async () => {
+    const paprDir = fs.mkdtempSync(path.join(os.tmpdir(), "papr-linked-db-"));
+    process.env.PAPR_HOME = paprDir;
+    const appId = "app-audit";
+    try {
+      fs.mkdirSync(path.join(paprDir, "data"), { recursive: true });
+      fs.writeFileSync(path.join(paprDir, "data", "databases.json"), JSON.stringify({ version: 1, databases: {} }));
+      const appDir = path.join(paprDir, "apps", appId);
+      fs.mkdirSync(appDir, { recursive: true });
+      fs.writeFileSync(
+        path.join(appDir, "data-sources.json"),
+        JSON.stringify({ sources: [{ id: "db-707ef4c1:workpapers", type: "sqlite", dbId: "db-707ef4c1", alias: "workpapers", dbPath: "", tables: [] }] }),
+      );
+      fs.writeFileSync(
+        path.join(appDir, "linked-databases.json"),
+        JSON.stringify({ version: 1, databases: { "db-707ef4c1": { dbId: "db-707ef4c1", tursoShortName: "d-707ef4c1", label: "Workpapers", isolation: "shared", status: "active", localPath: "" } } }),
+      );
+      const result = await writeLinkedDatabasesForApp(paprDir, appId);
+      expect(result.missingDbIds).toEqual(["db-707ef4c1"]);
+      const linked = JSON.parse(fs.readFileSync(path.join(appDir, "linked-databases.json"), "utf8")) as {
+        databases: Record<string, { tursoShortName: string }>;
+      };
+      expect(linked.databases["db-707ef4c1"]?.tursoShortName).toBe("d-707ef4c1");
+    } finally {
+      fs.rmSync(paprDir, { recursive: true, force: true, maxRetries: 5, retryDelay: 50 });
+    }
+  });
 });
