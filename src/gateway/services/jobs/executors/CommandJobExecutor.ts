@@ -147,6 +147,15 @@ export class CommandJobExecutor implements IJobExecutor {
     }
     // ─────────────────────────────────────────────────────────────────────────
 
+    // Resource governor: a memory-heavy job (model load, local LLM, docker) waits for room instead of starting on a
+    // machine that is already short of memory. Light and medium jobs start immediately and are only measured.
+    const { admitBashCommand } = await import("../../../../core/system/bashGovernor.js");
+    const admission = await admitBashCommand(finalCommand, `job:${params.job.id}`, { waitMs: 10 * 60_000 });
+    if (!admission.ok) {
+      dbProxy.release();
+      throw new Error(admission.message);
+    }
+
     // spawn() throws SYNCHRONOUSLY for EBADF/EMFILE on macOS (posix_spawn
     // file-action setup fails before a child exists). Release the DB proxy
     // lease ourselves — the "error" listener below is never attached.
@@ -160,8 +169,12 @@ export class CommandJobExecutor implements IJobExecutor {
       });
     } catch (spawnError) {
       dbProxy.release();
+      admission.handle.done();
       throw spawnError;
     }
+    admission.handle.onSpawn(proc.pid);
+    proc.once("close", () => { admission.handle.done(); });
+    proc.once("error", () => { admission.handle.done(); });
 
     // Revoke the proxy session with the process rather than on a timer, so a
     // finished job cannot keep writing. "close" (not "exit") waits for stdio,
