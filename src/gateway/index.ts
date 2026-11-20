@@ -39,6 +39,8 @@ if (!globalThis.crypto) {
 
 import express from "express";
 import { registerVaultRoutes, wireVaultKeyChanges } from "./routes/vaultRoutes.js";
+import { registerTrainingConsentRoutes } from "./routes/trainingConsentRoutes.js";
+import { getPaprDataDir as getPaprDataDirForTraining } from "../core/utils/paprRoot.js";
 import { createServer } from "http";
 import { WebSocketServer } from "ws";
 import path from "path";
@@ -4352,6 +4354,15 @@ async function startGateway(): Promise<void> {
     lapRouteRegistrationSection("cloud-sync-routes");
 
     registerVaultRoutes(app, getVaultSyncService);
+
+    registerTrainingConsentRoutes(app, {
+      getClient: async () => {
+        const { getPaprClient } = await import("../core/tools/paprClient.js");
+        return getPaprClient().catch(() => null);
+      },
+      // Lazy: the active workspace can change without a gateway restart.
+      askedFile: () => path.join(getPaprDataDirForTraining(), "training-consent-asked.json"),
+    });
 
     // Renderer telemetry: validate sync, respond immediately, forward async (never block hot path).
     app.post("/api/telemetry/events", (req, res) => {

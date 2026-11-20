@@ -151,9 +151,14 @@ export async function cloudSearch(
   opts: { blobShas?: string[]; repoIds?: string[]; limit?: number; queryEmbedding?: Float32Array; timeout?: number } = {},
 ): Promise<CloudHit[]> {
   try {
+    const { getAssistantMessageIdForTools, getCurrentChatId } = await import("../context.js");
+    const clientMessageId = getAssistantMessageIdForTools();
+    const sessionId = getCurrentChatId();
     const res: any = await client.post("/v1/memory/search", {
       body: {
         query,
+        // QueryLog join keys; the server logs code searches with useCase "code".
+        metadata: { useCase: "code", ...(clientMessageId ? { clientMessageId } : {}), ...(sessionId ? { sessionId } : {}) },
         code_search: {
           embed_model: model,
           query_embedding: opts.queryEmbedding ? Array.from(opts.queryEmbedding) : undefined,

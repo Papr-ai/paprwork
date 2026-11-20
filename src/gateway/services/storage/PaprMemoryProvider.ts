@@ -28,6 +28,7 @@ import {
   type PaprMessageStoreBody,
 } from "./paprSyncPayload.js";
 import { buildPaprMemoryWriteScope } from "../../utils/memoryScopeResolver.js";
+import { attachTrainingPayload, type FullResultReader } from "./trainingSync.js";
 import { PAPR_DEFAULT_HEADERS } from "../../../core/tools/paprSurface.js";
 import {
   paprSessionUserQuery,
@@ -65,6 +66,9 @@ export class PaprMemoryProvider implements IStorageProvider {
     return this.client;
   }
 
+  /** Set by HybridStorageProvider so offloaded (sidecar) results can be uploaded in full. */
+  public readFullResult: FullResultReader = async (tc) => tc.result;
+
   constructor(config: PaprConfig) {
     this.client = new Papr({
       xAPIKey: config.apiKey, // X-API-Key header from macOS Keychain
@@ -99,6 +103,9 @@ export class PaprMemoryProvider implements IStorageProvider {
         namespaceId: memoryScope.namespace_id,
         policy: memoryScope.policy,
       });
+      // Opted-in users only: full tool args + result pointers, and the join key
+      // QueryLog rows use. Opted-out users send exactly what they sent before.
+      await attachTrainingPayload(storeBody, message, this.readFullResult);
 
       const response = await this.client.messages.store(
         storeBody as Parameters<Papr["messages"]["store"]>[0],

@@ -1,3 +1,4 @@
+import { AsyncLocalStorage } from "async_hooks";
 /**
  * Bash Tool - Command execution with security and timeout
  *
@@ -497,7 +498,11 @@ async function searchPaprMemoryForCode(
     );
     const scopeSpread = await paprMemorySearchScopeSpread();
 
-    const response = await client.memory.search({
+    const { getAssistantMessageIdForTools, getCurrentChatId } = await import("./context.js");
+    const toolCallId = bashToolCallId.getStore();
+    const assistantMessageId = getAssistantMessageIdForTools();
+    const chatId = getCurrentChatId();
+    const { data: response, response: httpResponse } = await client.memory.search({
       query,
       ...scopeSpread,
       max_memories: 10,
@@ -509,8 +514,18 @@ async function searchPaprMemoryForCode(
         role: "assistant",
         category: "learning",
         customMetadata,
-      },
-    });
+        // QueryLog join keys (not search filters).
+        useCase: "code_grep",
+        ...(assistantMessageId ? { clientMessageId: assistantMessageId } : {}),
+        ...(toolCallId ? { toolCallId } : {}),
+        ...(chatId ? { sessionId: chatId } : {}),
+      } as Record<string, unknown>,
+    }).withResponse();
+    {
+      const searchId = httpResponse.headers.get("X-Search-Id");
+      const { recordSearchOnToolCall } = await import("../../gateway/services/storage/trainingSync.js");
+      recordSearchOnToolCall(toolCallId, searchId, "code_grep");
+    }
     
     // Format results - response.data.memories
     if (!response?.data?.memories || response.data.memories.length === 0) {
@@ -774,9 +789,16 @@ export const __testing = { joinForSubstitution, splitAfterSubstitution, envHasKe
 
 export async function executeBashCommand(
   input: BashInput,
+  executeCtx?: unknown,
 ): Promise<ToolResult<BashOutput>> {
-  return attachIdentityReminder(input.command ?? "", executeBashCommandInner(input));
+  const { toolCallIdFromExecuteContext } = await import("./context.js");
+  return bashToolCallId.run(toolCallIdFromExecuteContext(executeCtx), () =>
+    attachIdentityReminder(input.command ?? "", executeBashCommandInner(input)),
+  );
 }
+
+/** Tool call id of the running bash call, so code searches it triggers can tag it. */
+const bashToolCallId = new AsyncLocalStorage<string | undefined>();
 
 async function executeBashCommandInner(
   input: BashInput,
