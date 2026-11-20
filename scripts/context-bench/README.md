@@ -32,8 +32,8 @@ Retrieval-Loss = −log10(Hit@K) + 0.5 · p95_ms / 100 + 0.01 · tokens / 1,000
 ```
 
 **Gate.** `baseline.json` lists the shipped arms. CI fails if one drops more than 2 hits at its K or hands the agent
-15% more tokens (latency is reported but not gated: it is runner noise), comments the table on the PR and opens an issue. Runs on PRs that touch the grep hook, the
-on-device embedder, Jev or memory search; on every push to `master` and `development`; and weekly, because the memory server
+15% more tokens (latency is reported but not gated: it is runner noise), comments the table on the PR and opens an issue. Runs on every PR so it can be a required check: PRs that don't touch the grep hook, the on-device embedder, Jev or
+memory search pass in seconds without running the bench. It also runs on every push to `master` and `development`; and weekly, because the memory server
 and Jev change without a paprwork PR.
 
 **Run it locally.**
