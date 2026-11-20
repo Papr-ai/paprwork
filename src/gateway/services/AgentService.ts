@@ -3898,8 +3898,12 @@ export class AgentService {
           const papr = new PaprClient({
             xAPIKey: keys.PAPR_API_KEY,
           });
+          const { paprSessionUserQuery } = await import(
+            "./storage/paprSessionScope.js"
+          );
           const response = await papr.messages.sessions.compress(chatId, {
             maxRetries: 0,
+            query: paprSessionUserQuery(),
           });
           if (response.summaries) {
             const s = response.summaries;
