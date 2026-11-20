@@ -74,9 +74,9 @@ export function openAsksFrom<T extends { fromUserId: string }>(inbox: T[], peopl
 /** Everything Pen needs to see about one mention: where it stands, the exchange so far, what it's about. */
 export function mentionSummary(m: MentionItem) {
   return {
-    id: m.id, from: m.fromName, to: m.toName, text: m.text.slice(0, 300), action: m.action, status: m.status,
+    id: m.id, from: m.fromName, to: m.toName, text: m.text, action: m.action, status: m.status,
     progress: m.progress ?? (m.reply ? "in_progress" : "asked"), notified: m.notified !== false, reply: m.reply?.text ?? null,
-    thread: (m.thread ?? []).slice(-6).map((t) => ({ by: t.by, text: t.text.slice(0, 300), at: t.at })),
+    thread: (m.thread ?? []).slice(-6).map((t) => ({ by: t.by, text: t.text, at: t.at })),
     about: { appId: m.context?.appId ?? null, appName: m.context?.appName ?? null, chatId: m.context?.chatId ?? null },
     promisedAt: m.promisedAt ?? null, nudgedAt: m.nudgedAt ?? null, at: m.createdAt,
   };
