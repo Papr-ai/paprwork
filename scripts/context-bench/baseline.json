@@ -42,6 +42,7 @@
    "method": "bm25+dense+jev ane-0.6b",
    "expand": "message",
    "K": 3,
+   "live": true,
    "hits": 80,
    "loss": 4.144,
    "n": 94,

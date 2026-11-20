@@ -5,7 +5,7 @@ agent grow more than 15%. Latency (and so the latency term of retrieval loss) is
 network noise move it by hundreds of ms between identical runs. Update baseline.json only in a PR that is meant to move the numbers, and say why.
 usage: gate.py <results.json> [more results.json ...] --baseline baseline.json [--report report.md]
 """
-import json, sys
+import json, os, sys
 
 args = sys.argv[1:]
 base_path = args[args.index("--baseline") + 1]
@@ -22,6 +22,11 @@ for g in base["gated"]:
     r = idx.get(key)
     if r is None and g.get("optional"):
         lines.append(f"| {g['method']} ({g['expand']}) | {g['K']} | skipped | {g['hits']} | | | | ⏭ needs the workspace key |")
+        continue
+    # Live arms (Jev) need a bench Papr key. Without one (forks, a repo where the secret is not set yet) they are
+    # skipped and say so; with a key, a missing row is a real failure.
+    if r is None and g.get("live") and os.environ.get("CTX_BENCH_HAVE_KEY") != "1":
+        lines.append(f"| {g['method']} ({g['expand']}) | {g['K']} | skipped | {g['hits']} | | | | ⏭ needs JEV_BENCH_PAPR_API_KEY |")
         continue
     if r is None:
         lines.append(f"| {g['method']} ({g['expand']}) | {g['K']} | missing | {g['hits']} | | | | ❌ not run |")

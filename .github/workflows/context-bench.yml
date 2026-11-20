@@ -22,7 +22,7 @@ on:
       - "scripts/context-bench/**"
       - ".github/workflows/context-bench.yml"
   push:
-    branches: [main] # release: every merge to main is measured against the baseline
+    branches: [master, development] # every merge is measured against the baseline
   schedule:
     - cron: "0 10 * * 1" # weekly: the memory server and Jev change without a paprwork PR
   workflow_dispatch:
@@ -81,6 +81,8 @@ jobs:
 
       - name: Gate
         id: gate
+        env:
+          CTX_BENCH_HAVE_KEY: ${{ (secrets.CONTEXT_BENCH_PAPR_API_KEY != '' || secrets.JEV_BENCH_PAPR_API_KEY != '') && '1' || '0' }}
         run: |
           set +e
           python scripts/context-bench/gate.py ctx/data/results_*.json --baseline scripts/context-bench/baseline.json --report ctx/report.md
@@ -97,12 +99,17 @@ jobs:
           GH_TOKEN: ${{ github.token }}
         run: gh pr comment ${{ github.event.pull_request.number }} --body-file ctx/report.md --edit-last || gh pr comment ${{ github.event.pull_request.number }} --body-file ctx/report.md
 
-      - name: Open an issue on regression
-        if: steps.gate.outputs.failed == '1'
+      # On a PR the failed check and the PR comment are the record; an issue is opened only for regressions on main or
+      # the weekly run, where no PR is there to block.
+      - name: Open an issue on regression (main / weekly)
+        if: steps.gate.outputs.failed == '1' && github.event_name != 'pull_request'
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
-          T="Context Bench regression: ${{ github.event.pull_request.title || github.ref_name }}"
+          T="Context Bench regression: ${{ github.ref_name }} ($(date -u +%F))"
           { cat ctx/report.md; echo; echo "Run: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}"; } > ctx/issue.md
           gh issue create --title "$T" --body-file ctx/issue.md --label context-bench || gh issue create --title "$T" --body-file ctx/issue.md
-          exit 1
+
+      - name: Fail on regression
+        if: steps.gate.outputs.failed == '1'
+        run: exit 1
