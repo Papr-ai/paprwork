@@ -9,6 +9,8 @@ export interface ShellExecOptions {
   timeout?: number;
   env?: NodeJS.ProcessEnv;
   maxBuffer?: number;
+  /** Called with the child pid right after spawn (the resource governor measures the process tree). */
+  onSpawn?: (pid: number | undefined) => void;
 }
 
 export interface ShellExecError extends Error {
@@ -41,6 +43,7 @@ export function execShellCommand(
       env: env ? { ...process.env, ...env } : process.env,
       stdio: SPAWN_STDIO_IGNORE_IN,
     });
+    options.onSpawn?.(proc.pid);
 
     let stdout = "";
     let stderr = "";

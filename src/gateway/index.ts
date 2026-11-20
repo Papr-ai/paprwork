@@ -3625,6 +3625,18 @@ async function startGateway(): Promise<void> {
       }
     });
 
+    // Resource governor: memory state, caps, leases and the agent-started processes being measured. Read-only.
+    app.get("/api/system/resources", async (_req, res) => {
+      try {
+        const { getResourceGovernor } = await import("../core/system/resourceGovernor.js");
+        const g = getResourceGovernor();
+        await g.refresh();
+        res.json(g.status());
+      } catch (e) {
+        res.status(500).json({ error: (e as Error).message });
+      }
+    });
+
     app.get("/api/sync/status", (_req, res) => {
       const sync = getCloudSyncService();
       if (!sync) {
@@ -4906,6 +4918,8 @@ async function startGateway(): Promise<void> {
     if (!isCloudAgentGatewayMode()) {
       // On-device code search: fetch + verify the model for new and existing users after startup settles.
       void import("../core/tools/codeEmbed/runtime.js").then((m) => m.startCodeEmbedInBackground()).catch(() => undefined);
+      // Memory governor: sample pressure from startup so the agent cap and leases react before the first heavy command.
+      void import("../core/system/resourceGovernor.js").then((m) => m.getResourceGovernor().start()).catch(() => undefined);
     }
     const { markGatewayRoutesReady } =
       await import("./services/gatewayReadiness.js");
