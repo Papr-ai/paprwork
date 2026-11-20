@@ -232,11 +232,11 @@ function coerceArgTypes(args: Record<string, unknown>): Record<string, unknown> 
 /**
  * Execute a single tool call using Mastra tools
  */
-async function executeToolCall(
+export async function executeToolCall(
   toolCall: ToolCallAccum,
   mastraTools: Record<
     string,
-    { execute?: (args: unknown) => Promise<unknown> }
+    { execute?: (args: unknown, ctx?: { toolCallId: string; messages: unknown[] }) => Promise<unknown> }
   >,
   apiKeys: string[],
   toolContext: {
@@ -261,7 +261,10 @@ async function executeToolCall(
     const { runWithToolContext } = await import("../../../core/tools/context.js");
     const rawResult = await runWithToolContext(
       toolContext.chatId,
-      () => tool.execute!(coerceArgTypes(toolCall.args)),
+      // Pass the call id the way the AI SDK loop does (Mastra turns
+      // { toolCallId, messages } into ctx.agent), so tools that tag their
+      // work by call id (search ids on tool calls) see it on this path too.
+      () => tool.execute!(coerceArgTypes(toolCall.args), { toolCallId: toolCall.toolCallId, messages: [] }),
       {
         activeAppId: toolContext.activeAppId,
         jobEnv: toolContext.jobEnv,
