@@ -10,6 +10,7 @@ import {
 import { buildAgentMemoryAddPolicy } from "../../gateway/utils/workspaceContextSchema.js";
 import { asToonOrRows } from "../utils/toonRows.js";
 import { createTool } from "@mastra/core/tools";
+import { agenticGraphEnabled } from "./searchDefaults.js";
 import { z } from "zod";
 import {
   CURRENT_CHAT_SCOPE,
@@ -1025,7 +1026,8 @@ export const searchAgentMemoryTool = createTool({
           ...memorySearchSpread,
           max_memories: args.maxMemories ?? 20,
           max_nodes: 20,
-          enable_agentic_graph: true,
+          // Off by default: cold agentic graph calls took ~5.8 s (PAPR_AGENTIC_GRAPH=1 to opt in).
+          enable_agentic_graph: agenticGraphEnabled(),
           reranking_config: {
             reranking_enabled: chosenProvider !== "none",
             reranking_provider: chosenProvider,

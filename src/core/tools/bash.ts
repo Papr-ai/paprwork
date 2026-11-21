@@ -476,6 +476,7 @@ async function searchPaprMemoryForCode(
       "../../gateway/utils/paprMemoryPolicy.js"
     );
     const { PAPR_DEFAULT_HEADERS } = await import("./paprSurface.js");
+    const { agenticGraphEnabled } = await import("./searchDefaults.js");
     const memoryBaseURL = process.env.PAPR_MEMORY_SERVER_URL?.replace(/\/$/, "") || undefined;
     const client = new Papr({
       xAPIKey: paprKey,
@@ -507,7 +508,7 @@ async function searchPaprMemoryForCode(
       ...scopeSpread,
       max_memories: 10,
       max_nodes: 10,
-      enable_agentic_graph: true,
+      enable_agentic_graph: agenticGraphEnabled(),
       response_format: "toon",
       policy: buildSearchPolicy({ defaultDomain: "code" }),
       metadata: {
@@ -849,16 +850,20 @@ async function executeBashCommandInner(
     let devicePromise: Promise<DeviceGrepHits> | null = null;
     
     if (grepInfo) {
-      const memoryQuery = buildHybridMemorySearchQuery(
-        grepInfo.pattern,
-        grepInfo.path,
-      );
-      memoryPromise = searchPaprMemoryForCode(memoryQuery, grepInfo.path);
+      // Cloud memory search alongside grep is off by default (slow, rarely added a file; see searchDefaults.ts).
+      const { grepCloudMemoryEnabled } = await import("./searchDefaults.js");
+      if (grepCloudMemoryEnabled()) {
+        const memoryQuery = buildHybridMemorySearchQuery(
+          grepInfo.pattern,
+          grepInfo.path,
+        );
+        memoryPromise = searchPaprMemoryForCode(memoryQuery, grepInfo.path);
+        console.log(
+          `[Bash Tool] Detected grep in Papr folder, running parallel memory search: "${memoryQuery.substring(0, 120)}${memoryQuery.length > 120 ? "..." : ""}"`,
+        );
+      }
       // On-device papr-embed-code (Neural Engine / ONNX) runs alongside; never blocks grep (2 s budget, [] when not ready).
       devicePromise = import("./codeEmbed/runtime.js").then((m) => m.deviceHitsForGrep(grepInfo.path, grepInfo.pattern));
-      console.log(
-        `[Bash Tool] Detected grep in Papr folder, running parallel memory search: "${memoryQuery.substring(0, 120)}${memoryQuery.length > 120 ? "..." : ""}"`,
-      );
     }
 
     if (contextGrep) {
