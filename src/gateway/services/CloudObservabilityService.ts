@@ -99,6 +99,9 @@ export interface CloudSyncStatusReport {
   appWriterRepo?: AppWriterRepoReport;
   /** Present when appId is scoped — legacy namespace git is not app code source of truth. */
   namespaceGitTrapWarning?: string;
+  /** false when the requested appId is not an app in this workspace (no appWriterRepo then). */
+  appFound?: false;
+  appNotFound?: string;
   /** Apps in this workspace from local apps.json (disk registry — not namespace git). */
   workspaceApps?: WorkspaceAppRegistryEntry[];
   checkedAt: string;
@@ -310,6 +313,16 @@ export async function resolveTursoDatabaseName(input: {
   );
 }
 
+/** True when appId is an app in this workspace: listed in apps.json or has a folder with metadata. */
+export function isWorkspaceApp(
+  paprDir: string,
+  appId: string,
+  registry: { id: string }[] = loadWorkspaceAppRegistry(paprDir),
+): boolean {
+  if (registry.some((a) => a.id === appId)) return true;
+  return fs.existsSync(path.join(paprDir, "apps", appId, "metadata.json"));
+}
+
 export async function getCloudSyncStatus(options?: {
   appId?: string;
   jobId?: string;
@@ -346,8 +359,14 @@ export async function getCloudSyncStatus(options?: {
     appId ? filterGitHubReportByApp(githubFull, appId, paprDir) : githubFull,
   );
 
+  // An id that isn't an app here (another device's copy, a typo) has no sync
+  // state. Building one anyway reported "Local changes waiting" for a folder
+  // that doesn't exist, and agents acted on it (#929).
+  const workspaceApps = loadWorkspaceAppRegistry(paprDir);
+  const appFound = appId ? isWorkspaceApp(paprDir, appId, workspaceApps) : undefined;
+
   let appWriterRepo: AppWriterRepoReport | undefined;
-  if (appId) {
+  if (appId && appFound) {
     appWriterRepo = await buildAppWriterRepoReport({
       appId,
       paprDir,
@@ -441,9 +460,16 @@ export async function getCloudSyncStatus(options?: {
     jobs,
     oversizedAppFiles,
     appWriterRepo,
-    workspaceApps: loadWorkspaceAppRegistry(paprDir),
+    workspaceApps,
     namespaceGitTrapWarning: NAMESPACE_GIT_TRAP_WARNING,
-    ...(appId
+    ...(appId && !appFound
+      ? {
+          appFound: false,
+          appNotFound: `App ${appId} is not in this workspace, so it has no sync state here. ` +
+            "If it came from a teammate, it is their device's id: match it by name in workspaceApps.",
+        }
+      : {}),
+    ...(appId && appFound
       ? {
           appContext: {
             appId,
