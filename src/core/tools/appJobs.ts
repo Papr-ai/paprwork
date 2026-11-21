@@ -728,6 +728,9 @@ const createJobSchemaCore = z
       // Ollama - Recursive Flint
       "flint:latest",
       "flint:40b",
+      // Ollama - Thinking Machines Inkling 2 Mini (looped)
+      "inkling-2-mini:latest",
+      "inkling-2-mini:26b-a5b",
       // Ollama - Gemma 4
       "gemma4:e2b",
       "gemma4:e4b",
@@ -2134,6 +2137,9 @@ const updateJobSchema = z.object({
       // Ollama - Recursive Flint
       "flint:latest",
       "flint:40b",
+      // Ollama - Thinking Machines Inkling 2 Mini (looped)
+      "inkling-2-mini:latest",
+      "inkling-2-mini:26b-a5b",
       // Ollama - Gemma 4
       "gemma4:e2b",
       "gemma4:e4b",
