@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest";
 import {
   bytesToRamGbRounded,
   getRecommendedFlintModel,
+  getRecommendedInklingModel,
   getRecommendedGemmaModel,
   getRecommendedQwenModel,
   ollamaModelFitsHostRam,
@@ -32,6 +33,12 @@ describe("ollamaModelFit", () => {
     expect(getRecommendedFlintModel(32)).toBe("flint:latest");
     expect(ollamaModelFitsHostRam("flint:latest", 24)).toBe(true);
     expect(ollamaModelFitsHostRam("flint:latest", 16)).toBe(false);
+  });
+
+  it("recommends inkling-2-mini only on 32GB+ hosts", () => {
+    expect(getRecommendedInklingModel(32)).toBe("inkling-2-mini:latest");
+    expect(ollamaModelFitsHostRam("inkling-2-mini:latest", 32)).toBe(true);
+    expect(ollamaModelFitsHostRam("inkling-2-mini:26b-a5b", 24)).toBe(false);
   });
 
   it("ollamaModelFitsHostRam uses minimum total RAM from table", () => {

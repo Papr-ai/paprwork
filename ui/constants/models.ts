@@ -577,6 +577,29 @@ export const CHAT_MODELS: AIModel[] = [
     requiresApiKey: "NONE",
   },
 
+  // Inkling 2 Mini (On-Device) — Thinking Machines open-weight looped MoE (Apache 2.0, ollama.com/library/inkling-2-mini)
+  {
+    id: "inkling-2-mini:latest",
+    name: "Inkling 2 Mini (Looped)",
+    provider: "ollama",
+    description:
+      "Looped reasoning • 32GB+ RAM • MoE 26B (~5B active) • 1M context • vision • Apache 2.0",
+    group: "Ollama (On-Device)",
+    supportsThinking: true,
+    maxTokens: 16384,
+    requiresApiKey: "NONE",
+  },
+  {
+    id: "inkling-2-mini:26b-a5b",
+    name: "Inkling 2 Mini 26B",
+    provider: "ollama",
+    description: "Same as inkling-2-mini:latest • explicit 26b-a5b tag • native 4-bit (~20GB)",
+    group: "Ollama (On-Device)",
+    supportsThinking: true,
+    maxTokens: 16384,
+    requiresApiKey: "NONE",
+  },
+
   // Gemma 4 (On-Device) — latest open models (see deepmind.google/models/gemma)
   {
     id: "gemma4:e2b",

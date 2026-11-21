@@ -341,6 +341,22 @@ const AVAILABLE_MODELS: Record<Provider, ModelInfo[]> = {
       supportsVision: false,
     },
     {
+      id: "inkling-2-mini:latest",
+      name: "Inkling 2 Mini (Looped)",
+      provider: "ollama",
+      contextWindow: 1048576,
+      supportsThinking: true,
+      supportsVision: true,
+    },
+    {
+      id: "inkling-2-mini:26b-a5b",
+      name: "Inkling 2 Mini 26B",
+      provider: "ollama",
+      contextWindow: 1048576,
+      supportsThinking: true,
+      supportsVision: true,
+    },
+    {
       id: "gemma4:12b",
       name: "Gemma 4 12B",
       provider: "ollama",

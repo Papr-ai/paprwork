@@ -115,6 +115,8 @@ export const MODEL_PRICING: Record<string, ModelPricing> = {
   "qwen3.5:27b": { input: 0, output: 0 },
   "flint:latest": { input: 0, output: 0 },
   "flint:40b": { input: 0, output: 0 },
+  "inkling-2-mini:latest": { input: 0, output: 0 },
+  "inkling-2-mini:26b-a5b": { input: 0, output: 0 },
   "gemma4:e2b": { input: 0, output: 0 },
   "gemma4:e4b": { input: 0, output: 0 },
   "gemma4:12b": { input: 0, output: 0 },
