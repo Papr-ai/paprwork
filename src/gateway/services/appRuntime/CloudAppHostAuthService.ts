@@ -134,7 +134,7 @@ export class CloudAppHostAuthService {
       typeof req.query.returnTo === "string" ? req.query.returnTo : "/",
     );
     const mode: PaprAuthMode =
-      req.query.mode === "signup" ? "signup" : "login";
+      req.query.mode === "signup" || req.query.mode === "phone" ? req.query.mode : "login";
     const existingSession = this.getSessionToken(req);
 
     // Already signed in — skip Auth0 (prevents sign-in loop when access is still denied).
