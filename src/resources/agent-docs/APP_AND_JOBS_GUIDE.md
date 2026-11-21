@@ -455,7 +455,7 @@ Handlers receive **`PAPR_ACTION_PARAMS`** (JSON string of all merged params), **
 | `apps/{appId}/papr-cloud-dependencies.json` | **Cross-app / database** install deps for community publish — **not** API keys |
 
 **Vault key injection (do not reverse-engineer):**
-1. User stores keys in **Settings → Integration Keys** (syncs to cloud vault on publish).
+1. User stores keys in **Settings → Integration Keys** (syncs to cloud vault on publish). Teammates who install the app and need the same key: the owner sets **Who can use it** to Selected members / Team / Organization on that key, and it shows up as a read-only mirror for them under the same name. Never route keys through Bitwarden, chat or email.
 2. **Backend handlers:** list exact key names in **backend/manifest.json** `"keys": ["RR_ATTENTION_API_KEY"]` (per-action allowlist).
 3. **Linked jobs (buttons → `/api/jobs/run`):** declare `requiredKeys: ["RR_ATTENTION_API_KEY"]` in **job.json** and read `os.environ["RR_ATTENTION_API_KEY"]` (or add `${RR_ATTENTION_API_KEY}` in the job **command** so publish auto-detection sees it).
 4. **Declare every key:** `declare_app_keys({ appId, keys: [{ name, purpose, provider: "owner" | "user", required }], notKeys: [...] })`, or pass the same objects as job `requiredKeys`. This writes **apps/{appId}/requirements.json**, which is what visitors see on apps.papr.ai. **Nothing is auto-synced any more:** `validate_app` reports an error until every key found in backend/manifest.json and linked jobs is declared. Publish does not block; until declared, keys publish as owner keys (visitors are never asked for them).
