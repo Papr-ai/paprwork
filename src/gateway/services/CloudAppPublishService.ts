@@ -1135,6 +1135,13 @@ export class CloudAppPublishService {
     const appDir = path.join(this.paprDir, "apps", appId);
     const lightSync = isCloudCatalogLightSyncEnabled();
 
+    // Polling and retry floods hurt every app on the shared host (#957): block, don't just warn.
+    {
+      const { lintAppDirForPolling, MiniAppPollingPublishError } = await import("../utils/miniAppJobEventLint.js");
+      const polling = await lintAppDirForPolling(appDir);
+      if (polling.length) throw new MiniAppPollingPublishError(appId, polling);
+    }
+
     if (lightSync) {
       const { prepareAppForCloudGitSync } = await import(
         "./cloudSync/prepareAppsForCloud.js"
