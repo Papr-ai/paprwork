@@ -221,7 +221,7 @@ export const MENTION_CHECK_TOOLS = [
   "search_agent_memory", "search_wiki_entities", "get_wiki_entity", "list_mentions", "list_documents", "read_document",
   "read_file", "search_files", "list_apps", "list_app_files", "read_app_file", "read_app_data_sources", "read_app_data_health",
   "list_jobs", "read_job_file", "read_job_logs", "papr_db_query", "papr_db_sync_status", "query_cloud_turso",
-  "get_cloud_sync_status", "inspect_cloud_repo",
+  "get_cloud_sync_status", "inspect_cloud_repo", "list_keys",
 ];
 
 export function parseInvestigation(raw: string | null): { reply: string; nextStep?: string; findings?: string; why?: string; plan: PlanStep[] } | null {
@@ -251,6 +251,9 @@ async function investigate(item: MentionItem): Promise<ReturnType<typeof parseIn
     "also read the user's goals (workspace/IDENTITY.md → Goals) and what they're working on, so you can say how much this matters to them.",
     "search memory and the wiki for context and how the user handled similar things, and if they report a problem (an app, job, database, sync issue),",
     "look at it with the read/query tools. Never change anything, never send messages. Keep it to a few focused checks.",
+    "If they ask for an API key/token/secret: check list_keys (name + sharedWith). Papr shares keys natively — the user picks Who can use it",
+    "(Selected members / Team / Organization) in Settings → Integration Keys and the teammate gets it automatically. Plan that, never Bitwarden,",
+    "password managers, chat or 'a secure channel'. Suggest the teammate's own key only if they need their own account or quota.",
     "",
     mentionBrief(item),
     "",
