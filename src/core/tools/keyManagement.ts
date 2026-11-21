@@ -21,7 +21,7 @@ import type { ToolResult } from "../types/index.js";
 export const listKeysTool = createTool({
   id: "list_keys",
   description:
-    "List all custom API keys configured in Settings. Returns metadata (name, description, permission) but NOT values. Use this to check what keys are available before trying to use them.",
+    "List all custom API keys configured in Settings. Returns metadata (name, description, permission, sharedWith) but NOT values. Use this to check what keys are available before trying to use them. sharedWith shows who else can use each key; to give a teammate a key, the owner changes Who can use it in Settings → Integration Keys (never send values over chat, email or password managers).",
   inputSchema: z.object({}),
   execute: async (): Promise<ToolResult> => {
     const startTime = performance.now();
@@ -40,7 +40,7 @@ export const listKeysTool = createTool({
           data: {
             keys: [],
             message:
-              "No custom keys configured yet. User can add keys in Settings → API Keys → Custom API Keys.",
+              "No custom keys configured yet. User can add keys in Settings → Integration Keys.",
           },
           duration: performance.now() - startTime,
           timestamp: new Date().toISOString(),
@@ -53,6 +53,17 @@ export const listKeysTool = createTool({
         description: key.description || "(no description)",
         permission: key.permission,
         createdAt: key.createdAt,
+        // Who can use it — teammates get shared keys without copying values.
+        sharedWith:
+          key.vaultOrigin === "shared"
+            ? "shared with you by a teammate (read-only)"
+            : key.vaultAudience === "members"
+              ? `selected members (${key.vaultAudienceMemberIds?.length ?? 0})`
+              : key.vaultAudience === "namespace"
+                ? "team"
+                : key.vaultAudience === "org"
+                  ? "organization"
+                  : "only me",
       }));
 
       return {
@@ -85,7 +96,7 @@ export const listKeysTool = createTool({
 export const getKeyTool = createTool({
   id: "get_key",
   description:
-    "Check whether a custom API key exists without exposing its value. If the key does not exist, guide the user to add it in Settings → API Keys → Custom API Keys.",
+    "Check whether a custom API key exists without exposing its value. If the key does not exist, guide the user to add it in Settings → Integration Keys.",
   inputSchema: z.object({
     name: z
       .string()
@@ -105,7 +116,7 @@ export const getKeyTool = createTool({
       if (!value) {
         return {
           success: false,
-          error: `Key '${args.name}' not found. User needs to add it in Settings → API Keys → Custom API Keys.`,
+          error: `Key '${args.name}' not found. User needs to add it in Settings → Integration Keys.`,
           duration: performance.now() - startTime,
           timestamp: new Date().toISOString(),
         };
