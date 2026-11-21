@@ -160,7 +160,7 @@ jobs:
         run: |
           gcloud storage cp -q cb/local.json cb/cloud.json cb/*_jev.json cb/report.md "$BENCH/runs/${{ github.run_id }}/" || true
           echo "Rows: \`$BENCH/runs/${{ github.run_id }}/\`" >> "$GITHUB_STEP_SUMMARY"
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@v7
         if: always() && hashFiles('cb/report.md') != ''
         with:
           name: curation-bench-report-${{ github.run_id }}
