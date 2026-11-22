@@ -16,7 +16,7 @@ describe("paprQuotaStore workspace switch", () => {
       title: "Subscription cancelled.",
       detail: "Papr Cloud features paused. Local chat works.",
       suggestMeteredBilling: false,
-      billingUrl: "https://dashboard.papr.ai/usage",
+      billingUrl: "papr://billing",
       reportedAt: new Date().toISOString(),
     });
 
