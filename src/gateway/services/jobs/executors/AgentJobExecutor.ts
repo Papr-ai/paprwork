@@ -25,6 +25,9 @@ import {
   resolveHelperAgentProviderModel,
   usesSignInAwareModel,
 } from "../../../utils/explorationSubAgentModel.js";
+import { resolveSystemJobProviderModel } from "../../../utils/systemJobModel.js";
+import { SLEEP_JOB_DEFAULTS } from "../../SleepCycleService.js";
+import { WIKI_WRITER_JOB_DEFAULTS } from "../../WikiWriterService.js";
 import {
   jobWriteDatabaseEnv,
   jobWriteDatabasePromptLines,
@@ -37,6 +40,24 @@ import { ensureJobRuntime, defaultRuntimesRoot } from "../runtime/jobRuntime.js"
 import { leaseJobDbProxyEnv } from "../jobDbProxyEnv.js";
 import { runtimeParamsForJobEnv } from "../../../utils/normalizeRuntimeParams.js";
 import type { IsolatedJobRunDiagnostics } from "../../AgentService.js";
+
+/** True when a Sleep / Wiki Writer job still has its seeded provider/model. */
+export function isOnSeededSystemJobModel(
+  jobName: string,
+  provider: string | undefined,
+  model: string | undefined,
+): boolean {
+  const defaults = isSleepCycleJobName(jobName)
+    ? SLEEP_JOB_DEFAULTS
+    : isWikiWriterJobName(jobName)
+      ? WIKI_WRITER_JOB_DEFAULTS
+      : null;
+  if (!defaults) return false;
+  return (
+    (!provider || provider === defaults.provider) &&
+    (!model || model === defaults.model)
+  );
+}
 
 export interface AgentJobSessionInput {
   jobId: string;
@@ -166,6 +187,21 @@ export class AgentJobExecutor implements IJobExecutor {
         fallbackModel = undefined;
         console.log(
           `[AgentJobExecutor] ${params.job.subAgentId} sign-in-aware model: ${provider}/${model}`,
+        );
+      }
+    }
+
+    // Sleep Cycle / Wiki Writer are seeded on Claude. Run them on a provider
+    // the user actually connected instead of failing on Claude first.
+    // Desktop and cloud both build the session here; in the cloud the
+    // credential memory sends still has the final say (pickCloudJobProviderModel).
+    if (isOnSeededSystemJobModel(params.job.name, provider, model)) {
+      const picked = await resolveSystemJobProviderModel();
+      if (picked) {
+        provider = picked.provider;
+        model = picked.model;
+        console.log(
+          `[AgentJobExecutor] ${params.job.name} uses connected model: ${provider}/${model}`,
         );
       }
     }
