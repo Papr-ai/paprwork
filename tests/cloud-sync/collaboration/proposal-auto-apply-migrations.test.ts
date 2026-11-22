@@ -76,4 +76,13 @@ describe("propose runs new migrations before refusing", () => {
     expect(apply).not.toHaveBeenCalled();
     expect(out).toEqual({ applied: [], failed: [] });
   });
+  it("team copy: an app-folder migration mirrored to the registry tree is caught as unapplied", () => {
+    // Per-app repo: the app tree sits at "." and also carries databases/{slug}/migrations.
+    const changes = buildProposalChangeSet([
+      { repoDir: ".", kind: "app", base: new Map(), local: new Map([[`${DIR}/${M27}.sql`, "b"]]) },
+      { repoDir: DIR, kind: "migrations", base: new Map(), local: new Map([[`${M27}.sql`, "b"]]), appliedIds: new Set(["0025_x"]) },
+    ]);
+    expect(changes.unapplied).toEqual([`${DIR}/${M27}.sql`]);
+    expect([...unappliedIdsByTree(trees(), changes.unapplied)]).toEqual([[1, [M27]]]);
+  });
 });

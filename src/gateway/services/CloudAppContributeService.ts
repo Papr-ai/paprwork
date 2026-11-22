@@ -499,6 +499,18 @@ async function buildContributeStaging(
     });
   }
 
+  // A team copy keeps its migrations in apps/{id}/databases/{slug}/migrations;
+  // the registry folder the check below reads can be empty. Mirror new files
+  // across first (missing files only) so they are checked and run here like any
+  // other new migration, instead of riding along untested in the app tree.
+  const { hydrateAppFolderSchemaMigrationsToRegistry } = await import(
+    "./syncV3/syncPulledSchemaOwnerMigrations.js"
+  );
+  const mirrored = await hydrateAppFolderSchemaMigrationsToRegistry({ appId: forkAppId, paprRoot: paprDir });
+  if (mirrored.copied.length > 0) {
+    console.info(`[CloudContribute] mirrored app-folder migrations before proposing: ${mirrored.copied.join(", ")}`);
+  }
+
   for (const tree of await collectMigrationTrees(paprDir, forkAppId, remaps, tempRoot)) {
     let dir = tree.repoRelativeDir;
     // Per-app repos keep schema-owner migrations at databases/{slug}/migrations
