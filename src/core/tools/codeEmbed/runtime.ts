@@ -16,17 +16,20 @@
  * Cloud tier (cloud agent gateway, or a device that fails the on-device checks): no model is loaded. Files the cloud
  * lacks are chunked with the model's tokenizer (exact boundaries) and sent as text; memory embeds them with the same
  * model and does not store the text. Search is server-embedded. PAPR_CODE_EMBED_TIER=cloud forces it (tests).
- * Env: PAPR_CODE_EMBED=0 turns it off. PAPR_CODE_EMBED_CONTEXT=0 skips documents/workspace/repos. PAPR_CODE_EMBED_DOWNLOAD=0 never downloads the model.
+ * Env: PAPR_CODE_EMBED=0 turns it off. PAPR_CODE_EMBED_LOCAL=0 never runs the model on this device (cloud tier, or off). PAPR_CODE_EMBED_CONTEXT=0 skips documents/workspace/repos. PAPR_CODE_EMBED_DOWNLOAD=0 never downloads the model.
  *      PAPR_CODE_EMBED_CLOUD_SYNC=0 never uploads vectors. PAPR_CODE_EMBED_COREML=0 stays on ONNX. PAPR_CODE_EMBED_DATA_DIR overrides <PAPR_HOME>/data. PAPR_CODE_EMBED_HELPER = path to the Swift helper.
  */
 import * as fs from "fs";
 import * as path from "path";
-import { CodeIndexer, SKIP_DIRS } from "./codeIndexer.js";
+import * as os from "os";
+import { CodeIndexer, QUARANTINE_AFTER, SKIP_DIRS } from "./codeIndexer.js";
 import { contextEnabled, contextRootFor, contextRoots, contextSkip } from "./contextRoots.js";
 import type { PostClient } from "./cloudSync.js";
-import { availableMemBytes, canRunNow, readDeviceFacts, selfTestPasses, staticTier, type EmbedTier } from "./deviceHealth.js";
+import { availableMemBytes, readDeviceFacts, readPowerState, selfTestPasses, staticTier, throttleReason, type EmbedTier } from "./deviceHealth.js";
 import { CODE_EMBED_DIM, CODE_EMBED_MODEL, downloadModel, downloadTokenizer, loadTokenCounter, modelDir, tokenizerInstalled, WorkerOnnxEmbedder, modelInstalled, type Embedder } from "./embedder.js";
 import { CodeVectorStore } from "./vectorStore.js";
+import { aneAvailable } from "./coremlEmbedder.js";
+import { INDEX_CORES_BUDGET, IndexCpu, QUERY_P50_BUDGET_MS, Samples, cpuSeconds } from "./perfStats.js";
 
 export interface RuntimeDeps {
   /** Directory holding models/ and code-embed/index.db (default <PAPR_HOME>/data). */
@@ -52,6 +55,11 @@ export interface RuntimeDeps {
    *  org's key, or search the next org's cloud index). */
   scope?: string;
   activeScope?: () => string | null;
+  /** First retry delay after a failed Neural Engine load (default UPGRADE_RETRY_MS; tests use a few ms). */
+  upgradeRetryMs?: number;
+  /** Load the Neural Engine (loadUpgrade) first and only start ONNX if it fails. Default: aneAvailable() (Apple Silicon
+   *  with the helper and CoreML model on disk). false = ONNX first, Neural Engine swapped in when ready. */
+  aneFirst?: boolean;
 }
 
 export interface DeviceHit {
@@ -64,6 +72,17 @@ export interface DeviceHit {
 const REFRESH_EVERY_MS = 30_000;
 const SYNC_EVERY_MS = 5 * 60_000;
 const TICK_MS = 250;
+/** The on-device embed process died on its own (native abort, OOM kill): wait before loading it again, doubling. */
+export const CRASH_BACKOFF_MS = 30_000;
+export const CRASH_BACKOFF_MAX_MS = 30 * 60_000;
+/** This many crashes within CRASH_WINDOW_MS turns the local tier off for CRASH_DISABLE_MS (persisted across restarts,
+ *  so a crash that also takes the app down cannot loop either). */
+export const CRASH_LIMIT = 3;
+export const CRASH_WINDOW_MS = 60 * 60_000;
+export const CRASH_DISABLE_MS = 24 * 60 * 60_000;
+/** Neural Engine load failed or the helper died: try again after this, doubling up to the max. */
+export const UPGRADE_RETRY_MS = 60_000;
+export const UPGRADE_RETRY_MAX_MS = 30 * 60_000;
 
 export class CodeEmbedRuntime {
   readonly store: CodeVectorStore;
@@ -71,12 +90,32 @@ export class CodeEmbedRuntime {
   tier: EmbedTier;
   tierReasons: string[];
   private emb: Embedder | null = null;
+  /** The ONNX base process (also the upgrade's long-document fallback). */
+  private base: Embedder | null = null;
+  /** No embedder load before this time (backoff after a crash or failed load). */
+  private retryAt = 0;
   private embLoading: Promise<Embedder | null> | null = null;
   private downloading: Promise<void> | null = null;
   private refreshedAt = new Map<string, number>();
   private roots = new Set<string>();
   private loop: NodeJS.Timeout | null = null;
   private syncedAt = 0;
+  /** Why background indexing is paused right now (battery, heat, memory), null when it runs. Search is never paused. */
+  private paused: string | null = null;
+  private querySamples = new Samples();
+  private chunkSamples = new Samples();
+  private indexCpu = new IndexCpu();
+  private lastSwap: number | null = null;
+  private closed = false;
+  /** Something the cloud does not have yet: new local vectors, queued deletes, or a sync that failed. Starts true so
+   *  every app start (restart, crash, update) reconciles once with the cloud. */
+  private syncDirty = true;
+  private upgradeTimer: NodeJS.Timeout | null = null;
+  private upgradeFailures = 0;
+  /** Why the Neural Engine is not in use yet (shown in /api/code-embed/status). */
+  private upgradeNote: string | null = null;
+  /** When the Neural Engine last failed to load or died (0 = never): ONNX is used until the backoff retry succeeds. */
+  private aneFailedAt = 0;
   private counter: ((s: string) => number) | null = null;
   private counterLoading: Promise<((s: string) => number) | null> | null = null;
   status = "starting";
@@ -101,15 +140,42 @@ export class CodeEmbedRuntime {
     const decision = staticTier(readDeviceFacts(freeDisk), { cloudAvailable: d.cloudAvailable });
     this.tier = d.tierOverride ?? decision.tier;
     this.tierReasons = decision.reasons;
+    const fallback: EmbedTier = d.cloudAvailable ? "cloud" : "off";
+    // A blob still marked in flight means the last run died while embedding it (an older build ran ONNX in the
+    // gateway, so a native abort took everything down): count it against that blob and as a crash.
+    // An isolated marker (child process) means the app itself stopped mid-embed: quit, restart, sleep kill, power
+    // loss. The child's own crashes are counted live, so this one is not held against the blob or the device.
+    const crashed = this.store.takeInflight();
+    if (crashed && !crashed.isolated) {
+      this.store.noteEmbedFailure(crashed.blobSha);
+      this.noteCrash();
+    }
+    if (this.tier === "local" && process.env.PAPR_CODE_EMBED_LOCAL === "0") {
+      this.tier = fallback;
+      this.tierReasons = ["on-device embedding turned off (PAPR_CODE_EMBED_LOCAL=0)"];
+    } else if (this.tier === "local" && this.localDisabledUntil() > Date.now()) {
+      this.tier = fallback;
+      this.tierReasons = [`on-device embedder crashed ${CRASH_LIMIT} times; off until ${new Date(this.localDisabledUntil()).toISOString()}`];
+    }
     this.indexer = new CodeIndexer({
       store: this.store,
       tier: () => this.tier,
       embedder: () => this.embedder(),
       tokenCounter: () => this.tokenCounter(),
       cloud: () => this.cloudForScope(),
-      canRun: d.canRun ?? (() => canRunNow({ freeMemBytes: availableMemBytes() }, false).ok),
+      canRun: d.canRun ?? (() => this.mayIndex()),
       skipFor: contextSkip,
     });
+  }
+
+  /** Background indexing may run now: not on low battery, Low Power Mode, a hot CPU or a machine that is paging. */
+  private mayIndex(): boolean {
+    const s = readPowerState();
+    // The Neural Engine is light (no ONNX process running): it only waits for the serious cases.
+    const light = this.backend === "CoreMLEmbedder" && !this.base;
+    this.paused = throttleReason(s, availableMemBytes(), this.lastSwap, { light });
+    if (s.swapUsedBytes !== null) this.lastSwap = s.swapUsedBytes;
+    return this.paused === null;
   }
 
   /** Cloud client only while the active workspace is still the one this index belongs to. */
@@ -144,10 +210,50 @@ export class CodeEmbedRuntime {
     return this.counterLoading;
   }
 
+  private crashTimes(): number[] {
+    try {
+      return (JSON.parse(this.store.getMeta("embed_crashes") ?? "[]") as number[]).filter((t) => Date.now() - t < CRASH_WINDOW_MS);
+    } catch {
+      return [];
+    }
+  }
+
+  private localDisabledUntil(): number {
+    return Number(this.store.getMeta("local_disabled_until") ?? 0) || 0;
+  }
+
+  /** Record an embed-process crash; after CRASH_LIMIT in the window, turn the local tier off (persisted). */
+  private noteCrash(): void {
+    const times = [...this.crashTimes(), Date.now()];
+    this.store.setMeta("embed_crashes", JSON.stringify(times));
+    this.retryAt = Date.now() + Math.min(CRASH_BACKOFF_MAX_MS, CRASH_BACKOFF_MS * 2 ** (times.length - 1));
+    if (times.length >= CRASH_LIMIT) {
+      const until = Date.now() + CRASH_DISABLE_MS;
+      this.store.setMeta("local_disabled_until", String(until));
+      if (this.tier === "local") {
+        this.tier = this.d.cloudAvailable ? "cloud" : "off";
+        this.tierReasons = [`on-device embedder crashed ${times.length} times in an hour; off until ${new Date(until).toISOString()}`];
+      }
+    }
+  }
+
+  /** The embed process died on its own: drop it, count the crash, and back off before loading it again. */
+  private onEmbedderDied(e: Embedder, why: string): void {
+    if (this.emb !== e && this.base !== e) return;
+    const up = this.emb !== e ? this.emb : null;
+    this.emb = null;
+    this.base = null;
+    void up?.close().catch(() => undefined);
+    this.noteCrash();
+    this.status = this.tier === "local" ? `embedder crashed (${why}); retrying after ${new Date(this.retryAt).toISOString()}` : `embedder crashed (${why}); ${this.tierReasons[0]}`;
+    console.warn(`[codeEmbed] ${this.status}`);
+  }
+
   /** The loaded embedder, starting download/load in the background. Resolves null while unavailable. */
   embedder(): Promise<Embedder | null> {
     if (this.emb) return Promise.resolve(this.emb);
     if (this.tier !== "local") return Promise.resolve(null);
+    if (Date.now() < this.retryAt) return Promise.resolve(null);
     if (!(this.d.installed ?? modelInstalled)(this.d.dataDir)) {
       if (!this.downloading && process.env.PAPR_CODE_EMBED_DOWNLOAD !== "0") {
         this.status = "downloading model";
@@ -161,8 +267,16 @@ export class CodeEmbedRuntime {
     if (!this.embLoading) {
       this.status = "loading model";
       this.embLoading = (async () => {
+        // Neural Engine first on Apple Silicon: ~16 ms per short chunk at near-zero CPU, versus ONNX keeping ~4 cores
+        // busy. ONNX only starts if the Neural Engine cannot load (or later, for a document longer than it takes).
         try {
+          if (this.aneFirst && !this.aneFailedAt) {
+            const ane = await this.loadAneFirst();
+            if (ane) return ane;
+          }
           const e = await (this.d.loadEmbedder ?? ((r) => WorkerOnnxEmbedder.start(r)))(this.d.dataDir);
+          const ex = e as Embedder & { onExit?: (l: (i: { code: number | null; signal: string | null }) => void) => void };
+          ex.onExit?.((i) => this.onEmbedderDied(e, String(i.signal ?? i.code)));
           // Speed self-test: catches emulation and throttled laptops the static rules miss. One untimed warm-up
           // (first run allocates and JITs), then up to 2 timed rounds: one busy moment must not disable it all session.
           await e.embedQuery("warm up");
@@ -179,13 +293,20 @@ export class CodeEmbedRuntime {
             this.status = "self-test failed";
             return null;
           }
+          if ((e as { dead?: boolean }).dead) return null; // died during the self-test (already counted)
           this.emb = e;
+          this.base = e;
           this.status = `ready (${e.constructor.name})`;
           this.kick(true); // index now instead of waiting for the idle re-check
-          this.startUpgrade(e);
+          // The Neural Engine just failed: try it again after the backoff, not straight away.
+          if (this.aneFailedAt) this.scheduleUpgrade(e, this.upgradeNote ?? "Neural Engine unavailable");
+          else this.startUpgrade(e);
           return e;
         } catch (err) {
           this.status = `load failed: ${(err as Error).message}`;
+          // A process that died while loading or self-testing counts as a crash too, so it cannot be retried in a loop.
+          if (/exited/.test((err as Error).message ?? "")) this.noteCrash();
+          else this.retryAt = Date.now() + CRASH_BACKOFF_MS;
           return null;
         } finally {
           this.embLoading = null;
@@ -195,17 +316,98 @@ export class CodeEmbedRuntime {
     return this.embLoading;
   }
 
-  /** Swap in the faster backend when it loads. Vectors are interchangeable (CoreML fp16 vs ONNX int8: cosine 0.9998). */
+  /** Swap in the faster backend when it loads. A failed load (helper not built yet, compile timed out under memory
+   *  pressure) is retried with backoff instead of staying on ONNX for the whole session, and a helper that dies later
+   *  hands back to the base embedder and is reloaded the same way. */
+  private scheduleUpgrade(base: Embedder, why: string): void {
+    if (this.closed || this.base !== base) return;
+    if (this.upgradeTimer) clearTimeout(this.upgradeTimer);
+    const wait = Math.min(UPGRADE_RETRY_MAX_MS, (this.d.upgradeRetryMs ?? UPGRADE_RETRY_MS) * 2 ** this.upgradeFailures++);
+    this.upgradeNote = `${why}; retrying at ${new Date(Date.now() + wait).toISOString()}`;
+    this.upgradeTimer = setTimeout(() => this.startUpgrade(base), wait);
+    this.upgradeTimer.unref?.();
+  }
+
+  private get aneFirst(): boolean {
+    return this.d.aneFirst ?? aneAvailable(this.d.dataDir).ok;
+  }
+
+  /** ONNX loaded on demand: the Neural Engine's fallback for a document longer than its longest shape. Most sessions
+   *  never start it. */
+  private lazyBase(): Embedder {
+    const load = async (): Promise<Embedder> => {
+      if (this.base) return this.base;
+      const e = await (this.d.loadEmbedder ?? ((r) => WorkerOnnxEmbedder.start(r)))(this.d.dataDir);
+      if (this.closed) { await e.close().catch(() => undefined); throw new Error("closed"); }
+      // Its crash costs one long document, not the Neural Engine: drop it (restarts on the next long document) and
+      // count it like any embed-process crash.
+      (e as { onExit?: (l: () => void) => void }).onExit?.(() => { if (this.base === e) { this.base = null; this.noteCrash(); } });
+      this.base = e;
+      return e;
+    };
+    return {
+      model: CODE_EMBED_MODEL, dim: CODE_EMBED_DIM,
+      embedQuery: async (t) => (await load()).embedQuery(t),
+      embedDocuments: async (ts) => (await load()).embedDocuments(ts),
+      countTokens: () => { throw new Error("lazy fallback does not count tokens"); },
+      close: async () => {}, // the runtime closes this.base itself
+    };
+  }
+
+  /** Load the Neural Engine as the primary embedder. null (and ONNX takes over) if it fails or is too slow. */
+  private async loadAneFirst(): Promise<Embedder | null> {
+    const up = this.d.loadUpgrade === undefined ? defaultUpgrade() : this.d.loadUpgrade;
+    if (!up) return null;
+    this.status = "loading Neural Engine (first compile ~2 min, then under 1 s)";
+    try {
+      const u = await up(this.d.dataDir, this.lazyBase());
+      await u.embedQuery("warm up");
+      const t = Date.now();
+      for (let i = 0; i < 8; i++) await u.embedQuery(`self test ${i}: where is the retry logic`);
+      if (!selfTestPasses(Date.now() - t)) throw new Error(`self-test too slow (${Date.now() - t} ms for 8 queries)`);
+      if (this.closed) { await u.close().catch(() => undefined); return null; }
+      this.emb = u;
+      this.upgradeFailures = 0;
+      this.upgradeNote = null;
+      this.status = `ready (${u.constructor.name})`;
+      (u as { onExit?: (l: () => void) => void }).onExit?.(() => {
+        if (this.emb !== u) return;
+        // Helper died (memory pressure kill, crash): carry on with ONNX now, Neural Engine again after the backoff.
+        this.emb = this.base;
+        this.aneFailedAt = Date.now();
+        this.upgradeNote = "Neural Engine helper exited";
+        if (this.emb) { this.status = `ready (${this.emb.constructor.name})`; this.scheduleUpgrade(this.emb, "Neural Engine helper exited"); }
+        else void this.embedder();
+      });
+      this.kick(true);
+      return u;
+    } catch (e) {
+      this.aneFailedAt = Date.now();
+      this.upgradeNote = `Neural Engine load failed: ${(e as Error)?.message ?? e}`;
+      return null;
+    }
+  }
+
   private startUpgrade(base: Embedder): void {
     const up = this.d.loadUpgrade === undefined ? defaultUpgrade() : this.d.loadUpgrade;
-    if (!up) return;
+    if (!up || this.closed) return;
+    if (this.upgradeTimer) { clearTimeout(this.upgradeTimer); this.upgradeTimer = null; }
+    const retry = (why: string) => this.scheduleUpgrade(base, why);
     up(this.d.dataDir, base)
       .then((u) => {
-        if (this.emb !== base) return void u.close();
+        if (this.closed || this.emb !== base) return void u.close();
         this.emb = u; // u keeps base as its long-document fallback; do not close base
+        this.upgradeFailures = 0;
+        this.upgradeNote = null;
         this.status = `ready (${u.constructor.name})`;
+        (u as { onExit?: (l: () => void) => void }).onExit?.(() => {
+          if (this.emb !== u) return;
+          this.emb = this.base; // ONNX carries on; the Neural Engine comes back after the backoff
+          if (this.emb) this.status = `ready (${this.emb.constructor.name})`;
+          retry("Neural Engine helper exited");
+        });
       })
-      .catch(() => undefined);
+      .catch((e) => retry(`Neural Engine load failed: ${(e as Error)?.message ?? e}`));
   }
 
   get backend(): string {
@@ -263,8 +465,23 @@ export class CodeEmbedRuntime {
     return this.d.paprRoot && contextEnabled() ? contextRoots(this.d.paprRoot) : [];
   }
 
-  info(): { scope: string | null; tier: EmbedTier; reasons: string[]; status: string; backend: string; modelInstalled: boolean; roots: number } & ReturnType<CodeVectorStore["stats"]> {
-    return { scope: this.store.scope(), tier: this.tier, reasons: this.tierReasons, status: this.status, backend: this.backend, modelInstalled: (this.d.installed ?? modelInstalled)(this.d.dataDir), roots: this.roots.size, ...this.store.stats() };
+  info() {
+    // Device facts and crash history, so a report like "the gateway keeps crashing" comes with the machine it ran on.
+    const f = readDeviceFacts(null);
+    const GBf = (b: number) => Math.round((b / 1e9) * 10) / 10;
+    return {
+      scope: this.store.scope(), tier: this.tier, reasons: this.tierReasons, status: this.status, backend: this.backend, upgrade: this.upgradeNote,
+      indexingPaused: this.paused,
+      perf: {
+        searchMs: { p50: this.querySamples.pct(50), p95: this.querySamples.pct(95), n: this.querySamples.count, budgetP50: QUERY_P50_BUDGET_MS },
+        indexMsPerChunk: { p50: this.chunkSamples.pct(50), n: this.chunkSamples.count },
+        indexCores: { avg: this.indexCpu.cores, budget: INDEX_CORES_BUDGET },
+      },
+      neuralEngine: { ...aneAvailable(this.d.dataDir), first: this.aneFirst, onnxStarted: !!this.base },
+      modelInstalled: (this.d.installed ?? modelInstalled)(this.d.dataDir), roots: this.roots.size, ...this.store.stats(),
+      device: { platform: f.platform, arch: f.arch, os: `${os.type()} ${os.release()}`, cpu: f.cpuModel, cores: f.physicalCores, ramGB: GBf(f.totalMemBytes), availableGB: GBf(f.freeMemBytes), translated: f.translated },
+      crashes: { lastHour: this.crashTimes().length, localDisabledUntil: this.localDisabledUntil() || null, quarantined: this.store.quarantined(QUARANTINE_AFTER).size },
+    };
   }
 
   /** Background: embed pending files a few at a time, then sync vectors to the cloud. One loop at a time. */
@@ -282,18 +499,47 @@ export class CodeEmbedRuntime {
           this.loop?.unref?.();
           return;
         }
+        const pids = () => [this.emb, this.base].map((e) => (e as { pid?: number } | null)?.pid).filter((p): p is number => !!p);
+        const cpu = () => pids().reduce((s, p) => s + (cpuSeconds(p) ?? 0), 0);
+        const c0 = cpu(), w0 = Date.now(), chunks0 = this.store.stats().chunks;
         const r = await this.indexer.embedPending(4);
-        const pending = this.store.pendingBlobs().length;
+        if (r.embedded > 0) {
+          const wall = (Date.now() - w0) / 1000, made = this.store.stats().chunks - chunks0;
+          this.indexCpu.addBatch(cpu() - c0, wall);
+          if (made > 0) this.chunkSamples.add((wall * 1000) / made);
+        }
+        // Quarantined blobs are not pending on device: counting them would spin this loop forever.
+        const pending = this.tier === "local" ? this.indexer.localPending().length : this.store.pendingBlobs().length;
+        if ((this.tier as EmbedTier) === "cloud") {
+          this.loop = setTimeout(tick, 0); // the local tier just turned off (crashes): carry on in the cloud
+          return;
+        }
+        if (r.embedded > 0) this.syncDirty = true;
         if (r.embedded > 0 || (pending > 0 && r.skipped === null)) {
           this.loop = setTimeout(tick, TICK_MS);
           return;
         }
-        if (pending === 0 && process.env.PAPR_CODE_EMBED_CLOUD_SYNC !== "0" && Date.now() - this.syncedAt > SYNC_EVERY_MS) {
+        const syncOn = process.env.PAPR_CODE_EMBED_CLOUD_SYNC !== "0";
+        if (pending === 0 && syncOn && this.syncDirty && Date.now() - this.syncedAt > SYNC_EVERY_MS) {
           this.syncedAt = Date.now();
-          await this.indexer.syncCloud((root) => `paprwork:${path.basename(root)}`);
+          const s = await this.indexer.syncCloud((root) => `paprwork:${path.basename(root)}`);
+          // Offline, signed out, server error or cut short: keep it dirty so the next pass retries. Uploads are
+          // idempotent (the cloud is asked what it lacks), and deletes stay queued in the store across restarts.
+          this.syncDirty = s.failed !== 0 || this.store.pendingCloudDeletes(1).length > 0 || !(await this.cloudForScope());
         }
-        // Model still downloading/loading or device busy: check again later.
-        this.loop = pending > 0 && this.tier === "local" ? setTimeout(tick, 5_000) : null;
+        if (this.closed) { this.loop = null; return; }
+        if (pending > 0 && this.tier === "local") {
+          // Paused for battery, heat or memory: look again in 30 s. Model still loading: 5 s.
+          this.loop = setTimeout(tick, r.skipped === "device busy" ? 30_000 : 5_000);
+          this.loop.unref?.();
+        } else if (pending === 0 && syncOn && this.syncDirty) {
+          // New vectors, a failed sync, or deletes still queued: come back when the sync window opens, instead of
+          // waiting for the next file change or grep to restart the loop.
+          this.loop = setTimeout(tick, Math.max(1_000, SYNC_EVERY_MS - (Date.now() - this.syncedAt)));
+          this.loop.unref?.();
+        } else {
+          this.loop = null;
+        }
       } catch {
         this.loop = null;
       }
@@ -310,16 +556,29 @@ export class CodeEmbedRuntime {
       return { tier: "local", hits: [] };
     }
     if (this.tier === "off") return { tier: "off", hits: [] };
-    const work = this.indexer.search(query, { root, limit: opts.limit ?? 10 });
+    const t0 = Date.now();
+    const work = this.indexer.search(query, { root, limit: opts.limit ?? 10 }).then((r) => { this.querySamples.add(Date.now() - t0); return r; });
     const timeout = new Promise<null>((r) => setTimeout(() => r(null), opts.budgetMs ?? 2_000).unref?.());
     const res = await Promise.race([work.catch(() => null), timeout]);
     if (!res) return { tier: this.tier, hits: [] };
     return { tier: res.tier, hits: res.hits.map((h) => ({ path: h.path, score: h.score, lineStart: h.lineStart, lineEnd: h.lineEnd })) };
   }
 
+  /** Shut down (app quit, workspace switch). An embed in progress is abandoned, not counted against its blob, and the
+   *  in-flight marker is cleared so the next start does not treat the quit as a crash. */
   async close(): Promise<void> {
+    if (this.closed) return;
+    this.closed = true;
+    this.indexer.stop();
     if (this.loop) clearTimeout(this.loop);
-    await this.emb?.close();
+    if (this.upgradeTimer) clearTimeout(this.upgradeTimer);
+    const emb = this.emb;
+    const base = this.base;
+    this.emb = null;
+    this.base = null;
+    await emb?.close().catch(() => undefined);
+    if (base && base !== emb) await base.close().catch(() => undefined);
+    try { this.store.setInflight(null); } catch {}
     this.store.close();
   }
 }

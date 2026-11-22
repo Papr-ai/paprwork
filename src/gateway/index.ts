@@ -39,6 +39,8 @@ if (!globalThis.crypto) {
 
 import express from "express";
 import { registerVaultRoutes, wireVaultKeyChanges } from "./routes/vaultRoutes.js";
+import { registerTrainingConsentRoutes } from "./routes/trainingConsentRoutes.js";
+import { getPaprDataDir as getPaprDataDirForTraining } from "../core/utils/paprRoot.js";
 import { createServer } from "http";
 import { WebSocketServer } from "ws";
 import path from "path";
@@ -3625,6 +3627,18 @@ async function startGateway(): Promise<void> {
       }
     });
 
+    // Resource governor: memory state, caps, leases and the agent-started processes being measured. Read-only.
+    app.get("/api/system/resources", async (_req, res) => {
+      try {
+        const { getResourceGovernor } = await import("../core/system/resourceGovernor.js");
+        const g = getResourceGovernor();
+        await g.refresh();
+        res.json(g.status());
+      } catch (e) {
+        res.status(500).json({ error: (e as Error).message });
+      }
+    });
+
     app.get("/api/sync/status", (_req, res) => {
       const sync = getCloudSyncService();
       if (!sync) {
@@ -4341,6 +4355,15 @@ async function startGateway(): Promise<void> {
 
     registerVaultRoutes(app, getVaultSyncService);
 
+    registerTrainingConsentRoutes(app, {
+      getClient: async () => {
+        const { getPaprClient } = await import("../core/tools/paprClient.js");
+        return getPaprClient().catch(() => null);
+      },
+      // Lazy: the active workspace can change without a gateway restart.
+      askedFile: () => path.join(getPaprDataDirForTraining(), "training-consent-asked.json"),
+    });
+
     // Renderer telemetry: validate sync, respond immediately, forward async (never block hot path).
     app.post("/api/telemetry/events", (req, res) => {
       const prepared = prepareRendererTelemetry(req.body);
@@ -4906,6 +4929,8 @@ async function startGateway(): Promise<void> {
     if (!isCloudAgentGatewayMode()) {
       // On-device code search: fetch + verify the model for new and existing users after startup settles.
       void import("../core/tools/codeEmbed/runtime.js").then((m) => m.startCodeEmbedInBackground()).catch(() => undefined);
+      // Memory governor: sample pressure from startup so the agent cap and leases react before the first heavy command.
+      void import("../core/system/resourceGovernor.js").then((m) => m.getResourceGovernor().start()).catch(() => undefined);
     }
     const { markGatewayRoutesReady } =
       await import("./services/gatewayReadiness.js");

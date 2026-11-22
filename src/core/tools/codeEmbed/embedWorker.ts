@@ -1,40 +1,50 @@
 /**
- * Worker thread that owns the ONNX embedder. onnxruntime-node's session.run() is synchronous native work wrapped in
- * setImmediate, so on the gateway's main thread a 2k-token file would freeze every request for seconds. Here it only
- * blocks this thread.
+ * Child process that owns the ONNX embedder (forked by WorkerOnnxEmbedder). onnxruntime-node's session.run() is
+ * synchronous native work, and it aborts the whole process when an allocation fails. Here either one only affects this
+ * process: the gateway sees the exit, rejects pending calls and falls back.
  *
- * Protocol (parentPort): { id, op: "query"|"docs"|"count"|"close", text?, texts? } -> { id, ok, vecs?, n?, error? }
- * First message out: { ready: true } or { ready: false, error }.
+ * Protocol (IPC, advanced serialization): { id, op: "query"|"docs"|"count"|"close", text?, texts? }
+ *   -> { id, ok, vecs?, n?, error? }. First message out: { ready: true } or { ready: false, error }.
  */
-import { parentPort, workerData } from "node:worker_threads";
-import { loadEmbedder, type Embedder } from "./embedder.js";
+import { EMBED_NICE, loadEmbedder, lowerPriority, type Embedder } from "./embedder.js";
 
 type Req = { id: number; op: "query" | "docs" | "count" | "close"; text?: string; texts?: string[] };
 
-const port = parentPort!;
+const send = (m: unknown) => process.send?.(m);
 let emb: Embedder | null = null;
 
+// The gateway went away (crash, quit): never linger as an orphan holding the model in memory.
+process.on("disconnect", () => process.exit(0));
+
 (async () => {
+  // Background work: below the app so indexing never competes with what the user is doing.
+  lowerPriority(process.pid, EMBED_NICE);
   try {
-    emb = await loadEmbedder(workerData.root as string, { threads: workerData.threads as number | undefined });
-    port.postMessage({ ready: true });
+    const threads = Number(process.env.PAPR_EMBED_THREADS) || undefined;
+    emb = await loadEmbedder(process.env.PAPR_EMBED_ROOT as string, { threads });
+    send({ ready: true });
   } catch (e) {
-    port.postMessage({ ready: false, error: (e as Error)?.message ?? String(e) });
-    return;
+    send({ ready: false, error: (e as Error)?.message ?? String(e) });
+    process.exit(1);
   }
-  port.on("message", async (r: Req) => {
+  process.on("message", async (r: Req) => {
     try {
       if (r.op === "close") {
         await emb?.close();
-        port.postMessage({ id: r.id, ok: true });
+        send({ id: r.id, ok: true });
         process.exit(0);
       }
-      if (r.op === "count") return port.postMessage({ id: r.id, ok: true, n: emb!.countTokens(r.text ?? "") });
+      if (r.op === "count") {
+        send({ id: r.id, ok: true, n: emb!.countTokens(r.text ?? "") });
+        return;
+      }
+      // Test hook: simulate onnxruntime's native abort (SIGTRAP) on a marked document.
+      if (process.env.PAPR_EMBED_TEST_CRASH_ON && (r.texts ?? []).some((t) => t.includes(process.env.PAPR_EMBED_TEST_CRASH_ON!)))
+        process.kill(process.pid, "SIGTRAP");
       const vecs = r.op === "query" ? [await emb!.embedQuery(r.text ?? "")] : await emb!.embedDocuments(r.texts ?? []);
-      // Transfer the buffers instead of copying 4 KB per vector.
-      port.postMessage({ id: r.id, ok: true, vecs }, vecs.map((v) => v.buffer as ArrayBuffer));
+      send({ id: r.id, ok: true, vecs });
     } catch (e) {
-      port.postMessage({ id: r.id, ok: false, error: (e as Error)?.message ?? String(e) });
+      send({ id: r.id, ok: false, error: (e as Error)?.message ?? String(e) });
     }
   });
 })();

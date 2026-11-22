@@ -28,7 +28,12 @@ import {
   type PaprMessageStoreBody,
 } from "./paprSyncPayload.js";
 import { buildPaprMemoryWriteScope } from "../../utils/memoryScopeResolver.js";
+import { attachTrainingPayload, type FullResultReader } from "./trainingSync.js";
 import { PAPR_DEFAULT_HEADERS } from "../../../core/tools/paprSurface.js";
+import {
+  paprSessionUserQuery,
+  withPaprSessionUser,
+} from "./paprSessionScope.js";
 
 export interface PaprConfig {
   apiKey: string; // X-API-Key from macOS Keychain
@@ -60,6 +65,9 @@ export class PaprMemoryProvider implements IStorageProvider {
   public get _client() {
     return this.client;
   }
+
+  /** Set by HybridStorageProvider so offloaded (sidecar) results can be uploaded in full. */
+  public readFullResult: FullResultReader = async (tc) => tc.result;
 
   constructor(config: PaprConfig) {
     this.client = new Papr({
@@ -95,6 +103,9 @@ export class PaprMemoryProvider implements IStorageProvider {
         namespaceId: memoryScope.namespace_id,
         policy: memoryScope.policy,
       });
+      // Opted-in users only: full tool args + result pointers, and the join key
+      // QueryLog rows use. Opted-out users send exactly what they sent before.
+      await attachTrainingPayload(storeBody, message, this.readFullResult);
 
       const response = await this.client.messages.store(
         storeBody as Parameters<Papr["messages"]["store"]>[0],
@@ -120,10 +131,10 @@ export class PaprMemoryProvider implements IStorageProvider {
       // GET from PAPR /v1/messages/sessions/{sessionId} using SDK
       const response = await this.client.messages.sessions.retrieveHistory(
         chatId,
-        {
+        withPaprSessionUser({
           limit,
           skip,
-        },
+        }),
       );
 
       // PAPR returns newest first (-createdAt order), reverse to chronological for UI
@@ -201,7 +212,10 @@ export class PaprMemoryProvider implements IStorageProvider {
     try {
       // Get messages and check for summary using SDK
       const response =
-        await this.client.messages.sessions.retrieveHistory(chatId);
+        await this.client.messages.sessions.retrieveHistory(
+          chatId,
+          withPaprSessionUser({ limit: 50 }),
+        );
 
       console.log(`[PaprMemoryProvider] 📥 Retrieved ${response.messages?.length || 0} messages from PAPR for chat ${chatId}`);
       console.log(`[PaprMemoryProvider] 📊 Total count: ${response.total_count}, Has summary: ${!!response.summaries}`);
@@ -285,7 +299,7 @@ export class PaprMemoryProvider implements IStorageProvider {
       // and can 500 on very large tool-heavy sessions.
       const history = await this.client.messages.sessions.retrieveHistory(
         chatId,
-        { limit: 1 },
+        withPaprSessionUser({ limit: 1 }),
         { maxRetries: 0 },
       );
 
@@ -317,6 +331,7 @@ export class PaprMemoryProvider implements IStorageProvider {
       // On-demand compress when no cached summary exists
       const response = await this.client.messages.sessions.compress(chatId, {
         maxRetries: 0,
+        query: paprSessionUserQuery(),
       });
 
       if (response.summaries) {
@@ -438,9 +453,9 @@ export class PaprMemoryProvider implements IStorageProvider {
     try {
       const response = await this.client.messages.sessions.retrieveHistory(
         chatId,
-        {
+        withPaprSessionUser({
           limit: 1,
-        },
+        }),
       );
 
       return {

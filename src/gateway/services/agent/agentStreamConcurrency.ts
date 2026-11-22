@@ -1,4 +1,5 @@
 /** Separate concurrency pools for interactive chats and background agent jobs. */
+import { getResourceGovernor } from "../../../core/system/resourceGovernor.js";
 
 export const DEFAULT_AGENT_STREAM_MAX_CONCURRENT = 6;
 export const AGENT_STREAM_ACQUIRE_TIMEOUT_MS = 5_000;
@@ -99,7 +100,10 @@ class AgentStreamPoolGate {
     readonly pool: AgentStreamPool,
     private readonly maxConcurrent: number,
     private readonly acquireTimeoutMs: number,
-  ) {}
+  ) {
+    // When memory pressure clears, sessions queued by the lowered cap can start.
+    try { getResourceGovernor().onStateChange(() => this.drainQueue()); } catch { /* governor unavailable */ }
+  }
 
   private readonly active = new Map<string, AgentStreamConcurrencyLease>();
   private readonly waitQueue: Waiter[] = [];
@@ -234,7 +238,14 @@ class AgentStreamPoolGate {
 
   private canAdmit(lease: AgentStreamConcurrencyLease): boolean {
     if (this.active.has(lease.chatId)) return false;
-    return this.active.size < this.maxConcurrent;
+    return this.active.size < this.effectiveMax();
+  }
+
+  /** The configured cap, lowered while the machine is short of memory (resource governor Red / Critical). */
+  private effectiveMax(): number {
+    let cap: number | null = null;
+    try { cap = getResourceGovernor().agentCap(); } catch { cap = null; }
+    return cap === null ? this.maxConcurrent : Math.min(this.maxConcurrent, cap);
   }
 
   private admit(lease: AgentStreamConcurrencyLease): AgentStreamConcurrencyLease {

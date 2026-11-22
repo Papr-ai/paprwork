@@ -717,7 +717,28 @@ async function pushContributeBranch(
         ...(tree.kind === "app" && opts.includeBuildOutputs ? { includeBuildOutputs: true } : {}),
       });
     }
-    const changes = buildProposalChangeSet(trees);
+    let changes = buildProposalChangeSet(trees);
+    if (changes.unapplied.length > 0) {
+      // New migrations that never ran here: run them now (this desktop only on
+      // team-shared data), then check again. Only real failures block.
+      const { autoApplyProposalMigrations } = await import("./cloudSync/proposalAutoApplyMigrations.js");
+      const { paprDbApplyMigration } = await import("./tursoReplica/PaprDbService.js");
+      const auto = await autoApplyProposalMigrations(staged, changes.unapplied, paprDbApplyMigration);
+      if (auto.applied.length > 0) {
+        console.info(`[CloudContribute] ran new migrations before proposing: ${auto.applied.join(", ")}`);
+        staged.forEach((tree, i) => {
+          if (tree.kind === "migrations" && tree.appliedIds !== undefined) trees[i]!.appliedIds = tree.appliedIds;
+        });
+        changes = buildProposalChangeSet(trees);
+      }
+      if (auto.failed.length > 0) {
+        throw new Error(
+          "A new database change failed to run on this copy, so it can't be proposed yet: " +
+            auto.failed.map((f) => `${f.path.split("/").pop()} (${f.error})`).join("; ") +
+            ". Fix or remove it, then propose again.",
+        );
+      }
+    }
     assertProposalMigrationsApplied(changes);
     if (changes.ignored.length > 0) {
       console.info(

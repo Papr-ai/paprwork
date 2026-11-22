@@ -1,0 +1,72 @@
+{
+ "_note": "Context Bench v1 (106 questions, 94 text + 12 graph/DB). Hits at the gated K; gate = hits (\u22122) and tokens (+15%); loss reported, = -log10(Hit@K)+0.5*p95/100ms+0.01*tok/1k. Memory search and grep are tracked so improvements show; change only in a PR that explains why.",
+ "tolerance": 2,
+ "gated": [
+  {
+   "method": "grep (agent keyword)",
+   "expand": "chunk",
+   "K": 10,
+   "hits": 53,
+   "loss": 0.758,
+   "n": 94,
+   "tokens": 3655
+  },
+  {
+   "method": "bm25",
+   "expand": "message",
+   "K": 5,
+   "hits": 76,
+   "loss": 0.687,
+   "n": 94,
+   "tokens": 5978
+  },
+  {
+   "method": "dense ane-0.6b",
+   "expand": "message",
+   "K": 10,
+   "hits": 70,
+   "loss": 0.297,
+   "n": 94,
+   "tokens": 7069
+  },
+  {
+   "method": "bm25+dense ane-0.6b",
+   "expand": "message",
+   "K": 5,
+   "hits": 74,
+   "loss": 0.731,
+   "n": 94,
+   "tokens": 4894
+  },
+  {
+   "method": "bm25+dense+jev ane-0.6b",
+   "expand": "message",
+   "K": 3,
+   "live": true,
+   "hits": 80,
+   "loss": 4.144,
+   "n": 94,
+   "tokens": 2896
+  },
+  {
+   "method": "papr memory search (prod)",
+   "expand": "chunk",
+   "K": 5,
+   "hits": 39,
+   "loss": 18.591,
+   "n": 94,
+   "optional": true,
+   "tokens": 29987
+  },
+  {
+   "method": "sql/graphql (schema tool)",
+   "expand": "chunk",
+   "K": 10,
+   "hits": 11,
+   "loss": 12.146,
+   "n": 12,
+   "optional": true,
+   "tokens": 88
+  }
+ ]
+}

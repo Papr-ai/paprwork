@@ -10,7 +10,8 @@ import { spawn, type ChildProcessWithoutNullStreams } from "child_process";
 import * as fs from "fs";
 import * as path from "path";
 import * as readline from "readline";
-import { CODE_EMBED_DIM, CODE_EMBED_MODEL, MAX_QUERY_TOKENS, QUERY_INSTRUCTION, l2normalize, type Embedder } from "./embedder.js";
+import { fileURLToPath } from "url";
+import { CODE_EMBED_DIM, CODE_EMBED_MODEL, MAX_QUERY_TOKENS, QUERY_INSTRUCTION, coremlInstalled, l2normalize, type Embedder } from "./embedder.js";
 
 export const EOS_ENDOFTEXT = 151643;
 export const COREML_MODEL = "coreml/papr-embed-code-1-0.6b.mlpackage";
@@ -24,6 +25,11 @@ export class CoreMLEmbedder implements Embedder {
   readonly dim = CODE_EMBED_DIM;
   private next = 1;
   private pending = new Map<number, { ok: (v: Float32Array) => void; err: (e: Error) => void }>();
+  private exitListeners: Array<() => void> = [];
+  private closing = false;
+  dead = false;
+  /** The helper is its own process: its crash cannot take the app down. */
+  readonly isolated = true;
 
   private constructor(
     private readonly proc: ChildProcessWithoutNullStreams,
@@ -45,9 +51,12 @@ export class CoreMLEmbedder implements Embedder {
       else p.ok(l2normalize(Float32Array.from(m.embedding)));
     });
     proc.on("exit", () => {
+      this.dead = true;
       for (const p of this.pending.values()) p.err(new Error("coreml helper exited"));
       this.pending.clear();
+      if (!this.closing) for (const l of this.exitListeners) l();
     });
+    proc.on("error", () => undefined); // exit follows
   }
 
   /** Spawn the helper and wait for {"ready":true}. Throws if it fails to load within timeoutMs (first ANE compile ~50 s). */
@@ -74,11 +83,23 @@ export class CoreMLEmbedder implements Embedder {
     return this.tok.encode(text, { add_special_tokens: false }).ids.length;
   }
 
-  private run(ids: number[]): Promise<Float32Array> {
+  get pid(): number | undefined {
+    return this.proc.pid;
+  }
+
+  /** Called once if the helper dies on its own (killed under memory pressure, crash), not after close(). */
+  onExit(l: () => void): void {
+    this.exitListeners.push(l);
+  }
+
+  /** bg: indexing (the helper runs it at utility QoS); queries run at user-initiated QoS so a search is never queued
+   *  behind background priority. */
+  private run(ids: number[], bg = false): Promise<Float32Array> {
+    if (this.dead) return Promise.reject(new Error("coreml helper is not running"));
     const id = this.next++;
     return new Promise((ok, err) => {
       this.pending.set(id, { ok, err });
-      this.proc.stdin.write(JSON.stringify({ id, ids }) + "\n");
+      this.proc.stdin.write(JSON.stringify(bg ? { id, ids, bg: true } : { id, ids }) + "\n");
     });
   }
 
@@ -97,21 +118,38 @@ export class CoreMLEmbedder implements Embedder {
         if (!this.fallback) throw new Error(`document has ${n} tokens; CoreML max is ${this.maxTokens} and no fallback`);
         out.push(...(await this.fallback.embedDocuments([t])));
       } else {
-        out.push(await this.run(this.ids(t, this.maxTokens)));
+        out.push(await this.run(this.ids(t, this.maxTokens), true));
       }
     }
     return out;
   }
 
   async close(): Promise<void> {
+    this.closing = true;
     this.proc.stdin.end();
     this.proc.kill();
     await this.fallback?.close();
   }
 }
 
-/** Where the helper binary lives: packaged app resources, else the dev build output. */
+/** Where the helper binary lives: PAPR_CODE_EMBED_HELPER, packaged app resources, else the dev build output (found
+ *  from the repo root whatever the gateway's cwd is). */
 export function helperPath(resourcesDir = (process as any).resourcesPath ?? ""): string {
-  const cands = [process.env.PAPR_CODE_EMBED_HELPER ?? "", path.join(resourcesDir, "bin", "papr-embed-coreml"), path.join(process.cwd(), "native", "papr-embed-coreml", "build", "papr-embed-coreml")];
+  const repoRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..", "..", "..", "..");
+  const dev = (root: string) => path.join(root, "native", "papr-embed-coreml", "build", "papr-embed-coreml");
+  const cands = [process.env.PAPR_CODE_EMBED_HELPER ?? "", path.join(resourcesDir, "bin", "papr-embed-coreml"), dev(process.cwd()), dev(repoRoot)];
   return cands.find((c) => c && fs.existsSync(c)) ?? cands[1]!;
+}
+
+/**
+ * Can this machine embed on the Neural Engine right now? Apple Silicon macOS, not turned off, the helper binary and the
+ * CoreML model on disk. When yes the runtime loads CoreML first and never starts the ONNX process unless it has to.
+ */
+export function aneAvailable(root: string, platform = process.platform, arch = process.arch): { ok: boolean; reason: string } {
+  if (platform !== "darwin" || arch !== "arm64") return { ok: false, reason: "not Apple Silicon macOS" };
+  if (process.env.PAPR_CODE_EMBED_COREML === "0") return { ok: false, reason: "turned off (PAPR_CODE_EMBED_COREML=0)" };
+  const h = helperPath();
+  if (!fs.existsSync(h)) return { ok: false, reason: `Neural Engine helper not found (${h})` };
+  if (!coremlInstalled(root)) return { ok: false, reason: "Neural Engine model not downloaded yet" };
+  return { ok: true, reason: "Neural Engine" };
 }

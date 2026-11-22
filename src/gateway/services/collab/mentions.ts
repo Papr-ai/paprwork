@@ -78,11 +78,32 @@ async function chatTitle(chatId?: string): Promise<string | undefined> {
   return (await getStorageManager().getChat(chatId).catch(() => null))?.title || undefined;
 }
 
+/** The publisher's app id for an installed copy (from its lineage), else the id itself. */
+export async function canonicalAppId(appId: string, appsDir?: string): Promise<string> {
+  const { getCloudAppLineageService } = await import("../CloudAppLineageService.js");
+  const lineage = await getCloudAppLineageService(appsDir).readLineageForApp(appId).catch(() => null);
+  return lineage?.sourceAppId?.trim() || appId;
+}
+
+/** This device's app for a mention's appId: the app itself, or the installed copy whose source it is. */
+export async function localAppFor(appId?: string, appsDir?: string): Promise<string | null> {
+  if (!appId) return null;
+  const { getCloudAppLineageService } = await import("../CloudAppLineageService.js");
+  const svc = getCloudAppLineageService(appsDir);
+  const { existsSync } = await import("fs");
+  if (existsSync(path.join(svc.appsRoot, appId, "metadata.json"))) return appId;
+  const index = await svc.buildIndex().catch(() => null);
+  const hit = Object.values(index?.byAppId ?? {}).find((e) => e.sourceAppId === appId);
+  return hit?.appId ?? null;
+}
+
 /** Record a mention. Quiet unless notify: the person isn't told until notifyMentions (or notify: true). */
 export async function sendMention(input: {
   toUserIds: string[]; text: string; chatId?: string; action?: MentionAction | null; context?: MentionContext; notify?: boolean;
 }): Promise<MentionItem[]> {
   const context: MentionContext = { ...input.context };
+  // Each install has its own local app id. Send the publisher's id so the other side can find it (#930).
+  if (context.appId) context.appId = await canonicalAppId(context.appId);
   if (input.chatId) { context.chatId = input.chatId; context.chatTitle ??= await chatTitle(input.chatId); }
   const out = await call<{ mentions: MentionItem[] }>("/mentions", "POST", {
     toUserIds: input.toUserIds, text: input.text, context, action: input.action ?? undefined, notify: !!input.notify,
@@ -180,6 +201,9 @@ async function suggest(item: MentionItem): Promise<{ reply: string; nextStep?: s
 function mentionBrief(item: MentionItem): string {
   return [
     `${item.fromName} wrote to ${item.toName}${item.context.chatTitle ? ` (from the chat "${item.context.chatTitle}")` : ""}:`,
+    item.context.appName || item.context.appId
+      ? `About the app ${item.context.appName ?? ""}${item.context.appId ? ` (this device's app id ${item.context.appId})` : " (not installed on this device; find it by name)"}`
+      : "",
     item.text,
     item.action ? `Action asked of ${item.toName}: ${item.action.title}${item.action.due ? ` (due ${dueDate(item.action.due)})` : ""}` : "",
   ].filter(Boolean).join("\n");
@@ -197,7 +221,7 @@ export const MENTION_CHECK_TOOLS = [
   "search_agent_memory", "search_wiki_entities", "get_wiki_entity", "list_mentions", "list_documents", "read_document",
   "read_file", "search_files", "list_apps", "list_app_files", "read_app_file", "read_app_data_sources", "read_app_data_health",
   "list_jobs", "read_job_file", "read_job_logs", "papr_db_query", "papr_db_sync_status", "query_cloud_turso",
-  "get_cloud_sync_status", "inspect_cloud_repo",
+  "get_cloud_sync_status", "inspect_cloud_repo", "list_keys",
 ];
 
 export function parseInvestigation(raw: string | null): { reply: string; nextStep?: string; findings?: string; why?: string; plan: PlanStep[] } | null {
@@ -227,6 +251,9 @@ async function investigate(item: MentionItem): Promise<ReturnType<typeof parseIn
     "also read the user's goals (workspace/IDENTITY.md → Goals) and what they're working on, so you can say how much this matters to them.",
     "search memory and the wiki for context and how the user handled similar things, and if they report a problem (an app, job, database, sync issue),",
     "look at it with the read/query tools. Never change anything, never send messages. Keep it to a few focused checks.",
+    "If they ask for an API key/token/secret: check list_keys (name + sharedWith). Papr shares keys natively — the user picks Who can use it",
+    "(Selected members / Team / Organization) in Settings → Integration Keys and the teammate gets it automatically. Plan that, never Bitwarden,",
+    "password managers, chat or 'a secure channel'. Suggest the teammate's own key only if they need their own account or quota.",
     "",
     mentionBrief(item),
     "",
@@ -344,6 +371,12 @@ async function receiveMention(e: CollabEvent): Promise<void> {
   if (!itemId) return;
   const item = await getMention(itemId).catch(() => null);
   if (!item || item.status !== "open" || (await cards()).has(itemId)) return;
+  if (item.context?.appId) {
+    const local = await localAppFor(item.context.appId);
+    item.context = local
+      ? { ...item.context, appId: local }
+      : { ...item.context, appId: undefined, appName: item.context.appName ? `${item.context.appName} (not on this device)` : undefined };
+  }
   const s = await suggest(item);
   const card: MentionCardData = {
     type: "mention_inbox", itemId, fromName: item.fromName, text: item.text, context: item.context ?? {},
@@ -383,6 +416,26 @@ async function receiveMention(e: CollabEvent): Promise<void> {
   }).catch(() => updateCard(itemId, { investigating: false }));
 }
 
+/**
+ * Event details carry only a short preview of what was said (the server clips it at ~280 chars with "…").
+ * Chat must show the whole message, so read it back from the mention's thread: the newest entry by that
+ * side whose text starts with the preview. Falls back to the preview when the mention can't be read.
+ */
+export function fullFromThread(preview: string, thread: MentionItem["thread"], by: "from" | "to", reply?: string | null): string {
+  const head = preview.replace(/…$/, "").replace(/\s+/g, " ").trim();
+  if (!head) return preview;
+  const flat = (t: string) => t.replace(/\s+/g, " ").trim();
+  const candidates = [...(thread ?? []).filter((t) => t.by === by).map((t) => t.text).reverse(), ...(reply ? [reply] : [])];
+  return candidates.find((t) => flat(t).startsWith(head)) ?? preview;
+}
+
+async function fullEventText(itemId: string | null | undefined, preview: string | undefined, by: "from" | "to"): Promise<string> {
+  const text = preview || "";
+  if (!itemId || !text.endsWith("…")) return text;
+  const item = await getMention(itemId).catch(() => null);
+  return item ? fullFromThread(text, item.thread, by, by === "to" ? item.reply?.text : null) : text;
+}
+
 async function receiveReply(e: CollabEvent): Promise<void> {
   const d = (e.detail ?? {}) as { fromName?: string; text?: string; status?: string; progress?: string; context?: MentionContext; action?: MentionAction | null; promisedAt?: string | null };
   const who = d.fromName || "Someone";
@@ -393,7 +446,8 @@ async function receiveReply(e: CollabEvent): Promise<void> {
   const { getAgentService } = await import("../AgentService.js");
   const storage = getAgentService().getStorageManager();
   const local = chatId ? await storage.getChat(chatId).catch(() => null) : null;
-  const said = d.text ? `\n\n> ${d.text.split("\n").join("\n> ")}` : "";
+  const full = await fullEventText(e.requestId, d.text, "to");
+  const said = full ? `\n\n> ${full.split("\n").join("\n> ")}` : "";
   // Short, in the chat the ask came from: Pen picks the work back up from here.
   const by = d.promisedAt ? ` · by ${promiseLabel(d.promisedAt)}` : "";
   // "@name" renders as a person pill in chat. One status line, then their words.
@@ -434,7 +488,8 @@ async function receiveFollowUp(e: CollabEvent): Promise<void> {
   const who = (d.fromName || "Someone").split(" ")[0];
   const hit = itemId ? (await cards()).get(itemId) : undefined;
   if (hit) {
-    const line = d.kind === "reply" ? `**${who} replied:**\n\n> ${(d.text || "").split("\n").join("\n> ")}`
+    const text = d.kind === "reply" ? await fullEventText(itemId, d.text, "from") : d.text || "";
+    const line = d.kind === "reply" ? `**${who} replied:**\n\n> ${text.split("\n").join("\n> ")}`
       : d.kind === "nudge" ? `**${who} is checking in** on ${lowerFirst(d.what || "this")}.`
       : `**${who} doesn't need this anymore:** ${d.what || ""}. Nothing more to do.`;
     await postToChat(hit.chatId, line);

@@ -1,3 +1,4 @@
+import { AsyncLocalStorage } from "async_hooks";
 /**
  * Bash Tool - Command execution with security and timeout
  *
@@ -30,6 +31,7 @@ import {
   formatSqlitePathWarningBlock,
 } from "../utils/sqlitePathGuard.js";
 import { getJobToolEnv } from "./context.js";
+import { admitBashCommand, type BashGovernorHandle } from "../system/bashGovernor.js";
 
 function mergeBashEnv(inputEnv?: Record<string, string>): Record<string, string> {
   return { ...getJobToolEnv(), ...(inputEnv ?? {}) };
@@ -353,6 +355,8 @@ export interface BashOutput {
   _processHint?: string;
   /** Desktop PAPR_API_KEY used against the memory server without user ids. */
   _paprIdentityReminder?: string;
+  /** The resource governor paused or stopped this command, or refused to start it, because memory was short. */
+  _memoryGovernor?: string;
 }
 
 /**
@@ -472,6 +476,7 @@ async function searchPaprMemoryForCode(
       "../../gateway/utils/paprMemoryPolicy.js"
     );
     const { PAPR_DEFAULT_HEADERS } = await import("./paprSurface.js");
+    const { agenticGraphEnabled } = await import("./searchDefaults.js");
     const memoryBaseURL = process.env.PAPR_MEMORY_SERVER_URL?.replace(/\/$/, "") || undefined;
     const client = new Papr({
       xAPIKey: paprKey,
@@ -494,20 +499,34 @@ async function searchPaprMemoryForCode(
     );
     const scopeSpread = await paprMemorySearchScopeSpread();
 
-    const response = await client.memory.search({
+    const { getAssistantMessageIdForTools, getCurrentChatId } = await import("./context.js");
+    const toolCallId = bashToolCallId.getStore();
+    const assistantMessageId = getAssistantMessageIdForTools();
+    const chatId = getCurrentChatId();
+    const { data: response, response: httpResponse } = await client.memory.search({
       query,
       ...scopeSpread,
       max_memories: 10,
       max_nodes: 10,
-      enable_agentic_graph: true,
+      enable_agentic_graph: agenticGraphEnabled(),
       response_format: "toon",
       policy: buildSearchPolicy({ defaultDomain: "code" }),
       metadata: {
         role: "assistant",
         category: "learning",
         customMetadata,
-      },
-    });
+        // QueryLog join keys (not search filters).
+        useCase: "code_grep",
+        ...(assistantMessageId ? { clientMessageId: assistantMessageId } : {}),
+        ...(toolCallId ? { toolCallId } : {}),
+        ...(chatId ? { sessionId: chatId } : {}),
+      } as Record<string, unknown>,
+    }).withResponse();
+    {
+      const searchId = httpResponse.headers.get("X-Search-Id");
+      const { recordSearchOnToolCall } = await import("../../gateway/services/storage/trainingSync.js");
+      recordSearchOnToolCall(toolCallId, searchId, "code_grep");
+    }
     
     // Format results - response.data.memories
     if (!response?.data?.memories || response.data.memories.length === 0) {
@@ -557,6 +576,33 @@ function isBackgroundedCommand(command: string): boolean {
   return /&\s*$/.test(trimmed) || /\bnohup\b/.test(trimmed) || /\bdisown\b/.test(trimmed);
 }
 
+/** Who started a command, for the governor's messages: chat id, delegated job id, or null. */
+async function currentOwner(): Promise<string | null> {
+  try {
+    const { getCurrentChatId, getCurrentDelegationJobId } = await import("./context.js");
+    const job = getCurrentDelegationJobId();
+    return job ? `job:${job}` : getCurrentChatId();
+  } catch {
+    return null;
+  }
+}
+
+function governorRefusal(message: string, originalCommand: string, apiKeys: string[], startTime: number): ToolResult<BashOutput> {
+  return {
+    success: false,
+    error: message,
+    type: "memory_governor",
+    data: {
+      stdout: "",
+      stderr: message,
+      exitCode: -1,
+      command: sanitizeError(originalCommand, apiKeys),
+      duration: Date.now() - startTime,
+      _memoryGovernor: message,
+    },
+  };
+}
+
 /**
  * Execute a backgrounded command using spawn with proper detachment
  */
@@ -567,6 +613,7 @@ async function executeBackgroundedCommand(
   apiKeys: string[],
   originalCommand: string,
   startTime: number,
+  gov?: BashGovernorHandle,
 ): Promise<ToolResult<BashOutput>> {
   return new Promise((resolve) => {
     const [shellPath, shellArgs] = getShellCommand(command);
@@ -578,6 +625,10 @@ async function executeBackgroundedCommand(
       detached: true,
       stdio: "ignore", // Critical: don't inherit stdio pipes
     });
+    // The governor keeps measuring a backgrounded model load after this call returns (the Nov 19 panic was four
+    // backgrounded model processes); its lease is held until the process exits.
+    gov?.onSpawn(proc.pid);
+    proc.on("exit", () => { gov?.done(); });
 
     let settled = false;
     const finish = (result: ToolResult<BashOutput>): void => {
@@ -587,6 +638,7 @@ async function executeBackgroundedCommand(
     };
 
     proc.on("error", (err) => {
+      gov?.done();
       notifySpawnResourceError(err, "bash background spawn");
       const classified = classifyChildProcessError(err);
       finish({
@@ -738,9 +790,16 @@ export const __testing = { joinForSubstitution, splitAfterSubstitution, envHasKe
 
 export async function executeBashCommand(
   input: BashInput,
+  executeCtx?: unknown,
 ): Promise<ToolResult<BashOutput>> {
-  return attachIdentityReminder(input.command ?? "", executeBashCommandInner(input));
+  const { toolCallIdFromExecuteContext } = await import("./context.js");
+  return bashToolCallId.run(toolCallIdFromExecuteContext(executeCtx), () =>
+    attachIdentityReminder(input.command ?? "", executeBashCommandInner(input)),
+  );
 }
+
+/** Tool call id of the running bash call, so code searches it triggers can tag it. */
+const bashToolCallId = new AsyncLocalStorage<string | undefined>();
 
 async function executeBashCommandInner(
   input: BashInput,
@@ -791,16 +850,20 @@ async function executeBashCommandInner(
     let devicePromise: Promise<DeviceGrepHits> | null = null;
     
     if (grepInfo) {
-      const memoryQuery = buildHybridMemorySearchQuery(
-        grepInfo.pattern,
-        grepInfo.path,
-      );
-      memoryPromise = searchPaprMemoryForCode(memoryQuery, grepInfo.path);
+      // Cloud memory search alongside grep is off by default (slow, rarely added a file; see searchDefaults.ts).
+      const { grepCloudMemoryEnabled } = await import("./searchDefaults.js");
+      if (grepCloudMemoryEnabled()) {
+        const memoryQuery = buildHybridMemorySearchQuery(
+          grepInfo.pattern,
+          grepInfo.path,
+        );
+        memoryPromise = searchPaprMemoryForCode(memoryQuery, grepInfo.path);
+        console.log(
+          `[Bash Tool] Detected grep in Papr folder, running parallel memory search: "${memoryQuery.substring(0, 120)}${memoryQuery.length > 120 ? "..." : ""}"`,
+        );
+      }
       // On-device papr-embed-code (Neural Engine / ONNX) runs alongside; never blocks grep (2 s budget, [] when not ready).
       devicePromise = import("./codeEmbed/runtime.js").then((m) => m.deviceHitsForGrep(grepInfo.path, grepInfo.pattern));
-      console.log(
-        `[Bash Tool] Detected grep in Papr folder, running parallel memory search: "${memoryQuery.substring(0, 120)}${memoryQuery.length > 120 ? "..." : ""}"`,
-      );
     }
 
     if (contextGrep) {
@@ -880,6 +943,12 @@ async function executeBashCommandInner(
       substituteEnvKeyRefs(env, customKeys);
     }
 
+    // Resource governor: memory-heavy commands (model loads, local LLMs, docker) wait for room or are refused with a
+    // reason instead of starting on a machine that is already short of memory.
+    const admission = await admitBashCommand(command, await currentOwner());
+    if (!admission.ok) return governorRefusal(admission.message, input.command, apiKeys, startTime);
+    const gov = admission.handle;
+
     // Check if this is a backgrounded command
     if (isBackgroundedCommand(command)) {
       console.log('[Bash Tool] Detected backgrounded command, using detached spawn');
@@ -890,6 +959,7 @@ async function executeBashCommandInner(
         apiKeys,
         input.command,
         startTime,
+        gov,
       );
     }
 
@@ -904,14 +974,21 @@ async function executeBashCommandInner(
     // grep exits 1 when nothing matches. For a hybrid grep that is exactly when the semantic results matter, so
     // treat it as an empty result (exitCode 1, success) instead of throwing them away in the error path.
     let grepNoMatch = false;
+    let governorNote: string | undefined;
     try {
-      ({ stdout, stderr } = await execShellCommand(command, {
-        cwd: cwd || process.cwd(),
-        timeout,
-        maxBuffer: 100 * 1024 * 1024,
-        env: mergedExecEnv,
-      }));
+      try {
+        ({ stdout, stderr } = await execShellCommand(command, {
+          cwd: cwd || process.cwd(),
+          timeout,
+          maxBuffer: 100 * 1024 * 1024,
+          env: mergedExecEnv,
+          onSpawn: gov.onSpawn,
+        }));
+      } finally {
+        governorNote = gov.done();
+      }
     } catch (err) {
+      if (governorNote) throw Object.assign(err as object, { governorNote });
       const e = err as { code?: unknown; stdout?: string; stderr?: string; killed?: boolean };
       if (grepInfo && e?.code === 1 && !e.killed && !(e.stderr ?? "").trim()) {
         grepNoMatch = true;
@@ -1083,11 +1160,13 @@ async function executeBashCommandInner(
           ? { _sqlitePathWarnings: sqliteWarnings }
           : {}),
         ...(oversizedWarning ? { _largeFileReminder: oversizedWarning.trim() } : {}),
+        ...(governorNote ? { _memoryGovernor: governorNote } : {}),
       },
     };
   } catch (error: unknown) {
     const duration = Date.now() - startTime;
     const apiKeys = [...getApiKeysForSanitization(), ...jobSecretValues()];
+    const governorNoteErr = (error as { governorNote?: string } | null)?.governorNote;
 
     if (isSpawnResourceError(error)) {
       notifySpawnResourceError(error, "bash tool spawn");
@@ -1118,6 +1197,7 @@ async function executeBashCommandInner(
           ...(classified.agentHint
             ? { _processHint: classified.agentHint }
             : {}),
+          ...(governorNoteErr ? { _memoryGovernor: governorNoteErr } : {}),
         },
       };
     }
@@ -1127,8 +1207,8 @@ async function executeBashCommandInner(
     const sanitizedMessage = sanitizeError(message, apiKeys);
     return {
       success: false,
-      error: `Bash execution failed: ${sanitizedMessage}`,
-      type: "unknown_error",
+      error: governorNoteErr ? `${governorNoteErr} (${sanitizedMessage})` : `Bash execution failed: ${sanitizedMessage}`,
+      type: governorNoteErr ? "memory_governor" : "unknown_error",
     };
   }
 }
@@ -1249,6 +1329,10 @@ async function executeBashCommandStreamingInner(
     substituteEnvKeyRefs(env, customKeys);
   }
 
+  const admission = await admitBashCommand(command, await currentOwner());
+  if (!admission.ok) return governorRefusal(admission.message, input.command, apiKeys, startTime);
+  const gov = admission.handle;
+
   return new Promise((resolve) => {
     let stdoutData = "";
     let stderrData = "";
@@ -1261,6 +1345,7 @@ async function executeBashCommandStreamingInner(
       timeout,
       stdio: SPAWN_STDIO_IGNORE_IN,
     });
+    gov.onSpawn(proc.pid);
 
     // Stream stdout (sanitize before sending)
     proc.stdout.on("data", (data: Buffer) => {
@@ -1282,6 +1367,7 @@ async function executeBashCommandStreamingInner(
     proc.on("close", (code: number | null) => {
       if (killTimer) clearTimeout(killTimer);
       destroyChildProcessStreams(proc);
+      const governorNote = gov.done();
 
       const duration = Date.now() - startTime;
       const exitCode = code ?? -1;
@@ -1322,6 +1408,7 @@ async function executeBashCommandStreamingInner(
             exitCode,
             command: sanitizedCommand,
             duration,
+            ...(governorNote ? { _memoryGovernor: governorNote } : {}),
           },
         });
       } else {
@@ -1338,6 +1425,7 @@ async function executeBashCommandStreamingInner(
             exitCode,
             command: sanitizedCommand,
             duration,
+            ...(governorNote ? { _memoryGovernor: governorNote } : {}),
           },
         });
       }
@@ -1347,6 +1435,7 @@ async function executeBashCommandStreamingInner(
     proc.on("error", (error: Error) => {
       if (killTimer) clearTimeout(killTimer);
       destroyChildProcessStreams(proc);
+      gov.done();
 
       const duration = Date.now() - startTime;
       let sanitizedStdout = sanitizeError(stdoutData, apiKeys);

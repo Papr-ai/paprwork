@@ -22,7 +22,10 @@ export const COREML_FILES = [
 ] as const;
 export const QUERY_INSTRUCTION =
   "Given a code search query about a repository, retrieve the source code file that must be read or edited";
-export const MAX_DOC_TOKENS = 8192;
+/** Every chunk is at most CHUNK_TOKENS (1000) tokens, long lines included (chunker.ts), so nothing legitimate reaches
+ *  this. It is the last guard: it used to be 8192, and one 8k-token run makes onnxruntime allocate several GB (measured
+ *  2.3 GB at 4k tokens, in process, CPU arena on), which aborts natively under memory pressure (Nov 17 crash loop). */
+export const MAX_DOC_TOKENS = 1024;
 export const MAX_QUERY_TOKENS = 512;
 
 export interface Embedder {
@@ -47,6 +50,11 @@ export function l2normalize(v: Float32Array): Float32Array {
 
 export function modelDir(root: string): string {
   return path.join(root, "models", CODE_EMBED_MODEL);
+}
+
+/** The Neural Engine build is on disk at its pinned sizes (Apple Silicon downloads it with the base files). */
+export function coremlInstalled(root: string): boolean {
+  return COREML_FILES.every((f) => sizeIs(path.join(modelDir(root), f), MODEL_MANIFEST[f]!.size));
 }
 
 /** All base files present at their pinned sizes (a cheap stat; hashes are checked once, at download). */
@@ -217,6 +225,37 @@ export async function loadTokenCounter(root: string): Promise<(text: string) => 
   return (text: string) => tok.encode(text, { add_special_tokens: false }).ids.length;
 }
 
+/** Lower a process to background priority. Never throws (already lower, or gone). */
+export function lowerPriority(pid: number | undefined, nice = EMBED_NICE): void {
+  if (!pid) return;
+  try {
+    if (os.getPriority(pid) < nice) os.setPriority(pid, nice);
+  } catch {}
+}
+
+/** Indexing is background work: the embed process runs at this nice level (below the app, above idle). */
+export const EMBED_NICE = 10;
+/** Threads for the ONNX embed process: min(4, cores/2). Measured on an M2 Pro: 2 threads doubles query latency (677 vs
+ *  348 ms) and ONNX is the only search path on Intel and Windows, so the thread count stays; nice 10 plus no spinning
+ *  is what keeps indexing out of the user's way (the kernel gives the app the cores first). */
+export const EMBED_THREADS = Math.max(1, Math.min(4, Math.floor(os.cpus().length / 2)));
+
+/** ONNX session options. allow_spinning off: idle threads sleep instead of busy-waiting between runs (ORT spins by
+ *  default, which shows as CPU use with no work done). */
+export function onnxSessionOptions(threads: number): Record<string, unknown> {
+  return {
+    executionProviders: ["cpu"],
+    graphOptimizationLevel: "all",
+    // No BFC arena: it grows to the largest run ever seen and never gives memory back, and an arena Extend that
+    // fails under memory pressure aborts the process. Plain allocations free after each run.
+    enableCpuMemArena: false,
+    enableMemPattern: false,
+    intraOpNumThreads: threads,
+    interOpNumThreads: 1,
+    extra: { session: { intra_op: { allow_spinning: "0" }, inter_op: { allow_spinning: "0" } } },
+  };
+}
+
 /** Load the on-device embedder. Throws if packages or model files are missing. */
 export async function loadEmbedder(root: string, opts: { threads?: number } = {}): Promise<Embedder> {
   const dir = modelDir(root);
@@ -231,12 +270,7 @@ export async function loadEmbedder(root: string, opts: { threads?: number } = {}
   if (typeof eos !== "number") throw new Error("tokenizer has no <|endoftext|>");
   const session = await (ort.InferenceSession ?? ort.default.InferenceSession).create(
     path.join(dir, "onnx/model_quantized.onnx"),
-    {
-      executionProviders: ["cpu"],
-      graphOptimizationLevel: "all",
-      // Leave cores for the app: indexing is background work.
-      intraOpNumThreads: opts.threads ?? Math.max(1, Math.min(4, Math.floor(os.cpus().length / 2))),
-    },
+    onnxSessionOptions(opts.threads ?? EMBED_THREADS),
   );
   return new OnnxEmbedder(ort.Tensor ? ort : ort.default, session, tok, eos);
 }
@@ -263,64 +297,101 @@ export async function loadBestEmbedder(root: string, opts: { threads?: number; h
 }
 
 /**
- * ONNX embedder in a worker thread (see embedWorker.ts). Token counts use a tokenizer on this thread (cheap, sync).
- * Same vectors as loadEmbedder; use this anywhere the event loop matters (the gateway).
+ * ONNX embedder in a child process (see embedWorker.ts). onnxruntime aborts natively when an allocation fails
+ * (EXC_BREAKPOINT in BFCArena::Extend), and in a worker thread that took the whole gateway down with it. In a child
+ * process the abort only kills the child: pending calls reject, onExit fires, and the runtime falls back.
+ * Token counts use a tokenizer in this process (cheap, sync). Same vectors as loadEmbedder.
  */
 export class WorkerOnnxEmbedder implements Embedder {
   readonly model = CODE_EMBED_MODEL;
   readonly dim = CODE_EMBED_DIM;
   private next = 1;
   private pending = new Map<number, { ok: (v: any) => void; err: (e: Error) => void }>();
+  private closing = false;
+  private exitListeners: Array<(info: { code: number | null; signal: string | null }) => void> = [];
+  dead = false;
+  /** Runs in a child process: its crash cannot take the app down (see CodeVectorStore.setInflight). */
+  readonly isolated = true;
 
-  private constructor(private readonly w: import("node:worker_threads").Worker, private readonly tok: any) {
-    w.on("message", (m: any) => {
+  private constructor(private readonly child: import("node:child_process").ChildProcess, private readonly tok: any) {
+    child.on("message", (m: any) => {
       const p = m?.id !== undefined ? this.pending.get(m.id) : undefined;
       if (!p) return;
       this.pending.delete(m.id);
       m.ok ? p.ok(m) : p.err(new Error(m.error ?? "embed worker error"));
     });
-    const failAll = (e: Error) => { for (const p of this.pending.values()) p.err(e); this.pending.clear(); };
-    w.on("error", failAll);
-    w.on("exit", (c) => failAll(new Error(`embed worker exited (${c})`)));
+    child.on("exit", (code, signal) => {
+      this.dead = true;
+      const e = new Error(`embed process exited (${signal ?? code})`);
+      for (const p of this.pending.values()) p.err(e);
+      this.pending.clear();
+      if (!this.closing) for (const l of this.exitListeners) l({ code, signal });
+    });
+    child.on("error", () => undefined); // exit follows
   }
 
-  static async start(root: string, opts: { threads?: number; workerUrl?: URL } = {}): Promise<WorkerOnnxEmbedder> {
-    if (!modelInstalled(root)) throw new Error(`model not installed in ${modelDir(root)}`);
-    const { Worker } = await import("node:worker_threads");
-    const { Tokenizer }: any = await import("@huggingface/tokenizers");
-    const dir = modelDir(root);
-    const tok = new Tokenizer(
-      JSON.parse(fs.readFileSync(path.join(dir, "tokenizer.json"), "utf8")),
-      JSON.parse(fs.readFileSync(path.join(dir, "tokenizer_config.json"), "utf8")),
-    );
+  get pid(): number | undefined {
+    return this.child.pid;
+  }
+
+  /** Called once if the process dies on its own (native abort, OOM kill), not after close(). */
+  onExit(l: (info: { code: number | null; signal: string | null }) => void): void {
+    this.exitListeners.push(l);
+  }
+
+  /** opts.entry + opts.tok: run another child script with a given tokenizer (tests). */
+  static async start(root: string, opts: { threads?: number; entry?: string; tok?: any; env?: Record<string, string> } = {}): Promise<WorkerOnnxEmbedder> {
+    const { fork } = await import("node:child_process");
+    const { fileURLToPath } = await import("node:url");
+    let tok = opts.tok;
+    if (!tok) {
+      if (!modelInstalled(root)) throw new Error(`model not installed in ${modelDir(root)}`);
+      const { Tokenizer }: any = await import("@huggingface/tokenizers");
+      const dir = modelDir(root);
+      tok = new Tokenizer(
+        JSON.parse(fs.readFileSync(path.join(dir, "tokenizer.json"), "utf8")),
+        JSON.parse(fs.readFileSync(path.join(dir, "tokenizer_config.json"), "utf8")),
+      );
+    }
     const here = new URL(import.meta.url);
     // Built JS ships embedWorker.js; under tsx (dev/tests) the .ts source runs with the tsx loader.
     const ts = here.pathname.endsWith(".ts");
-    const workerData = { root, threads: opts.threads };
-    const w = opts.workerUrl
-      ? new Worker(opts.workerUrl, { workerData })
-      : ts
-        ? // tsx's loader is not inherited by workers: register it, then load the .ts worker.
-          new Worker(
-            `import("tsx/esm/api").then((m) => { m.register(); return import(${JSON.stringify(new URL("./embedWorker.ts", here).href)}); });`,
-            { eval: true, workerData },
-          )
-        : new Worker(new URL("./embedWorker.js", here), { workerData });
-    w.unref();
-    await new Promise<void>((ok, err) => {
-      const t = setTimeout(() => { void w.terminate(); err(new Error("embed worker load timeout")); }, 120_000);
-      w.once("message", (m: any) => { clearTimeout(t); m?.ready ? ok() : (void w.terminate(), err(new Error(m?.error ?? "embed worker failed"))); });
-      w.once("error", (e) => { clearTimeout(t); err(e); });
+    const entry = opts.entry ?? fileURLToPath(new URL(ts ? "./embedWorker.ts" : "./embedWorker.js", here));
+    const execArgv = entry.endsWith(".ts") ? ["--import", (await import("node:module")).createRequire(import.meta.url).resolve("tsx/esm")] : [];
+    const child = fork(entry, [], {
+      // process.execPath is Electron in the app: ELECTRON_RUN_AS_NODE makes it plain Node with the same native ABI
+      // the gateway already loads onnxruntime-node with.
+      execPath: process.execPath,
+      execArgv,
+      env: { ...process.env, ELECTRON_RUN_AS_NODE: "1", PAPR_EMBED_ROOT: root, PAPR_EMBED_THREADS: String(opts.threads ?? EMBED_THREADS), ...opts.env },
+      serialization: "advanced", // Float32Array crosses as-is
+      stdio: ["ignore", "ignore", "inherit", "ipc"],
     });
-    return new WorkerOnnxEmbedder(w, tok);
+    child.unref();
+    (child as any).channel?.unref?.();
+    // Background priority from the start (the child also lowers itself; this covers test fixtures and races).
+    lowerPriority(child.pid);
+    await new Promise<void>((ok, err) => {
+      const t = setTimeout(() => { child.kill(); err(new Error("embed process load timeout")); }, 120_000);
+      const onExit = (c: number | null, s: string | null) => { clearTimeout(t); err(new Error(`embed process exited during load (${s ?? c})`)); };
+      child.once("exit", onExit);
+      child.once("message", (m: any) => {
+        clearTimeout(t);
+        child.off("exit", onExit);
+        m?.ready ? ok() : (child.kill(), err(new Error(m?.error ?? "embed process failed")));
+      });
+    });
+    return new WorkerOnnxEmbedder(child, tok);
   }
 
   private call(op: string, body: Record<string, unknown>): Promise<any> {
+    if (this.dead) return Promise.reject(new Error("embed process is not running"));
     const id = this.next++;
     return new Promise((ok, err) => {
       this.pending.set(id, { ok, err });
-      this.w.postMessage({ id, op, ...body });
-    });
+      (this.child as any).channel?.ref?.(); // keep the channel alive while a call is out
+      this.child.send({ id, op, ...body }, (e) => { if (e) { this.pending.delete(id); err(e); } });
+    }).finally(() => { if (!this.pending.size) (this.child as any).channel?.unref?.(); });
   }
 
   countTokens(text: string): number {
@@ -338,7 +409,9 @@ export class WorkerOnnxEmbedder implements Embedder {
   }
 
   async close(): Promise<void> {
+    this.closing = true;
+    if (this.dead) return;
     await Promise.race([this.call("close", {}).catch(() => undefined), new Promise((r) => setTimeout(r, 2000))]);
-    await this.w.terminate().catch(() => undefined);
+    if (!this.dead) this.child.kill();
   }
 }

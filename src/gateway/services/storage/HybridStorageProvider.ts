@@ -65,6 +65,10 @@ export class HybridStorageProvider implements IStorageProvider {
   constructor(localPath: string, paprConfig: PaprConfig) {
     this.local = new LocalStorageProvider(localPath);
     this.papr = new PaprMemoryProvider(paprConfig);
+    // Training sync (opted-in users) uploads the full text of results the local
+    // store moved to sidecar files, not the inline preview.
+    this.papr.readFullResult = (tc, message) =>
+      this.local.readOffloadedToolResult(message.chat_id, message.id, tc.id);
     this.syncEnabled = true;
   }
 

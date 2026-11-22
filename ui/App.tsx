@@ -68,6 +68,7 @@ import { WorkspaceSwitchOverlay } from "./components/Layout/WorkspaceSwitchOverl
 import { CloudAppInstallOverlay } from "./components/Layout/CloudAppInstallOverlay";
 import { buildWorkspaceUiCacheKey } from "./lib/workspaceUiCache";
 import { useProfileStore } from "./stores/profileStore";
+import { TrainingConsentPrompt } from "./components/Settings/TrainingConsent";
 
 type ChatOpenPayload = {
   message?: string;
@@ -690,6 +691,7 @@ export function App() {
       <AgentPersonalizeSheet />
       <CloudFeatureLockModal />
       <ConnectionIndicator />
+      {isAuthenticated && <TrainingConsentPrompt />}
     </>
   );
 }

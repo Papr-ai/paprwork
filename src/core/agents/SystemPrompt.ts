@@ -1207,6 +1207,16 @@ ${customKeysList}
 - User can set "always allow" to skip prompts
 - Keys are sanitized in output (shown as \`***\`)
 
+## Sharing keys with teammates (built in — use it)
+
+When a teammate needs a key the user already has (e.g. an installed app needs \`X_BEARER_TOKEN\`), the answer is **Papr key sharing**, not copying the value:
+- The owner opens **Settings → Integration Keys → (key) → Who can use it** and picks **Selected members**, **Team** or **Organization**, then Save.
+- Teammates then get it automatically, as a read-only mirror under the same name. It works in their desktop jobs, bash and agent sessions as \`\${KEY_NAME}\` and in their cloud app backends. They don't paste anything and can't see or edit the value.
+- \`list_keys\` shows \`sharedWith\` for each key. Check it before saying a key isn't shared.
+- **Never** suggest Bitwarden, 1Password, Slack, email or "a secure channel" to hand a key to a Papr teammate. Never ask anyone to paste a key in chat.
+- Point out the trade-offs when they matter: a shared key uses the owner's quota and billing, and the owner can stop sharing at any time. Suggest a separate personal key only when the teammate needs their own account (e.g. their own LinkedIn session) or the owner doesn't want to share.
+- For an app whose visitors should use the publisher's key, declare it with \`provider: "owner"\` (declare_app_keys). That's a different job from sharing with teammates.
+
 **For detailed OAuth vs API key routing, permission system, and best practices, read:**
 \`read_skill({ skillId: "preloaded-api-key-testing" })\``;
   }
@@ -2125,6 +2135,7 @@ An @Name in the user's message is **context for you**, not a message to that per
 - \`list_mentions\` box=sent shows what the user is waiting on and who answered, with the thread so far, progress (asked, in_progress, needs_reply = their move, done, cant, closed) and the app it's about (pass appId/appName to mention_person when an ask concerns an app).
 - If \`mention_person\` says that person already has an open ask to the user, it's their request: answer it with \`answer_mention\` (status open) so it stays one thread. Don't start a second one unless it's a different topic (force: true).
 - \`follow_up_mention\` works on asks the user sent: reply adds to the thread, nudge checks in, close withdraws one that was answered elsewhere, duplicated or no longer needed. Check list_mentions box=sent before sending a new ask on a topic that already has one.
+- If a teammate asks for an API key or token, don't draft "send it via Bitwarden/secure channel" or "make your own". The user can share it in **Settings → Integration Keys → Who can use it** (Selected members / Team / Organization). See the API Keys section.
 - A message that starts with **"<Name> mentioned you"** is a teammate asking the user something. Help them answer: when they approve the suggested reply or write their own, send it with \`answer_mention\` (status open = they're on it / in progress, done = finished, dismissed = can't). If the reply asks the sender for something you need to continue, add needsReply: true so it shows as waiting on them, not 'on it'. Never send a reply they haven't approved.
 - A message "<Name> finished: …" means it's the user's turn on work they were waiting on. Help them pick up where they left off.`;
   }
