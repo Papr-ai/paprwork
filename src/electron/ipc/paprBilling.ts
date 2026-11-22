@@ -736,7 +736,10 @@ async function createCustomerPortalUrl(customerId: string): Promise<string> {
   const response = await fetch(`${PAPR_PLATFORM_URL}/api/createCustomerPortalSession`, {
     method: "POST",
     headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ customerId }),
+    // source: "desktop" → Stripe's "Return to Papr" opens Papr Work (public
+    // /billing/return page) instead of the dashboard, whose first-visit setup used to
+    // create a second org for desktop users.
+    body: JSON.stringify({ customerId, source: "desktop" }),
   });
 
   const data = (await response.json()) as { url?: string; error?: string };

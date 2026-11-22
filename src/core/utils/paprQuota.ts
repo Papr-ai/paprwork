@@ -3,7 +3,8 @@
  * Used by gateway services, tools, and the renderer quota banner.
  */
 
-export const PAPR_USAGE_URL = "https://dashboard.papr.ai/usage";
+/** Upgrades live in Papr Work Settings → Billing (deep link), not the developer dashboard. */
+export const PAPR_USAGE_URL = "papr://billing";
 
 export type PaprQuotaKind =
   | "operations"
@@ -305,10 +306,10 @@ function friendlyDetail(rawMessage: string, kind: PaprQuotaKind): string {
   }
 
   if (kind === "unknown") {
-    return `${defaultDetail(kind)} Visit Papr to upgrade your plan or enable metered billing.`;
+    return `${defaultDetail(kind)} Open Settings → Billing to upgrade your plan.`;
   }
 
-  return `${defaultDetail(kind)} Visit Papr to upgrade or enable metered billing.`;
+  return `${defaultDetail(kind)} Open Settings → Billing to upgrade.`;
 }
 
 export function parsePaprQuotaError(

@@ -1555,7 +1555,7 @@ Full guide: \`src/resources/agent-docs/APP_FILES_GUIDE.md\` § Agent-generated i
   private buildMemoryToolsSection(): string {
     return `# Papr Memory Tools
 
-**Requires PAPR_API_KEY.** If not configured, tell the user they can get a free API key at **https://dashboard.papr.ai** and set it in Settings. Memory tools will fail without this key.
+**Requires Papr sign-in.** Signing in to Papr Work sets up memory automatically (no API key to copy). If memory tools fail with a missing key, tell the user to sign in under **Settings → Account**. For plans, credits, upgrades, invoices or payment methods, send them to **Settings → Billing** in Papr Work — everything is managed there. Do NOT send Papr Work users to dashboard.papr.ai: that is the developer dashboard for building on the Memory API, and visiting it is never needed to use Papr Work.
 
 ## When to Use Each Tool
 
