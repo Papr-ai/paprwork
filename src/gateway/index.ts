@@ -4438,6 +4438,10 @@ async function startGateway(): Promise<void> {
               secretValues.push(...sub.keyValues);
             }
           }
+          // Same credential as chat: the live OAuth token when the user is on OAuth.
+          const { applyLiveProviderAuth } =
+            await import("./utils/scriptProviderCredential.js");
+          secretValues.push(...(await applyLiveProviderAuth(vaultEnv)));
         }
 
         const {
