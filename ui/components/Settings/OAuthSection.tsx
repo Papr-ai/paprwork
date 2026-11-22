@@ -326,9 +326,13 @@ export function OAuthSection({
     setApiKeyError("");
     try {
       const existingKey = keys.find(k => k.name === apiKeyName);
-      if (existingKey) {
+      if (existingKey && existingKey.managedBy !== "oauth") {
         await updateKey(existingKey.id, { value: trimmed });
       } else {
+        // An OAuth-managed slot holds the sign-in token. Writing the API key into
+        // it kept the "OAuth (Auto-managed)" labels, so the key read as a sign-in
+        // everywhere. Replace the entry so it is recorded as the user's own key.
+        if (existingKey) await deleteKey(existingKey.id);
         await addKey({ name: apiKeyName, value: trimmed, description: `${title} API Key`, permission: "always" });
       }
       setApiKeySaved(true);
