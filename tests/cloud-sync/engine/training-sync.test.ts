@@ -8,6 +8,7 @@ import {
 import {
   applySearchTags,
   attachTrainingPayload,
+  isTrainingAvailable,
   isTrainingOptedIn,
   recordSearchOnToolCall,
   resetSearchTagsForTests,
@@ -43,7 +44,11 @@ function trainingBlock(b: ReturnType<typeof body>): TrainingToolBlock[] | undefi
   return t?.calls;
 }
 
+const prevProfile = process.env.PAPR_PROFILE;
+
 beforeEach(() => {
+  // Training sync is development-only; most tests run as the dev profile.
+  process.env.PAPR_PROFILE = "dev";
   uploads.length = 0;
   resetSearchTagsForTests();
   setTrainingUploaderForTests(async (_text, sha256, bytes) => {
@@ -53,8 +58,36 @@ beforeEach(() => {
 });
 
 afterEach(() => {
+  if (prevProfile === undefined) delete process.env.PAPR_PROFILE;
+  else process.env.PAPR_PROFILE = prevProfile;
+  delete process.env.PAPR_TRAINING_SYNC;
   setTrainingConsentFetcherForTests(null);
   setTrainingUploaderForTests(null);
+});
+
+describe("development only", () => {
+  test("production profile never opts in, even when the account says yes", async () => {
+    delete process.env.PAPR_PROFILE;
+    setTrainingConsentFetcherForTests(async () => true);
+    expect(isTrainingAvailable()).toBe(false);
+    expect(await isTrainingOptedIn()).toBe(false);
+  });
+
+  test("production profile adds no training payload", async () => {
+    delete process.env.PAPR_PROFILE;
+    setTrainingConsentFetcherForTests(async () => true);
+    const m = msg([{ id: "t1", name: "bash", args: { command: "ls" }, result: "a.ts" } as never]);
+    const b = body(m);
+    expect(await attachTrainingPayload(b, m, async () => undefined)).toBe(false);
+    expect(trainingBlock(b)).toBeUndefined();
+    expect(uploads).toHaveLength(0);
+  });
+
+  test("dev profile is available; PAPR_TRAINING_SYNC=0 turns it off", () => {
+    expect(isTrainingAvailable()).toBe(true);
+    process.env.PAPR_TRAINING_SYNC = "0";
+    expect(isTrainingAvailable()).toBe(false);
+  });
 });
 
 describe("consent", () => {

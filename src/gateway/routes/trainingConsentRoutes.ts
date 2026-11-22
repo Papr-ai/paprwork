@@ -1,22 +1,27 @@
 /**
  * Training opt-in — the one switch.
  *
- *   GET /api/training/consent   -> { signedIn, optedIn, asked, version }
+ *   GET /api/training/consent   -> { available, signedIn, optedIn, asked, version }
  *   PUT /api/training/consent   { optedIn } -> same shape
  *
  * The choice is stored on the Papr account (memory: /v1/training/consent) so
  * every device, cloud agent and job reads the same answer. `asked` is local:
  * whether this install already showed the one-time prompt.
+ *
+ * Development-only: outside the dev profile GET reports available:false (the UI
+ * hides the switch and the prompt) and PUT refuses, so production never asks.
  */
 import type { Express } from "express";
 import { promises as fs } from "fs";
 import path from "path";
 import {
+  isTrainingAvailable,
   setTrainingOptInCache,
   TRAINING_CONSENT_VERSION,
 } from "../services/storage/trainingSync.js";
 
 interface ConsentState {
+  available: boolean;
   signedIn: boolean;
   optedIn: boolean;
   asked: boolean;
@@ -49,10 +54,14 @@ async function markAsked(file: string): Promise<void> {
 
 export function registerTrainingConsentRoutes(app: Express, deps: TrainingConsentDeps): void {
   app.get("/api/training/consent", async (_req, res) => {
+    if (!isTrainingAvailable()) {
+      res.json({ available: false, signedIn: false, optedIn: false, asked: true, version: TRAINING_CONSENT_VERSION } satisfies ConsentState);
+      return;
+    }
     const asked = await wasAsked(deps.askedFile());
     const client = await deps.getClient().catch(() => null);
     if (!client) {
-      res.json({ signedIn: false, optedIn: false, asked, version: TRAINING_CONSENT_VERSION } satisfies ConsentState);
+      res.json({ available: true, signedIn: false, optedIn: false, asked, version: TRAINING_CONSENT_VERSION } satisfies ConsentState);
       return;
     }
     try {
@@ -61,13 +70,17 @@ export function registerTrainingConsentRoutes(app: Express, deps: TrainingConsen
       setTrainingOptInCache(optedIn);
       // A choice made under older wording counts as not asked, so the prompt re-appears.
       const current = !r?.version || r.version === TRAINING_CONSENT_VERSION;
-      res.json({ signedIn: true, optedIn, asked: asked && current, version: TRAINING_CONSENT_VERSION } satisfies ConsentState);
+      res.json({ available: true, signedIn: true, optedIn, asked: asked && current, version: TRAINING_CONSENT_VERSION } satisfies ConsentState);
     } catch (err) {
       res.status(502).json({ error: (err as Error).message });
     }
   });
 
   app.put("/api/training/consent", async (req, res) => {
+    if (!isTrainingAvailable()) {
+      res.status(404).json({ error: "Training opt-in is not available in this build" });
+      return;
+    }
     const optedIn = (req.body as { optedIn?: unknown } | undefined)?.optedIn;
     if (typeof optedIn !== "boolean") {
       res.status(400).json({ error: "optedIn must be a boolean" });
@@ -85,7 +98,7 @@ export function registerTrainingConsentRoutes(app: Express, deps: TrainingConsen
       });
       setTrainingOptInCache(optedIn);
       await markAsked(deps.askedFile());
-      res.json({ signedIn: true, optedIn, asked: true, version: TRAINING_CONSENT_VERSION } satisfies ConsentState);
+      res.json({ available: true, signedIn: true, optedIn, asked: true, version: TRAINING_CONSENT_VERSION } satisfies ConsentState);
     } catch (err) {
       res.status(502).json({ error: (err as Error).message });
     }

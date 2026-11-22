@@ -5,6 +5,11 @@
  *
  * The choice lives on the Papr account, so it applies to every device, cloud
  * agent and job. Copy is deliberately plain; the legal text is linked.
+ *
+ * DEVELOPMENT ONLY. Both components render nothing unless this is a Vite dev
+ * build (import.meta.env.DEV, a literal false in packaged builds) AND the
+ * gateway reports available (PAPR_PROFILE=dev). Do not ship to production
+ * without a product + privacy-policy decision.
  */
 import { useCallback, useEffect, useState } from "react";
 import { SettingRow } from "./SettingRow";
@@ -21,7 +26,10 @@ export const TRAINING_HINT =
   "Lets Papr use your chats, the searches and tool calls in them, and how your apps run to train its models. Off by default. You can turn it off any time.";
 const PRIVACY_URL = "https://papr.ai/privacy";
 
+const TRAINING_DEV_ONLY = import.meta.env.DEV === true;
+
 interface ConsentState {
+  available?: boolean;
   signedIn: boolean;
   optedIn: boolean;
   asked: boolean;
@@ -32,6 +40,7 @@ function useTrainingConsent() {
   const [saving, setSaving] = useState(false);
 
   useEffect(() => {
+    if (!TRAINING_DEV_ONLY) return;
     let live = true;
     fetch(`${GATEWAY}/api/training/consent`)
       .then((r) => (r.ok ? r.json() : null))
@@ -62,7 +71,7 @@ function useTrainingConsent() {
 /** Settings → Privacy row. */
 export function TrainingConsentRow() {
   const { state, saving, save } = useTrainingConsent();
-  if (!state) return null;
+  if (!TRAINING_DEV_ONLY || !state?.available) return null;
   return (
     <SettingRow
       label={TRAINING_LABEL}
@@ -82,7 +91,7 @@ export function TrainingConsentRow() {
 /** One-time card after sign-in. Renders nothing once the user has chosen. */
 export function TrainingConsentPrompt() {
   const { state, saving, save } = useTrainingConsent();
-  if (!state || !state.signedIn || state.asked) return null;
+  if (!TRAINING_DEV_ONLY || !state?.available || !state.signedIn || state.asked) return null;
   return (
     <div className="training-consent-card" role="dialog" aria-label={TRAINING_LABEL}>
       <div className="training-consent-card__title">{TRAINING_LABEL}?</div>

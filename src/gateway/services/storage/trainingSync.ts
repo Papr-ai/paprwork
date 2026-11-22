@@ -75,9 +75,20 @@ async function defaultFetchConsent(): Promise<boolean> {
   return res?.opted_in === true;
 }
 
+/**
+ * Training sync is development-only for now: it runs only in the dev profile
+ * (`npm run dev:devenv`, PAPR_PROFILE=dev, against memoryserver-development).
+ * Production builds never ask, never read consent and never upload.
+ * PAPR_TRAINING_SYNC=0 turns it off even in dev.
+ */
+export function isTrainingAvailable(): boolean {
+  if (process.env.PAPR_TRAINING_SYNC === "0") return false;
+  return (process.env.PAPR_PROFILE || "").trim().toLowerCase() === "dev";
+}
+
 /** Cached account consent. Any error → false (never upload on doubt). */
 export async function isTrainingOptedIn(now = Date.now()): Promise<boolean> {
-  if (process.env.PAPR_TRAINING_SYNC === "0") return false;
+  if (!isTrainingAvailable()) return false;
   if (consentCache && now - consentCache.at < CONSENT_TTL_MS) return consentCache.value;
   let value = false;
   try {
