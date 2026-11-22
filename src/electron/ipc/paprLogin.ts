@@ -98,7 +98,9 @@ import {
 } from "../../core/papr/provisioningDefaults.js";
 import {
   GET_WORKSPACE_ORG_CLAIM_STATE,
+  LINK_ORG_SUBSCRIPTION,
   UPDATE_WORKSPACE_ORG,
+  readSubscriptionPointerId,
 } from "../../core/papr/paprLoginGraphql.js";
 
 /**
@@ -2218,7 +2220,7 @@ async function provisionNewOrgNamespace(
     // linked an org in between, and losing that pointer is unrecoverable.
     const claimState = (await parseGraphQL(sessionToken, GET_WORKSPACE_ORG_CLAIM_STATE, {
       workspaceId,
-    })) as { workSpace?: { organization?: { objectId?: string } } };
+    })) as { workSpace?: { subscription?: unknown; organization?: { objectId?: string } } };
     const currentOrgId = claimState.workSpace?.organization?.objectId;
 
     if (currentOrgId && currentOrgId !== orgId) {
@@ -2231,6 +2233,7 @@ async function provisionNewOrgNamespace(
         workspaceId,
         organizationId: orgId,
       });
+      await linkWorkspaceSubscription(sessionToken, orgId, claimState.workSpace?.subscription);
     }
   }
 
@@ -2242,6 +2245,30 @@ async function provisionNewOrgNamespace(
     workspaceId || "",
     namespaceName,
   );
+}
+
+/**
+ * Give a newly created org the workspace's Subscription (Stripe customer). Without
+ * it the dashboard saw an org with no billing and created a second org on first
+ * visit, and checkout billed that one while this app's key stayed on the first.
+ * Best effort: the org is usable without it, and the dashboard now reuses it anyway.
+ */
+async function linkWorkspaceSubscription(
+  sessionToken: string,
+  orgId: string,
+  workspaceSubscription: unknown,
+): Promise<void> {
+  const subscriptionId = readSubscriptionPointerId(workspaceSubscription);
+  if (!subscriptionId) return;
+  try {
+    await parseGraphQL(sessionToken, LINK_ORG_SUBSCRIPTION, {
+      organizationId: orgId,
+      subscriptionId,
+    });
+    console.log(`[PaprLogin] Linked workspace subscription ${subscriptionId} to org ${orgId}`);
+  } catch (error) {
+    console.warn(`[PaprLogin] Could not link subscription to org ${orgId}:`, error);
+  }
 }
 
 /**
@@ -3463,12 +3490,16 @@ async function finalizeLoginWithProvisioning(
     completedSource,
   } = auth;
 
-  const provision = await provisionOrGetApiKey(
-    parseSessionToken,
-    objectId,
-    email || "user",
-    workspaceInfo.workspaceId,
-    names,
+  // One provisioning run per user at a time: a quick retry (second click, second
+  // callback) used to race the first and create a second org on the same workspace.
+  const provision = await coalesce(`papr-provision:${objectId}`, () =>
+    provisionOrGetApiKey(
+      parseSessionToken,
+      objectId,
+      email || "user",
+      workspaceInfo.workspaceId,
+      names,
+    ),
   );
   trackLoginStep("api_key_provisioned", {
     organization_id: provision.organizationId,

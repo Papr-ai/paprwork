@@ -736,7 +736,10 @@ async function createCustomerPortalUrl(customerId: string): Promise<string> {
   const response = await fetch(`${PAPR_PLATFORM_URL}/api/createCustomerPortalSession`, {
     method: "POST",
     headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ customerId }),
+    // source: "desktop" → Stripe's "Return to Papr" opens Papr Work (public
+    // /billing/return page) instead of the dashboard, whose first-visit setup used to
+    // create a second org for desktop users.
+    body: JSON.stringify({ customerId, source: "desktop" }),
   });
 
   const data = (await response.json()) as { url?: string; error?: string };
@@ -779,9 +782,15 @@ async function createCheckoutUrl(input: {
  */
 async function createCreditsCheckoutUrl(
   sessionToken: string,
-  body:
+  body: (
     | { workspaceId: string; kind: "plan"; plan: PaprCreditPlanId; seats: number }
-    | { workspaceId: string; kind: "expert_build"; size: PaprExpertBuildSize; notes?: string },
+    | { workspaceId: string; kind: "expert_build"; size: PaprExpertBuildSize; notes?: string }
+  ) & {
+    /** The org this app's API key meters against. The dashboard verifies it belongs to
+     *  workspaceId; without it, checkout bills WorkSpace.organization, which can be a
+     *  different org on the same workspace (paid plan lands where we don't meter). */
+    organizationId?: string;
+  },
 ): Promise<string> {
   const response = await fetch(`${PAPR_PLATFORM_URL}/api/v1/billing/credits-checkout`, {
     method: "POST",
@@ -924,6 +933,7 @@ export function registerPaprBillingHandlers(deps: {
           : countSeatHolders(await fetchWorkspaceMembers(profile.sessionToken!, profile.workspaceId!));
         const url = await createCreditsCheckoutUrl(profile.sessionToken!, {
           workspaceId: profile.workspaceId!,
+          organizationId: profile.organizationId || undefined,
           kind: "plan",
           plan: input.plan,
           seats,
@@ -992,6 +1002,7 @@ export function registerPaprBillingHandlers(deps: {
         const profile = requireLoggedInProfile(deps.settingsStorage);
         const url = await createCreditsCheckoutUrl(profile.sessionToken!, {
           workspaceId: profile.workspaceId!,
+          organizationId: profile.organizationId || undefined,
           kind: "expert_build",
           size: input.size,
           notes: typeof input.notes === "string" ? input.notes.slice(0, 450) : undefined,
