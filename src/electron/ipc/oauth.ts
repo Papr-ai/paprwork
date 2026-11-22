@@ -214,7 +214,17 @@ async function syncOAuthTokenToApiKeys(
       oauthProvider: provider,
     };
 
-    if (existingKeyMetadata) {
+    if (
+      existingKeyMetadata &&
+      existingKeyMetadata.managedBy !== "oauth" &&
+      existingKeyMetadata.source !== "oauth"
+    ) {
+      // The user saved their own API key here (Settings → API key mode). A token
+      // refresh must not overwrite it; scripts get the live OAuth token at run
+      // time instead (scriptProviderCredential), so nothing needs this slot.
+      invalidateKeyCache(keyName, true);
+      console.log(`[OAuth IPC] Kept user-saved ${keyName}; OAuth token not copied over it`);
+    } else if (existingKeyMetadata) {
       await customKeysStorage.updateKey(existingKeyMetadata.id, {
         value: cleanToken,
         ...oauthKeyFields,
