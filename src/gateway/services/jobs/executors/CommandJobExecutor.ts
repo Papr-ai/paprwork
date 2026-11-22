@@ -279,6 +279,13 @@ export class CommandJobExecutor implements IJobExecutor {
       );
     }
 
+    // The stored OPENAI_/ANTHROPIC_API_KEY can lag the user's live sign-in (or
+    // hold an API key they saved, then switched away from). Use the credential
+    // chat uses: the live OAuth token whenever the user is on OAuth.
+    const { applyLiveProviderAuth } =
+      await import("../../../utils/scriptProviderCredential.js");
+    await applyLiveProviderAuth(customKeys);
+
     for (const keyName of requiredKeys) {
       if (!customKeys[keyName]) {
         throw new Error(
