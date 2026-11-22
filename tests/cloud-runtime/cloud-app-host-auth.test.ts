@@ -43,6 +43,31 @@ describe("paprAuth0Pkce", () => {
     expect(url.searchParams.get("code_challenge_method")).toBe("S256");
   });
 
+  it("phone mode goes straight to the Auth0 SMS connection", () => {
+    const config = getCloudAppHostAuth0Config("https://apps.papr.ai");
+    const url = buildAuth0AuthorizeUrl(config, {
+      state: "s",
+      codeChallenge: generateCodeChallenge(generateCodeVerifier()),
+      mode: "phone",
+    });
+    expect(url.searchParams.get("connection")).toBe("sms");
+    expect(url.searchParams.get("screen_hint")).toBeNull();
+    const login = buildAuth0AuthorizeUrl(config, { state: "s", codeChallenge: "c", mode: "login" });
+    expect(login.searchParams.get("connection")).toBeNull();
+  });
+
+  it("passes the one-box value to Auth0 as login_hint", () => {
+    const config = getCloudAppHostAuth0Config("https://apps.papr.ai");
+    const phone = buildAuth0AuthorizeUrl(config, { state: "s", codeChallenge: "c", mode: "phone", loginHint: "+12065550123" });
+    expect(phone.searchParams.get("connection")).toBe("sms");
+    expect(phone.searchParams.get("login_hint")).toBe("+12065550123");
+    const email = buildAuth0AuthorizeUrl(config, { state: "s", codeChallenge: "c", mode: "login", loginHint: "a@b.co" });
+    expect(email.searchParams.get("login_hint")).toBe("a@b.co");
+    expect(email.searchParams.get("connection")).toBeNull();
+    const plain = buildAuth0AuthorizeUrl(config, { state: "s", codeChallenge: "c" });
+    expect(plain.searchParams.get("login_hint")).toBeNull();
+  });
+
   it("extracts Parse session claims from JWT payload", () => {
     const payload = Buffer.from(
       JSON.stringify({
