@@ -2615,6 +2615,26 @@ export const listAppsTool = createTool({
       favorite: app.favorite,
     }));
 
+    // Cloud runs start with no apps on disk: also list the user's published apps (their own
+    // can be opened and edited by id; the code loads on first use) with their real links.
+    let cloudApps: Array<Record<string, unknown>> | undefined;
+    if (process.env.GATEWAY_MODE === "cloud_agent") {
+      const { fetchCloudAccessibleApps, isOwnCatalogApp } = await import(
+        "../../gateway/services/cloudAgentGateway/cloudAppCatalog.js"
+      );
+      const local = new Set(appsData.map((a) => a.id));
+      cloudApps = (await fetchCloudAccessibleApps())
+        .filter((a) => !local.has(a.appId))
+        .map((a) => ({
+          id: a.appId,
+          title: a.name ?? a.slug,
+          description: a.catalogHeadline ?? a.description ?? undefined,
+          link: a.shareUrl,
+          updatedAt: a.updatedAt ?? undefined,
+          editable: isOwnCatalogApp(a),
+        }));
+    }
+
     const workspace = getPaprWorkspacePathsForAgent();
 
     return {
@@ -2622,6 +2642,13 @@ export const listAppsTool = createTool({
       data: {
         apps: asToonOrRows("apps", appsData),
         count: appsData.length,
+        ...(cloudApps
+          ? {
+              publishedApps: cloudApps,
+              publishedAppsTip:
+                "Their published apps. Share only these links. To change one marked editable, use its id with read_app_file / edit_app_file (the code loads on first use) — do not create a new app.",
+            }
+          : {}),
         appsRoot: workspace.appsRoot,
         paprHome: workspace.paprHome,
         tip:
