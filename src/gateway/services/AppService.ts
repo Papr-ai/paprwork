@@ -1415,7 +1415,10 @@ export class AppService {
     // "not found" — which the caller reports as the app not being here.
     await this.initialize();
 
-    const app = this.apps.get(id);
+    let app = this.apps.get(id);
+    if (!app && process.env.GATEWAY_MODE === "cloud_agent") {
+      app = (await this.hydrateCloudCatalogApp(id)) ?? undefined;
+    }
     if (!app) {
       return null;
     }
@@ -2035,6 +2038,41 @@ export class AppService {
       .catch(() => {
         /* non-fatal */
       });
+  }
+
+  /**
+   * Cloud workspace runs start with no apps on disk. When the agent asks for one of the
+   * user's own published apps, load its code from the app repo and index it so the normal
+   * read/edit tools (and the writer push) work on the real app instead of a new copy.
+   */
+  private async hydrateCloudCatalogApp(id: string): Promise<MiniApp | null> {
+    try {
+      const { fetchCloudAccessibleApps, isOwnCatalogApp, cloneCatalogAppIntoSandbox } =
+        await import("./cloudAgentGateway/cloudAppCatalog.js");
+      const entry = (await fetchCloudAccessibleApps()).find((a) => a.appId === id);
+      if (!entry || !isOwnCatalogApp(entry)) return null;
+      if (!(await cloneCatalogAppIntoSandbox(this.appsDir, id))) return null;
+      const hints = await this.readMetadataHintsFromAppDir(path.join(this.appsDir, id));
+      const now = new Date().toISOString();
+      const scope = readActiveAppWorkspaceScope();
+      const app: MiniApp = {
+        id,
+        title: hints.title ?? entry.name ?? entry.slug ?? id,
+        description: hints.description ?? entry.description ?? "",
+        type: "app",
+        createdAt: now,
+        updatedAt: hints.updatedAt ?? entry.updatedAt ?? now,
+        ownerUserId: getPaprUserId()!.trim(),
+        ...(scope ? withWorkspaceScope({}, scope) : {}),
+        ...((hints.icon ?? entry.icon) ? { icon: (hints.icon ?? entry.icon)! } : {}),
+      };
+      this.apps.set(id, app);
+      await this.saveApps();
+      return app;
+    } catch (err) {
+      console.warn(`[AppService] Could not load cloud app ${id}:`, (err as Error).message);
+      return null;
+    }
   }
 
   async listApps(): Promise<MiniApp[]> {
