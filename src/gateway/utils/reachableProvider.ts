@@ -35,6 +35,7 @@ function sameFamily(a: Provider, b: Provider): boolean {
 export async function findReachableProvider(
   exclude: readonly Provider[] = [],
   order: readonly Provider[] = REACHABLE_PROVIDER_ORDER,
+  options: { directOnly?: boolean } = {},
 ): Promise<ReachableProvider | null> {
   for (const provider of order) {
     if (exclude.some((e) => sameFamily(e, provider))) continue;
@@ -42,7 +43,10 @@ export async function findReachableProvider(
     if (!model) continue;
     try {
       const creds = await resolveAgentProviderCredentials(provider, model);
-      if (creds) return { provider, model, creds };
+      // directOnly: the user's own OAuth/API key, not the Papr proxy.
+      if (creds && !(options.directOnly && creds.usePaprProxy)) {
+        return { provider, model, creds };
+      }
     } catch {
       // Treat a resolver failure as "not reachable" and try the next provider.
     }

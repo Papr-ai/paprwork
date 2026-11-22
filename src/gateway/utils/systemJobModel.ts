@@ -5,47 +5,29 @@
  * the Papr proxy, failed in about a second with a full context sent, and only
  * then fell back to the provider they actually connected.
  *
- * Pick the strong model of a provider the user connected directly, in the same
- * order as the main chat default (Claude, then OpenAI, then Google). Returns
- * null when nothing is connected directly, so the caller keeps the stored
- * default (Papr proxy users).
+ * Uses the same pick as chat Auto and job auth-refusal retries
+ * (findReachableProvider: Claude → OpenAI → Google, strong ladder rung),
+ * limited to credentials the user connected directly. Works on desktop and in
+ * the cloud gateway (keyResolver reads vault env there). Returns null when
+ * nothing is connected directly, so the stored default (Papr proxy) is kept.
  */
 
 import type { Provider } from "../../core/types/agents.js";
-import { DEFAULT_AUTO_LADDERS } from "../../core/agents/autoLadders.js";
 
 export interface SystemJobProviderModel {
   provider: Provider;
   model: string;
 }
 
-function strongModel(provider: Provider): string | null {
-  return DEFAULT_AUTO_LADDERS[provider]?.models.strong ?? null;
-}
-
 export async function resolveSystemJobProviderModel(): Promise<SystemJobProviderModel | null> {
-  const { getProviderAuth, getApiKeys } = await import("./keyResolver.js");
-
-  for (const provider of ["anthropic", "openai"] as const) {
-    try {
-      if (await getProviderAuth(provider)) {
-        const model = strongModel(provider);
-        if (model) return { provider, model };
-      }
-    } catch {
-      // try the next provider
-    }
-  }
-
-  try {
-    const keys = await getApiKeys(["GOOGLE_GENERATIVE_AI_API_KEY", "GOOGLE_API_KEY"]);
-    if (keys.GOOGLE_GENERATIVE_AI_API_KEY || keys.GOOGLE_API_KEY) {
-      const model = strongModel("google");
-      if (model) return { provider: "google", model };
-    }
-  } catch {
-    // fall through
-  }
-
-  return null;
+  const { findReachableProvider, REACHABLE_PROVIDER_ORDER } = await import(
+    "./reachableProvider.js"
+  );
+  const { autoRefusedProviders } = await import("./autoProviderHealth.js");
+  const next = await findReachableProvider(
+    autoRefusedProviders(),
+    REACHABLE_PROVIDER_ORDER,
+    { directOnly: true },
+  );
+  return next ? { provider: next.provider, model: next.model } : null;
 }

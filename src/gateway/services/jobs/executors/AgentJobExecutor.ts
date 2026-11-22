@@ -193,10 +193,9 @@ export class AgentJobExecutor implements IJobExecutor {
 
     // Sleep Cycle / Wiki Writer are seeded on Claude. Run them on a provider
     // the user actually connected instead of failing on Claude first.
-    if (
-      process.env.GATEWAY_MODE !== "cloud_agent" &&
-      isOnSeededSystemJobModel(params.job.name, provider, model)
-    ) {
+    // Desktop and cloud both build the session here; in the cloud the
+    // credential memory sends still has the final say (pickCloudJobProviderModel).
+    if (isOnSeededSystemJobModel(params.job.name, provider, model)) {
       const picked = await resolveSystemJobProviderModel();
       if (picked) {
         provider = picked.provider;

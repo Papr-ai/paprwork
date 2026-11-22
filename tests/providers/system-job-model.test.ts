@@ -1,38 +1,38 @@
 import { beforeEach, describe, expect, test, vi } from "vitest";
 import { resolveSystemJobProviderModel } from "../../src/gateway/utils/systemJobModel.js";
+import { findReachableProvider } from "../../src/gateway/utils/reachableProvider.js";
 import { DEFAULT_AUTO_LADDERS } from "../../src/core/agents/autoLadders.js";
 
-vi.mock("../../src/gateway/utils/keyResolver.js", () => ({
-  getProviderAuth: vi.fn(),
-  getApiKeys: vi.fn(),
+vi.mock("../../src/gateway/utils/resolveAgentProviderCredentials.js", () => ({
+  resolveAgentProviderCredentials: vi.fn(),
 }));
 
-import { getApiKeys, getProviderAuth } from "../../src/gateway/utils/keyResolver.js";
+import { resolveAgentProviderCredentials } from "../../src/gateway/utils/resolveAgentProviderCredentials.js";
 
 const strong = (p: "anthropic" | "openai" | "google") =>
   DEFAULT_AUTO_LADDERS[p]!.models.strong;
+const direct = { apiKey: "k", authType: "oauth" as const };
+const proxy = { apiKey: "papr", authType: "apiKey" as const, usePaprProxy: true };
+
+function connected(map: Partial<Record<string, typeof direct | typeof proxy>>) {
+  vi.mocked(resolveAgentProviderCredentials).mockImplementation(
+    async (p) => map[p] ?? null,
+  );
+}
 
 describe("resolveSystemJobProviderModel", () => {
-  beforeEach(() => {
-    vi.mocked(getProviderAuth).mockReset();
-    vi.mocked(getApiKeys).mockReset();
-    vi.mocked(getApiKeys).mockResolvedValue({});
-  });
+  beforeEach(() => vi.mocked(resolveAgentProviderCredentials).mockReset());
 
   test("keeps Claude when Claude is connected", async () => {
-    vi.mocked(getProviderAuth).mockImplementation(async (p) =>
-      p === "anthropic" ? { type: "oauth", token: "t" } : null,
-    );
+    connected({ anthropic: direct, openai: direct });
     expect(await resolveSystemJobProviderModel()).toEqual({
       provider: "anthropic",
       model: strong("anthropic"),
     });
   });
 
-  test("uses OpenAI on ChatGPT sign-in when Claude is not connected", async () => {
-    vi.mocked(getProviderAuth).mockImplementation(async (p) =>
-      p === "openai" ? { type: "oauth", token: "t" } : null,
-    );
+  test("ChatGPT-only user on Papr login: skips Claude-via-proxy, uses OpenAI", async () => {
+    connected({ anthropic: proxy, openai: direct, google: proxy });
     expect(await resolveSystemJobProviderModel()).toEqual({
       provider: "openai",
       model: strong("openai"),
@@ -40,27 +40,37 @@ describe("resolveSystemJobProviderModel", () => {
   });
 
   test("uses Google when only a Gemini key is set", async () => {
-    vi.mocked(getProviderAuth).mockResolvedValue(null);
-    vi.mocked(getApiKeys).mockResolvedValue({ GOOGLE_API_KEY: "g" });
+    connected({ anthropic: proxy, openai: proxy, google: { apiKey: "g", authType: "apiKey" } });
     expect(await resolveSystemJobProviderModel()).toEqual({
       provider: "google",
       model: strong("google"),
     });
   });
 
-  test("returns null with no direct connection (Papr proxy keeps stored default)", async () => {
-    vi.mocked(getProviderAuth).mockResolvedValue(null);
+  test("returns null when only the Papr proxy is available", async () => {
+    connected({ anthropic: proxy, openai: proxy, google: proxy });
     expect(await resolveSystemJobProviderModel()).toBeNull();
   });
 
-  test("a failing auth lookup does not stop the search", async () => {
-    vi.mocked(getProviderAuth).mockImplementation(async (p) => {
+  test("a failing credential lookup does not stop the search", async () => {
+    vi.mocked(resolveAgentProviderCredentials).mockImplementation(async (p) => {
       if (p === "anthropic") throw new Error("ipc timeout");
-      return { type: "apiKey", key: "sk" };
+      return direct;
     });
     expect(await resolveSystemJobProviderModel()).toEqual({
       provider: "openai",
       model: strong("openai"),
     });
+  });
+});
+
+describe("findReachableProvider directOnly", () => {
+  beforeEach(() => vi.mocked(resolveAgentProviderCredentials).mockReset());
+
+  test("default still accepts the Papr proxy (chat / retry behaviour unchanged)", async () => {
+    connected({ anthropic: proxy });
+    const r = await findReachableProvider();
+    expect(r?.provider).toBe("anthropic");
+    expect(r?.creds.usePaprProxy).toBe(true);
   });
 });
