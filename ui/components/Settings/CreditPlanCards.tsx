@@ -104,6 +104,19 @@ function LocalCard(props: CardProps) {
   );
 }
 
+/** mailto: links do nothing inside the app window; hand it to the OS mail app. */
+function ContactSales() {
+  return (
+    <button
+      type="button"
+      className="cpc-btn"
+      onClick={() => void window.electronAPI.system.invoke("shell.openExternal", PAPR_ENTERPRISE_PLAN.contact)}
+    >
+      Contact sales
+    </button>
+  );
+}
+
 function EnterpriseCard() {
   return (
     <div className="cpc-card">
@@ -111,7 +124,7 @@ function EnterpriseCard() {
       <p className="cpc-blurb">{PAPR_ENTERPRISE_PLAN.blurb}</p>
       <div className="cpc-price"><b>Custom</b></div>
       <div className="cpc-cred">{PAPR_ENTERPRISE_PLAN.creditsLine}</div>
-      <a className="cpc-btn" href={PAPR_ENTERPRISE_PLAN.contact}>Contact sales</a>
+      <ContactSales />
       <div className="cpc-plus">Everything in Cloud Max, plus:</div>
       <Features items={PAPR_ENTERPRISE_PLAN.features} />
     </div>
@@ -153,7 +166,7 @@ function SplitPlans(props: CardProps & { plans: [PaprCreditPlanCard, PaprCreditP
       {team ? (
         <WideRow name={PAPR_ENTERPRISE_PLAN.name} blurb={PAPR_ENTERPRISE_PLAN.blurb} price="Custom"
           line={PAPR_ENTERPRISE_PLAN.creditsLine}
-          action={<a className="cpc-btn" href={PAPR_ENTERPRISE_PLAN.contact}>Contact sales</a>} />
+          action={<ContactSales />} />
       ) : (
         <WideRow name={PAPR_LOCAL_PLAN.name} blurb={PAPR_LOCAL_PLAN.blurb} price="Free"
           line={PAPR_LOCAL_PLAN.creditsLine}
