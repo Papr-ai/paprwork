@@ -580,10 +580,46 @@ export const CHAT_MODELS: AIModel[] = [
     requiresApiKey: "GOOGLE_GENERATIVE_AI_API_KEY",
   },
   {
+    id: "gemini-4-carbon",
+    name: "Gemini 4 Carbon",
+    description:
+      "Strongest Gemini — hardest software engineering, math and science, long autonomous agents",
+    provider: "google",
+    group: "Google",
+    supportsThinking: true,
+    defaultThinkingBudget: 16000,
+    maxTokens: 65536,
+    requiresApiKey: "GOOGLE_GENERATIVE_AI_API_KEY",
+  },
+  {
+    id: "gemini-4-neon",
+    name: "Gemini 4 Neon",
+    description:
+      "Frontier Gemini with fast end-to-end task completion across coding and knowledge work",
+    provider: "google",
+    group: "Google",
+    supportsThinking: true,
+    defaultThinkingBudget: 16000,
+    maxTokens: 65536,
+    requiresApiKey: "GOOGLE_GENERATIVE_AI_API_KEY",
+  },
+  {
     id: "gemini-4-argon",
     name: "Gemini 4 Argon",
     description:
-      "Most capable Gemini — depth and precision for hard software engineering and knowledge work",
+      "Efficient Gemini 4 reasoning — faster and cheaper per turn than Carbon",
+    provider: "google",
+    group: "Google",
+    supportsThinking: true,
+    defaultThinkingBudget: 16000,
+    maxTokens: 65536,
+    requiresApiKey: "GOOGLE_GENERATIVE_AI_API_KEY",
+  },
+  {
+    id: "gemini-4-hydrogen",
+    name: "Gemini 4 Hydrogen",
+    description:
+      "Fast, efficient Gemini 4 for everyday coding and agent work",
     provider: "google",
     group: "Google",
     supportsThinking: true,

@@ -362,6 +362,23 @@
   flex-shrink: 0;
 }
 
+.model-badge-upgrade {
+  display: inline-flex;
+  align-items: center;
+  gap: 2px;
+  margin-left: 6px;
+  padding: 0 5px;
+  border-radius: 999px;
+  font-size: 10px;
+  font-weight: 600;
+  color: var(--accent, var(--link-color));
+  background: color-mix(in srgb, var(--accent, var(--link-color)) 12%, transparent);
+}
+
+.model-badge-upgrade svg {
+  flex-shrink: 0;
+}
+
 .model-badge-ram-warn {
   display: inline-flex;
   align-items: center;

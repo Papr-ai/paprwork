@@ -14,7 +14,12 @@ import { isPaprProxyOnlyModel } from "../../../src/core/constants/paprCloudFeatu
 import {
   checkPaprCloudFeature,
 } from "../../stores/paprCloudFeatureStore";
-import { showPaprCloudFeatureLock } from "../../utils/paprCloudFeatureUi";
+import { openPaprPlanSettings, showPaprCloudFeatureLock } from "../../utils/paprCloudFeatureUi";
+import { usePremiumAccessStore } from "../../stores/premiumAccessStore";
+import {
+  isPremiumProxyModel,
+  premiumRequiresPaygMessage,
+} from "../../../src/core/agents/premiumModels";
 import { getUnavailableModelMessage } from "../../utils/modelAvailabilityMessage";
 
 interface ModelPickerDropdownProps {
@@ -42,11 +47,13 @@ function ModelPickerRow({
   needsInstall,
   ramTight,
   compact,
+  needsUpgrade,
   onSelect,
 }: {
   model: AIModel;
   selected: boolean;
   available: boolean;
+  needsUpgrade?: boolean;
   needsInstall: boolean;
   ramTight: boolean;
   compact?: boolean;
@@ -59,7 +66,9 @@ function ModelPickerRow({
       onMouseDown={(e) => e.preventDefault()}
       onClick={onSelect}
       title={
-        !available
+        needsUpgrade
+          ? premiumRequiresPaygMessage(model.name)
+          : !available
           ? getUnavailableModelMessage(model)
           : ramTight
             ? "May need more RAM than this device"
@@ -71,7 +80,18 @@ function ModelPickerRow({
       <div className="model-picker-item-content">
         <div className="model-picker-item-name">
           {model.name}
-          {!available && (
+          {needsUpgrade && (
+            <span className="model-badge-upgrade" title="Turn on pay as you go to use this model">
+              <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round">
+                <path d="M12 15v2m-6 4h12a2 2 0 002-2v-6a2 2 0 00-2-2H6a2 2 0 00-2 2v6a2 2 0 002 2zm10-10V7a4 4 0 00-8 0v4h8z" />
+              </svg>
+              <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.75" strokeLinecap="round" strokeLinejoin="round">
+                <path d="M12 19V5M5 12l7-7 7 7" />
+              </svg>
+              <span>Upgrade</span>
+            </span>
+          )}
+          {!available && !needsUpgrade && (
             <span className="model-badge-locked" title="Add API key or connect OAuth">
               <svg
                 width="12"
@@ -154,10 +174,19 @@ export function ModelPickerDropdown({
     (model) => model.id !== recommendedLocalId,
   );
 
+  const premiumLocked = usePremiumAccessStore((state) => state.locked);
+  // Unavailable only because premium needs pay as you go (no own key/OAuth for it).
+  const needsUpgrade = (model: AIModel, available: boolean): boolean =>
+    !available && premiumLocked && isPremiumProxyModel(model.id);
+
   const handleSelect = (model: AIModel): void => {
     const available = isModelAvailable?.(model) ?? true;
     if (available) {
       onSelect(model);
+      return;
+    }
+    if (needsUpgrade(model, available)) {
+      openPaprPlanSettings();
       return;
     }
 
@@ -202,6 +231,7 @@ export function ModelPickerDropdown({
         needsInstall={needsInstall}
         ramTight={ramTight}
         compact={compact}
+        needsUpgrade={needsUpgrade(model, available)}
         onSelect={() => handleSelect(model)}
       />
     );
