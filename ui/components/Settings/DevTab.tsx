@@ -14,6 +14,7 @@ import { useState } from "react";
 import { AuthFlow, type AuthFlowStage } from "../Auth/AuthFlow";
 import { ConnectAIStep } from "../Auth/ConnectAIStep";
 import { RecommendStep } from "../Auth/RecommendStep";
+import { PlanStep } from "../Auth/PlanStep";
 import type { OrgNamespaceSetupRequest } from "../Auth/OrgNamespaceSetup";
 import {
   getOnboardingState,
@@ -97,7 +98,8 @@ const FAKE_ORG_REQUEST: OrgNamespaceSetupRequest = {
 type DevAuthPreview =
   | { kind: "flow"; stage: AuthFlowStage }
   | { kind: "claude-setup" }
-  | { kind: "recommend" };
+  | { kind: "recommend" }
+  | { kind: "plan" };
 
 const STAGES: Array<{ id: AuthFlowStage; label: string; note: string }> = [
   {
@@ -148,6 +150,8 @@ export function DevTab() {
     const previewLabel =
       preview.kind === "claude-setup"
         ? "Claude guided setup (recover / stepper)"
+        : preview.kind === "plan"
+          ? "Pick your plan (after a new org) — never opens checkout"
         : preview.kind === "recommend"
           ? "Recommended apps — live catalog, real install"
           : `AuthFlow — starting at "${preview.stage}"`;
@@ -167,7 +171,9 @@ export function DevTab() {
           </button>
         </div>
         <div className="dev-preview__stage">
-          {preview.kind === "recommend" ? (
+          {preview.kind === "plan" ? (
+            <PlanStep onDone={() => setPreview(null)} previewMode />
+          ) : preview.kind === "recommend" ? (
             // The real gated screen, not the bare card list. previewMode stops
             // it from writing onboarding state; installs still run for real.
             <RecommendStep onComplete={() => setPreview(null)} previewMode />
@@ -282,6 +288,18 @@ export function DevTab() {
             className="dev-tab__btn"
             onClick={() => setPreview(CLAUDE_SETUP_PREVIEW)}
           >
+            Launch
+          </button>
+        </div>
+        <div className="dev-tab__row">
+          <div className="dev-tab__row-text">
+            <span className="dev-tab__row-label">2b — Pick your plan</span>
+            <span className="dev-tab__row-note">
+              Shown once after someone creates a new org. Preselects a plan picked on
+              papr.ai. Preview never opens checkout.
+            </span>
+          </div>
+          <button type="button" className="dev-tab__btn" onClick={() => setPreview({ kind: "plan" })}>
             Launch
           </button>
         </div>

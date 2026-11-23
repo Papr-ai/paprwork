@@ -371,6 +371,7 @@ export function PaprPlanSection() {
                 canManageBilling={summary.canManageBilling}
                 busy={creditAction !== null}
                 onCheckout={handleCreditsCheckout}
+                onSwitchPlan={() => handlePortal("subscriptions")}
               />
             ) : null}
 

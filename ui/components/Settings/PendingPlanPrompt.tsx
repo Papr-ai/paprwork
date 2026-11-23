@@ -25,9 +25,11 @@ interface Props {
   canManageBilling: boolean;
   busy: boolean;
   onCheckout: (plan: PaprCreditPlanId, track: PaprPlanTrack) => Promise<boolean>;
+  /** Already paying for another credits plan: switching happens in Stripe's portal. */
+  onSwitchPlan: () => Promise<void>;
 }
 
-export function PendingPlanPrompt({ choice, currentPlan, canManageBilling, busy, onCheckout }: Props) {
+export function PendingPlanPrompt({ choice, currentPlan, canManageBilling, busy, onCheckout, onSwitchPlan }: Props) {
   // Already on it (e.g. paid on another device): nothing left to do.
   useEffect(() => {
     if (currentPlan === choice.plan) clearPendingPlan();
@@ -36,6 +38,7 @@ export function PendingPlanPrompt({ choice, currentPlan, canManageBilling, busy,
 
   const name = planChoiceName(choice.plan);
   const perSeat = choice.track === "team" ? " for your team" : "";
+  const switching = currentPlan !== null;
 
   return (
     <div className="papr-plan__pending" role="status">
@@ -43,7 +46,9 @@ export function PendingPlanPrompt({ choice, currentPlan, canManageBilling, busy,
         <strong>You picked {name}{perSeat}</strong>
         <span>
           {canManageBilling
-            ? "Continue to checkout to start it on this workspace."
+            ? switching
+              ? `You're on ${planChoiceName(currentPlan)} now. Change your plan to switch.`
+              : "Continue to checkout to start it on this workspace."
             : "Only this workspace's owners and admins can buy a plan. Ask one of them to upgrade."}
         </span>
       </div>
@@ -54,12 +59,16 @@ export function PendingPlanPrompt({ choice, currentPlan, canManageBilling, busy,
             className="papr-plan__primary-btn"
             disabled={busy}
             onClick={() => {
+              if (switching) {
+                void onSwitchPlan().then(clearPendingPlan);
+                return;
+              }
               void onCheckout(choice.plan, choice.track).then((ok) => {
                 if (ok) clearPendingPlan();
               });
             }}
           >
-            {busy ? "Opening checkout…" : "Continue to checkout"}
+            {busy ? "Opening…" : switching ? "Change plan" : "Continue to checkout"}
           </button>
         ) : null}
         <button type="button" className="papr-plan__link-btn" onClick={clearPendingPlan}>

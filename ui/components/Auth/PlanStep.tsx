@@ -31,15 +31,18 @@ interface PlanStepProps {
   previewMode?: boolean;
 }
 
-const OPTIONS: { id: Choice; name: string; price: string; line: string }[] = [
-  { id: "local", name: PAPR_LOCAL_PLAN.name, price: "Free", line: PAPR_LOCAL_PLAN.blurb },
-  ...PAPR_CREDIT_PLANS.map((p) => ({
-    id: p.id as Choice,
-    name: p.name,
-    price: `${formatUsd(p.pricePerSeat)}/mo`,
-    line: p.blurb,
-  })),
-];
+function planOptions(track: PaprPlanTrack): { id: Choice; name: string; price: string; line: string }[] {
+  const per = track === "team" ? "/person/mo" : "/mo";
+  return [
+    { id: "local", name: PAPR_LOCAL_PLAN.name, price: "Free", line: PAPR_LOCAL_PLAN.blurb },
+    ...PAPR_CREDIT_PLANS.map((p) => ({
+      id: p.id as Choice,
+      name: p.name,
+      price: `${formatUsd(p.pricePerSeat)}${per}`,
+      line: p.blurb,
+    })),
+  ];
+}
 
 export function PlanStep({ onDone, previewMode = false }: PlanStepProps) {
   const pending = readPendingPlan();
@@ -97,7 +100,7 @@ export function PlanStep({ onDone, previewMode = false }: PlanStepProps) {
         </p>
 
         <div className="plan-step__list" role="radiogroup" aria-label="Plan">
-          {OPTIONS.map((o) => (
+          {planOptions(track).map((o) => (
             <button
               key={o.id}
               type="button"
