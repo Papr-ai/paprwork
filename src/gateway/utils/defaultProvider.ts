@@ -64,6 +64,7 @@ export async function getDefaultProviderAndModel(): Promise<{
     zai: "glm-5.2",
     groq: "openai/gpt-oss-120b",
     moonshot: "kimi-k3",
+    openrouter: "thinkingmachines/inkling-2-mini",
   };
 
   try {
@@ -144,6 +145,7 @@ export async function getAvailableProviders(): Promise<AvailableProvider[]> {
     zai: "glm-5.2",
     groq: "openai/gpt-oss-120b",
     moonshot: "kimi-k3",
+    openrouter: "thinkingmachines/inkling-2-mini",
   };
 
   const providers: AvailableProvider[] = [];

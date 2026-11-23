@@ -11,6 +11,7 @@ const fallback = new ModelFallback();
 const PROVIDER_DEFAULT_CONTEXT: Partial<Record<Provider, number>> = {
   groq: 131_072,
   moonshot: 1_048_576,
+  openrouter: 1_048_576,
   ollama: 32_768,
   openai: 128_000,
   anthropic: 200_000,

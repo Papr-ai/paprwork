@@ -1672,6 +1672,15 @@ export class AgentService {
         );
       }
 
+      // OpenRouter (via Papr): effort rides openai.reasoningEffort → reasoning_effort,
+      // which openrouterModel.ts turns into OpenRouter's unified `reasoning` field.
+      if (config.provider === "openrouter") {
+        const effort = config.reasoning?.effort;
+        Object.assign(providerOptions, {
+          openai: { reasoningEffort: effort ?? "medium" },
+        });
+      }
+
       // For Moonshot Kimi K3 (OpenAI-compatible — reasoning_effort=max always)
       if (config.provider === "moonshot") {
         const { buildMoonshotProviderOptions } =
@@ -2024,7 +2033,9 @@ export class AgentService {
         // 3. Proactive Papr summarization before/after turns
         // 4. User can abort via UI (abortController)
         abortSignal: abortController.signal,
-        ...(config.provider === "groq" || config.provider === "moonshot"
+        ...(config.provider === "groq" ||
+        config.provider === "moonshot" ||
+        config.provider === "openrouter"
           ? { includeRawChunks: true }
           : {}),
         ...(providerOptions.openai ||
@@ -2033,7 +2044,8 @@ export class AgentService {
         providerOptions.anthropic ||
         config.provider === "zai" ||
         config.provider === "groq" ||
-        config.provider === "moonshot"
+        config.provider === "moonshot" ||
+        config.provider === "openrouter"
           ? { providerOptions }
           : {}),
         // Before each tool step: drop oldest stored history if mid-turn context exceeds model budget.
@@ -2790,7 +2802,7 @@ export class AgentService {
         });
 
         aiSdkStreamResult = await streamText(streamTextOptions);
-        if (config.provider === "groq") {
+        if (config.provider === "groq" || config.provider === "openrouter") {
           const { adaptGroqAISDKFullStream } =
             await import("../utils/groqProvider.js");
           fullStream = adaptGroqAISDKFullStream(aiSdkStreamResult.fullStream);
@@ -2822,7 +2834,9 @@ export class AgentService {
         apiKeys,
         {
           sequence,
-          ...(config.provider === "groq" || config.provider === "moonshot"
+          ...(config.provider === "groq" ||
+          config.provider === "moonshot" ||
+          config.provider === "openrouter"
             ? { textBufferMin: 1 }
             : {}),
         },

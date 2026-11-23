@@ -17,6 +17,7 @@ export const DEFAULT_MODEL_BY_PROVIDER: Record<Provider, string> = {
   zai: "glm-5.2",
   groq: "openai/gpt-oss-120b",
   moonshot: "kimi-k3",
+  openrouter: "thinkingmachines/inkling-2-mini",
 };
 
 function isCloudAgentGateway(): boolean {
