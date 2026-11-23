@@ -104,12 +104,13 @@ export async function pushTextChunks(
 export async function pushVectors(
   client: PostClient,
   store: CodeVectorStore,
-  opts: { repoId: (blobSha: string) => string | undefined; pathHint: (blobSha: string) => string | undefined; storeContent?: (blobSha: string) => string | undefined; timeout?: number; batch?: number },
+  opts: { repoId: (blobSha: string) => string | undefined; pathHint: (blobSha: string) => string | undefined; storeContent?: (blobSha: string) => string | undefined; timeout?: number; batch?: number; skip?: (blobSha: string) => boolean },
 ): Promise<{ uploaded: number; failed: number }> {
   const db: any = (store as any).db;
-  const local = db
+  const local = (db
     .prepare(`SELECT blob_sha, chunk, line_start, line_end, vec FROM chunks WHERE model=? AND source='local'`)
-    .all(store.model) as Array<{ blob_sha: string; chunk: number; line_start: number; line_end: number; vec: Buffer }>;
+    .all(store.model) as Array<{ blob_sha: string; chunk: number; line_start: number; line_end: number; vec: Buffer }>)
+    .filter((r) => !opts.skip?.(r.blob_sha));
   if (!local.length) return { uploaded: 0, failed: 0 };
   const missing = new Set(await cloudMissing(client, store.model, local.map((r) => r.blob_sha), opts.timeout));
   const todo = chunkZeroLast(local.filter((r) => missing.has(r.blob_sha)), (r) => r.blob_sha, (r) => r.chunk);

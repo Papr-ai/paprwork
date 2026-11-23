@@ -199,6 +199,21 @@ export class CodeVectorStore {
     return this.db.prepare(`SELECT DISTINCT root FROM files`).all().map((r) => r.root);
   }
 
+  /** Blobs every path of which sits under a root matching pred (e.g. only in the user's own repos). */
+  blobsOnlyIn(pred: (root: string) => boolean): Set<string> {
+    const rows = this.db.prepare(`SELECT DISTINCT root, blob_sha FROM files`).all() as Array<{ root: string; blob_sha: string }>;
+    const inside = new Set<string>();
+    const outside = new Set<string>();
+    for (const r of rows) (pred(r.root) ? inside : outside).add(r.blob_sha);
+    for (const b of outside) inside.delete(b);
+    return inside;
+  }
+
+  /** Forget a root's manifest (vectors no other root holds become orphans and are dropped on the next sync). */
+  forgetRoot(root: string): void {
+    this.db.prepare(`DELETE FROM files WHERE root=?`).run(root);
+  }
+
   listFiles(root: string): Array<{ path: string; blobSha: string }> {
     return this.db.prepare(`SELECT path, blob_sha FROM files WHERE root=?`).all(root).map((r) => ({ path: r.path, blobSha: r.blob_sha }));
   }

@@ -11,6 +11,7 @@ import { AsyncLocalStorage } from "async_hooks";
  */
 
 import { spawn } from "child_process";
+import * as os from "os";
 import { z } from "zod";
 import { createTool } from "@mastra/core/tools";
 import type { ToolResult } from "../types/tools.js";
@@ -388,6 +389,41 @@ export function detectPaprContextGrepCommand(command: string): { pattern: string
   const grepPath = m[4]!.trim().replace(/\\/g, "/");
   const inPapr = /(?:\/orgs\/[^/]+\/namespaces\/[^/]+|\/Papr|\$\{?PAPR_HOME\}?)\/(?:documents|workspace|repos\/[^/\s"']+)(?:[/\s"']|$)/i;
   return inPapr.test(grepPath) ? { pattern: m[1] ?? m[2] ?? m[3]!, path: m[4]!.trim() } : null;
+}
+
+/** grep/rg flags that take a value as the next token (so the value is not mistaken for the pattern). */
+const GREP_VALUE_FLAGS = new Set(["-e", "-f", "-m", "-A", "-B", "-C", "-g", "-t", "-T", "--type", "--type-not", "--glob", "--include", "--exclude", "--exclude-dir", "--max-count", "--regexp", "--file", "--context", "--after-context", "--before-context"]);
+
+/** Any other grep / rg (the user's own git repos): pattern + target path. Repo consent is checked later. */
+export function detectRepoGrepCommand(command: string): { pattern: string; path: string } | null {
+  const cmd = command.trim();
+  if (/[|]\s*(?:grep|rg)\b/.test(cmd)) return null; // grep as a filter on another command's output
+  const seg = cmd.split(/\s*(?:&&|;)\s*/).find((x) => /^(?:grep|rg)\s/.test(x));
+  if (!seg) return null;
+  const toks = seg.match(/"[^"]*"|'[^']*'|\S+/g) ?? [];
+  const args: string[] = [];
+  for (let i = 1; i < toks.length; i++) {
+    const t = toks[i]!;
+    if (t === "--") { args.push(...toks.slice(i + 1)); break; }
+    if (t.startsWith("-")) {
+      if (t === "-e" || t === "--regexp") { if (toks[i + 1]) args.unshift(toks[++i]!); continue; }
+      if (GREP_VALUE_FLAGS.has(t)) i++;
+      continue;
+    }
+    args.push(t);
+  }
+  if (!args.length) return null;
+  const unq = (x: string) => x.replace(/^(["'])(.*)\1$/, "$2");
+  return { pattern: unq(args[0]!), path: args.length > 1 ? args.slice(1).map(unq).join(" ") : "." };
+}
+
+/** One line asking the agent to confirm, once per repo, before the user's own code is indexed on this Mac. */
+export function repoConsentLine(root: string): string {
+  return (
+    `=== On-device code search: not set up for ${root} ===\n` +
+    `Ask the user once: "Index ${root} on this Mac for faster, smarter code search? Tracked files only; vectors stay on this device." ` +
+    `Then call code_index_repo({ path: "${root}", allow: true|false }). Until then grep runs as usual.\n`
+  );
 }
 
 const PAPR_PROJECT_ID_REGEX =
@@ -870,6 +906,17 @@ async function executeBashCommandInner(
       devicePromise = import("./codeEmbed/runtime.js").then((m) => m.deviceHitsForGrep(contextGrep.path, contextGrep.pattern));
     }
 
+    // The user's own git repos (~/Developer/…): on-device hits once they allowed the repo; asked once otherwise.
+    const repoGrep = grepInfo || contextGrep ? null : detectRepoGrepCommand(command);
+    let repoAsk: string | undefined;
+    if (repoGrep) {
+      devicePromise = import("./codeEmbed/repoGrep.js").then(async (m) => {
+        const r = await m.repoHitsForGrep(repoGrep.path, repoGrep.pattern, 2_000, cwd ? cwd.replace(/^~(?=\/|$)/, os.homedir()) : undefined);
+        repoAsk = r.askRepo;
+        return r;
+      });
+    }
+
     // Get API keys for sanitization and substitution
     const apiKeys = [...getApiKeysForSanitization(), ...jobSecretValues()];
 
@@ -1032,12 +1079,15 @@ async function executeBashCommandInner(
     }
 
     // On-device hits lead: same model the ranking was tuned on (papr-embed-code), current local files, no network.
-    if ((grepInfo || contextGrep) && devicePromise) {
+    if ((grepInfo || contextGrep || repoGrep) && devicePromise) {
       const dev = await devicePromise.catch(() => null);
       if (dev && dev.hits.length) {
         memoryHits = mergeDeviceHits(dev.hits, memoryHits);
         const block = deviceHitsBlock(dev);
         memoryResults = memoryResults ? `${block}\n${memoryResults}` : block;
+      } else if (repoAsk) {
+        const line = repoConsentLine(repoAsk);
+        memoryResults = memoryResults ? `${line}\n${memoryResults}` : line;
       }
     }
 

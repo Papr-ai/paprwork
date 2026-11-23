@@ -1,7 +1,7 @@
 {
   "version": 1,
-  "generatedAt": "2026-11-12T18:48:06.744Z",
-  "entryCount": 223,
+  "generatedAt": "2026-11-23T20:04:10.385Z",
+  "entryCount": 224,
   "entries": [
     {
       "id": "access-members",
@@ -400,6 +400,26 @@
       "playbookRef": "preloaded-app-and-jobs-guide"
     },
     {
+      "id": "agent-tool-code_index_repo",
+      "title": "code_index_repo",
+      "summary": "Record the user's answer for on-device code search in one of their own git repos (outside the Papr folder). Only call after the user answered the question shown in a grep result. allow: true indexes tracked files (git ls-files) on this Mac in the background; vectors never leave the device. allow: false stops asking and drops anything indexed for it. Covers the repo's worktrees too.",
+      "surfaces": [
+        "agent-tool"
+      ],
+      "runtimes": [
+        "desktop"
+      ],
+      "toolId": "code_index_repo",
+      "keywords": [
+        "code_index_repo",
+        "code",
+        "index",
+        "repo",
+        "tool",
+        "agent"
+      ]
+    },
+    {
       "id": "agent-tool-complete_delegation",
       "title": "complete_delegation",
       "summary": "Mark your delegation task as complete and return the final result. Use this when you have finished the assigned task and have a result to deliver.",
@@ -614,7 +634,7 @@
     {
       "id": "agent-tool-create_sub_agent",
       "title": "create_sub_agent",
-      "summary": "Create or update a persistent sub-agent profile. Specify icon (robot, search, code, pen, chart) for sidebar/mini-chat. If allowedToolIds not specified, defaults to ['bash', 'read_file', 'write_file'].",
+      "summary": "Create or update a persistent sub-agent profile. Specify icon (robot, search, code, pen, chart) for sidebar/mini-chat. If allowedToolIds not specified, defaults to ['bash', 'read_file', 'write_file']. runtime shapes the run: replace the system prompt, switch memory/wiki context, tools or web search off. Prompt caching and context trimming stay on unless there is a specific reason. Bare model (writer/classifier/scorer): runtime: { systemPromptMode: 'replace', memoryContext: false, wikiContext: false, tools: false }.",
       "surfaces": [
         "agent-tool"
       ],
@@ -1250,7 +1270,7 @@
     {
       "id": "agent-tool-get_key",
       "title": "get_key",
-      "summary": "Check whether a custom API key exists without exposing its value. If the key does not exist, guide the user to add it in Settings → API Keys → Custom API Keys.",
+      "summary": "Check whether a custom API key exists without exposing its value. If the key does not exist, guide the user to add it in Settings → Integration Keys.",
       "surfaces": [
         "agent-tool"
       ],
@@ -1886,7 +1906,7 @@
     {
       "id": "agent-tool-list_keys",
       "title": "list_keys",
-      "summary": "List all custom API keys configured in Settings. Returns metadata (name, description, permission) but NOT values. Use this to check what keys are available before trying to use them.",
+      "summary": "List all custom API keys configured in Settings. Returns metadata (name, description, permission, sharedWith) but NOT values. Use this to check what keys are available before trying to use them. sharedWith shows who else can use each key; to give a teammate a key, the owner changes Who can use it in Settings → Integration Keys (never send values over chat, email or password managers).",
       "surfaces": [
         "agent-tool"
       ],

@@ -150,8 +150,45 @@ export const listFileCodeSummariesTool = createTool({
   },
 });
 
+const codeIndexRepoSchema = z.object({
+  path: z.string().min(1).describe("Any path inside the git repo (its root, a file, or the folder grep ran in)"),
+  allow: z.boolean().describe("true = index this repo on this Mac; false = never index it and never ask again"),
+});
+
+export const codeIndexRepoTool = createTool({
+  id: "code_index_repo",
+  description:
+    "Record the user's answer for on-device code search in one of their own git repos (outside the Papr folder). " +
+    "Only call after the user answered the question shown in a grep result. allow: true indexes tracked files " +
+    "(git ls-files) on this Mac in the background; vectors never leave the device. allow: false stops asking and " +
+    "drops anything indexed for it. Covers the repo's worktrees too.",
+  inputSchema: codeIndexRepoSchema,
+  execute: async (input) => {
+    const args = (input as { context?: z.infer<typeof codeIndexRepoSchema> }).context ?? input;
+    const { getCodeEmbedRuntime } = await import("./codeEmbed/runtime.js");
+    const rt = await getCodeEmbedRuntime();
+    if (!rt) return { success: false, error: "On-device code search is off on this machine (PAPR_CODE_EMBED=0 or no Papr workspace)." };
+    const r = rt.setRepoConsent(args.path, args.allow);
+    if (!r) return { success: false, error: `${args.path} is not inside a git repo outside the Papr folder.` };
+    return {
+      success: true,
+      data: {
+        repo: r.root,
+        allowed: r.allowed,
+        tier: rt.tier,
+        note: r.allowed
+          ? rt.tier === "local"
+            ? "Indexing in the background (pauses on low battery, heat or memory pressure). Grep gets on-device hits as files finish."
+            : `This Mac is on the ${rt.tier} tier: repos are only indexed on device, so grep stays exact-match here.`
+          : "Won't index or ask again. Anything indexed for this repo was dropped.",
+      },
+    };
+  },
+});
+
 export const codeIndexTools = [
   getProjectCodeOverviewTool,
   getFileCodeSummaryTool,
   listFileCodeSummariesTool,
+  codeIndexRepoTool,
 ];
