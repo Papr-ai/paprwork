@@ -16,6 +16,7 @@ interface SubAgentProfile {
   maxTurns?: number;
   memoryPolicy?: string;
   icon?: string;
+  runtime?: Record<string, unknown>;
   createdAt: string;
   updatedAt: string;
   runCount: number;
@@ -119,6 +120,7 @@ export function AgentProfileModal({ agentId, onClose }: Props) {
         maxTurns: agent.maxTurns,
         memoryPolicy: agent.memoryPolicy,
         icon: agent.icon,
+        runtime: agent.runtime,
       });
 
       if (response.success) {

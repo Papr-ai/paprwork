@@ -144,6 +144,7 @@ interface CreateSubAgentInput {
   maxTurns?: number;
   memoryPolicy?: "none" | "summary" | "full";
   icon?: import("../../core/types/subagents.js").SubAgentIconName;
+  runtime?: import("../../core/types/subagents.js").SubAgentRuntimeOptions;
 }
 
 let subAgentServiceInstance: SubAgentService | null = null;
@@ -568,7 +569,7 @@ export class SubAgentService {
       id,
       name: input.name.trim(),
       description: input.description.trim(),
-      systemPrompt: input.systemPrompt.trim(),
+      systemPrompt: (input.systemPrompt ?? "").trim(),
       provider: input.provider,
       model: input.model,
       fallbackProvider: input.fallbackProvider ?? existing?.fallbackProvider,
@@ -580,6 +581,7 @@ export class SubAgentService {
       maxTurns: input.maxTurns ?? existing?.maxTurns ?? DEFAULT_AGENT_MAX_TURNS,
       memoryPolicy: input.memoryPolicy ?? existing?.memoryPolicy ?? "none",
       icon: input.icon ?? existing?.icon,
+      runtime: input.runtime ?? existing?.runtime,
       createdAt: existing?.createdAt ?? now,
       updatedAt: now,
       runCount: existing?.runCount ?? 0,

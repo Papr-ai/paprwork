@@ -20,7 +20,14 @@ import {
 } from "../../WikiWriterService.js";
 import { isHomeDailyBriefJob } from "../dailyBriefVerification.js";
 import { todayBriefDateKey } from "../../../../core/utils/briefDateKey.js";
-import type { SubAgentIconName } from "../../../../core/types/subagents.js";
+import type {
+  SubAgentIconName,
+  SubAgentRuntimeOptions,
+} from "../../../../core/types/subagents.js";
+import {
+  BLANK_SUBAGENT_SYSTEM_PROMPT,
+  resolveSubAgentRuntime,
+} from "../../../../core/types/subagents.js";
 import {
   resolveHelperAgentProviderModel,
   usesSignInAwareModel,
@@ -75,6 +82,10 @@ export interface AgentJobSessionInput {
   sourceAgentName: string;
   subAgentName?: string;
   subAgentIcon?: SubAgentIconName;
+  /** Sub-agent runtime switches (replace prompt, memory/wiki/tools/search/caching). */
+  runtime?: SubAgentRuntimeOptions;
+  /** Replace-mode sub-agents: this IS the system prompt (no Pen prompt). */
+  systemPromptOverride?: string;
 }
 
 function describeEmptyJobOutput(diag: IsolatedJobRunDiagnostics): string {
@@ -155,6 +166,7 @@ export class AgentJobExecutor implements IJobExecutor {
     let subAgentSystemPrompt: string | undefined;
     let subAgentName: string | undefined;
     let subAgentIcon: SubAgentIconName | undefined;
+    let runtime: SubAgentRuntimeOptions | undefined;
 
     if (params.job.type === "subagent") {
       if (!params.job.subAgentId) {
@@ -176,6 +188,7 @@ export class AgentJobExecutor implements IJobExecutor {
       subAgentName = profile.name;
       subAgentSystemPrompt = profile.systemPrompt;
       subAgentIcon = profile.icon;
+      runtime = profile.runtime;
 
       // Built-in helpers run on the cheap model the user's sign-in can actually
       // run, not the one stored in the profile.
@@ -217,7 +230,29 @@ export class AgentJobExecutor implements IJobExecutor {
     if (params.runtimeParams?.prompt?.trim()) {
       taskBody = params.runtimeParams.prompt.trim();
     }
-    if (params.job.type === "subagent") {
+    const resolvedRuntime = resolveSubAgentRuntime(runtime);
+    const replacePrompt =
+      params.job.type === "subagent" &&
+      resolvedRuntime.systemPromptMode === "replace";
+    let systemPromptOverride: string | undefined;
+    if (replacePrompt) {
+      // The profile prompt becomes the whole system prompt. The user message
+      // carries only context + task (+ the job environment when tools are on,
+      // since that is what tools need to find the job's databases).
+      systemPromptOverride =
+        subAgentSystemPrompt?.trim() || BLANK_SUBAGENT_SYSTEM_PROMPT;
+      prompt = [
+        resolvedRuntime.tools ? envBlock : "",
+        params.job.delegationContext
+          ? `Context:\n${params.job.delegationContext}`
+          : "",
+        params.job.delegationContext || resolvedRuntime.tools
+          ? `Task:\n${taskBody}`
+          : taskBody,
+      ]
+        .filter(Boolean)
+        .join("\n\n");
+    } else if (params.job.type === "subagent") {
       const delegationIdBlock = `\n[Delegation ID: ${params.job.id}]\nWhen using request_agent_input, always pass delegationId: "${params.job.id}" so your question appears in the correct chat.`;
       prompt = [
         `[Sub-Agent: ${subAgentName!}]`,
@@ -261,6 +296,8 @@ export class AgentJobExecutor implements IJobExecutor {
       sourceAgentName,
       subAgentName,
       subAgentIcon,
+      ...(runtime ? { runtime } : {}),
+      ...(systemPromptOverride ? { systemPromptOverride } : {}),
     };
   }
 
@@ -396,6 +433,8 @@ export class AgentJobExecutor implements IJobExecutor {
           maxTurns: session.maxTurns,
           appendLog: params.appendLog,
           delegationId: session.delegationId,
+          runtime: session.runtime,
+          systemPromptOverride: session.systemPromptOverride,
         });
         outputText = response.text;
         runDiagnostics = response.diagnostics;
