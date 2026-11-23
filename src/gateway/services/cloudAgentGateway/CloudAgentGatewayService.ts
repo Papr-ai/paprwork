@@ -154,7 +154,9 @@ export class CloudAgentGatewayService {
     }
 
     if (syncError) {
-      yield { type: "error", message: syncError, chatId };
+      // phase lets the caller (iMessage, agent runs) tell the user the answer
+      // stands but the live app/database didn't get the changes.
+      yield { type: "error", phase: "publish", message: syncError, chatId };
     }
 
     yield { type: "done", exitCode, chatId };
@@ -200,7 +202,9 @@ export class CloudAgentGatewayService {
     }
 
     if (syncError) {
-      yield { type: "error", message: syncError, chatId };
+      // phase lets the caller (iMessage, agent runs) tell the user the answer
+      // stands but the live app/database didn't get the changes.
+      yield { type: "error", phase: "publish", message: syncError, chatId };
     }
 
     yield { type: "done", exitCode, chatId };

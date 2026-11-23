@@ -352,6 +352,18 @@ If Cloud Sync is disabled, returns an error with fallbackTool=export_app_bundle 
 
       await requireCloudPublishAvailable();
 
+      // Cloud run: publish the sandbox's pending code first so the live app
+      // reflects this turn's edits (there is no desktop sync to do it).
+      if (process.env.GATEWAY_MODE === "cloud_agent") {
+        const { flushCloudSandboxAppNow } = await import(
+          "../../gateway/services/cloudAgentGateway/cloudAppWriterDebouncedPush.js"
+        );
+        const flushed = await flushCloudSandboxAppNow(args.appId);
+        if (!flushed.pushed) {
+          throw new Error(`Could not publish this app's code: ${flushed.error ?? "unknown error"}`);
+        }
+      }
+
       const publishOptions: Parameters<CloudAppPublishService["publishApp"]>[1] =
         {};
       if (args.loginAccess !== undefined) {

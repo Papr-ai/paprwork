@@ -2052,6 +2052,12 @@ export class AppService {
       const entry = (await fetchCloudAccessibleApps()).find((a) => a.appId === id);
       if (!entry || !isOwnCatalogApp(entry)) return null;
       if (!(await cloneCatalogAppIntoSandbox(this.appsDir, id))) return null;
+      // Code alone isn't enough: connect the app's databases too, or every
+      // read/write in this run fails with "not available in this cloud run".
+      const { registerCatalogAppDatabases } = await import(
+        "./cloudAgentGateway/catalogAppDatabases.js"
+      );
+      await registerCatalogAppDatabases(path.dirname(this.appsDir), id);
       const hints = await this.readMetadataHintsFromAppDir(path.join(this.appsDir, id));
       const now = new Date().toISOString();
       const scope = readActiveAppWorkspaceScope();
