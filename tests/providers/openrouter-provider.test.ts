@@ -24,6 +24,11 @@ describe("OpenRouter (via Papr)", () => {
     const b3: Record<string, unknown> = {};
     injectOpenRouterRequestBody(b3, { effort: "max" });
     expect(b3.reasoning).toEqual({ effort: "high" });
+    // Thinking off in the picker arrives as reasoning_effort "none".
+    const off: Record<string, unknown> = { reasoning_effort: "none" };
+    injectOpenRouterRequestBody(off);
+    expect(off.reasoning).toEqual({ enabled: false });
+    expect(off.reasoning_effort).toBeUndefined();
   });
 
   it("every allowlisted model is in the catalog, priced, sized, opt-in, open tier", () => {

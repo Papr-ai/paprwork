@@ -49,9 +49,13 @@ export function injectOpenRouterRequestBody(
 ): void {
   // The AI SDK sends providerOptions.openai.reasoningEffort as reasoning_effort;
   // OpenRouter's unified field is `reasoning`, so translate it.
-  const sdkEffort = body.reasoning_effort as ModelReasoning["effort"] | undefined;
+  const sdkEffort = body.reasoning_effort as string | undefined;
   delete body.reasoning_effort;
-  const effort = reasoning?.effort ?? sdkEffort;
+  if (sdkEffort === "none") {
+    body.reasoning = { enabled: false };
+    return;
+  }
+  const effort = reasoning?.effort ?? (sdkEffort as ModelReasoning["effort"] | undefined);
   body.reasoning = { effort: mapEffort(effort) };
 }
 

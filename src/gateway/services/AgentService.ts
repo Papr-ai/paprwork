@@ -1675,9 +1675,12 @@ export class AgentService {
       // OpenRouter (via Papr): effort rides openai.reasoningEffort → reasoning_effort,
       // which openrouterModel.ts turns into OpenRouter's unified `reasoning` field.
       if (config.provider === "openrouter") {
-        const effort = config.reasoning?.effort;
+        // Thinking off in the picker → "none", which openrouterModel.ts sends as
+        // reasoning: { enabled: false } so the model answers without thinking.
+        const effort =
+          config.thinking === false ? "none" : (config.reasoning?.effort ?? "medium");
         Object.assign(providerOptions, {
-          openai: { reasoningEffort: effort ?? "medium" },
+          openai: { reasoningEffort: effort },
         });
       }
 
