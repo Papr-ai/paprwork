@@ -16,7 +16,8 @@ export type Provider =
   | "cursor"
   | "zai"
   | "groq"
-  | "moonshot";
+  | "moonshot"
+  | "openrouter";
 
 /**
  * OpenAI AI SDK `providerOptions.openai.reasoningEffort`.

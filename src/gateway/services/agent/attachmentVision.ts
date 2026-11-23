@@ -50,6 +50,7 @@ export function modelSupportsVision(provider: string, modelId: string): boolean 
     case "openai":
     case "google":
     case "moonshot":
+    case "openrouter":
       return true;
     case "ollama":
     case "groq":
