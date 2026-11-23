@@ -38,7 +38,7 @@ export function cloudRunHelperAuth(
 ): {
   provider: Provider;
   model: string | undefined;
-  authOverride: { apiKey: string; authType: "oauth" | "apiKey" };
+  authOverride: { apiKey: string; authType: "oauth" | "apiKey"; usePaprProxy?: boolean };
 } | null {
   const auth = getActiveCloudRunLlmAuth();
   if (!auth) return null;
@@ -46,6 +46,10 @@ export function cloudRunHelperAuth(
   return {
     provider: keep ? (jobProvider ?? auth.provider) : auth.provider,
     model: keep ? jobModel : undefined,
-    authOverride: { apiKey: auth.token, authType: auth.authType },
+    authOverride: {
+      apiKey: auth.token,
+      authType: auth.authType,
+      ...(auth.usePaprProxy ? { usePaprProxy: true } : {}),
+    },
   };
 }
