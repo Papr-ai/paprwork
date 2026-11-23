@@ -2,6 +2,7 @@
  * Shared setup + teardown for cloud agent gateway runs.
  */
 
+import type { SubAgentRuntimeOptions } from "../../../core/types/subagents.js";
 import fs from "fs/promises";
 import os from "os";
 import path from "path";
@@ -762,6 +763,7 @@ export async function resolveCloudAgentJobStreamInput(
   chatId: string;
   streamUserMessage: string;
   systemPromptOverride?: string;
+  runtime?: SubAgentRuntimeOptions;
   provider: Provider;
   model?: string;
   allowedToolIds?: string[];
@@ -840,7 +842,10 @@ export async function resolveCloudAgentJobStreamInput(
     streamUserMessage: streamOverrides?.userMessage ?? session.prompt,
     ...(streamOverrides?.systemPrompt
       ? { systemPromptOverride: streamOverrides.systemPrompt }
-      : {}),
+      : session.systemPromptOverride
+        ? { systemPromptOverride: session.systemPromptOverride }
+        : {}),
+    ...(session.runtime ? { runtime: session.runtime } : {}),
     provider,
     model,
     allowedToolIds:

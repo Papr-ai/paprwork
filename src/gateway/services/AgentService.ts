@@ -98,6 +98,11 @@ import {
   trimOldestHistoryTurns,
 } from "./agent/midTurnContextTrim.js";
 import {
+  resolveSubAgentRuntime,
+  type SubAgentRuntimeOptions,
+} from "../../core/types/subagents.js";
+import { filterMemoryBlocksForRuntime } from "./agent/subAgentRuntimeContext.js";
+import {
   classifyMemoryBlock,
   getUserMemoryContextService,
   isMemoryContextUserMessage,
@@ -592,6 +597,11 @@ export class AgentService {
       _reuseAssistantMessageId?: string;
       /** Internal: Auto retry on the next provider after an auth refusal. Retries once. */
       _isAuthFallbackRetry?: boolean;
+      /**
+       * Sub-agent runtime switches. Omitted = full Pen runtime (every switch on).
+       * See SubAgentRuntimeOptions.
+       */
+      runtime?: SubAgentRuntimeOptions;
     },
   ): AsyncGenerator<StreamChunk & { chatId: string }> {
     if (!this.initialized) {
@@ -1410,16 +1420,23 @@ export class AgentService {
           config.provider,
         ));
 
+      const runtime = resolveSubAgentRuntime(options?.runtime);
       let memoryContextBlocks: string[] = [];
       try {
         const memoryContextService = getUserMemoryContextService();
         memoryContextBlocks =
-          await memoryContextService.getMemoryContextBlocks(
-            chatId,
-            userMessage,
-            history,
-            { mode: "stream" },
-          );
+          runtime.memoryContext || runtime.wikiContext
+            ? await memoryContextService.getMemoryContextBlocks(
+                chatId,
+                userMessage,
+                history,
+                { mode: "stream" },
+              )
+            : [];
+        memoryContextBlocks = filterMemoryBlocksForRuntime(
+          memoryContextBlocks,
+          runtime,
+        );
         // The catalog experiment record is written when the deferred block is
         // built and consumed here, on the turn that actually injects it.
         recordCatalogExperiment(
@@ -1460,7 +1477,9 @@ export class AgentService {
       }
 
       const useAnthropicPromptCache =
-        config.provider === "anthropic" && config.authType !== "oauth";
+        runtime.promptCaching &&
+        config.provider === "anthropic" &&
+        config.authType !== "oauth";
       if (useAnthropicPromptCache) {
         const { applyAnthropicPromptCacheControl } =
           await import("./agent/promptCacheControl.js");
@@ -1556,6 +1575,7 @@ export class AgentService {
         shouldYield: () => isYieldRequested(chatId),
         jevTrim: jevTrimRegistry,
         userMessage,
+        contextTrimming: runtime.contextTrimming,
         ...(focusAppId ? { activeAppId: focusAppId } : {}),
         ...(Object.keys(mergedJobEnv).length > 0
           ? { jobEnv: mergedJobEnv }
@@ -1763,9 +1783,11 @@ export class AgentService {
       // turn end. Reset here so a previous turn's searches can never be
       // attributed to this turn's answer.
       resetSearchOutcomes(chatId);
-      const registryTools = wrapToolsWithMemorySearchFirstGate(
-        this.toolRegistry.getToolsForMastra(options?.allowedToolIds),
-      );
+      const registryTools = runtime.tools
+        ? wrapToolsWithMemorySearchFirstGate(
+            this.toolRegistry.getToolsForMastra(options?.allowedToolIds),
+          )
+        : {};
 
       // Which schemas ride in the request. Decided once, here, and never
       // revised mid-turn: the tool block sits in the cached prefix, so one
@@ -1877,6 +1899,7 @@ export class AgentService {
       // Whether compaction ran or the pressure gate declined is the measurement
       // that makes a change to the truncation policy visible, so both are counted.
       const compactWithMetrics = (msgs: unknown[]): void => {
+        if (!runtime.contextTrimming) return;
         const stats = compactStaleToolResults(msgs, {
           historyTokenBudget,
           jevTrim: jevTrimRegistry,
@@ -1892,10 +1915,12 @@ export class AgentService {
       // Pre-flight trim: use model-aware cap (not global 300K) so Groq/Ollama don't overflow.
       // The same budget gates compaction, which does nothing until the context is under pressure.
       compactWithMetrics(messages);
-      const preFlightTrim = trimOldestHistoryTurns(messages, {
-        ...historyTrimBounds,
-        maxTokens: historyTokenBudget,
-      });
+      const preFlightTrim = runtime.contextTrimming
+        ? trimOldestHistoryTurns(messages, {
+            ...historyTrimBounds,
+            maxTokens: historyTokenBudget,
+          })
+        : { trimmed: false as const, removedTurns: 0, tokensBefore: 0, tokensAfter: 0 };
       if (preFlightTrim.trimmed) {
         const postTrimEstimate = estimateMessagesTokens(messages) + toolTokens;
         console.log(
@@ -1930,9 +1955,10 @@ export class AgentService {
 
       // Native provider search tools (OpenAI web_search, Gemini google_search) target
       // direct provider APIs — they break when the model routes through Papr proxy.
-      const nativeSearchTools = config.usePaprProxy
-        ? {}
-        : await this.buildNativeSearchTools(config.provider);
+      const nativeSearchTools =
+        config.usePaprProxy || !runtime.nativeWebSearch
+          ? {}
+          : await this.buildNativeSearchTools(config.provider);
       if (config.usePaprProxy) {
         console.log(
           `[AgentService] Skipping native provider search tools — using Papr AI proxy for ${config.provider}`,
@@ -2050,19 +2076,23 @@ export class AgentService {
             };
             const msgs = [...stepOptions.messages, warningMessage];
             compactWithMetrics(msgs);
-            trimOldestHistoryTurns(msgs, {
-              ...historyTrimBounds,
-              maxTokens: historyTokenBudget,
-            });
+            if (runtime.contextTrimming) {
+              trimOldestHistoryTurns(msgs, {
+                ...historyTrimBounds,
+                maxTokens: historyTokenBudget,
+              });
+            }
             return { messages: msgs };
           }
 
           let msgs = [...stepOptions.messages];
           compactWithMetrics(msgs);
-          trimOldestHistoryTurns(msgs, {
-            ...historyTrimBounds,
-            maxTokens: historyTokenBudget,
-          });
+          if (runtime.contextTrimming) {
+            trimOldestHistoryTurns(msgs, {
+              ...historyTrimBounds,
+              maxTokens: historyTokenBudget,
+            });
+          }
           if (steerFollowUp) {
             msgs = withSteerNote(msgs as any) as typeof msgs;
           }
@@ -2467,8 +2497,9 @@ export class AgentService {
         );
 
         // Build native web search tools for pi-ai providers
-        const nativeSearchTools =
-          this.buildNativeSearchToolsForPiAi(piProvider);
+        const nativeSearchTools = runtime.nativeWebSearch
+          ? this.buildNativeSearchToolsForPiAi(piProvider)
+          : [];
 
         const piContext = buildPiContext({
           // Steered follow-up: the model-only note rides right after the
@@ -2584,7 +2615,13 @@ export class AgentService {
           sessionId,
           signal: abortController.signal,
           reasoning: reasoningLevel,
-          ...(usePiAiAnthropic ? { cacheRetention: "long" as const } : {}),
+          ...(usePiAiAnthropic
+            ? {
+                cacheRetention: runtime.promptCaching
+                  ? ("long" as const)
+                  : ("none" as const),
+              }
+            : {}),
         };
 
         type PiAiStreamOptions =
@@ -4844,6 +4881,10 @@ ${last15.substring(0, 8_000)}`;
     };
     /** Cloud agent gateway: Papr Memory API key for tool calls */
     paprApiKey?: string;
+    /** Sub-agent runtime switches (memory/wiki/tools/search/caching/trimming). */
+    runtime?: SubAgentRuntimeOptions;
+    /** Replace-mode sub-agent: used as the whole system prompt. */
+    systemPromptOverride?: string;
   }): Promise<{
     chatId: string;
     text: string;
@@ -4953,7 +4994,9 @@ ${last15.substring(0, 8_000)}`;
       apiKey,
       authType,
       usePaprProxy,
-      systemPrompt: `${this.systemPrompt}\n\n# Isolated Job Run\n- Session: ${chatId}\n- Keep output concise and actionable.`,
+      systemPrompt:
+        input.systemPromptOverride ??
+        `${this.systemPrompt}\n\n# Isolated Job Run\n- Session: ${chatId}\n- Keep output concise and actionable.`,
       contextLimit: DEFAULT_SESSION_CONTEXT_LIMIT,
     };
 
@@ -4978,6 +5021,7 @@ ${last15.substring(0, 8_000)}`;
           {
             allowedToolIds: input.allowedToolIds,
             maxSteps: input.maxTurns,
+            ...(input.runtime ? { runtime: input.runtime } : {}),
           },
         )) {
           if (chunk.type === "error") {
@@ -5186,6 +5230,7 @@ ${last15.substring(0, 8_000)}`;
           {
             allowedToolIds: input.allowedToolIds,
             maxSteps: input.maxTurns,
+            ...(input.runtime ? { runtime: input.runtime } : {}),
           },
         )) {
           if (chunk.type === "error") {
@@ -5332,6 +5377,7 @@ ${last15.substring(0, 8_000)}`;
     authOverride: { apiKey: string; authType: "oauth" | "apiKey" };
     paprApiKey?: string;
     systemPromptOverride?: string;
+    runtime?: SubAgentRuntimeOptions;
     appendLog?: (line: string) => Promise<void>;
   }): AsyncGenerator<StreamChunk & { chatId: string }> {
     if (!this.initialized) {
@@ -5410,6 +5456,7 @@ ${last15.substring(0, 8_000)}`;
       {
         allowedToolIds: input.allowedToolIds,
         maxSteps: input.maxTurns,
+        ...(input.runtime ? { runtime: input.runtime } : {}),
       },
     )) {
       if (input.appendLog) {

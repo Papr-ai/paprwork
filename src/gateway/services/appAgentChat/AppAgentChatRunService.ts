@@ -125,6 +125,9 @@ export class AppAgentChatRunService {
       for await (const chunk of agentService.streamAgent(chatId, userMessage, config, {
         allowedToolIds,
         maxSteps: 20,
+        // The embedded prompt is built above; the profile's memory/wiki/tools/
+        // search/caching switches still apply.
+        ...(profile.runtime ? { runtime: profile.runtime } : {}),
       })) {
         for (const event of mapGatewayStreamToAppAgentEvents(
           { type: chunk.type, payload: chunk.payload, timestamp: chunk.timestamp },

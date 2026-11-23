@@ -498,6 +498,11 @@ export async function* createPiCodexStreamWithToolLoop(
     /** The user's message, for the Jev trim goal. */
     userMessage?: string;
     /**
+     * false = sub-agent opted out of stale tool-result compaction and oldest-turn
+     * trimming. Memory-pressure compaction still runs (process safety).
+     */
+    contextTrimming?: boolean;
+    /**
      * True once the user sent a follow-up and asked this turn to pause at the
      * next tool boundary (see agent/steerYield.ts).
      */
@@ -759,12 +764,13 @@ export async function* createPiCodexStreamWithToolLoop(
       yield { type: "start-step" };
     }
 
+    const trimmingOn = toolContext?.contextTrimming !== false;
     applyMidTurnContextShaping(
       context.messages,
-      historyTrimBounds,
+      trimmingOn ? historyTrimBounds : undefined,
       memoryPressure,
       {
-        skipStaleToolCompaction: step === 0,
+        skipStaleToolCompaction: step === 0 || !trimmingOn,
         jevTrim: toolContext?.jevTrim,
         turnMetrics: toolContext?.turnMetrics,
       },

@@ -19,6 +19,7 @@ interface UpsertSubAgentPayload {
   maxTurns?: number;
   memoryPolicy?: "none" | "summary" | "full";
   icon?: import("../../core/types/subagents.js").SubAgentIconName;
+  runtime?: import("../../core/types/subagents.js").SubAgentRuntimeOptions;
 }
 
 interface GetSubAgentPayload {
