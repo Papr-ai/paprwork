@@ -104,7 +104,7 @@ function LocalCard(props: CardProps) {
   );
 }
 
-/** mailto: links do nothing inside the app window; hand it to the OS mail app. */
+/** Opens papr.ai/contact-sales in the browser (links inside the app window go nowhere). */
 function ContactSales() {
   return (
     <button

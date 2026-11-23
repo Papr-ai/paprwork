@@ -92,7 +92,7 @@ export const PAPR_ENTERPRISE_PLAN = {
   name: "Enterprise",
   blurb: "For companies rolling out across teams",
   creditsLine: "Volume pricing & pooled credits",
-  contact: "mailto:sales@papr.ai?subject=Papr%20Enterprise",
+  contact: "https://papr.ai/contact-sales?from=app&track=team",
   features: [
     "SSO / SAML & SCIM provisioning",
     "Admin console, roles & audit logs",
