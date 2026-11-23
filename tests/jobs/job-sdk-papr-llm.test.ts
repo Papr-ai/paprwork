@@ -12,7 +12,7 @@ import { afterAll, beforeAll, beforeEach, describe, expect, it } from "vitest";
 
 const SDK = path.resolve(__dirname, "../../src/resources/job-sdk");
 
-type Seen = { url: string; body: any };
+type Seen = { url: string; body: any; auth?: string };
 let server: http.Server;
 let base = "";
 let seen: Seen[] = [];
@@ -23,7 +23,7 @@ beforeAll(async () => {
     let raw = "";
     req.on("data", (c) => (raw += c));
     req.on("end", () => {
-      seen.push({ url: req.url ?? "", body: raw ? JSON.parse(raw) : {} });
+      seen.push({ url: req.url ?? "", body: raw ? JSON.parse(raw) : {}, auth: req.headers.authorization });
       const next = replies.shift() ?? {
         status: 200,
         body: {
@@ -76,6 +76,7 @@ describe("papr_llm (gateway client)", () => {
     expect(r.stdout.trim()).toBe("hello anthropic claude-sonnet-4-6 sign-in 3225 0.0012");
     expect(seen).toHaveLength(1);
     expect(seen[0].url).toBe("/api/llm/complete");
+    expect(seen[0].auth).toBeUndefined();
     expect(seen[0].body).toMatchObject({
       prompt: "Q",
       system: "S",
@@ -131,5 +132,28 @@ describe("papr_llm (gateway client)", () => {
     );
     expect(r.stdout.trim()).toBe("{'ok': True}");
     expect(seen[0].body.system).toBe("Base\n\nReply with JSON only: no prose, no code fences.");
+  });
+});
+
+describe("papr_llm in a cloud script job (relay)", () => {
+  it("uses PAPR_LLM_PROXY_URL with the run's bearer token when set", async () => {
+    const r = await new Promise<{ status: number | null; stdout: string }>((resolve) => {
+      const p = spawn("python3", ["-c", "from papr_llm import complete\nprint(complete('Q').text)"], {
+        env: {
+          PATH: process.env.PATH ?? "",
+          PYTHONPATH: SDK,
+          PAPR_GATEWAY_URL: "http://127.0.0.1:1",
+          PAPR_LLM_PROXY_URL: `${base}/v1/cloud/runtime/job-llm`,
+          PAPR_LLM_PROXY_TOKEN: "pjllm1.abc.def",
+        },
+      });
+      let stdout = "";
+      p.stdout.on("data", (d) => (stdout += d));
+      p.on("close", (status) => resolve({ status, stdout }));
+    });
+    expect(r.status).toBe(0);
+    expect(r.stdout.trim()).toBe("hello");
+    expect(seen[0].url).toBe("/v1/cloud/runtime/job-llm/complete");
+    expect(seen[0].auth).toBe("Bearer pjllm1.abc.def");
   });
 });
