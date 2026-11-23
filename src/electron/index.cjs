@@ -2664,7 +2664,18 @@ async function flushPendingDeepLinks() {
       if (mainWindow.isMinimized()) mainWindow.restore();
       mainWindow.show();
       mainWindow.focus();
-      mainWindow.webContents.send("notification:open-settings", { target: "billing" });
+      // papr://billing?plan=cloud_plus&track=team (papr.ai/pricing plan buttons): the
+      // renderer validates and remembers the choice, then offers "Continue to checkout".
+      let plan;
+      let track;
+      try {
+        const params = new URL(url).searchParams;
+        plan = params.get("plan") || undefined;
+        track = params.get("track") || undefined;
+      } catch {
+        /* malformed link: just open Billing */
+      }
+      mainWindow.webContents.send("notification:open-settings", { target: "billing", plan, track });
       continue;
     }
 

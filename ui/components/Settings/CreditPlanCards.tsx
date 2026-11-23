@@ -9,7 +9,7 @@
  * Cloud Max is one card with a 5x · 20x toggle that defaults to 5x ("From $100").
  */
 
-import { useState } from "react";
+import { useState, type ReactNode } from "react";
 import {
   PAPR_CREDIT_PLANS,
   PAPR_ENTERPRISE_PLAN,
@@ -39,6 +39,14 @@ interface Props {
   /** Shown on Local only when the workspace has no active subscription at all. */
   onActivateLocal?: () => void;
   localPending?: boolean;
+  /** Label for the Local button (first-run uses "Continue free"). */
+  localLabel?: string;
+  /** Plan to open on (e.g. picked on papr.ai): selects the Cloud Max size. */
+  initialPlan?: PaprCreditPlanId | null;
+  /** Hide the one-time Expert Build add-on (first-run keeps the choice simple). */
+  hideExpertBuild?: boolean;
+  /** First-run layout: Cloud / Max 5x / Max 20x as three cards, Local (or Enterprise on Team) as a wide row below. */
+  splitMax?: boolean;
 }
 
 type CardProps = Props & { track: PaprPlanTrack };
@@ -87,12 +95,25 @@ function LocalCard(props: CardProps) {
       {props.onActivateLocal ? (
         <button type="button" className="cpc-btn" disabled={props.localPending || props.pending !== null}
           onClick={props.onActivateLocal}>
-          {props.localPending ? "Activating…" : "Activate free plan"}
+          {props.localPending ? "Activating…" : props.localLabel ?? "Activate free plan"}
         </button>
       ) : null}
       <div className="cpc-plus">Included:</div>
       <Features items={PAPR_LOCAL_PLAN.features} />
     </div>
+  );
+}
+
+/** Opens papr.ai/contact-sales in the browser (links inside the app window go nowhere). */
+function ContactSales() {
+  return (
+    <button
+      type="button"
+      className="cpc-btn"
+      onClick={() => void window.electronAPI.system.invoke("shell.openExternal", PAPR_ENTERPRISE_PLAN.contact)}
+    >
+      Contact sales
+    </button>
   );
 }
 
@@ -103,17 +124,69 @@ function EnterpriseCard() {
       <p className="cpc-blurb">{PAPR_ENTERPRISE_PLAN.blurb}</p>
       <div className="cpc-price"><b>Custom</b></div>
       <div className="cpc-cred">{PAPR_ENTERPRISE_PLAN.creditsLine}</div>
-      <a className="cpc-btn" href={PAPR_ENTERPRISE_PLAN.contact}>Contact sales</a>
+      <ContactSales />
       <div className="cpc-plus">Everything in Cloud Max, plus:</div>
       <Features items={PAPR_ENTERPRISE_PLAN.features} />
     </div>
   );
 }
 
+function WideRow(props: { name: string; blurb: string; price: string; line: string; action: ReactNode }) {
+  return (
+    <div className="cpc-card cpc-card--free cpc-wide">
+      <div className="cpc-wide-l">
+        <div className="cpc-n">{props.name}<span className="cpc-wide-price">{props.price}</span></div>
+        <p className="cpc-blurb">{props.blurb} &middot; {props.line}</p>
+      </div>
+      <div className="cpc-wide-r">{props.action}</div>
+    </div>
+  );
+}
+
+/** Three paid cards side by side, the free/custom option as one row underneath. */
+function SplitPlans(props: CardProps & { plans: [PaprCreditPlanCard, PaprCreditPlanCard, PaprCreditPlanCard] }) {
+  const [cloud, max5, max20] = props.plans;
+  const featured = props.initialPlan ?? "cloud_plus";
+  const team = props.track === "team";
+  const cards: [PaprCreditPlanCard, string][] = [[cloud, "Local"], [max5, "Cloud"], [max20, "Cloud Max 5x"]];
+  return (
+    <>
+      <div className="cpc-grid">
+        {cards.map(([plan, prev]) => (
+          <div key={plan.id} className={plan.id === featured ? "cpc-card cpc-card--feat" : "cpc-card"}>
+            {plan.id === featured ? (
+              <div className="cpc-tag">{props.initialPlan ? "Your pick" : "Most popular"}</div>
+            ) : null}
+            <div className="cpc-n">{plan.name}</div>
+            <p className="cpc-blurb">{plan.blurb}</p>
+            <PlanBody {...props} plan={plan} prev={prev} solid={plan.id === featured} />
+          </div>
+        ))}
+      </div>
+      {team ? (
+        <WideRow name={PAPR_ENTERPRISE_PLAN.name} blurb={PAPR_ENTERPRISE_PLAN.blurb} price="Custom"
+          line={PAPR_ENTERPRISE_PLAN.creditsLine}
+          action={<ContactSales />} />
+      ) : (
+        <WideRow name={PAPR_LOCAL_PLAN.name} blurb={PAPR_LOCAL_PLAN.blurb} price="Free"
+          line={PAPR_LOCAL_PLAN.creditsLine}
+          action={props.onActivateLocal ? (
+            <button type="button" className="cpc-btn" disabled={props.localPending || props.pending !== null}
+              onClick={props.onActivateLocal}>
+              {props.localPending ? "Activating…" : props.localLabel ?? "Activate free plan"}
+            </button>
+          ) : null} />
+      )}
+    </>
+  );
+}
+
 export function CreditPlanCards(props: Props) {
   const [cloud, max5, max20] = PAPR_CREDIT_PLANS as [PaprCreditPlanCard, PaprCreditPlanCard, PaprCreditPlanCard];
   const [track, setTrack] = useState<PaprPlanTrack>(props.defaultTrack ?? "team");
-  const [maxSize, setMaxSize] = useState<PaprCreditPlanCard>(props.currentPlan === "cloud_max" ? max20 : max5);
+  const [maxSize, setMaxSize] = useState<PaprCreditPlanCard>(
+    (props.initialPlan ?? props.currentPlan) === "cloud_max" ? max20 : max5,
+  );
   const expertPending = props.pending?.startsWith("expert:")
     ? (props.pending.slice(7) as PaprExpertBuildSize) : null;
   const team = track === "team";
@@ -132,6 +205,7 @@ export function CreditPlanCards(props: Props) {
         </div>
       </div>
 
+      {props.splitMax ? <SplitPlans {...card} plans={[cloud, max5, max20]} /> : (
       <div className="cpc-grid">
         {team ? null : <LocalCard {...card} />}
 
@@ -154,15 +228,18 @@ export function CreditPlanCards(props: Props) {
           </div>
           <p className="cpc-blurb">{maxSize.blurb}</p>
           <PlanBody {...card} plan={maxSize} prev="Cloud" from={maxSize.id === max5.id} solid />
-          <ExpertBuilder
-            canBuy={props.canManageBilling && props.pending === null}
-            pendingSize={expertPending}
-            onBuy={props.onBuyExpertBuild}
-          />
+          {props.hideExpertBuild ? null : (
+            <ExpertBuilder
+              canBuy={props.canManageBilling && props.pending === null}
+              pendingSize={expertPending}
+              onBuy={props.onBuyExpertBuild}
+            />
+          )}
         </div>
 
         {team ? <EnterpriseCard /> : null}
       </div>
+      )}
 
       <div className="cpc-seat">
         {team ? (
