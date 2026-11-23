@@ -420,15 +420,22 @@ export class AgentJobExecutor implements IJobExecutor {
           "Structured output generated and validated by model.",
         );
       } else {
-        // Free-form text output via streamText (existing path)
+        // Free-form text output via streamText (existing path).
+        // Inside a cloud run there is no keychain/IPC: a delegated helper must use
+        // the run's own credential, or it falls back to local Ollama and hangs.
+        const { cloudRunHelperAuth } = await import(
+          "../../cloudAgentGateway/cloudRunLlmAuth.js"
+        );
+        const cloudAuth = cloudRunHelperAuth(session.provider, session.model);
         const response = await agentService.runIsolatedJobSession({
           jobId: session.jobId,
           runId: session.runId,
           prompt: session.prompt,
-          provider: session.provider,
-          model: session.model,
-          fallbackProvider: session.fallbackProvider,
-          fallbackModel: session.fallbackModel,
+          provider: cloudAuth?.provider ?? session.provider,
+          model: cloudAuth ? cloudAuth.model : session.model,
+          ...(cloudAuth ? { authOverride: cloudAuth.authOverride } : {}),
+          fallbackProvider: cloudAuth ? undefined : session.fallbackProvider,
+          fallbackModel: cloudAuth ? undefined : session.fallbackModel,
           allowedToolIds: session.allowedToolIds,
           maxTurns: session.maxTurns,
           appendLog: params.appendLog,

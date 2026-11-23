@@ -802,7 +802,15 @@ export class SubAgentService {
     });
 
     if (input.background) {
-      void jobsService.runJob(job.id);
+      // The main agent is waiting on this run. As plain background work it sat
+      // in the background budget (one slot, 2-min grace while a chat streams),
+      // so on a busy gateway it stayed "pending" until the chat turn ended.
+      const { gatewayBackgroundBudget } = await import("./gatewayBackgroundBudget.js");
+      void gatewayBackgroundBudget
+        .runInteractive(() => jobsService.runJob(job.id))
+        .catch((err: unknown) =>
+          console.warn(`[SubAgentService] delegation ${job.id} failed to start:`, err),
+        );
       return this.mapJobToRun(job);
     }
     const completed = await jobsService.runJob(job.id);
