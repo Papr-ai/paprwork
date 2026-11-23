@@ -1538,6 +1538,18 @@ export class JobsService {
     }
   }
 
+  /** A sub-agent profile's default placement, if it set one. */
+  private async profileExecutionCapability(
+    subAgentId: string,
+  ): Promise<JobRecord["executionCapability"]> {
+    try {
+      const { getSubAgentService } = await import("./SubAgentService.js");
+      return (await getSubAgentService().getAgent(subAgentId))?.executionCapability;
+    } catch {
+      return undefined;
+    }
+  }
+
   /** Background pass: pin existing desktop-only jobs that nobody has placed yet. */
   private async reassessAllDesktopOnly(): Promise<void> {
     let pinned = 0;
@@ -1921,6 +1933,11 @@ export class JobsService {
     const { defaultExecutionCapabilityForAppIds } = await import(
       "./jobs/executionCapability.js"
     );
+    // Placement: the job's own choice, else its sub-agent profile's, else the
+    // app-link default. Desktop-only code is still pinned by reassessDesktopOnly.
+    const placement =
+      input.executionCapability ??
+      (input.subAgentId ? await this.profileExecutionCapability(input.subAgentId) : undefined);
     const job: JobRecord = {
       id,
       name: input.name,
@@ -1953,10 +1970,7 @@ export class JobsService {
       provider: input.provider,
       model: input.model,
       recipe: input.recipe,
-      executionCapability: defaultExecutionCapabilityForAppIds(
-        appIds,
-        input.executionCapability,
-      ),
+      executionCapability: defaultExecutionCapabilityForAppIds(appIds, placement),
       createdAt: now,
       updatedAt: now,
     };

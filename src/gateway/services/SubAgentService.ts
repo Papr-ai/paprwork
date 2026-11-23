@@ -145,6 +145,7 @@ interface CreateSubAgentInput {
   memoryPolicy?: "none" | "summary" | "full";
   icon?: import("../../core/types/subagents.js").SubAgentIconName;
   runtime?: import("../../core/types/subagents.js").SubAgentRuntimeOptions;
+  executionCapability?: SubAgentProfile["executionCapability"];
 }
 
 let subAgentServiceInstance: SubAgentService | null = null;
@@ -582,6 +583,7 @@ export class SubAgentService {
       memoryPolicy: input.memoryPolicy ?? existing?.memoryPolicy ?? "none",
       icon: input.icon ?? existing?.icon,
       runtime: input.runtime ?? existing?.runtime,
+      executionCapability: input.executionCapability ?? existing?.executionCapability,
       createdAt: existing?.createdAt ?? now,
       updatedAt: now,
       runCount: existing?.runCount ?? 0,

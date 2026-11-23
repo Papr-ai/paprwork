@@ -8,6 +8,7 @@
  *   - /api/app/backend/:action → AppBackendService (handler runs with the run's vault keys)
  *   - /internal/backend-db/*   → papr_db proxy for those handlers
  *   - /api/db/query|write      → the app's linked sources
+ *   - /api/llm/complete        → one model call (papr_llm) on the run's vault credentials
  *   - /api/files/*             → App Files (papr_files.add/url in jobs), stored in the
  *                                app's linked database and uploaded with the run's key
  * Reads/writes resolve through the registry, which seedCloudDatabaseRegistry marks
@@ -29,6 +30,7 @@ import {
 } from "../cloudDirect/cloudDirectDb.js";
 import { createDesktopBackendDbProxyRouter } from "../appRuntime/backendDbProxy.js";
 import { registerAppFilesRoutes } from "../appFiles/appFilesRoutes.js";
+import { registerModelCallRoutes } from "../llm/registerModelCallRoutes.js";
 import { assertReadOnlySql, assertWriteSql } from "../appRuntime/sqlValidation.js";
 import { httpStatusForDbRouteError } from "../tursoReplica/replicaSchemaQueryErrorMessage.js";
 
@@ -102,6 +104,9 @@ export function createSandboxLocalApi(): express.Express {
     dbQuery: (appId, source, sql, params) => query(appId, source as AppDataSource, sql, params),
     dbWrite: (appId, source, sql, params) => write(appId, source as AppDataSource, sql, params),
   });
+
+  // papr_llm.complete in cloud runs: same helper, credentials from the run's vault.
+  registerModelCallRoutes(app);
 
   app.post("/api/db/query", async (req, res) => {
     try {

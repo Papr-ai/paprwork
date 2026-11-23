@@ -1734,14 +1734,9 @@ create_sub_agent({
 create_job({ name: "Ask buyer questions", type: "subagent", subAgentId: "neutral-buyer", appIds: [appId] })
 ```
 
-**Use a Python/Node job or backend action instead ONLY for one of these reasons — name the reason when you choose it:**
-1. **Synchronous UI response** — a backend action must answer the user's click in <2 min, in-request (jobs are async).
-2. **Many calls in a data loop** — hundreds of rows each needing one call, where per-row job runs would be too slow/expensive.
-3. **The model call is one step inside existing script code** (pandas, scraping, file processing) that must keep running in the same process.
-4. **Exact API features the agent runtime does not expose** — e.g. Anthropic's native `web_search` tool (disabled in the agent path), exact request shape for evals, logprobs.
-5. **Determinism/audit** — the request must be byte-identical and version-controlled, with no agent loop.
+Sub-agent jobs are not fire-and-forget: the app sees progress and results through `subscribeJobEvents` (`onStatusChanged`, `onDbChanged` when the job writes rows). Web search works on every provider (`nativeWebSearch`, on by default). A neutral profile sends the same short request every time. So "fast answer", "web search" or "fixed request" are not reasons to leave the sub-agent path.
 
-In those cases use **`papr_llm`** (bundled in every job and backend action — `from papr_llm import complete`). Never hand-write `anthropic.Anthropic(...)` / `api.openai.com` calls: Papr may hand the script a Claude or ChatGPT **sign-in token** in `ANTHROPIC_API_KEY` / `OPENAI_API_KEY`, and those need different addresses and headers. `papr_llm` handles both, caches by default and logs `cache_read` per call.
+**The one reason to call a model from Python/Node:** the call is a step inside script code that is already running — a data loop over rows, a pandas/scraping pipeline, a backend action that post-processes its own result. Use **`papr_llm`** (bundled in every job and backend action):
 
 ```python
 from papr_llm import complete, complete_json
@@ -1750,14 +1745,15 @@ r = complete(
     prompt=f"Score this lead: {row_json}",       # per-call data LAST
     system="You score B2B leads 1-5. Rubric: ...", # fixed → cached
     context=reference_doc,                         # fixed → cached
-    provider="anthropic",                          # or "openai"; default: whichever key is set
+    provider="anthropic",                          # or "openai"; default: the user's default model
     cache_ttl="1h",                                # when reused less often than every 5 min
+    web_search=False,
 )
-print(r.text, r.usage)   # usage.cache_read_input_tokens > 0 on repeats
+print(r.text, r.usage, r.cost_usd)   # usage.cache_read_input_tokens > 0 on repeats
 scores = complete_json("Return [{id, score}] for: ...", provider="openai")
 ```
 
-Declare the key: `requiredKeys: ["ANTHROPIC_API_KEY"]` (job) or the backend manifest `keys`. No `requirements` needed — standard library only.
+`papr_llm` is a thin client for the gateway (`POST /api/llm/complete`): the call runs on the same credentials, sign-in handling, fallbacks (rate limit → API key / Papr proxy; refused credential → next provider), caching and cost tracking as chat. The model credential never enters the job, so don't list `ANTHROPIC_API_KEY` / `OPENAI_API_KEY` in `requiredKeys` just for `papr_llm`. Other keys the script uses (Stripe, Apollo, a scraper API…) still go in `requiredKeys` as usual. No `requirements` needed. Never hand-write `anthropic.Anthropic(...)` / `api.openai.com` calls.
 
 **Pipeline pattern:** Python (data fetch) → sub-agent job (model) → Python (format output)
 
@@ -2335,7 +2331,7 @@ read_job_logs({ jobId: "amplitude-sync", runId: "latest" })
 
 - **No model involved** → `python`/`node`/`bash` script job (ETL, API calls with known shapes, DB work).
 - **Any model call** → `subagent` job (see "Calling models: sub-agent job first"). Shape it with `runtime`: replace the system prompt for a focused role, turn memory/wiki/tools off for a neutral or cheap call.
-- **Model call inside a script** → only for the five named reasons in that section, via `papr_llm`. Say which reason applies.
+- **Model call inside a script** → only when it is a step inside script code that is already running, via `papr_llm`.
 
 Agent jobs get automatic environment injection:
 ```
@@ -2352,10 +2348,10 @@ DEP_SCRAPER_DB="/Users/.../PAPR/jobs/{dep-id}/data/data.db"
 ```
 Does the job call a model?
   NO  → script job
-  YES → Does one of the 5 script reasons apply (sync UI, big data loop,
-        step inside script code, exact API feature, byte-identical audit)?
+  YES → Is the call a step inside script code that is already running
+        (row loop, pandas/scraping pipeline, backend action post-processing)?
     NO  → subagent job (replace prompt / turn off memory, wiki, tools as needed)
-    YES → script or backend action + papr_llm — name the reason
+    YES → papr_llm inside that script
 ```
 
 ### Job Dependencies (DAG Pipelines)
