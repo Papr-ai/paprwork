@@ -204,3 +204,14 @@ describe("macOS media + local workspace", () => {
     expect(kinds({ type: "bash", command: 'ls "$PAPR_HOME/Jobs"', files: files({}) })).toEqual([]);
   });
 });
+
+describe("local Ollama model without provider", () => {
+  test("inkling model id alone → ollama (desktop-only)", () => {
+    expect(kinds({ type: "agent", model: "inkling-2-mini:latest", files: files({}) })).toEqual(["ollama"]);
+    expect(kinds({ type: "agent", model: "qwen3.5:27b", files: files({}) })).toEqual(["ollama"]);
+  });
+  test("hosted model ids and explicit hosted provider stay cloud-safe", () => {
+    expect(kinds({ type: "agent", model: "claude-sonnet-5-5", files: files({}) })).toEqual([]);
+    expect(kinds({ type: "agent", provider: "anthropic", model: "inkling-2-mini:latest", files: files({}) })).toEqual([]);
+  });
+});
