@@ -1753,7 +1753,7 @@ print(r.text, r.usage, r.cost_usd)   # usage.cache_read_input_tokens > 0 on repe
 scores = complete_json("Return [{id, score}] for: ...", provider="openai")
 ```
 
-`papr_llm` is a thin client for the gateway (`POST /api/llm/complete`): the call runs on the same credentials, sign-in handling, fallbacks (rate limit → API key / Papr proxy; refused credential → next provider), caching and cost tracking as chat. No `requiredKeys` and no `requirements` needed. Never hand-write `anthropic.Anthropic(...)` / `api.openai.com` calls.
+`papr_llm` is a thin client for the gateway (`POST /api/llm/complete`): the call runs on the same credentials, sign-in handling, fallbacks (rate limit → API key / Papr proxy; refused credential → next provider), caching and cost tracking as chat. The model credential never enters the job, so don't list `ANTHROPIC_API_KEY` / `OPENAI_API_KEY` in `requiredKeys` just for `papr_llm`. Other keys the script uses (Stripe, Apollo, a scraper API…) still go in `requiredKeys` as usual. No `requirements` needed. Never hand-write `anthropic.Anthropic(...)` / `api.openai.com` calls.
 
 **Pipeline pattern:** Python (data fetch) → sub-agent job (model) → Python (format output)
 

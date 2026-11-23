@@ -75,9 +75,7 @@ const createSubAgentSchema = z.object({
     .enum(["local-only", "local-preferred", "cloud-preferred"])
     .optional()
     .describe(
-      "Where jobs that run this profile go when Cloud Sync is on (a job's own executionCapability wins). " +
-        "local-preferred (default): desktop when awake, cloud otherwise. cloud-preferred: cloud even while the desktop is awake. local-only: desktop only. " +
-        "Omit unless the user asked.",
+      "Default cloud placement for this profile's jobs (a job's own value wins). Omit unless asked.",
     ),
   runtime: z
     .object({

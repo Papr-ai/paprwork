@@ -441,7 +441,7 @@ const AGENT_JOB_LLM_REMINDER =
   "Prefer type: \"subagent\" — built-in sign-in/API routing, caching, tools, delivery, recipes, no SDK code. " +
   "Use a sub-agent profile runtime to replace the system prompt or turn memory/wiki/tools off for neutral or cheap calls. " +
   "Keep a script ONLY when the model call is a step inside script code that is already running (row loop, pandas/scraping pipeline), " +
-  "and then call models via `from papr_llm import complete` (runs on the gateway's credentials, fallbacks and caching; no keys in the job), not raw SDKs. " +
+  "and then call models via `from papr_llm import complete` (runs on the gateway's model credentials, fallbacks and caching; no model key needed in requiredKeys), not raw SDKs. " +
   "Example: create_job({ type: \"agent\", command: \"Analyze leads and save top 5 to registry DB\", writeDbIds: [dbId], provider: \"anthropic\" }) " +
   "Read: read_skill({ skillId: \"preloaded-agent-job-output-guide\" })";
 
@@ -687,11 +687,7 @@ const createJobSchemaCore = z
     .enum(["local-only", "local-preferred", "cloud-preferred"])
     .optional()
     .describe(
-      "Where the job runs when Cloud Sync is on. local-preferred (default for app-linked jobs): desktop when it is awake, cloud otherwise. " +
-        "cloud-preferred: cloud runs scheduled slots even while the desktop is awake. local-only: desktop only. " +
-        "Omit it unless the user asked: jobs whose code needs the desktop (your Chrome, macOS, home-folder files) are set to local-only automatically, " +
-        "and standalone jobs (appIds ['__standalone__']) stay local-only because the cloud only runs app-linked jobs. " +
-        "subagent jobs without it use the profile's executionCapability.",
+      "Cloud placement. Omit: app-linked → local-preferred, standalone → local-only, desktop-only code → local-only automatically; subagent jobs use the profile's value.",
     ),
   model: z
     .enum([

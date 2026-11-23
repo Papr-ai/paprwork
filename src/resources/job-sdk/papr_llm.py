@@ -29,7 +29,8 @@ Put fixed material (instructions, reference docs, examples) in `system` and
 `context`, and per-request data in `prompt`. Anything that changes between calls
 must come last, or it breaks the cache.
 
-No API keys in the job: the gateway holds the credentials. Standard library only.
+No model key in the job: the gateway holds the Claude/ChatGPT credentials (other
+API keys your script uses still go in requiredKeys). Standard library only.
 """
 
 from __future__ import annotations
