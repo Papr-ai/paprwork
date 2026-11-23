@@ -3027,6 +3027,20 @@ export class AppService {
       console.warn("[AppService] CSS coverage lint failed:", lintError);
     }
     try {
+      const indexHtml = fileContents.get("index.html");
+      if (indexHtml !== undefined) {
+        const { checkMiniAppAssetRefs } = await import(
+          "../utils/miniAppAssetRefLint.js"
+        );
+        const existing = new Set(
+          filesToCheck.map((f) => path.relative(appPath, f).split(path.sep).join("/")),
+        );
+        issues.push(...checkMiniAppAssetRefs(indexHtml, existing));
+      }
+    } catch (lintError) {
+      console.warn("[AppService] Asset reference lint failed:", lintError);
+    }
+    try {
       const { checkFrontendSqlOveruse } = await import(
         "../utils/miniAppFrontendSqlLint.js"
       );
