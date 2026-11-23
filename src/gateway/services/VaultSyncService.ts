@@ -497,7 +497,14 @@ export class VaultSyncService {
         this.state.status = "idle";
         return null;
       }
-      markVaultPushFingerprints(toPush);
+      // A key the server refused (name taken, org policy) did NOT reach the vault.
+      // Fingerprinting it would skip it forever — e.g. after the blocker is resolved.
+      const refused = new Set(
+        (result.conflicts ?? []).map((c) => c.name.trim().toUpperCase()),
+      );
+      markVaultPushFingerprints(
+        toPush.filter((entry) => !refused.has(entry.name.trim().toUpperCase())),
+      );
       await traceDiagnosticPhase("vault:apply-push-result", () => this.applyForWorkspace(signal, () => this.applyVaultPushResultFromBackground(result)));
       return result;
     } catch (err) {
