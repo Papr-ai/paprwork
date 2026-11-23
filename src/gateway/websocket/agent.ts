@@ -20,6 +20,40 @@ import {
 /** `${authEpoch}:${requestedProvider}` → provider Auto actually runs on. */
 const autoProviderMemo = new Map<string, AgentConfig["provider"]>();
 
+/**
+ * Papr-proxy turn without premium access: keep Auto on open models (moving off
+ * Anthropic, where only Haiku is open, to Google Flash), and refuse an explicit
+ * premium model with the reason. Returns the error to show, or null to proceed.
+ */
+async function applyPremiumGate(config: AgentConfig, paprApiKey: string): Promise<string | null> {
+  const { isPremiumProxyModel, premiumRequiresPaygMessage } = await import(
+    "../../core/agents/premiumModels.js"
+  );
+  const isAuto = config.model === "auto";
+  if (!isAuto && !isPremiumProxyModel(config.model)) return null;
+  const { getPaprEntitlements } = await import("../utils/paprEntitlements.js");
+  const ent = await getPaprEntitlements(paprApiKey);
+  if (ent.premium) return null;
+  if (!isAuto) return premiumRequiresPaygMessage(config.model);
+  const { DEFAULT_AUTO_LADDERS, ladderModelIds } = await import("../../core/agents/autoLadders.js");
+  if (config.provider === "anthropic") {
+    config.provider = "google";
+    delete config.autoAllowedModels;
+    delete config.autoFallbackModelId;
+  }
+  const ladder = DEFAULT_AUTO_LADDERS[config.provider];
+  const base = config.autoAllowedModels ?? (ladder ? ladderModelIds(ladder) : []);
+  const open = base.filter((id) => !isPremiumProxyModel(id));
+  config.autoAllowedModels = open.length > 0 ? open : base;
+  if (config.autoFallbackModelId && isPremiumProxyModel(config.autoFallbackModelId)) {
+    delete config.autoFallbackModelId;
+  }
+  console.log(
+    `[Agent WS] Auto on Papr credits without premium (${ent.reason ?? "?"}): ${config.provider} → ${config.autoAllowedModels.join(", ")}`,
+  );
+  return null;
+}
+
 interface StreamPayload {
   chatId: string;
   message: string;
@@ -264,6 +298,17 @@ export async function setupAgentHandlers(
           } catch (keyError) {
             console.error(`[Agent WS] Failed to fetch API key:`, keyError);
             sendError(ws, message.id, "Failed to fetch API key");
+            return;
+          }
+        }
+
+        // Premium models on Papr credits need a paid plan with pay as you go.
+        // Auto quietly keeps to open models; an explicit premium pick gets a clear
+        // message instead of a provider 402 mid-stream. Own OAuth/keys never gated.
+        if (usePaprProxy) {
+          const blocked = await applyPremiumGate(config, apiKey);
+          if (blocked) {
+            sendError(ws, message.id, blocked);
             return;
           }
         }
