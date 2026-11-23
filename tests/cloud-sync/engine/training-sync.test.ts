@@ -8,6 +8,7 @@ import {
 import {
   applySearchTags,
   attachTrainingPayload,
+  consentAllowsTraining,
   isTrainingOptedIn,
   recordSearchOnToolCall,
   resetSearchTagsForTests,
@@ -63,6 +64,17 @@ describe("consent", () => {
       throw new Error("offline");
     });
     expect(await isTrainingOptedIn()).toBe(false);
+  });
+
+  test("feature flag: off unless the server says available AND opted in", () => {
+    expect(consentAllowsTraining(undefined)).toBe(false);
+    expect(consentAllowsTraining({})).toBe(false);
+    // Older server without the flag field: stays off even if opted_in was stored.
+    expect(consentAllowsTraining({ opted_in: true })).toBe(false);
+    expect(consentAllowsTraining({ opted_in: true, available: false })).toBe(false);
+    expect(consentAllowsTraining({ opted_in: false, available: true })).toBe(false);
+    expect(consentAllowsTraining({ opted_in: "true", available: "true" })).toBe(false);
+    expect(consentAllowsTraining({ opted_in: true, available: true })).toBe(true);
   });
 });
 
