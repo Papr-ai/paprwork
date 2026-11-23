@@ -266,6 +266,34 @@ export function notifyCloudSandboxAppSave(appId: string): void {
   scheduleModuleFlush();
 }
 
+/**
+ * Push one app now (push_cloud_sync / publish inside a cloud run). Cloud runs
+ * have no desktop CloudSyncService, so this is their publish path.
+ */
+export async function flushCloudSandboxAppNow(
+  appId: string,
+): Promise<{ pushed: boolean; error?: string }> {
+  if (process.env.GATEWAY_MODE !== "cloud_agent") {
+    return { pushed: false, error: "not a cloud run" };
+  }
+  if (moduleDisabled) {
+    return {
+      pushed: false,
+      error: "Only Maintainers or Admins of this app can publish changes to it.",
+    };
+  }
+  if (moduleOnlyAppId && appId !== moduleOnlyAppId) {
+    return { pushed: false, error: `This run can only publish ${moduleOnlyAppId}.` };
+  }
+  moduleDirtyApps.delete(appId);
+  const result = await flushWriterApps([appId]);
+  const failure = result.failed.find((f) => f.appId === appId);
+  if (failure) {
+    return { pushed: false, error: failure.error };
+  }
+  return { pushed: true };
+}
+
 /** Run for someone who can't publish: app saves stay local, nothing is pushed. */
 export function disableCloudAppWriterForRun(role?: string): void {
   moduleDisabled = true;

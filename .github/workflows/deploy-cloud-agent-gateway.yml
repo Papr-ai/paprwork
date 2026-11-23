@@ -119,6 +119,10 @@ jobs:
             --image="${{ needs.build.outputs.image }}" \
             --region="${GCP_REGION}" --project="${GCP_PROJECT_ID}" \
             --labels=commit=${GITHUB_SHA::8}
+          # A manual deploy with --no-traffic/--tag pins traffic to one revision,
+          # after which every deploy here gets 0%. Always serve the new revision.
+          gcloud run services update-traffic "${DEV_SERVICE}" --to-latest \
+            --region="${GCP_REGION}" --project="${GCP_PROJECT_ID}"
           URL=$(gcloud run services describe "${DEV_SERVICE}" --region="${GCP_REGION}" --project="${GCP_PROJECT_ID}" --format='value(status.url)')
           echo "url=${URL}" >> "$GITHUB_OUTPUT"
           echo "Rollback: gcloud run services update-traffic ${DEV_SERVICE} --to-revisions=${PREV}=100 --region=${GCP_REGION} --project=${GCP_PROJECT_ID}" >> "$GITHUB_STEP_SUMMARY"
