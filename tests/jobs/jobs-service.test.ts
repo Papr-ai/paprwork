@@ -398,3 +398,57 @@ describe("JobsService deletion", () => {
     expect(await service.getJob(job.id)).toBeNull();
   });
 });
+
+describe("JobsService placement on create", () => {
+  async function appId(): Promise<string> {
+    const appService = getAppService();
+    await appService.initialize();
+    const app = await appService.createApp("Placement", "Desc", [
+      { filename: "index.html", content: "<div>x</div>" },
+    ]);
+    return app.id;
+  }
+
+  test("app-linked job defaults to local-preferred (unset)", async () => {
+    const service = await setupService();
+    const job = await service.createJob({ name: "J", appIds: [await appId()], type: "shell", command: "echo hi" });
+    expect(job.executionCapability).toBeUndefined();
+  });
+
+  test("keeps an explicit placement from create", async () => {
+    const service = await setupService();
+    const job = await service.createJob({
+      name: "J", appIds: [await appId()], type: "shell", command: "echo hi",
+      executionCapability: "cloud-preferred",
+    });
+    expect(job.executionCapability).toBe("cloud-preferred");
+  });
+
+  test("subagent job takes the profile's placement unless the job sets one", async () => {
+    const service = await setupService();
+    const { getSubAgentService, resetSubAgentServiceForWorkspaceSwitch } = await import(
+      "../../src/gateway/services/SubAgentService.js"
+    );
+    resetSubAgentServiceForWorkspaceSwitch();
+    await getSubAgentService().createOrUpdateAgent({
+      id: "cloud-writer", name: "Cloud writer", description: "d", systemPrompt: "Write.",
+      executionCapability: "cloud-preferred",
+    });
+    const id = await appId();
+    const inherited = await service.createJob({ name: "A", appIds: [id], type: "subagent", subAgentId: "cloud-writer" });
+    expect(inherited.executionCapability).toBe("cloud-preferred");
+    const overridden = await service.createJob({
+      name: "B", appIds: [id], type: "subagent", subAgentId: "cloud-writer", executionCapability: "local-only",
+    });
+    expect(overridden.executionCapability).toBe("local-only");
+  });
+
+  test("desktop-only code is still pinned local-only when placement was not chosen", async () => {
+    const service = await setupService();
+    const job = await service.createJob({
+      name: "Mac", appIds: [await appId()], type: "bash", command: "osascript -e 'beep'",
+    });
+    expect(job.executionCapability).toBe("local-only");
+    expect(job.localOnlyAuto).toBe(true);
+  });
+});

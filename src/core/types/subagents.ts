@@ -72,6 +72,11 @@ export interface SubAgentProfile {
   icon?: SubAgentIconName;
   /** Runtime assembly: replace system prompt, memory/wiki/tools/search/caching switches. */
   runtime?: SubAgentRuntimeOptions;
+  /**
+   * Default placement for jobs that run this profile (cloud sync on). A job's own
+   * executionCapability wins; unset = the job default (local-preferred when app-linked).
+   */
+  executionCapability?: "local-only" | "local-preferred" | "cloud-preferred";
   createdAt: string;
   updatedAt: string;
   runCount: number;

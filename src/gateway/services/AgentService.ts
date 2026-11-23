@@ -2494,11 +2494,6 @@ export class AgentService {
             `baseUrl=${finalModel ? (finalModel as any).baseUrl : "null"}`,
         );
 
-        // Build native web search tools for pi-ai providers
-        const nativeSearchTools = runtime.nativeWebSearch
-          ? this.buildNativeSearchToolsForPiAi(piProvider)
-          : [];
-
         const piContext = buildPiContext({
           // Steered follow-up: the model-only note rides right after the
           // user's message (never persisted; see agent/steerYield.ts).
@@ -2509,7 +2504,6 @@ export class AgentService {
           apiId: piApiId,
           providerId: piProvider,
           modelId: piModelId,
-          nativeTools: nativeSearchTools,
         });
 
         // 🔍 LOG EXACT CONTEXT SENT TO PI-AI
@@ -2639,6 +2633,15 @@ export class AgentService {
             baseStreamOpts,
             config.thinking !== false,
           );
+        }
+        // Provider web search rides on the request body (pi-ai only converts
+        // function tools); see providers/piAiNativeWebSearch.ts.
+        if (runtime.nativeWebSearch) {
+          const { withPiAiNativeWebSearch } = await import(
+            "./providers/piAiNativeWebSearch.js"
+          );
+          streamOpts = withPiAiNativeWebSearch(piProvider, streamOpts);
+          console.log(`[AgentService] ✅ Native web search on (${piProvider}, pi-ai)`);
         }
         const apiKeys = getApiKeysForSanitization();
         const maxSteps = options?.maxSteps ?? 100;
@@ -5993,10 +5996,17 @@ ${last15.substring(0, 8_000)}`;
         break;
 
       case "anthropic":
-        // Anthropic: web_search disabled for now due to compatibility issues
-        console.log(
-          "[AgentService] ℹ️  Anthropic: Web search disabled (use browser tools instead)",
-        );
+        try {
+          const { anthropic } = await import("@ai-sdk/anthropic");
+          // 20250305: the version every current Claude model accepts.
+          tools.web_search = anthropic.tools.webSearch_20250305({ maxUses: 5 });
+          console.log("[AgentService] ✅ Enabled Anthropic web search");
+        } catch (error) {
+          console.warn(
+            "[AgentService] ⚠️  Failed to load Anthropic web search tool:",
+            (error as Error).message,
+          );
+        }
         break;
 
       case "ollama":
@@ -6009,46 +6019,6 @@ ${last15.substring(0, 8_000)}`;
       default:
         console.log(
           `[AgentService] ℹ️  Provider ${provider}: No native search support`,
-        );
-    }
-
-    return tools;
-  }
-
-  /**
-   * Build native web search tools for pi-ai providers (OAuth routes)
-   *
-   * Same as buildNativeSearchTools but returns pi-ai compatible format
-   */
-  private buildNativeSearchToolsForPiAi(
-    provider: string,
-  ): Array<{ type: string; name?: string; max_uses?: number }> {
-    const tools: Array<{ type: string; name?: string; max_uses?: number }> = [];
-
-    switch (provider) {
-      case "anthropic":
-        // Anthropic: web_search disabled for now due to compatibility issues
-        console.log(
-          "[AgentService] ℹ️  Anthropic OAuth: Web search disabled (use browser tools instead)",
-        );
-        break;
-
-      case "openai-codex":
-        // OpenAI Codex: web_search tool
-        // Note: May require specific ChatGPT backend support
-        tools.push({
-          type: "web_search",
-          name: "web_search",
-          max_uses: 10,
-        });
-        console.log(
-          "[AgentService] ⚠️  Added OpenAI Codex web_search via pi-ai (experimental)",
-        );
-        break;
-
-      default:
-        console.log(
-          `[AgentService] ℹ️  Provider ${provider}: No native search via pi-ai`,
         );
     }
 
