@@ -4375,6 +4375,9 @@ async function startGateway(): Promise<void> {
       void sendPreparedRendererTelemetry(prepared.payload);
     });
 
+    // papr_llm.complete — jobs/backend actions call models through the chat stack.
+    (await import("./services/llm/registerModelCallRoutes.js")).registerModelCallRoutes(app);
+
     app.post("/api/bash/run", async (_req, res) => {
       const { MINI_APP_BASH_DISABLED_CODE, MINI_APP_BASH_DISABLED_MESSAGE } =
         await import("./services/appRuntime/miniAppApiPolicy.js");

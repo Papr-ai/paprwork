@@ -440,8 +440,8 @@ const AGENT_JOB_LLM_REMINDER =
   "⚠️ LLM IN SCRIPT JOB: This job appears to call OpenAI/Anthropic/Gemini directly. " +
   "Prefer type: \"subagent\" — built-in sign-in/API routing, caching, tools, delivery, recipes, no SDK code. " +
   "Use a sub-agent profile runtime to replace the system prompt or turn memory/wiki/tools off for neutral or cheap calls. " +
-  "Keep a script ONLY for a named reason (sync UI backend action, big per-row data loop, step inside existing script code, API feature the agent path lacks, byte-identical audit) " +
-  "and then call models via `from papr_llm import complete` (handles Claude/ChatGPT sign-in tokens + caching), not raw SDKs. " +
+  "Keep a script ONLY when the model call is a step inside script code that is already running (row loop, pandas/scraping pipeline), " +
+  "and then call models via `from papr_llm import complete` (runs on the gateway's credentials, fallbacks and caching; no keys in the job), not raw SDKs. " +
   "Example: create_job({ type: \"agent\", command: \"Analyze leads and save top 5 to registry DB\", writeDbIds: [dbId], provider: \"anthropic\" }) " +
   "Read: read_skill({ skillId: \"preloaded-agent-job-output-guide\" })";
 
@@ -682,6 +682,16 @@ const createJobSchemaCore = z
     .optional()
     .describe(
       "Provider for agent/subagent jobs. Overrides default. Example: 'openai', 'anthropic', 'ollama'",
+    ),
+  executionCapability: z
+    .enum(["local-only", "local-preferred", "cloud-preferred"])
+    .optional()
+    .describe(
+      "Where the job runs when Cloud Sync is on. local-preferred (default for app-linked jobs): desktop when it is awake, cloud otherwise. " +
+        "cloud-preferred: cloud runs scheduled slots even while the desktop is awake. local-only: desktop only. " +
+        "Omit it unless the user asked: jobs whose code needs the desktop (your Chrome, macOS, home-folder files) are set to local-only automatically, " +
+        "and standalone jobs (appIds ['__standalone__']) stay local-only because the cloud only runs app-linked jobs. " +
+        "subagent jobs without it use the profile's executionCapability.",
     ),
   model: z
     .enum([
@@ -1121,7 +1131,7 @@ export const createJobTool = createTool({
     "For pipelines that should run automatically when a parent job finishes, each dependsOn entry MUST include autoTrigger: true (same for subagent→subagent as python→subagent). " +
     "Without autoTrigger, dependencies only order runs when you start the job another way. " +
     "\n\nModel calls: default to type: 'subagent' (shape it with the profile runtime: replace system prompt, memory/wiki/tools off for neutral or cheap calls). " +
-    "Use a python/node job that calls a model only for a named reason (sync UI, big data loop, step inside script code, API feature the agent path lacks, byte-identical audit) — state it, and use the bundled papr_llm helper, never raw anthropic/openai SDKs. " +
+    "Use a python/node job that calls a model only when the call is a step inside script code that is already running (row loop, pandas/scraping pipeline) — via the bundled papr_llm helper, never raw anthropic/openai SDKs. " +
     "\n\nAgent job model selection: " +
     "Use 'provider' and 'model' fields for direct override (type: 'agent', same behavior, just different model). " +
     "Use subagent (type: 'subagent' with subAgentId) when you need custom system prompt or restricted tools. " +
@@ -1193,6 +1203,7 @@ export const createJobTool = createTool({
       provider: args.provider,
       model: args.model,
       recipe: args.recipe,
+      executionCapability: args.executionCapability,
     });
 
     const isScriptJob = ["python", "node", "bash", "shell", "swift"].includes(
