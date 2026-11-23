@@ -132,7 +132,7 @@ export const PAPR_EXPERT_BUILDS: readonly PaprExpertBuildOption[] = [
   },
 ];
 
-export const PAPR_EXPERT_BUILD_CONTACT = "mailto:sales@papr.ai?subject=Expert%20Build%20%E2%80%94%20XL%20app";
+export const PAPR_EXPERT_BUILD_CONTACT = "https://papr.ai/contact-sales?from=app-expert-build-xl";
 
 export function creditsUsdLabel(plan: Pick<PaprCreditPlanCard, "creditsPerSeat">): string {
   return `$${Math.round(plan.creditsPerSeat * USD_PER_CREDIT).toLocaleString("en-US")}`;
