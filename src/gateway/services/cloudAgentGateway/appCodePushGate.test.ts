@@ -18,3 +18,12 @@ describe("appCodePush gate", () => {
     expect(ctx).not.toMatch(/appCodePush \?\? "main"/);
   });
 });
+
+// Catalog apps loaded mid-run aren't watched; the write itself must queue the push.
+describe("cloud app edits reach the writer", () => {
+  it("writeAppFile notifies the cloud writer in cloud runs", () => {
+    const svc = readFileSync(path.resolve(__dirname, "../AppService.ts"), "utf8");
+    const write = svc.slice(svc.indexOf("  async writeAppFile("), svc.indexOf("  async buildApp("));
+    expect(write).toMatch(/GATEWAY_MODE === "cloud_agent"[\s\S]*notifyCloudSandboxAppSave\(appId\)/);
+  });
+});

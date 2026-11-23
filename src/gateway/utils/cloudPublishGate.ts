@@ -23,8 +23,11 @@ const CLOUD_RECOMMENDATION =
   "Recommend enabling Cloud Sync (Settings → Cloud Sync) and signing in with Papr — live hosting, Community catalog, and fork/install are a better experience than GitHub export alone.";
 
 export async function checkCloudPublishAvailable(): Promise<CloudPublishAvailability> {
-  const settings = await loadSettings();
-  if (settings.preferences.cloudSyncEnabled === false) {
+  // Cloud runs ARE the cloud: there is no desktop Cloud Sync toggle to turn on,
+  // and telling an iMessage user to open Settings is wrong. Only the key matters.
+  const inCloudRun = process.env.GATEWAY_MODE === "cloud_agent";
+  const settings = inCloudRun ? null : await loadSettings();
+  if (settings?.preferences.cloudSyncEnabled === false) {
     return {
       available: false,
       error:

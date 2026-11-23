@@ -2052,6 +2052,12 @@ export class AppService {
       const entry = (await fetchCloudAccessibleApps()).find((a) => a.appId === id);
       if (!entry || !isOwnCatalogApp(entry)) return null;
       if (!(await cloneCatalogAppIntoSandbox(this.appsDir, id))) return null;
+      // Code alone isn't enough: connect the app's databases too, or every
+      // read/write in this run fails with "not available in this cloud run".
+      const { registerCatalogAppDatabases } = await import(
+        "./cloudAgentGateway/catalogAppDatabases.js"
+      );
+      await registerCatalogAppDatabases(path.dirname(this.appsDir), id);
       const hints = await this.readMetadataHintsFromAppDir(path.join(this.appsDir, id));
       const now = new Date().toISOString();
       const scope = readActiveAppWorkspaceScope();
@@ -2466,6 +2472,24 @@ export class AppService {
 
       // Rebuild + iframe reload are handled by the filesystem watcher (debounced)
       // so multi-file agent edits coalesce into a single build/reload cycle.
+
+      // Cloud runs don't run the app file watcher (and apps loaded from the
+      // catalog mid-run are never registered with it), so queue the writer
+      // push here. Without this an agent edit in the cloud never reaches the
+      // live app. The debouncer dedupes with the watcher path.
+      if (process.env.GATEWAY_MODE === "cloud_agent") {
+        try {
+          const { notifyCloudSandboxAppSave } = await import(
+            "./cloudAgentGateway/cloudAppWriterDebouncedPush.js"
+          );
+          notifyCloudSandboxAppSave(appId);
+        } catch (notifyError) {
+          console.warn(
+            `[AppService] Cloud writer notify failed for ${appId}:`,
+            (notifyError as Error).message,
+          );
+        }
+      }
 
       return true;
     } catch (error) {
