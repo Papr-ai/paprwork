@@ -3,6 +3,7 @@
  */
 
 import {
+  formatRuntimeLogLine,
   getAppRuntimeLogService,
   normalizePreviewConsoleLevel,
   type AppRuntimeLogEntry,
@@ -177,11 +178,24 @@ export async function runMiniAppRuntimePreview(
   }
 }
 
+const isBackendEntry = (entry: AppRuntimeLogEntry): boolean =>
+  (entry.source ?? "").startsWith("backend/");
+
+/**
+ * Recent iframe/preview errors. Backend action failures are excluded unless
+ * they happened at or after `backendSinceIso` — an action that failed before the
+ * agent fixed it must not fail the next validate_app.
+ */
 export function collectRecentRuntimeErrors(
   appId: string,
   sinceMs = 5 * 60 * 1000,
+  backendSinceIso?: string,
 ): string[] {
-  return getAppRuntimeLogService().getErrorMessages(appId, { sinceMs, limit: 50 });
+  const backendCutoff = backendSinceIso ? Date.parse(backendSinceIso) : Infinity;
+  return getAppRuntimeLogService()
+    .getLogs(appId, { sinceMs, limit: 50, levels: ["error"] })
+    .filter((e) => !isBackendEntry(e) || Date.parse(e.timestamp) >= backendCutoff)
+    .map((e) => formatRuntimeLogLine(e));
 }
 
 export interface PostValidationRuntimeCheck {
@@ -195,8 +209,10 @@ export interface PostValidationRuntimeCheck {
 export async function runPostValidationRuntimeCheck(
   appId: string,
 ): Promise<PostValidationRuntimeCheck> {
+  const startedAt = new Date().toISOString();
   const preview = await runMiniAppRuntimePreview(appId);
-  const iframeErrors = collectRecentRuntimeErrors(appId);
+  // Backend calls the preview made (POST /api/app/backend/*) log failures here.
+  const iframeErrors = collectRecentRuntimeErrors(appId, undefined, startedAt);
   const allErrors = [...new Set([...preview.previewErrors, ...iframeErrors])];
   const loadWarnings = preview.networkProfile?.warnings ?? [];
   return { preview, iframeErrors, allErrors, loadWarnings };
