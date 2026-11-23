@@ -29,10 +29,10 @@ async function readJson<T>(file: string): Promise<T | null> {
   }
 }
 
-async function mintToken(database: string, appId: string): Promise<{ url: string; authToken: string }> {
+export async function mintToken(database: string, appId?: string): Promise<{ url: string; authToken: string }> {
   const res = await cloudApiFetch("/v1/cloud/databases/token", {
     method: "POST",
-    body: { database, appId },
+    body: appId ? { database, appId } : { database },
     timeoutMs: 30_000,
   });
   if (!res.ok) {

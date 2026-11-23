@@ -94,8 +94,14 @@ export const createDatabaseTool = createTool({
     const { shouldDeferRegistrySqliteFileForReplica } = await import(
       "../../gateway/utils/tursoReplicaEnabled.js"
     );
+    // Cloud agent run (any channel): the run folder is thrown away, so the
+    // database must live in Papr Cloud from the start — never a temp file.
+    const cloudRun = await import(
+      "../../gateway/services/cloudAgentGateway/cloudRunNewDatabase.js"
+    );
+    const inCloudRun = cloudRun.isCloudAgentRunSandbox();
     await ensureRegistryDatabase(localPath, {
-      deferSqliteFile: shouldDeferRegistrySqliteFileForReplica(),
+      deferSqliteFile: inCloudRun || shouldDeferRegistrySqliteFileForReplica(),
     });
 
     const registry = await initializeDatabaseRegistry();
@@ -103,7 +109,11 @@ export const createDatabaseTool = createTool({
       localPath,
       label: args.name,
       isolation: args.isolation ?? "shared",
+      ...(inCloudRun ? { syncMode: "cloud-direct" as const } : {}),
     });
+    if (inCloudRun) {
+      await cloudRun.connectNewCloudRunDatabase(record);
+    }
 
     return {
       success: true,
@@ -171,6 +181,13 @@ export const attachDatabaseTool = createTool({
       dbPath: record.localPath,
       tables: [],
     });
+
+    // Attaching makes this app the schema owner: its migration files now ship
+    // with the app. In a cloud run nothing else queues that publish.
+    const { publishSchemaOwnerAfterMigration } = await import(
+      "../../gateway/services/cloudAgentGateway/cloudRunNewDatabase.js"
+    );
+    await publishSchemaOwnerAfterMigration(registry.getById(args.dbId));
 
     return {
       success: true,

@@ -714,6 +714,14 @@ export async function paprDbCreateMigration(options: {
     dbId: options.dbId,
     migrationId: created.migrationId,
   });
+  // Cloud run: the migration file sits beside the database, not in the app
+  // folder, so no app save fires. Publish the owner app so the file ships.
+  const { publishSchemaOwnerAfterMigration } = await import(
+    "../cloudAgentGateway/cloudRunNewDatabase.js"
+  );
+  await publishSchemaOwnerAfterMigration(
+    getDatabaseRegistryService().getById(options.dbId),
+  );
   return {
     migrationId: created.migrationId,
     fileName: created.fileName,
