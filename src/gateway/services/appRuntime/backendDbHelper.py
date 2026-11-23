@@ -44,7 +44,63 @@ from typing import Any, Union
 #   4 = row ACL helpers: caller_id(), acl_read_filter(), acl_write_filter(), acl_for_caller()
 #   5 = role/team principals in `_acl` (caller_role(), caller_principals()) +
 #       acl_segment_filter() for membership-scoped rows (standups, projects, …)
-PAPR_DB_HELPER_VERSION = 5
+#   6 = con.execute() results also work sqlite3-style: .fetchall() / .fetchone(),
+#       rows indexable by name or position (agents write the sqlite3 idiom)
+PAPR_DB_HELPER_VERSION = 6
+
+
+class _Row(dict):
+    """A dict row that also answers row[0] like sqlite3 tuples / sqlite3.Row."""
+
+    def __getitem__(self, key: Any) -> Any:
+        if isinstance(key, int):
+            return list(self.values())[key]
+        return super().__getitem__(key)
+
+
+class _Rows(list):
+    """Rows from con.execute(SELECT …): a list of dicts that also has fetchall().
+
+    Agents write `con.execute(sql).fetchall()` out of sqlite3 habit; returning a
+    bare list made that crash with AttributeError in every backend action.
+    """
+
+    rowcount = -1
+
+    def fetchall(self) -> "_Rows":
+        return self
+
+    def fetchone(self) -> "_Row | None":
+        return self[0] if self else None
+
+    def fetchmany(self, size: int = 1) -> list["_Row"]:
+        return list(self[:size])
+
+
+class _Changes(int):
+    """Row count from con.execute(INSERT/UPDATE/DELETE …), cursor-shaped too."""
+
+    lastrowid: int | None = None
+
+    @property
+    def rowcount(self) -> int:
+        return int(self)
+
+    def fetchall(self) -> list[Any]:
+        return []
+
+    def fetchone(self) -> None:
+        return None
+
+
+def _wrap_execute_result(result: Any, lastrowid: int | None) -> "_Rows | _Changes":
+    if isinstance(result, list):
+        rows = _Rows(_Row(r) if isinstance(r, dict) else r for r in result)
+        rows.rowcount = len(rows)
+        return rows
+    changes = _Changes(int(result or 0))
+    changes.lastrowid = lastrowid
+    return changes
 
 
 @dataclass(frozen=True)
@@ -453,8 +509,8 @@ class _ProxyConnection:
         self,
         sql: str,
         params: list[Any] | None = None,
-    ) -> list[dict[str, Any]] | int:
-        return execute(self, sql, params)
+    ) -> "_Rows | _Changes":
+        return _wrap_execute_result(execute(self, sql, params), self.lastrowid)
 
     def close(self) -> None:
         return None
@@ -533,6 +589,13 @@ class _TursoConnection:
         return None
 
     def execute(
+        self,
+        sql: str,
+        params: list[Any] | None = None,
+    ) -> "_Rows | _Changes":
+        return _wrap_execute_result(self._execute_raw(sql, params), self.lastrowid)
+
+    def _execute_raw(
         self,
         sql: str,
         params: list[Any] | None = None,
