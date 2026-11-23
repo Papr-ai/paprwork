@@ -34,6 +34,19 @@ export interface ModelCallInput {
   cacheTtl?: "5m" | "1h";
   temperature?: number;
   signal?: AbortSignal;
+  /**
+   * Cloud only: credentials to use, in fallback order, instead of resolving
+   * them on this machine. The memory server resolves them from the vault per
+   * run; they live only for this call.
+   */
+  credentials?: ModelCallCredential[];
+}
+
+export interface ModelCallCredential {
+  provider: string;
+  authType: "oauth" | "apiKey";
+  token: string;
+  usePaprProxy?: boolean;
 }
 
 export interface ModelCallUsage {
@@ -55,7 +68,7 @@ export interface ModelCallResult {
   retries: string[];
 }
 
-type Auth = {
+export type Auth = {
   provider: Provider;
   model: string;
   apiKey: string;
@@ -101,8 +114,31 @@ export async function resolveModelCallAuth(
   return resolveJobSessionAuth({ provider: p, model: m });
 }
 
+/** Supplied credentials → Auth list; the requested model is kept only on its own provider. */
+export function authsFromCredentials(
+  credentials: ModelCallCredential[],
+  provider?: "anthropic" | "openai",
+  model?: string,
+): Auth[] {
+  const out: Auth[] = [];
+  for (const c of credentials) {
+    const family = c.provider.startsWith("openai") ? "openai" : c.provider === "anthropic" ? "anthropic" : null;
+    if (!family || !c.token?.trim()) continue;
+    const keepModel = !!model && (!provider || provider === family);
+    out.push({
+      provider: family as Provider,
+      model: keepModel ? model! : DEFAULT_MODEL[family],
+      apiKey: c.token.trim(),
+      authType: c.authType === "oauth" ? "oauth" : "apiKey",
+      usePaprProxy: c.usePaprProxy === true,
+    });
+  }
+  return out;
+}
+
 export async function callModel(input: ModelCallInput): Promise<ModelCallResult> {
   if (!input.prompt?.trim()) throw new Error("prompt is required");
+  if (input.credentials) return callWithCredentials(input, authsFromCredentials(input.credentials, input.provider, input.model));
   let auth = await resolveModelCallAuth(input.provider, input.model);
   const retries: string[] = [];
 
@@ -126,6 +162,22 @@ export async function callModel(input: ModelCallInput): Promise<ModelCallResult>
     }
   }
   throw new Error(`Model call failed after retries: ${retries.join(" | ")}`);
+}
+
+/** Cloud: try each supplied credential in order; move on after a rate limit or a refused credential. */
+async function callWithCredentials(input: ModelCallInput, auths: Auth[]): Promise<ModelCallResult> {
+  if (!auths.length) throw new CallError("No Claude or ChatGPT credential is connected for this account", "auth");
+  const retries: string[] = [];
+  for (const auth of auths) {
+    try {
+      return { ...(await callOnce(input, auth)), retries };
+    } catch (err) {
+      const e = err instanceof CallError ? err : await classify((err as Error).message ?? String(err));
+      retries.push(`${auth.provider}/${auth.model} (${auth.usePaprProxy ? "proxy" : auth.authType}): ${e.message.slice(0, 200)}`);
+      if (e.kind === "other") throw new Error(`Model call failed (${auth.provider}/${auth.model}): ${e.message}`);
+    }
+  }
+  throw new Error(`Model call failed on every connected credential: ${retries.join(" | ")}`);
 }
 
 async function callOnce(input: ModelCallInput, auth: Auth): Promise<Omit<ModelCallResult, "retries">> {

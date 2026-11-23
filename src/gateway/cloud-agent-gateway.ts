@@ -17,6 +17,7 @@ import { getCloudAgentGatewayService } from "./services/cloudAgentGateway/CloudA
 import { handleCloudAgentAppRepoCommitted } from "./services/cloudAgentGateway/handleAppRepoCommitted.js";
 import { resolveCloudAgentRunId } from "./services/cloudAgentGateway/cloudAgentRunId.js";
 import { startSandboxLocalApi } from "./services/cloudAgentGateway/sandboxLocalApi.js";
+import { registerInternalModelCallRoute } from "./services/llm/registerModelCallRoutes.js";
 import type { CloudAgentRunRequest } from "./services/cloudAgentGateway/types.js";
 import {
   parseAppRepoCommittedPayload,
@@ -289,6 +290,10 @@ async function main(): Promise<void> {
     await service.endAgentSession(sessionId);
     res.json({ ok: true, sessionId });
   });
+
+  // papr_llm from cloud script jobs (GKE pods): the memory server relays each call
+  // here with the run's vault credentials, so no credential ever enters the pod.
+  registerInternalModelCallRoute(app, requireGatewayAuth);
 
   app.post("/internal/app-repo-committed", requireGatewayAuth, async (req, res) => {
     const event = parseAppRepoCommittedPayload(req.body);

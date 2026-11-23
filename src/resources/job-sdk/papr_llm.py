@@ -4,8 +4,10 @@ Use this only when the work really belongs in a script (see APP_AND_JOBS_GUIDE
 "Calling models from scripts"). For anything with reasoning, tools or several
 steps, a sub-agent job is the better tool.
 
-This is a thin client. The call goes to the Papr gateway (POST
-/api/llm/complete), which runs it on the same stack chat and agent jobs use:
+This is a thin client. On the desktop the call goes to the Papr gateway (POST
+/api/llm/complete); in a cloud script job it goes to a per-run relay
+(PAPR_LLM_PROXY_URL) that the memory server sets up. Both run it on the same
+stack chat and agent jobs use:
 
   * the same credential: API key or Claude / ChatGPT sign-in, refreshed for you
   * the same fallbacks: sign-in rate limit -> API key or Papr proxy; a refused
@@ -72,12 +74,24 @@ def _gateway() -> str:
     return os.environ.get("PAPR_GATEWAY_URL", DEFAULT_GATEWAY).rstrip("/")
 
 
+def _endpoint() -> "tuple[str, Dict[str, str]]":
+    """Cloud script jobs get a per-run relay (PAPR_LLM_PROXY_URL + token); desktop
+    jobs and backend actions call the local gateway."""
+    headers = {"Content-Type": "application/json"}
+    relay = os.environ.get("PAPR_LLM_PROXY_URL", "").strip()
+    token = os.environ.get("PAPR_LLM_PROXY_TOKEN", "").strip()
+    if relay and token:
+        headers["Authorization"] = f"Bearer {token}"
+        return f"{relay.rstrip('/')}/complete", headers
+    return f"{_gateway()}/api/llm/complete", headers
+
+
 def _post(body: dict, timeout: float) -> dict:
     data = json.dumps(body).encode()
-    url = f"{_gateway()}/api/llm/complete"
+    url, headers = _endpoint()
     last: Optional[Exception] = None
     for attempt in range(3):
-        req = urllib.request.Request(url, data=data, headers={"Content-Type": "application/json"}, method="POST")
+        req = urllib.request.Request(url, data=data, headers=headers, method="POST")
         try:
             with urllib.request.urlopen(req, timeout=timeout) as resp:
                 return json.loads(resp.read().decode())
@@ -91,7 +105,7 @@ def _post(body: dict, timeout: float) -> dict:
             if e.code not in _RETRY_STATUS:
                 raise last from None
         except urllib.error.URLError as e:
-            last = LLMError(f"Papr gateway not reachable at {_gateway()}: {e.reason}")
+            last = LLMError(f"Papr model endpoint not reachable at {url}: {e.reason}")
         time.sleep(1.5 * (attempt + 1))
     raise last  # type: ignore[misc]
 
