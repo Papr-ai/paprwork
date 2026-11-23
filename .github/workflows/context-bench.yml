@@ -64,7 +64,7 @@ jobs:
           python-version: "3.12"
       - run: pip install -q "numpy<3" rank_bm25 requests
         if: steps.scope.outputs.run == '1'
-      - uses: google-github-actions/auth@v2
+      - uses: google-github-actions/auth@v3
         if: steps.scope.outputs.run == '1'
         with:
           workload_identity_provider: ${{ vars.GCP_WIF_PROVIDER }}
