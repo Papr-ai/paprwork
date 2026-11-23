@@ -119,7 +119,7 @@ export async function assessJobDesktopOnly(
   lookup: (jobId: string) => JobRecord | undefined,
 ): Promise<DesktopOnlyHit[]> {
   const files = await collectJobCodeFiles(jobDir);
-  const input = { id: job.id, type: job.type, command: job.command, provider: job.provider, files };
+  const input = { id: job.id, type: job.type, command: job.command, provider: job.provider, model: job.model, files };
   const hits = detectJobDesktopOnly(input);
   if (!hits.length) {
     for (const ref of referencedJobIds(input)) {

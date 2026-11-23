@@ -9,6 +9,7 @@ import { getAgentService } from "../../AgentService.js";
 import { getJobsService } from "../../JobsService.js";
 import { substituteAppIdPlaceholder } from "../appIdPlaceholder.js";
 import { v4 as uuidv4 } from "uuid";
+import { inferJobProvider } from "../../../../core/utils/ollamaModelFit.js";
 import { writeRunMemory } from "../../PaprMemoryWritebackService.js";
 import {
   getSleepCycleService,
@@ -162,6 +163,9 @@ export class AgentJobExecutor implements IJobExecutor {
     if (params.job.model) {
       model = params.job.model;
     }
+    // A job with only a local Ollama model id (no provider) must run on Ollama,
+    // not on the default cloud provider with an id it doesn't know.
+    provider = inferJobProvider(provider, model) as Provider | undefined;
 
     let subAgentSystemPrompt: string | undefined;
     let subAgentName: string | undefined;

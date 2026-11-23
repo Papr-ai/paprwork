@@ -1,4 +1,5 @@
 import { gatewayBackgroundBudget } from "../../gateway/services/gatewayBackgroundBudget.js";
+import { inferJobProvider } from "../utils/ollamaModelFit.js";
 import { createTool } from "@mastra/core/tools";
 import { z } from "zod";
 import { isPlatformInjectedEnvKey } from "../utils/platformInjectedEnvKeys.js";
@@ -1196,7 +1197,7 @@ export const createJobTool = createTool({
       maxTurns: args.maxTurns,
       memoryPolicy: args.memoryPolicy,
       reportChatId: args.reportChatId,
-      provider: args.provider,
+      provider: inferJobProvider(args.provider, args.model),
       model: args.model,
       recipe: args.recipe,
       executionCapability: args.executionCapability,
@@ -2947,8 +2948,13 @@ Common use cases:
       await import("../../gateway/services/JobsService.js");
     const jobsService = getJobsService();
     await jobsService.initialize();
+    const inferredProvider =
+      rest.model !== undefined && rest.provider === undefined
+        ? inferJobProvider(undefined, rest.model)
+        : undefined;
     const job = await jobsService.updateJob(jobId, {
       ...rest,
+      ...(inferredProvider ? { provider: inferredProvider as typeof rest.provider } : {}),
       ...(requiredKeys !== undefined
         ? { requiredKeys: jobRequiredKeyNames(requiredKeys) }
         : {}),
