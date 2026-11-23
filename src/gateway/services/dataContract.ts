@@ -4,12 +4,12 @@
  * Stored at ~/Papr/apps/{appId}/data-contract.json
  */
 
-import { existsSync } from "fs";
 import { todayBriefDateKey } from "../../core/utils/briefDateKey.js";
 import {
   countRowsInRegistryTable,
   queryRegistryDatabase,
   readRegistryDatabaseSchema,
+  registryDatabaseExists,
   type RegistryDbSchemaReadInput,
 } from "./jobs/registryDbSchemaReader.js";
 
@@ -119,7 +119,7 @@ export async function validateDatabaseAgainstContract(
   const violations: ContractViolation[] = [];
   const tablesChecked = new Set<string>();
 
-  if (!existsSync(db.dbPath)) {
+  if (!(await registryDatabaseExists(db))) {
     return {
       passed: false,
       violations: [
@@ -293,7 +293,7 @@ export async function listUserTablesWithCounts(
   dbPathOrContext: string | ContractValidationDbContext,
 ): Promise<TableRowCount[]> {
   const db = normalizeDbContext(dbPathOrContext);
-  if (!existsSync(db.dbPath)) return [];
+  if (!(await registryDatabaseExists(db))) return [];
 
   const tableNames = await (async () => {
     const read = await readRegistryDatabaseSchema(db);
