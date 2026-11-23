@@ -39,6 +39,12 @@ interface Props {
   /** Shown on Local only when the workspace has no active subscription at all. */
   onActivateLocal?: () => void;
   localPending?: boolean;
+  /** Label for the Local button (first-run uses "Continue free"). */
+  localLabel?: string;
+  /** Plan to open on (e.g. picked on papr.ai): selects the Cloud Max size. */
+  initialPlan?: PaprCreditPlanId | null;
+  /** Hide the one-time Expert Build add-on (first-run keeps the choice simple). */
+  hideExpertBuild?: boolean;
 }
 
 type CardProps = Props & { track: PaprPlanTrack };
@@ -87,7 +93,7 @@ function LocalCard(props: CardProps) {
       {props.onActivateLocal ? (
         <button type="button" className="cpc-btn" disabled={props.localPending || props.pending !== null}
           onClick={props.onActivateLocal}>
-          {props.localPending ? "Activating…" : "Activate free plan"}
+          {props.localPending ? "Activating…" : props.localLabel ?? "Activate free plan"}
         </button>
       ) : null}
       <div className="cpc-plus">Included:</div>
@@ -113,7 +119,9 @@ function EnterpriseCard() {
 export function CreditPlanCards(props: Props) {
   const [cloud, max5, max20] = PAPR_CREDIT_PLANS as [PaprCreditPlanCard, PaprCreditPlanCard, PaprCreditPlanCard];
   const [track, setTrack] = useState<PaprPlanTrack>(props.defaultTrack ?? "team");
-  const [maxSize, setMaxSize] = useState<PaprCreditPlanCard>(props.currentPlan === "cloud_max" ? max20 : max5);
+  const [maxSize, setMaxSize] = useState<PaprCreditPlanCard>(
+    (props.initialPlan ?? props.currentPlan) === "cloud_max" ? max20 : max5,
+  );
   const expertPending = props.pending?.startsWith("expert:")
     ? (props.pending.slice(7) as PaprExpertBuildSize) : null;
   const team = track === "team";
@@ -154,11 +162,13 @@ export function CreditPlanCards(props: Props) {
           </div>
           <p className="cpc-blurb">{maxSize.blurb}</p>
           <PlanBody {...card} plan={maxSize} prev="Cloud" from={maxSize.id === max5.id} solid />
-          <ExpertBuilder
-            canBuy={props.canManageBilling && props.pending === null}
-            pendingSize={expertPending}
-            onBuy={props.onBuyExpertBuild}
-          />
+          {props.hideExpertBuild ? null : (
+            <ExpertBuilder
+              canBuy={props.canManageBilling && props.pending === null}
+              pendingSize={expertPending}
+              onBuy={props.onBuyExpertBuild}
+            />
+          )}
         </div>
 
         {team ? <EnterpriseCard /> : null}
