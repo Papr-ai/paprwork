@@ -2467,6 +2467,24 @@ export class AppService {
       // Rebuild + iframe reload are handled by the filesystem watcher (debounced)
       // so multi-file agent edits coalesce into a single build/reload cycle.
 
+      // Cloud runs don't run the app file watcher (and apps loaded from the
+      // catalog mid-run are never registered with it), so queue the writer
+      // push here. Without this an agent edit in the cloud never reaches the
+      // live app. The debouncer dedupes with the watcher path.
+      if (process.env.GATEWAY_MODE === "cloud_agent") {
+        try {
+          const { notifyCloudSandboxAppSave } = await import(
+            "./cloudAgentGateway/cloudAppWriterDebouncedPush.js"
+          );
+          notifyCloudSandboxAppSave(appId);
+        } catch (notifyError) {
+          console.warn(
+            `[AppService] Cloud writer notify failed for ${appId}:`,
+            (notifyError as Error).message,
+          );
+        }
+      }
+
       return true;
     } catch (error) {
       console.error(`[AppService] Failed to write file: ${filename}`, error);

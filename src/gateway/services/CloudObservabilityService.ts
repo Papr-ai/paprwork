@@ -560,12 +560,44 @@ function resolvePushCloudSyncTargets(
   return ["github", "turso"];
 }
 
+async function pushCloudSyncInCloudRun(
+  options: PushCloudSyncOptions,
+  startMs: number,
+): Promise<PushCloudSyncResult> {
+  if (!options.appId) {
+    throw new Error(
+      "In cloud runs, app edits publish automatically. Pass appId to publish an app now; database rows already write straight to the cloud.",
+    );
+  }
+  const { flushCloudSandboxAppNow } = await import(
+    "./cloudAgentGateway/cloudAppWriterDebouncedPush.js"
+  );
+  const outcome = await flushCloudSandboxAppNow(options.appId);
+  if (!outcome.pushed) {
+    throw new Error(`Could not publish ${options.appId}: ${outcome.error ?? "unknown error"}`);
+  }
+  return {
+    success: true,
+    scope: buildPushCloudSyncScopeLabel(options),
+    targets: ["github"],
+    appId: options.appId,
+    syncState: { enabled: true, cloudRun: true } as unknown as PushCloudSyncResult["syncState"],
+    pushedAt: new Date().toISOString(),
+    durationMs: Math.round(performance.now() - startMs),
+  } as PushCloudSyncResult;
+}
+
 export async function pushCloudSync(
   options?: PushCloudSyncOptions,
 ): Promise<PushCloudSyncResult> {
   const startMs = performance.now();
   const sync = getCloudSyncService();
   if (!sync) {
+    // Cloud runs have no desktop sync service: edits publish through the app
+    // writer. Never tell the user to enable Cloud Sync from inside the cloud.
+    if (process.env.GATEWAY_MODE === "cloud_agent") {
+      return pushCloudSyncInCloudRun(options ?? {}, startMs);
+    }
     throw new Error("Cloud sync not initialized. Enable Cloud Sync in Settings.");
   }
 
