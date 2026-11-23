@@ -438,9 +438,10 @@ const LLM_SDK_PACKAGES = new Set([
 
 const AGENT_JOB_LLM_REMINDER =
   "⚠️ LLM IN SCRIPT JOB: This job appears to call OpenAI/Anthropic/Gemini directly. " +
-  "Prefer type: \"agent\" — built-in OAuth/API routing, full tool access (bash, files, browser), " +
-  "delivery, recipes, and no LLM SDK boilerplate. " +
-  "Script jobs with LLM SDKs are ONLY for fixed pipelines: read known data → single LLM call → write SQLite (no tools/exploration). " +
+  "Prefer type: \"subagent\" — built-in sign-in/API routing, caching, tools, delivery, recipes, no SDK code. " +
+  "Use a sub-agent profile runtime to replace the system prompt or turn memory/wiki/tools off for neutral or cheap calls. " +
+  "Keep a script ONLY for a named reason (sync UI backend action, big per-row data loop, step inside existing script code, API feature the agent path lacks, byte-identical audit) " +
+  "and then call models via `from papr_llm import complete` (handles Claude/ChatGPT sign-in tokens + caching), not raw SDKs. " +
   "Example: create_job({ type: \"agent\", command: \"Analyze leads and save top 5 to registry DB\", writeDbIds: [dbId], provider: \"anthropic\" }) " +
   "Read: read_skill({ skillId: \"preloaded-agent-job-output-guide\" })";
 
@@ -1119,8 +1120,8 @@ export const createJobTool = createTool({
     "Use folder for pipeline stage grouping (ingestion, processing), not app linkage. " +
     "For pipelines that should run automatically when a parent job finishes, each dependsOn entry MUST include autoTrigger: true (same for subagent→subagent as python→subagent). " +
     "Without autoTrigger, dependencies only order runs when you start the job another way. " +
-    "\n\nLLM tasks: Prefer type: 'agent' for any job that needs AI reasoning, tools, or exploration. " +
-    "Do NOT create python/node jobs with anthropic/openai SDK packages unless it is a fixed pipeline (read data → single LLM call → write SQLite). " +
+    "\n\nModel calls: default to type: 'subagent' (shape it with the profile runtime: replace system prompt, memory/wiki/tools off for neutral or cheap calls). " +
+    "Use a python/node job that calls a model only for a named reason (sync UI, big data loop, step inside script code, API feature the agent path lacks, byte-identical audit) — state it, and use the bundled papr_llm helper, never raw anthropic/openai SDKs. " +
     "\n\nAgent job model selection: " +
     "Use 'provider' and 'model' fields for direct override (type: 'agent', same behavior, just different model). " +
     "Use subagent (type: 'subagent' with subAgentId) when you need custom system prompt or restricted tools. " +

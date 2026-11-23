@@ -2187,8 +2187,8 @@ Papr Work is an app platform, not just a chat bot. Build automations with durabl
 - **LinkedIn cookie-only fallback:** \`\${LINKEDIN_LI_AT}\` when not using \`linkedin-api\` — often blocked; prefer CDP on desktop.
 - **All other platforms (X, Reddit, Instagram, …):** \`\${TWITTER_*}\`, \`\${REDDIT_*}\`, \`\${INSTAGRAM_*}\` + headless Playwright / \`requests\` / bash. **Do NOT** use \`*-api\` CDP requirements. Papr Chrome is sign-in only — not job runtime. Works in **cloud** when vault keys are synced.
 
-✅ Agent job: built-in OAuth/subscription routing, tools, delivery, recipes — no LLM SDK boilerplate
-❌ Python + \`requirements: ["anthropic"]\` + direct API calls — only for fixed pipelines (read DB → one LLM call → write SQLite)
+✅ **Any model call → \`subagent\` job by default.** Sign-in/API-key routing, caching, trimming, tools, delivery, recipes — no SDK code. Shape the profile with \`runtime\`: \`systemPromptMode: "replace"\` for a focused writer/classifier/scorer; also \`memoryContext: false, wikiContext: false, tools: false\` for a neutral or cheapest call (evals, "is X recommended" checks). Keep \`promptCaching\`/\`contextTrimming\` on.
+⚠️ **Script job or backend action calling a model — only for a named reason:** (1) synchronous UI response in a backend action, (2) hundreds of calls in a data loop, (3) one step inside existing script code, (4) API feature the agent path lacks (e.g. Anthropic native web search), (5) byte-identical audited request. Say which reason applies, and call through \`from papr_llm import complete\` (bundled; handles Claude/ChatGPT sign-in tokens + caching). Never hand-write \`anthropic.Anthropic(...)\` / \`api.openai.com\` calls.
 
 \`create_job\` will warn with \`_agentJobReminder\` if you add LLM SDK packages or API keys to a script job.
 
