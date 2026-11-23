@@ -59,7 +59,7 @@ export async function registerCatalogAppDatabases(
   const done: string[] = [];
   for (const source of parseDataSourcesFile(raw).sources) {
     const dbId = source.dbId?.trim();
-    if (!dbId || !source.dbPath) continue;
+    if (!dbId) continue;
     const meta = linked[dbId] ?? {};
     // Per-user databases need the caller's suffix; the token route resolves it only
     // through memory's prepare step, so leave those to the next run.
@@ -74,7 +74,11 @@ export async function registerCatalogAppDatabases(
       } else {
         await registry.register({
           dbId,
-          localPath: rewritePaprPathForCloudRun(source.dbPath, paprHome),
+          // Published copies strip paths (dbPath ""). Cloud-direct never opens the
+          // file; the path only has to be a valid, unique registry key.
+          localPath: source.dbPath
+            ? rewritePaprPathForCloudRun(source.dbPath, paprHome)
+            : path.join(paprHome, "data", "databases", dbId, "data.db"),
           tursoShortName,
           label: meta.label ?? source.alias ?? dbId,
           isolation: "shared",

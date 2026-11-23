@@ -44,6 +44,17 @@ describe("catalog app databases in a cloud run", () => {
     }));
   });
 
+  it("published copies with an empty dbPath still connect", async () => {
+    const f = path.join(home, "apps", "app-1", "data-sources.json");
+    const ds = JSON.parse(await fs.readFile(f, "utf8"));
+    ds.sources[0].dbPath = "";
+    await fs.writeFile(f, JSON.stringify(ds));
+    await expect(registerCatalogAppDatabases(home, "app-1")).resolves.toEqual(["db-1f3c043a"]);
+    expect(registry.register).toHaveBeenCalledWith(expect.objectContaining({
+      localPath: path.join(home, "data", "databases", "db-1f3c043a", "data.db"),
+    }));
+  });
+
   it("a token failure doesn't break loading the app", async () => {
     fetchMock.mockResolvedValue({ ok: false, status: 403, text: async () => "no" });
     await expect(registerCatalogAppDatabases(home, "app-1")).resolves.toEqual([]);
