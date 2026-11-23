@@ -55,6 +55,7 @@ import {
 import type { JobType } from "../jobs/types.js";
 import { isJobScratchDatabasePath } from "../jobs/jobScratchDatabasePath.js";
 import { normalizeRuntimeParams } from "../../utils/normalizeRuntimeParams.js";
+import { setActiveCloudRunLlmAuth } from "./cloudRunLlmAuth.js";
 
 export interface CloudRunHandle {
   runRoot: string;
@@ -201,6 +202,7 @@ function applyPaprApiKey(
 }
 
 async function restoreCloudRunEnv(snapshot: CloudRunEnvSnapshot): Promise<void> {
+  setActiveCloudRunLlmAuth(null);
   if (snapshot.previousPaprHome === undefined) delete process.env.PAPR_HOME;
   else process.env.PAPR_HOME = snapshot.previousPaprHome;
   if (snapshot.previousPaprUserData === undefined) delete process.env.PAPR_USER_DATA;
@@ -815,6 +817,8 @@ export async function resolveCloudAgentJobStreamInput(
     session.model ?? request.model,
     llmAuth.provider,
   );
+  // Helper agents this run delegates to (product-architect, …) use the same credential.
+  setActiveCloudRunLlmAuth(llmAuth);
 
   const workspaceChatOverrides = await resolveCloudWorkspaceChatStreamOverrides(request);
   const appAgentOverrides =
