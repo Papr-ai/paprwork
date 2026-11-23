@@ -4,6 +4,12 @@ import type {
   WebviewTestRequest,
 } from "../../core/types/gateway-ipc.js";
 import { isWebviewTestResponseMessage } from "../../core/types/gateway-ipc.js";
+import { isCloudAgentGatewayMode } from "../../core/utils/paprRoot.js";
+
+/** Cloud agent gateway, or opted in for local testing. */
+export function isHeadlessWebviewHostEnabled(): boolean {
+  return isCloudAgentGatewayMode() || process.env.PAPR_HEADLESS_WEBVIEW === "1";
+}
 
 interface PendingWebviewRequest {
   resolve: (response: WebviewTestResponse) => void;
@@ -47,9 +53,15 @@ export async function requestWebviewTest(
   ipcProcess: IpcProcessLike = process,
 ): Promise<WebviewTestResponse> {
   if (!ipcProcess.send) {
-    throw new Error(
-      "Webview testing requires Gateway running as Electron child process",
-    );
+    // No Electron parent. Cloud agent runs use headless Chromium, which the
+    // image already ships for browser_* tools; anywhere else keep failing loudly.
+    if (!isHeadlessWebviewHostEnabled()) {
+      throw new Error(
+        "Webview testing requires Gateway running as Electron child process",
+      );
+    }
+    const { handleHeadlessWebviewRequest } = await import("./headlessWebviewHost.js");
+    return handleHeadlessWebviewRequest(request);
   }
   initializeWebviewTestBridge(ipcProcess);
   const requestId = `webview-${Date.now()}-${++requestCounter}`;
