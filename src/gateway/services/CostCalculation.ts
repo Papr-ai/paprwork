@@ -126,6 +126,9 @@ export const MODEL_PRICING: Record<string, ModelPricing> = {
   "gemini-3.8-flash": { input: 0.75, output: 3.75, until: "2026-12-31", then: { input: 1.5, output: 7.5 } },
   // Context caching is $0.10 on $2 (and $0.20 on $4 after the intro): 0.05×.
   "gemini-4-argon": { input: 2.0, output: 10.0, cacheReadMultiplier: 0.05, until: "2026-11-30", then: { input: 4.0, output: 20.0, cacheReadMultiplier: 0.05 } },
+  "gemini-4-carbon": { input: 2.0, output: 10.0, cacheReadMultiplier: 0.05, until: "2026-11-30", then: { input: 4.0, output: 20.0, cacheReadMultiplier: 0.05 } },
+  "gemini-4-neon": { input: 3.0, output: 15.0, cacheReadMultiplier: 0.05 },
+  "gemini-4-hydrogen": { input: 1.5, output: 7.5, cacheReadMultiplier: 0.05 },
   "gemini-3.1-pro-preview": { input: 2.0, output: 12.0 },
   // Deprecated IDs — kept for cost lookup on older chats
   "gemini-3-flash-preview": { input: 0.5, output: 3.0 },

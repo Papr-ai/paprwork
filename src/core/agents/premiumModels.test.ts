@@ -8,7 +8,7 @@ describe("isPremiumProxyModel (mirrors credits.yaml premium_input_usd_per_1m: 1.
     for (const id of [
       "claude-sonnet-5-5", "claude-opus-5-5", "claude-fable-5-2", "claude-sonnet-4-6",
       "gpt-5-6-sol", "gpt-5.6-sol", "gpt-5-6-terra", "gpt-5.5", "gpt-5.5-high", "gpt-5.3-codex", "gpt-6-astra",
-      "gemini-3.1-pro-preview", "gemini-3.5-flash", "gemini-4-argon", "kimi-k3",
+      "gemini-3.1-pro-preview", "gemini-3.5-flash", "gemini-4-argon", "gemini-4-carbon", "gemini-4-neon", "gemini-4-hydrogen", "kimi-k3",
     ]) expect(isPremiumProxyModel(id), id).toBe(true);
   });
 

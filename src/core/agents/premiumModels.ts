@@ -24,11 +24,11 @@ const PREMIUM_PREFIXES: readonly string[] = [
   "gpt-5-3-codex",
   "gpt-6-astra",
   "gpt-6-1-sol",
-  // Google: Pro, 3.5 Flash ($1.50), Argon (Flash 2.5-3.8 and Flash-Lite stay open)
+  // Google: Pro, 3.5 Flash ($1.50), every Gemini 4 (Hydrogen $1.50 and up). Flash 2.5-3.8 and Flash-Lite stay open
   "gemini-3-1-pro",
   "gemini-3-pro",
   "gemini-2-5-pro",
-  "gemini-4-argon",
+  "gemini-4-",
   // Moonshot frontier
   "kimi-k3",
 ];
