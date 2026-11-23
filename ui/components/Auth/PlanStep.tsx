@@ -89,6 +89,7 @@ export function PlanStep({ onDone, previewMode = false }: PlanStepProps) {
           defaultTrack={pending?.track ?? "individual"}
           initialPlan={pending?.plan ?? null}
           hideExpertBuild
+          splitMax
           onChoosePlan={(plan, track) => void choosePlan(plan, track)}
           onBuyExpertBuild={() => undefined}
           onActivateLocal={() => finish("local", "local")}

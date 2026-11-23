@@ -9,7 +9,7 @@
  * Cloud Max is one card with a 5x · 20x toggle that defaults to 5x ("From $100").
  */
 
-import { useState } from "react";
+import { useState, type ReactNode } from "react";
 import {
   PAPR_CREDIT_PLANS,
   PAPR_ENTERPRISE_PLAN,
@@ -45,6 +45,8 @@ interface Props {
   initialPlan?: PaprCreditPlanId | null;
   /** Hide the one-time Expert Build add-on (first-run keeps the choice simple). */
   hideExpertBuild?: boolean;
+  /** First-run layout: Cloud / Max 5x / Max 20x as three cards, Local (or Enterprise on Team) as a wide row below. */
+  splitMax?: boolean;
 }
 
 type CardProps = Props & { track: PaprPlanTrack };
@@ -116,6 +118,56 @@ function EnterpriseCard() {
   );
 }
 
+function WideRow(props: { name: string; blurb: string; price: string; line: string; action: ReactNode }) {
+  return (
+    <div className="cpc-card cpc-card--free cpc-wide">
+      <div className="cpc-wide-l">
+        <div className="cpc-n">{props.name}<span className="cpc-wide-price">{props.price}</span></div>
+        <p className="cpc-blurb">{props.blurb} &middot; {props.line}</p>
+      </div>
+      <div className="cpc-wide-r">{props.action}</div>
+    </div>
+  );
+}
+
+/** Three paid cards side by side, the free/custom option as one row underneath. */
+function SplitPlans(props: CardProps & { plans: [PaprCreditPlanCard, PaprCreditPlanCard, PaprCreditPlanCard] }) {
+  const [cloud, max5, max20] = props.plans;
+  const featured = props.initialPlan ?? "cloud_plus";
+  const team = props.track === "team";
+  const cards: [PaprCreditPlanCard, string][] = [[cloud, "Local"], [max5, "Cloud"], [max20, "Cloud Max 5x"]];
+  return (
+    <>
+      <div className="cpc-grid">
+        {cards.map(([plan, prev]) => (
+          <div key={plan.id} className={plan.id === featured ? "cpc-card cpc-card--feat" : "cpc-card"}>
+            {plan.id === featured ? (
+              <div className="cpc-tag">{props.initialPlan ? "Your pick" : "Most popular"}</div>
+            ) : null}
+            <div className="cpc-n">{plan.name}</div>
+            <p className="cpc-blurb">{plan.blurb}</p>
+            <PlanBody {...props} plan={plan} prev={prev} solid={plan.id === featured} />
+          </div>
+        ))}
+      </div>
+      {team ? (
+        <WideRow name={PAPR_ENTERPRISE_PLAN.name} blurb={PAPR_ENTERPRISE_PLAN.blurb} price="Custom"
+          line={PAPR_ENTERPRISE_PLAN.creditsLine}
+          action={<a className="cpc-btn" href={PAPR_ENTERPRISE_PLAN.contact}>Contact sales</a>} />
+      ) : (
+        <WideRow name={PAPR_LOCAL_PLAN.name} blurb={PAPR_LOCAL_PLAN.blurb} price="Free"
+          line={PAPR_LOCAL_PLAN.creditsLine}
+          action={props.onActivateLocal ? (
+            <button type="button" className="cpc-btn" disabled={props.localPending || props.pending !== null}
+              onClick={props.onActivateLocal}>
+              {props.localPending ? "Activating…" : props.localLabel ?? "Activate free plan"}
+            </button>
+          ) : null} />
+      )}
+    </>
+  );
+}
+
 export function CreditPlanCards(props: Props) {
   const [cloud, max5, max20] = PAPR_CREDIT_PLANS as [PaprCreditPlanCard, PaprCreditPlanCard, PaprCreditPlanCard];
   const [track, setTrack] = useState<PaprPlanTrack>(props.defaultTrack ?? "team");
@@ -140,6 +192,7 @@ export function CreditPlanCards(props: Props) {
         </div>
       </div>
 
+      {props.splitMax ? <SplitPlans {...card} plans={[cloud, max5, max20]} /> : (
       <div className="cpc-grid">
         {team ? null : <LocalCard {...card} />}
 
@@ -173,6 +226,7 @@ export function CreditPlanCards(props: Props) {
 
         {team ? <EnterpriseCard /> : null}
       </div>
+      )}
 
       <div className="cpc-seat">
         {team ? (

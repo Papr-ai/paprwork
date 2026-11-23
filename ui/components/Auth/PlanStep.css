@@ -2,8 +2,15 @@
    CreditPlanCards from Settings → Billing; this only sizes the screen and pins
    the card palette to the (always light) onboarding theme. */
 
+/* Size the column to its content (not the stretched screen height) so the
+   bottom padding actually lands below the last line when the page scrolls. */
+.plan-step {
+  align-items: flex-start;
+}
+
 .plan-step__inner {
   max-width: 1040px;
+  padding-bottom: 48px;
 }
 
 .plan-step .cpc {
