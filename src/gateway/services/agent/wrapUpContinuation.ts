@@ -190,7 +190,7 @@ export async function* runAiSdkWrapUpContinuation(
   });
 
   let fullStream: AsyncIterable<unknown> = wrapUpResult.fullStream;
-  if (args.provider === "groq") {
+  if (args.provider === "groq" || args.provider === "openrouter") {
     const { adaptGroqAISDKFullStream } = await import(
       "../../utils/groqProvider.js"
     );
@@ -203,7 +203,7 @@ export async function* runAiSdkWrapUpContinuation(
   }
 
   const iterator = orchestrateModelStream(fullStream, args.chatId, args.apiKeys, {
-    textBufferMin: args.provider === "groq" || args.provider === "moonshot" ? 1 : undefined,
+    textBufferMin: args.provider === "groq" || args.provider === "moonshot" || args.provider === "openrouter" ? 1 : undefined,
   });
 
   while (true) {
@@ -256,7 +256,7 @@ export async function* runAiSdkPlanContinuation(
   });
 
   let fullStream: AsyncIterable<unknown> = result.fullStream;
-  if (args.provider === "groq") {
+  if (args.provider === "groq" || args.provider === "openrouter") {
     const { adaptGroqAISDKFullStream } = await import(
       "../../utils/groqProvider.js"
     );
@@ -270,7 +270,7 @@ export async function* runAiSdkPlanContinuation(
 
   const iterator = orchestrateModelStream(fullStream, args.chatId, args.apiKeys, {
     textBufferMin:
-      args.provider === "groq" || args.provider === "moonshot" ? 1 : undefined,
+      args.provider === "groq" || args.provider === "moonshot" || args.provider === "openrouter" ? 1 : undefined,
   });
 
   while (true) {

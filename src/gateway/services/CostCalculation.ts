@@ -139,6 +139,18 @@ export const MODEL_PRICING: Record<string, ModelPricing> = {
   // Moonshot Kimi K3 (via Papr proxy — cache-miss input / output per 1M tokens)
   "kimi-k3": { input: 3.0, output: 15.0 },
   "kimi-3": { input: 3.0, output: 15.0 },
+
+  // OpenRouter (via Papr proxy — openrouter.ai list prices per 1M tokens)
+  "thinkingmachines/inkling-2-mini": { input: 0.075, output: 0.3 },
+  "thinkingmachines/inkling-2-small": { input: 0.3, output: 1.0 },
+  "thinkingmachines/inkling": { input: 1.0, output: 4.05 },
+  "deepseek/deepseek-v4-pro": { input: 0.9, output: 1.5 },
+  "deepseek/deepseek-v4.1-flash-1017": { input: 0.03, output: 0.2 },
+  "qwen/qwen3.8-flash": { input: 0.15, output: 0.47 },
+  "qwen/qwen3.7-plus": { input: 0.32, output: 1.28 },
+  "minimax/minimax-m3": { input: 0.3, output: 1.2 },
+  "mistralai/mistral-large-4-0": { input: 0.7, output: 2.1 },
+  "nvidia/nemotron-3.5-lightning": { input: 0.07, output: 0.2 },
 };
 
 /** Normalize model ID for cost lookup (legacy dash format -> dot format) */

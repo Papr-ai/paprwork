@@ -99,6 +99,7 @@ const EFFORT_PROVIDERS = new Set([
   "zai",
   "groq",
   "moonshot",
+  "openrouter",
 ]);
 
 /**
@@ -238,6 +239,16 @@ export const MODEL_CONTEXT_WINDOWS: Readonly<Record<string, number>> = {
   "inkling-2-mini:26b-a5b": 1_048_576,
   "openai/gpt-oss-120b": 131_072,
   "kimi-k3": 1_048_576,
+  "thinkingmachines/inkling-2-mini": 1_048_576,
+  "thinkingmachines/inkling-2-small": 1_048_576,
+  "thinkingmachines/inkling": 1_048_576,
+  "deepseek/deepseek-v4-pro": 1_048_576,
+  "deepseek/deepseek-v4.1-flash-1017": 1_048_576,
+  "qwen/qwen3.8-flash": 1_000_000,
+  "qwen/qwen3.7-plus": 1_000_000,
+  "minimax/minimax-m3": 1_048_576,
+  "mistralai/mistral-large-4-0": 1_048_576,
+  "nvidia/nemotron-3.5-lightning": 1_048_576,
 };
 
 /** Advertised window, or undefined when the model is not in the table. */

@@ -297,6 +297,7 @@ export async function getBestFallbackModel(
     zai: "glm-5.2",
     groq: "openai/gpt-oss-120b",
     moonshot: "kimi-k3",
+    openrouter: "thinkingmachines/inkling-2-mini",
   };
   if (!originalCapabilities) {
     const firstAvailable = available[0];
@@ -440,6 +441,12 @@ export function getUpgradeModelForTask(
       coding: "kimi-k3",
       writing: "kimi-k3",
       general: "kimi-k3",
+    },
+    openrouter: {
+      reasoning: "deepseek/deepseek-v4-pro",
+      coding: "deepseek/deepseek-v4-pro",
+      writing: "thinkingmachines/inkling-2-mini",
+      general: "thinkingmachines/inkling-2-mini",
     },
   };
 
