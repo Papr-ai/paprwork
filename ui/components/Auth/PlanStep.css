@@ -1,0 +1,76 @@
+/* "Pick your plan" — first-run step after org setup. Uses the --onb-* tokens
+   from onboardingTheme.css so it matches the other gated screens. */
+
+.plan-step__inner {
+  max-width: 620px;
+}
+
+.plan-step__list {
+  display: grid;
+  gap: 10px;
+  margin-bottom: 22px;
+}
+
+.plan-step__opt {
+  display: grid;
+  grid-template-columns: 1fr auto;
+  grid-template-areas:
+    "name price"
+    "line price";
+  align-items: center;
+  gap: 2px 16px;
+  width: 100%;
+  padding: 14px 18px;
+  text-align: left;
+  background: var(--onb-card);
+  border: 1px solid var(--onb-line);
+  border-radius: 12px;
+  color: var(--onb-ink);
+  transition: border-color 0.15s ease, box-shadow 0.15s ease;
+}
+
+.plan-step__opt:hover {
+  border-color: #c3ccdb;
+}
+
+.plan-step__opt.on {
+  border-color: var(--onb-g1);
+  box-shadow: 0 0 0 3px rgba(0, 96, 224, 0.12);
+}
+
+.plan-step__name {
+  grid-area: name;
+  font-weight: 600;
+  font-size: 15px;
+}
+
+.plan-step__line {
+  grid-area: line;
+  font-size: 13px;
+  color: var(--onb-mid);
+}
+
+.plan-step__price {
+  grid-area: price;
+  font-weight: 600;
+  font-size: 15px;
+  white-space: nowrap;
+}
+
+.plan-step__error {
+  margin: 0 0 14px;
+  font-size: 13px;
+  color: #c8323f;
+}
+
+.plan-step__note {
+  margin-top: 10px;
+  text-align: center;
+  font-size: 13px;
+}
+
+@media (max-width: 520px) {
+  .plan-step__opt {
+    padding: 12px 14px;
+  }
+}
