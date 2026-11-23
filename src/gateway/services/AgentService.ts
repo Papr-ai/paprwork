@@ -4882,6 +4882,7 @@ ${last15.substring(0, 8_000)}`;
     authOverride?: {
       apiKey: string;
       authType: "oauth" | "apiKey";
+      usePaprProxy?: boolean;
     };
     /** Cloud agent gateway: Papr Memory API key for tool calls */
     paprApiKey?: string;
@@ -4917,6 +4918,7 @@ ${last15.substring(0, 8_000)}`;
 
     let apiKey: string | undefined;
     let authType: "oauth" | "apiKey" | undefined;
+    let usePaprProxy: boolean | undefined;
 
     const isCloudGateway = process.env.GATEWAY_MODE === "cloud_agent";
 
@@ -4933,14 +4935,17 @@ ${last15.substring(0, 8_000)}`;
           model: input.model,
           token: input.authOverride.apiKey,
           authType: input.authOverride.authType,
+          usePaprProxy: input.authOverride.usePaprProxy,
         });
         provider = cloudSession.provider;
         model = cloudSession.model;
         apiKey = cloudSession.token;
         authType = cloudSession.authType;
+        usePaprProxy = cloudSession.usePaprProxy;
       } else {
         apiKey = input.authOverride.apiKey;
         authType = input.authOverride.authType;
+        usePaprProxy = input.authOverride.usePaprProxy;
       }
     }
 
@@ -4961,8 +4966,6 @@ ${last15.substring(0, 8_000)}`;
     console.log(
       `[AgentService] Resolved job provider/model: ${provider}/${model}`,
     );
-
-    let usePaprProxy: boolean | undefined;
 
     if (!input.authOverride?.apiKey) {
       const sessionAuth = await (
@@ -5378,7 +5381,7 @@ ${last15.substring(0, 8_000)}`;
     model?: string;
     allowedToolIds?: string[];
     maxTurns?: number;
-    authOverride: { apiKey: string; authType: "oauth" | "apiKey" };
+    authOverride: { apiKey: string; authType: "oauth" | "apiKey"; usePaprProxy?: boolean };
     paprApiKey?: string;
     systemPromptOverride?: string;
     runtime?: SubAgentRuntimeOptions;
@@ -5399,6 +5402,7 @@ ${last15.substring(0, 8_000)}`;
     let model: string;
     let apiKey: string;
     let authType: "oauth" | "apiKey";
+    let usePaprProxy = false;
 
     if (isCloudGateway && input.authOverride?.apiKey) {
       const cloudSession = await (
@@ -5408,11 +5412,13 @@ ${last15.substring(0, 8_000)}`;
         model: input.model,
         token: input.authOverride.apiKey,
         authType: input.authOverride.authType,
+        usePaprProxy: input.authOverride.usePaprProxy,
       });
       provider = cloudSession.provider;
       model = cloudSession.model;
       apiKey = cloudSession.token;
       authType = cloudSession.authType;
+      usePaprProxy = cloudSession.usePaprProxy === true;
     } else {
       const resolved = await (
         await import("../utils/resolveJobProviderModel.js")
@@ -5439,6 +5445,7 @@ ${last15.substring(0, 8_000)}`;
       model,
       apiKey,
       authType,
+      ...(usePaprProxy ? { usePaprProxy: true } : {}),
       systemPrompt:
         input.systemPromptOverride ??
         `${this.systemPrompt}\n\n# Isolated Job Run\n${isolatedRunNote}\n- Keep output concise and actionable.`,

@@ -770,7 +770,7 @@ export async function resolveCloudAgentJobStreamInput(
   model?: string;
   allowedToolIds?: string[];
   maxTurns?: number;
-  authOverride: { apiKey: string; authType: "oauth" | "apiKey" };
+  authOverride: { apiKey: string; authType: "oauth" | "apiKey"; usePaprProxy?: boolean };
   paprApiKey?: string;
   session: AgentJobSessionInput;
   appendLog: (line: string) => Promise<void>;
@@ -810,6 +810,7 @@ export async function resolveCloudAgentJobStreamInput(
     provider: request.llmAuth.provider as Provider,
     token: request.llmAuth.token,
     authType: request.llmAuth.authType,
+    usePaprProxy: request.llmAuth.usePaprProxy === true,
   });
 
   const { provider, model } = pickCloudJobProviderModel(
@@ -860,6 +861,7 @@ export async function resolveCloudAgentJobStreamInput(
     authOverride: {
       apiKey: llmAuth.token,
       authType: llmAuth.authType,
+      ...(llmAuth.usePaprProxy ? { usePaprProxy: true } : {}),
     },
     paprApiKey: request.paprApiKey,
     session,
@@ -900,13 +902,14 @@ export function cloudAgentStreamInput(request: CloudAgentRunRequest): {
   model?: string;
   allowedToolIds?: string[];
   maxTurns?: number;
-  authOverride: { apiKey: string; authType: "oauth" | "apiKey" };
+  authOverride: { apiKey: string; authType: "oauth" | "apiKey"; usePaprProxy?: boolean };
   paprApiKey?: string;
 } {
   const llmAuth = reconcileCloudProviderAuth({
     provider: request.llmAuth.provider as Provider,
     token: request.llmAuth.token,
     authType: request.llmAuth.authType,
+    usePaprProxy: request.llmAuth.usePaprProxy === true,
   });
 
   return {
@@ -920,6 +923,7 @@ export function cloudAgentStreamInput(request: CloudAgentRunRequest): {
     authOverride: {
       apiKey: llmAuth.token,
       authType: llmAuth.authType,
+      ...(llmAuth.usePaprProxy ? { usePaprProxy: true } : {}),
     },
     paprApiKey: request.paprApiKey,
   };

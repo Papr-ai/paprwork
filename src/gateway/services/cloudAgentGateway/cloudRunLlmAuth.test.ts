@@ -74,3 +74,26 @@ describe("cloud gateway never falls back to local Ollama", () => {
     expect((await getDefaultProviderAndModel()).provider).toBe("ollama");
   });
 });
+
+describe("Papr AI proxy credential (no usable vault key)", () => {
+  it("reconcile keeps usePaprProxy and never reinterprets the Papr key", async () => {
+    const { reconcileCloudProviderAuth } = await import("./resolveCloudProviderAuth.js");
+    expect(
+      reconcileCloudProviderAuth({ provider: "anthropic", token: " sk-org-abc ", authType: "apiKey", usePaprProxy: true }),
+    ).toEqual({ provider: "anthropic", authType: "apiKey", token: "sk-org-abc", usePaprProxy: true });
+    expect(
+      reconcileCloudProviderAuth({ provider: "anthropic", token: "sk-ant-api-x", authType: "apiKey" }).usePaprProxy,
+    ).toBeUndefined();
+  });
+
+  it("helper jobs inherit the proxy route", () => {
+    process.env.GATEWAY_MODE = "cloud_agent";
+    setActiveCloudRunLlmAuth({ provider: "anthropic", authType: "apiKey", token: "sk-org-abc", usePaprProxy: true });
+    expect(cloudRunHelperAuth("anthropic", "claude-sonnet-4-6")?.authOverride).toEqual({
+      apiKey: "sk-org-abc",
+      authType: "apiKey",
+      usePaprProxy: true,
+    });
+    setActiveCloudRunLlmAuth(null);
+  });
+});
