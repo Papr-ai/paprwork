@@ -28,34 +28,50 @@ function initials(name: string): string {
 
 /**
  * Google's own connectors point at API hosts (gmail.googleapis.com,
- * www.googleapis.com/drive) whose favicon is a generic globe. Map them to the
- * product site so the row shows the real Gmail / Drive logo.
+ * www.googleapis.com/drive). Their favicons, and even mail.google.com /
+ * drive.google.com, come back as the generic Google "G", so use the official
+ * product logos instead.
  */
-const API_HOST_SITES: Array<[RegExp, string]> = [
-  [/^gmail\.googleapis\.com\//, "mail.google.com"],
-  [/^www\.googleapis\.com\/drive\b/, "drive.google.com"],
-  [/^www\.googleapis\.com\/calendar\b/, "calendar.google.com"],
+const GSTATIC = "https://ssl.gstatic.com/images/branding/product/2x";
+const API_HOST_LOGOS: Array<[RegExp, string]> = [
+  [/^gmail\.googleapis\.com\//, `${GSTATIC}/gmail_2020q4_48dp.png`],
+  [/^www\.googleapis\.com\/drive\b/, `${GSTATIC}/drive_2020q4_48dp.png`],
+  [/^www\.googleapis\.com\/calendar\b/, `${GSTATIC}/calendar_2020q4_48dp.png`],
 ];
 
 /** Service's own site, from its MCP URL (mcp.linear.app → linear.app). */
 export function siteDomain(url: string): string | null {
   try {
-    const u = new URL(url);
-    const hostPath = u.hostname + u.pathname;
-    for (const [re, site] of API_HOST_SITES) if (re.test(hostPath)) return site;
-    return u.hostname.replace(/^(mcp|api|www)\./, "");
+    return new URL(url).hostname.replace(/^(mcp|api|www)\./, "");
   } catch {
     return null;
   }
 }
 
+/** Logo image URL: a known product logo, else the site's favicon. */
+export function logoUrl(url: string): string | null {
+  try {
+    const u = new URL(url);
+    const hostPath = u.hostname + u.pathname;
+    for (const [re, logo] of API_HOST_LOGOS) if (re.test(hostPath)) return logo;
+  } catch {
+    return null;
+  }
+  const domain = siteDomain(url);
+  return domain ? `https://www.google.com/s2/favicons?domain=${domain}&sz=128` : null;
+}
+
 export function ServiceLogo({ server, size = "md" }: { server: Pick<McpServer, "name" | "url">; size?: "sm" | "md" | "lg" }) {
-  const [failed, setFailed] = useState(false);
-  const domain = siteDomain(server.url);
+  const [state, setState] = useState<"loading" | "ok" | "failed">("loading");
+  const src = logoUrl(server.url);
   return (
-    <span className={`svc-logo svc-logo--${size}`} aria-hidden data-ini={initials(server.name)}>
-      {domain && !failed && (
-        <img src={`https://www.google.com/s2/favicons?domain=${domain}&sz=128`} alt="" onError={() => setFailed(true)} />
+    <span
+      className={`svc-logo svc-logo--${size}${state === "ok" ? " svc-logo--img" : ""}`}
+      aria-hidden
+      data-ini={initials(server.name)}
+    >
+      {src && state !== "failed" && (
+        <img src={src} alt="" onLoad={() => setState("ok")} onError={() => setState("failed")} />
       )}
     </span>
   );
