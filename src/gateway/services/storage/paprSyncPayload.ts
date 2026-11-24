@@ -159,21 +159,78 @@ export function buildPaprSyncCustomMetadata(
   return customMetadata;
 }
 
+type SyncToolCall = NonNullable<StoredMessage["toolCalls"]>[number];
+
+/**
+ * The turn's text and tool calls in the order they happened, from `sequence`. Null when the
+ * sequence is missing or doesn't account for every tool call (then the old layout is used).
+ * Keeping the order matters: readers of the history (e.g. the memory server recovering an
+ * iMessage run after a restart) take the reply as the text after the last tool call.
+ */
+function orderedTurn(
+  message: Pick<StoredMessage, "toolCalls" | "sequence">,
+  toolCalls: SyncToolCall[],
+): Array<{ text: string } | { tc: SyncToolCall }> | null {
+  const seq = message.sequence;
+  if (!Array.isArray(seq) || !seq.some((i) => i?.type === "text")) return null;
+  const byId = new Map(toolCalls.map((tc) => [tc.id, tc]));
+  const used = new Set<string>();
+  const out: Array<{ text: string } | { tc: SyncToolCall }> = [];
+  for (const item of seq) {
+    if (item?.type === "text" && typeof item.data === "string" && item.data.trim()) {
+      out.push({ text: item.data });
+    } else if (item?.type === "tool" && item.data && typeof item.data === "object") {
+      const id = (item.data as { toolCallId?: string }).toolCallId;
+      const tc = id ? byId.get(id) : undefined;
+      if (!tc || used.has(tc.id)) return null;
+      used.add(tc.id);
+      out.push({ tc });
+    }
+  }
+  return used.size === toolCalls.length ? out : null;
+}
+
+function pushToolBlocks(
+  blocks: PaprContentBlock[],
+  tc: SyncToolCall,
+  budget: PaprSyncBudget,
+): void {
+  const toolUse: PaprContentBlock = {
+    type: "tool_use",
+    id: tc.id,
+    name: tc.name,
+  };
+  if (budget.includeToolInputs) {
+    const input = truncateToolArgsForPaprSync(
+      tc.args as Record<string, unknown>,
+      budget.maxToolArgsChars,
+    );
+    if (input) {
+      (toolUse as { input: Record<string, unknown> }).input = input;
+    }
+  }
+  blocks.push(toolUse);
+  if (budget.includeToolResults && tc.result != null) {
+    blocks.push({
+      type: "tool_result",
+      tool_use_id: tc.id,
+      content: truncateStringForPaprSync(
+        String(tc.result),
+        budget.maxToolResultChars,
+      ),
+    });
+  }
+}
+
 export function buildPaprSyncContent(
-  message: Pick<StoredMessage, "role" | "content" | "thinking" | "toolCalls">,
+  message: Pick<StoredMessage, "role" | "content" | "thinking" | "toolCalls" | "sequence">,
   budget: PaprSyncBudget,
 ): string | PaprContentBlock[] {
   const toolCalls = message.toolCalls ?? [];
 
   if (message.role === "assistant" && toolCalls.length > 0) {
     const contentBlocks: PaprContentBlock[] = [];
-
-    if (message.content) {
-      contentBlocks.push({
-        type: "text",
-        text: truncateStringForPaprSync(message.content, budget.maxTextChars),
-      });
-    }
+    const ordered = orderedTurn(message, toolCalls);
 
     if (budget.includeThinking && message.thinking) {
       contentBlocks.push({
@@ -185,35 +242,29 @@ export function buildPaprSyncContent(
       });
     }
 
-    for (const tc of toolCalls) {
-      const toolUse: PaprContentBlock = {
-        type: "tool_use",
-        id: tc.id,
-        name: tc.name,
-      };
-
-      if (budget.includeToolInputs) {
-        const input = truncateToolArgsForPaprSync(
-          tc.args as Record<string, unknown>,
-          budget.maxToolArgsChars,
-        );
-        if (input) {
-          (toolUse as { input: Record<string, unknown> }).input = input;
+    if (ordered) {
+      for (const part of ordered) {
+        if ("text" in part) {
+          contentBlocks.push({
+            type: "text",
+            text: truncateStringForPaprSync(part.text, budget.maxTextChars),
+          });
+        } else {
+          pushToolBlocks(contentBlocks, part.tc, budget);
         }
       }
+      return contentBlocks;
+    }
 
-      contentBlocks.push(toolUse);
+    if (message.content) {
+      contentBlocks.unshift({
+        type: "text",
+        text: truncateStringForPaprSync(message.content, budget.maxTextChars),
+      });
+    }
 
-      if (budget.includeToolResults && tc.result != null) {
-        contentBlocks.push({
-          type: "tool_result",
-          tool_use_id: tc.id,
-          content: truncateStringForPaprSync(
-            String(tc.result),
-            budget.maxToolResultChars,
-          ),
-        });
-      }
+    for (const tc of toolCalls) {
+      pushToolBlocks(contentBlocks, tc, budget);
     }
 
     return contentBlocks;
