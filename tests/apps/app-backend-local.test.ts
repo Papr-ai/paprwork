@@ -74,6 +74,37 @@ describe("AppBackendService (local)", () => {
     expect(errors.some((e) => e.includes('action "items" failed') && e.includes("fetchall"))).toBe(true);
   });
 
+  it("backend handlers get sqlite3-style rows from the shared helper at runtime", async () => {
+    tempRoot = await mkdtemp(join(tmpdir(), "papr-backend-"));
+    const appId = "test-app-sqlite-rows";
+    const backendDir = join(tempRoot, "apps", appId, "backend");
+    await mkdir(backendDir, { recursive: true });
+    await writeFile(
+      join(backendDir, "manifest.json"),
+      JSON.stringify({ version: 1, actions: { items: { handler: "items.py", runtime: "python" } } }),
+    );
+    // Real runtime env (PYTHONPATH from jobSdkEnv + refreshed vendored papr_db.py):
+    // the shared Row/Cursor must import, and the grocery-list idiom must work.
+    await writeFile(
+      join(backendDir, "items.py"),
+      [
+        "import json, papr_db",
+        "cur = papr_db._wrap_execute_result([{'id': 1, 'name': 'Milk'}, {'id': 2, 'name': 'Eggs'}], None)",
+        "cols = [d[0] for d in cur.description]",
+        "print(json.dumps({'items': [dict(zip(cols, r)) for r in cur.fetchall()]}))",
+        "",
+      ].join("\n"),
+    );
+
+    const result = await new AppBackendService(tempRoot).runAction({ appId, action: "items" });
+
+    expect(result.stderr).toBe("");
+    expect(result.exitCode).toBe(0);
+    expect(JSON.parse(result.stdout)).toEqual({
+      items: [{ id: 1, name: "Milk" }, { id: 2, name: "Eggs" }],
+    });
+  });
+
   it("runs node ping action", async () => {
     tempRoot = await mkdtemp(join(tmpdir(), "papr-backend-"));
     const appId = "test-app-node";
