@@ -228,6 +228,25 @@ export interface PollDeps {
   recordMerges?: (merges: LastMerge[]) => Promise<void>;
   /** Mentions from teammates (mention, mention.replied). */
   onCollab?: (events: ProposalEvent[]) => Promise<void>;
+  /** Your proposal was accepted or declined: settle schema holds now, not on the next 5-min pull. */
+  onDecided?: () => Promise<unknown>;
+}
+
+/** True when one of your own proposals was accepted or declined in this batch. */
+export function hasOwnProposalDecision(events: ProposalEvent[]): boolean {
+  return events.some(
+    (e) => e.role === "contributor" && (e.type === "proposal.accepted" || e.type === "proposal.declined"),
+  );
+}
+
+/**
+ * Same settle the periodic pull runs. Without this, a contributor's copy stays
+ * cut off from the team's data until startup, reconnect or a 5-min pull that
+ * isn't skipped (audit finding A).
+ */
+async function defaultDecided(): Promise<unknown> {
+  const { settleProposalHolds } = await import("../tursoReplica/settleProposalHolds.js");
+  return settleProposalHolds();
 }
 
 async function defaultCollab(events: ProposalEvent[]): Promise<void> {
@@ -380,6 +399,11 @@ export async function pollProposalEvents(
       (deps.onRefresh ?? defaultRefresh)(appIdsToRefresh(page.events));
       if (!deps.onRefresh) refreshConnections(page.events);
       (deps.onNotify ?? defaultNotify)(summarizeNotices(page.events, Number.POSITIVE_INFINITY));
+      if (hasOwnProposalDecision(page.events)) {
+        await (deps.onDecided ?? defaultDecided)().catch((err: Error) => {
+          console.warn("[ProposalHold] settle after proposal decision failed:", err?.message?.slice(0, 120));
+        });
+      }
       const merged = mergedSourceAppIds(page.events);
       if (merged.length > 0) {
         await (deps.recordMerges ?? ((m) => recordLastMerges(paprDir, m)))(
