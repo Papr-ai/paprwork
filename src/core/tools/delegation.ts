@@ -347,6 +347,17 @@ export const delegateTaskTool = createTool({
     
     // ALWAYS run in background so tool returns immediately with job ID (enables real-time UI updates)
     const run = await service.delegateTask({ ...args, reportChatId, background: true });
+    if (process.env.GATEWAY_MODE === "cloud_agent" && reportChatId) {
+      // Cloud runs continue automatically with the helper's result (cloudRunDelegationWait).
+      return {
+        success: true,
+        data: run,
+        next:
+          "This helper runs in the background and you will get its result as a new message in this run. " +
+          "Don't poll get_delegation_run and don't build around it: end your turn now with no reply text. " +
+          "The person will only see your reply after the result arrives.",
+      };
+    }
     return { success: true, data: run };
   },
 });
