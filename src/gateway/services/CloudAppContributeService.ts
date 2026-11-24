@@ -298,12 +298,37 @@ export async function appliedMigrationIdsForProposal(
   return ids;
 }
 
+/** Migration ids in a job's own database ledger; null when it can't be read. */
+export async function appliedJobMigrationIds(jobDir: string): Promise<Set<string> | null> {
+  const dbPath = path.join(jobDir, "data", "data.db");
+  if (!(await pathExists(dbPath))) return null;
+  try {
+    const { default: Database } = await import("better-sqlite3");
+    const db = new Database(dbPath, { readonly: true, fileMustExist: true });
+    try {
+      const rows = db.prepare("SELECT id FROM schema_migrations").all() as Array<{ id: unknown }>;
+      return new Set(rows.map((r) => String(r.id ?? "").replace(/\.sql$/, "")));
+    } finally {
+      db.close();
+    }
+  } catch {
+    return null;
+  }
+}
+
 /** Proposals never carry a migration that didn't run here (it would run untested on approve). */
 export function assertProposalMigrationsApplied(changes: { unapplied: string[]; unverified: string[] }): void {
   if (changes.unapplied.length > 0) {
     throw new Error(
       `These migration files never ran on this copy's database: ${changes.unapplied.join(", ")}. ` +
         "Apply them (papr_db_apply_migration) and test, or remove them, then propose again.",
+    );
+  }
+  const jobUnverified = changes.unverified.filter((p) => p.startsWith("Jobs/"));
+  if (jobUnverified.length > 0) {
+    throw new Error(
+      `These job migrations never ran on this desktop: ${jobUnverified.join(", ")}. ` +
+        "Run the job once so they apply to its database, then propose again.",
     );
   }
   if (changes.unverified.length > 0) {
@@ -376,6 +401,8 @@ async function collectMigrationTrees(
       trees.push({
         repoRelativeDir: path.join("Jobs", jobId, "migrations").replace(/\\/g, "/"),
         files,
+        // A new job migration must have run in the job's own database (audit G).
+        appliedIds: await appliedJobMigrationIds(path.join(paprDir, "Jobs", jobId)),
       });
     }
   }
@@ -513,7 +540,13 @@ async function buildContributeStaging(
   const { hydrateAppFolderSchemaMigrationsToRegistry } = await import(
     "./syncV3/syncPulledSchemaOwnerMigrations.js"
   );
-  const mirrored = await hydrateAppFolderSchemaMigrationsToRegistry({ appId: forkAppId, paprRoot: paprDir });
+  // Every linked database, not only the ones this copy schema-owns: one
+  // migrations folder per database, so nothing rides along untested (audit E).
+  const mirrored = await hydrateAppFolderSchemaMigrationsToRegistry({
+    appId: forkAppId,
+    paprRoot: paprDir,
+    includeLinked: true,
+  });
   if (mirrored.copied.length > 0) {
     console.info(`[CloudContribute] mirrored app-folder migrations before proposing: ${mirrored.copied.join(", ")}`);
   }
