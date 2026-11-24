@@ -102,6 +102,9 @@ export const MODEL_PRICING: Record<string, ModelPricing> = {
   "gemini-3.8-flash": { input: 0.75, output: 3.75 },
   // Intro through 2026-11-30; standard $4/$20 from 2026-12-01 (ai.google.dev pricing)
   "gemini-4-argon": { input: 2.0, output: 10.0 },
+  "gemini-4-carbon": { input: 2.0, output: 10.0 },
+  "gemini-4-neon": { input: 3.0, output: 15.0 },
+  "gemini-4-hydrogen": { input: 1.5, output: 7.5 },
   "gemini-3.1-pro-preview": { input: 2.0, output: 12.0 },
   // Deprecated IDs — kept for cost lookup on older chats
   "gemini-3-flash-preview": { input: 0.5, output: 3.0 },

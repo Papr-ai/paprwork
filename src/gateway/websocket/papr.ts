@@ -23,6 +23,19 @@ export async function setupPaprHandlers(
         break;
       }
 
+      case "papr:entitlements": {
+        // Premium models on Papr credits: paid plan + pay as you go? Fails open.
+        const { getPaprApiKey } = await import("../utils/keyResolver.js");
+        const key = await getPaprApiKey();
+        if (!key) {
+          sendResponse(ws, { id: message.id, success: true, data: { premium: true, reason: "no_key" } });
+          break;
+        }
+        const { getPaprEntitlements } = await import("../utils/paprEntitlements.js");
+        sendResponse(ws, { id: message.id, success: true, data: await getPaprEntitlements(key) });
+        break;
+      }
+
       default:
         sendError(ws, message.id, `Unknown papr message type: ${message.type}`);
     }
