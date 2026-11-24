@@ -63,6 +63,15 @@ describe("stripDirectDbCredentials", () => {
   });
 });
 
+describe("cloud backend handlers never get direct Turso credentials", () => {
+  it("CloudAppBackendService strips them for every caller, not only read-only", async () => {
+    const { readFile } = await import("node:fs/promises");
+    const src = await readFile("src/gateway/services/appRuntime/CloudAppBackendService.ts", "utf8");
+    expect(src).toContain("...stripDirectDbCredentials(databaseEnv),");
+    expect(src).not.toMatch(/!input\.cloudAccess\.canWrite\s*\?\s*stripDirectDbCredentials/);
+  });
+});
+
 describe("checkBundleFingerprint", () => {
   it("reports a stale bundle instead of refusing (accepted proposal changed the handler)", async () => {
     const { checkBundleFingerprint } = await import(
