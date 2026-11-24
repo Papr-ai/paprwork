@@ -397,6 +397,15 @@ export class CloudAppInstallService {
       if (installDbPolicy === "fork_empty") {
         forkDbIdsForRollback = [...linked.registryDbIds];
       }
+      // A token cached before this install (an earlier install, or a request
+      // that missed the team copy) may point at a different physical database.
+      // Drop it before bootstrap pulls anything with it.
+      try {
+        const { forgetTursoCredentialsForApp } = await import("./tursoCredentialsForApp.js");
+        await forgetTursoCredentialsForApp(app.id, `install (${installDbPolicy})`);
+      } catch {
+        /* best effort: the cached-token check in TursoSyncBridge still applies */
+      }
       await provisionInstalledDatabases({
         registryDbIds: linked.registryDbIds,
         installDbPolicy,

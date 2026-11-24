@@ -1847,6 +1847,18 @@ export class AppService {
     const { removeAppPublishPrefs } = await import("./cloudPublishPrefs.js");
     removeAppPublishPrefs(id, this.paprRootDir);
 
+    // No token should outlive the app: a reinstall must ask the server again
+    // instead of reusing a token that may point at a different copy.
+    try {
+      const { forgetTursoCredentialsForApp } = await import("./tursoCredentialsForApp.js");
+      await forgetTursoCredentialsForApp(id, "app deleted");
+    } catch (error) {
+      console.warn(
+        `[AppService] Could not drop cached database tokens for ${id}:`,
+        error instanceof Error ? error.message : error,
+      );
+    }
+
     try {
       const { removeSharedPrimaryTursoEntriesForApp } = await import(
         "./sharedPrimaryTursoStore.js"
