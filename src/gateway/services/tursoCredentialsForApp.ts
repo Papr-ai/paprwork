@@ -102,7 +102,11 @@ export function cachedTokenMatchesInstall(
   }
   if (!entry) return true;
   const lineage = readLineage(entry.localAppId);
-  if (!lineage?.source.orgId || !lineage.source.namespaceId || !lineage.source.userId) {
+  // Only judge copies the install explicitly put on team data. Older linked
+  // installs have no databasePolicy; some of them (public/link access) are
+  // legitimately on their own data, so an own-segment token is correct there.
+  if (lineage?.databasePolicy !== "shared") return true;
+  if (!lineage.source.orgId || !lineage.source.namespaceId || !lineage.source.userId) {
     return true;
   }
   return tursoUrl.startsWith(tursoSegmentUrlPrefix(lineage.source));

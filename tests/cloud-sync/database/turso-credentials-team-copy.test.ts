@@ -165,6 +165,17 @@ describe("Turso tokens for a copy on team data", () => {
     ).rejects.toThrow();
   });
 
+  it("does not judge older linked installs without an explicit team-data policy", async () => {
+    const lineagePath = path.join(ws.paprHome, "apps", LOCAL_APP, "papr-cloud-lineage.json");
+    const lineage = JSON.parse(await fs.readFile(lineagePath, "utf8"));
+    delete lineage.databasePolicy;
+    await fs.writeFile(lineagePath, JSON.stringify(lineage));
+    const { cachedTokenMatchesInstall } = await import(
+      "../../../src/gateway/services/tursoCredentialsForApp.js"
+    );
+    expect(cachedTokenMatchesInstall(DB, OWN_URL)).toBe(true);
+  });
+
   it("forgetTursoCredentialsForApp removes the app's tokens (delete / reinstall)", async () => {
     const { saveTursoCredentialsEntry, getTursoCredentialsEntry } = await import(
       "../../../src/gateway/services/tursoCredentialsStore.js"
