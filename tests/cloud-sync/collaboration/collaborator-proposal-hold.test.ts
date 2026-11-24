@@ -96,12 +96,14 @@ describe("proposal hold", () => {
 });
 
 describe("settleProposalHold", () => {
-  it("waits while the proposal is pending: nothing local changes", async () => {
+  it("a hold left by an older build with no decision is released: rebuild, replay what fits", async () => {
+    proposalHold();
+    appendHoldJournal(db(), [{ sql: "INSERT INTO x VALUES (1)" }]);
     const d = settleDeps();
-    const r = await settleProposalHold(proposalHold(), d);
-    expect(r?.outcome).toBe("pending");
-    expect(d.calls).toEqual([]);
-    expect(isReplicaHeld(db())).toBe(true);
+    const r = await settleProposalHold(getReplicaPublishHold(db())!, d);
+    expect(r).toMatchObject({ outcome: "superseded", replayed: 1 });
+    expect(d.calls).toEqual(["rebuild", "replay:INSERT INTO x VALUES (1)", "push"]);
+    expect(isReplicaHeld(db())).toBe(false);
   });
 
   it("approved (cloud ledger has every held migration): rebuild, replay, upload, release", async () => {
@@ -117,7 +119,7 @@ describe("settleProposalHold", () => {
   it("partly on the cloud is not approved", async () => {
     proposalHold(["0009_trigger", "0010_more"]);
     const d = settleDeps({ cloudAppliedIds: async () => new Set(["0009_trigger"]) });
-    expect((await settleProposalHold(getReplicaPublishHold(db())!, d))?.outcome).toBe("pending");
+    expect((await settleProposalHold(getReplicaPublishHold(db())!, d))?.outcome).toBe("superseded");
   });
 
   it("rejected: back to the cloud schema, writes that fit are kept, the rest reported, files quarantined", async () => {

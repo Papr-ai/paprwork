@@ -304,14 +304,19 @@ export async function applyRegistryMigrationSingleRoute(
   const hold = await import("./replicaPublishHold.js");
   const { classifyMigrationSql } = await import("../jobs/migrationBreakingClassifier.js");
   const breaking = classifyMigrationSql(sql).breaking;
-  // A teammate on the team's shared data: every schema change stays local
-  // (proposal hold) — only the publisher migrates the shared cloud copy.
+  // A teammate on the team's shared data never migrates their real copy: the
+  // change runs on a test copy and the team's database gets it on accept
+  // (#1045). Refuse here too, so no caller can leave a hold nothing settles.
   const { isCollaboratorOnSharedDatabase } = await import("../sharedPrimaryTursoResolve.js");
-  const proposal = Boolean(source.dbId && isCollaboratorOnSharedDatabase(source.dbId));
+  if (source.dbId && isCollaboratorOnSharedDatabase(source.dbId)) {
+    throw new Error(
+      `${migrationId}: this is the team's shared data — the change is tested on a test copy ` +
+        "and reaches the team's database when the publisher accepts it. Your real copy isn't migrated.",
+    );
+  }
   // Breaking (or anything queued behind a held one): apply locally only, publish carries it to the cloud.
   const holdForPublish =
-    proposal ||
-    (hold.isBreakingMigrationHoldEnabled() && (breaking || hold.isReplicaHeld(source.dbPath)));
+    hold.isBreakingMigrationHoldEnabled() && (breaking || hold.isReplicaHeld(source.dbPath));
   if (holdForPublish && !hold.isReplicaHeld(source.dbPath) && online) {
     // Upload rows written before the hold: the publish rebuilds this copy from the
     // cloud, so anything not yet uploaded (and not journaled) would be lost.
@@ -367,22 +372,14 @@ export async function applyRegistryMigrationSingleRoute(
     hold.addMigrationToHold({
       localPath: source.dbPath,
       dbId: source.dbId,
-      purpose: proposal ? "proposal" : "publish",
+      purpose: "publish",
       migration: { migrationId, sql, breaking, migrationRoot },
     });
-    if (proposal) {
-      console.log(
-        `[TursoReplica] ${migrationId}: team shared data — applied on this desktop only; ` +
-          "the cloud copy changes when the publisher approves the proposal",
-      );
-      pushError = "held for proposal";
-    } else {
-      console.log(
-        `[TursoReplica] ${migrationId}: ${breaking ? "breaking" : "queued behind a breaking"} migration ` +
-          "held for publish (applied locally; cloud gets it with the app code)",
-      );
-      pushError = "held for publish";
-    }
+    console.log(
+      `[TursoReplica] ${migrationId}: ${breaking ? "breaking" : "queued behind a breaking"} migration ` +
+        "held for publish (applied locally; cloud gets it with the app code)",
+    );
+    pushError = "held for publish";
   } else if (online) {
     // Sync does not carry triggers/views, and its push rewinds the replica to
     // the cloud state — capture them first, copy to the cloud, then pull back.

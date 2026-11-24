@@ -120,6 +120,20 @@ async function resolveSchemaOwnerSlugMap(
   return schemaOwnerSlugMapForApp(appId);
 }
 
+/**
+ * The local folder for a repo database slug: the same name, or the name with a
+ * short id suffix (`{slug}-{8 hex}`) when a same-named database already existed
+ * on this machine at install. Never another database: a migration belongs to
+ * the database named in its path, or to none.
+ */
+export function registrySlugForRepoSlug(owned: Map<string, string>, slug: string): string {
+  if (owned.has(slug)) return slug;
+  const suffixed = [...owned.keys()].filter(
+    (k) => k.startsWith(`${slug}-`) && /^[0-9a-f]{8}$/.test(k.slice(slug.length + 1)),
+  );
+  return suffixed.length === 1 ? suffixed[0]! : slug;
+}
+
 export interface PersistPulledSchemaMigrationInput {
   appId: string;
   repoPath: string;
@@ -166,10 +180,7 @@ export async function mirrorSchemaMigrationToRegistry(
   }
 
   const owned = await resolveSchemaOwnerSlugMap(input.appId, input.paprRoot);
-  const registrySlug =
-    owned.has(parsed.slug) || owned.size !== 1
-      ? parsed.slug
-      : ([...owned.keys()][0] ?? parsed.slug);
+  const registrySlug = registrySlugForRepoSlug(owned, parsed.slug);
   const paprRoot = input.paprRoot ?? getPaprRoot();
   if (!owned.has(registrySlug)) {
     // Another app on this machine owns the database (a second copy of the
@@ -314,10 +325,7 @@ export async function hydrateAppFolderSchemaMigrationsToRegistry(input: {
     }
     const slug = slugEntry.name;
     const owned = await resolveSchemaOwnerSlugMap(input.appId, input.paprRoot);
-    const registrySlug =
-      owned.has(slug) || owned.size !== 1
-        ? slug
-        : ([...owned.keys()][0] ?? slug);
+    const registrySlug = registrySlugForRepoSlug(owned, slug);
     const migrationsDir = path.join(databasesDir, slug, "migrations");
     const sqlFiles = await listSqlFilesInDir(migrationsDir);
     for (const fileName of sqlFiles) {
