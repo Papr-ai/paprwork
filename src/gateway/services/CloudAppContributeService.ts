@@ -288,6 +288,13 @@ export async function appliedMigrationIdsForProposal(
   const ids = new Set(ledger.rows.map((row) => String(row.id ?? "").replace(/\.sql$/, "")));
   const { getReplicaPublishHold } = await import("./tursoReplica/replicaPublishHold.js");
   for (const m of getReplicaPublishHold(dbPath)?.migrations ?? []) ids.add(m.migrationId);
+  // Contributor on the team's data: tested on a test copy, never applied here.
+  const { resolveMigrationRootFromDbPath } = await import("./jobs/databaseMigrations.js");
+  const root = resolveMigrationRootFromDbPath(dbPath);
+  if (root) {
+    const { testedMigrationIds } = await import("./cloudSync/proposalTestCopy.js");
+    for (const id of await testedMigrationIds(dbId, root)) ids.add(id);
+  }
   return ids;
 }
 
@@ -731,7 +738,7 @@ async function pushContributeBranch(
     }
     let changes = buildProposalChangeSet(trees);
     if (changes.unapplied.length > 0) {
-      // New migrations that never ran here: run them now (this desktop only on
+      // New migrations that never ran here: run them now (a test copy on
       // team-shared data), then check again. Only real failures block.
       const { autoApplyProposalMigrations } = await import("./cloudSync/proposalAutoApplyMigrations.js");
       const { paprDbApplyMigration } = await import("./tursoReplica/PaprDbService.js");
