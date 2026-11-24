@@ -170,11 +170,24 @@ export async function mirrorSchemaMigrationToRegistry(
     owned.has(parsed.slug) || owned.size !== 1
       ? parsed.slug
       : ([...owned.keys()][0] ?? parsed.slug);
+  const paprRoot = input.paprRoot ?? getPaprRoot();
   if (!owned.has(registrySlug)) {
+    // Another app on this machine owns the database (a second copy of the
+    // same app). If its migration is already there, byte for byte, there's
+    // nothing to write: report unchanged so a pull doesn't count it as failed
+    // and hold the copy's base commit back (audit D).
+    try {
+      const existing = await fs.readFile(
+        registryMigrationFilePath(paprRoot, parsed.slug, parsed.fileName),
+        "utf8",
+      );
+      if (fileContentHash(existing) === fileContentHash(input.content)) return { kind: "unchanged" };
+    } catch {
+      /* not there: fall through */
+    }
     return { kind: "skipped", reason: "not schema owner for slug" };
   }
 
-  const paprRoot = input.paprRoot ?? getPaprRoot();
   const registryFullPath = registryMigrationFilePath(
     paprRoot,
     registrySlug,
