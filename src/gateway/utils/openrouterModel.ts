@@ -42,6 +42,34 @@ function mapEffort(effort: ModelReasoning["effort"] | undefined): OpenRouterEffo
   return "medium";
 }
 
+/**
+ * OpenRouter's server-side web search. The memory server forces the engine and caps
+ * (Exa, 5 results, 3 searches) and bills each search as web_search credits.
+ */
+export const OPENROUTER_WEB_SEARCH_TOOL = { type: "openrouter:web_search" } as const;
+
+/** Set via providerOptions.openai.metadata to turn web search off (sub-agents with nativeWebSearch: false). */
+export const OPENROUTER_WEB_SEARCH_OFF_FLAG = "papr_web_search";
+
+/**
+ * Add the web search server tool unless the request turned it off, and strip the
+ * Papr-only flag so it never reaches OpenRouter. Only added when the request already
+ * carries tools (agent turns), so plain completions stay plain.
+ */
+export function injectOpenRouterWebSearch(body: Record<string, unknown>): void {
+  const meta = body.metadata as Record<string, unknown> | undefined;
+  const off = meta?.[OPENROUTER_WEB_SEARCH_OFF_FLAG] === "off";
+  if (meta && OPENROUTER_WEB_SEARCH_OFF_FLAG in meta) {
+    delete meta[OPENROUTER_WEB_SEARCH_OFF_FLAG];
+    if (Object.keys(meta).length === 0) delete body.metadata;
+  }
+  if (off || !Array.isArray(body.tools)) return;
+  const tools = body.tools as Array<Record<string, unknown>>;
+  if (!tools.some((t) => t?.type === OPENROUTER_WEB_SEARCH_TOOL.type)) {
+    tools.push({ ...OPENROUTER_WEB_SEARCH_TOOL });
+  }
+}
+
 /** Inject OpenRouter's unified reasoning field. */
 export function injectOpenRouterRequestBody(
   body: Record<string, unknown>,
@@ -78,6 +106,7 @@ export async function createOpenRouterChatModel(
       try {
         const body = JSON.parse(init.body) as Record<string, unknown>;
         injectOpenRouterRequestBody(body, options.reasoning);
+        injectOpenRouterWebSearch(body);
         return baseFetch(input, { ...init, body: JSON.stringify(body) });
       } catch {
         // not JSON — send as is
