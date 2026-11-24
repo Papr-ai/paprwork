@@ -1,7 +1,7 @@
 {
   "version": 1,
-  "generatedAt": "2026-11-23T17:44:04.480Z",
-  "entryCount": 223,
+  "generatedAt": "2026-11-23T20:04:10.385Z",
+  "entryCount": 224,
   "entries": [
     {
       "id": "access-members",
@@ -398,6 +398,26 @@
         "agent"
       ],
       "playbookRef": "preloaded-app-and-jobs-guide"
+    },
+    {
+      "id": "agent-tool-code_index_repo",
+      "title": "code_index_repo",
+      "summary": "Save the user's answer to the grep prompt about on-device code search for one of their git repos. allow: true indexes it on this Mac; false stops asking.",
+      "surfaces": [
+        "agent-tool"
+      ],
+      "runtimes": [
+        "desktop"
+      ],
+      "toolId": "code_index_repo",
+      "keywords": [
+        "code_index_repo",
+        "code",
+        "index",
+        "repo",
+        "tool",
+        "agent"
+      ]
     },
     {
       "id": "agent-tool-complete_delegation",

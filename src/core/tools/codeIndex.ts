@@ -150,8 +150,43 @@ export const listFileCodeSummariesTool = createTool({
   },
 });
 
+const codeIndexRepoSchema = z.object({
+  path: z.string().min(1).describe("Any path inside the git repo"),
+  allow: z.boolean().describe("true = index on this Mac; false = never ask again"),
+});
+
+export const codeIndexRepoTool = createTool({
+  id: "code_index_repo",
+  description:
+    "Save the user's answer to the grep prompt about on-device code search for one of their git repos. " +
+    "allow: true indexes it on this Mac; false stops asking.",
+  inputSchema: codeIndexRepoSchema,
+  execute: async (input) => {
+    const args = (input as { context?: z.infer<typeof codeIndexRepoSchema> }).context ?? input;
+    const { getCodeEmbedRuntime } = await import("./codeEmbed/runtime.js");
+    const rt = await getCodeEmbedRuntime();
+    if (!rt) return { success: false, error: "On-device code search is off on this machine (PAPR_CODE_EMBED=0 or no Papr workspace)." };
+    const r = rt.setRepoConsent(args.path, args.allow);
+    if (!r) return { success: false, error: `${args.path} is not inside a git repo outside the Papr folder.` };
+    return {
+      success: true,
+      data: {
+        repo: r.root,
+        allowed: r.allowed,
+        tier: rt.tier,
+        note: r.allowed
+          ? rt.tier === "local"
+            ? "Indexing in the background (pauses on low battery, heat or memory pressure). Grep gets on-device hits as files finish."
+            : `This Mac is on the ${rt.tier} tier: repos are only indexed on device, so grep stays exact-match here.`
+          : "Won't index or ask again. Anything indexed for this repo was dropped.",
+      },
+    };
+  },
+});
+
 export const codeIndexTools = [
   getProjectCodeOverviewTool,
   getFileCodeSummaryTool,
   listFileCodeSummariesTool,
+  codeIndexRepoTool,
 ];

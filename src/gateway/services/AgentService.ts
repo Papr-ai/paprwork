@@ -210,6 +210,22 @@ export interface IsolatedJobRunDiagnostics {
   maxTurns?: number;
 }
 
+/** Any tool that names an app, job or repo path also adopts it in the on-device code index (fire-and-forget). */
+async function wrapToolsForCodeIndex<T extends Record<string, any>>(tools: T): Promise<T> {
+  try {
+    const [{ wrapToolsWithIndexOnTouch }, { noteCodeEmbedTouch }, { getPaprRoot }] = await Promise.all([
+      import("../../core/tools/codeEmbed/touch.js"),
+      import("../../core/tools/codeEmbed/runtime.js"),
+      import("../../core/utils/paprRoot.js"),
+    ]);
+    return wrapToolsWithIndexOnTouch(tools, noteCodeEmbedTouch, () => {
+      try { return getPaprRoot(); } catch { return undefined; }
+    });
+  } catch {
+    return tools;
+  }
+}
+
 export class AgentService {
   private storageManager: StorageManager;
   private sessionManager: ChatSessionManager;
@@ -1802,7 +1818,9 @@ export class AgentService {
       resetSearchOutcomes(chatId);
       const registryTools = runtime.tools
         ? wrapToolsWithMemorySearchFirstGate(
-            this.toolRegistry.getToolsForMastra(options?.allowedToolIds),
+            await wrapToolsForCodeIndex(
+              this.toolRegistry.getToolsForMastra(options?.allowedToolIds),
+            ),
           )
         : {};
 

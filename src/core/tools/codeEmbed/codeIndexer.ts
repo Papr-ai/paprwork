@@ -39,6 +39,10 @@ export interface IndexerDeps {
   canRun?: () => boolean;
   /** Extra folders/files to skip for one root (documents/: versions/ and meta.json). */
   skipFor?: (root: string) => ExtraSkip | undefined;
+  /** How to list a root's files (default: walk). Git repos use `git ls-files` (tracked files only). */
+  listFor?: (root: string) => ((root: string) => Array<{ rel: string; abs: string; mtimeMs: number; size: number }>) | undefined;
+  /** Roots whose vectors stay on this device: never uploaded, never sent as text (the user's own git repos). */
+  localOnly?: (root: string) => boolean;
   now?: () => number;
 }
 
@@ -101,7 +105,8 @@ export class CodeIndexer {
     const { store } = this.d;
     const seen = new Set<string>();
     const changed: string[] = [];
-    for (const f of listFiles(root, this.d.skipFor?.(root))) {
+    const lister = this.d.listFor?.(root);
+    for (const f of lister ? lister(root) : listFiles(root, this.d.skipFor?.(root))) {
       seen.add(f.rel);
       const prev = store.fileEntry(root, f.rel);
       if (prev && prev.size === f.size && Math.abs(prev.mtimeMs - Math.round(f.mtimeMs)) < 1) {
@@ -208,7 +213,7 @@ export class CodeIndexer {
       const done: string[] = [];
       for (const sha of shas) {
         const src = this.texts.get(sha);
-        if (!src) continue;
+        if (!src || this.d.localOnly?.(src.root)) continue; // the user's repos never leave the device
         let text: string;
         try {
           text = fs.readFileSync(src.abs, "utf8");
@@ -259,7 +264,10 @@ export class CodeIndexer {
         }
       }
       const where = (sha: string) => this.texts.get(sha);
+      // Blobs only local-only roots (the user's repos) hold are never uploaded; a blob an app also holds is.
+      const localOnly = this.d.localOnly ? store.blobsOnlyIn((root) => this.d.localOnly!(root)) : undefined;
       const r = await pushVectors(client, store, {
+        skip: localOnly && localOnly.size ? (sha) => localOnly.has(sha) : undefined,
         repoId: (sha) => (where(sha) ? repoIdFor(where(sha)!.root) : undefined),
         pathHint: (sha) => where(sha)?.rel,
         batch: opts.batch,

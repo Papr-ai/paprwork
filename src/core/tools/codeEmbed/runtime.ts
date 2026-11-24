@@ -28,6 +28,8 @@ import type { PostClient } from "./cloudSync.js";
 import { availableMemBytes, readDeviceFacts, readPowerState, selfTestPasses, staticTier, throttleReason, type EmbedTier } from "./deviceHealth.js";
 import { CODE_EMBED_DIM, CODE_EMBED_MODEL, downloadModel, downloadTokenizer, loadTokenCounter, modelDir, tokenizerInstalled, WorkerOnnxEmbedder, modelInstalled, type Embedder } from "./embedder.js";
 import { CodeVectorStore } from "./vectorStore.js";
+import { RepoConsentStore, gitListFiles, repoKey, repoRootFor, reposEnabled } from "./repos.js";
+import { RECENT_APPS_CAP, recentAppRoots, recentDays, type TouchTarget } from "./touch.js";
 import { aneAvailable } from "./coremlEmbedder.js";
 import { INDEX_CORES_BUDGET, IndexCpu, QUERY_P50_BUDGET_MS, Samples, cpuSeconds } from "./perfStats.js";
 
@@ -119,6 +121,9 @@ export class CodeEmbedRuntime {
   private counter: ((s: string) => number) | null = null;
   private counterLoading: Promise<((s: string) => number) | null> | null = null;
   status = "starting";
+  /** The user's own git repos they allowed (opt-in, asked once). Indexed with git ls-files, never synced. */
+  readonly repos: RepoConsentStore;
+  private repoRoots = new Set<string>();
 
   constructor(private readonly d: RuntimeDeps) {
     const dir = path.join(d.dataDir, "code-embed");
@@ -165,7 +170,58 @@ export class CodeEmbedRuntime {
       cloud: () => this.cloudForScope(),
       canRun: d.canRun ?? (() => this.mayIndex()),
       skipFor: contextSkip,
+      listFor: (root) => (this.repoRoots.has(root) ? (r) => gitListFiles(r) : undefined),
+      localOnly: (root) => this.repoRoots.has(root),
     });
+    this.repos = new RepoConsentStore(d.dataDir);
+  }
+
+  /**
+   * A tool touched these apps/jobs or paths: adopt them (index in the background). App/job roots under the Papr
+   * folder are adopted outright; a path inside an allowed git repo adopts that repo. Never throws, never blocks.
+   */
+  noteTouch(targets: TouchTarget[]): void {
+    if (this.closed || this.tier === "off") return;
+    for (const t of targets) {
+      try {
+        if (t.kind === "project") {
+          if (!this.roots.has(t.value) && fs.existsSync(t.value)) this.touch(t.value, true);
+          continue;
+        }
+        const repo = this.repoFor(t.value);
+        if (repo?.decision === "allow" && !this.roots.has(repo.root)) this.adoptRepo(repo.root);
+      } catch {}
+    }
+  }
+
+  /** The git repo a path is in, with the user's decision for it (undefined = not asked yet). */
+  repoFor(p: string): { root: string; key: string; decision: "allow" | "deny" | undefined } | undefined {
+    if (!reposEnabled()) return undefined;
+    const root = repoRootFor(p, this.d.paprRoot);
+    if (!root) return undefined;
+    const key = repoKey(root);
+    return { root, key, decision: this.repos.decision(key) };
+  }
+
+  /** Record the user's choice for a repo. allow adopts it now; deny forgets anything indexed for it. */
+  setRepoConsent(p: string, allow: boolean): { root: string; allowed: boolean } | null {
+    const repo = this.repoFor(p);
+    if (!repo) return null;
+    this.repos.set(repo.key, allow);
+    if (allow) this.adoptRepo(repo.root);
+    else {
+      this.repoRoots.delete(repo.root);
+      this.roots.delete(repo.root);
+      this.store.forgetRoot(repo.root);
+    }
+    return { root: repo.root, allowed: allow };
+  }
+
+  /** Repos are embedded on device only: a cloud-tier device keeps grep + graph for them, sends nothing. */
+  private adoptRepo(root: string): void {
+    if (this.tier !== "local") return;
+    this.repoRoots.add(root);
+    this.touch(root, true);
   }
 
   /** Background indexing may run now: not on low battery, Low Power Mode, a hot CPU or a machine that is paging. */
@@ -437,6 +493,15 @@ export class CodeEmbedRuntime {
         return true;
       }
     }
+    if (!root && this.d.paprRoot && this.tier !== "off") {
+      // An edit in an app/job not indexed yet (agent edit, editor, watcher): adopt the whole app instead of dropping it.
+      const id = projectIdFromPath(absPath);
+      const proj = id ? [path.join(this.d.paprRoot, "apps", id), path.join(this.d.paprRoot, "Jobs", id)].find((r) => absPath.startsWith(r + path.sep)) : undefined;
+      if (proj && fs.existsSync(proj)) {
+        this.touch(proj, true);
+        return true;
+      }
+    }
     if (!root) return false;
     const rel = path.relative(root, absPath).split(path.sep);
     const extra = contextSkip(root);
@@ -451,8 +516,19 @@ export class CodeEmbedRuntime {
   /** Startup: fetch/load the model in the background and keep previously indexed roots fresh. Never throws. */
   warm(): void {
     if (this.tier === "off") return;
-    for (const r of this.store.roots()) if (fs.existsSync(r)) this.roots.add(r);
+    for (const r of this.store.roots()) {
+      if (!fs.existsSync(r)) continue;
+      const repo = this.d.paprRoot && r.startsWith(path.resolve(this.d.paprRoot) + path.sep) ? undefined : this.repoFor(r);
+      if (repo) {
+        // A repo indexed before: keep it only while still allowed (consent can be withdrawn while the app was closed).
+        if (repo.decision === "allow" && this.tier === "local") this.repoRoots.add(r);
+        else { this.store.forgetRoot(r); continue; }
+      }
+      this.roots.add(r);
+    }
     for (const r of this.contextRoots()) this.roots.add(r);
+    // Apps opened recently: indexed in the background (behind the pause rules), most recent first.
+    if (this.d.paprRoot) for (const r of recentAppRoots(this.d.paprRoot, recentDays(), RECENT_APPS_CAP)) this.roots.add(r);
     if (this.tier === "cloud") {
       void this.tokenCounter().then((c) => { if (c) for (const r of this.roots) this.touch(r, true); });
       return;
@@ -478,7 +554,7 @@ export class CodeEmbedRuntime {
         indexCores: { avg: this.indexCpu.cores, budget: INDEX_CORES_BUDGET },
       },
       neuralEngine: { ...aneAvailable(this.d.dataDir), first: this.aneFirst, onnxStarted: !!this.base },
-      modelInstalled: (this.d.installed ?? modelInstalled)(this.d.dataDir), roots: this.roots.size, ...this.store.stats(),
+      modelInstalled: (this.d.installed ?? modelInstalled)(this.d.dataDir), roots: this.roots.size, repos: this.repoRoots.size, ...this.store.stats(),
       device: { platform: f.platform, arch: f.arch, os: `${os.type()} ${os.release()}`, cpu: f.cpuModel, cores: f.physicalCores, ramGB: GBf(f.totalMemBytes), availableGB: GBf(f.freeMemBytes), translated: f.translated },
       crashes: { lastHour: this.crashTimes().length, localDisabledUntil: this.localDisabledUntil() || null, quarantined: this.store.quarantined(QUARANTINE_AFTER).size },
     };
@@ -616,7 +692,7 @@ export async function deviceHitsForGrep(grepPath: string, query: string, budgetM
     if (isForeignWorkspacePath(grepPath, roots.getPaprRoot())) return none;
     const ctx = contextEnabled() ? contextRootFor(grepPath, roots.getPaprRoot()) : undefined;
     const projectId = ctx ? undefined : projectIdFromPath(grepPath);
-    if (!ctx && !projectId) return none;
+    if (!ctx && !projectId) return (await import("./repoGrep.js")).repoHitsForGrep(grepPath, query, budgetMs);
     const root = ctx && fs.existsSync(ctx) ? ctx : projectId ? [roots.getPaprAppsRoot(), roots.getPaprJobsRoot()].map((r) => path.join(r, projectId)).find((r) => fs.existsSync(r)) : undefined;
     if (!root) return none;
     const rt = await getCodeEmbedRuntime();
@@ -627,6 +703,17 @@ export async function deviceHitsForGrep(grepPath: string, query: string, budgetM
   } catch {
     return none;
   }
+}
+
+/** The runtime only if it is already running (never starts one). */
+export function runningCodeEmbedRuntime(): Promise<CodeEmbedRuntime | null> {
+  return shared ? shared.catch(() => null) : Promise.resolve(null);
+}
+
+/** Agent tools touched these apps/jobs/paths: adopt them in the on-device index. No-op until the runtime is up. */
+export function noteCodeEmbedTouch(targets: TouchTarget[]): void {
+  if (!shared || !targets.length) return;
+  void shared.then((rt) => rt?.noteTouch(targets)).catch(() => undefined);
 }
 
 /** CoreML on the Neural Engine, Apple Silicon only; falls back to the ONNX base for documents over its longest length. */
