@@ -48,6 +48,47 @@ export async function addJobTombstones(
   }
 }
 
+/**
+ * Remove job IDs from the tombstone list. Use only on explicit user intent to
+ * have those jobs again: installing or updating an app that ships them. A
+ * track install keeps the publisher's job IDs, so an earlier install of the
+ * same app that was deleted left them tombstoned, and the reinstalled jobs
+ * were dropped on the next reload with no error (the scheduler never fired).
+ * Returns the IDs that were actually removed.
+ */
+export async function clearJobTombstones(
+  paprDir: string,
+  jobIds: string[],
+): Promise<string[]> {
+  const wanted = new Set(jobIds.map((id) => id.trim()).filter(Boolean));
+  if (wanted.size === 0) {
+    return [];
+  }
+  const key = tombstonesPath(paprDir);
+  let cleared: string[] = [];
+  const prev = writeChains.get(key) ?? Promise.resolve();
+  const next = prev
+    .catch(() => undefined)
+    .then(async () => {
+      const existing = await readJobTombstones(paprDir);
+      cleared = [...wanted].filter((id) => existing.has(id));
+      if (cleared.length === 0) {
+        return;
+      }
+      for (const id of cleared) {
+        existing.delete(id);
+      }
+      await writeTombstoneSet(paprDir, existing);
+    });
+  writeChains.set(key, next);
+  try {
+    await next;
+  } finally {
+    if (writeChains.get(key) === next) writeChains.delete(key);
+  }
+  return cleared;
+}
+
 async function writeJobTombstones(paprDir: string, jobIds: string[]): Promise<void> {
   const incoming = jobIds.map((id) => id.trim()).filter(Boolean);
   if (incoming.length === 0) {
@@ -59,6 +100,10 @@ async function writeJobTombstones(paprDir: string, jobIds: string[]): Promise<vo
     existing.add(id);
   }
 
+  await writeTombstoneSet(paprDir, existing);
+}
+
+async function writeTombstoneSet(paprDir: string, existing: Set<string>): Promise<void> {
   const target = tombstonesPath(paprDir);
   await fs.mkdir(path.dirname(target), { recursive: true });
   const payload: JobTombstonesFile = {

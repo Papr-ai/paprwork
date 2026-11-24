@@ -10,6 +10,8 @@
  *   3. an unchanged second run does not reinstall
  *   4. a missing tool / unresolvable package fails with a structured missing_dependency
  */
+// Must stay first: runs in a temp workspace, never the real ~/Papr.
+import "./lib/isolateHome.mjs";
 import { cpSync, existsSync, mkdtempSync, rmSync, writeFileSync } from "fs";
 import { tmpdir } from "os";
 import path from "path";

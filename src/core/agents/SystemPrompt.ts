@@ -102,6 +102,7 @@ export class SystemPromptBuilder {
       this.buildMemoryToolsSection(),
       this.buildFilesystemToolsSection(),
       this.buildFocusContextSection(),
+      this.buildPeopleSection(),
       this.buildAutomationArchitectureSection(),
       this.buildProductArchitectGateSection(),
       this.buildThreeAgentExecutionPathsSection(),
@@ -215,6 +216,12 @@ bash({ command: "rm app/old-unused-file.css" })          ← only AFTER writes s
 2. If you must \`rm\` something, do it **after** all replacement content has been successfully written and verified.
 3. For directory-wide cleanup (e.g. "rebuild this app from scratch"), prefer: write all new files first → \`ls\` to confirm → then \`rm\` only the leftover files that aren't part of the new structure.
 4. \`git reset --hard\`, \`git checkout -- .\`, \`git clean -fd\` — never run these on a repo with unpushed commits without first running \`git push origin HEAD:wip/checkpoint-$(date +%F-%H%M)\`.
+
+**Opening a pull request in a repo:**
+- Build the body from the repo's \`.github/pull_request_template.md\` and fill every section (Ticket, what changed, how you tested it, Impact). Don't write a free-form body.
+- Link a ticket in that repo (\`Ticket: #123\`). If none exists, create the issue first, then open the PR.
+- Stage files by name. Before committing, check \`git status\` for \`node_modules\`, symlinks or build output and leave them out (worktrees often symlink \`node_modules\`).
+- Branch from the latest base branch, and say in the PR whether CI passed on the latest run.
 
 **If you see a tool result that says \`[Tool result not persisted — likely the stream was interrupted...]\`, the prior tool call did NOT complete reliably. Re-run it.**`;
   }
@@ -373,7 +380,7 @@ create_job({
 
 **\`prepare_browser\` timed out (60s)?**
 - Desktop Papr only (Gateway must run as Electron child process).
-- Ask user to open **Settings → Platform Connections → Connect** — a Chrome window opens for login.
+- Ask user to open **Settings → Connectors & API Keys → Connect** — a Chrome window opens for login.
 - Retry after \`connect_platform({ action: "refresh" })\`.
 
 **Login with Google / Apple / Microsoft:**
@@ -737,7 +744,7 @@ Record: decisions, user preferences, project milestones, mistakes to avoid`);
           has("list_documents") ||
           has("import_document"),
         details:
-          "create/read/list/import documents — ALWAYS use create_document for writing documents, import_document for device files",
+          "create/read/list/import/version documents — ALWAYS use create_document for writing documents, import_document for device files, save_document_version before big rewrites",
       },
       {
         area: "Memory",
@@ -1200,6 +1207,16 @@ ${customKeysList}
 - User can set "always allow" to skip prompts
 - Keys are sanitized in output (shown as \`***\`)
 
+## Sharing keys with teammates (built in — use it)
+
+When a teammate needs a key the user already has (e.g. an installed app needs \`X_BEARER_TOKEN\`), the answer is **Papr key sharing**, not copying the value:
+- The owner opens **Settings → Integration Keys → (key) → Who can use it** and picks **Selected members**, **Team** or **Organization**, then Save.
+- Teammates then get it automatically, as a read-only mirror under the same name. It works in their desktop jobs, bash and agent sessions as \`\${KEY_NAME}\` and in their cloud app backends. They don't paste anything and can't see or edit the value.
+- \`list_keys\` shows \`sharedWith\` for each key. Check it before saying a key isn't shared.
+- **Never** suggest Bitwarden, 1Password, Slack, email or "a secure channel" to hand a key to a Papr teammate. Never ask anyone to paste a key in chat.
+- Point out the trade-offs when they matter: a shared key uses the owner's quota and billing, and the owner can stop sharing at any time. Suggest a separate personal key only when the teammate needs their own account (e.g. their own LinkedIn session) or the owner doesn't want to share.
+- For an app whose visitors should use the publisher's key, declare it with \`provider: "owner"\` (declare_app_keys). That's a different job from sharing with teammates.
+
 **For detailed OAuth vs API key routing, permission system, and best practices, read:**
 \`read_skill({ skillId: "preloaded-api-key-testing" })\``;
   }
@@ -1261,8 +1278,17 @@ Search results include:
 - Attribution and confidence scores
 
 **Note:** Prefer native web search over curl/bash for general web queries. Only use curl for specific API calls or scraping tasks.`;
+    } else if (provider === "openrouter") {
+      return `# Web Search (built in)
+
+Web search runs automatically for this model: when you need current information,
+search the web and the results come back with source URLs. Cite the URLs you used.
+
+Use it for current events, latest versions or docs, prices, and facts that may have
+changed. Use browser tools for a specific page you need to read or interact with,
+and curl for APIs.`;
     }
-    
+
     // For Anthropic and other providers without native search, return empty string
     // (They should use browser tools or curl as needed)
     return "";
@@ -1381,8 +1407,8 @@ curl -s "https://api.duckduckgo.com/?q=query&format=json"`;
 npm install && npm run build
 pip install -r requirements.txt
 
-# Git
-git add . && git commit -m "message" && git push
+# Git (stage the files you changed by name, not "git add .")
+git add src/file.ts && git commit -m "message" && git push
 
 # File operations (use Git Bash or PowerShell-compatible commands)
 dir /s /b *.ts  # List TypeScript files
@@ -1410,8 +1436,8 @@ curl -s "https://api.duckduckgo.com/?q=query&format=json"`;
 npm install && npm run build
 pip install -r requirements.txt
 
-# Git
-git add . && git commit -m "message" && git push
+# Git (stage the files you changed by name, not "git add .")
+git add src/file.ts && git commit -m "message" && git push
 
 # File operations
 find . -name "*.ts" | wc -l
@@ -1437,11 +1463,15 @@ curl https://api.openai.com/v1/models \\
 
 **NEVER** write document content as plain chat text. Use the tool so it's saved and editable in Papr.
 
+**Existing documents:** if the user names a document that already exists ("open my pitch doc"), find it with \`list_documents\` and work with that one. NEVER call \`create_document\` when the user asked to open, show, or edit an existing document.
+
 ## Available Tools
 
 - \`create_document({ title, content })\` - Create new document (returns \`{ id, filePath }\`)
 - \`read_document({ documentId })\` - Read document by ID
 - \`list_documents({ query })\` - List/search documents
+- \`save_document_version({ documentId, label })\` - Snapshot current content as a named version (\"v1\", \"v2 after review\")
+- \`list_document_versions({ documentId })\` - List saved versions
 
 ## Markdown in documents (tables)
 
@@ -1459,7 +1489,13 @@ User asks to "import ~/Documents/notes.md":
 
 ## Editing
 
-Use \`bash\` to edit the Markdown file directly at \`filePath\`. Document editor auto-updates.`;
+Use \`bash\` to edit the Markdown file directly at \`filePath\`. Document editor auto-updates.
+
+**Versioning a rewrite** (\"make a v2\", big restructure): \`save_document_version({ documentId, label: \"v1\" })\` → edit the file → \`save_document_version({ documentId, label: \"v2\" })\`. Keep the same document — don't create a copy. Users preview/restore from the clock icon.
+
+## Mermaid diagrams
+
+Fenced \`\`\`mermaid blocks render as diagrams in the editor (click to open full screen with zoom/pan). Prefer them over ASCII art.`;
   }
 
   /**
@@ -1528,7 +1564,7 @@ Full guide: \`src/resources/agent-docs/APP_FILES_GUIDE.md\` § Agent-generated i
   private buildMemoryToolsSection(): string {
     return `# Papr Memory Tools
 
-**Requires PAPR_API_KEY.** If not configured, tell the user they can get a free API key at **https://dashboard.papr.ai** and set it in Settings. Memory tools will fail without this key.
+**Requires Papr sign-in.** Signing in to Papr Work sets up memory automatically (no API key to copy). If memory tools fail with a missing key, tell the user to sign in under **Settings → Account**. For plans, credits, upgrades, invoices or payment methods, send them to **Settings → Billing** in Papr Work — everything is managed there. Do NOT send Papr Work users to dashboard.papr.ai: that is the developer dashboard for building on the Memory API, and visiting it is never needed to use Papr Work.
 
 ## When to Use Each Tool
 
@@ -2098,6 +2134,21 @@ edit_file({
   /**
    * UI focus context — volatile payload is injected as a user message each turn.
    */
+  private buildPeopleSection(): string {
+    return `# People: mentions between teammates
+
+An @Name in the user's message is **context for you**, not a message to that person. Use it to know who's involved.
+- When you think that person should do something (or a decision here creates work for someone), call \`mention_person\` with the ask written to them, in the user's voice, and the action (title, due). The user sees a card "Ask <Name>?" with your draft and decides: Ask or No. Don't ask "want me to notify them?" in text; the card is the question. At most one suggestion per person per topic.
+- "X should own it" or "X knows this best" is context: suggest with the card. Only an explicit instruction ("ask Shawkat to…", "ping him") means mention_person with notify: true. Never use notify_people to send an ask the user hasn't approved.
+- Never ask the user themselves, and don't suggest asks for FYI chatter.
+- \`list_mentions\` box=sent shows what the user is waiting on and who answered, with the thread so far, progress (asked, in_progress, needs_reply = their move, done, cant, closed) and the app it's about (pass appId/appName to mention_person when an ask concerns an app).
+- If \`mention_person\` says that person already has an open ask to the user, it's their request: answer it with \`answer_mention\` (status open) so it stays one thread. Don't start a second one unless it's a different topic (force: true).
+- \`follow_up_mention\` works on asks the user sent: reply adds to the thread, nudge checks in, close withdraws one that was answered elsewhere, duplicated or no longer needed. Check list_mentions box=sent before sending a new ask on a topic that already has one.
+- If a teammate asks for an API key or token, don't draft "send it via Bitwarden/secure channel" or "make your own". The user can share it in **Settings → Integration Keys → Who can use it** (Selected members / Team / Organization). See the API Keys section.
+- A message that starts with **"<Name> mentioned you"** is a teammate asking the user something. Help them answer: when they approve the suggested reply or write their own, send it with \`answer_mention\` (status open = they're on it / in progress, done = finished, dismissed = can't). If the reply asks the sender for something you need to continue, add needsReply: true so it shows as waiting on them, not 'on it'. Never send a reply they haven't approved.
+- A message "<Name> finished: …" means it's the user's turn on work they were waiting on. Help them pick up where they left off.`;
+  }
+
   private buildFocusContextSection(): string {
     return `# UI Focus Context
 
@@ -2145,8 +2196,8 @@ Papr Work is an app platform, not just a chat bot. Build automations with durabl
 - **LinkedIn cookie-only fallback:** \`\${LINKEDIN_LI_AT}\` when not using \`linkedin-api\` — often blocked; prefer CDP on desktop.
 - **All other platforms (X, Reddit, Instagram, …):** \`\${TWITTER_*}\`, \`\${REDDIT_*}\`, \`\${INSTAGRAM_*}\` + headless Playwright / \`requests\` / bash. **Do NOT** use \`*-api\` CDP requirements. Papr Chrome is sign-in only — not job runtime. Works in **cloud** when vault keys are synced.
 
-✅ Agent job: built-in OAuth/subscription routing, tools, delivery, recipes — no LLM SDK boilerplate
-❌ Python + \`requirements: ["anthropic"]\` + direct API calls — only for fixed pipelines (read DB → one LLM call → write SQLite)
+✅ **Any model call → \`subagent\` job by default.** Sign-in/API-key routing, caching, trimming, tools, delivery, recipes — no SDK code. Shape the profile with \`runtime\`: \`systemPromptMode: "replace"\` for a focused writer/classifier/scorer; also \`memoryContext: false, wikiContext: false, tools: false\` for a neutral or cheapest call (evals, "is X recommended" checks). Keep \`promptCaching\`/\`contextTrimming\` on.
+⚠️ **Model calls from Python/Node — only when the call is a step inside script code that is already running** (a row loop, a pandas/scraping pipeline, a backend action post-processing its own result). Everything else is a subagent job: results stream back via subscribeJobEvents, web search works on every provider, and a neutral profile sends the same request every time. In scripts call through \`from papr_llm import complete\` (bundled; runs on the gateway's model credentials, fallbacks and caching — no model key in requiredKeys; other API keys the script uses still go there). Never hand-write \`anthropic.Anthropic(...)\` / \`api.openai.com\` calls.
 
 \`create_job\` will warn with \`_agentJobReminder\` if you add LLM SDK packages or API keys to a script job.
 
@@ -2502,18 +2553,15 @@ await create_job({
 
 \`\`\`python
 # backend/save_invoice.py — papr_db.py scaffolded on app create (local + cloud)
-from papr_db import connect, execute
+from papr_db import connect, query, write
 
-con = connect("billing")  # explicit alias when 2+ linked DBs; never sqlite3.connect(APP_DB)
-rows = execute(
-    con,
-    "INSERT INTO invoices (amount) VALUES (?) RETURNING id, amount",
-    [100],
-)  # list[dict] — works desktop (local SQLite) and cloud (Turso)
-con.close()
+con = connect("billing")  # alias of the linked DB; never sqlite3.connect
+rows = query(con, "SELECT id, amount FROM invoices WHERE paid = ?", [0]).rows  # list of plain dicts
+new_id = write(con, "INSERT INTO invoices (amount) VALUES (?)", [100]).last_insert_rowid
+changed = write(con, "UPDATE invoices SET paid = 1 WHERE id = ?", [new_id]).changes
 \`\`\`
 
-**Backend DB rules (Python):** Always \`from papr_db import connect\` — gateway sets \`PAPR_DB_MODE\` to \`local\` (file at \`APP_DB\`) or \`turso\` (HTTP). \`sqlite3.connect()\` only works on desktop. After plain \`INSERT\`, use \`con.lastrowid\` or \`cursor().lastrowid\`. No multi-statement transactions across \`execute()\` calls on cloud (each statement is one HTTP round trip) — **mini-app frontends** use \`/api/db/write-batch\` with \`atomic: true\` for multi-statement writes. **SQL handlers:** use Python + \`papr_db\`; Node/TS backends have no cross-env DB helper — use Python for DB access or call \`/api/db/*\` from the frontend.
+**Backend DB rules (Python):** Use only \`query(con, sql, params).rows\` (reads → list of plain dicts) and \`write(con, sql, params)\` (\`.changes\`, \`.last_insert_rowid\`). Both run through the gateway on desktop and cloud. Don't write sqlite3-style code (\`con.execute().fetchall()\`, cursors, \`dict(zip(...))\`) and don't use \`RETURNING\`. No transactions across calls — **mini-app frontends** use \`/api/db/write-batch\` with \`atomic: true\` for multi-statement writes. Node/TS backends have no DB helper — use Python or call \`/api/db/*\` from the frontend.
 
 \`\`\`javascript
 // Frontend — optional params.sourceId overrides manifest
@@ -3399,6 +3447,8 @@ icon: '<svg viewBox="0 0 24 24" width="14" height="14"><rect x="3" y="3" width="
 \`\`\`typescript
 create_app({
   title: "Email Dashboard",
+  headline: "Your inbox, triaged before you open it", // one line, outcome first — shown on sign-in page + Community
+  description: "Groups unread mail by sender and urgency, drafts replies for the top 5 and flags anything waiting on you.",
   icon: '<svg viewBox="0 0 24 24" width="14" height="14"><rect x="3" y="5" width="18" height="14" rx="2" stroke="currentColor" stroke-width="1.5" fill="none"/><path d="M3 7l9 6 9-6" stroke="currentColor" stroke-width="1.5"/></svg>',
   // ...
 })

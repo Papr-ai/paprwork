@@ -20,7 +20,10 @@ import {
 import { normalizeZaiModelId } from "./zaiModel.js";
 
 const PAPR_PROXY_BASE =
-  process.env.PAPR_AI_PROXY_BASE_URL || "https://memory.papr.ai/v1/ai";
+  process.env.PAPR_AI_PROXY_BASE_URL ||
+  (process.env.PAPR_MEMORY_SERVER_URL
+    ? `${process.env.PAPR_MEMORY_SERVER_URL.replace(/\/$/, "")}/v1/ai`
+    : "https://memory.papr.ai/v1/ai");
 
 /**
  * Create an AI SDK LanguageModel that routes through the Papr proxy.
@@ -94,6 +97,15 @@ export async function createProxyModel(
       return createMoonshotChatModel(normalizeMoonshotModelId(modelId), {
         apiKey: "papr-proxy",
         baseURL: `${PAPR_PROXY_BASE}/moonshot`,
+        headers,
+      });
+    }
+
+    case "openrouter": {
+      const { createOpenRouterChatModel } = await import("./openrouterModel.js");
+      return createOpenRouterChatModel(modelId, {
+        apiKey: "papr-proxy",
+        baseURL: `${PAPR_PROXY_BASE}/openrouter`,
         headers,
       });
     }

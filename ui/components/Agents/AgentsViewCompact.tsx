@@ -12,6 +12,7 @@ const COMPACT_MODEL_IDS = [
   "claude-sonnet-5-5",
   "claude-sonnet-4-6",
   "claude-opus-4-6",
+  "gpt-5-6-luna",
   "gpt-5.4-mini",
   "gpt-5.4-low",
   "gpt-5.4",

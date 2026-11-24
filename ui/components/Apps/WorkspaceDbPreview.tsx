@@ -2,12 +2,15 @@
  * WorkspaceDbPreview — table browser for job SQLite databases.
  */
 
-import React, { useEffect, useRef } from "react";
+import { useEffect, useRef } from "react";
 import type { JobDbPreviewResult } from "../../hooks/useAppWorkspace";
+import { rowsLine, type ScopedTable } from "../../../src/core/utils/tableScope";
 import "./WorkspaceDbPreview.css";
 
 interface WorkspaceDbPreviewProps {
   preview: JobDbPreviewResult;
+  /** Visibility per table in this database (from table-scope). */
+  scopes?: ScopedTable[];
   loading: boolean;
   onSelectTable: (tableName: string) => void;
   onPageChange?: (page: number) => void;
@@ -16,8 +19,15 @@ interface WorkspaceDbPreviewProps {
 
 const PAGE_SIZES = [20, 50, 100];
 
+/** Public = every row to anyone with access; Private = rows go to their owner / who they're shared with. */
+function accessTag(t: ScopedTable): { label: string; pub: boolean } {
+  if (t.scope === "all" || t.scope === "visitor") return { label: "Public", pub: true };
+  return { label: "Private", pub: false };
+}
+
 export function WorkspaceDbPreview({
   preview,
+  scopes,
   loading,
   onSelectTable,
   onPageChange,
@@ -40,9 +50,10 @@ export function WorkspaceDbPreview({
   if (!activeTable) {
     return (
       <div className="workspace-db-preview__empty">
-        <p>No user tables found in this database yet.</p>
+        <p>No tables yet</p>
         <p className="workspace-db-preview__hint">
-          Run the linked job to populate data.
+          This job hasn&apos;t saved any data of its own. Papr&apos;s run history is kept here
+          too but hidden.
         </p>
       </div>
     );
@@ -75,6 +86,19 @@ export function WorkspaceDbPreview({
             onClick={() => onSelectTable(table.name)}
           >
             {table.name}
+            {(() => {
+              const scope = scopes?.find((t) => t.name === table.name);
+              if (!scope) return null;
+              const tag = accessTag(scope);
+              return (
+                <span
+                  className={`workspace-db-preview__access${tag.pub ? " is-public" : ""}`}
+                  title={`${rowsLine(scope, scope.scope !== "visitor")} for people with access`}
+                >
+                  {tag.label}
+                </span>
+              );
+            })()}
             <span className="workspace-db-preview__tab-count">
               {table.rowCount.toLocaleString()}
             </span>

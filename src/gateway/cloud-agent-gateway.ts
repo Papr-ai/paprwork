@@ -17,6 +17,7 @@ import { getCloudAgentGatewayService } from "./services/cloudAgentGateway/CloudA
 import { handleCloudAgentAppRepoCommitted } from "./services/cloudAgentGateway/handleAppRepoCommitted.js";
 import { resolveCloudAgentRunId } from "./services/cloudAgentGateway/cloudAgentRunId.js";
 import { startSandboxLocalApi } from "./services/cloudAgentGateway/sandboxLocalApi.js";
+import { registerInternalModelCallRoute } from "./services/llm/registerModelCallRoutes.js";
 import type { CloudAgentRunRequest } from "./services/cloudAgentGateway/types.js";
 import {
   parseAppRepoCommittedPayload,
@@ -31,6 +32,12 @@ dotenv.config({ path: resolve(process.cwd(), ".env") });
 
 process.env.GATEWAY_MODE = process.env.GATEWAY_MODE ?? "cloud_agent";
 process.env.CLOUD_SYNC_ENABLED = process.env.CLOUD_SYNC_ENABLED ?? "false";
+// The @papr/memory SDK reads PAPR_BASE_URL (default memory.papr.ai), not
+// PAPR_MEMORY_SERVER_URL. Without this a dev gateway synced chat messages to
+// prod memory, which rejected the dev user ("Invalid user_id", #568).
+if (!process.env.PAPR_BASE_URL && process.env.PAPR_MEMORY_SERVER_URL) {
+  process.env.PAPR_BASE_URL = process.env.PAPR_MEMORY_SERVER_URL.replace(/\/$/, "");
+}
 
 const PORT = Number(process.env.PORT ?? process.env.CLOUD_AGENT_GATEWAY_PORT ?? 8788);
 // Read once, then removed from process.env so agent bash/jobs never inherit it.
@@ -283,6 +290,10 @@ async function main(): Promise<void> {
     await service.endAgentSession(sessionId);
     res.json({ ok: true, sessionId });
   });
+
+  // papr_llm from cloud script jobs (GKE pods): the memory server relays each call
+  // here with the run's vault credentials, so no credential ever enters the pod.
+  registerInternalModelCallRoute(app, requireGatewayAuth);
 
   app.post("/internal/app-repo-committed", requireGatewayAuth, async (req, res) => {
     const event = parseAppRepoCommittedPayload(req.body);

@@ -30,6 +30,12 @@ export interface JobWriteDatabaseTarget {
    * fails with "short read on WAL frame at offset N: expected 4096, got 0".
    */
   syncMode?: DatabaseSyncMode;
+  /**
+   * Names the job's linked app(s) gave this database in data-sources.json
+   * (e.g. "perf" for a database labelled "Perf 459"). Exported so
+   * papr_db.connect("perf") works in a job exactly as it does in the app.
+   */
+  appAliases?: string[];
 }
 
 export interface ResolveJobWriteTargetsOptions {
@@ -163,6 +169,7 @@ export async function resolveJobWriteTargets(
       }
       targets.push(await resolveWriteTargetForRecord(record, options));
     }
+    await attachAppAliases(targets, job.appIds);
     return targets;
   }
 
@@ -217,6 +224,31 @@ export async function resolveJobWriteTargets(
     ];
   }
   return [targetFromRegistryRecord(record, dbPath)];
+}
+
+/** Add each linked app's alias for a target database (best effort). */
+async function attachAppAliases(
+  targets: JobWriteDatabaseTarget[],
+  appIds: readonly string[] | undefined,
+): Promise<void> {
+  const linked = (appIds ?? []).filter((id) => id !== STANDALONE_APP_ID);
+  if (linked.length === 0 || targets.length === 0) return;
+  try {
+    const { getAppService } = await import("./AppService.js");
+    const appService = getAppService();
+    await appService.initialize();
+    for (const appId of linked) {
+      const cfg = await appService.getDataSourcesConfig(appId).catch(() => null);
+      for (const src of cfg?.sources ?? []) {
+        const target = targets.find((t) => t.dbId === src.dbId);
+        if (!target || !src.alias || src.alias === target.alias) continue;
+        const list = (target.appAliases ??= []);
+        if (!list.includes(src.alias)) list.push(src.alias);
+      }
+    }
+  } catch {
+    // Aliases are a convenience; the label and dbId still resolve.
+  }
 }
 
 /** @deprecated Use resolveJobWriteTargets — kept for legacy call sites during migration. */
@@ -309,6 +341,9 @@ export function jobWriteDatabaseEnv(
     const prefix = `PAPR_DB_${target.envKey}`;
     env[`${prefix}_ALIAS`] = target.alias;
     env[`${prefix}_ID`] = target.dbId;
+    if (target.appAliases?.length) {
+      env[`${prefix}_APP_ALIASES`] = target.appAliases.join(",");
+    }
     // The path stays exported either way: reads are the common case and a
     // read-only handle never checkpoints. "replica" mode tells papr_db to
     // open it mode=ro and route writes through the gateway proxy instead.

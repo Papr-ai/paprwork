@@ -21,19 +21,41 @@ export type ClaudeUsageLimitsSnapshot = {
   source: "oauth" | "web";
   rows: ClaudeUsageLimitRow[];
   extraUsageEnabled: boolean | null;
+  /**
+   * Extra usage billed this month past the plan's included limits — real money
+   * on top of the subscription. Null when the response carries no spend block.
+   */
+  extraUsageSpent?: { amount: number; currency: string } | null;
+  /** Monthly cap on extra usage, in the same currency; null when uncapped/off. */
+  extraUsageMonthlyLimit?: number | null;
+  /** Plan the token belongs to, from /api/oauth/profile (null if unreadable). */
+  plan?: ClaudePlanInfo | null;
   /** Which credential succeeded (Claude Code Keychain vs Paprwork paste store). */
   credentialSource?: "claude_code_keychain" | "papr_stored";
   subscriptionType?: string | null;
   orgName?: string | null;
 };
 
+export type ClaudePlanInfo = {
+  /** e.g. claude_pro, claude_max, claude_team, claude_enterprise */
+  organizationType: string | null;
+  /** e.g. default_claude_max_5x, default_claude_max_20x */
+  rateLimitTier: string | null;
+  /** e.g. team_tier_1 */
+  seatTier: string | null;
+};
+
 export type FetchClaudeUsageResult =
   | { success: true; data: ClaudeUsageLimitsSnapshot }
   | { success: false; error: string; httpStatus?: number };
 
-/** Query params match Claude Code's internal usage fetch (see CLI binary). */
-const OAUTH_USAGE_URL =
-  "https://api.anthropic.com/api/oauth/usage?at_wall=1&skip_spend=1";
+/**
+ * Query params match Claude Code's internal usage fetch (see CLI binary),
+ * minus `skip_spend=1`: with it the response carries `extra_usage: null`, so
+ * `extraUsageEnabled` was always null and nothing could say whether a turn
+ * past the plan's limits was refused or billed (issue #900).
+ */
+const OAUTH_USAGE_URL = "https://api.anthropic.com/api/oauth/usage?at_wall=1";
 const OAUTH_PROFILE_URL = "https://api.anthropic.com/api/oauth/profile";
 
 type RawUtilizationBlock = {
@@ -161,6 +183,62 @@ export function parseClaudeUsagePayload(
     source,
     rows,
     extraUsageEnabled: extraEnabled,
+    extraUsageSpent: readExtraUsageSpent(root),
+    extraUsageMonthlyLimit: readMinorUnits(
+      extra?.monthly_limit,
+      extra?.decimal_places,
+    ),
+  };
+}
+
+/** Integer minor units (cents) with an exponent → major units, or null. */
+function readMinorUnits(value: unknown, exponent: unknown): number | null {
+  if (typeof value !== "number" || !Number.isFinite(value)) return null;
+  const places = typeof exponent === "number" && exponent >= 0 ? exponent : 2;
+  return value / 10 ** places;
+}
+
+/**
+ * Money spent this month past the plan's included limits. `spend.used` is the
+ * newer shape (amount_minor + exponent); `extra_usage.used_credits` with
+ * `decimal_places` is the older one. Either answers in the same currency.
+ */
+export function readExtraUsageSpent(
+  root: Record<string, unknown>,
+): { amount: number; currency: string } | null {
+  const spend = asRecord(root.spend);
+  const used = spend ? asRecord(spend.used) : null;
+  if (used) {
+    const amount = readMinorUnits(used.amount_minor, used.exponent);
+    if (amount !== null) {
+      return {
+        amount,
+        currency: typeof used.currency === "string" ? used.currency : "USD",
+      };
+    }
+  }
+  const extra = asRecord(root.extra_usage);
+  if (extra) {
+    const amount = readMinorUnits(extra.used_credits, extra.decimal_places);
+    if (amount !== null) {
+      return {
+        amount,
+        currency: typeof extra.currency === "string" ? extra.currency : "USD",
+      };
+    }
+  }
+  return null;
+}
+
+/** Plan fields from /api/oauth/profile; any of them may be absent. */
+export function parseClaudePlanInfo(body: unknown): ClaudePlanInfo | null {
+  const org = asRecord(asRecord(body)?.organization);
+  if (!org) return null;
+  const str = (v: unknown) => (typeof v === "string" && v ? v : null);
+  return {
+    organizationType: str(org.organization_type),
+    rateLimitTier: str(org.rate_limit_tier),
+    seatTier: str(org.seat_tier),
   };
 }
 
@@ -288,6 +366,20 @@ function errorMessageFromBody(body: unknown, fallback: string): string {
   return fallback;
 }
 
+async function withTimeout<T>(promise: Promise<T>, ms: number): Promise<T | null> {
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  try {
+    return await Promise.race([
+      promise.catch(() => null),
+      new Promise<null>((resolve) => {
+        timer = setTimeout(() => resolve(null), ms);
+      }),
+    ]);
+  } finally {
+    if (timer) clearTimeout(timer);
+  }
+}
+
 export type FetchClaudeUsageOptions = {
   /** From `claude auth status --json` when profile API is unavailable. */
   orgUuidHint?: string;
@@ -317,14 +409,21 @@ export async function fetchClaudeSubscriptionUsage(
     return { success: false, error: "Missing OAuth access token" };
   }
 
+  // The plan tier only labels the figures, so it is read alongside the usage
+  // and never allowed to delay or fail it.
+  const planPromise = withTimeout(
+    fetchOAuthProfile(trimmed).then((p) => (p.ok ? parseClaudePlanInfo(p.body) : null)),
+    5_000,
+  );
   const oauthAttempt = await fetchOAuthUsageWithRetry(trimmed);
   if (oauthAttempt.ok) {
+    const plan = await planPromise;
     return {
       success: true,
-      data: attachMeta(
-        parseClaudeUsagePayload(oauthAttempt.body, "oauth"),
-        options,
-      ),
+      data: {
+        ...attachMeta(parseClaudeUsagePayload(oauthAttempt.body, "oauth"), options),
+        plan,
+      },
     };
   }
 

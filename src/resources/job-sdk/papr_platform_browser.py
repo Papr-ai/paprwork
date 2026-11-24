@@ -58,7 +58,7 @@ def fetch_cdp_targets(cdp_url: str | None = None) -> list[dict[str, Any]]:
     except (urllib.error.URLError, TimeoutError, json.JSONDecodeError) as exc:
         raise PaprPlatformBrowserError(
             f"Cannot reach Papr CDP at {base}. Is Papr desktop running? Connect LinkedIn "
-            f"in Settings → Platform Connections first. ({exc})"
+            f"in Settings → Connectors & API Keys first. ({exc})"
         ) from exc
     return []
 
@@ -110,7 +110,7 @@ async def connect_platform_browser(playwright: Any, host_fragment: str = "linked
     except Exception as exc:
         raise PaprPlatformBrowserError(
             f"Playwright connect_over_cdp failed at {cdp_url}. "
-            "Use Papr desktop, connect LinkedIn in Settings → Platform Connections, "
+            "Use Papr desktop, connect LinkedIn in Settings → Connectors & API Keys, "
             'and declare requirements: ["linkedin-api"] on the job. '
             f"({exc})"
         ) from exc
@@ -133,6 +133,6 @@ async def connect_platform_browser(playwright: Any, host_fragment: str = "linked
     platform_id = os.environ.get("PAPR_PLATFORM_ID", host_fragment.split(".")[0])
     raise PaprPlatformBrowserError(
         f"No {host_fragment} tab on CDP at {cdp_url}. "
-        f"Open Papr → Settings → Platform Connections → connect {platform_id}, "
+        f"Open Papr → Settings → Connectors & API Keys → connect {platform_id}, "
         "keep Papr Chrome running, then re-run the job."
     )

@@ -4,6 +4,7 @@ import { useTabs } from "../../hooks/useTabs";
 import { useSubAgentsStore } from "../../stores/subAgentsStore";
 import { OverviewBody } from "./overview/OverviewBody";
 import { useAgentsOverview } from "./overview/useAgentsOverview";
+import { usePlanUsage } from "./overview/usePlanUsage";
 import "./AgentsOverviewPage.css";
 
 const RANGES = [7, 30, 90] as const;
@@ -22,6 +23,7 @@ export function AgentsView() {
     return l?.type === "agents" || r?.type === "agents";
   }, [activeLeftTab, activeRightTab, getTab]);
   const { data, loading, error } = useAgentsOverview(days, visible);
+  const { plans } = usePlanUsage(visible);
 
   const wasVisible = useRef(false);
   useEffect(() => {
@@ -64,7 +66,7 @@ export function AgentsView() {
 
   return (
     <div className="ag-page">
-      <OverviewBody data={data} agents={agents} runs={runs} range={range} />
+      <OverviewBody data={data} agents={agents} runs={runs} range={range} plans={plans} />
     </div>
   );
 }

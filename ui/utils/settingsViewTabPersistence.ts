@@ -15,6 +15,7 @@ const VALID_TABS: ReadonlySet<SettingsTab> = new Set([
   "platforms",
   "connections",
   "profile",
+  "team",
   "billing",
   "permissions",
   "privacy",

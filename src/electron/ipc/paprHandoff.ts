@@ -8,7 +8,8 @@
  * Pure helpers live here so they're testable without Electron.
  */
 
-export const HANDOFF_URL_PREFIX = "papr://auth/handoff";
+const PAPR_SCHEME = (process.env.PAPR_PROFILE || "").trim().toLowerCase() === "dev" ? "papr-dev" : "papr";
+export const HANDOFF_URL_PREFIX = `${PAPR_SCHEME}://auth/handoff`;
 
 export interface HandoffRedeemResult {
   userId: string;
@@ -31,7 +32,8 @@ export function isHandoffUrl(url: string): boolean {
 export function parseHandoffCode(url: string): string | null {
   try {
     const u = new URL(url);
-    if (u.protocol !== "papr:" || u.hostname !== "auth" || u.pathname !== "/handoff") return null;
+    // papr:// in production, papr-dev:// for the dev desktop profile.
+    if (u.protocol !== `${PAPR_SCHEME}:` || u.hostname !== "auth" || u.pathname !== "/handoff") return null;
     const code = u.searchParams.get("code")?.trim() ?? "";
     return /^[A-Za-z0-9_-]{16,128}$/.test(code) ? code : null;
   } catch {

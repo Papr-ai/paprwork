@@ -66,12 +66,14 @@ Each mini-app may override global defaults. Stored in publish prefs / app metada
 
 Users who want to **test locally before others see changes** set `uploadMode: manual` (per app or globally via `cloudAutoUploadEnabled: false`).
 
-| Mode | Watchers | Dirty tracking | Auto push (git + Turso) | Upload now / agent |
-|------|----------|----------------|-------------------------|-------------------|
-| **Auto** (default) | ✅ Run | ✅ Mark dirty | ✅ Debounce + max-wait (§7) | ✅ Also works (guaranteed flush) |
-| **Manual** | ✅ Run | ✅ Mark dirty, status **`pending (manual)`** | ❌ **No auto push** | ✅ Only path to cloud |
+| Mode | Watchers | Dirty tracking | Auto push of code (git) | Database rows (Turso replica) | Upload now / agent |
+|------|----------|----------------|-------------------------|------------------------------|-------------------|
+| **Auto** (default) | ✅ Run | ✅ Mark dirty | ✅ Debounce + max-wait (§7) | ✅ Real-time | ✅ Also works (guaranteed flush) |
+| **Manual** | ✅ Run | ✅ Mark dirty, status **`pending (manual)`** | ❌ **No auto push** | ✅ **Real-time (unchanged)** | ✅ Only path for code |
 
-**Manual does not disable local development** — jobs, bash, preview, and SQLite all work normally. Cloud layers simply stay stale until explicit upload.
+**Upload mode gates code and schema, never rows.** Row changes on registry (replica) databases sync local→cloud and cloud→local in real time for every app. Breaking schema changes wait for publish via the publish hold (`replicaPublishHold.ts`).
+
+**Manual does not disable local development** — jobs, bash, preview, and SQLite all work normally. App code in the cloud stays stale until explicit upload.
 
 **Agent behavior:** If app is `manual` or global auto-upload off, **do not** call `push_cloud_sync` unless the user explicitly asks. Tell them local changes are ready and they can click **Upload now** when satisfied.
 
@@ -244,7 +246,7 @@ See **§2 Upload mode** for settings. Summary:
 | Mode | Behavior |
 |------|----------|
 | **Auto** (default) | Watchers mark dirty → debounce + max-wait → push (§7, §7.2) |
-| **Manual** (user opt-in) | Watchers mark dirty → status `pending (manual)` → **no push** until Upload now / agent |
+| **Manual** (user opt-in) | Watchers mark dirty → status `pending (manual)` → **no code push** until Upload now / agent. Database rows still push in real time. |
 | **Upload now / `push_cloud_sync`** | **Always available** — guaranteed full pipeline (§12.1), regardless of auto/manual |
 
 Auto sync improves timeliness for users who want it; manual mode supports **local test-first** workflows. Upload now is always the explicit “ship it” action.

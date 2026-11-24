@@ -41,4 +41,4 @@ Session cookies from the browser are **not** required when the OAuth Bearer path
 
 ## Tests
 
-`tests/claude-oauth-usage.test.ts` — parser only (no live network).
+`tests/providers/claude-oauth-usage.test.ts` — parser only (no live network).

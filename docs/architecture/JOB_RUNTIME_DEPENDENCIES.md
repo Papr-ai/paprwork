@@ -58,7 +58,7 @@ cloud and OS sandboxes (macOS `sandbox-exec`/Apple's Containerization, Linux bub
 
 ## Verification
 
-- `tests/job-runtime-deps.test.ts` — 13 hermetic tests (spec merge, tool lookup, venv/pip/node via a fake
+- `tests/jobs/job-runtime-deps.test.ts` — 13 hermetic tests (spec merge, tool lookup, venv/pip/node via a fake
   installer, no-reinstall, failure classification).
 - `npx tsx scripts/e2e-job-runtime.ts <job folder>` — real venv, real pip, real PATH injection through the
   actual `CommandJobExecutor`, run against a copy of Launch Video Studio's Studio Engine job.

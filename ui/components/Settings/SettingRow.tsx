@@ -13,7 +13,7 @@ export function SettingRow({
   disabled = false,
   children,
 }: {
-  label: string;
+  label: ReactNode;
   hint?: string;
   tooltip?: string;
   nested?: boolean;

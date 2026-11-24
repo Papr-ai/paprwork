@@ -291,3 +291,19 @@ export function useAppLinkedJobCount(appId: string): number {
     (state) => state.graph?.appLinks[appId]?.jobIds.length ?? 0,
   );
 }
+
+/** First failed job linked to this app (for the publish bar's "Job failing" chip). */
+export function useAppFailingJob(appId: string): { id: string; name: string } | null {
+  useEffect(() => subscribeJobsGraph(), []);
+  useEffect(() => subscribeJobsFullPolling(), []);
+  const id = useJobsStore((state) => {
+    const ids = new Set(state.graph?.appLinks[appId]?.jobIds ?? []);
+    return (
+      state.jobs.find(
+        (j) => j.status === "failed" && (ids.has(j.id) || j.appIds?.includes(appId)),
+      )?.id ?? null
+    );
+  });
+  const name = useJobsStore((state) => (id ? state.jobs.find((j) => j.id === id)?.name ?? "" : ""));
+  return id ? { id, name } : null;
+}

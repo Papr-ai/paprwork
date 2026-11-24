@@ -371,12 +371,25 @@ export async function installCloudAppLinkedResources(input: {
   }
 
   const localAppDir = path.join(getPaprAppsRoot(), input.localAppId);
+  // syncAppLinkedResourcesToTarget copied these job folders and wrote
+  // data/jobs.json directly; register them with the running service (and lift
+  // tombstones left by an earlier install of the same app) so they are live now.
+  // Track "Get updates" (syncScope set) keeps a job the user deleted on purpose deleted.
+  const freshInstall = !input.syncScope;
+  const syncedJobIds = [...sync.copiedJobIds, ...sync.skippedJobIds];
+  if (syncedJobIds.length > 0) {
+    const { getJobsService } = await import("./JobsService.js");
+    const jobsService = getJobsService();
+    await jobsService.initialize();
+    await jobsService.adoptJobsFromDisk(syncedJobIds, { clearTombstones: freshInstall });
+  }
   let promotedJobIds: string[] = [];
   if (existsSync(localAppDir)) {
     const promoted = await promoteBundledAppJobsToRegistry({
       localAppId: input.localAppId,
       localAppDir,
       paprHome: getPaprRoot(),
+      clearTombstones: freshInstall,
     });
     promotedJobIds = promoted.promotedJobIds;
   }

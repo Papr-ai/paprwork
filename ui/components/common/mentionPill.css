@@ -1,0 +1,12 @@
+/* A person: photo (or initials) + name in a soft blue pill. Same look in chat, Focus and the brief.
+   The name sits on the text baseline (inline-flex + align-items: baseline), so the pill reads as part of the
+   line; the avatar is centred inside the pill. Don't add a vertical-align offset: it pushes the pill low. */
+.mention-pill {
+  display: inline-flex; align-items: baseline; gap: 5px; max-width: 100%;
+  padding: 0 9px 0 2px; min-width: 0; border-radius: 999px; vertical-align: baseline;
+  background: color-mix(in srgb, var(--primary-color, #0161e0) 9%, transparent);
+  color: var(--primary-color, #0161e0); font-size: 0.93em; font-weight: 600; line-height: 1.55; white-space: nowrap;
+}
+.mention-pill .mention-pill__av { align-self: center; }
+.markdown-strong .mention-pill { font-weight: 600; }
+.mention-pill__name { min-width: 0; overflow: hidden; text-overflow: ellipsis; }

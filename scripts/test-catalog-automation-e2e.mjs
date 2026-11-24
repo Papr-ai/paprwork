@@ -14,6 +14,8 @@
  *   node scripts/test-catalog-automation-e2e.mjs --gateway=http://localhost:18789
  */
 
+// Deliberately uses the REAL workspace — needs PAPR_E2E_REAL_HOME=1.
+import "./lib/requireRealWorkspace.mjs";
 import { readFileSync } from "node:fs";
 import { join } from "node:path";
 import { pathToFileURL } from "node:url";

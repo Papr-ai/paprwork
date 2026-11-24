@@ -2,7 +2,7 @@ name: SAST Security Scan
 
 on:
   pull_request:
-    branches: [master]
+    branches: [master, development]
   push:
     branches: [master]
   schedule:

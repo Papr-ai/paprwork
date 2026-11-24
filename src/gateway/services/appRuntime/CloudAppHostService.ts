@@ -3,6 +3,7 @@
  * Deploy standalone via cloud-app-host.ts (apps.papr.ai).
  */
 
+import { randomUUID } from "node:crypto";
 import { proxyOAuthCallback } from "./oauthCallbackProxy.js";
 import type { Express, Request, Response } from "express";
 import path from "path";
@@ -42,6 +43,9 @@ import { getMemoryServerBaseUrl } from "../../utils/cloudApiClient.js";
 import {
   fetchRuntimeDbToken,
   fetchRuntimeFileUrl,
+  fetchRuntimeFileUpload,
+  fetchRuntimeFileCommit,
+  RuntimeFilesError,
   getCloudAppHostKey,
   getRuntimeJobStatus,
   createDesktopHandoff,
@@ -275,6 +279,9 @@ function getRequestPaprApiKey(req: Request): string | undefined {
   return undefined;
 }
 
+/** Per-process id so write timings show which Cloud Run instance served them. */
+const HOST_INSTANCE_ID = `${process.env.K_REVISION?.split("-").pop() ?? "local"}.${randomUUID().slice(0, 6)}`;
+
 /** Exposed as Server-Timing for E2E / browser devtools (Phase 1 perf tracking). */
 function setCloudDbServerTiming(
   res: Response,
@@ -303,15 +310,66 @@ function cloudHostCacheTimingParts(perf: {
 }
 
 /**
- * Ceiling for uploads initiated from a published cloud app.
- *
- * Desktop uploads are unbounded because the uploader owns the storage. On the
- * cloud host the ticket is minted with the publisher's credential, so an
- * authorized team member spends the owner's quota — `canWrite` answers who may
- * upload but nothing caps how much. Rejecting before the ticket is minted keeps
- * the check cheap and server-side.
+ * Ceiling for uploads from a published app when memory is too old to apply
+ * the app's own cap (it answers 404 for /runtime/file-upload). Current memory
+ * enforces a per-app limit (50 MB default, Admin-adjustable) itself.
  */
-const CLOUD_UPLOAD_MAX_BYTES = 100 * 1024 * 1024;
+const LEGACY_CLOUD_UPLOAD_MAX_BYTES = 50 * 1024 * 1024;
+
+/**
+ * Upload tickets/commits for a published app. Memory decides under the APP's
+ * sharing rules (canWrite), so a signed-out visitor of a writable public app
+ * can upload without a key in the publisher's workspace. Falls back to the
+ * caller's own key only when memory predates the runtime endpoints.
+ */
+function cloudFilesTransport(
+  runtimeAuth: AppRuntimeRouteAuth,
+): import("../appFiles/AppFilesService.js").FilesTransport {
+  const legacy = async <T,>(err: unknown, run: () => Promise<T>): Promise<T> => {
+    if (!(err instanceof RuntimeFilesError) || err.status !== 404) throw err;
+    if (!runtimeAuth.paprApiKey) {
+      throw new RuntimeFilesError("Sign in to Papr to upload files from this app.", 401);
+    }
+    return run();
+  };
+  return {
+    async ticket(a) {
+      try {
+        const t = await fetchRuntimeFileUpload(runtimeAuth, {
+          sha256: a.sha256,
+          sizeBytes: a.sizeBytes,
+          mime: a.mime,
+          scope: a.scope,
+        });
+        return { object_key: t.objectKey, upload_url: t.uploadUrl, already_exists: t.alreadyExists };
+      } catch (err) {
+        return legacy(err, async () => {
+          if (a.sizeBytes > LEGACY_CLOUD_UPLOAD_MAX_BYTES) {
+            throw new RuntimeFilesError("File is larger than this app's 50 MB upload limit", 413);
+          }
+          const { requestUploadTicket } = await import("../appFiles/appFilesClient.js");
+          return requestUploadTicket({ ...a, memoryApiKey: runtimeAuth.paprApiKey });
+        });
+      }
+    },
+    async commit(appId, objectKey, sizeBytes) {
+      try {
+        return await fetchRuntimeFileCommit(runtimeAuth, objectKey, sizeBytes);
+      } catch (err) {
+        return legacy(err, async () => {
+          const { commitUpload } = await import("../appFiles/appFilesClient.js");
+          return commitUpload(appId, objectKey, sizeBytes, runtimeAuth.paprApiKey);
+        });
+      }
+    },
+  };
+}
+
+/** Pass memory's 4xx (403 not allowed, 413 too big) through instead of a 500. */
+function fileErrorStatus(err: unknown): number {
+  const status = err instanceof RuntimeFilesError ? err.status : 0;
+  return status >= 400 && status < 500 ? status : 500;
+}
 
 export class CloudAppHostService {
   private readonly turso: TursoDbAdapter;
@@ -878,11 +936,7 @@ export class CloudAppHostService {
         "../appFiles/cloudFileUrl.js"
       );
 
-      if (
-        row &&
-        row.upload_state !== "verified" &&
-        runtimeAuth.paprApiKey
-      ) {
+      if (row && row.upload_state !== "verified") {
         const { tryFinalizeBrowserUpload } = await import(
           "../appFiles/AppFilesService.js"
         );
@@ -897,7 +951,8 @@ export class CloudAppHostService {
           (await tryFinalizeBrowserUpload(filesDb, row, {
             appId,
             memoryApiKey: runtimeAuth.paprApiKey,
-          })) ?? row;
+            transport: cloudFilesTransport(runtimeAuth),
+          }).catch(() => null)) ?? row;
       }
 
       const decision = resolveCloudFileUrl(row, {
@@ -1042,7 +1097,12 @@ export class CloudAppHostService {
     res: Response,
     requestedAppId: string | undefined,
     sourceId: string | undefined,
-  ): Promise<{ db: FilesDb; appId: string; memoryApiKey?: string } | null> {
+  ): Promise<{
+    db: FilesDb;
+    appId: string;
+    memoryApiKey?: string;
+    transport: import("../appFiles/AppFilesService.js").FilesTransport;
+  } | null> {
     if (!this.enforceDbRateLimit(req, res, "write")) return null;
 
     const ctx = await this.resolveDbAppContext(req, res, requestedAppId);
@@ -1058,18 +1118,12 @@ export class CloudAppHostService {
       return null;
     }
 
-    if (!runtimeAuth.paprApiKey) {
-      res.status(401).json({
-        error: "Sign in to Papr to upload files from this app.",
-      });
-      return null;
-    }
-
     const config = await this.loadDataSources(runtimeAuth);
     return {
       db: this.cloudFilesDb(access, runtimeAuth, appId, config, sourceId),
       appId,
       memoryApiKey: runtimeAuth.paprApiKey,
+      transport: cloudFilesTransport(runtimeAuth),
     };
   }
 
@@ -1110,15 +1164,6 @@ export class CloudAppHostService {
           .json({ error: "fileName, sizeBytes and fingerprint are required" });
         return;
       }
-      if (sizeBytes > CLOUD_UPLOAD_MAX_BYTES) {
-        res.status(413).json({
-          error: `File exceeds the ${Math.round(
-            CLOUD_UPLOAD_MAX_BYTES / 1024 / 1024,
-          )} MB limit for uploads from a published app`,
-        });
-        return;
-      }
-
       const ctx = await this.resolveFileWriteContext(
         req,
         res,
@@ -1140,10 +1185,11 @@ export class CloudAppHostService {
           scope,
           fingerprint,
           memoryApiKey: ctx.memoryApiKey,
+          transport: ctx.transport,
         }),
       );
     } catch (err) {
-      res.status(500).json({ error: (err as Error).message });
+      res.status(fileErrorStatus(err)).json({ error: (err as Error).message });
     }
   }
 
@@ -1189,10 +1235,11 @@ export class CloudAppHostService {
           objectKey,
           sizeBytes,
           memoryApiKey: ctx.memoryApiKey,
+          transport: ctx.transport,
         }),
       );
     } catch (err) {
-      res.status(500).json({ error: (err as Error).message });
+      res.status(fileErrorStatus(err)).json({ error: (err as Error).message });
     }
   }
 
@@ -1331,6 +1378,7 @@ export class CloudAppHostService {
       runtimeAuth,
       config,
       warmRemoteChangeLog: access.canWrite,
+      scopes: access.canWrite ? ["read", "write"] : ["read"],
     });
   }
 
@@ -1752,7 +1800,7 @@ export class CloudAppHostService {
     let accessMs = 0;
     let configMs = 0;
     let tursoWriteMs = 0;
-    const tursoPerf: { clientMs?: number; execMs?: number; bumpMs?: number } = {};
+    const tursoPerf: NonNullable<Parameters<TursoDbAdapter["write"]>[0]["perf"]> = {};
 
     try {
       const { appId: requestedAppId, sourceId, sql, params } = req.body as {
@@ -1814,6 +1862,13 @@ export class CloudAppHostService {
         ...(tursoPerf.execMs !== undefined
           ? { tclient: tursoPerf.clientMs ?? 0, texec: tursoPerf.execMs, tbump: tursoPerf.bumpMs ?? 0 }
           : {}),
+        inst: HOST_INSTANCE_ID,
+        ...(tursoPerf.clientReused !== undefined
+          ? { reuse: tursoPerf.clientReused ? "1" : "0", idle: tursoPerf.idleMs ?? -1, ping: tursoPerf.sincePingMs ?? -1 }
+          : {}),
+        ...(tursoPerf.preflightMs !== undefined
+          ? { tpre: tursoPerf.preflightMs, tappend: tursoPerf.appendMs ?? -1 }
+          : {}),
         total: performance.now() - writeStarted,
       });
       res.json(result);
@@ -1831,7 +1886,10 @@ export class CloudAppHostService {
           `[CloudAppHost] /api/db/write timing accessMs=${Math.round(accessMs)} ` +
             `configMs=${Math.round(configMs)} tursoWriteMs=${Math.round(tursoWriteMs)} ` +
             `clientMs=${Math.round(tursoPerf.clientMs ?? -1)} execMs=${Math.round(tursoPerf.execMs ?? -1)} ` +
-            `bumpMs=${Math.round(tursoPerf.bumpMs ?? -1)} totalMs=${totalMs}`,
+            `bumpMs=${Math.round(tursoPerf.bumpMs ?? -1)} totalMs=${totalMs} ` +
+            `inst=${HOST_INSTANCE_ID} reused=${tursoPerf.clientReused ?? "na"} ` +
+            `idleMs=${tursoPerf.idleMs ?? -1} sincePingMs=${tursoPerf.sincePingMs ?? -1} ` +
+            `preflightMs=${Math.round(tursoPerf.preflightMs ?? -1)} appendMs=${Math.round(tursoPerf.appendMs ?? -1)}`,
         );
       }
     }

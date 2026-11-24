@@ -30,9 +30,10 @@ import {
 import { initJobPermissionListener } from "./stores/jobPermissionStore";
 import { initPaprQuotaListener } from "./stores/paprQuotaStore";
 import { initProposalNoticeListener } from "./stores/proposalNoticeListener";
+import { initNoticeListener } from "./stores/noticeStore";
+import { initNoticeOs } from "./stores/noticeOs";
 import { initJobLiveLogsListener } from "./stores/jobLiveLogsStore";
 import { initSubagentJobStore } from "./stores/subagentJobStore";
-import { PaprQuotaBanner } from "./components/PaprQuotaBanner/PaprQuotaBanner";
 import { ConnectionIndicator } from "./components/ConnectionIndicator/ConnectionIndicator";
 import { useAppStatePersistence } from "./hooks/useAppStatePersistence";
 import { useCloudMemoryStatus } from "./hooks/useCloudMemoryStatus";
@@ -67,6 +68,7 @@ import { WorkspaceSwitchOverlay } from "./components/Layout/WorkspaceSwitchOverl
 import { CloudAppInstallOverlay } from "./components/Layout/CloudAppInstallOverlay";
 import { buildWorkspaceUiCacheKey } from "./lib/workspaceUiCache";
 import { useProfileStore } from "./stores/profileStore";
+import { TrainingConsentPrompt } from "./components/Settings/TrainingConsent";
 
 type ChatOpenPayload = {
   message?: string;
@@ -496,6 +498,8 @@ export function App() {
     initJobPermissionListener();
     initPaprQuotaListener();
     initProposalNoticeListener();
+    initNoticeListener();
+    initNoticeOs();
     initJobLiveLogsListener();
     initSubagentJobStore();
     initPlatformConnectListener();
@@ -685,9 +689,9 @@ export function App() {
         onClose={() => setCommandPaletteOpen(false)}
       />
       <AgentPersonalizeSheet />
-      <PaprQuotaBanner />
       <CloudFeatureLockModal />
       <ConnectionIndicator />
+      {isAuthenticated && <TrainingConsentPrompt />}
     </>
   );
 }

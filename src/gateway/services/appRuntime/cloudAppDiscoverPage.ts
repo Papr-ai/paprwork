@@ -13,11 +13,13 @@ import type { Express, Request, Response } from "express";
 import { getMemoryServerBaseUrl } from "../../utils/cloudApiClient.js";
 import { getCloudAppHostKey, runtimeFetch } from "./memoryRuntimeClient.js";
 import { getCloudAppPublicBaseUrl } from "./CloudAppPreviewService.js";
-import { buildDiscoverHtml, buildRobotsTxt, buildSitemapXml, type DiscoverView } from "./cloudAppDiscoverHtml.js";
+import { registerFocusRoutes } from "./cloudAppFocusRoutes.js";
+import { FAVICON_SVG, buildDiscoverHtml, buildRobotsTxt, buildSitemapXml, type DiscoverView } from "./cloudAppDiscoverHtml.js";
 
 export interface DiscoverMedia {
   kind?: string;
   role?: string;
+  scheme?: string | null;
   url?: string | null;
   posterUrl?: string | null;
   alt?: string | null;
@@ -40,6 +42,7 @@ export interface DiscoverEntry {
   catalogMedia?: DiscoverMedia[] | null;
   catalogRequirements?: Array<{ name?: string; service?: string }> | null;
   catalogAutomation?: { cardLine?: string } | null;
+  catalogRequiresDesktop?: boolean | null;
   updatedAt?: string | null;
   installCount?: number | null;
 }
@@ -98,6 +101,42 @@ export async function fetchMyApps(sessionToken: string): Promise<DiscoverEntry[]
   }
 }
 
+const PARSE_URL = (process.env.PARSE_SERVER_URL ?? "https://server.papr.ai/parse").replace(/\/$/, "");
+const PARSE_APP_ID = process.env.PARSE_APP_ID ?? "671e705a-f735-4ec0-8474-15899a475440";
+const PROFILE_MS = 10 * 60_000;
+const profiles = new Map<string, { at: number; p: DiscoverProfile }>();
+
+export interface DiscoverProfile {
+  displayName?: string;
+  avatarUrl?: string;
+}
+
+/** Signed-in user's Parse profile (name + profile image) for the header avatar. */
+export async function fetchDiscoverProfile(sessionToken: string): Promise<DiscoverProfile> {
+  const hit = profiles.get(sessionToken);
+  if (hit && Date.now() - hit.at < PROFILE_MS) return hit.p;
+  try {
+    const res = await runtimeFetch(
+      `${PARSE_URL}/users/me`,
+      { headers: { "X-Parse-Application-Id": PARSE_APP_ID, "X-Parse-Session-Token": sessionToken } },
+      5_000,
+    );
+    if (!res.ok) throw new Error(`parse ${res.status}`);
+    const u = (await res.json()) as {
+      displayName?: string; fullname?: string; profileimage?: { url?: string }; imageUrl?: string;
+    };
+    const p: DiscoverProfile = {
+      displayName: (u.displayName || u.fullname || "").trim() || undefined,
+      avatarUrl: (u.profileimage?.url || u.imageUrl || "").trim() || undefined,
+    };
+    if (profiles.size > 2_000) profiles.clear();
+    profiles.set(sessionToken, { at: Date.now(), p });
+    return p;
+  } catch {
+    return {};
+  }
+}
+
 const ASSET_RE = /^drop-(light|dark)\.png$/;
 const assetCache = new Map<string, Buffer | null>();
 function loadAsset(file: string): Buffer | null {
@@ -116,13 +155,31 @@ function loadAsset(file: string): Buffer | null {
   return buf;
 }
 
+/** The Focus bundle from scripts/build-focus-web.mjs. Read once; a missing bundle is a 404, not a crash. */
+function loadFocusAsset(file: string): Buffer | null {
+  const key = `focus-web/${file}`;
+  if (assetCache.has(key)) return assetCache.get(key)!;
+  const here = path.dirname(fileURLToPath(import.meta.url));
+  let buf: Buffer | null = null;
+  for (const p of [path.join(here, "../../../resources/focus-web", file), path.join(process.cwd(), "dist/resources/focus-web", file)]) {
+    try { buf = fs.readFileSync(p); break; } catch { /* next */ }
+  }
+  assetCache.set(key, buf);
+  return buf;
+}
+
 export function registerDiscoverRoutes(app: Express, session: DiscoverSessionReader): void {
   const render = async (req: Request, res: Response, view: DiscoverView, focus?: { ns: string; slug: string }) => {
     try {
       const sessionToken = session.getSessionToken(req);
-      const [apps, mine] = await Promise.all([
-        fetchDiscoverEntries(),
-        sessionToken ? fetchMyApps(sessionToken) : Promise.resolve(null),
+      if ((view === "mine" || view === "focus") && !focus && !sessionToken) {
+        res.redirect(302, `/auth/login?returnTo=${encodeURIComponent(view === "mine" ? "/my-apps" : "/")}`);
+        return;
+      }
+      const [apps, mine, profile] = await Promise.all([
+        view === "focus" ? Promise.resolve([] as DiscoverEntry[]) : fetchDiscoverEntries(),
+        sessionToken && view !== "focus" ? fetchMyApps(sessionToken) : Promise.resolve(null),
+        sessionToken ? fetchDiscoverProfile(sessionToken) : Promise.resolve({} as DiscoverProfile),
       ]);
       let focused: DiscoverEntry | undefined;
       if (focus) {
@@ -150,6 +207,8 @@ export function registerDiscoverRoutes(app: Express, session: DiscoverSessionRea
           signedIn: Boolean(sessionToken),
           userId: session.getExternalUserId(req),
           email: session.getSessionEmail(req),
+          displayName: profile.displayName,
+          avatarUrl: profile.avatarUrl,
           publicBaseUrl: getCloudAppPublicBaseUrl(req),
         }),
       );
@@ -158,7 +217,18 @@ export function registerDiscoverRoutes(app: Express, session: DiscoverSessionRea
     }
   };
 
-  app.get("/", (req, res) => void render(req, res, "discover"));
+  // Signed in, the home page is Focus (same page as Papr Work); Discover is one tab away.
+  app.get("/", (req, res) => void render(req, res, session.getSessionToken(req) ? "focus" : "discover"));
+  app.get("/focus", (_req, res) => res.redirect(302, "/"));
+  app.get("/focus/_/:file", (req, res) => {
+    const file = String(req.params.file ?? "");
+    const buf = /^focus\.(js|css)$/.test(file) ? loadFocusAsset(file) : null;
+    if (!buf) { res.status(404).end(); return; }
+    res.type(file.endsWith(".js") ? "text/javascript" : "text/css");
+    res.setHeader("Cache-Control", "public, max-age=300");
+    res.send(buf);
+  });
+  registerFocusRoutes(app, session);
   app.get("/discover", (req, res) => void render(req, res, "discover"));
   app.get("/my-apps", (req, res) => void render(req, res, "mine"));
   app.get("/discover/_/:file", (req, res) => {
@@ -175,6 +245,12 @@ export function registerDiscoverRoutes(app: Express, session: DiscoverSessionRea
   app.get("/discover/:ns/:slug", (req, res) =>
     void render(req, res, "discover", { ns: String(req.params.ns), slug: String(req.params.slug) }),
   );
+  const sendIcon = (_req: Request, res: Response) => {
+    res.setHeader("Cache-Control", "public, max-age=86400");
+    res.type("image/svg+xml").send(FAVICON_SVG);
+  };
+  app.get("/favicon.svg", sendIcon);
+  app.get("/favicon.ico", sendIcon);
   app.get("/robots.txt", (req, res) => {
     res.type("text/plain").send(buildRobotsTxt(getCloudAppPublicBaseUrl(req)));
   });

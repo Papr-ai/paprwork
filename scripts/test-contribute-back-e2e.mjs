@@ -14,6 +14,8 @@
  *   node scripts/test-contribute-back-e2e.mjs [--gateway URL] [--memory URL] [--app-id ID] [--approve]
  */
 
+// Deliberately uses the REAL workspace — needs PAPR_E2E_REAL_HOME=1.
+import "./lib/requireRealWorkspace.mjs";
 import { execSync } from "child_process";
 import { randomUUID } from "crypto";
 import {

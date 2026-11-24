@@ -14,7 +14,7 @@
 import { createHash } from "node:crypto";
 import { discoverOAuthServerInfo, registerClient } from "@modelcontextprotocol/sdk/client/auth.js";
 import type { AuthorizationServerMetadata } from "@modelcontextprotocol/sdk/shared/auth.js";
-import type { McpServerDefinition } from "./mcpServerCatalog.js";
+import { PAPR_CLIENT_METADATA_URL, type McpServerDefinition } from "./mcpServerCatalog.js";
 import type { McpStoredCredential } from "./McpOAuthProvider.js";
 
 export type CloudFetch = (path: string, init?: { method?: string; body?: unknown }) => Promise<Response>;
@@ -28,6 +28,8 @@ export interface ServerSignInDeps {
   redirectUri?: string;
   /** Org client ID saved by an admin (vault key MCP_<ID>_CLIENT_ID), if any. */
   orgClientId?: (serverId: string) => Promise<string | undefined | null>;
+  /** Client ID Metadata Document URL; defaults to PAPR_CLIENT_METADATA_URL. Pass "" to disable. */
+  clientMetadataUrl?: string;
   pollMs?: number;
   timeoutMs?: number;
 }
@@ -79,6 +81,11 @@ export class McpServerSignIn {
 
   constructor(private readonly deps: ServerSignInDeps) {}
 
+  /** CIMD document URL (its URL is the client_id), when configured. */
+  private get clientMetadataUrl(): string | undefined {
+    return this.deps.clientMetadataUrl === undefined ? PAPR_CLIENT_METADATA_URL : this.deps.clientMetadataUrl || undefined;
+  }
+
   get redirectUri(): string {
     return this.deps.redirectUri ?? DEFAULT_SERVER_REDIRECT;
   }
@@ -94,6 +101,8 @@ export class McpServerSignIn {
     if (org) return org;
     const cached = this.dcrClients.get(def.id);
     if (cached) return cached;
+    // CIMD (SEP-991): the document URL is the client_id; no registration call.
+    if (md.client_id_metadata_document_supported === true && this.clientMetadataUrl) return this.clientMetadataUrl;
     if (!md.registration_endpoint) {
       throw new ServerSignInError(`${def.name} needs a one-time setup by your admin before anyone can connect.`, 412);
     }
@@ -117,12 +126,15 @@ export class McpServerSignIn {
     def: McpServerDefinition,
     opts: { audience: ConnectionAudience; allowedUserIds?: string[]; origin?: string },
   ): Promise<{ sessionId: string; authorizeUrl: string }> {
-    const info = await discoverOAuthServerInfo(def.url);
-    const md = info.authorizationServerMetadata;
+    const fixed = def.oauthEndpoints;
+    const info = fixed ? undefined : await discoverOAuthServerInfo(def.url);
+    const md = fixed
+      ? ({ issuer: new URL(fixed.authorizationEndpoint).origin, authorization_endpoint: fixed.authorizationEndpoint, token_endpoint: fixed.tokenEndpoint, response_types_supported: ["code"] } as AuthorizationServerMetadata)
+      : info?.authorizationServerMetadata;
     if (!md?.authorization_endpoint || !md.token_endpoint) {
       throw new ServerSignInError(`${def.name} didn't publish its sign-in endpoints.`, 502);
     }
-    const clientId = await this.clientIdFor(def, md, info.authorizationServerUrl);
+    const clientId = await this.clientIdFor(def, md, info?.authorizationServerUrl ?? md.issuer);
     const res = await this.deps.cloud("/v1/cloud/oauth/sessions", {
       method: "POST",
       body: {
@@ -132,8 +144,9 @@ export class McpServerSignIn {
         authorizationEndpoint: md.authorization_endpoint,
         tokenEndpoint: md.token_endpoint,
         clientId,
-        scopes: info.resourceMetadata?.scopes_supported ?? undefined,
-        resource: info.resourceMetadata?.resource ?? def.url,
+        scopes: def.scopes ? [...def.scopes] : (info?.resourceMetadata?.scopes_supported ?? undefined),
+        // RFC 8707 resource only for MCP servers; plain APIs (native connectors) take none.
+        ...(fixed ? {} : { resource: info?.resourceMetadata?.resource ?? def.url }),
         ...(opts.allowedUserIds?.length ? { allowedUserIds: opts.allowedUserIds } : {}),
       },
     });

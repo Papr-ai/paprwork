@@ -1,6 +1,6 @@
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from "fs";
-import { homedir } from "os";
 import path from "path";
+import { getPaprworkBaseDir } from "../../../../core/utils/paprWorkspace.js";
 import { runSetupCommand } from "../../../../core/utils/runSetupCommand.js";
 import { getVenvPaths } from "../../../../core/utils/platform.js";
 import {
@@ -47,7 +47,7 @@ export interface JobRuntime {
  * PAPR_RUNTIMES_ROOT for tests and CI.
  */
 export function defaultRuntimesRoot(): string {
-  return process.env.PAPR_RUNTIMES_ROOT || path.join(homedir(), ".paprwork-v2");
+  return process.env.PAPR_RUNTIMES_ROOT || getPaprworkBaseDir();
 }
 
 function pathKeyOf(env: NodeJS.ProcessEnv): string {

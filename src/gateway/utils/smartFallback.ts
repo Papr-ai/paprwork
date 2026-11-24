@@ -136,6 +136,13 @@ const MODEL_CAPABILITIES: Record<string, ModelCapabilities> = {
     cost: "expensive",
     specialties: ["reasoning", "agentic", "coding", "long-horizon"],
   },
+  "claude-fable-5-2": {
+    reasoningLevel: "advanced",
+    contextWindow: 1000000,
+    speed: "slow",
+    cost: "expensive",
+    specialties: ["reasoning", "agentic", "long-horizon", "coding"],
+  },
   "claude-fable-5-1": {
     reasoningLevel: "advanced",
     contextWindow: 1000000,
@@ -193,6 +200,34 @@ const MODEL_CAPABILITIES: Record<string, ModelCapabilities> = {
     speed: "fast",
     cost: "medium",
     specialties: ["agentic", "coding", "software-engineering", "frontier-flash"],
+  },
+  "gemini-4-carbon": {
+    reasoningLevel: "advanced",
+    contextWindow: 1048576,
+    speed: "slow",
+    cost: "expensive",
+    specialties: ["reasoning", "coding", "software-engineering", "science", "agentic"],
+  },
+  "gemini-4-neon": {
+    reasoningLevel: "advanced",
+    contextWindow: 1048576,
+    speed: "fast",
+    cost: "expensive",
+    specialties: ["coding", "knowledge-work", "agentic"],
+  },
+  "gemini-4-hydrogen": {
+    reasoningLevel: "advanced",
+    contextWindow: 1048576,
+    speed: "fast",
+    cost: "medium",
+    specialties: ["coding", "agentic", "tool-use"],
+  },
+  "gemini-4-argon": {
+    reasoningLevel: "advanced",
+    contextWindow: 1048576,
+    speed: "medium",
+    cost: "expensive",
+    specialties: ["reasoning", "coding", "software-engineering", "knowledge-work"],
   },
   "gemini-3.7-flash": {
     reasoningLevel: "advanced",
@@ -283,6 +318,7 @@ export async function getBestFallbackModel(
     zai: "glm-5.2",
     groq: "openai/gpt-oss-120b",
     moonshot: "kimi-k3",
+    openrouter: "thinkingmachines/inkling-2-mini",
   };
   if (!originalCapabilities) {
     const firstAvailable = available[0];
@@ -386,14 +422,14 @@ export function getUpgradeModelForTask(
       general: "gpt-5.3-codex",
     },
     anthropic: {
-      reasoning: "claude-fable-5-1",
-      coding: "claude-fable-5-1",
+      reasoning: "claude-fable-5-2",
+      coding: "claude-fable-5-2",
       writing: "claude-sonnet-5-5",
       general: "claude-sonnet-5-5",
     },
     google: {
-      reasoning: "gemini-3.1-pro-preview",
-      coding: "gemini-3.8-flash",
+      reasoning: "gemini-4-argon",
+      coding: "gemini-4-argon",
       writing: "gemini-3.1-pro-preview",
       general: "gemini-3.8-flash",
     },
@@ -426,6 +462,12 @@ export function getUpgradeModelForTask(
       coding: "kimi-k3",
       writing: "kimi-k3",
       general: "kimi-k3",
+    },
+    openrouter: {
+      reasoning: "deepseek/deepseek-v4-pro",
+      coding: "deepseek/deepseek-v4-pro",
+      writing: "thinkingmachines/inkling-2-mini",
+      general: "thinkingmachines/inkling-2-mini",
     },
   };
 

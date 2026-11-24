@@ -44,10 +44,33 @@ import { notifyCloudDbChanged } from "../cloudSync/notifyCloudDbChanged.js";
 import { computeReplicaPendingPush } from "./replicaPendingPush.js";
 
 /** One local registry save after a replica write (no cloud upload — timestamps are local-only). */
+/**
+ * Queue the normal debounced push after a local replica write. The file watcher
+ * can't be relied on here: the sync engine writes `-changes` / `-info` sidecars,
+ * not the `data.db` / `-wal` files the watcher filters for. The scheduler still
+ * honours manual upload mode, backoff and the publish hold.
+ */
+function scheduleReplicaPushAfterWrite(source: AppDataSource): void {
+  const syncKey = source.dbId ?? source.jobId ?? source.dbPath;
+  if (!syncKey) {
+    return;
+  }
+  void import("./tursoReplicaPushScheduler.js")
+    .then(({ scheduleTursoReplicaPushForSyncKey }) =>
+      scheduleTursoReplicaPushForSyncKey(syncKey, "normal", "api_write"),
+    )
+    .catch(() => {
+      /* best effort — the startup/post-git sweep still picks it up */
+    });
+}
+
 async function noteReplicaWriteOutcome(
   source: AppDataSource,
   pendingPush: boolean,
 ): Promise<void> {
+  if (pendingPush) {
+    scheduleReplicaPushAfterWrite(source);
+  }
   if (!source.dbId) {
     return;
   }
@@ -366,7 +389,12 @@ export async function pullLinkedDbViaTursoReplica(
 
 export async function pushLinkedDbViaTursoReplica(
   source: AppDataSource,
-  options?: { pullBeforePush?: boolean; skipMigrationConflictCheck?: boolean },
+  options?: {
+    pullBeforePush?: boolean;
+    skipMigrationConflictCheck?: boolean;
+    /** Upload even a backlog that looks like churn (explicit user/agent choice). */
+    allowLargeBacklog?: boolean;
+  },
 ): Promise<TursoReplicaPushResponse> {
   const tursoDatabase = resolveTursoDatabaseForReplicaSource(source);
 
@@ -375,6 +403,20 @@ export async function pushLinkedDbViaTursoReplica(
     isTursoReplicaOnline() && options?.pullBeforePush !== false;
 
   try {
+    // Before the pull: a pull rewrites the replica files, the file watcher then
+    // schedules another push, and a held backlog was re-checked every minute.
+    if (!options?.allowLargeBacklog) {
+      const held = await checkReplicaBacklogHold(source, tursoDatabase);
+      if (held) {
+        if (source.dbId) {
+          await getDatabaseRegistryService().updateReplicaPushState(source.dbId, {
+            lastReplicaPushError: held,
+          });
+        }
+        return { ok: false, error: held, backlogHold: true };
+      }
+    }
+
     if (pullFirst) {
       await replica.pull(source.dbPath, tursoDatabase);
     }
@@ -447,6 +489,41 @@ export async function pushLinkedDbViaTursoReplica(
   } catch (error) {
     noteTursoReplicaTransportError(error);
     throw error;
+  }
+}
+
+/** Returns the hold message when the pending backlog looks like churn, else null. */
+async function checkReplicaBacklogHold(
+  source: AppDataSource,
+  tursoDatabase: string,
+): Promise<string | null> {
+  const guard = await import("./replicaBacklogGuard.js");
+  try {
+    const pendingOps = await getTursoReplicaService().readCdcOperations(source.dbPath, tursoDatabase);
+    if (pendingOps < guard.BACKLOG_HOLD_MIN_PENDING) return null;
+    const liveRows = await guard.countLiveRows(async (statements) =>
+      (await queryBatchLinkedDbViaTursoReplica(source, statements)) as { rows: unknown[] }[],
+    );
+    const assessment = guard.assessReplicaBacklog(pendingOps, liveRows);
+    if (!assessment.hold) return null;
+    let jobNames: string[] = [];
+    if (source.dbId) {
+      try {
+        const { getJobsService } = await import("../JobsService.js");
+        jobNames = (await getJobsService().listJobs())
+          .filter((j) => j.writeDbIds?.includes(source.dbId!))
+          .map((j) => j.name)
+          .slice(0, 3);
+      } catch {
+        // job lookup is only a hint
+      }
+    }
+    const message = guard.formatBacklogHold(assessment, jobNames);
+    console.warn(`[TursoReplicaRouting] ${source.dbId ?? source.dbPath}: ${message}`);
+    return message;
+  } catch {
+    // Never block a push because the check itself failed.
+    return null;
   }
 }
 

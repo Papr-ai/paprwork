@@ -5,6 +5,8 @@
  * Usage: node --import tsx scripts/test-independent-databases-e2e.mjs
  */
 
+// Must stay first: runs in a temp workspace, never the real ~/Papr.
+import "./lib/isolateHome.mjs";
 import {
   dbTursoDatabaseName,
   jobTursoDatabaseName,

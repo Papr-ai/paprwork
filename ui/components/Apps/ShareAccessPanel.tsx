@@ -11,6 +11,7 @@
 import { useEffect, useMemo, useState } from "react";
 import {
   ROLE_COPY,
+  UPLOAD_MAX_MB_CHOICES,
   accessPatch,
   addGrant,
   editableGrants,
@@ -135,7 +136,7 @@ export function ShareAccessPanel(props: ShareAccessPanelProps) {
             }}
             allowedEmails={people.filter((g) => !g.userId && g.email).map((g) => g.email as string)}
             onEmailsChange={(emails) => {
-              let grants = draft.grants.filter((g) => g.userId || emails.includes(g.email ?? ""));
+              let grants = draft.grants.filter((g) => g.userId || g.domain || emails.includes(g.email ?? ""));
               for (const email of emails) grants = addGrant(grants, { email });
               set({ grants });
             }}
@@ -147,8 +148,8 @@ export function ShareAccessPanel(props: ShareAccessPanelProps) {
           <span className="ss6-role ss6-role--fixed">Admin</span>
         </AccessRow>
         {people.map((g) => (
-          <AccessRow key={grantKey(g)} label={g.userId ? nameOf(g.userId) : (g.email ?? "")}>
-            {select("person", g.role, (r) => set({ grants: setGrantRole(draft.grants, grantKey(g), r) }))}
+          <AccessRow key={grantKey(g)} label={g.userId ? nameOf(g.userId) : g.domain ? `@${g.domain}` : (g.email ?? "")}>
+            {select(g.domain ? "domain" : "person", g.role, (r) => set({ grants: setGrantRole(draft.grants, grantKey(g), r) }))}
             {edit ? (
               <button
                 type="button"
@@ -171,6 +172,22 @@ export function ShareAccessPanel(props: ShareAccessPanelProps) {
       {draft.visibility === "public_read" ? (
         <AccessRow label="Community">
           {select("community", draft.communityRole, (r) => set({ communityRole: r }))}
+        </AccessRow>
+      ) : null}
+
+      {draft.uploadMaxMb !== undefined ? (
+        <AccessRow label="Largest upload" sub="Per file, from people using the app. Counts toward your storage.">
+          <select
+            className="ss6-role"
+            aria-label="Largest upload"
+            value={draft.uploadMaxMb}
+            disabled={!edit}
+            onChange={(e) => set({ uploadMaxMb: Number(e.target.value) })}
+          >
+            {[...new Set([...UPLOAD_MAX_MB_CHOICES, draft.uploadMaxMb])].sort((a, b) => a - b).map((mb) => (
+              <option key={mb} value={mb}>{mb >= 1024 ? `${mb / 1024} GB` : `${mb} MB`}</option>
+            ))}
+          </select>
         </AccessRow>
       ) : null}
 

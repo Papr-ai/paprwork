@@ -2,6 +2,7 @@
  * DatabasesTab — list registered databases from databases.json
  */
 
+import { MemorySchemasPanel } from "./MemorySchemasPanel";
 import React, { useCallback, useEffect, useState } from "react";
 import "./DatabasesTab.css";
 
@@ -119,6 +120,8 @@ export function DatabasesTab() {
           ))}
         </div>
       ) : null}
+
+      <MemorySchemasPanel />
     </div>
   );
 }

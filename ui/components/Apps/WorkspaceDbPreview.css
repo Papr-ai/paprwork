@@ -38,6 +38,25 @@
   color: #fff;
 }
 
+.workspace-db-preview__access {
+  padding: 1px 6px;
+  border-radius: 999px;
+  font-size: 9.5px;
+  font-weight: 600;
+  background: rgba(107, 114, 128, 0.14);
+  color: var(--text-secondary);
+}
+
+.workspace-db-preview__access.is-public {
+  background: rgba(245, 158, 11, 0.16);
+  color: #b45309;
+}
+
+.workspace-db-preview__tab--active .workspace-db-preview__access {
+  background: rgba(255, 255, 255, 0.22);
+  color: #fff;
+}
+
 .workspace-db-preview__tab-count {
   opacity: 0.85;
   font-size: 10px;

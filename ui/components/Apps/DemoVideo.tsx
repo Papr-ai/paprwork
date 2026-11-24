@@ -1,7 +1,9 @@
 /**
- * Looping app preview video. Loads nothing until it scrolls into view, plays only while
- * visible, pauses off-screen and in background tabs, and shows the still poster when the
- * user prefers reduced motion. Decorative: clicks go to the card underneath.
+ * App preview video. Still poster by default; it plays only while the pointer is over (or
+ * keyboard focus is inside) the card that holds it, so a page of cards stays calm. The card
+ * is the nearest `[data-hover-play]` ancestor, else the video's parent. `autoPlay` is for the
+ * one video the user opened on purpose (the app page): it plays while visible.
+ * Reduced motion → the poster only. Decorative: clicks go to the card underneath.
  */
 import { useEffect, useRef, useState } from "react";
 
@@ -13,11 +15,13 @@ export function DemoVideo({
   poster,
   className,
   onError,
+  autoPlay = false,
 }: {
   src: string;
   poster?: string;
   className?: string;
   onError?: () => void;
+  autoPlay?: boolean;
 }) {
   const ref = useRef<HTMLVideoElement>(null);
   const [still] = useState(reducedMotion);
@@ -25,30 +29,41 @@ export function DemoVideo({
   useEffect(() => {
     const el = ref.current;
     if (!el || still) return;
-    let visible = false;
-    const sync = () => {
-      if (visible && document.visibilityState === "visible") {
-        if (el.preload !== "auto") el.preload = "auto";
-        void el.play().catch(() => undefined);
-      } else {
-        el.pause();
-      }
+    const play = () => {
+      if (document.visibilityState !== "visible") return;
+      if (el.preload !== "auto") el.preload = "auto";
+      void el.play().catch(() => undefined);
     };
-    const io = new IntersectionObserver(
-      ([entry]) => {
-        visible = Boolean(entry?.isIntersecting);
-        sync();
-      },
-      { threshold: 0.35 },
-    );
-    io.observe(el);
-    document.addEventListener("visibilitychange", sync);
+    const stop = () => el.pause();
+
+    if (autoPlay) {
+      let visible = false;
+      const sync = () => (visible ? play() : stop());
+      const io = new IntersectionObserver(([e]) => { visible = Boolean(e?.isIntersecting); sync(); }, { threshold: 0.35 });
+      io.observe(el);
+      document.addEventListener("visibilitychange", sync);
+      return () => { io.disconnect(); document.removeEventListener("visibilitychange", sync); stop(); };
+    }
+
+    const host = el.closest<HTMLElement>("[data-hover-play]") ?? el.parentElement;
+    if (!host) return;
+    // Leaving rewinds, so the next hover starts the story from the top (and the poster shows).
+    const leave = () => { stop(); el.currentTime = 0; };
+    const focusOut = (e: FocusEvent) => { if (!host.contains(e.relatedTarget as Node | null)) leave(); };
+    host.addEventListener("pointerenter", play);
+    host.addEventListener("pointerleave", leave);
+    host.addEventListener("focusin", play);
+    host.addEventListener("focusout", focusOut);
+    document.addEventListener("visibilitychange", leave);
     return () => {
-      io.disconnect();
-      document.removeEventListener("visibilitychange", sync);
-      el.pause();
+      host.removeEventListener("pointerenter", play);
+      host.removeEventListener("pointerleave", leave);
+      host.removeEventListener("focusin", play);
+      host.removeEventListener("focusout", focusOut);
+      document.removeEventListener("visibilitychange", leave);
+      stop();
     };
-  }, [still, src]);
+  }, [still, src, autoPlay]);
 
   if (still && poster) {
     return <img className={className} src={poster} alt="" draggable={false} loading="lazy" onError={onError} />;

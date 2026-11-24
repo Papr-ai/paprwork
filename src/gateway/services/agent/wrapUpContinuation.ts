@@ -155,6 +155,11 @@ type AiSdkWrapUpArgs = {
   wrapUpMessage?: string;
 };
 
+/** The conversation the AI SDK turn was started with (prompt + history). */
+function priorMessages(options: { [key: string]: unknown }): ModelMessage[] {
+  return Array.isArray(options.messages) ? (options.messages as ModelMessage[]) : [];
+}
+
 /** Text-only continuation after AI SDK stream ends on tools without a user reply. */
 export async function* runAiSdkWrapUpContinuation(
   args: AiSdkWrapUpArgs,
@@ -164,7 +169,12 @@ export async function* runAiSdkWrapUpContinuation(
   undefined
 > {
   const response = await args.aiSdkResult.response;
+  // response.messages holds only what the model produced this turn. Without
+  // the original prompt in front, the history opens on a model tool call,
+  // which Gemini rejects ("function call turn comes immediately after a user
+  // turn"). Keep the conversation the turn started from.
   const wrapUpMessages: ModelMessage[] = [
+    ...priorMessages(args.streamTextOptions),
     ...response.messages,
     {
       role: "user",
@@ -180,7 +190,7 @@ export async function* runAiSdkWrapUpContinuation(
   });
 
   let fullStream: AsyncIterable<unknown> = wrapUpResult.fullStream;
-  if (args.provider === "groq") {
+  if (args.provider === "groq" || args.provider === "openrouter") {
     const { adaptGroqAISDKFullStream } = await import(
       "../../utils/groqProvider.js"
     );
@@ -193,7 +203,7 @@ export async function* runAiSdkWrapUpContinuation(
   }
 
   const iterator = orchestrateModelStream(fullStream, args.chatId, args.apiKeys, {
-    textBufferMin: args.provider === "groq" || args.provider === "moonshot" ? 1 : undefined,
+    textBufferMin: args.provider === "groq" || args.provider === "moonshot" || args.provider === "openrouter" ? 1 : undefined,
   });
 
   while (true) {
@@ -238,14 +248,15 @@ export async function* runAiSdkPlanContinuation(
   { state: StreamOrchestratorResult; messages: ModelMessage[] } | null,
   undefined
 > {
+  const sent: ModelMessage[] = [...args.messages, { role: "user", content: args.nudge }];
   const result = streamText({
     ...args.streamTextOptions,
-    messages: [...args.messages, { role: "user", content: args.nudge }],
+    messages: sent,
     abortSignal: args.abortSignal,
   });
 
   let fullStream: AsyncIterable<unknown> = result.fullStream;
-  if (args.provider === "groq") {
+  if (args.provider === "groq" || args.provider === "openrouter") {
     const { adaptGroqAISDKFullStream } = await import(
       "../../utils/groqProvider.js"
     );
@@ -259,7 +270,7 @@ export async function* runAiSdkPlanContinuation(
 
   const iterator = orchestrateModelStream(fullStream, args.chatId, args.apiKeys, {
     textBufferMin:
-      args.provider === "groq" || args.provider === "moonshot" ? 1 : undefined,
+      args.provider === "groq" || args.provider === "moonshot" || args.provider === "openrouter" ? 1 : undefined,
   });
 
   while (true) {
@@ -272,7 +283,9 @@ export async function* runAiSdkPlanContinuation(
         return null;
       }
       const response = await result.response;
-      return { state, messages: response.messages };
+      // Return the whole thread, not just this call's output, so the next
+      // continuation still starts from the user's prompt.
+      return { state, messages: [...sent, ...response.messages] };
     }
     yield next.value;
   }

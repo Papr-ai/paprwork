@@ -1582,7 +1582,7 @@ print('Write OK')
   - After `linkAppDataSource` / auto-discover → push + refresh watcher
   - After CloudSync `finalizeBatchSync` (git push) → `scheduleTursoPushAllLinked`
   - On gateway startup (after pull) → push dirty linked jobs + start watcher
-- `tests/turso-push-scheduler.test.ts` — unit tests for sync state + scheduler
+- `tests/cloud-sync/database/turso-push-scheduler.test.ts` — unit tests for sync state + scheduler
 
 **Pass criteria:** ✅ Web `apps.papr.ai` sees data without manual Turso push. Local writes trigger debounced push within ~10s.
 
@@ -1663,8 +1663,8 @@ print('Write OK')
 
 **Tests:**
 - `npm run test:cloud-community-install` — publish → community → fork install → unpublish
-- `tests/cloud-publish-gate.test.ts` — Cloud Sync / login gating
-- `tests/share-audience-model.test.ts` — audience ↔ codeAccess mapping
+- `tests/cloud-sync/publish/cloud-publish-gate.test.ts` — Cloud Sync / login gating
+- `tests/cloud-sync/sharing/share-audience-model.test.ts` — audience ↔ codeAccess mapping
 
 **Pass criteria:** ✅ Public app appears in Community tab. Install creates local app + lineage file. Fork badge visible. Owner sees change requests. Agent prefers `publish_cloud_app` with `codeAccess=install`; falls back to export when cloud unavailable.
 
@@ -1978,7 +1978,7 @@ The original design assumed a simple `git add -A && git commit && git push` loop
 | `src/gateway/services/tursoPushScheduler.ts` | Debounced auto-push hooks | ✅ Done (3B-h) |
 | `src/gateway/services/tursoSyncState.ts` | Last-push mtime state (`$PAPR_HOME/data/.turso-sync-state.json`) | ✅ Done (3B-h) |
 | `src/gateway/services/TursoLinkedDbWatcher.ts` | Watch linked `data.db` for job writes | ✅ Done (3B-h) |
-| `tests/turso-push-scheduler.test.ts` | Unit tests for sync state + scheduler | ✅ Done (3B-h) |
+| `tests/cloud-sync/database/turso-push-scheduler.test.ts` | Unit tests for sync state + scheduler | ✅ Done (3B-h) |
 | `scripts/test-turso-job-sync.mjs` | E2E test for boundary sync (passing) | ✅ Created |
 | `scripts/test-turso-sync-bridge-e2e.mjs` | TypeScript TursoSyncBridge E2E (passing) | ✅ Created |
 

@@ -117,4 +117,4 @@ Switching org or namespace is a **user UI action** (Settings → workspace selec
 - `src/core/utils/paprWorkspace.ts` — pointer file, migration
 - `src/core/utils/paprRoot.ts` — `getPaprRoot()`, `getPaprAppsRoot()`, `getPaprJobsRoot()`
 - `src/core/utils/paprAgentPaths.ts` — legacy path rewrite + write guards
-- `tests/papr-workspace.test.ts` — path resolution tests
+- `tests/workspace/papr-workspace.test.ts` — path resolution tests

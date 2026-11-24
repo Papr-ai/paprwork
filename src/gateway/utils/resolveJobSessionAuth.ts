@@ -28,12 +28,12 @@ export async function resolveJobSessionAuth(params: {
   const originalProvider = params.provider;
   const requestedModel = params.requestedModel ?? params.model;
 
-  let provider = params.provider;
-  let model = params.model;
+  const provider = params.provider;
+  const model = params.model;
 
-  let creds = await resolveAgentProviderCredentials(provider, model);
+  const creds = await resolveAgentProviderCredentials(provider, model);
   if (creds) {
-    return { provider, model, ...creds };
+    return keepOAuthOnSupportedModel({ provider, model, ...creds });
   }
 
   if (params.fallbackProvider && params.fallbackModel) {
@@ -45,48 +45,129 @@ export async function resolveJobSessionAuth(params: {
       console.log(
         `[AgentService] Explicit fallback: ${originalProvider}/${requestedModel} → ${params.fallbackProvider}/${params.fallbackModel}`,
       );
-      return {
+      return keepOAuthOnSupportedModel({
         provider: params.fallbackProvider,
         model: params.fallbackModel,
         ...fbCreds,
-      };
+      });
     }
   }
 
-  const { getBestFallbackModel } = await import("./smartFallback.js");
-  const { getAvailableProviders, getDefaultProviderAndModel } =
-    await import("./defaultProvider.js");
+  // Capability-matched pick first, then every other provider the user can reach
+  // (Anthropic → OpenAI → Google). One unusable candidate must not end the
+  // search — e.g. a Claude-pinned profile on a Google-only account.
+  const tried = new Set<string>([`${provider}/${model}`]);
+  if (params.fallbackProvider && params.fallbackModel) {
+    tried.add(`${params.fallbackProvider}/${params.fallbackModel}`);
+  }
+  const candidates: Array<{ provider: Provider; model: string; why: string }> =
+    [];
 
-  const available = await getAvailableProviders();
-  const smart = await getBestFallbackModel(
-    originalProvider,
-    requestedModel,
-    available,
-  );
-
-  if (smart) {
-    provider = smart.provider;
-    model = smart.model;
-    console.log(
-      `[AgentService] Smart fallback: ${originalProvider}/${requestedModel} → ${provider}/${model} (capability-matched)`,
+  try {
+    const { getBestFallbackModel } = await import("./smartFallback.js");
+    const { getAvailableProviders } = await import("./defaultProvider.js");
+    const available = await getAvailableProviders();
+    const smart = await getBestFallbackModel(
+      originalProvider,
+      requestedModel,
+      available,
     );
-  } else {
-    const defaults = await getDefaultProviderAndModel();
-    provider = defaults.provider;
-    model = defaults.model;
-    console.log(
-      `[AgentService] Falling back from ${originalProvider} to ${provider}/${model}`,
-    );
+    if (smart) candidates.push({ ...smart, why: "capability-matched" });
+  } catch (error) {
+    console.warn("[AgentService] Smart fallback lookup failed:", error);
   }
 
-  creds = await resolveAgentProviderCredentials(provider, model);
-  if (creds) {
-    return { provider, model, ...creds };
+  const { REACHABLE_PROVIDER_ORDER } = await import("./reachableProvider.js");
+  const { DEFAULT_AUTO_LADDERS } = await import(
+    "../../core/agents/autoLadders.js"
+  );
+  for (const p of REACHABLE_PROVIDER_ORDER) {
+    const m = DEFAULT_AUTO_LADDERS[p]?.models.strong;
+    if (m) candidates.push({ provider: p, model: m, why: "reachable provider" });
+  }
+
+  const { getDefaultProviderAndModel } = await import("./defaultProvider.js");
+  const defaults = await getDefaultProviderAndModel();
+  candidates.push({ ...defaults, why: "default" });
+
+  for (const cand of candidates) {
+    const key = `${cand.provider}/${cand.model}`;
+    if (tried.has(key)) continue;
+    tried.add(key);
+    const candCreds = await resolveAgentProviderCredentials(
+      cand.provider,
+      cand.model,
+    );
+    if (candCreds) {
+      console.log(
+        `[AgentService] Fallback (${cand.why}): ${originalProvider}/${requestedModel} → ${key}`,
+      );
+      return keepOAuthOnSupportedModel({
+        provider: cand.provider,
+        model: cand.model,
+        ...candCreds,
+      });
+    }
   }
 
   throw new Error(
     agentProviderAuthErrorMessage(originalProvider, requestedModel),
   );
+}
+
+/** Cheap OpenAI model that runs on ChatGPT sign-in. */
+export const CHATGPT_SIGN_IN_FALLBACK_MODEL = "gpt-5-6-luna";
+
+/**
+ * A ChatGPT sign-in token only works on the models ChatGPT serves. For any other
+ * OpenAI model (gpt-5.4-mini, gpt-5.3-codex…) the session would go down the
+ * Platform API route with that token and fail with "Invalid API key". Use a
+ * real Platform key when there is one; otherwise run on Luna, which ChatGPT does
+ * serve.
+ */
+export async function keepOAuthOnSupportedModel(
+  auth: JobSessionAuth,
+): Promise<JobSessionAuth> {
+  const isOpenAI = auth.provider === "openai" || auth.provider === "openai-codex";
+  if (!isOpenAI || auth.authType !== "oauth" || auth.usePaprProxy) return auth;
+
+  const { isOpenAICodexModel } = await import("./modelNormalizer.js");
+  if (isOpenAICodexModel(auth.model)) return auth;
+
+  const { getApiKeys } = await import("./keyResolver.js");
+  const keys = await getApiKeys(["OPENAI_API_KEY"]);
+  if (keys.OPENAI_API_KEY) {
+    console.log(
+      `[AgentService] ${auth.model} is not served on ChatGPT sign-in — using the OpenAI API key`,
+    );
+    return { ...auth, apiKey: keys.OPENAI_API_KEY, authType: "apiKey" };
+  }
+
+  console.log(
+    `[AgentService] ${auth.model} is not served on ChatGPT sign-in and there is no OpenAI API key — running on ${CHATGPT_SIGN_IN_FALLBACK_MODEL}`,
+  );
+  return { ...auth, provider: "openai", model: CHATGPT_SIGN_IN_FALLBACK_MODEL };
+}
+
+/**
+ * Next provider for an agent job whose provider refused its credential before
+ * producing anything. Skips every provider that has refused this auth epoch.
+ */
+export async function resolveAuthRefusalRetry(
+  refusedProvider: Provider,
+): Promise<JobSessionAuth | null> {
+  const { markAutoProviderRefused, autoRefusedProviders } = await import(
+    "./autoProviderHealth.js"
+  );
+  markAutoProviderRefused(refusedProvider);
+  const { findReachableProvider } = await import("./reachableProvider.js");
+  const next = await findReachableProvider(autoRefusedProviders());
+  if (!next) return null;
+  return keepOAuthOnSupportedModel({
+    provider: next.provider,
+    model: next.model,
+    ...next.creds,
+  });
 }
 
 /**

@@ -69,6 +69,14 @@ export async function resolvePaprApiKeyFromKeychain(cwd = process.cwd()) {
 
   const env = { ...process.env };
   delete env.ELECTRON_RUN_AS_NODE;
+  // Under scripts/lib/isolateHome.mjs, read the key from the real home
+  // (read-only), not the temp workspace that has no keychain/pointer.
+  if (env.PAPR_E2E_ORIGINAL_HOME) {
+    env.HOME = env.PAPR_E2E_ORIGINAL_HOME;
+    env.USERPROFILE = env.PAPR_E2E_ORIGINAL_HOME;
+    delete env.PAPR_HOME;
+    delete env.PAPR_USER_DATA;
+  }
 
   try {
     const { stdout } = await execFileAsync(electronBin, [helper], {
@@ -104,6 +112,14 @@ export async function resolvePaprSessionFromKeychain(cwd = process.cwd()) {
 
   const env = { ...process.env };
   delete env.ELECTRON_RUN_AS_NODE;
+  // Under scripts/lib/isolateHome.mjs, read the key from the real home
+  // (read-only), not the temp workspace that has no keychain/pointer.
+  if (env.PAPR_E2E_ORIGINAL_HOME) {
+    env.HOME = env.PAPR_E2E_ORIGINAL_HOME;
+    env.USERPROFILE = env.PAPR_E2E_ORIGINAL_HOME;
+    delete env.PAPR_HOME;
+    delete env.PAPR_USER_DATA;
+  }
 
   try {
     const { stdout } = await execFileAsync(electronBin, [helper], {

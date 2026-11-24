@@ -36,6 +36,11 @@ import {
 import { updateLiveTurn } from "../agent/liveTurn.js";
 import { resolveParallelWidthNudge } from "../agent/parallelWidthNudge.js";
 import {
+  LENGTH_STOP_RECOVERY_NUDGE,
+  shouldRecoverFromLengthStop,
+  withLowEffort,
+} from "../agent/lengthStopRecovery.js";
+import {
   estimateMessagesTokens,
   stripAllAssistantReasoning,
 } from "../agent/compactToolResults.js";
@@ -227,11 +232,11 @@ function coerceArgTypes(args: Record<string, unknown>): Record<string, unknown> 
 /**
  * Execute a single tool call using Mastra tools
  */
-async function executeToolCall(
+export async function executeToolCall(
   toolCall: ToolCallAccum,
   mastraTools: Record<
     string,
-    { execute?: (args: unknown) => Promise<unknown> }
+    { execute?: (args: unknown, ctx?: { toolCallId: string; messages: unknown[] }) => Promise<unknown> }
   >,
   apiKeys: string[],
   toolContext: {
@@ -256,7 +261,10 @@ async function executeToolCall(
     const { runWithToolContext } = await import("../../../core/tools/context.js");
     const rawResult = await runWithToolContext(
       toolContext.chatId,
-      () => tool.execute!(coerceArgTypes(toolCall.args)),
+      // Pass the call id the way the AI SDK loop does (Mastra turns
+      // { toolCallId, messages } into ctx.agent), so tools that tag their
+      // work by call id (search ids on tool calls) see it on this path too.
+      () => tool.execute!(coerceArgTypes(toolCall.args), { toolCallId: toolCall.toolCallId, messages: [] }),
       {
         activeAppId: toolContext.activeAppId,
         jobEnv: toolContext.jobEnv,
@@ -303,9 +311,14 @@ async function executeToolCall(
 
 
     import("../gatewayTelemetry.js").then(({ getGatewayTelemetry }) => {
-      getGatewayTelemetry().trackFireAndForget("paprwork_tool_called", {
-        tool_name: toolCall.toolName,
-        success: true,
+      void import("../../../core/telemetry/toolCallTelemetry.js").then(({ toolFailureTelemetry }) => {
+        const r = result as Record<string, unknown> | null;
+        const failed = !!r && typeof r === "object" && ("error" in r || r.success === false);
+        getGatewayTelemetry().trackFireAndForget("paprwork_tool_called", {
+          tool_name: toolCall.toolName,
+          success: !failed,
+          ...toolFailureTelemetry(toolCall.toolName, result),
+        });
       });
     }).catch(() => {});
 
@@ -321,6 +334,7 @@ async function executeToolCall(
       getGatewayTelemetry().trackFireAndForget("paprwork_tool_called", {
         tool_name: toolCall.toolName,
         success: false,
+        error_category: "exception",
       });
     }).catch(() => {});
 
@@ -490,6 +504,11 @@ export async function* createPiCodexStreamWithToolLoop(
     /** The user's message, for the Jev trim goal. */
     userMessage?: string;
     /**
+     * false = sub-agent opted out of stale tool-result compaction and oldest-turn
+     * trimming. Memory-pressure compaction still runs (process safety).
+     */
+    contextTrimming?: boolean;
+    /**
      * True once the user sent a follow-up and asked this turn to pause at the
      * next tool boundary (see agent/steerYield.ts).
      */
@@ -573,6 +592,10 @@ export async function* createPiCodexStreamWithToolLoop(
   /** Text streamed during the current step — i.e. after the previous step's tools. */
   let stepText = "";
   let planContinuationsUsed = 0;
+  /** Steps resumed after hitting the output cap mid-thought (lengthStopRecovery.ts). */
+  let lengthRecoveriesUsed = 0;
+  /** Set by a length-stop recovery; read and cleared at the top of the next step. */
+  let lowEffortStep = false;
   /** Bounded by MAX_WIDTH_NUDGES_PER_TURN — see parallelWidthNudge.ts. */
   let widthNudgesIssued = 0;
 
@@ -613,10 +636,37 @@ export async function* createPiCodexStreamWithToolLoop(
     });
   };
 
-  stepLoop: while (step < maxSteps) {
+  // `<=` leaves room for one text-only step after the budget is spent (below).
+  stepLoop: while (step <= maxSteps) {
+    // Only the step right after a length-stop recovery runs at low effort.
+    const stepLowEffort = lowEffortStep;
+    lowEffortStep = false;
     if (streamOptions.signal?.aborted) {
       emitTurnEnd("aborted");
       break stepLoop;
+    }
+
+    // The step budget ran out on a tool step. The fixed force-stop threshold
+    // (95) never fires for a small budget — an agent job with maxTurns 4 — so
+    // without this the turn ends on its last tool result with no reply, and
+    // the job fails with "produced no output" (#675). Spend one extra step,
+    // tools removed, so the model writes its answer from what it already has.
+    if (step >= maxSteps) {
+      if (textOnlyWrapUpStepUsed) {
+        break stepLoop;
+      }
+      console.warn(
+        `[PiCodexToolLoop] Step budget (${maxSteps}) spent on tool calls. Text-only wrap-up.`,
+      );
+      textOnlyWrapUpStepUsed = true;
+      applyForcedTextOnlyWrapUpStep(context, WRAP_UP_AFTER_TOOLS_NO_TEXT);
+      logWrapUpTrigger({
+        chatId: toolContext?.chatId,
+        sessionId: streamOptions.sessionId,
+        trigger: "step_budget_spent",
+        step,
+        totalToolCalls,
+      });
     }
 
     // CIRCUIT BREAKER 1: Check validation error count (Issue 65)
@@ -720,12 +770,13 @@ export async function* createPiCodexStreamWithToolLoop(
       yield { type: "start-step" };
     }
 
+    const trimmingOn = toolContext?.contextTrimming !== false;
     applyMidTurnContextShaping(
       context.messages,
-      historyTrimBounds,
+      trimmingOn ? historyTrimBounds : undefined,
       memoryPressure,
       {
-        skipStaleToolCompaction: step === 0,
+        skipStaleToolCompaction: step === 0 || !trimmingOn,
         jevTrim: toolContext?.jevTrim,
         turnMetrics: toolContext?.turnMetrics,
       },
@@ -765,7 +816,11 @@ export async function* createPiCodexStreamWithToolLoop(
       try {
         let piStream: AsyncIterable<AssistantMessageEvent>;
         try {
-          piStream = streamSimple(piModel, context, streamOptions);
+          piStream = streamSimple(
+            piModel,
+            context,
+            stepLowEffort ? withLowEffort(streamOptions) : streamOptions,
+          );
         } catch (err) {
           requestFailed = true; requestTrace.error(err);
           const quotaChunk = quotaExhaustedChunk(err, activeCredential);
@@ -1393,6 +1448,37 @@ export async function* createPiCodexStreamWithToolLoop(
         continue stepLoop;
       }
     } else {
+      // Cut off by the output cap while still thinking: no text, no tool
+      // call. Ending here leaves the user a "no reply" note, and "continue"
+      // replays the same plan into the same cap — so resume now, once.
+      if (
+        shouldRecoverFromLengthStop({
+          finishReason: lastFinishReason,
+          stepText,
+          toolCallCount: toolCallsThisTurn.length,
+          recoveriesUsed: lengthRecoveriesUsed,
+          aborted: Boolean(streamOptions.signal?.aborted),
+          textOnlyStep: textOnlyWrapUpStepUsed,
+        })
+      ) {
+        lengthRecoveriesUsed += 1;
+        lowEffortStep = true;
+        console.warn(
+          `[TurnEnd:length-recovery] ${JSON.stringify({
+            ts: new Date().toISOString(),
+            chatId: toolContext?.chatId ?? null,
+            sessionId: streamOptions.sessionId,
+            step,
+            totalToolCalls,
+          })}`,
+        );
+        // The cut-off message holds only reasoning, which the next request
+        // could not replay anyway — the nudge goes on the existing context.
+        applyPlanContinuationStep(context, LENGTH_STOP_RECOVERY_NUDGE);
+        step++;
+        continue stepLoop;
+      }
+
       // Model stopped without pending tools. If an active plan still has
       // pending steps this is usually a stop mid-work, not a finished turn —
       // resume the loop (tools intact) instead of ending. Bounded by

@@ -8,15 +8,28 @@ import { cloudApiFetch } from "../../utils/cloudApiClient.js";
 import { getPaprApiKey } from "../../utils/keyResolver.js";
 import { isSyncV3FlagEnabled } from "./syncV3Flags.js";
 
+/** "Database X changed" push from memory (fast path; the heartbeat index check stays as the safety net). */
+export interface DbChangedEvent {
+  shortName: string;
+  dbId?: string;
+  jobId?: string;
+  tables?: string[];
+}
+
 export interface RuntimeDispatchSubscriberOptions {
   onPatch: (patch: JobRuntimePatch) => Promise<void>;
+  onDbChanged?: (event: DbChangedEvent) => void;
   onError?: (message: string) => void;
 }
 
 let activeAbort: AbortController | null = null;
 let reconnectTimer: ReturnType<typeof setTimeout> | null = null;
 
-function parseSseDataBlock(block: string): JobRuntimePatch | null {
+export type DispatchMessage =
+  | { kind: "patch"; patch: JobRuntimePatch }
+  | { kind: "db_changed"; event: DbChangedEvent };
+
+export function parseSseDataBlock(block: string): DispatchMessage | null {
   for (const line of block.split("\n")) {
     if (!line.startsWith("data: ")) {
       continue;
@@ -25,9 +38,13 @@ function parseSseDataBlock(block: string): JobRuntimePatch | null {
       const parsed = JSON.parse(line.slice(6)) as {
         type?: string;
         patch?: JobRuntimePatch;
-      };
+      } & Partial<DbChangedEvent>;
       if (parsed.type === "job_runtime_patch" && parsed.patch?.jobId) {
-        return parsed.patch;
+        return { kind: "patch", patch: parsed.patch };
+      }
+      if (parsed.type === "db_changed" && parsed.shortName) {
+        const { shortName, dbId, jobId, tables } = parsed;
+        return { kind: "db_changed", event: { shortName, dbId, jobId, tables } };
       }
     } catch {
       /* ignore malformed event */
@@ -63,9 +80,11 @@ async function consumeDispatchStream(
     buffer = parts.pop() ?? "";
 
     for (const block of parts) {
-      const patch = parseSseDataBlock(block);
-      if (patch) {
-        await options.onPatch(patch);
+      const message = parseSseDataBlock(block);
+      if (message?.kind === "patch") {
+        await options.onPatch(message.patch);
+      } else if (message?.kind === "db_changed") {
+        options.onDbChanged?.(message.event);
       }
     }
   }

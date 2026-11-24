@@ -345,9 +345,23 @@
   background-color: #8E9CC7; /* Muted periwinkle */
 }
 
+/* Needs you: a job or Pen is waiting on you in this chat (open Priority notice). Solid blue, same as the rail. */
+.tab.tab--needs::before {
+  content: '';
+  position: absolute;
+  top: 50%;
+  left: 8px;
+  transform: translateY(-50%);
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  background-color: #0161E0; /* Papr blue: waiting on you */
+}
+
 /* Shift icon to make room for dot */
 .tab.tab--streaming .tab__icon,
 .tab.tab--unread .tab__icon,
+.tab.tab--needs .tab__icon,
 .tab.tab--pending-refresh .tab__icon {
   margin-left: 10px;
 }
@@ -375,6 +389,9 @@
 
   .tab.tab--pending-refresh::before {
     background-color: #A8B4D4; /* Soft lavender for dark mode */
+  }
+  .tab.tab--needs::before {
+    background-color: #4D9BFF; /* Papr blue, dark mode */
   }
 }
 

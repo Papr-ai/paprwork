@@ -21,7 +21,10 @@ export interface DocumentData {
 export interface DocumentVersion {
   versionId: string;
   timestamp: string;
+  /** "auto-save", "before-restore", or a user/agent label such as "v2". */
   reason: string;
+  /** True when someone chose the label. Older gateways omit it. */
+  named?: boolean;
   preview: string;
 }
 
@@ -180,6 +183,24 @@ export function useDocument(documentId: string | null) {
     [documentId],
   );
 
+  // Snapshot the current content under a name ("v2", "Before review")
+  const saveNamedVersion = useCallback(
+    async (label: string, content: string) => {
+      if (!documentId || !label.trim()) return;
+      try {
+        await gateway.send("document:save-version", {
+          documentId,
+          content,
+          reason: label.trim(),
+        });
+        await loadVersions();
+      } catch (err) {
+        console.error("[useDocument] Save named version error:", err);
+      }
+    },
+    [documentId, loadVersions],
+  );
+
   // Restore version
   const restoreVersion = useCallback(
     async (versionId: string) => {
@@ -267,5 +288,6 @@ export function useDocument(documentId: string | null) {
     loadVersions,
     getVersion,
     restoreVersion,
+    saveNamedVersion,
   };
 }

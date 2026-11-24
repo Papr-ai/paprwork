@@ -16,14 +16,18 @@ import path from 'path';
 import fs from 'fs';
 import https from 'https';
 import { promisify } from 'util';
-import { exec } from 'child_process';
+import { exec, spawn } from 'child_process';
+import os from 'os';
 import * as tar from 'tar';
+import { windowsClaudeExePath } from '../../core/services/claudeWindowsSetup.js';
 
 const execAsync = promisify(exec);
 
 interface DownloadProgress {
   status: 'downloading' | 'extracting' | 'complete' | 'error';
   percent: number;
+  /** Human-readable phase, e.g. "Installing Claude Code". */
+  message?: string;
   total?: number;
   completed?: number;
   error?: string;
@@ -35,7 +39,11 @@ export class ClaudeCLIManager {
 
   // Claude CLI npm package info
   private readonly PACKAGE_NAME = '@anthropic-ai/claude-code';
-  private readonly PACKAGE_VERSION = '2.1.97'; // Latest as of 2026-04-08
+  // macOS/Linux only. DO NOT BUMP blindly: current releases (e.g. 2.1.312)
+  // ship a per-platform native binary instead of package/cli.js, so a newer
+  // version here breaks this download path. Move to install.sh before upgrading.
+  // Windows uses Anthropic's install.ps1 instead (see ensureWindowsCLI).
+  private readonly PACKAGE_VERSION = '2.1.97';
   private readonly REGISTRY_URL = `https://registry.npmjs.org/${this.PACKAGE_NAME}/-/claude-code-${this.PACKAGE_VERSION}.tgz`;
 
   constructor() {
@@ -204,6 +212,9 @@ export class ClaudeCLIManager {
    * Returns path to CLI executable
    */
   async ensureCLI(): Promise<string> {
+    if (process.platform === 'win32') {
+      return this.ensureWindowsCLI();
+    }
     // 1. Check if we already resolved the path
     if (this.cliPath && fs.existsSync(this.cliPath)) {
       return this.cliPath;
@@ -242,6 +253,9 @@ export class ClaudeCLIManager {
    * Check if CLI is available (global or cached)
    */
   async isAvailable(): Promise<boolean> {
+    if (process.platform === 'win32') {
+      return (await this.findWindowsClaude()) !== null;
+    }
     try {
       const globalCLI = await this.checkGlobalCLI();
       if (globalCLI) return true;
@@ -266,6 +280,88 @@ export class ClaudeCLIManager {
     } catch {
       return null;
     }
+  }
+
+  // ---------------------------------------------------------------------------
+  // Windows: official install.ps1 (native claude.exe). No Git needed.
+  // ---------------------------------------------------------------------------
+
+  private async whereOnWindows(name: string): Promise<string | null> {
+    try {
+      const { stdout } = await execAsync(`where ${name}`, { timeout: 5000 });
+      const first = stdout.trim().split(/\r?\n/)[0]?.trim();
+      return first && fs.existsSync(first) ? first : null;
+    } catch {
+      return null;
+    }
+  }
+
+  /** claude.exe from install.ps1's folder first (Electron's PATH is stale), then PATH. */
+  private async findWindowsClaude(): Promise<string | null> {
+    const direct = windowsClaudeExePath(os.homedir());
+    if (fs.existsSync(direct)) return direct;
+    return this.whereOnWindows('claude');
+  }
+
+  private async ensureWindowsCLI(): Promise<string> {
+    const existing = await this.findWindowsClaude();
+    if (existing) {
+      this.cliPath = existing;
+      return existing;
+    }
+
+    this.emitProgress({ status: 'downloading', percent: 0, message: 'Installing Claude Code' });
+    await this.runInstallPs1();
+
+    const installed = await this.findWindowsClaude();
+    if (!installed) {
+      const error = 'Claude Code installer finished but claude.exe was not found.';
+      this.emitProgress({ status: 'error', percent: 0, error });
+      throw new Error(error);
+    }
+    this.emitProgress({ status: 'complete', percent: 100 });
+    this.cliPath = installed;
+    return installed;
+  }
+
+  /** Runs Anthropic's installer exactly as documented, without execution-policy prompts. */
+  private runInstallPs1(): Promise<void> {
+    return new Promise((resolve, reject) => {
+      const child = spawn(
+        'powershell.exe',
+        [
+          '-NoProfile',
+          '-NonInteractive',
+          '-ExecutionPolicy',
+          'Bypass',
+          '-Command',
+          '[Net.ServicePointManager]::SecurityProtocol = [Net.SecurityProtocolType]::Tls12; irm https://claude.ai/install.ps1 | iex',
+        ],
+        { windowsHide: true },
+      );
+      let output = '';
+      const onData = (d: Buffer) => {
+        output += d.toString();
+        console.log('[ClaudeCLIManager] install.ps1:', d.toString().trim());
+      };
+      child.stdout.on('data', onData);
+      child.stderr.on('data', onData);
+      const timer = setTimeout(() => {
+        child.kill();
+        reject(new Error('Claude Code install timed out after 5 minutes. Check your connection and try again.'));
+      }, 5 * 60_000);
+      child.on('error', (err) => {
+        clearTimeout(timer);
+        reject(err);
+      });
+      child.on('close', (code) => {
+        clearTimeout(timer);
+        if (code === 0) return resolve();
+        // Surface the installer's own message (region block, 32-bit, checksum…).
+        const lastLines = output.trim().split(/\r?\n/).filter(Boolean).slice(-3).join(' ');
+        reject(new Error(lastLines || `Claude Code installer exited with code ${code}`));
+      });
+    });
   }
 
   /**

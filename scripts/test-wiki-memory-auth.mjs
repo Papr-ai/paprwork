@@ -7,6 +7,8 @@
  *   npm run test:wiki-memory-auth
  */
 
+// Deliberately uses the REAL workspace — needs PAPR_E2E_REAL_HOME=1.
+import "./lib/requireRealWorkspace.mjs";
 import { config } from "dotenv";
 import { join } from "path";
 import { existsSync, readdirSync, statSync } from "fs";

@@ -26,4 +26,4 @@ Selecting a team in a non-primary org could also **silently bounce back** to the
 
 - `src/electron/ipc/paprLogin.ts` — `list-all-namespaces`, org resolution
 - `ui/components/Settings/PaprLoginSection.tsx` — team picker UI
-- `tests/papr-auth-mode.test.ts` — auth/org tests
+- `tests/account/papr-auth-mode.test.ts` — auth/org tests

@@ -258,6 +258,12 @@ contextBridge.exposeInMainWorld("electronAPI", {
       startCheckout: (input) => ipcRenderer.invoke("papr:start-checkout", input),
       startCreditsCheckout: (input) =>
         ipcRenderer.invoke("papr:start-credits-checkout", input),
+      getBuilderSeats: () => ipcRenderer.invoke("papr:get-builder-seats"),
+      setBuilder: (input) => ipcRenderer.invoke("papr:set-builder", input),
+      requestMember: (input) => ipcRenderer.invoke("papr:request-member", input),
+      decideMemberRequest: (input) => ipcRenderer.invoke("papr:decide-member-request", input),
+      setMemberPolicy: (input) => ipcRenderer.invoke("papr:set-member-policy", input),
+      setMemberCap: (input) => ipcRenderer.invoke("papr:set-member-cap", input),
       startExpertBuildCheckout: (input) =>
         ipcRenderer.invoke("papr:start-expert-build-checkout", input),
       subscribeDeveloperPlan: () =>
@@ -426,6 +432,14 @@ contextBridge.exposeInMainWorld("electronAPI", {
     GATEWAY_PORT: process.env.GATEWAY_PORT || "18789",
   },
 
+  // Notices: show an OS notification route() already decided on (renderer only).
+  notices: {
+    showOs: (payload) => ipcRenderer.invoke("notice:show-os", payload),
+    closeOs: (keys) => ipcRenderer.invoke("notice:close-os", keys),
+    openOsSettings: () => ipcRenderer.invoke("notice:open-os-settings"),
+    osAccess: () => ipcRenderer.invoke("notice:os-access"),
+  },
+
   // System integration for mini-apps (generic invoke)
   system: {
     invoke: (method, args) => ipcRenderer.invoke("system:invoke", method, args),
@@ -434,6 +448,9 @@ contextBridge.exposeInMainWorld("electronAPI", {
 
 // Initialize chat IPC listener (forward to DOM event)
 console.log("[Preload] Initializing chat listener");
+ipcRenderer.on("notice:open", (_event, data) => {
+  window.dispatchEvent(new CustomEvent("papr-notice-open", { detail: data }));
+});
 ipcRenderer.on("notification:open-settings", (_event, data) => {
   window.dispatchEvent(new CustomEvent("papr-notification-open-settings", { detail: data }));
 });

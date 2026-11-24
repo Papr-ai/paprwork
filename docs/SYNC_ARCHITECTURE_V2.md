@@ -215,7 +215,7 @@ Propose click / submit_cloud_app_change
 | `ui/components/Apps/CloudContributeBackPanel.tsx` | Contributor propose |
 | Memory: `cloud_app_contribute_service.py` | GitHub App PR merge on approve |
 | `scripts/test-contribute-back-e2e.mjs` | Local E2E (gateway flow + optional `--approve`) |
-| `tests/contribute-data-index-merge.test.ts` | Unit tests for index merge |
+| `tests/cloud-sync/collaboration/contribute-data-index-merge.test.ts` | Unit tests for index merge |
 
 #### Contributor sync during open PR
 
@@ -502,7 +502,7 @@ Implemented in `cloudUploadMode.ts`, `CloudSyncTab.tsx`, publish prefs + publish
 | **(new)** per-app cloudEnabled | local-only app excluded from sync | — (Phase 3) |
 | **(new)** oplog dirty fast path | no fingerprint when log unchanged | — (Phase 5) |
 | **(new)** authority opt-in (defer) | web 403 only when `writeAuthority: desktop` set | — |
-| **(new)** convergence checker unit | hash equality/drift | `tests/convergence-hash.test.ts`, `tests/web-ready.test.ts`, `tests/flush-app-now.test.ts` |
+| **(new)** convergence checker unit | hash equality/drift | `tests/convergence-hash.test.ts`, `tests/gateway/web-ready.test.ts`, `tests/cloud-sync/publish/flush-app-now.test.ts` |
 
 ---
 
@@ -519,5 +519,5 @@ Implemented in `cloudUploadMode.ts`, `CloudSyncTab.tsx`, publish prefs + publish
 | Track pull | `CloudAppTrackSyncService.ts`, `cloudSync/trackUpstreamRevision.ts` |
 | Post-push verify | `cloudSync/postPushVerify.ts` |
 | Contribute (implemented) | `CloudAppContributeService.ts`, `contributeDataIndexMerge.ts`, `CloudAppChangeRequestService.ts`, `cloudInstall.ts`, panels |
-| Contribute tests | `scripts/test-contribute-back-e2e.mjs`, `tests/contribute-data-index-merge.test.ts` |
+| Contribute tests | `scripts/test-contribute-back-e2e.mjs`, `tests/cloud-sync/collaboration/contribute-data-index-merge.test.ts` |
 | Sync mode settings | `storage.ts`, `CloudSyncTab.tsx`, publish prefs, `CloudSyncService.ts`, `tursoPushScheduler.ts` |

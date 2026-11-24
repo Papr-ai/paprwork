@@ -26,6 +26,7 @@ export interface CloudAppRegistryEntry {
   id: string;
   title?: string;
   description?: string;
+  headline?: string;
   icon?: string;
   ownerUserId?: string;
   organizationId?: string;
@@ -90,6 +91,7 @@ export async function writeCloudAppMetadataFile(
     title,
     description:
       entry.description?.trim() || buildDefaultCloudAppDescription(title),
+    ...(entry.headline?.trim() ? { headline: entry.headline.trim() } : {}),
     updatedAt: new Date().toISOString(),
     ...(entry.ownerUserId ? { ownerUserId: entry.ownerUserId } : {}),
     ...(scopedFields.organizationId

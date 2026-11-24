@@ -38,6 +38,9 @@ if (!globalThis.crypto) {
 }
 
 import express from "express";
+import { registerVaultRoutes, wireVaultKeyChanges } from "./routes/vaultRoutes.js";
+import { registerTrainingConsentRoutes } from "./routes/trainingConsentRoutes.js";
+import { getPaprDataDir as getPaprDataDirForTraining } from "../core/utils/paprRoot.js";
 import { createServer } from "http";
 import { WebSocketServer } from "ws";
 import path from "path";
@@ -108,6 +111,8 @@ import { getJobsScheduler } from "./services/JobsScheduler.js";
 import { initializeWorkspaceService } from "./services/WorkspaceService.js";
 import { setupWebSocketHandlers, broadcast } from "./websocket/index.js";
 import { getJobEventHub } from "./services/JobEventHub.js";
+import { onNoticeOs, onNoticesChanged } from "./services/notifications/NoticeService.js";
+import { NOTICES_CHANGED_EVENT } from "../core/types/notices.js";
 import { registerJobEventsSseRoutes } from "./services/registerJobEventsSse.js";
 import { registerPaprMiniAppSdkRoutes } from "./utils/registerPaprMiniAppSdkRoutes.js";
 import { registerAppAgentChatRoutes } from "./services/appAgentChat/registerAppAgentChatRoutes.js";
@@ -133,6 +138,7 @@ import {
 import { ensureTursoSyncBridge } from "./services/TursoSyncBridge.js";
 import { buildTursoSyncItemsReport } from "./services/tursoSyncStatus.js";
 import { isLoopbackRequest } from "./utils/isLoopbackRequest.js";
+import { registerFocusRoutes } from "./services/focusRoutes.js";
 import { buildCloudLinkSyncReport } from "./services/cloudPublishStatus.js";
 import {
   getCachedCloudLinkSyncReport,
@@ -271,6 +277,7 @@ async function initializeServices(): Promise<void> {
       const { cloudApiFetch } = await import("./utils/cloudApiClient.js");
       const mcp = initializeMcpConnectionService({
         store: createKeychainMcpCredentialStore(mcpName),
+        onSignedOut: (names) => void import("./services/notifications/rootConditions.js").then((m) => m.setConnectorsSignedOut(names)).catch(() => {}),
         serverSignIn: new McpServerSignIn({
           cloud: (p, init) => cloudApiFetch(p, { method: init?.method ?? "GET", ...(init?.body !== undefined ? { body: init.body } : {}), timeoutMs: 20_000 }),
           redirectUri: process.env.PAPR_OAUTH_REDIRECT_URI,
@@ -545,7 +552,10 @@ async function startGateway(): Promise<void> {
         await import("../core/utils/paprQuota.js");
       const { broadcastPaprQuotaStatus } =
         await import("./utils/paprQuotaNotify.js");
-      setPaprQuotaExceededListener(broadcastPaprQuotaStatus);
+      setPaprQuotaExceededListener((status) => {
+        broadcastPaprQuotaStatus(status);
+        if (status.severity === "exceeded") void import("./services/notifications/rootConditions.js").then((m) => m.planPaused(status.title, status.detail)).catch(() => {});
+      });
     });
     console.log("[Gateway] Papr quota status listener ready");
 
@@ -580,7 +590,7 @@ async function startGateway(): Promise<void> {
             );
             res.setHeader(
               "Access-Control-Allow-Headers",
-              "Content-Type,Authorization",
+              "Content-Type,Authorization,x-papr-actor",
             );
           }
         } catch {
@@ -642,6 +652,13 @@ async function startGateway(): Promise<void> {
       setupWebSocketHandlers(wss);
       getJobEventHub().subscribe((event) => {
         broadcast({ type: event.type, data: event.data });
+      });
+      onNoticesChanged((open, prefs) => {
+        broadcast({ type: NOTICES_CHANGED_EVENT, data: { notices: open, prefs } });
+      });
+      // route() said pop the OS; the window process owns Notification, so the UI shows it.
+      onNoticeOs(({ notice, why, sound, previews }) => {
+        broadcast({ type: "notifications:os", data: { notice, why, sound, previews } });
       });
     });
     console.log("[Gateway] WebSocket server created");
@@ -796,6 +813,7 @@ async function startGateway(): Promise<void> {
               return {
                 alias: source.alias,
                 perUser: registry.getRecordForSource(source)?.isolation === "per-user",
+                privateTables: registry.getRecordForSource(source)?.privateTables ?? [],
                 tables: schema.tables,
               };
             } catch {
@@ -1430,6 +1448,8 @@ async function startGateway(): Promise<void> {
           `[Gateway] /api/db/query app=${appId} source=${source.alias} backend=${result.backend} rows=${result.count}`,
         );
         const payload = { ...result, source: source.alias };
+        const { recordPreviewLoadedRows } = await import("./utils/previewLoadedData.js");
+        recordPreviewLoadedRows(appId, `db/query ${source.alias}`, result.rows);
         if (cacheKey) {
           setCachedLocalDbReadResult(cacheKey, payload, appId);
         }
@@ -1693,6 +1713,12 @@ async function startGateway(): Promise<void> {
         const { notifyMiniAppFirstDataPaint } =
           await import("./services/tursoPullScheduler.js");
         notifyMiniAppFirstDataPaint(appId);
+        {
+          const { recordPreviewLoadedRows } = await import("./utils/previewLoadedData.js");
+          for (const r of (payload as { results?: Array<{ rows?: unknown }> }).results ?? []) {
+            if (r?.rows) recordPreviewLoadedRows(appId, "db/batch", r.rows);
+          }
+        }
         res.json(payload);
       } catch (err) {
         console.error("[Gateway] /api/db/batch error:", err);
@@ -1899,6 +1925,18 @@ async function startGateway(): Promise<void> {
       "/internal/backend-db",
       createDesktopBackendDbProxyRouter({
         resolveSource: resolveLinkedSource,
+        registryLabel: async (dbId) => {
+          const { getDatabaseRegistryService } =
+            await import("./services/DatabaseRegistryService.js");
+          const record = getDatabaseRegistryService().getById(dbId);
+          return record && record.status === "active" ? record.label ?? null : null;
+        },
+        appDbAliases: async (appId) => {
+          const config = await getAppService().getDataSourcesConfig(appId);
+          return config.sources
+            .filter((s) => s.dbId)
+            .map((s) => ({ dbId: s.dbId as string, alias: s.alias }));
+        },
         resolveRegistrySource: async (dbId, sourceId) => {
           const { getDatabaseRegistryService } =
             await import("./services/DatabaseRegistryService.js");
@@ -3014,8 +3052,15 @@ async function startGateway(): Promise<void> {
         const {
           bootstrapInstalledAppDatabases,
           buildCloudInstallAgentSetupMessage,
+          resolveInstalledAppDbPolicy,
         } = await import("./services/cloudAppInstallBootstrap.js");
-        const bootstrap = await bootstrapInstalledAppDatabases(appId);
+        // Team copies on shared data pull the publisher's schema; they must
+        // not run migrations against the shared database on retry.
+        const installDbPolicy = await resolveInstalledAppDbPolicy(appId);
+        const bootstrap = await bootstrapInstalledAppDatabases(
+          appId,
+          installDbPolicy ? { installDbPolicy } : undefined,
+        );
         const appService = getAppService();
         const app = await appService.getApp(appId);
         const agentSetupMessage =
@@ -3036,76 +3081,37 @@ async function startGateway(): Promise<void> {
     });
 
     // Roles: who has which role on a published app (memory /apps/{id}/access).
-    // A team collaborator's copy manages the original, so resolve to its source.
-    const accessTargetAppId = async (appId: string): Promise<string> => {
-      const lineage = await getCloudAppLineageService().readLineageForApp(appId);
-      return lineage?.mode === "track" && lineage.databasePolicy === "shared"
-        ? lineage.sourceAppId
-        : appId;
-    };
+    // Same service as publish_cloud_app, so the Share sheet and agent tools stay in sync.
     const proxyAppAccess = async (
       req: import("express").Request,
       res: import("express").Response,
       method: "GET" | "PUT",
     ) => {
       try {
-        const { cloudApiFetch } = await import("./utils/cloudApiClient.js");
-        const target = await accessTargetAppId(String(req.params.appId));
-        // Community listings need an approved gallery; already-listed apps are left alone.
-        if (method === "PUT") {
-          const gate = await import("./services/communityGalleryGate.js");
-          const patch = (req.body ?? {}) as import("./services/communityGalleryGate.js").AccessPatchLike;
-          const { sharedCoverKind } = await import("./services/appDemoVideos.js");
-          if (gate.blocksCommunityListing(patch, {}, sharedCoverKind(String(req.params.appId)) === "video")) {
-            const cur = await cloudApiFetch(`/v1/cloud/apps/${encodeURIComponent(target)}/access`, { method: "GET", timeoutMs: 20_000 });
-            const current = cur.ok ? ((await cur.json().catch(() => null)) as import("./services/communityGalleryGate.js").AccessStateLike | null) : null;
-            if (gate.blocksCommunityListing(patch, current, false)) {
-              res.status(409).json({ error: gate.COMMUNITY_NEEDS_GALLERY, code: "community_needs_gallery" });
-              return;
-            }
+        const aud = await import("./services/cloudAppAudiences.js");
+        const appId = String(req.params.appId);
+        if (method === "GET") {
+          const { cloudApiFetch } = await import("./utils/cloudApiClient.js");
+          const target = await aud.accessTargetAppId(appId);
+          const upstream = await cloudApiFetch(`/v1/cloud/apps/${encodeURIComponent(target)}/access`, { method: "GET", timeoutMs: 20_000 });
+          const text = (await upstream.text()) || "{}";
+          // The bar builds Copy link from local prefs. Follow the server on every
+          // read, so a failed save or a change made elsewhere can't leave
+          // "Anyone with the link" on with a link that has no invite token.
+          if (upstream.ok && target === appId) {
+            try { aud.syncAudiencePrefs(appId, JSON.parse(text)); } catch { /* not JSON */ }
           }
+          res.status(upstream.status).type("application/json").send(text);
+          return;
         }
-        const upstream = await cloudApiFetch(
-          `/v1/cloud/apps/${encodeURIComponent(target)}/access`,
-          { method, ...(method === "PUT" ? { body: req.body ?? {} } : {}), timeoutMs: 20_000 },
-        );
-        const text = await upstream.text();
-        if (method === "PUT" && upstream.ok) {
-          syncAudiencePrefs(String(req.params.appId), target, text);
-        }
-        res.status(upstream.status).type("application/json").send(text || "{}");
-      } catch (err) {
-        res.status(500).json({ error: (err as Error).message });
-      }
-    };
-    // v9: after a Share sheet save, mirror who can open it into local publish
-    // prefs so the bar's link, icon and next code publish match the server.
-    const syncAudiencePrefs = (appId: string, target: string, body: string) => {
-      try {
-        const a = JSON.parse(body) as {
-          accessModel?: string;
-          visibility?: CloudAccessMode;
-          linkPermission?: "read" | "read_write";
-          requireSignIn?: boolean;
-          audiences?: { workspace: boolean; link: boolean; community: boolean };
-          shareToken?: string;
-        };
-        if (a.accessModel !== "audiences" || !a.audiences || target !== appId) return;
-        const open = a.audiences;
-        const prefs = getAppPublishPrefs(appId);
-        setAppPublishPrefs(appId, {
-          accessMode: a.visibility ?? prefs.accessMode,
-          loginAccess: open.community ? "public" : open.workspace ? "team" : "private",
-          externalLink: open.link ? (a.linkPermission === "read_write" ? "read_write" : "read") : "off",
-          requireSignIn: a.requireSignIn === true,
-          audiencesModel: true,
-          ...(a.shareToken ? { shareToken: a.shareToken } : {}),
-          // People are grants now; the old allowlists were folded in server-side.
-          allowedUserIds: undefined,
-          allowedEmails: undefined,
+        const { sharedCoverKind } = await import("./services/appDemoVideos.js");
+        const access = await aud.saveAudiences(appId, (req.body ?? {}) as import("./services/cloudAppAudiences.js").AudiencesPatch, {
+          hasGallery: sharedCoverKind(appId) === "video",
         });
-      } catch {
-        /* not JSON: leave prefs alone */
+        res.json(access);
+      } catch (err) {
+        const e = err as { message: string; status?: number; code?: string };
+        res.status(e.status ?? 500).json({ error: e.message, ...(e.code ? { code: e.code } : {}) });
       }
     };
     app.get("/api/cloud/apps/:appId/access", (req, res) => void proxyAppAccess(req, res, "GET"));
@@ -3661,6 +3667,29 @@ async function startGateway(): Promise<void> {
     lapRouteRegistrationSection("cloud-proxy");
 
     // ── Cloud Sync Status + Triggers ─────────────────────────────────────
+    // On-device code search (papr-embed-code): tier, model, backend, index size. Read-only.
+    app.get("/api/code-embed/status", async (_req, res) => {
+      try {
+        const { getCodeEmbedRuntime } = await import("../core/tools/codeEmbed/runtime.js");
+        const rt = await getCodeEmbedRuntime();
+        res.json(rt ? { enabled: true, ...rt.info() } : { enabled: false });
+      } catch (e) {
+        res.status(500).json({ enabled: false, error: (e as Error).message });
+      }
+    });
+
+    // Resource governor: memory state, caps, leases and the agent-started processes being measured. Read-only.
+    app.get("/api/system/resources", async (_req, res) => {
+      try {
+        const { getResourceGovernor } = await import("../core/system/resourceGovernor.js");
+        const g = getResourceGovernor();
+        await g.refresh();
+        res.json(g.status());
+      } catch (e) {
+        res.status(500).json({ error: (e as Error).message });
+      }
+    });
+
     app.get("/api/sync/status", (_req, res) => {
       const sync = getCloudSyncService();
       if (!sync) {
@@ -3949,21 +3978,8 @@ async function startGateway(): Promise<void> {
       }
     });
 
-    // Lazy first-run setup for the bundled Home dashboard (job + DB + data-sources).
-    app.post("/api/home/ensure-brief-setup", async (req, res) => {
-      try {
-        const { appId: bodyAppId } = (req.body ?? {}) as { appId?: string };
-        const { DEFAULT_HOME_APP_ID } =
-          await import("./services/defaultHomeBundle.js");
-        const appId = bodyAppId?.trim() || DEFAULT_HOME_APP_ID;
-        const result = await getAppService().ensureHomeDailyBriefReady(appId);
-        res.json(result);
-      } catch (error) {
-        const message = error instanceof Error ? error.message : String(error);
-        const status = message.includes("not found") ? 404 : 500;
-        res.status(status).json({ error: message });
-      }
-    });
+    // Focus DB for jobs/scripts (save_brief.py, trackers): no app id, loopback only.
+    registerFocusRoutes(app);
 
     // Unified tasks (L3 goals + entity Open Items), projected into the Home DB.
     app.get("/api/workspace/tasks", async (req, res) => {
@@ -4388,82 +4404,15 @@ async function startGateway(): Promise<void> {
 
     lapRouteRegistrationSection("cloud-sync-routes");
 
-    // ── Vault Sync Status + Triggers ──────────────────────────────────────
-    app.get("/api/vault/status", (_req, res) => {
-      const vault = getVaultSyncService();
-      if (!vault) {
-        res.json({ enabled: false, reason: "Vault sync not initialized" });
-        return;
-      }
-      res.json({ enabled: true, ...vault.getState() });
-    });
+    registerVaultRoutes(app, getVaultSyncService);
 
-    app.post("/api/vault/push", async (_req, res) => {
-      const vault = getVaultSyncService();
-      if (!vault) {
-        res.status(503).json({ error: "Vault sync not initialized" });
-        return;
-      }
-      try {
-        const result = await vault.pushAllKeys();
-        res.json({ success: true, ...vault.getState(), result });
-      } catch (err) {
-        res.status(500).json({ error: (err as Error).message });
-      }
-    });
-
-    app.post("/api/vault/pull-shared", async (_req, res) => {
-      const vault = getVaultSyncService();
-      if (!vault) {
-        res.status(503).json({ error: "Vault sync not initialized" });
-        return;
-      }
-      try {
-        const upserted = await vault.pullSharedKeys();
-        res.json({ success: true, ...vault.getState(), upserted });
-      } catch (err) {
-        res.status(500).json({ error: (err as Error).message });
-      }
-    });
-
-    app.post("/api/vault/sync-key", async (req, res) => {
-      const vault = getVaultSyncService();
-      if (!vault) {
-        res.status(503).json({ error: "Vault sync not initialized" });
-        return;
-      }
-      const body = req.body as {
-        name?: string;
-        previousAudience?: string;
-        nextAudience?: string;
-        targetOrgId?: string;
-        mode?: "delete" | "update";
-      };
-      if (
-        !body.name?.trim() ||
-        (body.mode !== "delete" && body.mode !== "update")
-      ) {
-        res
-          .status(400)
-          .json({ error: "name and mode (delete|update) are required" });
-        return;
-      }
-      try {
-        const result = await vault.syncKeyVaultChange({
-          name: body.name.trim(),
-          previousAudience: body.previousAudience as
-            | import("../core/storage/customKeysVault.js").IntegrationKeyVaultAudience
-            | undefined,
-          nextAudience: body.nextAudience as
-            | import("../core/storage/customKeysVault.js").IntegrationKeyVaultAudience
-            | undefined,
-          targetOrgId: body.targetOrgId,
-          mode: body.mode,
-        });
-        res.json({ success: true, ...vault.getState(), result });
-      } catch (err) {
-        res.status(500).json({ error: (err as Error).message });
-      }
+    registerTrainingConsentRoutes(app, {
+      getClient: async () => {
+        const { getPaprClient } = await import("../core/tools/paprClient.js");
+        return getPaprClient().catch(() => null);
+      },
+      // Lazy: the active workspace can change without a gateway restart.
+      askedFile: () => path.join(getPaprDataDirForTraining(), "training-consent-asked.json"),
     });
 
     // Renderer telemetry: validate sync, respond immediately, forward async (never block hot path).
@@ -4476,6 +4425,9 @@ async function startGateway(): Promise<void> {
       res.sendStatus(204);
       void sendPreparedRendererTelemetry(prepared.payload);
     });
+
+    // papr_llm.complete — jobs/backend actions call models through the chat stack.
+    (await import("./services/llm/registerModelCallRoutes.js")).registerModelCallRoutes(app);
 
     app.post("/api/bash/run", async (_req, res) => {
       const { MINI_APP_BASH_DISABLED_CODE, MINI_APP_BASH_DISABLED_MESSAGE } =
@@ -4574,6 +4526,10 @@ async function startGateway(): Promise<void> {
               secretValues.push(...sub.keyValues);
             }
           }
+          // Same credential as chat: the live OAuth token when the user is on OAuth.
+          const { applyLiveProviderAuth } =
+            await import("./utils/scriptProviderCredential.js");
+          secretValues.push(...(await applyLiveProviderAuth(vaultEnv)));
         }
 
         const {
@@ -5028,6 +4984,12 @@ async function startGateway(): Promise<void> {
     lapRouteRegistrationSection("mini-app-hosting-and-preview-routes");
 
     gatewayReady = true;
+    if (!isCloudAgentGatewayMode()) {
+      // On-device code search: fetch + verify the model for new and existing users after startup settles.
+      void import("../core/tools/codeEmbed/runtime.js").then((m) => m.startCodeEmbedInBackground()).catch(() => undefined);
+      // Memory governor: sample pressure from startup so the agent cap and leases react before the first heavy command.
+      void import("../core/system/resourceGovernor.js").then((m) => m.getResourceGovernor().start()).catch(() => undefined);
+    }
     const { markGatewayRoutesReady } =
       await import("./services/gatewayReadiness.js");
     markGatewayRoutesReady();
@@ -5161,20 +5123,7 @@ async function startGateway(): Promise<void> {
               const vaultSync = await initializeVaultSyncService({
                 gatewayPort: Number(PORT),
               });
-              getCustomKeysService().onKeyChange((keyName) => {
-                if (keyName) {
-                  vaultSync
-                    .onKeyChanged(keyName)
-                    .catch((e) =>
-                      console.warn(
-                        "[Gateway] Vault key push failed:",
-                        (e as Error).message,
-                      ),
-                    );
-                } else {
-                  vaultSync.scheduleDebouncedPushAll();
-                }
-              });
+              wireVaultKeyChanges(getCustomKeysService(), vaultSync);
             },
           );
         })().catch((err) => {
@@ -5381,6 +5330,11 @@ async function startGateway(): Promise<void> {
       } catch (error) {
         console.error("[Gateway] Failed to stop background worker:", error);
       }
+
+      try {
+        const { resetCodeEmbedRuntime } = await import("../core/tools/codeEmbed/runtime.js");
+        await resetCodeEmbedRuntime();
+      } catch {}
 
       // Stop code indexing
       try {

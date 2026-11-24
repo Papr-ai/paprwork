@@ -5,6 +5,7 @@ import {
   buildClaudeManualAgentPrompt,
   CLAUDE_MANUAL_AGENT_MODEL_ID,
   detectManualConnectionPlatform,
+  getTerminalLabel,
 } from "../../constants/claudeManualConnection";
 import { getClaudeOnboardingSteps } from "../../constants/claudeOnboardingSteps";
 import { ClaudeOnboardingTokenStep } from "./ClaudeOnboardingTokenStep";
@@ -30,6 +31,7 @@ export function ClaudeOnboardingStepper({
   hideFooterLinks = false,
 }: ClaudeOnboardingStepperProps) {
   const steps = useMemo(() => getClaudeOnboardingSteps(), []);
+  const terminal = useMemo(() => getTerminalLabel(detectManualConnectionPlatform()), []);
   const stepCount = steps.length;
 
   const [stepIndex, setStepIndex] = useState(0);
@@ -134,7 +136,7 @@ export function ClaudeOnboardingStepper({
       stage: String(index),
     } as Parameters<typeof trackOAuthProviderStep>[2]);
     if (index === 2) {
-      completeStep(2, "You ran sign-in yourself. Token is on screen in Terminal.");
+      completeStep(2, `You ran sign-in yourself. Token is on screen in ${terminal}.`);
       return;
     }
     if (allowManualOverride) {
@@ -164,7 +166,7 @@ export function ClaudeOnboardingStepper({
       }
       setAllowManualOverride(true);
       setStepError(
-        "Papr can't see `claude` on your PATH yet. If the install finished, open a new Terminal window and run `claude --version`. Click again to continue anyway.",
+        `Papr can't see \`claude\` on your PATH yet. If the install finished, open a new ${terminal} window and run \`claude --version\`. Click again to continue anyway.`,
       );
     } catch (error) {
       setStepError(error instanceof Error ? error.message : "Check failed");
@@ -291,7 +293,7 @@ export function ClaudeOnboardingStepper({
           const displayedCmd =
             index === 2 && setupTokenCmd ? setupTokenCmd : step.cmd;
           const cmdLabel =
-            step.mode === "run" ? "Papr runs this for you" : "Runs in Terminal on your computer";
+            step.mode === "run" ? "Papr runs this for you" : `Runs in ${terminal} on your computer`;
 
           return (
             <div key={step.title} className="claude-stepper__st claude-stepper__st--active">
@@ -319,7 +321,7 @@ export function ClaudeOnboardingStepper({
                 {manualSteps.has(index) && displayedCmd && !(index === 2 && terminalSignInReady) && (
                   <p className="claude-stepper__manual-hint" role="status">
                     {copiedCmd === displayedCmd ? "Copied. " : ""}
-                    Paste it into Terminal, press Enter, then come back here.
+                    Paste it into {terminal}, press Enter, then come back here.
                   </p>
                 )}
 
@@ -331,8 +333,8 @@ export function ClaudeOnboardingStepper({
 
                 {index === 2 && terminalSignInReady && (
                   <p className="claude-stepper__st-ok" role="status">
-                    Terminal should be open with sign-in running. Finish in Terminal, then continue
-                    below.
+                    {terminal} should be open with sign-in running. Finish in {terminal}, then
+                    continue below.
                   </p>
                 )}
 

@@ -7,7 +7,7 @@ description: How to design a goal / progress page (Focus goal detail, OKR pages,
 
 Load this before building or changing any page that shows progress on a goal: the Focus goal detail in Home, an OKR mini-app, or a tracker job's output. Use it together with `preloaded-paprwork-design-system` (layout, glass) and the Papr brand guidelines (one blue accent).
 
-Reference implementation: `src/resources/default-apps/home-dashboard/three_hero.js` + `three_hero.css`.
+Reference implementation: `ui/components/Focus/page/GoalHero.tsx` + `ui/components/Focus/focusPage.css`.
 Data comes from tracker jobs: `POST /api/workspace/focus/metrics` (`src/gateway/services/focusTrackers.ts`, `GOAL_PAGE_CONTRACT`).
 
 ## The one job

@@ -2,7 +2,7 @@
  * Last auto-update status for replay when the renderer mounts after IPC events.
  */
 
-/** @typedef {{ status: string, version?: string, releaseNotes?: string, percent?: number, error?: string, recoveryHint?: string }} UpdateStatusPayload */
+/** @typedef {{ status: string, version?: string, releaseNotes?: string, percent?: number, error?: string, recoveryHint?: string, transient?: boolean }} UpdateStatusPayload */
 
 /**
  * Whether `next` should replace `current` in the durable cache.
@@ -23,6 +23,15 @@ function shouldReplaceCachedUpdateStatus(current, next) {
     ) {
       return false;
     }
+  }
+  // A transient check failure (GitHub busy, network) must not hide an update
+  // that is already downloading or downloaded.
+  if (
+    next.status === "error" &&
+    next.transient &&
+    (current.status === "ready" || current.status === "downloading")
+  ) {
+    return false;
   }
   if (next.status === "checking" && current.status === "downloading") {
     return false;

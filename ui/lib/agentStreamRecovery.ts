@@ -16,6 +16,7 @@ import type {
 import type { ToolCall } from "../types/core";
 import { dedupeChatMessages } from "../utils/messageDedup";
 import { isExpectedStreamCancellation } from "../../src/core/constants/streamCancellation.js";
+import { HIDDEN_CONTINUE_PREFIX } from "../../src/core/constants/hiddenContinue.js";
 import { disarmFirstChunkWatchdog } from "./agentFirstChunkWatchdog";
 import { recoveryBannerSurvivesStreamEnd } from "./streamRecoveryPersistence";
 import { AGENT_INTERRUPT_TIMEOUT_MS } from "../utils/agentSendLifecycle";
@@ -123,7 +124,7 @@ export function rehydrateStreamingRefsForChat(
 }
 
 /** Hidden user message sent when Resume must start a new agent turn */
-export const HIDDEN_CONTINUE_USER_PREFIX = "[__papr_continue__]";
+export const HIDDEN_CONTINUE_USER_PREFIX = HIDDEN_CONTINUE_PREFIX;
 
 export const HIDDEN_CONTINUE_USER_MESSAGE = `${HIDDEN_CONTINUE_USER_PREFIX} Continue your previous response from where you left off. Do not repeat work you already completed. Pick up seamlessly.`;
 
@@ -545,8 +546,14 @@ export function mergeHistoryWithLocal(
       return;
     }
     // With nothing consumed there is no window to sit outside of, so keep the
-    // original append-at-the-end behaviour rather than guessing.
+    // original append-at-the-end behaviour rather than guessing — except for
+    // settled saved messages (below), which are never newer than the window.
     if (firstConsumedIndex !== -1 && index < firstConsumedIndex) {
+      beforeWindow.push(localMsg);
+    } else if (isSettledSavedOutsideWindow(localMsg)) {
+      // A finished reply the server saved, yet missing from the newest-N
+      // window, is older than the window. Appending it pinned an old reply
+      // below the newest one on every reload until restart.
       beforeWindow.push(localMsg);
     } else if (
       firstConsumedIndex !== -1 &&
@@ -573,6 +580,20 @@ export function mergeHistoryWithLocal(
   });
 
   return dedupeChatMessages([...beforeWindow, ...middle, ...afterWindow]);
+}
+
+/**
+ * A saved assistant reply that is finished: server id, not streaming, not
+ * interrupted. The server window is the newest N saved messages, so one of
+ * these missing from it is older than the window, never in flight.
+ */
+function isSettledSavedOutsideWindow(msg: ChatMessage): boolean {
+  return (
+    msg.role === "assistant" &&
+    isPersistedMessageId(msg.id) &&
+    !msg.isStreaming &&
+    !msg.interrupted
+  );
 }
 
 /**

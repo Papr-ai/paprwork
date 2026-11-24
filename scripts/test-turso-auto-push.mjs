@@ -10,6 +10,8 @@
  * Requires PAPR_API_KEY (env or .env.local).
  */
 
+// Deliberately uses the REAL workspace — needs PAPR_E2E_REAL_HOME=1.
+import "./lib/requireRealWorkspace.mjs";
 import Database from "better-sqlite3";
 import * as fs from "fs";
 import * as os from "os";

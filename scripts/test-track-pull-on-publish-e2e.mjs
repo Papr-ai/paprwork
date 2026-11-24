@@ -15,6 +15,8 @@
  *   node scripts/test-track-pull-on-publish-e2e.mjs [--gateway URL] [--app-id ID] [--no-cleanup]
  */
 
+// Deliberately uses the REAL workspace — needs PAPR_E2E_REAL_HOME=1.
+import "./lib/requireRealWorkspace.mjs";
 import { readFileSync, writeFileSync, readdirSync, existsSync } from "fs";
 import { homedir } from "os";
 import { join } from "path";

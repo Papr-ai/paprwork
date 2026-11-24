@@ -32,7 +32,18 @@ interface Props {
   data: JobStatusData;
 }
 
-export function JobStatusCard({ data }: Props) {
+export function JobStatusCard({ data: rawData }: Props) {
+  // The tool result freezes "running" when the turn ended before the job did (failed
+  // delegation, stopped turn, reload). Prefer the job's real final status.
+  const finalStatus = useJobLiveLogsStore((s) =>
+    rawData.status === "running" ? s.finalStatusByJobId.get(rawData.jobId) : undefined,
+  );
+  const data = finalStatus ? { ...rawData, status: finalStatus } : rawData;
+  useEffect(() => {
+    if (rawData.status === "running" && rawData.jobId !== "unknown") {
+      void useJobLiveLogsStore.getState().reconcileStatus(rawData.jobId);
+    }
+  }, [rawData.status, rawData.jobId]);
   const [isExpanded, setIsExpanded] = useState(
     data.status === "running" || data.status === "waiting_permission",
   );

@@ -51,7 +51,7 @@ function caller(req: Request, res: Response, opts: { allowApps: boolean; allowUi
     return null;
   }
   if (c.kind === "app" && !opts.allowApps) {
-    res.status(403).json({ error: "Mini-apps cannot manage connections. Ask the user to do it in Settings → Connections." });
+    res.status(403).json({ error: "Mini-apps cannot manage connections. Ask the user to do it in Settings → Connectors & API Keys." });
     return null;
   }
   if (c.kind === "ui" && opts.allowUi === false) {

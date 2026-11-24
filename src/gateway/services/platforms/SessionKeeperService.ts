@@ -16,6 +16,10 @@ import {
 
 const CHECK_INTERVAL_MS = 60 * 1000; // Check every 60 seconds
 const MIN_REFRESH_DELAY_MS = 30 * 1000; // Minimum 30 seconds between refreshes
+/** Sites that do not rotate tokens stay signed in on their own; re-checking often only risks false logouts. */
+const STABLE_REFRESH_INTERVAL_MS = 6 * 60 * 60 * 1000;
+/** How often to look for a sign-in that happened in Papr Chrome for sites marked needs_reauth. */
+const RECOVERY_INTERVAL_MS = 5 * 60 * 1000;
 
 interface RefreshState {
   lastAttemptAt: number;
@@ -79,7 +83,24 @@ export class SessionKeeperService {
 
       if (status.status === "connected") {
         await this.checkAndRefreshIfNeeded(status);
+      } else if (status.status === "needs_reauth") {
+        await this.tryRecover(status.platformId);
       }
+    }
+  }
+
+  /** Cheap local check: if the user signed in again in Papr Chrome, flip back to connected. */
+  private async tryRecover(platformId: PlatformId): Promise<void> {
+    const state = this.refreshState.get(platformId) ?? { lastAttemptAt: 0, consecutiveFailures: 0 };
+    const now = Date.now();
+    if (now - state.lastAttemptAt < RECOVERY_INTERVAL_MS) return;
+    state.lastAttemptAt = now;
+    this.refreshState.set(platformId, state);
+    try {
+      const recovered = await getPlatformSessionService().syncFromLivePaprChrome(platformId);
+      if (recovered) console.log(`[SessionKeeperService] Recovered ${platformId} from Papr Chrome`);
+    } catch (error) {
+      console.warn(`[SessionKeeperService] Recovery check failed for ${platformId}:`, error);
     }
   }
 
@@ -118,7 +139,10 @@ export class SessionKeeperService {
       : 0;
     const timeSinceRefresh = now - lastRefreshed;
 
-    if (timeSinceRefresh < config.refreshIntervalMs) {
+    const intervalMs = config.rotatesTokens
+      ? config.refreshIntervalMs
+      : Math.max(config.refreshIntervalMs, STABLE_REFRESH_INTERVAL_MS);
+    if (timeSinceRefresh < intervalMs) {
       return; // Not yet due for refresh
     }
 
@@ -134,7 +158,7 @@ export class SessionKeeperService {
       const sessionService = getPlatformSessionService();
       const result = await sessionService.refresh(platformId);
 
-      if (result.status === "connected") {
+      if (result.status === "connected" && !result.error) {
         // Success - reset failure count
         state.consecutiveFailures = 0;
         this.refreshState.set(platformId, state);

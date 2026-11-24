@@ -51,6 +51,8 @@ export const TelemetryEvents = {
   // Chat Events
   CHAT_CREATED: "paprwork_chat_created",
   MESSAGE_SENT: "paprwork_message_sent",
+  /** Canonical recurring activity: a visible user-authored message accepted by the gateway. */
+  USER_MESSAGE_SENT: "paprwork_user_message_sent",
   MESSAGE_RECEIVED: "paprwork_message_received",
   CHAT_DELETED: "paprwork_chat_deleted",
   CHAT_RENAMED: "paprwork_chat_renamed",
@@ -80,6 +82,7 @@ export const TelemetryEvents = {
   APP_OPENED: "paprwork_app_opened",
   APP_CLOSED: "paprwork_app_closed",
   APP_PUBLISHED: "paprwork_app_published",
+  CLOUD_PROPOSE_FAILED: "paprwork_cloud_propose_failed",
   APP_EDITED: "paprwork_app_edited",
   APP_DELETED: "paprwork_app_deleted",
   HOME_APP_SET: "paprwork_home_app_set",

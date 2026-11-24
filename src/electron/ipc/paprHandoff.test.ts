@@ -26,6 +26,21 @@ describe("handoff link parsing", () => {
     expect(parseHandoffCode("papr://auth/handoff?code=has%20space%20in%20it%20padding")).toBeNull();
     expect(parseHandoffCode("not a url")).toBeNull();
   });
+  it("dev profile accepts papr-dev:// hand-off links, not papr://", async () => {
+    const prev = process.env.PAPR_PROFILE;
+    process.env.PAPR_PROFILE = "dev";
+    vi.resetModules();
+    try {
+      const dev = await import("./paprHandoff.js");
+      expect(dev.isHandoffUrl(`papr-dev://auth/handoff?code=${CODE}`)).toBe(true);
+      expect(dev.parseHandoffCode(`papr-dev://auth/handoff?code=${CODE}`)).toBe(CODE);
+      expect(dev.parseHandoffCode(`papr://auth/handoff?code=${CODE}`)).toBeNull();
+    } finally {
+      if (prev === undefined) delete process.env.PAPR_PROFILE;
+      else process.env.PAPR_PROFILE = prev;
+      vi.resetModules();
+    }
+  });
   it("finds memory the same way the gateway does", () => {
     expect(memoryBaseUrl({})).toBe("https://memory.papr.ai");
     expect(memoryBaseUrl({ PAPR_AI_PROXY_BASE_URL: "https://staging.papr.ai/v1/ai" })).toBe("https://staging.papr.ai");

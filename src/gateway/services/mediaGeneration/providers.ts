@@ -2,7 +2,7 @@ import { readFile } from "node:fs/promises";
 import type { ResolvedMediaModel } from "./types.js";
 import { openAiImageQuality, openAiSizeForAspectRatio } from "./models.js";
 import { generateWithOpenAiCodexOAuth } from "./openaiCodexImage.js";
-import { generateWithVeoModel } from "./veoVideo.js";
+import { generateWithOmniVideoModel } from "./omniVideo.js";
 
 export interface GeneratedMediaBytes {
   bytes: Buffer;
@@ -178,7 +178,15 @@ export async function generateMediaBytes(input: {
   aspectRatio?: string;
   durationSeconds?: number;
   referenceImagePath?: string;
+  lastFramePath?: string;
+  referenceImagePaths?: string[];
 }): Promise<GeneratedMediaBytes> {
+  if (
+    (input.lastFramePath || input.referenceImagePaths?.length) &&
+    input.model.apiStyle !== "gemini_omni_interactions"
+  ) {
+    throw new Error("lastFramePath and referenceImagePaths are only supported by video models.");
+  }
   switch (input.model.apiStyle) {
     case "gemini_generate_content": {
       if (!input.model.apiKey) {
@@ -192,17 +200,18 @@ export async function generateMediaBytes(input: {
         referenceImagePath: input.referenceImagePath,
       });
     }
-    case "veo_predict_long_running": {
+    case "gemini_omni_interactions": {
       if (!input.model.apiKey) {
         throw new Error("Missing Google API key.");
       }
-      return generateWithVeoModel({
+      return generateWithOmniVideoModel({
         model: input.model,
         apiKey: input.model.apiKey,
         prompt: input.prompt,
         aspectRatio: input.aspectRatio,
-        durationSeconds: input.durationSeconds,
         referenceImagePath: input.referenceImagePath,
+        lastFramePath: input.lastFramePath,
+        referenceImagePaths: input.referenceImagePaths,
       });
     }
     case "openai_images": {

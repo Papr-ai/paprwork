@@ -64,8 +64,10 @@ export function UserAvatar({
   const initials = getProfileInitials(displayName, email);
   const label = alt || displayName || email || "";
 
+  const tinted = !showImage && Boolean(initials);
   const frameClass = [
     "papr-avatar",
+    tinted ? "papr-avatar--initials" : "",
     ring ? "papr-avatar--ring" : "",
     interactive ? "papr-avatar--interactive" : "",
     className ?? "",

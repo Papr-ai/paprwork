@@ -47,7 +47,7 @@
 
 ### 3. Comprehensive Performance Tests ✅
 
-**File**: `tests/agent-performance-scaling.test.ts`
+**File**: `tests/agent/agent-performance-scaling.test.ts`
 
 **Test Suites**:
 
@@ -178,7 +178,7 @@ If AI first token is slow:
 ```
 src/gateway/websocket/agent.ts          - Session caching + timing logs
 src/gateway/services/AgentService.ts    - Detailed performance tracking
-tests/agent-performance-scaling.test.ts - Comprehensive perf tests
+tests/agent/agent-performance-scaling.test.ts - Comprehensive perf tests
 scripts/run-perf-tests.mjs              - Test runner
 docs/AGENT_PERFORMANCE_TESTING.md       - Complete documentation
 package.json                            - Added test:perf script

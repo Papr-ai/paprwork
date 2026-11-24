@@ -19,6 +19,7 @@ const PAPR_RESUME_CLOUD_TASK = "papr:resume-cloud";
  */
 export function schedulePaprCloudResumeAfterBillingRestore(): { resumed: boolean; scheduled: boolean } {
   // Billing refresh is a reconciliation signal, not a periodic vault-sync trigger.
+  void import("./notifications/rootConditions.js").then((m) => m.planBack()).catch(() => {});
   if (!isPaprCloudPaused()) return { resumed: false, scheduled: false };
   setPaprCloudPaused(false);
   resumeCodeIndexingAfterBillingRestore();

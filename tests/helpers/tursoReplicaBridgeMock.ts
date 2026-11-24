@@ -18,6 +18,8 @@ export function tursoReplicaBridgeMock(): {
     // Replica push scheduler resolves linked sources under this root (null → Papr default).
     getAppsRootDir: vi.fn(() => null),
     listLinkedSources: vi.fn(async () => []),
+    // Called on any replica push/open error; must exist or the error path itself throws.
+    invalidateCredentialsOnAuthError: vi.fn(() => false),
   };
   return {
     ensureTursoSyncBridge: vi.fn(() => bridge),

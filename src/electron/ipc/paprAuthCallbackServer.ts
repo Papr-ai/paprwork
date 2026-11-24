@@ -66,8 +66,63 @@ export function verifyCode(code: string): { valid: boolean; sessionData?: unknow
   return { valid: true, sessionData: data.sessionData };
 }
 
-export function buildPaprAuthSuccessHtml(verificationCode?: string): string {
+/** Where the success page continues to, so papr.ai can link the visitor to this install. */
+export const PAPR_SIGNED_IN_URL = "https://papr.ai/desktop/signed-in";
+const PAPR_SIGNED_IN_PROBE_TIMEOUT_MS = 1500;
+
+export type PaprSignedInFunnel = { installId: string; baseUrl?: string };
+
+/**
+ * papr.ai URL for the signed-in page. Only the random install id goes in the
+ * query; the backup code goes in the fragment so it never reaches a server.
+ */
+export function buildPaprSignedInUrl(
+  funnel: PaprSignedInFunnel,
+  formattedCode: string | null,
+): string | null {
+  if (!/^[0-9a-f-]{36}$/i.test(funnel.installId)) return null;
+  const url = new URL(funnel.baseUrl ?? PAPR_SIGNED_IN_URL);
+  url.searchParams.set("install", funnel.installId);
+  if (formattedCode) url.hash = `code=${encodeURIComponent(formattedCode)}`;
+  return url.toString();
+}
+
+/**
+ * Funnel link for the success page: packaged builds only (dev builds stay on
+ * the local page), only with telemetry on, and never throws.
+ */
+export function paprSignedInFunnel(
+  settings: { getTelemetryEnabled(): boolean; getOrCreateTelemetryInstallId(): string },
+  isPackaged: boolean,
+): PaprSignedInFunnel | null {
+  if (!isPackaged || process.env.PAPR_AUTH_SIGNED_IN_REDIRECT === "false") return null;
+  try {
+    if (!settings.getTelemetryEnabled()) return null;
+    const installId = settings.getOrCreateTelemetryInstallId();
+    return installId ? { installId } : null;
+  } catch {
+    return null;
+  }
+}
+
+export function buildPaprAuthSuccessHtml(
+  verificationCode?: string,
+  funnel?: PaprSignedInFunnel | null,
+): string {
   const formattedCode = verificationCode ? formatVerificationCode(verificationCode) : null;
+  const signedInUrl = funnel ? buildPaprSignedInUrl(funnel, formattedCode) : null;
+  // Continue to papr.ai only if it answers quickly; otherwise this local page stays.
+  const continueScript = signedInUrl
+    ? `
+      (function () {
+        var target = ${JSON.stringify(signedInUrl)};
+        var done = false;
+        var timer = setTimeout(function () { done = true; }, ${PAPR_SIGNED_IN_PROBE_TIMEOUT_MS});
+        fetch(new URL(target).origin + "/favicon.ico", { mode: "no-cors", cache: "no-store" })
+          .then(function () { if (!done) { clearTimeout(timer); location.replace(target); } })
+          .catch(function () { clearTimeout(timer); });
+      })();`
+    : "";
 
   // People skim this page. One big instruction, one button, code last.
   return `<!DOCTYPE html>
@@ -174,6 +229,7 @@ export function buildPaprAuthSuccessHtml(verificationCode?: string): string {
       ` : ""}
     </div>
     <script>
+      ${continueScript}
       ${formattedCode ? `
       document.querySelector('.code-display')?.addEventListener('click', function() {
         navigator.clipboard.writeText('${formattedCode}');
@@ -234,25 +290,78 @@ export function getCurrentVerificationCode(): string | null {
   return currentVerificationCode;
 }
 
+/** How long the browser can take to come back. Matches the PKCE TTL in paprLogin. */
+export const PAPR_AUTH_CALLBACK_WINDOW_MS = 10 * 60 * 1000;
+/** After sign-in, keep answering reloads/second tabs with a friendly page this long. */
+const PAPR_AUTH_LINGER_MS = 10 * 60 * 1000;
+
+/** Browser page for a reload / second tab after sign-in already finished. */
+export function buildPaprAuthAlreadyUsedHtml(): string {
+  return simplePage(
+    "This sign-in was already used.",
+    "Papr Work already has it. Go back to Papr Work. If you&apos;re not signed in there, click Sign in again.",
+  );
+}
+
+/** Browser page when the callback belongs to an older, abandoned sign-in attempt. */
+export const PAPR_AUTH_STALE_CALLBACK = {
+  title: "This sign-in link has expired",
+  body: "It belongs to an earlier attempt. Go back to Papr Work and click Sign in again.",
+};
+
+function simplePage(title: string, body: string): string {
+  return `<!DOCTYPE html><html lang="en"><head><meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" /><title>Papr Work</title>
+<style>body{margin:0;min-height:100vh;display:flex;align-items:center;justify-content:center;padding:24px;
+font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,sans-serif;background:#f5f5f7;color:#1c1c1e}
+.card{max-width:440px;text-align:center;background:#fff;border-radius:18px;padding:40px 36px;box-shadow:0 12px 40px rgba(0,0,0,.06)}
+h1{margin:0 0 10px;font-size:24px}p{margin:0;color:#6e6e73}a.open-btn{display:inline-block;margin-top:24px;padding:13px 26px;
+border-radius:12px;background:#0071e3;color:#fff;font-weight:700;text-decoration:none}</style></head>
+<body><div class="card"><h1>${title}</h1><p>${body}</p><a class="open-btn" href="papr://focus">Open Papr Work</a></div></body></html>`;
+}
+
+export interface StartPaprAuthCallbackOptions {
+  funnel?: PaprSignedInFunnel | null;
+  /** The state this login is waiting for; other states get the "expired" page. */
+  expectedState?: string;
+  /** Bind exactly this port (re-arming after a restart must reuse the old redirect_uri). */
+  exactPort?: number;
+  /** Override the default window (e.g. the time left on a restored login). */
+  windowMs?: number;
+  /** The browser never came back in time. */
+  onTimeout?: () => void;
+}
+
 export async function startPaprAuthCallbackServer(
   onCallback: (params: URLSearchParams, verificationCode: string) => void | Promise<void>,
+  options: StartPaprAuthCallbackOptions = {},
 ): Promise<string> {
   stopPaprAuthCallbackServer();
 
   // Generate a verification code for this session
   currentVerificationCode = generateVerificationCode();
-  const successHtml = buildPaprAuthSuccessHtml(currentVerificationCode);
+  const successHtml = buildPaprAuthSuccessHtml(currentVerificationCode, options.funnel);
+  const { expectedState } = options;
 
   const server = new OAuthCallbackServer({
-    port: PAPR_AUTH_CALLBACK_PORT,
-    timeout: 5 * 60 * 1000,
+    port: options.exactPort ?? PAPR_AUTH_CALLBACK_PORT,
+    maxPortAttempts: options.exactPort ? 1 : 10, // Try ports 18791-18800
+    timeout: options.windowMs ?? PAPR_AUTH_CALLBACK_WINDOW_MS,
     successHtml,
-    maxPortAttempts: 10, // Try ports 18791-18800
+    // Stay up after the callback so a reload or second tab gets a page,
+    // not Chrome's "127.0.0.1 refused to connect".
+    keepAliveAfterCallback: true,
+    repeatHtml: buildPaprAuthAlreadyUsedHtml(),
+    validateCallback: (params) =>
+      expectedState && params.get("state") && params.get("state") !== expectedState
+        ? PAPR_AUTH_STALE_CALLBACK
+        : null,
+    onTimeout: options.onTimeout,
     onCallback: (params) => {
       const code = currentVerificationCode!;
       void bringPaprWorkToFront();
       void Promise.resolve(onCallback(params, code)).finally(() => {
-        stopPaprAuthCallbackServer();
+        settlePaprAuthCallbackServer();
       });
     },
   });
@@ -269,4 +378,21 @@ export async function startPaprAuthCallbackServer(
   console.log(`[PaprAuthCallback] Server ready at: ${actualUrl}`);
   console.log(`[PaprAuthCallback] Verification code: ${formatVerificationCode(currentVerificationCode)}`);
   return actualUrl;
+}
+
+/**
+ * Sign-in finished (either way): stop accepting callbacks but keep answering
+ * repeat hits for a while instead of refusing the connection.
+ */
+export function settlePaprAuthCallbackServer(): void {
+  activeServer?.settle(PAPR_AUTH_LINGER_MS);
+}
+
+/** Port from a stored http://127.0.0.1:PORT/auth/callback redirect, or null. */
+export function loopbackPortFromRedirectUri(redirectUri: string | undefined): number | null {
+  if (!redirectUri) return null;
+  const m = /^http:\/\/127\.0\.0\.1:(\d{4,5})\/auth\/callback$/.exec(redirectUri);
+  if (!m) return null;
+  const port = Number(m[1]);
+  return port >= PAPR_AUTH_CALLBACK_PORT && port < PAPR_AUTH_CALLBACK_PORT + 10 ? port : null;
 }

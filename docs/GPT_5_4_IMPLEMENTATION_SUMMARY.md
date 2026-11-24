@@ -72,7 +72,7 @@ Successfully integrated OpenAI's GPT-5.4 models (Thinking and Pro variants) into
 ### 7. Testing
 
 **Created full test suite:**
-- `tests/gpt-5-4-integration.test.ts` - 20 tests covering:
+- `tests/providers/gpt-5-4-integration.test.ts` - 20 tests covering:
   - Model definitions
   - Cost calculation
   - Model normalization
@@ -165,7 +165,7 @@ npm run type-check
 
 ### 2. Test Suite ✅
 ```bash
-npm test tests/gpt-5-4-integration.test.ts
+npm test tests/providers/gpt-5-4-integration.test.ts
 # 20/20 tests passing
 ```
 
@@ -203,7 +203,7 @@ Modified (7 files):
 
 Created (2 files):
   ✅ docs/GPT_5_4_INTEGRATION.md - Complete documentation
-  ✅ tests/gpt-5-4-integration.test.ts - Test suite
+  ✅ tests/providers/gpt-5-4-integration.test.ts - Test suite
 ```
 
 ## Known Limitations

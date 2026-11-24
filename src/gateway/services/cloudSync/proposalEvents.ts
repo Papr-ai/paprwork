@@ -9,11 +9,13 @@
  * notification.
  */
 
-import { promises as fs } from "fs";
+import { promises as fs, readFileSync } from "fs";
 import path from "path";
 import { cloudApiFetch } from "../../utils/cloudApiClient.js";
 import { broadcast } from "../../websocket/index.js";
 import { notifyCloudSyncItemsStale } from "./cloudSyncBroadcast.js";
+import { tryNotify, tryResolve } from "../notifications/NoticeService.js";
+import type { NoticeInput, NoticeLevel } from "../../../core/types/notices.js";
 import { recordLastMerges, type LastMerge } from "./lastMerge.js";
 
 export type ProposalEventType =
@@ -48,9 +50,11 @@ export interface ProposalNotice {
   body: string;
   /** App whose share bar / inbox this is about, on this machine. */
   appId?: string;
-  /** Connections notices open Settings → Connections (org requests for admins). */
+  /** Connections notices open Settings → Connectors & API Keys (org requests for admins). */
   openSettings?: "connections" | "connections-requests";
   requestId?: string;
+  /** Priority = someone waits on you (review, re-propose, approve). FYI = news. */
+  level?: NoticeLevel;
 }
 
 /** Local app ids to refresh: the owner's source app or the contributor's copy. */
@@ -74,7 +78,7 @@ function connectionNotice(e: ProposalEvent): ProposalNotice | null {
   const reason = typeof e.detail?.reason === "string" && e.detail.reason ? ` "${e.detail.reason}"` : "";
   switch (e.type) {
     case "connection.requested":
-      return { title: `${name} requested`, body: `A teammate asked to connect ${name}. Review it in Connections.`, openSettings: "connections-requests" };
+      return { title: `${name} requested`, body: `A teammate asked to connect ${name}. Review it in Connections.`, openSettings: "connections-requests", level: "priority" };
     case "connection.approved":
       return { title: `${name} approved`, body: `You can connect ${name} now.`, openSettings: "connections" };
     case "connection.declined":
@@ -109,6 +113,7 @@ export function noticeForEvent(e: ProposalEvent): ProposalNotice | null {
       case "proposal.needs_update":
         return {
           title: "Proposal needs an update",
+          level: "priority",
           body: `The app${app} changed since you sent ${quoted(e.title)}. Open it and choose Update & re-propose.`,
           appId,
           requestId,
@@ -122,6 +127,7 @@ export function noticeForEvent(e: ProposalEvent): ProposalNotice | null {
   if (e.role === "owner" && e.type === "proposal.received") {
     return {
       title: "New proposal",
+      level: "priority",
       body: `${quoted(e.title)} was proposed for your app${app}.`,
       appId,
       requestId,
@@ -220,6 +226,72 @@ export interface PollDeps {
   onMerged?: (sourceAppIds: string[]) => void;
   /** Persist who merged what, for the status dialog. */
   recordMerges?: (merges: LastMerge[]) => Promise<void>;
+  /** Mentions from teammates (mention, mention.replied). */
+  onCollab?: (events: ProposalEvent[]) => Promise<void>;
+  /** Your proposal was accepted or declined: settle schema holds now, not on the next 5-min pull. */
+  onDecided?: () => Promise<unknown>;
+  /** Your proposal was merged: catch those copies up so their base is the merged version (audit D). */
+  onOwnAccepted?: (installedAppIds: string[]) => Promise<unknown>;
+}
+
+/** Your copies whose proposal was just accepted (merged into the publisher's app). */
+export function ownAcceptedCopies(events: ProposalEvent[]): string[] {
+  const ids = new Set<string>();
+  for (const e of events) {
+    if (e.role === "contributor" && e.type === "proposal.accepted" && e.installedAppId) ids.add(e.installedAppId);
+  }
+  return [...ids];
+}
+
+/**
+ * Pull the merged version into each copy (three-way: newer local edits are
+ * kept). The pull advances the copy's base commit, so the next proposal diffs
+ * against what was merged and doesn't re-send its migrations (audit D). The
+ * pre-propose check can't catch this: it compares the built app, and a
+ * migration-only merge doesn't change it.
+ */
+async function defaultOwnAccepted(installedAppIds: string[]): Promise<void> {
+  const { getPaprAppsRoot } = await import("../../../core/utils/paprRoot.js");
+  const { getCloudAppTrackSyncService } = await import("../CloudAppTrackSyncService.js");
+  for (const id of installedAppIds) {
+    try {
+      await fs.access(path.join(getPaprAppsRoot(), id));
+    } catch {
+      continue; // copy isn't on this machine
+    }
+    try {
+      const r = await getCloudAppTrackSyncService().syncTrackApp(id);
+      console.info(
+        `[ProposalAccepted] ${id}: caught up to the merged version` +
+          (r.conflictFiles.length ? ` (base kept: ${r.conflictFiles.length} conflict(s))` : ""),
+      );
+    } catch (err) {
+      console.warn(`[ProposalAccepted] ${id}: catch-up failed:`, (err as Error).message.slice(0, 160));
+    }
+    notifyCloudSyncItemsStale(id);
+  }
+}
+
+/** True when one of your own proposals was accepted or declined in this batch. */
+export function hasOwnProposalDecision(events: ProposalEvent[]): boolean {
+  return events.some(
+    (e) => e.role === "contributor" && (e.type === "proposal.accepted" || e.type === "proposal.declined"),
+  );
+}
+
+/**
+ * Same settle the periodic pull runs. Without this, a contributor's copy stays
+ * cut off from the team's data until startup, reconnect or a 5-min pull that
+ * isn't skipped (audit finding A).
+ */
+async function defaultDecided(): Promise<unknown> {
+  const { settleProposalHolds } = await import("../tursoReplica/settleProposalHolds.js");
+  return settleProposalHolds();
+}
+
+async function defaultCollab(events: ProposalEvent[]): Promise<void> {
+  const { handleCollabEvents } = await import("../collab/mentions.js");
+  await handleCollabEvents(events);
 }
 
 async function defaultFetchEvents(
@@ -246,9 +318,57 @@ function refreshConnections(events: ProposalEvent[]): void {
   }
 }
 
+const proposals = { type: "platform" as const, id: "proposals", name: "Proposals" };
+
+/** One notice per request (or connection), so a later status updates it in place instead of pinging again. */
+export function noticeInputFor(n: ProposalNotice, appName = "App"): NoticeInput {
+  const owner = n.openSettings
+    ? { kind: "account" as const, id: "settings", name: "Connectors & API Keys", section: n.openSettings }
+    : n.appId
+      ? { kind: "app" as const, id: n.appId, name: appName }
+      : { kind: "account" as const, id: "proposals", name: "Proposals" };
+  const key = n.requestId ? `proposal:${n.requestId}` : `${proposals.id}:${n.openSettings ?? "app"}:${n.title}:${n.body}`;
+  return {
+    key, kind: n.openSettings ? "connection" : "proposal", type: "event", level: n.level ?? "fyi",
+    title: n.title, body: n.body, source: proposals, owner, actions: [{ label: "Open", intent: "open" }],
+  };
+}
+
+/** The app's title on this machine, so its tab and the notice say its real name. */
+function localAppTitle(appId: string | undefined, appsRoot: string): string {
+  if (!appId) return "App";
+  try {
+    const m = JSON.parse(readFileSync(path.join(appsRoot, appId, "metadata.json"), "utf8")) as { title?: unknown };
+    return typeof m.title === "string" && m.title.trim() ? m.title.trim() : "App";
+  } catch {
+    return "App";
+  }
+}
+
+let cloudNotices: (() => boolean) | null = null;
+void import("../notifications/noticeCloudSync.js").then((m) => { cloudNotices = m.cloudNoticesAvailable; }).catch(() => undefined);
+function cloudNoticesAvailableSync(): boolean {
+  return cloudNotices?.() ?? false;
+}
+
+/** Through notify(): route() decides OS vs dot (nothing pops while you're in Paprwork). */
 function defaultNotify(notices: ProposalNotice[]): void {
-  if (notices.length === 0) return;
-  broadcast({ type: "cloud-proposal:notify", data: { notices } });
+  if (!notices.length) return;
+  // The server's notices list has these now (memory notice_mirrors): one copy, synced across devices.
+  if (cloudNoticesAvailableSync()) return;
+  void import("../../../core/utils/paprRoot.js").then(({ getPaprAppsRoot }) => {
+    const root = getPaprAppsRoot();
+    for (const n of notices) notifyOne(n, localAppTitle(n.appId, root));
+  }).catch((e) => console.warn("[proposalEvents] notify failed:", e));
+}
+
+function notifyOne(n: ProposalNotice, appName: string): void {
+  {
+    const input = noticeInputFor(n, appName);
+    // A new status (needs update -> accepted) replaces the old one and is news, not a repeat.
+    tryResolve(input.key);
+    tryNotify(input);
+  }
 }
 
 /**
@@ -305,9 +425,30 @@ export async function pollProposalEvents(
     const page = await (deps.fetchEvents ?? defaultFetchEvents)(since);
     if (!page) return 0;
     if (page.events.length > 0) {
+      // Mentions between people ride the same feed; they open a chat instead of a share bar.
+      const collab = page.events.filter((e) => e.type === "mention" || e.type === "mention.replied" || e.type === "mention.followup");
+      if (collab.length) await (deps.onCollab ?? defaultCollab)(collab);
+      // Goals/tasks/briefs/settings changed on another device (or a teammate assigned a task): pull.
+      // Your notices changed (another device, a teammate, a proposal): pull them now.
+      if (!deps.fetchEvents && page.events.some((e) => (e.type as string) === "notices.changed")) {
+        void import("../notifications/noticeCloudSync.js").then((m) => m.scheduleNoticePull("changed elsewhere", 200)).catch(() => undefined);
+      }
+      if (!deps.fetchEvents && page.events.some((e) => e.type === "focus.changed")) {
+        void import("../focusCloud/focusCloudSync.js").then((m) => m.scheduleFocusCloudSync("changed elsewhere", 500)).catch(() => undefined);
+      }
       (deps.onRefresh ?? defaultRefresh)(appIdsToRefresh(page.events));
       if (!deps.onRefresh) refreshConnections(page.events);
-      (deps.onNotify ?? defaultNotify)(summarizeNotices(page.events));
+      (deps.onNotify ?? defaultNotify)(summarizeNotices(page.events, Number.POSITIVE_INFINITY));
+      if (hasOwnProposalDecision(page.events)) {
+        await (deps.onDecided ?? defaultDecided)().catch((err: Error) => {
+          console.warn("[ProposalHold] settle after proposal decision failed:", err?.message?.slice(0, 120));
+        });
+      }
+      // After the settle: the copy's schema now matches the team's, so the pull's DB step is clean.
+      const accepted = ownAcceptedCopies(page.events);
+      if (accepted.length > 0) {
+        await (deps.onOwnAccepted ?? defaultOwnAccepted)(accepted).catch(() => undefined);
+      }
       const merged = mergedSourceAppIds(page.events);
       if (merged.length > 0) {
         await (deps.recordMerges ?? ((m) => recordLastMerges(paprDir, m)))(

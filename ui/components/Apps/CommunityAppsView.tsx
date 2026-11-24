@@ -26,6 +26,8 @@ import "./AppsHome.css";
 import { DropGlyph } from "./HomeTiles";
 import { CatalogAppDetails, CatalogBanner, catalogBy } from "./CatalogAppDetails";
 import { FeaturedBanner, pickFeaturedCatalogEntry } from "./CatalogFeatured";
+import { requestAppInfo } from "../../utils/appInfoRequest";
+import { useColorScheme } from "../../utils/catalogScheme";
 import { HomeMenu, type HomeMenuItem } from "./HomeMenu";
 import { trackEvent } from "../../lib/telemetry";
 import {
@@ -903,7 +905,7 @@ export function CommunityAppsView({
       : publicWorkspaceEntries;
 
   return (
-    <div className="community-apps">
+    <div className={`community-apps${scope === "global" && !resultsHeading ? " community-apps--discover" : ""}`}>
       {resultsHeading ? (
         searchMatches.length > 0 ? (
           <section className="apps-view__results">
@@ -1125,7 +1127,8 @@ export function CommunityAppCard({
   const showLocalOpen = Boolean(localAppId) && Boolean(onOpen);
   const showOpenWeb = !showLocalOpen && Boolean(onOpenWeb);
   // Owner-approved cover (served by the cloud host); falls back to a gradient + droplet.
-  const coverUrl = catalogCoverUrl(entry);
+  const scheme = useColorScheme();
+  const coverUrl = catalogCoverUrl(entry, scheme);
   const icon = entry.icon?.trim().startsWith("<") ? sanitizeIcon(entry.icon.trim()) : entry.icon;
   const shown = { ...entry, icon };
   const [details, setDetails] = useState(false);
@@ -1168,6 +1171,7 @@ export function CommunityAppCard({
       hasWeb={hasWeb && entry.source === "cloud"}
       actions={actions(true)}
       onClose={() => setDetails(false)}
+      onEditPage={entry.isOwned && localAppId && onOpen ? () => { requestAppInfo(localAppId); setDetails(false); onOpen(); } : undefined}
     />
   ) : null;
 
@@ -1184,6 +1188,7 @@ export function CommunityAppCard({
   return (
     <div
       className="cat-card"
+      data-hover-play=""
       role="button"
       tabIndex={0}
       onClick={() => setDetails(true)}

@@ -131,7 +131,7 @@ export async function prepareEmbeddedPlatformSession(
       title,
       message: `${config.name} session expired — log in using the ${config.name} tab in Papr.`,
       error:
-        `Session expired. Open Settings → Platform Connections → Connect, or log in in Papr Chrome.`,
+        `Session expired. Open Settings → Connectors & API Keys → Connect, or log in in Papr Chrome.`,
     };
   }
 

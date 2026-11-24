@@ -70,16 +70,13 @@ async function migrationSchemaSatisfiedOnReplica(
   return migrationSatisfiedOnReplica(source, migrationRoot, migrationId);
 }
 
+/** Recorded = applied: schema + ledger row commit together (no schema re-check). */
 async function migrationAlreadyAppliedOnReplica(
   source: AppDataSource,
-  migrationRoot: string,
+  _migrationRoot: string,
   migrationId: string,
 ): Promise<boolean> {
-  const recorded = await migrationRecordedInLedger(source, migrationId);
-  if (!recorded) {
-    return false;
-  }
-  return migrationSchemaSatisfiedOnReplica(source, migrationRoot, migrationId);
+  return migrationRecordedInLedger(source, migrationId);
 }
 
 function normalizeMigrationId(migrationFileName: string): string {

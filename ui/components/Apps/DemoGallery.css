@@ -97,3 +97,21 @@
 .dg-err { display: flex; align-items: center; gap: 10px; padding: 9px 10px 9px 12px; border-radius: 12px; font-size: 12.5px; line-height: 1.35; color: var(--danger, #d92d20); background: color-mix(in srgb, var(--danger, #d92d20) 8%, transparent); }
 .dg-err > span { flex: 1; min-width: 0; }
 .dg-err__ask { flex: none; height: 28px; padding: 0 12px; border: 0; border-radius: 8px; font: inherit; font-weight: 600; color: #fff; background: var(--accent, #0161e0); cursor: pointer; }
+
+/* "Download all" result: where the files went. */
+.dg-saved {
+  display: flex; align-items: center; gap: 8px; padding: 6px 6px 6px 10px; border-radius: 9px;
+  background: rgba(var(--accent-rgb, 1, 97, 224), 0.1); font-size: 12px; color: var(--text-secondary);
+}
+.dg-saved span { flex: 1; min-width: 0; overflow: hidden; white-space: nowrap; text-overflow: ellipsis; }
+.dg-saved b { font-weight: 600; color: var(--text-primary); }
+.dg-saved__btn {
+  flex: none; padding: 3px 8px; border: 0; border-radius: 6px; background: transparent;
+  color: var(--accent, #0161e0); font: inherit; font-size: 12px; font-weight: 600; cursor: pointer;
+}
+.dg-saved__btn:hover { background: rgba(var(--accent-rgb, 1, 97, 224), 0.14); }
+.dg-saved__x {
+  flex: none; width: 22px; height: 22px; padding: 0; border: 0; border-radius: 6px; background: transparent;
+  color: var(--text-tertiary); font-size: 15px; line-height: 1; cursor: pointer;
+}
+.dg-saved__x:hover { color: var(--text-primary); background: rgba(127, 127, 127, 0.14); }

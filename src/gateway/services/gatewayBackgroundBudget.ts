@@ -55,6 +55,9 @@ export class BackgroundBudget {
       return Number.isFinite(value) && value >= 0 ? value : 120_000;
     },
   ) {}
+  private limitFor(waiter: Waiting, busy: boolean, capacity: number): number {
+    return busy && !waiter.interactive ? 1 : capacity;
+  }
   private blockReasonFor(
     waiter: Waiting,
     busy: boolean,
@@ -62,18 +65,18 @@ export class BackgroundBudget {
   ): BackgroundBudgetBlockReason {
     const waitedMs = Date.now() - waiter.queuedAt;
     if (busy && !waiter.interactive && waitedMs < this.graceMs()) return "grace_period";
-    if (this.active.size >= limit) {
-      return busy && limit <= 1 ? "interactive_busy" : "at_capacity";
+    if (this.active.size >= this.limitFor(waiter, busy, limit)) {
+      return busy && !waiter.interactive ? "interactive_busy" : "at_capacity";
     }
     return "awaiting_drain";
   }
   stats() {
     const busy = this.busy();
-    const limit = busy ? 1 : this.capacity();
+    const limit = this.capacity();
     const blockingActive = [...this.active.values()];
     return {
       active: blockingActive,
-      maxConcurrent: limit,
+      maxConcurrent: busy ? 1 : limit,
       interactiveBusy: busy,
       graceMs: this.graceMs(),
       capacityWhenIdle: this.capacity(),
@@ -129,12 +132,15 @@ export class BackgroundBudget {
     if (this.timer) clearTimeout(this.timer);
     this.timer = undefined;
     const busy = this.busy();
-    const limit = busy ? 1 : this.capacity();
-    while (this.waiting.length && this.active.size < limit) {
+    const capacity = this.capacity();
+    while (this.waiting.length) {
       // Pick the first eligible waiter. A maintenance task still in grace must
       // not block an explicit job behind it; aged maintenance keeps FIFO priority.
+      // Explicitly requested work gets full capacity even during a chat; only
+      // maintenance is held to one slot while the user is interacting.
       const index = this.waiting.findIndex(w =>
-        !busy || w.interactive || Date.now() - w.queuedAt >= this.graceMs());
+        this.active.size < this.limitFor(w, busy, capacity) &&
+        (!busy || w.interactive || Date.now() - w.queuedAt >= this.graceMs()));
       if (index < 0) break;
       const [next] = this.waiting.splice(index, 1);
       next.signal?.removeEventListener("abort", next.abort);

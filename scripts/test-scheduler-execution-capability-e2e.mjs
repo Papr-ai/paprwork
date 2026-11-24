@@ -11,6 +11,8 @@
  *   PAPR_MEMORY_SERVER_URL=http://127.0.0.1:5001 npm run test:scheduler-execution-capability-e2e
  */
 
+// Deliberately uses the REAL workspace — needs PAPR_E2E_REAL_HOME=1.
+import "./lib/requireRealWorkspace.mjs";
 import fs from "node:fs";
 import { pathToFileURL } from "node:url";
 import { loadEnvLocal } from "./lib/testEnv.mjs";

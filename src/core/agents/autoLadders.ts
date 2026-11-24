@@ -25,9 +25,10 @@ export interface AutoLadder {
 }
 
 const OPENAI_LADDER: AutoLadder = {
-  models: { basic: "gpt-5.4-mini", strong: "gpt-5.5", frontier: "gpt-5.5" },
+  // Basic is Luna: it runs on ChatGPT sign-in and a Platform key alike.
+  models: { basic: "gpt-5-6-luna", strong: "gpt-5.5", frontier: "gpt-5.5" },
   alternates: {
-    basic: ["gpt-5-6-luna", "gpt-5-6-terra", "gpt-5-6-sol"],
+    basic: ["gpt-5-6-terra", "gpt-5-6-sol"],
     strong: ["gpt-5-6-sol", "gpt-5-6-terra", "gpt-6-astra"],
     frontier: ["gpt-6-astra", "gpt-5-6-sol"],
   },
@@ -51,13 +52,20 @@ export const DEFAULT_AUTO_LADDERS: Partial<Record<Provider, AutoLadder>> = {
     alternates: {
       basic: ["claude-sonnet-5-5", "claude-sonnet-5", "claude-sonnet-4-6"],
       strong: ["claude-sonnet-5", "claude-sonnet-4-6", "claude-opus-5-5", "claude-opus-5"],
-      frontier: ["claude-opus-5", "claude-fable-5-1", "claude-sonnet-5-5", "claude-sonnet-5"],
+      frontier: [
+        "claude-opus-5",
+        "claude-fable-5-2",
+        "claude-fable-5-1",
+        "claude-sonnet-5-5",
+        "claude-sonnet-5",
+      ],
     },
     effortModels: new Set([
       "claude-sonnet-5-5",
       "claude-sonnet-5",
       "claude-opus-5-5",
       "claude-opus-5",
+      "claude-fable-5-2",
       "claude-fable-5-1",
     ]),
   },
@@ -67,12 +75,12 @@ export const DEFAULT_AUTO_LADDERS: Partial<Record<Provider, AutoLadder>> = {
     models: {
       basic: "gemini-3.5-flash-lite",
       strong: "gemini-3.8-flash",
-      frontier: "gemini-3.1-pro-preview",
+      frontier: "gemini-4-argon",
     },
     alternates: {
       basic: ["gemini-3.8-flash"],
       strong: ["gemini-3.1-pro-preview", "gemini-3.5-flash-lite"],
-      frontier: ["gemini-3.8-flash"],
+      frontier: ["gemini-3.8-flash", "gemini-3.1-pro-preview"],
     },
     effortModels: new Set(),
   },

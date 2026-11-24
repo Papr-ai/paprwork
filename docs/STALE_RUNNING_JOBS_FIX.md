@@ -218,7 +218,7 @@ run_job("job-id")
 ```
 
 ### Automated Tests
-See `tests/jobs-stale-reconcile.test.ts`:
+See `tests/jobs/jobs-stale-reconcile.test.ts`:
 - ✅ Detects process-backed jobs without tracked process
 - ✅ Detects agent jobs stuck in running
 - ✅ Skips legitimately running jobs

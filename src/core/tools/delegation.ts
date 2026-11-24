@@ -32,6 +32,7 @@ const SUBAGENT_MODEL_IDS = [
   "claude-opus-5",
   "claude-opus-5-5",
   "claude-fable-5-1",
+  "claude-fable-5-2",
   "gemini-2.5-flash",
   "gemini-2.5-flash-lite",
   "gemini-3.1-flash-lite",
@@ -39,6 +40,10 @@ const SUBAGENT_MODEL_IDS = [
   "gemini-3.6-flash",
   "gemini-3.7-flash",
   "gemini-3.8-flash",
+  "gemini-4-carbon",
+  "gemini-4-neon",
+  "gemini-4-argon",
+  "gemini-4-hydrogen",
   "gemini-3.1-pro-preview",
 ] as const;
 
@@ -48,7 +53,11 @@ const createSubAgentSchema = z.object({
   id: z.string().min(1).optional(),
   name: z.string().min(1),
   description: z.string().min(1),
-  systemPrompt: z.string().min(1),
+  systemPrompt: z
+    .string()
+    .describe(
+      "Agent instructions. With runtime.systemPromptMode='replace' this is the ENTIRE system prompt (may be empty for a bare model). Otherwise it is added on top of Pen's prompt.",
+    ),
   provider: z
     .enum(["anthropic", "openai", "openai-codex", "google"])
     .optional(),
@@ -64,6 +73,50 @@ const createSubAgentSchema = z.object({
     .optional()
     .describe(
       "Icon for sidebar/mini-chat: robot, search, code, pen, or chart (sidebar-style SVG, not emoji)",
+    ),
+  executionCapability: z
+    .enum(["local-only", "local-preferred", "cloud-preferred"])
+    .optional()
+    .describe(
+      "Default cloud placement for this profile's jobs (a job's own value wins). Omit unless asked.",
+    ),
+  runtime: z
+    .object({
+      systemPromptMode: z
+        .enum(["append", "replace"])
+        .optional()
+        .describe(
+          "append (default): systemPrompt rides on Pen's full prompt (platform docs, skills). replace: systemPrompt is the whole system prompt — use for focused writers/classifiers/scorers that don't need Papr know-how.",
+        ),
+      memoryContext: z
+        .boolean()
+        .optional()
+        .describe("Papr memory catalog, goals, use cases injected (default true). false for tasks that must not see user memory or need a clean, cheap context."),
+      wikiContext: z
+        .boolean()
+        .optional()
+        .describe("Local wiki graph catalog injected (default true)."),
+      tools: z
+        .boolean()
+        .optional()
+        .describe("false = no tools at all (pure model call; allowedToolIds ignored). Default true."),
+      nativeWebSearch: z
+        .boolean()
+        .optional()
+        .describe("Provider web search (Claude, ChatGPT/OpenAI, Gemini; not via the Papr proxy). Default true."),
+      promptCaching: z
+        .boolean()
+        .optional()
+        .describe("Keep ON (default). Anthropic prompt caching — only turn off when every call has a unique prefix."),
+      contextTrimming: z
+        .boolean()
+        .optional()
+        .describe("Keep ON (default). Stale tool-result compaction + oldest-turn trimming. Off only when the agent must see every byte of every tool result."),
+    })
+    .strict()
+    .optional()
+    .describe(
+      "How the run is assembled. Omit for the full Pen runtime. Bare model: { systemPromptMode: 'replace', memoryContext: false, wikiContext: false, tools: false }.",
     ),
 });
 
@@ -158,7 +211,9 @@ export const listSubAgentsTool = createTool({
 export const createSubAgentTool = createTool({
   id: "create_sub_agent",
   description:
-    "Create or update a persistent sub-agent profile. Specify icon (robot, search, code, pen, chart) for sidebar/mini-chat. If allowedToolIds not specified, defaults to ['bash', 'read_file', 'write_file'].",
+    "Create or update a persistent sub-agent profile. Specify icon (robot, search, code, pen, chart) for sidebar/mini-chat. If allowedToolIds not specified, defaults to ['bash', 'read_file', 'write_file']. " +
+      "runtime shapes the run: replace the system prompt, switch memory/wiki context, tools or web search off. Prompt caching and context trimming stay on unless there is a specific reason. " +
+      "Bare model (writer/classifier/scorer): runtime: { systemPromptMode: 'replace', memoryContext: false, wikiContext: false, tools: false }.",
   inputSchema: createSubAgentSchema,
   execute: async (input) => {
     const args = (input as { context?: CreateSubAgentArgs }).context ?? input;
@@ -166,9 +221,20 @@ export const createSubAgentTool = createTool({
       await import("../../gateway/services/SubAgentService.js");
     const service = getSubAgentService();
 
+    if (
+      args.runtime?.systemPromptMode !== "replace" &&
+      !(args.systemPrompt ?? "").trim()
+    ) {
+      return {
+        success: false,
+        error:
+          "systemPrompt is required unless runtime.systemPromptMode is 'replace'.",
+      };
+    }
     // Apply default tools if not specified
     const argsWithDefaults = {
       ...args,
+      systemPrompt: args.systemPrompt ?? "",
       allowedToolIds: args.allowedToolIds || [
         "bash",
         "read_file",

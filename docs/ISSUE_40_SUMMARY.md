@@ -259,7 +259,7 @@ While reconciliation **fixes** stale jobs, we should also **reduce** how often t
 
 - `docs/STALE_RUNNING_JOBS_FIX.md` - Complete technical documentation
 - `CLAUDE.md` - Issue 40 entry with full context
-- `tests/jobs-stale-reconcile.test.ts` - Automated test coverage
+- `tests/jobs/jobs-stale-reconcile.test.ts` - Automated test coverage
 
 ---
 

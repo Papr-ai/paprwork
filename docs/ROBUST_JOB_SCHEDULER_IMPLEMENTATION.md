@@ -157,8 +157,8 @@ console.warn (not console.error), skip run
 
 ### New
 - `src/gateway/services/jobs/scheduleEngine.ts` - Schedule math engine
-- `tests/schedule-engine.test.ts` - Engine unit tests
-- `tests/jobs-stale-reconcile.test.ts` - Stale job recovery tests
+- `tests/jobs/schedule-engine.test.ts` - Engine unit tests
+- `tests/jobs/jobs-stale-reconcile.test.ts` - Stale job recovery tests
 - `docs/ROBUST_JOB_SCHEDULER_IMPLEMENTATION.md` - This file
 
 ### Modified
@@ -173,7 +173,7 @@ console.warn (not console.error), skip run
 - `ui/components/Chat/MessageList.css` - Scroll fix
 - `ui/components/Agents/AgentsViewCards.css` - Scroll fix
 - `ui/components/Layout/ContentArea.css` - Scroll fix (`min-height: 0` for flex children)
-- `tests/jobs-scheduler.test.ts` - Updated for new flow + cron test
+- `tests/jobs/jobs-scheduler.test.ts` - Updated for new flow + cron test
 
 ---
 

@@ -17,6 +17,43 @@ import {
   startStreamProfiler,
 } from "../../core/utils/streamProfiler.js";
 
+/** `${authEpoch}:${requestedProvider}` → provider Auto actually runs on. */
+const autoProviderMemo = new Map<string, AgentConfig["provider"]>();
+
+/**
+ * Papr-proxy turn without premium access: keep Auto on open models (moving off
+ * Anthropic, where only Haiku is open, to Google Flash), and refuse an explicit
+ * premium model with the reason. Returns the error to show, or null to proceed.
+ */
+async function applyPremiumGate(config: AgentConfig, paprApiKey: string): Promise<string | null> {
+  const { isPremiumProxyModel, premiumRequiresPaygMessage } = await import(
+    "../../core/agents/premiumModels.js"
+  );
+  const isAuto = config.model === "auto";
+  if (!isAuto && !isPremiumProxyModel(config.model)) return null;
+  const { getPaprEntitlements } = await import("../utils/paprEntitlements.js");
+  const ent = await getPaprEntitlements(paprApiKey);
+  if (ent.premium) return null;
+  if (!isAuto) return premiumRequiresPaygMessage(config.model);
+  const { DEFAULT_AUTO_LADDERS, ladderModelIds } = await import("../../core/agents/autoLadders.js");
+  if (config.provider === "anthropic") {
+    config.provider = "google";
+    delete config.autoAllowedModels;
+    delete config.autoFallbackModelId;
+  }
+  const ladder = DEFAULT_AUTO_LADDERS[config.provider];
+  const base = config.autoAllowedModels ?? (ladder ? ladderModelIds(ladder) : []);
+  const open = base.filter((id) => !isPremiumProxyModel(id));
+  config.autoAllowedModels = open.length > 0 ? open : base;
+  if (config.autoFallbackModelId && isPremiumProxyModel(config.autoFallbackModelId)) {
+    delete config.autoFallbackModelId;
+  }
+  console.log(
+    `[Agent WS] Auto on Papr credits without premium (${ent.reason ?? "?"}): ${config.provider} → ${config.autoAllowedModels.join(", ")}`,
+  );
+  return null;
+}
+
 interface StreamPayload {
   chatId: string;
   message: string;
@@ -96,8 +133,42 @@ export async function setupAgentHandlers(
         let authType: "oauth" | "apiKey" | undefined;
         let usePaprProxy = false;
 
+        // Auto must run on a provider the user can actually reach. The UI picks
+        // one from its own auth snapshot (defaulting to Anthropic when unknown),
+        // which can be stale or wrong — re-check here and move to the first
+        // reachable provider (Anthropic → OpenAI → Google) instead of erroring.
         const { getAuthEpoch } = await import("../utils/keyResolver.js");
         const authEpoch = getAuthEpoch();
+
+        if (config.model === "auto") {
+          // Memoized per auth epoch: only the first Auto turn after a
+          // credential change pays for the lookup; later turns are a Map hit.
+          // Providers that refused their credential this epoch are skipped too.
+          const { autoRefusedProviders } = await import("../utils/autoProviderHealth.js");
+          const refused = autoRefusedProviders();
+          const memoKey = `${authEpoch}:${config.provider}:${refused.join(",")}`;
+          let routed = autoProviderMemo.get(memoKey);
+          if (routed === undefined) {
+            const { findReachableProvider, REACHABLE_PROVIDER_ORDER } =
+              await import("../utils/reachableProvider.js");
+            const reachable = await findReachableProvider(refused, [
+              config.provider,
+              ...REACHABLE_PROVIDER_ORDER,
+            ]);
+            routed = reachable?.provider ?? config.provider;
+            if (autoProviderMemo.size > 32) autoProviderMemo.clear();
+            autoProviderMemo.set(memoKey, routed);
+          }
+          if (routed !== config.provider) {
+            console.log(
+              `[Agent WS] Auto: no ${config.provider} auth — rerouting to ${routed}`,
+            );
+            config.provider = routed;
+            // Allow-list and fallback were computed for the old provider.
+            delete config.autoAllowedModels;
+            delete config.autoFallbackModelId;
+          }
+        }
 
         if (
           existingSession &&
@@ -190,7 +261,7 @@ export async function setupAgentHandlers(
                 apiKey = auth.type === "oauth" ? auth.token : auth.key;
                 authType = auth.type;
               }
-              
+
               console.log(
                 `[Agent WS] Auth resolved for ${config.provider}: type=${authType} tokenLength=${apiKey?.length || 0} ` +
                 `tokenPrefix=${apiKey?.substring(0, 15)}...`
@@ -231,6 +302,17 @@ export async function setupAgentHandlers(
           }
         }
 
+        // Premium models on Papr credits need a paid plan with pay as you go.
+        // Auto quietly keeps to open models; an explicit premium pick gets a clear
+        // message instead of a provider 402 mid-stream. Own OAuth/keys never gated.
+        if (usePaprProxy) {
+          const blocked = await applyPremiumGate(config, apiKey);
+          if (blocked) {
+            sendError(ws, message.id, blocked);
+            return;
+          }
+        }
+
         // Create internal config with API key and auth type (for OAuth vs API key routing)
         const configInternal = {
           ...config,
@@ -255,16 +337,27 @@ export async function setupAgentHandlers(
           );
         }
 
-        // Track message_sent event
+        // Track gateway-accepted messages. The recurring active-use event excludes
+        // synthetic recovery turns while the legacy event remains unchanged.
         const { getGatewayTelemetry } = await import("../services/gatewayTelemetry.js");
-        getGatewayTelemetry().trackFireAndForget("paprwork_message_sent", {
-          chat_id: chatId,
-          message_length: userMessage.length,
+        const { TelemetryEvents } = await import("../../core/telemetry/events.js");
+        const { messageSentProperties, userMessageSentProperties } = await import(
+          "../services/userMessageTelemetry.js"
+        );
+        const telemetryContext = {
+          chatId,
+          userMessage,
           model: config.model,
           provider: config.provider,
-          auth_type: authType ?? "apiKey",
-          uses_papr_proxy: usePaprProxy,
-        });
+          authType,
+          usesPaprProxy: usePaprProxy,
+        };
+        const telemetry = getGatewayTelemetry();
+        telemetry.trackFireAndForget(
+          TelemetryEvents.MESSAGE_SENT,
+          messageSentProperties(telemetryContext),
+        );
+        const userMessageProperties = userMessageSentProperties(telemetryContext);
 
         wsStreamProfiler?.mark("ws.authResolved");
 
@@ -282,6 +375,17 @@ export async function setupAgentHandlers(
           attachments,
           reuseAssistantMessageId,
           ws,
+          // Active-use KPI: count the message only once its reply succeeds,
+          // so failed sends (bad key, model error) aren't counted.
+          ...(userMessageProperties
+            ? {
+                onSucceeded: () =>
+                  telemetry.trackFireAndForget(
+                    TelemetryEvents.USER_MESSAGE_SENT,
+                    userMessageProperties,
+                  ),
+              }
+            : {}),
         });
         break;
       }

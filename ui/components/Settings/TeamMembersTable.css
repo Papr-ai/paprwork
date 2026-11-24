@@ -1,0 +1,53 @@
+.team-table { margin-top: 12px; }
+.team-table__head,
+.team-table__main {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) 104px 152px;
+  gap: 10px;
+  align-items: center;
+}
+.team-table__head {
+  padding: 0 10px 6px;
+  font-size: 11px;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+  color: var(--text-tertiary);
+}
+.team-table__rows { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: 6px; }
+.team-table__row { border: 1px solid var(--border-color); border-radius: 10px; padding: 8px 10px; }
+.team-table__row--open { border-color: var(--accent-color, var(--border-color)); }
+.team-table__person { display: flex; align-items: center; gap: 10px; min-width: 0; }
+.team-table__who { display: flex; flex-direction: column; min-width: 0; }
+.team-table__name { font-size: 13px; font-weight: 600; color: var(--text-primary); }
+.team-table__sub {
+  font-size: 12px; color: var(--text-tertiary);
+  overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+}
+.team-table__select {
+  width: 100%; font-size: 12px; color: var(--text-primary);
+  background: var(--background-secondary, rgba(255, 255, 255, 0.06));
+  border: 1px solid var(--border-color); border-radius: 8px; padding: 6px 8px;
+}
+.team-table__select--paid { border-color: var(--accent-color, var(--border-color)); }
+.team-table__select--inline { width: auto; padding: 3px 6px; }
+.team-table__select:disabled { opacity: 0.6; }
+.team-table__static { font-size: 12px; color: var(--text-secondary); padding: 6px 0; }
+.team-table__note { margin: 6px 0 0 38px; font-size: 12px; color: var(--text-tertiary); }
+.team-table__note--held { color: var(--text-secondary); }
+.team-table__link {
+  margin-left: 8px; border: none; background: none; padding: 0;
+  color: var(--accent-color, #2563eb); font-size: 12px; font-weight: 600; cursor: pointer;
+}
+.team-table__confirm {
+  display: flex; align-items: center; gap: 8px; flex-wrap: wrap;
+  margin: 8px 0 0 38px; font-size: 12px; color: var(--text-primary);
+}
+.team-table__confirm > span { flex: 1; min-width: 200px; }
+.team-table__btn {
+  border: 1px solid var(--border-color); background: transparent; color: var(--text-primary);
+  border-radius: 8px; padding: 5px 12px; font-size: 12px; cursor: pointer;
+}
+.team-table__btn--primary { background: #2563eb; border-color: #2563eb; color: #fff; }
+.team-table__btn:disabled { opacity: 0.5; cursor: not-allowed; }
+.team-table__empty { font-size: 12px; color: var(--text-tertiary); padding: 8px 10px; }
+.team-table__total { margin: 10px 0 0; font-size: 12px; color: var(--text-secondary); }

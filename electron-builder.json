@@ -21,9 +21,11 @@
     "src/electron/main.cjs",
     "src/electron/index.cjs",
     "src/electron/updaterStatusCache.cjs",
+    "src/electron/updateErrorFormat.cjs",
     "src/electron/supervisor-logic.cjs",
     "src/electron/preload.cjs",
     "src/electron/geolocationPermission.cjs",
+    "src/electron/webviewSessionCap.cjs",
     "src/electron/ipc/**/*.cjs",
     "src/resources/**/*",
     "node_modules/playwright/**/*",
@@ -35,7 +37,6 @@
     "node_modules/@esbuild/**",
     "node_modules/playwright/**",
     "node_modules/playwright-core/**",
-    "dist/resources/default-apps/**",
     "dist/resources/default-jobs/**",
     "dist/resources/job-sdk/**",
     "dist/resources/mini-app-sdk/**",
@@ -75,7 +76,13 @@
       "NSCameraUsageDescription": "Paprwork needs access to your camera for meeting recording.",
       "NSCalendarsUsageDescription": "Paprwork needs access to your calendar to show upcoming meetings.",
       "NSLocationWhenInUseUsageDescription": "Papr Work uses your location to show local weather in the sidebar."
-    }
+    },
+    "extraResources": [
+      {
+        "from": "native/papr-embed-coreml/build/papr-embed-coreml",
+        "to": "bin/papr-embed-coreml"
+      }
+    ]
   },
   "win": {
     "target": [
@@ -86,7 +93,13 @@
         ]
       }
     ],
-    "icon": "build/icon.ico"
+    "icon": "build/icon.ico",
+    "azureSignOptions": {
+      "publisherName": "Papr, Inc.",
+      "endpoint": "https://wus2.codesigning.azure.net/",
+      "codeSigningAccountName": "paprsigning",
+      "certificateProfileName": "papr-public"
+    }
   },
   "linux": {
     "target": [

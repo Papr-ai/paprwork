@@ -1,47 +1,47 @@
-/* Prototyper "App of the week": the preview fills the card, copy sits on a soft bottom
-   gradient. Hover (after a beat) grows the card to the film's own 16:10 and fades the
-   copy, so the whole video is visible — then settles back when the pointer leaves. */
-.cat-feat-wrap { container-type: inline-size; margin: 4px 0 24px; }
+/* Prototyper "App of the week": one fixed 16:8 story (never resizes on hover, so a wide
+   window never gets a card taller than the screen). The film sits still on its poster and
+   plays only while the pointer is on this card. Copy on a soft bottom scrim. */
+.cat-feat-wrap { margin: 4px 0 8px; }
 .cat-feat {
-  position: relative; overflow: hidden; display: block; height: clamp(240px, 32cqw, 380px); border-radius: 26px;
-  cursor: pointer; color: #fff; background: #000; isolation: isolate;
+  position: relative; overflow: hidden; display: block; aspect-ratio: 16 / 8; min-height: 300px; max-height: 62vh;
+  border-radius: 26px; cursor: pointer; color: #fff; background: #000; isolation: isolate;
   box-shadow: 0 1px 2px rgba(0, 0, 0, 0.12), 0 18px 50px rgba(0, 0, 0, 0.22);
-  transition: height .55s cubic-bezier(.2, .8, .2, 1);
+  transition: transform .3s cubic-bezier(.2, .8, .2, 1);
 }
-.cat-feat.has-shot:hover, .cat-feat.has-shot:focus-visible { height: 62.5cqw; transition-delay: .2s; }
+.cat-feat:hover { transform: scale(1.006); }
+.cat-feat:focus-visible { outline: 3px solid color-mix(in srgb, var(--accent, #0060e0) 45%, transparent); outline-offset: 3px; }
 .cat-feat__media { position: absolute; inset: 0; }
-.cat-feat__shot { position: absolute; inset: 0; width: 100%; height: 100%; object-fit: cover; object-position: center top; pointer-events: none; }
+.cat-feat__shot { position: absolute; inset: 0; width: 100%; height: 100%; object-fit: cover; object-position: center; pointer-events: none; }
 .cat-feat__big {
   position: absolute; inset: 0; display: grid; place-items: center end; padding-right: 9%;
   background: radial-gradient(80% 110% at 88% 0%, color-mix(in srgb, var(--accent, #0060e0) 70%, transparent), transparent 62%),
     linear-gradient(150deg, color-mix(in srgb, var(--accent, #0060e0) 42%, #06061a), color-mix(in srgb, var(--accent, #0060e0) 80%, #000));
 }
+/* Scrim holds 4.5:1 on the brightest frame. */
 .cat-feat__txt {
-  position: absolute; inset: auto 0 0; display: grid; gap: 14px; padding: 90px 28px 20px;
+  position: absolute; inset: auto 0 0; display: grid; gap: 14px; padding: 140px 28px 22px;
   background: linear-gradient(transparent 0%, rgba(0, 0, 0, 0.38) 38%, rgba(0, 0, 0, 0.82) 100%);
 }
-.cat-feat__k, .cat-feat__h { transition: opacity .3s ease; }
-.cat-feat.has-shot:hover .cat-feat__k, .cat-feat.has-shot:hover .cat-feat__h { opacity: 0; transition-delay: .25s; }
-.cat-feat.has-shot:hover .cat-feat__txt { background: linear-gradient(transparent 55%, rgba(0, 0, 0, 0.5)); }
-.cat-feat__k { font-size: 12px; font-weight: 700; text-transform: uppercase; letter-spacing: 0.1em; color: rgba(255, 255, 255, 0.88); text-shadow: 0 1px 8px rgba(0, 0, 0, 0.5); }
+.cat-feat__k { font-size: 12px; font-weight: 700; text-transform: uppercase; letter-spacing: 0.06em; color: rgba(255, 255, 255, 0.88); text-shadow: 0 1px 8px rgba(0, 0, 0, 0.5); }
 .cat-feat__h {
-  margin: 0; max-width: 560px; font-size: clamp(24px, 3vw, 34px); line-height: 1.1; letter-spacing: -0.025em; font-weight: 700;
+  margin: 0; max-width: 560px; font-size: clamp(24px, 2.6vw, 32px); line-height: 1.1; letter-spacing: -0.025em; font-weight: 700;
   text-shadow: 0 1px 2px rgba(0, 0, 0, 0.35), 0 6px 28px rgba(0, 0, 0, 0.45);
   display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; overflow: hidden;
 }
 .cat-feat__app {
   display: flex; align-items: center; gap: 12px; max-width: 520px; padding: 10px 12px; border-radius: 18px;
-  background: rgba(16, 16, 22, 0.46); border: 0.5px solid rgba(255, 255, 255, 0.16); backdrop-filter: blur(28px) saturate(1.6);
+  background: rgba(16, 16, 22, 0.46); border: 0.5px solid rgba(255, 255, 255, 0.16);
+  backdrop-filter: blur(28px) saturate(1.6); -webkit-backdrop-filter: blur(28px) saturate(1.6);
 }
 .cat-feat__n { flex: 1; min-width: 0; display: grid; gap: 2px; }
 .cat-feat__n b { font-size: 15px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-.cat-feat__n span { font-size: 12.5px; color: rgba(255, 255, 255, 0.84); }
+.cat-feat__n span { font-size: 13px; color: rgba(255, 255, 255, 0.84); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .cat-feat__act { display: flex; gap: 6px; flex: none; }
-.cat-feat .cat-btn { height: 32px; padding: 0 18px; font-size: 14px; background: #fff; color: var(--accent, #0060e0); }
+.cat-feat .cat-btn { height: 30px; padding: 0 16px; font-size: 13.5px; background: #fff; color: var(--accent, #0060e0); }
 .cat-feat .cat-btn:hover { background: #fff; filter: brightness(0.95); }
 @media (max-width: 640px) {
-  .cat-feat, .cat-feat.has-shot:hover { height: auto; aspect-ratio: 4 / 5; }
+  .cat-feat { aspect-ratio: 4 / 5; max-height: none; }
   .cat-feat__h { font-size: 24px; }
   .cat-feat__big { place-items: start center; padding: 14% 0 0; }
 }
-@media (prefers-reduced-motion: reduce) { .cat-feat { transition: none; } }
+@media (prefers-reduced-motion: reduce) { .cat-feat { transition: none; } .cat-feat:hover { transform: none; } }

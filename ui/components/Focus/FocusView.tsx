@@ -1,23 +1,25 @@
 /**
  * FocusView — the agent's page, opened from the rail agent. One job: what matters today.
- * No in-page chrome: the Home mini-app owns Today | All tasks, the rail owns Memory and Search.
+ * Native: the brief, Needs you, Your three, Waiting on, goals and tasks (Focus/page). No iframe.
  */
-import { useEffect, useState } from "react";
-import { HomeTodayView } from "../Memory/HomeTodayView";
-import "../Memory/WikiLibrary.css";
+import "./FocusView.css";
+import { FocusPage } from "./page/FocusPage";
+import { focusEnv } from "./page/focusApi";
+import { useFocusFeed } from "./focusBridge";
+import { requestMemoryEntity } from "../../lib/memoryNav";
+import { switchToMemoryTab } from "../../lib/ensureDefaultChatTab";
+
+/** Goal entity chips open the Memory page (desktop only; the web shows them as plain chips). */
+focusEnv.openEntity = (ref) => {
+  const [type, ...rest] = ref.split("/");
+  switchToMemoryTab();
+  requestMemoryEntity({ id: ref, type: type.replace(/s$/, ""), label: rest.join("/").replace(/-/g, " "), description: "", props: {} });
+};
 
 export function FocusView() {
-  const [refreshToken, setRefreshToken] = useState(0);
-
-  useEffect(() => {
-    const onSwitched = () => setRefreshToken((t) => t + 1);
-    window.addEventListener("papr-workspace-switch-complete", onSwitched);
-    return () => window.removeEventListener("papr-workspace-switch-complete", onSwitched);
-  }, []);
-
   return (
-    <div className="memory-view focus-view" data-testid="focus-view">
-      <HomeTodayView refreshToken={refreshToken} />
+    <div className="focus-view" data-testid="focus-view">
+      <FocusPage useFeed={useFocusFeed} />
     </div>
   );
 }

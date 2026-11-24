@@ -29,6 +29,8 @@ export async function generateMedia(
     aspectRatio: input.aspectRatio,
     durationSeconds: input.durationSeconds,
     referenceImagePath: input.referenceImagePath,
+    lastFramePath: input.lastFramePath,
+    referenceImagePaths: input.referenceImagePaths,
   });
 
   const artifact = await persistGeneratedMedia({

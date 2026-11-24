@@ -104,6 +104,8 @@ export function startWorkspaceWatcher(host: CloudSyncWorkspaceWatchHost): void {
       // (main agent in chat, user in editor) re-project into the Home DB.
       const rel = path.relative(path.join(paprDir, "workspace"), event.path);
       if (!rel.startsWith("..")) {
+        // On-device index: re-embed edited IDENTITY.md, wiki entities, memory notes (no-op until the runtime is up).
+        void import("../../../core/tools/codeEmbed/runtime.js").then((m) => m.noteCodeEmbedFileChange(event.path)).catch(() => undefined);
         void import("../goalsTasksProjection.js").then(({ isGoalsTasksSourcePath, scheduleGoalsTasksProjection }) => {
           if (isGoalsTasksSourcePath(rel)) scheduleGoalsTasksProjection(`watch ${rel}`);
         });

@@ -25,7 +25,10 @@ import {
   shouldSkipMigrationForRemoteLedger,
 } from "../jobs/migrationLedgerPolicy.js";
 import { listAppliedMigrationIdsReadOnly } from "../jobs/schemaMigrationsLedger.js";
-import { alignMigrationLedgers } from "../jobs/jobMigrationLedgerSync.js";
+import {
+  alignMigrationLedgers,
+  listRemoteAppliedMigrationIds,
+} from "../jobs/jobMigrationLedgerSync.js";
 import { localRemoteUserSchemaDriftTables } from "../tursoDeltaSync.js";
 import { userSchemaColumns } from "../tursoTableFingerprint.js";
 import type { TursoLinkedSource } from "../tursoLinkedSources.js";
@@ -327,9 +330,15 @@ async function listUnsatisfiedMigrationIds(
     }
   }
 
+  const remoteRecorded = await listRemoteAppliedMigrationIds(remote);
   const unsatisfied: string[] = [];
   for (const migrationId of localApplied) {
     if (shouldSkipMigrationForRemoteLedger(migrationId)) {
+      continue;
+    }
+    // Recorded on the cloud = applied there (later migrations may have
+    // rebuilt or dropped its objects, so its own schema check would misfire).
+    if (remoteRecorded.has(migrationId)) {
       continue;
     }
     const hasExecutable = await migrationHasExecutableOps(

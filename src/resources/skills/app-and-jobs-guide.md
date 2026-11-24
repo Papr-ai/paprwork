@@ -155,7 +155,7 @@ When a backend handler must **read or write** linked SQLite/Turso databases:
 1. **Ensure sources are linked** — `create_database` → `attach_database({ alias })`
 2. **Name the DB** — `"sourceId": "billing"` on the action in `manifest.json`, or `params: { sourceId: "billing" }` from the frontend
 3. Gateway injects **every** linked source as `PAPR_DB_{KEY}*` plus `APP_DB` for the active source
-4. **Python:** `from papr_db import connect, execute` — `connect("billing")` or `connect()`; never `sqlite3.connect(APP_DB)` (cloud uses Turso). Insert id: `INSERT … RETURNING`, or `con.lastrowid` after INSERT.
+4. **Python:** `from papr_db import connect, query, write` — `connect("billing")` or `connect()`; reads `query(con, sql, params).rows` (plain dicts), writes `write(con, sql, params)` (`.changes`, `.last_insert_rowid`). No sqlite3-style `.execute().fetchall()`, no `RETURNING`, never `sqlite3.connect(APP_DB)`.
 5. **Node/TS:** No cross-env DB helper — use Python backend handlers for SQL, or `/api/db/*` from the frontend.
 
 **❌ NEVER:** parse `data-sources.json` manually, grep keychain for DB paths, or read API keys from SQLite.
@@ -908,6 +908,14 @@ webview_execute({ script: "fetch('/api/jobs/run', ...)" })
 
 // ❌ Node.js imports in browser JS
 import Database from 'better-sqlite3'  // browser can't use Node modules
+
+// ❌ Wiping and reloading a table on every run
+// for t in tables: DELETE FROM t   then   INSERT INTO t ... (every row, every run)
+// → On a synced database every rewritten row is a change the cloud must upload. A
+//   15-minute job reloading 15K rows built a 5.3M-change backlog. Write only what
+//   changed: read existing rows, upsert new/changed ones
+//   (INSERT ... ON CONFLICT(id) DO UPDATE SET ...), delete only rows that are gone.
+//   Runs log a [job-full-table-rewrite] warning when the job's code does this.
 
 // ❌ Polling when WebSocket push is available
 setInterval(() => fetch('/api/jobs/status/...'), 1000)

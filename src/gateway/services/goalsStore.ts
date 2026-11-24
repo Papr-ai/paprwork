@@ -1,5 +1,5 @@
 /**
- * Goals store — the Home DB `goals` table is the source of truth.
+ * Goals store — the Focus DB `goals` table (focusDb.ts) is the source of truth.
  *
  * Every goal write (Home buttons, chat agent, Sleep) goes through
  * `updateGoal` / `createGoal` (exposed as PATCH/POST /api/workspace/goals).
@@ -18,7 +18,7 @@
 import { promises as fs } from "fs";
 import path from "path";
 import { getPaprWorkspaceDir } from "../../core/utils/paprRoot.js";
-import { DEFAULT_HOME_APP_ID } from "./defaultHomeBundle.js";
+import { focusDb } from "./focusDb.js";
 import {
   buildGoalTree,
   normalizeGoalStatus,
@@ -29,7 +29,6 @@ import {
   type WorkspaceGoalsResult,
 } from "./workspaceGoals.js";
 
-const GATEWAY_PORT = Number(process.env.GATEWAY_PORT ?? 18789);
 const CANONICAL: ReadonlySet<string> = new Set(["proposed", "on-track", "at-risk", "blocked", "done", "dropped"]);
 const LEVELS: ReadonlySet<string> = new Set(["L1", "L2", "L3"]);
 const CONFIDENCE: ReadonlySet<string> = new Set(["high", "medium", "low"]);
@@ -40,16 +39,7 @@ export class GoalValidationError extends Error {
 
 type Row = Record<string, unknown>;
 
-async function homeDb(endpoint: "query" | "write", sql: string, params: unknown[] = []): Promise<Row[]> {
-  const res = await fetch(`http://127.0.0.1:${GATEWAY_PORT}/api/db/${endpoint}`, {
-    method: "POST",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ appId: DEFAULT_HOME_APP_ID, sql, params }),
-  });
-  const data = (await res.json().catch(() => ({}))) as { error?: string; rows?: Row[] };
-  if (!res.ok || data.error) throw new Error(data.error ?? `gateway ${endpoint} HTTP ${res.status}`);
-  return data.rows ?? [];
-}
+const homeDb = (endpoint: "query" | "write", sql: string, params: unknown[] = []): Promise<Row[]> => focusDb(endpoint, sql, params);
 
 export interface GoalPatch {
   title?: string;
@@ -230,6 +220,7 @@ async function writeRow(prev: Row | undefined, next: Row, actor: string): Promis
       next.next_milestone ?? null, next.owner ?? null, next.evidence ?? null, next.mentions ?? null, next.outcome ?? null, next.archived ?? 0, 0, next.source_file ?? "IDENTITY.md", prev?.created_at ?? now, now],
   );
   console.log(`[GoalsStore] ${actor}: ${prev ? "updated" : "created"} ${next.id} (${next.status})`);
+  void import("./focusCloud/focusCloudSync.js").then((m) => m.scheduleFocusCloudSync(`goal ${next.id}`)).catch(() => undefined);
 }
 
 async function setEntities(id: string, refs: string[]): Promise<void> {
@@ -310,6 +301,23 @@ export async function createGoal(rawPatch: GoalPatch, actor = "api"): Promise<Ro
   if (patch.entities?.length) await setEntities(String(next.id), patch.entities);
   await mirrorToIdentity({ ...next, entities: patch.entities?.join(", ") });
   return next;
+}
+
+/**
+ * Apply a goal that changed on another device (from Mongo). Writes the row, its links and the
+ * IDENTITY.md block, so the markdown stays generated from the shared copy. Not sent back up:
+ * the sync records this as the last-synced copy first, so the diff is empty.
+ */
+export async function applyRemoteGoal(row: Row, entities: string[]): Promise<void> {
+  const id = String(row.id);
+  const prev = await getRow(id);
+  const next = { ...(prev ?? {}), ...row };
+  await writeRow(prev, next, "another device");
+  if (prev && Number(prev.archived ?? 0) !== Number(next.archived ?? 0)) {
+    await homeDb("write", "UPDATE goals SET archived = ?, source_file = ? WHERE id = ?", [next.archived, next.source_file, id]);
+  }
+  await setEntities(id, entities);
+  if (!Number(next.archived)) await mirrorToIdentity({ ...next, entities: entities.join(", ") || undefined });
 }
 
 /* ---------------- reads ---------------- */

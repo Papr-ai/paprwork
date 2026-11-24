@@ -55,7 +55,7 @@ const PLATFORM_CONFIG = {
 
 function getPlatformConnectionsPath() {
   const paprHome =
-    process.env.PAPR_HOME || path.join(os.homedir(), "Papr");
+    process.env.PAPR_HOME || path.join(os.homedir(), (process.env.PAPR_PROFILE || "").trim().toLowerCase() === "dev" ? "Papr-dev" : "Papr");
   return path.join(paprHome, "data", "platform-connections.json");
 }
 

@@ -434,7 +434,7 @@ export function builderPrompt(goal: TrackerGoal, template: TrackerTemplate | und
     `   body {"goalId": "${goal.id}", "template": "${template?.id ?? "custom"}", "summary": {<metric>: <number>}, "sources": {<source>: {"ok": true|false, "error"?: "..."}}}`,
     `   Numbers only in summary; use null when a source is unavailable — never invent values.`,
     ...GOAL_PAGE_CONTRACT,
-    `4. Create it with create_job (appIds: ["bbb7e17e-c810-47ef-b9ce-c8a83c0cd16c"], folder "focus-trackers"), run it once, read its logs, and fix it until the POST succeeds.`,
+    `4. Create it with create_job (appIds: ["__standalone__"], folder "focus-trackers"), run it once, read its logs, and fix it until the POST succeeds.`,
     `5. Finish with POST ${gateway}/api/workspace/focus/tracker/link body {"goalId": "${goal.id}", "jobId": "<the job id>", "template": "${template?.id ?? "custom"}"}.`,
     `If a needed source is not connected, stop and say exactly which one (connect_platform request_connect) instead of guessing.`,
   ].join("\n");
@@ -469,7 +469,6 @@ export async function createTracker(goal: TrackerGoal): Promise<{ jobId: string;
 
   const decision = file.decisions[goalHash(goal)] ?? { template: (await decideTemplates([goal]))[goal.id] ?? null };
   const template = findTemplate(decision.template);
-  const { DEFAULT_HOME_APP_ID } = await import("./defaultHomeBundle.js");
   const gateway = `http://127.0.0.1:${Number(process.env.GATEWAY_PORT ?? 18789)}`;
 
   if (template?.script) {
@@ -481,7 +480,7 @@ export async function createTracker(goal: TrackerGoal): Promise<{ jobId: string;
     const job = await svc.createJob({
       name: `Focus tracker · ${template.title}`,
       type: "python",
-      appIds: [DEFAULT_HOME_APP_ID],
+      appIds: ["__standalone__"],
       folder: "focus-trackers",
       command: `python3 track.py --goal ${JSON.stringify(goal.id)}`,
       requiredKeys,
@@ -505,7 +504,7 @@ export async function createTracker(goal: TrackerGoal): Promise<{ jobId: string;
   const builder = await svc.createJob({
     name: `Focus tracker builder · ${goal.title.slice(0, 60)}`,
     type: "agent",
-    appIds: [DEFAULT_HOME_APP_ID],
+    appIds: ["__standalone__"],
     folder: "focus-trackers",
     command: builderPrompt(goal, template, gateway),
     maxTurns: 40,

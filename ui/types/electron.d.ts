@@ -51,6 +51,8 @@ export interface UpdateStatus {
   percent?: number;
   error?: string;
   recoveryHint?: string;
+  /** Fixes itself (server busy, network): the banner stays quiet, Settings still shows it. */
+  transient?: boolean;
 }
 
 export interface ElectronAPI {
@@ -477,6 +479,25 @@ export interface ElectronAPI {
       plan: import("../../src/core/types/paprCreditPlans").PaprCreditPlanId;
       track?: import("../../src/core/types/paprCreditPlans").PaprPlanTrack;
     }) => Promise<{ success: boolean; error?: string }>;
+    getBuilderSeats: () => Promise<{
+      success: boolean;
+      view?: import("../../src/core/utils/paprCreditSeats").BuildersView;
+      error?: string;
+    }>;
+    setBuilder: (input: { userId: string; builder: boolean; plan?: string }) => Promise<{
+      success: boolean;
+      result?: import("../../src/core/utils/paprCreditSeats").SetBuilderResult;
+      error?: string;
+    }>;
+    requestMember: (input: { kind: import("../../src/core/utils/paprCreditSeats").MemberRequestKind }) => Promise<{
+      success: boolean; result?: { status: string }; error?: string;
+    }>;
+    decideMemberRequest: (input: {
+      userId: string; kind: import("../../src/core/utils/paprCreditSeats").MemberRequestKind;
+      approve: boolean; capCredits?: number; plan?: string;
+    }) => Promise<{ success: boolean; error?: string }>;
+    setMemberPolicy: (input: { policy: import("../../src/core/utils/paprCreditSeats").MemberPolicy }) => Promise<{ success: boolean; error?: string }>;
+    setMemberCap: (input: { capCredits: number }) => Promise<{ success: boolean; error?: string }>;
     startExpertBuildCheckout: (input: {
       size: import("../../src/core/types/paprCreditPlans").PaprExpertBuildSize;
       notes?: string;
@@ -688,6 +709,14 @@ export interface ElectronAPI {
     check: () => void;
     /** Last update status (for renderer that mounted after IPC events). */
     getStatus: () => Promise<UpdateStatus | null>;
+  };
+
+  /** OS notification for a notice route() already decided on (renderer only). */
+  notices?: {
+    showOs: (payload: { key: string; title: string; body?: string; level?: string; sound?: boolean; previews?: string; owner?: unknown }) => Promise<{ shown: boolean }>;
+    closeOs: (keys: string[]) => Promise<{ ok: boolean }>;
+    openOsSettings?: () => Promise<{ ok: boolean }>;
+    osAccess?: () => Promise<{ state: "on" | "off" | "unknown" }>;
   };
 
   // System integration for mini-apps (generic invoke)

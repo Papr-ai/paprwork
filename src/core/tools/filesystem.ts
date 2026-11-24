@@ -326,6 +326,12 @@ async function writeFile(
       "../../gateway/services/cloudSync/gitSyncLimits.js"
     );
 
+    let tableRewriteReminder: string | undefined;
+    if (editTarget.kind === "job") {
+      const { tableRewriteReminderFor } = await import("./appJobs.js");
+      tableRewriteReminder = await tableRewriteReminderFor(editTarget.jobId);
+    }
+
     let largeFileReminder: string | undefined;
     const appIdFromPath = extractAppIdFromAppsPath(filePath);
     if (appIdFromPath && isTooLargeForGitSync(stats.size)) {
@@ -346,6 +352,7 @@ async function writeFile(
         git_status: gitResult.staged ? "staged" : "untracked",
       },
       ...(largeFileReminder ? { _largeFileReminder: largeFileReminder } : {}),
+      ...(tableRewriteReminder ? { _tableRewriteReminder: tableRewriteReminder } : {}),
     };
   } catch (error) {
     const message = error instanceof Error ? error.message : String(error);

@@ -34,7 +34,7 @@ import type { ShareAudience } from "../../utils/shareAudienceModel";
 import { SharePeoplePicker, type SharePeopleMember } from "./SharePeoplePicker";
 import { ShareRoleMenu } from "./ShareRoleMenu";
 
-const opts = (a: "workspace" | "person" | "link") => roleOptions(a).filter((r) => r !== "none");
+const opts = (a: "workspace" | "person" | "domain" | "link") => roleOptions(a).filter((r) => r !== "none");
 
 function Glyph({ audience }: { audience: ShareAudience }) {
   return (
@@ -92,8 +92,14 @@ export function ShareWhoV9({ access, draft, onChange, members, membersLoading, w
       }}
       allowedEmails={others.filter((g) => !g.userId && g.email).map((g) => g.email as string)}
       onEmailsChange={(emails) => {
-        let grants = draft.grants.filter((g) => g.userId || emails.includes(g.email ?? ""));
+        let grants = draft.grants.filter((g) => g.userId || g.domain || emails.includes(g.email ?? ""));
         for (const email of emails) grants = addGrant(grants, { email }, "viewer");
+        set({ grants });
+      }}
+      allowedEmailDomains={others.filter((g) => g.domain).map((g) => g.domain as string)}
+      onDomainsChange={(domains) => {
+        let grants = draft.grants.filter((g) => !g.domain || domains.includes(g.domain));
+        for (const domain of domains) grants = addGrant(grants, { domain }, "viewer");
         set({ grants });
       }}
       loading={membersLoading}
@@ -135,6 +141,17 @@ export function ShareWhoV9({ access, draft, onChange, members, membersLoading, w
         ) : ro ? <span className="ss9-role">No access</span> : <Plus label={team} onClick={() => set({ workspace: "viewer" })} />}
       </div>
       {others.map((g) => {
+        if (g.domain) {
+          return (
+            <div key={grantKey(g)} className="ss9-row">
+              <span className="ss9-ico"><Glyph audience="people" /></span>
+              <span className="ss9-who"><b>@{g.domain}</b><small>Anyone signed in with this email domain</small></span>
+              <ShareRoleMenu value={g.role} options={opts("domain")} label={`@${g.domain}`} readOnly={ro}
+                onChange={(r: AppRole) => set({ grants: setGrantRole(draft.grants, grantKey(g), r) })}
+                onRemove={() => set({ grants: removeGrant(draft.grants, grantKey(g)) })} />
+            </div>
+          );
+        }
         const who = nameOf(g.userId, g.email);
         return (
           <div key={grantKey(g)} className="ss9-row">

@@ -5,6 +5,8 @@ export default defineConfig({
   test: {
     name: "integration",
     include: ["test/integration/**/*.{test,spec}.{js,ts}"],
+    // Real AI provider / network: `npm run test:live`, never in CI.
+    exclude: ["**/node_modules/**", "**/*.live.test.ts"],
     environment: "node",
     globals: true,
     // See tests/setup/defaultTempWorkspace.ts — the five integration suites

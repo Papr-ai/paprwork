@@ -165,6 +165,16 @@
   }
 }
 
+.rail-btn__badge.rail-btn__badge--needs {
+  background: #0161e0;
+}
+
+@media (prefers-color-scheme: dark) {
+  .rail-btn__badge.rail-btn__badge--needs {
+    background: #4d9bff;
+  }
+}
+
 .rail-btn__badge--warn {
   top: 0;
   right: 0;
@@ -451,5 +461,34 @@
   .rail-btn__new-orb,
   .rail-btn--agent .agent-glyph {
     transition: none;
+  }
+}
+
+/* Pen's count: how many things need you. The only number on the rail. */
+.rail-btn__count {
+  position: absolute;
+  top: 2px;
+  right: 0;
+  min-width: 16px;
+  height: 16px;
+  padding: 0 4px;
+  box-sizing: border-box;
+  border-radius: 8px;
+  background: #0161e0;
+  color: #fff;
+  font-style: normal;
+  font-size: 10.5px;
+  font-weight: 600;
+  line-height: 16px;
+  text-align: center;
+  font-variant-numeric: tabular-nums;
+  box-shadow: 0 0 0 2px var(--rail-bg);
+  pointer-events: none;
+}
+
+@media (prefers-color-scheme: dark) {
+  .rail-btn__count {
+    background: #4d9bff;
+    color: #071321;
   }
 }

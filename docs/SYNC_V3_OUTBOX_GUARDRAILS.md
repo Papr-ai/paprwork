@@ -146,7 +146,7 @@ The OID cache is now read once per flush rather than once per file.
 ## Results
 
 Verified against the real production outbox, reconstructed in an isolated
-workspace (`tests/sync-outbox-recovery-fixture.test.ts`):
+workspace (`tests/cloud-sync/engine/sync-outbox-recovery-fixture.test.ts`):
 
 | | Before | After |
 |---|---|---|
@@ -163,19 +163,19 @@ unreachable before this change and drain normally after it.
 
 | File | Covers |
 |---|---|
-| `tests/sync-outbox-guardrails.test.ts` | streaming reads, oversized detection, quarantining, enqueue cap, crash-counts-as-attempt, payload stripping, coalescing, recovery from a pre-existing oversized line |
-| `tests/never-track-repo-path.test.ts` | anchored matching; `sandbox.ts` and friends are *not* excluded |
-| `tests/collect-app-op-files.test.ts` | databases and `.bak` copies never read, oversized file skipped before read, batch budget defers the remainder |
-| `tests/sync-outbox-recovery-fixture.test.ts` | full recovery against a reconstructed production outbox (skipped unless `OUTBOX_FIXTURE` is set) |
+| `tests/cloud-sync/engine/sync-outbox-guardrails.test.ts` | streaming reads, oversized detection, quarantining, enqueue cap, crash-counts-as-attempt, payload stripping, coalescing, recovery from a pre-existing oversized line |
+| `tests/cloud-sync/publish/never-track-repo-path.test.ts` | anchored matching; `sandbox.ts` and friends are *not* excluded |
+| `tests/cloud-sync/publish/collect-app-op-files.test.ts` | databases and `.bak` copies never read, oversized file skipped before read, batch budget defers the remainder |
+| `tests/cloud-sync/engine/sync-outbox-recovery-fixture.test.ts` | full recovery against a reconstructed production outbox (skipped unless `OUTBOX_FIXTURE` is set) |
 
 ```bash
-npx vitest run tests/sync-outbox-guardrails.test.ts \
-  tests/never-track-repo-path.test.ts \
-  tests/collect-app-op-files.test.ts --project unit-backend
+npx vitest run tests/cloud-sync/engine/sync-outbox-guardrails.test.ts \
+  tests/cloud-sync/publish/never-track-repo-path.test.ts \
+  tests/cloud-sync/publish/collect-app-op-files.test.ts --project unit-backend
 
 # Against a real oversized outbox (paths joined by ':'):
 OUTBOX_FIXTURE=/path/sync-outbox.jsonl.oversized:/path/sync-outbox.jsonl \
-  npx vitest run tests/sync-outbox-recovery-fixture.test.ts --project unit-backend
+  npx vitest run tests/cloud-sync/engine/sync-outbox-recovery-fixture.test.ts --project unit-backend
 ```
 
 ## What app authors should do

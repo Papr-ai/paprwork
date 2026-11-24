@@ -1111,3 +1111,6 @@
   object-position: top center;
   display: block;
 }
+
+/* Discover reads like Prototyper: one centered column, so a wide monitor gets margins, not a stretched hero. */
+.community-apps--discover { max-width: 1040px; margin: 0 auto; width: 100%; }

@@ -1,3 +1,4 @@
+import { AsyncLocalStorage } from "async_hooks";
 /**
  * Bash Tool - Command execution with security and timeout
  *
@@ -30,9 +31,51 @@ import {
   formatSqlitePathWarningBlock,
 } from "../utils/sqlitePathGuard.js";
 import { getJobToolEnv } from "./context.js";
+import { admitBashCommand, type BashGovernorHandle } from "../system/bashGovernor.js";
 
 function mergeBashEnv(inputEnv?: Record<string, string>): Record<string, string> {
   return { ...getJobToolEnv(), ...(inputEnv ?? {}) };
+}
+
+const KEY_REF_PATTERN = /\$\{[A-Z_][A-Z0-9_]*\}/;
+const ENV_SEPARATOR = "\u0000PAPR_ENV\u0000";
+
+/** True when any `env` value references a custom key (e.g. "$" + "{KEY_NAME}"). */
+function envHasKeyRef(env: Record<string, string>): boolean {
+  return Object.values(env).some((v) => typeof v === "string" && KEY_REF_PATTERN.test(v));
+}
+
+function keyRefUsed(keyName: string, command: string, env: Record<string, string>): boolean {
+  const ref = `\${${keyName}}`;
+  return command.includes(ref) || Object.values(env).some((v) => typeof v === "string" && v.includes(ref));
+}
+
+/**
+ * Key refs used to be substituted in `command` only, so `env: { S: "${KEY}" }`
+ * reached the process as the literal 28-char string "${KEY}" — silently, with a
+ * successful exit. Join command + env values so one permission-aware pass covers both.
+ */
+function joinForSubstitution(command: string, env: Record<string, string>): string {
+  const names = Object.keys(env);
+  return [command, ...names.map((n) => env[n] ?? "")].join(ENV_SEPARATOR);
+}
+
+/** Inverse of joinForSubstitution: writes substituted env values back in place, returns the command. */
+function splitAfterSubstitution(combined: string, env: Record<string, string>): string {
+  const names = Object.keys(env);
+  const parts = combined.split(ENV_SEPARATOR);
+  names.forEach((n, i) => {
+    env[n] = parts[i + 1] ?? env[n];
+  });
+  return parts[0];
+}
+
+function substituteEnvKeyRefs(env: Record<string, string>, customKeys: Record<string, string>): void {
+  for (const name of Object.keys(env)) {
+    if (typeof env[name] === "string" && KEY_REF_PATTERN.test(env[name])) {
+      env[name] = substituteCustomKeys(env[name], customKeys);
+    }
+  }
 }
 
 /**
@@ -312,28 +355,39 @@ export interface BashOutput {
   _processHint?: string;
   /** Desktop PAPR_API_KEY used against the memory server without user ids. */
   _paprIdentityReminder?: string;
+  /** The resource governor paused or stopped this command, or refused to start it, because memory was short. */
+  _memoryGovernor?: string;
 }
 
 /**
  * Detects if command is a grep search in PAPR folders
  * Returns { pattern, path } if detected, null otherwise
  */
-function detectPaprGrepCommand(command: string): { pattern: string; path: string } | null {
-  // Match: grep [options] "pattern" path/to/PAPR/...
-  // Also match: grep [options] pattern path/to/PAPR/... (without quotes)
-  const grepRegex = /\bgrep\s+(?:-[a-zA-Z]+\s+)*["']?([^"'\s]+)["']?\s+(.+)/i;
+export function detectPaprGrepCommand(command: string): { pattern: string; path: string } | null {
+  // Match: grep [options] "multi word pattern" path/to/PAPR/...   (quoted: keep the whole phrase)
+  // Also match: grep [options] pattern path/to/PAPR/...            (unquoted: one word)
+  const grepRegex = /\bgrep\s+(?:-[a-zA-Z]+\s+)*(?:"([^"]+)"|'([^']+)'|([^"'\s]+))\s+(.+)/i;
   const match = command.match(grepRegex);
   
   if (!match) return null;
   
-  const pattern = match[1];
-  const grepPath = match[2].trim();
+  const pattern = match[1] ?? match[2] ?? match[3]!;
+  const grepPath = match[4]!.trim();
 
   if (isPaprAppsOrJobsSearchPath(grepPath)) {
     return { pattern, path: grepPath };
   }
 
   return null;
+}
+
+/** grep inside the Papr Work folder's documents/, workspace/ or repos/<name>/ (absolute, ~/ or $PAPR_HOME paths). */
+export function detectPaprContextGrepCommand(command: string): { pattern: string; path: string } | null {
+  const m = command.match(/\bgrep\s+(?:-[a-zA-Z]+\s+)*(?:"([^"]+)"|'([^']+)'|([^"'\s]+))\s+(.+)/i);
+  if (!m) return null;
+  const grepPath = m[4]!.trim().replace(/\\/g, "/");
+  const inPapr = /(?:\/orgs\/[^/]+\/namespaces\/[^/]+|\/Papr|\$\{?PAPR_HOME\}?)\/(?:documents|workspace|repos\/[^/\s"']+)(?:[/\s"']|$)/i;
+  return inPapr.test(grepPath) ? { pattern: m[1] ?? m[2] ?? m[3]!, path: m[4]!.trim() } : null;
 }
 
 const PAPR_PROJECT_ID_REGEX =
@@ -372,17 +426,48 @@ export function buildHybridMemorySearchQuery(
 /**
  * Search PAPR Memory for code matching the hybrid query (semantic, not literal grep pattern).
  */
+export interface MemoryCodeSearch {
+  block: string | null;
+  hits: Array<{ path: string; score: number }>;
+}
+
+export interface DeviceGrepHits {
+  tier: string;
+  backend: string;
+  hits: Array<{ path: string; score: number; lineStart: number; lineEnd: number }>;
+}
+
+/** Device hits first (their cosine order), then memory hits not already present, scored just below the last device hit. */
+export function mergeDeviceHits(
+  device: DeviceGrepHits["hits"],
+  memory: MemoryCodeSearch["hits"],
+): Array<MemoryCodeSearch["hits"][number] & { lineStart?: number; lineEnd?: number }> {
+  const norm = (p: string) => p.replace(/\\/g, "/");
+  const have = (p: string) => device.some((d) => norm(p) === d.path || norm(p).endsWith(`/${d.path}`));
+  const floor = Math.min(...device.map((d) => d.score));
+  const rest = memory.filter((m) => m.path && !have(m.path)).map((m, i) => ({ path: m.path, score: floor - 0.001 * (i + 1) }));
+  return [...device.map((d) => ({ path: d.path, score: d.score, lineStart: d.lineStart, lineEnd: d.lineEnd })), ...rest];
+}
+
+export function deviceHitsBlock(dev: DeviceGrepHits): string {
+  const where = dev.tier === "cloud" ? "Papr Cloud" : dev.backend === "CoreMLEmbedder" ? "Neural Engine" : "on device";
+  let out = `=== Semantic code search (papr-embed-code, ${where}) ===\n`;
+  for (const h of dev.hits.slice(0, 8)) out += `${h.path}:${h.lineStart}-${h.lineEnd}  (${h.score.toFixed(3)})\n`;
+  return out;
+}
+
 async function searchPaprMemoryForCode(
   query: string,
   grepPath: string,
-): Promise<string | null> {
+): Promise<MemoryCodeSearch> {
+  const none: MemoryCodeSearch = { block: null, hits: [] };
   try {
     // Check if PAPR_API_KEY is available
     const { getApiKey } = await import("../../gateway/utils/keyResolver.js");
     const paprKey = await getApiKey('PAPR_API_KEY');
     
     if (!paprKey) {
-      return null; // No PAPR key, skip memory search
+      return none; // No PAPR key: code pointers still run without memory
     }
     
     // Import Papr client
@@ -391,9 +476,12 @@ async function searchPaprMemoryForCode(
       "../../gateway/utils/paprMemoryPolicy.js"
     );
     const { PAPR_DEFAULT_HEADERS } = await import("./paprSurface.js");
+    const { agenticGraphEnabled } = await import("./searchDefaults.js");
+    const memoryBaseURL = process.env.PAPR_MEMORY_SERVER_URL?.replace(/\/$/, "") || undefined;
     const client = new Papr({
       xAPIKey: paprKey,
       defaultHeaders: PAPR_DEFAULT_HEADERS,
+      ...(memoryBaseURL ? { baseURL: memoryBaseURL } : {}),
     });
 
     const projectId = extractProjectIdFromPaprPath(grepPath);
@@ -411,26 +499,46 @@ async function searchPaprMemoryForCode(
     );
     const scopeSpread = await paprMemorySearchScopeSpread();
 
-    const response = await client.memory.search({
+    const { getAssistantMessageIdForTools, getCurrentChatId } = await import("./context.js");
+    const toolCallId = bashToolCallId.getStore();
+    const assistantMessageId = getAssistantMessageIdForTools();
+    const chatId = getCurrentChatId();
+    const { data: response, response: httpResponse } = await client.memory.search({
       query,
       ...scopeSpread,
       max_memories: 10,
       max_nodes: 10,
-      enable_agentic_graph: true,
+      enable_agentic_graph: agenticGraphEnabled(),
       response_format: "toon",
       policy: buildSearchPolicy({ defaultDomain: "code" }),
       metadata: {
         role: "assistant",
         category: "learning",
         customMetadata,
-      },
-    });
+        // QueryLog join keys (not search filters).
+        useCase: "code_grep",
+        ...(assistantMessageId ? { clientMessageId: assistantMessageId } : {}),
+        ...(toolCallId ? { toolCallId } : {}),
+        ...(chatId ? { sessionId: chatId } : {}),
+      } as Record<string, unknown>,
+    }).withResponse();
+    {
+      const searchId = httpResponse.headers.get("X-Search-Id");
+      const { recordSearchOnToolCall } = await import("../../gateway/services/storage/trainingSync.js");
+      recordSearchOnToolCall(toolCallId, searchId, "code_grep");
+    }
     
     // Format results - response.data.memories
     if (!response?.data?.memories || response.data.memories.length === 0) {
-      return null;
+      return none;
     }
     
+    // papr-code-search v2 ranks these hits (with the code graph and link sources) after grep finishes.
+    const hits = response.data.memories.map((m) => {
+      const md = m.customMetadata as Record<string, string> | undefined;
+      return { path: md?.file_path ?? "", score: typeof m.score === "number" ? m.score : 0 };
+    });
+
     let output = '=== Memory Search Results (Semantic) ===\n';
     output += `Found ${response.data.memories.length} relevant code files:\n\n`;
     
@@ -446,16 +554,16 @@ async function searchPaprMemoryForCode(
       output += `   Match: ${memory.content.substring(0, 200)}...\n\n`;
     }
     
-    return output;
+    return { block: output, hits };
     
   } catch (error) {
     // Papr returns HTTP 404 "No relevant items found" for zero hits — that's an empty result, not a failure.
     const err = error as { status?: number; message?: string };
     if (err?.status === 404 && /no relevant items/i.test(err.message ?? "")) {
-      return null;
+      return none;
     }
     console.warn('[Bash Tool] Memory search failed:', err?.message ?? error);
-    return null; // Fail gracefully
+    return none; // Fail gracefully
   }
 }
 
@@ -468,6 +576,33 @@ function isBackgroundedCommand(command: string): boolean {
   return /&\s*$/.test(trimmed) || /\bnohup\b/.test(trimmed) || /\bdisown\b/.test(trimmed);
 }
 
+/** Who started a command, for the governor's messages: chat id, delegated job id, or null. */
+async function currentOwner(): Promise<string | null> {
+  try {
+    const { getCurrentChatId, getCurrentDelegationJobId } = await import("./context.js");
+    const job = getCurrentDelegationJobId();
+    return job ? `job:${job}` : getCurrentChatId();
+  } catch {
+    return null;
+  }
+}
+
+function governorRefusal(message: string, originalCommand: string, apiKeys: string[], startTime: number): ToolResult<BashOutput> {
+  return {
+    success: false,
+    error: message,
+    type: "memory_governor",
+    data: {
+      stdout: "",
+      stderr: message,
+      exitCode: -1,
+      command: sanitizeError(originalCommand, apiKeys),
+      duration: Date.now() - startTime,
+      _memoryGovernor: message,
+    },
+  };
+}
+
 /**
  * Execute a backgrounded command using spawn with proper detachment
  */
@@ -478,6 +613,7 @@ async function executeBackgroundedCommand(
   apiKeys: string[],
   originalCommand: string,
   startTime: number,
+  gov?: BashGovernorHandle,
 ): Promise<ToolResult<BashOutput>> {
   return new Promise((resolve) => {
     const [shellPath, shellArgs] = getShellCommand(command);
@@ -489,6 +625,10 @@ async function executeBackgroundedCommand(
       detached: true,
       stdio: "ignore", // Critical: don't inherit stdio pipes
     });
+    // The governor keeps measuring a backgrounded model load after this call returns (the Nov 19 panic was four
+    // backgrounded model processes); its lease is held until the process exits.
+    gov?.onSpawn(proc.pid);
+    proc.on("exit", () => { gov?.done(); });
 
     let settled = false;
     const finish = (result: ToolResult<BashOutput>): void => {
@@ -498,6 +638,7 @@ async function executeBackgroundedCommand(
     };
 
     proc.on("error", (err) => {
+      gov?.done();
       notifySpawnResourceError(err, "bash background spawn");
       const classified = classifyChildProcessError(err);
       finish({
@@ -645,11 +786,20 @@ async function captureGitChangesIfChanged(
 /**
  * Execute bash command with timeout and safety
  */
+export const __testing = { joinForSubstitution, splitAfterSubstitution, envHasKeyRef, keyRefUsed, substituteEnvKeyRefs };
+
 export async function executeBashCommand(
   input: BashInput,
+  executeCtx?: unknown,
 ): Promise<ToolResult<BashOutput>> {
-  return attachIdentityReminder(input.command ?? "", executeBashCommandInner(input));
+  const { toolCallIdFromExecuteContext } = await import("./context.js");
+  return bashToolCallId.run(toolCallIdFromExecuteContext(executeCtx), () =>
+    attachIdentityReminder(input.command ?? "", executeBashCommandInner(input)),
+  );
 }
+
+/** Tool call id of the running bash call, so code searches it triggers can tag it. */
+const bashToolCallId = new AsyncLocalStorage<string | undefined>();
 
 async function executeBashCommandInner(
   input: BashInput,
@@ -694,24 +844,37 @@ async function executeBashCommandInner(
     
     // Check if this is a grep command in PAPR folders
     const grepInfo = detectPaprGrepCommand(command);
-    let memoryPromise: Promise<string | null> | null = null;
+    // grep in documents/, workspace/ or repos/<name>/: on-device semantic hits only (no app/job pointers or memory).
+    const contextGrep = grepInfo ? null : detectPaprContextGrepCommand(command);
+    let memoryPromise: Promise<MemoryCodeSearch> | null = null;
+    let devicePromise: Promise<DeviceGrepHits> | null = null;
     
     if (grepInfo) {
-      const memoryQuery = buildHybridMemorySearchQuery(
-        grepInfo.pattern,
-        grepInfo.path,
-      );
-      memoryPromise = searchPaprMemoryForCode(memoryQuery, grepInfo.path);
-      console.log(
-        `[Bash Tool] Detected grep in Papr folder, running parallel memory search: "${memoryQuery.substring(0, 120)}${memoryQuery.length > 120 ? "..." : ""}"`,
-      );
+      // Cloud memory search alongside grep is off by default (slow, rarely added a file; see searchDefaults.ts).
+      const { grepCloudMemoryEnabled } = await import("./searchDefaults.js");
+      if (grepCloudMemoryEnabled()) {
+        const memoryQuery = buildHybridMemorySearchQuery(
+          grepInfo.pattern,
+          grepInfo.path,
+        );
+        memoryPromise = searchPaprMemoryForCode(memoryQuery, grepInfo.path);
+        console.log(
+          `[Bash Tool] Detected grep in Papr folder, running parallel memory search: "${memoryQuery.substring(0, 120)}${memoryQuery.length > 120 ? "..." : ""}"`,
+        );
+      }
+      // On-device papr-embed-code (Neural Engine / ONNX) runs alongside; never blocks grep (2 s budget, [] when not ready).
+      devicePromise = import("./codeEmbed/runtime.js").then((m) => m.deviceHitsForGrep(grepInfo.path, grepInfo.pattern));
+    }
+
+    if (contextGrep) {
+      devicePromise = import("./codeEmbed/runtime.js").then((m) => m.deviceHitsForGrep(contextGrep.path, contextGrep.pattern));
     }
 
     // Get API keys for sanitization and substitution
     const apiKeys = [...getApiKeysForSanitization(), ...jobSecretValues()];
 
     // Quick check: does the command even use custom keys?
-    const hasKeyPattern = /\$\{[A-Z_]+\}/.test(command);
+    const hasKeyPattern = KEY_REF_PATTERN.test(command) || envHasKeyRef(env);
     
     // Build custom keys map only if needed
     const customKeys: Record<string, string> = {};
@@ -740,7 +903,7 @@ async function executeBashCommandInner(
 
     // Check if command uses any keys - if so, request permission
     const usesKeys = Object.keys(customKeys).some((keyName) =>
-      command.includes(`\${${keyName}}`),
+      keyRefUsed(keyName, command, env),
     );
 
     if (usesKeys) {
@@ -750,8 +913,10 @@ async function executeBashCommandInner(
         const { requestKeyPermission } =
           await import("../../gateway/permissions/PermissionRequester.js");
 
-        command = await substituteCustomKeysWithPermission(
-          command,
+        // Permission is checked once per key, whether it is referenced in the
+        // command or in an env value (the `env` parameter).
+        const combined = await substituteCustomKeysWithPermission(
+          joinForSubstitution(command, env),
           customKeys,
           { toolName: "bash", command: input.command },
           async (keyName, context) => {
@@ -763,6 +928,7 @@ async function executeBashCommandInner(
             });
           },
         );
+        command = splitAfterSubstitution(combined, env);
       } catch (error) {
         // Permission denied or error requesting permission
         return {
@@ -774,7 +940,14 @@ async function executeBashCommandInner(
     } else {
       // No keys used, simple substitution
       command = substituteCustomKeys(command, customKeys);
+      substituteEnvKeyRefs(env, customKeys);
     }
+
+    // Resource governor: memory-heavy commands (model loads, local LLMs, docker) wait for room or are refused with a
+    // reason instead of starting on a machine that is already short of memory.
+    const admission = await admitBashCommand(command, await currentOwner());
+    if (!admission.ok) return governorRefusal(admission.message, input.command, apiKeys, startTime);
+    const gov = admission.handle;
 
     // Check if this is a backgrounded command
     if (isBackgroundedCommand(command)) {
@@ -786,6 +959,7 @@ async function executeBashCommandInner(
         apiKeys,
         input.command,
         startTime,
+        gov,
       );
     }
 
@@ -795,12 +969,35 @@ async function executeBashCommandInner(
         ? { ...process.env, ...(env as Record<string, string>) }
         : process.env;
 
-    const { stdout, stderr } = await execShellCommand(command, {
-      cwd: cwd || process.cwd(),
-      timeout,
-      maxBuffer: 100 * 1024 * 1024,
-      env: mergedExecEnv,
-    });
+    let stdout: string | undefined;
+    let stderr: string | undefined;
+    // grep exits 1 when nothing matches. For a hybrid grep that is exactly when the semantic results matter, so
+    // treat it as an empty result (exitCode 1, success) instead of throwing them away in the error path.
+    let grepNoMatch = false;
+    let governorNote: string | undefined;
+    try {
+      try {
+        ({ stdout, stderr } = await execShellCommand(command, {
+          cwd: cwd || process.cwd(),
+          timeout,
+          maxBuffer: 100 * 1024 * 1024,
+          env: mergedExecEnv,
+          onSpawn: gov.onSpawn,
+        }));
+      } finally {
+        governorNote = gov.done();
+      }
+    } catch (err) {
+      if (governorNote) throw Object.assign(err as object, { governorNote });
+      const e = err as { code?: unknown; stdout?: string; stderr?: string; killed?: boolean };
+      if (grepInfo && e?.code === 1 && !e.killed && !(e.stderr ?? "").trim()) {
+        grepNoMatch = true;
+        stdout = e.stdout ?? "";
+        stderr = "";
+      } else {
+        throw err;
+      }
+    }
     
     // Validate output exists (catch undefined/null from process failures)
     if (stdout === undefined && stderr === undefined) {
@@ -821,9 +1018,10 @@ async function executeBashCommandInner(
     
     // If we started a memory search, wait for it now
     let memoryResults: string | null = null;
+    let memoryHits: Array<MemoryCodeSearch["hits"][number] & { lineStart?: number; lineEnd?: number }> = [];
     if (grepInfo && memoryPromise) {
       try {
-        memoryResults = await memoryPromise;
+        ({ block: memoryResults, hits: memoryHits } = await memoryPromise);
         if (memoryResults) {
           console.log(`[Bash Tool] Memory search returned ${memoryResults.split('\n').length} lines`);
         }
@@ -833,12 +1031,32 @@ async function executeBashCommandInner(
       }
     }
 
+    // On-device hits lead: same model the ranking was tuned on (papr-embed-code), current local files, no network.
+    if ((grepInfo || contextGrep) && devicePromise) {
+      const dev = await devicePromise.catch(() => null);
+      if (dev && dev.hits.length) {
+        memoryHits = mergeDeviceHits(dev.hits, memoryHits);
+        const block = deviceHitsBlock(dev);
+        memoryResults = memoryResults ? `${block}\n${memoryResults}` : block;
+      }
+    }
+
     const duration = Date.now() - startTime;
 
     // Sanitize output before returning (no truncation - prepareStep keeps last full)
     let sanitizedStdout = sanitizeError(stdout || "", apiKeys);
     const sanitizedStderr = sanitizeError(stderr || "", apiKeys);
     
+    // papr-code-search v2: ≤5 ranked pointers (papr-embed + code graph + bm25 + command/load/table/entity links).
+    // Runs even when memory returned nothing; "" on any failure.
+    if (grepInfo) {
+      const { codePointersForGrep } = await import("./codeSearchV2.js");
+      // Lexical/link sources use the grep pattern, not the boilerplate memory query ("Find Papr mini-apps code…").
+      const { getUserMessageForTools } = await import("./context.js");
+      const pointers = await codePointersForGrep(grepInfo.path, command, grepInfo.pattern, grepInfo.pattern, memoryHits, stdout || "", getUserMessageForTools());
+      if (pointers) memoryResults = memoryResults ? `${pointers}\n${memoryResults}` : pointers;
+    }
+
     // Combine memory results with grep results if available
     if (memoryResults && sanitizedStdout) {
       sanitizedStdout = `${memoryResults}\n\n=== Grep Results (Exact Match) ===\n${sanitizedStdout}`;
@@ -880,6 +1098,16 @@ async function executeBashCommandInner(
     });
     if (sqliteWarnings.length > 0) {
       sanitizedStdout += formatSqlitePathWarningBlock(sqliteWarnings);
+    }
+
+    // papr-code-harness v1.2: note when the agent repeats the same command with the same output
+    try {
+      const { checkLoop } = await import("./loopBreaker.js");
+      const { getCurrentChatId, getCurrentDelegationJobId } = await import("./context.js");
+      const sid = getCurrentDelegationJobId() ?? getCurrentChatId() ?? "";
+      sanitizedStdout += checkLoop(sid, input.command, `${stdout ?? ""}\u0000${stderr ?? ""}`);
+    } catch {
+      // best-effort only
     }
 
     const appDbGuidance = buildAppDbBashGuidance(command);
@@ -925,18 +1153,20 @@ async function executeBashCommandInner(
       data: {
         stdout: sanitizedStdout,
         stderr: sanitizedStderr,
-        exitCode: 0,
+        exitCode: grepNoMatch ? 1 : 0,
         command: sanitizeError(command, apiKeys), // Sanitize command too
         duration,
         ...(sqliteWarnings.length > 0
           ? { _sqlitePathWarnings: sqliteWarnings }
           : {}),
         ...(oversizedWarning ? { _largeFileReminder: oversizedWarning.trim() } : {}),
+        ...(governorNote ? { _memoryGovernor: governorNote } : {}),
       },
     };
   } catch (error: unknown) {
     const duration = Date.now() - startTime;
     const apiKeys = [...getApiKeysForSanitization(), ...jobSecretValues()];
+    const governorNoteErr = (error as { governorNote?: string } | null)?.governorNote;
 
     if (isSpawnResourceError(error)) {
       notifySpawnResourceError(error, "bash tool spawn");
@@ -967,6 +1197,7 @@ async function executeBashCommandInner(
           ...(classified.agentHint
             ? { _processHint: classified.agentHint }
             : {}),
+          ...(governorNoteErr ? { _memoryGovernor: governorNoteErr } : {}),
         },
       };
     }
@@ -976,8 +1207,8 @@ async function executeBashCommandInner(
     const sanitizedMessage = sanitizeError(message, apiKeys);
     return {
       success: false,
-      error: `Bash execution failed: ${sanitizedMessage}`,
-      type: "unknown_error",
+      error: governorNoteErr ? `${governorNoteErr} (${sanitizedMessage})` : `Bash execution failed: ${sanitizedMessage}`,
+      type: governorNoteErr ? "memory_governor" : "unknown_error",
     };
   }
 }
@@ -1030,7 +1261,7 @@ async function executeBashCommandStreamingInner(
   const apiKeys = [...getApiKeysForSanitization(), ...jobSecretValues()];
 
   // Quick check: does the command even use custom keys?
-  const hasKeyPattern = /\$\{[A-Z_]+\}/.test(command);
+  const hasKeyPattern = KEY_REF_PATTERN.test(command) || envHasKeyRef(env);
 
   // Build custom keys map only if needed
   const customKeys: Record<string, string> = {};
@@ -1059,7 +1290,7 @@ async function executeBashCommandStreamingInner(
 
   // Check if command uses any keys - if so, request permission
   const usesKeys = Object.keys(customKeys).some((keyName) =>
-    command.includes(`\${${keyName}}`),
+    keyRefUsed(keyName, command, env),
   );
 
   if (usesKeys) {
@@ -1068,8 +1299,10 @@ async function executeBashCommandStreamingInner(
       const { requestKeyPermission } =
         await import("../../gateway/permissions/PermissionRequester.js");
 
-      command = await substituteCustomKeysWithPermission(
-        command,
+      // Permission is checked once per key, whether it is referenced in the
+      // command or in an env value (the `env` parameter).
+      const combined = await substituteCustomKeysWithPermission(
+        joinForSubstitution(command, env),
         customKeys,
         { toolName: "bash", command: input.command },
         async (keyName, context) => {
@@ -1081,6 +1314,7 @@ async function executeBashCommandStreamingInner(
           });
         },
       );
+      command = splitAfterSubstitution(combined, env);
     } catch (error) {
       // Permission denied - return error immediately
       return {
@@ -1092,7 +1326,12 @@ async function executeBashCommandStreamingInner(
   } else {
     // No keys used, simple substitution
     command = substituteCustomKeys(command, customKeys);
+    substituteEnvKeyRefs(env, customKeys);
   }
+
+  const admission = await admitBashCommand(command, await currentOwner());
+  if (!admission.ok) return governorRefusal(admission.message, input.command, apiKeys, startTime);
+  const gov = admission.handle;
 
   return new Promise((resolve) => {
     let stdoutData = "";
@@ -1106,6 +1345,7 @@ async function executeBashCommandStreamingInner(
       timeout,
       stdio: SPAWN_STDIO_IGNORE_IN,
     });
+    gov.onSpawn(proc.pid);
 
     // Stream stdout (sanitize before sending)
     proc.stdout.on("data", (data: Buffer) => {
@@ -1127,6 +1367,7 @@ async function executeBashCommandStreamingInner(
     proc.on("close", (code: number | null) => {
       if (killTimer) clearTimeout(killTimer);
       destroyChildProcessStreams(proc);
+      const governorNote = gov.done();
 
       const duration = Date.now() - startTime;
       const exitCode = code ?? -1;
@@ -1167,6 +1408,7 @@ async function executeBashCommandStreamingInner(
             exitCode,
             command: sanitizedCommand,
             duration,
+            ...(governorNote ? { _memoryGovernor: governorNote } : {}),
           },
         });
       } else {
@@ -1183,6 +1425,7 @@ async function executeBashCommandStreamingInner(
             exitCode,
             command: sanitizedCommand,
             duration,
+            ...(governorNote ? { _memoryGovernor: governorNote } : {}),
           },
         });
       }
@@ -1192,6 +1435,7 @@ async function executeBashCommandStreamingInner(
     proc.on("error", (error: Error) => {
       if (killTimer) clearTimeout(killTimer);
       destroyChildProcessStreams(proc);
+      gov.done();
 
       const duration = Date.now() - startTime;
       let sanitizedStdout = sanitizeError(stdoutData, apiKeys);

@@ -10,6 +10,7 @@ import {
 import { buildAgentMemoryAddPolicy } from "../../gateway/utils/workspaceContextSchema.js";
 import { asToonOrRows } from "../utils/toonRows.js";
 import { createTool } from "@mastra/core/tools";
+import { agenticGraphEnabled } from "./searchDefaults.js";
 import { z } from "zod";
 import {
   CURRENT_CHAT_SCOPE,
@@ -914,9 +915,11 @@ export const searchAgentMemoryTool = createTool({
     "Use customMetadataFilters for exact filters (upload_id, content_type, file_name, chat_id, etc.). " +
     `For THIS chat: chatId "${CURRENT_CHAT_SCOPE}". For code: category='code' + projectId/projectType/language/fileName.`,
   inputSchema: searchMemorySchema,
-  execute: async (args) => {
+  execute: async (args, executeCtx?: unknown) => {
     try {
       const client = await getPaprClient();
+      const { toolCallIdFromExecuteContext, getAssistantMessageIdForTools } = await import("./context.js");
+      const toolCallId = toolCallIdFromExecuteContext(executeCtx);
 
       if (args.memoryId) {
         const response = await client.memory.get(args.memoryId);
@@ -960,6 +963,11 @@ export const searchAgentMemoryTool = createTool({
         role?: "user" | "assistant";
         conversationId?: string;
         customMetadata?: Record<string, string | number | boolean | string[]>;
+        /** QueryLog-only join keys: not used as filters by the server. */
+        useCase?: string;
+        clientMessageId?: string;
+        toolCallId?: string;
+        sessionId?: string;
       } = {};
 
       if (conversationId) {
@@ -977,6 +985,12 @@ export const searchAgentMemoryTool = createTool({
       if (hasMetadataFilters) {
         searchMetadata.customMetadata = customMetadata;
       }
+      const useCase = isCodeSearch ? "code_memory" : "memory";
+      searchMetadata.useCase = useCase;
+      const assistantMessageId = getAssistantMessageIdForTools();
+      if (assistantMessageId) searchMetadata.clientMessageId = assistantMessageId;
+      if (toolCallId) searchMetadata.toolCallId = toolCallId;
+      if (scopeChatId) searchMetadata.sessionId = scopeChatId;
 
       const searchPolicy = buildSearchPolicy({
         vectorPolicy: args.vectorPolicy,
@@ -1012,7 +1026,8 @@ export const searchAgentMemoryTool = createTool({
           ...memorySearchSpread,
           max_memories: args.maxMemories ?? 20,
           max_nodes: 20,
-          enable_agentic_graph: true,
+          // Off by default: cold agentic graph calls took ~5.8 s (PAPR_AGENTIC_GRAPH=1 to opt in).
+          enable_agentic_graph: agenticGraphEnabled(),
           reranking_config: {
             reranking_enabled: chosenProvider !== "none",
             reranking_provider: chosenProvider,
@@ -1054,6 +1069,10 @@ export const searchAgentMemoryTool = createTool({
         if (warning) formatted._retrievalQuality = warning;
       }
 
+      {
+        const { recordSearchOnToolCall } = await import("../../gateway/services/storage/trainingSync.js");
+        recordSearchOnToolCall(toolCallId, formatted.searchId, useCase);
+      }
       if (formatted.searchId !== null) {
         // No explicit run key: it is inherited from the AsyncLocalStorage tool
         // context (chat id, or `job:{jobId}:{runId}` for job runs). Passing one

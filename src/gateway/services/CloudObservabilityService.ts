@@ -99,6 +99,9 @@ export interface CloudSyncStatusReport {
   appWriterRepo?: AppWriterRepoReport;
   /** Present when appId is scoped — legacy namespace git is not app code source of truth. */
   namespaceGitTrapWarning?: string;
+  /** false when the requested appId is not an app in this workspace (no appWriterRepo then). */
+  appFound?: false;
+  appNotFound?: string;
   /** Apps in this workspace from local apps.json (disk registry — not namespace git). */
   workspaceApps?: WorkspaceAppRegistryEntry[];
   checkedAt: string;
@@ -310,6 +313,16 @@ export async function resolveTursoDatabaseName(input: {
   );
 }
 
+/** True when appId is an app in this workspace: listed in apps.json or has a folder with metadata. */
+export function isWorkspaceApp(
+  paprDir: string,
+  appId: string,
+  registry: { id: string }[] = loadWorkspaceAppRegistry(paprDir),
+): boolean {
+  if (registry.some((a) => a.id === appId)) return true;
+  return fs.existsSync(path.join(paprDir, "apps", appId, "metadata.json"));
+}
+
 export async function getCloudSyncStatus(options?: {
   appId?: string;
   jobId?: string;
@@ -346,8 +359,14 @@ export async function getCloudSyncStatus(options?: {
     appId ? filterGitHubReportByApp(githubFull, appId, paprDir) : githubFull,
   );
 
+  // An id that isn't an app here (another device's copy, a typo) has no sync
+  // state. Building one anyway reported "Local changes waiting" for a folder
+  // that doesn't exist, and agents acted on it (#929).
+  const workspaceApps = loadWorkspaceAppRegistry(paprDir);
+  const appFound = appId ? isWorkspaceApp(paprDir, appId, workspaceApps) : undefined;
+
   let appWriterRepo: AppWriterRepoReport | undefined;
-  if (appId) {
+  if (appId && appFound) {
     appWriterRepo = await buildAppWriterRepoReport({
       appId,
       paprDir,
@@ -441,9 +460,16 @@ export async function getCloudSyncStatus(options?: {
     jobs,
     oversizedAppFiles,
     appWriterRepo,
-    workspaceApps: loadWorkspaceAppRegistry(paprDir),
+    workspaceApps,
     namespaceGitTrapWarning: NAMESPACE_GIT_TRAP_WARNING,
-    ...(appId
+    ...(appId && !appFound
+      ? {
+          appFound: false,
+          appNotFound: `App ${appId} is not in this workspace, so it has no sync state here. ` +
+            "If it came from a teammate, it is their device's id: match it by name in workspaceApps.",
+        }
+      : {}),
+    ...(appId && appFound
       ? {
           appContext: {
             appId,
@@ -534,12 +560,44 @@ function resolvePushCloudSyncTargets(
   return ["github", "turso"];
 }
 
+async function pushCloudSyncInCloudRun(
+  options: PushCloudSyncOptions,
+  startMs: number,
+): Promise<PushCloudSyncResult> {
+  if (!options.appId) {
+    throw new Error(
+      "In cloud runs, app edits publish automatically. Pass appId to publish an app now; database rows already write straight to the cloud.",
+    );
+  }
+  const { flushCloudSandboxAppNow } = await import(
+    "./cloudAgentGateway/cloudAppWriterDebouncedPush.js"
+  );
+  const outcome = await flushCloudSandboxAppNow(options.appId);
+  if (!outcome.pushed) {
+    throw new Error(`Could not publish ${options.appId}: ${outcome.error ?? "unknown error"}`);
+  }
+  return {
+    success: true,
+    scope: buildPushCloudSyncScopeLabel(options),
+    targets: ["github"],
+    appId: options.appId,
+    syncState: { enabled: true, cloudRun: true } as unknown as PushCloudSyncResult["syncState"],
+    pushedAt: new Date().toISOString(),
+    durationMs: Math.round(performance.now() - startMs),
+  } as PushCloudSyncResult;
+}
+
 export async function pushCloudSync(
   options?: PushCloudSyncOptions,
 ): Promise<PushCloudSyncResult> {
   const startMs = performance.now();
   const sync = getCloudSyncService();
   if (!sync) {
+    // Cloud runs have no desktop sync service: edits publish through the app
+    // writer. Never tell the user to enable Cloud Sync from inside the cloud.
+    if (process.env.GATEWAY_MODE === "cloud_agent") {
+      return pushCloudSyncInCloudRun(options ?? {}, startMs);
+    }
     throw new Error("Cloud sync not initialized. Enable Cloud Sync in Settings.");
   }
 

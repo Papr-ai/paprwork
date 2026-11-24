@@ -1,6 +1,6 @@
 import { openDiagnosticDatabase } from "./databaseDiagnostics/sqlite.js";
 import { gatewayBackgroundBudget } from "./gatewayBackgroundBudget.js";
-import { promises as fs } from "fs";
+import { existsSync, promises as fs } from "fs";
 import path from "path";
 import os from "os";
 import type { ChildProcess } from "child_process";
@@ -66,6 +66,7 @@ import {
   getErrorClassificationReason,
 } from "./jobs/errorClassifier.js";
 import { getJobEventHub } from "./JobEventHub.js";
+import { syncJobPermissionNotice } from "./notifications/noticeSources.js";
 import {
   parseJobProgressLine,
   toJobProgressData,
@@ -150,6 +151,8 @@ export class JobsService {
   private legacyJobsRootDir: string;
   private legacyJobsIndexPath: string;
   private attemptControllers = new Map<string, AbortController>();
+  /** Manual cloud runs in flight: no local process, so the stale-running watchdog must skip them. */
+  private cloudRuns = new Set<string>();
   /**
    * Jobs between "accepted a run" and "attempt controller registered". The
    * running/attemptControllers check is followed by several awaits before
@@ -457,134 +460,6 @@ export class JobsService {
     }
   }
 
-  /**
-   * Sync Home Daily Brief agent prompt from bundled default-job.json.
-   * Each workspace owns its own job UUID — match by Home app link + job name.
-   */
-  private async syncHomeDailyBriefFromBundle(): Promise<void> {
-    // Cloud sandbox: Home and its Daily Brief job come from the cloud repos. Re-running
-    // the desktop Home setup there minted a new job id and rewrote default-job-id.txt /
-    // data-sources.json on every run, and the run pushed that over the real Home.
-    if (isCloudAgentGatewayMode()) {
-      return;
-    }
-    const bundledAppsDir = await resolveBundledResourcesDir(
-      __dirname,
-      "resources/default-apps/home-dashboard",
-    );
-    if (!bundledAppsDir) {
-      return;
-    }
-
-    const jobDefPath = path.join(bundledAppsDir, "default-job.json");
-    let bundledDef: {
-      command?: string;
-      appIds?: string[];
-      name?: string;
-      recipe?: JobRecord["recipe"];
-      retries?: JobRecord["retries"];
-    };
-    try {
-      bundledDef = JSON.parse(
-        await fs.readFile(jobDefPath, "utf8"),
-      ) as typeof bundledDef;
-    } catch {
-      return;
-    }
-
-    const { findHomeDailyBriefJobIdInRegistry, DEFAULT_HOME_APP_ID, readHomeDailyBriefJobIdFromAppDir } =
-      await import("./defaultHomeBundle.js");
-    const { normalizePortableJobPrompt } = await import(
-      "./jobs/normalizePortableJobPrompt.js"
-    );
-
-    const homeAppDir = path.join(getPaprAppsRoot(), DEFAULT_HOME_APP_ID);
-    const preferJobId = await readHomeDailyBriefJobIdFromAppDir(homeAppDir);
-    const jobId = findHomeDailyBriefJobIdInRegistry(this.jobs.values(), {
-      preferJobId,
-    });
-    if (!jobId) {
-      return;
-    }
-
-    const job = this.jobs.get(jobId);
-    if (!job) {
-      return;
-    }
-
-    const nextCommand = bundledDef.command?.trim();
-    if (!nextCommand) {
-      return;
-    }
-
-    const normalizedCommand = normalizePortableJobPrompt(nextCommand);
-    const nextAppIds = bundledDef.appIds?.length
-      ? bundledDef.appIds
-      : [DEFAULT_HOME_APP_ID];
-    const commandChanged = normalizedCommand !== (job.command ?? "");
-    const appIdsChanged =
-      JSON.stringify(nextAppIds) !== JSON.stringify(job.appIds ?? []);
-    const bundledRecipe = bundledDef.recipe;
-    const recipeChanged =
-      bundledRecipe !== undefined &&
-      JSON.stringify(bundledRecipe) !== JSON.stringify(job.recipe ?? null);
-    // Retries only fill a gap: an install that never had a retry policy gets
-    // the bundled one (so transient model-stream drops are retried), but a
-    // user-tuned policy is left alone.
-    const bundledRetries = bundledDef.retries;
-    const retriesChanged =
-      bundledRetries !== undefined && !job.retries;
-
-    if (!commandChanged && !appIdsChanged && !recipeChanged && !retriesChanged) {
-      return;
-    }
-
-    const updated: JobRecord = {
-      ...job,
-      ...(commandChanged ? { command: normalizedCommand } : {}),
-      ...(appIdsChanged ? { appIds: nextAppIds } : {}),
-      ...(recipeChanged ? { recipe: bundledRecipe } : {}),
-      ...(retriesChanged ? { retries: bundledRetries } : {}),
-      updatedAt: new Date().toISOString(),
-    };
-
-    this.setJobInMemory(updated);
-    try {
-      await this.persistJobRecord(updated);
-      await this.syncBundledHomeDailyBriefRecipe(bundledAppsDir, jobId);
-      await this.saveJobs();
-      console.log(
-        `[JobsService] Synced Home Daily Brief job ${jobId} from bundled default-job.json`,
-      );
-    } catch (err) {
-      console.warn(
-        `[JobsService] Could not sync Home Daily Brief job ${jobId}:`,
-        err instanceof Error ? err.message : err,
-      );
-    }
-  }
-
-  /** Copy bundled recipe.md into the workspace Daily Brief job folder when present. */
-  private async syncBundledHomeDailyBriefRecipe(
-    bundledAppDir: string,
-    jobId: string,
-  ): Promise<void> {
-    const recipePath = path.join(bundledAppDir, "recipe.md");
-    try {
-      const markdown = await fs.readFile(recipePath, "utf8");
-      const { getRecipeService } = await import("./jobs/RecipeService.js");
-      await getRecipeService().writeRecipe(jobId, markdown);
-    } catch (err) {
-      const code = (err as NodeJS.ErrnoException).code;
-      if (code !== "ENOENT") {
-        console.warn(
-          `[JobsService] Could not sync bundled recipe for ${jobId}:`,
-          err instanceof Error ? err.message : err,
-        );
-      }
-    }
-  }
-
   async initialize(): Promise<void> {
     if (this.initialized) {
       return;
@@ -669,8 +544,6 @@ export class JobsService {
       await this.installDefaultJobs();
       logJobsStartupStep("Maintenance", "install workspace chat job");
       await this.installWorkspaceChatJob();
-      logJobsStartupStep("Maintenance", "sync Home Daily Brief bundle");
-      await this.syncHomeDailyBriefFromBundle();
       logJobsStartupStep("Maintenance", "reconcile duplicate Home Daily Brief");
       await this.reconcileDuplicateHomeDailyBriefJobsIfNeeded();
       logJobsStartupStep("Maintenance", "filter tombstones after hydrate");
@@ -904,6 +777,9 @@ export class JobsService {
     const job = this.jobs.get(jobId);
     if (!job) return;
     if (jobBelongsToApp(job.appIds, appId)) return;
+    // Focus jobs (Daily Brief, trackers) belong to Papr Work. An old Home data-sources.json
+    // still names the brief job; re-attaching it here would undo the re-link every boot.
+    if (job.folder === "focus" || job.folder === "focus-trackers") return;
 
     const appIds = mergeJobAppIds(job.appIds, [appId]);
     await this.validateAppIdsExist(
@@ -1023,6 +899,103 @@ export class JobsService {
   }
 
   /**
+   * Register job folders (Jobs/{id}/job.json) in the live registry.
+   *
+   * Installs and track updates copy job folders and write data/jobs.json
+   * directly. The running service never saw those entries, and its next
+   * saveJobs() wrote its own in-memory list back over the file, so the
+   * installed jobs vanished until a restart (and stayed gone if an earlier
+   * install of the same app had tombstoned their IDs). Callers that know the
+   * user wants these jobs (install / update) pass clearTombstones: true.
+   *
+   * Never adopts a folder whose job.json id does not match the folder name.
+   * Returns the IDs newly added to the registry (already-registered IDs are
+   * refreshed from disk but not reported).
+   */
+  async adoptJobsFromDisk(
+    jobIds: readonly string[],
+    options?: { clearTombstones?: boolean },
+  ): Promise<{ adopted: string[]; untombstoned: string[] }> {
+    const ids = [...new Set(jobIds.map((id) => id.trim()).filter(Boolean))];
+    if (ids.length === 0 || !this.isWriteContextValid("adopt jobs from disk")) {
+      return { adopted: [], untombstoned: [] };
+    }
+    const paprDir = this.boundPaprDir ?? getPaprRoot();
+    const { clearJobTombstones, readJobTombstones } = await import(
+      "./jobs/jobTombstones.js"
+    );
+    const untombstoned = options?.clearTombstones
+      ? await clearJobTombstones(paprDir, ids)
+      : [];
+    const tombstones = await readJobTombstones(paprDir);
+
+    const adopted: string[] = [];
+    let changed = false;
+    for (const jobId of ids) {
+      if (tombstones.has(jobId)) {
+        continue;
+      }
+      const record = await this.readMergedJobRecordFromDisk(jobId);
+      if (!record) {
+        continue;
+      }
+      const declaredId = await this.readDeclaredJobId(jobId);
+      if (declaredId && declaredId !== jobId) {
+        continue;
+      }
+      if (!this.jobs.has(jobId)) {
+        adopted.push(jobId);
+      }
+      this.setJobInMemory(this.withInitialNextRunAt(record));
+      changed = true;
+    }
+    if (changed) {
+      await this.saveJobs();
+      if (adopted.length > 0) {
+        console.log(
+          `[JobsService] Registered ${adopted.length} job(s) from disk: [${adopted.join(", ")}]`,
+        );
+        void this.rebuildGraph();
+        void import("./JobsScheduler.js")
+          .then(({ getJobsScheduler }) => getJobsScheduler().requestReschedule())
+          .catch(() => {});
+      }
+    }
+    return { adopted, untombstoned };
+  }
+
+  /** job.json "id" for a folder, or null when absent/unreadable. */
+  private async readDeclaredJobId(dirName: string): Promise<string | null> {
+    try {
+      const raw = parseJsonTolerant<Record<string, unknown>>(
+        await fs.readFile(path.join(this.jobsRootDir, dirName, "job.json"), "utf8"),
+      );
+      return typeof raw?.id === "string" && raw.id.length > 0 ? raw.id : null;
+    } catch {
+      return null;
+    }
+  }
+
+  /** Job folders on disk that are not in the registry (UUID-named, with a job.json). */
+  private async listUnregisteredJobDirs(): Promise<string[]> {
+    let dirs: string[];
+    try {
+      dirs = await fs.readdir(this.jobsRootDir);
+    } catch {
+      return [];
+    }
+    const uuid = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+    const out: string[] = [];
+    for (const dirName of dirs) {
+      if (!uuid.test(dirName) || this.jobs.has(dirName)) continue;
+      if (existsSync(path.join(this.jobsRootDir, dirName, "job.json"))) {
+        out.push(dirName);
+      }
+    }
+    return out;
+  }
+
+  /**
    * Reload jobs from disk, picking up any manual edits to jobs.json.
    * Useful when agent or user manually fixes job status on disk.
    */
@@ -1030,6 +1003,13 @@ export class JobsService {
     console.log("[JobsService] Reloading jobs from disk...");
     await this.loadJobs();
     await this.hydrateJobsFromRuntimeFiles();
+    // Job folders that exist on disk but are missing from jobs.json (an install
+    // wrote them, then a save from this process dropped the entries). Tombstoned
+    // IDs stay deleted: adoptJobsFromDisk skips them without clearTombstones.
+    const orphaned = await this.listUnregisteredJobDirs();
+    if (orphaned.length > 0) {
+      await this.adoptJobsFromDisk(orphaned);
+    }
     await this.pruneStaleJobEntries();
     await this.reconcileRegistryAfterSync();
     // Explicit reload is a user signal: drop phantom `running` flags now
@@ -1079,7 +1059,7 @@ export class JobsService {
     return removed.length;
   }
 
-  /** After cloud/git sync — dedupe Home Daily Brief, repair links, respect tombstones. */
+  /** After cloud/git sync — dedupe old Home Daily Brief jobs, respect tombstones. */
   async reconcileRegistryAfterSync(): Promise<{
     tombstonesRemoved: number;
     duplicatesReconciled: boolean;
@@ -1116,16 +1096,6 @@ export class JobsService {
         await this.deleteJob(jobId, true, false);
       },
     });
-
-    try {
-      const { getAppService } = await import("./AppService.js");
-      await getAppService().repairHomeAndWorkspaceOnStartup();
-    } catch (err) {
-      console.warn(
-        "[JobsService] Home repair after sync failed:",
-        (err as Error).message.slice(0, 120),
-      );
-    }
 
     return {
       tombstonesRemoved,
@@ -1568,6 +1538,18 @@ export class JobsService {
     }
   }
 
+  /** A sub-agent profile's default placement, if it set one. */
+  private async profileExecutionCapability(
+    subAgentId: string,
+  ): Promise<JobRecord["executionCapability"]> {
+    try {
+      const { getSubAgentService } = await import("./SubAgentService.js");
+      return (await getSubAgentService().getAgent(subAgentId))?.executionCapability;
+    } catch {
+      return undefined;
+    }
+  }
+
   /** Background pass: pin existing desktop-only jobs that nobody has placed yet. */
   private async reassessAllDesktopOnly(): Promise<void> {
     let pinned = 0;
@@ -1693,7 +1675,9 @@ export class JobsService {
       return JSON.parse(raw) as JobGraph;
     } catch (error) {
       const err = error as NodeJS.ErrnoException;
-      if (err.code === "ENOENT") {
+      // Missing, or unreadable from an older non-atomic write: the graph is
+      // derived data, so rebuild it rather than failing the caller.
+      if (err.code === "ENOENT" || error instanceof SyntaxError) {
         await this.rebuildGraph();
         try {
           const raw = await fs.readFile(this.graphPath, "utf8");
@@ -1805,11 +1789,11 @@ export class JobsService {
       }
 
       await fs.mkdir(path.dirname(this.graphPath), { recursive: true });
-      await fs.writeFile(
-        this.graphPath,
-        JSON.stringify(graph, null, 2),
-        "utf8",
-      );
+      // rebuildGraph runs fire-and-forget after every mutation, so overlapping
+      // rebuilds and readers are normal. A plain writeFile truncates first, and a
+      // reader landing in that window saw an empty file ("Unexpected end of JSON
+      // input"). Temp file + rename: readers see the old graph or the new one.
+      await writeJsonAtomic(this.graphPath, graph);
     } catch (error) {
       console.warn("[JobsService] Failed to rebuild graph:", error);
     }
@@ -1846,7 +1830,12 @@ export class JobsService {
     >,
     currentJobId?: string,
   ): Promise<JobArchitectureIssue[]> {
-    const issues = validateJobArchitecture(job);
+    let scriptSources = "";
+    if (currentJobId) {
+      const { readJobScriptSources } = await import("./jobs/jobScriptSources.js");
+      scriptSources = await readJobScriptSources(this.getJobDir(currentJobId));
+    }
+    const issues = validateJobArchitecture({ ...job, scriptSources });
     const linkedAppId = job.appIds?.find((id) => id !== STANDALONE_APP_ID);
     if (!linkedAppId) return issues;
 
@@ -1944,6 +1933,11 @@ export class JobsService {
     const { defaultExecutionCapabilityForAppIds } = await import(
       "./jobs/executionCapability.js"
     );
+    // Placement: the job's own choice, else its sub-agent profile's, else the
+    // app-link default. Desktop-only code is still pinned by reassessDesktopOnly.
+    const placement =
+      input.executionCapability ??
+      (input.subAgentId ? await this.profileExecutionCapability(input.subAgentId) : undefined);
     const job: JobRecord = {
       id,
       name: input.name,
@@ -1976,10 +1970,7 @@ export class JobsService {
       provider: input.provider,
       model: input.model,
       recipe: input.recipe,
-      executionCapability: defaultExecutionCapabilityForAppIds(
-        appIds,
-        input.executionCapability,
-      ),
+      executionCapability: defaultExecutionCapabilityForAppIds(appIds, placement),
       createdAt: now,
       updatedAt: now,
     };
@@ -2444,6 +2435,7 @@ export class JobsService {
   }
 
   private broadcastJobStatus(job: JobRecord): void {
+    syncJobPermissionNotice(job);
     getJobEventHub().publish({
       type: "jobs:status-changed",
       data: {
@@ -2465,6 +2457,29 @@ export class JobsService {
 
   private async sleep(ms: number): Promise<void> {
     await new Promise((resolve) => setTimeout(resolve, ms));
+  }
+
+  /**
+   * An enabled schedule with no nextRunAt is invisible to the scheduler: the
+   * schedule index only holds jobs that have one. Records built from an app
+   * bundle's job.json (install, Get updates, bundle import) never carry
+   * scheduleState, because it is per-machine and stripped on publish, so an
+   * installed 9:05 job sat in the list and never ran until a restart (#513).
+   * Fill it here so every write path is covered. A one-shot atTime already in
+   * the past is left alone: reconcileScheduleStates decides whether it fires.
+   */
+  private withInitialNextRunAt(job: JobRecord): JobRecord {
+    const schedule = job.schedule;
+    if (!schedule?.enabled) return job;
+    const current = job.scheduleState?.nextRunAt;
+    if (current && !Number.isNaN(new Date(current).getTime())) return job;
+    const now = new Date();
+    if (schedule.atTime && new Date(schedule.atTime).getTime() < now.getTime()) {
+      return job;
+    }
+    const nextRunAt = computeInitialNextRunAt(schedule, now, job.scheduleState);
+    if (!nextRunAt) return job;
+    return { ...job, scheduleState: { ...job.scheduleState, nextRunAt } };
   }
 
   private computeScheduleState(
@@ -2758,6 +2773,14 @@ export class JobsService {
 
     const runSanitizationValues = launch.sanitizationValues ?? [];
 
+    // The child is already running. Capture its exit now: a fast command
+    // (`echo`) can finish during the awaits below, and a "close" listener
+    // attached afterwards never fires, leaving the job "running" until the
+    // 30-minute watchdog.
+    const earlyExit = launch.mode === "process" && launch.process
+      ? captureEarlyProcessExit(launch.process)
+      : undefined;
+
     // Sanitize command before logging (replace API key values with ***)
     const sanitizedCommand = await this.sanitizeCommandForLogging(
       launch.command,
@@ -2848,7 +2871,7 @@ export class JobsService {
         );
         void appendRunLog(`[stderr] ${sanitized}`);
       });
-      proc.on("close", (code: number | null) => {
+      const onClose = (code: number | null) => {
         this.running.delete(job.id);
         destroyChildProcessStreams(proc);
         const exitCode = code ?? -1;
@@ -2856,15 +2879,17 @@ export class JobsService {
         const lastOutput =
           outputChunks.join("\n").slice(0, MAX_OUTPUT_BYTES) || undefined;
         safeResolve({ exitCode, lastOutput });
-      });
-      proc.on("error", (error: Error) => {
+      };
+      earlyExit?.onClose(onClose);
+      const onError = (error: Error) => {
         this.running.delete(job.id);
         destroyChildProcessStreams(proc);
         notifySpawnResourceError(error, `job ${job.id} spawn`);
         const formatted = formatSpawnErrorForLogs(error.message);
         void appendRunLog(`Process error: ${formatted}`);
         safeResolve({ exitCode: -1, errorMessage: formatted });
-      });
+      };
+      earlyExit?.onError(onError);
     });
   }
 
@@ -2920,6 +2945,11 @@ export class JobsService {
     const architectureErrors = formatJobArchitectureErrors(architectureIssues);
     if (architectureErrors) {
       throw new Error(`Job architecture validation failed before run:\n${architectureErrors}`);
+    }
+    for (const issue of architectureIssues) {
+      if (issue.rule === "job-full-table-rewrite") {
+        await this.appendLog(jobId, `[Architecture] WARNING: ${issue.message} Fix: ${issue.remediation}`);
+      }
     }
     // Read before stack.add: a non-empty stack means this run was pulled in by
     // ensureDependencyChain rather than started directly. Separating chained
@@ -3432,7 +3462,12 @@ export class JobsService {
     if (!job || job.status !== "running") {
       return false;
     }
-    if (this.running.has(jobId) || this.agentRuns.has(jobId) || this.attemptControllers.has(jobId)) {
+    if (
+      this.running.has(jobId) ||
+      this.agentRuns.has(jobId) ||
+      this.attemptControllers.has(jobId) ||
+      this.cloudRuns.has(jobId)
+    ) {
       return false;
     }
     await this.appendLog(
@@ -3452,11 +3487,22 @@ export class JobsService {
   }
 
   /** Run on Papr Cloud (memory server) while desktop is awake — for testing cloud execution. */
-  async runJobInCloud(jobId: string): Promise<JobRecord> {
+  async runJobInCloud(
+    jobId: string,
+    params?: Record<string, string>,
+  ): Promise<JobRecord> {
+    if (this.cloudRuns.has(jobId)) {
+      throw new Error("Job is already running in the cloud");
+    }
     const { runJobInCloud: executeCloudJobRun } = await import(
       "./CloudJobRunService.js"
     );
-    return executeCloudJobRun(this, jobId);
+    this.cloudRuns.add(jobId);
+    try {
+      return await executeCloudJobRun(this, jobId, params);
+    } finally {
+      this.cloudRuns.delete(jobId);
+    }
   }
 
   /**
@@ -3892,6 +3938,8 @@ export class JobsService {
     const nowMs = Date.now();
     for (const [jobId, job] of this.jobs.entries()) {
       if (this.attemptControllers.has(jobId) && !this.running.has(jobId)) continue;
+      // A cloud run has no local process; its own request records the outcome.
+      if (this.cloudRuns.has(jobId)) continue;
       if (job.status !== "running") {
         continue;
       }
@@ -4375,6 +4423,7 @@ export class JobsService {
   }
 
   async upsertJob(job: JobRecord, sourceDir?: string): Promise<JobRecord> {
+    job = this.withInitialNextRunAt(job);
     const destination = this.getJobDir(job.id);
     await fs.mkdir(destination, { recursive: true });
     if (sourceDir) {
@@ -4410,4 +4459,42 @@ export async function initializeJobsService(): Promise<JobsService> {
   const service = getJobsService();
   await service.initialize();
   return service;
+}
+
+/**
+ * Record a child's "close"/"error" from the moment it is spawned and replay it
+ * to a handler attached later. Stdout/stderr "data" still needs listeners
+ * before the stream ends, so callers attach those synchronously after awaits;
+ * Node buffers piped output until a reader attaches.
+ */
+export function captureEarlyProcessExit(proc: import("child_process").ChildProcess): {
+  onClose: (handler: (code: number | null) => void) => void;
+  onError: (handler: (error: Error) => void) => void;
+} {
+  let closed: { code: number | null } | undefined;
+  let failed: Error | undefined;
+  let closeHandler: ((code: number | null) => void) | undefined;
+  let errorHandler: ((error: Error) => void) | undefined;
+  proc.once("close", (code: number | null) => {
+    closed = { code };
+    closeHandler?.(code);
+  });
+  proc.once("error", (error: Error) => {
+    failed = error;
+    errorHandler?.(error);
+  });
+  return {
+    onClose(handler) {
+      closeHandler = handler;
+      // Defer so buffered stdout/stderr reach the "data" listeners first.
+      if (closed) {
+        const { code } = closed;
+        setImmediate(() => handler(code));
+      }
+    },
+    onError(handler) {
+      errorHandler = handler;
+      if (failed) handler(failed);
+    },
+  };
 }

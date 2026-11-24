@@ -98,6 +98,10 @@
   flex-shrink: 0;
 }
 
+.settings-tab__notice { margin-left: auto; }
+.settings-tab .notif-dot--blue { background: #0161e0; }
+.settings-tab .notif-dot--green { background: #10b981; }
+
 .settings-tab__attention--paused {
   background: rgb(249, 115, 22);
   box-shadow: 0 0 6px rgba(249, 115, 22, 0.4);
@@ -1167,7 +1171,7 @@
   left: 0;
   right: 0;
   bottom: 0;
-  background-color: var(--background-tertiary);
+  background-color: var(--bg-tertiary, rgba(120, 120, 128, 0.16));
   transition: var(--dur-2) var(--ease);
   border-radius: 24px;
   border: 1px solid var(--border-color);
@@ -1213,8 +1217,12 @@
     color: #ff453a;
   }
 
+  /* The knob stays white in dark mode (as on macOS); only the track darkens. */
+  .toggle-switch__slider {
+    background-color: var(--bg-tertiary, rgba(120, 120, 128, 0.32));
+  }
   .toggle-switch__slider:before {
-    background-color: var(--background-color);
+    box-shadow: 0 1px 3px rgba(0, 0, 0, 0.4);
   }
 }
 

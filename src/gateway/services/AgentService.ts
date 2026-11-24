@@ -18,6 +18,7 @@ import * as path from "path";
 import { streamText } from "ai";
 import type { LanguageModel, ModelMessage, ToolSet, StepResult } from "ai";
 import { ToolRegistry } from "../../core/agents/ToolRegistry.js";
+import { HIDDEN_CONTINUE_PREFIX } from "../../core/constants/hiddenContinue.js";
 import {
   initializeMemorySearchGate,
   wrapToolsWithMemorySearchFirstGate,
@@ -96,6 +97,11 @@ import {
   computeHistoryTrimBounds,
   trimOldestHistoryTurns,
 } from "./agent/midTurnContextTrim.js";
+import {
+  resolveSubAgentRuntime,
+  type SubAgentRuntimeOptions,
+} from "../../core/types/subagents.js";
+import { filterMemoryBlocksForRuntime } from "./agent/subAgentRuntimeContext.js";
 import {
   classifyMemoryBlock,
   getUserMemoryContextService,
@@ -500,8 +506,6 @@ export class AgentService {
     broadcast({ type: "chat:list-updated" });
   }
 
-  private static readonly HIDDEN_CONTINUE_PREFIX = "[__papr_continue__]";
-
   private async assistantMessageRowExists(
     chatId: string,
     messageId: string,
@@ -543,7 +547,7 @@ export class AgentService {
       return { messageId: explicitReuse, checkpointInserted: exists };
     }
 
-    if (userMessage.startsWith(AgentService.HIDDEN_CONTINUE_PREFIX)) {
+    if (userMessage.startsWith(HIDDEN_CONTINUE_PREFIX)) {
       const reused = await this.findLastResumableAssistantMessageId(chatId);
       if (reused) {
         return { messageId: reused, checkpointInserted: true };
@@ -591,6 +595,13 @@ export class AgentService {
       attachments?: import("./storage/IStorageProvider.js").StoredMessageAttachment[];
       /** Reuse an existing assistant row (continue / compress / silent retry). */
       _reuseAssistantMessageId?: string;
+      /** Internal: Auto retry on the next provider after an auth refusal. Retries once. */
+      _isAuthFallbackRetry?: boolean;
+      /**
+       * Sub-agent runtime switches. Omitted = full Pen runtime (every switch on).
+       * See SubAgentRuntimeOptions.
+       */
+      runtime?: SubAgentRuntimeOptions;
     },
   ): AsyncGenerator<StreamChunk & { chatId: string }> {
     if (!this.initialized) {
@@ -712,7 +723,8 @@ export class AgentService {
 
     const skipConcurrencyGate =
       options?._isContextCompressRetry === true ||
-      options?._isSilentRetry === true;
+      options?._isSilentRetry === true ||
+      options?._isAuthFallbackRetry === true;
     let concurrencyLease:
       | import("./agent/agentStreamConcurrency.js").AgentStreamConcurrencyLease
       | undefined;
@@ -803,12 +815,13 @@ export class AgentService {
     const isInternalRerun =
       options?._isSilentRetry === true ||
       options?._isContextCompressRetry === true ||
+      options?._isAuthFallbackRetry === true ||
       options?._isWrapUpContinuation === true;
     const { steerFollowUp } = isInternalRerun
       ? { steerFollowUp: false }
       : consumeTurnStart(chatId, {
           hiddenContinue: userMessage.startsWith(
-            AgentService.HIDDEN_CONTINUE_PREFIX,
+            HIDDEN_CONTINUE_PREFIX,
           ),
         });
     if (steerFollowUp) {
@@ -1407,16 +1420,23 @@ export class AgentService {
           config.provider,
         ));
 
+      const runtime = resolveSubAgentRuntime(options?.runtime);
       let memoryContextBlocks: string[] = [];
       try {
         const memoryContextService = getUserMemoryContextService();
         memoryContextBlocks =
-          await memoryContextService.getMemoryContextBlocks(
-            chatId,
-            userMessage,
-            history,
-            { mode: "stream" },
-          );
+          runtime.memoryContext || runtime.wikiContext
+            ? await memoryContextService.getMemoryContextBlocks(
+                chatId,
+                userMessage,
+                history,
+                { mode: "stream" },
+              )
+            : [];
+        memoryContextBlocks = filterMemoryBlocksForRuntime(
+          memoryContextBlocks,
+          runtime,
+        );
         // The catalog experiment record is written when the deferred block is
         // built and consumed here, on the turn that actually injects it.
         recordCatalogExperiment(
@@ -1457,7 +1477,9 @@ export class AgentService {
       }
 
       const useAnthropicPromptCache =
-        config.provider === "anthropic" && config.authType !== "oauth";
+        runtime.promptCaching &&
+        config.provider === "anthropic" &&
+        config.authType !== "oauth";
       if (useAnthropicPromptCache) {
         const { applyAnthropicPromptCacheControl } =
           await import("./agent/promptCacheControl.js");
@@ -1529,6 +1551,8 @@ export class AgentService {
       const focusAppId = options?.focusContext?.activeApp?.appId;
       setToolContext(chatId, {
         turnMetrics,
+        userMessage,
+        assistantMessageId,
         ...(focusAppId ? { activeAppId: focusAppId } : {}),
         ...(Object.keys(mergedJobEnv).length > 0
           ? { jobEnv: mergedJobEnv }
@@ -1551,6 +1575,7 @@ export class AgentService {
         shouldYield: () => isYieldRequested(chatId),
         jevTrim: jevTrimRegistry,
         userMessage,
+        contextTrimming: runtime.contextTrimming,
         ...(focusAppId ? { activeAppId: focusAppId } : {}),
         ...(Object.keys(mergedJobEnv).length > 0
           ? { jobEnv: mergedJobEnv }
@@ -1645,6 +1670,23 @@ export class AgentService {
           providerOptions,
           buildGroqProviderOptions(config.model, config.reasoning),
         );
+      }
+
+      // OpenRouter (via Papr): effort rides openai.reasoningEffort → reasoning_effort,
+      // which openrouterModel.ts turns into OpenRouter's unified `reasoning` field.
+      if (config.provider === "openrouter") {
+        // Thinking off in the picker → "none", which openrouterModel.ts sends as
+        // reasoning: { enabled: false } so the model answers without thinking.
+        const effort =
+          config.thinking === false ? "none" : (config.reasoning?.effort ?? "medium");
+        // Web search is OpenRouter's server tool (added in openrouterModel.ts); a
+        // runtime with nativeWebSearch: false turns it off through this flag.
+        Object.assign(providerOptions, {
+          openai: {
+            reasoningEffort: effort,
+            ...(runtime.nativeWebSearch ? {} : { metadata: { papr_web_search: "off" } }),
+          },
+        });
       }
 
       // For Moonshot Kimi K3 (OpenAI-compatible — reasoning_effort=max always)
@@ -1758,9 +1800,11 @@ export class AgentService {
       // turn end. Reset here so a previous turn's searches can never be
       // attributed to this turn's answer.
       resetSearchOutcomes(chatId);
-      const registryTools = wrapToolsWithMemorySearchFirstGate(
-        this.toolRegistry.getToolsForMastra(options?.allowedToolIds),
-      );
+      const registryTools = runtime.tools
+        ? wrapToolsWithMemorySearchFirstGate(
+            this.toolRegistry.getToolsForMastra(options?.allowedToolIds),
+          )
+        : {};
 
       // Which schemas ride in the request. Decided once, here, and never
       // revised mid-turn: the tool block sits in the cached prefix, so one
@@ -1872,6 +1916,7 @@ export class AgentService {
       // Whether compaction ran or the pressure gate declined is the measurement
       // that makes a change to the truncation policy visible, so both are counted.
       const compactWithMetrics = (msgs: unknown[]): void => {
+        if (!runtime.contextTrimming) return;
         const stats = compactStaleToolResults(msgs, {
           historyTokenBudget,
           jevTrim: jevTrimRegistry,
@@ -1887,10 +1932,12 @@ export class AgentService {
       // Pre-flight trim: use model-aware cap (not global 300K) so Groq/Ollama don't overflow.
       // The same budget gates compaction, which does nothing until the context is under pressure.
       compactWithMetrics(messages);
-      const preFlightTrim = trimOldestHistoryTurns(messages, {
-        ...historyTrimBounds,
-        maxTokens: historyTokenBudget,
-      });
+      const preFlightTrim = runtime.contextTrimming
+        ? trimOldestHistoryTurns(messages, {
+            ...historyTrimBounds,
+            maxTokens: historyTokenBudget,
+          })
+        : { trimmed: false as const, removedTurns: 0, tokensBefore: 0, tokensAfter: 0 };
       if (preFlightTrim.trimmed) {
         const postTrimEstimate = estimateMessagesTokens(messages) + toolTokens;
         console.log(
@@ -1925,9 +1972,10 @@ export class AgentService {
 
       // Native provider search tools (OpenAI web_search, Gemini google_search) target
       // direct provider APIs — they break when the model routes through Papr proxy.
-      const nativeSearchTools = config.usePaprProxy
-        ? {}
-        : await this.buildNativeSearchTools(config.provider);
+      const nativeSearchTools =
+        config.usePaprProxy || !runtime.nativeWebSearch
+          ? {}
+          : await this.buildNativeSearchTools(config.provider);
       if (config.usePaprProxy) {
         console.log(
           `[AgentService] Skipping native provider search tools — using Papr AI proxy for ${config.provider}`,
@@ -1993,7 +2041,9 @@ export class AgentService {
         // 3. Proactive Papr summarization before/after turns
         // 4. User can abort via UI (abortController)
         abortSignal: abortController.signal,
-        ...(config.provider === "groq" || config.provider === "moonshot"
+        ...(config.provider === "groq" ||
+        config.provider === "moonshot" ||
+        config.provider === "openrouter"
           ? { includeRawChunks: true }
           : {}),
         ...(providerOptions.openai ||
@@ -2002,7 +2052,8 @@ export class AgentService {
         providerOptions.anthropic ||
         config.provider === "zai" ||
         config.provider === "groq" ||
-        config.provider === "moonshot"
+        config.provider === "moonshot" ||
+        config.provider === "openrouter"
           ? { providerOptions }
           : {}),
         // Before each tool step: drop oldest stored history if mid-turn context exceeds model budget.
@@ -2045,19 +2096,23 @@ export class AgentService {
             };
             const msgs = [...stepOptions.messages, warningMessage];
             compactWithMetrics(msgs);
-            trimOldestHistoryTurns(msgs, {
-              ...historyTrimBounds,
-              maxTokens: historyTokenBudget,
-            });
+            if (runtime.contextTrimming) {
+              trimOldestHistoryTurns(msgs, {
+                ...historyTrimBounds,
+                maxTokens: historyTokenBudget,
+              });
+            }
             return { messages: msgs };
           }
 
           let msgs = [...stepOptions.messages];
           compactWithMetrics(msgs);
-          trimOldestHistoryTurns(msgs, {
-            ...historyTrimBounds,
-            maxTokens: historyTokenBudget,
-          });
+          if (runtime.contextTrimming) {
+            trimOldestHistoryTurns(msgs, {
+              ...historyTrimBounds,
+              maxTokens: historyTokenBudget,
+            });
+          }
           if (steerFollowUp) {
             msgs = withSteerNote(msgs as any) as typeof msgs;
           }
@@ -2351,13 +2406,22 @@ export class AgentService {
             );
 
             // Map model ID to display name and pricing
-            const modelInfo = piModelId.includes("fable")
+            const modelInfo = piModelId.includes("fable-5-2")
               ? {
-                  name: piModelId.includes("fable-5-1")
-                    ? "Claude Fable 5.1"
-                    : "Claude Fable 5",
-                  inputCost: 10.0,
-                  outputCost: 50.0,
+                  name: "Claude Fable 5.2",
+                  inputCost: 8.0,
+                  outputCost: 40.0,
+                  contextWindow: 1000000,
+                }
+              : piModelId.includes("fable")
+              ? {
+                  name: piModelId.includes("fable-5-2")
+                    ? "Claude Fable 5.2"
+                    : piModelId.includes("fable-5-1")
+                      ? "Claude Fable 5.1"
+                      : "Claude Fable 5",
+                  inputCost: piModelId.includes("fable-5-2") ? 8.0 : 10.0,
+                  outputCost: piModelId.includes("fable-5-2") ? 40.0 : 50.0,
                   contextWindow: 1000000,
                 }
               : piModelId.includes("opus-5-5")
@@ -2413,7 +2477,9 @@ export class AgentService {
 
             const cacheReadMultiplier = piModelId.includes("opus-5-5")
               ? 0.05
-              : 0.1;
+              : piModelId.includes("fable-5-2")
+                ? 0.025
+                : 0.1;
 
             finalModel = {
               id: piModelId,
@@ -2450,10 +2516,6 @@ export class AgentService {
             `baseUrl=${finalModel ? (finalModel as any).baseUrl : "null"}`,
         );
 
-        // Build native web search tools for pi-ai providers
-        const nativeSearchTools =
-          this.buildNativeSearchToolsForPiAi(piProvider);
-
         const piContext = buildPiContext({
           // Steered follow-up: the model-only note rides right after the
           // user's message (never persisted; see agent/steerYield.ts).
@@ -2464,7 +2526,6 @@ export class AgentService {
           apiId: piApiId,
           providerId: piProvider,
           modelId: piModelId,
-          nativeTools: nativeSearchTools,
         });
 
         // 🔍 LOG EXACT CONTEXT SENT TO PI-AI
@@ -2568,7 +2629,13 @@ export class AgentService {
           sessionId,
           signal: abortController.signal,
           reasoning: reasoningLevel,
-          ...(usePiAiAnthropic ? { cacheRetention: "long" as const } : {}),
+          ...(usePiAiAnthropic
+            ? {
+                cacheRetention: runtime.promptCaching
+                  ? ("long" as const)
+                  : ("none" as const),
+              }
+            : {}),
         };
 
         type PiAiStreamOptions =
@@ -2588,6 +2655,15 @@ export class AgentService {
             baseStreamOpts,
             config.thinking !== false,
           );
+        }
+        // Provider web search rides on the request body (pi-ai only converts
+        // function tools); see providers/piAiNativeWebSearch.ts.
+        if (runtime.nativeWebSearch) {
+          const { withPiAiNativeWebSearch } = await import(
+            "./providers/piAiNativeWebSearch.js"
+          );
+          streamOpts = withPiAiNativeWebSearch(piProvider, streamOpts);
+          console.log(`[AgentService] ✅ Native web search on (${piProvider}, pi-ai)`);
         }
         const apiKeys = getApiKeysForSanitization();
         const maxSteps = options?.maxSteps ?? 100;
@@ -2734,7 +2810,7 @@ export class AgentService {
         });
 
         aiSdkStreamResult = await streamText(streamTextOptions);
-        if (config.provider === "groq") {
+        if (config.provider === "groq" || config.provider === "openrouter") {
           const { adaptGroqAISDKFullStream } =
             await import("../utils/groqProvider.js");
           fullStream = adaptGroqAISDKFullStream(aiSdkStreamResult.fullStream);
@@ -2766,7 +2842,9 @@ export class AgentService {
         apiKeys,
         {
           sequence,
-          ...(config.provider === "groq" || config.provider === "moonshot"
+          ...(config.provider === "groq" ||
+          config.provider === "moonshot" ||
+          config.provider === "openrouter"
             ? { textBufferMin: 1 }
             : {}),
         },
@@ -2786,6 +2864,9 @@ export class AgentService {
       let firstTextDeltaMarked = false;
       let contextLengthErrorMessage: string | null = null;
       let rateLimitExhausted = false;
+      // Auto only: the provider refused its credential before producing anything.
+      let authFallbackConfig: AgentConfigInternal | null = null;
+      let producedOutput = false;
       while (true) {
         const next = await streamIterator.next();
 
@@ -2872,6 +2953,36 @@ export class AgentService {
             break;
           }
           if (
+            autoRequested &&
+            !producedOutput &&
+            !options?._isAuthFallbackRetry
+          ) {
+            const { isProviderAuthError, markAutoProviderRefused, autoRefusedProviders } =
+              await import("../utils/autoProviderHealth.js");
+            if (isProviderAuthError(errorText)) {
+              markAutoProviderRefused(config.provider);
+              const { findReachableProvider } = await import("../utils/reachableProvider.js");
+              const next = await findReachableProvider(autoRefusedProviders());
+              if (next) {
+                console.warn(
+                  `[AgentService] Auto: ${config.provider} refused its credential — retrying on ${next.provider}. chatId=${chatId}`,
+                );
+                authFallbackConfig = {
+                  ...config,
+                  provider: next.provider,
+                  model: AUTO_MODEL_ID as typeof config.model,
+                  apiKey: next.creds.apiKey,
+                  authType: next.creds.authType,
+                  usePaprProxy: next.creds.usePaprProxy ?? false,
+                };
+                delete authFallbackConfig.reasoning;
+                delete authFallbackConfig.autoAllowedModels;
+                delete authFallbackConfig.autoFallbackModelId;
+                break;
+              }
+            }
+          }
+          if (
             !options?._isContextCompressRetry &&
             isContextLengthError(errorText)
           ) {
@@ -2922,6 +3033,13 @@ export class AgentService {
         // up-to-date content even though the orchestrator holds the
         // authoritative copy until it returns (next.done).
         const chunkType = next.value.type;
+        if (
+          chunkType === "text-delta" ||
+          chunkType === "reasoning-delta" ||
+          chunkType === "tool-call"
+        ) {
+          producedOutput = true;
+        }
         if (chunkType === "text-delta") {
           const textPayload = next.value.payload as
             | { text?: string }
@@ -3002,6 +3120,26 @@ export class AgentService {
         checkpointTimer = null;
       }
 
+      if (authFallbackConfig) {
+        for await (const chunk of this.streamAgentInternal(
+          chatId,
+          userMessage,
+          authFallbackConfig,
+          {
+            ...options,
+            _isAuthFallbackRetry: true,
+            _skipSaveUserMessage: true,
+            _reuseAssistantMessageId: assistantMessageId,
+          },
+        )) {
+          // The retry skips the gate and runs under this turn's lease.
+          if (chunk.type === "done") releaseConcurrencyLease();
+          yield chunk;
+        }
+        this.sessionManager.setStreaming(chatId, false);
+        return;
+      }
+
       if (contextLengthErrorMessage) {
         yield {
           type: "compression-start",
@@ -3067,9 +3205,12 @@ export class AgentService {
 
         // Widened from the SDK's narrower assistant|tool response type so the
         // continuation's own messages can be threaded back in.
-        let continuationMessages: ModelMessage[] = (
-          await aiSdkStreamResult.response
-        ).messages;
+        // Prompt + history first: the response alone opens on a model turn,
+        // which Gemini rejects once it is sent back as the next request.
+        let continuationMessages: ModelMessage[] = [
+          ...((streamTextOptions.messages as ModelMessage[] | undefined) ?? []),
+          ...(await aiSdkStreamResult.response).messages,
+        ];
 
         for (
           let attempt = 0;
@@ -3274,6 +3415,11 @@ export class AgentService {
           yield wrapUpNext.value;
         }
         wrapUpOutcome = wrapUpResult?.outcome ?? wrapUpOutcome;
+        if (wrapUpOutcome.kind === "transport") {
+          // The wrap-up lost its connection: the turn is resumable, not
+          // finished, so it gets no closing note (finalReplyGuarantee.ts).
+          providerStreamFailed = true;
+        }
         const wrapUpState = wrapUpResult?.state;
         if (wrapUpState?.assistantText.trim()) {
           const merged = mergeWrapUpTextIntoState(
@@ -3495,6 +3641,13 @@ export class AgentService {
         usage: tokenUsage,
         delegationFinishFor: delegationFinishFor ?? undefined,
       });
+      // Searches that ran this turn recorded their searchId by toolCallId; copy
+      // them onto the stored tool calls so the local row and the synced row both
+      // name the QueryLog each call produced.
+      {
+        const { applySearchTags } = await import("./storage/trainingSync.js");
+        applySearchTags(assistantMsg.toolCalls);
+      }
       const streamStorage = resolveStreamStorage();
       if (streamStorage) {
         if (checkpointInserted) {
@@ -3815,8 +3968,12 @@ export class AgentService {
           const papr = new PaprClient({
             xAPIKey: keys.PAPR_API_KEY,
           });
+          const { paprSessionUserQuery } = await import(
+            "./storage/paprSessionScope.js"
+          );
           const response = await papr.messages.sessions.compress(chatId, {
             maxRetries: 0,
+            query: paprSessionUserQuery(),
           });
           if (response.summaries) {
             const s = response.summaries;
@@ -4746,9 +4903,14 @@ ${last15.substring(0, 8_000)}`;
     authOverride?: {
       apiKey: string;
       authType: "oauth" | "apiKey";
+      usePaprProxy?: boolean;
     };
     /** Cloud agent gateway: Papr Memory API key for tool calls */
     paprApiKey?: string;
+    /** Sub-agent runtime switches (memory/wiki/tools/search/caching/trimming). */
+    runtime?: SubAgentRuntimeOptions;
+    /** Replace-mode sub-agent: used as the whole system prompt. */
+    systemPromptOverride?: string;
   }): Promise<{
     chatId: string;
     text: string;
@@ -4777,6 +4939,7 @@ ${last15.substring(0, 8_000)}`;
 
     let apiKey: string | undefined;
     let authType: "oauth" | "apiKey" | undefined;
+    let usePaprProxy: boolean | undefined;
 
     const isCloudGateway = process.env.GATEWAY_MODE === "cloud_agent";
 
@@ -4793,14 +4956,17 @@ ${last15.substring(0, 8_000)}`;
           model: input.model,
           token: input.authOverride.apiKey,
           authType: input.authOverride.authType,
+          usePaprProxy: input.authOverride.usePaprProxy,
         });
         provider = cloudSession.provider;
         model = cloudSession.model;
         apiKey = cloudSession.token;
         authType = cloudSession.authType;
+        usePaprProxy = cloudSession.usePaprProxy;
       } else {
         apiKey = input.authOverride.apiKey;
         authType = input.authOverride.authType;
+        usePaprProxy = input.authOverride.usePaprProxy;
       }
     }
 
@@ -4821,8 +4987,6 @@ ${last15.substring(0, 8_000)}`;
     console.log(
       `[AgentService] Resolved job provider/model: ${provider}/${model}`,
     );
-
-    let usePaprProxy: boolean | undefined;
 
     if (!input.authOverride?.apiKey) {
       const sessionAuth = await (
@@ -4858,7 +5022,9 @@ ${last15.substring(0, 8_000)}`;
       apiKey,
       authType,
       usePaprProxy,
-      systemPrompt: `${this.systemPrompt}\n\n# Isolated Job Run\n- Session: ${chatId}\n- Keep output concise and actionable.`,
+      systemPrompt:
+        input.systemPromptOverride ??
+        `${this.systemPrompt}\n\n# Isolated Job Run\n- Session: ${chatId}\n- Keep output concise and actionable.`,
       contextLimit: DEFAULT_SESSION_CONTEXT_LIMIT,
     };
 
@@ -4869,6 +5035,10 @@ ${last15.substring(0, 8_000)}`;
     let toolCallCount = 0;
     let orphanToolCount = 0;
     let lastStreamError: string | undefined;
+    // The provider refused its credential before producing anything: retry once
+    // on the next provider this user can reach (same rule as Auto chat turns).
+    let authRefusal = false;
+    let producedOutput = false;
 
     try {
       try {
@@ -4879,6 +5049,7 @@ ${last15.substring(0, 8_000)}`;
           {
             allowedToolIds: input.allowedToolIds,
             maxSteps: input.maxTurns,
+            ...(input.runtime ? { runtime: input.runtime } : {}),
           },
         )) {
           if (chunk.type === "error") {
@@ -4900,9 +5071,30 @@ ${last15.substring(0, 8_000)}`;
               break; // Exit the stream loop to retry
             }
 
+            if (!producedOutput && !input.authOverride?.apiKey) {
+              const { isProviderAuthError } = await import(
+                "../utils/autoProviderHealth.js"
+              );
+              if (isProviderAuthError(errMsg)) {
+                console.warn(
+                  `[AgentService] Job ${input.jobId}: ${provider} refused its credential — trying the next provider`,
+                );
+                authRefusal = true;
+                break;
+              }
+            }
+
             throw new Error(
               `Agent job model error (${provider}/${model}): ${errMsg}`,
             );
+          }
+
+          if (
+            chunk.type === "text-delta" ||
+            chunk.type === "reasoning-delta" ||
+            chunk.type === "tool-call"
+          ) {
+            producedOutput = true;
           }
 
           // Log structured activity to job logs (thinking, tool calls, results)
@@ -4992,36 +5184,68 @@ ${last15.substring(0, 8_000)}`;
           thinkingBuffer = "";
         }
       } catch (err) {
-        // If error wasn't a rate limit, rethrow
-        if (!retryWithApiKey) throw err;
+        // If error wasn't a rate limit or a credential refusal, rethrow
+        if (!retryWithApiKey && !authRefusal) throw err;
       }
 
-      // Retry with API key or Papr proxy if OAuth rate limit was hit
-      if (retryWithApiKey && authType === "oauth") {
-        const { resolveOAuthRateLimitRetryCredentials } =
-          await import("../utils/resolveJobSessionAuth.js");
-        const retryCreds = await resolveOAuthRateLimitRetryCredentials(
-          provider,
-          model,
-        );
-
-        if (!retryCreds) {
-          throw new Error(
-            `OAuth rate limit reached and no API key or Papr proxy available for ${provider}. ` +
-              `Add an API key in Settings, sign in with Papr, or wait for rate limit to reset.`,
+      // Retry: OAuth rate limit → API key / Papr proxy on the same provider;
+      // credential refusal → the next provider the user can reach.
+      if ((retryWithApiKey && authType === "oauth") || authRefusal) {
+        let apiKeyConfig: AgentConfigInternal;
+        if (authRefusal) {
+          const { resolveAuthRefusalRetry } = await import(
+            "../utils/resolveJobSessionAuth.js"
           );
+          const next = await resolveAuthRefusalRetry(provider);
+          if (!next) {
+            throw new Error(
+              `Agent job model error (${provider}/${model}): ${lastStreamError ?? "credential refused"}`,
+            );
+          }
+          console.log(
+            `[AgentService] Job ${input.jobId}: retrying on ${next.provider}/${next.model} after ${provider} refused its credential`,
+          );
+          provider = next.provider;
+          model = next.model;
+          apiKey = next.apiKey;
+          authType = next.authType;
+          usePaprProxy = next.usePaprProxy;
+          const refusalRetryConfig: AgentConfigInternal = {
+            ...config,
+            provider: next.provider,
+            model: next.model as typeof config.model,
+            apiKey: next.apiKey,
+            authType: next.authType,
+            usePaprProxy: next.usePaprProxy,
+          };
+          apiKeyConfig = refusalRetryConfig;
+        } else {
+          const { resolveOAuthRateLimitRetryCredentials } =
+            await import("../utils/resolveJobSessionAuth.js");
+          const retryCreds = await resolveOAuthRateLimitRetryCredentials(
+            provider,
+            model,
+          );
+
+          if (!retryCreds) {
+            throw new Error(
+              `OAuth rate limit reached and no API key or Papr proxy available for ${provider}. ` +
+                `Add an API key in Settings, sign in with Papr, or wait for rate limit to reset.`,
+            );
+          }
+
+          console.log(
+            `[AgentService] Retrying after OAuth rate limit for ${provider} (apiKey=${retryCreds.authType === "apiKey"} paprProxy=${Boolean(retryCreds.usePaprProxy)})`,
+          );
+
+          const rateLimitRetryConfig: AgentConfigInternal = {
+            ...config,
+            apiKey: retryCreds.apiKey,
+            authType: retryCreds.authType,
+            usePaprProxy: retryCreds.usePaprProxy,
+          };
+          apiKeyConfig = rateLimitRetryConfig;
         }
-
-        console.log(
-          `[AgentService] Retrying after OAuth rate limit for ${provider} (apiKey=${retryCreds.authType === "apiKey"} paprProxy=${Boolean(retryCreds.usePaprProxy)})`,
-        );
-
-        const apiKeyConfig: AgentConfigInternal = {
-          ...config,
-          apiKey: retryCreds.apiKey,
-          authType: retryCreds.authType,
-          usePaprProxy: retryCreds.usePaprProxy,
-        };
 
         // Create new chatId for retry to avoid session cache
         retryChatId = `${chatId}-retry`;
@@ -5034,13 +5258,14 @@ ${last15.substring(0, 8_000)}`;
           {
             allowedToolIds: input.allowedToolIds,
             maxSteps: input.maxTurns,
+            ...(input.runtime ? { runtime: input.runtime } : {}),
           },
         )) {
           if (chunk.type === "error") {
             const errMsg =
               (chunk.payload as { error?: string })?.error ?? "Model API error";
             throw new Error(
-              `Agent job model error (${provider}/${model}) after API key fallback: ${errMsg}`,
+              `Agent job model error (${provider}/${model}) after ${authRefusal ? "provider fallback" : "API key fallback"}: ${errMsg}`,
             );
           }
 
@@ -5177,9 +5402,10 @@ ${last15.substring(0, 8_000)}`;
     model?: string;
     allowedToolIds?: string[];
     maxTurns?: number;
-    authOverride: { apiKey: string; authType: "oauth" | "apiKey" };
+    authOverride: { apiKey: string; authType: "oauth" | "apiKey"; usePaprProxy?: boolean };
     paprApiKey?: string;
     systemPromptOverride?: string;
+    runtime?: SubAgentRuntimeOptions;
     appendLog?: (line: string) => Promise<void>;
   }): AsyncGenerator<StreamChunk & { chatId: string }> {
     if (!this.initialized) {
@@ -5197,6 +5423,7 @@ ${last15.substring(0, 8_000)}`;
     let model: string;
     let apiKey: string;
     let authType: "oauth" | "apiKey";
+    let usePaprProxy = false;
 
     if (isCloudGateway && input.authOverride?.apiKey) {
       const cloudSession = await (
@@ -5206,11 +5433,13 @@ ${last15.substring(0, 8_000)}`;
         model: input.model,
         token: input.authOverride.apiKey,
         authType: input.authOverride.authType,
+        usePaprProxy: input.authOverride.usePaprProxy,
       });
       provider = cloudSession.provider;
       model = cloudSession.model;
       apiKey = cloudSession.token;
       authType = cloudSession.authType;
+      usePaprProxy = cloudSession.usePaprProxy === true;
     } else {
       const resolved = await (
         await import("../utils/resolveJobProviderModel.js")
@@ -5237,6 +5466,7 @@ ${last15.substring(0, 8_000)}`;
       model,
       apiKey,
       authType,
+      ...(usePaprProxy ? { usePaprProxy: true } : {}),
       systemPrompt:
         input.systemPromptOverride ??
         `${this.systemPrompt}\n\n# Isolated Job Run\n${isolatedRunNote}\n- Keep output concise and actionable.`,
@@ -5258,6 +5488,7 @@ ${last15.substring(0, 8_000)}`;
       {
         allowedToolIds: input.allowedToolIds,
         maxSteps: input.maxTurns,
+        ...(input.runtime ? { runtime: input.runtime } : {}),
       },
     )) {
       if (input.appendLog) {
@@ -5807,10 +6038,17 @@ ${last15.substring(0, 8_000)}`;
         break;
 
       case "anthropic":
-        // Anthropic: web_search disabled for now due to compatibility issues
-        console.log(
-          "[AgentService] ℹ️  Anthropic: Web search disabled (use browser tools instead)",
-        );
+        try {
+          const { anthropic } = await import("@ai-sdk/anthropic");
+          // 20250305: the version every current Claude model accepts.
+          tools.web_search = anthropic.tools.webSearch_20250305({ maxUses: 5 });
+          console.log("[AgentService] ✅ Enabled Anthropic web search");
+        } catch (error) {
+          console.warn(
+            "[AgentService] ⚠️  Failed to load Anthropic web search tool:",
+            (error as Error).message,
+          );
+        }
         break;
 
       case "ollama":
@@ -5823,46 +6061,6 @@ ${last15.substring(0, 8_000)}`;
       default:
         console.log(
           `[AgentService] ℹ️  Provider ${provider}: No native search support`,
-        );
-    }
-
-    return tools;
-  }
-
-  /**
-   * Build native web search tools for pi-ai providers (OAuth routes)
-   *
-   * Same as buildNativeSearchTools but returns pi-ai compatible format
-   */
-  private buildNativeSearchToolsForPiAi(
-    provider: string,
-  ): Array<{ type: string; name?: string; max_uses?: number }> {
-    const tools: Array<{ type: string; name?: string; max_uses?: number }> = [];
-
-    switch (provider) {
-      case "anthropic":
-        // Anthropic: web_search disabled for now due to compatibility issues
-        console.log(
-          "[AgentService] ℹ️  Anthropic OAuth: Web search disabled (use browser tools instead)",
-        );
-        break;
-
-      case "openai-codex":
-        // OpenAI Codex: web_search tool
-        // Note: May require specific ChatGPT backend support
-        tools.push({
-          type: "web_search",
-          name: "web_search",
-          max_uses: 10,
-        });
-        console.log(
-          "[AgentService] ⚠️  Added OpenAI Codex web_search via pi-ai (experimental)",
-        );
-        break;
-
-      default:
-        console.log(
-          `[AgentService] ℹ️  Provider ${provider}: No native search via pi-ai`,
         );
     }
 

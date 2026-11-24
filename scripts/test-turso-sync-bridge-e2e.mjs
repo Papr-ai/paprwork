@@ -10,6 +10,8 @@
  *   ELECTRON_RUN_AS_NODE=1 ./node_modules/.bin/electron scripts/test-turso-sync-bridge-e2e.mjs
  */
 
+// Must stay first: runs in a temp workspace, never the real ~/Papr.
+import "./lib/isolateHome.mjs";
 import Database from "better-sqlite3";
 import * as fs from "fs";
 import * as os from "os";

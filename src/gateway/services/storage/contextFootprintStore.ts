@@ -258,7 +258,8 @@ export function scheduleContextFootprintBackfill(
   if (backfillRunning) return;
 
   setImmediate(() => {
-    if (backfillRunning) return;
+    // The DB can be closed (workspace switch, shutdown) before this tick runs.
+    if (backfillRunning || !db.open) return;
 
     scheduleContextStatsRebuild(db);
 

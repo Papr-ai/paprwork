@@ -1,0 +1,369 @@
+import { mkdtemp, rm, writeFile, mkdir } from "fs/promises";
+import { tmpdir } from "os";
+import { join } from "path";
+import { afterEach, describe, expect, it } from "vitest";
+import { AppBackendService } from "../../src/gateway/services/appRuntime/AppBackendService.js";
+import { getAppRuntimeLogService } from "../../src/gateway/services/AppRuntimeLogService.js";
+import {
+  DEFAULT_BACKEND_MANIFEST,
+  DEFAULT_BACKEND_PING_HANDLER,
+  DEFAULT_BACKEND_PING_HANDLER_JS,
+  DEFAULT_BACKEND_PING_HANDLER_TS,
+} from "../../src/gateway/utils/appBackendScaffold.js";
+
+describe("AppBackendService (local)", () => {
+  // Keeps fixtures out of the developer's real ~/Papr workspace.
+  useIsolatedPaprWorkspace("app-backend-local");
+
+  let tempRoot: string;
+
+  afterEach(async () => {
+    if (tempRoot) {
+      await rm(tempRoot, { recursive: true, force: true, maxRetries: 5, retryDelay: 50 });
+    }
+  });
+
+  it("runs scaffolded ping action", async () => {
+    tempRoot = await mkdtemp(join(tmpdir(), "papr-backend-"));
+    const appId = "test-app-id";
+    const backendDir = join(tempRoot, "apps", appId, "backend");
+    await mkdir(backendDir, { recursive: true });
+    await writeFile(
+      join(backendDir, "manifest.json"),
+      JSON.stringify(DEFAULT_BACKEND_MANIFEST, null, 2),
+    );
+    await writeFile(join(backendDir, "ping.py"), DEFAULT_BACKEND_PING_HANDLER);
+
+    const service = new AppBackendService(tempRoot);
+    const result = await service.runAction({
+      appId,
+      action: "ping",
+      params: { hello: "world" },
+    });
+
+    expect(result.exitCode).toBe(0);
+    const payload = JSON.parse(result.stdout) as {
+      ok: boolean;
+      action: string;
+      params: { hello: string };
+    };
+    expect(payload.ok).toBe(true);
+    expect(payload.action).toBe("ping");
+    expect(payload.params.hello).toBe("world");
+  });
+
+  it("logs a failing action as a runtime error so validate_app sees it", async () => {
+    tempRoot = await mkdtemp(join(tmpdir(), "papr-backend-"));
+    const appId = "test-app-failing";
+    const backendDir = join(tempRoot, "apps", appId, "backend");
+    await mkdir(backendDir, { recursive: true });
+    await writeFile(
+      join(backendDir, "manifest.json"),
+      JSON.stringify({ version: 1, actions: { items: { handler: "items.py", runtime: "python" } } }),
+    );
+    await writeFile(
+      join(backendDir, "items.py"),
+      "raise AttributeError(\"'list' object has no attribute 'fetchall'\")\n",
+    );
+    getAppRuntimeLogService().clear(appId);
+
+    const result = await new AppBackendService(tempRoot).runAction({ appId, action: "items" });
+
+    expect(result.exitCode).not.toBe(0);
+    const errors = getAppRuntimeLogService().getErrorMessages(appId);
+    expect(errors.some((e) => e.includes('action "items" failed') && e.includes("fetchall"))).toBe(true);
+  });
+
+  it("backend handlers get sqlite3-style rows from the shared helper at runtime", async () => {
+    tempRoot = await mkdtemp(join(tmpdir(), "papr-backend-"));
+    const appId = "test-app-sqlite-rows";
+    const backendDir = join(tempRoot, "apps", appId, "backend");
+    await mkdir(backendDir, { recursive: true });
+    await writeFile(
+      join(backendDir, "manifest.json"),
+      JSON.stringify({ version: 1, actions: { items: { handler: "items.py", runtime: "python" } } }),
+    );
+    // Real runtime env (PYTHONPATH from jobSdkEnv + refreshed vendored papr_db.py):
+    // the shared Row/Cursor must import, and the grocery-list idiom must work.
+    await writeFile(
+      join(backendDir, "items.py"),
+      [
+        "import json, papr_db",
+        "cur = papr_db._wrap_execute_result([{'id': 1, 'name': 'Milk'}, {'id': 2, 'name': 'Eggs'}], None)",
+        "cols = [d[0] for d in cur.description]",
+        "print(json.dumps({'items': [dict(zip(cols, r)) for r in cur.fetchall()]}))",
+        "",
+      ].join("\n"),
+    );
+
+    const result = await new AppBackendService(tempRoot).runAction({ appId, action: "items" });
+
+    expect(result.stderr).toBe("");
+    expect(result.exitCode).toBe(0);
+    expect(JSON.parse(result.stdout)).toEqual({
+      items: [{ id: 1, name: "Milk" }, { id: 2, name: "Eggs" }],
+    });
+  });
+
+  it("runs node ping action", async () => {
+    tempRoot = await mkdtemp(join(tmpdir(), "papr-backend-"));
+    const appId = "test-app-node";
+    const backendDir = join(tempRoot, "apps", appId, "backend");
+    await mkdir(backendDir, { recursive: true });
+    await writeFile(
+      join(backendDir, "manifest.json"),
+      JSON.stringify(
+        {
+          version: 1,
+          actions: {
+            ping: {
+              handler: "ping.mjs",
+              runtime: "node",
+              timeoutMs: 10_000,
+            },
+          },
+        },
+        null,
+        2,
+      ),
+    );
+    await writeFile(join(backendDir, "ping.mjs"), DEFAULT_BACKEND_PING_HANDLER_JS);
+
+    const service = new AppBackendService(tempRoot);
+    const result = await service.runAction({
+      appId,
+      action: "ping",
+      params: { mode: "node" },
+    });
+
+    expect(result.exitCode).toBe(0);
+    const payload = JSON.parse(result.stdout) as {
+      ok: boolean;
+      params: { mode: string };
+    };
+    expect(payload.ok).toBe(true);
+    expect(payload.params.mode).toBe("node");
+  });
+
+  it("runs typescript ping action when esbuild is available", async () => {
+    let esbuildAvailable = false;
+    try {
+      const esbuild = await import("esbuild");
+      await esbuild.transform("const x = 1", {
+        loader: "ts",
+        platform: "node",
+        format: "esm",
+      });
+      esbuildAvailable = true;
+    } catch {
+      esbuildAvailable = false;
+    }
+    if (!esbuildAvailable) {
+      return;
+    }
+
+    tempRoot = await mkdtemp(join(tmpdir(), "papr-backend-"));
+    const appId = "test-app-ts";
+    const backendDir = join(tempRoot, "apps", appId, "backend");
+    await mkdir(backendDir, { recursive: true });
+    await writeFile(
+      join(backendDir, "manifest.json"),
+      JSON.stringify(
+        {
+          version: 1,
+          actions: {
+            ping: {
+              handler: "ping.ts",
+              runtime: "typescript",
+              timeoutMs: 10_000,
+            },
+          },
+        },
+        null,
+        2,
+      ),
+    );
+    await writeFile(join(backendDir, "ping.ts"), DEFAULT_BACKEND_PING_HANDLER_TS);
+
+    const service = new AppBackendService(tempRoot);
+    const result = await service.runAction({
+      appId,
+      action: "ping",
+      params: { mode: "ts" },
+    });
+
+    expect(result.exitCode).toBe(0);
+    const payload = JSON.parse(result.stdout) as {
+      ok: boolean;
+      params: { mode: string };
+    };
+    expect(payload.ok).toBe(true);
+    expect(payload.params.mode).toBe("ts");
+  });
+
+  it("injects APP_DB when data-sources.json links primary sqlite", async () => {
+    tempRoot = await mkdtemp(join(tmpdir(), "papr-backend-"));
+    const appId = "test-app-db";
+    const dbPath = join(tempRoot, "linked.db");
+    await writeFile(dbPath, "sqlite-placeholder");
+
+    const backendDir = join(tempRoot, "apps", appId, "backend");
+    await mkdir(backendDir, { recursive: true });
+    await writeFile(
+      join(tempRoot, "apps", appId, "data-sources.json"),
+      JSON.stringify(
+        {
+          primary: "main",
+          sources: [
+            {
+              id: "j:main",
+              type: "sqlite",
+              jobId: "33333333-3333-3333-3333-333333333333",
+              alias: "main",
+              role: "primary",
+              dbPath,
+              tables: [],
+              linkedAt: new Date().toISOString(),
+            },
+          ],
+        },
+        null,
+        2,
+      ),
+    );
+    await writeFile(
+      join(backendDir, "manifest.json"),
+      JSON.stringify(
+        {
+          version: 1,
+          actions: {
+            ping: { handler: "ping.py", runtime: "python", timeoutMs: 10_000 },
+          },
+        },
+        null,
+        2,
+      ),
+    );
+    const pingDbHandler = `#!/usr/bin/env python3
+import json, os, sys
+json.dump({"dbMode": os.environ.get("PAPR_DB_MODE"), "appDb": os.environ.get("APP_DB")}, sys.stdout)
+`;
+    await writeFile(join(backendDir, "ping.py"), pingDbHandler);
+
+    const service = new AppBackendService(tempRoot);
+    const result = await service.runAction({ appId, action: "ping" });
+    expect(result.exitCode).toBe(0);
+    const payload = JSON.parse(result.stdout) as {
+      dbMode: string;
+      appDb: string;
+    };
+    // Handlers reach the DB through the gateway proxy; APP_DB stays for backward compat.
+    expect(payload.dbMode).toBe("proxy");
+    expect(payload.appDb).toBe(dbPath);
+  });
+
+  it("injects PAPR_DB_* for multiple linked sources with manifest sourceId", async () => {
+    tempRoot = await mkdtemp(join(tmpdir(), "papr-backend-"));
+    const appId = "test-app-multi-db";
+    const metricsPath = join(tempRoot, "metrics.db");
+    const billingPath = join(tempRoot, "billing.db");
+    await writeFile(metricsPath, "sqlite-placeholder");
+    await writeFile(billingPath, "sqlite-placeholder");
+
+    const backendDir = join(tempRoot, "apps", appId, "backend");
+    await mkdir(backendDir, { recursive: true });
+    await writeFile(
+      join(tempRoot, "apps", appId, "data-sources.json"),
+      JSON.stringify(
+        {
+          sources: [
+            {
+              id: "db-a:metrics",
+              type: "sqlite",
+              dbId: "db-aaaa1111",
+              alias: "metrics",
+              dbPath: metricsPath,
+              tables: [],
+              linkedAt: new Date().toISOString(),
+            },
+            {
+              id: "db-b:billing",
+              type: "sqlite",
+              dbId: "db-bbbb2222",
+              alias: "billing",
+              dbPath: billingPath,
+              tables: [],
+              linkedAt: new Date().toISOString(),
+            },
+          ],
+        },
+        null,
+        2,
+      ),
+    );
+    await writeFile(
+      join(backendDir, "manifest.json"),
+      JSON.stringify(
+        {
+          version: 1,
+          actions: {
+            readBilling: {
+              handler: "read_billing.py",
+              runtime: "python",
+              sourceId: "billing",
+              timeoutMs: 10_000,
+            },
+          },
+        },
+        null,
+        2,
+      ),
+    );
+    const handler = `#!/usr/bin/env python3
+import json, os, sys
+json.dump({
+  "appDb": os.environ.get("APP_DB"),
+  "billing": os.environ.get("PAPR_DB_BILLING"),
+  "metrics": os.environ.get("PAPR_DB_METRICS"),
+  "active": os.environ.get("PAPR_ACTIVE_SOURCE_ID"),
+}, sys.stdout)
+`;
+    await writeFile(join(backendDir, "read_billing.py"), handler);
+
+    const service = new AppBackendService(tempRoot);
+    const result = await service.runAction({ appId, action: "readBilling" });
+    expect(result.exitCode).toBe(0);
+    const payload = JSON.parse(result.stdout) as {
+      appDb: string;
+      billing: string;
+      metrics: string;
+      active: string;
+    };
+    expect(payload.appDb).toBe(billingPath);
+    expect(payload.billing).toBe(billingPath);
+    expect(payload.metrics).toBe(metricsPath);
+    expect(payload.active).toBe("billing");
+  });
+});
+
+import { useIsolatedPaprWorkspace } from "../setup/isolatedWorkspace.js";
+describe("collectRecentRuntimeErrors backend window", () => {
+  it("ignores backend failures from before the current preview", async () => {
+    const { collectRecentRuntimeErrors } = await import(
+      "../../src/gateway/utils/miniAppRuntimePreview.js"
+    );
+    const appId = "test-app-window";
+    const log = getAppRuntimeLogService();
+    log.clear(appId);
+    const old = new Date(Date.now() - 60_000).toISOString();
+    log.append(appId, { level: "error", message: "old backend", source: "backend/items", timestamp: old, origin: "preview" });
+    log.append(appId, { level: "error", message: "iframe boom", timestamp: old, origin: "iframe" });
+    const start = new Date(Date.now() - 1_000).toISOString();
+    log.append(appId, { level: "error", message: "new backend", source: "backend/items", timestamp: new Date().toISOString(), origin: "preview" });
+
+    const errors = collectRecentRuntimeErrors(appId, undefined, start);
+    expect(errors.join("\n")).toContain("new backend");
+    expect(errors.join("\n")).toContain("iframe boom");
+    expect(errors.join("\n")).not.toContain("old backend");
+  });
+});

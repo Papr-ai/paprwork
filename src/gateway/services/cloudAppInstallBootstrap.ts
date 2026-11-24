@@ -3,6 +3,7 @@
  * resolve linked DB paths, apply git migrations locally, optional Turso row pull.
  */
 
+import { isCloudSyncEnabled } from "../utils/cloudSyncEnabled.js";
 import { openDiagnosticDatabase } from "./databaseDiagnostics/sqlite.js";
 
 import { existsSync, statSync } from "fs";
@@ -67,6 +68,11 @@ export interface InstallBootstrapResult {
   needsSeed: boolean;
   errors: string[];
   warnings: string[];
+  /**
+   * Team copy on the publisher's shared database: schema comes from the
+   * cloud pull, never from installer-run migrations.
+   */
+  sharedDatabase?: boolean;
 }
 
 function countUserTables(dbPath: string): number {
@@ -222,6 +228,7 @@ async function bootstrapLinkedSource(
     skipMigrations?: boolean;
     migrationsApplied?: string[];
     localOnly?: boolean;
+    sharedDatabase?: boolean;
     paprHome?: string;
     registry?: DatabasesRegistryFile;
   },
@@ -296,13 +303,37 @@ async function bootstrapLinkedSource(
       : countUserTables(localPath);
   const writable = cloudDirect ? cloudDirect.reachable : isLocalDbReadable(localPath);
 
+  const shared = Boolean(options?.sharedDatabase && !options.localOnly);
   if (!writable && errors.length === 0) {
     errors.push(
-      `Database "${source.alias}" is not reachable after setup (${localPath}).`,
+      shared
+        ? `The team's shared database for "${source.alias}"` +
+            (source.dbId ? ` (dbId ${source.dbId})` : "") +
+            ` is not reachable on this device after the cloud pull (pull ${tursoPull}, ${localPath}).`
+        : `Database "${source.alias}" is not reachable after setup (${localPath}).`,
     );
   }
 
-  if (writable && userTableCount === 0 && errors.length === 0 && !options?.tursoPullOnly) {
+  if (shared && errors.length === 0) {
+    // The team's database is the source of truth. If the pull did not bring
+    // its schema down, the copy is broken: say so instead of suggesting
+    // migrations or seed jobs that would write schema into the shared DB.
+    if (tursoPull === "unavailable" || tursoPull === "failed") {
+      errors.push(
+        `Could not pull the team's shared database for "${source.alias}"` +
+          (source.dbId ? ` (dbId ${source.dbId})` : "") +
+          `: cloud pull ${tursoPull}.`,
+      );
+    } else if (writable && userTableCount === 0) {
+      // Reachable but empty: the replica may still be pulling. Not an error,
+      // and never a cue to migrate or seed the team's database from here.
+      warnings.push(
+        `The team's shared database for "${source.alias}"` +
+          (source.dbId ? ` (dbId ${source.dbId})` : "") +
+          " has no tables on this device yet. Pull it from the cloud; do not run migrations or seed it here.",
+      );
+    }
+  } else if (writable && userTableCount === 0 && errors.length === 0 && !options?.tursoPullOnly) {
     warnings.push(
       `Database "${source.alias}" has no user tables yet. Run the linked job on this device or seed via the app setup flow.`,
     );
@@ -390,7 +421,8 @@ function shouldRunMigrationsBeforeTurso(
   if (options?.tursoPullOnly || shouldSkipTursoDuringBootstrap(options)) {
     return false;
   }
-  // Shared team database: pull remote rows first, then apply forward-only migrations.
+  // Shared team database: schema and rows come from the publisher's cloud
+  // database. The installer never runs migrations against it.
   if (options?.installDbPolicy === "shared_primary") {
     return false;
   }
@@ -430,6 +462,12 @@ export async function bootstrapInstalledAppDatabases(
   const pullResults = new Map<string, PullResult | undefined>();
   const migrationsByAlias = new Map<string, string[]>();
   const runMigrationsBeforeTurso = shouldRunMigrationsBeforeTurso(options);
+  // Only a cloud-backed copy shares the publisher's database. With cloud sync
+  // off the copy is a local file nobody else sees, so it migrates like any app.
+  const sharedDatabase =
+    (options?.installDbPolicy === "shared_primary" || options?.tursoPullOnly === true) &&
+    !localOnly &&
+    isCloudSyncEnabled();
 
   if (runMigrationsBeforeTurso) {
     for (const source of sources) {
@@ -532,8 +570,11 @@ export async function bootstrapInstalledAppDatabases(
         ...options,
         localOnly,
         ...workspaceOpts,
-        skipMigrations: runMigrationsBeforeTurso,
+        // Already migrated before the pull, or a shared team database whose
+        // schema is owned by the publisher: never migrate here.
+        skipMigrations: runMigrationsBeforeTurso || sharedDatabase,
         migrationsApplied: migrationsByAlias.get(source.alias),
+        sharedDatabase,
       },
     );
     linkedDbs.push(result);
@@ -572,7 +613,31 @@ export async function bootstrapInstalledAppDatabases(
     needsSeed,
     errors,
     warnings,
+    ...(sharedDatabase ? { sharedDatabase: true } : {}),
   };
+}
+
+/**
+ * Install policy for an already-installed app, from its lineage file.
+ * Team copies on shared data return shared_primary; everything else undefined.
+ */
+export async function resolveInstalledAppDbPolicy(
+  appId: string,
+): Promise<InstallDbPolicy | undefined> {
+  try {
+    const { CLOUD_LINEAGE_FILENAME } = await import("./CloudAppLineageService.js");
+    const raw = await fs.readFile(
+      path.join(getPaprAppsRoot(), appId.trim(), CLOUD_LINEAGE_FILENAME),
+      "utf8",
+    );
+    const lineage = JSON.parse(raw) as { mode?: string; databasePolicy?: string };
+    const shared =
+      lineage.databasePolicy === "shared" ||
+      (lineage.databasePolicy === undefined && lineage.mode === "track");
+    return shared ? "shared_primary" : undefined;
+  } catch {
+    return undefined;
+  }
 }
 
 /** After cross-namespace copy: apply pending migrations in the target workspace. */
@@ -662,6 +727,9 @@ export function buildCloudInstallAgentSetupMessage(input: {
   bootstrap: InstallBootstrapResult;
   linkedJobIds?: string[];
 }): string {
+  if (input.bootstrap.sharedDatabase) {
+    return buildSharedDatabaseSetupMessage(input);
+  }
   const hasErrors = input.bootstrap.errors.length > 0;
   const lines: string[] = [
     hasErrors
@@ -717,5 +785,53 @@ export function buildCloudInstallAgentSetupMessage(input: {
     "Do not paste API keys or database tokens into chat or files — credentials are fetched by the platform.",
   );
 
+  return lines.join("\n");
+}
+
+/**
+ * Team copy on shared data: the fix is always to pull the publisher's
+ * database, never to run migrations or seed it from this device.
+ */
+function buildSharedDatabaseSetupMessage(input: {
+  appTitle: string;
+  appId: string;
+  sourceSlug?: string;
+  bootstrap: InstallBootstrapResult;
+}): string {
+  const paths = resolveSetupPromptPaths();
+  const lines: string[] = [
+    `The team app "${input.appTitle}" (appId: ${input.appId}` +
+      (input.sourceSlug ? `, slug: ${input.sourceSlug}` : "") +
+      ") was installed on the team's shared database, but this device could not load it.",
+    "",
+    "The schema and rows belong to the publisher's cloud database. This copy must pull them; it does not own the schema.",
+    "",
+  ];
+  if (input.bootstrap.errors.length > 0) {
+    lines.push("**Errors:**");
+    for (const err of input.bootstrap.errors) {
+      lines.push(`- ${err}`);
+    }
+    lines.push("");
+  }
+  if (input.bootstrap.linkedDbs.length > 0) {
+    lines.push("**Linked databases:**");
+    for (const db of input.bootstrap.linkedDbs) {
+      const mode = storageModeForPrompt(db);
+      lines.push(
+        `- alias "${db.alias}"${db.dbId ? ` (dbId ${db.dbId})` : ""}: storage=${mode.label}, ` +
+          `pull=${db.tursoPull}, tables=${db.userTableCount}, reachable=${db.writable}`,
+      );
+    }
+    lines.push("");
+  }
+  lines.push(
+    "**Do this:**",
+    "1. Check sign-in and cloud sync (get_cloud_sync_status for this app).",
+    `2. Confirm each linked dbId in ${paths.dataSources.replace("{appId}", input.appId)} matches the registry at ${paths.registry} and points at the team's cloud database.`,
+    "3. Pull the shared database (repair_cloud_sync strategy pull), then confirm the tables with query_cloud_turso and papr_db_query.",
+    "4. Do NOT apply migrations, create tables or run seed jobs against this database — that changes the team's shared data. If the cloud database itself is missing tables, ask the app's publisher to publish.",
+    "Do not paste API keys or database tokens into chat or files — credentials are fetched by the platform.",
+  );
   return lines.join("\n");
 }

@@ -66,7 +66,9 @@ export default defineConfig(({ mode }) => {
     include: ["react", "react/jsx-runtime", "react-dom", "zustand"],
   },
   server: {
-    port: 5173,
+    // Dev profile (npm run dev:devenv) sets VITE_PORT so it runs beside the
+    // production app's dev server.
+    port: Number(process.env.VITE_PORT) || 5173,
     strictPort: true,
   },
   build: {

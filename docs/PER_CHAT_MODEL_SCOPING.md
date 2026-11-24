@@ -99,12 +99,12 @@ selection the user just made.
 | `ui/utils/historyMapper.ts`, `ui/types/chat.ts` | Carry `model` per message so a chat can recover its own model |
 | `ui/hooks/useChat.ts` | Forget a deleted chat's model |
 | `ui/App.tsx` | Boot seeds the *new-chat* default, not per-chat state |
-| `tests/chat-model-scoping.test.ts` | 21 tests |
+| `tests/providers/chat-model-scoping.test.ts` | 21 tests |
 
 ## Tests
 
 ```bash
-npx vitest run tests/chat-model-scoping.test.ts --config vitest.config.unit.ts
+npx vitest run tests/providers/chat-model-scoping.test.ts --config vitest.config.unit.ts
 ```
 
 Covers per-chat isolation, survival across a simulated restart, the reported

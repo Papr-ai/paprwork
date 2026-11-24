@@ -10,6 +10,10 @@
 // the first file to define a key wins. Omitting `.env` left dev builds without
 // keys that only live there (PAPR_TURSO_REPLICA_SYNC), which silently ran the
 // legacy sync engine against already-cutover replica databases.
+// PAPR_PROFILE=dev → .env.development wins (dev backend URLs, dev Auth0).
+if ((process.env.PAPR_PROFILE || "").trim().toLowerCase() === "dev") {
+  require("dotenv").config({ path: require("path").join(__dirname, "../../.env.development") });
+}
 require("dotenv").config({ path: require("path").join(__dirname, "../../.env.local") });
 require("dotenv").config({ path: require("path").join(__dirname, "../../.env") });
 
@@ -35,7 +39,15 @@ const {
 
 // Set app name for macOS Keychain (must be before any safeStorage usage)
 // This determines the keychain entry name: "Papr Work Safe Storage"
-app.setName("Papr Work");
+// A dev profile gets its own name → own userData dir, keychain entry and
+// single-instance lock, so it runs side by side with the production app.
+const PAPR_DEV_PROFILE = (process.env.PAPR_PROFILE || "").trim().toLowerCase() === "dev";
+app.setName(PAPR_DEV_PROFILE ? "Papr Work Dev" : "Papr Work");
+// Dev profile owns papr-dev:// so it never fights the production app for papr://.
+const PAPR_SCHEME = PAPR_DEV_PROFILE ? "papr-dev" : "papr";
+const PAPR_URL = `${PAPR_SCHEME}://`;
+// Base workspace dir: ~/Papr (prod) or ~/Papr-dev (dev profile). Keep in sync with getPaprBaseDir().
+const PAPR_BASE_DIRNAME = PAPR_DEV_PROFILE ? "Papr-dev" : "Papr";
 
 // Real Chrome owns port 9222 for platform jobs + agent automation.
 // Enable embedded Electron CDP only when explicitly requested (PAPR_PLATFORM_EMBEDDED_CDP=1).
@@ -468,6 +480,7 @@ async function handleWebviewTestRequest(request) {
     );
     for (const sid of stale) {
       const old = webviewSessions.get(sid);
+      if (defaultWebviewId === sid) defaultWebviewId = null;
       if (old && !old.window.isDestroyed()) old.window.close();
     }
 
@@ -519,9 +532,11 @@ async function handleWebviewTestRequest(request) {
           : undefined,
     };
     webviewSessions.set(id, entry);
-    if (!defaultWebviewId) {
-      defaultWebviewId = id;
-    }
+    // The newest preview is the default. The session cap above may have just
+    // closed the old default, and its "closed" handler (which clears the
+    // default) only runs later, so "keep the first one" left no default at all
+    // and every call without a webviewId failed with "No active webview session".
+    defaultWebviewId = id;
 
     const session = win.webContents.session;
     // Capture the webContentsId now — before the window can be destroyed —
@@ -1149,7 +1164,7 @@ function readActiveWorkspacePointer() {
     const osMod = require("os");
     const pointerPath = pathMod.join(
       osMod.homedir(),
-      "Papr",
+      PAPR_BASE_DIRNAME,
       ".active-workspace.json",
     );
     if (!fs.existsSync(pointerPath)) {
@@ -2178,10 +2193,7 @@ class GatewayProcessSupervisor {
 
 const { mergeUpdateStatusCache } = require("./updaterStatusCache.cjs");
 
-const UPDATE_RECOVERY_HINT =
-  "If the app won't open after updating: quit Papr Work, delete " +
-  "~/Library/Caches/com.paprwork.v2.ShipIt, remove /Applications/Papr Work.app, " +
-  "then reinstall the latest arm64 .pkg from GitHub Releases.";
+const { formatUpdateError } = require("./updateErrorFormat.cjs");
 
 /** @type {import("./updaterStatusCache.cjs").UpdateStatusPayload | null} */
 let cachedUpdateStatusPayload = null;
@@ -2189,57 +2201,6 @@ let cachedUpdateStatusPayload = null;
 /** Register before the renderer loads — UpdateBanner calls getStatus on mount. */
 function registerUpdaterIpcHandlers() {
   ipcMain.handle("updater:get-status", () => cachedUpdateStatusPayload);
-}
-
-function formatUpdateError(rawMessage) {
-  const message =
-    typeof rawMessage === "string" ? rawMessage : String(rawMessage ?? "Unknown error");
-  const lower = message.toLowerCase();
-
-  if (lower.includes("read-only volume") || lower.includes("readonly")) {
-    return {
-      error:
-        "Update cannot install while Papr Work is on a read-only volume. " +
-        "Install to /Applications using the .pkg installer.",
-      recoveryHint: UPDATE_RECOVERY_HINT,
-    };
-  }
-
-  if (
-    lower.includes("shipit") ||
-    lower.includes("signature") ||
-    lower.includes("codesign") ||
-    lower.includes("seckey") ||
-    lower.includes("corrupt") ||
-    lower.includes("damaged")
-  ) {
-    return {
-      error: `Update installation failed: ${message}`,
-      recoveryHint: UPDATE_RECOVERY_HINT,
-    };
-  }
-
-  if (
-    lower.includes("enotfound") ||
-    lower.includes("network") ||
-    lower.includes("net::") ||
-    lower.includes("econnrefused") ||
-    lower.includes("timed out")
-  ) {
-    return {
-      error: `Could not reach the update server: ${message}`,
-      recoveryHint: "Check your internet connection and try again.",
-    };
-  }
-
-  if (lower.includes("not packaged")) {
-    return {
-      error: message,
-      recoveryHint: "Auto-updates only work in packaged builds from GitHub Releases.",
-    };
-  }
-
-  return { error: message };
 }
 
 /**
@@ -2306,25 +2267,8 @@ function setupAutoUpdater() {
 
   autoUpdater.on("update-downloaded", (info) => {
     console.log(`[AutoUpdater] Update downloaded: v${info.version}`);
+    // The renderer raises an app.update_ready notice; route() decides whether the OS pops.
     sendUpdateStatus("ready", { version: info.version });
-    try {
-      const { Notification } = require("electron");
-      if (Notification.isSupported()) {
-        const notification = new Notification({
-          title: "Papr Work update ready",
-          body: `Version ${info.version} is downloaded. Restart to update.`,
-        });
-        notification.on("click", () => {
-          if (mainWindow && !mainWindow.isDestroyed()) {
-            mainWindow.show();
-            mainWindow.focus();
-          }
-        });
-        notification.show();
-      }
-    } catch (notificationError) {
-      console.warn("[AutoUpdater] Could not show update notification:", notificationError.message);
-    }
   });
 
   autoUpdater.on("error", (err) => {
@@ -2472,24 +2416,8 @@ function initializeSystemInvokeHandler(mainWindow) {
       return { text: clipboard.readText() };
     },
     
-    'notification.show': async (options) => {
-      const notification = new Notification({
-        title: options.title || 'Notification',
-        body: options.body || '',
-        urgency: options.urgency || 'normal'
-      });
-      // Optional click-through, e.g. a connection request opens Settings → Connections.
-      if (options.openSettings && typeof options.openSettings === 'string') {
-        notification.on('click', () => {
-          if (!mainWindow || mainWindow.isDestroyed()) return;
-          if (mainWindow.isMinimized()) mainWindow.restore();
-          mainWindow.focus();
-          mainWindow.webContents.send('notification:open-settings', { target: options.openSettings });
-        });
-      }
-      notification.show();
-      return { success: true };
-    },
+    // notification.show is handled in the renderer: it becomes a notice (notifications:app) so
+    // route() caps it at Priority, dedupes it and only pops the OS when Paprwork is in the background.
     
     'app.getPath': async (name) => {
       return { path: app.getPath(name) };
@@ -2513,6 +2441,70 @@ function initializeSystemInvokeHandler(mainWindow) {
       throw new Error('Main window not available');
     },
   };
+
+  // OS notification decided by route() in the gateway. macOS, Windows and Linux (libnotify).
+  // Not in ALLOWED_APIS: mini-apps go through notifications:app, which caps and dedupes them.
+  // Open OS notifications by notice key. Holding them also keeps macOS from garbage
+  // collecting the object, which silently drops its click handler.
+  const openNotices = new Map();
+  // Show previews "When unlocked": hide the text while the screen is locked.
+  let screenLocked = false;
+  powerMonitor.on('lock-screen', () => { screenLocked = true; });
+  powerMonitor.on('unlock-screen', () => { screenLocked = false; });
+  ipcMain.handle('notice:open-os-settings', async () => {
+    const url = process.platform === 'darwin' ? 'x-apple.systempreferences:com.apple.Notifications-Settings.extension'
+      : process.platform === 'win32' ? 'ms-settings:notifications' : '';
+    if (url) await shell.openExternal(url).catch(() => {});
+    return { ok: !!url };
+  });
+  // Are Papr Work's notifications allowed in macOS? Electron has no API for it, so read Notification
+  // Center's prefs: the entry whose path is this app bundle. `auth` holds what macOS granted (alert = 4);
+  // 0 means not allowed. No entry: macOS hasn't been asked yet. Elsewhere we can't tell (gray dot).
+  ipcMain.handle('notice:os-access', async () => {
+    if (process.platform !== 'darwin') return { state: 'unknown' };
+    try {
+      const bundle = process.execPath.replace(/\/Contents\/MacOS\/[^/]+$/, '');
+      const xml = execSync('/usr/bin/defaults export com.apple.ncprefs -', { encoding: 'utf8', timeout: 3000, maxBuffer: 16 * 1024 * 1024 });
+      const at = xml.indexOf(`<string>${bundle}</string>`);
+      if (at < 0) return { state: 'unknown' };
+      const start = xml.lastIndexOf('<dict>', at); // keys are sorted: auth comes before bundle-id
+      const m = /<key>auth<\/key>\s*<integer>(\d+)<\/integer>/.exec(xml.slice(start, at));
+      if (!m) return { state: 'unknown' };
+      return { state: Number(m[1]) & 4 ? 'on' : 'off' };
+    } catch { return { state: 'unknown' }; }
+  });
+  ipcMain.handle('notice:close-os', async (_event, keys) => {
+    for (const key of Array.isArray(keys) ? keys : []) {
+      const n = openNotices.get(key);
+      if (n) { openNotices.delete(key); try { n.close(); } catch { /* already gone */ } }
+    }
+    return { ok: true };
+  });
+  ipcMain.handle('notice:show-os', async (_event, payload) => {
+    const { Notification } = require('electron');
+    if (!Notification.isSupported() || !payload || typeof payload.title !== 'string') return { shown: false };
+    const key = typeof payload.key === 'string' ? payload.key : '';
+    if (key && openNotices.has(key)) { try { openNotices.get(key).close(); } catch { /* gone */ } }
+    const n = new Notification({
+      title: payload.title.slice(0, 200),
+      body: typeof payload.body === 'string' && payload.previews !== 'never' && !(payload.previews === 'unlocked' && screenLocked)
+        ? payload.body.slice(0, 500) : '',
+      urgency: payload.level === 'urgent' ? 'critical' : 'normal',
+      // route() decides sound (per source); older gateways only sent the level.
+      silent: typeof payload.sound === 'boolean' ? !payload.sound : payload.level === 'fyi',
+    });
+    n.on('click', () => {
+      if (!mainWindow || mainWindow.isDestroyed()) return;
+      if (mainWindow.isMinimized()) mainWindow.restore();
+      mainWindow.show();
+      mainWindow.focus();
+      mainWindow.webContents.send('notice:open', { key, owner: payload.owner });
+    });
+    n.on('close', () => { if (key && openNotices.get(key) === n) openNotices.delete(key); });
+    if (key) openNotices.set(key, n);
+    n.show();
+    return { shown: true };
+  });
 
   // Register IPC handler
   ipcMain.handle('system:invoke', async (event, method, args) => {
@@ -2591,7 +2583,7 @@ async function flushPendingDeepLinks() {
   while (index < pendingDeepLinks.length) {
     const url = pendingDeepLinks[index];
 
-    if (url.startsWith("papr://auth/callback")) {
+    if (url.startsWith((PAPR_URL + "auth/callback"))) {
       if (
         !authDeepLinksReady ||
         !handlePaprAuthCallback ||
@@ -2617,7 +2609,7 @@ async function flushPendingDeepLinks() {
     // polling the session, just bring Papr to the front.
     // papr://connections/connect?platform=reddit ("Connect Reddit" on an app's setup
     // page): also open the Connected Platforms sign-in for that platform.
-    if (url.startsWith("papr://connections/")) {
+    if (url.startsWith(PAPR_URL + "connections/")) {
       if (!mainWindow || mainWindow.isDestroyed()) {
         return;
       }
@@ -2637,7 +2629,7 @@ async function flushPendingDeepLinks() {
       continue;
     }
 
-    if (url.startsWith("papr://auth/handoff")) {
+    if (url.startsWith((PAPR_URL + "auth/handoff"))) {
       // Claude "Continue on your Mac" (one-time code). Needs storage like the login callback.
       if (!authDeepLinksReady || !handlePaprHandoffLink || !customKeysStorage || !settingsStorage) {
         return;
@@ -2652,7 +2644,7 @@ async function flushPendingDeepLinks() {
       continue;
     }
 
-    if (url.startsWith("papr://chat/")) {
+    if (url.startsWith((PAPR_URL + "chat/"))) {
       if (!mainWindow || mainWindow.isDestroyed()) {
         return;
       }
@@ -2664,7 +2656,7 @@ async function flushPendingDeepLinks() {
 
     // "Open Papr Work" on the post-checkout page (dashboard /billing/success):
     // bring Papr forward on Settings -> Billing so the new plan is right there.
-    if (url.startsWith("papr://billing")) {
+    if (url.startsWith((PAPR_URL + "billing"))) {
       if (!mainWindow || mainWindow.isDestroyed()) {
         return;
       }
@@ -2672,12 +2664,23 @@ async function flushPendingDeepLinks() {
       if (mainWindow.isMinimized()) mainWindow.restore();
       mainWindow.show();
       mainWindow.focus();
-      mainWindow.webContents.send("notification:open-settings", { target: "billing" });
+      // papr://billing?plan=cloud_plus&track=team (papr.ai/pricing plan buttons): the
+      // renderer validates and remembers the choice, then offers "Continue to checkout".
+      let plan;
+      let track;
+      try {
+        const params = new URL(url).searchParams;
+        plan = params.get("plan") || undefined;
+        track = params.get("track") || undefined;
+      } catch {
+        /* malformed link: just open Billing */
+      }
+      mainWindow.webContents.send("notification:open-settings", { target: "billing", plan, track });
       continue;
     }
 
     // "Open Papr Work" button on the browser sign-in success page.
-    if (url.startsWith("papr://focus")) {
+    if (url.startsWith((PAPR_URL + "focus"))) {
       if (!mainWindow || mainWindow.isDestroyed()) {
         return;
       }
@@ -2694,7 +2697,7 @@ async function flushPendingDeepLinks() {
 }
 
 function queueDeepLink(url) {
-  if (typeof url !== "string" || !url.startsWith("papr://")) {
+  if (typeof url !== "string" || !url.startsWith(PAPR_URL)) {
     return;
   }
   console.log("[Electron] Queued deep link:", url.split("?")[0], {
@@ -2730,7 +2733,7 @@ if (!gotTheLock) {
     }
     
     // Check if the second instance was launched with a deep link
-    const url = commandLine.find(arg => arg.startsWith('papr://'));
+    const url = commandLine.find(arg => arg.startsWith(PAPR_URL));
     if (url) {
       console.log('[Electron] Second instance opened with deep link:', url);
       queueDeepLink(url);
@@ -2743,6 +2746,9 @@ if (!gotTheLock) {
     queueDeepLink(url);
   });
 }
+
+// Windows shows no toast without an AppUserModelID matching the installer (electron-builder appId).
+if (process.platform === "win32") app.setAppUserModelId("com.paprwork.v2");
 
 app.whenReady().then(async () => {
   const appStartTime = Date.now();
@@ -2803,15 +2809,15 @@ app.whenReady().then(async () => {
   // Register custom URL protocol for papr:// deep links
   if (process.defaultApp) {
     if (process.argv.length >= 2) {
-      const registered = app.setAsDefaultProtocolClient('papr', process.execPath, [path.resolve(process.argv[1])]);
+      const registered = app.setAsDefaultProtocolClient(PAPR_SCHEME, process.execPath, [path.resolve(process.argv[1])]);
       console.log('[Electron] Protocol handler registered (dev mode):', registered);
     }
   } else {
-    const registered = app.setAsDefaultProtocolClient('papr');
+    const registered = app.setAsDefaultProtocolClient(PAPR_SCHEME);
     console.log('[Electron] Protocol handler registered (production):', registered);
   }
   
-  console.log('[Electron] isDefaultProtocolClient for papr://:', app.isDefaultProtocolClient('papr'));
+  console.log('[Electron] isDefaultProtocolClient for', PAPR_URL, app.isDefaultProtocolClient(PAPR_SCHEME));
 
   // Load ESM modules first
   await loadESMModules();
@@ -3054,7 +3060,7 @@ app.whenReady().then(async () => {
       const fs = require("fs");
       const pathMod = require("path");
       const osMod = require("os");
-      const pointerPath = pathMod.join(osMod.homedir(), "Papr", ".active-workspace.json");
+      const pointerPath = pathMod.join(osMod.homedir(), PAPR_BASE_DIRNAME, ".active-workspace.json");
       if (!fs.existsSync(pointerPath)) {
         return {};
       }
@@ -3083,7 +3089,7 @@ app.whenReady().then(async () => {
     if (workspaceEnv.PAPR_HOME) {
       return pathMod.join(workspaceEnv.PAPR_HOME, "data", "settings.json");
     }
-    return pathMod.join(osMod.homedir(), "Papr", "data", "settings.json");
+    return pathMod.join(osMod.homedir(), PAPR_BASE_DIRNAME, "data", "settings.json");
   };
 
   const activeWorkspaceEnv = readActiveWorkspaceEnv();
@@ -3340,7 +3346,7 @@ app.whenReady().then(async () => {
   console.log("[Electron] Startup: complete");
 
   // Process auth deep links after Gateway + window are ready (callback needs both)
-  const coldStartUrl = process.argv.find((arg) => arg.startsWith("papr://"));
+  const coldStartUrl = process.argv.find((arg) => arg.startsWith(PAPR_URL));
   if (coldStartUrl) {
     queueDeepLink(coldStartUrl);
   }

@@ -1,3 +1,4 @@
+import { isRecoverableProviderStreamDrop } from "../../../core/constants/streamCancellation.js";
 import { sanitizeToolOutput } from "../../../core/tools/index.js";
 import { isFailedToolResult } from "../../../core/utils/interruptedToolResult.js";
 import {
@@ -168,6 +169,9 @@ function isNetworkConnectivityError(error: unknown): boolean {
       message.includes("api connection timeout") ||
       message.includes("network error") ||
       message.includes("other side closed") ||
+      // Anthropic / OpenAI SDK APIConnectionError, and its bare message as
+      // the pi-ai route passes it up.
+      message.startsWith("connection error") ||
       message.includes("socket hang up")
     ) {
       return true;
@@ -194,6 +198,11 @@ function isNetworkConnectivityError(error: unknown): boolean {
  * would promise a resume that cannot happen.
  */
 export function isRetryableProviderStreamFailure(error: unknown): boolean {
+  // The pi-ai route reduces the provider error to its message before it
+  // gets here, so a string has to be classified by its wording.
+  if (typeof error === "string") {
+    return isRecoverableProviderStreamDrop(error);
+  }
   if (isNetworkConnectivityError(error)) {
     return true;
   }
@@ -311,7 +320,15 @@ function extractFromRetryError(error: Record<string, unknown>): string | null {
     return "API key does not have permission for this model. Check your Anthropic plan.";
   }
   if (statusCode === 402) {
-    return "Credit balance too low. Please add credits to your Anthropic account.";
+    const premium = readPremiumRequiresPayg(err);
+    if (premium) return premium;
+    const via = providerFromRequestUrl(extractRequestUrl(err));
+    const ours = !via; // no provider host = Papr's own AI service (memory.papr.ai)
+    const name = via ? via[0].toUpperCase() + via.slice(1) : "";
+    void import("../notifications/rootConditions.js").then((m) => m.creditsOut(ours ? "papr" : name)).catch(() => {});
+    return ours
+      ? "You're out of AI credits. Add credits in Settings → Plan & usage to keep chatting."
+      : `Your ${name} account is out of credits. Add credits there, or switch to another model.`;
   }
   if (statusCode && statusCode >= 500) {
     return `Anthropic server error (${statusCode}). Please try again in a moment.`;
@@ -326,6 +343,23 @@ function extractFromRetryError(error: Record<string, unknown>): string | null {
     return `API error${statusCode ? ` (${statusCode})` : ""}: ${message}`;
   }
   return null;
+}
+
+/** Papr proxy 402 {detail: {code: "premium_requires_payg", message}}: not "out of credits". */
+function readPremiumRequiresPayg(err: Record<string, unknown>): string | null {
+  let body: unknown = err.data;
+  if (typeof err.responseBody === "string") {
+    try {
+      body = JSON.parse(err.responseBody);
+    } catch {
+      // not JSON
+    }
+  }
+  const detail = (body as { detail?: { code?: unknown; message?: unknown } } | undefined)?.detail;
+  if (!detail || detail.code !== "premium_requires_payg") return null;
+  return typeof detail.message === "string" && detail.message
+    ? detail.message
+    : "This model on Papr credits needs a paid plan with pay as you go turned on. Pick Auto or a lighter model.";
 }
 
 /**
@@ -918,12 +952,16 @@ export async function* orchestrateModelStream(
           sanitizedResult &&
           typeof sanitizedResult === "object" &&
           "error" in (sanitizedResult as Record<string, unknown>);
-        import("../gatewayTelemetry.js").then(({ getGatewayTelemetry }) => {
+        Promise.all([
+          import("../gatewayTelemetry.js"),
+          import("../../../core/telemetry/toolCallTelemetry.js"),
+        ]).then(([{ getGatewayTelemetry }, { toolFailureTelemetry }]) => {
           getGatewayTelemetry().trackFireAndForget("paprwork_tool_called", {
             tool_name: parsedToolResult.toolName,
             success: !isToolError,
             result_size: rawSize,
             chat_id: chatId,
+            ...toolFailureTelemetry(parsedToolResult.toolName, sanitizedResult),
           });
         }).catch(() => {});
 

@@ -9,6 +9,7 @@ import {
   paprCloudStatusDotVariant,
 } from "../../utils/cloudMemoryStatus";
 import { useSettingsNavigationStore } from "../../stores/settingsNavigationStore";
+import { billingMark, useNoticeStore } from "../../stores/noticeStore";
 import { useProfileStore } from "../../stores/profileStore";
 import { useAppUpdater } from "../../hooks/useAppUpdater";
 import { gateway } from "../../src/lib/gateway";
@@ -25,6 +26,7 @@ import { CloudSyncTab } from "./CloudSyncTab";
 import { DatabasesTab } from "./DatabasesTab";
 import { ConnectionsView, type ConnectionsSubTab } from "./ConnectionsView";
 import { BillingTab } from "./BillingTab";
+import { NotificationsTab } from "./NotificationsTab";
 import { PaprLoginSection } from "./PaprLoginSection";
 import { resizeProfilePhoto } from "../../utils/profilePhoto";
 import {
@@ -40,6 +42,7 @@ import {
   writeSettingsViewTab,
 } from "../../utils/settingsViewTabPersistence";
 import { ExperimentRows } from "./ExperimentsSection";
+import { TrainingConsentRow } from "./TrainingConsent";
 import { SettingRow } from "./SettingRow";
 import { Toggle } from "./Toggle";
 import "./SettingsView.css";
@@ -73,11 +76,23 @@ const SETTINGS_NAV: SettingsNavItem[] = [
   },
   {
     id: "connections",
-    label: "Connections",
+    label: "Connectors & API Keys",
     icon: (
       <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
         <path d="M10 13a5 5 0 0 0 7.54.54l3-3a5 5 0 0 0-7.07-7.07l-1.72 1.71" />
         <path d="M14 11a5 5 0 0 0-7.54-.54l-3 3a5 5 0 0 0 7.07 7.07l1.71-1.71" />
+      </svg>
+    ),
+  },
+  {
+    id: "team",
+    label: "Team",
+    icon: (
+      <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
+        <path d="M17 21v-2a4 4 0 0 0-4-4H5a4 4 0 0 0-4 4v2" />
+        <circle cx="9" cy="7" r="4" />
+        <path d="M23 21v-2a4 4 0 0 0-3-3.87" />
+        <path d="M16 3.13a4 4 0 0 1 0 7.75" />
       </svg>
     ),
   },
@@ -108,6 +123,16 @@ const SETTINGS_NAV: SettingsNavItem[] = [
         <ellipse cx="12" cy="5" rx="9" ry="3" />
         <path d="M3 5v6c0 1.66 4 3 9 3s9-1.34 9-3V5" />
         <path d="M3 11v6c0 1.66 4 3 9 3s9-1.34 9-3v-6" />
+      </svg>
+    ),
+  },
+  {
+    id: "notifications",
+    label: "Notifications",
+    icon: (
+      <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
+        <path d="M18 8a6 6 0 0 0-12 0c0 7-3 9-3 9h18s-3-2-3-9" />
+        <path d="M13.73 21a2 2 0 0 1-3.46 0" />
       </svg>
     ),
   },
@@ -172,6 +197,7 @@ export function SettingsView() {
   const planAttentionHint = planStatus
     ? `${planStatus.label} — review Plan & usage`
     : "Billing needs attention — review Plan & usage";
+  const billingDot = useNoticeStore(billingMark);
   const navigationToken = useSettingsNavigationStore((state) => state.token);
   const pendingSettingsTab = useSettingsNavigationStore((state) => state.pendingTab);
   // Key Vault and Platform Connections now live inside Connections; old deep links still work.
@@ -240,6 +266,12 @@ export function SettingsView() {
     useSettingsNavigationStore.getState().acknowledgeTab();
   }, [navigationToken, pendingSettingsTab, setActiveTab]);
 
+  // Opening Billing is seeing what's there: news clears, things waiting on you stay until handled.
+  useEffect(() => {
+    if (activeTab !== "billing") return;
+    void gateway.send("notifications:seen", { ownerKind: "account", ownerId: "billing" }).catch(() => {});
+  }, [activeTab, billingDot]);
+
   useEffect(() => {
     useSettingsNavigationStore.getState().setCurrentTab(activeTab);
     return () => {
@@ -270,7 +302,9 @@ export function SettingsView() {
             >
               {item.icon}
               <span className="settings-tab__label">{item.label}</span>
-              {item.id === "billing" && planAttention && planStatus ? (
+              {item.id === "billing" && billingDot !== "none" ? (
+                <span className={`notif-dot notif-dot--${billingDot} settings-tab__notice`} aria-label="Billing has something for you" />
+              ) : item.id === "billing" && planAttention && planStatus ? (
                 <span
                   className={`settings-tab__attention settings-tab__attention--${paprCloudStatusDotVariant(planStatus)}`}
                   aria-label={planAttentionHint}
@@ -291,7 +325,13 @@ export function SettingsView() {
           {activeTab === "databases" && <DatabasesTab />}
           {activeTab === "connections" && <ConnectionsView link={connectionsLink} />}
           {activeTab === "profile" && <ProfileTab />}
+          {activeTab === "team" && (
+            <div className="settings-content">
+              <PaprLoginSection view="team" />
+            </div>
+          )}
           {activeTab === "billing" && <BillingTab />}
+          {activeTab === "notifications" && <NotificationsTab />}
           {activeTab === "permissions" && <PermissionsTab />}
           {activeTab === "privacy" && <PrivacyTab />}
           {activeTab === "about" && <AboutTab />}
@@ -752,6 +792,8 @@ function PrivacyTab() {
           />
         </SettingRow>
 
+        <TrainingConsentRow />
+
         <ExperimentRows />
 
         <GatewayDiagnosticsCopySection />
@@ -1080,7 +1122,7 @@ function AboutTab() {
                 <line x1="12" y1="16" x2="12.01" y2="16" />
               </svg>
               <div>
-                <strong>Update check failed</strong>
+                <strong>{updateStatus.transient ? "Update check will retry" : "Update check failed"}</strong>
                 <p>{updateStatus.error}</p>
                 {updateStatus.recoveryHint && (
                   <p className="update-recovery-hint">{updateStatus.recoveryHint}</p>

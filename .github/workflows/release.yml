@@ -4,6 +4,9 @@ on:
   push:
     tags:
       - 'v*'
+  # Started by auto-tag.yml with --ref v<version>: tags pushed with GITHUB_TOKEN do not trigger
+  # push workflows, but workflow_dispatch is allowed. GITHUB_REF_NAME is the tag either way.
+  workflow_dispatch:
 
 permissions:
   contents: write
@@ -15,15 +18,16 @@ jobs:
       matrix:
         include:
           - arch: arm64
-            runner: macos-14
+            runner: macos-15
             app_path: release/mac-arm64/Papr Work.app
             builder_flag: --arm64
           - arch: x64
             runner: macos-15-intel
             app_path: release/mac/Papr Work.app
             builder_flag: --x64
+            timeout_minutes: 40
     runs-on: ${{ matrix.runner }}
-    timeout-minutes: 25
+    timeout-minutes: ${{ matrix.timeout_minutes || 25 }}
     steps:
       - uses: actions/checkout@v4
 
@@ -88,8 +92,14 @@ jobs:
       - name: Prepare native deps (${{ matrix.arch }})
         run: node scripts/prepare-mac-native-deps.mjs ${{ matrix.arch }}
 
+      # The Neural Engine helper ships in Contents/Resources/bin (electron-builder.json extraResources). Without it
+      # Apple Silicon users embed code on the CPU. Apple Silicon only: Intel Macs have no Neural Engine.
+      - name: Build Neural Engine helper (arm64)
+        if: matrix.arch == 'arm64'
+        run: npm run build:native:coreml
+
       - name: Build Mac distributables (${{ matrix.arch }})
-        run: npx electron-builder --mac ${{ matrix.builder_flag }} --publish never
+        run: node scripts/build-mac-release-ci.mjs ${{ matrix.builder_flag }}
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           APPLE_ID: ${{ secrets.APPLE_ID }}
@@ -99,6 +109,7 @@ jobs:
       - name: Verify Mac native arch and SDK bundles (${{ matrix.arch }})
         run: |
           node scripts/verify-packaged-native-arch.mjs "${{ matrix.app_path }}"
+          if [ "${{ matrix.arch }}" = "arm64" ]; then test -x "${{ matrix.app_path }}/Contents/Resources/bin/papr-embed-coreml" || { echo "::error::Neural Engine helper missing from the app"; exit 1; }; fi
           node scripts/verify-packaged-mini-app-sdk.mjs "${{ matrix.app_path }}"
           node scripts/verify-packaged-job-sdk.mjs "${{ matrix.app_path }}"
           node scripts/verify-packaged-turso-sync.mjs "${{ matrix.app_path }}/Contents/Resources" darwin ${{ matrix.arch }}
@@ -155,6 +166,17 @@ jobs:
         run: npx electron-builder --win --publish never
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          AZURE_TENANT_ID: ${{ secrets.AZURE_TENANT_ID }}
+          AZURE_CLIENT_ID: ${{ secrets.AZURE_CLIENT_ID }}
+          AZURE_CLIENT_SECRET: ${{ secrets.AZURE_CLIENT_SECRET }}
+
+      - name: Verify Windows installer signature
+        shell: pwsh
+        run: |
+          $exe = Get-ChildItem release/PaprWork-Setup-*.exe | Select-Object -First 1
+          $sig = Get-AuthenticodeSignature $exe.FullName
+          Write-Host "Signature: $($sig.Status) — $($sig.SignerCertificate.Subject)"
+          if ($sig.Status -ne 'Valid') { throw "Windows installer is not signed: $($sig.Status)" }
 
       - name: Verify packaged SDK bundles (Windows)
         run: |

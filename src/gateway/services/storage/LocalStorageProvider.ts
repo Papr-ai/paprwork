@@ -712,7 +712,8 @@ export class LocalStorageProvider implements IStorageProvider {
       SELECT 
         id, chat_id, role, content, timestamp,
         thinking, error, incomplete,
-        model, prompt_tokens, completion_tokens, total_tokens,
+        model, prompt_tokens, completion_tokens, total_tokens, cost,
+        cache_read_tokens, cache_write_tokens,
         sync_status, papr_message_id, last_sync_attempt, sync_error,
         source_agent_id, source_agent_name,
         attachments,
@@ -1276,7 +1277,7 @@ export class LocalStorageProvider implements IStorageProvider {
     const { OVERVIEW_ROWS_SQL, OVERVIEW_CHATS_SQL } = await import(
       "../agentsOverview/overviewRows.js"
     );
-    const { aggregateOverview } = await import(
+    const { aggregateOverview, overviewSince } = await import(
       "../agentsOverview/aggregateOverview.js"
     );
     const { loadWorkTypes, classifyChatsInBackground } = await import(
@@ -1284,7 +1285,11 @@ export class LocalStorageProvider implements IStorageProvider {
     );
     const { getAppService } = await import("../AppService.js");
 
-    const since = new Date(Date.now() - days * 864e5).toISOString();
+    const now = new Date();
+    const since = new Date(now.getTime() - days * 864e5).toISOString();
+    // Rows reach back to the start of the month too, so the plan section can
+    // show month-to-date billing whatever range is selected.
+    const readSince = overviewSince(days, now).toISOString();
     // First open after upgrade: make sure the visible window has facts, then
     // let the rest of history fill in the background. Later opens find
     // nothing missing and skip straight to the read.
@@ -1298,7 +1303,7 @@ export class LocalStorageProvider implements IStorageProvider {
     }
     void this.fillTurnFacts({ whenIdle: true }).catch(() => {});
     const [rows, chats, apps] = await Promise.all([
-      this.readRows("getAgentsOverview", OVERVIEW_ROWS_SQL, [since]),
+      this.readRows("getAgentsOverview", OVERVIEW_ROWS_SQL, [readSince]),
       this.readRows("getAgentsOverviewChats", OVERVIEW_CHATS_SQL, [since]),
       getAppService().listApps().catch(() => []),
     ]);
@@ -1306,7 +1311,7 @@ export class LocalStorageProvider implements IStorageProvider {
       rows,
       chats,
       days,
-      now: new Date(),
+      now,
       appTitles: new Map(apps.map((a) => [a.id.toLowerCase(), a.title])),
       workTypes: loadWorkTypes(),
     });

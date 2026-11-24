@@ -17,6 +17,8 @@ export type AccessVisibility =
 export interface AccessGrant {
   userId?: string;
   email?: string;
+  /** Anyone signed in with an email at this domain (e.g. "acme.com"); up to Maintainer. */
+  domain?: string;
   role: AppRole;
 }
 
@@ -42,7 +44,12 @@ export interface AppAccess {
   accessModel?: "visibility" | "audiences";
   /** v9 server: which audiences can open it now. Missing = older server. */
   audiences?: { workspace: boolean; link: boolean; community: boolean };
+  /** Size cap (MB) for one upload by a visitor of the published app. Missing = older server. */
+  uploadMaxMb?: number;
 }
+
+/** Choices for the visitor upload cap. 50 MB is the server default. */
+export const UPLOAD_MAX_MB_CHOICES = [10, 50, 100, 250, 500, 1024, 5120] as const;
 
 export type AccessPatch = Partial<
   Pick<
@@ -55,6 +62,7 @@ export type AccessPatch = Partial<
     | "visibility"
     | "requireSignIn"
     | "accessModel"
+    | "uploadMaxMb"
   >
 >;
 
@@ -71,6 +79,7 @@ export const ROLE_COPY: Record<AppRole, { label: string; sub: string }> = {
 /** Highest role each audience can be given (server enforces the same caps). */
 export const AUDIENCE_CAP = {
   person: "admin",
+  domain: "maintainer",
   workspace: "maintainer",
   link: "contributor",
   community: "contributor",
@@ -85,11 +94,11 @@ export function rank(role: AppRole | undefined | null): number {
 /** Choices for an audience's dropdown, lowest first. People never offer "none". */
 export function roleOptions(audience: AccessAudience): AppRole[] {
   const cap = rank(AUDIENCE_CAP[audience]);
-  return ORDER.filter((r, i) => i <= cap && !(audience === "person" && r === "none"));
+  return ORDER.filter((r, i) => i <= cap && !((audience === "person" || audience === "domain") && r === "none"));
 }
 
 export function grantKey(g: AccessGrant): string {
-  return g.userId || (g.email ?? "").toLowerCase();
+  return g.userId || (g.email ?? "").toLowerCase() || (g.domain ? `@${g.domain.toLowerCase()}` : "");
 }
 
 export function setGrantRole(
@@ -107,12 +116,13 @@ export function removeGrant(grants: AccessGrant[], key: string): AccessGrant[] {
 /** Adds a person once (default Contributor); a repeat add is a no-op. */
 export function addGrant(
   grants: AccessGrant[],
-  person: { userId?: string; email?: string },
+  person: { userId?: string; email?: string; domain?: string },
   role: AppRole = "contributor",
 ): AccessGrant[] {
   const next: AccessGrant = {
     ...(person.userId ? { userId: person.userId } : {}),
     ...(person.email ? { email: person.email.toLowerCase() } : {}),
+    ...(!person.userId && !person.email && person.domain ? { domain: person.domain.toLowerCase().replace(/^@/, "") } : {}),
     role,
   };
   const key = grantKey(next);
@@ -149,7 +159,7 @@ export function summarizeAccess(a: Pick<AppAccess, "visibility" | "workspaceRole
 /** Only the fields that differ, so a save never rewrites what didn't change. */
 export function accessPatch(live: AppAccess, draft: AppAccess): AccessPatch {
   const patch: AccessPatch = {};
-  const keys = ["workspaceRole", "linkRole", "communityRole", "approvalRule", "visibility", "requireSignIn"] as const;
+  const keys = ["workspaceRole", "linkRole", "communityRole", "approvalRule", "visibility", "requireSignIn", "uploadMaxMb"] as const;
   for (const k of keys) {
     if (live[k] !== draft[k]) (patch as Record<string, unknown>)[k] = draft[k];
   }

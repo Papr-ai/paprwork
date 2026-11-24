@@ -111,6 +111,7 @@ export function sharedCoverCatalogFields(appId: string): { catalogMedia: Catalog
         videoUrl?: string;
         videoObjectKey?: string;
         gallery?: { objectKey?: string; caption?: string }[];
+        dark?: { objectKey?: string; videoObjectKey?: string; gallery?: { objectKey?: string; caption?: string }[] };
       })
     | null;
   const media: CatalogMediaItem[] = [];
@@ -121,8 +122,16 @@ export function sharedCoverCatalogFields(appId: string): { catalogMedia: Catalog
   } else if (p?.objectKey) {
     media.push({ kind: "image", role: "cover", objectKey: p.objectKey });
   }
+  // Light first (older clients and the web page read the first cover); dark items carry scheme "dark".
+  const d = p?.kind === "video" ? p.dark : undefined;
+  if (d?.videoObjectKey && d.objectKey) {
+    media.push({ kind: "video", role: "cover", scheme: "dark", objectKey: d.videoObjectKey, posterObjectKey: d.objectKey });
+  }
   for (const g of p?.kind === "video" && Array.isArray(p.gallery) ? p.gallery : []) {
     if (g?.objectKey) media.push({ kind: "image", role: "gallery", objectKey: g.objectKey, ...(g.caption ? { alt: g.caption } : {}) });
+  }
+  for (const g of Array.isArray(d?.gallery) ? d!.gallery! : []) {
+    if (g?.objectKey) media.push({ kind: "image", role: "gallery", scheme: "dark", objectKey: g.objectKey, ...(g.caption ? { alt: g.caption } : {}) });
   }
   return { catalogMedia: media };
 }
@@ -130,8 +139,9 @@ export function sharedCoverCatalogFields(appId: string): { catalogMedia: Catalog
 export class TeamDataCopyPublishError extends Error {
   constructor(appId: string) {
     super(
-      `App ${appId} is a copy on the team's live data. Its code reaches the team only through a proposal; ` +
-        "switch to your own data to publish it to its own link.",
+      `App ${appId} is a copy on the team's live data, so publish_cloud_app can't ship it. ` +
+        "Use submit_cloud_app_pr({ publishNow: true }) instead. A Maintainer or Admin of the source app publishes straight to the live app; " +
+        "anyone else is sent for review automatically and publishNote says why. To publish to a separate link, switch the copy to its own data.",
     );
     this.name = "TeamDataCopyPublishError";
   }
@@ -341,8 +351,18 @@ const PUBLISH_STATUS_NOT_FOUND_TTL_MS = 60 * 60 * 1000;
 const PUBLISH_STATUS_FOUND_TTL_MS = 30 * 1000;
 const publishStatusCache = new Map<
   string,
-  { expiresAt: number; value: Promise<PublishApiResponse | null> }
+  {
+    expiresAt: number;
+    value: Promise<PublishApiResponse | null>;
+    /** PAPR_API_KEY that fetched it. A 404 from another org's key says nothing
+     *  about this org — without this, an app read mid-switch showed "draft" for 1h. */
+    key: string;
+  }
 >();
+
+function publishStatusCacheKey(): string {
+  return (process.env.PAPR_API_KEY ?? "").trim();
+}
 
 export function invalidatePublishStatusCache(appId?: string): void {
   if (appId) publishStatusCache.delete(appId);
@@ -374,16 +394,17 @@ export class CloudAppPublishService {
   private fetchMemoryPublishResponse(
     appId: string,
   ): Promise<PublishApiResponse | null> {
+    const key = publishStatusCacheKey();
     const hit = publishStatusCache.get(appId);
-    if (hit && hit.expiresAt > Date.now()) return hit.value;
+    if (hit && hit.key === key && hit.expiresAt > Date.now()) return hit.value;
     const value = this.fetchMemoryPublishResponseUncached(appId);
     // Concurrent callers share one request; errors are never cached.
-    publishStatusCache.set(appId, { expiresAt: Date.now() + PUBLISH_STATUS_FOUND_TTL_MS, value });
+    publishStatusCache.set(appId, { expiresAt: Date.now() + PUBLISH_STATUS_FOUND_TTL_MS, value, key });
     value.then(
       (data) => {
         if (publishStatusCache.get(appId)?.value !== value) return;
         const ttl = data ? PUBLISH_STATUS_FOUND_TTL_MS : PUBLISH_STATUS_NOT_FOUND_TTL_MS;
-        publishStatusCache.set(appId, { expiresAt: Date.now() + ttl, value });
+        publishStatusCache.set(appId, { expiresAt: Date.now() + ttl, value, key });
       },
       () => {
         if (publishStatusCache.get(appId)?.value === value) publishStatusCache.delete(appId);
@@ -1113,6 +1134,13 @@ export class CloudAppPublishService {
 
     const appDir = path.join(this.paprDir, "apps", appId);
     const lightSync = isCloudCatalogLightSyncEnabled();
+
+    // Polling and retry floods hurt every app on the shared host (#957): block, don't just warn.
+    {
+      const { lintAppDirForPolling, MiniAppPollingPublishError } = await import("../utils/miniAppJobEventLint.js");
+      const polling = await lintAppDirForPolling(appDir);
+      if (polling.length) throw new MiniAppPollingPublishError(appId, polling);
+    }
 
     if (lightSync) {
       const { prepareAppForCloudGitSync } = await import(

@@ -17,6 +17,7 @@
  * @property {ServiceRequirement[]} requires
  * @property {boolean} [continueOnFail] default false — stop suite on failure
  * @property {boolean} [optional] skip when requirements missing (don't fail suite)
+ * @property {boolean} [realWorkspace] script uses the developer's real ~/Papr on purpose; runner sets PAPR_E2E_REAL_HOME=1
  */
 
 /** @type {Record<string, { port: number, healthPath: string, label: string }>} */
@@ -61,6 +62,14 @@ export const TEST_STEPS = [
     name: "Build gateway (dist/)",
     tiers: ["ci", "local", "cloud", "full"],
     npmScript: "build:gateway",
+    command: null,
+    requires: [],
+  },
+  {
+    id: "build-tests",
+    name: "Build-tier tests (*.build.test.ts, need dist/)",
+    tiers: ["ci", "local", "cloud", "full"],
+    npmScript: "test:build",
     command: null,
     requires: [],
   },
@@ -186,6 +195,8 @@ export const TEST_STEPS = [
   },
   {
     id: "contribute-back-e2e",
+    // Uses the developer's real workspace on purpose (see scripts/lib/requireRealWorkspace.mjs).
+    realWorkspace: true,
     name: "Contribute-back PR E2E (fork install → propose → list)",
     tiers: ["cloud", "full"],
     npmScript: "test:contribute-back-e2e",
@@ -195,6 +206,8 @@ export const TEST_STEPS = [
   },
   {
     id: "track-pull-on-publish-e2e",
+    // Uses the developer's real workspace on purpose (see scripts/lib/requireRealWorkspace.mjs).
+    realWorkspace: true,
     name: "Track pull-on-publish E2E (stale revision → auto sync)",
     tiers: ["cloud", "full"],
     npmScript: "test:track-pull-on-publish-e2e",
@@ -222,6 +235,8 @@ export const TEST_STEPS = [
   },
   {
     id: "replica-production-e2e",
+    // Uses the developer's real workspace on purpose (see scripts/lib/requireRealWorkspace.mjs).
+    realWorkspace: true,
     name: "Plan A Turso replica production E2E",
     tiers: ["cloud", "full"],
     npmScript: "test:replica-production-e2e",

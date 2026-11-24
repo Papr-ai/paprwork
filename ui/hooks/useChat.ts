@@ -18,6 +18,7 @@ import { forgetDraft } from "../utils/chatDraftStore";
 import {
   chatHasLiveStreamBlockingHistory,
   mergeHistoryWithLocal,
+  isHiddenContinueUserMessage,
 } from "../lib/agentStreamRecovery";
 
 let hasLoadedChatsOnce = false;
@@ -421,7 +422,7 @@ const MAX_FIRST_PAGE = 240;
 function isHiddenRow(row: unknown): boolean {
   const r = row as { role?: string; content?: unknown };
   return r?.role === "user" && typeof r.content === "string" &&
-    r.content.startsWith("[__papr_continue__]");
+    isHiddenContinueUserMessage(r.content);
 }
 /** Exported for tests: grow the first history page past hidden rows. */
 export async function widenForHiddenRows(

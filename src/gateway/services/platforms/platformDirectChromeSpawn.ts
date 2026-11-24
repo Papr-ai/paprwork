@@ -247,7 +247,8 @@ export function isCdpAttachUnsupportedError(error: unknown): boolean {
   const message = error instanceof Error ? error.message : String(error);
   return (
     /Browser\.setDownloadBehavior/i.test(message) ||
-    /Browser context management is not supported/i.test(message)
+    /Browser context management is not supported/i.test(message) ||
+    /Timeout \d+ms exceeded/i.test(message)
   );
 }
 

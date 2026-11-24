@@ -43,7 +43,8 @@ it("handshakes with a late-mounted frame and validates message source/origin/seq
     documentId: "document-1",
     phase: "hidden",
     allowedApi: 0,
-    blockedApi: 2,
+    deferredApi: 2,
+    passedThroughApi: 0,
     allowedOther: 0,
   };
   const send = (source: Window | null, origin: string, sequence?: number) =>
@@ -73,7 +74,7 @@ it("handshakes with a late-mounted frame and validates message source/origin/seq
   await vi.advanceTimersByTimeAsync(5000);
   const app = JSON.parse(fetch.mock.calls[1][1].body).apps[0];
   expect(app.acknowledgedPhase).toBe("hidden");
-  expect(app.gate.blockedApi).toBe(2);
+  expect(app.gate.deferredApi).toBe(2);
   host.rerender(<Host mounted visible />);
   expect(post.mock.calls.at(-1)?.[0].type).toBe("papr:preview-visible");
   host.unmount();

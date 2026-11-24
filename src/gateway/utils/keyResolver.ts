@@ -80,7 +80,31 @@ export function getAuthEpoch(): number {
  * API fails or bills against the wrong quota, so never resolve one as a key.
  */
 function isOAuthShapedToken(value: string): boolean {
-  return value.startsWith("sk-ant-oat") || value.startsWith("sk-ant-ort");
+  return (
+    value.startsWith("sk-ant-oat") ||
+    value.startsWith("sk-ant-ort") ||
+    // ChatGPT sign-in access token (a JWT). A session on ChatGPT sign-in writes
+    // it into OPENAI_API_KEY; read back as a Platform key it gets a 401
+    // ("Missing scopes: api.responses.write") from api.openai.com.
+    value.startsWith("eyJ")
+  );
+}
+
+/** Provider key names that must hold the provider's own key, never a Papr key. */
+const PROVIDER_KEY_NAMES = new Set([
+  "OPENAI_API_KEY",
+  "ANTHROPIC_API_KEY",
+  "GOOGLE_API_KEY",
+  "GOOGLE_GENERATIVE_AI_API_KEY",
+]);
+
+/**
+ * A Papr key (sk-org-…) sitting in a provider's key slot: left behind by a
+ * Papr-proxy session. Resolving it as a provider key sends it to OpenAI /
+ * Anthropic, which answer 401 "Incorrect API key".
+ */
+export function isPaprKeyInProviderSlot(keyName: string, value: string): boolean {
+  return PROVIDER_KEY_NAMES.has(keyName) && value.startsWith("sk-org-");
 }
 
 /**
@@ -90,6 +114,7 @@ function isOAuthShapedToken(value: string): boolean {
 export function preserveEnvKeyBeforeOverwrite(keyName: string): void {
   const current = process.env[keyName];
   if (!current || isOAuthShapedToken(current)) return;
+  if (isPaprKeyInProviderSlot(keyName, current)) return;
   if (overwrittenEnvKeys[keyName]) return;
   overwrittenEnvKeys[keyName] = current;
 }
@@ -294,6 +319,12 @@ export async function getApiKeys(
     }
     const value = overwrittenEnvKeys[keyName] ?? process.env[keyName];
     if (!value) continue;
+    if (isPaprKeyInProviderSlot(keyName, value)) {
+      console.warn(
+        `[KeyResolver]   ✗ Ignoring ${keyName} — holds a Papr key, not a provider API key`,
+      );
+      continue;
+    }
     if (isOAuthShapedToken(value)) {
       console.warn(
         `[KeyResolver]   ✗ Ignoring ${keyName} — holds an OAuth token, not a Platform API key`,

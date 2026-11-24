@@ -138,7 +138,7 @@ export function usePlatformConnections() {
   const setupWithPen = useCallback((id: string, name: string) => {
     setError(null);
     setNeedsChromeFor(null);
-    openChatWithPrompt(buildSettingsPlatformSetupChatPrompt(name, id));
+    openChatWithPrompt(buildSettingsPlatformSetupChatPrompt(name, id), `Set up ${name}`);
   }, []);
 
   const connect = useCallback(

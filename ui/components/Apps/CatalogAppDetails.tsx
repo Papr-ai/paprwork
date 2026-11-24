@@ -14,6 +14,7 @@ import { formatCatalogUpdated, getCatalogByline } from "../../utils/communityCat
 import { DropGlyph } from "./HomeTiles";
 import { DefaultCover } from "./DefaultCover";
 import { catalogCoverVideoUrl, viaDesktopMedia } from "../../utils/catalogPreviewUrl";
+import { mediaForScheme, useColorScheme } from "../../utils/catalogScheme";
 import "./CatalogAppDetails.css";
 
 export function catalogKeyNames(entry: CommunityCatalogEntry): string[] {
@@ -49,15 +50,15 @@ export function CatIcon({ name, size = 13 }: { name: keyof typeof I; size?: numb
   );
 }
 
-export function CatalogBanner({ entry, coverUrl }: { entry: CommunityCatalogEntry; coverUrl: string | null; glyphSize?: number }) {
+export function CatalogBanner({ entry, coverUrl, autoPlay = false }: { entry: CommunityCatalogEntry; coverUrl: string | null; glyphSize?: number; autoPlay?: boolean }) {
   const [failed, setFailed] = useState(false);
   // Owner-shared preview video lives next to the cover (papr-cover-video); 404 → the picture.
   const [noVideo, setNoVideo] = useState(false);
-  const videoUrl = catalogCoverVideoUrl(entry, coverUrl);
+  const videoUrl = catalogCoverVideoUrl(entry, coverUrl, useColorScheme());
   return (
     <span className="cat-banner">
       {videoUrl && coverUrl && !noVideo && !failed ? (
-        <DemoVideo className="cat-banner__img" src={videoUrl} poster={coverUrl} onError={() => setNoVideo(true)} />
+        <DemoVideo className="cat-banner__img" src={videoUrl} poster={coverUrl} autoPlay={autoPlay} onError={() => setNoVideo(true)} />
       ) : coverUrl && !failed ? (
         <img className="cat-banner__img" src={coverUrl} alt="" loading="lazy" draggable={false} onError={() => setFailed(true)} />
       ) : (
@@ -74,15 +75,27 @@ interface Props {
   hasWeb: boolean;
   actions: ReactNode;
   onClose: () => void;
+  /** Owner only: open the app on App info to edit this page (headline, gallery). */
+  onEditPage?: () => void;
 }
 
+/** The surface the page covers: the visible Apps body (keeps the Apps top bar), else the window. */
+function pageHost(): HTMLElement {
+  const hosts = Array.from(document.querySelectorAll<HTMLElement>(".apps-view__body"));
+  return hosts.find((v) => v.offsetParent !== null && v.getClientRects().length > 0) ?? document.body;
+}
+
+const mention = (name: string) => name.replace(/[^A-Za-z0-9]+/g, "");
+
 /**
- * Prototyper-style app page in a centered modal: the whole preview film (inset in its own
- * rounded frame, so nothing dark touches the card's corners), identity row with a big Get,
- * a facts strip, screenshots, then what it needs / runs. Scrolls inside; Esc/backdrop closes.
+ * Prototyper app page, full view (not a popup): back link, the film, identity + Get, a facts
+ * strip, How it works (the gallery screens and their captions), what it can touch, where to
+ * use it. Key names and the long description wait behind "More about".
  */
-export function CatalogAppDetails({ entry, coverUrl, hasWeb, actions, onClose }: Props) {
+export function CatalogAppDetails({ entry, coverUrl, hasWeb, actions, onClose, onEditPage }: Props) {
   const scroller = useRef<HTMLDivElement>(null);
+  const scheme = useColorScheme();
+  const [host] = useState(pageHost);
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => { if (e.key === "Escape") onClose(); };
     window.addEventListener("keydown", onKey);
@@ -90,82 +103,104 @@ export function CatalogAppDetails({ entry, coverUrl, hasWeb, actions, onClose }:
     return () => window.removeEventListener("keydown", onKey);
   }, [onClose]);
   const keys = catalogKeyNames(entry);
+  const services = catalogKeyServices(entry);
   const updated = formatCatalogUpdated(entry.updatedAt);
   const installs = entry.installCount;
   const teamData = isTeamSharedVisibility(entry.visibility);
-  const shots = (entry.media ?? []).filter((m) => m.role === "gallery" && m.kind === "image" && m.url);
+  const steps = mediaForScheme(entry.media, scheme).filter((m) => m.role === "gallery" && m.kind === "image" && m.url).slice(0, 3);
+  const headline = entry.headline?.trim() || entry.description;
   const facts: Array<[string, string]> = [
     ...(typeof installs === "number" && installs > 0 ? [[installs.toLocaleString(), installs === 1 ? "install" : "installs"] as [string, string]] : []),
     [entry.isOwned ? "You" : (getCatalogByline(entry).replace(/^By\s+/i, "") || "Papr"), "built by"],
-    [String(keys.length), keys.length === 1 ? "key needed" : "keys needed"],
+    [keys.length ? String(keys.length) : "None", keys.length === 1 ? "key needed" : "keys needed"],
     ...(updated ? [[updated, "updated"] as [string, string]] : []),
-    ...(hasWeb ? [["Web", "also runs on"] as [string, string]] : []),
+  ];
+  const touches: Array<[string, string]> = [
+    ["Uses", services.length ? services.join(", ") : "Nothing outside Papr"],
+    ["Data", teamData ? "Your team's data" : "Your own private copy"],
+    ["Runs", entry.catalogAutomation?.cardLine ?? "Only when you open it"],
+    ["Updates", "Arrive automatically"],
   ];
   return createPortal(
     <div
-      className="cat-modal"
+      ref={scroller}
+      className={`cat-page${host === document.body ? " cat-page--window" : ""}`}
+      role="dialog"
+      aria-modal="true"
+      aria-label={entry.name}
+      tabIndex={-1}
       onClick={(e) => e.stopPropagation()}
       onKeyDown={(e) => e.stopPropagation()}
-      onMouseDown={(e) => { if (e.target === e.currentTarget) onClose(); }}
     >
-      <div className="cat-modal__card" role="dialog" aria-modal="true" aria-label={entry.name}>
-      <button type="button" className="cat-modal__x" onClick={onClose} aria-label="Close"><CatIcon name="x" size={14} /></button>
-      <div ref={scroller} className="cat-modal__scroll cat-page__in" tabIndex={-1}>
+      <div className="cat-page__in">
+        <button type="button" className="cat-page__back" onClick={onClose}>
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true"><path d="M15 5l-7 7 7 7" /></svg>
+          {teamData ? "Team" : "Discover"}
+        </button>
         <section className="cat-page__hero">
-          <div className="cat-page__media"><CatalogBanner entry={entry} coverUrl={coverUrl} /></div>
+          <div className="cat-page__media"><CatalogBanner entry={entry} coverUrl={coverUrl} autoPlay /></div>
           <div className="cat-page__id">
             <DropGlyph icon={entry.icon} title={entry.name} size={88} />
             <div className="cat-page__t">
               <h1>{entry.name}</h1>
-              {entry.headline?.trim() ? <p>{entry.headline.trim()}</p> : null}
+              {headline ? <p>{headline}</p> : null}
             </div>
-            <div className="cat-page__cta">{actions}</div>
+            <div className="cat-page__cta">
+              {actions}
+              {onEditPage ? <button type="button" className="cat-page__edit" onClick={onEditPage}>Edit page</button> : null}
+            </div>
           </div>
         </section>
         <ul className="cat-page__facts">
           {facts.map(([v, k]) => <li key={k}><b title={v}>{v}</b><span>{k}</span></li>)}
         </ul>
-        {entry.description ? (
-          <section className="cat-page__sec"><h2>About</h2><p className="cat-page__desc">{entry.description}</p></section>
-        ) : null}
-        {shots.length ? (
+        {steps.length ? (
           <section className="cat-page__sec">
-            <h2>Screenshots</h2>
-            <div className="cat-page__shots">
-              {shots.map((m, i) => (
+            <h2>How it works</h2>
+            <div className="cat-page__steps">
+              {steps.map((m, i) => (
                 <figure key={i}>
-                  <img src={viaDesktopMedia(m.url!)} alt={m.alt ?? ""} loading="lazy" draggable={false} />
-                  {m.alt ? <figcaption>{m.alt}</figcaption> : null}
+                  <img src={viaDesktopMedia(m.url!)} alt="" loading="lazy" draggable={false} />
+                  {m.alt ? <figcaption><b>{i + 1}</b>{m.alt}</figcaption> : null}
                 </figure>
               ))}
             </div>
           </section>
+        ) : onEditPage ? (
+          <section className="cat-page__sec">
+            <h2>How it works</h2>
+            <button type="button" className="cat-page__empty" onClick={onEditPage}>
+              <b>Show people how it works</b>
+              <span>Add a short video and three screens with one line each. Papr can make them for you.</span>
+            </button>
+          </section>
         ) : null}
         <section className="cat-page__sec cat-page__two">
           <div>
-            <h2>What it needs</h2>
-            <ul className="cat-page__list">
-              {keys.length ? keys.map((k) => (
-                <li key={k}><CatIcon name="key" /><code>{k}</code></li>
-              )) : <li><CatIcon name="check" /><span>No keys needed</span></li>}
-            </ul>
+            <h2>What it can touch</h2>
+            <ul className="cat-page__rows">{touches.map(([v, w]) => <li key={v}><b>{v}</b><span>{w}</span></li>)}</ul>
           </div>
           <div>
-            <h2>What it runs</h2>
-            <ul className="cat-page__list">
-              <li><CatIcon name="bolt" /><span>{entry.catalogAutomation?.cardLine ?? "Nothing in the background"}</span></li>
-              {hasWeb ? <li><CatIcon name="globe" /><span>Also works on the web</span></li> : null}
+            <h2>Use it from anywhere</h2>
+            <ul className="cat-page__rows cat-page__any">
+              <li><kbd>⌘K</kbd><span>Type “{entry.name.split(/\s+/)[0]?.toLowerCase()}” to open it</span></li>
+              <li><kbd>@</kbd><span>Mention <b>@{mention(entry.name)}</b> in any chat</span></li>
+              {hasWeb ? <li><kbd><CatIcon name="globe" size={12} /></kbd><span>Open it on the web</span></li> : null}
             </ul>
           </div>
         </section>
-        {!entry.isOwned ? (
-          <p className="cat-page__note">
-            {teamData ? "Uses your team's data." : "Your data stays private."} Updates arrive automatically.
-          </p>
-        ) : null}
-      </div>
+        <details className="cat-page__more">
+          <summary>More about {entry.name}</summary>
+          {entry.description && entry.description !== headline ? <p>{entry.description}</p> : null}
+          <ul className="cat-page__list">
+            {keys.length ? keys.map((k) => (
+              <li key={k}><CatIcon name="key" /><code>{k}</code></li>
+            )) : <li><CatIcon name="check" /><span>No keys needed</span></li>}
+            {updated ? <li><CatIcon name="check" /><span>Updated {updated}</span></li> : null}
+          </ul>
+        </details>
       </div>
     </div>,
-    document.body,
+    host,
   );
 }

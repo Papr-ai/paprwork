@@ -182,3 +182,18 @@
   .cpc-btn { border-color: var(--line); }
   .cpc-logo, .cpc-more { background: rgba(255, 255, 255, 0.08); }
 }
+
+/* First-run split layout: free/custom option as one wide row under the paid cards. */
+.cpc-wide {
+  display: flex; flex-direction: row; align-items: center; justify-content: space-between; gap: 20px;
+  margin-top: 16px; padding: 16px 22px;
+}
+.cpc-wide-l { min-width: 0; }
+.cpc-wide .cpc-blurb { min-height: 0; margin-top: 4px; }
+.cpc-wide-price { margin-left: 10px; font-weight: 600; color: var(--mid); }
+.cpc-wide-r { flex: none; width: 200px; }
+.cpc-wide-r .cpc-btn { margin-top: 0; }
+@media (max-width: 640px) {
+  .cpc-wide { flex-direction: column; align-items: stretch; }
+  .cpc-wide-r { width: auto; }
+}

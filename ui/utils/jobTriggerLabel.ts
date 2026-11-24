@@ -160,5 +160,5 @@ export function jobTriggerLabel(job: JobRecord, jobs: JobRecord[]): string {
     });
     return `After ${depNames.join(", ")}`;
   }
-  return "Manual";
+  return "One off";
 }

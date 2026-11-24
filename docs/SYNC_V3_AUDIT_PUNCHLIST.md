@@ -157,8 +157,8 @@ Two bug families cover all Critical/High items:
 nvm use 24
 npm run type-check
 # Unit bundle (36 tests when last run):
-npx vitest run tests/cloud-sync-hardening.test.ts tests/sync-v3-heartbeat.test.ts \
-  tests/app-repo-writer-ops.test.ts tests/push-app-via-writer-ops.test.ts
+npx vitest run tests/cloud-sync/engine/cloud-sync-hardening.test.ts tests/cloud-sync/engine/sync-v3-heartbeat.test.ts \
+  tests/cloud-sync/publish/app-repo-writer-ops.test.ts tests/cloud-sync/publish/push-app-via-writer-ops.test.ts
 
 PAPR_MEMORY_SERVER_URL=http://127.0.0.1:5001 npm run test:sync-v3-e2e
 npm run test:app-repo-writer

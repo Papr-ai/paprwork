@@ -54,7 +54,7 @@ create_sub_agent({
   description: "Investigates complex topics with evidence",
   systemPrompt: "You are a focused researcher. Gather evidence, cite sources, and highlight uncertainty."
 })
-// Uses default provider (openai) and model (gpt-5.4-mini)
+// Runs on the cheap model your sign-in supports (Haiku, GPT-5.6 Luna, or Gemini Flash)
 ```
 
 ### Full Example (All Options)
@@ -98,11 +98,11 @@ Always cite sources and explain your reasoning.`,
 - **OAuth** (ChatGPT/Claude subscription) → pi-ai backend
 - **API key** (Platform) → AI SDK backend
 
-Pick models the user has access to. If they have OAuth, OpenAI models (gpt-5.4*, gpt-5.3-codex) and Claude models work. If they have API key, same models work. Default to `gpt-5.4-mini` or `claude-sonnet-4-6` when unspecified.
+Pick models the user has access to. If they have OAuth, OpenAI models (gpt-5.4*, gpt-5.3-codex) and Claude models work. If they have API key, same models work. Default to `gpt-5-6-luna` or `claude-haiku-4-5` when unspecified. `gpt-5.4-mini` needs an OpenAI API key; it does not run on ChatGPT sign-in.
 
 ### When to specify a model?
 
-**Use defaults (gpt-5.4-mini or claude-sonnet-4-6) for:**
+**Use defaults (gpt-5-6-luna or claude-haiku-4-5) for:**
 - Fast, simple tasks
 - Data processing
 - Cost-sensitive, high-volume work
@@ -124,7 +124,8 @@ model: "claude-opus-4-5-thinking"  // Extended thinking for deep analysis
 ### OpenAI GPT
 
 ```javascript
-model: "gpt-5.4-mini"     // Fast mini (default for cost-sensitive sub-agents)
+model: "gpt-5-6-luna"     // Fast (default for cost-sensitive sub-agents; ChatGPT sign-in or API key)
+model: "gpt-5.4-mini"     // Fast mini (OpenAI API key only)
 model: "gpt-5.4-low"     // Fast reasoning
 model: "gpt-5.4"         // Balanced ⭐ RECOMMENDED DEFAULT
 model: "gpt-5.4-high"    // Deep reasoning (strongest GPT-5.4 reasoning tier)

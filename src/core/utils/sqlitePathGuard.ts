@@ -90,7 +90,7 @@ export function collectPaprDbPathsFromEnv(
   const paths: string[] = [];
   for (const [key, value] of Object.entries(env)) {
     if (!key.startsWith("PAPR_DB_") || !value) continue;
-    if (key.endsWith("_ALIAS") || key.endsWith("_ID")) continue;
+    if (key.endsWith("_ALIAS") || key.endsWith("_ID") || key.endsWith("_APP_ALIASES")) continue;
     paths.push(value);
   }
   return paths;

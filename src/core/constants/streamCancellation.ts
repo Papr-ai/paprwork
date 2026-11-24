@@ -37,6 +37,15 @@ export function isRecoverableProviderStreamDrop(reason: string): boolean {
   if (lower.includes("econnreset") || lower.includes("stream_ended_early")) {
     return true;
   }
+  // The Anthropic and OpenAI SDKs' APIConnectionError. The pi-ai route hands
+  // only its message up ("Connection error."), so the string is all there is.
+  if (
+    lower.startsWith("connection error") ||
+    lower.includes("fetch failed") ||
+    lower.includes("other side closed")
+  ) {
+    return true;
+  }
   if (
     lower.includes("connect timeout") ||
     lower.includes("connection timed out") ||

@@ -226,7 +226,7 @@ Use if Mongo backfill is incomplete; otherwise 3.1 alone may suffice.
 - `src/gateway/services/appRuntime/memoryRuntimeClient.ts`
 - `src/gateway/services/appRuntime/TursoDbAdapter.ts`
 - `src/gateway/services/syncV3/MetadataRegistryClient.ts`
-- `tests/cloud-app-host-cache.test.ts`
+- `tests/cloud-runtime/cloud-app-host-cache.test.ts`
 - `docs/ARCHITECTURE_CONVERSATION_SYNTHESIS.md` (link this plan)
 
 ### memory

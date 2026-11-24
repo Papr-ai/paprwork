@@ -107,6 +107,7 @@ export async function paprDbSyncStatus(
 
 export async function paprDbPush(
   ref: PaprDbSourceRef,
+  options?: { allowLargeBacklog?: boolean },
 ): Promise<{
   ok: boolean;
   error?: string;
@@ -117,7 +118,7 @@ export async function paprDbPush(
 }> {
   await initializeDatabaseRegistry();
   const source = resolveSource(ref);
-  const result = await pushLinkedDbViaTursoReplica(source);
+  const result = await pushLinkedDbViaTursoReplica(source, options);
   return { ...result, dbId: source.dbId ?? source.id };
 }
 
@@ -222,7 +223,8 @@ export async function repairCloudSync(options: {
       };
     }
     case "push": {
-      const push = await paprDbPush({ dbId: options.dbId });
+      // An explicit push is the "upload anyway" choice for a held backlog.
+      const push = await paprDbPush({ dbId: options.dbId }, { allowLargeBacklog: true });
       if (push.ok) {
         await scheduleLegacyCutoverRetryAfterRepair(options.dbId);
       }
@@ -305,6 +307,7 @@ export async function repairCloudSync(options: {
       const pushResult = await pushLinkedDbViaTursoReplica(source, {
         pullBeforePush: false,
         skipMigrationConflictCheck: true,
+        allowLargeBacklog: true,
       });
 
       await registry.updateReplicaPushState(options.dbId, {
@@ -711,6 +714,14 @@ export async function paprDbCreateMigration(options: {
     dbId: options.dbId,
     migrationId: created.migrationId,
   });
+  // Cloud run: the migration file sits beside the database, not in the app
+  // folder, so no app save fires. Publish the owner app so the file ships.
+  const { publishSchemaOwnerAfterMigration } = await import(
+    "../cloudAgentGateway/cloudRunNewDatabase.js"
+  );
+  await publishSchemaOwnerAfterMigration(
+    getDatabaseRegistryService().getById(options.dbId),
+  );
   return {
     migrationId: created.migrationId,
     fileName: created.fileName,
@@ -728,6 +739,8 @@ export async function paprDbApplyMigration(options: {
   migrationId: string;
   pendingPush: boolean;
   backend: "turso-replica" | "legacy-local" | "cloud-direct";
+  /** Teammate on shared data: passed on a test copy; the real copy is unchanged. */
+  testedOnly?: boolean;
   applyToken?: string;
   replicaApplied?: boolean;
   cloudApplied?: boolean;
@@ -745,6 +758,31 @@ export async function paprDbApplyMigration(options: {
   const migrationFileName = options.migrationId.endsWith(".sql")
     ? options.migrationId
     : `${options.migrationId}.sql`;
+
+  // A teammate on the team's shared data never changes their real copy's
+  // schema: the change runs on a throwaway test copy (schema + up to 100 rows
+  // per table), and the team's database gets it when the proposal is accepted
+  // (audit A, B, F2). No hold, so this copy stays live on the team's data.
+  const { isCollaboratorOnSharedDatabase } = await import("../sharedPrimaryTursoResolve.js");
+  if (isCollaboratorOnSharedDatabase(options.dbId)) {
+    const { testPendingMigrations } = await import("../cloudSync/proposalTestCopy.js");
+    const { queryRegistryDatabase } = await import("../jobs/registryDbSchemaReader.js");
+    const migrationId = migrationFileName.replace(/\.sql$/, "");
+    const tested = await testPendingMigrations({
+      dbId: options.dbId,
+      migrationRoot,
+      read: (sql) => queryRegistryDatabase({ dbPath: source.dbPath, dbId: options.dbId }, sql),
+    });
+    if (!tested.passed.includes(migrationId) && tested.pending.includes(migrationId)) {
+      const why = tested.failed
+        ? `${tested.failed.id === migrationId ? "it" : tested.failed.id} failed: ${tested.failed.error}`
+        : "it did not run";
+      throw new Error(
+        `${migrationId} didn't pass on a test copy of the team's data (${why}). Your real data wasn't changed.`,
+      );
+    }
+    return { applied: false, testedOnly: true, migrationId, pendingPush: false, backend: "turso-replica" };
+  }
 
   const { isCloudDirectSource } = await import("../cloudDirect/cloudDirectDb.js");
   if (isCloudDirectSource(source)) {
@@ -783,7 +821,10 @@ export async function paprDbApplyMigration(options: {
   await ensureReplicaSchemaMigrationsLedger(source);
 
   assertPaprDbMigrationApplyAllowed();
-  await assertNotCollaboratorOnSharedDatabase(options.dbId);
+  // No collaborator refusal here: on the team's shared data the single route
+  // applies on this desktop only (proposal hold) and the shared cloud copy
+  // changes when the publisher approves. Refusing left teammates stuck: the
+  // proposal in turn refuses migrations that never ran on this copy.
 
   const result = await applyRegistryMigrationSingleRoute(
     source,
@@ -1091,7 +1132,7 @@ async function assertNotCollaboratorOnSharedDatabase(dbId: string): Promise<void
   if (isCollaboratorOnSharedDatabase(dbId)) {
     throw new Error(
       `Database ${dbId} is the team's shared data and the publisher owns its schema. ` +
-        "Create it with apply: false, then submit_cloud_app_pr (a Maintainer/Admin can pass publishNow: true to " +
+        "Propose it with submit_cloud_app_pr (a Maintainer/Admin can pass publishNow: true to " +
         "apply it to the team's database and publish), or switch this copy to your own data first.",
     );
   }

@@ -33,19 +33,19 @@ npm run test:jobs-e2e && npm run test:jobs-advanced
 
 ### Error Classification Tests
 ```bash
-npm test -- tests/jobs-e2e-simple.test.ts -t "Error Classification"
+npm test -- tests/jobs/jobs-e2e-simple.test.ts -t "Error Classification"
 ```
 **Tests:** 5/5 (rate limit, invalid API key, timeout, 401, unknown)
 
 ### Run History Tests
 ```bash
-npm test -- tests/jobs-e2e-simple.test.ts -t "Run History"
+npm test -- tests/jobs/jobs-e2e-simple.test.ts -t "Run History"
 ```
 **Tests:** 1/1 (store and retrieve multiple runs with stats)
 
 ### Schedule Engine Tests
 ```bash
-npm test -- tests/schedule-engine.test.ts
+npm test -- tests/jobs/schedule-engine.test.ts
 ```
 **Tests:** Core scheduling logic (isScheduleDue, computeNextRunAt, etc.)
 

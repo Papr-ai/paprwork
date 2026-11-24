@@ -308,6 +308,14 @@ export class CloudAppInstallService {
       prepare.accessMode,
     );
     const databasePolicy = databasePolicyFromInstallPolicy(installDbPolicy);
+    // A teammate who installed from Community is on the team's data, so the
+    // copy is a team copy (bar, Propose path, data switch all key off this).
+    const sourceAudience =
+      installDbPolicy === "shared_primary" && input.sourceAudience === "community"
+        ? prepare.accessMode === "people"
+          ? "people"
+          : "team"
+        : input.sourceAudience;
 
     let createdAppId: string | null = null;
     // Fork databases created by this install — dropped (local + cloud) on rollback.
@@ -434,9 +442,14 @@ export class CloudAppInstallService {
         buildCloudInstallAgentSetupMessage,
         shouldOfferInstallAgentSetup,
       } = await import("./cloudAppInstallBootstrap.js");
+      // Fork and Community own-data copies start empty and create their cloud
+      // DB on first publish. A teammate's Community install on the team's data
+      // must pull the shared rows now, same as from Team Apps.
       const deferTursoUntilPublish =
         mode === "fork" ||
-        (mode === "track" && input.catalogScope === "global");
+        (mode === "track" &&
+          input.catalogScope === "global" &&
+          installDbPolicy !== "shared_primary");
       let bootstrap = await bootstrapInstalledAppDatabases(app.id, {
         installDbPolicy,
         deferTursoUntilPublish,
@@ -520,7 +533,7 @@ export class CloudAppInstallService {
         source: prepare.source,
         databasePolicy,
         ...(baseCommit ? { baseCommit } : {}),
-        ...(input.sourceAudience ? { sourceAudience: input.sourceAudience } : {}),
+        ...(sourceAudience ? { sourceAudience } : {}),
         installedAt: new Date().toISOString(),
         ...(prepare.mode === "track"
           ? {

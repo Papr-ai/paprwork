@@ -281,6 +281,10 @@
   background: #30d158;
 }
 
+.tab-ov__dot--needs {
+  background: #f59e0b;
+}
+
 @keyframes tab-ov-pulse {
   50% { opacity: 0.35; }
 }

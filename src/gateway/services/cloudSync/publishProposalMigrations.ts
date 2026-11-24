@@ -88,9 +88,10 @@ export async function publishProposalMigrations(
       throw new Error(`Couldn't upload pending rows before the database change: ${flushed.error ?? "push failed"}`);
     }
     for (const m of [...list].sort((a, b) => a.migrationId.localeCompare(b.migrationId))) {
-      if (await deps.applyOnCloud(tursoDatabase, m.migrationRoot, m.migrationId)) {
-        migrated.push(m.migrationId);
+      if (!(await deps.applyOnCloud(tursoDatabase, m.migrationRoot, m.migrationId))) {
+        continue; // already recorded on the cloud database: applied, nothing to verify
       }
+      migrated.push(m.migrationId);
       if (!(await deps.verifyOnCloud(tursoDatabase, m.migrationRoot, m.migrationId))) {
         throw new Error(`${m.migrationId} was applied to the cloud database but its schema didn't verify`);
       }

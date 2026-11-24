@@ -9,6 +9,8 @@ import { useCustomKeys } from "./useCustomKeys";
 import { isPaprProxyOnlyModel } from "../../src/core/constants/paprCloudFeatures";
 import { resolvePaprCloudFeatureAccess } from "../../src/core/utils/paprCloudFeatureAccess";
 import { usePaprCloudFeatureStore } from "../stores/paprCloudFeatureStore";
+import { usePremiumAccessStore } from "../stores/premiumAccessStore";
+import { isPremiumProxyModel } from "../../src/core/agents/premiumModels";
 import { resolveGlobalDefaultForAuth } from "../utils/authAwareModelDefaults";
 import { writeNewChatDefaultModel } from "../utils/chatModelMemory";
 import { gateway } from "../src/lib/gateway";
@@ -59,6 +61,7 @@ export function useAuthStatus() {
 
   const [paprLoggedIn, setPaprLoggedIn] = useState(false);
   const paprCloudContext = usePaprCloudFeatureStore((state) => state.context);
+  const premiumLocked = usePremiumAccessStore((state) => state.locked);
   const [preferences, setPreferences] = useState<{
     openai: ProviderAuthPreference;
     anthropic: ProviderAuthPreference;
@@ -166,6 +169,13 @@ export function useAuthStatus() {
     refresh();
   }, [refresh]);
 
+  // Premium models on Papr credits need pay as you go; ask once per login.
+  useEffect(() => {
+    const store = usePremiumAccessStore.getState();
+    if (status.paprProxy) void store.refresh();
+    else store.reset();
+  }, [status.paprProxy]);
+
   const prevOAuthRef = useRef<{ anthropic: boolean; openai: boolean } | null>(
     null,
   );
@@ -234,15 +244,27 @@ export function useAuthStatus() {
       if (model.provider === "openai-codex") {
         return status.openai.oauth;
       }
-      if (model.provider === "openai") {
-        return status.openai.oauth || status.openai.apiKey;
+      // No direct auth → fall through to the Papr proxy (credits), same as
+      // Google. The gateway already falls back to the proxy for these.
+      if (
+        model.provider === "openai" &&
+        (status.openai.oauth || status.openai.apiKey)
+      ) {
+        return true;
       }
-      if (model.provider === "anthropic") {
-        return status.anthropic.oauth || status.anthropic.apiKey;
+      if (
+        model.provider === "anthropic" &&
+        (status.anthropic.oauth || status.anthropic.apiKey)
+      ) {
+        return true;
       }
 
-      // Papr proxy routes models without direct auth — requires active subscription
+      // Papr proxy routes models without direct auth — requires active subscription,
+      // and premium models also need pay as you go (picker shows an upgrade badge).
       if (status.paprProxy) {
+        if (premiumLocked && isPremiumProxyModel(model.id)) {
+          return false;
+        }
         if (paprCloudContext) {
           return resolvePaprCloudFeatureAccess("papr_ai_proxy", paprCloudContext)
             .allowed;
@@ -260,7 +282,7 @@ export function useAuthStatus() {
       }
       return false;
     },
-    [status, paprCloudContext],
+    [status, paprCloudContext, premiumLocked],
   );
 
   return {

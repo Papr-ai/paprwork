@@ -61,7 +61,7 @@ SUMMARY: ✓ All 8 tests passed!
 ```
 
 ### Vitest Unit Tests
-**Command:** `npm test tests/jobs-e2e-simple.test.ts`
+**Command:** `npm test tests/jobs/jobs-e2e-simple.test.ts`
 
 **Error Classification Tests:** ✅ 5/5 passed
 - ✓ classifies rate limit as transient
@@ -185,7 +185,7 @@ command: `python3 -c 'print("Python job executed successfully")'`  // ✅ Proper
    - Verifies scheduling, retry logic, error classification, run history
    - **Runtime:** ~14 seconds
 
-2. **`tests/jobs-e2e-simple.test.ts`** - Vitest unit tests
+2. **`tests/jobs/jobs-e2e-simple.test.ts`** - Vitest unit tests
    - Error classification tests (5 tests)
    - Run history management tests (1 test)
    - Additional job execution tests (skipped due to worker serialization)
@@ -301,7 +301,7 @@ cat $PAPR_HOME/data/job-runs.jsonl | tail -5 | jq
 
 ### Test Code
 - `scripts/test-jobs-e2e.mjs` - Created comprehensive manual E2E test suite
-- `tests/jobs-e2e-simple.test.ts` - Created simplified Vitest tests
+- `tests/jobs/jobs-e2e-simple.test.ts` - Created simplified Vitest tests
 
 ### Documentation
 - `docs/E2E_JOB_TESTING_GUIDE.md` - Complete testing guide

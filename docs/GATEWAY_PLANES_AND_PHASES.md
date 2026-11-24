@@ -77,7 +77,7 @@ The OS schedules processes on available cores. The app does **not** pin cores in
 ### Verification
 
 ```bash
-npx vitest run tests/gateway-background-concurrency.test.ts tests/gateway-background-work.test.ts --project unit-backend
+npx vitest run tests/gateway/gateway-background-concurrency.test.ts tests/gateway/gateway-background-work.test.ts --project unit-backend
 npm run build:gateway && npm run test:gateway-background-phases
 ```
 

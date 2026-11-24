@@ -320,11 +320,16 @@ export function rebuildContextStatsCacheNow(db: Database.Database): void {
 }
 
 export function scheduleContextStatsRebuild(db: Database.Database): void {
+  if (!db.open) return;
   const stats = readContextStatsCache(db);
   if (!stats.needsRebuild || statsRebuildRunning) return;
 
   statsRebuildRunning = true;
   setImmediate(() => {
+    if (!db.open) {
+      statsRebuildRunning = false;
+      return;
+    }
     try {
       console.log("[ContextStats] Rebuilding lifetime stats cache (one-time)...");
       const started = Date.now();

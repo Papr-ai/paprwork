@@ -1,4 +1,5 @@
 import { useMemo, useEffect, useRef, useState, useCallback } from "react";
+import { noticeFromApp } from "../../stores/noticeOs";
 import { useApp } from "../../hooks/useApp";
 import { useCloudPublish } from "../../hooks/useCloudPublish";
 import { useGatewaySupervisorStatus } from "../../hooks/useGatewaySupervisorStatus";
@@ -10,8 +11,8 @@ import {
   MiniAppPublishBar,
   type AppPreviewMode,
 } from "./MiniAppPublishBar";
-import { MiniAppFilesView } from "./MiniAppFilesView";
-import { MiniAppJobsView } from "./MiniAppJobsView";
+import { onOpenAppTable } from "../../utils/openAppTable";
+import { AppSidePanel, type AppSideTab } from "./AppSidePanel";
 import type { AppWorkspaceMode, AppWorkspacePanel } from "../../hooks/useAppWorkspace";
 import { useAppLinkedJobCount } from "../../stores/jobsStore";
 import { useTabs } from "../../hooks/useTabs";
@@ -82,8 +83,13 @@ export function MiniAppView({
   const [appTitle, setAppTitle] = useState("Mini-app");
   const [cloudLineage, setCloudLineage] = useState<ArtifactCloudLineage | null>(null);
   const [viewMode, setViewMode] = useState<AppPreviewMode>("local");
-  const [workspaceMode, setWorkspaceMode] = useState<AppWorkspaceMode>("preview");
+  // The app is always on screen now; Data & code opens beside it (sideTab).
+  const workspaceMode: AppWorkspaceMode = "preview";
   const [workspacePanel, setWorkspacePanel] = useState<AppWorkspacePanel>("code");
+  // Data & code panel: opens beside the app; null = closed.
+  const [sideTab, setSideTab] = useState<AppSideTab | null>(null);
+  const [sideWide, setSideWide] = useState(false);
+  const [focusJobId, setFocusJobId] = useState<string | null>(null);
   const linkedJobCount = useAppLinkedJobCount(appId);
   const [previewShellLoaded, setPreviewShellLoaded] = useState(false);
   const [iframeLoadKey, setIframeLoadKey] = useState(0);
@@ -111,7 +117,21 @@ export function MiniAppView({
 
   useEffect(() => {
     setWorkspacePanel("code");
+    setSideTab(null);
+    setSideWide(false);
   }, [appId]);
+
+  // Share sheet table pill: show that table in this app's DB panel.
+  const [pendingTable, setPendingTable] = useState<{ db: string; table: string } | null>(null);
+  const clearPendingTable = useCallback(() => setPendingTable(null), []);
+  useEffect(
+    () =>
+      onOpenAppTable(appId, ({ db, table }) => {
+        setSideTab("data");
+        setPendingTable({ db, table });
+      }),
+    [appId],
+  );
 
   const localPreviewOrigin = useMemo(
     () =>
@@ -594,7 +614,7 @@ export function MiniAppView({
         surface,
       } as Record<string, unknown>);
     };
-  }, [appId, isPublishedPreview]);
+  }, [appId, appTitle, isPublishedPreview]);
 
   // Inject paprAPI + runtime console forwarding for local preview only
   useEffect(() => {
@@ -804,7 +824,11 @@ export function MiniAppView({
         if (!window.electronAPI?.system?.invoke) {
           throw new Error("electronAPI.system.invoke not available");
         }
-        const result = await window.electronAPI.system.invoke(method, args);
+        // OS notifications go through notify(): this app is the source, capped at Priority, deduped.
+        const result =
+          method === "notification.show"
+            ? await noticeFromApp(appId, appTitle, (Array.isArray(args) ? args[0] : args) ?? {})
+            : await window.electronAPI.system.invoke(method, args);
         iframeRef.current?.contentWindow?.postMessage(
           { type: "papr-invoke-response", id, result },
           "*",
@@ -878,12 +902,16 @@ export function MiniAppView({
           onViewModeChange={handleViewModeChange}
           workspaceMode={workspaceMode}
           onWorkspaceModeChange={(mode) => {
-            setWorkspaceMode(mode);
+            // "Data & code" opens the panel beside the app; the bar stays put.
             if (mode === "files") {
-              setWorkspacePanel("code");
+              setSideTab((cur) => cur ?? "data");
+            } else {
+              setSideTab(null);
+              setSideWide(false);
             }
           }}
           workspacePanel={workspacePanel}
+          dataPanelOpen={sideTab !== null}
           onWorkspacePanelChange={setWorkspacePanel}
           linkedJobCount={linkedJobCount}
           onTrackPullComplete={() => void refreshAppMetadata()}
@@ -891,19 +919,19 @@ export function MiniAppView({
           onRefreshPreview={handleRefreshPreview}
           previewTabVisible={previewTabVisible}
           previewShellLoaded={previewShellLoaded}
+          onOpenFailingJob={(jobId) => {
+            setFocusJobId(jobId);
+            setSideTab("jobs");
+          }}
           onOpenDependencyApp={(dependencyAppId, title) => {
             const tabId = createTab("app", dependencyAppId, title ?? "App");
             switchToTab(tabId);
           }}
         />
       ) : null}
-      {!embedded && workspaceMode === "files" ? (
-        workspacePanel === "jobs" ? (
-          <MiniAppJobsView appId={appId} appTitle={appTitle} />
-        ) : (
-          <MiniAppFilesView appId={appId} panel={workspacePanel} />
-        )
-      ) : (
+      <div
+        className={`mini-app-view__stage${sideTab && sideWide ? " mini-app-view__stage--wide" : ""}`}
+      >
         <div className="mini-app-view__frame-wrap">
           {waitingForGateway ? (
             <div className="mini-app-view__overlay">
@@ -1046,7 +1074,25 @@ export function MiniAppView({
             </div>
           ) : null}
         </div>
-      )}
+        {!embedded && sideTab ? (
+          <AppSidePanel
+            appId={appId}
+            tab={sideTab}
+            wide={sideWide}
+            jobCount={linkedJobCount}
+            focusJobId={focusJobId}
+            openTable={pendingTable}
+            onTableOpened={clearPendingTable}
+            onTabChange={setSideTab}
+            onWideChange={setSideWide}
+            onClose={() => {
+              setSideTab(null);
+              setSideWide(false);
+              setFocusJobId(null);
+            }}
+          />
+        ) : null}
+      </div>
     </div>
   );
 }

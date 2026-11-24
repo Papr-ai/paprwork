@@ -72,12 +72,22 @@ export interface UserConsentMigrationResult {
   targetPaprHome: string;
 }
 
+/**
+ * PAPR_PROFILE=dev runs a fully separate desktop install against the
+ * development backend: ~/Papr-dev + ~/.paprwork-v2-dev, so dev accounts,
+ * chats, jobs and synced repos never mix with the production workspace.
+ */
+export function paprProfileSuffix(): string {
+  const p = (process.env.PAPR_PROFILE || "").trim().toLowerCase();
+  return p && p !== "prod" && p !== "production" ? `-${p.replace(/[^a-z0-9]/g, "")}` : "";
+}
+
 export function getPaprBaseDir(): string {
-  return path.join(os.homedir(), "Papr");
+  return path.join(os.homedir(), `Papr${paprProfileSuffix()}`);
 }
 
 export function getPaprworkBaseDir(): string {
-  return path.join(os.homedir(), ".paprwork-v2");
+  return path.join(os.homedir(), `.paprwork-v2${paprProfileSuffix()}`);
 }
 
 export function resolveOrgNamespaceWorkspacePath(

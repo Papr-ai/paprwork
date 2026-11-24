@@ -67,6 +67,20 @@ export interface PaprPlanSummary {
   usage: PaprUsageSnapshot;
   limits: PaprPlanLimits;
   warnings: PaprPlanWarnings;
+  /** Set when the org is billed in credits: the legacy usage/limits fields are unused. */
+  credits?: PaprCreditsSummary;
+}
+
+export interface PaprCreditsSummary {
+  /** Credits plan key: local | cloud | cloud_plus | cloud_max. */
+  plan: string;
+  period: string;
+  /** This person's allowance. */
+  you: { grant: number; used: number; state: string; reason?: string | null; seat: boolean; memberCap?: number; requests?: string[] };
+  /** Whole org, all seats. */
+  org: { grant: number; used: number; state: string; seats: number } | null;
+  /** Prepaid top-up balance in USD, when known. */
+  topupBalanceUsd?: number | null;
 }
 
 export const PAPR_CHECKOUT_PRICE_IDS: Record<

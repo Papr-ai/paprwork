@@ -18,6 +18,8 @@
  *   npm run test:turso-phase1-oplog-e2e
  */
 
+// Must stay first: runs in a temp workspace, never the real ~/Papr.
+import "./lib/isolateHome.mjs";
 import Database from "better-sqlite3";
 import { createClient } from "@libsql/client";
 import * as fs from "fs";

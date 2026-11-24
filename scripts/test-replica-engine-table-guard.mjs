@@ -7,6 +7,8 @@
  *   npm run test:engine-table-guard
  */
 
+// Must stay first: runs in a temp workspace, never the real ~/Papr.
+import "./lib/isolateHome.mjs";
 import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";

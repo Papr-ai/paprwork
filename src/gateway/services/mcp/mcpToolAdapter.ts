@@ -38,10 +38,51 @@ export function mcpAgentToolId(serverId: string, toolName: string): string {
 const MAX_DESCRIPTION_CHARS = 1_000;
 const MAX_RESULT_CHARS = 60_000;
 
-function toZod(schema: Record<string, unknown> | undefined): z.ZodType {
-  if (!schema || typeof schema !== "object") return z.looseObject({});
+type JsonObject = Record<string, unknown>;
+const isObj = (v: unknown): v is JsonObject => Boolean(v) && typeof v === "object" && !Array.isArray(v);
+
+/**
+ * Providers (Anthropic: "input_schema.type: Field required") need every tool's
+ * input schema to be `{ type: "object", properties }` at the top level. Some MCP
+ * servers (e.g. Amplitude's use_amplitude_chart_monitors) put all parameters in a
+ * top-level anyOf/oneOf with an empty top-level `properties`. Zod turns that into
+ * a schema with no `type`, and one such tool 400s the whole request.
+ *
+ * Flatten it: merge every branch's properties up to the top level (so the model
+ * still sees every parameter), keep only `required` fields common to all branches,
+ * and drop the combinator. The server still enforces the exact "one of" rules.
+ */
+export function flattenTopLevelUnion(schema: JsonObject): JsonObject {
+  const flat: JsonObject = { ...schema, type: "object" };
+  const branches: JsonObject[] = [];
+  for (const k of ["anyOf", "oneOf"] as const) {
+    const list = flat[k];
+    if (Array.isArray(list)) branches.push(...list.filter(isObj));
+  }
+  for (const k of ["anyOf", "oneOf", "allOf", "not", "if", "then", "else"]) delete flat[k];
+  if (branches.length === 0) return flat;
+
+  const props: JsonObject = isObj(flat.properties) ? { ...flat.properties } : {};
+  for (const b of branches) {
+    if (!isObj(b.properties)) continue;
+    for (const [name, def] of Object.entries(b.properties)) if (!(name in props)) props[name] = def;
+  }
+  const reqOf = (b: JsonObject) => (Array.isArray(b.required) ? (b.required as string[]) : []);
+  const common = branches.map(reqOf).reduce((a, r) => a.filter((n) => r.includes(n)));
+  const required = [...new Set([...reqOf(flat), ...common])].filter((n) => n in props);
+  flat.properties = props;
+  if (required.length > 0) flat.required = required;
+  else delete flat.required;
+  delete flat.additionalProperties; // branches said false; the merged shape is a union, so don't forbid.
+  return flat;
+}
+
+export function mcpInputSchemaToZod(schema: JsonObject | undefined): z.ZodType {
+  if (!isObj(schema)) return z.looseObject({});
   try {
-    return z.fromJSONSchema({ type: "object", ...schema } as Parameters<typeof z.fromJSONSchema>[0]);
+    const zod = z.fromJSONSchema(flattenTopLevelUnion(schema) as Parameters<typeof z.fromJSONSchema>[0]);
+    const wire = z.toJSONSchema(zod, { io: "input", unrepresentable: "any" }) as { type?: unknown };
+    return wire.type === "object" ? zod : z.looseObject({});
   } catch {
     // An exotic schema should not hide the tool — let the server validate.
     return z.looseObject({});
@@ -82,7 +123,7 @@ export function buildMcpAgentTool(
   return createTool({
     id,
     description,
-    inputSchema: toZod(tool.inputSchema),
+    inputSchema: mcpInputSchemaToZod(tool.inputSchema),
     execute: async (inputData: unknown) => {
       const raw = (inputData as { context?: unknown })?.context ?? inputData;
       const args = raw && typeof raw === "object" ? (raw as Record<string, unknown>) : {};

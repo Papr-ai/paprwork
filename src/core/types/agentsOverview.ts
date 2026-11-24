@@ -87,11 +87,22 @@ export interface AgentsOverviewWorkType {
   chats: number;
 }
 
+/**
+ * Calendar month to date (local time), independent of the selected range, so
+ * the plan section can put "what was billed on top of the plan this month"
+ * next to a monthly subscription price. Same split as `billing`.
+ */
+export interface AgentsOverviewMonth extends AgentsOverviewBilling {
+  /** ISO timestamp of the first instant of the month. */
+  start: string;
+}
+
 export interface AgentsOverview {
   days: number;
   generatedAt: string;
   totals: AgentsOverviewTotals;
   billing: AgentsOverviewBilling;
+  month: AgentsOverviewMonth;
   daily: Array<{ date: string; cost: number }>;
   chats: AgentsOverviewChat[];
   longTail: { chats: number; cost: number };

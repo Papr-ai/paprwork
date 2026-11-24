@@ -60,7 +60,7 @@ const OPENAI_CODEX_MODELS = new Set([
 ## Files Updated
 
 1. `src/gateway/utils/modelNormalizer.ts` - Removed GPT-5.4 from OAuth models
-2. `tests/gpt-5-4-integration.test.ts` - Updated tests to expect API-key-only
+2. `tests/providers/gpt-5-4-integration.test.ts` - Updated tests to expect API-key-only
 3. `docs/GPT_5_4_INTEGRATION.md` - Documented OAuth limitation
 4. `docs/GPT_5_4_IMPLEMENTATION_SUMMARY.md` - Updated status
 5. `CLAUDE.md` - Clarified availability

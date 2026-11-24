@@ -38,6 +38,15 @@ export function getClaudeCliInstallCommand(
   return "curl -fsSL https://claude.ai/install.sh | bash";
 }
 
+/** Shell command that shows whether `claude` is installed and its version. */
+export function getClaudeCliCheckCommand(platform: ManualConnectionPlatform): string {
+  // PowerShell: `where` is an alias for Where-Object and `&&` fails on 5.1.
+  if (platform === "windows") {
+    return "Get-Command claude; claude --version";
+  }
+  return "which claude && claude --version";
+}
+
 export function getClaudeManualConnectionSteps(
   platform: ManualConnectionPlatform = detectManualConnectionPlatform(),
 ): ClaudeManualConnectionStep[] {
@@ -61,7 +70,10 @@ export function getClaudeManualConnectionSteps(
     },
     {
       title: "Verify the install",
-      description: `Still in ${terminal}, run this and press Enter. You should see a version number (for example 2.1.x).`,
+      description:
+        platform === "windows"
+          ? `Close ${terminal}, open a new ${terminal} window (so it picks up the new install), then run this. You should see a version number.`
+          : `Still in ${terminal}, run this and press Enter. You should see a version number (for example 2.1.x).`,
       command: "claude --version",
     },
     {

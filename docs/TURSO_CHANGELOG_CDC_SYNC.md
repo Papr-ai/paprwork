@@ -124,7 +124,7 @@ Requires Electron’s embedded Node (native `better-sqlite3` is built for Electr
 
 ```bash
 npm run build:gateway
-ELECTRON_RUN_AS_NODE=1 ./node_modules/.bin/electron ./node_modules/vitest/vitest.mjs run tests/turso-sync-log.test.ts --project unit-backend
+ELECTRON_RUN_AS_NODE=1 ./node_modules/.bin/electron ./node_modules/vitest/vitest.mjs run tests/cloud-sync/database/turso-sync-log.test.ts --project unit-backend
 ```
 
 Covers:

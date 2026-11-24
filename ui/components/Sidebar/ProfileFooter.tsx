@@ -7,6 +7,7 @@
 import { useCallback, useEffect } from "react";
 import { formatActiveWorkspaceLabel } from "../../lib/workspaceSwitchOverlay";
 import { useCloudMemoryStatusStore } from "../../stores/cloudMemoryStatusStore";
+import { billingNeedsYou, useNoticeStore } from "../../stores/noticeStore";
 import { UserAvatar } from "../common/UserAvatar";
 import { useProfileStore } from "../../stores/profileStore";
 import { AgentGlyph } from "../Agent/AgentGlyph";
@@ -24,9 +25,12 @@ interface ProfileFooterProps {
 }
 
 export function ProfileFooter({ onOpenProfile, onOpenSettings }: ProfileFooterProps) {
-  const planAttention = useCloudMemoryStatusStore((state) => state.planAttention);
+  const billingWaiting = useNoticeStore(billingNeedsYou);
+  const planAttention = useCloudMemoryStatusStore((state) => state.planAttention) || billingWaiting;
   const planStatus = useCloudMemoryStatusStore((state) => state.status);
-  const planAttentionHint = planStatus
+  const planAttentionHint = billingWaiting
+    ? "Billing needs you — open Billing in Settings"
+    : planStatus
     ? `${planStatus.label} — open Billing in Settings`
     : "Billing needs attention — open Billing in Settings";
   const {
@@ -130,7 +134,6 @@ export function ProfileFooter({ onOpenProfile, onOpenSettings }: ProfileFooterPr
       >
         <UserAvatar imageUrl={imageUrl} displayName={name} alt={displayName} size={32} />
         {badge}
-        {planAttention ? <i className="rail-btn__badge rail-btn__badge--warn" aria-hidden="true" /> : null}
       </button>
 
       <div className="rail-peek rail-account__card" role="menu" aria-label="Account">

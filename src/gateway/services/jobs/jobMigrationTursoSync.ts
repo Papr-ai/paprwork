@@ -324,17 +324,9 @@ export async function applyPendingDatabaseMigrationsToTurso(
       continue;
     }
     if (remoteApplied.has(migrationId)) {
-      const satisfied = await migrationSatisfiedOnRemote(
-        remote,
-        migrationRoot,
-        migrationId,
-      );
-      if (satisfied) {
-        continue;
-      }
-      console.warn(
-        `[MigrationTurso] Remote ledger lists ${migrationId} but schema is incomplete — re-applying`,
-      );
+      // Recorded = applied. Re-checking against today's schema misfires once a
+      // later migration rebuilds or drops what this one created.
+      continue;
     }
     const applyOptions: ApplyToRemoteOptions = { recordAs: migrationId };
     await applyMigrationToRemote(remote, migrationRoot, migrationId, applyOptions);
@@ -365,14 +357,7 @@ export async function applyAndRecordMigrationOnTursoPrimary(
   const normalizedId = migrationId.replace(/\.sql$/, "");
   const remoteApplied = await listRemoteAppliedMigrationIds(remote);
   if (remoteApplied.has(normalizedId)) {
-    const satisfied = await migrationSatisfiedOnRemote(
-      remote,
-      migrationRoot,
-      normalizedId,
-    );
-    if (satisfied) {
-      return { applied: false };
-    }
+    return { applied: false };
   }
   const applyOptions: ApplyToRemoteOptions = { recordAs: normalizedId };
   await applyMigrationToRemote(remote, migrationRoot, normalizedId, applyOptions);

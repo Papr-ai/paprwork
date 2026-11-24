@@ -1,0 +1,151 @@
+/** v9: data check scopes, Write with AI prompt/parse, "Published by" line. */
+import { describe, expect, it } from "vitest";
+
+import {
+  COLUMN_CAP,
+  humanTable,
+  rowsLine,
+  DATA_CHECK_CHAT_TITLE,
+  dataCheckAgentPrompt,
+  scopeTables,
+  scopeTag,
+  tableIsShared,
+  tableScope,
+} from "../../../src/core/utils/tableScope.js";
+import {
+  buildDraftPrompt,
+  compactFileDiff,
+  parseDraft,
+} from "../../../src/gateway/services/cloudSync/proposalDraft.js";
+import { formatMergeByline } from "../../../ui/utils/mergeByline.js";
+
+const cols = (...names: string[]) => names.map((name) => ({ name }));
+
+describe("table scope columns (hover card)", () => {
+  const src = (cols: string[]) => [{ alias: "crm", tables: [{ table: "deals", columns: cols.map((name) => ({ name })) }] }];
+  it("returns user-facing columns from the schema it already read", () => {
+    const [t] = scopeTables(src(["id", "company", "amount", "_acl", "created_by", "papr_user_id", "stage"]));
+    expect(t.columns).toEqual(["company", "amount", "stage"]);
+    expect(t.moreColumns).toBe(0);
+  });
+  it("caps columns so the response stays small", () => {
+    const [t] = scopeTables(src(Array.from({ length: 20 }, (_, i) => `c${i}`)));
+    expect(t.columns).toHaveLength(COLUMN_CAP);
+    expect(t.moreColumns).toBe(20 - COLUMN_CAP);
+  });
+  it("describes rows in plain words", () => {
+    expect(rowsLine({ db: "a", name: "b", scope: "all" }, true)).toBe("Every row");
+    expect(rowsLine({ db: "a", name: "b", scope: "user" }, true)).toBe("Their own rows");
+    expect(rowsLine({ db: "a", name: "b", scope: "private" }, true)).toBe("Rows shared with them");
+    expect(humanTable("deal_notes")).toBe("deal notes");
+  });
+});
+
+describe("Ask Pen prompt", () => {
+  const t = (name: string) => ({ db: "crm", name, scope: "all" as const });
+  it("asks before changing anything and uses _acl, not papr_user_id", () => {
+    const p = dataCheckAgentPrompt("app-1", [t("deals"), t("partners")]);
+    expect(p).toContain("2 tables show every row");
+    expect(p).toContain("crm.deals, crm.partners");
+    expect(p).toContain("Ask me which should stay shared");
+    expect(p).toContain("acl_for_caller()");
+    expect(p).not.toContain("papr_user_id");
+    expect(DATA_CHECK_CHAT_TITLE).toBe("Review shared data");
+  });
+  it("caps the table list", () => {
+    const p = dataCheckAgentPrompt("a", Array.from({ length: 9 }, (_, i) => t(`t${i}`)));
+    expect(p).toContain("9 tables");
+    expect(p).toContain("and 3 more");
+    expect(p).not.toContain("crm.t8");
+  });
+});
+
+describe("table scope", () => {
+  it("reads owner columns", () => {
+    expect(tableScope(cols("id", "papr_user_id"))).toBe("user");
+    expect(tableScope(cols("id", "owner_session"))).toBe("visitor");
+    expect(tableScope(cols("id", "name"))).toBe("all");
+    expect(tableScope(cols("id"), true)).toBe("user");
+  });
+
+  it("visitor tables only leak without sign-in; internal tables skipped", () => {
+    const t = scopeTables([
+      {
+        alias: "crm",
+        tables: [
+          { table: "leads", columns: cols("id") },
+          { table: "signups", columns: cols("owner_session") },
+          { table: "sqlite_sequence", columns: cols("name") },
+          { table: "_papr_migrations", columns: cols("id") },
+        ],
+      },
+    ]);
+    expect(t.map((x) => x.name)).toEqual(["leads", "signups"]);
+    expect(t.filter((x) => tableIsShared(x, false)).length).toBe(2);
+    expect(t.filter((x) => tableIsShared(x, true)).map((x) => x.name)).toEqual(["leads"]);
+    expect(scopeTag(t[1]!, false)).toBe("Needs sign-in");
+    expect(scopeTag(t[1]!, true)).toBe("Per person");
+  });
+});
+
+describe("table scope: private tables and engine bookkeeping", () => {
+  const cols = (...n: string[]) => n.map((name) => ({ name }));
+  it("tables marked private on the database are not visible to visitors", () => {
+    const t = scopeTables([{ alias: "docs", privateTables: ["Docs", "doc_blocks"], tables: [
+      { table: "docs", columns: cols("id", "_acl") },
+      { table: "doc_blocks", columns: cols("id") },
+      { table: "catalog", columns: cols("id") },
+    ] }]);
+    expect(t.map((x) => [x.name, x.scope])).toEqual([["docs", "private"], ["doc_blocks", "private"], ["catalog", "all"]]);
+    expect(t.filter((x) => tableIsShared(x, false)).map((x) => x.name)).toEqual(["catalog"]);
+    expect(scopeTag(t[0], false)).toBe("Private");
+  });
+  it("never lists sync, CDC or migration bookkeeping as app data", () => {
+    const t = scopeTables([{ alias: "docs", tables: ["turso_cdc", "turso_cdc_version", "turso_sync_last_change_id", "schema_migrations", "libsql_wasm_func_table", "notes"]
+      .map((table) => ({ table, columns: cols("id") })) }]);
+    expect(t.map((x) => x.name)).toEqual(["notes"]);
+  });
+});
+
+describe("Write with AI", () => {
+  it("keeps only the changed middle of a file", () => {
+    const d = compactFileDiff({ path: "app.ts", before: "a\nb\nc\nd", after: "a\nB\nc\nd" });
+    expect(d).toBe("Edited app.ts (line 2)\n- b\n+ B");
+    expect(compactFileDiff({ path: "x.ts", before: undefined, after: "hi" })).toContain("New file x.ts");
+    expect(compactFileDiff({ path: "y.ts", before: "z", after: undefined })).toBe("Removed file y.ts");
+  });
+
+  it("caps the prompt and parses the reply", () => {
+    const big = "x\n".repeat(20_000);
+    const p = buildDraftPrompt("CRM", [
+      { path: "a.ts", before: "", after: big },
+      { path: "b.ts", before: "", after: big },
+      { path: "c.ts", before: "", after: big },
+      { path: "d.ts", before: "", after: big },
+      { path: "e.ts", before: "", after: big },
+      { path: "f.ts", before: "", after: big },
+    ]);
+    expect(p.length).toBeLessThan(16_000);
+    expect(p).toContain("more file(s)");
+    expect(parseDraft("TITLE: Fix chart labels.\nSUMMARY: Labels no longer overlap.")).toEqual({
+      title: "Fix chart labels",
+      description: "Labels no longer overlap.",
+    });
+    expect(parseDraft("nothing useful")).toBeNull();
+  });
+});
+
+describe("Published by", () => {
+  it("names the Maintainer and the change", () => {
+    const now = Date.parse("2026-10-12T12:00:00Z");
+    const line = formatMergeByline(
+      { actorUserId: "u2", title: "Fix chart labels", publishedDirectly: true, at: "2026-10-12T10:00:00Z" },
+      [{ userId: "u2", displayName: "Shawkat" }],
+      now,
+    );
+    expect(line).toBe("Published by Shawkat · “Fix chart labels” · 2h ago");
+    expect(
+      formatMergeByline({ actorUserId: "zz", title: null, publishedDirectly: false, at: "2026-10-12T11:59:50Z" }, [], now),
+    ).toBe("Accepted by a Maintainer · just now");
+  });
+});

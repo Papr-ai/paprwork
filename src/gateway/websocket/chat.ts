@@ -137,6 +137,7 @@ export async function setupChatHandlers(
       case "chat:delete": {
         const { chatId } = message.payload as DeleteChatPayload;
         await agentService.deleteChat(chatId);
+        void import("../services/notifications/noticeSources.js").then((m) => m.noticeChatDeleted(chatId));
 
         const { getGatewayTelemetry } = await import("../services/gatewayTelemetry.js");
         getGatewayTelemetry().trackFireAndForget("paprwork_chat_deleted", {

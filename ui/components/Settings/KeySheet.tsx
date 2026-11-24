@@ -40,6 +40,9 @@ const EXPOSE = [
   { value: "client" as const, label: "Browser-safe", hint: "Publishable keys only. Can be bundled into mini-app code" },
 ];
 
+/** How long Save waits for the cloud vault before closing anyway. */
+const SYNC_WAIT_MS = 2500;
+
 const hintOf = <T extends string>(opts: Array<{ value: T; hint: string }>, v: T) => opts.find((o) => o.value === v)?.hint;
 
 async function syncWithAlerts(input: Parameters<typeof syncVaultKeyChange>[0], owner: (id?: string) => string) {
@@ -113,12 +116,17 @@ export function KeySheet({ keyItem, ctx, onClose }: { keyItem: CustomKey | null;
         const v = value.trim() || (moved ? ((await getKeyValue(keyItem.id)) ?? "") : "");
         if (!(await updateKey(keyItem.id, v ? { ...fields, value: v } : fields))) return setStatus("Couldn't save. Try again.");
       }
-      const warn = await syncWithAlerts(
+      // The key is saved locally at this point. The cloud push can queue behind other vault
+      // work for a long time, so don't hold the sheet open on it: wait briefly for a
+      // conflict answer, then close and let the push finish in the background.
+      const sync = syncWithAlerts(
         { name, previousAudience: keyItem?.vaultAudience ?? "user", nextAudience: audience, targetOrgId: scopeInput.organizationId, mode: "update" },
         ownerOf,
-      );
-      await loadKeys(true);
-      if (warn) return setStatus(warn);
+      ).catch(() => null);
+      const warn = await Promise.race([sync, new Promise<null>((r) => setTimeout(() => r(null), SYNC_WAIT_MS))]);
+      void loadKeys(true);
+      // Only a sharing conflict needs the user's attention; a slow or failed push retries on its own.
+      if (warn && !warn.startsWith("Saved on this Mac")) return setStatus(warn);
       onClose();
     } finally {
       setBusy(false);

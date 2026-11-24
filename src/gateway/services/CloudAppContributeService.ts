@@ -63,6 +63,10 @@ import {
   isAppRepoRootPath,
   linkedJobRepoRelativeDir,
 } from "./cloudSync/cloudGitClone.js";
+import {
+  proposeFailureProps,
+  type ProposeStep,
+} from "./cloudSync/proposeFailureTelemetry.js";
 
 export interface ProposeContributeInput {
   sourceNamespaceId: string;
@@ -284,6 +288,13 @@ export async function appliedMigrationIdsForProposal(
   const ids = new Set(ledger.rows.map((row) => String(row.id ?? "").replace(/\.sql$/, "")));
   const { getReplicaPublishHold } = await import("./tursoReplica/replicaPublishHold.js");
   for (const m of getReplicaPublishHold(dbPath)?.migrations ?? []) ids.add(m.migrationId);
+  // Contributor on the team's data: tested on a test copy, never applied here.
+  const { resolveMigrationRootFromDbPath } = await import("./jobs/databaseMigrations.js");
+  const root = resolveMigrationRootFromDbPath(dbPath);
+  if (root) {
+    const { testedMigrationIds } = await import("./cloudSync/proposalTestCopy.js");
+    for (const id of await testedMigrationIds(dbId, root)) ids.add(id);
+  }
   return ids;
 }
 
@@ -493,6 +504,18 @@ async function buildContributeStaging(
       kind: "job",
       jobId,
     });
+  }
+
+  // A team copy keeps its migrations in apps/{id}/databases/{slug}/migrations;
+  // the registry folder the check below reads can be empty. Mirror new files
+  // across first (missing files only) so they are checked and run here like any
+  // other new migration, instead of riding along untested in the app tree.
+  const { hydrateAppFolderSchemaMigrationsToRegistry } = await import(
+    "./syncV3/syncPulledSchemaOwnerMigrations.js"
+  );
+  const mirrored = await hydrateAppFolderSchemaMigrationsToRegistry({ appId: forkAppId, paprRoot: paprDir });
+  if (mirrored.copied.length > 0) {
+    console.info(`[CloudContribute] mirrored app-folder migrations before proposing: ${mirrored.copied.join(", ")}`);
   }
 
   for (const tree of await collectMigrationTrees(paprDir, forkAppId, remaps, tempRoot)) {
@@ -713,7 +736,28 @@ async function pushContributeBranch(
         ...(tree.kind === "app" && opts.includeBuildOutputs ? { includeBuildOutputs: true } : {}),
       });
     }
-    const changes = buildProposalChangeSet(trees);
+    let changes = buildProposalChangeSet(trees);
+    if (changes.unapplied.length > 0) {
+      // New migrations that never ran here: run them now (a test copy on
+      // team-shared data), then check again. Only real failures block.
+      const { autoApplyProposalMigrations } = await import("./cloudSync/proposalAutoApplyMigrations.js");
+      const { paprDbApplyMigration } = await import("./tursoReplica/PaprDbService.js");
+      const auto = await autoApplyProposalMigrations(staged, changes.unapplied, paprDbApplyMigration);
+      if (auto.applied.length > 0) {
+        console.info(`[CloudContribute] ran new migrations before proposing: ${auto.applied.join(", ")}`);
+        staged.forEach((tree, i) => {
+          if (tree.kind === "migrations" && tree.appliedIds !== undefined) trees[i]!.appliedIds = tree.appliedIds;
+        });
+        changes = buildProposalChangeSet(trees);
+      }
+      if (auto.failed.length > 0) {
+        throw new Error(
+          "A new database change failed to run on this copy, so it can't be proposed yet: " +
+            auto.failed.map((f) => `${f.path.split("/").pop()} (${f.error})`).join("; ") +
+            ". Fix or remove it, then propose again.",
+        );
+      }
+    }
     assertProposalMigrationsApplied(changes);
     if (changes.ignored.length > 0) {
       console.info(
@@ -827,9 +871,61 @@ async function pushContributeBranch(
   }
 }
 
+/** Best effort: tell the server a prepared proposal will never be submitted. */
+async function abandonPreparedProposal(requestId: string, reason: string): Promise<void> {
+  try {
+    const resp = await cloudApiFetch(
+      `/v1/cloud/apps/changes/${encodeURIComponent(requestId)}/abandon`,
+      { method: "POST", body: { reason: reason.slice(0, 300) } },
+    );
+    if (!resp.ok) {
+      console.warn(`[CloudContribute] abandon ${requestId} failed (${resp.status})`);
+    }
+  } catch (err) {
+    // Older servers have no abandon route; their TTL sweep cleans it up.
+    console.warn(`[CloudContribute] abandon ${requestId} failed: ${(err as Error).message.slice(0, 120)}`);
+  }
+}
+
 export class CloudAppContributeService {
   async propose(input: ProposeContributeInput): Promise<ProposeContributeResult> {
+    const stage: { step: ProposeStep; requestId?: string } = { step: "lineage" };
+    try {
+      return await this.proposeSteps(input, stage);
+    } catch (err) {
+      // The error only reaches the user's screen otherwise; record which step
+      // failed and why so a stuck or missing proposal can be explained.
+      try {
+        const { getGatewayTelemetry } = await import("./gatewayTelemetry.js");
+        const { TelemetryEvents } = await import("../../core/telemetry/events.js");
+        const props = proposeFailureProps(err, {
+          step: stage.step,
+          publishNow: input.publishNow === true,
+          installedAppId: input.installedAppId,
+          requestId: stage.requestId,
+        });
+        // Not trackFireAndForget: a background rejection there is unhandled.
+        void getGatewayTelemetry()
+          .track(TelemetryEvents.CLOUD_PROPOSE_FAILED, { ...props })
+          .catch(() => undefined);
+      } catch {
+        // Telemetry must never change the outcome.
+      }
+      throw err;
+    }
+  }
+
+  private async proposeSteps(
+    input: ProposeContributeInput,
+    stage: { step: ProposeStep; requestId?: string },
+  ): Promise<ProposeContributeResult> {
     const lineageId = await readLineageId(input.installedAppId);
+    stage.step = "prepare";
+
+    // No early "nothing changed" check here: a proposal also carries linked
+    // Jobs/{id} code and unapplied migrations, which app-folder edits can't
+    // see. pushContributeBranch decides emptiness over the full change set,
+    // and an empty one is abandoned below.
 
     const { getPaprCallerIdentity } = await import("../utils/paprUserId.js");
     const proposer = getPaprCallerIdentity();
@@ -863,6 +959,8 @@ export class CloudAppContributeService {
     }
 
     const prepare = (await prepareResp.json()) as PrepareResponse;
+    stage.requestId = prepare.id;
+    stage.step = "push";
 
     const ownerRepo = await resolveAppRepoForSync(prepare.targetAppId);
     if (ownerRepo && !cloneUrlMatchesAppRepo(prepare.cloneUrl, ownerRepo)) {
@@ -871,11 +969,18 @@ export class CloudAppContributeService {
       );
     }
 
-    const { headSha, stagedPaths, migrations, baseCommit } = await pushContributeBranch(
-      prepare,
-      input.installedAppId,
-      { includeBuildOutputs: input.publishNow === true },
-    );
+    let pushed: Awaited<ReturnType<typeof pushContributeBranch>>;
+    try {
+      pushed = await pushContributeBranch(prepare, input.installedAppId, {
+        includeBuildOutputs: input.publishNow === true,
+      });
+    } catch (err) {
+      // The server already holds this proposal as "preparing". Without this it
+      // stays there forever with no branch — owners see a phantom proposal.
+      await abandonPreparedProposal(prepare.id, (err as Error).message);
+      throw err;
+    }
+    const { headSha, stagedPaths, migrations, baseCommit } = pushed;
 
     // Publish now with a schema change: same order as the publisher's own
     // publish — the team's database first (verified), then the code. If the
@@ -883,6 +988,7 @@ export class CloudAppContributeService {
     let databasePublished = false;
     let databaseNote: string | undefined;
     if (input.publishNow && migrations.length > 0) {
+      stage.step = "publish_database";
       const { publishProposalMigrations, defaultPublishMigrationsDeps } = await import(
         "./cloudSync/publishProposalMigrations.js"
       );
@@ -900,6 +1006,7 @@ export class CloudAppContributeService {
       }
     }
 
+    stage.step = "submit";
     const submitResp = await cloudApiFetch(
       `/v1/cloud/apps/changes/${encodeURIComponent(prepare.id)}/submit`,
       {
@@ -927,6 +1034,7 @@ export class CloudAppContributeService {
       );
     }
 
+    stage.step = "after_submit";
     const submitted = (await submitResp.json()) as {
       id: string;
       prUrl?: string;

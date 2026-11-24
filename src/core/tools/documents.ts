@@ -214,7 +214,7 @@ export const importDocumentTool = createTool({
 
     // Save initial version
     try {
-      await service.saveVersion(document.id, content, "Imported from device");
+      await service.saveVersion(document.id, content, "imported");
     } catch {
       // Non-critical
     }
@@ -234,9 +234,80 @@ export const importDocumentTool = createTool({
   },
 });
 
+const saveDocumentVersionSchema = z.object({
+  documentId: z.string().min(1).describe("Document id"),
+  label: z
+    .string()
+    .min(1)
+    .max(60)
+    .describe(
+      "Version name shown in Version History, e.g. 'v2' or 'v2 after Oct 29 review'",
+    ),
+});
+
+export const saveDocumentVersionTool = createTool({
+  id: "save_document_version",
+  description:
+    "Snapshot a document's CURRENT content as a named version (e.g. 'v1', 'v2 after review'). " +
+    "Named versions are never pruned and show at the top of Version History, where the user can preview or restore them. " +
+    "Before rewriting a document substantially, save the old content as a named version first, then edit, then save the new one.",
+  inputSchema: saveDocumentVersionSchema,
+  execute: async (input) => {
+    const args =
+      (input as { context?: z.infer<typeof saveDocumentVersionSchema> })
+        .context ?? input;
+    const { getDocumentService } =
+      await import("../../gateway/services/DocumentService.js");
+    const service = getDocumentService();
+    const document = await service.getDocument(args.documentId);
+    if (!document) throw new Error(`Document not found: ${args.documentId}`);
+    const versionId = await service.saveVersion(
+      document.id,
+      document.content,
+      args.label,
+    );
+    return {
+      success: true,
+      data: { documentId: document.id, versionId, label: args.label },
+    };
+  },
+});
+
+const listDocumentVersionsSchema = z.object({
+  documentId: z.string().min(1).describe("Document id"),
+});
+
+export const listDocumentVersionsTool = createTool({
+  id: "list_document_versions",
+  description:
+    "List a document's saved versions (newest first) with labels and timestamps. Named versions have named: true.",
+  inputSchema: listDocumentVersionsSchema,
+  execute: async (input) => {
+    const args =
+      (input as { context?: z.infer<typeof listDocumentVersionsSchema> })
+        .context ?? input;
+    const { getDocumentService } =
+      await import("../../gateway/services/DocumentService.js");
+    const versions = await getDocumentService().getVersionHistory(
+      args.documentId,
+    );
+    return {
+      success: true,
+      data: versions.map(({ versionId, timestamp, reason, named }) => ({
+        versionId,
+        timestamp,
+        label: reason,
+        named,
+      })),
+    };
+  },
+});
+
 export const documentTools = [
   createDocumentTool,
   readDocumentTool,
   listDocumentsTool,
   importDocumentTool,
+  saveDocumentVersionTool,
+  listDocumentVersionsTool,
 ];

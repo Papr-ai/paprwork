@@ -9,6 +9,7 @@ import { getAgentService } from "../../AgentService.js";
 import { getJobsService } from "../../JobsService.js";
 import { substituteAppIdPlaceholder } from "../appIdPlaceholder.js";
 import { v4 as uuidv4 } from "uuid";
+import { inferJobProvider } from "../../../../core/utils/ollamaModelFit.js";
 import { writeRunMemory } from "../../PaprMemoryWritebackService.js";
 import {
   getSleepCycleService,
@@ -20,9 +21,21 @@ import {
 } from "../../WikiWriterService.js";
 import { isHomeDailyBriefJob } from "../dailyBriefVerification.js";
 import { todayBriefDateKey } from "../../../../core/utils/briefDateKey.js";
-import type { SubAgentIconName } from "../../../../core/types/subagents.js";
-import { CODEBASE_EXPLORER_SUB_AGENT_ID } from "../../../../core/subagents/codebaseExplorer.js";
-import { resolveCodebaseExplorerProviderModel } from "../../../utils/explorationSubAgentModel.js";
+import type {
+  SubAgentIconName,
+  SubAgentRuntimeOptions,
+} from "../../../../core/types/subagents.js";
+import {
+  BLANK_SUBAGENT_SYSTEM_PROMPT,
+  resolveSubAgentRuntime,
+} from "../../../../core/types/subagents.js";
+import {
+  resolveHelperAgentProviderModel,
+  usesSignInAwareModel,
+} from "../../../utils/explorationSubAgentModel.js";
+import { resolveSystemJobProviderModel } from "../../../utils/systemJobModel.js";
+import { SLEEP_JOB_DEFAULTS } from "../../SleepCycleService.js";
+import { WIKI_WRITER_JOB_DEFAULTS } from "../../WikiWriterService.js";
 import {
   jobWriteDatabaseEnv,
   jobWriteDatabasePromptLines,
@@ -35,6 +48,24 @@ import { ensureJobRuntime, defaultRuntimesRoot } from "../runtime/jobRuntime.js"
 import { leaseJobDbProxyEnv } from "../jobDbProxyEnv.js";
 import { runtimeParamsForJobEnv } from "../../../utils/normalizeRuntimeParams.js";
 import type { IsolatedJobRunDiagnostics } from "../../AgentService.js";
+
+/** True when a Sleep / Wiki Writer job still has its seeded provider/model. */
+export function isOnSeededSystemJobModel(
+  jobName: string,
+  provider: string | undefined,
+  model: string | undefined,
+): boolean {
+  const defaults = isSleepCycleJobName(jobName)
+    ? SLEEP_JOB_DEFAULTS
+    : isWikiWriterJobName(jobName)
+      ? WIKI_WRITER_JOB_DEFAULTS
+      : null;
+  if (!defaults) return false;
+  return (
+    (!provider || provider === defaults.provider) &&
+    (!model || model === defaults.model)
+  );
+}
 
 export interface AgentJobSessionInput {
   jobId: string;
@@ -52,6 +83,10 @@ export interface AgentJobSessionInput {
   sourceAgentName: string;
   subAgentName?: string;
   subAgentIcon?: SubAgentIconName;
+  /** Sub-agent runtime switches (replace prompt, memory/wiki/tools/search/caching). */
+  runtime?: SubAgentRuntimeOptions;
+  /** Replace-mode sub-agents: this IS the system prompt (no Pen prompt). */
+  systemPromptOverride?: string;
 }
 
 function describeEmptyJobOutput(diag: IsolatedJobRunDiagnostics): string {
@@ -128,10 +163,14 @@ export class AgentJobExecutor implements IJobExecutor {
     if (params.job.model) {
       model = params.job.model;
     }
+    // A job with only a local Ollama model id (no provider) must run on Ollama,
+    // not on the default cloud provider with an id it doesn't know.
+    provider = inferJobProvider(provider, model) as Provider | undefined;
 
     let subAgentSystemPrompt: string | undefined;
     let subAgentName: string | undefined;
     let subAgentIcon: SubAgentIconName | undefined;
+    let runtime: SubAgentRuntimeOptions | undefined;
 
     if (params.job.type === "subagent") {
       if (!params.job.subAgentId) {
@@ -153,15 +192,33 @@ export class AgentJobExecutor implements IJobExecutor {
       subAgentName = profile.name;
       subAgentSystemPrompt = profile.systemPrompt;
       subAgentIcon = profile.icon;
+      runtime = profile.runtime;
 
-      if (params.job.subAgentId === CODEBASE_EXPLORER_SUB_AGENT_ID) {
-        const exploration = await resolveCodebaseExplorerProviderModel();
-        provider = exploration.provider;
-        model = exploration.model;
+      // Built-in helpers run on the cheap model the user's sign-in can actually
+      // run, not the one stored in the profile.
+      if (usesSignInAwareModel(params.job.subAgentId)) {
+        const picked = await resolveHelperAgentProviderModel();
+        provider = picked.provider;
+        model = picked.model;
         fallbackProvider = undefined;
         fallbackModel = undefined;
         console.log(
-          `[AgentJobExecutor] codebase-explorer auth-aware model: ${provider}/${model}`,
+          `[AgentJobExecutor] ${params.job.subAgentId} sign-in-aware model: ${provider}/${model}`,
+        );
+      }
+    }
+
+    // Sleep Cycle / Wiki Writer are seeded on Claude. Run them on a provider
+    // the user actually connected instead of failing on Claude first.
+    // Desktop and cloud both build the session here; in the cloud the
+    // credential memory sends still has the final say (pickCloudJobProviderModel).
+    if (isOnSeededSystemJobModel(params.job.name, provider, model)) {
+      const picked = await resolveSystemJobProviderModel();
+      if (picked) {
+        provider = picked.provider;
+        model = picked.model;
+        console.log(
+          `[AgentJobExecutor] ${params.job.name} uses connected model: ${provider}/${model}`,
         );
       }
     }
@@ -177,7 +234,29 @@ export class AgentJobExecutor implements IJobExecutor {
     if (params.runtimeParams?.prompt?.trim()) {
       taskBody = params.runtimeParams.prompt.trim();
     }
-    if (params.job.type === "subagent") {
+    const resolvedRuntime = resolveSubAgentRuntime(runtime);
+    const replacePrompt =
+      params.job.type === "subagent" &&
+      resolvedRuntime.systemPromptMode === "replace";
+    let systemPromptOverride: string | undefined;
+    if (replacePrompt) {
+      // The profile prompt becomes the whole system prompt. The user message
+      // carries only context + task (+ the job environment when tools are on,
+      // since that is what tools need to find the job's databases).
+      systemPromptOverride =
+        subAgentSystemPrompt?.trim() || BLANK_SUBAGENT_SYSTEM_PROMPT;
+      prompt = [
+        resolvedRuntime.tools ? envBlock : "",
+        params.job.delegationContext
+          ? `Context:\n${params.job.delegationContext}`
+          : "",
+        params.job.delegationContext || resolvedRuntime.tools
+          ? `Task:\n${taskBody}`
+          : taskBody,
+      ]
+        .filter(Boolean)
+        .join("\n\n");
+    } else if (params.job.type === "subagent") {
       const delegationIdBlock = `\n[Delegation ID: ${params.job.id}]\nWhen using request_agent_input, always pass delegationId: "${params.job.id}" so your question appears in the correct chat.`;
       prompt = [
         `[Sub-Agent: ${subAgentName!}]`,
@@ -221,6 +300,8 @@ export class AgentJobExecutor implements IJobExecutor {
       sourceAgentName,
       subAgentName,
       subAgentIcon,
+      ...(runtime ? { runtime } : {}),
+      ...(systemPromptOverride ? { systemPromptOverride } : {}),
     };
   }
 
@@ -343,19 +424,28 @@ export class AgentJobExecutor implements IJobExecutor {
           "Structured output generated and validated by model.",
         );
       } else {
-        // Free-form text output via streamText (existing path)
+        // Free-form text output via streamText (existing path).
+        // Inside a cloud run there is no keychain/IPC: a delegated helper must use
+        // the run's own credential, or it falls back to local Ollama and hangs.
+        const { cloudRunHelperAuth } = await import(
+          "../../cloudAgentGateway/cloudRunLlmAuth.js"
+        );
+        const cloudAuth = cloudRunHelperAuth(session.provider, session.model);
         const response = await agentService.runIsolatedJobSession({
           jobId: session.jobId,
           runId: session.runId,
           prompt: session.prompt,
-          provider: session.provider,
-          model: session.model,
-          fallbackProvider: session.fallbackProvider,
-          fallbackModel: session.fallbackModel,
+          provider: cloudAuth?.provider ?? session.provider,
+          model: cloudAuth ? cloudAuth.model : session.model,
+          ...(cloudAuth ? { authOverride: cloudAuth.authOverride } : {}),
+          fallbackProvider: cloudAuth ? undefined : session.fallbackProvider,
+          fallbackModel: cloudAuth ? undefined : session.fallbackModel,
           allowedToolIds: session.allowedToolIds,
           maxTurns: session.maxTurns,
           appendLog: params.appendLog,
           delegationId: session.delegationId,
+          runtime: session.runtime,
+          systemPromptOverride: session.systemPromptOverride,
         });
         outputText = response.text;
         runDiagnostics = response.diagnostics;

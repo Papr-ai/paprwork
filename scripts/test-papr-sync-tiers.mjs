@@ -10,6 +10,8 @@
  * (login with Papr in Settings).
  */
 
+// Deliberately uses the REAL workspace — needs PAPR_E2E_REAL_HOME=1.
+import "./lib/requireRealWorkspace.mjs";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";

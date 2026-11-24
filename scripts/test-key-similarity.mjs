@@ -5,6 +5,8 @@
  * Tests various scenarios to ensure fuzzy matching works correctly
  */
 
+// Must stay first: runs in a temp workspace, never the real ~/Papr.
+import "./lib/isolateHome.mjs";
 import {
   findSimilarKeys,
   isOptionalLLMKey,

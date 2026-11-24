@@ -69,7 +69,7 @@ export function ClaudeOnboardingTokenStep({
         return true;
       }
       if (result.reason === "not_found") {
-        setPollStatus("No token found yet. Finish sign-in in Terminal, then try again.");
+        setPollStatus(`No token found yet. Finish sign-in in ${terminalLabel}, then try again.`);
       } else {
         setPollStatus(result.error ?? "Could not detect token yet.");
       }
@@ -80,7 +80,7 @@ export function ClaudeOnboardingTokenStep({
     } finally {
       setSyncing(false);
     }
-  }, [oauthSource, onConnected, onStepError]);
+  }, [oauthSource, onConnected, onStepError, terminalLabel]);
 
   useEffect(() => {
     if (fieldShownTrackedRef.current) {

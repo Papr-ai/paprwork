@@ -21,6 +21,8 @@
  *   node scripts/test-replica-production-e2e.mjs [--http] [--isolated-gateway]
  */
 
+// Deliberately uses the REAL workspace — needs PAPR_E2E_REAL_HOME=1.
+import "./lib/requireRealWorkspace.mjs";
 import * as path from "node:path";
 import { pathToFileURL } from "node:url";
 import {

@@ -15,7 +15,8 @@ import { useCallback, useEffect, useRef, useState } from "react";
 import { getGatewayHttpBase } from "../../utils/gatewayHttpBase";
 import type { AgentWorkState } from "./agentWork";
 
-export type NudgeAction = { type: "focus"; goalId?: string } | { type: "chat"; prompt: string } | { type: "app"; appId: string };
+export type NudgeAction = { type: "focus"; goalId?: string } | { type: "chat"; prompt: string } | { type: "app"; appId: string }
+  | { type: "notice"; key: string };
 
 export interface AgentNudgeData {
   key: string;
@@ -43,7 +44,11 @@ export const NUDGE_TIMING = {
 
 const api = (p: string) => `${getGatewayHttpBase()}/api/nudge${p}`;
 
+/** Urgent notices and reviewer previews don't count against the nudge caps. */
+const offLedger = (key: string) => key.startsWith("preview:") || key.startsWith("urgent:");
+
 function send(n: AgentNudgeData, event: "shown" | "go" | "later" | "dismiss") {
+  if (offLedger(n.key)) return;
   void fetch(api("/event"), {
     method: "POST",
     headers: { "Content-Type": "application/json" },
@@ -177,7 +182,7 @@ export function useAgentNudge(workState: AgentWorkState, onGo: (action: NudgeAct
     const n = nudgeRef.current;
     if (!n) return;
     window.clearTimeout(parkTimer.current);
-    if (!n.key.startsWith("preview:")) send(n, event);
+    send(n, event);
     setPhase("out");
     restDay.current = today();
     later(() => setPhase(event === "later" ? "rest" : "off"), NUDGE_TIMING.leaveMs);
@@ -190,12 +195,14 @@ export function useAgentNudge(workState: AgentWorkState, onGo: (action: NudgeAct
       const n = nudgeRef.current;
       if (!n) return;
       window.clearTimeout(parkTimer.current);
-      if (!n.key.startsWith("preview:")) send(n, "go");
+      send(n, "go");
       setPhase("off");
       onGo(n.action);
     },
     later: () => leave("later"),
     dismiss: () => leave("dismiss"),
+    /** Urgent (you're blocked): lean out now, over any nudge. Not a nudge, so no caps and no breakpoint wait. */
+    lean: (n: AgentNudgeData) => { window.clearTimeout(parkTimer.current); play(n); },
     /** Tap the resting dot: the same nudge opens again (not a new show). */
     reopen: () => nudgeRef.current && play(nudgeRef.current),
     /** Hovering the whisper holds it open. */

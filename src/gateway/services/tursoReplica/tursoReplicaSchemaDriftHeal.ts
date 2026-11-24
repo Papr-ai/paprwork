@@ -38,10 +38,8 @@ export async function healReplicaSchemaDrift(source: AppDataSource): Promise<boo
   }
 
   if (isHomeDailyBriefRegistryDbPath(dbPath)) {
-    const { ensureHomeDailyBriefRegistrySchema } = await import(
-      "../defaultHomeAppRepair.js"
-    );
-    await ensureHomeDailyBriefRegistrySchema(dbPath);
+    const { healFocusDbSchema } = await import("../focusDb.js");
+    await healFocusDbSchema(dbPath);
     return true;
   }
 

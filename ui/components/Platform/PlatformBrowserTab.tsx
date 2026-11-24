@@ -191,7 +191,7 @@ export function PlatformBrowserTab({
       {redirectLoop ? (
         <div className="platform-browser-tab__redirect-loop" role="alert">
           LinkedIn keeps reloading — usually a stale session in Papr&apos;s embedded browser.
-          Go to <strong>Settings → Platform Connections</strong>, disconnect LinkedIn, connect
+          Go to <strong>Settings → Connectors &amp; API Keys</strong>, disconnect LinkedIn, connect
           again, and sign in. Or use the refresh button after reconnecting.
         </div>
       ) : null}

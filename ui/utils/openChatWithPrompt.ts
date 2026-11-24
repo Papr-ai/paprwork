@@ -33,10 +33,10 @@ export function createTempChat(): string {
   return chatId;
 }
 
-export function openChatWithPrompt(message: string): void {
+export function openChatWithPrompt(message: string, title?: string): void {
   const chatId = createTempChat();
   const { createTab, switchToTab } = useTabStore.getState();
-  const tabId = createTab("chat", chatId, "New Chat");
+  const tabId = createTab("chat", chatId, title?.trim() || "New Chat");
   switchToTab(tabId);
 
   window.setTimeout(() => {

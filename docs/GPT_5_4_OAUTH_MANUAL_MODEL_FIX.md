@@ -91,7 +91,7 @@ fullStream = createPiCodexStreamWithToolLoop(streamSimple, finalModel, ...);
 
 1. `src/gateway/services/AgentService.ts` - Manual model creation
 2. `src/gateway/utils/modelNormalizer.ts` - Re-added GPT-5.4 to OAuth models
-3. `tests/gpt-5-4-integration.test.ts` - Updated OAuth tests
+3. `tests/providers/gpt-5-4-integration.test.ts` - Updated OAuth tests
 
 ## Credit
 

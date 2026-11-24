@@ -156,7 +156,7 @@ Copy this checklist into every brief when the app uses backend handlers and/or l
 |----------|------|
 | **Guide first** | `read_skill({ skillId: "preloaded-app-and-jobs-guide" })` before first backend/DB edit |
 | **Backend params** | `PAPR_ACTION_PARAMS` env — **never** `sys.stdin` |
-| **Backend DB** | `from papr_db import connect` — **never** `sqlite3.connect`, `APP_DB_PATH`, or raw env paths |
+| **Backend DB** | `from papr_db import connect, query, write` — reads `query(con, sql).rows`, writes `write(con, sql)`; **never** `sqlite3.connect`, sqlite3-style cursors, `APP_DB_PATH`, or raw env paths |
 | **Frontend → backend** | `JSON.stringify({ params: { ... } })` — nested `params` required |
 | **Frontend ← backend** | `{ stdout, exitCode, stderr } = await res.json()` → check `exitCode` → `JSON.parse(stdout)` |
 | **DB reads** | `POST /api/db/query` with `{ sourceId, sql, params }` — field is **`sql`**, not `query` |

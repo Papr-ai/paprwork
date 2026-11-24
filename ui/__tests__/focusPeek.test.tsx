@@ -61,3 +61,14 @@ describe("FocusPeek", () => {
     expect(onOpen).toHaveBeenLastCalledWith();
   });
 });
+
+import { peekParts } from "../components/Sidebar/FocusPeek";
+describe("peek pill is the person", () => {
+  const n = (title: string, kind = "mention.done") => ({ title, kind } as never);
+  it("pulls the name out of Your turn / checking in / plain asks", () => {
+    expect(peekParts(n("Your turn: Yara finished review the copy"))).toEqual({ from: "Yara", title: "Your turn: review the copy" });
+    expect(peekParts(n("amir+1 is checking in: Review the copy", "mention"))).toEqual({ from: "amir+1", title: "Checking in: Review the copy" });
+    expect(peekParts(n("amir+1: Draft the launch tweet", "mention"))).toEqual({ from: "amir+1", title: "Draft the launch tweet" });
+    expect(peekParts(n("Build failed", "job"))).toEqual({ from: null, title: "Build failed" });
+  });
+});

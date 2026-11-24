@@ -179,7 +179,7 @@ Existing sub-agents without `allowedToolIds`:
 
 ## Testing
 
-The existing `tests/delegation-tools.test.ts` still passes:
+The existing `tests/agent/delegation-tools.test.ts` still passes:
 
 ```bash
 npm test -- delegation-tools.test.ts

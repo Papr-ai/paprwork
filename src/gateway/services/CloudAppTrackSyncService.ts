@@ -36,6 +36,7 @@ import {
   type CloudAppInstallInput,
 } from "./CloudAppInstallService.js";
 import { getAppService } from "./AppService.js";
+import { isLocallyRebuiltAppPath } from "./syncV3/platformGeneratedAppPaths.js";
 import { decideTrackPullAction } from "./cloudSync/trackPullOnPublishLogic.js";
 import type { InstallDeniedReason } from "./CloudAppInstallService.js";
 import { fetchPublisherRevisionSignedIn } from "./syncV3/checkPublisherUpstreamRevision.js";
@@ -178,7 +179,7 @@ const LOCAL_WIRING_FILES = new Set([
 
 export function isCollaboratorEditablePath(rel: string): boolean {
   return (
-    !rel.startsWith("dist/") &&
+    !isLocallyRebuiltAppPath(rel) &&
     !rel.startsWith("__papr__/") &&
     !PLATFORM_MANAGED_FILES.has(rel)
   );
@@ -585,6 +586,15 @@ export class CloudAppTrackSyncService {
         await appService.ensureAppDbTs(appId);
       } catch {
         /* regenerated on the next link / pull */
+      }
+      // Local edits merged with the publisher's source: the publisher's dist/
+      // doesn't contain them, so rebuild from what is now on disk.
+      if (mergedFiles.length > 0 || takenTheirsFiles.length > 0 || updatedFiles.length > 0) {
+        try {
+          await appService.buildApp(appId);
+        } catch (err) {
+          console.warn(`[TrackSync] Rebuild after update failed for ${appId}:`, err);
+        }
       }
 
       const nextSnapshot: Record<string, string> = { ...snapshot };

@@ -11,6 +11,8 @@
  * node scripts/test-jobs-e2e.mjs (in another terminal)
  */
 
+// Must stay first: isolates HOME before any gateway module resolves paths.
+import "./lib/isolateHome.mjs";
 import { getJobsService } from "../dist/gateway/services/JobsService.js";
 import { getJobRunHistory } from "../dist/gateway/services/jobs/JobRunHistory.js";
 import { classifyError } from "../dist/gateway/services/jobs/errorClassifier.js";
@@ -58,6 +60,7 @@ async function testBashJobExecution() {
 
   log("Creating bash job...");
   const job = await jobsService.createJob({
+    appIds: ["__standalone__"],
     name: "E2E Test: Bash Execution",
     type: "bash",
     command: 'echo "Bash job executed successfully"',
@@ -102,6 +105,7 @@ async function testBashJobRetry() {
 
   log("Creating bash job that fails...");
   const job = await jobsService.createJob({
+    appIds: ["__standalone__"],
     name: "E2E Test: Bash Retry",
     type: "bash",
     command: "exit 1",
@@ -158,6 +162,7 @@ async function testScheduledJob() {
 
   log("Creating scheduled job (30-second interval)...");
   const job = await jobsService.createJob({
+    appIds: ["__standalone__"],
     name: "E2E Test: Scheduled Interval",
     type: "bash",
     command: 'echo "Scheduled job run at $(date)"',
@@ -216,6 +221,7 @@ async function testCronSchedule() {
 
   log("Creating cron job (every 5 minutes)...");
   const job = await jobsService.createJob({
+    appIds: ["__standalone__"],
     name: "E2E Test: Cron Schedule",
     type: "bash",
     command: 'echo "Cron job executed"',
@@ -257,6 +263,7 @@ async function testPythonJob() {
 
   log("Creating Python job...");
   const job = await jobsService.createJob({
+    appIds: ["__standalone__"],
     name: "E2E Test: Python Execution",
     type: "python",
     command: `
@@ -303,6 +310,7 @@ async function testRunHistoryStats() {
 
   log("Creating test job for stats...");
   const job = await jobsService.createJob({
+    appIds: ["__standalone__"],
     name: "E2E Test: Stats Collection",
     type: "bash",
     command: 'echo "test"',
@@ -346,6 +354,7 @@ async function testErrorClassification() {
   // Test 1: Simulate bash job that will be classified as transient (generic failure)
   log("Creating job with generic failure (exit 1)...");
   const genericJob = await jobsService.createJob({
+    appIds: ["__standalone__"],
     name: "E2E Test: Generic Error",
     type: "bash",
     command: 'exit 1', // Generic failure - will be classified as transient
@@ -387,6 +396,7 @@ async function testScheduledJobAdvancement() {
 
   log("Creating scheduled job (10-second interval)...");
   const job = await jobsService.createJob({
+    appIds: ["__standalone__"],
     name: "E2E Test: Schedule Advancement",
     type: "bash",
     command: 'echo "Scheduled run"',
@@ -464,6 +474,7 @@ async function testPythonJobExecution() {
 
   log("Creating Python job...");
   const job = await jobsService.createJob({
+    appIds: ["__standalone__"],
     name: "E2E Test: Python Execution",
     type: "python",
     command: `python3 -c 'print("Python job executed successfully")'`,
@@ -512,6 +523,7 @@ async function testLogRotation() {
 
   log("Creating job with large log output...");
   const job = await jobsService.createJob({
+    appIds: ["__standalone__"],
     name: "E2E Test: Log Rotation",
     type: "bash",
     command: 'for i in {1..500}; do echo "Log line $i with padding XXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXX"; done',

@@ -108,11 +108,26 @@ export async function writeLinkedDatabasesForApp(
     /* no workspace registry yet */
   }
 
+  // Keep a record the app already carries for a dbId this workspace hasn't
+  // registered yet (a merged proposal's new database): dropping it here made
+  // the next sync upload the link's removal.
+  let previousDeclared: Record<string, DatabaseRecord> = {};
+  try {
+    const prevRaw = await fs.readFile(outputPath, "utf8");
+    previousDeclared = (JSON.parse(prevRaw) as DatabasesRegistryFile).databases ?? {};
+  } catch {
+    /* none yet */
+  }
+
   const databases: Record<string, DatabaseRecord> = {};
   const missingDbIds: string[] = [];
   for (const dbId of dbIds) {
     const record = registryFile.databases[dbId];
     if (!record || record.status === "tombstone") {
+      const declared = previousDeclared[dbId];
+      if (!record && declared && declared.status !== "tombstone") {
+        databases[dbId] = portableRecord(declared);
+      }
       missingDbIds.push(dbId);
       continue;
     }

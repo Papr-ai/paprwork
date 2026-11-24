@@ -21,7 +21,7 @@
  * - `ignore(absPath)` predicate evaluated before any stat/timers
  */
 
-import { watch as fsWatch, type FSWatcher as NodeFSWatcher } from "fs";
+import { existsSync, watch as fsWatch, type FSWatcher as NodeFSWatcher } from "fs";
 import { stat } from "fs/promises";
 import path from "path";
 
@@ -81,6 +81,15 @@ export class TreeWatcher {
     if (this.closed) return false;
     const abs = path.resolve(root);
     if (this.watchers.has(abs)) return true;
+
+    // Linux recursive fs.watch reports a missing root asynchronously (an
+    // "error" event later) instead of throwing, so check up front. Otherwise
+    // the dead root is counted, and a caller can't tell it failed.
+    if (!existsSync(abs)) {
+      const error = Object.assign(new Error(`ENOENT: no such file or directory, watch '${abs}'`), { code: "ENOENT" });
+      this.options.onError?.(error, abs);
+      return false;
+    }
 
     let watcher: NodeFSWatcher;
     try {

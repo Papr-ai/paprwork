@@ -111,6 +111,21 @@ export async function readDatabasesRegistryStrict(
   return null;
 }
 
+/** Active dbIds an app declares in its own linked-databases.json. */
+async function readDeclaredLinkedDbIds(appDir: string): Promise<Set<string>> {
+  try {
+    const raw = await fs.readFile(path.join(appDir, "linked-databases.json"), "utf8");
+    const parsed = JSON.parse(raw) as DatabasesRegistryFile;
+    return new Set(
+      Object.entries(parsed?.databases ?? {})
+        .filter(([, r]) => r && r.status !== "tombstone")
+        .map(([dbId]) => dbId),
+    );
+  } catch {
+    return new Set();
+  }
+}
+
 function jobExistsOnDisk(paprDir: string, jobId: string): boolean {
   return existsSync(path.join(paprDir, "Jobs", jobId, "job.json"));
 }
@@ -174,6 +189,10 @@ export async function reconcileAppDataSourcesForPublish(
     ),
   );
 
+  // Databases the app itself declares (linked-databases.json, e.g. added by a
+  // merged proposal) are links waiting to be registered here, not deletions.
+  const declaredDbIds = await readDeclaredLinkedDbIds(path.join(paprDir, "apps", appId));
+
   const keptSources: AppDataSource[] = [];
   const seenJobIds = new Set<string>();
 
@@ -218,6 +237,13 @@ export async function reconcileAppDataSourcesForPublish(
       const owner = registry.databases[source.dbId]?.schemaOwnerAppId;
       if (owner && owner !== appId) {
         keptSources.push(source);
+        continue;
+      }
+      if (declaredDbIds.has(source.dbId)) {
+        keptSources.push(source);
+        report.warnings.push(
+          `Kept ${source.dbId} (${source.alias}): declared in linked-databases.json but not registered in this workspace yet.`,
+        );
         continue;
       }
       report.removedDbIds.push(source.dbId);
@@ -426,6 +452,12 @@ export async function promoteBundledAppJobsToRegistry(input: {
   localAppId: string;
   localAppDir: string;
   paprHome: string;
+  /**
+   * Fresh install (default): the user asked for these jobs, so lift tombstones
+   * an earlier install left behind. Track "Get updates" passes false so a job
+   * the user deleted on purpose stays deleted.
+   */
+  clearTombstones?: boolean;
 }): Promise<{ promotedJobIds: string[] }> {
   const bundledIds = await listBundledAppJobIds(input.localAppDir);
   if (bundledIds.length === 0) {
@@ -436,10 +468,28 @@ export async function promoteBundledAppJobsToRegistry(input: {
   const jobsService = getJobsService();
   await jobsService.initialize();
 
-  const jobIndexIds = await readJobsIndexIds(input.paprHome);
-  const promotedJobIds: string[] = [];
+  // The app ships these jobs, so the user wants them live. A track install
+  // keeps the publisher's job IDs: an earlier install of the same app that was
+  // deleted tombstoned them, and the reinstalled jobs were dropped on the next
+  // reload. Jobs already copied to Jobs/{id} (syncAppJobsToTarget writes
+  // jobs.json behind the running service) are adopted into the LIVE registry
+  // here — checking the file alone skipped them, and the service's next save
+  // erased their jobs.json entries.
+  const onDisk = bundledIds.filter((jobId) =>
+    existsSync(path.join(input.paprHome, "Jobs", jobId, "job.json")),
+  );
+  const clearTombstones = input.clearTombstones !== false;
+  const { adopted } = await jobsService.adoptJobsFromDisk(bundledIds, {
+    clearTombstones,
+  });
+  const { readJobTombstones } = await import("./jobs/jobTombstones.js");
+  const tombstones = clearTombstones
+    ? new Set<string>()
+    : await readJobTombstones(input.paprHome);
+  const promotedJobIds: string[] = [...adopted];
+  const registered = new Set(onDisk.filter((jobId) => jobsService.hasJob(jobId)));
   for (const jobId of bundledIds) {
-    if (jobRegisteredOnDisk(input.paprHome, jobId, jobIndexIds)) {
+    if (registered.has(jobId) || tombstones.has(jobId)) {
       continue;
     }
 
@@ -490,7 +540,6 @@ export async function promoteBundledAppJobsToRegistry(input: {
       copyFrom,
     );
     promotedJobIds.push(jobId);
-    jobIndexIds.add(jobId);
   }
 
   return { promotedJobIds };

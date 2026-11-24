@@ -311,13 +311,12 @@ export function TabBar() {
           // For merged display, show the first child as the "right tab"
           const displayRightTab = leftChild || rightChild;
 
-          // Get streaming/unread status for chat tabs
+          // Streaming status for chat tabs (green/blue dots come from notices, inside Tab)
           const chatMetadata =
             tab.type === "chat"
               ? chats.find((c) => c.id === tab.entityId)
               : undefined;
           const isStreaming = chatMetadata?.isStreaming || false;
-          const hasUnread = chatMetadata?.hasUnread || false;
 
           // CRITICAL: Pass the actual index from the full tabs array, not just visible tabs
           const actualTabIndex = tabs.findIndex((t) => t.id === tab.id);
@@ -331,7 +330,6 @@ export function TabBar() {
               rightTab={displayRightTab}
               tabIndex={actualTabIndex}
               isStreaming={isStreaming}
-              hasUnread={hasUnread}
               onDragPositionChange={handleDragPositionChange}
             />
           );

@@ -21,6 +21,8 @@ import { TableHeader } from "@tiptap/extension-table-header";
 import { CustomMarkdown } from "./CustomMarkdown";
 import { DocumentMarkdownItTables } from "./DocumentMarkdownItTables";
 import { SlashCommandExtension } from "./SlashCommandExtension";
+import { MermaidCodeBlock } from "./mermaid/MermaidCodeBlock";
+import "./mermaid/Mermaid.css";
 import { useDocument } from "../../hooks/useDocuments";
 import { gateway } from "../../src/lib/gateway";
 import { VersionHistory } from "./VersionHistory";
@@ -43,6 +45,7 @@ function DocumentViewInner({ documentId }: DocumentViewProps) {
     loadVersions,
     getVersion,
     restoreVersion,
+    saveNamedVersion,
   } = useDocument(documentId);
 
   const [editingTitle, setEditingTitle] = useState(false);
@@ -66,7 +69,10 @@ function DocumentViewInner({ documentId }: DocumentViewProps) {
     extensions: [
       StarterKit.configure({
         heading: { levels: [1, 2, 3] },
+        // Replaced by MermaidCodeBlock (same node, renders ```mermaid)
+        codeBlock: false,
       }),
+      MermaidCodeBlock,
       Table.configure({ resizable: false }),
       TableRow,
       TableHeader,
@@ -226,6 +232,20 @@ function DocumentViewInner({ documentId }: DocumentViewProps) {
       setShowVersions(false);
     },
     [restoreVersion],
+  );
+
+  // Name the current content ("v2") — reads live editor state so unsaved
+  // typing is included.
+  const handleSaveNamed = useCallback(
+    async (label: string) => {
+      const storage = editor?.storage as
+        | { markdown?: { getMarkdown(): string } }
+        | undefined;
+      const content =
+        storage?.markdown?.getMarkdown() ?? document?.content ?? "";
+      await saveNamedVersion(label, content);
+    },
+    [editor, document?.content, saveNamedVersion],
   );
 
   // Export DOCX
@@ -465,6 +485,7 @@ function DocumentViewInner({ documentId }: DocumentViewProps) {
             versions={versions}
             onGetVersion={getVersion}
             onRestore={handleRestore}
+            onSaveNamed={handleSaveNamed}
             onClose={() => setShowVersions(false)}
           />
         )}

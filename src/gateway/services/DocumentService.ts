@@ -18,6 +18,14 @@ import { markdownPreviewText } from "../../core/utils/markdownPreview.js";
 import { getPaprDocumentsDir } from "../../core/utils/paprRoot.js";
 import { watch, type FSWatcher } from "fs";
 import path from "path";
+import {
+  AUTO_SAVE_COALESCE_MS,
+  AUTO_SAVE_REASON,
+  buildVersionId,
+  isNamedVersion,
+  isSafeVersionId,
+  parseVersionId,
+} from "./documentVersionId.js";
 import os from "os";
 import {
   cancelDocumentPostSync,
@@ -61,7 +69,10 @@ export interface Document extends DocumentMeta {
 export interface DocumentVersion {
   versionId: string;
   timestamp: string;
+  /** "auto-save", "before-restore", or a user/agent label such as "v2". */
   reason: string;
+  /** True when someone chose the label (named versions are kept forever). */
+  named: boolean;
   preview: string;
 }
 
@@ -435,21 +446,40 @@ export class DocumentService {
     const versionsDir = path.join(this.docDir(docId), "versions");
     await fs.mkdir(versionsDir, { recursive: true });
 
-    const timestamp = new Date().toISOString();
-    const safeTimestamp = timestamp.replace(/[:.]/g, "-");
-    const versionId = `${safeTimestamp}_${reason}`;
-    const versionPath = path.join(versionsDir, `${versionId}.md`);
+    const now = new Date();
+    const versionId = buildVersionId(now, reason);
+    const { reason: cleanReason } = parseVersionId(versionId);
 
-    // Deduplicate: check latest version's content
     const existing = await this.getVersionHistory(docId);
-    if (existing.length > 0) {
-      const latest = await this.getVersion(docId, existing[0].versionId);
-      if (latest && latest.content === content) {
-        return existing[0].versionId; // No change, skip
+    const latest = existing[0];
+    if (latest) {
+      const latestFull = await this.getVersion(docId, latest.versionId);
+      if (latestFull && latestFull.content === content) {
+        // Same content. Naming it still matters: promote an unnamed snapshot
+        // so "save as v2" right after an auto-save isn't silently dropped.
+        if (!isNamedVersion(cleanReason) || isNamedVersion(latest.reason)) {
+          return latest.versionId;
+        }
+      }
+      // Auto-saves fire about once a second while typing. Keep one rolling
+      // auto-save per editing burst instead of hundreds of near-identical files.
+      if (
+        cleanReason === AUTO_SAVE_REASON &&
+        latest.reason === AUTO_SAVE_REASON &&
+        now.getTime() - new Date(latest.timestamp).getTime() <
+          AUTO_SAVE_COALESCE_MS
+      ) {
+        await fs.rm(path.join(versionsDir, `${latest.versionId}.md`), {
+          force: true,
+        });
       }
     }
 
-    await fs.writeFile(versionPath, content, "utf-8");
+    await fs.writeFile(
+      path.join(versionsDir, `${versionId}.md`),
+      content,
+      "utf-8",
+    );
     return versionId;
   }
 
@@ -463,23 +493,19 @@ export class DocumentService {
       return [];
     }
 
-    const versions: DocumentVersion[] = files
-      .filter((f) => f.endsWith(".md"))
-      .map((f) => {
-        const name = f.replace(".md", "");
-        const parts = name.split("_");
-        const reason = parts.slice(6).join("_") || "save"; // timestamp has 6 parts
-        return {
-          versionId: name,
-          timestamp: versionIdToTimestamp(name),
-          reason,
-          preview: "", // Filled below lazily
-        };
-      })
-      .sort(
-        (a, b) =>
-          new Date(b.timestamp).getTime() - new Date(a.timestamp).getTime(),
-      );
+    const versions: DocumentVersion[] = [];
+    for (const f of files) {
+      if (!f.endsWith(".md")) continue;
+      const versionId = f.slice(0, -3);
+      versions.push(await this.describeVersion(versionsDir, versionId));
+    }
+    versions.sort(
+      (a, b) =>
+        new Date(b.timestamp).getTime() - new Date(a.timestamp).getTime() ||
+        // Same millisecond (e.g. "name this" right after an auto-save): the
+        // named one is the newer intent.
+        Number(b.named) - Number(a.named),
+    );
 
     // Load preview for first 20 versions
     for (const v of versions.slice(0, 20)) {
@@ -501,24 +527,43 @@ export class DocumentService {
     docId: string,
     versionId: string,
   ): Promise<DocumentVersionFull | null> {
-    const versionPath = path.join(
-      this.docDir(docId),
-      "versions",
-      `${versionId}.md`,
-    );
-
+    if (!isSafeVersionId(versionId)) return null;
+    const versionsDir = path.join(this.docDir(docId), "versions");
     try {
-      const content = await fs.readFile(versionPath, "utf-8");
-      return {
-        versionId,
-        timestamp: versionIdToTimestamp(versionId),
-        reason: versionId.split("_").slice(6).join("_") || "save",
-        preview: markdownPreviewText(content),
-        content,
-      };
+      const content = await fs.readFile(
+        path.join(versionsDir, `${versionId}.md`),
+        "utf-8",
+      );
+      const meta = await this.describeVersion(versionsDir, versionId);
+      return { ...meta, preview: markdownPreviewText(content), content };
     } catch {
       return null;
     }
+  }
+
+  private async describeVersion(
+    versionsDir: string,
+    versionId: string,
+  ): Promise<DocumentVersion> {
+    const parsed = parseVersionId(versionId);
+    let timestamp = parsed.timestamp;
+    if (!timestamp) {
+      // Hand-made snapshot with a non-standard name — fall back to mtime
+      // rather than pretending it was written "just now".
+      try {
+        const stat = await fs.stat(path.join(versionsDir, `${versionId}.md`));
+        timestamp = stat.mtime.toISOString();
+      } catch {
+        timestamp = new Date(0).toISOString();
+      }
+    }
+    return {
+      versionId,
+      timestamp,
+      reason: parsed.reason,
+      named: isNamedVersion(parsed.reason),
+      preview: "",
+    };
   }
 
   async restoreVersion(
@@ -1012,29 +1057,6 @@ function extractTitleFromMarkdown(content: string): string | null {
 function wordCount(text: string): number {
   if (!text.trim()) return 0;
   return text.trim().split(/\s+/).length;
-}
-
-function versionIdToTimestamp(versionId: string): string {
-  // Format: YYYY-MM-DDTHH-MM-SS-sssZ_reason
-  // Convert dashes back to colons/dots for valid ISO
-  const parts = versionId.split("_");
-  // Reconstruct: parts[0]=YYYY, parts[1]=MM, parts[2]=DDTHHh, etc.
-  // Simpler: just use the file's mtime as fallback, or parse what we can
-  try {
-    const datePart = parts.slice(0, 6).join("-");
-    // YYYY-MM-DDTHH-MM-SS-sssZ -> YYYY-MM-DDTHH:MM:SS.sssZ
-    const iso = datePart
-      .replace(
-        /^(\d{4})-(\d{2})-(\d{2})T(\d{2})-(\d{2})-(\d{2})/,
-        "$1-$2-$3T$4:$5:$6",
-      )
-      .replace(/-(\d{3})Z/, ".$1Z");
-    const d = new Date(iso);
-    if (!isNaN(d.getTime())) return d.toISOString();
-  } catch {
-    /* fallback */
-  }
-  return new Date().toISOString();
 }
 
 // ===== Singleton =====

@@ -5,6 +5,8 @@
  * Run: node scripts/test-default-job-install.mjs
  */
 
+// Must stay first: runs in a temp workspace, never the real ~/Papr.
+import "./lib/isolateHome.mjs";
 import fs from 'fs/promises';
 import path from 'path';
 import { fileURLToPath } from 'url';

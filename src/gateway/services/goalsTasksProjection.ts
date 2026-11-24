@@ -12,16 +12,16 @@
  * archived=1 if found in archive, else left as-is with a warning; tasks →
  * dropped) rather than deleted, so history survives.
  *
- * All writes go through the gateway's own /api/db/write (loopback with the
- * Home app id) so routing matches every other writer. Pure parsing lives in
+ * All reads and writes go to the Focus DB (focusDb.ts), which Papr Work owns:
+ * no app id, same replica routing as every other writer. Pure parsing lives in
  * projectWorkspace() so it can be unit-tested without a DB.
  */
 
 import { createHash } from "crypto";
 import { promises as fs } from "fs";
 import path from "path";
-import { getPaprDataDir, getPaprWorkspaceDir } from "../../core/utils/paprRoot.js";
-import { DEFAULT_HOME_APP_ID, DEFAULT_HOME_BRIEFS_DB_SLUG } from "./defaultHomeBundle.js";
+import { getPaprWorkspaceDir } from "../../core/utils/paprRoot.js";
+import { ensureFocusDb, focusDb, focusDbReady } from "./focusDb.js";
 import {
   extractGoalsSection,
   parseArchive,
@@ -321,55 +321,15 @@ export async function computeGoalsWorkspaceFingerprint(): Promise<string> {
     .digest("hex");
 }
 
-const GATEWAY_PORT = Number(process.env.GATEWAY_PORT ?? 18789);
 
 /** Cheap probe — no migrations. */
-export async function probeHomeGoalsTableExists(): Promise<boolean> {
-  const dbPath = path.join(
-    getPaprDataDir(),
-    "databases",
-    DEFAULT_HOME_BRIEFS_DB_SLUG,
-    "data.db",
-  );
-  try {
-    await fs.access(dbPath);
-  } catch {
-    return false;
-  }
-  try {
-    const rows = await homeDb(
-      "query",
-      "SELECT name FROM sqlite_master WHERE type = 'table' AND name = 'goals' LIMIT 1",
-    );
-    return rows.length > 0;
-  } catch {
-    return false;
-  }
+export function probeHomeGoalsTableExists(): Promise<boolean> {
+  return focusDbReady();
 }
 
-/** Ensure goals/tasks DDL exists on the Home briefs DB (replica handle, not raw sqlite3). */
-export async function ensureHomeGoalsTasksSchema(): Promise<string[]> {
-  const dbPath = path.join(
-    getPaprDataDir(),
-    "databases",
-    DEFAULT_HOME_BRIEFS_DB_SLUG,
-    "data.db",
-  );
-  try {
-    await fs.access(dbPath);
-  } catch {
-    return [];
-  }
-  const { ensureHomeDailyBriefRegistrySchema } = await import(
-    "./defaultHomeAppRepair.js"
-  );
-  const applied = await ensureHomeDailyBriefRegistrySchema(dbPath);
-  if (applied.length > 0) {
-    console.log(
-      `[GoalsTasksProjection] Applied Home briefs migrations: ${applied.join(", ")}`,
-    );
-  }
-  return applied;
+/** Create the Focus DB if needed and bring its schema current (native, no Home app). */
+export function ensureHomeGoalsTasksSchema(): Promise<string[]> {
+  return ensureFocusDb();
 }
 
 /** True when the Home briefs DB exists and has a goals table (projection can run). */
@@ -377,22 +337,8 @@ export async function isHomeGoalsProjectionReady(): Promise<boolean> {
   return probeHomeGoalsTableExists();
 }
 
-/**
- * Loopback to the gateway's own /api/db/* routes with the Home app id — the
- * same path save_brief.py and the Home app use, so replica-vs-legacy routing,
- * the briefs write guard, and sourceId resolution are identical to every
- * other writer. Keeps this service out of the pool/dbRouter closure.
- */
-async function homeDb(endpoint: "query" | "write", sql: string, params?: unknown[]): Promise<Record<string, unknown>[]> {
-  const res = await fetch(`http://127.0.0.1:${GATEWAY_PORT}/api/db/${endpoint}`, {
-    method: "POST",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ appId: DEFAULT_HOME_APP_ID, sql, params: params ?? [] }),
-  });
-  const data = (await res.json().catch(() => ({}))) as { error?: string; rows?: Record<string, unknown>[] };
-  if (!res.ok || data.error) throw new Error(data.error ?? `gateway ${endpoint} HTTP ${res.status}`);
-  return data.rows ?? [];
-}
+/** Focus DB access (native: no app id, no HTTP loopback). */
+const homeDb = (endpoint: "query" | "write", sql: string, params?: unknown[]) => focusDb(endpoint, sql, params ?? []);
 
 type Exec = (sql: string, params?: unknown[]) => Promise<unknown>;
 type Query = (sql: string, params?: unknown[]) => Promise<Record<string, unknown>[]>;
@@ -508,7 +454,8 @@ export async function applySnapshot(
   const existingTasks = new Map<string, Record<string, unknown>>();
   for (const row of await query("SELECT * FROM tasks")) existingTasks.set(String(row.id), row);
   for (const [id, row] of existingTasks) {
-    if (row.status === "open" && !seenTasks.has(id)) {
+    // Tasks that came from another device (source "cloud") have no markdown here; don't drop them.
+    if (row.status === "open" && !seenTasks.has(id) && row.source !== "cloud") {
       tasksDropped += 1;
       await exec("UPDATE tasks SET status = 'dropped', updated_at = ? WHERE id = ?", [now, id]);
     }
@@ -550,6 +497,8 @@ export async function projectGoalsAndTasks(reason = "manual"): Promise<
     console.log(
       `[GoalsTasksProjection] ${reason}: goals written=${res.goalsUpserted} history+${res.historyRows} tasks=${res.tasksUpserted} dropped=${res.tasksDropped} links=${res.links} unchanged=${res.skipped}`,
     );
+    // Mirror to the memory server (debounced; skips when signed out or offline).
+    void import("./focusCloud/focusCloudSync.js").then((m) => m.scheduleFocusCloudSync(`projection: ${reason}`)).catch(() => undefined);
     return { ok: true as const, ...res };
   })();
   running = run;

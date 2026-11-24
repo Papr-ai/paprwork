@@ -82,7 +82,7 @@ function runStep(step) {
       cwd: REPO_ROOT,
       encoding: "utf8",
       shell: true,
-      env: process.env,
+      env: step.realWorkspace ? { ...process.env, PAPR_E2E_REAL_HOME: "1" } : process.env,
     });
     exitCode = result.status ?? 1;
     output = `${result.stdout ?? ""}${result.stderr ?? ""}`.slice(-8000);
@@ -94,7 +94,7 @@ function runStep(step) {
       cwd: REPO_ROOT,
       encoding: "utf8",
       shell: true,
-      env: process.env,
+      env: step.realWorkspace ? { ...process.env, PAPR_E2E_REAL_HOME: "1" } : process.env,
     });
     exitCode = result.status ?? 1;
     output = `${result.stdout ?? ""}${result.stderr ?? ""}`.slice(-8000);

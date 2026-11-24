@@ -6,6 +6,8 @@
  * trigger parallel Papr Memory semantic search.
  */
 
+// Deliberately uses the REAL workspace — needs PAPR_E2E_REAL_HOME=1.
+import "./lib/requireRealWorkspace.mjs";
 import { executeBashCommand } from '../src/core/tools/bash.js';
 import * as fs from 'fs';
 import * as path from 'path';

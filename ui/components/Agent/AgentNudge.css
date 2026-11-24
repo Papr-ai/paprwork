@@ -212,3 +212,6 @@
     animation: nudge-words 0.2s ease both;
   }
 }
+
+/* Pen already shows a count: one mark on the agent, not two. Tapping Pen opens Focus anyway. */
+.rail-item:has(.rail-btn__count) .agent-nudge__rest { display: none; }

@@ -55,7 +55,7 @@ See `src/core/tools/jevGuardrails.ts`:
 - `src/core/tools/jevAuth.ts` — Papr proxy vs BYOK
 - `src/core/tools/jevGuardrails.ts` — limits
 - `src/core/tools/jevDecide.ts` — Mastra tool
-- `tests/jev-decide-tool.test.ts` — unit tests
+- `tests/agent/jev-decide-tool.test.ts` — unit tests
 
 ## Latency benchmark
 

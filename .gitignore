@@ -1,5 +1,5 @@
 # Dependencies
-node_modules/
+node_modules
 
 # Build outputs
 dist/
@@ -8,6 +8,7 @@ release/
 # Environment
 .env.*
 !.env.example
+!.env.development.example
 
 # IDE
 .vscode/
@@ -90,3 +91,7 @@ __pycache__/
 # Local UI scratch / capture helpers (not product code)
 ui/_capture.mjs
 ui/_film.html
+
+# patch/merge leftovers
+*.orig
+*.rej

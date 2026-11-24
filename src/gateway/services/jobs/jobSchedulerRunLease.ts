@@ -18,7 +18,7 @@ interface ReleaseResponse {
 export async function tryAcquireSchedulerRunLease(
   jobId: string,
   dueAt: string,
-): Promise<{ acquired: boolean; runId?: string }> {
+): Promise<{ acquired: boolean; runId?: string; unavailable?: boolean }> {
   try {
     const res = await cloudApiFetch("/v1/cloud/runtime/scheduler-run-lease/acquire", {
       method: "POST",
@@ -29,7 +29,9 @@ export async function tryAcquireSchedulerRunLease(
       console.warn(
         `[SchedulerRunLease] acquire failed (${res.status}) job=${jobId} dueAt=${dueAt}`,
       );
-      return { acquired: false };
+      // Contention comes back as 200 { acquired: false }. A non-2xx means the
+      // lease service could not answer, which is not the same as being refused.
+      return { acquired: false, unavailable: true };
     }
     const data = (await res.json()) as AcquireResponse;
     return { acquired: data.acquired, runId: data.runId };
@@ -38,7 +40,8 @@ export async function tryAcquireSchedulerRunLease(
       `[SchedulerRunLease] acquire error job=${jobId} dueAt=${dueAt}:`,
       err,
     );
-    return { acquired: false };
+    // Logged out, offline, or memory unreachable.
+    return { acquired: false, unavailable: true };
   }
 }
 

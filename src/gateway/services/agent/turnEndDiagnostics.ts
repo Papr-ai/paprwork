@@ -72,7 +72,11 @@ export function previewText(text: string, max = 120): string {
 export function logWrapUpTrigger(input: {
   chatId?: string;
   sessionId?: string;
-  trigger: "memory_force_wrap_up" | "step_limit" | "tool_call_hard_limit";
+  trigger:
+    | "memory_force_wrap_up"
+    | "step_limit"
+    | "tool_call_hard_limit"
+    | "step_budget_spent";
   step: number;
   totalToolCalls: number;
   memoryCheck?: PiStreamMemoryCheck;

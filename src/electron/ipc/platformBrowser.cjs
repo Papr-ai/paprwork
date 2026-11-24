@@ -504,7 +504,7 @@ async function handleNavigate(payload) {
     return {
       success: false,
       error:
-        "LinkedIn session redirect loop detected. Disconnect and reconnect in Settings → Platform Connections, or log in again in this tab.",
+        "LinkedIn session redirect loop detected. Disconnect and reconnect in Settings → Connectors & API Keys, or log in again in this tab.",
     };
   }
 

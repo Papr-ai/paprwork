@@ -27,8 +27,21 @@ import {
   requiresPaymentMethodForMeteredBilling,
   resolvePlanTierForBilling,
 } from "../../core/utils/paprPlanLimits.js";
-import { fetchWorkspaceMembers } from "../../core/utils/paprWorkspaceTeam.js";
+import { countSeatHolders, fetchWorkspaceMembers } from "../../core/utils/paprWorkspaceTeam.js";
 import { PAPR_USAGE_URL } from "../../core/utils/paprQuota.js";
+import {
+  decideMemberRequest,
+  fetchBuilders,
+  fetchCreditUsage,
+  requestMember,
+  setBuilder,
+  setMemberCap,
+  setMemberPolicy,
+  type MemberPolicy,
+  type MemberRequestKind,
+} from "../../core/utils/paprCreditSeats.js";
+import { buildCreditsPlanSummary, creditsRoleFromBuilders, creditsSummaryFromUsage } from "../../core/utils/paprCreditsPlanSummary.js";
+import { memoryBaseUrl } from "./paprHandoff.js";
 
 type GraphQLRunner = (
   query: string,
@@ -327,6 +340,15 @@ export interface EnsureDeveloperSubscriptionResponse {
  * Calls dashboard ensure-developer-subscription API (mirrors web onboarding).
  * Non-throwing — login and plan summary should continue if billing setup fails.
  */
+/** True when memory bills this caller's org in credits. Lookup failure = false (legacy path). */
+export async function isCreditsBillingOrg(sessionToken: string): Promise<boolean> {
+  try {
+    return creditsSummaryFromUsage(await fetchCreditUsage(memoryBaseUrl(), sessionToken)) !== null;
+  } catch {
+    return false;
+  }
+}
+
 export async function ensureDeveloperStripeSubscription(input: {
   sessionToken: string;
   workspaceId: string;
@@ -524,6 +546,31 @@ async function buildPlanSummary(services: BillingServices): Promise<PaprPlanSumm
     stripeCustomerId: stripeCustomerId ? `${stripeCustomerId.slice(0, 12)}…` : null,
   });
 
+  // Credits orgs: memory is the source of truth. Skip the legacy dashboard metrics and
+  // never lazily create a Developer subscription for them.
+  const creditsView = await fetchCreditUsage(memoryBaseUrl(), profile.sessionToken!).catch((err) => {
+    console.warn("[PaprBilling] credits usage lookup failed; using legacy plan summary:", err);
+    return null;
+  });
+  const credits = creditsSummaryFromUsage(creditsView);
+  if (credits) {
+    const creditsRole = await resolveWorkspaceRole(profile.sessionToken!, workspaceId, profile.userId)
+      .catch(() => "member");
+    // Memory decides who is an org owner/admin for credits orgs. The Parse workspace role can
+    // be missing (member list Forbidden), so ask memory when Parse says "member":
+    // /builders answers only for owners and admins, and its rows carry each user's roles.
+    const role = creditsRole === "owner" || creditsRole === "admin"
+      ? creditsRole
+      : await fetchBuilders(memoryBaseUrl(), profile.sessionToken!)
+        .then((view) => creditsRoleFromBuilders(view, profile.userId), () => null);
+    return buildCreditsPlanSummary({
+      credits,
+      isWorkspaceOwner: role === "owner",
+      isWorkspaceAdmin: role === "owner" || role === "admin",
+      stripeCustomerId,
+    });
+  }
+
   const usageMetricsResult = await fetchUsageMetrics(
     profile.sessionToken!,
     workspaceId,
@@ -689,7 +736,10 @@ async function createCustomerPortalUrl(customerId: string): Promise<string> {
   const response = await fetch(`${PAPR_PLATFORM_URL}/api/createCustomerPortalSession`, {
     method: "POST",
     headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ customerId }),
+    // source: "desktop" → Stripe's "Return to Papr" opens Papr Work (public
+    // /billing/return page) instead of the dashboard, whose first-visit setup used to
+    // create a second org for desktop users.
+    body: JSON.stringify({ customerId, source: "desktop" }),
   });
 
   const data = (await response.json()) as { url?: string; error?: string };
@@ -732,9 +782,15 @@ async function createCheckoutUrl(input: {
  */
 async function createCreditsCheckoutUrl(
   sessionToken: string,
-  body:
+  body: (
     | { workspaceId: string; kind: "plan"; plan: PaprCreditPlanId; seats: number }
-    | { workspaceId: string; kind: "expert_build"; size: PaprExpertBuildSize; notes?: string },
+    | { workspaceId: string; kind: "expert_build"; size: PaprExpertBuildSize; notes?: string }
+  ) & {
+    /** The org this app's API key meters against. The dashboard verifies it belongs to
+     *  workspaceId; without it, checkout bills WorkSpace.organization, which can be a
+     *  different org on the same workspace (paid plan lands where we don't meter). */
+    organizationId?: string;
+  },
 ): Promise<string> {
   const response = await fetch(`${PAPR_PLATFORM_URL}/api/v1/billing/credits-checkout`, {
     method: "POST",
@@ -870,12 +926,14 @@ export function registerPaprBillingHandlers(deps: {
           throw new Error("Only the workspace owner can change plans.");
         }
         const profile = requireLoggedInProfile(deps.settingsStorage);
-        // Individual = one person. Team = one seat per workspace member (credits per person).
+        // Individual = one person. Team = one seat per builder; members pay per credit
+        // (matches the memory server's seat sync, which would correct the count anyway).
         const seats = input.track === "individual"
           ? 1
-          : Math.max((await fetchWorkspaceMembers(profile.sessionToken!, profile.workspaceId!)).length, 1);
+          : countSeatHolders(await fetchWorkspaceMembers(profile.sessionToken!, profile.workspaceId!));
         const url = await createCreditsCheckoutUrl(profile.sessionToken!, {
           workspaceId: profile.workspaceId!,
+          organizationId: profile.organizationId || undefined,
           kind: "plan",
           plan: input.plan,
           seats,
@@ -892,6 +950,50 @@ export function registerPaprBillingHandlers(deps: {
     },
   );
 
+  // Builder seats (credits billing). Owner/admin only — the server enforces it.
+  ipcMain.handle("papr:get-builder-seats", async () => {
+    try {
+      const profile = requireLoggedInProfile(deps.settingsStorage);
+      return { success: true, view: await fetchBuilders(memoryBaseUrl(), profile.sessionToken!) };
+    } catch (error) {
+      return { success: false, error: error instanceof Error ? error.message : "Failed to load seats" };
+    }
+  });
+
+  ipcMain.handle(
+    "papr:set-builder",
+    async (_event, input: { userId: string; builder: boolean; plan?: string }) => {
+      try {
+        if (typeof input?.builder !== "boolean") throw new Error("builder must be true or false");
+        if (input.plan !== undefined && typeof input.plan !== "string") throw new Error("plan must be a string");
+        const profile = requireLoggedInProfile(deps.settingsStorage);
+        const result = await setBuilder(
+          memoryBaseUrl(), profile.sessionToken!, input.userId, input.builder, undefined, input.plan,
+        );
+        invalidatePlanSummaryCache();
+        return { success: true, result };
+      } catch (error) {
+        return { success: false, error: error instanceof Error ? error.message : "Failed to update seat" };
+      }
+    },
+  );
+
+  const creditsCall = (name: string, fn: (token: string, input: any) => Promise<unknown>) =>
+    ipcMain.handle(name, async (_event, input) => {
+      try {
+        const profile = requireLoggedInProfile(deps.settingsStorage);
+        const result = await fn(profile.sessionToken!, input);
+        invalidatePlanSummaryCache();
+        return { success: true, result };
+      } catch (error) {
+        return { success: false, error: error instanceof Error ? error.message : "Request failed" };
+      }
+    });
+  creditsCall("papr:request-member", (t, i: { kind: MemberRequestKind }) => requestMember(memoryBaseUrl(), t, i?.kind));
+  creditsCall("papr:decide-member-request", (t, i) => decideMemberRequest(memoryBaseUrl(), t, i));
+  creditsCall("papr:set-member-policy", (t, i: { policy: MemberPolicy }) => setMemberPolicy(memoryBaseUrl(), t, i?.policy));
+  creditsCall("papr:set-member-cap", (t, i: { capCredits: number }) => setMemberCap(memoryBaseUrl(), t, Number(i?.capCredits)));
+
   ipcMain.handle(
     "papr:start-expert-build-checkout",
     async (_event, input: { size: PaprExpertBuildSize; notes?: string }) => {
@@ -900,6 +1002,7 @@ export function registerPaprBillingHandlers(deps: {
         const profile = requireLoggedInProfile(deps.settingsStorage);
         const url = await createCreditsCheckoutUrl(profile.sessionToken!, {
           workspaceId: profile.workspaceId!,
+          organizationId: profile.organizationId || undefined,
           kind: "expert_build",
           size: input.size,
           notes: typeof input.notes === "string" ? input.notes.slice(0, 450) : undefined,

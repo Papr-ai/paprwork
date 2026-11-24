@@ -262,16 +262,16 @@ Recommendation: **Option A** — mirror web path via `memoryRuntimeClient.fetchR
 
 | Test file | Cases |
 |-----------|-------|
-| `tests/cloud-install-db-policy.test.ts` | **New** — fork → `fork_empty`; track+shared → `shared_primary`; track+per-user → error |
-| `tests/cloud-install-fork-registry.test.ts` | **New** — fork remints `dbId`, rewrites `data-sources.json`, preserves job ids |
+| `tests/cloud-runtime/cloud-install-db-policy.test.ts` | **New** — fork → `fork_empty`; track+shared → `shared_primary`; track+per-user → error |
+| `tests/cloud-runtime/cloud-install-fork-registry.test.ts` | **New** — fork remints `dbId`, rewrites `data-sources.json`, preserves job ids |
 | `tests/cloud-install-collaborate-credentials.test.ts` | **New** — mock memory client: track passes `publisherUserId` from lineage; fork never calls publisher token |
-| `tests/cloud-app-install-bootstrap.test.ts` | Extend — collaborate mock returns `attachedToPublisher: true`; fork returns `empty_local` |
-| `tests/portable-replica-bootstrap.test.ts` | Extend — track skips push-to-installer; fork still seeds own Turso |
-| `tests/turso-replica-cutover.test.ts` | Extend — `team_collaborate_attach` → `pull_remote`, never `seed_local` from copied bytes |
-| `tests/turso-runtime-identity.test.ts` | Extend — routing reads lineage publisher for shared-primary install |
-| `tests/cloud-app-lineage.test.ts` | Extend — schema 1.2 `databasePolicy` round-trip |
+| `tests/cloud-runtime/cloud-app-install-bootstrap.test.ts` | Extend — collaborate mock returns `attachedToPublisher: true`; fork returns `empty_local` |
+| `tests/cloud-sync/database/portable-replica-bootstrap.test.ts` | Extend — track skips push-to-installer; fork still seeds own Turso |
+| `tests/cloud-sync/database/turso-replica-cutover.test.ts` | Extend — `team_collaborate_attach` → `pull_remote`, never `seed_local` from copied bytes |
+| `tests/cloud-sync/database/turso-runtime-identity.test.ts` | Extend — routing reads lineage publisher for shared-primary install |
+| `tests/cloud-sync/publish/cloud-app-lineage.test.ts` | Extend — schema 1.2 `databasePolicy` round-trip |
 
-Run: `npx vitest run tests/cloud-install-*.test.ts tests/cloud-app-install-bootstrap.test.ts --project unit-backend`
+Run: `npx vitest run tests/cloud-install-*.test.ts tests/cloud-runtime/cloud-app-install-bootstrap.test.ts --project unit-backend`
 
 ### 5.2 Memory unit tests (memory repo)
 
@@ -444,8 +444,8 @@ Week 4: Dogfood, repair script, SYNC_CONTRACT doc update, CLAUDE.md entry
 
 - `src/gateway/services/cloudInstallDbPolicy.ts`
 - `src/gateway/services/cloudInstallTursoCredentials.ts`
-- `tests/cloud-install-db-policy.test.ts`
-- `tests/cloud-install-fork-registry.test.ts`
+- `tests/cloud-runtime/cloud-install-db-policy.test.ts`
+- `tests/cloud-runtime/cloud-install-fork-registry.test.ts`
 - `tests/cloud-install-collaborate-credentials.test.ts`
 - `tests/cloud-install-collaborate-integration.test.ts`
 - `scripts/test-team-collaborate-install-e2e.mjs`

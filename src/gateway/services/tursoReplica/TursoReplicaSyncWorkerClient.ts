@@ -76,6 +76,60 @@ export function writeWorkerStdinLine(
 }
 
 const WORKER_BOOT_TIMEOUT_MS = 20_000;
+/** Grace for a SIGTERM'd worker to close its handles before we SIGKILL it. */
+const WORKER_SHUTDOWN_GRACE_MS = 4_000;
+/** After SIGKILL the kernel reaps it promptly; this only bounds the await. */
+const WORKER_KILL_WAIT_MS = 2_000;
+
+function hasExited(child: ChildProcess): boolean {
+  return child.exitCode !== null || child.signalCode !== null;
+}
+
+function waitForExit(child: ChildProcess, ms: number): Promise<boolean> {
+  if (hasExited(child)) return Promise.resolve(true);
+  return new Promise((resolve) => {
+    const timer = setTimeout(() => {
+      child.off("exit", onExit);
+      resolve(hasExited(child));
+    }, ms);
+    const onExit = (): void => {
+      clearTimeout(timer);
+      resolve(true);
+    };
+    child.once("exit", onExit);
+  });
+}
+
+/**
+ * Stop a worker and make sure it is gone. Every replica file the worker opened stays
+ * POSIX-locked until the *process* exits, so "asked it to stop" is not enough: a worker
+ * wedged in a native close ignores SIGTERM forever and blocks every later worker from
+ * opening those databases. Escalate to SIGKILL after a grace period.
+ */
+export async function retireChild(
+  child: ChildProcess,
+  graceMs = WORKER_SHUTDOWN_GRACE_MS,
+): Promise<void> {
+  if (hasExited(child)) return;
+  try {
+    child.kill("SIGTERM");
+  } catch {
+    /* already gone */
+  }
+  if (await waitForExit(child, graceMs)) return;
+  console.warn(
+    `[TursoSyncWorker] Worker pid=${child.pid} did not exit ${graceMs}ms after SIGTERM ` +
+      "(likely wedged in a native close); sending SIGKILL so its replica locks are released",
+  );
+  try {
+    child.kill("SIGKILL");
+  } catch {
+    /* already gone */
+  }
+  if (!(await waitForExit(child, WORKER_KILL_WAIT_MS))) {
+    console.error(`[TursoSyncWorker] Worker pid=${child.pid} still running after SIGKILL`);
+  }
+}
 const STDERR_RING_BYTES = 4_000;
 const TIMING_RING_LINES = 400;
 /**
@@ -93,6 +147,12 @@ const STDERR_LOG_CHUNK_LIMIT = 5;
  * leaves a message that names the file instead of a stream of crash reports.
  */
 const MAX_CONSECUTIVE_PATH_CRASHES = 3;
+
+/**
+ * Consecutive request timeouts on one replica before it is parked. Each timeout SIGKILLs
+ * the shared worker, so an unbounded loop on one slow file fails every database's requests.
+ */
+export const MAX_CONSECUTIVE_PATH_TIMEOUTS = 3;
 
 export interface TursoSyncWorkerCommand {
   command: string;
@@ -165,6 +225,8 @@ export class TursoReplicaSyncWorkerClient {
   private readonly crashListeners = new Set<TursoSyncWorkerCrashListener>();
   /** Consecutive engine crashes per replica path, cleared by a successful op. */
   private readonly crashStreaks = new Map<string, number>();
+  /** Consecutive request timeouts per replica path, cleared by a successful op. */
+  private readonly timeoutStreaks = new Map<string, number>();
   /**
    * Paths whose engine tables we have already dropped since the last healthy op, and so
    * the evidence that a malformed table reappearing came from the remote rather than
@@ -522,6 +584,28 @@ export class TursoReplicaSyncWorkerClient {
       });
   }
 
+  /**
+   * A path whose requests keep timing out restarts the shared worker every time, failing
+   * every other database's requests with it. After {@link MAX_CONSECUTIVE_PATH_TIMEOUTS}
+   * in a row, park it for the session so the rest keep working; parking hands it to the
+   * self-heal (re-seed from cloud, keeping unpushed rows). `close` never counts.
+   */
+  private noteTimeout(options: SendOptions): void {
+    if (options.op === "close") return;
+    const streak = (this.timeoutStreaks.get(options.localPath) ?? 0) + 1;
+    this.timeoutStreaks.set(options.localPath, streak);
+    if (streak >= MAX_CONSECUTIVE_PATH_TIMEOUTS && !this.parkedPaths.has(options.localPath)) {
+      console.error(
+        `[TursoSyncWorker] Parking ${options.localPath} after ${streak} consecutive timeouts ` +
+          "so it stops restarting the worker for every other database.",
+      );
+      this.parkPath(
+        options.localPath,
+        `its requests timed out ${streak} times in a row, restarting the sync worker each time`,
+      );
+    }
+  }
+
   private noteHealthy(options: SendOptions): void {
     // A `close` on a path that was never opened succeeds without the engine running at
     // all, so it must not be able to launder a streak.
@@ -529,6 +613,7 @@ export class TursoReplicaSyncWorkerClient {
       return;
     }
     this.crashStreaks.delete(options.localPath);
+    this.timeoutStreaks.delete(options.localPath);
     this.engineTableRepairs.delete(options.localPath);
   }
 
@@ -562,6 +647,7 @@ export class TursoReplicaSyncWorkerClient {
         // kill is ours so the requests it takes down with it are not read as aborts.
         if (this.child) this.selfKill = { op: options.op, localPath: options.localPath };
         this.killChild("SIGKILL");
+        this.noteTimeout(options);
         reject(
           new Error(
             `Turso sync worker ${options.op} timed out after ${options.timeoutMs}ms ` +
@@ -600,12 +686,15 @@ export class TursoReplicaSyncWorkerClient {
 
   async shutdown(): Promise<void> {
     this.shuttingDown = true;
+    const child = this.child;
     this.rejectAllPending(new Error("Turso sync worker shutting down"));
-    this.killChild("SIGTERM");
     this.child = null;
     this.ownedPaths.clear();
     this.booted = null;
     this.shuttingDown = false;
+    // Callers (reseed, workspace switch, drain) delete or reopen replica files next, so
+    // only return once the process that held their locks is actually gone.
+    if (child) await retireChild(child);
   }
 
   isRunning(): boolean {
@@ -614,7 +703,9 @@ export class TursoReplicaSyncWorkerClient {
 
   private killChild(signal: NodeJS.Signals): void {
     const child = this.child;
-    if (child && child.killed !== true) {
+    // Not `child.killed`: that turns true once *any* signal is delivered, so after a SIGTERM
+    // it silently swallowed the SIGKILL escalation. Only skip a process that has exited.
+    if (child && !hasExited(child)) {
       try {
         child.kill(signal);
       } catch {
@@ -696,6 +787,9 @@ export class TursoReplicaSyncWorkerClient {
           clearTimeout(bootTimer);
           reject(error);
         }
+        // A retired worker exits *after* its replacement is running. Its exit must not
+        // clear the new worker's state or fail the new worker's requests as crashes.
+        if (this.child !== child) return;
         this.handleChildGone(null, null);
       });
 
@@ -709,12 +803,16 @@ export class TursoReplicaSyncWorkerClient {
             ),
           );
         }
+        if (this.child !== child) return;
         this.handleChildGone(code, signal);
       });
     }).catch((error: unknown) => {
+      // A boot that times out was SIGKILLed above; one that errored may still be alive.
+      const failed = this.child;
       this.child = null;
-    this.ownedPaths.clear();
+      this.ownedPaths.clear();
       this.booted = null;
+      if (failed) void retireChild(failed, 0);
       throw error;
     });
 

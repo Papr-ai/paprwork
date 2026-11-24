@@ -318,6 +318,30 @@ export function useAppWorkspace(appId: string) {
     [loadDbPreview],
   );
 
+  /** Open a table by data source alias: a registry database or a linked job's data.db. */
+  const openDbTable = useCallback(
+    async (alias: string, tableName: string) => {
+      const tree = workspace;
+      if (!tree) return false;
+      if ((tree.databases ?? []).some((d) => d.alias === alias)) {
+        await loadDbPreview(
+          { scope: "registry", appId, alias, path: alias, kind: "database", readOnly: true },
+          tableName,
+        );
+        return true;
+      }
+      const job = tree.jobs.find((j) => j.alias === alias);
+      const file = job?.files.find((f) => f.kind === "database");
+      if (!job || !file) return false;
+      await loadDbPreview(
+        { scope: "job", jobId: job.jobId, path: file.path, kind: "database", readOnly: true },
+        tableName,
+      );
+      return true;
+    },
+    [workspace, appId, loadDbPreview],
+  );
+
   const changeDbPage = useCallback(
     async (page: number) => {
       const target = selectedRef.current;
@@ -417,6 +441,7 @@ export function useAppWorkspace(appId: string) {
     saveFile,
     reloadFromDisk,
     selectDbTable,
+    openDbTable,
     changeDbPage,
     changeDbPageSize,
   };

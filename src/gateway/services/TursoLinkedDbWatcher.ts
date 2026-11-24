@@ -49,7 +49,13 @@ function normalizePath(filePath: string): string {
 /** Linked job SQLite artifacts under `.../data/`. */
 export function isLinkedJobSqliteFile(filePath: string): boolean {
   const base = path.basename(filePath);
-  return base === "data.db" || base === "data.db-wal" || base === "data.db-shm";
+  // `-changes` is where the Turso sync engine (replica path) records local writes.
+  return (
+    base === "data.db" ||
+    base === "data.db-wal" ||
+    base === "data.db-shm" ||
+    base === "data.db-changes"
+  );
 }
 
 export function resolveJobIdForDbFileChange(
@@ -188,10 +194,7 @@ function evaluateDbChangeReplica(watched: WatchedDbDir): void {
     return;
   }
 
-  if (!shouldAutoUploadReplicaSyncKey(watched.syncKey, watcherPaprDir())) {
-    return;
-  }
-
+  // Rows sync in real time regardless of the app's upload mode (manual gates code/schema only).
   const coordinator = getSyncCoordinator();
   if (coordinator) {
     const status = coordinator.getStatus();
