@@ -1,7 +1,7 @@
 /**
  * A proposal must never carry a migration that didn't run on this copy (it
  * would run untested on approve). Before refusing, run the new ones here: a
- * teammate on shared data applies them on this desktop only (proposal hold),
+ * teammate on shared data tests them on a throwaway test copy (real copy untouched),
  * everyone else on their own copy, exactly like papr_db_apply_migration.
  */
 
@@ -17,7 +17,7 @@ export interface AutoApplyTree {
 export type ApplyMigrationFn = (input: {
   dbId: string;
   migrationId: string;
-}) => Promise<{ applied: boolean }>;
+}) => Promise<{ applied: boolean; testedOnly?: boolean }>;
 
 export interface AutoApplyResult {
   /** Migration ids that ran here now. */
@@ -61,7 +61,7 @@ export async function autoApplyProposalMigrations(
     for (const [i, migrationId] of ids.entries()) {
       try {
         const outcome = await apply({ dbId: tree.dbId!, migrationId });
-        if (!outcome.applied) throw new Error("it did not run");
+        if (!outcome.applied && !outcome.testedOnly) throw new Error("it did not run");
         ran.add(migrationId);
         result.applied.push(migrationId);
       } catch (err) {

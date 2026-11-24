@@ -7,7 +7,9 @@
 import { promises as fs } from "fs";
 import os from "os";
 import path from "path";
+import { createHash } from "crypto";
 import Database from "better-sqlite3";
+import { getPaprRoot } from "../../../core/utils/paprRoot.js";
 import { splitSqlStatements } from "../jobs/migrationSqlHelpers.js";
 
 export const TEST_COPY_ROWS = 100;
@@ -96,4 +98,60 @@ export async function testMigrationsOnTestCopy(
     await fs.rm(dir, { recursive: true, force: true }).catch(() => undefined);
   }
   return result;
+}
+
+// ── Contributor on the team's shared data ─────────────────────────────────
+// A new migration is never applied to the real copy. Every migration file not
+// yet in this copy's ledger runs, in order, on a test copy; the ones that pass
+// are recorded with their checksum so Propose can tell they were tested.
+
+
+const sha = (s: string) => createHash("sha256").update(s).digest("hex");
+const bare = (id: string) => id.replace(/\.sql$/, "");
+
+function manifestPath(dbId: string): string {
+  return path.join(getPaprRoot(), "data", "proposal-tests", `${dbId}.json`);
+}
+
+async function readManifest(dbId: string): Promise<Record<string, string>> {
+  try {
+    return JSON.parse(await fs.readFile(manifestPath(dbId), "utf8")) as Record<string, string>;
+  } catch {
+    return {};
+  }
+}
+
+async function migrationFiles(migrationRoot: string): Promise<Array<{ id: string; sql: string }>> {
+  const dir = path.join(migrationRoot, "migrations");
+  const names = (await fs.readdir(dir).catch(() => [] as string[])).filter((n) => n.endsWith(".sql")).sort();
+  return Promise.all(names.map(async (n) => ({ id: bare(n), sql: await fs.readFile(path.join(dir, n), "utf8") })));
+}
+
+export interface PendingTestInput {
+  dbId: string;
+  migrationRoot: string;
+  /** Reads the real copy (read-only). */
+  read: ReadQuery;
+}
+
+/** Test every migration not in the real ledger, in order. Records the ones that passed. */
+export async function testPendingMigrations(input: PendingTestInput): Promise<TestCopyResult & { pending: string[] }> {
+  const ledger = await input.read("SELECT id FROM schema_migrations");
+  if (!ledger) throw new Error("couldn't read this copy's migration ledger");
+  const done = new Set(ledger.rows.map((r) => bare(String(r.id ?? ""))));
+  const pending = (await migrationFiles(input.migrationRoot)).filter((m) => !done.has(m.id));
+  const result = await testMigrationsOnTestCopy(input.read, pending);
+  const manifest: Record<string, string> = {};
+  for (const m of pending) if (result.passed.includes(m.id)) manifest[m.id] = sha(m.sql);
+  await fs.mkdir(path.dirname(manifestPath(input.dbId)), { recursive: true });
+  await fs.writeFile(manifestPath(input.dbId), JSON.stringify(manifest, null, 2));
+  return { ...result, pending: pending.map((m) => m.id) };
+}
+
+/** Migration ids that passed on a test copy and whose file hasn't changed since. */
+export async function testedMigrationIds(dbId: string, migrationRoot: string): Promise<Set<string>> {
+  const manifest = await readManifest(dbId);
+  const ids = new Set<string>();
+  for (const m of await migrationFiles(migrationRoot)) if (manifest[m.id] === sha(m.sql)) ids.add(m.id);
+  return ids;
 }

@@ -61,3 +61,30 @@ describe("proposal test copy", () => {
     expect(r).toEqual({ passed: ["0002_cap", "0003_check"] });
   });
 });
+
+describe("pending migrations on the team's data (contributor)", () => {
+  it("tests files missing from the ledger, records them; an edited file is no longer tested", async () => {
+    const { testPendingMigrations, testedMigrationIds } = await import(
+      "../../../src/gateway/services/cloudSync/proposalTestCopy.js"
+    );
+    const home = await fs.mkdtemp(path.join(os.tmpdir(), "papr-home-"));
+    dirs.push(home);
+    process.env.PAPR_HOME = home;
+    const { file, read } = await realCopy(3);
+    const w = new Database(file);
+    w.exec("CREATE TABLE schema_migrations (id TEXT PRIMARY KEY); INSERT INTO schema_migrations VALUES ('0001_init');");
+    w.close();
+    const root = path.join(home, "data", "databases", "team");
+    await fs.mkdir(path.join(root, "migrations"), { recursive: true });
+    await fs.writeFile(path.join(root, "migrations", "0001_init.sql"), "CREATE TABLE notes (id INTEGER PRIMARY KEY, body TEXT);");
+    await fs.writeFile(path.join(root, "migrations", "0002_add.sql"), "ALTER TABLE notes ADD COLUMN p TEXT;");
+    const r = await testPendingMigrations({ dbId: "db-1", migrationRoot: root, read });
+    expect(r.pending).toEqual(["0002_add"]);
+    expect(r.passed).toEqual(["0002_add"]);
+    expect(cols(file)).toEqual(["id", "body"]);
+    expect([...(await testedMigrationIds("db-1", root))]).toEqual(["0002_add"]);
+    await fs.writeFile(path.join(root, "migrations", "0002_add.sql"), "ALTER TABLE notes ADD COLUMN q TEXT;");
+    expect([...(await testedMigrationIds("db-1", root))]).toEqual([]);
+    delete process.env.PAPR_HOME;
+  });
+});
