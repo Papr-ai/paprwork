@@ -182,6 +182,10 @@ const RegistryDatabaseBundleSchema = z.object({
   dbId: z.string().min(1),
   bundlePath: z.string().min(1),
   label: z.string().optional(),
+  /** Folder name under data/databases/ on the exporting machine. */
+  slug: z.string().optional(),
+  /** Bundle-relative migrations folder (SQL + snapshot.json). */
+  migrationsPath: z.string().optional(),
   isolation: z.enum(["shared", "per-user"]).optional(),
 });
 

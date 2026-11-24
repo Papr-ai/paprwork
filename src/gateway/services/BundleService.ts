@@ -881,35 +881,53 @@ export class BundleService {
       dbId: string;
       bundlePath: string;
       label?: string;
+      slug?: string;
+      migrationsPath?: string;
       isolation?: "shared" | "per-user";
     }> = [];
 
+    // Every registry database the app links (not just the primary) travels
+    // with its migrations folder. The data file is copied too but scrubbed
+    // below unless includeData — without the migrations, the importer had
+    // nothing to build the schema from and never registered the database.
     try {
-      const primary = await this.appService.getPrimaryDataSource(input.appId);
-      if (primary?.dbId && primary.dbPath) {
-        const bundleDbRel = path.posix.join(
-          "databases",
-          primary.dbId,
-          "data.db",
-        );
-        const bundleDbAbs = path.join(destinationPath, "databases", primary.dbId, "data.db");
-        await fs.mkdir(path.dirname(bundleDbAbs), { recursive: true });
-        await fs.copyFile(primary.dbPath, bundleDbAbs);
-        const { initializeDatabaseRegistry } = await import(
-          "./DatabaseRegistryService.js"
-        );
-        const registry = await initializeDatabaseRegistry();
-        const record = registry.getById(primary.dbId);
+      const { initializeDatabaseRegistry } = await import(
+        "./DatabaseRegistryService.js"
+      );
+      const registry = await initializeDatabaseRegistry();
+      const config = await this.appService.getDataSourcesConfig(input.appId);
+      const seen = new Set<string>();
+      for (const source of config.sources) {
+        if (!source.dbId || source.jobId || seen.has(source.dbId)) continue;
+        seen.add(source.dbId);
+        const record = registry.getById(source.dbId);
+        const localPath = record?.localPath || source.dbPath;
+        if (!localPath) continue;
+        const bundleDir = path.join(destinationPath, "databases", source.dbId);
+        await fs.mkdir(bundleDir, { recursive: true });
+        if (existsSync(localPath)) {
+          await fs.copyFile(localPath, path.join(bundleDir, "data.db"));
+        }
+        const migrationsSrc = path.join(path.dirname(localPath), "migrations");
+        let migrationsPath: string | undefined;
+        if (existsSync(migrationsSrc)) {
+          await fs.cp(migrationsSrc, path.join(bundleDir, "migrations"), {
+            recursive: true,
+          });
+          migrationsPath = path.posix.join("databases", source.dbId, "migrations");
+        }
         registryDatabases.push({
-          dbId: primary.dbId,
-          bundlePath: bundleDbRel,
-          label: primary.alias,
+          dbId: source.dbId,
+          bundlePath: path.posix.join("databases", source.dbId, "data.db"),
+          label: record?.label ?? source.alias,
+          slug: path.basename(path.dirname(localPath)),
+          ...(migrationsPath ? { migrationsPath } : {}),
           ...(record?.isolation ? { isolation: record.isolation } : {}),
         });
       }
     } catch (dbBundleErr) {
       console.warn(
-        `[BundleService] Could not bundle primary database for app ${input.appId}:`,
+        `[BundleService] Could not bundle databases for app ${input.appId}:`,
         dbBundleErr,
       );
     }
@@ -1250,34 +1268,10 @@ export class BundleService {
     };
     await this.appService.upsertApp(appMetadata, appSource);
 
+    const databaseSetupResults: Array<{ jobName: string; ok: boolean; message: string }> = [];
     for (const dbSpec of manifest.registryDatabases ?? []) {
-      const sourceDbPath = path.join(destination, dbSpec.bundlePath);
-      try {
-        await fs.access(sourceDbPath);
-      } catch {
-        continue;
-      }
-      const { getPaprDataDir } = await import("../../core/utils/paprRoot.js");
-      const { initializeDatabaseRegistry } = await import(
-        "./DatabaseRegistryService.js"
-      );
-      const { dbTursoDatabaseName } = await import("./tursoDatabaseNaming.js");
-      const registry = await initializeDatabaseRegistry();
-      const existing = registry.getById(dbSpec.dbId);
-      const targetPath =
-        existing?.localPath ??
-        path.join(getPaprDataDir(), "databases", dbSpec.dbId, "data.db");
-      await fs.mkdir(path.dirname(targetPath), { recursive: true });
-      await fs.copyFile(sourceDbPath, targetPath);
-      if (!existing) {
-        await registry.register({
-          dbId: dbSpec.dbId,
-          localPath: targetPath,
-          label: dbSpec.label,
-          tursoShortName: dbTursoDatabaseName(dbSpec.dbId),
-          isolation: dbSpec.isolation ?? "shared",
-        });
-      }
+      const result = await this.importRegistryDatabase(destination, dbSpec);
+      if (result) databaseSetupResults.push(result);
     }
 
     for (const jobSpec of manifest.jobs) {
@@ -1345,7 +1339,7 @@ export class BundleService {
       jobName: string;
       ok: boolean;
       message: string;
-    }> = [];
+    }> = [...databaseSetupResults];
     for (const jobSpec of manifest.jobs) {
       const jobType = mapRuntimeToJobType(jobSpec.type);
       if (jobType === "python" || jobType === "node") {
@@ -1368,6 +1362,85 @@ export class BundleService {
       ...manifest,
       setupResults: setupResults.length > 0 ? setupResults : undefined,
     };
+  }
+
+  /**
+   * Register one bundled registry database and build its schema. The data
+   * file is optional (scrubbed by default); migrations are what make the
+   * database usable, so a bundle without data still gets a working, empty DB.
+   */
+  private async importRegistryDatabase(
+    bundleRoot: string,
+    dbSpec: BundleManifest["registryDatabases"][number],
+  ): Promise<{ jobName: string; ok: boolean; message: string } | null> {
+    const name = `database ${dbSpec.label ?? dbSpec.dbId}`;
+    try {
+      const { getPaprDataDir } = await import("../../core/utils/paprRoot.js");
+      const { initializeDatabaseRegistry } = await import(
+        "./DatabaseRegistryService.js"
+      );
+      const { dbTursoDatabaseName } = await import("./tursoDatabaseNaming.js");
+      const registry = await initializeDatabaseRegistry();
+      const existing = registry.getById(dbSpec.dbId);
+      const slug = (dbSpec.slug || dbSpec.dbId).replace(/[^a-zA-Z0-9._-]/g, "-");
+      let targetPath =
+        existing?.localPath ??
+        path.join(getPaprDataDir(), "databases", slug, "data.db");
+      if (!existing && registry.getByPath(targetPath)) {
+        targetPath = path.join(getPaprDataDir(), "databases", dbSpec.dbId, "data.db");
+      }
+      const targetDir = path.dirname(targetPath);
+      await fs.mkdir(targetDir, { recursive: true });
+
+      const migrationsSrc = path.join(
+        bundleRoot,
+        dbSpec.migrationsPath ?? path.posix.join(path.posix.dirname(dbSpec.bundlePath), "migrations"),
+      );
+      const hasMigrations = existsSync(migrationsSrc);
+      if (hasMigrations) {
+        await fs.cp(migrationsSrc, path.join(targetDir, "migrations"), {
+          recursive: true,
+          force: false,
+          errorOnExist: false,
+        });
+      }
+
+      const sourceDbPath = path.join(bundleRoot, dbSpec.bundlePath);
+      if (existsSync(sourceDbPath) && !existsSync(targetPath)) {
+        await fs.copyFile(sourceDbPath, targetPath);
+      }
+
+      if (!existing) {
+        await registry.register({
+          dbId: dbSpec.dbId,
+          localPath: targetPath,
+          label: dbSpec.label,
+          tursoShortName: dbTursoDatabaseName(dbSpec.dbId),
+          isolation: dbSpec.isolation ?? "shared",
+        });
+      }
+
+      if (!hasMigrations) {
+        return existsSync(targetPath)
+          ? null
+          : { jobName: name, ok: false, message: `Registered ${name}, but the bundle has no migrations to build its tables` };
+      }
+      const { applyDatabaseMigrations } = await import(
+        "./jobs/databaseMigrations.js"
+      );
+      const applied = await applyDatabaseMigrations(targetDir, targetPath);
+      return {
+        jobName: name,
+        ok: true,
+        message: `Registered ${name} and applied ${applied.length} migration(s)`,
+      };
+    } catch (error) {
+      return {
+        jobName: name,
+        ok: false,
+        message: `Could not set up ${name}: ${(error as Error).message}`,
+      };
+    }
   }
 
   async fetchCommunityRegistry(): Promise<CommunityRegistry> {
