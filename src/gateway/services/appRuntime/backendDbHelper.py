@@ -47,51 +47,29 @@ from typing import Any, Union
 #   6 = con.execute() results also work sqlite3-style: .fetchall() / .fetchone(),
 #       rows indexable by name or position (agents write the sqlite3 idiom)
 #   7 = rows iterate values like sqlite3.Row (dict(zip(cols, row)) works)
-PAPR_DB_HELPER_VERSION = 7
+#   8 = rows/cursors come from papr_sqlite_compat, shared with the job SDK, so
+#       a sqlite3 pattern that works in a job works in a backend action
+PAPR_DB_HELPER_VERSION = 8
 
 
-class _Row(dict):
-    """A dict row that also behaves like sqlite3.Row / a tuple row.
+def _compat():
+    """Row/Cursor shared with the job SDK (papr_sqlite_compat on PYTHONPATH).
 
-    - row["name"] and row[0] both work.
-    - Iterating yields VALUES (like sqlite3 tuples and sqlite3.Row), so the
-      common `dict(zip(cols, row))` / `name, qty = row` idioms work. Iterating
-      keys made zip() map every column to its own name. dict(row), row.items(),
-      row.keys(), {**row} and json.dumps(row) still see the full mapping.
+    Imported lazily so query()/write() never depend on it.
     """
+    import papr_sqlite_compat
 
-    def __getitem__(self, key: Any) -> Any:
-        if isinstance(key, int):
-            return list(self.values())[key]
-        return super().__getitem__(key)
-
-    def __iter__(self):  # type: ignore[override]
-        return iter(self.values())
-
-
-class _Rows(list):
-    """Rows from con.execute(SELECT …): a list of dicts that also has fetchall().
-
-    Agents write `con.execute(sql).fetchall()` out of sqlite3 habit; returning a
-    bare list made that crash with AttributeError in every backend action.
-    """
-
-    rowcount = -1
-
-    def fetchall(self) -> "_Rows":
-        return self
-
-    def fetchone(self) -> "_Row | None":
-        return self[0] if self else None
-
-    def fetchmany(self, size: int = 1) -> list["_Row"]:
-        return list(self[:size])
+    return papr_sqlite_compat
 
 
 class _Changes(int):
-    """Row count from con.execute(INSERT/UPDATE/DELETE …), cursor-shaped too."""
+    """Row count from con.execute(INSERT/UPDATE/DELETE …), cursor-shaped too.
+
+    Older handlers compare the result to an int, so writes keep returning one.
+    """
 
     lastrowid: int | None = None
+    description = None
 
     @property
     def rowcount(self) -> int:
@@ -103,12 +81,13 @@ class _Changes(int):
     def fetchone(self) -> None:
         return None
 
+    def fetchmany(self, size: int | None = None) -> list[Any]:
+        return []
 
-def _wrap_execute_result(result: Any, lastrowid: int | None) -> "_Rows | _Changes":
+
+def _wrap_execute_result(result: Any, lastrowid: int | None) -> Any:
     if isinstance(result, list):
-        rows = _Rows(_Row(r) if isinstance(r, dict) else r for r in result)
-        rows.rowcount = len(rows)
-        return rows
+        return _compat().Cursor(result, rowcount=len(result), lastrowid=lastrowid)
     changes = _Changes(int(result or 0))
     changes.lastrowid = lastrowid
     return changes
@@ -520,7 +499,7 @@ class _ProxyConnection:
         self,
         sql: str,
         params: list[Any] | None = None,
-    ) -> "_Rows | _Changes":
+    ) -> Any:
         return _wrap_execute_result(execute(self, sql, params), self.lastrowid)
 
     def close(self) -> None:
@@ -548,7 +527,7 @@ class _TursoCursor:
             if result.rows:
                 names = list(result.rows[0].keys())
                 self.description = [(name, None, None, None, None, None, None) for name in names]
-                self._rows = [tuple(row[name] for name in names) for row in result.rows]
+                self._rows = [_compat().as_row(row) for row in result.rows]
             else:
                 self.description = []
                 self._rows = []
@@ -603,7 +582,7 @@ class _TursoConnection:
         self,
         sql: str,
         params: list[Any] | None = None,
-    ) -> "_Rows | _Changes":
+    ) -> Any:
         return _wrap_execute_result(self._execute_raw(sql, params), self.lastrowid)
 
     def _execute_raw(
