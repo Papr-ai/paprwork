@@ -157,5 +157,10 @@ export function getPaprCloudFeature(
 
 /** Models routed only through Papr Memory proxy (not BYOK). */
 export function isPaprProxyOnlyModel(provider: string): boolean {
-  return provider === "zai" || provider === "groq" || provider === "moonshot";
+  return (
+    provider === "zai" ||
+    provider === "groq" ||
+    provider === "moonshot" ||
+    provider === "openrouter"
+  );
 }

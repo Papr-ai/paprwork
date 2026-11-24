@@ -71,6 +71,8 @@ export interface CloudAgentRunRequest {
     authType: "oauth" | "apiKey";
     token: string;
     provider: string;
+    /** No usable vault key: token is the user's Papr API key, calls go through the Papr AI proxy. */
+    usePaprProxy?: boolean;
   };
   /** User vault keys from GCP Secret Manager (memory server) — injected into process.env for bash/run_job */
   vaultKeys?: Record<string, string>;
@@ -104,6 +106,7 @@ export interface CloudProviderAuthResolution {
   provider: Provider;
   authType: "oauth" | "apiKey";
   token: string;
+  usePaprProxy?: boolean;
 }
 
 export interface CloudAgentSessionBeginResponse {

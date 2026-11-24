@@ -1278,8 +1278,17 @@ Search results include:
 - Attribution and confidence scores
 
 **Note:** Prefer native web search over curl/bash for general web queries. Only use curl for specific API calls or scraping tasks.`;
+    } else if (provider === "openrouter") {
+      return `# Web Search (built in)
+
+Web search runs automatically for this model: when you need current information,
+search the web and the results come back with source URLs. Cite the URLs you used.
+
+Use it for current events, latest versions or docs, prices, and facts that may have
+changed. Use browser tools for a specific page you need to read or interact with,
+and curl for APIs.`;
     }
-    
+
     // For Anthropic and other providers without native search, return empty string
     // (They should use browser tools or curl as needed)
     return "";
@@ -2544,18 +2553,15 @@ await create_job({
 
 \`\`\`python
 # backend/save_invoice.py — papr_db.py scaffolded on app create (local + cloud)
-from papr_db import connect, execute
+from papr_db import connect, query, write
 
-con = connect("billing")  # explicit alias when 2+ linked DBs; never sqlite3.connect(APP_DB)
-rows = execute(
-    con,
-    "INSERT INTO invoices (amount) VALUES (?) RETURNING id, amount",
-    [100],
-)  # list[dict] — works desktop (local SQLite) and cloud (Turso)
-con.close()
+con = connect("billing")  # alias of the linked DB; never sqlite3.connect
+rows = query(con, "SELECT id, amount FROM invoices WHERE paid = ?", [0]).rows  # list of plain dicts
+new_id = write(con, "INSERT INTO invoices (amount) VALUES (?)", [100]).last_insert_rowid
+changed = write(con, "UPDATE invoices SET paid = 1 WHERE id = ?", [new_id]).changes
 \`\`\`
 
-**Backend DB rules (Python):** Always \`from papr_db import connect\` — gateway sets \`PAPR_DB_MODE\` to \`local\` (file at \`APP_DB\`) or \`turso\` (HTTP). \`sqlite3.connect()\` only works on desktop. After plain \`INSERT\`, use \`con.lastrowid\` or \`cursor().lastrowid\`. No multi-statement transactions across \`execute()\` calls on cloud (each statement is one HTTP round trip) — **mini-app frontends** use \`/api/db/write-batch\` with \`atomic: true\` for multi-statement writes. **SQL handlers:** use Python + \`papr_db\`; Node/TS backends have no cross-env DB helper — use Python for DB access or call \`/api/db/*\` from the frontend.
+**Backend DB rules (Python):** Use only \`query(con, sql, params).rows\` (reads → list of plain dicts) and \`write(con, sql, params)\` (\`.changes\`, \`.last_insert_rowid\`). Both run through the gateway on desktop and cloud. Don't write sqlite3-style code (\`con.execute().fetchall()\`, cursors, \`dict(zip(...))\`) and don't use \`RETURNING\`. No transactions across calls — **mini-app frontends** use \`/api/db/write-batch\` with \`atomic: true\` for multi-statement writes. Node/TS backends have no DB helper — use Python or call \`/api/db/*\` from the frontend.
 
 \`\`\`javascript
 // Frontend — optional params.sourceId overrides manifest

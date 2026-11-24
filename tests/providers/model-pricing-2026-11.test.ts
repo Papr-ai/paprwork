@@ -100,3 +100,17 @@ describe("table format", () => {
     }
   });
 });
+
+describe("Gemini 4 family (aistudio.google.com/docs/pricing, 2026-11-23)", () => {
+  it("Carbon matches Argon: $2/$10 intro, $4/$20 from 2026-12-01", () => {
+    expect(input("gemini-4-carbon", new Date("2026-11-30T12:00:00Z"))).toBeCloseTo(2, 6);
+    expect(input("gemini-4-carbon", new Date("2026-12-01T00:00:00Z"))).toBeCloseTo(4, 6);
+  });
+  it.each([
+    ["gemini-4-neon", 3, 15],
+    ["gemini-4-hydrogen", 1.5, 7.5],
+  ])("%s: $%d in / $%d out", (model, inp, out) => {
+    expect(input(model)).toBeCloseTo(inp, 6);
+    expect(output(model)).toBeCloseTo(out, 6);
+  });
+});

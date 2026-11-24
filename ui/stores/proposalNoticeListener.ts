@@ -5,6 +5,7 @@
  */
 
 import { ensureSettingsTab } from "../lib/ensureSettingsTab";
+import { savePendingPlan } from "../utils/pendingPlan";
 
 /** "connections-requests" lands admins on the Requests list inside Connections. */
 export const CONNECTIONS_REQUESTS_EVENT = "papr:connections-show-requests";
@@ -15,9 +16,12 @@ export function initProposalNoticeListener(): void {
   if (initialized) return;
   initialized = true;
   window.addEventListener("papr-notification-open-settings", (event: Event) => {
-    const target = (event as CustomEvent<{ target?: string }>).detail?.target;
-    // papr://billing deep link (post-checkout page) lands on the plan card.
+    const detail = (event as CustomEvent<{ target?: string; plan?: string; track?: string }>).detail;
+    const target = detail?.target;
+    // papr://billing deep link (post-checkout page, or a plan button on papr.ai/pricing)
+    // lands on the plan card; a plan in the link becomes a "Continue to checkout" prompt.
     if (target === "billing") {
+      if (detail?.plan) savePendingPlan({ plan: detail.plan, track: detail.track });
       ensureSettingsTab({ section: "billing", focusPlan: true });
       return;
     }

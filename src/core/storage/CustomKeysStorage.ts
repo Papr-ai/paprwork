@@ -622,15 +622,20 @@ export class CustomKeysStorage {
       input.syncedNames.map((name) => this.normalizeKeyName(name)),
     );
 
+    // Keys saved for "all my orgs" live in the shared file, not the org file —
+    // both must show "Not shared" when the cloud refuses them.
+    let orgDirty = false;
+    let sharedDirty = false;
     for (const conflict of input.conflicts) {
       const entry = this.findKeyEntryByName(conflict.name);
       if (!entry || entry.key.vaultOrigin === "shared") {
         continue;
       }
-      if (entry.scope !== "org") {
+      if (entry.scope !== "org" && entry.scope !== "shared") {
         continue;
       }
-      this.orgKeys.set(entry.id, {
+      const target = entry.scope === "org" ? this.orgKeys : this.sharedKeys;
+      target.set(entry.id, {
         ...entry.key,
         vaultShareBlocked: true,
         ...(conflict.ownerUserId
@@ -638,28 +643,39 @@ export class CustomKeysStorage {
           : {}),
         updatedAt: now,
       });
+      if (entry.scope === "org") orgDirty = true;
+      else sharedDirty = true;
       blocked += 1;
     }
 
-    for (const [id, key] of this.orgKeys.entries()) {
-      if (key.vaultOrigin === "shared") {
-        continue;
+    for (const target of [this.orgKeys, this.sharedKeys]) {
+      for (const [id, key] of target.entries()) {
+        if (key.vaultOrigin === "shared") {
+          continue;
+        }
+        if (!syncedNames.has(this.normalizeKeyName(key.name))) {
+          continue;
+        }
+        if (!key.vaultShareBlocked && !key.vaultShareBlockedOwnerUserId) {
+          continue;
+        }
+        const nextKey: CustomKey = { ...key, updatedAt: now };
+        delete nextKey.vaultShareBlocked;
+        delete nextKey.vaultShareBlockedOwnerUserId;
+        target.set(id, nextKey);
+        if (target === this.orgKeys) orgDirty = true;
+        else sharedDirty = true;
+        cleared += 1;
       }
-      if (!syncedNames.has(this.normalizeKeyName(key.name))) {
-        continue;
-      }
-      if (!key.vaultShareBlocked && !key.vaultShareBlockedOwnerUserId) {
-        continue;
-      }
-      const nextKey: CustomKey = { ...key, updatedAt: now };
-      delete nextKey.vaultShareBlocked;
-      delete nextKey.vaultShareBlockedOwnerUserId;
-      this.orgKeys.set(id, nextKey);
-      cleared += 1;
     }
 
-    if (blocked > 0 || cleared > 0) {
+    if (orgDirty) {
       await this.persistOrgKeysForOrganization(activeOrgId, this.orgKeys);
+    }
+    if (sharedDirty) {
+      await this.saveSharedKeys();
+    }
+    if (blocked > 0 || cleared > 0) {
       console.log(
         `[CustomKeys] Share sync reconciled (blocked=${blocked}, cleared=${cleared})`,
       );

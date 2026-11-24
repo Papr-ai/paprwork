@@ -1038,6 +1038,36 @@ export class DatabaseRegistryService {
   }
 
   /**
+   * Register databases an app's linked-databases.json declares that this
+   * workspace has never seen (a merged proposal or Get updates brought a new
+   * link), and persist them. Existing records are left alone. Without this the
+   * link only lived in the in-memory cache, so the next publish reconcile saw
+   * the dbId as deleted and removed it from data-sources.json.
+   */
+  async adoptLinkedDatabasesFile(raw: string): Promise<string[]> {
+    let parsed: DatabasesRegistryFile;
+    try {
+      parsed = JSON.parse(raw) as DatabasesRegistryFile;
+    } catch {
+      return [];
+    }
+    if (!parsed?.databases || typeof parsed.databases !== "object") return [];
+    if (!this.cache) this.cache = await this.load();
+    const state = this.getState();
+    const fresh: Record<string, DatabaseRecord> = {};
+    for (const [dbId, record] of Object.entries(parsed.databases)) {
+      if (!record || record.status === "tombstone" || !dbId.startsWith("db-")) continue;
+      if (state.databases[dbId]) continue;
+      fresh[dbId] = record;
+    }
+    const ids = Object.keys(fresh);
+    if (ids.length === 0) return [];
+    this.mergeFromRegistryFile(JSON.stringify({ version: 1, databases: fresh }));
+    await this.save(this.getState());
+    return ids;
+  }
+
+  /**
    * Ensure an in-memory registry record exists for Turso routing (cloud fallback).
    * Only used when databases.json is missing entries — assumes shared isolation.
    */

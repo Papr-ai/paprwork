@@ -17,6 +17,7 @@ export const DEFAULT_MODEL_BY_PROVIDER: Record<Provider, string> = {
   zai: "glm-5.2",
   groq: "openai/gpt-oss-120b",
   moonshot: "kimi-k3",
+  openrouter: "thinkingmachines/inkling-2-mini",
 };
 
 function isCloudAgentGateway(): boolean {
@@ -30,6 +31,7 @@ export interface CloudAgentCredentials {
   model: string;
   token: string;
   authType: "oauth" | "apiKey";
+  usePaprProxy?: boolean;
 }
 
 function decodeJwtPayload(token: string): Record<string, unknown> | null {
@@ -338,6 +340,7 @@ export async function resolveCloudAgentJobSessionFromAuthOverride(input: {
   model?: string;
   token: string;
   authType: "oauth" | "apiKey";
+  usePaprProxy?: boolean;
 }): Promise<CloudAgentCredentials> {
   const resolved = await resolveJobProviderModel({
     provider: input.provider,
@@ -348,10 +351,11 @@ export async function resolveCloudAgentJobSessionFromAuthOverride(input: {
     provider: resolved.provider,
     token: input.token,
     authType: input.authType,
+    usePaprProxy: input.usePaprProxy,
   });
 
   console.log(
-    `[ResolveJobProviderModel] Cloud session (authOverride): ${resolved.provider}/${resolved.model} authType=${llmAuth.authType}`,
+    `[ResolveJobProviderModel] Cloud session (authOverride): ${resolved.provider}/${resolved.model} authType=${llmAuth.authType}${llmAuth.usePaprProxy ? " via=papr-proxy" : ""}`,
   );
 
   return {
@@ -359,5 +363,6 @@ export async function resolveCloudAgentJobSessionFromAuthOverride(input: {
     model: resolved.model,
     token: llmAuth.token,
     authType: llmAuth.authType,
+    ...(llmAuth.usePaprProxy ? { usePaprProxy: true } : {}),
   };
 }

@@ -151,17 +151,15 @@ export const listFileCodeSummariesTool = createTool({
 });
 
 const codeIndexRepoSchema = z.object({
-  path: z.string().min(1).describe("Any path inside the git repo (its root, a file, or the folder grep ran in)"),
-  allow: z.boolean().describe("true = index this repo on this Mac; false = never index it and never ask again"),
+  path: z.string().min(1).describe("Any path inside the git repo"),
+  allow: z.boolean().describe("true = index on this Mac; false = never ask again"),
 });
 
 export const codeIndexRepoTool = createTool({
   id: "code_index_repo",
   description:
-    "Record the user's answer for on-device code search in one of their own git repos (outside the Papr folder). " +
-    "Only call after the user answered the question shown in a grep result. allow: true indexes tracked files " +
-    "(git ls-files) on this Mac in the background; vectors never leave the device. allow: false stops asking and " +
-    "drops anything indexed for it. Covers the repo's worktrees too.",
+    "Save the user's answer to the grep prompt about on-device code search for one of their git repos. " +
+    "allow: true indexes it on this Mac; false stops asking.",
   inputSchema: codeIndexRepoSchema,
   execute: async (input) => {
     const args = (input as { context?: z.infer<typeof codeIndexRepoSchema> }).context ?? input;

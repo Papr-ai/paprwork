@@ -3,6 +3,7 @@ import { tmpdir } from "os";
 import { join } from "path";
 import { afterEach, describe, expect, it } from "vitest";
 import { AppBackendService } from "../../src/gateway/services/appRuntime/AppBackendService.js";
+import { getAppRuntimeLogService } from "../../src/gateway/services/AppRuntimeLogService.js";
 import {
   DEFAULT_BACKEND_MANIFEST,
   DEFAULT_BACKEND_PING_HANDLER,
@@ -49,6 +50,59 @@ describe("AppBackendService (local)", () => {
     expect(payload.ok).toBe(true);
     expect(payload.action).toBe("ping");
     expect(payload.params.hello).toBe("world");
+  });
+
+  it("logs a failing action as a runtime error so validate_app sees it", async () => {
+    tempRoot = await mkdtemp(join(tmpdir(), "papr-backend-"));
+    const appId = "test-app-failing";
+    const backendDir = join(tempRoot, "apps", appId, "backend");
+    await mkdir(backendDir, { recursive: true });
+    await writeFile(
+      join(backendDir, "manifest.json"),
+      JSON.stringify({ version: 1, actions: { items: { handler: "items.py", runtime: "python" } } }),
+    );
+    await writeFile(
+      join(backendDir, "items.py"),
+      "raise AttributeError(\"'list' object has no attribute 'fetchall'\")\n",
+    );
+    getAppRuntimeLogService().clear(appId);
+
+    const result = await new AppBackendService(tempRoot).runAction({ appId, action: "items" });
+
+    expect(result.exitCode).not.toBe(0);
+    const errors = getAppRuntimeLogService().getErrorMessages(appId);
+    expect(errors.some((e) => e.includes('action "items" failed') && e.includes("fetchall"))).toBe(true);
+  });
+
+  it("backend handlers get sqlite3-style rows from the shared helper at runtime", async () => {
+    tempRoot = await mkdtemp(join(tmpdir(), "papr-backend-"));
+    const appId = "test-app-sqlite-rows";
+    const backendDir = join(tempRoot, "apps", appId, "backend");
+    await mkdir(backendDir, { recursive: true });
+    await writeFile(
+      join(backendDir, "manifest.json"),
+      JSON.stringify({ version: 1, actions: { items: { handler: "items.py", runtime: "python" } } }),
+    );
+    // Real runtime env (PYTHONPATH from jobSdkEnv + refreshed vendored papr_db.py):
+    // the shared Row/Cursor must import, and the grocery-list idiom must work.
+    await writeFile(
+      join(backendDir, "items.py"),
+      [
+        "import json, papr_db",
+        "cur = papr_db._wrap_execute_result([{'id': 1, 'name': 'Milk'}, {'id': 2, 'name': 'Eggs'}], None)",
+        "cols = [d[0] for d in cur.description]",
+        "print(json.dumps({'items': [dict(zip(cols, r)) for r in cur.fetchall()]}))",
+        "",
+      ].join("\n"),
+    );
+
+    const result = await new AppBackendService(tempRoot).runAction({ appId, action: "items" });
+
+    expect(result.stderr).toBe("");
+    expect(result.exitCode).toBe(0);
+    expect(JSON.parse(result.stdout)).toEqual({
+      items: [{ id: 1, name: "Milk" }, { id: 2, name: "Eggs" }],
+    });
   });
 
   it("runs node ping action", async () => {
@@ -293,3 +347,23 @@ json.dump({
 });
 
 import { useIsolatedPaprWorkspace } from "../setup/isolatedWorkspace.js";
+describe("collectRecentRuntimeErrors backend window", () => {
+  it("ignores backend failures from before the current preview", async () => {
+    const { collectRecentRuntimeErrors } = await import(
+      "../../src/gateway/utils/miniAppRuntimePreview.js"
+    );
+    const appId = "test-app-window";
+    const log = getAppRuntimeLogService();
+    log.clear(appId);
+    const old = new Date(Date.now() - 60_000).toISOString();
+    log.append(appId, { level: "error", message: "old backend", source: "backend/items", timestamp: old, origin: "preview" });
+    log.append(appId, { level: "error", message: "iframe boom", timestamp: old, origin: "iframe" });
+    const start = new Date(Date.now() - 1_000).toISOString();
+    log.append(appId, { level: "error", message: "new backend", source: "backend/items", timestamp: new Date().toISOString(), origin: "preview" });
+
+    const errors = collectRecentRuntimeErrors(appId, undefined, start);
+    expect(errors.join("\n")).toContain("new backend");
+    expect(errors.join("\n")).toContain("iframe boom");
+    expect(errors.join("\n")).not.toContain("old backend");
+  });
+});

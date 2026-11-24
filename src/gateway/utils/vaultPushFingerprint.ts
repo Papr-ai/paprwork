@@ -7,6 +7,9 @@ import type { CloudVaultKeyEntry } from "../../core/utils/cloudReposScope.js";
 
 export function computeVaultPushFingerprint(entry: CloudVaultKeyEntry): string {
   const payload = {
+    // v2: earlier builds fingerprinted keys the server refused (name_taken), so they
+    // never re-pushed. Bumping re-sends every key once; the server skips unchanged ones.
+    v: 2,
     name: entry.name,
     value: entry.value,
     source: entry.source ?? "",

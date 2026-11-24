@@ -44,7 +44,55 @@ from typing import Any, Union
 #   4 = row ACL helpers: caller_id(), acl_read_filter(), acl_write_filter(), acl_for_caller()
 #   5 = role/team principals in `_acl` (caller_role(), caller_principals()) +
 #       acl_segment_filter() for membership-scoped rows (standups, projects, …)
-PAPR_DB_HELPER_VERSION = 5
+#   6 = con.execute() results also work sqlite3-style: .fetchall() / .fetchone(),
+#       rows indexable by name or position (agents write the sqlite3 idiom)
+#   7 = rows iterate values like sqlite3.Row (dict(zip(cols, row)) works)
+#   8 = rows/cursors come from papr_sqlite_compat, shared with the job SDK, so
+#       a sqlite3 pattern that works in a job works in a backend action
+#   9 = query() with INSERT/UPDATE … RETURNING through the gateway fails with
+#       the fix (write().last_insert_rowid) instead of a bare HTTP 403
+PAPR_DB_HELPER_VERSION = 9
+
+
+def _compat():
+    """Row/Cursor shared with the job SDK (papr_sqlite_compat on PYTHONPATH).
+
+    Imported lazily so query()/write() never depend on it.
+    """
+    import papr_sqlite_compat
+
+    return papr_sqlite_compat
+
+
+class _Changes(int):
+    """Row count from con.execute(INSERT/UPDATE/DELETE …), cursor-shaped too.
+
+    Older handlers compare the result to an int, so writes keep returning one.
+    """
+
+    lastrowid: int | None = None
+    description = None
+
+    @property
+    def rowcount(self) -> int:
+        return int(self)
+
+    def fetchall(self) -> list[Any]:
+        return []
+
+    def fetchone(self) -> None:
+        return None
+
+    def fetchmany(self, size: int | None = None) -> list[Any]:
+        return []
+
+
+def _wrap_execute_result(result: Any, lastrowid: int | None) -> Any:
+    if isinstance(result, list):
+        return _compat().Cursor(result, rowcount=len(result), lastrowid=lastrowid)
+    changes = _Changes(int(result or 0))
+    changes.lastrowid = lastrowid
+    return changes
 
 
 @dataclass(frozen=True)
@@ -328,6 +376,14 @@ def query(
         return QueryResult(rows=rows, count=len(rows))
 
     if isinstance(con, _ProxyConnection):
+        if _sql_is_write(sql):
+            # The gateway serves reads and writes on separate routes and does
+            # not return rows from a write. Fail with the fix, not a bare 403.
+            raise RuntimeError(
+                "INSERT/UPDATE … RETURNING is not supported through the gateway. "
+                "Use write(con, sql, params) — its .last_insert_rowid is the new id — "
+                "then query() the row if you need it."
+            )
         payload = con._post("query", sql, args)
         rows = payload.get("rows") or []
         if not isinstance(rows, list):
@@ -453,8 +509,8 @@ class _ProxyConnection:
         self,
         sql: str,
         params: list[Any] | None = None,
-    ) -> list[dict[str, Any]] | int:
-        return execute(self, sql, params)
+    ) -> Any:
+        return _wrap_execute_result(execute(self, sql, params), self.lastrowid)
 
     def close(self) -> None:
         return None
@@ -481,7 +537,7 @@ class _TursoCursor:
             if result.rows:
                 names = list(result.rows[0].keys())
                 self.description = [(name, None, None, None, None, None, None) for name in names]
-                self._rows = [tuple(row[name] for name in names) for row in result.rows]
+                self._rows = [_compat().as_row(row) for row in result.rows]
             else:
                 self.description = []
                 self._rows = []
@@ -533,6 +589,13 @@ class _TursoConnection:
         return None
 
     def execute(
+        self,
+        sql: str,
+        params: list[Any] | None = None,
+    ) -> Any:
+        return _wrap_execute_result(self._execute_raw(sql, params), self.lastrowid)
+
+    def _execute_raw(
         self,
         sql: str,
         params: list[Any] | None = None,

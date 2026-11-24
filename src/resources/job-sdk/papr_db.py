@@ -255,20 +255,11 @@ def _send_once(endpoint, payload, headers, action, _retried=False):
 
 # ── connection shims ──────────────────────────────────────────────────────────
 
-class _Cursor:
-    """Enough of sqlite3.Cursor for the common job patterns."""
+def _cursor(rows=(), rowcount=-1, lastrowid=None, is_select=True):
+    """sqlite3-shaped result (shared with app backends — see papr_sqlite_compat)."""
+    from papr_sqlite_compat import Cursor
 
-    def __init__(self, rows):
-        self._rows = rows
-
-    def __iter__(self):
-        return iter(self._rows)
-
-    def fetchone(self):
-        return self._rows[0] if self._rows else None
-
-    def fetchall(self):
-        return self._rows
+    return Cursor(rows, rowcount=rowcount, lastrowid=lastrowid, is_select=is_select)
 
 
 class ReplicaConnection:
@@ -327,10 +318,16 @@ class ReplicaConnection:
                 "papr_db_apply_migration."
             )
         if verb in _WRITE_VERBS:
-            _proxy_post("write", sql, params, self._alias)
-            self._last = _Cursor([])
+            out = _proxy_post("write", sql, params, self._alias) or {}
+            last_id = out.get("lastInsertRowid")
+            self._last = _cursor(
+                rowcount=int(out.get("changes", 0) or 0),
+                lastrowid=int(last_id) if last_id is not None else None,
+                is_select=False,
+            )
         else:
-            self._last = _Cursor(self._read_rows(sql, params))
+            rows = self._read_rows(sql, params)
+            self._last = _cursor(rows, rowcount=len(rows))
         return self._last
 
     def executemany(self, sql, seq_of_params):
@@ -348,11 +345,13 @@ class ReplicaConnection:
                 if self._alias:
                     payload["sourceId"] = self._alias
                 _send(url.rstrip("/") + "/write-many", payload, headers, "write")
-            self._last = _Cursor([])
+            self._last = _cursor(rowcount=len(rows), is_select=False)
             return self._last
+        total = 0
         for params in rows:
-            self.execute(sql, params)
-        return _Cursor([])
+            total += max(self.execute(sql, params).rowcount, 0)
+        self._last = _cursor(rowcount=total, is_select=False)
+        return self._last
 
     # sqlite3 code often does `cur = con.cursor()` then `cur.execute(...)`
     # followed by `cur.fetchall()`. Supporting that shape here means existing
@@ -366,6 +365,21 @@ class ReplicaConnection:
 
     def fetchall(self):
         return self._last.fetchall() if self._last else []
+
+    def fetchmany(self, size=None):
+        return self._last.fetchmany(size) if self._last else []
+
+    @property
+    def rowcount(self):
+        return self._last.rowcount if self._last else -1
+
+    @property
+    def lastrowid(self):
+        return self._last.lastrowid if self._last else None
+
+    @property
+    def description(self):
+        return self._last.description if self._last else None
 
     def commit(self):
         """No-op: gateway writes commit themselves.

@@ -402,7 +402,7 @@
     {
       "id": "agent-tool-code_index_repo",
       "title": "code_index_repo",
-      "summary": "Record the user's answer for on-device code search in one of their own git repos (outside the Papr folder). Only call after the user answered the question shown in a grep result. allow: true indexes tracked files (git ls-files) on this Mac in the background; vectors never leave the device. allow: false stops asking and drops anything indexed for it. Covers the repo's worktrees too.",
+      "summary": "Save the user's answer to the grep prompt about on-device code search for one of their git repos. allow: true indexes it on this Mac; false stops asking.",
       "surfaces": [
         "agent-tool"
       ],

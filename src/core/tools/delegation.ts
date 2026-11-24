@@ -40,7 +40,10 @@ const SUBAGENT_MODEL_IDS = [
   "gemini-3.6-flash",
   "gemini-3.7-flash",
   "gemini-3.8-flash",
+  "gemini-4-carbon",
+  "gemini-4-neon",
   "gemini-4-argon",
+  "gemini-4-hydrogen",
   "gemini-3.1-pro-preview",
 ] as const;
 
@@ -344,6 +347,17 @@ export const delegateTaskTool = createTool({
     
     // ALWAYS run in background so tool returns immediately with job ID (enables real-time UI updates)
     const run = await service.delegateTask({ ...args, reportChatId, background: true });
+    if (process.env.GATEWAY_MODE === "cloud_agent" && reportChatId) {
+      // Cloud runs continue automatically with the helper's result (cloudRunDelegationWait).
+      return {
+        success: true,
+        data: run,
+        next:
+          "This helper runs in the background and you will get its result as a new message in this run. " +
+          "Don't poll get_delegation_run and don't build around it: end your turn now with no reply text. " +
+          "The person will only see your reply after the result arrives.",
+      };
+    }
     return { success: true, data: run };
   },
 });

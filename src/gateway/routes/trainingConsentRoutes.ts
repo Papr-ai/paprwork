@@ -1,16 +1,16 @@
 /**
- * Training opt-in — the one switch.
+ * Internal training beta — feature-flagged OFF.
  *
- *   GET /api/training/consent   -> { signedIn, optedIn, asked, version }
- *   PUT /api/training/consent   { optedIn } -> same shape
+ * Papr does not train on user data. This switch only exists for accounts the
+ * memory server puts on its internal allowlist (TRAINING_PROGRAM_ALLOWLIST,
+ * e.g. Papr employees who agree to it). Everyone else gets `available: false`,
+ * sees nothing in the UI, and cannot opt in. Allowlisted users still start off
+ * and must turn it on themselves in Settings. There is no popup.
  *
- * The choice is stored on the Papr account (memory: /v1/training/consent) so
- * every device, cloud agent and job reads the same answer. `asked` is local:
- * whether this install already showed the one-time prompt.
+ *   GET /api/training/consent   -> { signedIn, available, optedIn, version }
+ *   PUT /api/training/consent   { optedIn } -> same shape (403 unless available)
  */
 import type { Express } from "express";
-import { promises as fs } from "fs";
-import path from "path";
 import {
   setTrainingOptInCache,
   TRAINING_CONSENT_VERSION,
@@ -18,8 +18,8 @@ import {
 
 interface ConsentState {
   signedIn: boolean;
+  available: boolean;
   optedIn: boolean;
-  asked: boolean;
   version: string;
 }
 
@@ -29,41 +29,39 @@ export interface TrainingConsentDeps {
     get: (p: string, o?: { timeout?: number }) => PromiseLike<unknown>;
     put: (p: string, o: { body: unknown; timeout?: number }) => PromiseLike<unknown>;
   } | null>;
-  /** File that remembers the prompt was shown on this install. */
-  askedFile: () => string;
 }
 
-async function wasAsked(file: string): Promise<boolean> {
-  try {
-    const raw = JSON.parse(await fs.readFile(file, "utf8")) as { version?: string };
-    return raw.version === TRAINING_CONSENT_VERSION;
-  } catch {
-    return false;
-  }
-}
+const OFF = (signedIn: boolean): ConsentState => ({
+  signedIn,
+  available: false,
+  optedIn: false,
+  version: TRAINING_CONSENT_VERSION,
+});
 
-async function markAsked(file: string): Promise<void> {
-  await fs.mkdir(path.dirname(file), { recursive: true });
-  await fs.writeFile(file, JSON.stringify({ version: TRAINING_CONSENT_VERSION, at: new Date().toISOString() }));
+type ServerConsent = { opted_in?: boolean; available?: boolean };
+
+async function readServer(deps: TrainingConsentDeps): Promise<{ signedIn: boolean; r: ServerConsent | null }> {
+  const client = await deps.getClient().catch(() => null);
+  if (!client) return { signedIn: false, r: null };
+  const r = (await client.get("/v1/training/consent", { timeout: 8_000 })) as ServerConsent;
+  return { signedIn: true, r };
 }
 
 export function registerTrainingConsentRoutes(app: Express, deps: TrainingConsentDeps): void {
   app.get("/api/training/consent", async (_req, res) => {
-    const asked = await wasAsked(deps.askedFile());
-    const client = await deps.getClient().catch(() => null);
-    if (!client) {
-      res.json({ signedIn: false, optedIn: false, asked, version: TRAINING_CONSENT_VERSION } satisfies ConsentState);
-      return;
-    }
     try {
-      const r = (await client.get("/v1/training/consent", { timeout: 8_000 })) as { opted_in?: boolean; version?: string };
-      const optedIn = r?.opted_in === true;
+      const { signedIn, r } = await readServer(deps);
+      // Fail closed: no `available: true` from the server means the program does not exist for this user.
+      if (!r || r.available !== true) {
+        setTrainingOptInCache(false);
+        res.json(OFF(signedIn));
+        return;
+      }
+      const optedIn = r.opted_in === true;
       setTrainingOptInCache(optedIn);
-      // A choice made under older wording counts as not asked, so the prompt re-appears.
-      const current = !r?.version || r.version === TRAINING_CONSENT_VERSION;
-      res.json({ signedIn: true, optedIn, asked: asked && current, version: TRAINING_CONSENT_VERSION } satisfies ConsentState);
-    } catch (err) {
-      res.status(502).json({ error: (err as Error).message });
+      res.json({ signedIn, available: true, optedIn, version: TRAINING_CONSENT_VERSION } satisfies ConsentState);
+    } catch {
+      res.json(OFF(true));
     }
   });
 
@@ -79,13 +77,17 @@ export function registerTrainingConsentRoutes(app: Express, deps: TrainingConsen
       return;
     }
     try {
+      const cur = (await client.get("/v1/training/consent", { timeout: 8_000 })) as ServerConsent;
+      if (cur?.available !== true) {
+        res.status(403).json({ error: "The training program is not available for this account" });
+        return;
+      }
       await client.put("/v1/training/consent", {
         body: { opted_in: optedIn, version: TRAINING_CONSENT_VERSION },
         timeout: 8_000,
       });
       setTrainingOptInCache(optedIn);
-      await markAsked(deps.askedFile());
-      res.json({ signedIn: true, optedIn, asked: true, version: TRAINING_CONSENT_VERSION } satisfies ConsentState);
+      res.json({ signedIn: true, available: true, optedIn, version: TRAINING_CONSENT_VERSION } satisfies ConsentState);
     } catch (err) {
       res.status(502).json({ error: (err as Error).message });
     }

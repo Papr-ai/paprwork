@@ -101,6 +101,15 @@ export async function createProxyModel(
       });
     }
 
+    case "openrouter": {
+      const { createOpenRouterChatModel } = await import("./openrouterModel.js");
+      return createOpenRouterChatModel(modelId, {
+        apiKey: "papr-proxy",
+        baseURL: `${PAPR_PROXY_BASE}/openrouter`,
+        headers,
+      });
+    }
+
     default:
       throw new Error(`Papr proxy does not support provider: ${provider}`);
   }

@@ -1,4 +1,5 @@
 import { gatewayBackgroundBudget } from "../../gateway/services/gatewayBackgroundBudget.js";
+import { inferJobProvider } from "../utils/ollamaModelFit.js";
 import { createTool } from "@mastra/core/tools";
 import { z } from "zod";
 import { isPlatformInjectedEnvKey } from "../utils/platformInjectedEnvKeys.js";
@@ -723,7 +724,10 @@ const createJobSchemaCore = z
       "gemini-3.6-flash",
       "gemini-3.7-flash",
       "gemini-3.8-flash",
+      "gemini-4-carbon",
+      "gemini-4-neon",
       "gemini-4-argon",
+      "gemini-4-hydrogen",
       "gemini-3.1-pro-preview",
       // Ollama - Qwen
       "qwen3.5:0.8b",
@@ -904,11 +908,51 @@ function resolveAppFiles(
     { filename: "app.ts", content: javascript },
   ];
 
+  // The agent's CSS is the app's own stylesheet. base.css is reserved for the
+  // Liquid Glass design system (added in execute); writing the agent's CSS
+  // there replaced the design system and left HTML that links style.css unstyled.
   if (css !== null) {
-    files.push({ filename: "base.css", content: css });
+    files.push({ filename: "style.css", content: css });
   }
 
   return files;
+}
+
+/**
+ * Make sure index.html loads the stylesheets create_app wrote. Agents link
+ * whatever name they imagine (style.css, styles.css, nothing at all), so a
+ * stylesheet that exists but is never linked renders as browser defaults.
+ * Skips sheets already linked or imported from the TS entry (bundled into dist/app.css).
+ */
+export function linkCreatedStylesheets(
+  files: Array<{ filename: string; content: string }>,
+): Array<{ filename: string; content: string }> {
+  const index = files.find((f) => f.filename === "index.html");
+  if (!index) return files;
+  const entry = files.find((f) => /^(app|main)\.tsx?$/.test(f.filename));
+  const isLoaded = (sheet: string): boolean => {
+    const name = sheet.replace(".", "\\.");
+    const linked = new RegExp(`href=["'](?:\\./)?${name}["'?]`, "i");
+    const imported = new RegExp(`import\\s+['"]\\./${name}['"]`);
+    return linked.test(index.content) || Boolean(entry && imported.test(entry.content));
+  };
+  const has = (sheet: string) => files.some((f) => f.filename === sheet);
+  let html = index.content;
+  const firstSheet = /<link\b[^>]*rel=["']stylesheet["'][^>]*>/i;
+  const insertBeforeHeadEnd = (tag: string) =>
+    /<\/head>/i.test(html) ? html.replace(/<\/head>/i, `  ${tag}\n</head>`) : `${tag}\n${html}`;
+  // Design system first so the app's own rules win the cascade.
+  if (has("base.css") && !isLoaded("base.css")) {
+    const tag = '<link rel="stylesheet" href="base.css">';
+    html = firstSheet.test(html)
+      ? html.replace(firstSheet, (m) => `${tag}\n  ${m}`)
+      : insertBeforeHeadEnd(tag);
+  }
+  if (has("style.css") && !isLoaded("style.css")) {
+    html = insertBeforeHeadEnd('<link rel="stylesheet" href="style.css">');
+  }
+  if (html === index.content) return files;
+  return files.map((f) => (f === index ? { ...f, content: html } : f));
 }
 
 export const createAppTool = createTool({
@@ -941,16 +985,15 @@ export const createAppTool = createTool({
     const appService = getAppService();
     await appService.initialize();
 
-    const files = resolveAppFiles(args);
+    let files = resolveAppFiles(args);
 
-    // Auto-inject Liquid Glass base CSS if no stylesheet was provided
-    const hasStylesheet = files.some(
-      (f) => f.filename === "base.css" || f.filename === "style.css",
-    );
-    if (!hasStylesheet) {
+    // Always ship the Liquid Glass design system as base.css (tokens, glass,
+    // typography). The agent's own CSS lives in style.css on top of it.
+    if (!files.some((f) => f.filename === "base.css")) {
       const baseCss = await loadLiquidGlassBase();
       files.push({ filename: "base.css", content: baseCss });
     }
+    files = linkCreatedStylesheets(files);
 
     const app = await appService.createApp(
       args.title,
@@ -1196,7 +1239,7 @@ export const createJobTool = createTool({
       maxTurns: args.maxTurns,
       memoryPolicy: args.memoryPolicy,
       reportChatId: args.reportChatId,
-      provider: args.provider,
+      provider: inferJobProvider(args.provider, args.model),
       model: args.model,
       recipe: args.recipe,
       executionCapability: args.executionCapability,
@@ -2133,7 +2176,10 @@ const updateJobSchema = z.object({
       "gemini-3.6-flash",
       "gemini-3.7-flash",
       "gemini-3.8-flash",
+      "gemini-4-carbon",
+      "gemini-4-neon",
       "gemini-4-argon",
+      "gemini-4-hydrogen",
       "gemini-3.1-pro-preview",
       // Ollama - Qwen
       "qwen3.5:0.8b",
@@ -2630,17 +2676,21 @@ export const listAppsTool = createTool({
       const { fetchCloudAccessibleApps, isOwnCatalogApp } = await import(
         "../../gateway/services/cloudAgentGateway/cloudAppCatalog.js"
       );
+      const { shareLinksForCatalogApps } = await import(
+        "../../gateway/services/cloudAgentGateway/cloudAppShareLinks.js"
+      );
       const local = new Set(appsData.map((a) => a.id));
-      cloudApps = (await fetchCloudAccessibleApps())
-        .filter((a) => !local.has(a.appId))
-        .map((a) => ({
-          id: a.appId,
-          title: a.name ?? a.slug,
-          description: a.catalogHeadline ?? a.description ?? undefined,
-          link: a.shareUrl,
-          updatedAt: a.updatedAt ?? undefined,
-          editable: isOwnCatalogApp(a),
-        }));
+      const remote = (await fetchCloudAccessibleApps()).filter((a) => !local.has(a.appId));
+      const links = await shareLinksForCatalogApps(remote, isOwnCatalogApp);
+      cloudApps = remote.map((a) => ({
+        id: a.appId,
+        title: a.name ?? a.slug,
+        description: a.catalogHeadline ?? a.description ?? undefined,
+        link: links.get(a.appId)?.shareLink ?? a.shareUrl,
+        linkWho: links.get(a.appId)?.shareLinkWho,
+        updatedAt: a.updatedAt ?? undefined,
+        editable: isOwnCatalogApp(a),
+      }));
     }
 
     const workspace = getPaprWorkspacePathsForAgent();
@@ -2947,8 +2997,13 @@ Common use cases:
       await import("../../gateway/services/JobsService.js");
     const jobsService = getJobsService();
     await jobsService.initialize();
+    const inferredProvider =
+      rest.model !== undefined && rest.provider === undefined
+        ? inferJobProvider(undefined, rest.model)
+        : undefined;
     const job = await jobsService.updateJob(jobId, {
       ...rest,
+      ...(inferredProvider ? { provider: inferredProvider as typeof rest.provider } : {}),
       ...(requiredKeys !== undefined
         ? { requiredKeys: jobRequiredKeyNames(requiredKeys) }
         : {}),
@@ -4522,7 +4577,7 @@ IMPORTANT: Run this after creating/editing app files to catch issues early!`,
           "",
           errorList,
           "",
-          "Fix runtime JS errors before proceeding. Sources: auto preview webview + errors forwarded from the app iframe while the user tests.",
+          "Fix these before proceeding. Sources: auto preview webview, errors forwarded from the app iframe, failed backend actions, and [data] checks (data the app loaded on first load that never reached the screen).",
           runtimeCheck.preview.skippedReason
             ? `(Preview note: ${runtimeCheck.preview.skippedReason})`
             : "",
