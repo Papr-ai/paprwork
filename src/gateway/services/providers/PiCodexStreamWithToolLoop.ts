@@ -308,9 +308,14 @@ async function executeToolCall(
 
 
     import("../gatewayTelemetry.js").then(({ getGatewayTelemetry }) => {
-      getGatewayTelemetry().trackFireAndForget("paprwork_tool_called", {
-        tool_name: toolCall.toolName,
-        success: true,
+      void import("../../../core/telemetry/toolCallTelemetry.js").then(({ toolFailureTelemetry }) => {
+        const r = result as Record<string, unknown> | null;
+        const failed = !!r && typeof r === "object" && ("error" in r || r.success === false);
+        getGatewayTelemetry().trackFireAndForget("paprwork_tool_called", {
+          tool_name: toolCall.toolName,
+          success: !failed,
+          ...toolFailureTelemetry(toolCall.toolName, result),
+        });
       });
     }).catch(() => {});
 
@@ -326,6 +331,7 @@ async function executeToolCall(
       getGatewayTelemetry().trackFireAndForget("paprwork_tool_called", {
         tool_name: toolCall.toolName,
         success: false,
+        error_category: "exception",
       });
     }).catch(() => {});
 

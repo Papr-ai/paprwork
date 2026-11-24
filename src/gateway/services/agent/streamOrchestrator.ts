@@ -933,12 +933,16 @@ export async function* orchestrateModelStream(
           sanitizedResult &&
           typeof sanitizedResult === "object" &&
           "error" in (sanitizedResult as Record<string, unknown>);
-        import("../gatewayTelemetry.js").then(({ getGatewayTelemetry }) => {
+        Promise.all([
+          import("../gatewayTelemetry.js"),
+          import("../../../core/telemetry/toolCallTelemetry.js"),
+        ]).then(([{ getGatewayTelemetry }, { toolFailureTelemetry }]) => {
           getGatewayTelemetry().trackFireAndForget("paprwork_tool_called", {
             tool_name: parsedToolResult.toolName,
             success: !isToolError,
             result_size: rawSize,
             chat_id: chatId,
+            ...toolFailureTelemetry(parsedToolResult.toolName, sanitizedResult),
           });
         }).catch(() => {});
 
