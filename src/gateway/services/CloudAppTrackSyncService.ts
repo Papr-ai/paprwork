@@ -623,6 +623,11 @@ export class CloudAppTrackSyncService {
             ? { baseCommit: base.sha }
             : {}),
         ...(upstreamRevision ? { upstreamRevision } : {}),
+        // The team's databases move with the base: an accepted proposal that
+        // added one makes it team data here too (and the draft token goes).
+        ...(onTeamData(lineage) && conflictFiles.length === 0 && failedFiles.length === 0 && upstreamHead
+          ? { teamDbIds: (await import("./sharedPrimaryTursoResolve.js")).dbIdsInDataSources(upstreamFiles.get("data-sources.json")) }
+          : {}),
         ...(nextMetadataBaseline ? { metadataBaseline: nextMetadataBaseline } : {}),
         ...(nextMetadataUpstream ? { metadataUpstreamBaseline: nextMetadataUpstream } : {}),
       });

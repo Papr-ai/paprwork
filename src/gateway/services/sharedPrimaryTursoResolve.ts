@@ -98,7 +98,7 @@ function discoverSharedPrimaryTursoEntryFromApps(
       continue;
     }
 
-    const registryDbIds = readRegistryDbIdsSync(appDir);
+    const registryDbIds = teamDbIdsForCopy(appId, appDir, lineage);
     if (registryDbIds.length === 0) {
       continue;
     }
@@ -132,6 +132,41 @@ function readLineageSync(appDir: string): CloudAppLineageFile | null {
   } catch {
     return null;
   }
+}
+
+/** dbIds in a data-sources.json body. */
+export function dbIdsInDataSources(raw: string | undefined): string[] {
+  if (!raw) return [];
+  try {
+    return parseDataSourcesFile(raw)
+      .sources.map((s) => s.dbId?.trim())
+      .filter((id): id is string => Boolean(id));
+  } catch {
+    return [];
+  }
+}
+
+/**
+ * The databases a team copy uses as TEAM data: the publisher's linked ids at
+ * the copy's base commit. A database the contributor added on their own
+ * desktop is their draft (own token, normal migrations, never held) until a
+ * proposal adding it is accepted. Older lineages without teamDbIds: anything
+ * this copy owns the schema of and created after install is a draft.
+ */
+export function teamDbIdsForCopy(appId: string, appDir: string, lineage: CloudAppLineageFile): string[] {
+  const linked = readRegistryDbIdsSync(appDir);
+  if (Array.isArray(lineage.teamDbIds)) {
+    const team = new Set(lineage.teamDbIds);
+    return linked.filter((id) => team.has(id));
+  }
+  const installedAt = Date.parse(lineage.installedAt ?? "");
+  const registry = getDatabaseRegistryService();
+  return linked.filter((id) => {
+    const rec = registry.getById(id);
+    if (!rec || rec.schemaOwnerAppId?.trim() !== appId) return true;
+    const created = Date.parse(rec.createdAt ?? "");
+    return !(Number.isFinite(created) && Number.isFinite(installedAt) && created > installedAt);
+  });
 }
 
 function readRegistryDbIdsSync(appDir: string): string[] {
@@ -193,7 +228,7 @@ export function isCollaboratorOnSharedDatabase(dbId: string): boolean {
     if (!lineage || !lineageUsesSharedPrimaryDatabase(lineage)) {
       continue;
     }
-    if (readRegistryDbIdsSync(appDir).includes(dbId)) {
+    if (teamDbIdsForCopy(appId, appDir, lineage).includes(dbId)) {
       return true;
     }
   }
@@ -225,7 +260,7 @@ export function resolveTeamCopyPublisherUserId(dbId: string): string | undefined
     const lineage = readLineageSync(appDir);
     if (!lineage || !lineageUsesSharedPrimaryDatabase(lineage)) continue;
     const publisher = lineage.source?.userId?.trim();
-    if (publisher && readRegistryDbIdsSync(appDir).includes(id)) {
+    if (publisher && teamDbIdsForCopy(appId, appDir, lineage).includes(id)) {
       return publisher;
     }
   }
