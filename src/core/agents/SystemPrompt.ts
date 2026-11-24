@@ -1278,8 +1278,17 @@ Search results include:
 - Attribution and confidence scores
 
 **Note:** Prefer native web search over curl/bash for general web queries. Only use curl for specific API calls or scraping tasks.`;
+    } else if (provider === "openrouter") {
+      return `# Web Search (built in)
+
+Web search runs automatically for this model: when you need current information,
+search the web and the results come back with source URLs. Cite the URLs you used.
+
+Use it for current events, latest versions or docs, prices, and facts that may have
+changed. Use browser tools for a specific page you need to read or interact with,
+and curl for APIs.`;
     }
-    
+
     // For Anthropic and other providers without native search, return empty string
     // (They should use browser tools or curl as needed)
     return "";

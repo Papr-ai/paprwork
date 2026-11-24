@@ -1677,8 +1677,13 @@ export class AgentService {
         // reasoning: { enabled: false } so the model answers without thinking.
         const effort =
           config.thinking === false ? "none" : (config.reasoning?.effort ?? "medium");
+        // Web search is OpenRouter's server tool (added in openrouterModel.ts); a
+        // runtime with nativeWebSearch: false turns it off through this flag.
         Object.assign(providerOptions, {
-          openai: { reasoningEffort: effort },
+          openai: {
+            reasoningEffort: effort,
+            ...(runtime.nativeWebSearch ? {} : { metadata: { papr_web_search: "off" } }),
+          },
         });
       }
 
