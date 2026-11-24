@@ -173,6 +173,11 @@ export const MessageList: React.FC<MessageListProps> = ({
   const showHistoryLoadingIndicator =
     isLoading && !streamUiActive && !hasStreamingAssistantMessage;
 
+  // The scroll container only exists once there is something to show; the
+  // empty state renders a different div without listRef. Re-run the listener
+  // effect when the list mounts, or a chat that opened empty never detaches.
+  const listMounted = filteredMessages.length > 0 || Boolean(isLoading);
+
   // Detect scroll position for auto-scroll and load-more triggers
   useEffect(() => {
     const listElement = listRef.current;
@@ -251,7 +256,7 @@ export const MessageList: React.FC<MessageListProps> = ({
       listElement.removeEventListener("touchmove", handleTouchMove);
       listElement.removeEventListener("keydown", handleKeyDown);
     };
-  }, []);
+  }, [listMounted]);
 
   const jumpToLatest = useCallback(() => {
     const listElement = listRef.current;
