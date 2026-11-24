@@ -86,8 +86,22 @@ function readProbability(answer: unknown, option?: string): number | null {
   return null;
 }
 
+/**
+ * A risk word that the request itself rules out ("no scheduling", "without a backend job",
+ * "doesn't need sign-in") is not a risk. Blank the negation and up to 5 words after it, stopping
+ * at punctuation or "but", so "no backend jobs or scheduling needed" passes while
+ * "no login but a daily digest" still vetoes on "daily".
+ */
+const NEGATED_PHRASE =
+  /\b(?:no|not|without|never|(?:does|do)(?:n't| not) need|no need for)(?:\s+(?!but\b)[\w'/-]+){1,5}/gi;
+
+function stripNegatedRisks(text: string): string {
+  return text.replace(NEGATED_PHRASE, " ");
+}
+
 export function findVetoes(text: string): string[] {
-  return VETO_PATTERNS.filter(([, re]) => re.test(text)).map(([label]) => label);
+  const t = stripNegatedRisks(text);
+  return VETO_PATTERNS.filter(([, re]) => re.test(t)).map(([label]) => label);
 }
 
 /** Pure decision — unit-testable without Jev. */
