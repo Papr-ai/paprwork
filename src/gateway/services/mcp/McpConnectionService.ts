@@ -182,6 +182,7 @@ export class McpConnectionService {
       ...(base?.clientId ? { clientId: base.clientId } : {}),
       ...(base?.serverOAuth ? { serverOAuth: base.serverOAuth } : {}),
       ...(base?.requiresClientId ? { requiresClientId: base.requiresClientId } : {}),
+      ...(base?.scopes ? { scopes: base.scopes } : {}),
       custom: true,
     };
     this.custom.push(def);
