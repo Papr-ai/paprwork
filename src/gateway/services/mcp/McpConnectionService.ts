@@ -37,6 +37,7 @@ import {
   PAPR_CLIENT_METADATA_URL,
   type McpServerDefinition,
 } from "./mcpServerCatalog.js";
+import { openNativeTransport } from "./google/nativeServer.js";
 import { buildMcpAgentTool, mcpAgentToolId, type McpCallResult, type McpToolDescriptor } from "./mcpToolAdapter.js";
 
 export type McpConnectionState = "disconnected" | "connecting" | "awaiting_user" | "connected" | "needs_reauth" | "error";
@@ -182,6 +183,7 @@ export class McpConnectionService {
       ...(base?.clientId ? { clientId: base.clientId } : {}),
       ...(base?.serverOAuth ? { serverOAuth: base.serverOAuth } : {}),
       ...(base?.requiresClientId ? { requiresClientId: base.requiresClientId } : {}),
+      ...(base?.scopes ? { scopes: base.scopes } : {}),
       custom: true,
     };
     this.custom.push(def);
@@ -271,8 +273,24 @@ export class McpConnectionService {
 
   private async openClient(def: McpServerDefinition, provider: McpOAuthProvider): Promise<Client> {
     const client = new Client({ name: "papr-work", version: "2" }, { capabilities: {} });
-    await client.connect(this.makeTransport(def, provider));
+    await client.connect(def.native ? await openNativeTransport(def.native, this.nativeToken(def.id)) : this.makeTransport(def, provider));
     return client;
+  }
+
+  /** Access token for an in-process connector; claims a fresh one from the server when stale or rejected. */
+  private nativeToken(id: string): (force?: boolean) => Promise<string> {
+    return async (force = false) => {
+      const stored = await this.opts.store.load(id);
+      if (force || !stored?.tokens?.access_token || (stored.serverRefresh && serverTokenStale(stored))) {
+        if (!(await this.pickUpServerCredential(id, force).catch(() => false))) {
+          if (!force && stored?.tokens?.access_token) return stored.tokens.access_token;
+          this.entry(id).state = "needs_reauth";
+          throw new McpReauthRequiredError(id);
+        }
+        return (await this.opts.store.load(id))!.tokens!.access_token;
+      }
+      return stored.tokens.access_token;
+    };
   }
 
   private async attach(def: McpServerDefinition, client: Client): Promise<void> {
