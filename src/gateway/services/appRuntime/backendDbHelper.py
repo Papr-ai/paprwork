@@ -46,16 +46,27 @@ from typing import Any, Union
 #       acl_segment_filter() for membership-scoped rows (standups, projects, …)
 #   6 = con.execute() results also work sqlite3-style: .fetchall() / .fetchone(),
 #       rows indexable by name or position (agents write the sqlite3 idiom)
-PAPR_DB_HELPER_VERSION = 6
+#   7 = rows iterate values like sqlite3.Row (dict(zip(cols, row)) works)
+PAPR_DB_HELPER_VERSION = 7
 
 
 class _Row(dict):
-    """A dict row that also answers row[0] like sqlite3 tuples / sqlite3.Row."""
+    """A dict row that also behaves like sqlite3.Row / a tuple row.
+
+    - row["name"] and row[0] both work.
+    - Iterating yields VALUES (like sqlite3 tuples and sqlite3.Row), so the
+      common `dict(zip(cols, row))` / `name, qty = row` idioms work. Iterating
+      keys made zip() map every column to its own name. dict(row), row.items(),
+      row.keys(), {**row} and json.dumps(row) still see the full mapping.
+    """
 
     def __getitem__(self, key: Any) -> Any:
         if isinstance(key, int):
             return list(self.values())[key]
         return super().__getitem__(key)
+
+    def __iter__(self):  # type: ignore[override]
+        return iter(self.values())
 
 
 class _Rows(list):

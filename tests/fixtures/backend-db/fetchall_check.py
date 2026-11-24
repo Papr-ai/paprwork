@@ -43,4 +43,15 @@ for con in (proxy, turso):
     assert h.write(con, "INSERT INTO items (name) VALUES (?)", ["x"]).changes == 1
     assert h.execute(con, "SELECT id FROM items")[1]["name"] == "Eggs"
 
+    # sqlite3-style iteration: values, so zip/unpack idioms work
+    cols = ["id", "name"]
+    zipped = [dict(zip(cols, r)) for r in con.execute("SELECT id, name FROM items").fetchall()]
+    assert zipped == ROWS, zipped
+    rid, rname = con.execute("SELECT id, name FROM items").fetchone()
+    assert (rid, rname) == (1, "Milk")
+    row = con.execute("SELECT id, name FROM items").fetchone()
+    assert dict(row) == ROWS[0] and {**row} == ROWS[0] and list(row.keys()) == cols
+    import json as _json
+    assert _json.loads(_json.dumps(row)) == ROWS[0]
+
 print("fetchall ok")
