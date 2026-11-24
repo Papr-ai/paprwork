@@ -3,6 +3,7 @@ import { describe, expect, it } from "vitest";
 
 import {
   hasOwnProposalDecision,
+  ownAcceptedCopies,
   pollProposalEvents,
   type ProposalEvent,
 } from "../../../src/gateway/services/cloudSync/proposalEvents.js";
@@ -26,6 +27,7 @@ const quiet = {
   onMerged: () => undefined,
   recordMerges: async () => undefined,
   onCollab: async () => undefined,
+  onOwnAccepted: async () => undefined,
 };
 
 describe("settle on proposal decision", () => {
@@ -63,6 +65,44 @@ describe("settle on proposal decision", () => {
       ...quiet,
       fetchEvents: async () => ({ events: [ev()], cursor: "1" }),
       onDecided: async () => { throw new Error("cloud down"); },
+    });
+    expect(n).toBe(1);
+  });
+});
+
+describe("catch up a copy when its proposal is accepted (audit D)", () => {
+  it("only the contributor's accepted events, deduped, with a copy id", () => {
+    expect(ownAcceptedCopies([ev(), ev({ id: "e2" }), ev({ installedAppId: "copy-2" })])).toEqual(["copy-app", "copy-2"]);
+    expect(ownAcceptedCopies([ev({ type: "proposal.declined" })])).toEqual([]);
+    expect(ownAcceptedCopies([ev({ role: "owner", type: "proposal.merged" })])).toEqual([]);
+    expect(ownAcceptedCopies([ev({ installedAppId: null })])).toEqual([]);
+  });
+
+  it("settles holds first, then catches the copy up", async () => {
+    const order: string[] = [];
+    await pollProposalEvents("/tmp/papr-test-nonexistent", "u1", {
+      ...quiet,
+      fetchEvents: async () => ({ events: [ev()], cursor: "1" }),
+      onDecided: async () => { order.push("settle"); },
+      onOwnAccepted: async (ids) => { order.push(`catchup:${ids.join(",")}`); },
+    });
+    expect(order).toEqual(["settle", "catchup:copy-app"]);
+  });
+
+  it("declined does not pull; a failed catch-up does not break the poll", async () => {
+    const seen: string[][] = [];
+    await pollProposalEvents("/tmp/papr-test-nonexistent", "u1", {
+      ...quiet,
+      fetchEvents: async () => ({ events: [ev({ type: "proposal.declined" })], cursor: "1" }),
+      onDecided: async () => undefined,
+      onOwnAccepted: async (ids) => { seen.push(ids); },
+    });
+    expect(seen).toEqual([]);
+    const n = await pollProposalEvents("/tmp/papr-test-nonexistent", "u1", {
+      ...quiet,
+      fetchEvents: async () => ({ events: [ev()], cursor: "1" }),
+      onDecided: async () => undefined,
+      onOwnAccepted: async () => { throw new Error("offline"); },
     });
     expect(n).toBe(1);
   });
