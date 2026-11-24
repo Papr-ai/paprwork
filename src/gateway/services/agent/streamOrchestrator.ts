@@ -320,6 +320,8 @@ function extractFromRetryError(error: Record<string, unknown>): string | null {
     return "API key does not have permission for this model. Check your Anthropic plan.";
   }
   if (statusCode === 402) {
+    const premium = readPremiumRequiresPayg(err);
+    if (premium) return premium;
     const via = providerFromRequestUrl(extractRequestUrl(err));
     const ours = !via; // no provider host = Papr's own AI service (memory.papr.ai)
     const name = via ? via[0].toUpperCase() + via.slice(1) : "";
@@ -341,6 +343,23 @@ function extractFromRetryError(error: Record<string, unknown>): string | null {
     return `API error${statusCode ? ` (${statusCode})` : ""}: ${message}`;
   }
   return null;
+}
+
+/** Papr proxy 402 {detail: {code: "premium_requires_payg", message}}: not "out of credits". */
+function readPremiumRequiresPayg(err: Record<string, unknown>): string | null {
+  let body: unknown = err.data;
+  if (typeof err.responseBody === "string") {
+    try {
+      body = JSON.parse(err.responseBody);
+    } catch {
+      // not JSON
+    }
+  }
+  const detail = (body as { detail?: { code?: unknown; message?: unknown } } | undefined)?.detail;
+  if (!detail || detail.code !== "premium_requires_payg") return null;
+  return typeof detail.message === "string" && detail.message
+    ? detail.message
+    : "This model on Papr credits needs a paid plan with pay as you go turned on. Pick Auto or a lighter model.";
 }
 
 /**
@@ -933,12 +952,16 @@ export async function* orchestrateModelStream(
           sanitizedResult &&
           typeof sanitizedResult === "object" &&
           "error" in (sanitizedResult as Record<string, unknown>);
-        import("../gatewayTelemetry.js").then(({ getGatewayTelemetry }) => {
+        Promise.all([
+          import("../gatewayTelemetry.js"),
+          import("../../../core/telemetry/toolCallTelemetry.js"),
+        ]).then(([{ getGatewayTelemetry }, { toolFailureTelemetry }]) => {
           getGatewayTelemetry().trackFireAndForget("paprwork_tool_called", {
             tool_name: parsedToolResult.toolName,
             success: !isToolError,
             result_size: rawSize,
             chat_id: chatId,
+            ...toolFailureTelemetry(parsedToolResult.toolName, sanitizedResult),
           });
         }).catch(() => {});
 

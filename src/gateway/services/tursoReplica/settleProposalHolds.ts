@@ -10,7 +10,8 @@
  *              report the ones that don't, quarantine the migration files, release.
  *   otherwise — still waiting (not proposed yet, or under review): keep the hold.
  *
- * Runs on startup, reconnect and the periodic pull tick.
+ * Runs on startup, reconnect, the periodic pull tick, and as soon as the
+ * contributor's desktop sees its proposal accepted or declined (proposalEvents).
  */
 
 import * as path from "node:path";

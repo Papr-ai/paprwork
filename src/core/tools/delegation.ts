@@ -40,7 +40,10 @@ const SUBAGENT_MODEL_IDS = [
   "gemini-3.6-flash",
   "gemini-3.7-flash",
   "gemini-3.8-flash",
+  "gemini-4-carbon",
+  "gemini-4-neon",
   "gemini-4-argon",
+  "gemini-4-hydrogen",
   "gemini-3.1-pro-preview",
 ] as const;
 
@@ -71,6 +74,12 @@ const createSubAgentSchema = z.object({
     .describe(
       "Icon for sidebar/mini-chat: robot, search, code, pen, or chart (sidebar-style SVG, not emoji)",
     ),
+  executionCapability: z
+    .enum(["local-only", "local-preferred", "cloud-preferred"])
+    .optional()
+    .describe(
+      "Default cloud placement for this profile's jobs (a job's own value wins). Omit unless asked.",
+    ),
   runtime: z
     .object({
       systemPromptMode: z
@@ -94,7 +103,7 @@ const createSubAgentSchema = z.object({
       nativeWebSearch: z
         .boolean()
         .optional()
-        .describe("Provider web search (ChatGPT/OpenAI, Gemini). Default true."),
+        .describe("Provider web search (Claude, ChatGPT/OpenAI, Gemini; not via the Papr proxy). Default true."),
       promptCaching: z
         .boolean()
         .optional()

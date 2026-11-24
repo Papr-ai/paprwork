@@ -20,6 +20,7 @@ interface UpsertSubAgentPayload {
   memoryPolicy?: "none" | "summary" | "full";
   icon?: import("../../core/types/subagents.js").SubAgentIconName;
   runtime?: import("../../core/types/subagents.js").SubAgentRuntimeOptions;
+  executionCapability?: import("../../core/types/subagents.js").SubAgentProfile["executionCapability"];
 }
 
 interface GetSubAgentPayload {

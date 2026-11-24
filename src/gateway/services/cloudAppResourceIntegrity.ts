@@ -111,6 +111,21 @@ export async function readDatabasesRegistryStrict(
   return null;
 }
 
+/** Active dbIds an app declares in its own linked-databases.json. */
+async function readDeclaredLinkedDbIds(appDir: string): Promise<Set<string>> {
+  try {
+    const raw = await fs.readFile(path.join(appDir, "linked-databases.json"), "utf8");
+    const parsed = JSON.parse(raw) as DatabasesRegistryFile;
+    return new Set(
+      Object.entries(parsed?.databases ?? {})
+        .filter(([, r]) => r && r.status !== "tombstone")
+        .map(([dbId]) => dbId),
+    );
+  } catch {
+    return new Set();
+  }
+}
+
 function jobExistsOnDisk(paprDir: string, jobId: string): boolean {
   return existsSync(path.join(paprDir, "Jobs", jobId, "job.json"));
 }
@@ -174,6 +189,10 @@ export async function reconcileAppDataSourcesForPublish(
     ),
   );
 
+  // Databases the app itself declares (linked-databases.json, e.g. added by a
+  // merged proposal) are links waiting to be registered here, not deletions.
+  const declaredDbIds = await readDeclaredLinkedDbIds(path.join(paprDir, "apps", appId));
+
   const keptSources: AppDataSource[] = [];
   const seenJobIds = new Set<string>();
 
@@ -218,6 +237,13 @@ export async function reconcileAppDataSourcesForPublish(
       const owner = registry.databases[source.dbId]?.schemaOwnerAppId;
       if (owner && owner !== appId) {
         keptSources.push(source);
+        continue;
+      }
+      if (declaredDbIds.has(source.dbId)) {
+        keptSources.push(source);
+        report.warnings.push(
+          `Kept ${source.dbId} (${source.alias}): declared in linked-databases.json but not registered in this workspace yet.`,
+        );
         continue;
       }
       report.removedDbIds.push(source.dbId);

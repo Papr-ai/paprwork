@@ -3,9 +3,9 @@
  * no job database is linked via data-sources.json.
  */
 
-import { existsSync } from "fs";
 import {
   readRegistryDatabaseSchema,
+  registryDatabaseExists,
   type RegistryDbSchemaReadInput,
 } from "./jobs/registryDbSchemaReader.js";
 import {
@@ -208,7 +208,7 @@ async function listTablesOnDb(
   dbPath: string,
   context?: Omit<RegistryDbSchemaReadInput, "dbPath">,
 ): Promise<Set<string>> {
-  if (!existsSync(dbPath)) {
+  if (!(await registryDatabaseExists({ dbPath, ...context }))) {
     return new Set();
   }
   const read = await readRegistryDatabaseSchema({

@@ -1,9 +1,9 @@
 /**
- * Job SDK papr_llm: credential routing + caching.
+ * Job SDK papr_llm: thin client for POST /api/llm/complete.
  *
  * Runs the real Python module against a local HTTP server standing in for the
- * Anthropic, OpenAI and ChatGPT endpoints, and checks the request shape each
- * credential kind needs.
+ * Papr gateway: checks the request it sends, how it maps the reply, its retry
+ * on transient gateway errors, and complete_json parsing.
  */
 import { spawn } from "child_process";
 import http from "http";
@@ -12,72 +12,50 @@ import { afterAll, beforeAll, beforeEach, describe, expect, it } from "vitest";
 
 const SDK = path.resolve(__dirname, "../../src/resources/job-sdk");
 
-type Seen = { url: string; headers: http.IncomingHttpHeaders; body: any };
+type Seen = { url: string; body: any; auth?: string };
 let server: http.Server;
 let base = "";
 let seen: Seen[] = [];
-
-function chatgptToken(): string {
-  const b64 = (o: unknown) => Buffer.from(JSON.stringify(o)).toString("base64url");
-  return `${b64({ alg: "none" })}.${b64({ "https://api.openai.com/auth": { chatgpt_account_id: "acct-1" } })}.sig`;
-}
+let replies: Array<{ status: number; body: unknown }> = [];
 
 beforeAll(async () => {
   server = http.createServer((req, res) => {
     let raw = "";
     req.on("data", (c) => (raw += c));
     req.on("end", () => {
-      const body = raw ? JSON.parse(raw) : {};
-      seen.push({ url: req.url ?? "", headers: req.headers, body });
-      if (req.url === "/anthropic") {
-        res.setHeader("content-type", "application/json");
-        res.end(JSON.stringify({
-          content: [{ type: "text", text: "claude says hi" }],
-          usage: { input_tokens: 10, output_tokens: 3, cache_read_input_tokens: 900, cache_creation_input_tokens: 0 },
-        }));
-      } else if (req.url === "/openai") {
-        res.setHeader("content-type", "application/json");
-        res.end(JSON.stringify({
-          output_text: "{\"ok\": true}",
-          usage: { input_tokens: 20, output_tokens: 4, input_tokens_details: { cached_tokens: 12 } },
-        }));
-      } else if (req.url === "/chatgpt") {
-        res.setHeader("content-type", "text/event-stream");
-        const ev = (o: unknown) => `data: ${JSON.stringify(o)}\n\n`;
-        res.end(
-          ev({ type: "response.output_text.delta", delta: "chat" }) +
-          ev({ type: "response.output_text.delta", delta: "gpt" }) +
-          ev({ type: "response.completed", response: { usage: { input_tokens: 30, output_tokens: 2, input_tokens_details: { cached_tokens: 25 } } } }) +
-          "data: [DONE]\n\n",
-        );
-      } else {
-        res.statusCode = 404;
-        res.end("{}");
-      }
+      seen.push({ url: req.url ?? "", body: raw ? JSON.parse(raw) : {}, auth: req.headers.authorization });
+      const next = replies.shift() ?? {
+        status: 200,
+        body: {
+          text: "hello",
+          provider: "anthropic",
+          model: "claude-sonnet-4-6",
+          route: "sign-in",
+          usage: { inputTokens: 17, outputTokens: 3, cacheReadTokens: 3225, cacheWriteTokens: 0 },
+          costUsd: 0.0012,
+          retries: [],
+        },
+      };
+      res.statusCode = next.status;
+      res.setHeader("content-type", "application/json");
+      res.end(JSON.stringify(next.body));
     });
   });
   await new Promise<void>((r) => server.listen(0, "127.0.0.1", () => r()));
-  const addr = server.address() as { port: number };
-  base = `http://127.0.0.1:${addr.port}`;
+  base = `http://127.0.0.1:${(server.address() as { port: number }).port}`;
 });
 
 afterAll(() => new Promise<void>((r) => server.close(() => r())));
 beforeEach(() => {
   seen = [];
+  replies = [];
 });
 
-function run(code: string, env: Record<string, string>) {
+function run(code: string) {
   // Async spawn: spawnSync would block the event loop and the server could not answer.
   return new Promise<{ status: number | null; stdout: string; stderr: string }>((resolve) => {
     const p = spawn("python3", ["-c", code], {
-      env: {
-        PATH: process.env.PATH ?? "",
-        PYTHONPATH: SDK,
-        PAPR_LLM_ANTHROPIC_URL: `${base}/anthropic`,
-        PAPR_LLM_OPENAI_URL: `${base}/openai`,
-        PAPR_LLM_CHATGPT_URL: `${base}/chatgpt`,
-        ...env,
-      },
+      env: { PATH: process.env.PATH ?? "", PYTHONPATH: SDK, PAPR_GATEWAY_URL: base },
     });
     let stdout = "";
     let stderr = "";
@@ -87,74 +65,95 @@ function run(code: string, env: Record<string, string>) {
   });
 }
 
-describe("papr_llm", () => {
-  it("Claude sign-in token: Bearer + Claude Code identity, cache_control on stable parts", async () => {
+describe("papr_llm (gateway client)", () => {
+  it("posts one request to /api/llm/complete and maps the reply", async () => {
     const r = await run(
-      "from papr_llm import complete\nr=complete('q', system='S', context='C', provider='anthropic')\nprint(r.text, r.usage['cache_read_input_tokens'])",
-      { ANTHROPIC_API_KEY: "sk-ant-oat01-test" },
+      "from papr_llm import complete\n" +
+        "r = complete('Q', system='S', context='C', provider='anthropic', web_search=True, cache_ttl='1h')\n" +
+        "print(r.text, r.provider, r.model, r.route, r.usage['cache_read_input_tokens'], r.cost_usd)",
     );
-    expect(r.status, r.stderr).toBe(0);
-    expect(r.stdout.trim()).toBe("claude says hi 900");
-    expect(r.stderr).toContain("cache_read=900");
-    const req = seen[0];
-    expect(req.headers.authorization).toBe("Bearer sk-ant-oat01-test");
-    expect(req.headers["x-api-key"]).toBeUndefined();
-    expect(String(req.headers["anthropic-beta"])).toContain("oauth-2025-04-20");
-    expect(req.body.system[0].text).toContain("Claude Code");
-    expect(req.body.system.at(-1)).toMatchObject({ text: "S", cache_control: { type: "ephemeral" } });
-    expect(req.body.messages[0].content[0]).toMatchObject({ text: "C", cache_control: { type: "ephemeral" } });
-    expect(req.body.messages[0].content[1]).toEqual({ type: "text", text: "q" });
-  });
-
-  it("Claude API key: x-api-key, no Claude Code line, 1h TTL when asked", async () => {
-    const r = await run(
-      "from papr_llm import complete\ncomplete('q', system='S', provider='anthropic', cache_ttl='1h')",
-      { ANTHROPIC_API_KEY: "sk-ant-api03-test" },
-    );
-    expect(r.status, r.stderr).toBe(0);
-    const req = seen[0];
-    expect(req.headers["x-api-key"]).toBe("sk-ant-api03-test");
-    expect(req.headers.authorization).toBeUndefined();
-    expect(req.body.system).toEqual([{ type: "text", text: "S", cache_control: { type: "ephemeral", ttl: "1h" } }]);
-  });
-
-  it("cache=False sends no cache_control", async () => {
-    await run("from papr_llm import complete\ncomplete('q', system='S', context='C', provider='anthropic', cache=False)", {
-      ANTHROPIC_API_KEY: "sk-ant-api03-test",
+    expect(r.status).toBe(0);
+    expect(r.stdout.trim()).toBe("hello anthropic claude-sonnet-4-6 sign-in 3225 0.0012");
+    expect(seen).toHaveLength(1);
+    expect(seen[0].url).toBe("/api/llm/complete");
+    expect(seen[0].auth).toBeUndefined();
+    expect(seen[0].body).toMatchObject({
+      prompt: "Q",
+      system: "S",
+      context: "C",
+      provider: "anthropic",
+      webSearch: true,
+      cache: true,
+      cacheTtl: "1h",
+      maxTokens: 4096,
     });
-    expect(JSON.stringify(seen[0].body)).not.toContain("cache_control");
+    expect(seen[0].body).not.toHaveProperty("model");
+    expect(r.stderr).toContain("[papr_llm] anthropic/claude-sonnet-4-6 (sign-in)");
+    expect(r.stderr).toContain("cache_read=3225");
   });
 
-  it("OpenAI API key: Responses API with prompt_cache_key; complete_json parses", async () => {
-    const r = await run(
-      "from papr_llm import complete_json\nprint(complete_json('q', provider='openai', model='gpt-5-6-sol'))",
-      { OPENAI_API_KEY: "sk-proj-test" },
+  it("needs no API key in the job environment", async () => {
+    const r = await run("from papr_llm import complete\nprint(complete('Q').text)");
+    expect(r.status).toBe(0);
+    expect(r.stdout.trim()).toBe("hello");
+  });
+
+  it("retries transient gateway errors, not client errors", async () => {
+    replies = [{ status: 503, body: { error: "busy" } }];
+    const ok = await run("from papr_llm import complete\nprint(complete('Q').text)");
+    expect(ok.status).toBe(0);
+    expect(seen).toHaveLength(2);
+
+    seen = [];
+    replies = [{ status: 401, body: { error: "Connect Claude or ChatGPT in Settings" } }];
+    const bad = await run(
+      "from papr_llm import complete, LLMError\n" +
+        "try:\n  complete('Q')\nexcept LLMError as e:\n  print('ERR', e.status, e)",
     );
-    expect(r.status, r.stderr).toBe(0);
+    expect(bad.stdout).toContain("ERR 401");
+    expect(bad.stdout).toContain("Connect Claude or ChatGPT in Settings");
+    expect(seen).toHaveLength(1);
+  });
+
+  it("rejects bad arguments before calling the gateway", async () => {
+    const r = await run(
+      "from papr_llm import complete, LLMError\n" +
+        "for kw in ({'cache_ttl': '2h'}, {'provider': 'gemini'}):\n" +
+        "  try:\n    complete('Q', **kw)\n  except LLMError as e:\n    print('ERR', e)",
+    );
+    expect(r.stdout.match(/ERR/g)).toHaveLength(2);
+    expect(seen).toHaveLength(0);
+  });
+
+  it("complete_json parses fenced JSON and adds the JSON instruction", async () => {
+    replies = [{ status: 200, body: { text: "```json\n{\"ok\": true}\n```", usage: {} } }];
+    const r = await run(
+      "from papr_llm import complete_json\nprint(complete_json('Q', system='Base'))",
+    );
     expect(r.stdout.trim()).toBe("{'ok': True}");
-    const req = seen[0];
-    expect(req.url).toBe("/openai");
-    expect(req.body.model).toBe("gpt-5.6-sol");
-    expect(req.body.prompt_cache_key).toMatch(/^papr-llm-/);
+    expect(seen[0].body.system).toBe("Base\n\nReply with JSON only: no prose, no code fences.");
   });
+});
 
-  it("ChatGPT sign-in token: Codex endpoint, account header, streamed text, web search", async () => {
-    const r = await run(
-      "from papr_llm import complete\nr=complete('q', system='S', provider='openai', web_search=True)\nprint(r.model, r.text, r.usage['cache_read_input_tokens'])",
-      { OPENAI_API_KEY: chatgptToken() },
-    );
-    expect(r.status, r.stderr).toBe(0);
-    expect(r.stdout.trim()).toBe("gpt-5.6-sol chatgpt 25");
-    const req = seen[0];
-    expect(req.url).toBe("/chatgpt");
-    expect(req.headers["chatgpt-account-id"]).toBe("acct-1");
-    expect(req.headers["session_id"]).toBe(req.body.prompt_cache_key);
-    expect(req.body).toMatchObject({ stream: true, store: false, instructions: "S", tools: [{ type: "web_search" }] });
-  });
-
-  it("no credential: clear error naming the key", async () => {
-    const r = await run("from papr_llm import complete\ncomplete('q')", {});
-    expect(r.status).not.toBe(0);
-    expect(r.stderr).toContain("No model credential");
+describe("papr_llm in a cloud script job (relay)", () => {
+  it("uses PAPR_LLM_PROXY_URL with the run's bearer token when set", async () => {
+    const r = await new Promise<{ status: number | null; stdout: string }>((resolve) => {
+      const p = spawn("python3", ["-c", "from papr_llm import complete\nprint(complete('Q').text)"], {
+        env: {
+          PATH: process.env.PATH ?? "",
+          PYTHONPATH: SDK,
+          PAPR_GATEWAY_URL: "http://127.0.0.1:1",
+          PAPR_LLM_PROXY_URL: `${base}/v1/cloud/runtime/job-llm`,
+          PAPR_LLM_PROXY_TOKEN: "pjllm1.abc.def",
+        },
+      });
+      let stdout = "";
+      p.stdout.on("data", (d) => (stdout += d));
+      p.on("close", (status) => resolve({ status, stdout }));
+    });
+    expect(r.status).toBe(0);
+    expect(r.stdout.trim()).toBe("hello");
+    expect(seen[0].url).toBe("/v1/cloud/runtime/job-llm/complete");
+    expect(seen[0].auth).toBe("Bearer pjllm1.abc.def");
   });
 });

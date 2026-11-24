@@ -195,6 +195,26 @@ export function getOllamaRamRequirementGb(modelId: string): number | undefined {
   );
 }
 
+/** Local Ollama model families Paprwork ships in the picker (id prefix before ":"). */
+const OLLAMA_MODEL_FAMILIES = new Set(["qwen3.5", "flint", "inkling-2-mini", "gemma4", "gemma3"]);
+
+/**
+ * True when a model id is one of our local Ollama models (e.g. "inkling-2-mini:latest").
+ * Lets jobs that set only `model` still route to Ollama and stay desktop-only.
+ */
+export function isKnownOllamaModelId(modelId: string | undefined | null): boolean {
+  if (!modelId) return false;
+  const baseId = modelId.split("/").pop() ?? modelId;
+  if (getOllamaRamRequirementGb(baseId) !== undefined) return true;
+  return OLLAMA_MODEL_FAMILIES.has(baseId.split(":")[0]);
+}
+
+/** Provider for a job: explicit provider wins; otherwise infer "ollama" from a local model id. */
+export function inferJobProvider(provider: string | undefined, model: string | undefined): string | undefined {
+  if (provider) return provider;
+  return isKnownOllamaModelId(model) ? "ollama" : undefined;
+}
+
 export function ollamaModelFitsHostRam(modelId: string, totalRamGb: number): boolean {
   const need = getOllamaRamRequirementGb(modelId);
   if (need === undefined) return true;

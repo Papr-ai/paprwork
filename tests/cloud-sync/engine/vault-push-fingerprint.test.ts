@@ -9,6 +9,7 @@ import type { CloudVaultKeyEntry } from "../../../src/core/utils/cloudReposScope
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
+import { createHash } from "node:crypto";
 
 describe("computeVaultPushFingerprint", () => {
   it("changes when value changes", () => {
@@ -75,5 +76,38 @@ describe("vaultPushStateStore", () => {
     forgetVaultPushFingerprint("API_KEY");
     const { toPush } = filterVaultEntriesNeedingPush([entry]);
     expect(toPush).toHaveLength(1);
+  });
+});
+
+describe("refused pushes are retried", () => {
+  it("does not fingerprint keys the server answered with a conflict", () => {
+    const content = fs.readFileSync(
+      path.join(process.cwd(), "src/gateway/services/VaultSyncService.ts"),
+      "utf-8",
+    );
+    // Regression: AMPLITUDE_* was refused (name_taken) yet fingerprinted, so it was
+    // never pushed again — teammates never received the org-shared key.
+    expect(content).toMatch(/refused\.has\(entry\.name/);
+    expect(content).not.toMatch(/markVaultPushFingerprints\(toPush\);/);
+  });
+
+  it("fingerprint format is versioned so stale refused fingerprints re-push once", () => {
+    const entry: CloudVaultKeyEntry = { name: "AMPLITUDE_API_KEY", value: "v", shareScope: "org" };
+    const legacy = createHash("sha256")
+      .update(
+        JSON.stringify({
+          name: entry.name,
+          value: entry.value,
+          source: "",
+          clientAccess: "server",
+          shareScope: "org",
+          targetOrgId: "",
+          permission: "always_allow",
+          allowedUserIds: [],
+          penAccess: "",
+        }),
+      )
+      .digest("hex");
+    expect(computeVaultPushFingerprint(entry)).not.toBe(legacy);
   });
 });

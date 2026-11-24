@@ -110,7 +110,10 @@ export function ExpertBuilder(props: {
             <u>{b.name}</u>
             <Tip text={b.description} />
             {b.price === null ? (
-              <a className="cpc-mini" href={PAPR_EXPERT_BUILD_CONTACT}>Contact us</a>
+              <button type="button" className="cpc-mini"
+                onClick={() => void window.electronAPI.system.invoke("shell.openExternal", PAPR_EXPERT_BUILD_CONTACT)}>
+                Contact us
+              </button>
             ) : (
               <button type="button" className="cpc-mini" disabled={!props.canBuy}
                 onClick={() => props.onBuy(b.size as PaprExpertBuildSize)}>

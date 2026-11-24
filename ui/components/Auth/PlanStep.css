@@ -1,0 +1,34 @@
+/* "Pick your plan" — first-run step after org setup. The cards are the shared
+   CreditPlanCards from Settings → Billing; this only sizes the screen and pins
+   the card palette to the (always light) onboarding theme. */
+
+/* Size the column to its content (not the stretched screen height) so the
+   bottom padding actually lands below the last line when the page scrolls. */
+.plan-step {
+  align-items: flex-start;
+}
+
+.plan-step__inner {
+  max-width: 1040px;
+  padding-bottom: 48px;
+}
+
+.plan-step .cpc {
+  --ink: var(--onb-ink);
+  --mid: var(--onb-mid);
+  --soft: var(--onb-soft);
+  --line: var(--onb-line);
+  margin-top: 4px;
+}
+
+.plan-step__error {
+  margin: 0 0 12px;
+  font-size: 13px;
+  color: #c8323f;
+}
+
+.plan-step__note {
+  margin-top: 14px;
+  text-align: center;
+  font-size: 13px;
+}

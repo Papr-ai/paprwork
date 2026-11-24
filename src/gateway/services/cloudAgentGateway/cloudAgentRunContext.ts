@@ -55,6 +55,7 @@ import {
 import type { JobType } from "../jobs/types.js";
 import { isJobScratchDatabasePath } from "../jobs/jobScratchDatabasePath.js";
 import { normalizeRuntimeParams } from "../../utils/normalizeRuntimeParams.js";
+import { setActiveCloudRunLlmAuth } from "./cloudRunLlmAuth.js";
 
 export interface CloudRunHandle {
   runRoot: string;
@@ -201,6 +202,7 @@ function applyPaprApiKey(
 }
 
 async function restoreCloudRunEnv(snapshot: CloudRunEnvSnapshot): Promise<void> {
+  setActiveCloudRunLlmAuth(null);
   if (snapshot.previousPaprHome === undefined) delete process.env.PAPR_HOME;
   else process.env.PAPR_HOME = snapshot.previousPaprHome;
   if (snapshot.previousPaprUserData === undefined) delete process.env.PAPR_USER_DATA;
@@ -768,7 +770,7 @@ export async function resolveCloudAgentJobStreamInput(
   model?: string;
   allowedToolIds?: string[];
   maxTurns?: number;
-  authOverride: { apiKey: string; authType: "oauth" | "apiKey" };
+  authOverride: { apiKey: string; authType: "oauth" | "apiKey"; usePaprProxy?: boolean };
   paprApiKey?: string;
   session: AgentJobSessionInput;
   appendLog: (line: string) => Promise<void>;
@@ -808,6 +810,7 @@ export async function resolveCloudAgentJobStreamInput(
     provider: request.llmAuth.provider as Provider,
     token: request.llmAuth.token,
     authType: request.llmAuth.authType,
+    usePaprProxy: request.llmAuth.usePaprProxy === true,
   });
 
   const { provider, model } = pickCloudJobProviderModel(
@@ -815,6 +818,8 @@ export async function resolveCloudAgentJobStreamInput(
     session.model ?? request.model,
     llmAuth.provider,
   );
+  // Helper agents this run delegates to (product-architect, …) use the same credential.
+  setActiveCloudRunLlmAuth(llmAuth);
 
   const workspaceChatOverrides = await resolveCloudWorkspaceChatStreamOverrides(request);
   const appAgentOverrides =
@@ -856,6 +861,7 @@ export async function resolveCloudAgentJobStreamInput(
     authOverride: {
       apiKey: llmAuth.token,
       authType: llmAuth.authType,
+      ...(llmAuth.usePaprProxy ? { usePaprProxy: true } : {}),
     },
     paprApiKey: request.paprApiKey,
     session,
@@ -896,13 +902,14 @@ export function cloudAgentStreamInput(request: CloudAgentRunRequest): {
   model?: string;
   allowedToolIds?: string[];
   maxTurns?: number;
-  authOverride: { apiKey: string; authType: "oauth" | "apiKey" };
+  authOverride: { apiKey: string; authType: "oauth" | "apiKey"; usePaprProxy?: boolean };
   paprApiKey?: string;
 } {
   const llmAuth = reconcileCloudProviderAuth({
     provider: request.llmAuth.provider as Provider,
     token: request.llmAuth.token,
     authType: request.llmAuth.authType,
+    usePaprProxy: request.llmAuth.usePaprProxy === true,
   });
 
   return {
@@ -916,6 +923,7 @@ export function cloudAgentStreamInput(request: CloudAgentRunRequest): {
     authOverride: {
       apiKey: llmAuth.token,
       authType: llmAuth.authType,
+      ...(llmAuth.usePaprProxy ? { usePaprProxy: true } : {}),
     },
     paprApiKey: request.paprApiKey,
   };

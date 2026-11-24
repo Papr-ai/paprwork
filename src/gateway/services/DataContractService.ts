@@ -5,6 +5,7 @@
 import { promises as fs } from "fs";
 import path from "path";
 import { existsSync } from "fs";
+import { registryDatabaseExists } from "./jobs/registryDbSchemaReader.js";
 import { getAppService } from "./AppService.js";
 import { getJobsService } from "./JobsService.js";
 import { jobBelongsToApp, STANDALONE_APP_ID } from "./jobs/appIds.js";
@@ -165,7 +166,10 @@ export class DataContractService {
 
     const linkedSources = await Promise.all(
       config.sources.map(async (source) => {
-        const exists = existsSync(source.dbPath);
+        const exists = await registryDatabaseExists({
+          dbPath: source.dbPath,
+          dbId: source.dbId,
+        });
         const counts = exists
           ? await listUserTablesWithCounts({
               dbPath: source.dbPath,
@@ -238,7 +242,9 @@ export class DataContractService {
       primary: {
         alias: primary?.alias ?? null,
         dbPath: primaryPath,
-        exists: primaryPath ? existsSync(primaryPath) : false,
+        exists: primaryPath
+          ? await registryDatabaseExists({ dbPath: primaryPath, dbId: primary?.dbId })
+          : false,
       },
       tableCounts,
       contractValidation,

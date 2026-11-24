@@ -228,6 +228,65 @@ export interface PollDeps {
   recordMerges?: (merges: LastMerge[]) => Promise<void>;
   /** Mentions from teammates (mention, mention.replied). */
   onCollab?: (events: ProposalEvent[]) => Promise<void>;
+  /** Your proposal was accepted or declined: settle schema holds now, not on the next 5-min pull. */
+  onDecided?: () => Promise<unknown>;
+  /** Your proposal was merged: catch those copies up so their base is the merged version (audit D). */
+  onOwnAccepted?: (installedAppIds: string[]) => Promise<unknown>;
+}
+
+/** Your copies whose proposal was just accepted (merged into the publisher's app). */
+export function ownAcceptedCopies(events: ProposalEvent[]): string[] {
+  const ids = new Set<string>();
+  for (const e of events) {
+    if (e.role === "contributor" && e.type === "proposal.accepted" && e.installedAppId) ids.add(e.installedAppId);
+  }
+  return [...ids];
+}
+
+/**
+ * Pull the merged version into each copy (three-way: newer local edits are
+ * kept). The pull advances the copy's base commit, so the next proposal diffs
+ * against what was merged and doesn't re-send its migrations (audit D). The
+ * pre-propose check can't catch this: it compares the built app, and a
+ * migration-only merge doesn't change it.
+ */
+async function defaultOwnAccepted(installedAppIds: string[]): Promise<void> {
+  const { getPaprAppsRoot } = await import("../../../core/utils/paprRoot.js");
+  const { getCloudAppTrackSyncService } = await import("../CloudAppTrackSyncService.js");
+  for (const id of installedAppIds) {
+    try {
+      await fs.access(path.join(getPaprAppsRoot(), id));
+    } catch {
+      continue; // copy isn't on this machine
+    }
+    try {
+      const r = await getCloudAppTrackSyncService().syncTrackApp(id);
+      console.info(
+        `[ProposalAccepted] ${id}: caught up to the merged version` +
+          (r.conflictFiles.length ? ` (base kept: ${r.conflictFiles.length} conflict(s))` : ""),
+      );
+    } catch (err) {
+      console.warn(`[ProposalAccepted] ${id}: catch-up failed:`, (err as Error).message.slice(0, 160));
+    }
+    notifyCloudSyncItemsStale(id);
+  }
+}
+
+/** True when one of your own proposals was accepted or declined in this batch. */
+export function hasOwnProposalDecision(events: ProposalEvent[]): boolean {
+  return events.some(
+    (e) => e.role === "contributor" && (e.type === "proposal.accepted" || e.type === "proposal.declined"),
+  );
+}
+
+/**
+ * Same settle the periodic pull runs. Without this, a contributor's copy stays
+ * cut off from the team's data until startup, reconnect or a 5-min pull that
+ * isn't skipped (audit finding A).
+ */
+async function defaultDecided(): Promise<unknown> {
+  const { settleProposalHolds } = await import("../tursoReplica/settleProposalHolds.js");
+  return settleProposalHolds();
 }
 
 async function defaultCollab(events: ProposalEvent[]): Promise<void> {
@@ -380,6 +439,16 @@ export async function pollProposalEvents(
       (deps.onRefresh ?? defaultRefresh)(appIdsToRefresh(page.events));
       if (!deps.onRefresh) refreshConnections(page.events);
       (deps.onNotify ?? defaultNotify)(summarizeNotices(page.events, Number.POSITIVE_INFINITY));
+      if (hasOwnProposalDecision(page.events)) {
+        await (deps.onDecided ?? defaultDecided)().catch((err: Error) => {
+          console.warn("[ProposalHold] settle after proposal decision failed:", err?.message?.slice(0, 120));
+        });
+      }
+      // After the settle: the copy's schema now matches the team's, so the pull's DB step is clean.
+      const accepted = ownAcceptedCopies(page.events);
+      if (accepted.length > 0) {
+        await (deps.onOwnAccepted ?? defaultOwnAccepted)(accepted).catch(() => undefined);
+      }
       const merged = mergedSourceAppIds(page.events);
       if (merged.length > 0) {
         await (deps.recordMerges ?? ((m) => recordLastMerges(paprDir, m)))(

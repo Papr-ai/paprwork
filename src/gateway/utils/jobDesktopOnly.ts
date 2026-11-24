@@ -17,6 +17,7 @@
  *   - comment lines and docstring-style prose
  *   - agent/subagent prompts — the agent can pick a cloud-safe tool instead
  */
+import { inferJobProvider } from "../../core/utils/ollamaModelFit.js";
 
 export type DesktopOnlyKind =
   | "chrome"
@@ -41,6 +42,8 @@ export interface JobDesktopOnlyInput {
   type: string;
   command?: string;
   provider?: string;
+  /** Agent job model id; a local Ollama id (e.g. inkling-2-mini:latest) is desktop-only even without provider. */
+  model?: string;
   /** Job's own source files, relative path → content. */
   files: Map<string, string>;
 }
@@ -136,7 +139,7 @@ export function detectJobDesktopOnly(job: JobDesktopOnlyInput): DesktopOnlyHit[]
   if (job.type === "swift") {
     hits.push({ kind: "swift", reason: DESKTOP_ONLY_REASON.swift, file: "job.json" });
   }
-  if (job.provider === "ollama") {
+  if (inferJobProvider(job.provider, job.model) === "ollama") {
     hits.push({ kind: "ollama", reason: DESKTOP_ONLY_REASON.ollama, file: "job.json" });
   }
   const isAgent = job.type === "agent" || job.type === "subagent";

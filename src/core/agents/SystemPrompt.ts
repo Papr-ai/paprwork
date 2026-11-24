@@ -1278,8 +1278,17 @@ Search results include:
 - Attribution and confidence scores
 
 **Note:** Prefer native web search over curl/bash for general web queries. Only use curl for specific API calls or scraping tasks.`;
+    } else if (provider === "openrouter") {
+      return `# Web Search (built in)
+
+Web search runs automatically for this model: when you need current information,
+search the web and the results come back with source URLs. Cite the URLs you used.
+
+Use it for current events, latest versions or docs, prices, and facts that may have
+changed. Use browser tools for a specific page you need to read or interact with,
+and curl for APIs.`;
     }
-    
+
     // For Anthropic and other providers without native search, return empty string
     // (They should use browser tools or curl as needed)
     return "";
@@ -2188,7 +2197,7 @@ Papr Work is an app platform, not just a chat bot. Build automations with durabl
 - **All other platforms (X, Reddit, Instagram, …):** \`\${TWITTER_*}\`, \`\${REDDIT_*}\`, \`\${INSTAGRAM_*}\` + headless Playwright / \`requests\` / bash. **Do NOT** use \`*-api\` CDP requirements. Papr Chrome is sign-in only — not job runtime. Works in **cloud** when vault keys are synced.
 
 ✅ **Any model call → \`subagent\` job by default.** Sign-in/API-key routing, caching, trimming, tools, delivery, recipes — no SDK code. Shape the profile with \`runtime\`: \`systemPromptMode: "replace"\` for a focused writer/classifier/scorer; also \`memoryContext: false, wikiContext: false, tools: false\` for a neutral or cheapest call (evals, "is X recommended" checks). Keep \`promptCaching\`/\`contextTrimming\` on.
-⚠️ **Script job or backend action calling a model — only for a named reason:** (1) synchronous UI response in a backend action, (2) hundreds of calls in a data loop, (3) one step inside existing script code, (4) API feature the agent path lacks (e.g. Anthropic native web search), (5) byte-identical audited request. Say which reason applies, and call through \`from papr_llm import complete\` (bundled; handles Claude/ChatGPT sign-in tokens + caching). Never hand-write \`anthropic.Anthropic(...)\` / \`api.openai.com\` calls.
+⚠️ **Model calls from Python/Node — only when the call is a step inside script code that is already running** (a row loop, a pandas/scraping pipeline, a backend action post-processing its own result). Everything else is a subagent job: results stream back via subscribeJobEvents, web search works on every provider, and a neutral profile sends the same request every time. In scripts call through \`from papr_llm import complete\` (bundled; runs on the gateway's model credentials, fallbacks and caching — no model key in requiredKeys; other API keys the script uses still go there). Never hand-write \`anthropic.Anthropic(...)\` / \`api.openai.com\` calls.
 
 \`create_job\` will warn with \`_agentJobReminder\` if you add LLM SDK packages or API keys to a script job.
 
@@ -2544,18 +2553,15 @@ await create_job({
 
 \`\`\`python
 # backend/save_invoice.py — papr_db.py scaffolded on app create (local + cloud)
-from papr_db import connect, execute
+from papr_db import connect, query, write
 
-con = connect("billing")  # explicit alias when 2+ linked DBs; never sqlite3.connect(APP_DB)
-rows = execute(
-    con,
-    "INSERT INTO invoices (amount) VALUES (?) RETURNING id, amount",
-    [100],
-)  # list[dict] — works desktop (local SQLite) and cloud (Turso)
-con.close()
+con = connect("billing")  # alias of the linked DB; never sqlite3.connect
+rows = query(con, "SELECT id, amount FROM invoices WHERE paid = ?", [0]).rows  # list of plain dicts
+new_id = write(con, "INSERT INTO invoices (amount) VALUES (?)", [100]).last_insert_rowid
+changed = write(con, "UPDATE invoices SET paid = 1 WHERE id = ?", [new_id]).changes
 \`\`\`
 
-**Backend DB rules (Python):** Always \`from papr_db import connect\` — gateway sets \`PAPR_DB_MODE\` to \`local\` (file at \`APP_DB\`) or \`turso\` (HTTP). \`sqlite3.connect()\` only works on desktop. After plain \`INSERT\`, use \`con.lastrowid\` or \`cursor().lastrowid\`. No multi-statement transactions across \`execute()\` calls on cloud (each statement is one HTTP round trip) — **mini-app frontends** use \`/api/db/write-batch\` with \`atomic: true\` for multi-statement writes. **SQL handlers:** use Python + \`papr_db\`; Node/TS backends have no cross-env DB helper — use Python for DB access or call \`/api/db/*\` from the frontend.
+**Backend DB rules (Python):** Use only \`query(con, sql, params).rows\` (reads → list of plain dicts) and \`write(con, sql, params)\` (\`.changes\`, \`.last_insert_rowid\`). Both run through the gateway on desktop and cloud. Don't write sqlite3-style code (\`con.execute().fetchall()\`, cursors, \`dict(zip(...))\`) and don't use \`RETURNING\`. No transactions across calls — **mini-app frontends** use \`/api/db/write-batch\` with \`atomic: true\` for multi-statement writes. Node/TS backends have no DB helper — use Python or call \`/api/db/*\` from the frontend.
 
 \`\`\`javascript
 // Frontend — optional params.sourceId overrides manifest

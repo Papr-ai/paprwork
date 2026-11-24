@@ -19,6 +19,7 @@ import { useSettingsNavigationStore } from "../../stores/settingsNavigationStore
 import { CreditPlanCards, type CreditPlanAction } from "./CreditPlanCards";
 import { CreditsUsagePanel } from "./CreditsUsagePanel";
 import { MemberRequestsCard } from "./MemberRequestsCard";
+import { PendingPlanPrompt, usePendingPlan } from "./PendingPlanPrompt";
 import type {
   PaprCreditPlanId,
   PaprExpertBuildSize,
@@ -133,6 +134,8 @@ export function PaprPlanSection() {
     "developer" | null
   >(null);
   const [creditAction, setCreditAction] = useState<CreditPlanAction>(null);
+  // Plan picked on papr.ai (papr://billing?plan=…), offered back as one button.
+  const pendingPlan = usePendingPlan();
   // userId -> display name, for the Members card (admins on credits orgs only).
   const [memberNames, setMemberNames] = useState<Record<string, string>>({});
   useEffect(() => {
@@ -243,7 +246,7 @@ export function PaprPlanSection() {
 
 
 
-  const handleCreditsCheckout = async (plan: PaprCreditPlanId, track: PaprPlanTrack) => {
+  const handleCreditsCheckout = async (plan: PaprCreditPlanId, track: PaprPlanTrack): Promise<boolean> => {
     setCreditAction(plan);
     setActionMessage(null);
     try {
@@ -253,6 +256,7 @@ export function PaprPlanSection() {
           ? "Checkout opened in your browser. Your plan updates here once payment completes."
           : result.error || "Could not start checkout",
       );
+      return result.success;
     } finally {
       setCreditAction(null);
     }
@@ -359,6 +363,17 @@ export function PaprPlanSection() {
                 </span>
               </div>
             )}
+
+            {pendingPlan ? (
+              <PendingPlanPrompt
+                choice={pendingPlan}
+                currentPlan={creditsCurrentPlan(summary)}
+                canManageBilling={summary.canManageBilling}
+                busy={creditAction !== null}
+                onCheckout={handleCreditsCheckout}
+                onSwitchPlan={() => handlePortal("subscriptions")}
+              />
+            ) : null}
 
             <div className="papr-plan__summary">
               <div>

@@ -1446,6 +1446,8 @@ async function startGateway(): Promise<void> {
           `[Gateway] /api/db/query app=${appId} source=${source.alias} backend=${result.backend} rows=${result.count}`,
         );
         const payload = { ...result, source: source.alias };
+        const { recordPreviewLoadedRows } = await import("./utils/previewLoadedData.js");
+        recordPreviewLoadedRows(appId, `db/query ${source.alias}`, result.rows);
         if (cacheKey) {
           setCachedLocalDbReadResult(cacheKey, payload, appId);
         }
@@ -1709,6 +1711,12 @@ async function startGateway(): Promise<void> {
         const { notifyMiniAppFirstDataPaint } =
           await import("./services/tursoPullScheduler.js");
         notifyMiniAppFirstDataPaint(appId);
+        {
+          const { recordPreviewLoadedRows } = await import("./utils/previewLoadedData.js");
+          for (const r of (payload as { results?: Array<{ rows?: unknown }> }).results ?? []) {
+            if (r?.rows) recordPreviewLoadedRows(appId, "db/batch", r.rows);
+          }
+        }
         res.json(payload);
       } catch (err) {
         console.error("[Gateway] /api/db/batch error:", err);
@@ -4371,6 +4379,9 @@ async function startGateway(): Promise<void> {
       res.sendStatus(204);
       void sendPreparedRendererTelemetry(prepared.payload);
     });
+
+    // papr_llm.complete — jobs/backend actions call models through the chat stack.
+    (await import("./services/llm/registerModelCallRoutes.js")).registerModelCallRoutes(app);
 
     app.post("/api/bash/run", async (_req, res) => {
       const { MINI_APP_BASH_DISABLED_CODE, MINI_APP_BASH_DISABLED_MESSAGE } =

@@ -17,6 +17,8 @@ import {
   type MiniAppCallerIdentity,
 } from "./appBackendRunner.js";
 import { getPaprRoot } from "../../../core/utils/paprRoot.js";
+import { getAppRuntimeLogService } from "../AppRuntimeLogService.js";
+import { recordPreviewBackendCall, recordPreviewBackendStdout } from "../../utils/previewLoadedData.js";
 import { resolveDesktopAppBackendDatabaseEnv } from "./appBackendDatabase.js";
 import {
   mintBackendDbProxyEnv,
@@ -39,6 +41,9 @@ export class AppBackendService {
     vaultEnv?: Record<string, string>;
     callerIdentity?: MiniAppCallerIdentity;
     loggedIn?: boolean;
+    /** validate_app probe: DB writes rejected, failures not logged as user runtime errors. */
+    probe?: boolean;
+    timeoutMs?: number;
   }): Promise<AppBackendRunResult> {
     // Desktop: the signed-in Papr user runs their own install — same as the
     // local /api/access response (owner, full access).
@@ -61,7 +66,7 @@ export class AppBackendService {
     );
     await fs.access(handlerPath);
 
-    const timeoutMs = resolveActionTimeoutMs(spec);
+    const timeoutMs = resolveActionTimeoutMs(spec, input.timeoutMs);
     const sourceId = input.params?.sourceId ?? spec.sourceId;
     const databaseEnv = await resolveDesktopAppBackendDatabaseEnv({
       appId: input.appId,
@@ -72,6 +77,7 @@ export class AppBackendService {
       appId: input.appId,
       sourceId,
       proxyBaseUrl: `http://127.0.0.1:${GATEWAY_PORT}`,
+      readOnly: input.probe,
     });
     const env = buildBackendActionEnv({
       appId: input.appId,
@@ -87,14 +93,43 @@ export class AppBackendService {
     });
 
     try {
-      return await runBackendHandler({
+      const result = await runBackendHandler({
         spec,
         handlerPath,
         env,
         timeoutMs,
       });
+      if (input.probe) return result;
+      recordPreviewBackendCall(input.appId, input.action);
+      recordBackendFailure(input.appId, input.action, result);
+      if (result.exitCode === 0) recordPreviewBackendStdout(input.appId, input.action, result.stdout);
+      return result;
     } finally {
       revokeBackendDbProxyToken(proxyEnv.PAPR_DB_PROXY_TOKEN);
     }
   }
+}
+
+/**
+ * A failed backend action is a runtime error even though the HTTP call returns
+ * 200 with exitCode in the body — apps often swallow it and render an empty
+ * state. Logging it here (desktop and cloud share this path) puts it in the
+ * buffer validate_app reads, so the preview fails instead of passing.
+ */
+function recordBackendFailure(
+  appId: string,
+  action: string,
+  result: AppBackendRunResult,
+): void {
+  if (result.exitCode === 0) return;
+  const detail = (result.stderr || result.stdout).trim().split("\n").slice(-3).join(" | ");
+  getAppRuntimeLogService().append(appId, {
+    level: "error",
+    message:
+      `[backend] action "${action}" failed (exit ${result.exitCode}): ` +
+      (detail.length > 300 ? `…${detail.slice(-300)}` : detail),
+    source: `backend/${action}`,
+    timestamp: new Date().toISOString(),
+    origin: "preview",
+  });
 }

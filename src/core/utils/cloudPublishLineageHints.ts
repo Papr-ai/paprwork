@@ -31,9 +31,11 @@ export function toPublishLineageSummary(
 }
 
 const TRACK_COLLABORATOR_WARNING =
-  "This copy is on the team's live data, so publish_cloud_app is refused for it. Its code reaches the team through submit_cloud_app_pr. " +
+  "This copy is on the team's live data, so publish_cloud_app can't ship its code (sharing changes still work, see below). Its code reaches the team through submit_cloud_app_pr. " +
   "To ship code: push_cloud_sync({ appId }) then submit_cloud_app_pr. " +
-  "When the user asks to publish (not just propose), always call submit_cloud_app_pr({ publishNow: true }); you can't look up their role, so don't guess it. " +
+  "When the user asks to publish (not just propose), always call submit_cloud_app_pr({ publishNow: true }). " +
+  "Their role on the source app is audiences.myRole in get_cloud_app_publish (canManageAccess = can change sharing); don't guess it. " +
+  "Access-only changes (loginAccess, externalLink, requireSignIn, uploadMaxMb) still work from this copy: publish_cloud_app applies them to the original app, like the Share sheet. An Admin can make them; don't ask the owner to do it. " +
   "A Maintainer or Admin of the source app goes straight to the live app with no owner review. " +
   "Anyone else is sent for review automatically and publishNote says why (\"You can propose changes to this app, but not publish them directly.\" means their role). " +
   "Then tell them it went to the owner for review, and that the owner can make them a Maintainer in the app's sharing settings if they want to publish directly. " +

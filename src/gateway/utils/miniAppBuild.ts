@@ -271,6 +271,17 @@ export function rewriteHtmlForBundledDist(
     /<script([^>]*)\ssrc=["'](app|main)(?:\.tsx?)["']([^>]*)>/gi,
     '<script$1 src="dist/app.js"$3>',
   );
+  // Agents often write <script src="app.js"> (the transpiled name of app.ts).
+  // There is no app.js on disk or in the repo — only the dist bundle — so point it there.
+  // dist/app.js is an ES module, so a classic tag must become type="module".
+  result = result.replace(
+    /<script([^>]*)\ssrc=["'](?:\.\/)?(?:app|main)\.(?:js|jsx|mjs)["']([^>]*)>/gi,
+    (_m, before: string, after: string) => {
+      const attrs = `${before}${after}`;
+      const typeAttr = /\stype=["']module["']/i.test(attrs) ? "" : ' type="module"';
+      return `<script${before}${typeAttr} src="dist/app.js"${after}>`;
+    },
+  );
 
   if (!/rel=["']modulepreload["'][^>]*dist\/app\.js/i.test(result)) {
     result = result.replace(

@@ -1,6 +1,6 @@
 {
   "version": 1,
-  "generatedAt": "2026-11-12T18:48:06.744Z",
+  "generatedAt": "2026-11-23T17:44:04.480Z",
   "entryCount": 223,
   "entries": [
     {
@@ -614,7 +614,7 @@
     {
       "id": "agent-tool-create_sub_agent",
       "title": "create_sub_agent",
-      "summary": "Create or update a persistent sub-agent profile. Specify icon (robot, search, code, pen, chart) for sidebar/mini-chat. If allowedToolIds not specified, defaults to ['bash', 'read_file', 'write_file'].",
+      "summary": "Create or update a persistent sub-agent profile. Specify icon (robot, search, code, pen, chart) for sidebar/mini-chat. If allowedToolIds not specified, defaults to ['bash', 'read_file', 'write_file']. runtime shapes the run: replace the system prompt, switch memory/wiki context, tools or web search off. Prompt caching and context trimming stay on unless there is a specific reason. Bare model (writer/classifier/scorer): runtime: { systemPromptMode: 'replace', memoryContext: false, wikiContext: false, tools: false }.",
       "surfaces": [
         "agent-tool"
       ],
@@ -1250,7 +1250,7 @@
     {
       "id": "agent-tool-get_key",
       "title": "get_key",
-      "summary": "Check whether a custom API key exists without exposing its value. If the key does not exist, guide the user to add it in Settings → API Keys → Custom API Keys.",
+      "summary": "Check whether a custom API key exists without exposing its value. If the key does not exist, guide the user to add it in Settings → Integration Keys.",
       "surfaces": [
         "agent-tool"
       ],
@@ -1886,7 +1886,7 @@
     {
       "id": "agent-tool-list_keys",
       "title": "list_keys",
-      "summary": "List all custom API keys configured in Settings. Returns metadata (name, description, permission) but NOT values. Use this to check what keys are available before trying to use them.",
+      "summary": "List all custom API keys configured in Settings. Returns metadata (name, description, permission, sharedWith) but NOT values. Use this to check what keys are available before trying to use them. sharedWith shows who else can use each key; to give a teammate a key, the owner changes Who can use it in Settings → Integration Keys (never send values over chat, email or password managers).",
       "surfaces": [
         "agent-tool"
       ],

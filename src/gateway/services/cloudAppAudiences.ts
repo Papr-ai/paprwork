@@ -36,6 +36,10 @@ export interface AudiencesAccess extends AccessStateLike {
   communityRole?: AudienceRole;
   shareToken?: string;
   uploadMaxMb?: number;
+  /** The signed-in caller's own role on the app (server-computed). */
+  callerRole?: AudienceRole;
+  /** True when the caller may change access (Admins). */
+  canManage?: boolean;
 }
 
 /** Legacy publish_cloud_app sharing args, mapped onto audience roles like the Share sheet. */
@@ -181,5 +185,7 @@ export function describeAudiences(a: AudiencesAccess | null): Record<string, unk
     community: role("community", a.communityRole),
     requireSignIn: a.requireSignIn === true,
     ...(a.uploadMaxMb !== undefined ? { uploadMaxMb: a.uploadMaxMb } : {}),
+    ...(a.callerRole ? { myRole: a.callerRole } : {}),
+    ...(a.canManage !== undefined ? { canManageAccess: a.canManage } : {}),
   };
 }
