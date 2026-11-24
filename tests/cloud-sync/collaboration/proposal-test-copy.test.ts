@@ -62,6 +62,17 @@ describe("proposal test copy", () => {
   });
 });
 
+describe("sample row values from the replica", () => {
+  it("binds blobs, booleans and objects the replica may return", async () => {
+    const read: ReadQuery = async (sql) =>
+      sql.startsWith("SELECT type")
+        ? { rows: [{ type: "table", name: "t", sql: "CREATE TABLE t (a BLOB, b INTEGER, c TEXT)" }] }
+        : { rows: [{ a: new Uint8Array([1, 2]).buffer, b: true, c: { k: 1 } }] };
+    const r = await testMigrationsOnTestCopy(read, [{ id: "0002", sql: "CREATE INDEX t_b ON t(b);" }]);
+    expect(r).toEqual({ passed: ["0002"] });
+  });
+});
+
 describe("pending migrations on the team's data (contributor)", () => {
   it("tests files missing from the ledger, records them; an edited file is no longer tested", async () => {
     const { testPendingMigrations, testedMigrationIds } = await import(

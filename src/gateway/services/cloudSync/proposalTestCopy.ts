@@ -28,6 +28,17 @@ export interface TestCopyResult {
   failed?: { id: string; error: string };
 }
 
+/** Replica reads can return blobs as ArrayBuffer/typed arrays; better-sqlite3 binds Buffers. */
+function sqliteValue(v: unknown): unknown {
+  if (v === undefined || v === null) return null;
+  if (typeof v === "boolean") return v ? 1 : 0;
+  if (Buffer.isBuffer(v)) return v;
+  if (v instanceof ArrayBuffer) return Buffer.from(v);
+  if (ArrayBuffer.isView(v)) return Buffer.from(v.buffer, v.byteOffset, v.byteLength);
+  if (typeof v === "object") return JSON.stringify(v);
+  return v;
+}
+
 const q = (name: string) => `"${name.replace(/"/g, '""')}"`;
 
 /** Build the test copy at `file` from the source's schema and sample rows. */
@@ -50,7 +61,7 @@ export async function buildTestCopy(read: ReadQuery, file: string, rowsPerTable 
         `INSERT OR IGNORE INTO ${q(t.name)} (${cols.map(q).join(", ")}) VALUES (${cols.map(() => "?").join(", ")})`,
       );
       db.transaction(() => {
-        for (const row of rows) insert.run(...cols.map((c) => (row[c] === undefined ? null : row[c]) as never));
+        for (const row of rows) insert.run(...cols.map((c) => sqliteValue(row[c]) as never));
       })();
     }
     // Indexes, views and triggers after the rows, so triggers don't fire on the sample.
