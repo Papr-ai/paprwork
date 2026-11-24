@@ -78,7 +78,7 @@ function displayValues(row: Record<string, unknown>): string[] {
     );
 }
 
-const isKeyEcho = (row: Record<string, unknown>): boolean => {
+export const isKeyEcho = (row: Record<string, unknown>): boolean => {
   const entries = Object.entries(row);
   return entries.length >= 2 && entries.every(([k, v]) => v === k);
 };
@@ -137,7 +137,26 @@ export function checkPreviewDataRendered(
   return errors;
 }
 
+/** Backend actions the preview called (success or not) since sinceMs. */
+const calledActions = new Map<string, Array<{ at: number; action: string }>>();
+
+export function recordPreviewBackendCall(appId: string, action: string): void {
+  const list = calledActions.get(appId) ?? [];
+  list.push({ at: Date.now(), action });
+  if (list.length > MAX_RECORDS_PER_APP) list.splice(0, list.length - MAX_RECORDS_PER_APP);
+  calledActions.set(appId, list);
+}
+
+export function backendActionsCalledSince(appId: string, sinceMs: number): Set<string> {
+  return new Set((calledActions.get(appId) ?? []).filter((c) => c.at >= sinceMs).map((c) => c.action));
+}
+
 export function clearPreviewLoadedData(appId?: string): void {
-  if (appId) records.delete(appId);
-  else records.clear();
+  if (appId) {
+    records.delete(appId);
+    calledActions.delete(appId);
+  } else {
+    records.clear();
+    calledActions.clear();
+  }
 }

@@ -196,3 +196,25 @@ describe("backendDbProxy", () => {
     }
   });
 });
+
+describe("backendDbProxy read-only (validate_app probe) sessions", () => {
+  it("allows reads and rejects every write", async () => {
+    const { baseUrl, close } = await listen(createTestApp());
+    try {
+      const env = mintBackendDbProxyEnv({ appId: "app-1", proxyBaseUrl: baseUrl.replace("/internal/backend-db", ""), readOnly: true });
+      const post = (route: string, sql: string) =>
+        fetch(`${env.PAPR_DB_PROXY_URL}/${route}`, {
+          method: "POST",
+          headers: { "Content-Type": "application/json", Authorization: `Bearer ${env.PAPR_DB_PROXY_TOKEN}` },
+          body: JSON.stringify({ sql }),
+        });
+      expect((await post("query", "SELECT 1")).status).toBe(200);
+      const w = await post("write", "INSERT INTO t (a) VALUES (1)");
+      expect(w.status).toBe(409);
+      expect((await w.json()).error).toContain("writes are blocked during the check");
+      revokeBackendDbProxyToken(env.PAPR_DB_PROXY_TOKEN);
+    } finally {
+      close();
+    }
+  });
+});
