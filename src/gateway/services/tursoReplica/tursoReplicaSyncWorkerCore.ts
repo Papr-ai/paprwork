@@ -29,8 +29,6 @@ const IDLE_CLOSE_MS = 5 * 60_000;
 
 interface Handle {
   db: Db;
-  /** Token the handle was opened with. The engine keeps it for every later sync. */
-  authToken: string;
   trace?: DatabaseConnectionTrace;
   idleTimer: NodeJS.Timeout | null;
 }
@@ -50,6 +48,12 @@ function isExclusiveInteractiveWorkerOp(op: TursoSyncWorkerRequest["op"]): boole
 export class TursoSyncWorkerCore {
   private readonly handles = new Map<string, Handle>();
   private readonly opening = new Map<string, Promise<Db>>();
+  /**
+   * Latest token the gateway sent for each path. The engine reads it through a
+   * function before every remote request, so a refreshed token takes effect on the
+   * open handle; no reopen needed.
+   */
+  private readonly tokens = new Map<string, string>();
   private readonly scheduler = new TursoReplicaPathScheduler();
 
   constructor(private readonly log: WorkerLogger = () => {}) {}
@@ -182,13 +186,9 @@ export class TursoSyncWorkerCore {
   }
 
   private async getOrOpen(request: TursoSyncWorkerRequest): Promise<Db> {
+    if (request.authToken) this.tokens.set(request.localPath, request.authToken);
     const existing = this.handles.get(request.localPath);
-    if (existing && request.authToken && existing.authToken !== request.authToken) {
-      // The gateway refreshed this database's token (expired, or Turso rejected the old
-      // one). The engine holds the token it was opened with, so without a reopen every
-      // pull keeps failing with 401 while reads quietly serve the last pulled data.
-      await this.closeHandle(request.localPath);
-    } else if (existing) {
+    if (existing) {
       return existing.db;
     }
     const pending = this.opening.get(request.localPath);
@@ -197,14 +197,15 @@ export class TursoSyncWorkerCore {
     }
     const trace = databaseTracingEnabled() ? new DatabaseConnectionTrace(request.localPath, "turso-sync-worker", "turso") : undefined;
     const endOpen = trace?.begin("connect");
+    const localPath = request.localPath;
     const openPromise = connectTursoReplica({
       localPath: request.localPath,
       tursoUrl: request.tursoUrl,
-      authToken: request.authToken,
+      authToken: async () => this.tokens.get(localPath) ?? request.authToken,
       bootstrapIfEmpty: request.bootstrapIfEmpty,
       clientName: request.clientName,
     }).then((db) => {
-      this.handles.set(request.localPath, { db, authToken: request.authToken, trace, idleTimer: null });
+      this.handles.set(request.localPath, { db, trace, idleTimer: null });
       endOpen?.();
       return db;
     }).catch(error => { endOpen?.(error); trace?.close(); throw error; });

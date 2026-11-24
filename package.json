@@ -1,7 +1,7 @@
 {
   "name": "paprwork",
   "version": "2.7.2",
-  "description": "Papr Work \u2014 build software that runs your work, and gets smarter the more you use it",
+  "description": "Papr Work — build software that runs your work, and gets smarter the more you use it",
   "main": "./src/electron/main.cjs",
   "type": "module",
   "workspaces": [
@@ -249,7 +249,7 @@
     "@tiptap/starter-kit": "^3.19.0",
     "@tiptap/suggestion": "^3.19.0",
     "@toon-format/toon": "^4.1.1",
-    "@tursodatabase/sync": "^0.7.2",
+    "@tursodatabase/sync": "^0.8.4",
     "@types/react-syntax-highlighter": "^15.5.13",
     "ai": "^6.0.89",
     "better-sqlite3": "^12.6.2",

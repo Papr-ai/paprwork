@@ -18,7 +18,11 @@ export interface TursoReplicaDatabaseStats {
 export interface TursoReplicaConnectOptions {
   localPath: string;
   tursoUrl: string;
-  authToken: string;
+  /**
+   * A fixed token, or a function the engine calls before each remote request so a
+   * long-lived handle always uses the current token (the worker passes a function).
+   */
+  authToken: string | (() => Promise<string>);
   /** When false, do not bootstrap from remote if local file exists. */
   bootstrapIfEmpty?: boolean;
   clientName?: string;
