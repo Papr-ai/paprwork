@@ -4,8 +4,9 @@
  * gateway sends when a request/approval event arrives on the change feed.
  */
 import { useCallback, useEffect, useState } from "react";
+import { getGatewayHttpBase } from "../../utils/gatewayHttpBase";
 
-const GATEWAY = "http://localhost:18789";
+const GATEWAY = getGatewayHttpBase();
 
 export type ConnectMode = "all" | "approved" | "none";
 
