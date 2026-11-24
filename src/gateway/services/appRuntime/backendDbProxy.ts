@@ -23,6 +23,8 @@ export interface BackendDbProxySession {
    */
   allowedDbIds?: string[];
   expiresAt: number;
+  /** validate_app probe runs: reads allowed, every write rejected (no junk rows). */
+  readOnly?: boolean;
   cloud?: {
     runtimeAuth: AppRuntimeRouteAuth;
     orgId: string;
@@ -99,6 +101,7 @@ export function mintBackendDbProxyEnv(input: {
   proxyBaseUrl: string;
   cloud?: BackendDbProxySession["cloud"];
   ttlMs?: number;
+  readOnly?: boolean;
 }): Record<string, string> {
   pruneExpiredSessions();
   const token = randomBytes(24).toString("hex");
@@ -111,6 +114,7 @@ export function mintBackendDbProxyEnv(input: {
       : undefined,
     expiresAt: Date.now() + (input.ttlMs ?? DEFAULT_TTL_MS),
     cloud: input.cloud,
+    readOnly: input.readOnly || undefined,
   });
   const base = input.proxyBaseUrl.replace(/\/$/, "");
   return {
@@ -153,6 +157,14 @@ function requireSession(req: Request, res: Response): BackendDbProxySession | nu
     return null;
   }
   return session;
+}
+
+export const PROBE_WRITE_BLOCKED = "validate_app probe: writes are blocked during the check";
+
+function rejectProbeWrite(session: BackendDbProxySession, res: Response): boolean {
+  if (!session.readOnly) return false;
+  res.status(409).json({ error: PROBE_WRITE_BLOCKED });
+  return true;
 }
 
 function httpError(message: string, status: number): Error {
@@ -302,6 +314,7 @@ export function createDesktopBackendDbProxyRouter(
         return;
       }
 
+      if (rejectProbeWrite(session, res)) return;
       assertWriteSql(sql);
       const { assertReplaySafeRowSql } = await import(
         "../syncV3/replaySafeSql.js"
@@ -385,6 +398,7 @@ export function createCloudBackendDbProxyRouter(
         return;
       }
 
+      if (rejectProbeWrite(session, res)) return;
       assertWriteSql(sql);
       const resolvedSourceId = sourceId?.trim() || session.sourceId;
       const bound = bindCallerId(sql, params, session.cloud.callerUserId) as unknown[] | undefined;

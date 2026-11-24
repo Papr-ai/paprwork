@@ -18,7 +18,7 @@ import {
 } from "./appBackendRunner.js";
 import { getPaprRoot } from "../../../core/utils/paprRoot.js";
 import { getAppRuntimeLogService } from "../AppRuntimeLogService.js";
-import { recordPreviewBackendStdout } from "../../utils/previewLoadedData.js";
+import { recordPreviewBackendCall, recordPreviewBackendStdout } from "../../utils/previewLoadedData.js";
 import { resolveDesktopAppBackendDatabaseEnv } from "./appBackendDatabase.js";
 import {
   mintBackendDbProxyEnv,
@@ -41,6 +41,9 @@ export class AppBackendService {
     vaultEnv?: Record<string, string>;
     callerIdentity?: MiniAppCallerIdentity;
     loggedIn?: boolean;
+    /** validate_app probe: DB writes rejected, failures not logged as user runtime errors. */
+    probe?: boolean;
+    timeoutMs?: number;
   }): Promise<AppBackendRunResult> {
     // Desktop: the signed-in Papr user runs their own install — same as the
     // local /api/access response (owner, full access).
@@ -63,7 +66,7 @@ export class AppBackendService {
     );
     await fs.access(handlerPath);
 
-    const timeoutMs = resolveActionTimeoutMs(spec);
+    const timeoutMs = resolveActionTimeoutMs(spec, input.timeoutMs);
     const sourceId = input.params?.sourceId ?? spec.sourceId;
     const databaseEnv = await resolveDesktopAppBackendDatabaseEnv({
       appId: input.appId,
@@ -74,6 +77,7 @@ export class AppBackendService {
       appId: input.appId,
       sourceId,
       proxyBaseUrl: `http://127.0.0.1:${GATEWAY_PORT}`,
+      readOnly: input.probe,
     });
     const env = buildBackendActionEnv({
       appId: input.appId,
@@ -95,6 +99,8 @@ export class AppBackendService {
         env,
         timeoutMs,
       });
+      if (input.probe) return result;
+      recordPreviewBackendCall(input.appId, input.action);
       recordBackendFailure(input.appId, input.action, result);
       if (result.exitCode === 0) recordPreviewBackendStdout(input.appId, input.action, result.stdout);
       return result;

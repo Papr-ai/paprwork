@@ -155,7 +155,7 @@ When a backend handler must **read or write** linked SQLite/Turso databases:
 1. **Ensure sources are linked** — `create_database` → `attach_database({ alias })`
 2. **Name the DB** — `"sourceId": "billing"` on the action in `manifest.json`, or `params: { sourceId: "billing" }` from the frontend
 3. Gateway injects **every** linked source as `PAPR_DB_{KEY}*` plus `APP_DB` for the active source
-4. **Python:** `from papr_db import connect, execute` — `connect("billing")` or `connect()`; never `sqlite3.connect(APP_DB)` (cloud uses Turso). Insert id: `INSERT … RETURNING`, or `con.lastrowid` after INSERT.
+4. **Python:** `from papr_db import connect, query, write` — `connect("billing")` or `connect()`; reads `query(con, sql, params).rows` (plain dicts), writes `write(con, sql, params)` (`.changes`, `.last_insert_rowid`). No sqlite3-style `.execute().fetchall()`, no `RETURNING`, never `sqlite3.connect(APP_DB)`.
 5. **Node/TS:** No cross-env DB helper — use Python backend handlers for SQL, or `/api/db/*` from the frontend.
 
 **❌ NEVER:** parse `data-sources.json` manually, grep keychain for DB paths, or read API keys from SQLite.
