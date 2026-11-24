@@ -413,19 +413,20 @@ apps/{appId}/backend/
 
 **Python handler (`backend/papr_db.py` scaffolded on app create):**
 ```python
-from papr_db import connect, execute
+from papr_db import connect, query, write
 
-con = connect("billing")   # explicit alias — required when 2+ linked DBs
-# con = connect()          # active source (manifest sourceId / params.sourceId)
-rows = execute(
-    con,
-    "INSERT INTO invoices (amount) VALUES (?) RETURNING id, amount",
-    [100],
-)  # list[dict] on desktop (local SQLite) and cloud (Turso)
-con.close()
+con = connect("billing")  # alias — required when 2+ linked DBs; connect() = active source
+rows = query(con, "SELECT id, amount FROM invoices WHERE paid = ?", [0]).rows  # list of plain dicts
+new_id = write(con, "INSERT INTO invoices (amount) VALUES (?)", [100]).last_insert_rowid
+changed = write(con, "UPDATE invoices SET paid = 1 WHERE id = ?", [new_id]).changes
 ```
 
-Use **`papr_db.connect()` only** — never `sqlite3.connect(APP_DB)` (cloud has no local file). After plain `INSERT`, `con.lastrowid` / `cursor().lastrowid` work in both modes. Each `execute()` is one statement; no multi-call transactions on cloud.
+**Use only `query()` and `write()`.** Every backend call — desktop and cloud — goes through the gateway (the sync engine owns the database file), so:
+- reads: `query(con, sql, params).rows` → list of plain dicts (`row["name"]`)
+- writes: `write(con, sql, params)` → `.changes`, `.last_insert_rowid`
+- don't write sqlite3-style code (`con.execute(...).fetchall()`, cursors, `dict(zip(cols, row))`) — it is emulated, not real sqlite3
+- no `RETURNING` (use `.last_insert_rowid`, then `query()` the row), no schema changes (migrations), no transactions across calls (frontend `/api/db/write-batch` with `atomic: true`)
+- never `sqlite3.connect(APP_DB)`
 
 **Node/TS handler:** No `papr_db` equivalent — use **Python** for SQL backend actions, or keep DB access in the frontend via `/api/db/query` and `/api/db/write`.
 

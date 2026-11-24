@@ -49,7 +49,9 @@ from typing import Any, Union
 #   7 = rows iterate values like sqlite3.Row (dict(zip(cols, row)) works)
 #   8 = rows/cursors come from papr_sqlite_compat, shared with the job SDK, so
 #       a sqlite3 pattern that works in a job works in a backend action
-PAPR_DB_HELPER_VERSION = 8
+#   9 = query() with INSERT/UPDATE … RETURNING through the gateway fails with
+#       the fix (write().last_insert_rowid) instead of a bare HTTP 403
+PAPR_DB_HELPER_VERSION = 9
 
 
 def _compat():
@@ -374,6 +376,14 @@ def query(
         return QueryResult(rows=rows, count=len(rows))
 
     if isinstance(con, _ProxyConnection):
+        if _sql_is_write(sql):
+            # The gateway serves reads and writes on separate routes and does
+            # not return rows from a write. Fail with the fix, not a bare 403.
+            raise RuntimeError(
+                "INSERT/UPDATE … RETURNING is not supported through the gateway. "
+                "Use write(con, sql, params) — its .last_insert_rowid is the new id — "
+                "then query() the row if you need it."
+            )
         payload = con._post("query", sql, args)
         rows = payload.get("rows") or []
         if not isinstance(rows, list):

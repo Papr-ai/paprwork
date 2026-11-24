@@ -230,7 +230,18 @@ export async function runPostValidationRuntimeCheck(
     preview.renderedPage !== undefined && preview.snapshotAt !== undefined
       ? checkPreviewDataRendered(appId, startedMs, preview.snapshotAt, preview.renderedPage)
       : [];
-  const allErrors = [...new Set([...preview.previewErrors, ...iframeErrors, ...dataErrors])];
-  const loadWarnings = preview.networkProfile?.warnings ?? [];
+  // Every backend action the preview did not call, once, read-only.
+  const { probeBackendActions } = await import("./backendActionProbe.js");
+  const { backendActionsCalledSince } = await import("./previewLoadedData.js");
+  const probe = await probeBackendActions(appId, backendActionsCalledSince(appId, startedMs)).catch(
+    (err: Error) => ({ errors: [`[backend] probe failed to run: ${err.message}`], probed: [], skipped: [] }),
+  );
+  const allErrors = [
+    ...new Set([...preview.previewErrors, ...iframeErrors, ...dataErrors, ...probe.errors]),
+  ];
+  const loadWarnings = [
+    ...(preview.networkProfile?.warnings ?? []),
+    ...probe.skipped.map((s) => `[backend] not probed: "${s.action}" ${s.reason}`),
+  ];
   return { preview, iframeErrors, allErrors, loadWarnings };
 }
