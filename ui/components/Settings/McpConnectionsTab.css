@@ -216,6 +216,11 @@
   color: var(--text-secondary);
 }
 
+/* Hide the initials once a logo has loaded (transparent logos let them show through). */
+.svc-logo--img::before {
+  content: none;
+}
+
 .svc-logo img {
   position: absolute;
   inset: 5px;
