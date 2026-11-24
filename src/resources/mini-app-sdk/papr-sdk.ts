@@ -15,6 +15,7 @@ import { askConfirm, askText, showAlert } from "./papr-dialog.ts";
 import { papr as paprFilesModule } from "./papr-files.ts";
 import { papr as paprConnectModule } from "./papr-connect.ts";
 import { search as paprSearch } from "./papr-search.ts";
+import { entities as paprEntities } from "./papr-entities.ts";
 import { onHandoff, type PaprHandoff } from "./papr-handoff.ts";
 import {
   subscribeJobEvents,
@@ -54,6 +55,8 @@ export const papr = {
   files: paprFilesModule.files,
   connect: paprConnectModule.connect,
   search: paprSearch,
+  /** One identity for people, funds and meetings across apps (bind tables in entities.json). */
+  entities: paprEntities,
   /** Claude's "Open in Papr" landed here while the app was open (or just opened it). */
   onHandoff,
   preview: {
