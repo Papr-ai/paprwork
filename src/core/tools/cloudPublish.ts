@@ -27,7 +27,7 @@ import {
   requirePaprCloudLogin,
   throwCloudPublishUnavailable,
 } from "../../gateway/utils/cloudPublishGate.js";
-import { formatShareLink } from "../utils/cloudShareLink.js";
+import { formatShareLink, pickShareLink } from "../utils/cloudShareLink.js";
 import { appendLineageToPublishData } from "../utils/cloudPublishLineageHints.js";
 import { isAccessOnlyRequest } from "../utils/publishAccessOnly.js";
 import { isOnTeamData } from "../utils/copyAxes.js";
@@ -64,6 +64,7 @@ function withAudiences(data: Record<string, unknown>, a: AudiencesAccess | null)
     audiences: view,
     listedInCommunity: view.community !== "none",
     externalLinkUrl,
+    ...pickShareLink(shareUrl, a?.shareToken ?? null, view as Parameters<typeof pickShareLink>[2]),
     signInRequired: view.community === "none" && !linkOn ? true : view.requireSignIn === true,
     sharingSummary: [
       view.workspace !== "none" && `Workspace: ${view.workspace}`,
@@ -191,6 +192,12 @@ function formatPublishResult(
     shareUrl: config.shareUrl,
     loginUrl,
     externalLinkUrl,
+    ...pickShareLink(config.shareUrl, config.shareToken ?? null, {
+      workspace: sharing.loginAccess === "team" ? "viewer" : "none",
+      community: sharing.loginAccess === "public" ? "viewer" : "none",
+      link: sharing.externalLink === "off" ? "none" : "viewer",
+      requireSignIn: prefs?.requireSignIn,
+    }),
     publishedAt: config.publishedAt,
     tip: inCommunity && codeAccess === "install"
       ? "Listed in Community Apps — others can fork/install source while code stays on papr-work."
@@ -227,6 +234,8 @@ function toolError(error: unknown, startTime: number): never {
 export const getCloudAppPublishTool = createTool({
   id: "get_cloud_app_publish",
   description: `Get cloud publish status for a mini-app (apps.papr.ai).
+
+**To give someone the app, send \`shareLink\` exactly as returned** (it carries the ?t= token when only the link grants access) and say who can open it (\`shareLinkWho\`). Never send \`shareUrl\` for a link-shared app — it shows "Invite link required".
 
 Returns live status, slug, loginAccess, externalLink, codeAccess (off | install), requireSignIn, perUserIsolation, Community listing, URLs, and **lineage** (mode fork|track, source.slug) when installed via install_cloud_app.
 
@@ -299,6 +308,8 @@ If Cloud Sync is off, the tool returns an error — use export_app_bundle instea
 export const publishCloudAppTool = createTool({
   id: "publish_cloud_app",
   description: `Publish or update cloud sharing for a mini-app on apps.papr.ai.
+
+**After publishing, send the user \`shareLink\` exactly as returned** — it is picked from the app's access (tokened ?t= link when link sharing is on; plain URL for Community/Workspace). \`shareLinkWho\` says who can open it. Never hand out \`shareUrl\` for a link-shared app.
 
 **Installed copies:** a copy on its OWN data (Community installs, per-user team apps, detached copies) publishes to its own link like any app; it never updates the original. A copy on the TEAM's shared data can't publish code: send code with submit_cloud_app_pr, and shared rows with push_cloud_sync. Sharing-only changes (loginAccess, externalLink, requireSignIn, uploadMaxMb) from such a copy are applied to the original app, like the Share sheet; the server allows them for Admins (audiences.myRole / canManageAccess in get_cloud_app_publish). Check get_cloud_app_publish → lineage.databasePolicy.
 

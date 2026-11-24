@@ -2676,17 +2676,21 @@ export const listAppsTool = createTool({
       const { fetchCloudAccessibleApps, isOwnCatalogApp } = await import(
         "../../gateway/services/cloudAgentGateway/cloudAppCatalog.js"
       );
+      const { shareLinksForCatalogApps } = await import(
+        "../../gateway/services/cloudAgentGateway/cloudAppShareLinks.js"
+      );
       const local = new Set(appsData.map((a) => a.id));
-      cloudApps = (await fetchCloudAccessibleApps())
-        .filter((a) => !local.has(a.appId))
-        .map((a) => ({
-          id: a.appId,
-          title: a.name ?? a.slug,
-          description: a.catalogHeadline ?? a.description ?? undefined,
-          link: a.shareUrl,
-          updatedAt: a.updatedAt ?? undefined,
-          editable: isOwnCatalogApp(a),
-        }));
+      const remote = (await fetchCloudAccessibleApps()).filter((a) => !local.has(a.appId));
+      const links = await shareLinksForCatalogApps(remote, isOwnCatalogApp);
+      cloudApps = remote.map((a) => ({
+        id: a.appId,
+        title: a.name ?? a.slug,
+        description: a.catalogHeadline ?? a.description ?? undefined,
+        link: links.get(a.appId)?.shareLink ?? a.shareUrl,
+        linkWho: links.get(a.appId)?.shareLinkWho,
+        updatedAt: a.updatedAt ?? undefined,
+        editable: isOwnCatalogApp(a),
+      }));
     }
 
     const workspace = getPaprWorkspacePathsForAgent();
@@ -2700,7 +2704,7 @@ export const listAppsTool = createTool({
           ? {
               publishedApps: cloudApps,
               publishedAppsTip:
-                "Their published apps. Share only these links. To change one marked editable, use its id with read_app_file / edit_app_file (the code loads on first use) — do not create a new app.",
+                "Their published apps. To share one, send its `link` exactly (it includes the ?t= token when the app is link-shared) and say who can open it (`linkWho`). To change one marked editable, use its id with read_app_file / edit_app_file (the code loads on first use) — do not create a new app.",
             }
           : {}),
         appsRoot: workspace.appsRoot,
@@ -4573,7 +4577,7 @@ IMPORTANT: Run this after creating/editing app files to catch issues early!`,
           "",
           errorList,
           "",
-          "Fix runtime JS errors before proceeding. Sources: auto preview webview + errors forwarded from the app iframe while the user tests.",
+          "Fix these before proceeding. Sources: auto preview webview, errors forwarded from the app iframe, failed backend actions, and [data] checks (data the app loaded on first load that never reached the screen).",
           runtimeCheck.preview.skippedReason
             ? `(Preview note: ${runtimeCheck.preview.skippedReason})`
             : "",

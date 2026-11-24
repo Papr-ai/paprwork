@@ -18,6 +18,7 @@
  */
 
 import fs from "fs/promises";
+import { recordPreviewLoadedRows } from "../../utils/previewLoadedData.js";
 import path from "path";
 import express from "express";
 import { getPaprRoot } from "../../../core/utils/paprRoot.js";
@@ -128,7 +129,10 @@ export function createSandboxLocalApi(): express.Express {
       if (!sql) return void res.status(400).json({ error: "sql is required" });
       assertReadOnlySql(sql);
       const appId = appIdFrom(req.body, req);
-      res.json(await query(appId, await resolveSource(appId, sourceId, "read"), sql, params));
+      const source = await resolveSource(appId, sourceId, "read");
+      const result = await query(appId, source, sql, params);
+      recordPreviewLoadedRows(appId, `db/query ${source.alias}`, result.rows);
+      res.json(result);
     } catch (err) {
       sendError(res, err);
     }
@@ -160,6 +164,9 @@ export function createSandboxLocalApi(): express.Express {
           }
         }),
       );
+      for (const r of results) {
+        if ("rows" in r && r.rows) recordPreviewLoadedRows(appId, "db/batch", r.rows);
+      }
       res.json({ results });
     } catch (err) {
       sendError(res, err);
