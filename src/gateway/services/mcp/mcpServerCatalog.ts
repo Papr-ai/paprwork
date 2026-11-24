@@ -62,8 +62,8 @@ const GOOGLE_DRIVE_CLIENT_ID = process.env.PAPR_GOOGLEDRIVE_CLIENT_ID || "650055
 const GOOGLE_GMAIL_CLIENT_ID = process.env.PAPR_GMAIL_CLIENT_ID || GOOGLE_DRIVE_CLIENT_ID;
 
 /** Scopes submitted for Google verification — change only together with the GCP Data Access list. */
-export const GOOGLE_DRIVE_SCOPES = ["https://www.googleapis.com/auth/drive.readonly", "https://www.googleapis.com/auth/drive.file"] as const;
-export const GOOGLE_GMAIL_SCOPES = ["https://www.googleapis.com/auth/gmail.readonly"] as const;
+export const GOOGLE_DRIVE_SCOPES = ["https://www.googleapis.com/auth/drive"] as const;
+export const GOOGLE_GMAIL_SCOPES = ["https://www.googleapis.com/auth/gmail.modify"] as const;
 
 export const BUILTIN_MCP_SERVERS: readonly McpServerDefinition[] = [
   // One-click: dynamic client registration accepted a loopback redirect (probed Oct 2026).
@@ -83,7 +83,7 @@ export const BUILTIN_MCP_SERVERS: readonly McpServerDefinition[] = [
   { id: "sanity", name: "Sanity", url: "https://mcp.sanity.io", transport: "streamable-http", category: "Content", description: "Content lake, documents" },
   { id: "contentful", name: "Contentful", url: "https://mcp.contentful.com/mcp", transport: "streamable-http", category: "Content", description: "Entries, assets, spaces" },
   { id: "cloudinary", name: "Cloudinary", url: "https://asset-management.mcp.cloudinary.com/sse", transport: "sse", category: "Content", description: "Media assets" },
-  { id: "egnyte", name: "Egnyte", url: "https://mcp-server.egnyte.com/mcp", transport: "streamable-http", category: "Docs", description: "Files and folders" },
+  { id: "egnyte", name: "Egnyte", url: "https://mcp-server.egnyte.com/mcp", transport: "streamable-http", category: "Docs", description: "Read, create and edit files" },
   { id: "granola", name: "Granola", url: "https://mcp.granola.ai/mcp", transport: "streamable-http", category: "Meetings", description: "Meeting notes" },
   { id: "fireflies", name: "Fireflies", url: "https://api.fireflies.ai/mcp", transport: "streamable-http", category: "Meetings", description: "Meeting transcripts" },
   { id: "intercom", name: "Intercom", url: "https://mcp.intercom.com/mcp", transport: "streamable-http", category: "Support", description: "Conversations, contacts" },
@@ -124,9 +124,9 @@ export const BUILTIN_MCP_SERVERS: readonly McpServerDefinition[] = [
   { id: "github", name: "GitHub", url: "https://api.githubcopilot.com/mcp/", transport: "streamable-http", category: "Engineering", description: "Repos, issues, PRs", requiresClientId: true },
   { id: "slack", name: "Slack", url: "https://mcp.slack.com/mcp", transport: "streamable-http", category: "Communication", description: "Channels, messages, search", requiresClientId: true },
   { id: "hubspot", name: "HubSpot", url: "https://mcp.hubspot.com/", transport: "streamable-http", category: "CRM", description: "Contacts, companies, deals", requiresClientId: true },
-  { id: "googledrive", name: "Google Drive", url: "https://drivemcp.googleapis.com/mcp", transport: "streamable-http", category: "Docs", description: "Files and folders", requiresClientId: true, serverOAuth: true, clientId: GOOGLE_DRIVE_CLIENT_ID, scopes: GOOGLE_DRIVE_SCOPES },
-  { id: "gmail", name: "Gmail", url: "https://gmailmcp.googleapis.com/mcp", transport: "streamable-http", category: "Communication", description: "Search and read email", requiresClientId: true, serverOAuth: true, clientId: GOOGLE_GMAIL_CLIENT_ID, scopes: GOOGLE_GMAIL_SCOPES },
-  { id: "box", name: "Box", url: "https://mcp.box.com", transport: "streamable-http", category: "Docs", description: "Files and folders", requiresClientId: true },
+  { id: "googledrive", name: "Google Drive", url: "https://drivemcp.googleapis.com/mcp", transport: "streamable-http", category: "Docs", description: "Read, create and edit files", requiresClientId: true, serverOAuth: true, clientId: GOOGLE_DRIVE_CLIENT_ID, scopes: GOOGLE_DRIVE_SCOPES },
+  { id: "gmail", name: "Gmail", url: "https://gmailmcp.googleapis.com/mcp", transport: "streamable-http", category: "Communication", description: "Read, write, send and organize email", requiresClientId: true, serverOAuth: true, clientId: GOOGLE_GMAIL_CLIENT_ID, scopes: GOOGLE_GMAIL_SCOPES },
+  { id: "box", name: "Box", url: "https://mcp.box.com", transport: "streamable-http", category: "Docs", description: "Read, create and edit files", requiresClientId: true },
   { id: "docusign", name: "DocuSign", url: "https://mcp.docusign.com/mcp", transport: "streamable-http", category: "Docs", description: "Envelopes, agreements", requiresClientId: true },
   { id: "zendesk", name: "Zendesk", url: "https://mcp.zendesk.com/mcp", transport: "streamable-http", category: "Support", description: "Tickets, users", requiresClientId: true },
   { id: "smartsheet", name: "Smartsheet", url: "https://mcp.smartsheet.com/mcp", transport: "streamable-http", category: "Projects", description: "Sheets, rows", requiresClientId: true },
