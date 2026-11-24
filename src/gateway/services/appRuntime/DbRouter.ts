@@ -1024,6 +1024,19 @@ export function getDbRouter(): DbRouter {
   return routerInstance;
 }
 
+/** Drop one cached Turso client (its token was invalidated, e.g. app deleted). */
+export function forgetDbRouterTursoClient(databaseName: string): void {
+  const client = tursoClients.get(databaseName);
+  tursoClients.delete(databaseName);
+  tursoClientPromises.delete(databaseName);
+  tursoUnavailableUntil.delete(databaseName);
+  try {
+    client?.close();
+  } catch {
+    /* already closed */
+  }
+}
+
 /** Reset cached Turso clients (tests). */
 export function resetDbRouterTursoCache(): void {
   tursoClients.clear();
