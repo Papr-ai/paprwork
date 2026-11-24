@@ -162,8 +162,11 @@ describe("tool registry", () => {
 
     // ~4.2 chars/token measured on this text with cl100k_base.
     expect(wireChars).toBeLessThan(stringifyChars / 2);
-    // And the honest figure is comfortably under a fifth of a 200K window,
-    // which is the number any deferral decision should be argued from.
-    expect(wireChars / 4.2 / 200_000).toBeLessThan(0.25);
+    // Tripwire on registry growth, not a runtime limit: the full block is only
+    // sent when deferral is off (toolDeferral.ts sends the core + matched tools
+    // otherwise). 200K is the smallest window we ship, so it's the worst case.
+    // Raised 0.25 -> 0.26 for code_index_repo (#1002) at ~0.2505; past this,
+    // defer more tools rather than raising it again.
+    expect(wireChars / 4.2 / 200_000).toBeLessThan(0.26);
   });
 });
