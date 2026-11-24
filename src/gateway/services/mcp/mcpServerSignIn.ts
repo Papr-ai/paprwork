@@ -141,7 +141,7 @@ export class McpServerSignIn {
         authorizationEndpoint: md.authorization_endpoint,
         tokenEndpoint: md.token_endpoint,
         clientId,
-        scopes: info.resourceMetadata?.scopes_supported ?? undefined,
+        scopes: def.scopes ? [...def.scopes] : (info.resourceMetadata?.scopes_supported ?? undefined),
         resource: info.resourceMetadata?.resource ?? def.url,
         ...(opts.allowedUserIds?.length ? { allowedUserIds: opts.allowedUserIds } : {}),
       },

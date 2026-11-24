@@ -35,6 +35,12 @@ export interface McpServerDefinition {
    * Used for providers like Google that need a secret at token exchange.
    */
   serverOAuth?: boolean;
+  /**
+   * OAuth scopes to request. Overrides the server's advertised `scopes_supported`,
+   * which for Google lists every scope (incl. delete/full-mailbox) — requesting all
+   * of them would fail Google's app verification. Keep this to the minimum needed.
+   */
+  scopes?: readonly string[];
   /** Added by the user/agent rather than shipped. */
   custom?: boolean;
 }
@@ -52,6 +58,12 @@ const HEYBTW_CLIENT_ID = process.env.PAPR_HEYBTW_CLIENT_ID?.trim() || undefined;
 
 /** Papr's Google OAuth web client (project papr-connectors). Public; the secret lives on the memory server. */
 const GOOGLE_DRIVE_CLIENT_ID = process.env.PAPR_GOOGLEDRIVE_CLIENT_ID || "650055379473-7j2rg39vgc3dusu9fuoich9msajc893d.apps.googleusercontent.com";
+/** Same papr-connectors client serves Gmail (one consent screen, one verification). */
+const GOOGLE_GMAIL_CLIENT_ID = process.env.PAPR_GMAIL_CLIENT_ID || GOOGLE_DRIVE_CLIENT_ID;
+
+/** Scopes submitted for Google verification — change only together with the GCP Data Access list. */
+export const GOOGLE_DRIVE_SCOPES = ["https://www.googleapis.com/auth/drive.readonly", "https://www.googleapis.com/auth/drive.file"] as const;
+export const GOOGLE_GMAIL_SCOPES = ["https://www.googleapis.com/auth/gmail.readonly"] as const;
 
 export const BUILTIN_MCP_SERVERS: readonly McpServerDefinition[] = [
   // One-click: dynamic client registration accepted a loopback redirect (probed Oct 2026).
@@ -112,7 +124,8 @@ export const BUILTIN_MCP_SERVERS: readonly McpServerDefinition[] = [
   { id: "github", name: "GitHub", url: "https://api.githubcopilot.com/mcp/", transport: "streamable-http", category: "Engineering", description: "Repos, issues, PRs", requiresClientId: true },
   { id: "slack", name: "Slack", url: "https://mcp.slack.com/mcp", transport: "streamable-http", category: "Communication", description: "Channels, messages, search", requiresClientId: true },
   { id: "hubspot", name: "HubSpot", url: "https://mcp.hubspot.com/", transport: "streamable-http", category: "CRM", description: "Contacts, companies, deals", requiresClientId: true },
-  { id: "googledrive", name: "Google Drive", url: "https://drivemcp.googleapis.com/mcp", transport: "streamable-http", category: "Docs", description: "Files and folders", requiresClientId: true, serverOAuth: true, clientId: GOOGLE_DRIVE_CLIENT_ID },
+  { id: "googledrive", name: "Google Drive", url: "https://drivemcp.googleapis.com/mcp", transport: "streamable-http", category: "Docs", description: "Files and folders", requiresClientId: true, serverOAuth: true, clientId: GOOGLE_DRIVE_CLIENT_ID, scopes: GOOGLE_DRIVE_SCOPES },
+  { id: "gmail", name: "Gmail", url: "https://gmailmcp.googleapis.com/mcp", transport: "streamable-http", category: "Communication", description: "Search and read email", requiresClientId: true, serverOAuth: true, clientId: GOOGLE_GMAIL_CLIENT_ID, scopes: GOOGLE_GMAIL_SCOPES },
   { id: "box", name: "Box", url: "https://mcp.box.com", transport: "streamable-http", category: "Docs", description: "Files and folders", requiresClientId: true },
   { id: "docusign", name: "DocuSign", url: "https://mcp.docusign.com/mcp", transport: "streamable-http", category: "Docs", description: "Envelopes, agreements", requiresClientId: true },
   { id: "zendesk", name: "Zendesk", url: "https://mcp.zendesk.com/mcp", transport: "streamable-http", category: "Support", description: "Tickets, users", requiresClientId: true },
