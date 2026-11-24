@@ -29,6 +29,8 @@ const IDLE_CLOSE_MS = 5 * 60_000;
 
 interface Handle {
   db: Db;
+  /** Token the handle was opened with. The engine keeps it for every later sync. */
+  authToken: string;
   trace?: DatabaseConnectionTrace;
   idleTimer: NodeJS.Timeout | null;
 }
@@ -181,7 +183,12 @@ export class TursoSyncWorkerCore {
 
   private async getOrOpen(request: TursoSyncWorkerRequest): Promise<Db> {
     const existing = this.handles.get(request.localPath);
-    if (existing) {
+    if (existing && request.authToken && existing.authToken !== request.authToken) {
+      // The gateway refreshed this database's token (expired, or Turso rejected the old
+      // one). The engine holds the token it was opened with, so without a reopen every
+      // pull keeps failing with 401 while reads quietly serve the last pulled data.
+      await this.closeHandle(request.localPath);
+    } else if (existing) {
       return existing.db;
     }
     const pending = this.opening.get(request.localPath);
@@ -197,7 +204,7 @@ export class TursoSyncWorkerCore {
       bootstrapIfEmpty: request.bootstrapIfEmpty,
       clientName: request.clientName,
     }).then((db) => {
-      this.handles.set(request.localPath, { db, trace, idleTimer: null });
+      this.handles.set(request.localPath, { db, authToken: request.authToken, trace, idleTimer: null });
       endOpen?.();
       return db;
     }).catch(error => { endOpen?.(error); trace?.close(); throw error; });
