@@ -5,13 +5,16 @@ import path from "node:path";
 import { describe, expect, it } from "vitest";
 
 /**
- * Agent-written backends use the sqlite3 idiom `con.execute(sql).fetchall()`.
- * The proxy/Turso connections returned a bare list, so every such handler
- * crashed with AttributeError (grocery-list showed an empty list).
+ * App backends (backendDbHelper.py) and jobs (job-sdk/papr_db.py) reach the
+ * database through the gateway, which returns JSON rows. Handlers and jobs are
+ * written with sqlite3 idioms, so both helpers return the shared
+ * papr_sqlite_compat Row/Cursor. This runs each idiom against real sqlite3 and
+ * through all three paths (backend proxy, backend Turso, job replica) and
+ * requires identical results. A new gap fails here, not in a user's app.
  */
-describe("backendDbHelper.py sqlite3-style execute()", () => {
-  it("supports fetchall/fetchone/rowcount on proxy and Turso connections", () => {
-    const dir = mkdtempSync(path.join(tmpdir(), "papr-fetchall-"));
+describe("sqlite3 parity: backend helper + job SDK", () => {
+  it("every sqlite3 idiom returns what real sqlite3 returns", () => {
+    const dir = mkdtempSync(path.join(tmpdir(), "papr-sqlite-parity-"));
     try {
       copyFileSync(
         path.resolve("src/gateway/services/appRuntime/backendDbHelper.py"),
@@ -19,10 +22,17 @@ describe("backendDbHelper.py sqlite3-style execute()", () => {
       );
       const out = execFileSync(
         "python3",
-        [path.resolve("tests/fixtures/backend-db/fetchall_check.py"), dir],
+        [
+          path.resolve("tests/fixtures/backend-db/sqlite_parity_check.py"),
+          dir,
+          path.resolve("src/resources/job-sdk"),
+        ],
         { encoding: "utf8" },
       );
-      expect(out).toContain("fetchall ok");
+      expect(out).toContain("parity ok");
+    } catch (err) {
+      const e = err as { stdout?: string; stderr?: string };
+      throw new Error(`sqlite3 parity failed:\n${e.stdout ?? ""}${e.stderr ?? ""}`);
     } finally {
       rmSync(dir, { recursive: true, force: true });
     }
