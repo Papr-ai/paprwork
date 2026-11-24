@@ -48,3 +48,19 @@ describe("OpenRouter (via Papr)", () => {
     expect(isOpenRouterModelId("anthropic/claude-opus-5")).toBe(false);
   });
 });
+
+describe("OpenRouter web search", () => {
+  it("adds the server tool to agent turns and honours the off flag", async () => {
+    const { injectOpenRouterWebSearch } = await import("../../src/gateway/utils/openrouterModel.js");
+    const on: Record<string, unknown> = { tools: [{ type: "function", function: { name: "bash" } }] };
+    injectOpenRouterWebSearch(on);
+    expect((on.tools as Array<{ type: string }>).map((t) => t.type)).toEqual(["function", "openrouter:web_search"]);
+    const off: Record<string, unknown> = { tools: [], metadata: { papr_web_search: "off" } };
+    injectOpenRouterWebSearch(off);
+    expect(off.tools).toEqual([]);
+    expect(off.metadata).toBeUndefined();
+    const plain: Record<string, unknown> = { messages: [] };
+    injectOpenRouterWebSearch(plain);
+    expect(plain.tools).toBeUndefined();
+  });
+});
