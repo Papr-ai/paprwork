@@ -739,6 +739,8 @@ export async function paprDbApplyMigration(options: {
   migrationId: string;
   pendingPush: boolean;
   backend: "turso-replica" | "legacy-local" | "cloud-direct";
+  /** Teammate on shared data: passed on a test copy; the real copy is unchanged. */
+  testedOnly?: boolean;
   applyToken?: string;
   replicaApplied?: boolean;
   cloudApplied?: boolean;
@@ -756,6 +758,31 @@ export async function paprDbApplyMigration(options: {
   const migrationFileName = options.migrationId.endsWith(".sql")
     ? options.migrationId
     : `${options.migrationId}.sql`;
+
+  // A teammate on the team's shared data never changes their real copy's
+  // schema: the change runs on a throwaway test copy (schema + up to 100 rows
+  // per table), and the team's database gets it when the proposal is accepted
+  // (audit A, B, F2). No hold, so this copy stays live on the team's data.
+  const { isCollaboratorOnSharedDatabase } = await import("../sharedPrimaryTursoResolve.js");
+  if (isCollaboratorOnSharedDatabase(options.dbId)) {
+    const { testPendingMigrations } = await import("../cloudSync/proposalTestCopy.js");
+    const { queryRegistryDatabase } = await import("../jobs/registryDbSchemaReader.js");
+    const migrationId = migrationFileName.replace(/\.sql$/, "");
+    const tested = await testPendingMigrations({
+      dbId: options.dbId,
+      migrationRoot,
+      read: (sql) => queryRegistryDatabase({ dbPath: source.dbPath, dbId: options.dbId }, sql),
+    });
+    if (!tested.passed.includes(migrationId) && tested.pending.includes(migrationId)) {
+      const why = tested.failed
+        ? `${tested.failed.id === migrationId ? "it" : tested.failed.id} failed: ${tested.failed.error}`
+        : "it did not run";
+      throw new Error(
+        `${migrationId} didn't pass on a test copy of the team's data (${why}). Your real data wasn't changed.`,
+      );
+    }
+    return { applied: false, testedOnly: true, migrationId, pendingPush: false, backend: "turso-replica" };
+  }
 
   const { isCloudDirectSource } = await import("../cloudDirect/cloudDirectDb.js");
   if (isCloudDirectSource(source)) {
