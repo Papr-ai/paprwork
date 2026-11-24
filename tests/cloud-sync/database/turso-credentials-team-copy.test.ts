@@ -126,6 +126,45 @@ describe("Turso tokens for a copy on team data", () => {
     expect(creds.authToken).toBe("pub-tok");
   });
 
+  it("refuses (and never caches) a fresh token for the wrong copy", async () => {
+    // Server still misses the match (e.g. lineage missing) and answers with an
+    // empty own-segment copy no matter what app id we send.
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async (url: string) => {
+        if (!String(url).includes("/v1/cloud/databases/token")) {
+          return { ok: false, status: 404, json: async () => ({}), text: async () => "" };
+        }
+        return {
+          ok: true,
+          json: async () => ({
+            tursoUrl: OWN_URL,
+            authToken: "own-tok",
+            expiresAt: new Date(Date.now() + 14 * 86_400_000).toISOString(),
+          }),
+        };
+      }),
+    );
+    const { getTursoCredentialsEntry } = await import(
+      "../../../src/gateway/services/tursoCredentialsStore.js"
+    );
+    await expect((await bridge()).fetchCredentials(DB, { appId: LOCAL_APP })).rejects.toMatchObject({
+      code: "shared_database_unreachable",
+    });
+    expect(getTursoCredentialsEntry(key)).toBeNull();
+  });
+
+  it("offline fallback never returns an expired wrong-copy token", async () => {
+    const { saveTursoCredentialsEntry } = await import(
+      "../../../src/gateway/services/tursoCredentialsStore.js"
+    );
+    saveTursoCredentialsEntry(key, { tursoUrl: OWN_URL, authToken: "own-tok" }, Date.now() - 60_000);
+    vi.stubGlobal("fetch", vi.fn(async () => { throw new Error("offline"); }));
+    await expect(
+      (await bridge()).resolveCredentialsForReplicaOpen(DB, { localReplicaExists: true }),
+    ).rejects.toThrow();
+  });
+
   it("forgetTursoCredentialsForApp removes the app's tokens (delete / reinstall)", async () => {
     const { saveTursoCredentialsEntry, getTursoCredentialsEntry } = await import(
       "../../../src/gateway/services/tursoCredentialsStore.js"

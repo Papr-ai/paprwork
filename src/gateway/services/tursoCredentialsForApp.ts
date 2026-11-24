@@ -25,6 +25,21 @@ import { CLOUD_LINEAGE_FILENAME } from "./CloudAppLineageService.js";
 import { resolveTursoDatabaseNameForSource } from "./DatabaseRegistryService.js";
 import { resolveSharedPrimaryTursoEntry } from "./sharedPrimaryTursoResolve.js";
 
+/**
+ * A team copy could not get a token for the team's database (the server
+ * refused, or answered with a different copy). Callers must not fall back to
+ * an own copy: show "Can't reach the team's data" and retry later.
+ */
+export class SharedDatabaseUnreachableError extends Error {
+  readonly code = "shared_database_unreachable";
+  constructor(readonly databaseName: string) {
+    super(
+      `Can't reach the team's data for ${databaseName}: the cloud returned a different database than this team copy uses. Will retry.`,
+    );
+    this.name = "SharedDatabaseUnreachableError";
+  }
+}
+
 /** Same as memory `turso_service._sanitize_name(part, 8)`. */
 export function tursoSegmentPart(id: string): string {
   return id

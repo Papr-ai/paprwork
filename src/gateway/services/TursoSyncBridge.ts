@@ -56,7 +56,11 @@ import {
 import { getActivePaprWorkspacePointer } from "../../core/utils/paprApiKey.js";
 import { readActiveWorkspacePointer } from "../../core/utils/paprWorkspace.js";
 import { getPaprUserId } from "../utils/paprUserId.js";
-import { cachedTokenMatchesInstall, tokenScopeAppIdFor } from "./tursoCredentialsForApp.js";
+import {
+  cachedTokenMatchesInstall,
+  SharedDatabaseUnreachableError,
+  tokenScopeAppIdFor,
+} from "./tursoCredentialsForApp.js";
 import { recordTursoPushQuarantine } from "./tursoSyncState.js";
 import {
   localRemoteSchemaDriftTables,
@@ -320,6 +324,19 @@ export class TursoSyncBridge {
     return false;
   }
 
+  /** Persisted entry (even expired) only when it points at the right copy. */
+  private persistedEntryIfFits(key: string, databaseName: string) {
+    const entry = getTursoCredentialsEntry(key);
+    if (!entry) return null;
+    try {
+      if (cachedTokenMatchesInstall(databaseName, entry.tursoUrl)) return entry;
+    } catch {
+      return entry;
+    }
+    removeTursoCredentialsEntry(key);
+    return null;
+  }
+
   async fetchCredentials(
     databaseName: string,
     options?: { appId?: string },
@@ -344,7 +361,7 @@ export class TursoSyncBridge {
       return inFlight;
     }
 
-    const persisted = getTursoCredentialsEntry(key);
+    const persisted = this.persistedEntryIfFits(key, databaseName);
     const promise = this.fetchCredentialsUncached(databaseName, options?.appId)
       .then((bundle) => {
         // Filed under the identity captured BEFORE the request — a switch
@@ -383,7 +400,7 @@ export class TursoSyncBridge {
       return hit.creds;
     }
 
-    const persisted = key ? getTursoCredentialsEntry(key) : null;
+    const persisted = key ? this.persistedEntryIfFits(key, databaseName) : null;
     try {
       return await this.fetchCredentials(databaseName);
     } catch (error) {
@@ -510,6 +527,15 @@ export class TursoSyncBridge {
       tursoUrl: data.tursoUrl,
       authToken: data.authToken,
     };
+    // A team copy must read the publisher's database. If the server answered
+    // with any other copy (usually an empty one in this user's own segment),
+    // refuse it: never cache it, never read or write through it.
+    if (!cachedTokenMatchesInstall(databaseName, creds.tursoUrl)) {
+      console.warn(
+        `[TursoSyncBridge] Refusing token for ${databaseName}: server returned a different database than the team copy uses`,
+      );
+      throw new SharedDatabaseUnreachableError(databaseName);
+    }
     return {
       creds,
       expiresAtMs: this.resolveCredentialExpiryMs(data.expiresAt),
