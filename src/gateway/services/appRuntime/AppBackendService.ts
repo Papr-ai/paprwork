@@ -18,6 +18,7 @@ import {
 } from "./appBackendRunner.js";
 import { getPaprRoot } from "../../../core/utils/paprRoot.js";
 import { getAppRuntimeLogService } from "../AppRuntimeLogService.js";
+import { recordPreviewBackendStdout } from "../../utils/previewLoadedData.js";
 import { resolveDesktopAppBackendDatabaseEnv } from "./appBackendDatabase.js";
 import {
   mintBackendDbProxyEnv,
@@ -95,6 +96,7 @@ export class AppBackendService {
         timeoutMs,
       });
       recordBackendFailure(input.appId, input.action, result);
+      if (result.exitCode === 0) recordPreviewBackendStdout(input.appId, input.action, result.stdout);
       return result;
     } finally {
       revokeBackendDbProxyToken(proxyEnv.PAPR_DB_PROXY_TOKEN);
