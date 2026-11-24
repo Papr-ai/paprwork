@@ -16,6 +16,8 @@ sys.path.insert(0, JOB_SDK_DIR)  # papr_sqlite_compat, as PYTHONPATH does at run
 def load(name, path):
     spec = importlib.util.spec_from_file_location(name, path)
     mod = importlib.util.module_from_spec(spec)
+    # @dataclass resolves the module via sys.modules (None on newer Pythons otherwise).
+    sys.modules[name] = mod
     spec.loader.exec_module(mod)
     return mod
 
