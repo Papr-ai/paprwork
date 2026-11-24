@@ -380,10 +380,21 @@ export class TursoReplicaService {
         );
       }
 
-      const spec = await this.openSpec(localPath, tursoDatabase);
+      let spec = await this.openSpec(localPath, tursoDatabase);
       const marker = readBootstrapPendingMarker(localPath);
       try {
-        const synced = await this.syncWithRecovery(spec, "pull", { scalePull: true });
+        let synced: boolean;
+        try {
+          synced = await this.syncWithRecovery(spec, "pull", { scalePull: true });
+        } catch (error) {
+          // A rejected token: drop it, fetch a fresh one and pull once more. The worker
+          // reopens its handle when the token changes.
+          if (!ensureTursoSyncBridge().invalidateCredentialsOnAuthError(tursoDatabase, error)) {
+            throw error;
+          }
+          spec = await this.openSpec(localPath, tursoDatabase);
+          synced = await this.syncWithRecovery(spec, "pull", { scalePull: true });
+        }
         if (marker) {
           const settled = await this.settleBootstrapMarker(localPath, marker);
           if (!settled) {
