@@ -168,6 +168,8 @@ export interface MirrorSchemaMigrationToRegistryInput {
   lastSyncedOid?: string | null;
   dryRun?: boolean;
   overwrite?: boolean;
+  /** Folders this call may write (default: databases the app schema-owns). */
+  slugMap?: Map<string, string>;
 }
 
 /** Copy one migration SQL file into the registry folder (shared pull + install + write redirect). */
@@ -179,7 +181,7 @@ export async function mirrorSchemaMigrationToRegistry(
     return { kind: "not_migration" };
   }
 
-  const owned = await resolveSchemaOwnerSlugMap(input.appId, input.paprRoot);
+  const owned = input.slugMap ?? (await resolveSchemaOwnerSlugMap(input.appId, input.paprRoot));
   const registrySlug = registrySlugForRepoSlug(owned, parsed.slug);
   const paprRoot = input.paprRoot ?? getPaprRoot();
   if (!owned.has(registrySlug)) {
@@ -235,7 +237,14 @@ export async function mirrorSchemaMigrationToRegistry(
       return { kind: "conflict" };
     }
     if (existsSync(registryFullPath)) {
-      return { kind: "skipped", reason: "already on disk" };
+      // Same name, different SQL: someone edited a migration after it shipped.
+      // Keep the file that ran here and say so, instead of diverging quietly
+      // (audit I). The fix is a new migration, never an edit.
+      console.warn(
+        `[Migrations] ${parsed.fileName} changed upstream after it was written here; ` +
+          "kept the local version. Applied migrations are never edited; add a new one.",
+      );
+      return { kind: "skipped", reason: "edited upstream after it shipped (kept local)" };
     }
   }
 
@@ -298,6 +307,12 @@ export async function hydrateAppFolderSchemaMigrationsToRegistry(input: {
   appId: string;
   paprRoot?: string;
   appsRoot?: string;
+  /**
+   * Also every database the app links, not only the ones it schema-owns
+   * (Propose: one migrations folder per database, so a copy that doesn't own
+   * the schema is checked and tested like the owner — audit E).
+   */
+  includeLinked?: boolean;
 }): Promise<{ copied: string[]; skipped: string[] }> {
   const paprRoot = input.paprRoot ?? getPaprRoot();
   const appDir =
@@ -325,11 +340,20 @@ export async function hydrateAppFolderSchemaMigrationsToRegistry(input: {
     }
     const slug = slugEntry.name;
     const owned = await resolveSchemaOwnerSlugMap(input.appId, input.paprRoot);
+    if (input.includeLinked) {
+      for (const [k, v] of await linkedSlugMapForApp(paprRoot, appDir)) if (!owned.has(k)) owned.set(k, v);
+    }
     const registrySlug = registrySlugForRepoSlug(owned, slug);
     const migrationsDir = path.join(databasesDir, slug, "migrations");
     const sqlFiles = await listSqlFilesInDir(migrationsDir);
     for (const fileName of sqlFiles) {
       const repoPath = `databases/${registrySlug}/migrations/${fileName}`;
+      // A declined proposal's migration is moved to _quarantine in the real
+      // folder. The app-folder copy must not bring it back (audit C).
+      if (isQuarantined(paprRoot, owned.get(registrySlug), fileName)) {
+        skipped.push(`${repoPath} (declined; in _quarantine)`);
+        continue;
+      }
       let content: string;
       try {
         content = await fs.readFile(path.join(migrationsDir, fileName), "utf8");
@@ -342,6 +366,7 @@ export async function hydrateAppFolderSchemaMigrationsToRegistry(input: {
         repoPath,
         content,
         paprRoot,
+        slugMap: owned,
       });
       if (outcome.kind === "written") {
         copied.push(outcome.registryRelativePath);
@@ -358,6 +383,34 @@ export async function hydrateAppFolderSchemaMigrationsToRegistry(input: {
   }
 
   return { copied, skipped };
+}
+
+function isQuarantined(paprRoot: string, dbPath: string | undefined, fileName: string): boolean {
+  const slug = dbPath ? registrySlugFromLocalPath(dbPath) : null;
+  if (!slug) return false;
+  const q = path.join(paprRoot, "data", "databases", slug, "migrations", "_quarantine");
+  return existsSync(path.join(q, fileName)) || existsSync(path.join(q, `${fileName}.rejected`));
+}
+
+/** Slugs of every registry database an app links (data-sources.json), slug → db path. */
+async function linkedSlugMapForApp(paprRoot: string, appDir: string): Promise<Map<string, string>> {
+  const map = new Map<string, string>();
+  let ids: string[] = [];
+  let registry: DatabasesRegistryFile;
+  try {
+    const raw = await fs.readFile(path.join(appDir, "data-sources.json"), "utf8");
+    ids = raw.match(/db-[0-9a-f]{8}(?![0-9a-f])/g) ?? [];
+    registry = JSON.parse(await fs.readFile(path.join(paprRoot, "data", "databases.json"), "utf8")) as DatabasesRegistryFile;
+  } catch {
+    return map;
+  }
+  for (const id of new Set(ids)) {
+    const record = registry.databases?.[id];
+    if (!record || record.status !== "active") continue;
+    const slug = registrySlugFromLocalPath(record.localPath ?? "");
+    if (slug) map.set(slug, record.localPath);
+  }
+  return map;
 }
 
 /** Apply pending registry migrations for every DB this app schema-owns. */

@@ -275,7 +275,7 @@ describe("persistPulledSchemaMigration", () => {
 
     expect(outcome.kind).toBe("skipped");
     if (outcome.kind === "skipped") {
-      expect(outcome.reason).toBe("already on disk");
+      expect(outcome.reason).toBe("edited upstream after it shipped (kept local)");
     }
   });
 
