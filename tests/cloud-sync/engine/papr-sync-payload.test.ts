@@ -202,3 +202,59 @@ describe("paprSyncPayload", () => {
     expect(body.process_messages).toBe(true);
   });
 });
+
+describe("paprSyncPayload keeps the turn's order", () => {
+  const budget = {
+    maxTextChars: 8_000,
+    maxToolArgsChars: 500,
+    maxToolResultChars: 500,
+    includeThinking: false,
+    includeToolInputs: true,
+    includeToolResults: true,
+  };
+
+  test("text after the last tool stays last, so readers can find the reply", () => {
+    const blocks = buildPaprSyncContent(
+      {
+        role: "assistant",
+        content: "Building it now.Your app is live: https://x/app",
+        toolCalls: [makeToolCall(0, { command: "ls" }, "ok"), makeToolCall(1, { command: "pwd" }, "ok")],
+        sequence: [
+          { type: "text", data: "Building it now." },
+          { type: "tool", data: { name: "bash", toolCallId: "tool-0" } },
+          { type: "tool", data: { name: "bash", toolCallId: "tool-1" } },
+          { type: "text", data: "Your app is live: https://x/app" },
+        ],
+      },
+      budget,
+    );
+    if (!Array.isArray(blocks)) throw new Error("expected blocks");
+    expect(blocks.map((b) => b.type)).toEqual([
+      "text",
+      "tool_use",
+      "tool_result",
+      "tool_use",
+      "tool_result",
+      "text",
+    ]);
+    expect(blocks.at(-1)).toMatchObject({ text: "Your app is live: https://x/app" });
+  });
+
+  test("falls back to the old layout when the sequence misses a tool call", () => {
+    const blocks = buildPaprSyncContent(
+      {
+        role: "assistant",
+        content: "done",
+        toolCalls: [makeToolCall(0, { command: "ls" }, "ok"), makeToolCall(1, { command: "pwd" }, "ok")],
+        sequence: [
+          { type: "tool", data: { name: "bash", toolCallId: "tool-0" } },
+          { type: "text", data: "done" },
+        ],
+      },
+      budget,
+    );
+    if (!Array.isArray(blocks)) throw new Error("expected blocks");
+    expect(blocks[0]).toMatchObject({ type: "text", text: "done" });
+    expect(blocks.filter((b) => b.type === "tool_use")).toHaveLength(2);
+  });
+});
