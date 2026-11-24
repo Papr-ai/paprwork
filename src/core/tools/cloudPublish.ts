@@ -235,7 +235,7 @@ export const getCloudAppPublishTool = createTool({
   id: "get_cloud_app_publish",
   description: `Get cloud publish status for a mini-app (apps.papr.ai).
 
-**To give someone the app, send \`shareLink\` exactly as returned** (it carries the ?t= token when only the link grants access) and say who can open it (\`shareLinkWho\`). Never send \`shareUrl\` for a link-shared app — it shows "Invite link required".
+Share \`shareLink\` as-is.
 
 Returns live status, slug, loginAccess, externalLink, codeAccess (off | install), requireSignIn, perUserIsolation, Community listing, URLs, and **lineage** (mode fork|track, source.slug) when installed via install_cloud_app.
 
@@ -309,7 +309,7 @@ export const publishCloudAppTool = createTool({
   id: "publish_cloud_app",
   description: `Publish or update cloud sharing for a mini-app on apps.papr.ai.
 
-**After publishing, send the user \`shareLink\` exactly as returned** — it is picked from the app's access (tokened ?t= link when link sharing is on; plain URL for Community/Workspace). \`shareLinkWho\` says who can open it. Never hand out \`shareUrl\` for a link-shared app.
+Share \`shareLink\` as-is.
 
 **Installed copies:** a copy on its OWN data (Community installs, per-user team apps, detached copies) publishes to its own link like any app; it never updates the original. A copy on the TEAM's shared data can't publish code: send code with submit_cloud_app_pr, and shared rows with push_cloud_sync. Sharing-only changes (loginAccess, externalLink, requireSignIn, uploadMaxMb) from such a copy are applied to the original app, like the Share sheet; the server allows them for Admins (audiences.myRole / canManageAccess in get_cloud_app_publish). Check get_cloud_app_publish → lineage.databasePolicy.
 

@@ -2704,7 +2704,7 @@ export const listAppsTool = createTool({
           ? {
               publishedApps: cloudApps,
               publishedAppsTip:
-                "Their published apps. To share one, send its `link` exactly (it includes the ?t= token when the app is link-shared) and say who can open it (`linkWho`). To change one marked editable, use its id with read_app_file / edit_app_file (the code loads on first use) — do not create a new app.",
+                "Their published apps. Share only these links. To change one marked editable, use its id with read_app_file / edit_app_file (the code loads on first use) — do not create a new app.",
             }
           : {}),
         appsRoot: workspace.appsRoot,
