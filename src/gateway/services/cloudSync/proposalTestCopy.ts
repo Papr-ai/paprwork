@@ -150,6 +150,9 @@ export async function testPendingMigrations(input: PendingTestInput): Promise<Te
   const ledger = await input.read("SELECT id FROM schema_migrations");
   if (!ledger) throw new Error("couldn't read this copy's migration ledger");
   const done = new Set(ledger.rows.map((r) => bare(String(r.id ?? ""))));
+  // The team's ledger rides down with the shared data: those already ran on the team's database.
+  const team = await input.read("SELECT id FROM _papr_schema_migrations").catch(() => null);
+  for (const r of team?.rows ?? []) done.add(bare(String(r.id ?? "")));
   const pending = (await migrationFiles(input.migrationRoot)).filter((m) => !done.has(m.id));
   const result = await testMigrationsOnTestCopy(input.read, pending);
   const manifest: Record<string, string> = {};

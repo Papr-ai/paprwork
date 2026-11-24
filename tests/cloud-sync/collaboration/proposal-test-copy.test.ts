@@ -83,11 +83,15 @@ describe("pending migrations on the team's data (contributor)", () => {
     process.env.PAPR_HOME = home;
     const { file, read } = await realCopy(3);
     const w = new Database(file);
-    w.exec("CREATE TABLE schema_migrations (id TEXT PRIMARY KEY); INSERT INTO schema_migrations VALUES ('0001_init');");
+    w.exec(
+      "CREATE TABLE schema_migrations (id TEXT PRIMARY KEY); INSERT INTO schema_migrations VALUES ('0001_init');" +
+        "CREATE TABLE _papr_schema_migrations (id TEXT PRIMARY KEY); INSERT INTO _papr_schema_migrations VALUES ('0001b_team');",
+    );
     w.close();
     const root = path.join(home, "data", "databases", "team");
     await fs.mkdir(path.join(root, "migrations"), { recursive: true });
     await fs.writeFile(path.join(root, "migrations", "0001_init.sql"), "CREATE TABLE notes (id INTEGER PRIMARY KEY, body TEXT);");
+    await fs.writeFile(path.join(root, "migrations", "0001b_team.sql"), "SELECT broken syntax here;");
     await fs.writeFile(path.join(root, "migrations", "0002_add.sql"), "ALTER TABLE notes ADD COLUMN p TEXT;");
     const r = await testPendingMigrations({ dbId: "db-1", migrationRoot: root, read });
     expect(r.pending).toEqual(["0002_add"]);
