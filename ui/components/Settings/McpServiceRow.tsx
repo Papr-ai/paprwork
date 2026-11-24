@@ -26,10 +26,24 @@ function initials(name: string): string {
   return name.replace(/[^A-Za-z0-9 ]/g, "").split(" ").map((w) => w[0]).join("").slice(0, 2).toUpperCase();
 }
 
+/**
+ * Google's own connectors point at API hosts (gmail.googleapis.com,
+ * www.googleapis.com/drive) whose favicon is a generic globe. Map them to the
+ * product site so the row shows the real Gmail / Drive logo.
+ */
+const API_HOST_SITES: Array<[RegExp, string]> = [
+  [/^gmail\.googleapis\.com\//, "mail.google.com"],
+  [/^www\.googleapis\.com\/drive\b/, "drive.google.com"],
+  [/^www\.googleapis\.com\/calendar\b/, "calendar.google.com"],
+];
+
 /** Service's own site, from its MCP URL (mcp.linear.app → linear.app). */
-function siteDomain(url: string): string | null {
+export function siteDomain(url: string): string | null {
   try {
-    return new URL(url).hostname.replace(/^(mcp|api|www)\./, "");
+    const u = new URL(url);
+    const hostPath = u.hostname + u.pathname;
+    for (const [re, site] of API_HOST_SITES) if (re.test(hostPath)) return site;
+    return u.hostname.replace(/^(mcp|api|www)\./, "");
   } catch {
     return null;
   }
