@@ -542,6 +542,11 @@ export class CloudAppInstallService {
         source: prepare.source,
         databasePolicy,
         ...(baseCommit ? { baseCommit } : {}),
+        // On team data, only the publisher's databases are the team's; one the
+        // contributor adds later is their draft until a proposal is accepted.
+        ...(databasePolicy === "shared"
+          ? { teamDbIds: await installedTeamDbIds(appDir) }
+          : {}),
         ...(sourceAudience ? { sourceAudience } : {}),
         installedAt: new Date().toISOString(),
         ...(prepare.mode === "track"
@@ -671,4 +676,10 @@ async function snapshotAppDirHashes(appDir: string): Promise<Record<string, stri
   }
   await walk(appDir, appDir);
   return out;
+}
+
+async function installedTeamDbIds(appDir: string): Promise<string[]> {
+  const { dbIdsInDataSources } = await import("./sharedPrimaryTursoResolve.js");
+  const raw = await fs.readFile(path.join(appDir, "data-sources.json"), "utf8").catch(() => undefined);
+  return dbIdsInDataSources(raw);
 }
