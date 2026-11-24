@@ -1,30 +1,27 @@
 /**
- * The one training switch, used in two places:
- *   - Settings → Privacy (always available)
- *   - a one-time card after Papr sign-in (asked once per wording version)
+ * Internal training beta — Settings → Privacy only. Feature-flagged OFF.
  *
- * The choice lives on the Papr account, so it applies to every device, cloud
- * agent and job. Copy is deliberately plain; the legal text is linked.
+ * Renders nothing unless the server marks this account `available` (internal
+ * allowlist on the memory server). Customers never see it. Allowlisted users
+ * start OFF and must opt in here themselves. There is no popup or prompt.
  */
 import { useCallback, useEffect, useState } from "react";
 import { SettingRow } from "./SettingRow";
 import { Toggle } from "./Toggle";
-import "./TrainingConsent.css";
 
 const GATEWAY =
   typeof import.meta !== "undefined" && import.meta.env?.VITE_GATEWAY_PORT
     ? `http://${import.meta.env.VITE_GATEWAY_HOST || "localhost"}:${import.meta.env.VITE_GATEWAY_PORT || "18789"}`
     : "http://localhost:18789";
 
-export const TRAINING_LABEL = "Help improve Papr with my chats";
+export const TRAINING_LABEL = "Join the internal training beta";
 export const TRAINING_HINT =
-  "Lets Papr use your chats, the searches and tool calls in them, and how your apps run to train its models. Off by default. You can turn it off any time.";
-const PRIVACY_URL = "https://papr.ai/privacy";
+  "We don't train on your data. This beta is invite-only: turning it on lets Papr use your chats, the searches and tool calls in them, and how your apps run to improve its models. Off by default; turn it off any time.";
 
 interface ConsentState {
   signedIn: boolean;
+  available: boolean;
   optedIn: boolean;
-  asked: boolean;
 }
 
 function useTrainingConsent() {
@@ -59,47 +56,22 @@ function useTrainingConsent() {
   return { state, saving, save };
 }
 
-/** Settings → Privacy row. */
+/** Settings → Privacy row. Hidden for everyone not on the internal allowlist. */
 export function TrainingConsentRow() {
   const { state, saving, save } = useTrainingConsent();
-  if (!state) return null;
+  if (!state || !state.signedIn || state.available !== true) return null;
   return (
     <SettingRow
       label={TRAINING_LABEL}
-      hint={state.signedIn ? TRAINING_HINT : "Sign in to Papr to choose."}
-      tooltip="Stored on your Papr account. Applies to every device and cloud agent."
+      hint={TRAINING_HINT}
+      tooltip="Internal beta. Stored on your Papr account; applies to every device and cloud agent."
     >
       <Toggle
         checked={state.optedIn}
-        disabled={saving || !state.signedIn}
+        disabled={saving}
         onChange={(v) => void save(v)}
         ariaLabel={TRAINING_LABEL}
       />
     </SettingRow>
-  );
-}
-
-/** One-time card after sign-in. Renders nothing once the user has chosen. */
-export function TrainingConsentPrompt() {
-  const { state, saving, save } = useTrainingConsent();
-  if (!state || !state.signedIn || state.asked) return null;
-  return (
-    <div className="training-consent-card" role="dialog" aria-label={TRAINING_LABEL}>
-      <div className="training-consent-card__title">{TRAINING_LABEL}?</div>
-      <p className="training-consent-card__body">
-        {TRAINING_HINT}{" "}
-        <a href={PRIVACY_URL} target="_blank" rel="noreferrer">
-          Privacy policy
-        </a>
-      </p>
-      <div className="training-consent-card__actions">
-        <button type="button" className="training-consent-card__btn" disabled={saving} onClick={() => void save(false)}>
-          Not now
-        </button>
-        <button type="button" className="training-consent-card__btn training-consent-card__btn--primary" disabled={saving} onClick={() => void save(true)}>
-          Yes, help improve Papr
-        </button>
-      </div>
-    </div>
   );
 }

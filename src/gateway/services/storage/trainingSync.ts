@@ -71,8 +71,17 @@ let fetchConsent: ConsentFetcher = defaultFetchConsent;
 async function defaultFetchConsent(): Promise<boolean> {
   const { getPaprClient } = await import("../../../core/tools/paprClient.js");
   const client = await getPaprClient();
-  const res = (await client.get("/v1/training/consent", { timeout: 8_000 })) as { opted_in?: boolean };
-  return res?.opted_in === true;
+  return consentAllowsTraining(await client.get("/v1/training/consent", { timeout: 8_000 }));
+}
+
+/**
+ * Feature-flagged OFF: the server only reports `available: true` for accounts on
+ * its internal allowlist (TRAINING_PROGRAM_ALLOWLIST). Missing/false — including
+ * any older server that predates the flag — means no training sync, ever.
+ */
+export function consentAllowsTraining(res: unknown): boolean {
+  const r = res as { opted_in?: unknown; available?: unknown } | null | undefined;
+  return r?.available === true && r?.opted_in === true;
 }
 
 /** Cached account consent. Any error → false (never upload on doubt). */
