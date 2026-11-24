@@ -12,6 +12,11 @@ describe("listLocalEditsAgainstSnapshot", () => {
       listLocalEditsAgainstSnapshot(new Map([["app.ts", "CHANGED"], ["new.ts", "n"]]), { "app.ts": "a", "gone.ts": "g" }),
     ).toEqual(["app.ts", "gone.ts", "new.ts"]);
   });
+  it("a migration missing from the app folder is not a deletion (it lives in the database's own folder)", () => {
+    const snapshot: Record<string, string> = { "app.ts": "a" };
+    snapshot[["databases", "team-data-680", "migrations", "0003_idx.sql"].join("/")] = "m";
+    expect(listLocalEditsAgainstSnapshot(new Map([["app.ts", "a"]]), snapshot)).toEqual([]);
+  });
 });
 
 import { isCollaboratorEditablePath } from "../../../src/gateway/services/CloudAppTrackSyncService.js";

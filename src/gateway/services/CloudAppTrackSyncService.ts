@@ -199,7 +199,12 @@ export function listLocalEditsAgainstSnapshot(
     if (base === undefined || base !== hash) edited.push(rel);
   }
   for (const rel of Object.keys(snapshot)) {
-    if (!localHashes.has(rel)) edited.push(rel);
+    if (localHashes.has(rel)) continue;
+    // Migrations are append-only and live in the database's own folder
+    // (data/databases/{slug}/migrations), not the app folder. One missing here
+    // is not a deletion and Propose never sends it as one (contributeChangeSet).
+    if (/(^|\/)migrations\//.test(rel)) continue;
+    edited.push(rel);
   }
   return edited.sort();
 }
