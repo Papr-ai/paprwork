@@ -821,10 +821,8 @@ export async function paprDbApplyMigration(options: {
   await ensureReplicaSchemaMigrationsLedger(source);
 
   assertPaprDbMigrationApplyAllowed();
-  // No collaborator refusal here: on the team's shared data the single route
-  // applies on this desktop only (proposal hold) and the shared cloud copy
-  // changes when the publisher approves. Refusing left teammates stuck: the
-  // proposal in turn refuses migrations that never ran on this copy.
+  // Teammates on the team's shared data returned above (test copy only); the
+  // single route also refuses them, so no path leaves an unsettleable hold.
 
   const result = await applyRegistryMigrationSingleRoute(
     source,
