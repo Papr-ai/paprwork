@@ -61,6 +61,11 @@ export async function writeLinkedDbRowLocalFirst(
   assertReplaySafeRowSql(sql);
   assertNoEngineOwnedTableWrite(sql);
 
+  if ((source as { previewCopy?: boolean }).previewCopy) {
+    // Preview test copy: a plain local file, never synced.
+    return { ...(await pool.write(appId, source.dbPath, sql, params)), cloudSyncScheduled: false };
+  }
+
   if (isCloudDirectSource(source)) {
     const direct = await dbRouter.write(appId, source, sql, params);
     publishCloudDirectChange(source);
@@ -118,6 +123,10 @@ export async function writeLinkedDbBatchAtomic(
     assertNoEngineOwnedTableWrite(stmt.sql);
   }
 
+  if ((source as { previewCopy?: boolean }).previewCopy) {
+    return { source, results: await pool.writeBatch(appId, source.dbPath, [...statements]) };
+  }
+
   if (isCloudDirectSource(source)) {
     const results = await dbRouter.writeBatch(appId, source, statements);
     publishCloudDirectChange(source);
@@ -168,6 +177,11 @@ export async function execLinkedDbSchemaLocalFirst(
   // and `CREATE TABLE IF NOT EXISTS turso_sync_last_change_id (...)` is the exact
   // statement that plants an index-free engine table and aborts the sync worker.
   assertNoEngineOwnedTableWrite(sql);
+
+  if ((source as { previewCopy?: boolean }).previewCopy) {
+    await pool.exec(appId, source.dbPath, sql);
+    return { cloudSyncScheduled: false };
+  }
 
   if (isCloudDirectSource(source)) {
     await dbRouter.exec(appId, source, sql);

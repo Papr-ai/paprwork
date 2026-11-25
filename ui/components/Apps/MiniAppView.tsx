@@ -249,6 +249,8 @@ export function MiniAppView({
     );
     url.searchParams.set("_r", String(reloadKey));
     url.searchParams.set("_lk", String(iframeLoadKey));
+    // Preview reads/writes a test copy while your data change is pending (8c).
+    if (barV2 && pillView === "preview") url.searchParams.set("pv", "1");
     return url.toString();
   }, [
     localSrc,
