@@ -415,6 +415,37 @@ export function dbHasOnlyBaselineTables(dbPath: string): boolean {
   }
 }
 
+/** Names a TS/JS module exports (declarations, export lists, default). */
+export function exportedNames(content: string): Set<string> {
+  const names = new Set<string>();
+  const decl =
+    /^export\s+(?:declare\s+)?(?:async\s+)?(?:function\*?|const|let|var|class|type|interface|enum)\s+([A-Za-z_$][\w$]*)/gm;
+  for (const m of content.matchAll(decl)) names.add(m[1]);
+  for (const m of content.matchAll(/^export\s*(?:type\s*)?\{([^}]*)\}/gm)) {
+    for (const part of m[1].split(",")) {
+      const name = part.trim().split(/\s+as\s+/).pop()?.trim();
+      if (name) names.add(name);
+    }
+  }
+  if (/^export\s+default\b/m.test(content)) names.add("default");
+  return names;
+}
+
+/** Names one source file imports from the app's own db module (./db, ./db.ts, ../db). */
+export function namesImportedFromDb(source: string): string[] {
+  const out: string[] = [];
+  const re =
+    /import\s+(?:type\s+)?(?:([A-Za-z_$][\w$]*)\s*,?\s*)?(?:\{([^}]*)\})?\s*from\s*["'](?:\.\.?\/)+db(?:\.(?:ts|js))?["']/g;
+  for (const m of source.matchAll(re)) {
+    if (m[1]) out.push("default");
+    for (const part of (m[2] ?? "").split(",")) {
+      const name = part.trim().replace(/^type\s+/, "").split(/\s+as\s+/)[0]?.trim();
+      if (name) out.push(name);
+    }
+  }
+  return out;
+}
+
 export function buildAppDbTsContent(
   sources: ReadonlyArray<{ alias: string }>,
 ): string {

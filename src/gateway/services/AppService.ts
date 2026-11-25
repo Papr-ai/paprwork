@@ -30,6 +30,8 @@ import {
   type AppDataSourceRole,
   type AppDataSourcesFile,
   buildAppDbTsContent,
+  exportedNames,
+  namesImportedFromDb,
   dbHasOnlyBaselineTables,
   omitUnlinkedDataSources,
   parseDataSourcesFile,
@@ -3989,11 +3991,51 @@ export class AppService {
       if (existing === content) {
         return;
       }
+      // Never regenerate db.ts out from under its importers. Apps add helpers
+      // to db.ts (esc, runJob) and older generators exported APP_ID/SOURCE_ID;
+      // overwriting dropped those names and the app stopped building
+      // (Reddit Research Agent, SEO Audit).
+      const missing = await this.dbTsImportsMissingFrom(appPath, content);
+      if (missing.length > 0) {
+        console.warn(
+          `[AppService] Keeping db.ts for ${appId}: app imports ${missing.join(", ")} which the generated db.ts does not export`,
+        );
+        return;
+      }
     } catch {
       // create below
     }
 
     await fs.writeFile(dbTsPath, content, "utf8");
+  }
+
+  /** Names app source files import from db.ts that `nextDbTs` would not export. */
+  private async dbTsImportsMissingFrom(appPath: string, nextDbTs: string): Promise<string[]> {
+    const provided = exportedNames(nextDbTs);
+    const missing = new Set<string>();
+    const walk = async (dir: string, depth: number): Promise<void> => {
+      let entries: import("fs").Dirent[];
+      try {
+        entries = await fs.readdir(dir, { withFileTypes: true });
+      } catch {
+        return;
+      }
+      for (const entry of entries) {
+        const full = path.join(dir, entry.name);
+        if (entry.isDirectory()) {
+          if (depth < 4 && !["dist", "node_modules", "data", "backend", "jobs", "__papr__"].includes(entry.name) && !entry.name.startsWith(".")) {
+            await walk(full, depth + 1);
+          }
+        } else if (/\.(tsx?|jsx?)$/.test(entry.name) && !/^db\.(ts|js)$/.test(entry.name)) {
+          const src = await fs.readFile(full, "utf8").catch(() => "");
+          for (const name of namesImportedFromDb(src)) {
+            if (!provided.has(name)) missing.add(name);
+          }
+        }
+      }
+    };
+    await walk(appPath, 0);
+    return [...missing].sort();
   }
 
   async linkAppDataSource(
