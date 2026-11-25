@@ -32,6 +32,10 @@ interface AppSidePanelProps {
   onTabChange: (tab: AppSideTab) => void;
   onWideChange: (wide: boolean) => void;
   onClose: () => void;
+  /** Share bar v2: today's Local / Web switch, moved here as "Where Live runs". */
+  liveRunsOn?: "local" | "published";
+  canRunOnWeb?: boolean;
+  onLiveRunsOnChange?: (mode: "local" | "published") => void;
 }
 
 function IconButton({
@@ -63,6 +67,9 @@ export function AppSidePanel({
   onTabChange,
   onWideChange,
   onClose,
+  liveRunsOn,
+  canRunOnWeb = false,
+  onLiveRunsOnChange,
 }: AppSidePanelProps) {
   return (
     <aside className={`asp${wide ? " asp--wide" : ""}`} aria-label="Data and code">
@@ -109,6 +116,25 @@ export function AppSidePanel({
           </IconButton>
         </div>
       </div>
+      {liveRunsOn && onLiveRunsOnChange ? (
+        <div className="asp-where" role="radiogroup" aria-label="Where Live runs">
+          <span className="asp-where__label">Where Live runs</span>
+          {(["local", "published"] as const).map((m) => (
+            <button
+              key={m}
+              type="button"
+              role="radio"
+              aria-checked={liveRunsOn === m}
+              className={`asp-where__opt${liveRunsOn === m ? " is-on" : ""}`}
+              disabled={m === "published" && !canRunOnWeb}
+              title={m === "published" && !canRunOnWeb ? "Publish to the web first" : undefined}
+              onClick={() => onLiveRunsOnChange(m)}
+            >
+              {m === "local" ? "This Mac" : "Web"}
+            </button>
+          ))}
+        </div>
+      ) : null}
       <div className="asp-body">
         {tab === "jobs" ? (
           <AppJobsPanel appId={appId} compact={!wide} focusJobId={focusJobId} />
