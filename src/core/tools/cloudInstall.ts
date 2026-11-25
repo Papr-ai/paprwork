@@ -103,6 +103,12 @@ const checkContributionsSchema = z.object({
 const resolveChangeSchema = z.object({
   requestId: z.string().uuid(),
   action: z.enum(["approve", "reject"]),
+  confirmDestructive: z
+    .boolean()
+    .optional()
+    .describe(
+      "approve only. Set true ONLY after the owner saw the destructiveChanges list from a 409 destructive_change (dropped tables/columns, deleted or rewritten rows) and said to accept anyway.",
+    ),
   mergedManually: z
     .boolean()
     .optional()
@@ -436,7 +442,7 @@ export const resolveCloudAppPrTool = createTool({
   id: CLOUD_APP_PR_TOOL_IDS.resolve,
   description: `Approve or reject an incoming contribute-back GitHub PR (OWNER ONLY). Approve merges on GitHub then runs Get updates (pullAppFromCloud) for the source app — do not push local over the merge. Review first with ${CLOUD_APP_PR_TOOL_IDS.review}.
 
-If the proposal has mergeState "conflict" (it was based on an older version and overlaps newer edits), a plain approve fails. Either reject, or resolve it yourself: read the owner's current files (read_file on the local app) and the proposal's versions (${CLOUD_APP_PR_TOOL_IDS.readFile}), write a merged version that keeps both sides' intent, show the owner the result, and only after they confirm publish (push_cloud_sync({ appId })) and call this tool with { action: "approve", mergedManually: true }. The server checks that publish is on main; if it answers 409 merge_not_published, the publish hasn't landed yet — wait for push_cloud_sync to finish (or re-run it) and retry. Never report the proposal accepted until this call succeeds.`,
+If the proposal has mergeState "conflict" (it was based on an older version and overlaps newer edits), a plain approve fails. Either reject, or resolve it yourself: read the owner's current files (read_file on the local app) and the proposal's versions (${CLOUD_APP_PR_TOOL_IDS.readFile}), write a merged version that keeps both sides' intent, show the owner the result, and only after they confirm publish (push_cloud_sync({ appId })) and call this tool with { action: "approve", mergedManually: true }. The server checks that publish is on main; if it answers 409 merge_not_published, the publish hasn't landed yet — wait for push_cloud_sync to finish (or re-run it) and retry. If approve answers 409 destructive_change, the change can delete or rewrite the team's data: show the owner the destructiveChanges list in plain words and only call again with confirmDestructive: true after they say yes. Never report the proposal accepted until this call succeeds.`,
   inputSchema: resolveChangeSchema,
   execute: async (input) => {
     const args =
@@ -448,6 +454,10 @@ If the proposal has mergeState "conflict" (it was based on an older version and 
       const path =
         args.action === "approve"
           ? `/v1/cloud/apps/changes/${args.requestId}/approve${
+              args.confirmDestructive && !args.mergedManually
+                ? "?confirmDestructive=true"
+                : ""
+            }${
               args.mergedManually
                 ? `?mergedManually=true${
                     args.mergedCommitSha
