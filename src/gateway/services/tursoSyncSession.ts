@@ -182,6 +182,16 @@ export async function isLinkedSourceRemoteAhead(
   });
 }
 
+/**
+ * A failed pull is a failure, not a skip. Reporting it as "skipped" hid a replica
+ * that could never pull again (forked sync id) behind "remote_unchanged" for hours.
+ */
+export function pullSessionAction(pull: PullResult): TursoCloudSyncSessionAction {
+  if (pull.status === "pulled") return "pulled";
+  if (pull.status === "failed") return "failed";
+  return "skipped";
+}
+
 function sessionActionFromPushPull(
   wasDirty: boolean,
   push: PushResult,
@@ -257,7 +267,7 @@ export async function syncLinkedSourceFromCloud(
       }
       return {
         syncKey: resolvedKey,
-        action: pull.status === "pulled" ? "pulled" : "skipped",
+        action: pullSessionAction(pull),
         trigger,
         pull,
         ...(pull.reason ? { reason: pull.reason } : {}),
@@ -283,7 +293,7 @@ export async function syncLinkedSourceFromCloud(
       });
       return {
         syncKey: resolvedKey,
-        action: pull.status === "pulled" ? "pulled" : "skipped",
+        action: pullSessionAction(pull),
         trigger,
         pull,
         ...(pull.reason ? { reason: pull.reason } : {}),
@@ -361,7 +371,7 @@ export async function syncLinkedSourceFromCloud(
     const pull = await bridge.pullJob(resolvedKey);
     return {
       syncKey: resolvedKey,
-      action: pull.status === "pulled" ? "pulled" : "skipped",
+      action: pullSessionAction(pull),
       trigger,
       pull,
       ...(pull.reason ? { reason: pull.reason } : {}),

@@ -82,6 +82,7 @@ import { computeReplicaPendingPush } from "./replicaPendingPush.js";
 import { scheduleTursoReplicaPushForSyncKey } from "./tursoReplicaPushScheduler.js";
 import { withTursoReplicaSyncBusy } from "./gatewayTursoSyncBusy.js";
 import { createClient } from "@libsql/client";
+import { isReplicaForkedClientError, rekeyReplicaClientId } from "./replicaForkedClientId.js";
 import {
   isPrimaryEngineTableTypeError,
   LAST_CHANGE_ID_TABLE,
@@ -531,6 +532,25 @@ export class TursoReplicaService {
         // The bad table lives on the primary; the replica re-downloads it on every pull,
         // so no local repair can stick. Rebuild it there (counters kept) and retry once.
         if (!(await this.repairPrimaryEngineTable(spec))) throw error;
+        const pulled = await run();
+        markTursoReplicaReachable();
+        return pulled;
+      }
+      if (isReplicaForkedClientError((error as Error).message)) {
+        // Another copy of these files synced under the same client id (folder copy,
+        // backup restore). Same data, new name; the engine then syncs normally and
+        // keeps its own unsent changes. Unknown -info format: leave it, rethrow.
+        await client.close(spec.localPath);
+        const rekey = rekeyReplicaClientId(spec.localPath);
+        if (!rekey.ok) {
+          console.error(
+            `[TursoReplicaService] Forked sync id, cannot rekey (${rekey.reason}): ${spec.localPath}`,
+          );
+          throw error;
+        }
+        console.warn(
+          `[TursoReplicaService] Forked sync id ${rekey.previousId} → ${rekey.clientId}: ${spec.localPath}`,
+        );
         const pulled = await run();
         markTursoReplicaReachable();
         return pulled;
