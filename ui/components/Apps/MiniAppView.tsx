@@ -13,6 +13,8 @@ import {
 } from "./MiniAppPublishBar";
 import { onOpenAppTable } from "../../utils/openAppTable";
 import { AppSidePanel, type AppSideTab } from "./AppSidePanel";
+import { AppSettingsPage, type SettingsSection } from "./AppSettingsPage";
+import { usesSharedData } from "../../utils/copyState";
 import { shareBarV2Enabled } from "../../utils/viewPill";
 import type { AppWorkspaceMode, AppWorkspacePanel } from "../../hooks/useAppWorkspace";
 import { useAppLinkedJobCount } from "../../stores/jobsStore";
@@ -90,6 +92,9 @@ export function MiniAppView({
   // Data & code panel: opens beside the app; null = closed.
   const [sideTab, setSideTab] = useState<AppSideTab | null>(null);
   const [sideWide, setSideWide] = useState(false);
+  // Share bar v2: Settings is one full page (null = closed).
+  const [settingsSection, setSettingsSection] = useState<SettingsSection | null>(null);
+  const barV2 = shareBarV2Enabled();
   const [focusJobId, setFocusJobId] = useState<string | null>(null);
   const linkedJobCount = useAppLinkedJobCount(appId);
   const [previewShellLoaded, setPreviewShellLoaded] = useState(false);
@@ -120,6 +125,7 @@ export function MiniAppView({
     setWorkspacePanel("code");
     setSideTab(null);
     setSideWide(false);
+    setSettingsSection(null);
   }, [appId]);
 
   // Share sheet table pill: show that table in this app's DB panel.
@@ -128,7 +134,8 @@ export function MiniAppView({
   useEffect(
     () =>
       onOpenAppTable(appId, ({ db, table }) => {
-        setSideTab("data");
+        if (shareBarV2Enabled()) setSettingsSection("data");
+        else setSideTab("data");
         setPendingTable({ db, table });
       }),
     [appId],
@@ -909,10 +916,11 @@ export function MiniAppView({
             } else {
               setSideTab(null);
               setSideWide(false);
+              setSettingsSection(null);
             }
           }}
           workspacePanel={workspacePanel}
-          dataPanelOpen={sideTab !== null}
+          dataPanelOpen={barV2 ? settingsSection !== null : sideTab !== null}
           onWorkspacePanelChange={setWorkspacePanel}
           linkedJobCount={linkedJobCount}
           onTrackPullComplete={() => void refreshAppMetadata()}
@@ -922,9 +930,10 @@ export function MiniAppView({
           previewShellLoaded={previewShellLoaded}
           onOpenFailingJob={(jobId) => {
             setFocusJobId(jobId);
-            setSideTab("jobs");
+            if (barV2) setSettingsSection("jobs");
+            else setSideTab("jobs");
           }}
-          onOpenSettings={(target) => setSideTab(target)}
+          onOpenSettings={(target) => (barV2 ? setSettingsSection(target === "settings" ? (cloudLineage?.mode === "track" ? "code" : "general") : target) : setSideTab(target === "settings" ? "data" : target))}
           onOpenDependencyApp={(dependencyAppId, title) => {
             const tabId = createTab("app", dependencyAppId, title ?? "App");
             switchToTab(tabId);
@@ -932,7 +941,7 @@ export function MiniAppView({
         />
       ) : null}
       <div
-        className={`mini-app-view__stage${sideTab && sideWide ? " mini-app-view__stage--wide" : ""}`}
+        className={`mini-app-view__stage${(sideTab && sideWide) || (barV2 && settingsSection) ? " mini-app-view__stage--wide" : ""}`}
       >
         <div className="mini-app-view__frame-wrap">
           {waitingForGateway ? (
@@ -1076,7 +1085,25 @@ export function MiniAppView({
             </div>
           ) : null}
         </div>
-        {!embedded && sideTab ? (
+        {!embedded && barV2 && settingsSection ? (
+          <AppSettingsPage
+            appId={appId}
+            section={settingsSection}
+            onSectionChange={setSettingsSection}
+            focusJobId={focusJobId}
+            openTable={pendingTable}
+            onTableOpened={clearPendingTable}
+            ctx={{
+              collaborator: cloudLineage?.mode === "track",
+              live: cloud.live,
+              onTeamData: usesSharedData(cloudLineage),
+              loggedIn: true,
+              liveRunsOn: viewMode,
+              onLiveRunsOnChange: handleViewModeChange,
+            }}
+          />
+        ) : null}
+        {!embedded && !barV2 && sideTab ? (
           <AppSidePanel
             appId={appId}
             tab={sideTab}
@@ -1087,9 +1114,6 @@ export function MiniAppView({
             onTableOpened={clearPendingTable}
             onTabChange={setSideTab}
             onWideChange={setSideWide}
-            liveRunsOn={shareBarV2Enabled() ? viewMode : undefined}
-            canRunOnWeb={cloud.live}
-            onLiveRunsOnChange={handleViewModeChange}
             onClose={() => {
               setSideTab(null);
               setSideWide(false);
