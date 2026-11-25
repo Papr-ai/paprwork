@@ -953,6 +953,14 @@ export class TursoReplicaService {
     tursoDatabase: string,
     overrides?: { bootstrapIfEmpty?: boolean },
   ): Promise<OpenSpec> {
+    // "" or a relative path opens in the process cwd (the code folder), not the
+    // workspace — the engine then re-downloads into the wrong place every time.
+    if (!localPath?.trim() || !path.isAbsolute(localPath)) {
+      throw new Error(
+        `Replica has no local path on this machine (got ${JSON.stringify(localPath ?? "")}). ` +
+          "Restart Papr to assign one, or run papr_db_repair.",
+      );
+    }
     const bridge = ensureTursoSyncBridge();
     if (!bridge.enabled) {
       throw new Error("Turso sync bridge not available — sign in to Papr");

@@ -25,6 +25,7 @@ import {
 import type { DatabaseSyncMode } from "./tursoReplica/tursoReplicaTypes.js";
 import { defaultSyncModeForNewRegistryDb } from "../utils/tursoReplicaEnabled.js";
 import { isJobScratchDatabasePath } from "./jobs/jobScratchDatabasePath.js";
+import { assignMissingLocalPaths } from "./registryLocalPathAssign.js";
 import {
   assertEligibleRegistryLocalPath,
   isEligibleRegistryLocalPath,
@@ -233,6 +234,16 @@ export class DatabaseRegistryService {
     this.bindWorkspaceWriteContext();
     this.cache = await this.load();
     await this.backfillFromAppsIfNeeded();
+    // Records adopted from the cloud registry arrive with localPath "" (paths are
+    // stripped before upload). Give each one this machine's standard path.
+    const assigned = assignMissingLocalPaths(
+      this.cache.databases,
+      path.dirname(this.registryPath),
+    );
+    if (assigned.length > 0) {
+      console.warn(`[DatabaseRegistry] Assigned local paths to ${assigned.join(", ")}`);
+      await this.save(this.cache, { skipCloudUpload: true });
+    }
     for (const [localPath, dbIds] of findRegistryLocalPathCollisions(this.cache)) {
       console.warn(
         `[DatabaseRegistry] ${dbIds.length} databases share one local file ${localPath}: ${dbIds.join(", ")}. ` +
@@ -1033,6 +1044,8 @@ export class DatabaseRegistryService {
       } as DatabaseRecord;
       merged += 1;
     }
+    // New-to-this-machine records carry localPath "" — assign before anything opens them.
+    assignMissingLocalPaths(state.databases, path.dirname(this.registryPath));
     this.cache = state;
     return merged;
   }
