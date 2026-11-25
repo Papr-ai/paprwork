@@ -637,9 +637,6 @@ export const MessageList: React.FC<MessageListProps> = ({
             <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.25" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
               <path d="M12 5v14M5 12l7 7 7-7" />
             </svg>
-            {(streamUiActive || hasStreamingAssistantMessage) && (
-              <span className="message-list__jump-dot" aria-hidden="true" />
-            )}
           </button>
         </div>
       )}
