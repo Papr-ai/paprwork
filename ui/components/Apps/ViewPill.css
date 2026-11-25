@@ -15,11 +15,10 @@
 button.vp__btn:hover { color: var(--text-primary, inherit); background: rgba(127, 127, 127, 0.12); }
 .vp__btn.is-on {
   color: var(--text-primary, inherit); cursor: default;
-  background: var(--bg-primary, #fff); box-shadow: 0 1px 2px rgba(0, 0, 0, 0.08);
+  background: rgba(255, 255, 255, 0.92); box-shadow: 0 1px 2px rgba(0, 0, 0, 0.08);
 }
 button.vp__btn.is-on { cursor: pointer; }
 .vp__btn--preview.is-on { color: #b26a0e; }
-:root[data-theme="dark"] .vp__btn--preview.is-on { color: #fbbf24; }
 .vp__dot { position: absolute; top: 3px; right: 3px; width: 7px; height: 7px; border-radius: 50%;
   box-shadow: 0 0 0 2px var(--bg-secondary, #f3f4f6); }
 .vp__dot--info { background: #10b981; }
@@ -35,8 +34,6 @@ button.vp__btn.is-on { cursor: pointer; }
 .vp__stt { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; max-width: 220px; }
 .vp__st--warn .vp__stt { color: #b26a0e; }
 .vp__st--bad .vp__stt { color: #e5484d; }
-:root[data-theme="dark"] .vp__st--warn .vp__stt { color: #fbbf24; }
-:root[data-theme="dark"] .vp__st--bad .vp__stt { color: #f87171; }
 .vp__verb { margin-left: 2px; height: 22px; padding: 0 8px; border: 0; border-radius: 5px; font: inherit;
   font-size: 12px; color: inherit; cursor: pointer; background: color-mix(in srgb, currentColor 16%, transparent); }
 .vp__verb:hover { background: color-mix(in srgb, currentColor 24%, transparent); }
@@ -44,4 +41,11 @@ button.vp__btn.is-on { cursor: pointer; }
 @media (max-width: 720px) {
   .vp__stt { display: none; }
   .vp__st { padding-left: 6px; }
+}
+/* The app follows the system theme (prefers-color-scheme), not a data-theme attribute. */
+@media (prefers-color-scheme: dark) {
+  .vp__btn.is-on { background: rgba(255, 255, 255, 0.12); box-shadow: none; }
+  .vp__btn--preview.is-on, .vp__st--warn .vp__stt { color: #fbbf24; }
+  .vp__st--bad .vp__stt { color: #f87171; }
+  .vp__dot { box-shadow: 0 0 0 2px rgb(28, 28, 30); }
 }

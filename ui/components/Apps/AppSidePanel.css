@@ -162,6 +162,9 @@
 .asp-where__label { color: var(--text-secondary, #6b7280); margin-right: 6px; }
 .asp-where__opt { height: 24px; padding: 0 10px; border-radius: 6px; border: 1px solid transparent;
   background: transparent; color: var(--text-secondary, #6b7280); font: inherit; cursor: pointer; }
-.asp-where__opt.is-on { color: var(--text-primary, inherit); background: var(--bg-primary, #fff);
+.asp-where__opt.is-on { color: var(--text-primary, inherit); background: rgba(255, 255, 255, 0.92);
   border-color: var(--border-color, rgba(127, 127, 127, 0.25)); }
 .asp-where__opt:disabled { opacity: 0.5; cursor: default; }
+@media (prefers-color-scheme: dark) {
+  .asp-where__opt.is-on { background: rgba(255, 255, 255, 0.12); }
+}
