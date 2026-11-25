@@ -213,6 +213,9 @@ export async function postAppOps(
   } catch {
     // Non-fatal — ack OIDs + cursor are enough when HEAD is not yet visible.
   }
+  // Live view now shows what was just published.
+  const live = await import("../liveCode/liveCodeCopy.js");
+  live.refreshLiveCodeQuietly(`publish ${appId}`, () => live.refreshLiveCodeFromOidCache(appId));
   return parsed.data;
 }
 

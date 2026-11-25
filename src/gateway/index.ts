@@ -4705,11 +4705,24 @@ async function startGateway(): Promise<void> {
         const appId = req.params[0];
         staticAppId = appId;
         const wildcard = req.params[1];
-        const requestedPath =
+        // Live view: /apps/{id}/@live/... serves the web's code (data/live-code);
+        // everything else is the app folder (Preview, your edits). Relative
+        // asset URLs stay under @live/, so the whole page is one version.
+        const rawPath =
           typeof wildcard === "string" && wildcard.length > 0
             ? wildcard
             : "index.html";
-        staticRequestedPath = requestedPath;
+        const { resolveLiveServe } = await import("./services/liveCode/liveCodeServe.js");
+        const live = await resolveLiveServe(appId, rawPath);
+        const requestedPath = live.path;
+        staticRequestedPath = rawPath;
+        const resolveFile = (rel: string): Promise<string | null> =>
+          live.dir ? live.resolve(rel) : appService.resolveAppFilePath(appId, rel);
+        const readFile = async (rel: string): Promise<string | null> => {
+          if (!live.dir) return appService.readAppFile(appId, rel);
+          const p = await live.resolve(rel);
+          return p ? (await import("fs/promises")).readFile(p, "utf8") : null;
+        };
         staticServeTimer.markPhase("setupMs");
 
         if (requestedPath.includes("..")) {
@@ -4740,10 +4753,7 @@ async function startGateway(): Promise<void> {
           await import("./utils/miniAppStaticAssets.js");
 
         if (isMiniAppBinaryExtension(ext)) {
-          const filePath = await appService.resolveAppFilePath(
-            appId,
-            requestedPath,
-          );
+          const filePath = await resolveFile(requestedPath);
           staticServeTimer.markPhase("resolveMs");
           if (!filePath) {
             staticStatusCode = 404;
@@ -4760,10 +4770,7 @@ async function startGateway(): Promise<void> {
         // For bundled apps: serve dist/ output when requesting the bundled JS/CSS.
         // The iframe's index.html references dist/app.js and dist/app.css.
         if (requestedPath.startsWith("dist/")) {
-          const distPath = await appService.resolveAppFilePath(
-            appId,
-            requestedPath,
-          );
+          const distPath = await resolveFile(requestedPath);
           staticServeTimer.markPhase("resolveMs");
           if (!distPath) {
             staticStatusCode = 404;
@@ -4813,7 +4820,7 @@ async function startGateway(): Promise<void> {
           return;
         }
 
-        let content = await appService.readAppFile(appId, requestedPath);
+        let content = await readFile(requestedPath);
         staticServeTimer.markPhase("readMs");
         if (content === null) {
           staticStatusCode = 404;
@@ -4909,7 +4916,7 @@ async function startGateway(): Promise<void> {
         }
 
         if (ext === ".html" && typeof content === "string") {
-          const appDir = await appService.getAppPath(appId);
+          const appDir = live.dir ?? (await appService.getAppPath(appId));
           if (appDir && requestedPath === "index.html") {
             const { preferBundledEntryInHtml } =
               await import("./utils/miniAppBuild.js");

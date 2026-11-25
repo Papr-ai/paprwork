@@ -95,6 +95,8 @@ export function MiniAppView({
   // Share bar v2: Settings is one full page (null = closed).
   const [settingsSection, setSettingsSection] = useState<SettingsSection | null>(null);
   const barV2 = shareBarV2Enabled();
+  // Share bar v2: Live serves the web's code (/@live/), Preview your folder.
+  const [pillView, setPillView] = useState<"live" | "preview">("preview");
   const [focusJobId, setFocusJobId] = useState<string | null>(null);
   const linkedJobCount = useAppLinkedJobCount(appId);
   const [previewShellLoaded, setPreviewShellLoaded] = useState(false);
@@ -242,7 +244,9 @@ export function MiniAppView({
       url.searchParams.set("_r", String(iframeLoadKey));
       return url.toString();
     }
-    const url = new URL(localSrc);
+    const url = new URL(
+      barV2 && pillView === "live" ? localSrc.replace(/index\.html$/, "@live/index.html") : localSrc,
+    );
     url.searchParams.set("_r", String(reloadKey));
     url.searchParams.set("_lk", String(iframeLoadKey));
     return url.toString();
@@ -252,6 +256,8 @@ export function MiniAppView({
     iframeLoadKey,
     isPublishedPreview,
     publishedIframeBaseUrl,
+    barV2,
+    pillView,
   ]);
 
   usePreviewTabLifecycle(iframeRef, previewTabVisible, appId, iframeSrc);
@@ -933,6 +939,7 @@ export function MiniAppView({
             if (barV2) setSettingsSection("jobs");
             else setSideTab("jobs");
           }}
+          onActiveViewChange={setPillView}
           onOpenSettings={(target) => (barV2 ? setSettingsSection(target === "settings" ? (cloudLineage?.mode === "track" ? "code" : "general") : target) : setSideTab(target === "settings" ? "data" : target))}
           onOpenDependencyApp={(dependencyAppId, title) => {
             const tabId = createTab("app", dependencyAppId, title ?? "App");

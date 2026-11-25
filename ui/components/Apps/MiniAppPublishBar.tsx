@@ -180,6 +180,8 @@ interface MiniAppPublishBarProps {
   onOpenFailingJob?: (jobId: string) => void;
   /** Share bar v2: open the Settings panel (code, data, jobs) at a section. */
   onOpenSettings?: (target: "jobs" | "code" | "data" | "settings") => void;
+  /** Share bar v2: the view the pill is on, so the iframe can show it. */
+  onActiveViewChange?: (view: PillView) => void;
 }
 
 function sharePrefsOptions(cloud: CloudPublishControls): {
@@ -283,6 +285,7 @@ export function MiniAppPublishBar({
   onOpenFailingJob,
   onOpenSettings,
   onTitleChange,
+  onActiveViewChange,
 }: MiniAppPublishBarProps) {
   const [shareOpen, setShareOpen] = useState(false);
   /** Lets the missing-key chip open Share straight on the keys step. */
@@ -1844,6 +1847,20 @@ export function MiniAppPublishBar({
   });
   const [pillView, setPillView] = useState<PillView | null>(null);
   const activePillView = pillView ?? defaultView(pill);
+  // A new change while you're on Live: go back to following the default
+  // (Preview), so you see what just changed. A later click sticks again.
+  const previewEmpty = pill.preview.empty === true;
+  const prevPreviewEmpty = useRef(previewEmpty);
+  useEffect(() => {
+    if (prevPreviewEmpty.current && !previewEmpty) setPillView(null);
+    prevPreviewEmpty.current = previewEmpty;
+  }, [previewEmpty]);
+  // Nothing changed: Live and Preview are the same files, so the iframe keeps
+  // the folder (a lagging Live copy can't show stale code).
+  const iframeView: PillView = previewEmpty ? "preview" : activePillView;
+  useEffect(() => {
+    onActiveViewChange?.(iframeView);
+  }, [iframeView, onActiveViewChange]);
   const runPillVerb = (_view: PillView, st: PillStatus) => {
     if (st.action === "owner_chip") return handlePublishStatusChipClick();
     if (st.action === "propose") return void handleCollaboratorPropose();

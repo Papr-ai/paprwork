@@ -696,6 +696,14 @@ export async function pullAppCodeFromRepo(
       });
       const { revalidateAppDirty } = await import("./appDirtyState.js");
       await revalidateAppDirty(getPaprRoot(), trimmed);
+      if (!options.dryRun) {
+        // Live = the web's HEAD, whatever was kept locally. Awaited: the clone
+        // is removed when this function returns.
+        const live = await import("../liveCode/liveCodeCopy.js");
+        await live.writeLiveCode(trimmed, upstreamFiles).catch((err: unknown) => {
+          console.warn(`[PullAppCode] ${trimmed}: Live copy not updated:`, err instanceof Error ? err.message : err);
+        });
+      }
     }
 
     if (updatedFiles.length > 0) {
