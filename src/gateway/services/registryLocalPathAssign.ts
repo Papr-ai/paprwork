@@ -10,10 +10,10 @@
  *
  * The local path is purely this machine's choice, so assign it here, from the record
  * itself: `data/databases/{slug(label)}/data.db`. Never touches a record that already
- * has a path. Never reuses a folder that another record owns or that already holds a
- * file (an unknown leftover is not assumed to be this database) — those get the short
- * dbId appended. The new file does not exist yet, so the first open is one normal
- * fresh download from the cloud.
+ * has a path. Never reuses a folder another record owns (tombstones included). An
+ * unowned file in the label folder is this database's own copy and is kept; other
+ * cases get the short dbId appended. A new file does not exist yet, so its first open is
+ * one normal fresh download from the cloud.
  */
 
 import * as fs from "fs";
@@ -64,9 +64,15 @@ export function assignMissingLocalPaths(
     const base = folderSlug(record);
     const short = slugifyDatabaseAlias(record.dbId.replace(/^db-/, "")).slice(0, 8) || "x";
     const candidates = [base, `${base}-${short}`, `${base}-${slugifyDatabaseAlias(record.dbId)}`];
-    const chosen = candidates
-      .map((slug) => norm(path.join(dataDir, "databases", slug, "data.db")))
-      .find((p) => !taken.has(p) && !exists(p));
+    const paths = candidates.map((slug) => norm(path.join(dataDir, "databases", slug, "data.db")));
+    // The label folder is adopted even when a file is already there and no record
+    // owns it: that is this database's own copy (workspace pulled with paths
+    // stripped, registry rebuilt). Picking a new folder would orphan it, including
+    // any unsent changes. Folders any record (tombstones too) claims are never reused.
+    // Fallback folders must be brand new.
+    const chosen = !taken.has(paths[0])
+      ? paths[0]
+      : paths.slice(1).find((p) => !taken.has(p) && !exists(p));
     if (!chosen) {
       continue;
     }

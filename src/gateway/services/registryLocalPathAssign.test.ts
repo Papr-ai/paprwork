@@ -45,12 +45,23 @@ describe("assignMissingLocalPaths", () => {
     expect(dbs.fresh.localPath).toBe(dbFile("notes-22222222"));
   });
 
-  it("does not adopt an unknown file already on disk", () => {
+  it("adopts this database's own file already in its label folder (no record owns it)", () => {
     mkdirSync(path.dirname(dbFile("notes")), { recursive: true });
-    writeFileSync(dbFile("notes"), "leftover");
+    writeFileSync(dbFile("notes"), "existing copy");
     const dbs = { fresh: rec("db-33333333", "", "Notes") };
     assignMissingLocalPaths(dbs, dataDir);
-    expect(dbs.fresh.localPath).toBe(dbFile("notes-33333333"));
+    expect(dbs.fresh.localPath).toBe(dbFile("notes"));
+  });
+
+  it("never reuses a tombstoned database's folder; fallback must be a new folder", () => {
+    mkdirSync(path.dirname(dbFile("notes-44444444")), { recursive: true });
+    writeFileSync(dbFile("notes-44444444"), "someone else");
+    const dbs = {
+      old: rec("db-old", dbFile("notes"), "Notes", "tombstone"),
+      fresh: rec("db-44444444", "", "Notes"),
+    };
+    assignMissingLocalPaths(dbs, dataDir);
+    expect(dbs.fresh.localPath).toBe(dbFile("notes-db-44444444"));
   });
 
   it("two blank records with the same label get different folders", () => {
