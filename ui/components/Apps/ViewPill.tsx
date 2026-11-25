@@ -72,7 +72,7 @@ export function ViewPill({ model, active, settingsOpen, onView, onVerb, onSettin
     if (!on) {
       const d = viewDot(v, st);
       return (
-        <button key={v} type="button" className={cls} title={`${LABEL[v]} · ${st.label}`}
+        <button key={v} type="button" className={cls} title={`${LABEL[v]} · ${st.hint ?? st.label}`}
           aria-label={d ? `${LABEL[v]}, ${st.label}` : LABEL[v]} aria-pressed={false}
           onClick={() => onView(v)}>
           <Icon name={v} />
@@ -81,7 +81,7 @@ export function ViewPill({ model, active, settingsOpen, onView, onVerb, onSettin
       );
     }
     return (
-      <span key={v} className={cls} title={TIP[v]} aria-pressed>
+      <span key={v} className={cls} title={st.hint ?? TIP[v]} aria-pressed>
         <Icon name={v} />
         <span>{LABEL[v]}</span>
         <span className={`vp__st vp__st--${st.tone}`}>

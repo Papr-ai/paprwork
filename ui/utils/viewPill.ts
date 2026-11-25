@@ -26,6 +26,8 @@ export interface PillStatus {
   verb?: string;
   /** Preview with nothing in it. */
   empty?: boolean;
+  /** Longer explanation for the tooltip, when the label alone could mislead. */
+  hint?: string;
   /** What the verb runs. Owner chip actions are passed through as-is. */
   action?: CopyChipAction | "owner_chip" | null;
 }
@@ -107,6 +109,19 @@ export function resolveViewPill(input: ViewPillInput): ViewPillModel {
     live = { label: "Not on the web yet", tone: "idle" };
   } else if (ownerChip.tone !== "ok") {
     live = { label: ownerChip.label, tone: tone(ownerChip.tone), action: "owner_chip" };
+  }
+
+  // Live is in sync with the web, but you have changes that aren't in it yet:
+  // "Up to date" would read as "everything you made is live". Say what Live
+  // lacks instead; a real Live problem (update, offline, failed) still wins.
+  if (live === UP_TO_DATE && !preview.empty) {
+    const sent = preview.action === "view_proposal" || preview.action === "see_decline";
+    const until = input.copyBar ? (sent ? "it's accepted" : "you propose it and it's accepted") : "you publish";
+    live = {
+      label: sent ? "Without your change" : "Without your edits",
+      tone: "idle",
+      hint: `Live matches the team's version. Your ${sent ? "change is" : "edits are"} only in Preview until ${until}.`,
+    };
   }
 
   const settingsDot = input.failingJobName

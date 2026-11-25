@@ -13,6 +13,16 @@ const owner = { label: "Live", tone: "ok" as const };
 const base = { ownerChip: owner, ownerHasUnpublished: false, ownerLive: true, publisherSlug: "amir" };
 
 describe("resolveViewPill", () => {
+  it("sent change waiting: Live says it's without your change; a real Live status still wins", () => {
+    const waiting = resolveViewPill({ ...base, copyBar: chip("Proposal sent", "idle", "view_proposal", "View") });
+    expect(waiting.live.label).toBe("Without your change");
+    const owner = resolveViewPill({ ...base, copyBar: null, ownerHasUnpublished: true });
+    expect(owner.live.label).toBe("Without your edits");
+    expect(owner.live.hint).toContain("until you publish");
+    const failing = resolveViewPill({ ...base, copyBar: null, ownerHasUnpublished: true, ownerChip: { label: "Publish failed", tone: "bad" } });
+    expect(failing.live.label).toBe("Publish failed");
+  });
+
   it("clean copy: Live up to date, Preview empty, opens in Live", () => {
     const m = resolveViewPill({ ...base, copyBar: chip("Same as the team's app", "ok") });
     expect(m.live).toMatchObject({ label: "Up to date", tone: "ok" });
@@ -23,7 +33,10 @@ describe("resolveViewPill", () => {
   it("unproposed edits belong to Preview and open it", () => {
     const m = resolveViewPill({ ...base, copyBar: chip("Edits not proposed", "warn", "propose", "Propose") });
     expect(m.preview).toMatchObject({ label: "Not proposed yet", tone: "warn", verb: "Propose" });
-    expect(m.live.label).toBe("Up to date");
+    // Live is in sync with the web but doesn't have your edits: not "Up to date".
+    expect(m.live).toMatchObject({ label: "Without your edits", tone: "idle" });
+    expect(m.live.hint).toContain("only in Preview");
+    expect(viewDot("live", m.live)).toBeNull();
     expect(defaultView(m)).toBe("preview");
   });
 
