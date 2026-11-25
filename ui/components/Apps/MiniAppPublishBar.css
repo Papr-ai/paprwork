@@ -2846,3 +2846,26 @@ button.cloud-compat-badge--paused:hover {
   white-space: pre-wrap;
   word-break: break-word;
 }
+
+/* Accept answered "destructive change": list it and ask once more (step 6). */
+.share-sheet__changes-destructive {
+  margin: 8px 0;
+  padding: 10px 12px;
+  border-radius: 10px;
+  border: 1px solid color-mix(in srgb, var(--danger, #d64545) 45%, transparent);
+  background: color-mix(in srgb, var(--danger, #d64545) 8%, transparent);
+}
+.share-sheet__changes-destructive-title {
+  margin: 0 0 6px;
+  font-weight: 600;
+  color: var(--danger, #d64545);
+}
+.share-sheet__changes-destructive ul {
+  margin: 0 0 6px;
+  padding-left: 18px;
+  font-size: 12px;
+}
+.share-sheet__primary-btn--danger {
+  background: var(--danger, #d64545);
+  border-color: var(--danger, #d64545);
+}

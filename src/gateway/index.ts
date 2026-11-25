@@ -3510,7 +3510,9 @@ async function startGateway(): Promise<void> {
         const { appendCloudActingUserQuery } =
           await import("./utils/cloudActingUser.js");
         const targetUrl = `${memoryServerBase}${appendCloudActingUserQuery(
-          `/v1/cloud/apps/changes/${encodeURIComponent(req.params.requestId)}/approve`,
+          `/v1/cloud/apps/changes/${encodeURIComponent(req.params.requestId)}/approve${
+            String(req.query.confirmDestructive) === "true" ? "?confirmDestructive=true" : ""
+          }`,
         )}`;
         const upstream = await fetch(targetUrl, {
           method: "POST",
