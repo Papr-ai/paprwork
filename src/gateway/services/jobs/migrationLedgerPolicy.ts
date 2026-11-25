@@ -21,6 +21,16 @@ export function isMigrationLedgerMarker(migrationId: string): boolean {
   return MIGRATION_LEDGER_MARKERS.has(migrationId);
 }
 
+/**
+ * A 0001_baseline.sql with real statements is the app's first schema migration,
+ * not a placeholder. Papr writes an empty one for every new database; apps that
+ * put their CREATE TABLEs in it need it to run on a fresh database.
+ */
+export async function baselineFileHasStatements(migrationRoot: string): Promise<boolean> {
+  const sql = await readMigrationSql(migrationRoot, "0001_baseline.sql");
+  return sql !== null && splitSqlStatements(sql).length > 0;
+}
+
 /** Skip when hydrating/reconciling remote or local ledgers. */
 export function shouldSkipMigrationForRemoteLedger(migrationId: string): boolean {
   return isMigrationLedgerMarker(migrationId);
