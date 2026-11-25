@@ -24,7 +24,6 @@
 }
 
 .message-list__jump-btn {
-  position: relative;
   transform: translateY(-100%);
   pointer-events: auto;
   display: inline-flex;
@@ -54,31 +53,13 @@
   outline-offset: 2px;
 }
 
-/* Agent still writing below — small pulsing dot, no label swap. */
-.message-list__jump-dot {
-  position: absolute;
-  top: 1px;
-  right: 1px;
-  width: 8px;
-  height: 8px;
-  border-radius: 50%;
-  background: var(--accent);
-  box-shadow: 0 0 0 2px var(--bg-secondary);
-  animation: message-list-jump-pulse 1.4s ease-in-out infinite;
-}
-
 @keyframes message-list-jump-in {
   from { opacity: 0; transform: translateY(-80%); }
   to { opacity: 1; transform: translateY(-100%); }
 }
 
-@keyframes message-list-jump-pulse {
-  0%, 100% { opacity: 1; }
-  50% { opacity: 0.35; }
-}
-
 @media (prefers-reduced-motion: reduce) {
-  .message-list__jump-btn, .message-list__jump-dot { animation: none; }
+  .message-list__jump-btn { animation: none; }
 }
 
 .message-list-empty {
