@@ -13,21 +13,34 @@ import {
 } from "../../utils/viewPill";
 import "./ViewPill.css";
 
+// Same geometry as the mockup (icons.ts): 24-unit viewBox, 1.7 stroke.
 const ICONS: Record<PillView | "settings", ReactNode> = {
-  live: <path d="M2 8a6 6 0 1 0 12 0A6 6 0 0 0 2 8Zm6-3v3l2 2" />,
-  preview: (
+  // Live: a "recording" ring with a filled centre, not a clock.
+  live: (
     <>
-      <path d="M1.5 8S4 3.5 8 3.5 14.5 8 14.5 8 12 12.5 8 12.5 1.5 8 1.5 8Z" />
-      <circle cx="8" cy="8" r="2" />
+      <circle cx="12" cy="12" r="8" />
+      <circle cx="12" cy="12" r="3" fill="currentColor" />
     </>
   ),
-  settings: <path d="M3 4.5h10M3 8h10M3 11.5h10M6 3v3M10 6.5v3M5 10v3" />,
+  preview: (
+    <>
+      <path d="M2 12s3.5-7 10-7 10 7 10 7-3.5 7-10 7S2 12 2 12z" />
+      <circle cx="12" cy="12" r="3" />
+    </>
+  ),
+  settings: (
+    <>
+      <path d="M4 7h9M17 7h3M4 17h3M11 17h9" />
+      <circle cx="15" cy="7" r="2.2" />
+      <circle cx="9" cy="17" r="2.2" />
+    </>
+  ),
 };
 
 function Icon({ name }: { name: PillView | "settings" }) {
   return (
-    <svg width="14" height="14" viewBox="0 0 16 16" fill="none" stroke="currentColor"
-      strokeWidth="1.6" strokeLinecap="round" strokeLinejoin="round" aria-hidden>
+    <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor"
+      strokeWidth="1.7" strokeLinecap="round" strokeLinejoin="round" aria-hidden>
       {ICONS[name]}
     </svg>
   );
