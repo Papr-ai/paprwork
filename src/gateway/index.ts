@@ -696,6 +696,20 @@ async function startGateway(): Promise<void> {
       sourceId: string | undefined,
       sql: string | undefined,
       operation: "read" | "write",
+      req?: import("express").Request,
+    ): Promise<import("./services/appDataSources.js").AppDataSource> {
+      const real = await resolveRealLinkedSource(appId, sourceId, sql, operation);
+      if (!req) return real;
+      const { isPreviewRequest, previewSourceFor } = await import("./services/previewData/previewDataCopy.js");
+      if (!isPreviewRequest(req.headers.referer)) return real;
+      return (await previewSourceFor(appId, real).catch(() => null)) ?? real;
+    }
+
+    async function resolveRealLinkedSource(
+      appId: string,
+      sourceId: string | undefined,
+      sql: string | undefined,
+      operation: "read" | "write",
     ): Promise<import("./services/appDataSources.js").AppDataSource> {
       const appService = getAppService();
       const config = await appService.getDataSourcesConfig(appId);
@@ -1366,14 +1380,14 @@ async function startGateway(): Promise<void> {
         let source: import("./services/appDataSources.js").AppDataSource;
         const resolveSourceStarted = performance.now();
         try {
-          source = await resolveLinkedSource(appId, sourceId, sql, "read");
+          source = await resolveLinkedSource(appId, sourceId, sql, "read", req);
         } catch (err) {
           const e = err as Error & { status?: number };
           res.status(e.status ?? 400).json({ error: e.message });
           return;
         }
 
-        const sourceKey = source.alias ?? source.dbPath;
+        const sourceKey = (source as { previewCopy?: boolean }).previewCopy ? source.dbPath : (source.alias ?? source.dbPath);
         let cacheKey: string | undefined;
         if (isLoopbackRequest(req)) {
           cacheKey = buildLocalDbReadCacheKey({
@@ -1678,6 +1692,7 @@ async function startGateway(): Promise<void> {
                     coalesceBatchSourceId(stmt.sourceId, batchSourceId),
                     sql,
                     "read",
+                    req,
                   );
                   prepared.push({ index, source, sql, params: stmt.params });
                 } catch (resolveErr) {
@@ -1788,7 +1803,7 @@ async function startGateway(): Promise<void> {
 
         let source: import("./services/appDataSources.js").AppDataSource;
         try {
-          source = await resolveLinkedSource(appId, sourceId, sql, "write");
+          source = await resolveLinkedSource(appId, sourceId, sql, "write", req);
         } catch (err) {
           const e = err as Error & { status?: number };
           res.status(e.status ?? 400).json({ error: e.message });
@@ -1890,7 +1905,7 @@ async function startGateway(): Promise<void> {
           atomic: atomic === true,
           pool: dbPool,
           dbRouter,
-          resolveLinkedSource,
+          resolveLinkedSource: (a, s, q, o) => resolveLinkedSource(a, s, q, o, req),
         });
 
         console.log(
@@ -2114,7 +2129,7 @@ async function startGateway(): Promise<void> {
 
         let source: import("./services/appDataSources.js").AppDataSource;
         try {
-          source = await resolveLinkedSource(appId, sourceId, sql, "write");
+          source = await resolveLinkedSource(appId, sourceId, sql, "write", req);
         } catch (err) {
           const e = err as Error & { status?: number };
           res.status(e.status ?? 400).json({ error: e.message });
