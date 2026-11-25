@@ -1,0 +1,92 @@
+/**
+ * Share bar v2 (plan step 7): status sorting into Live / Preview, dots, and the pill.
+ */
+import { describe, expect, it, vi } from "vitest";
+import { fireEvent, render, screen } from "@testing-library/react";
+import { ViewPill } from "../../components/Apps/ViewPill";
+import { defaultView, resolveViewPill, viewDot, type ViewPillModel } from "../../utils/viewPill";
+import type { CopyBar } from "../../utils/copyState";
+
+const chip = (label: string, tone: CopyBar["chip"]["tone"], action: CopyBar["chip"]["action"] = null, verb: string | null = null) =>
+  ({ chip: { label, tone, action, verb } }) as unknown as CopyBar;
+const owner = { label: "Live", tone: "ok" as const };
+const base = { ownerChip: owner, ownerHasUnpublished: false, ownerLive: true, publisherSlug: "amir" };
+
+describe("resolveViewPill", () => {
+  it("clean copy: Live up to date, Preview empty, opens in Live", () => {
+    const m = resolveViewPill({ ...base, copyBar: chip("Same as the team's app", "ok") });
+    expect(m.live).toMatchObject({ label: "Up to date", tone: "ok" });
+    expect(m.preview.empty).toBe(true);
+    expect(defaultView(m)).toBe("live");
+  });
+
+  it("unproposed edits belong to Preview and open it", () => {
+    const m = resolveViewPill({ ...base, copyBar: chip("Edits not proposed", "warn", "propose", "Propose") });
+    expect(m.preview).toMatchObject({ label: "Not proposed yet", tone: "warn", verb: "Propose" });
+    expect(m.live.label).toBe("Up to date");
+    expect(defaultView(m)).toBe("preview");
+  });
+
+  it("waiting names the reviewer; declined is red with See why", () => {
+    expect(resolveViewPill({ ...base, copyBar: chip("Proposal sent", "idle", "view_proposal", "View") }).preview.label)
+      .toBe("Waiting for amir");
+    expect(resolveViewPill({ ...base, copyBar: chip("Proposal declined", "bad", "see_decline", "See why") }).preview)
+      .toMatchObject({ tone: "bad", verb: "See why" });
+  });
+
+  it("teammate updates and conflicts are Live's status", () => {
+    const m = resolveViewPill({ ...base, copyBar: chip("Publisher has updates", "info", "get_updates", "Get updates") });
+    expect(m.live).toMatchObject({ label: "Publisher has updates", tone: "info", verb: "Get updates" });
+    expect(m.preview.empty).toBe(true);
+    expect(resolveViewPill({ ...base, copyBar: chip("Update conflicts", "bad", "review_conflicts", "Review") }).live.tone)
+      .toBe("bad");
+  });
+
+  it("owner with unpublished edits: Preview says so; a failed publish stays on Live", () => {
+    const m = resolveViewPill({ ...base, copyBar: null, ownerHasUnpublished: true,
+      ownerChip: { label: "Last publish failed", tone: "bad" } });
+    expect(m.preview).toMatchObject({ label: "Not published yet", verb: "Publish" });
+    expect(m.live).toMatchObject({ label: "Last publish failed", tone: "bad" });
+  });
+
+  it("a failing job puts a red dot on Settings that leads to Jobs", () => {
+    const m = resolveViewPill({ ...base, copyBar: null, failingJobName: "Nightly sync" });
+    expect(m.settingsDot).toEqual({ tone: "bad", target: "jobs", label: "Nightly sync failed" });
+  });
+});
+
+describe("viewDot", () => {
+  it("only when the other view needs a look", () => {
+    expect(viewDot("live", { label: "Up to date", tone: "ok" })).toBeNull();
+    expect(viewDot("live", { label: "Offline", tone: "warn" })).toBe("warn");
+    expect(viewDot("preview", { label: "No changes", tone: "idle", empty: true })).toBeNull();
+    expect(viewDot("preview", { label: "Waiting for amir", tone: "idle" })).toBe("warn");
+    expect(viewDot("preview", { label: "Declined", tone: "bad" })).toBe("bad");
+  });
+});
+
+describe("ViewPill", () => {
+  const model: ViewPillModel = {
+    live: { label: "Up to date", tone: "ok" },
+    preview: { label: "Not proposed yet", tone: "warn", verb: "Propose", action: "propose" },
+    settingsDot: { tone: "bad", target: "jobs", label: "Nightly sync failed" },
+  };
+
+  it("open view shows its status; the other a dot; Settings a dot that opens Jobs", () => {
+    const onView = vi.fn();
+    const onSettings = vi.fn();
+    render(<ViewPill model={model} active="live" settingsOpen={false} onView={onView} onVerb={vi.fn()} onSettings={onSettings} />);
+    expect(screen.getByText("Up to date")).toBeTruthy();
+    fireEvent.click(screen.getByRole("button", { name: "Preview, Not proposed yet" }));
+    expect(onView).toHaveBeenCalledWith("preview");
+    fireEvent.click(screen.getByRole("button", { name: "Settings, Nightly sync failed" }));
+    expect(onSettings).toHaveBeenCalledWith("jobs");
+  });
+
+  it("the verb on the open view runs its action", () => {
+    const onVerb = vi.fn();
+    render(<ViewPill model={model} active="preview" settingsOpen={false} onView={vi.fn()} onVerb={onVerb} onSettings={vi.fn()} />);
+    fireEvent.click(screen.getByRole("button", { name: "Propose" }));
+    expect(onVerb).toHaveBeenCalledWith("preview", model.preview);
+  });
+});
