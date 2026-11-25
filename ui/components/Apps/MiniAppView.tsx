@@ -13,6 +13,7 @@ import {
 } from "./MiniAppPublishBar";
 import { onOpenAppTable } from "../../utils/openAppTable";
 import { AppSidePanel, type AppSideTab } from "./AppSidePanel";
+import { shareBarV2Enabled } from "../../utils/viewPill";
 import type { AppWorkspaceMode, AppWorkspacePanel } from "../../hooks/useAppWorkspace";
 import { useAppLinkedJobCount } from "../../stores/jobsStore";
 import { useTabs } from "../../hooks/useTabs";
@@ -923,6 +924,7 @@ export function MiniAppView({
             setFocusJobId(jobId);
             setSideTab("jobs");
           }}
+          onOpenSettings={(target) => setSideTab(target)}
           onOpenDependencyApp={(dependencyAppId, title) => {
             const tabId = createTab("app", dependencyAppId, title ?? "App");
             switchToTab(tabId);
@@ -1085,6 +1087,9 @@ export function MiniAppView({
             onTableOpened={clearPendingTable}
             onTabChange={setSideTab}
             onWideChange={setSideWide}
+            liveRunsOn={shareBarV2Enabled() ? viewMode : undefined}
+            canRunOnWeb={cloud.live}
+            onLiveRunsOnChange={handleViewModeChange}
             onClose={() => {
               setSideTab(null);
               setSideWide(false);
