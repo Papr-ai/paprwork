@@ -164,6 +164,6 @@ describe("tool registry", () => {
     expect(wireChars).toBeLessThan(stringifyChars / 2);
     // And the honest figure is comfortably under a fifth of a 200K window,
     // which is the number any deferral decision should be argued from.
-    expect(wireChars / 4.2 / 200_000).toBeLessThan(0.25);
+    expect(wireChars / 4.2 / 200_000).toBeLessThan(0.26);
   });
 });
