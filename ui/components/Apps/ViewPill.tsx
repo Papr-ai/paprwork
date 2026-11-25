@@ -61,7 +61,7 @@ interface ViewPillProps {
   settingsOpen: boolean;
   onView: (view: PillView) => void;
   onVerb: (view: PillView, status: PillStatus) => void;
-  onSettings: (target: "jobs" | "code" | "data" | null) => void;
+  onSettings: (target: "jobs" | "code" | "data" | "settings" | null) => void;
 }
 
 export function ViewPill({ model, active, settingsOpen, onView, onVerb, onSettings }: ViewPillProps) {
@@ -104,9 +104,9 @@ export function ViewPill({ model, active, settingsOpen, onView, onVerb, onSettin
       {viewBtn("preview")}
       <span className="vp__sep" aria-hidden />
       <button type="button" className={`vp__btn${settingsOpen ? " is-on" : ""}`}
-        title={settingsOpen ? "Close Settings" : sd ? `Settings, ${sd.label}` : "Settings: code, data, jobs"}
+        title={settingsOpen ? "Close Settings" : sd ? `Settings, ${sd.label}` : "Settings"}
         aria-label={sd ? `Settings, ${sd.label}` : "Settings"} aria-pressed={settingsOpen}
-        onClick={() => onSettings(settingsOpen ? null : sd?.target ?? "data")}>
+        onClick={() => onSettings(settingsOpen ? null : sd?.target ?? "settings")}>
         <Icon name="settings" />
         {settingsOpen ? <span>Settings</span> : <Dot tone={sd?.tone ?? null} />}
       </button>
