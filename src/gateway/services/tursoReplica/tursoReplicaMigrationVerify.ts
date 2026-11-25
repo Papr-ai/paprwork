@@ -6,7 +6,10 @@
 
 import type { Client } from "@libsql/client";
 import type { AppDataSource } from "../appDataSources.js";
-import { isMigrationLedgerMarker } from "../jobs/migrationLedgerPolicy.js";
+import {
+  baselineFileHasStatements,
+  isMigrationLedgerMarker,
+} from "../jobs/migrationLedgerPolicy.js";
 import {
   verifyMigrationOnRemote,
   type MigrationVerification,
@@ -68,7 +71,10 @@ export async function migrationSatisfiedOnReplica(
   migrationId: string,
 ): Promise<boolean> {
   const bareId = migrationId.replace(/\.sql$/, "");
-  if (isMigrationLedgerMarker(bareId) || isMigrationLedgerMarker(migrationId)) {
+  if (
+    (isMigrationLedgerMarker(bareId) || isMigrationLedgerMarker(migrationId)) &&
+    !(await baselineFileHasStatements(migrationRoot))
+  ) {
     return true;
   }
   const result = await verifyMigrationOnReplica(source, migrationRoot, migrationId);
