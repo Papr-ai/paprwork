@@ -172,6 +172,15 @@ DML auto-pushes when online. After offline row work, use **Publish changes** or 
 
 **Platform-managed (auto-added, do not create):** `_papr_created_at`, `_papr_updated_at`, `_papr_row_version` — used for conflict resolution across devices.
 
+### Live vs Preview (share bar)
+
+- **Live** = the team's version. **Preview** = your changes (or one proposal a reviewer is trying). The focus block's **View:** line says which is open.
+- Code edits always go to Preview (the app folder); Live changes only on publish or an accepted proposal.
+- A pending data change (teammate on shared data; owner of a live app with `PAPR_OWNER_PREVIEW_DATA=1`) is tried on a **test copy**: `papr_db_create_migration` returns `testedOnly: true`, Preview shows it, the real database gets it on accept/publish (database first, then code).
+- `papr_db_query` / `papr_db_exec` need `target: "preview" | "live"` while a test copy exists. Teammate Live writes need `confirmedWithUser: true` after asking.
+- Jobs run from Preview (or with `PAPR_DATA_TARGET=preview`) use the test copy; schedules and Live use real data.
+- `data/live-code/`, `data/preview-data/`, `data/proposal-preview/` are local caches — not synced, never edit.
+
 ### Cloud Turso naming (paprwork-v2 ↔ memory server)
 
 | Linked source | Turso short name | With `isolation: "per-user"` |

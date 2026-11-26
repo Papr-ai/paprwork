@@ -180,7 +180,8 @@ export const paprDbCreateMigrationTool = createTool({
     "Create AND apply a new schema migration on a registry database. Pass a short name + SQL only — " +
     "the system assigns the filename NNNN_YYYYMMDDHHMMSS_name.sql (next number + UTC timestamp) so " +
     "collaborators can never produce the same filename. Then applies it like papr_db_apply_migration " +
-    "(once on the replica, then pushed to Turso through sync). Use this for EVERY new schema change; do not write_file " +
+    "(once on the replica, then pushed to Turso through sync). On the team's shared data (or an owner's live app with Preview data on) it " +
+    "returns testedOnly: true instead: passed on a test copy, shown in Preview, applied for real on accept/publish. Use this for EVERY new schema change; do not write_file " +
     "migration files or pick numbers yourself. Never edit or rename existing migration files. " +
     "Never hard-code a user id: write '{{papr.owner_user_id}}' (quoted) for owner/user columns in " +
     "seed rows or backfills — it is filled with the database owner when the migration runs " +
