@@ -33,14 +33,20 @@ export function formatAgentFocusContext(
   const sections: string[] = [];
 
   if (hasActiveApp && resolved.activeApp) {
-    const { appId, title, files, surface, webUrl, installed } = resolved.activeApp;
+    const { appId, title, files, surface, webUrl, installed, pillView, tryingProposal } = resolved.activeApp;
     // Fixed wording per state: the line only changes when the user flips the toggle.
     const viewLine =
       surface === "web"
         ? installed === false
           ? `- **View:** web version only${webUrl ? ` (${webUrl})` : ""}. Not installed on this desktop, so local file/database tools can't reach it.`
           : `- **View:** web version${webUrl ? ` (${webUrl})` : ""}. Focus on what the user sees there. This app is also installed locally: local files, papr_db_query/papr_db_exec and jobs work too, and its shared data is the same database the web version uses.`
-        : "- **View:** local preview. Use local files, papr_db_query/papr_db_exec and jobs.";
+        : tryingProposal
+          ? `- **View:** Preview, trying the proposal "${tryingProposal.title}" (requestId \`${tryingProposal.id}\`): Live code + only that proposal's files, on its own test copy of the data. Don't edit app files for it (they're the user's own changes, not the proposal); review it with get_cloud_app_pr_review / read_cloud_app_pr_file.`
+          : pillView === "live"
+            ? "- **View:** Live (the team's version, read-only code). Your file edits go to Preview, not here: say so, and tell the user to switch to Preview to see them. For papr_db_query/papr_db_exec use target: \"live\" (the team's real data)."
+            : pillView === "preview"
+              ? "- **View:** Preview (the user's own changes). File edits show here. For papr_db_query/papr_db_exec use target: \"preview\" when asked; jobs run from here use the test copy."
+              : "- **View:** local preview. Use local files, papr_db_query/papr_db_exec and jobs.";
     const fileLines =
       files && files.length > 0
         ? files

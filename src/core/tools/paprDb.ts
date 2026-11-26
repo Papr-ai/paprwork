@@ -96,7 +96,19 @@ export const paprDbPullTool = createTool({
   },
 });
 
+const targetFields = {
+  target: z
+    .enum(["preview", "live"])
+    .optional()
+    .describe(
+      "preview = the app's test copy (your pending data change; rows are thrown away). live = the team's real data. " +
+        "Required when the database has a preview; use the view the user has open and say which you used.",
+    ),
+  appId: z.string().min(1).optional().describe("App whose preview to use, when several apps share this database"),
+};
+
 const paprDbQuerySchema = dbRefSchema.extend({
+  ...targetFields,
   sql: z.string().min(1).describe("SELECT or WITH … SELECT only"),
   params: z.array(z.unknown()).optional().describe("Bound params"),
   limit: z.number().int().min(1).max(1000).optional().describe("Max rows returned (default 200)"),
@@ -124,6 +136,11 @@ export const paprDbQueryTool = createTool({
 });
 
 const paprDbExecSchema = dbRefSchema.extend({
+  ...targetFields,
+  confirmedWithUser: z
+    .boolean()
+    .optional()
+    .describe("Teammate on the team's data writing Live rows: true only after the user agreed (you told them how many rows)"),
   sql: z.string().min(1).describe("SQL to execute (DML or DDL)"),
   params: z.array(z.unknown()).optional().describe("Bound params for DML"),
 });
@@ -163,7 +180,8 @@ export const paprDbCreateMigrationTool = createTool({
     "Create AND apply a new schema migration on a registry database. Pass a short name + SQL only — " +
     "the system assigns the filename NNNN_YYYYMMDDHHMMSS_name.sql (next number + UTC timestamp) so " +
     "collaborators can never produce the same filename. Then applies it like papr_db_apply_migration " +
-    "(once on the replica, then pushed to Turso through sync). Use this for EVERY new schema change; do not write_file " +
+    "(once on the replica, then pushed to Turso through sync). On the team's shared data (or an owner's live app with Preview data on) it " +
+    "returns testedOnly: true instead: passed on a test copy, shown in Preview, applied for real on accept/publish. Use this for EVERY new schema change; do not write_file " +
     "migration files or pick numbers yourself. Never edit or rename existing migration files. " +
     "Never hard-code a user id: write '{{papr.owner_user_id}}' (quoted) for owner/user columns in " +
     "seed rows or backfills — it is filled with the database owner when the migration runs " +

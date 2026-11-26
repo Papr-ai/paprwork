@@ -2,6 +2,7 @@
  * MiniAppPublishBar — publish, share, preview mode controls.
  */
 
+import { getGatewayHttpBase } from "../../utils/gatewayHttpBase";
 import React, { useCallback, useEffect, useRef, useState } from "react";
 import { createPortal } from "react-dom";
 import type { useCloudPublish } from "../../hooks/useCloudPublish";
@@ -180,6 +181,10 @@ interface MiniAppPublishBarProps {
   onOpenFailingJob?: (jobId: string) => void;
   /** Share bar v2: open the Settings panel (code, data, jobs) at a section. */
   onOpenSettings?: (target: "jobs" | "code" | "data" | "settings") => void;
+  /** Share bar v2: the view the pill is on, so the iframe can show it. */
+  onActiveViewChange?: (view: PillView) => void;
+  /** 8d: the proposal being tried in Preview (null = your own changes). */
+  onProposalPreviewChange?: (requestId: string | null, title?: string) => void;
 }
 
 function sharePrefsOptions(cloud: CloudPublishControls): {
@@ -283,6 +288,8 @@ export function MiniAppPublishBar({
   onOpenFailingJob,
   onOpenSettings,
   onTitleChange,
+  onActiveViewChange,
+  onProposalPreviewChange,
 }: MiniAppPublishBarProps) {
   const [shareOpen, setShareOpen] = useState(false);
   /** Lets the missing-key chip open Share straight on the keys step. */
@@ -1842,9 +1849,67 @@ export function MiniAppPublishBar({
     publisherSlug: cloudLineage?.sourceSlug,
     failingJobName: failingJob?.name ?? null,
   });
+  // 8d: try one proposal at a time in Preview (Live + only its files, test data).
+  const [trying, setTrying] = useState<{ id: string; title: string } | null>(null);
+  const [tryError, setTryError] = useState<string | null>(null);
+  const previewChoices = barV2 && incomingChanges.open.length > 0
+    ? [
+        { id: null, label: "Your changes", sub: pill.preview.empty ? "No changes" : pill.preview.label },
+        ...incomingChanges.open.map((r) => ({ id: r.id, label: r.title || "Proposal", sub: "Proposal · test copy of data" })),
+      ]
+    : [];
+  if (trying) {
+    pill.preview = {
+      label: trying.title,
+      tone: "ok",
+      hint: "This proposal on a test copy of the team's data. Nothing you do here is saved.",
+    };
+  } else if (tryError) {
+    pill.preview = { ...pill.preview, label: "Couldn't load", hint: tryError, tone: "warn", empty: false };
+  }
+  const pickPreview = async (id: string | null) => {
+    setTryError(null);
+    const prev = trying?.id;
+    if (!id) {
+      setTrying(null);
+      onProposalPreviewChange?.(null);
+    } else {
+      const title = incomingChanges.open.find((r) => r.id === id)?.title || "Proposal";
+      const res = await fetch(`${getGatewayHttpBase()}/api/apps/${appId}/proposal-preview/${id}`, { method: "POST" }).catch(() => null);
+      const body = (await res?.json().catch(() => ({}))) as { error?: string };
+      if (!res?.ok) {
+        setTryError(body.error ?? "Couldn't load this proposal");
+        return;
+      }
+      setTrying({ id, title });
+      onProposalPreviewChange?.(id, title);
+      setPillView("preview");
+    }
+    // Leaving a proposal throws its preview away.
+    if (prev && prev !== id) void fetch(`${getGatewayHttpBase()}/api/apps/${appId}/proposal-preview/${prev}`, { method: "DELETE" }).catch(() => undefined);
+  };
   const [pillView, setPillView] = useState<PillView | null>(null);
   const activePillView = pillView ?? defaultView(pill);
+  // A new change while you're on Live: go back to following the default
+  // (Preview), so you see what just changed. A later click sticks again.
+  const previewEmpty = pill.preview.empty === true;
+  const prevPreviewEmpty = useRef(previewEmpty);
+  useEffect(() => {
+    if (prevPreviewEmpty.current && !previewEmpty) setPillView(null);
+    prevPreviewEmpty.current = previewEmpty;
+  }, [previewEmpty]);
+  // Nothing changed: Live and Preview are the same files, so the iframe keeps
+  // the folder (a lagging Live copy can't show stale code).
+  const iframeView: PillView = previewEmpty ? "preview" : activePillView;
+  useEffect(() => {
+    onActiveViewChange?.(iframeView);
+  }, [iframeView, onActiveViewChange]);
   const runPillVerb = (_view: PillView, st: PillStatus) => {
+    // Live "Without edits · Propose": open Preview and run its button there.
+    if (st.action === "go_preview") {
+      setPillView("preview");
+      return runPillVerb("preview", pill.preview);
+    }
     if (st.action === "owner_chip") return handlePublishStatusChipClick();
     if (st.action === "propose") return void handleCollaboratorPropose();
     if (st.action === "publish" && !copyBar) return handlePublishStatusChipClick();
@@ -2062,6 +2127,9 @@ export function MiniAppPublishBar({
               onView={setPillView}
               onVerb={runPillVerb}
               onSettings={openSettings}
+              previews={previewChoices}
+              activePreview={trying?.id ?? null}
+              onPickPreview={(id) => void pickPreview(id)}
             />
           </div>
         ) : workspaceMode === "preview" ? (
@@ -2539,6 +2607,8 @@ export function MiniAppPublishBar({
               loading={incomingChanges.loading}
               error={incomingChanges.error}
               onReload={incomingChanges.reload}
+              checksAppId={barV2 ? appId : undefined}
+              onTry={barV2 ? (id) => { setContributionsOpen(false); void pickPreview(id); } : undefined}
               onAccepted={
                 reviewsAsCopy
                   ? () => void pullAfterAccept(appId).then(() => webSyncCheckStatus())

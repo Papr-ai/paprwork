@@ -95,6 +95,10 @@ export function MiniAppView({
   // Share bar v2: Settings is one full page (null = closed).
   const [settingsSection, setSettingsSection] = useState<SettingsSection | null>(null);
   const barV2 = shareBarV2Enabled();
+  // Share bar v2: Live serves the web's code (/@live/), Preview your folder.
+  const [pillView, setPillView] = useState<"live" | "preview">("preview");
+  const [tryingProposal, setTryingProposal] = useState<string | null>(null);
+  const [tryingProposalTitle, setTryingProposalTitle] = useState<string | null>(null);
   const [focusJobId, setFocusJobId] = useState<string | null>(null);
   const linkedJobCount = useAppLinkedJobCount(appId);
   const [previewShellLoaded, setPreviewShellLoaded] = useState(false);
@@ -186,6 +190,17 @@ export function MiniAppView({
 
   useCloudPreviewChatBridge(isPublishedPreview);
 
+  // Tell Pen which view is open (Live / Preview / a proposal).
+  useEffect(() => {
+    const { setPillView: setAgentPillView } = useAppViewSurfaceStore.getState();
+    if (!barV2) return;
+    setAgentPillView(appId, {
+      view: pillView,
+      ...(tryingProposal ? { proposal: { id: tryingProposal, title: tryingProposalTitle ?? "Proposal" } } : {}),
+    });
+    return () => setAgentPillView(appId, null);
+  }, [appId, barV2, pillView, tryingProposal, tryingProposalTitle]);
+
   useEffect(() => {
     const { setSurface } = useAppViewSurfaceStore.getState();
     setSurface(appId, isPublishedPreview ? "web" : "local", publishedLiveUrl ?? undefined);
@@ -242,9 +257,17 @@ export function MiniAppView({
       url.searchParams.set("_r", String(iframeLoadKey));
       return url.toString();
     }
-    const url = new URL(localSrc);
+    const url = new URL(
+      barV2 && pillView === "live"
+        ? localSrc.replace(/index\.html$/, "@live/index.html")
+        : barV2 && tryingProposal
+          ? localSrc.replace(/index\.html$/, `@pr-${tryingProposal}/index.html`)
+          : localSrc,
+    );
     url.searchParams.set("_r", String(reloadKey));
     url.searchParams.set("_lk", String(iframeLoadKey));
+    // Preview reads/writes a test copy while your data change is pending (8c).
+    if (barV2 && pillView === "preview") url.searchParams.set("pv", "1");
     return url.toString();
   }, [
     localSrc,
@@ -252,6 +275,9 @@ export function MiniAppView({
     iframeLoadKey,
     isPublishedPreview,
     publishedIframeBaseUrl,
+    barV2,
+    pillView,
+    tryingProposal,
   ]);
 
   usePreviewTabLifecycle(iframeRef, previewTabVisible, appId, iframeSrc);
@@ -932,6 +958,11 @@ export function MiniAppView({
             setFocusJobId(jobId);
             if (barV2) setSettingsSection("jobs");
             else setSideTab("jobs");
+          }}
+          onActiveViewChange={setPillView}
+          onProposalPreviewChange={(id, title) => {
+            setTryingProposal(id);
+            setTryingProposalTitle(title ?? null);
           }}
           onOpenSettings={(target) => (barV2 ? setSettingsSection(target === "settings" ? (cloudLineage?.mode === "track" ? "code" : "general") : target) : setSideTab(target === "settings" ? "data" : target))}
           onOpenDependencyApp={(dependencyAppId, title) => {

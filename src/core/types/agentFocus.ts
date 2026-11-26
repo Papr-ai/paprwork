@@ -9,6 +9,9 @@ export interface UiActiveAppFocus {
   /** Which view the user has open: local preview or the published web version. */
   surface?: "local" | "web";
   webUrl?: string;
+  /** Share bar v2: Live (team's version) or Preview (your changes / one proposal). */
+  pillView?: "live" | "preview";
+  tryingProposal?: { id: string; title: string };
 }
 
 export interface UiActiveJobFocus {

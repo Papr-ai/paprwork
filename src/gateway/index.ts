@@ -696,6 +696,26 @@ async function startGateway(): Promise<void> {
       sourceId: string | undefined,
       sql: string | undefined,
       operation: "read" | "write",
+      req?: import("express").Request,
+    ): Promise<import("./services/appDataSources.js").AppDataSource> {
+      const real = await resolveRealLinkedSource(appId, sourceId, sql, operation);
+      if (!req) return real;
+      {
+        // Trying a proposal (8d): its frame only ever sees its own test copy.
+        const { proposalFromReferer, proposalDataSource } = await import("./services/previewData/proposalPreview.js");
+        const requestId = proposalFromReferer(req.headers.referer);
+        if (requestId) return proposalDataSource(appId, requestId, real);
+      }
+      const { isPreviewRequest, previewSourceFor } = await import("./services/previewData/previewDataCopy.js");
+      if (!isPreviewRequest(req.headers.referer)) return real;
+      return (await previewSourceFor(appId, real).catch(() => null)) ?? real;
+    }
+
+    async function resolveRealLinkedSource(
+      appId: string,
+      sourceId: string | undefined,
+      sql: string | undefined,
+      operation: "read" | "write",
     ): Promise<import("./services/appDataSources.js").AppDataSource> {
       const appService = getAppService();
       const config = await appService.getDataSourcesConfig(appId);
@@ -1010,6 +1030,53 @@ async function startGateway(): Promise<void> {
         console.error("[Gateway] /api/apps/link-database error:", err);
         res.status(500).json({ error: message });
       }
+    });
+
+    // Try a proposal (plan 8d): build its preview (Live + only its files, test
+    // data), or throw it away. The UI then loads /apps/{appId}/@pr-{id}/index.html.
+    app.post("/api/apps/:appId/proposal-preview/:requestId", async (req, res) => {
+      try {
+        const { ensureProposalPreview } = await import("./services/previewData/proposalPreview.js");
+        await ensureProposalPreview(req.params.appId, req.params.requestId);
+        res.json({ url: `/apps/${req.params.appId}/@pr-${req.params.requestId}/index.html` });
+      } catch (err) {
+        res.status(422).json({ error: (err as Error).message });
+      }
+    });
+    // Review sheet v2 (step 9): plain-language checks for one proposal.
+    app.get("/api/apps/:appId/proposal-checks/:requestId", async (req, res) => {
+      try {
+        const { appId, requestId } = req.params;
+        const { ensureProposalPreview, proposalDataSource } = await import("./services/previewData/proposalPreview.js");
+        try {
+          await ensureProposalPreview(appId, requestId);
+        } catch (err) {
+          res.json({ checks: [{ tone: "bad", text: (err as Error).message }], confirm: null, dataChange: false });
+          return;
+        }
+        const { buildProposalChecks } = await import("./services/previewData/proposalChecks.js");
+        const { queryRegistryDatabase } = await import("./services/jobs/registryDbSchemaReader.js");
+        const { resolveMigrationRootFromDbPath } = await import("./services/jobs/databaseMigrations.js");
+        const config = await getAppService().getDataSourcesConfig(appId);
+        const databases = config.sources.flatMap((s) => {
+          const root = resolveMigrationRootFromDbPath(s.dbPath);
+          if (!root) return [];
+          return [{
+            label: s.alias,
+            slug: path.basename(root),
+            read: (sql: string) => queryRegistryDatabase({ dbPath: s.dbPath, dbId: s.dbId }, sql),
+            tryOnCopy: async () => void (await proposalDataSource(appId, requestId, s)),
+          }];
+        });
+        res.json(await buildProposalChecks({ appId, requestId, databases, needsUpdate: req.query.needsUpdate === "1" }));
+      } catch (err) {
+        res.status(500).json({ error: (err as Error).message });
+      }
+    });
+    app.delete("/api/apps/:appId/proposal-preview/:requestId", async (req, res) => {
+      const { removeProposalPreview } = await import("./services/previewData/proposalPreview.js");
+      await removeProposalPreview(req.params.appId, req.params.requestId).catch(() => undefined);
+      res.json({ ok: true });
     });
 
     // Status panel: the files Publish would send (added / edited / removed).
@@ -1366,14 +1433,14 @@ async function startGateway(): Promise<void> {
         let source: import("./services/appDataSources.js").AppDataSource;
         const resolveSourceStarted = performance.now();
         try {
-          source = await resolveLinkedSource(appId, sourceId, sql, "read");
+          source = await resolveLinkedSource(appId, sourceId, sql, "read", req);
         } catch (err) {
           const e = err as Error & { status?: number };
           res.status(e.status ?? 400).json({ error: e.message });
           return;
         }
 
-        const sourceKey = source.alias ?? source.dbPath;
+        const sourceKey = (source as { previewCopy?: boolean }).previewCopy ? source.dbPath : (source.alias ?? source.dbPath);
         let cacheKey: string | undefined;
         if (isLoopbackRequest(req)) {
           cacheKey = buildLocalDbReadCacheKey({
@@ -1678,6 +1745,7 @@ async function startGateway(): Promise<void> {
                     coalesceBatchSourceId(stmt.sourceId, batchSourceId),
                     sql,
                     "read",
+                    req,
                   );
                   prepared.push({ index, source, sql, params: stmt.params });
                 } catch (resolveErr) {
@@ -1788,7 +1856,7 @@ async function startGateway(): Promise<void> {
 
         let source: import("./services/appDataSources.js").AppDataSource;
         try {
-          source = await resolveLinkedSource(appId, sourceId, sql, "write");
+          source = await resolveLinkedSource(appId, sourceId, sql, "write", req);
         } catch (err) {
           const e = err as Error & { status?: number };
           res.status(e.status ?? 400).json({ error: e.message });
@@ -1890,7 +1958,7 @@ async function startGateway(): Promise<void> {
           atomic: atomic === true,
           pool: dbPool,
           dbRouter,
-          resolveLinkedSource,
+          resolveLinkedSource: (a, s, q, o) => resolveLinkedSource(a, s, q, o, req),
         });
 
         console.log(
@@ -2114,7 +2182,7 @@ async function startGateway(): Promise<void> {
 
         let source: import("./services/appDataSources.js").AppDataSource;
         try {
-          source = await resolveLinkedSource(appId, sourceId, sql, "write");
+          source = await resolveLinkedSource(appId, sourceId, sql, "write", req);
         } catch (err) {
           const e = err as Error & { status?: number };
           res.status(e.status ?? 400).json({ error: e.message });
@@ -2353,8 +2421,10 @@ async function startGateway(): Promise<void> {
         const { mergeVerifiedCallerJobParams } =
           await import("./services/appRuntime/miniAppAccess.js");
         const { getPaprCallerIdentity } = await import("./utils/paprUserId.js");
+        // Run from the Preview (or a proposal) frame: the job uses that test copy.
+        const { dataTargetParamFromReferer } = await import("./services/previewData/jobPreviewTargets.js");
         const verifiedParams = mergeVerifiedCallerJobParams(
-          params,
+          { ...(params ?? {}), ...(await dataTargetParamFromReferer(req.headers.referer)) },
           true,
           getPaprCallerIdentity(),
         );
@@ -4705,11 +4775,24 @@ async function startGateway(): Promise<void> {
         const appId = req.params[0];
         staticAppId = appId;
         const wildcard = req.params[1];
-        const requestedPath =
+        // Live view: /apps/{id}/@live/... serves the web's code (data/live-code);
+        // everything else is the app folder (Preview, your edits). Relative
+        // asset URLs stay under @live/, so the whole page is one version.
+        const rawPath =
           typeof wildcard === "string" && wildcard.length > 0
             ? wildcard
             : "index.html";
-        staticRequestedPath = requestedPath;
+        const { resolveLiveServe } = await import("./services/liveCode/liveCodeServe.js");
+        const live = await resolveLiveServe(appId, rawPath);
+        const requestedPath = live.path;
+        staticRequestedPath = rawPath;
+        const resolveFile = (rel: string): Promise<string | null> =>
+          live.dir ? live.resolve(rel) : appService.resolveAppFilePath(appId, rel);
+        const readFile = async (rel: string): Promise<string | null> => {
+          if (!live.dir) return appService.readAppFile(appId, rel);
+          const p = await live.resolve(rel);
+          return p ? (await import("fs/promises")).readFile(p, "utf8") : null;
+        };
         staticServeTimer.markPhase("setupMs");
 
         if (requestedPath.includes("..")) {
@@ -4740,10 +4823,7 @@ async function startGateway(): Promise<void> {
           await import("./utils/miniAppStaticAssets.js");
 
         if (isMiniAppBinaryExtension(ext)) {
-          const filePath = await appService.resolveAppFilePath(
-            appId,
-            requestedPath,
-          );
+          const filePath = await resolveFile(requestedPath);
           staticServeTimer.markPhase("resolveMs");
           if (!filePath) {
             staticStatusCode = 404;
@@ -4760,10 +4840,7 @@ async function startGateway(): Promise<void> {
         // For bundled apps: serve dist/ output when requesting the bundled JS/CSS.
         // The iframe's index.html references dist/app.js and dist/app.css.
         if (requestedPath.startsWith("dist/")) {
-          const distPath = await appService.resolveAppFilePath(
-            appId,
-            requestedPath,
-          );
+          const distPath = await resolveFile(requestedPath);
           staticServeTimer.markPhase("resolveMs");
           if (!distPath) {
             staticStatusCode = 404;
@@ -4813,7 +4890,7 @@ async function startGateway(): Promise<void> {
           return;
         }
 
-        let content = await appService.readAppFile(appId, requestedPath);
+        let content = await readFile(requestedPath);
         staticServeTimer.markPhase("readMs");
         if (content === null) {
           staticStatusCode = 404;
@@ -4909,7 +4986,7 @@ async function startGateway(): Promise<void> {
         }
 
         if (ext === ".html" && typeof content === "string") {
-          const appDir = await appService.getAppPath(appId);
+          const appDir = live.dir ?? (await appService.getAppPath(appId));
           if (appDir && requestedPath === "index.html") {
             const { preferBundledEntryInHtml } =
               await import("./utils/miniAppBuild.js");

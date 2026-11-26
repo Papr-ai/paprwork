@@ -637,6 +637,15 @@ export class CloudAppTrackSyncService {
         ...(nextMetadataUpstream ? { metadataUpstreamBaseline: nextMetadataUpstream } : {}),
       });
 
+      // Live = the publisher's version (ids already translated for this copy).
+      // Awaited: upstreamDir is cleaned up when the sync ends.
+      {
+        const live = await import("./liveCode/liveCodeCopy.js");
+        await live.writeLiveCode(appId, upstreamFiles).catch((err: unknown) => {
+          console.warn(`[TrackSync] ${appId}: Live copy not updated:`, err instanceof Error ? err.message : err);
+        });
+      }
+
       // Linked-job install replaces job folders wholesale with the publisher's
       // copy. Remember the collaborator's job code first so edits survive.
       const paprRoot = getPaprRoot();

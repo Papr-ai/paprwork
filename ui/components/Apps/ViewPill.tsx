@@ -3,6 +3,7 @@
  * Model comes from resolveViewPill; this only draws it.
  */
 
+import { useState } from "react";
 import type { ReactNode } from "react";
 import {
   viewDot,
@@ -62,9 +63,17 @@ interface ViewPillProps {
   onView: (view: PillView) => void;
   onVerb: (view: PillView, status: PillStatus) => void;
   onSettings: (target: "jobs" | "code" | "data" | "settings" | null) => void;
+  /** Reviewer: previews to switch between (null id = your own changes). Menu shows when 2+. */
+  previews?: Array<{ id: string | null; label: string; sub?: string }>;
+  activePreview?: string | null;
+  onPickPreview?: (id: string | null) => void;
 }
 
-export function ViewPill({ model, active, settingsOpen, onView, onVerb, onSettings }: ViewPillProps) {
+export function ViewPill({
+  model, active, settingsOpen, onView, onVerb, onSettings, previews = [], activePreview = null, onPickPreview,
+}: ViewPillProps) {
+  const [menuOpen, setMenuOpen] = useState(false);
+  const menu = previews.length > 1 && onPickPreview;
   const viewBtn = (v: PillView) => {
     const st = model[v];
     const on = v === active;
@@ -72,7 +81,7 @@ export function ViewPill({ model, active, settingsOpen, onView, onVerb, onSettin
     if (!on) {
       const d = viewDot(v, st);
       return (
-        <button key={v} type="button" className={cls} title={`${LABEL[v]} · ${st.label}`}
+        <button key={v} type="button" className={cls} title={`${LABEL[v]} · ${st.hint ?? st.label}`}
           aria-label={d ? `${LABEL[v]}, ${st.label}` : LABEL[v]} aria-pressed={false}
           onClick={() => onView(v)}>
           <Icon name={v} />
@@ -81,7 +90,7 @@ export function ViewPill({ model, active, settingsOpen, onView, onVerb, onSettin
       );
     }
     return (
-      <span key={v} className={cls} title={TIP[v]} aria-pressed>
+      <span key={v} className={cls} title={st.hint ?? TIP[v]} aria-pressed>
         <Icon name={v} />
         <span>{LABEL[v]}</span>
         <span className={`vp__st vp__st--${st.tone}`}>
@@ -91,6 +100,12 @@ export function ViewPill({ model, active, settingsOpen, onView, onVerb, onSettin
         {st.verb ? (
           <button type="button" className="vp__verb" onClick={() => onVerb(v, st)}>
             {st.verb}
+          </button>
+        ) : null}
+        {v === "preview" && menu ? (
+          <button type="button" className="vp__caret" aria-haspopup="menu" aria-expanded={menuOpen}
+            title="Switch preview" onClick={() => setMenuOpen((o) => !o)}>
+            ▾<b>{previews.length}</b>
           </button>
         ) : null}
       </span>
@@ -110,6 +125,18 @@ export function ViewPill({ model, active, settingsOpen, onView, onVerb, onSettin
         <Icon name="settings" />
         {settingsOpen ? <span>Settings</span> : <Dot tone={sd?.tone ?? null} />}
       </button>
+      {menu && menuOpen ? (
+        <div className="vp__menu" role="menu">
+          {previews.map((p) => (
+            <button key={p.id ?? "mine"} type="button" role="menuitemradio" aria-checked={p.id === activePreview}
+              className={`vp__mi${p.id === activePreview ? " is-on" : ""}`}
+              onClick={() => { setMenuOpen(false); onPickPreview!(p.id); }}>
+              <span>{p.label}</span>{p.sub ? <small>{p.sub}</small> : null}
+            </button>
+          ))}
+          <p className="vp__mnote">One at a time. Each runs on a test copy of the data.</p>
+        </div>
+      ) : null}
     </div>
   );
 }

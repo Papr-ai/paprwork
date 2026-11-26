@@ -80,7 +80,7 @@ const submitChangeSchema = z.object({
         "database first and verified, then the code is published (same order as the publisher's own Publish). " +
         "If that can't happen (role, offline, own-data or per-user copy, older server, or the app requires review) " +
         "it is sent for review instead and publishNote says why; for a role block, tell the user the owner can make them a Maintainer. On a team-shared copy, create the migration with " +
-        "papr_db_create_migration as usual — it runs on this desktop only until the change is approved or published.",
+        "papr_db_create_migration as usual — it's tried on a test copy (Preview shows it; testedOnly: true) and reaches the team's database when the change is approved or published.",
     ),
 });
 

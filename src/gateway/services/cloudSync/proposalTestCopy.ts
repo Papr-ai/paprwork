@@ -91,17 +91,7 @@ export async function testMigrationsOnTestCopy(
     await buildTestCopy(read, file, rowsPerTable);
     const db = new Database(file);
     try {
-      for (const m of migrations) {
-        try {
-          db.transaction(() => {
-            for (const stmt of splitSqlStatements(m.sql)) db.exec(stmt);
-          })();
-          result.passed.push(m.id);
-        } catch (err) {
-          result.failed = { id: m.id, error: (err as Error).message.slice(0, 200) };
-          break;
-        }
-      }
+      Object.assign(result, applyMigrationsToTestCopy(db, migrations));
     } finally {
       db.close();
     }
@@ -145,15 +135,37 @@ export interface PendingTestInput {
   read: ReadQuery;
 }
 
-/** Test every migration not in the real ledger, in order. Records the ones that passed. */
-export async function testPendingMigrations(input: PendingTestInput): Promise<TestCopyResult & { pending: string[] }> {
-  const ledger = await input.read("SELECT id FROM schema_migrations");
+/** Migration files not yet on the team's database (this copy's ledger + the team ledger). */
+export async function pendingMigrations(read: ReadQuery, migrationRoot: string): Promise<TestCopyMigration[]> {
+  const ledger = await read("SELECT id FROM schema_migrations");
   if (!ledger) throw new Error("couldn't read this copy's migration ledger");
   const done = new Set(ledger.rows.map((r) => bare(String(r.id ?? ""))));
   // The team's ledger rides down with the shared data: those already ran on the team's database.
-  const team = await input.read("SELECT id FROM _papr_schema_migrations").catch(() => null);
+  const team = await read("SELECT id FROM _papr_schema_migrations").catch(() => null);
   for (const r of team?.rows ?? []) done.add(bare(String(r.id ?? "")));
-  const pending = (await migrationFiles(input.migrationRoot)).filter((m) => !done.has(m.id));
+  return (await migrationFiles(migrationRoot)).filter((m) => !done.has(m.id));
+}
+
+/** Run migrations in order on an open test copy; stop at the first failure. */
+export function applyMigrationsToTestCopy(db: Database.Database, migrations: readonly TestCopyMigration[]): TestCopyResult {
+  const result: TestCopyResult = { passed: [] };
+  for (const m of migrations) {
+    try {
+      db.transaction(() => {
+        for (const stmt of splitSqlStatements(m.sql)) db.exec(stmt);
+      })();
+      result.passed.push(m.id);
+    } catch (err) {
+      result.failed = { id: m.id, error: (err as Error).message.slice(0, 200) };
+      break;
+    }
+  }
+  return result;
+}
+
+/** Test every migration not in the real ledger, in order. Records the ones that passed. */
+export async function testPendingMigrations(input: PendingTestInput): Promise<TestCopyResult & { pending: string[] }> {
+  const pending = await pendingMigrations(input.read, input.migrationRoot);
   const result = await testMigrationsOnTestCopy(input.read, pending);
   const manifest: Record<string, string> = {};
   for (const m of pending) if (result.passed.includes(m.id)) manifest[m.id] = sha(m.sql);

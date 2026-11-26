@@ -94,10 +94,18 @@ export class CommandJobExecutor implements IJobExecutor {
     const jobDbPath = path.join(params.jobDir, "data", "data.db");
     const [shellPath, shellArgs] = getShellCommand(finalCommand);
 
-    const writeTargets = await requireJobWriteTargets(params.job);
     const linkedAppId = (params.job.appIds ?? []).find(
       (id) => id !== STANDALONE_APP_ID,
     );
+    // Started from Preview: write the test copy Preview shows, not the team's data.
+    const { applyJobDataTarget } = await import("../../previewData/jobPreviewTargets.js");
+    const dataTarget = await applyJobDataTarget(
+      await requireJobWriteTargets(params.job),
+      linkedAppId,
+      params.runtimeParams,
+    );
+    const writeTargets = dataTarget.targets;
+    if (dataTarget.note) await params.appendLog(dataTarget.note);
 
     const nvmEnv = this.getNvmEnv();
 

@@ -500,16 +500,34 @@ export async function paprDbQuery(options: {
   sql: string;
   params?: unknown[];
   limit?: number;
+  target?: "preview" | "live";
+  appId?: string;
 }): Promise<{
   rows: Record<string, unknown>[];
   count: number;
   truncated: boolean;
   backend: "cloud-direct" | "turso-replica" | "local";
+  target: string;
 }> {
   await initializeDatabaseRegistry();
-  const source = resolveSource({ dbId: options.dbId, localPath: options.localPath });
+  const real = resolveSource({ dbId: options.dbId, localPath: options.localPath });
   const { assertReadOnlySql } = await import("../appRuntime/sqlValidation.js");
   assertReadOnlySql(options.sql);
+  const { resolveAgentDbTarget } = await import("../previewData/agentDbTarget.js");
+  const resolved = await resolveAgentDbTarget(real, options);
+  const result = await queryResolvedSource(resolved.source, options);
+  return { ...result, target: resolved.label };
+}
+
+async function queryResolvedSource(
+  source: AppDataSource,
+  options: { sql: string; params?: unknown[]; limit?: number },
+): Promise<{
+  rows: Record<string, unknown>[];
+  count: number;
+  truncated: boolean;
+  backend: "cloud-direct" | "turso-replica" | "local";
+}> {
   const limit = Math.max(1, Math.min(options.limit ?? 200, 1000));
   const cap = (rows: Record<string, unknown>[]) => ({
     rows: rows.slice(0, limit),
@@ -548,17 +566,47 @@ export async function paprDbExec(options: {
   localPath?: string;
   sql: string;
   params?: unknown[];
+  target?: "preview" | "live";
+  appId?: string;
+  confirmedWithUser?: boolean;
 }): Promise<{
+  changes: number;
+  lastInsertRowid: number;
+  pendingPush: boolean;
+  backend: "turso-replica" | "legacy-local" | "cloud-direct" | "preview-copy";
+  target: string;
+}> {
+  await initializeDatabaseRegistry();
+  const real = resolveSource({
+    dbId: options.dbId,
+    localPath: options.localPath,
+  });
+  const { resolveAgentDbTarget, assertLiveWriteConfirmed } = await import("../previewData/agentDbTarget.js");
+  const resolved = await resolveAgentDbTarget(real, options);
+  if (resolved.target === "preview") {
+    assertPaprDbExecAllowed(options.sql);
+    const { default: Database } = await import("better-sqlite3");
+    const db = new Database(resolved.source.dbPath);
+    try {
+      const r = db.prepare(options.sql).run(...((options.params ?? []) as never[]));
+      return { changes: r.changes, lastInsertRowid: Number(r.lastInsertRowid), pendingPush: false, backend: "preview-copy", target: resolved.label };
+    } finally {
+      db.close();
+    }
+  }
+  assertLiveWriteConfirmed(resolved, options.confirmedWithUser, options.sql);
+  return { ...(await execOnLiveSource(real, options)), target: resolved.label };
+}
+
+async function execOnLiveSource(
+  source: AppDataSource,
+  options: { sql: string; params?: unknown[] },
+): Promise<{
   changes: number;
   lastInsertRowid: number;
   pendingPush: boolean;
   backend: "turso-replica" | "legacy-local" | "cloud-direct";
 }> {
-  await initializeDatabaseRegistry();
-  const source = resolveSource({
-    dbId: options.dbId,
-    localPath: options.localPath,
-  });
 
   // Cloud-direct: no local file — the Turso primary is the only copy.
   const { isCloudDirectSource, cloudDirectWrite } = await import(
@@ -739,8 +787,9 @@ export async function paprDbApplyMigration(options: {
   migrationId: string;
   pendingPush: boolean;
   backend: "turso-replica" | "legacy-local" | "cloud-direct";
-  /** Teammate on shared data: passed on a test copy; the real copy is unchanged. */
+  /** Teammate on shared data, or owner of a live app: passed on a test copy; the real copy is unchanged. */
   testedOnly?: boolean;
+  note?: string;
   applyToken?: string;
   replicaApplied?: boolean;
   cloudApplied?: boolean;
@@ -764,7 +813,10 @@ export async function paprDbApplyMigration(options: {
   // per table), and the team's database gets it when the proposal is accepted
   // (audit A, B, F2). No hold, so this copy stays live on the team's data.
   const { isCollaboratorOnSharedDatabase } = await import("../sharedPrimaryTursoResolve.js");
-  if (isCollaboratorOnSharedDatabase(options.dbId)) {
+  // Owner of a live app (gap 2): same test copy; the real database gets it on publish.
+  const { isOwnerPreviewDatabase } = await import("../previewData/ownerPreviewData.js");
+  const ownerPreview = !isCollaboratorOnSharedDatabase(options.dbId) && (await isOwnerPreviewDatabase(options.dbId));
+  if (isCollaboratorOnSharedDatabase(options.dbId) || ownerPreview) {
     const { testPendingMigrations } = await import("../cloudSync/proposalTestCopy.js");
     const { queryRegistryDatabase } = await import("../jobs/registryDbSchemaReader.js");
     const migrationId = migrationFileName.replace(/\.sql$/, "");
@@ -781,7 +833,16 @@ export async function paprDbApplyMigration(options: {
         `${migrationId} didn't pass on a test copy of the team's data (${why}). Your real data wasn't changed.`,
       );
     }
-    return { applied: false, testedOnly: true, migrationId, pendingPush: false, backend: "turso-replica" };
+    return {
+      applied: false,
+      testedOnly: true,
+      migrationId,
+      pendingPush: false,
+      backend: "turso-replica",
+      note: ownerPreview
+        ? "Tried in Preview (a test copy). The real database gets it when you publish, together with the code."
+        : "Tried on a test copy. The team's database gets it when the owner accepts the proposal.",
+    };
   }
 
   const { isCloudDirectSource } = await import("../cloudDirect/cloudDirectDb.js");

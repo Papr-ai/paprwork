@@ -21,12 +21,12 @@ button.vp__btn:hover { color: var(--text-primary, inherit); background: rgba(127
 button.vp__btn.is-on { cursor: pointer; }
 .vp__dot { position: absolute; top: 3px; right: 3px; width: 7px; height: 7px; border-radius: 50%;
   box-shadow: 0 0 0 2px var(--bg-secondary, #f3f4f6); }
-.vp__dot--info { background: #10b981; }
 .vp__dot--warn, .vp__dot--bad { background: #0161e0; }
 .vp__st { display: inline-flex; align-items: center; gap: 6px; padding-left: 8px; margin-left: 2px;
   border-left: 1px solid rgba(127, 127, 127, 0.25); font-weight: 500; min-width: 0; }
 .vp__st i { width: 7px; height: 7px; border-radius: 50%; flex-shrink: 0; background: currentColor; }
-.vp__st--ok i, .vp__st--info i { background: #10b981; }
+.vp__st--ok i { background: #10b981; }
+.vp__st--info i { background: var(--text-secondary, #9ca3af); }
 .vp__st--warn i, .vp__st--bad i { background: #0161e0; }
 .vp__st--idle i { background: var(--text-secondary, #9ca3af); }
 .vp__stt { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; max-width: 220px; }
@@ -46,3 +46,19 @@ button.vp__btn.is-on { cursor: pointer; }
   .vp__st--warn .vp__stt, .vp__st--bad .vp__stt { color: #6ea8ff; }
   .vp__dot { box-shadow: 0 0 0 2px rgb(28, 28, 30); }
 }
+
+/* 8d: switch previews (your changes / one proposal at a time) */
+.vp { position: relative; }
+.vp__caret { margin-left: 4px; height: 22px; padding: 0 6px; border: 0; border-radius: 5px; font: inherit; font-size: 11px;
+  color: inherit; cursor: pointer; background: transparent; display: inline-flex; align-items: center; gap: 3px; }
+.vp__caret:hover { background: color-mix(in srgb, currentColor 12%, transparent); }
+.vp__caret b { font-weight: 600; }
+.vp__menu { position: absolute; top: calc(100% + 6px); left: 0; z-index: 30; min-width: 240px; padding: 6px;
+  border-radius: 10px; background: var(--surface-elevated, #fff); box-shadow: 0 8px 28px rgba(0, 0, 0, 0.16);
+  display: flex; flex-direction: column; gap: 2px; }
+.vp__mi { display: flex; flex-direction: column; align-items: flex-start; gap: 1px; padding: 6px 8px; border: 0;
+  border-radius: 6px; background: transparent; font: inherit; font-size: 13px; color: inherit; cursor: pointer; text-align: left; }
+.vp__mi small { font-size: 11px; color: var(--text-secondary, #6b7280); }
+.vp__mi:hover, .vp__mi.is-on { background: rgba(127, 127, 127, 0.12); }
+.vp__mnote { margin: 4px 8px 2px; font-size: 11px; color: var(--text-secondary, #6b7280); }
+@media (prefers-color-scheme: dark) { .vp__menu { background: rgb(44, 44, 46); } }

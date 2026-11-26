@@ -321,10 +321,13 @@ export class AgentJobExecutor implements IJobExecutor {
     jobsService.registerAgentRun(params.job.id, params.runId);
 
     const jobChatId = `job:${params.job.id}:${params.runId}`;
-    const writeTargets = await resolveJobWriteTargets(params.job);
     const linkedAppId = (params.job.appIds ?? []).find(
       (id) => id !== STANDALONE_APP_ID,
     );
+    const { applyJobDataTarget } = await import("../../previewData/jobPreviewTargets.js");
+    const writeTargets = (
+      await applyJobDataTarget(await resolveJobWriteTargets(params.job), linkedAppId, params.runtimeParams)
+    ).targets;
     const jobDbPath = await getJobsService().getJobDatabasePath(params.job.id);
     const { getPaprRoot } = await import("../../../../core/utils/paprRoot.js");
     // Agent jobs write their own scripts at runtime, so a raw sqlite3 handle
@@ -601,7 +604,14 @@ export class AgentJobExecutor implements IJobExecutor {
     const { getPaprRoot } = await import("../../../../core/utils/paprRoot.js");
     envLines.push(`PAPR_HOME="${getPaprRoot()}"`);
 
-    const writeTargets = await resolveJobWriteTargets(params.job);
+    const { applyJobDataTarget } = await import("../../previewData/jobPreviewTargets.js");
+    const previewRun = await applyJobDataTarget(
+      await resolveJobWriteTargets(params.job),
+      (params.job.appIds ?? []).find((id) => id !== STANDALONE_APP_ID),
+      params.runtimeParams,
+    );
+    const writeTargets = previewRun.targets;
+    if (previewRun.note) envLines.push(previewRun.note);
     if (writeTargets.length > 0) {
       envLines.push(...jobWriteDatabasePromptLines(writeTargets));
       // Never tell an agent "or sqlite3" when a target is a replica — the block
