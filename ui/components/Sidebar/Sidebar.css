@@ -230,7 +230,8 @@
   left: calc(100% + 8px);
   top: -8px;
   width: 300px;
-  max-height: min(640px, var(--rail-peek-room, calc(100vh - 40px)));
+  /* Same height as the old 6-row peek (~330px); longer lists scroll inside it. */
+  max-height: min(330px, var(--rail-peek-room, calc(100vh - 40px)));
   overflow-y: auto;
   overscroll-behavior: contain;
   padding: 8px;
