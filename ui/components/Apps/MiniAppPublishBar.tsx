@@ -2602,6 +2602,8 @@ export function MiniAppPublishBar({
               loading={incomingChanges.loading}
               error={incomingChanges.error}
               onReload={incomingChanges.reload}
+              checksAppId={barV2 ? appId : undefined}
+              onTry={barV2 ? (id) => { setContributionsOpen(false); void pickPreview(id); } : undefined}
               onAccepted={
                 reviewsAsCopy
                   ? () => void pullAfterAccept(appId).then(() => webSyncCheckStatus())

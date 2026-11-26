@@ -1043,6 +1043,36 @@ async function startGateway(): Promise<void> {
         res.status(422).json({ error: (err as Error).message });
       }
     });
+    // Review sheet v2 (step 9): plain-language checks for one proposal.
+    app.get("/api/apps/:appId/proposal-checks/:requestId", async (req, res) => {
+      try {
+        const { appId, requestId } = req.params;
+        const { ensureProposalPreview, proposalDataSource } = await import("./services/previewData/proposalPreview.js");
+        try {
+          await ensureProposalPreview(appId, requestId);
+        } catch (err) {
+          res.json({ checks: [{ tone: "bad", text: (err as Error).message }], confirm: null, dataChange: false });
+          return;
+        }
+        const { buildProposalChecks } = await import("./services/previewData/proposalChecks.js");
+        const { queryRegistryDatabase } = await import("./services/jobs/registryDbSchemaReader.js");
+        const { resolveMigrationRootFromDbPath } = await import("./services/jobs/databaseMigrations.js");
+        const config = await getAppService().getDataSourcesConfig(appId);
+        const databases = config.sources.flatMap((s) => {
+          const root = resolveMigrationRootFromDbPath(s.dbPath);
+          if (!root) return [];
+          return [{
+            label: s.alias,
+            slug: path.basename(root),
+            read: (sql: string) => queryRegistryDatabase({ dbPath: s.dbPath, dbId: s.dbId }, sql),
+            tryOnCopy: async () => void (await proposalDataSource(appId, requestId, s)),
+          }];
+        });
+        res.json(await buildProposalChecks({ appId, requestId, databases, needsUpdate: req.query.needsUpdate === "1" }));
+      } catch (err) {
+        res.status(500).json({ error: (err as Error).message });
+      }
+    });
     app.delete("/api/apps/:appId/proposal-preview/:requestId", async (req, res) => {
       const { removeProposalPreview } = await import("./services/previewData/proposalPreview.js");
       await removeProposalPreview(req.params.appId, req.params.requestId).catch(() => undefined);

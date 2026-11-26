@@ -31,6 +31,7 @@ import {
   type OptimisticChangeRequestResolution,
 } from "../../utils/changeRequestDisplay";
 import { formatChangeRequestWhen } from "../../utils/formatChangeRequestWhen";
+import { ProposalChecksBlock, useProposalChecks } from "./ProposalChecks";
 import type { ShareAudience } from "../../utils/shareAudienceModel";
 
 interface CloudChangeRequestsPanelProps {
@@ -48,6 +49,10 @@ interface CloudChangeRequestsPanelProps {
   onReload: () => Promise<void>;
   /** After an Accept (e.g. a Maintainer's copy pulls the merged app now). */
   onAccepted?: () => void;
+  /** Review sheet v2: open this proposal in Preview (8d). Shows "Try it" when set. */
+  onTry?: (requestId: string) => void;
+  /** Review sheet v2: app whose checks to load (plain-language Checks + destructive confirm). */
+  checksAppId?: string;
 }
 
 export function CloudChangeRequestsPanel({
@@ -62,12 +67,16 @@ export function CloudChangeRequestsPanel({
   error,
   onReload,
   onAccepted,
+  onTry,
+  checksAppId,
 }: CloudChangeRequestsPanelProps) {
   const [resolvingId, setResolvingId] = useState<string | null>(null);
   const [localError, setLocalError] = useState<string | null>(null);
   // Accept answered "this can delete or rewrite the team's data": hold the list
   // until the owner confirms or cancels (step 6). Keyed by request id.
   const [destructive, setDestructive] = useState<{ id: string; changes: string[] } | null>(null);
+  const reviewChecks = useProposalChecks(checksAppId, requests);
+  const [ticked, setTicked] = useState<Set<string>>(new Set());
   const [pastOpen, setPastOpen] = useState(false);
   const [successNotice, setSuccessNotice] = useState<string | null>(null);
   const [optimisticResolved, setOptimisticResolved] =
@@ -233,6 +242,17 @@ export function CloudChangeRequestsPanel({
                         ) : null}
                       </p>
                     </div>
+                    {checksAppId ? (
+                      <ProposalChecksBlock
+                        state={reviewChecks.get(req.id)}
+                        ticked={ticked.has(req.id)}
+                        onTick={(on) => setTicked((prev) => {
+                          const next = new Set(prev);
+                          if (on) next.add(req.id); else next.delete(req.id);
+                          return next;
+                        })}
+                      />
+                    ) : null}
                     {destructive?.id === req.id ? (
                       <div className="share-sheet__changes-destructive" role="alert">
                         <p className="share-sheet__changes-destructive-title">
@@ -285,8 +305,19 @@ export function CloudChangeRequestsPanel({
                           );
                         }}
                       >
-                        Review with agent
+                        {checksAppId ? "Ask Pen" : "Review with agent"}
                       </button>
+                      {onTry && !changeRequestNeedsUpdate(req) ? (
+                        <button
+                          type="button"
+                          className="share-sheet__secondary-btn"
+                          disabled={busy || working}
+                          title="Open this proposal in Preview, on a test copy of the team's data"
+                          onClick={() => onTry(req.id)}
+                        >
+                          Try it
+                        </button>
+                      ) : null}
                       {changeRequestNeedsUpdate(req) ? (
                         <button
                           type="button"
@@ -305,17 +336,17 @@ export function CloudChangeRequestsPanel({
                             )
                           }
                         >
-                          Merge with agent
+                          {checksAppId ? "Merge with Pen" : "Merge with agent"}
                         </button>
                       ) : (
                         <button
                           type="button"
-                          className="share-sheet__primary-btn"
-                          disabled={busy || working}
+                          className={`share-sheet__primary-btn${reviewChecks.get(req.id)?.data?.confirm ? " share-sheet__primary-btn--danger" : ""}`}
                           title="Merge this proposal into your app"
-                          onClick={() => void resolve(req, "approve")}
+                          disabled={busy || working || (!!reviewChecks.get(req.id)?.data?.confirm && !ticked.has(req.id))}
+                          onClick={() => void resolve(req, "approve", !!reviewChecks.get(req.id)?.data?.confirm && ticked.has(req.id))}
                         >
-                          {working ? "Accepting…" : "Accept"}
+                          {working ? "Accepting…" : checksAppId ? "Accept and publish" : "Accept"}
                         </button>
                       )}
                       <button
