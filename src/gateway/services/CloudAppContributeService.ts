@@ -551,6 +551,11 @@ async function buildContributeStaging(
     console.info(`[CloudContribute] mirrored app-folder migrations before proposing: ${mirrored.copied.join(", ")}`);
   }
 
+  // A migration an older build filed under the wrong database never runs there
+  // and would fail every Propose: move it aside first (facts only).
+  const { quarantineMisfiledForApp } = await import("./jobs/misfiledMigrations.js");
+  await quarantineMisfiledForApp(paprDir, forkAppId).catch(() => []);
+
   for (const tree of await collectMigrationTrees(paprDir, forkAppId, remaps, tempRoot)) {
     let dir = tree.repoRelativeDir;
     // Per-app repos keep schema-owner migrations at databases/{slug}/migrations
@@ -786,7 +791,14 @@ async function pushContributeBranch(
       if (auto.failed.length > 0) {
         throw new Error(
           "A new database change failed to run on this copy, so it can't be proposed yet: " +
-            auto.failed.map((f) => `${f.path.split("/").pop()} (${f.error})`).join("; ") +
+            auto.failed
+              .map((f) => {
+                const parts = f.path.split("/");
+                const at = parts.indexOf("databases");
+                const db = at >= 0 && at + 2 < parts.length ? parts[at + 1] : undefined;
+                return `${parts.pop()}${db ? ` in ${db}'s migrations` : ""} (${f.error})`;
+              })
+              .join("; ") +
             ". Fix or remove it, then propose again.",
         );
       }
