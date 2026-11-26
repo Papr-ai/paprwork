@@ -84,6 +84,17 @@ describe("Preview data test copy", () => {
     expect(fs.existsSync(b!.dbPath)).toBe(false);
   });
 
+  it("an old unrecorded file isn't your change; only ones newer than the team's latest are", async () => {
+    const db = new Database(teamDb);
+    db.exec("CREATE TABLE _papr_schema_migrations(id TEXT); INSERT INTO _papr_schema_migrations VALUES('0005_x');");
+    db.close();
+    addMigration("0003_leftover.sql", "CREATE TABLE leftover(x);");
+    expect(await previewSourceFor("app", src(), deps())).toBeNull();
+    addMigration("0006_mine.sql", "ALTER TABLE t ADD COLUMN note TEXT;");
+    resetPreviewDataForTests();
+    expect((await previewSourceFor("app", src(), deps()))?.previewCopy).toBe(true);
+  });
+
   it("a change that fails on the test copy: Preview shows the team's data", async () => {
     addMigration("0002_bad.sql", "ALTER TABLE nope ADD COLUMN x TEXT;");
     expect(await previewSourceFor("app", src(), deps())).toBeNull();

@@ -92,7 +92,12 @@ async function ensureCopy(appId: string, source: AppDataSource, d: PreviewDeps):
     "../cloudSync/proposalTestCopy.js"
   );
   const read = (sql: string) => d.read(source, sql);
-  const pending = await pendingMigrations(read, root).catch(() => []);
+  // Only migrations newer than the team's latest count as "your change". An
+  // old file the ledgers never recorded (a leftover, an id gap) would otherwise
+  // pin Preview to 100 sample rows forever.
+  const team = await d.read(source, "SELECT max(id) m FROM _papr_schema_migrations").catch(() => null);
+  const teamMax = String(team?.rows[0]?.m ?? "");
+  const pending = (await pendingMigrations(read, root).catch(() => [])).filter((m) => m.id > teamMax);
   const dir = previewDataDir(appId, d.paprRoot);
   const prefix = `${source.dbId}-`;
   const old = (await fs.readdir(dir).catch(() => [] as string[])).filter((n) => n.startsWith(prefix));
