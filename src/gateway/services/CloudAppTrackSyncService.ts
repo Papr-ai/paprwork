@@ -640,6 +640,12 @@ export class CloudAppTrackSyncService {
       // Linked-job install replaces job folders wholesale with the publisher's
       // copy. Remember the collaborator's job code first so edits survive.
       const paprRoot = getPaprRoot();
+      if (!dryRun) {
+        // Migrations deleted on the web stay here (history): move aside any an
+        // older build filed under the wrong database, or it is pending forever.
+        const { quarantineMisfiledForApp } = await import("./jobs/misfiledMigrations.js");
+        await quarantineMisfiledForApp(paprRoot, appId).catch(() => []);
+      }
       const jobIdsBefore = resolveAppDependentJobIds(paprRoot, appId);
       const localJobFiles = new Map<string, Map<string, string>>();
       if (!options.discardLocal) {
