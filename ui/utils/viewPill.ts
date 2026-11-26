@@ -50,7 +50,13 @@ const PREVIEW_ACTIONS: ReadonlySet<CopyChipAction> = new Set<CopyChipAction>([
   "see_decline",
 ]);
 
-const NO_CHANGES: PillStatus = { label: "No changes", tone: "idle", empty: true };
+/** Preview with nothing in it is exactly Live: say so, so it's clear there is nothing to look at. */
+const NO_CHANGES: PillStatus = {
+  label: "Same as Live",
+  tone: "idle",
+  empty: true,
+  hint: "You have no changes. Preview shows the same app as Live.",
+};
 const UP_TO_DATE: PillStatus = { label: "Up to date", tone: "ok" };
 
 /** Blue only when there's something to press; in-progress and FYI stay grey. */

@@ -27,6 +27,7 @@ describe("resolveViewPill", () => {
     const m = resolveViewPill({ ...base, copyBar: chip("Same as the team's app", "ok") });
     expect(m.live).toMatchObject({ label: "Up to date", tone: "ok" });
     expect(m.preview.empty).toBe(true);
+    expect(m.preview.label).toBe("Same as Live");
     expect(defaultView(m)).toBe("live");
   });
 
@@ -84,7 +85,7 @@ describe("viewDot", () => {
   it("only when the other view needs a look", () => {
     expect(viewDot("live", { label: "Up to date", tone: "ok" })).toBeNull();
     expect(viewDot("live", { label: "Offline", tone: "warn" })).toBe("warn");
-    expect(viewDot("preview", { label: "No changes", tone: "idle", empty: true })).toBeNull();
+    expect(viewDot("preview", { label: "Same as Live", tone: "idle", empty: true })).toBeNull();
     expect(viewDot("preview", { label: "Waiting for amir", tone: "idle" })).toBeNull();
     expect(viewDot("preview", { label: "Declined", tone: "warn" })).toBe("warn");
   });
