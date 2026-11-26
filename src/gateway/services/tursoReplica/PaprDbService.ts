@@ -787,8 +787,9 @@ export async function paprDbApplyMigration(options: {
   migrationId: string;
   pendingPush: boolean;
   backend: "turso-replica" | "legacy-local" | "cloud-direct";
-  /** Teammate on shared data: passed on a test copy; the real copy is unchanged. */
+  /** Teammate on shared data, or owner of a live app: passed on a test copy; the real copy is unchanged. */
   testedOnly?: boolean;
+  note?: string;
   applyToken?: string;
   replicaApplied?: boolean;
   cloudApplied?: boolean;
@@ -812,7 +813,10 @@ export async function paprDbApplyMigration(options: {
   // per table), and the team's database gets it when the proposal is accepted
   // (audit A, B, F2). No hold, so this copy stays live on the team's data.
   const { isCollaboratorOnSharedDatabase } = await import("../sharedPrimaryTursoResolve.js");
-  if (isCollaboratorOnSharedDatabase(options.dbId)) {
+  // Owner of a live app (gap 2): same test copy; the real database gets it on publish.
+  const { isOwnerPreviewDatabase } = await import("../previewData/ownerPreviewData.js");
+  const ownerPreview = !isCollaboratorOnSharedDatabase(options.dbId) && (await isOwnerPreviewDatabase(options.dbId));
+  if (isCollaboratorOnSharedDatabase(options.dbId) || ownerPreview) {
     const { testPendingMigrations } = await import("../cloudSync/proposalTestCopy.js");
     const { queryRegistryDatabase } = await import("../jobs/registryDbSchemaReader.js");
     const migrationId = migrationFileName.replace(/\.sql$/, "");
@@ -829,7 +833,16 @@ export async function paprDbApplyMigration(options: {
         `${migrationId} didn't pass on a test copy of the team's data (${why}). Your real data wasn't changed.`,
       );
     }
-    return { applied: false, testedOnly: true, migrationId, pendingPush: false, backend: "turso-replica" };
+    return {
+      applied: false,
+      testedOnly: true,
+      migrationId,
+      pendingPush: false,
+      backend: "turso-replica",
+      note: ownerPreview
+        ? "Tried in Preview (a test copy). The real database gets it when you publish, together with the code."
+        : "Tried on a test copy. The team's database gets it when the owner accepts the proposal.",
+    };
   }
 
   const { isCloudDirectSource } = await import("../cloudDirect/cloudDirectDb.js");

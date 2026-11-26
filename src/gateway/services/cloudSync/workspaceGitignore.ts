@@ -26,6 +26,10 @@ export const LOCAL_SYNC_STATE_GITIGNORE_LINES = [
   "data/covers/",
   // Private demo scenes (sample data, but per-user drafts) — never synced.
   "data/demos/",
+  // Live / Preview / proposal copies: rebuilt from the app repo on each desktop.
+  "data/live-code/",
+  "data/preview-data/",
+  "data/proposal-preview/",
 ] as const;
 
 const JOB_RUNTIME_GITIGNORE_LINES = [

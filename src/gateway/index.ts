@@ -2421,8 +2421,10 @@ async function startGateway(): Promise<void> {
         const { mergeVerifiedCallerJobParams } =
           await import("./services/appRuntime/miniAppAccess.js");
         const { getPaprCallerIdentity } = await import("./utils/paprUserId.js");
+        // Run from the Preview (or a proposal) frame: the job uses that test copy.
+        const { dataTargetParamFromReferer } = await import("./services/previewData/jobPreviewTargets.js");
         const verifiedParams = mergeVerifiedCallerJobParams(
-          params,
+          { ...(params ?? {}), ...(await dataTargetParamFromReferer(req.headers.referer)) },
           true,
           getPaprCallerIdentity(),
         );

@@ -40,8 +40,13 @@ describe("agent DB target (preview vs live)", () => {
 
   it("no preview: only Live, and asking for preview says so", async () => {
     expect((await resolveAgentDbTarget(real, {}, deps({ preview: false }))).target).toBe("live");
-    await expect(resolveAgentDbTarget(real, { target: "preview" }, deps({ preview: false }))).rejects.toThrow(/only the team's live data/);
-    expect((await resolveAgentDbTarget(real, {}, deps({ shared: false }))).label).toMatch(/no preview/);
+    await expect(resolveAgentDbTarget(real, { target: "preview" }, deps({ preview: false }))).rejects.toThrow(/Preview and Live use the same data/);
+    expect((await resolveAgentDbTarget(real, {}, deps({ shared: false, preview: false }))).label).toBe("live data");
+  });
+
+  it("owner of a live app with an unpublished data change: also no silent default (gap 2)", async () => {
+    await expect(resolveAgentDbTarget(real, {}, deps({ shared: false }))).rejects.toThrow(/target: "preview"/);
+    expect((await resolveAgentDbTarget(real, { target: "preview" }, deps({ shared: false }))).source.dbPath).toBe("/pv.db");
   });
 
   it("rule 4: a teammate's Live write needs the user's yes; preview and owners don't", async () => {
@@ -50,7 +55,7 @@ describe("agent DB target (preview vs live)", () => {
     expect(() => assertLiveWriteConfirmed(lv, true, "UPDATE notes SET x=1")).not.toThrow();
     const pv = await resolveAgentDbTarget(real, { target: "preview" }, deps());
     expect(() => assertLiveWriteConfirmed(pv, false, "INSERT INTO notes DEFAULT VALUES")).not.toThrow();
-    const owner = await resolveAgentDbTarget(real, {}, deps({ shared: false }));
+    const owner = await resolveAgentDbTarget(real, { target: "live" }, deps({ shared: false }));
     expect(() => assertLiveWriteConfirmed(owner, false, "DELETE FROM notes")).not.toThrow();
   });
 });

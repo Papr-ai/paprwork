@@ -101,13 +101,16 @@ export function resolveAgentFocusContext(
   if (appTab) {
     const catalogPreview = readCloudCatalogPreviewTabMetadata(appTab);
     const focusAppId = catalogPreview?.publisherAppId ?? appTab.entityId;
-    const web = useAppViewSurfaceStore.getState().web[appTab.entityId];
+    const surfaces = useAppViewSurfaceStore.getState();
+    const web = surfaces.web[appTab.entityId];
+    const pill = surfaces.pill[appTab.entityId];
     focus.activeApp = {
       appId: focusAppId,
       title: appTab.title,
       // Catalog previews are web-only by definition (not installed here).
       surface: web || catalogPreview ? "web" : "local",
       ...(web?.webUrl ? { webUrl: web.webUrl } : {}),
+      ...(pill && !web ? { pillView: pill.view, ...(pill.proposal ? { tryingProposal: pill.proposal } : {}) } : {}),
     };
   }
 

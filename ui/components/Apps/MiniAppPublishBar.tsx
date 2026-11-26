@@ -184,7 +184,7 @@ interface MiniAppPublishBarProps {
   /** Share bar v2: the view the pill is on, so the iframe can show it. */
   onActiveViewChange?: (view: PillView) => void;
   /** 8d: the proposal being tried in Preview (null = your own changes). */
-  onProposalPreviewChange?: (requestId: string | null) => void;
+  onProposalPreviewChange?: (requestId: string | null, title?: string) => void;
 }
 
 function sharePrefsOptions(cloud: CloudPublishControls): {
@@ -1860,12 +1860,12 @@ export function MiniAppPublishBar({
     : [];
   if (trying) {
     pill.preview = {
-      label: `Trying: ${trying.title}`,
-      tone: "info",
+      label: trying.title,
+      tone: "ok",
       hint: "This proposal on a test copy of the team's data. Nothing you do here is saved.",
     };
   } else if (tryError) {
-    pill.preview = { ...pill.preview, label: tryError, tone: "bad", empty: false };
+    pill.preview = { ...pill.preview, label: "Couldn't load", hint: tryError, tone: "warn", empty: false };
   }
   const pickPreview = async (id: string | null) => {
     setTryError(null);
@@ -1882,7 +1882,7 @@ export function MiniAppPublishBar({
         return;
       }
       setTrying({ id, title });
-      onProposalPreviewChange?.(id);
+      onProposalPreviewChange?.(id, title);
       setPillView("preview");
     }
     // Leaving a proposal throws its preview away.
@@ -1905,6 +1905,11 @@ export function MiniAppPublishBar({
     onActiveViewChange?.(iframeView);
   }, [iframeView, onActiveViewChange]);
   const runPillVerb = (_view: PillView, st: PillStatus) => {
+    // Live "Without edits · Propose": open Preview and run its button there.
+    if (st.action === "go_preview") {
+      setPillView("preview");
+      return runPillVerb("preview", pill.preview);
+    }
     if (st.action === "owner_chip") return handlePublishStatusChipClick();
     if (st.action === "propose") return void handleCollaboratorPropose();
     if (st.action === "publish" && !copyBar) return handlePublishStatusChipClick();

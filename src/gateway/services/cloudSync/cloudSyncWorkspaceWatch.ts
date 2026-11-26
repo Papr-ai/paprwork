@@ -11,10 +11,15 @@ import type { SyncStateManager } from "./syncState.js";
 
 export const INSTANT_DIRS = ["workspace", "data"] as const;
 
+/** data/ subfolders holding per-desktop copies of app code and data (Preview Mode). */
+export const LOCAL_COPY_DIRS = ["live-code", "preview-data", "proposal-preview"] as const;
+
 /** Mirrors the old chokidar `ignored` list: .git trees and SQLite files/sidecars. */
 export function isIgnoredWorkspaceWatchPath(absPath: string): boolean {
   const normalized = absPath.replace(/\\/g, "/");
   if (normalized.includes("/.git/")) return true;
+  // Live / Preview / proposal copies are local caches (rebuilt, never synced).
+  if (LOCAL_COPY_DIRS.some((d) => normalized.includes(`/data/${d}/`))) return true;
   return /\.db(-wal|-shm|-changes|-journal)?$/.test(normalized);
 }
 

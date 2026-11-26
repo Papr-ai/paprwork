@@ -5,8 +5,9 @@
  *
  * Live is the team's version and keeping this Mac in step with it. Preview is
  * your changes and where they are in review. The open view shows its status
- * in words; the other shows a dot only when it needs a look. Dot colours are
- * the notification marks: green = FYI, amber = needs you, red = urgent.
+ * in words; the other shows a dot only when it needs a look. Three colours,
+ * same as Focus and Notifications: green = all good, blue = needs you (it has
+ * a button), grey = nothing to do or waiting on someone. Labels are 1-2 words.
  *
  * Pure: it only re-sorts statuses the bar already computes (the publish chip
  * for owners, resolveCopyBar for copies). No new sync logic lives here.
@@ -17,7 +18,8 @@ import type { PublishBarChipTone } from "./appCloudSyncStatus";
 
 export type PillView = "live" | "preview";
 export type PillTone = "ok" | "warn" | "bad" | "info" | "idle";
-export type PillDot = "info" | "warn" | "bad";
+/** Dots are blue only: a view you're not on gets one when it needs you. */
+export type PillDot = "warn" | "bad";
 
 export interface PillStatus {
   label: string;
@@ -28,8 +30,8 @@ export interface PillStatus {
   empty?: boolean;
   /** Longer explanation for the tooltip, when the label alone could mislead. */
   hint?: string;
-  /** What the verb runs. Owner chip actions are passed through as-is. */
-  action?: CopyChipAction | "owner_chip" | null;
+  /** What the verb runs. Owner chip actions are passed through as-is. go_preview = open Preview (its button). */
+  action?: CopyChipAction | "owner_chip" | "go_preview" | null;
 }
 
 export interface ViewPillModel {
@@ -51,8 +53,36 @@ const PREVIEW_ACTIONS: ReadonlySet<CopyChipAction> = new Set<CopyChipAction>([
 const NO_CHANGES: PillStatus = { label: "No changes", tone: "idle", empty: true };
 const UP_TO_DATE: PillStatus = { label: "Up to date", tone: "ok" };
 
-function tone(t: PublishBarChipTone): PillTone {
-  return t === "busy" ? "info" : t;
+/** Blue only when there's something to press; in-progress and FYI stay grey. */
+function tone(t: PublishBarChipTone, hasVerb: boolean): PillTone {
+  if (hasVerb && t !== "ok") return "warn";
+  if (t === "busy" || t === "info") return "idle";
+  return t === "bad" ? "warn" : t;
+}
+
+/** Old chip wording (owner publish chip + copy chip) → the pill's 1-2 words. null = nothing for Live to say. */
+const LIVE_WORDS: Array<[RegExp, string | null]> = [
+  [/^Last publish failed|^Publish failed/, "Publish failed"],
+  [/^Update conflicts/, "Conflicts"],
+  [/^Updates paused/, "Updates paused"],
+  [/^Publisher has updates|^Newer version on web/, "Update ready"],
+  [/^Getting updates/, "Updating…"],
+  [/^Publishing/, "Publishing…"],
+  [/^Checking/, "Checking…"],
+  [/sync off/i, "Sync off"],
+  [/^Draft$|^Not on the web yet/, "Local only"],
+  [/^Unpublished changes|^Live(,| ·|$)|^Same as the team|^Up to date/, null],
+];
+
+export function liveWords(label: string): string | null {
+  for (const [re, w] of LIVE_WORDS) if (re.test(label)) return w;
+  return label;
+}
+
+function liveStatus(label: string, t: PublishBarChipTone, verb: string | undefined, action: PillStatus["action"]): PillStatus | null {
+  const words = liveWords(label);
+  if (words === null) return null;
+  return { label: words, tone: tone(t, !!verb), ...(verb ? { verb } : {}), action, ...(words !== label ? { hint: label } : {}) };
 }
 
 /** Copy chip labels in the words the mockup settled on. */
@@ -63,11 +93,11 @@ function previewWords(chip: CopyBar["chip"], slug: string): PillStatus {
     case "publish":
       return { label: "Not published yet", tone: "warn", verb: "Publish", action: "publish" };
     case "view_proposal":
-      return { label: `Waiting for ${slug}`, tone: "idle", action: "view_proposal" };
+      return { label: `Waiting for ${slug}`, tone: "idle", verb: "View", action: "view_proposal" };
     case "update_and_repropose":
       return { label: "Needs updating", tone: "warn", verb: "Update", action: "update_and_repropose" };
     case "see_decline":
-      return { label: "Declined", tone: "bad", verb: "See why", action: "see_decline" };
+      return { label: "Declined", tone: "warn", verb: "See why", action: "see_decline" };
     default:
       return NO_CHANGES;
   }
@@ -94,34 +124,37 @@ export function resolveViewPill(input: ViewPillInput): ViewPillModel {
     if (chip.action && PREVIEW_ACTIONS.has(chip.action)) {
       preview = previewWords(chip, input.publisherSlug ?? "the owner");
     } else if (chip.tone !== "ok") {
-      live = { label: chip.label, tone: tone(chip.tone), verb: chip.verb ?? undefined, action: chip.action };
-    } else if (chip.action === "view_proposal") {
-      live = { label: "Your change is live", tone: "ok", action: "view_proposal" };
+      live = liveStatus(chip.label, chip.tone, chip.verb ?? undefined, chip.action) ?? UP_TO_DATE;
     }
-  } else if (input.ownerHasUnpublished) {
-    // Owner with edits: those are Preview's ("Not published yet"); Live keeps
-    // whatever else the chip knew (failed publish, update, conflict).
-    preview = { label: "Not published yet", tone: "warn", verb: "Publish", action: "publish" };
-    if (ownerChip.tone === "bad" || ownerChip.tone === "info" || ownerChip.tone === "busy") {
-      live = { label: ownerChip.label, tone: tone(ownerChip.tone), action: "owner_chip" };
+    if (chip.action === "view_proposal" && chip.tone === "ok") {
+      preview = NO_CHANGES;
+      live = { label: "Change accepted", tone: "ok", hint: "Your change is live for the team." };
     }
-  } else if (!input.ownerLive) {
-    live = { label: "Not on the web yet", tone: "idle" };
-  } else if (ownerChip.tone !== "ok") {
-    live = { label: ownerChip.label, tone: tone(ownerChip.tone), action: "owner_chip" };
+  } else {
+    // Owner: edits are Preview's ("Not published yet"); Live keeps whatever
+    // else the publish chip knew (failed publish, update, conflict, sync off).
+    if (input.ownerHasUnpublished) {
+      preview = { label: "Not published yet", tone: "warn", verb: "Publish", action: "publish" };
+    }
+    if (!input.ownerLive) live = { label: "Local only", tone: "idle", hint: "Not on the web yet. Publish to share it." };
+    else live = liveStatus(ownerChip.label, ownerChip.tone, undefined, "owner_chip") ?? UP_TO_DATE;
   }
 
   // Live is in sync with the web, but you have changes that aren't in it yet:
   // "Up to date" would read as "everything you made is live". Say what Live
-  // lacks instead; a real Live problem (update, offline, failed) still wins.
+  // lacks, with a button to Preview; a real Live problem still wins.
   if (live === UP_TO_DATE && !preview.empty) {
     const sent = preview.action === "view_proposal" || preview.action === "see_decline";
     const until = input.copyBar ? (sent ? "it's accepted" : "you propose it and it's accepted") : "you publish";
-    live = {
-      label: sent ? "Without your change" : "Without your edits",
-      tone: "idle",
-      hint: `Live matches the team's version. Your ${sent ? "change is" : "edits are"} only in Preview until ${until}.`,
-    };
+    live = sent
+      ? { label: "Change pending", tone: "idle", hint: `Live matches the team's version. Your change is only in Preview until ${until}.` }
+      : {
+          label: "Without edits",
+          tone: "idle",
+          verb: preview.verb,
+          action: "go_preview",
+          hint: `Live matches the team's version. Your edits are only in Preview until ${until}.`,
+        };
   }
 
   const settingsDot = input.failingJobName
@@ -132,8 +165,9 @@ export function resolveViewPill(input: ViewPillInput): ViewPillModel {
 
 /** A view you're not on only gets a dot when it needs a look. */
 export function viewDot(view: PillView, st: PillStatus): PillDot | null {
-  if (view === "preview") return st.empty ? null : st.tone === "bad" ? "bad" : "warn";
-  return st.tone === "warn" || st.tone === "bad" || st.tone === "info" ? st.tone : null;
+  // Waiting on someone is grey: nothing for you to press, so no dot.
+  if (view === "preview") return !st.empty && st.tone === "warn" ? "warn" : null;
+  return st.tone === "warn" || st.tone === "bad" ? "warn" : null;
 }
 
 /** The view to open on: Live, unless you have changes (decision 4). */

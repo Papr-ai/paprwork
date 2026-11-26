@@ -67,6 +67,10 @@ const SQLITE_HASH_IGNORED_SUFFIXES = [".db-shm", ".db-wal", ".db"] as const;
 
 export function shouldExcludePathFromContentHash(relativePath: string): boolean {
   const normalized = relativePath.replace(/\\/g, "/");
+  // Live / Preview / proposal copies (Preview Mode): local caches, never synced.
+  if (/^data\/(live-code|preview-data|proposal-preview)(\/|$)/.test(normalized)) {
+    return true;
+  }
   if (
     normalized.endsWith("/job.runtime.json") ||
     normalized === "data/job-runs.jsonl"

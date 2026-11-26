@@ -159,6 +159,11 @@ export async function finalizeAppRepoMutation(
     heldForApp.length > 0
       ? await heldModule.publishHeldDatabasesForApp(paprDir, appId, options.onProgress)
       : [];
+  // Owner schema changes waiting in Preview (gap 2): database first, then code.
+  if (options.source === "desktop-flush") {
+    const { applyOwnerPendingForPublish } = await import("../previewData/ownerPreviewData.js");
+    await applyOwnerPendingForPublish(paprDir, appId, options.onProgress);
+  }
 
   const pushResult =
     options.source === "desktop-flush" && (await shouldUsePublishWorker())

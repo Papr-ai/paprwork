@@ -1,6 +1,7 @@
 /**
  * Agent DB tools (papr_db_query / papr_db_exec) and Preview vs Live (plan §7):
- *  1. When the app has a preview of this database, `target` is required. No silent default.
+ *  1. When the app has a preview of this database (teammate, or owner of a live app
+ *     with an unpublished data change), `target` is required. No silent default.
  *  2. Every result names its target ("preview of <app>" / "team's live data").
  *  4. A teammate writing Live rows on the team's data must confirm with the user first.
  */
@@ -62,11 +63,7 @@ export async function resolveAgentDbTarget(
   if (!real.dbId) return { ...live, label: "live data" };
   const teamData = d.isCollaboratorOnShared(real.dbId);
   live.teamData = teamData;
-  if (!teamData) {
-    // Owners don't have a separate Preview database (schema goes in by publish).
-    if (opts.target === "preview") throw new Error("This database has no preview: there's only Live. Say so to the user.");
-    return { ...live, label: "live data (no preview for this database)" };
-  }
+  if (!teamData) live.label = "live data";
   const apps = (await appsLinking(real.dbId, d.paprRoot ?? getPaprRoot())).filter((a) => !opts.appId || a.appId === opts.appId);
   let preview: { source: AppDataSource; title: string } | null = null;
   for (const a of apps) {
@@ -78,7 +75,7 @@ export async function resolveAgentDbTarget(
   }
   if (!preview) {
     if (opts.target === "preview") {
-      throw new Error("No preview of this database right now (no pending data change), so only the team's live data exists. Say so to the user.");
+      throw new Error("No preview of this database right now (no pending data change), so Preview and Live use the same data. Say so to the user.");
     }
     return live;
   }

@@ -1,6 +1,6 @@
 /**
- * Preview data (plan 8c): a teammate on the team's shared data whose change
- * adds migrations the team hasn't accepted yet sees them only in Preview, on a
+ * Preview data (plan 8c): a teammate on the team's shared data (or the owner of
+ * a live app, gap 2) whose change adds migrations Live doesn't have yet sees them only in Preview, on a
  * test copy (schema + up to 100 rows per table, with the pending migrations
  * applied). Live and everything else keep the team's real data. Rows entered
  * in Preview are test data: the copy is rebuilt whenever the pending change
@@ -45,6 +45,8 @@ export function resetPreviewDataForTests(): void {
 
 export interface PreviewDeps {
   isCollaboratorOnShared: (dbId: string) => boolean;
+  /** Owner of a live app whose schema changes wait in Preview (gap 2). */
+  isOwnerPreview?: (dbId: string) => Promise<boolean>;
   migrationRoot: (dbPath: string) => string | null;
   read: (source: AppDataSource, sql: string) => Promise<{ rows: Record<string, unknown>[] } | null>;
   paprRoot?: string;
@@ -54,8 +56,10 @@ async function defaultDeps(): Promise<PreviewDeps> {
   const { isCollaboratorOnSharedDatabase } = await import("../sharedPrimaryTursoResolve.js");
   const { resolveMigrationRootFromDbPath } = await import("../jobs/databaseMigrations.js");
   const { queryRegistryDatabase } = await import("../jobs/registryDbSchemaReader.js");
+  const { isOwnerPreviewDatabase } = await import("./ownerPreviewData.js");
   return {
     isCollaboratorOnShared: isCollaboratorOnSharedDatabase,
+    isOwnerPreview: (id) => isOwnerPreviewDatabase(id),
     migrationRoot: resolveMigrationRootFromDbPath,
     read: (s, sql) => queryRegistryDatabase({ dbPath: s.dbPath, dbId: s.dbId }, sql),
   };
@@ -69,7 +73,7 @@ export async function previewSourceFor(
 ): Promise<PreviewSource | null> {
   if (!source.dbId) return null;
   const d = deps ?? (await defaultDeps());
-  if (!d.isCollaboratorOnShared(source.dbId)) return null;
+  if (!d.isCollaboratorOnShared(source.dbId) && !(await (d.isOwnerPreview ?? (async () => false))(source.dbId))) return null;
   const key = `${appId}:${source.dbId}`;
   const hit = memo.get(key);
   const file =

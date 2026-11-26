@@ -21,12 +21,12 @@ button.vp__btn:hover { color: var(--text-primary, inherit); background: rgba(127
 button.vp__btn.is-on { cursor: pointer; }
 .vp__dot { position: absolute; top: 3px; right: 3px; width: 7px; height: 7px; border-radius: 50%;
   box-shadow: 0 0 0 2px var(--bg-secondary, #f3f4f6); }
-.vp__dot--info { background: #10b981; }
 .vp__dot--warn, .vp__dot--bad { background: #0161e0; }
 .vp__st { display: inline-flex; align-items: center; gap: 6px; padding-left: 8px; margin-left: 2px;
   border-left: 1px solid rgba(127, 127, 127, 0.25); font-weight: 500; min-width: 0; }
 .vp__st i { width: 7px; height: 7px; border-radius: 50%; flex-shrink: 0; background: currentColor; }
-.vp__st--ok i, .vp__st--info i { background: #10b981; }
+.vp__st--ok i { background: #10b981; }
+.vp__st--info i { background: var(--text-secondary, #9ca3af); }
 .vp__st--warn i, .vp__st--bad i { background: #0161e0; }
 .vp__st--idle i { background: var(--text-secondary, #9ca3af); }
 .vp__stt { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; max-width: 220px; }
