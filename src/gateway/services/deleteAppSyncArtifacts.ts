@@ -52,6 +52,8 @@ export async function deleteAppSyncArtifacts(
   await removeLiveCode(trimmed, paprHome).catch(() => undefined);
   const { removePreviewData } = await import("./previewData/previewDataCopy.js");
   await removePreviewData(trimmed, paprHome).catch(() => undefined);
+  const { removeProposalPreview } = await import("./previewData/proposalPreview.js");
+  await removeProposalPreview(trimmed, undefined, paprHome).catch(() => undefined);
 
   let tombstonedSchemaOwnerDbs = 0;
   try {

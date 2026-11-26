@@ -24,6 +24,22 @@ export async function resolveLiveServe(
   rawPath: string,
   paprRoot = getPaprRoot(),
 ): Promise<LiveServe> {
+  const { parseProposalPath, proposalPreviewDir } = await import("../previewData/proposalPreview.js");
+  const pr = parseProposalPath(rawPath);
+  if (pr) {
+    // A proposal's preview is only ever its own folder; never falls back to yours.
+    const dir = path.join(proposalPreviewDir(appId, pr.requestId, paprRoot), "code");
+    return {
+      path: pr.rel,
+      dir,
+      resolve: async (p: string) => {
+        const full = path.resolve(dir, p);
+        if (!full.startsWith(dir + path.sep)) return null;
+        const st = await fs.stat(full).catch(() => null);
+        return st?.isFile() ? full : null;
+      },
+    };
+  }
   const isLive = rawPath === "@live" || rawPath.startsWith(LIVE_PREFIX);
   const rel = isLive ? rawPath.slice(LIVE_PREFIX.length) || "index.html" : rawPath;
   const none: LiveServe = { path: rel, dir: null, resolve: async () => null };

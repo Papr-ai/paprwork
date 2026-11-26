@@ -103,3 +103,27 @@ describe("ViewPill", () => {
     expect(onVerb).toHaveBeenCalledWith("preview", model.preview);
   });
 });
+
+describe("ViewPill preview switcher (8d)", () => {
+  const model: ViewPillModel = {
+    live: { label: "Up to date", tone: "ok" },
+    preview: { label: "Trying: Priority", tone: "info" },
+    settingsDot: null,
+  };
+  it("lists your changes and each proposal; one pick at a time", () => {
+    const onPick = vi.fn();
+    render(<ViewPill model={model} active="preview" settingsOpen={false} onView={vi.fn()} onVerb={vi.fn()} onSettings={vi.fn()}
+      previews={[{ id: null, label: "Your changes" }, { id: "r1", label: "Priority" }, { id: "r2", label: "Due dates" }]}
+      activePreview="r1" onPickPreview={onPick} />);
+    fireEvent.click(screen.getByTitle("Switch preview"));
+    expect(screen.getByRole("menuitemradio", { name: /Priority/ }).getAttribute("aria-checked")).toBe("true");
+    fireEvent.click(screen.getByRole("menuitemradio", { name: /Due dates/ }));
+    expect(onPick).toHaveBeenCalledWith("r2");
+    expect(screen.queryByRole("menu")).toBeNull();
+  });
+  it("no menu with only your own changes", () => {
+    render(<ViewPill model={model} active="preview" settingsOpen={false} onView={vi.fn()} onVerb={vi.fn()} onSettings={vi.fn()}
+      previews={[{ id: null, label: "Your changes" }]} onPickPreview={vi.fn()} />);
+    expect(screen.queryByTitle("Switch preview")).toBeNull();
+  });
+});

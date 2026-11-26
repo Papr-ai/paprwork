@@ -97,6 +97,7 @@ export function MiniAppView({
   const barV2 = shareBarV2Enabled();
   // Share bar v2: Live serves the web's code (/@live/), Preview your folder.
   const [pillView, setPillView] = useState<"live" | "preview">("preview");
+  const [tryingProposal, setTryingProposal] = useState<string | null>(null);
   const [focusJobId, setFocusJobId] = useState<string | null>(null);
   const linkedJobCount = useAppLinkedJobCount(appId);
   const [previewShellLoaded, setPreviewShellLoaded] = useState(false);
@@ -245,7 +246,11 @@ export function MiniAppView({
       return url.toString();
     }
     const url = new URL(
-      barV2 && pillView === "live" ? localSrc.replace(/index\.html$/, "@live/index.html") : localSrc,
+      barV2 && pillView === "live"
+        ? localSrc.replace(/index\.html$/, "@live/index.html")
+        : barV2 && tryingProposal
+          ? localSrc.replace(/index\.html$/, `@pr-${tryingProposal}/index.html`)
+          : localSrc,
     );
     url.searchParams.set("_r", String(reloadKey));
     url.searchParams.set("_lk", String(iframeLoadKey));
@@ -260,6 +265,7 @@ export function MiniAppView({
     publishedIframeBaseUrl,
     barV2,
     pillView,
+    tryingProposal,
   ]);
 
   usePreviewTabLifecycle(iframeRef, previewTabVisible, appId, iframeSrc);
@@ -942,6 +948,7 @@ export function MiniAppView({
             else setSideTab("jobs");
           }}
           onActiveViewChange={setPillView}
+          onProposalPreviewChange={setTryingProposal}
           onOpenSettings={(target) => (barV2 ? setSettingsSection(target === "settings" ? (cloudLineage?.mode === "track" ? "code" : "general") : target) : setSideTab(target === "settings" ? "data" : target))}
           onOpenDependencyApp={(dependencyAppId, title) => {
             const tabId = createTab("app", dependencyAppId, title ?? "App");

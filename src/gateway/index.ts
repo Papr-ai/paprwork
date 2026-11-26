@@ -700,6 +700,12 @@ async function startGateway(): Promise<void> {
     ): Promise<import("./services/appDataSources.js").AppDataSource> {
       const real = await resolveRealLinkedSource(appId, sourceId, sql, operation);
       if (!req) return real;
+      {
+        // Trying a proposal (8d): its frame only ever sees its own test copy.
+        const { proposalFromReferer, proposalDataSource } = await import("./services/previewData/proposalPreview.js");
+        const requestId = proposalFromReferer(req.headers.referer);
+        if (requestId) return proposalDataSource(appId, requestId, real);
+      }
       const { isPreviewRequest, previewSourceFor } = await import("./services/previewData/previewDataCopy.js");
       if (!isPreviewRequest(req.headers.referer)) return real;
       return (await previewSourceFor(appId, real).catch(() => null)) ?? real;
@@ -1024,6 +1030,23 @@ async function startGateway(): Promise<void> {
         console.error("[Gateway] /api/apps/link-database error:", err);
         res.status(500).json({ error: message });
       }
+    });
+
+    // Try a proposal (plan 8d): build its preview (Live + only its files, test
+    // data), or throw it away. The UI then loads /apps/{appId}/@pr-{id}/index.html.
+    app.post("/api/apps/:appId/proposal-preview/:requestId", async (req, res) => {
+      try {
+        const { ensureProposalPreview } = await import("./services/previewData/proposalPreview.js");
+        await ensureProposalPreview(req.params.appId, req.params.requestId);
+        res.json({ url: `/apps/${req.params.appId}/@pr-${req.params.requestId}/index.html` });
+      } catch (err) {
+        res.status(422).json({ error: (err as Error).message });
+      }
+    });
+    app.delete("/api/apps/:appId/proposal-preview/:requestId", async (req, res) => {
+      const { removeProposalPreview } = await import("./services/previewData/proposalPreview.js");
+      await removeProposalPreview(req.params.appId, req.params.requestId).catch(() => undefined);
+      res.json({ ok: true });
     });
 
     // Status panel: the files Publish would send (added / edited / removed).
