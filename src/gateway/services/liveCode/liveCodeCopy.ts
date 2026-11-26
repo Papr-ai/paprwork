@@ -63,9 +63,12 @@ function serial<T>(appId: string, fn: () => Promise<T>): Promise<T> {
   const prev = chains.get(appId) ?? Promise.resolve();
   const next = prev.catch(() => undefined).then(fn);
   chains.set(appId, next);
-  void next.finally(() => {
-    if (chains.get(appId) === next) chains.delete(appId);
-  });
+  // .catch: the finally() promise re-rejects; the caller handles `next` itself.
+  next
+    .finally(() => {
+      if (chains.get(appId) === next) chains.delete(appId);
+    })
+    .catch(() => undefined);
   return next;
 }
 
