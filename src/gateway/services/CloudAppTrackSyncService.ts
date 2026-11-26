@@ -36,6 +36,7 @@ import {
   type CloudAppInstallInput,
 } from "./CloudAppInstallService.js";
 import { getAppService } from "./AppService.js";
+import { isUnlinkedDatabaseMigrationPath } from "./syncV3/syncPulledSchemaOwnerMigrations.js";
 import { isLocallyRebuiltAppPath } from "./syncV3/platformGeneratedAppPaths.js";
 import { decideTrackPullAction } from "./cloudSync/trackPullOnPublishLogic.js";
 import type { InstallDeniedReason } from "./CloudAppInstallService.js";
@@ -558,6 +559,12 @@ export class CloudAppTrackSyncService {
             continue;
           }
           conflictFiles.push(filename);
+          continue;
+        }
+
+        // A database this copy doesn't link: nothing to write it to. Skip, don't fail.
+        if (await isUnlinkedDatabaseMigrationPath(appId, filename)) {
+          skippedFiles.push(filename);
           continue;
         }
 

@@ -1852,10 +1852,14 @@ export function MiniAppPublishBar({
   // 8d: try one proposal at a time in Preview (Live + only its files, test data).
   const [trying, setTrying] = useState<{ id: string; title: string } | null>(null);
   const [tryError, setTryError] = useState<string | null>(null);
-  const previewChoices = barV2 && incomingChanges.open.length > 0
+  // Proposals to try are other people's. One this copy sent is already "Your
+  // changes" (and once accepted it's in Live), so listing it again showed the
+  // same change twice and kept it after Live said accepted.
+  const othersProposals = incomingChanges.open.filter((r) => r.installedAppId !== appId);
+  const previewChoices = barV2 && othersProposals.length > 0
     ? [
-        { id: null, label: "Your changes", sub: pill.preview.empty ? "No changes" : pill.preview.label },
-        ...incomingChanges.open.map((r) => ({ id: r.id, label: r.title || "Proposal", sub: "Proposal · test copy of data" })),
+        { id: null, label: "Your changes", sub: pill.preview.empty ? "Same as Live" : pill.preview.label },
+        ...othersProposals.map((r) => ({ id: r.id, label: r.title || "Proposal", sub: "Proposal · test copy of data" })),
       ]
     : [];
   if (trying) {
@@ -1874,7 +1878,7 @@ export function MiniAppPublishBar({
       setTrying(null);
       onProposalPreviewChange?.(null);
     } else {
-      const title = incomingChanges.open.find((r) => r.id === id)?.title || "Proposal";
+      const title = othersProposals.find((r) => r.id === id)?.title || "Proposal";
       const res = await fetch(`${getGatewayHttpBase()}/api/apps/${appId}/proposal-preview/${id}`, { method: "POST" }).catch(() => null);
       const body = (await res?.json().catch(() => ({}))) as { error?: string };
       if (!res?.ok) {
