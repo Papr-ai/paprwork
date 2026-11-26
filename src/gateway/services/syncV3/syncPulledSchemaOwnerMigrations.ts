@@ -392,6 +392,27 @@ function isQuarantined(paprRoot: string, dbPath: string | undefined, fileName: s
   return existsSync(path.join(q, fileName)) || existsSync(path.join(q, `${fileName}.rejected`));
 }
 
+/**
+ * Is a repo path a migration for a database this copy doesn't link? The
+ * publisher's repo can carry databases the copy never got (a test database, one
+ * linked later and unlinked). Those files have nowhere to go here: Get updates
+ * skips them instead of counting them as failed writes, which would hold the
+ * copy's base commit back forever.
+ */
+export async function isUnlinkedDatabaseMigrationPath(
+  appId: string,
+  repoPath: string,
+  paprRoot: string = getPaprRoot(),
+): Promise<boolean> {
+  const m = /^databases\/([^/]+)\/migrations\//.exec(repoPath);
+  if (!m) return false;
+  const appDir = path.join(getPaprAppsRoot(), appId);
+  const linked = await linkedSlugMapForApp(paprRoot, appDir);
+  for (const [k, v] of await resolveSchemaOwnerSlugMap(appId)) if (!linked.has(k)) linked.set(k, v);
+  if (linked.size === 0) return false; // can't tell: keep the old behaviour
+  return !linked.has(registrySlugForRepoSlug(linked, m[1]!));
+}
+
 /** Slugs of every registry database an app links (data-sources.json), slug → db path. */
 async function linkedSlugMapForApp(paprRoot: string, appDir: string): Promise<Map<string, string>> {
   const map = new Map<string, string>();
