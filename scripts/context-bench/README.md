@@ -51,5 +51,22 @@ haystack from a local workspace, `embed_local.py` embeds it on the Neural Engine
 `embed.py <model> [band_schema]` embeds it with a cloud model. Upload `data/` to a new `dataset/vN` and bump
 `DATA_VERSION` in the workflow.
 
+**Bench workspace (memory search + GraphQL arms).** These arms read a real Papr workspace, so they run against a
+bench-only namespace, `ci-bench`, never a person's workspace (anyone with write access to the repo can read repo
+secrets). `seed.py` loads the dataset into it through the production paths: chats through `POST /v1/messages` (the
+path Papr Work syncs with, analysed every 15 messages and flushed at the end of each chat), doc sections through
+`/v1/memory/batch`, and the companies the GraphQL questions read as manual graph nodes. It is safe to re-run (a
+local ledger skips what is already there) and writes a manifest. The write key it uses stays on the operator's
+machine; CI only holds a read-only key on `ci-bench` (`CONTEXT_BENCH_PAPR_API_KEY`).
+
+```sh
+PAPR_BENCH_WRITE_KEY=... CTX_BENCH_DATA=ctx/data python scripts/context-bench/seed.py --limit-chats 1 --limit-docs 2   # smoke
+PAPR_BENCH_WRITE_KEY=... CTX_BENCH_DATA=ctx/data python scripts/context-bench/seed.py                                  # full
+```
+
+Adding data: add questions or sources, build `dataset/vN+1`, run `seed.py` with `CTX_BENCH_VERSION=vN+1` (it adds only
+new items), then reset the memory-arm baseline in the same PR. Bench searches are tagged `useCase: eval_bench` and
+seeded messages are never `trainingEligible`, so bench traffic never enters a training set.
+
 **Data handling.** Questions, corpus and vectors contain private chat text, docs and investor rows. They live only in
 GCS; this public repo has the code and the summary baseline.

@@ -125,7 +125,9 @@ def r_memory(q, k=20):
     t = time.time()
     try:
         r = requests.post(MEM + "/v1/memory/search", headers=H, params={"max_memories": k, "max_nodes": 10},
-                          json={"query": q["query"], "rank_results": False}, timeout=90)
+                          json={"query": q["query"], "rank_results": False,
+                                # Tagged so training exports skip bench traffic (QueryLog.useCase).
+                                "metadata": {"useCase": "eval_bench"}}, timeout=90)
         mems = (r.json().get("data") or {}).get("memories") or []
     except Exception:
         mems = []
