@@ -288,7 +288,32 @@ export async function appliedMigrationIdsForProposal(
   const ids = new Set(ledger.rows.map((row) => String(row.id ?? "").replace(/\.sql$/, "")));
   const { getReplicaPublishHold } = await import("./tursoReplica/replicaPublishHold.js");
   for (const m of getReplicaPublishHold(dbPath)?.migrations ?? []) ids.add(m.migrationId);
+  // Contributor on the team's data: tested on a test copy, never applied here.
+  const { resolveMigrationRootFromDbPath } = await import("./jobs/databaseMigrations.js");
+  const root = resolveMigrationRootFromDbPath(dbPath);
+  if (root) {
+    const { testedMigrationIds } = await import("./cloudSync/proposalTestCopy.js");
+    for (const id of await testedMigrationIds(dbId, root)) ids.add(id);
+  }
   return ids;
+}
+
+/** Migration ids in a job's own database ledger; null when it can't be read. */
+export async function appliedJobMigrationIds(jobDir: string): Promise<Set<string> | null> {
+  const dbPath = path.join(jobDir, "data", "data.db");
+  if (!(await pathExists(dbPath))) return null;
+  try {
+    const { default: Database } = await import("better-sqlite3");
+    const db = new Database(dbPath, { readonly: true, fileMustExist: true });
+    try {
+      const rows = db.prepare("SELECT id FROM schema_migrations").all() as Array<{ id: unknown }>;
+      return new Set(rows.map((r) => String(r.id ?? "").replace(/\.sql$/, "")));
+    } finally {
+      db.close();
+    }
+  } catch {
+    return null;
+  }
 }
 
 /** Proposals never carry a migration that didn't run here (it would run untested on approve). */
@@ -297,6 +322,13 @@ export function assertProposalMigrationsApplied(changes: { unapplied: string[]; 
     throw new Error(
       `These migration files never ran on this copy's database: ${changes.unapplied.join(", ")}. ` +
         "Apply them (papr_db_apply_migration) and test, or remove them, then propose again.",
+    );
+  }
+  const jobUnverified = changes.unverified.filter((p) => p.startsWith("Jobs/"));
+  if (jobUnverified.length > 0) {
+    throw new Error(
+      `These job migrations never ran on this desktop: ${jobUnverified.join(", ")}. ` +
+        "Run the job once so they apply to its database, then propose again.",
     );
   }
   if (changes.unverified.length > 0) {
@@ -369,6 +401,8 @@ async function collectMigrationTrees(
       trees.push({
         repoRelativeDir: path.join("Jobs", jobId, "migrations").replace(/\\/g, "/"),
         files,
+        // A new job migration must have run in the job's own database (audit G).
+        appliedIds: await appliedJobMigrationIds(path.join(paprDir, "Jobs", jobId)),
       });
     }
   }
@@ -498,6 +532,29 @@ async function buildContributeStaging(
       jobId,
     });
   }
+
+  // A team copy keeps its migrations in apps/{id}/databases/{slug}/migrations;
+  // the registry folder the check below reads can be empty. Mirror new files
+  // across first (missing files only) so they are checked and run here like any
+  // other new migration, instead of riding along untested in the app tree.
+  const { hydrateAppFolderSchemaMigrationsToRegistry } = await import(
+    "./syncV3/syncPulledSchemaOwnerMigrations.js"
+  );
+  // Every linked database, not only the ones this copy schema-owns: one
+  // migrations folder per database, so nothing rides along untested (audit E).
+  const mirrored = await hydrateAppFolderSchemaMigrationsToRegistry({
+    appId: forkAppId,
+    paprRoot: paprDir,
+    includeLinked: true,
+  });
+  if (mirrored.copied.length > 0) {
+    console.info(`[CloudContribute] mirrored app-folder migrations before proposing: ${mirrored.copied.join(", ")}`);
+  }
+
+  // A migration an older build filed under the wrong database never runs there
+  // and would fail every Propose: move it aside first (facts only).
+  const { quarantineMisfiledForApp } = await import("./jobs/misfiledMigrations.js");
+  await quarantineMisfiledForApp(paprDir, forkAppId).catch(() => []);
 
   for (const tree of await collectMigrationTrees(paprDir, forkAppId, remaps, tempRoot)) {
     let dir = tree.repoRelativeDir;
@@ -717,7 +774,35 @@ async function pushContributeBranch(
         ...(tree.kind === "app" && opts.includeBuildOutputs ? { includeBuildOutputs: true } : {}),
       });
     }
-    const changes = buildProposalChangeSet(trees);
+    let changes = buildProposalChangeSet(trees);
+    if (changes.unapplied.length > 0) {
+      // New migrations that never ran here: run them now (a test copy on
+      // team-shared data), then check again. Only real failures block.
+      const { autoApplyProposalMigrations } = await import("./cloudSync/proposalAutoApplyMigrations.js");
+      const { paprDbApplyMigration } = await import("./tursoReplica/PaprDbService.js");
+      const auto = await autoApplyProposalMigrations(staged, changes.unapplied, paprDbApplyMigration);
+      if (auto.applied.length > 0) {
+        console.info(`[CloudContribute] ran new migrations before proposing: ${auto.applied.join(", ")}`);
+        staged.forEach((tree, i) => {
+          if (tree.kind === "migrations" && tree.appliedIds !== undefined) trees[i]!.appliedIds = tree.appliedIds;
+        });
+        changes = buildProposalChangeSet(trees);
+      }
+      if (auto.failed.length > 0) {
+        throw new Error(
+          "A new database change failed to run on this copy, so it can't be proposed yet: " +
+            auto.failed
+              .map((f) => {
+                const parts = f.path.split("/");
+                const at = parts.indexOf("databases");
+                const db = at >= 0 && at + 2 < parts.length ? parts[at + 1] : undefined;
+                return `${parts.pop()}${db ? ` in ${db}'s migrations` : ""} (${f.error})`;
+              })
+              .join("; ") +
+            ". Fix or remove it, then propose again.",
+        );
+      }
+    }
     assertProposalMigrationsApplied(changes);
     if (changes.ignored.length > 0) {
       console.info(

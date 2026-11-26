@@ -2,7 +2,14 @@
  * RailItem — one rail destination: icon button + instant tooltip, or a hover-intent peek flyout.
  * Peeks open on hover or keyboard focus, so everything stays reachable without a mouse.
  */
-import type { ReactNode } from "react";
+import type { ReactNode, SyntheticEvent } from "react";
+
+/** Cap a top-anchored peek to the room left below its icon so long lists scroll instead of clipping. */
+function fitPeek(e: SyntheticEvent<HTMLDivElement>) {
+  const el = e.currentTarget;
+  const room = window.innerHeight - el.getBoundingClientRect().top - 16;
+  el.style.setProperty("--rail-peek-room", `${Math.max(240, Math.round(room))}px`);
+}
 
 interface RailItemProps {
   label: string;
@@ -57,8 +64,14 @@ export function RailItem({
     <div
       className={classes.filter(Boolean).join(" ")}
       data-agent-hover={variant === "agent" ? "" : undefined}
-      onMouseEnter={onPeekOpen}
-      onFocus={onPeekOpen}
+      onMouseEnter={(e) => {
+        if (peek && !peekFromBottom) fitPeek(e);
+        onPeekOpen?.();
+      }}
+      onFocus={(e) => {
+        if (peek && !peekFromBottom) fitPeek(e);
+        onPeekOpen?.();
+      }}
     >
       <button
         type="button"

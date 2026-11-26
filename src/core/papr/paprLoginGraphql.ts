@@ -28,6 +28,7 @@ export const GET_WORKSPACE_ORG_CLAIM_STATE = `
       workspace_name
       memberCount
       followerCount
+      subscription
       organization {
         objectId
         name
@@ -69,4 +70,31 @@ export function assertUpdateWorkspaceOrgMutation(mutation: string): void {
       'UPDATE_WORKSPACE_ORG must not select workspace { ... } — use workSpace per Parse schema',
     );
   }
+}
+
+/** Link the workspace's Subscription to an org Papr Work just created. */
+export const LINK_ORG_SUBSCRIPTION = `
+  mutation LinkOrganizationSubscription($organizationId: ID!, $subscriptionId: ID!) {
+    updateOrganization(
+      input: { id: $organizationId, fields: { subscription: { link: $subscriptionId } } }
+    ) {
+      organization {
+        objectId
+      }
+    }
+  }
+`;
+
+/** WorkSpace.subscription is an Object scalar (pointer JSON); pull its objectId. */
+export function readSubscriptionPointerId(value: unknown): string | undefined {
+  if (typeof value === "string") {
+    try {
+      return readSubscriptionPointerId(JSON.parse(value));
+    } catch {
+      return undefined;
+    }
+  }
+  if (!value || typeof value !== "object" || Array.isArray(value)) return undefined;
+  const id = (value as Record<string, unknown>).objectId;
+  return typeof id === "string" && id.trim() ? id.trim() : undefined;
 }

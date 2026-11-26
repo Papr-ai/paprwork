@@ -36,6 +36,7 @@ import {
   type CloudAppInstallInput,
 } from "./CloudAppInstallService.js";
 import { getAppService } from "./AppService.js";
+import { isUnlinkedDatabaseMigrationPath } from "./syncV3/syncPulledSchemaOwnerMigrations.js";
 import { isLocallyRebuiltAppPath } from "./syncV3/platformGeneratedAppPaths.js";
 import { decideTrackPullAction } from "./cloudSync/trackPullOnPublishLogic.js";
 import type { InstallDeniedReason } from "./CloudAppInstallService.js";
@@ -199,7 +200,12 @@ export function listLocalEditsAgainstSnapshot(
     if (base === undefined || base !== hash) edited.push(rel);
   }
   for (const rel of Object.keys(snapshot)) {
-    if (!localHashes.has(rel)) edited.push(rel);
+    if (localHashes.has(rel)) continue;
+    // Migrations are append-only and live in the database's own folder
+    // (data/databases/{slug}/migrations), not the app folder. One missing here
+    // is not a deletion and Propose never sends it as one (contributeChangeSet).
+    if (/(^|\/)migrations\//.test(rel)) continue;
+    edited.push(rel);
   }
   return edited.sort();
 }
@@ -556,6 +562,12 @@ export class CloudAppTrackSyncService {
           continue;
         }
 
+        // A database this copy doesn't link: nothing to write it to. Skip, don't fail.
+        if (await isUnlinkedDatabaseMigrationPath(appId, filename)) {
+          skippedFiles.push(filename);
+          continue;
+        }
+
         const written = await write(filename, upstreamContent);
         (written ? updatedFiles : failedFiles).push(filename);
       }
@@ -623,6 +635,11 @@ export class CloudAppTrackSyncService {
             ? { baseCommit: base.sha }
             : {}),
         ...(upstreamRevision ? { upstreamRevision } : {}),
+        // The team's databases move with the base: an accepted proposal that
+        // added one makes it team data here too (and the draft token goes).
+        ...(onTeamData(lineage) && conflictFiles.length === 0 && failedFiles.length === 0 && upstreamHead
+          ? { teamDbIds: (await import("./sharedPrimaryTursoResolve.js")).dbIdsInDataSources(upstreamFiles.get("data-sources.json")) }
+          : {}),
         ...(nextMetadataBaseline ? { metadataBaseline: nextMetadataBaseline } : {}),
         ...(nextMetadataUpstream ? { metadataUpstreamBaseline: nextMetadataUpstream } : {}),
       });
@@ -630,6 +647,12 @@ export class CloudAppTrackSyncService {
       // Linked-job install replaces job folders wholesale with the publisher's
       // copy. Remember the collaborator's job code first so edits survive.
       const paprRoot = getPaprRoot();
+      if (!dryRun) {
+        // Migrations deleted on the web stay here (history): move aside any an
+        // older build filed under the wrong database, or it is pending forever.
+        const { quarantineMisfiledForApp } = await import("./jobs/misfiledMigrations.js");
+        await quarantineMisfiledForApp(paprRoot, appId).catch(() => []);
+      }
       const jobIdsBefore = resolveAppDependentJobIds(paprRoot, appId);
       const localJobFiles = new Map<string, Map<string, string>>();
       if (!options.discardLocal) {

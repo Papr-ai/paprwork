@@ -19,8 +19,9 @@ import { canConnect, type useOrgConnections } from "../../hooks/useOrgConnection
 import { useCustomKeys } from "../../hooks/useCustomKeys";
 import { PLATFORM_META, usePlatformConnections, type PlatformInfo } from "../../hooks/usePlatformConnections";
 import { AddSiteSheet, SiteSheet, siteLogoServer } from "./SiteSheet";
+import { getGatewayHttpBase } from "../../utils/gatewayHttpBase";
 
-const GATEWAY = "http://localhost:18789";
+const GATEWAY = getGatewayHttpBase();
 const POLL_MS = 2_000;
 const QUICK_STARTS = ["notion", "linear", "github", "slack"];
 const POPULAR = ["notion", "linear", "github", "slack", "hubspot", "googledrive", "atlassian", "stripe", "asana", "airtable"];

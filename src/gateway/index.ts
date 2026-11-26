@@ -1445,6 +1445,8 @@ async function startGateway(): Promise<void> {
           `[Gateway] /api/db/query app=${appId} source=${source.alias} backend=${result.backend} rows=${result.count}`,
         );
         const payload = { ...result, source: source.alias };
+        const { recordPreviewLoadedRows } = await import("./utils/previewLoadedData.js");
+        recordPreviewLoadedRows(appId, `db/query ${source.alias}`, result.rows);
         if (cacheKey) {
           setCachedLocalDbReadResult(cacheKey, payload, appId);
         }
@@ -1708,6 +1710,12 @@ async function startGateway(): Promise<void> {
         const { notifyMiniAppFirstDataPaint } =
           await import("./services/tursoPullScheduler.js");
         notifyMiniAppFirstDataPaint(appId);
+        {
+          const { recordPreviewLoadedRows } = await import("./utils/previewLoadedData.js");
+          for (const r of (payload as { results?: Array<{ rows?: unknown }> }).results ?? []) {
+            if (r?.rows) recordPreviewLoadedRows(appId, "db/batch", r.rows);
+          }
+        }
         res.json(payload);
       } catch (err) {
         console.error("[Gateway] /api/db/batch error:", err);
@@ -3458,7 +3466,9 @@ async function startGateway(): Promise<void> {
         const { appendCloudActingUserQuery } =
           await import("./utils/cloudActingUser.js");
         const targetUrl = `${memoryServerBase}${appendCloudActingUserQuery(
-          `/v1/cloud/apps/changes/${encodeURIComponent(req.params.requestId)}/approve`,
+          `/v1/cloud/apps/changes/${encodeURIComponent(req.params.requestId)}/approve${
+            String(req.query.confirmDestructive) === "true" ? "?confirmDestructive=true" : ""
+          }`,
         )}`;
         const upstream = await fetch(targetUrl, {
           method: "POST",
@@ -4341,6 +4351,9 @@ async function startGateway(): Promise<void> {
       void sendPreparedRendererTelemetry(prepared.payload);
     });
 
+    // papr_llm.complete — jobs/backend actions call models through the chat stack.
+    (await import("./services/llm/registerModelCallRoutes.js")).registerModelCallRoutes(app);
+
     app.post("/api/bash/run", async (_req, res) => {
       const { MINI_APP_BASH_DISABLED_CODE, MINI_APP_BASH_DISABLED_MESSAGE } =
         await import("./services/appRuntime/miniAppApiPolicy.js");
@@ -4438,6 +4451,10 @@ async function startGateway(): Promise<void> {
               secretValues.push(...sub.keyValues);
             }
           }
+          // Same credential as chat: the live OAuth token when the user is on OAuth.
+          const { applyLiveProviderAuth } =
+            await import("./utils/scriptProviderCredential.js");
+          secretValues.push(...(await applyLiveProviderAuth(vaultEnv)));
         }
 
         const {

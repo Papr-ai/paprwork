@@ -188,9 +188,59 @@ async function readReplicaRegistrySchema(
   }
 }
 
+/**
+ * Cloud-direct databases have no local file — the Turso primary is the only
+ * copy (cloud agent runs, no-engine desktops). Checking the path on disk would
+ * report every table missing, so read the schema from the primary instead.
+ */
+export async function isCloudDirectSchemaInput(
+  input: Pick<RegistryDbSchemaReadInput, "dbPath" | "dbId" | "syncMode">,
+): Promise<boolean> {
+  if (input.syncMode === "cloud-direct") return true;
+  const { isCloudDirectSource } = await import("../cloudDirect/cloudDirectDb.js");
+  return isCloudDirectSource({ dbId: input.dbId, dbPath: input.dbPath });
+}
+
+async function readCloudDirectRegistrySchema(
+  input: RegistryDbSchemaReadInput,
+): Promise<RegistryDbSchemaReadResult> {
+  try {
+    const { cloudDirectQuery } = await import("../cloudDirect/cloudDirectDb.js");
+    const source = toAppDataSource(input);
+    const { rows } = await cloudDirectQuery(
+      source,
+      "SELECT m.name AS t, p.name AS c FROM sqlite_master m " +
+        "LEFT JOIN pragma_table_info(m.name) p WHERE m.type IN ('table','view')",
+    );
+    const tables = new Set<string>();
+    const columnsByTable = new Map<string, Set<string>>();
+    for (const row of rows) {
+      const table = String(row.t ?? "").toLowerCase();
+      if (!table) continue;
+      tables.add(table);
+      const cols = columnsByTable.get(table) ?? new Set<string>();
+      if (row.c != null) cols.add(String(row.c).toLowerCase());
+      columnsByTable.set(table, cols);
+    }
+    return { ok: true, schema: { tables, columnsByTable } };
+  } catch (error) {
+    return { ok: false, code: "unopenable", message: (error as Error).message };
+  }
+}
+
+/** Database exists: a local file, or a cloud-direct registry record. */
+export async function registryDatabaseExists(
+  input: Pick<RegistryDbSchemaReadInput, "dbPath" | "dbId" | "syncMode">,
+): Promise<boolean> {
+  return existsSync(input.dbPath) || (await isCloudDirectSchemaInput(input));
+}
+
 export async function readRegistryDatabaseSchema(
   input: RegistryDbSchemaReadInput,
 ): Promise<RegistryDbSchemaReadResult> {
+  if (await isCloudDirectSchemaInput(input)) {
+    return readCloudDirectRegistrySchema(input);
+  }
   if (!existsSync(input.dbPath)) {
     return {
       ok: false,
@@ -213,6 +263,16 @@ export async function countRowsInRegistryTable(
 ): Promise<number | null> {
   const escaped = table.replace(/"/g, '""');
   const sql = `SELECT COUNT(*) AS c FROM "${escaped}"`;
+
+  if (await isCloudDirectSchemaInput(input)) {
+    try {
+      const { cloudDirectQuery } = await import("../cloudDirect/cloudDirectDb.js");
+      const row = (await cloudDirectQuery(toAppDataSource(input), sql)).rows[0];
+      return row ? Number(row.c) : null;
+    } catch {
+      return null;
+    }
+  }
 
   if (shouldReadRegistrySchemaViaReplica(input)) {
     try {
@@ -263,6 +323,14 @@ export async function queryRegistryDatabase(
   sql: string,
   params: unknown[] = [],
 ): Promise<{ rows: Record<string, unknown>[] } | null> {
+  if (await isCloudDirectSchemaInput(input)) {
+    try {
+      const { cloudDirectQuery } = await import("../cloudDirect/cloudDirectDb.js");
+      return { rows: (await cloudDirectQuery(toAppDataSource(input), sql, params)).rows };
+    } catch {
+      return null;
+    }
+  }
   if (!existsSync(input.dbPath)) {
     return null;
   }

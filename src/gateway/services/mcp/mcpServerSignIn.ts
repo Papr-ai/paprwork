@@ -126,12 +126,15 @@ export class McpServerSignIn {
     def: McpServerDefinition,
     opts: { audience: ConnectionAudience; allowedUserIds?: string[]; origin?: string },
   ): Promise<{ sessionId: string; authorizeUrl: string }> {
-    const info = await discoverOAuthServerInfo(def.url);
-    const md = info.authorizationServerMetadata;
+    const fixed = def.oauthEndpoints;
+    const info = fixed ? undefined : await discoverOAuthServerInfo(def.url);
+    const md = fixed
+      ? ({ issuer: new URL(fixed.authorizationEndpoint).origin, authorization_endpoint: fixed.authorizationEndpoint, token_endpoint: fixed.tokenEndpoint, response_types_supported: ["code"] } as AuthorizationServerMetadata)
+      : info?.authorizationServerMetadata;
     if (!md?.authorization_endpoint || !md.token_endpoint) {
       throw new ServerSignInError(`${def.name} didn't publish its sign-in endpoints.`, 502);
     }
-    const clientId = await this.clientIdFor(def, md, info.authorizationServerUrl);
+    const clientId = await this.clientIdFor(def, md, info?.authorizationServerUrl ?? md.issuer);
     const res = await this.deps.cloud("/v1/cloud/oauth/sessions", {
       method: "POST",
       body: {
@@ -141,8 +144,9 @@ export class McpServerSignIn {
         authorizationEndpoint: md.authorization_endpoint,
         tokenEndpoint: md.token_endpoint,
         clientId,
-        scopes: info.resourceMetadata?.scopes_supported ?? undefined,
-        resource: info.resourceMetadata?.resource ?? def.url,
+        scopes: def.scopes ? [...def.scopes] : (info?.resourceMetadata?.scopes_supported ?? undefined),
+        // RFC 8707 resource only for MCP servers; plain APIs (native connectors) take none.
+        ...(fixed ? {} : { resource: info?.resourceMetadata?.resource ?? def.url }),
         ...(opts.allowedUserIds?.length ? { allowedUserIds: opts.allowedUserIds } : {}),
       },
     });

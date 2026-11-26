@@ -195,46 +195,12 @@ function buildResultExcerpt(text: string, excerptChars: number): string {
   );
 }
 
-/**
- * When a sub-agent delegation job finishes, wake the main agent so it can
- * post a user-facing update (summary + pointer to full report card).
- */
-export async function triggerMainAgentOnDelegationFinished(
+/** The message that wakes the main agent after a helper finishes (desktop trigger and cloud runs). */
+export async function buildDelegationFinishedMessage(
   delegationId: string,
   outcome: "completed" | "failed",
-): Promise<void> {
-  if (notifiedDelegationFinishes.has(delegationId)) {
-    console.log(
-      `[SubAgentResponseTrigger] Already notified for ${delegationId}, skipping`,
-    );
-    return;
-  }
-
-  const jobsService = getJobsService();
-  const job = await jobsService.getJob(delegationId);
-  if (!job || job.type !== "subagent" || !job.reportChatId?.trim()) {
-    return;
-  }
-
-  const chatId = job.reportChatId;
-
-  if (outcome === "failed" && job.nextRetryAt) {
-    console.log(
-      `[SubAgentResponseTrigger] Delegation ${delegationId} will retry, skipping notification`,
-    );
-    return;
-  }
-
-  if (await isMainAgentStreamActive(chatId)) {
-    queueDelegationFinished(chatId, delegationId, outcome);
-    return;
-  }
-
-  const config = await resolveConfigForChat(chatId);
-  if (!config) return;
-
-  notifiedDelegationFinishes.add(delegationId);
-
+  job: JobRecord,
+): Promise<string> {
   const task = job.delegationTask ?? job.command ?? "Delegated task";
   const { text: resultText, agentName } = await loadDelegationResultText(
     delegationId,
@@ -271,6 +237,61 @@ export async function triggerMainAgentOnDelegationFinished(
       `Use get_delegation_run({ runId: "${delegationId}" }) if you need the complete text before summarizing. ` +
       `Do NOT say you are still waiting for the sub-agent — it is done. Do NOT re-delegate unless the user asks.`;
   }
+
+  return syntheticMessage;
+}
+
+/**
+ * When a sub-agent delegation job finishes, wake the main agent so it can
+ * post a user-facing update (summary + pointer to full report card).
+ */
+export async function triggerMainAgentOnDelegationFinished(
+  delegationId: string,
+  outcome: "completed" | "failed",
+): Promise<void> {
+  if (notifiedDelegationFinishes.has(delegationId)) {
+    console.log(
+      `[SubAgentResponseTrigger] Already notified for ${delegationId}, skipping`,
+    );
+    return;
+  }
+
+  const jobsService = getJobsService();
+  const job = await jobsService.getJob(delegationId);
+  if (!job || job.type !== "subagent" || !job.reportChatId?.trim()) {
+    return;
+  }
+
+  const chatId = job.reportChatId;
+
+  const { isCloudRunAwaitingDelegations } = await import(
+    "./cloudAgentGateway/cloudRunDelegationWait.js"
+  );
+  if (isCloudRunAwaitingDelegations(chatId)) {
+    console.log(
+      `[SubAgentResponseTrigger] ${delegationId}: cloud run for ${chatId} continues inline, skipping`,
+    );
+    return;
+  }
+
+  if (outcome === "failed" && job.nextRetryAt) {
+    console.log(
+      `[SubAgentResponseTrigger] Delegation ${delegationId} will retry, skipping notification`,
+    );
+    return;
+  }
+
+  if (await isMainAgentStreamActive(chatId)) {
+    queueDelegationFinished(chatId, delegationId, outcome);
+    return;
+  }
+
+  const config = await resolveConfigForChat(chatId);
+  if (!config) return;
+
+  notifiedDelegationFinishes.add(delegationId);
+
+  const syntheticMessage = await buildDelegationFinishedMessage(delegationId, outcome, job);
 
   await runMainAgentStream(chatId, syntheticMessage, config);
 }

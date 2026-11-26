@@ -5,7 +5,10 @@
 
 import type { AppDataSource } from "../appDataSources.js";
 import { listMigrationSqlFiles } from "../jobs/jobMigrationManifest.js";
-import { shouldSkipMigrationForRemoteLedger } from "../jobs/migrationLedgerPolicy.js";
+import {
+  baselineFileHasStatements,
+  shouldSkipMigrationForRemoteLedger,
+} from "../jobs/migrationLedgerPolicy.js";
 import { normalizeMigrationId } from "../jobs/migrationIdNormalize.js";
 import { isTursoReplicaOnline } from "../../utils/tursoReplicaEnabled.js";
 import {
@@ -34,10 +37,43 @@ export async function replicaHasSchemaMigrationsTable(
   return result.rows.length > 0;
 }
 
+/**
+ * True when 0001_baseline.sql creates schema, is not recorded, and the database
+ * has no app tables: it is the first migration and the runner must apply it.
+ * 2026-11: Website Audit installs failed with "no such table: audits" because
+ * the baseline row was written here first, so its CREATE TABLEs never ran.
+ * Databases that already have tables keep the bookkeeping row, as before.
+ */
+async function baselineMustRunOnReplica(source: AppDataSource): Promise<boolean> {
+  const { resolveMigrationRootFromDbPath } = await import("../jobs/databaseMigrations.js");
+  const migrationRoot = resolveMigrationRootFromDbPath(source.dbPath);
+  if (!migrationRoot || !(await baselineFileHasStatements(migrationRoot))) {
+    return false;
+  }
+  const recorded = await queryLinkedDbViaTursoReplica(
+    source,
+    "SELECT id FROM schema_migrations WHERE id IN (?, ?) LIMIT 1",
+    [BASELINE_MIGRATION_ID, `${BASELINE_MIGRATION_ID}.sql`],
+    { pullBeforeRead: false },
+  );
+  if (recorded.rows.length > 0) {
+    return false;
+  }
+  const { FRESH_TABLES_SQL, hasNoAppTables } = await import("../jobs/schemaSnapshotApply.js");
+  const tables = await queryLinkedDbViaTursoReplica(source, FRESH_TABLES_SQL, [], {
+    pullBeforeRead: false,
+  });
+  return hasNoAppTables(tables.rows.map((row) => String(row.name ?? "")));
+}
+
 async function ensureBaselineOnLocalReplica(source: AppDataSource): Promise<void> {
   const hasTable = await replicaHasSchemaMigrationsTable(source);
   if (!hasTable) {
     await execLinkedDbViaTursoReplica(source, REPLICA_SCHEMA_MIGRATIONS_DDL);
+  }
+
+  if (await baselineMustRunOnReplica(source)) {
+    return;
   }
 
   await writeLinkedDbViaTursoReplica(

@@ -48,6 +48,12 @@ function isExclusiveInteractiveWorkerOp(op: TursoSyncWorkerRequest["op"]): boole
 export class TursoSyncWorkerCore {
   private readonly handles = new Map<string, Handle>();
   private readonly opening = new Map<string, Promise<Db>>();
+  /**
+   * Latest token the gateway sent for each path. The engine reads it through a
+   * function before every remote request, so a refreshed token takes effect on the
+   * open handle; no reopen needed.
+   */
+  private readonly tokens = new Map<string, string>();
   private readonly scheduler = new TursoReplicaPathScheduler();
 
   constructor(private readonly log: WorkerLogger = () => {}) {}
@@ -180,6 +186,7 @@ export class TursoSyncWorkerCore {
   }
 
   private async getOrOpen(request: TursoSyncWorkerRequest): Promise<Db> {
+    if (request.authToken) this.tokens.set(request.localPath, request.authToken);
     const existing = this.handles.get(request.localPath);
     if (existing) {
       return existing.db;
@@ -190,10 +197,11 @@ export class TursoSyncWorkerCore {
     }
     const trace = databaseTracingEnabled() ? new DatabaseConnectionTrace(request.localPath, "turso-sync-worker", "turso") : undefined;
     const endOpen = trace?.begin("connect");
+    const localPath = request.localPath;
     const openPromise = connectTursoReplica({
       localPath: request.localPath,
       tursoUrl: request.tursoUrl,
-      authToken: request.authToken,
+      authToken: async () => this.tokens.get(localPath) ?? request.authToken,
       bootstrapIfEmpty: request.bootstrapIfEmpty,
       clientName: request.clientName,
     }).then((db) => {

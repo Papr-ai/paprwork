@@ -49,6 +49,13 @@ export interface CloudAppLineageFile {
    */
   baseCommit?: string;
   /**
+   * Databases the publisher's app linked at baseCommit (copy on team data).
+   * Only these are the team's; anything else this copy links is the
+   * contributor's own draft until a proposal adding it is accepted.
+   * Absent on older installs: callers fall back to registry ownership.
+   */
+  teamDbIds?: string[];
+  /**
    * Who the publisher shared the source with when this copy was installed.
    * Drives the collaborator mark by the title (team / specific people /
    * Community). Absent on older installs: callers fall back to databasePolicy.

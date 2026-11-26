@@ -308,9 +308,14 @@ async function executeToolCall(
 
 
     import("../gatewayTelemetry.js").then(({ getGatewayTelemetry }) => {
-      getGatewayTelemetry().trackFireAndForget("paprwork_tool_called", {
-        tool_name: toolCall.toolName,
-        success: true,
+      void import("../../../core/telemetry/toolCallTelemetry.js").then(({ toolFailureTelemetry }) => {
+        const r = result as Record<string, unknown> | null;
+        const failed = !!r && typeof r === "object" && ("error" in r || r.success === false);
+        getGatewayTelemetry().trackFireAndForget("paprwork_tool_called", {
+          tool_name: toolCall.toolName,
+          success: !failed,
+          ...toolFailureTelemetry(toolCall.toolName, result),
+        });
       });
     }).catch(() => {});
 
@@ -326,6 +331,7 @@ async function executeToolCall(
       getGatewayTelemetry().trackFireAndForget("paprwork_tool_called", {
         tool_name: toolCall.toolName,
         success: false,
+        error_category: "exception",
       });
     }).catch(() => {});
 
@@ -494,6 +500,11 @@ export async function* createPiCodexStreamWithToolLoop(
     jevTrim?: JevTrimRegistry;
     /** The user's message, for the Jev trim goal. */
     userMessage?: string;
+    /**
+     * false = sub-agent opted out of stale tool-result compaction and oldest-turn
+     * trimming. Memory-pressure compaction still runs (process safety).
+     */
+    contextTrimming?: boolean;
     /**
      * True once the user sent a follow-up and asked this turn to pause at the
      * next tool boundary (see agent/steerYield.ts).
@@ -756,12 +767,13 @@ export async function* createPiCodexStreamWithToolLoop(
       yield { type: "start-step" };
     }
 
+    const trimmingOn = toolContext?.contextTrimming !== false;
     applyMidTurnContextShaping(
       context.messages,
-      historyTrimBounds,
+      trimmingOn ? historyTrimBounds : undefined,
       memoryPressure,
       {
-        skipStaleToolCompaction: step === 0,
+        skipStaleToolCompaction: step === 0 || !trimmingOn,
         jevTrim: toolContext?.jevTrim,
         turnMetrics: toolContext?.turnMetrics,
       },

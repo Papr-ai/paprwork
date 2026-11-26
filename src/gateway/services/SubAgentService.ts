@@ -144,6 +144,8 @@ interface CreateSubAgentInput {
   maxTurns?: number;
   memoryPolicy?: "none" | "summary" | "full";
   icon?: import("../../core/types/subagents.js").SubAgentIconName;
+  runtime?: import("../../core/types/subagents.js").SubAgentRuntimeOptions;
+  executionCapability?: SubAgentProfile["executionCapability"];
 }
 
 let subAgentServiceInstance: SubAgentService | null = null;
@@ -568,7 +570,7 @@ export class SubAgentService {
       id,
       name: input.name.trim(),
       description: input.description.trim(),
-      systemPrompt: input.systemPrompt.trim(),
+      systemPrompt: (input.systemPrompt ?? "").trim(),
       provider: input.provider,
       model: input.model,
       fallbackProvider: input.fallbackProvider ?? existing?.fallbackProvider,
@@ -580,6 +582,8 @@ export class SubAgentService {
       maxTurns: input.maxTurns ?? existing?.maxTurns ?? DEFAULT_AGENT_MAX_TURNS,
       memoryPolicy: input.memoryPolicy ?? existing?.memoryPolicy ?? "none",
       icon: input.icon ?? existing?.icon,
+      runtime: input.runtime ?? existing?.runtime,
+      executionCapability: input.executionCapability ?? existing?.executionCapability,
       createdAt: existing?.createdAt ?? now,
       updatedAt: now,
       runCount: existing?.runCount ?? 0,
@@ -798,7 +802,15 @@ export class SubAgentService {
     });
 
     if (input.background) {
-      void jobsService.runJob(job.id);
+      // The main agent is waiting on this run. As plain background work it sat
+      // in the background budget (one slot, 2-min grace while a chat streams),
+      // so on a busy gateway it stayed "pending" until the chat turn ended.
+      const { gatewayBackgroundBudget } = await import("./gatewayBackgroundBudget.js");
+      void gatewayBackgroundBudget
+        .runInteractive(() => jobsService.runJob(job.id))
+        .catch((err: unknown) =>
+          console.warn(`[SubAgentService] delegation ${job.id} failed to start:`, err),
+        );
       return this.mapJobToRun(job);
     }
     const completed = await jobsService.runJob(job.id);

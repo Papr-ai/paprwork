@@ -36,6 +36,17 @@ export interface AvailableProvider {
  * 3. Ollama (always available, no auth needed)
  * 4. Fallback: openai/gpt-5-6-sol (will error if not configured)
  */
+/** Cloud gateway found no model credential (it has no local Ollama to fall back to). */
+export class CloudNoCredentialError extends Error {
+  constructor() {
+    super(
+      "No model credential for this cloud run — local Ollama isn't available in Papr Cloud. " +
+        "Connect OpenAI, Anthropic or Google in Settings.",
+    );
+    this.name = "CloudNoCredentialError";
+  }
+}
+
 export async function getDefaultProviderAndModel(): Promise<{
   provider: Provider;
   model: string;
@@ -53,6 +64,7 @@ export async function getDefaultProviderAndModel(): Promise<{
     zai: "glm-5.2",
     groq: "openai/gpt-oss-120b",
     moonshot: "kimi-k3",
+    openrouter: "thinkingmachines/inkling-2-mini",
   };
 
   try {
@@ -96,12 +108,17 @@ export async function getDefaultProviderAndModel(): Promise<{
       return { provider: "openai", model: defaultModelByProvider.openai };
     }
 
-    // 3. Fallback to Ollama (always available, no auth needed)
+    // 3. Fallback to Ollama (always available, no auth needed) — desktop only.
+    // The cloud gateway has no local Ollama; picking it there hangs the run.
+    if (process.env.GATEWAY_MODE === "cloud_agent") {
+      throw new CloudNoCredentialError();
+    }
     console.log(
       "[DefaultProvider] No OAuth or API keys found, falling back to Ollama (local inference)",
     );
     return { provider: "ollama", model: defaultModelByProvider.ollama };
   } catch (error) {
+    if (error instanceof CloudNoCredentialError) throw error;
     // 4. Ultimate fallback: OpenAI (will error if not configured, but that's okay)
     console.warn(
       "[DefaultProvider] Error checking auth, falling back to OpenAI:",
@@ -128,6 +145,7 @@ export async function getAvailableProviders(): Promise<AvailableProvider[]> {
     zai: "glm-5.2",
     groq: "openai/gpt-oss-120b",
     moonshot: "kimi-k3",
+    openrouter: "thinkingmachines/inkling-2-mini",
   };
 
   const providers: AvailableProvider[] = [];

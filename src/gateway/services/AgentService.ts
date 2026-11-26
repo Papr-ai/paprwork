@@ -98,6 +98,11 @@ import {
   trimOldestHistoryTurns,
 } from "./agent/midTurnContextTrim.js";
 import {
+  resolveSubAgentRuntime,
+  type SubAgentRuntimeOptions,
+} from "../../core/types/subagents.js";
+import { filterMemoryBlocksForRuntime } from "./agent/subAgentRuntimeContext.js";
+import {
   classifyMemoryBlock,
   getUserMemoryContextService,
   isMemoryContextUserMessage,
@@ -592,6 +597,11 @@ export class AgentService {
       _reuseAssistantMessageId?: string;
       /** Internal: Auto retry on the next provider after an auth refusal. Retries once. */
       _isAuthFallbackRetry?: boolean;
+      /**
+       * Sub-agent runtime switches. Omitted = full Pen runtime (every switch on).
+       * See SubAgentRuntimeOptions.
+       */
+      runtime?: SubAgentRuntimeOptions;
     },
   ): AsyncGenerator<StreamChunk & { chatId: string }> {
     if (!this.initialized) {
@@ -1410,16 +1420,23 @@ export class AgentService {
           config.provider,
         ));
 
+      const runtime = resolveSubAgentRuntime(options?.runtime);
       let memoryContextBlocks: string[] = [];
       try {
         const memoryContextService = getUserMemoryContextService();
         memoryContextBlocks =
-          await memoryContextService.getMemoryContextBlocks(
-            chatId,
-            userMessage,
-            history,
-            { mode: "stream" },
-          );
+          runtime.memoryContext || runtime.wikiContext
+            ? await memoryContextService.getMemoryContextBlocks(
+                chatId,
+                userMessage,
+                history,
+                { mode: "stream" },
+              )
+            : [];
+        memoryContextBlocks = filterMemoryBlocksForRuntime(
+          memoryContextBlocks,
+          runtime,
+        );
         // The catalog experiment record is written when the deferred block is
         // built and consumed here, on the turn that actually injects it.
         recordCatalogExperiment(
@@ -1460,7 +1477,9 @@ export class AgentService {
       }
 
       const useAnthropicPromptCache =
-        config.provider === "anthropic" && config.authType !== "oauth";
+        runtime.promptCaching &&
+        config.provider === "anthropic" &&
+        config.authType !== "oauth";
       if (useAnthropicPromptCache) {
         const { applyAnthropicPromptCacheControl } =
           await import("./agent/promptCacheControl.js");
@@ -1554,6 +1573,7 @@ export class AgentService {
         shouldYield: () => isYieldRequested(chatId),
         jevTrim: jevTrimRegistry,
         userMessage,
+        contextTrimming: runtime.contextTrimming,
         ...(focusAppId ? { activeAppId: focusAppId } : {}),
         ...(Object.keys(mergedJobEnv).length > 0
           ? { jobEnv: mergedJobEnv }
@@ -1648,6 +1668,23 @@ export class AgentService {
           providerOptions,
           buildGroqProviderOptions(config.model, config.reasoning),
         );
+      }
+
+      // OpenRouter (via Papr): effort rides openai.reasoningEffort → reasoning_effort,
+      // which openrouterModel.ts turns into OpenRouter's unified `reasoning` field.
+      if (config.provider === "openrouter") {
+        // Thinking off in the picker → "none", which openrouterModel.ts sends as
+        // reasoning: { enabled: false } so the model answers without thinking.
+        const effort =
+          config.thinking === false ? "none" : (config.reasoning?.effort ?? "medium");
+        // Web search is OpenRouter's server tool (added in openrouterModel.ts); a
+        // runtime with nativeWebSearch: false turns it off through this flag.
+        Object.assign(providerOptions, {
+          openai: {
+            reasoningEffort: effort,
+            ...(runtime.nativeWebSearch ? {} : { metadata: { papr_web_search: "off" } }),
+          },
+        });
       }
 
       // For Moonshot Kimi K3 (OpenAI-compatible — reasoning_effort=max always)
@@ -1761,9 +1798,11 @@ export class AgentService {
       // turn end. Reset here so a previous turn's searches can never be
       // attributed to this turn's answer.
       resetSearchOutcomes(chatId);
-      const registryTools = wrapToolsWithMemorySearchFirstGate(
-        this.toolRegistry.getToolsForMastra(options?.allowedToolIds),
-      );
+      const registryTools = runtime.tools
+        ? wrapToolsWithMemorySearchFirstGate(
+            this.toolRegistry.getToolsForMastra(options?.allowedToolIds),
+          )
+        : {};
 
       // Which schemas ride in the request. Decided once, here, and never
       // revised mid-turn: the tool block sits in the cached prefix, so one
@@ -1875,6 +1914,7 @@ export class AgentService {
       // Whether compaction ran or the pressure gate declined is the measurement
       // that makes a change to the truncation policy visible, so both are counted.
       const compactWithMetrics = (msgs: unknown[]): void => {
+        if (!runtime.contextTrimming) return;
         const stats = compactStaleToolResults(msgs, {
           historyTokenBudget,
           jevTrim: jevTrimRegistry,
@@ -1890,10 +1930,12 @@ export class AgentService {
       // Pre-flight trim: use model-aware cap (not global 300K) so Groq/Ollama don't overflow.
       // The same budget gates compaction, which does nothing until the context is under pressure.
       compactWithMetrics(messages);
-      const preFlightTrim = trimOldestHistoryTurns(messages, {
-        ...historyTrimBounds,
-        maxTokens: historyTokenBudget,
-      });
+      const preFlightTrim = runtime.contextTrimming
+        ? trimOldestHistoryTurns(messages, {
+            ...historyTrimBounds,
+            maxTokens: historyTokenBudget,
+          })
+        : { trimmed: false as const, removedTurns: 0, tokensBefore: 0, tokensAfter: 0 };
       if (preFlightTrim.trimmed) {
         const postTrimEstimate = estimateMessagesTokens(messages) + toolTokens;
         console.log(
@@ -1928,9 +1970,10 @@ export class AgentService {
 
       // Native provider search tools (OpenAI web_search, Gemini google_search) target
       // direct provider APIs — they break when the model routes through Papr proxy.
-      const nativeSearchTools = config.usePaprProxy
-        ? {}
-        : await this.buildNativeSearchTools(config.provider);
+      const nativeSearchTools =
+        config.usePaprProxy || !runtime.nativeWebSearch
+          ? {}
+          : await this.buildNativeSearchTools(config.provider);
       if (config.usePaprProxy) {
         console.log(
           `[AgentService] Skipping native provider search tools — using Papr AI proxy for ${config.provider}`,
@@ -1996,7 +2039,9 @@ export class AgentService {
         // 3. Proactive Papr summarization before/after turns
         // 4. User can abort via UI (abortController)
         abortSignal: abortController.signal,
-        ...(config.provider === "groq" || config.provider === "moonshot"
+        ...(config.provider === "groq" ||
+        config.provider === "moonshot" ||
+        config.provider === "openrouter"
           ? { includeRawChunks: true }
           : {}),
         ...(providerOptions.openai ||
@@ -2005,7 +2050,8 @@ export class AgentService {
         providerOptions.anthropic ||
         config.provider === "zai" ||
         config.provider === "groq" ||
-        config.provider === "moonshot"
+        config.provider === "moonshot" ||
+        config.provider === "openrouter"
           ? { providerOptions }
           : {}),
         // Before each tool step: drop oldest stored history if mid-turn context exceeds model budget.
@@ -2048,19 +2094,23 @@ export class AgentService {
             };
             const msgs = [...stepOptions.messages, warningMessage];
             compactWithMetrics(msgs);
-            trimOldestHistoryTurns(msgs, {
-              ...historyTrimBounds,
-              maxTokens: historyTokenBudget,
-            });
+            if (runtime.contextTrimming) {
+              trimOldestHistoryTurns(msgs, {
+                ...historyTrimBounds,
+                maxTokens: historyTokenBudget,
+              });
+            }
             return { messages: msgs };
           }
 
           let msgs = [...stepOptions.messages];
           compactWithMetrics(msgs);
-          trimOldestHistoryTurns(msgs, {
-            ...historyTrimBounds,
-            maxTokens: historyTokenBudget,
-          });
+          if (runtime.contextTrimming) {
+            trimOldestHistoryTurns(msgs, {
+              ...historyTrimBounds,
+              maxTokens: historyTokenBudget,
+            });
+          }
           if (steerFollowUp) {
             msgs = withSteerNote(msgs as any) as typeof msgs;
           }
@@ -2464,10 +2514,6 @@ export class AgentService {
             `baseUrl=${finalModel ? (finalModel as any).baseUrl : "null"}`,
         );
 
-        // Build native web search tools for pi-ai providers
-        const nativeSearchTools =
-          this.buildNativeSearchToolsForPiAi(piProvider);
-
         const piContext = buildPiContext({
           // Steered follow-up: the model-only note rides right after the
           // user's message (never persisted; see agent/steerYield.ts).
@@ -2478,7 +2524,6 @@ export class AgentService {
           apiId: piApiId,
           providerId: piProvider,
           modelId: piModelId,
-          nativeTools: nativeSearchTools,
         });
 
         // 🔍 LOG EXACT CONTEXT SENT TO PI-AI
@@ -2582,7 +2627,13 @@ export class AgentService {
           sessionId,
           signal: abortController.signal,
           reasoning: reasoningLevel,
-          ...(usePiAiAnthropic ? { cacheRetention: "long" as const } : {}),
+          ...(usePiAiAnthropic
+            ? {
+                cacheRetention: runtime.promptCaching
+                  ? ("long" as const)
+                  : ("none" as const),
+              }
+            : {}),
         };
 
         type PiAiStreamOptions =
@@ -2602,6 +2653,15 @@ export class AgentService {
             baseStreamOpts,
             config.thinking !== false,
           );
+        }
+        // Provider web search rides on the request body (pi-ai only converts
+        // function tools); see providers/piAiNativeWebSearch.ts.
+        if (runtime.nativeWebSearch) {
+          const { withPiAiNativeWebSearch } = await import(
+            "./providers/piAiNativeWebSearch.js"
+          );
+          streamOpts = withPiAiNativeWebSearch(piProvider, streamOpts);
+          console.log(`[AgentService] ✅ Native web search on (${piProvider}, pi-ai)`);
         }
         const apiKeys = getApiKeysForSanitization();
         const maxSteps = options?.maxSteps ?? 100;
@@ -2748,7 +2808,7 @@ export class AgentService {
         });
 
         aiSdkStreamResult = await streamText(streamTextOptions);
-        if (config.provider === "groq") {
+        if (config.provider === "groq" || config.provider === "openrouter") {
           const { adaptGroqAISDKFullStream } =
             await import("../utils/groqProvider.js");
           fullStream = adaptGroqAISDKFullStream(aiSdkStreamResult.fullStream);
@@ -2780,7 +2840,9 @@ export class AgentService {
         apiKeys,
         {
           sequence,
-          ...(config.provider === "groq" || config.provider === "moonshot"
+          ...(config.provider === "groq" ||
+          config.provider === "moonshot" ||
+          config.provider === "openrouter"
             ? { textBufferMin: 1 }
             : {}),
         },
@@ -4828,9 +4890,14 @@ ${last15.substring(0, 8_000)}`;
     authOverride?: {
       apiKey: string;
       authType: "oauth" | "apiKey";
+      usePaprProxy?: boolean;
     };
     /** Cloud agent gateway: Papr Memory API key for tool calls */
     paprApiKey?: string;
+    /** Sub-agent runtime switches (memory/wiki/tools/search/caching/trimming). */
+    runtime?: SubAgentRuntimeOptions;
+    /** Replace-mode sub-agent: used as the whole system prompt. */
+    systemPromptOverride?: string;
   }): Promise<{
     chatId: string;
     text: string;
@@ -4859,6 +4926,7 @@ ${last15.substring(0, 8_000)}`;
 
     let apiKey: string | undefined;
     let authType: "oauth" | "apiKey" | undefined;
+    let usePaprProxy: boolean | undefined;
 
     const isCloudGateway = process.env.GATEWAY_MODE === "cloud_agent";
 
@@ -4875,14 +4943,17 @@ ${last15.substring(0, 8_000)}`;
           model: input.model,
           token: input.authOverride.apiKey,
           authType: input.authOverride.authType,
+          usePaprProxy: input.authOverride.usePaprProxy,
         });
         provider = cloudSession.provider;
         model = cloudSession.model;
         apiKey = cloudSession.token;
         authType = cloudSession.authType;
+        usePaprProxy = cloudSession.usePaprProxy;
       } else {
         apiKey = input.authOverride.apiKey;
         authType = input.authOverride.authType;
+        usePaprProxy = input.authOverride.usePaprProxy;
       }
     }
 
@@ -4903,8 +4974,6 @@ ${last15.substring(0, 8_000)}`;
     console.log(
       `[AgentService] Resolved job provider/model: ${provider}/${model}`,
     );
-
-    let usePaprProxy: boolean | undefined;
 
     if (!input.authOverride?.apiKey) {
       const sessionAuth = await (
@@ -4940,7 +5009,9 @@ ${last15.substring(0, 8_000)}`;
       apiKey,
       authType,
       usePaprProxy,
-      systemPrompt: `${this.systemPrompt}\n\n# Isolated Job Run\n- Session: ${chatId}\n- Keep output concise and actionable.`,
+      systemPrompt:
+        input.systemPromptOverride ??
+        `${this.systemPrompt}\n\n# Isolated Job Run\n- Session: ${chatId}\n- Keep output concise and actionable.`,
       contextLimit: DEFAULT_SESSION_CONTEXT_LIMIT,
     };
 
@@ -4965,6 +5036,7 @@ ${last15.substring(0, 8_000)}`;
           {
             allowedToolIds: input.allowedToolIds,
             maxSteps: input.maxTurns,
+            ...(input.runtime ? { runtime: input.runtime } : {}),
           },
         )) {
           if (chunk.type === "error") {
@@ -5173,6 +5245,7 @@ ${last15.substring(0, 8_000)}`;
           {
             allowedToolIds: input.allowedToolIds,
             maxSteps: input.maxTurns,
+            ...(input.runtime ? { runtime: input.runtime } : {}),
           },
         )) {
           if (chunk.type === "error") {
@@ -5316,9 +5389,10 @@ ${last15.substring(0, 8_000)}`;
     model?: string;
     allowedToolIds?: string[];
     maxTurns?: number;
-    authOverride: { apiKey: string; authType: "oauth" | "apiKey" };
+    authOverride: { apiKey: string; authType: "oauth" | "apiKey"; usePaprProxy?: boolean };
     paprApiKey?: string;
     systemPromptOverride?: string;
+    runtime?: SubAgentRuntimeOptions;
     appendLog?: (line: string) => Promise<void>;
   }): AsyncGenerator<StreamChunk & { chatId: string }> {
     if (!this.initialized) {
@@ -5336,6 +5410,7 @@ ${last15.substring(0, 8_000)}`;
     let model: string;
     let apiKey: string;
     let authType: "oauth" | "apiKey";
+    let usePaprProxy = false;
 
     if (isCloudGateway && input.authOverride?.apiKey) {
       const cloudSession = await (
@@ -5345,11 +5420,13 @@ ${last15.substring(0, 8_000)}`;
         model: input.model,
         token: input.authOverride.apiKey,
         authType: input.authOverride.authType,
+        usePaprProxy: input.authOverride.usePaprProxy,
       });
       provider = cloudSession.provider;
       model = cloudSession.model;
       apiKey = cloudSession.token;
       authType = cloudSession.authType;
+      usePaprProxy = cloudSession.usePaprProxy === true;
     } else {
       const resolved = await (
         await import("../utils/resolveJobProviderModel.js")
@@ -5376,6 +5453,7 @@ ${last15.substring(0, 8_000)}`;
       model,
       apiKey,
       authType,
+      ...(usePaprProxy ? { usePaprProxy: true } : {}),
       systemPrompt:
         input.systemPromptOverride ??
         `${this.systemPrompt}\n\n# Isolated Job Run\n${isolatedRunNote}\n- Keep output concise and actionable.`,
@@ -5397,6 +5475,7 @@ ${last15.substring(0, 8_000)}`;
       {
         allowedToolIds: input.allowedToolIds,
         maxSteps: input.maxTurns,
+        ...(input.runtime ? { runtime: input.runtime } : {}),
       },
     )) {
       if (input.appendLog) {
@@ -5946,10 +6025,17 @@ ${last15.substring(0, 8_000)}`;
         break;
 
       case "anthropic":
-        // Anthropic: web_search disabled for now due to compatibility issues
-        console.log(
-          "[AgentService] ℹ️  Anthropic: Web search disabled (use browser tools instead)",
-        );
+        try {
+          const { anthropic } = await import("@ai-sdk/anthropic");
+          // 20250305: the version every current Claude model accepts.
+          tools.web_search = anthropic.tools.webSearch_20250305({ maxUses: 5 });
+          console.log("[AgentService] ✅ Enabled Anthropic web search");
+        } catch (error) {
+          console.warn(
+            "[AgentService] ⚠️  Failed to load Anthropic web search tool:",
+            (error as Error).message,
+          );
+        }
         break;
 
       case "ollama":
@@ -5962,46 +6048,6 @@ ${last15.substring(0, 8_000)}`;
       default:
         console.log(
           `[AgentService] ℹ️  Provider ${provider}: No native search support`,
-        );
-    }
-
-    return tools;
-  }
-
-  /**
-   * Build native web search tools for pi-ai providers (OAuth routes)
-   *
-   * Same as buildNativeSearchTools but returns pi-ai compatible format
-   */
-  private buildNativeSearchToolsForPiAi(
-    provider: string,
-  ): Array<{ type: string; name?: string; max_uses?: number }> {
-    const tools: Array<{ type: string; name?: string; max_uses?: number }> = [];
-
-    switch (provider) {
-      case "anthropic":
-        // Anthropic: web_search disabled for now due to compatibility issues
-        console.log(
-          "[AgentService] ℹ️  Anthropic OAuth: Web search disabled (use browser tools instead)",
-        );
-        break;
-
-      case "openai-codex":
-        // OpenAI Codex: web_search tool
-        // Note: May require specific ChatGPT backend support
-        tools.push({
-          type: "web_search",
-          name: "web_search",
-          max_uses: 10,
-        });
-        console.log(
-          "[AgentService] ⚠️  Added OpenAI Codex web_search via pi-ai (experimental)",
-        );
-        break;
-
-      default:
-        console.log(
-          `[AgentService] ℹ️  Provider ${provider}: No native search via pi-ai`,
         );
     }
 

@@ -146,3 +146,34 @@ describe("reconcileAppDataSourcesForPublish — registry link with a job-scratch
     expect((await readReview()).map((s) => s.alias)).toEqual(["review"]);
   });
 });
+
+describe("reconcileAppDataSourcesForPublish — link declared by the app but not registered here", () => {
+  // A merged proposal links db-707ef4c1; the receiving workspace has never
+  // registered it. Publish reconcile used to treat it as deleted and upload the
+  // link's removal (GTM Gap Audit `workpapers`, 2026-11-15).
+  it("keeps a dbId declared in linked-databases.json", async () => {
+    await writeJson("data/databases.json", registry(["db-0a2adba9", "db-2ef11977"]));
+    await writeJson(`apps/${APP_ID}/data-sources.json`, {
+      sources: [
+        source(JOB_A, "db-0a2adba9", "Data Room DB"),
+        { id: "db-707ef4c1:workpapers", type: "sqlite", dbId: "db-707ef4c1", alias: "workpapers", dbPath: "", tables: [] },
+      ],
+    });
+    await writeJson(`apps/${APP_ID}/linked-databases.json`, {
+      version: 1,
+      databases: { "db-707ef4c1": { dbId: "db-707ef4c1", tursoShortName: "d-707ef4c1", status: "active", localPath: "" } },
+    });
+    const report = await reconcileAppDataSourcesForPublish(paprDir, APP_ID);
+    expect(report.removedDbIds).toEqual([]);
+    expect(report.warnings.join(" ")).toMatch(/Kept db-707ef4c1 \(workpapers\)/);
+    const kept = (await readSources()) as Array<{ dbId: string }>;
+    expect(kept.map((s) => s.dbId)).toContain("db-707ef4c1");
+  });
+
+  it("still prunes an undeclared missing dbId", async () => {
+    await writeJson("data/databases.json", registry(["db-0a2adba9"]));
+    await writeJson(`apps/${APP_ID}/linked-databases.json`, { version: 1, databases: {} });
+    const report = await reconcileAppDataSourcesForPublish(paprDir, APP_ID);
+    expect(report.removedDbIds).toEqual(["db-2ef11977"]);
+  });
+});

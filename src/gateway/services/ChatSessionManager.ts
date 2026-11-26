@@ -190,6 +190,11 @@ export class ChatSessionManager {
         break;
       }
 
+      case "openrouter":
+        throw new Error(
+          "OpenRouter models run through Papr. Sign in to Papr to use them.",
+        );
+
       default:
         throw new Error(`Unsupported provider: ${config.provider}`);
     }

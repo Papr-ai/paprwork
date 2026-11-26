@@ -1,4 +1,12 @@
 import { getAgentService } from "../AgentService.js";
+import { getJobsService } from "../JobsService.js";
+import { buildDelegationFinishedMessage } from "../SubAgentResponseTrigger.js";
+import {
+  CLOUD_DELEGATION_WAIT_MS,
+  CLOUD_MAX_FOLLOW_UPS,
+  markCloudRunAwaiting,
+  waitForDelegations,
+} from "./cloudRunDelegationWait.js";
 import { resolveCloudAgentChatId } from "./cloudAppAgentSession.js";
 import {
   beginCloudAgentRun,
@@ -154,7 +162,9 @@ export class CloudAgentGatewayService {
     }
 
     if (syncError) {
-      yield { type: "error", message: syncError, chatId };
+      // phase lets the caller (iMessage, agent runs) tell the user the answer
+      // stands but the live app/database didn't get the changes.
+      yield { type: "error", phase: "publish", message: syncError, chatId };
     }
 
     yield { type: "done", exitCode, chatId };
@@ -200,7 +210,9 @@ export class CloudAgentGatewayService {
     }
 
     if (syncError) {
-      yield { type: "error", message: syncError, chatId };
+      // phase lets the caller (iMessage, agent runs) tell the user the answer
+      // stands but the live app/database didn't get the changes.
+      yield { type: "error", phase: "publish", message: syncError, chatId };
     }
 
     yield { type: "done", exitCode, chatId };
@@ -239,23 +251,57 @@ export class CloudAgentGatewayService {
       ...jobSession
     } = streamInput;
 
-    for await (const chunk of agentService.streamIsolatedJobSessionForCloud({
-      ...jobSession,
-      prompt: streamInput.prompt,
-      chatId,
-      userMessage: streamUserMessage,
-      ...(systemPromptOverride ? { systemPromptOverride } : {}),
-      appendLog,
-    })) {
-      if (chunk.type === "error") {
-        exitCode = 1;
+    const jobs = getJobsService();
+    const helperIds = async () =>
+      new Set(
+        (await jobs.listJobs())
+          .filter((j) => j.type === "subagent" && j.reportChatId === chatId)
+          .map((j) => j.id),
+      );
+    let prompt = streamInput.prompt;
+    let userMessage = streamUserMessage;
+    // Helpers this run starts report back here; the run continues with them instead of
+    // ending on "still waiting" (see cloudRunDelegationWait.ts).
+    markCloudRunAwaiting(chatId, true);
+    try {
+      for (let followUps = 0; ; followUps++) {
+        const before = await helperIds();
+        for await (const chunk of agentService.streamIsolatedJobSessionForCloud({
+          ...jobSession,
+          prompt,
+          chatId,
+          userMessage,
+          ...(systemPromptOverride ? { systemPromptOverride } : {}),
+          appendLog,
+        })) {
+          if (chunk.type === "error") {
+            exitCode = 1;
+          }
+          yield {
+            type: chunk.type,
+            payload: chunk.payload,
+            timestamp: chunk.timestamp,
+            chatId: chunk.chatId,
+          };
+        }
+        if (exitCode !== 0 || followUps >= CLOUD_MAX_FOLLOW_UPS) break;
+        const started = [...(await helperIds())].filter((id) => !before.has(id));
+        if (!started.length) break;
+        await appendLog(`Waiting for ${started.length} helper(s) before replying`);
+        const finished = await waitForDelegations(started, (id) => jobs.getJob(id), {
+          timeoutMs: CLOUD_DELEGATION_WAIT_MS,
+        });
+        if (!finished.length) break;
+        const parts: string[] = [];
+        for (const f of finished) {
+          const job = await jobs.getJob(f.id);
+          if (job) parts.push(await buildDelegationFinishedMessage(f.id, f.outcome, job));
+        }
+        if (!parts.length) break;
+        prompt = userMessage = parts.join("\n\n---\n\n");
       }
-      yield {
-        type: chunk.type,
-        payload: chunk.payload,
-        timestamp: chunk.timestamp,
-        chatId: chunk.chatId,
-      };
+    } finally {
+      markCloudRunAwaiting(chatId, false);
     }
 
     return exitCode;

@@ -3,6 +3,7 @@
  */
 
 import {
+  formatRuntimeLogLine,
   getAppRuntimeLogService,
   normalizePreviewConsoleLevel,
   type AppRuntimeLogEntry,
@@ -13,6 +14,7 @@ import {
   type WebviewNetworkLogEntry,
 } from "./miniAppPreviewNetworkProfile.js";
 import { syncWebviewPreviewActivityLatch } from "../../core/tools/webviewSessionGuard.js";
+import { checkPreviewDataRendered } from "./previewLoadedData.js";
 
 export interface PreviewConsoleLog {
   level: number | string;
@@ -35,6 +37,10 @@ export interface MiniAppRuntimePreviewResult {
   previewScreenshot?: string;
   /** DB/API request counts during preview window (Electron webview only). */
   networkProfile?: PreviewNetworkProfile;
+  /** Rendered page (text + HTML) at snapshot time, for the data-rendered check. */
+  renderedPage?: string;
+  /** Epoch ms when the snapshot was taken. */
+  snapshotAt?: number;
 }
 
 const PREVIEW_WAIT_MS = 2000;
@@ -94,8 +100,12 @@ export async function runMiniAppRuntimePreview(
       snapshotRes.data !== undefined &&
       snapshotRes.data !== null &&
       typeof snapshotRes.data === "object"
-        ? (snapshotRes.data as { screenshot?: string })
+        ? (snapshotRes.data as { screenshot?: string; text?: string; html?: string })
         : undefined;
+    const snapshotAt = Date.now();
+    const renderedPage = snapshotData
+      ? `${snapshotData.text ?? ""}\n${snapshotData.html ?? ""}`
+      : undefined;
     const previewScreenshot =
       typeof snapshotData?.screenshot === "string"
         ? snapshotData.screenshot
@@ -167,6 +177,8 @@ export async function runMiniAppRuntimePreview(
       previewErrors,
       previewScreenshot,
       networkProfile,
+      renderedPage,
+      snapshotAt,
     };
   } catch (error) {
     return {
@@ -177,11 +189,24 @@ export async function runMiniAppRuntimePreview(
   }
 }
 
+const isBackendEntry = (entry: AppRuntimeLogEntry): boolean =>
+  (entry.source ?? "").startsWith("backend/");
+
+/**
+ * Recent iframe/preview errors. Backend action failures are excluded unless
+ * they happened at or after `backendSinceIso` — an action that failed before the
+ * agent fixed it must not fail the next validate_app.
+ */
 export function collectRecentRuntimeErrors(
   appId: string,
   sinceMs = 5 * 60 * 1000,
+  backendSinceIso?: string,
 ): string[] {
-  return getAppRuntimeLogService().getErrorMessages(appId, { sinceMs, limit: 50 });
+  const backendCutoff = backendSinceIso ? Date.parse(backendSinceIso) : Infinity;
+  return getAppRuntimeLogService()
+    .getLogs(appId, { sinceMs, limit: 50, levels: ["error"] })
+    .filter((e) => !isBackendEntry(e) || Date.parse(e.timestamp) >= backendCutoff)
+    .map((e) => formatRuntimeLogLine(e));
 }
 
 export interface PostValidationRuntimeCheck {
@@ -195,9 +220,28 @@ export interface PostValidationRuntimeCheck {
 export async function runPostValidationRuntimeCheck(
   appId: string,
 ): Promise<PostValidationRuntimeCheck> {
+  const startedMs = Date.now();
+  const startedAt = new Date(startedMs).toISOString();
   const preview = await runMiniAppRuntimePreview(appId);
-  const iframeErrors = collectRecentRuntimeErrors(appId);
-  const allErrors = [...new Set([...preview.previewErrors, ...iframeErrors])];
-  const loadWarnings = preview.networkProfile?.warnings ?? [];
+  // Backend calls the preview made (POST /api/app/backend/*) log failures here.
+  const iframeErrors = collectRecentRuntimeErrors(appId, undefined, startedAt);
+  // Data the preview loaded that never reached the screen (calls succeeded, UI blank).
+  const dataErrors =
+    preview.renderedPage !== undefined && preview.snapshotAt !== undefined
+      ? checkPreviewDataRendered(appId, startedMs, preview.snapshotAt, preview.renderedPage)
+      : [];
+  // Every backend action the preview did not call, once, read-only.
+  const { probeBackendActions } = await import("./backendActionProbe.js");
+  const { backendActionsCalledSince } = await import("./previewLoadedData.js");
+  const probe = await probeBackendActions(appId, backendActionsCalledSince(appId, startedMs)).catch(
+    (err: Error) => ({ errors: [`[backend] probe failed to run: ${err.message}`], probed: [], skipped: [] }),
+  );
+  const allErrors = [
+    ...new Set([...preview.previewErrors, ...iframeErrors, ...dataErrors, ...probe.errors]),
+  ];
+  const loadWarnings = [
+    ...(preview.networkProfile?.warnings ?? []),
+    ...probe.skipped.map((s) => `[backend] not probed: "${s.action}" ${s.reason}`),
+  ];
   return { preview, iframeErrors, allErrors, loadWarnings };
 }

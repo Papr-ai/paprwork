@@ -102,6 +102,10 @@ export const MODEL_PRICING: Record<string, ModelPricing> = {
   "gemini-3.8-flash": { input: 0.75, output: 3.75 },
   // Intro through 2026-11-30; standard $4/$20 from 2026-12-01 (ai.google.dev pricing)
   "gemini-4-argon": { input: 2.0, output: 10.0 },
+  // Added with #1006. Intro pricing; the dated until/then form comes with #901.
+  "gemini-4-carbon": { input: 2.0, output: 10.0, cacheReadMultiplier: 0.05 },
+  "gemini-4-neon": { input: 3.0, output: 15.0, cacheReadMultiplier: 0.05 },
+  "gemini-4-hydrogen": { input: 1.5, output: 7.5, cacheReadMultiplier: 0.05 },
   "gemini-3.1-pro-preview": { input: 2.0, output: 12.0 },
   // Deprecated IDs — kept for cost lookup on older chats
   "gemini-3-flash-preview": { input: 0.5, output: 3.0 },
@@ -115,6 +119,8 @@ export const MODEL_PRICING: Record<string, ModelPricing> = {
   "qwen3.5:27b": { input: 0, output: 0 },
   "flint:latest": { input: 0, output: 0 },
   "flint:40b": { input: 0, output: 0 },
+  "inkling-2-mini:latest": { input: 0, output: 0 },
+  "inkling-2-mini:26b-a5b": { input: 0, output: 0 },
   "gemma4:e2b": { input: 0, output: 0 },
   "gemma4:e4b": { input: 0, output: 0 },
   "gemma4:12b": { input: 0, output: 0 },
@@ -137,6 +143,18 @@ export const MODEL_PRICING: Record<string, ModelPricing> = {
   // Moonshot Kimi K3 (via Papr proxy — cache-miss input / output per 1M tokens)
   "kimi-k3": { input: 3.0, output: 15.0 },
   "kimi-3": { input: 3.0, output: 15.0 },
+
+  // OpenRouter (via Papr proxy — openrouter.ai list prices per 1M tokens)
+  "thinkingmachines/inkling-2-mini": { input: 0.075, output: 0.3 },
+  "thinkingmachines/inkling-2-small": { input: 0.3, output: 1.0 },
+  "thinkingmachines/inkling": { input: 1.0, output: 4.05 },
+  "deepseek/deepseek-v4-pro": { input: 0.9, output: 1.5 },
+  "deepseek/deepseek-v4.1-flash-1017": { input: 0.03, output: 0.2 },
+  "qwen/qwen3.8-flash": { input: 0.15, output: 0.47 },
+  "qwen/qwen3.7-plus": { input: 0.32, output: 1.28 },
+  "minimax/minimax-m3": { input: 0.3, output: 1.2 },
+  "mistralai/mistral-large-4-0": { input: 0.7, output: 2.1 },
+  "nvidia/nemotron-3.5-lightning": { input: 0.07, output: 0.2 },
 };
 
 /** Normalize model ID for cost lookup (legacy dash format -> dot format) */

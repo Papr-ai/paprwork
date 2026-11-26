@@ -8,9 +8,15 @@
  *   rejected — the latest proposal carrying the held migrations was rejected:
  *              rebuild from cloud (old schema), replay the writes that still fit,
  *              report the ones that don't, quarantine the migration files, release.
- *   otherwise — still waiting (not proposed yet, or under review): keep the hold.
+ *   superseded — anything else. Since #1045 a teammate's copy is never held: a
+ *              proposed change runs on a test copy and the team's database gets it
+ *              on accept. So any proposal hold still on disk was left by an older
+ *              build and has no event that would ever finish it. Rebuild from
+ *              cloud, replay the writes that still fit, report the rest, release.
+ *              Migration files stay, so they can still be proposed (and tested).
  *
- * Runs on startup, reconnect and the periodic pull tick.
+ * Runs on startup, reconnect, the periodic pull tick, and as soon as the
+ * contributor's desktop sees its proposal accepted or declined (proposalEvents).
  */
 
 import * as path from "node:path";
@@ -24,7 +30,7 @@ import {
   type ReplicaPublishHold,
 } from "./replicaPublishHold.js";
 
-export type ProposalOutcome = "approved" | "rejected" | "pending";
+export type ProposalOutcome = "approved" | "rejected" | "superseded";
 
 export interface SettleDeps {
   /** Migration ids recorded in the shared cloud copy's ledger. */
@@ -47,12 +53,12 @@ export interface SettleResult {
 }
 
 export async function decideProposalOutcome(hold: ReplicaPublishHold, deps: SettleDeps): Promise<ProposalOutcome> {
-  if (!hold.dbId || hold.migrations.length === 0) return "pending";
+  if (!hold.dbId || hold.migrations.length === 0) return "superseded";
   const ids = hold.migrations.map((m) => m.migrationId);
   const cloud = await deps.cloudAppliedIds(hold.dbId);
   if (ids.every((id) => cloud.has(id))) return "approved";
   const status = await deps.latestProposalStatus(hold.dbId, ids.map((id) => `${id}.sql`));
-  return status === "rejected" ? "rejected" : "pending";
+  return status === "rejected" ? "rejected" : "superseded";
 }
 
 export async function settleProposalHold(
@@ -62,7 +68,6 @@ export async function settleProposalHold(
   if (holdPurpose(hold) !== "proposal" || !hold.dbId) return null;
   const dbId = hold.dbId;
   const outcome = await decideProposalOutcome(hold, deps);
-  if (outcome === "pending") return { dbId, outcome, replayed: 0, dropped: [] };
 
   const source: AppDataSource = {
     id: `proposal:${dbId}`,
@@ -109,14 +114,12 @@ export async function settleProposalHolds(deps?: SettleDeps): Promise<SettleResu
       const r = await settleProposalHold(hold, d);
       if (!r) continue;
       results.push(r);
-      if (r.outcome !== "pending") {
-        console.log(
-          `[ProposalHold] ${r.dbId}: proposal ${r.outcome} — rebuilt from the shared copy, ` +
-            `replayed ${r.replayed} write(s)` +
-            (r.dropped.length ? `, ${r.dropped.length} no longer fit and were dropped` : ""),
-        );
-        for (const drop of r.dropped) console.warn(`[ProposalHold] ${r.dbId} dropped: ${drop.sql} (${drop.error})`);
-      }
+      console.log(
+        `[ProposalHold] ${r.dbId}: proposal ${r.outcome} — rebuilt from the shared copy, ` +
+          `replayed ${r.replayed} write(s)` +
+          (r.dropped.length ? `, ${r.dropped.length} no longer fit and were dropped` : ""),
+      );
+      for (const drop of r.dropped) console.warn(`[ProposalHold] ${r.dbId} dropped: ${drop.sql} (${drop.error})`);
     } catch (error) {
       console.warn(
         `[ProposalHold] ${hold.dbId ?? path.basename(hold.localPath)}: settle failed, hold kept:`,

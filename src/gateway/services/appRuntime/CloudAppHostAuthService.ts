@@ -2,7 +2,7 @@
  * Papr web login for Cloud App Host (Auth0 PKCE + HttpOnly session cookies).
  */
 
-import type { Express, Request, Response } from "express";
+import express, { type Express, type Request, type Response } from "express";
 import {
   buildAuth0AuthorizeUrl,
   decodeIdToken,
@@ -13,8 +13,10 @@ import {
   generateCodeChallenge,
   generateCodeVerifier,
   getCloudAppHostAuth0Config,
+  parseSignInIdentifier,
   type PaprAuthMode,
 } from "../../../core/utils/paprAuth0Pkce.js";
+import { allowSmsSignInAttempt } from "./smsSignInLimiter.js";
 import {
   appLabelFromReturnTo,
   buildPaprAuthCallbackPageHtml,
@@ -59,6 +61,12 @@ export class CloudAppHostAuthService {
     // Must be first: every route below reads caller identity.
     app.use(verifiedCallerMiddleware());
     app.get("/auth/login", (req, res) => this.handleLogin(req, res));
+    // Gate one-box: phone or email, posted (keeps it out of URLs and logs).
+    app.post(
+      "/auth/login",
+      express.urlencoded({ extended: false, limit: "2kb" }),
+      (req, res) => this.handleIdentifierLogin(req, res),
+    );
     app.get("/auth/callback", (req, res) => void this.handleCallback(req, res));
     app.get("/auth/logout", (req, res) => this.handleLogout(req, res));
     app.get("/auth/status", (req, res) => this.handleStatus(req, res));
@@ -127,14 +135,43 @@ export class CloudAppHostAuthService {
     res.json(body);
   }
 
-  private handleLogin(req: Request, res: Response): void {
+  /** POST /auth/login — the gate's "phone number or email" box. */
+  private handleIdentifierLogin(req: Request, res: Response): void {
+    const body = (req.body ?? {}) as Record<string, unknown>;
+    const rawReturnTo = typeof body.returnTo === "string" ? body.returnTo : "/";
+    const id = parseSignInIdentifier(body.identifier);
+    if (!id) {
+      const returnTo = resolveReturnToFromRequest(req, rawReturnTo);
+      res.redirect(303, `/auth/login?returnTo=${encodeURIComponent(returnTo)}`);
+      return;
+    }
+    if (id.kind === "phone" && !allowSmsSignInAttempt(req.ip ?? "unknown", id.value)) {
+      res
+        .status(429)
+        .type("text/plain")
+        .send("Too many sign-in codes requested. Please wait a few minutes and try again.");
+      return;
+    }
+    this.handleLogin(req, res, {
+      returnTo: rawReturnTo,
+      mode: id.kind === "phone" ? "phone" : "login",
+      loginHint: id.value,
+    });
+  }
+
+  private handleLogin(
+    req: Request,
+    res: Response,
+    override?: { returnTo: string; mode: PaprAuthMode; loginHint: string },
+  ): void {
     const secure = requestIsSecure(req);
     const returnTo = resolveReturnToFromRequest(
       req,
-      typeof req.query.returnTo === "string" ? req.query.returnTo : "/",
+      override?.returnTo ?? (typeof req.query.returnTo === "string" ? req.query.returnTo : "/"),
     );
     const mode: PaprAuthMode =
-      req.query.mode === "signup" ? "signup" : "login";
+      override?.mode ??
+      (req.query.mode === "signup" || req.query.mode === "phone" ? req.query.mode : "login");
     const existingSession = this.getSessionToken(req);
 
     // Already signed in — skip Auth0 (prevents sign-in loop when access is still denied).
@@ -144,7 +181,7 @@ export class CloudAppHostAuthService {
     }
 
     const error =
-      typeof req.query.error === "string" ? req.query.error : undefined;
+      !override && typeof req.query.error === "string" ? req.query.error : undefined;
     // After a failed callback, send users back to the app gate (app name + Sign in button).
     if (error && isBrowsableCloudReturnToPath(returnTo)) {
       res.redirect(302, returnTo);
@@ -165,8 +202,9 @@ export class CloudAppHostAuthService {
       state,
       codeChallenge,
       mode,
+      loginHint: override?.loginHint,
     });
-    res.redirect(302, authUrl.toString());
+    res.redirect(override ? 303 : 302, authUrl.toString());
   }
 
   private loginErrorPath(returnTo: string, message: string): string {

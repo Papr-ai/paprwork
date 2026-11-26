@@ -12,6 +12,7 @@
   --rail-soft: var(--text-tertiary);
   --rail-blue: var(--papr-blue-deep, #0060e0);
   --rail-card: rgba(255, 255, 255, 0.92);
+  --rail-card-solid: #fff;
   --rail-card-line: rgba(10, 16, 32, 0.06);
   --rail-hover: rgba(10, 16, 32, 0.05);
   --rail-active: rgba(0, 96, 224, 0.09);
@@ -229,8 +230,10 @@
   left: calc(100% + 8px);
   top: -8px;
   width: 300px;
-  max-height: min(560px, calc(100vh - 40px));
+  /* Same height as the old 6-row peek (~330px); longer lists scroll inside it. */
+  max-height: min(330px, var(--rail-peek-room, calc(100vh - 40px)));
   overflow-y: auto;
+  overscroll-behavior: contain;
   padding: 8px;
   border-radius: 16px;
   background: var(--rail-card);
@@ -243,6 +246,29 @@
   pointer-events: none;
   transform: translateX(-6px);
   transition: opacity 0.14s ease, transform 0.14s ease, visibility 0s linear 0.14s;
+}
+
+/* The peek scrolls its list; title and "See all" stay pinned to the edges. */
+.rail-peek > .rail-peek__header,
+.rail-peek > .rail-peek__footer {
+  position: sticky;
+  z-index: 1;
+  margin-inline: -8px;
+  padding-inline: 16px;
+  background: var(--rail-card-solid);
+}
+
+.rail-peek > .rail-peek__header {
+  top: -8px;
+  margin-top: -8px;
+  padding-top: 14px;
+}
+
+.rail-peek > .rail-peek__footer {
+  bottom: -8px;
+  margin-bottom: -8px;
+  padding-inline: 8px;
+  padding-bottom: 8px;
 }
 
 .rail-item--peek-bottom .rail-peek {
@@ -426,6 +452,7 @@
     --rail-bg: #0c0f14;
     --rail-line: #242b36;
     --rail-card: rgba(26, 31, 41, 0.95);
+    --rail-card-solid: #1a1f29;
     --rail-card-line: rgba(255, 255, 255, 0.04);
     --rail-hover: rgba(255, 255, 255, 0.06);
     --rail-active: rgba(76, 157, 255, 0.14);

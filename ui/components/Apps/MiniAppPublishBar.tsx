@@ -124,6 +124,15 @@ import { pendingCommunity } from "../../utils/galleryGate";
 import { galleryProgress, useDemoStatus } from "../../utils/appDemo";
 import { APP_COVER_CHANGED_EVENT } from "../../utils/appCover";
 import { SyncStatusPanel, type ConflictChoice } from "./SyncStatusPanel";
+import { ViewPill } from "./ViewPill";
+import { APP_SETTINGS_ACTION_EVENT, type SettingsAction } from "./AppSettingsPage";
+import {
+  defaultView,
+  resolveViewPill,
+  shareBarV2Enabled,
+  type PillStatus,
+  type PillView,
+} from "../../utils/viewPill";
 import { buildSyncPanel, type PanelAction, type PanelTone, type UpdatePreview } from "../../utils/syncPanelModel";
 import {
   confirmWebDeletes,
@@ -169,6 +178,8 @@ interface MiniAppPublishBarProps {
   onOpenDependencyApp?: (appId: string, title?: string) => void;
   /** "Job failing" chip: open that job in the Data & code panel. */
   onOpenFailingJob?: (jobId: string) => void;
+  /** Share bar v2: open the Settings panel (code, data, jobs) at a section. */
+  onOpenSettings?: (target: "jobs" | "code" | "data" | "settings") => void;
 }
 
 function sharePrefsOptions(cloud: CloudPublishControls): {
@@ -270,6 +281,7 @@ export function MiniAppPublishBar({
   previewShellLoaded = true,
   onOpenDependencyApp,
   onOpenFailingJob,
+  onOpenSettings,
   onTitleChange,
 }: MiniAppPublishBarProps) {
   const [shareOpen, setShareOpen] = useState(false);
@@ -1820,6 +1832,61 @@ export function MiniAppPublishBar({
     }
   };
 
+  // ── Share bar v2 (plan step 7, behind papr.shareBarV2) ───────────────────
+  const barV2 = shareBarV2Enabled();
+  const pill = resolveViewPill({
+    copyBar,
+    ownerChip: publishBarChip,
+    ownerHasUnpublished: !copyBar && webSyncStatus?.hasLocalChanges === true,
+    ownerLive: cloud.live,
+    publisherSlug: cloudLineage?.sourceSlug,
+    failingJobName: failingJob?.name ?? null,
+  });
+  const [pillView, setPillView] = useState<PillView | null>(null);
+  const activePillView = pillView ?? defaultView(pill);
+  const runPillVerb = (_view: PillView, st: PillStatus) => {
+    if (st.action === "owner_chip") return handlePublishStatusChipClick();
+    if (st.action === "propose") return void handleCollaboratorPropose();
+    if (st.action === "publish" && !copyBar) return handlePublishStatusChipClick();
+    runCopyChipAction(st.action ?? null);
+  };
+  // Settings page (v2) actions that need this bar's sheets and handlers.
+  const settingsActionRef = useRef<(a: SettingsAction) => void>(() => undefined);
+  settingsActionRef.current = (a: SettingsAction) => {
+    const link = copyUrl ?? webDisplayUrl;
+    switch (a) {
+      case "app-info": return setAppInfoOpen("details");
+      case "access": return setAccessOpen(true);
+      case "share": return setShareOpen(true);
+      case "contributions": return setContributionsOpen(true);
+      case "copy-link": return void cloud.copyLink(link);
+      case "open-link": return void cloud.openInBrowser(link);
+      case "unpublish":
+        if (confirm("Unpublish? This removes the web link and the Community listing.")) takeOffWeb();
+        return;
+      case "reload": return onRefreshPreview?.();
+      case "duplicate": return setDuplicateNameOpen(true);
+      case "copy-to-workspace": return setCopyToWorkspaceOpen(true);
+      case "show-in-finder": return handleShowInFinder();
+      case "discard-edits": return void handleDiscardEdits();
+      case "detach": return void handleDetach();
+    }
+  };
+  useEffect(() => {
+    const on = (e: Event) => {
+      const d = (e as CustomEvent<{ appId?: string; action?: SettingsAction }>).detail;
+      if (d?.appId === appId && d.action) settingsActionRef.current(d.action);
+    };
+    window.addEventListener(APP_SETTINGS_ACTION_EVENT, on);
+    return () => window.removeEventListener(APP_SETTINGS_ACTION_EVENT, on);
+  }, [appId]);
+  const openSettings = (target: "jobs" | "code" | "data" | "settings" | null) => {
+    if (!target) return onWorkspaceModeChange("preview");
+    if (target === "jobs" && failingJob && onOpenFailingJob) return onOpenFailingJob(failingJob.id);
+    if (onOpenSettings) return onOpenSettings(target);
+    onWorkspaceModeChange("files");
+  };
+
   return (
     <>
       <DuplicateAppNameModal
@@ -1908,7 +1975,7 @@ export function MiniAppPublishBar({
             {/* Status belongs to the app, so it sits with the app's name —
                 not inside the Local/Web toggle, which is about which preview
                 you are looking at. */}
-            {failingJob && onOpenFailingJob ? (
+            {failingJob && onOpenFailingJob && !barV2 ? (
               <button
                 type="button"
                 className="mini-app-publish-bar__job-failing"
@@ -1919,7 +1986,7 @@ export function MiniAppPublishBar({
                 Job failing
               </button>
             ) : null}
-            {chipSpeaks ? (
+            {chipSpeaks && !barV2 ? (
               <span
                 ref={webSyncAnchorRef}
                 className="mini-app-publish-bar__chip-anchor"
@@ -1986,7 +2053,18 @@ export function MiniAppPublishBar({
 
         </div>
 
-        {workspaceMode === "preview" ? (
+        {barV2 ? (
+          <div ref={webSyncAnchorRef} className="mini-app-publish-bar__chip-anchor">
+            <ViewPill
+              model={pill}
+              active={activePillView}
+              settingsOpen={dataPanelOpen}
+              onView={setPillView}
+              onVerb={runPillVerb}
+              onSettings={openSettings}
+            />
+          </div>
+        ) : workspaceMode === "preview" ? (
           <div
             className="mini-app-publish-bar__segment mini-app-publish-bar__segment--with-sync"
             role="group"

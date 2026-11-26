@@ -11,6 +11,7 @@ import {
 } from "../../utils/openCloudSyncAgentChat";
 import {
   changeRequestProposedByLine,
+  DestructiveChangeError,
   resolveCloudChangeRequest,
   type CloudChangeRequest,
 } from "../../utils/cloudChangeRequestsApi";
@@ -64,6 +65,9 @@ export function CloudChangeRequestsPanel({
 }: CloudChangeRequestsPanelProps) {
   const [resolvingId, setResolvingId] = useState<string | null>(null);
   const [localError, setLocalError] = useState<string | null>(null);
+  // Accept answered "this can delete or rewrite the team's data": hold the list
+  // until the owner confirms or cancels (step 6). Keyed by request id.
+  const [destructive, setDestructive] = useState<{ id: string; changes: string[] } | null>(null);
   const [pastOpen, setPastOpen] = useState(false);
   const [successNotice, setSuccessNotice] = useState<string | null>(null);
   const [optimisticResolved, setOptimisticResolved] =
@@ -93,12 +97,17 @@ export function CloudChangeRequestsPanel({
       ? "share-sheet__section share-sheet__changes share-sheet__changes--modal"
       : "share-sheet__section share-sheet__changes";
 
-  const resolve = async (req: CloudChangeRequest, action: "approve" | "reject") => {
+  const resolve = async (
+    req: CloudChangeRequest,
+    action: "approve" | "reject",
+    confirmDestructive = false,
+  ) => {
     setResolvingId(req.id);
     setLocalError(null);
     setSuccessNotice(null);
+    setDestructive(null);
     try {
-      await resolveCloudChangeRequest(req.id, action);
+      await resolveCloudChangeRequest(req.id, action, { confirmDestructive });
       if (action === "approve") onAccepted?.();
       setOptimisticResolved((prev) => {
         const next = new Map(prev);
@@ -121,6 +130,10 @@ export function CloudChangeRequestsPanel({
         return next;
       });
     } catch (err) {
+      if (err instanceof DestructiveChangeError) {
+        setDestructive({ id: req.id, changes: err.changes });
+        return;
+      }
       const message = (err as Error).message.slice(0, 400);
       openCloudSyncAgentChat(
         buildChangeRequestResolveAgentPrompt({
@@ -220,6 +233,39 @@ export function CloudChangeRequestsPanel({
                         ) : null}
                       </p>
                     </div>
+                    {destructive?.id === req.id ? (
+                      <div className="share-sheet__changes-destructive" role="alert">
+                        <p className="share-sheet__changes-destructive-title">
+                          This change can delete or overwrite your team’s data
+                        </p>
+                        <ul>
+                          {destructive.changes.map((c) => (
+                            <li key={c}>{c}</li>
+                          ))}
+                        </ul>
+                        <p className="share-sheet__footnote">
+                          This can’t be undone from here. Accept only if that’s what you want.
+                        </p>
+                        <div className="share-sheet__changes-actions">
+                          <button
+                            type="button"
+                            className="share-sheet__primary-btn share-sheet__primary-btn--danger"
+                            disabled={busy || working}
+                            onClick={() => void resolve(req, "approve", true)}
+                          >
+                            {working ? "Accepting…" : "Accept anyway"}
+                          </button>
+                          <button
+                            type="button"
+                            className="share-sheet__secondary-btn"
+                            disabled={busy || working}
+                            onClick={() => setDestructive(null)}
+                          >
+                            Cancel
+                          </button>
+                        </div>
+                      </div>
+                    ) : null}
                     <div className="share-sheet__changes-actions">
                       <button
                         type="button"

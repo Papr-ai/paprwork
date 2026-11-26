@@ -82,6 +82,7 @@ import { computeReplicaPendingPush } from "./replicaPendingPush.js";
 import { scheduleTursoReplicaPushForSyncKey } from "./tursoReplicaPushScheduler.js";
 import { withTursoReplicaSyncBusy } from "./gatewayTursoSyncBusy.js";
 import { createClient } from "@libsql/client";
+import { isReplicaForkedClientError, rekeyReplicaClientId } from "./replicaForkedClientId.js";
 import {
   isPrimaryEngineTableTypeError,
   LAST_CHANGE_ID_TABLE,
@@ -379,10 +380,21 @@ export class TursoReplicaService {
         );
       }
 
-      const spec = await this.openSpec(localPath, tursoDatabase);
+      let spec = await this.openSpec(localPath, tursoDatabase);
       const marker = readBootstrapPendingMarker(localPath);
       try {
-        const synced = await this.syncWithRecovery(spec, "pull", { scalePull: true });
+        let synced: boolean;
+        try {
+          synced = await this.syncWithRecovery(spec, "pull", { scalePull: true });
+        } catch (error) {
+          // A rejected token: drop it, fetch a fresh one and pull once more. The worker
+          // reopens its handle when the token changes.
+          if (!ensureTursoSyncBridge().invalidateCredentialsOnAuthError(tursoDatabase, error)) {
+            throw error;
+          }
+          spec = await this.openSpec(localPath, tursoDatabase);
+          synced = await this.syncWithRecovery(spec, "pull", { scalePull: true });
+        }
         if (marker) {
           const settled = await this.settleBootstrapMarker(localPath, marker);
           if (!settled) {
@@ -520,6 +532,25 @@ export class TursoReplicaService {
         // The bad table lives on the primary; the replica re-downloads it on every pull,
         // so no local repair can stick. Rebuild it there (counters kept) and retry once.
         if (!(await this.repairPrimaryEngineTable(spec))) throw error;
+        const pulled = await run();
+        markTursoReplicaReachable();
+        return pulled;
+      }
+      if (isReplicaForkedClientError((error as Error).message)) {
+        // Another copy of these files synced under the same client id (folder copy,
+        // backup restore). Same data, new name; the engine then syncs normally and
+        // keeps its own unsent changes. Unknown -info format: leave it, rethrow.
+        await client.close(spec.localPath);
+        const rekey = rekeyReplicaClientId(spec.localPath);
+        if (!rekey.ok) {
+          console.error(
+            `[TursoReplicaService] Forked sync id, cannot rekey (${rekey.reason}): ${spec.localPath}`,
+          );
+          throw error;
+        }
+        console.warn(
+          `[TursoReplicaService] Forked sync id ${rekey.previousId} → ${rekey.clientId}: ${spec.localPath}`,
+        );
         const pulled = await run();
         markTursoReplicaReachable();
         return pulled;
@@ -922,6 +953,14 @@ export class TursoReplicaService {
     tursoDatabase: string,
     overrides?: { bootstrapIfEmpty?: boolean },
   ): Promise<OpenSpec> {
+    // "" or a relative path opens in the process cwd (the code folder), not the
+    // workspace — the engine then re-downloads into the wrong place every time.
+    if (!localPath?.trim() || !path.isAbsolute(localPath)) {
+      throw new Error(
+        `Replica has no local path on this machine (got ${JSON.stringify(localPath ?? "")}). ` +
+          "Restart Papr to assign one, or run papr_db_repair.",
+      );
+    }
     const bridge = ensureTursoSyncBridge();
     if (!bridge.enabled) {
       throw new Error("Turso sync bridge not available — sign in to Papr");

@@ -44,8 +44,28 @@ async function serve(request: TursoSyncWorkerRequest): Promise<void> {
   }
 }
 
+/**
+ * How long a clean close may take before the worker exits anyway. The native
+ * `SyncEngine.close` can block the main thread forever (seen in the field: a worker parked
+ * in `close_c_callback` → semaphore wait for hours). A worker that never exits keeps its
+ * POSIX locks on every replica it had open, so the gateway's next worker fails every write
+ * with "File is locked by another process" until the app is restarted. Committed data is
+ * in the WAL already; exiting without the close loses nothing.
+ */
+const SHUTDOWN_DEADLINE_MS = 3_000;
+let shuttingDown = false;
+
 async function shutdown(): Promise<void> {
-  await core.closeAll();
+  if (shuttingDown) return;
+  shuttingDown = true;
+  // Armed before closeAll: if close blocks the event loop natively this timer cannot fire,
+  // which is why the gateway also escalates to SIGKILL (see retireChild in the client).
+  setTimeout(() => process.exit(0), SHUTDOWN_DEADLINE_MS).unref();
+  try {
+    await core.closeAll();
+  } catch (error) {
+    log(`closeAll failed during shutdown: ${error instanceof Error ? error.message : String(error)}`);
+  }
   process.exit(0);
 }
 

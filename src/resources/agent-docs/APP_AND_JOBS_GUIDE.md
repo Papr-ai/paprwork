@@ -413,19 +413,20 @@ apps/{appId}/backend/
 
 **Python handler (`backend/papr_db.py` scaffolded on app create):**
 ```python
-from papr_db import connect, execute
+from papr_db import connect, query, write
 
-con = connect("billing")   # explicit alias — required when 2+ linked DBs
-# con = connect()          # active source (manifest sourceId / params.sourceId)
-rows = execute(
-    con,
-    "INSERT INTO invoices (amount) VALUES (?) RETURNING id, amount",
-    [100],
-)  # list[dict] on desktop (local SQLite) and cloud (Turso)
-con.close()
+con = connect("billing")  # alias — required when 2+ linked DBs; connect() = active source
+rows = query(con, "SELECT id, amount FROM invoices WHERE paid = ?", [0]).rows  # list of plain dicts
+new_id = write(con, "INSERT INTO invoices (amount) VALUES (?)", [100]).last_insert_rowid
+changed = write(con, "UPDATE invoices SET paid = 1 WHERE id = ?", [new_id]).changes
 ```
 
-Use **`papr_db.connect()` only** — never `sqlite3.connect(APP_DB)` (cloud has no local file). After plain `INSERT`, `con.lastrowid` / `cursor().lastrowid` work in both modes. Each `execute()` is one statement; no multi-call transactions on cloud.
+**Use only `query()` and `write()`.** Every backend call — desktop and cloud — goes through the gateway (the sync engine owns the database file), so:
+- reads: `query(con, sql, params).rows` → list of plain dicts (`row["name"]`)
+- writes: `write(con, sql, params)` → `.changes`, `.last_insert_rowid`
+- don't write sqlite3-style code (`con.execute(...).fetchall()`, cursors, `dict(zip(cols, row))`) — it is emulated, not real sqlite3
+- no `RETURNING` (use `.last_insert_rowid`, then `query()` the row), no schema changes (migrations), no transactions across calls (frontend `/api/db/write-batch` with `atomic: true`)
+- never `sqlite3.connect(APP_DB)`
 
 **Node/TS handler:** No `papr_db` equivalent — use **Python** for SQL backend actions, or keep DB access in the frontend via `/api/db/query` and `/api/db/write`.
 
@@ -455,7 +456,7 @@ Handlers receive **`PAPR_ACTION_PARAMS`** (JSON string of all merged params), **
 | `apps/{appId}/papr-cloud-dependencies.json` | **Cross-app / database** install deps for community publish — **not** API keys |
 
 **Vault key injection (do not reverse-engineer):**
-1. User stores keys in **Settings → Integration Keys** (syncs to cloud vault on publish).
+1. User stores keys in **Settings → Integration Keys** (syncs to cloud vault on publish). Teammates who install the app and need the same key: the owner sets **Who can use it** to Selected members / Team / Organization on that key, and it shows up as a read-only mirror for them under the same name. Never route keys through Bitwarden, chat or email.
 2. **Backend handlers:** list exact key names in **backend/manifest.json** `"keys": ["RR_ATTENTION_API_KEY"]` (per-action allowlist).
 3. **Linked jobs (buttons → `/api/jobs/run`):** declare `requiredKeys: ["RR_ATTENTION_API_KEY"]` in **job.json** and read `os.environ["RR_ATTENTION_API_KEY"]` (or add `${RR_ATTENTION_API_KEY}` in the job **command** so publish auto-detection sees it).
 4. **Declare every key:** `declare_app_keys({ appId, keys: [{ name, purpose, provider: "owner" | "user", required }], notKeys: [...] })`, or pass the same objects as job `requiredKeys`. This writes **apps/{appId}/requirements.json**, which is what visitors see on apps.papr.ai. **Nothing is auto-synced any more:** `validate_app` reports an error until every key found in backend/manifest.json and linked jobs is declared. Publish does not block; until declared, keys publish as owner keys (visitors are never asked for them).
@@ -1622,7 +1623,7 @@ Python jobs automatically get a virtual environment and package installation:
 create_job({
   name: "Reddit Selector",
   type: "python",
-  requirements: ["anthropic", "sqlite-utils", "requests"],
+  requirements: ["sqlite-utils", "requests"],
   command: "python3 code/selector.py"
 })
 ```
@@ -1638,7 +1639,7 @@ What happens automatically:
 # ✅ CORRECT: Keys passed as CLI arguments in the COMMAND field
 # Job command:
 create_job({
-  command: "python3 code/main.py --anthropic-key ${ANTHROPIC_API_KEY} --github-token ${GITHUB_TOKEN}"
+  command: "python3 code/main.py --github-token ${GITHUB_TOKEN}"
   //                              ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ Substitution happens HERE
 })
 
@@ -1646,12 +1647,11 @@ create_job({
 import argparse
 
 parser = argparse.ArgumentParser()
-parser.add_argument('--anthropic-key', required=True)
 parser.add_argument('--github-token', required=True)
 args = parser.parse_args()
 
 # Use the keys - they're already substituted with real values!
-client = anthropic.Client(api_key=args.anthropic_key)  # ✅ Has actual key value
+headers = {"Authorization": f"Bearer {args.github_token}"}  # ✅ Has actual key value
 ```
 
 **❌ CRITICAL ANTI-PATTERN: Do NOT put ${KEY} in Python source code!**
@@ -1709,50 +1709,54 @@ key = os.getenv('GITHUB_TOKEN')  # Returns None!
 
 **OAuth vs API key for jobs:**
 - **Agent jobs** — Paprwork routes automatically. OAuth (ChatGPT/Claude subscription) → pi-ai. API key → AI SDK. No setup needed.
-- **Python/bash jobs that call LLM APIs** — ❌ **DON'T DO THIS!** Use agent jobs instead (see below).
+- **Python/Node jobs and backend actions that call models** — only for the reasons listed in "Calling models: sub-agent job first", and always through `papr_llm` (handles sign-in tokens + caching).
 
-### ⚠️ Use Agent Jobs for LLM Calls, Not Python/Bash Scripts
+### Calling models: sub-agent job first
 
-**❌ WRONG:**
-```python
-# DON'T call OpenAI/Anthropic APIs from Python jobs
-import openai
-response = openai.chat.completions.create(...)
-```
+**Default: any model call goes in a `subagent` job.** It gets sign-in/API-key routing, OAuth → API key fallback, prompt caching, context trimming, retries, delivery and recipes without code. A sub-agent profile controls how much of Pen it carries (`runtime`):
 
-**Problems:**
-- OAuth tokens don't work with Platform API
-- No automatic OAuth → API key fallback
-- Requires Platform API key even if user has OAuth subscription
+| Need | Profile |
+|---|---|
+| Uses Papr tools (DBs, files, browser, memory) | default runtime + `allowedToolIds` |
+| Focused writer / classifier / scorer, no Papr know-how | `runtime: { systemPromptMode: "replace" }` + own `systemPrompt` |
+| Neutral model, must not see user memory or Papr (evals, "does X get recommended" checks) | `runtime: { systemPromptMode: "replace", memoryContext: false, wikiContext: false, tools: false }` |
+| Pure model call, cheapest context | the neutral profile above; `nativeWebSearch: false` too unless it needs web search |
 
-**✅ CORRECT:** Use agent jobs (type: "agent" or "subagent")
+`promptCaching` and `contextTrimming` stay **on** (default). Turn one off only for a stated reason (every call has a unique prefix; the agent must see every byte of every tool result).
 
-Agent jobs automatically handle:
-- OAuth → API key routing (uses subscription first, falls back to Platform API)
-- Rate limit fallback (retries with API key if OAuth rate limited)
-- Works with OAuth, API key, or both
-
-**Example:**
 ```javascript
-// Create sub-agent for LLM task
 create_sub_agent({
-  id: "reviewer",
-  name: "Content Reviewer",
-  systemPrompt: "Review and polish content for clarity",
-  provider: "openai",
-  model: "gpt-5.2"
+  id: "neutral-buyer",
+  name: "Neutral buyer",
+  systemPrompt: "You are a helpful assistant. Answer the user's question directly.",
+  provider: "openai", model: "gpt-5-6-sol",
+  runtime: { systemPromptMode: "replace", memoryContext: false, wikiContext: false, tools: false },
 })
-
-// Use in pipeline (autoTrigger required if Review should start when fetch finishes)
-create_job({
-  name: "Review Posts",
-  type: "subagent",
-  subAgentId: "reviewer",
-  dependsOn: [{ jobId: "fetch-data", onStatus: "completed", autoTrigger: true }]
-})
+create_job({ name: "Ask buyer questions", type: "subagent", subAgentId: "neutral-buyer", appIds: [appId] })
 ```
 
-**Pipeline pattern:** Python (data fetch) → Agent job (LLM) → Python (format output)
+Sub-agent jobs are not fire-and-forget: the app sees progress and results through `subscribeJobEvents` (`onStatusChanged`, `onDbChanged` when the job writes rows). Web search works on every provider (`nativeWebSearch`, on by default). A neutral profile sends the same short request every time. So "fast answer", "web search" or "fixed request" are not reasons to leave the sub-agent path.
+
+**The one reason to call a model from Python/Node:** the call is a step inside script code that is already running — a data loop over rows, a pandas/scraping pipeline, a backend action that post-processes its own result. Use **`papr_llm`** (bundled in every job and backend action):
+
+```python
+from papr_llm import complete, complete_json
+
+r = complete(
+    prompt=f"Score this lead: {row_json}",       # per-call data LAST
+    system="You score B2B leads 1-5. Rubric: ...", # fixed → cached
+    context=reference_doc,                         # fixed → cached
+    provider="anthropic",                          # or "openai"; default: the user's default model
+    cache_ttl="1h",                                # when reused less often than every 5 min
+    web_search=False,
+)
+print(r.text, r.usage, r.cost_usd)   # usage.cache_read_input_tokens > 0 on repeats
+scores = complete_json("Return [{id, score}] for: ...", provider="openai")
+```
+
+`papr_llm` is a thin client for the gateway (`POST /api/llm/complete`): the call runs on the same credentials, sign-in handling, fallbacks (rate limit → API key / Papr proxy; refused credential → next provider), caching and cost tracking as chat. The model credential never enters the job, so don't list `ANTHROPIC_API_KEY` / `OPENAI_API_KEY` in `requiredKeys` just for `papr_llm`. Other keys the script uses (Stripe, Apollo, a scraper API…) still go in `requiredKeys` as usual. No `requirements` needed. Never hand-write `anthropic.Anthropic(...)` / `api.openai.com` calls.
+
+**Pipeline pattern:** Python (data fetch) → sub-agent job (model) → Python (format output)
 
 ### Agent Jobs: When to Use Model Override vs. Subagent
 
@@ -2324,87 +2328,11 @@ run_job({ jobId: "amplitude-sync" })
 read_job_logs({ jobId: "amplitude-sync", runId: "latest" })
 ```
 
-### Choosing: Script Job vs Agent Job vs Python + LLM
+### Choosing: Script Job vs Sub-agent Job
 
-This is the most important decision. There are THREE patterns, not two:
-
-#### Pattern 1: Pure Script Job (no AI)
-
-Use `python`/`node`/`bash` when the task is fully deterministic:
-- ETL pipelines, file processing, data transformation
-- API calls with known request/response shapes
-- Database queries, migrations, backups
-
-#### Pattern 2: Python Job WITH LLM Call (RECOMMENDED for most AI tasks)
-
-Use a `python` job that calls an LLM directly when you **know the steps** but need **AI judgment** at one point. This is the most common pattern and is almost always better than an agent job:
-
-```javascript
-create_job({
-  name: "Reddit Selector",
-  type: "python",
-  requirements: ["anthropic"],
-  command: "python3 code/selector.py --anthropic-key ${ANTHROPIC_API_KEY}",
-  dependsOn: [{ jobId: "scraper-id", onStatus: "completed", autoTrigger: true }]
-})
-```
-
-```python
-# code/selector.py
-import os, json, sqlite3, anthropic, argparse
-
-# Parse CLI arguments (for API keys)
-parser = argparse.ArgumentParser()
-parser.add_argument('--anthropic-key', required=True)
-args = parser.parse_args()
-
-# Step 1: SQL query (deterministic, fast)
-db = sqlite3.connect(os.environ.get('DEP_SCRAPER_DB', '../scraper/data/data.db'))
-rows = db.execute("""
-    SELECT id, title, score, num_comments FROM threads
-    WHERE score > 5 ORDER BY score DESC LIMIT 20
-""").fetchall()
-db.close()
-
-# Step 2: One LLM call for judgment (the AI part)
-client = anthropic.Anthropic()  # picks up ANTHROPIC_API_KEY from env
-response = client.messages.create(
-    model="claude-sonnet-4-6",
-    max_tokens=1024,
-    messages=[{"role": "user", "content": f"Pick 5-7 best threads to engage with: {json.dumps(rows)}"}]
-)
-
-# Step 3: Parse and write results (deterministic)
-picks = json.loads(response.content[0].text)
-out_db = sqlite3.connect("data/data.db")
-out_db.execute("CREATE TABLE IF NOT EXISTS picks (id TEXT, title TEXT, reason TEXT)")
-for p in picks:
-    out_db.execute("INSERT INTO picks VALUES (?, ?, ?)", (p['id'], p['title'], p['reason']))
-out_db.commit()
-print(f"Selected {len(picks)} threads")
-```
-
-**Why this is better than an agent job:**
-- One LLM call vs potentially dozens of tool-calling turns
-- Python controls the exact flow — no reasoning overhead
-- Faster, cheaper, more debuggable
-- Script is version-controlled and readable
-- Structured output via `response_format` is reliable
-
-**Use this pattern when:**
-- You know all the steps (query DB → call LLM → write results)
-- The AI part is one judgment call, not autonomous exploration
-- You need specific Python packages (pandas, requests, etc.)
-- The task involves data processing + one AI step
-
-#### Pattern 3: Agent Job (autonomous multi-step reasoning)
-
-Use `agent`/`subagent` ONLY when the task requires **autonomy** — the agent must decide what to do based on what it finds:
-
-- "Research this topic" — agent decides what to search, which pages to read, when to stop
-- "Debug why this scraper is failing" — agent reads logs, tries fixes, iterates
-- "Write a comprehensive report on X" — agent gathers sources, outlines, drafts, revises
-- "Set up a new data pipeline for Y" — agent explores the API, creates schema, tests
+- **No model involved** → `python`/`node`/`bash` script job (ETL, API calls with known shapes, DB work).
+- **Any model call** → `subagent` job (see "Calling models: sub-agent job first"). Shape it with `runtime`: replace the system prompt for a focused role, turn memory/wiki/tools off for a neutral or cheap call.
+- **Model call inside a script** → only when it is a step inside script code that is already running, via `papr_llm`.
 
 Agent jobs get automatic environment injection:
 ```
@@ -2416,16 +2344,15 @@ DEP_SCRAPER_DB="/Users/.../PAPR/jobs/{dep-id}/data/data.db"
 =======================
 ```
 
-The agent can use `bash` to query these paths directly — no need to hard-code or guess.
-
 #### Decision Quick-Check
 
 ```
-Do you know ALL the steps in advance?
-  YES → Is one step "ask LLM for judgment"?
-    YES → Python job with LLM call (Pattern 2)
-    NO  → Pure script job (Pattern 1)
-  NO  → Agent job (Pattern 3)
+Does the job call a model?
+  NO  → script job
+  YES → Is the call a step inside script code that is already running
+        (row loop, pandas/scraping pipeline, backend action post-processing)?
+    NO  → subagent job (replace prompt / turn off memory, wiki, tools as needed)
+    YES → papr_llm inside that script
 ```
 
 ### Job Dependencies (DAG Pipelines)

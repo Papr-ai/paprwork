@@ -23,6 +23,8 @@ export interface CloudAppChangeRequestDetail {
   /** Pending only: "clean" | "conflict" | "unknown" (server GitHub recheck). */
   mergeState?: string | null;
   supersededBy?: string | null;
+  /** Abandoned only: why the contributor's push failed ("expired" = never reported back). */
+  abandonReason?: string | null;
 }
 
 function normalizeDetail(raw: Record<string, unknown>): CloudAppChangeRequestDetail | null {
@@ -55,6 +57,7 @@ function normalizeDetail(raw: Record<string, unknown>): CloudAppChangeRequestDet
     resolvedAt: typeof raw.resolvedAt === "string" ? raw.resolvedAt : null,
     mergeState: typeof raw.mergeState === "string" ? raw.mergeState : null,
     supersededBy: typeof raw.supersededBy === "string" ? raw.supersededBy : null,
+    abandonReason: typeof raw.abandonReason === "string" ? raw.abandonReason : null,
   };
 }
 

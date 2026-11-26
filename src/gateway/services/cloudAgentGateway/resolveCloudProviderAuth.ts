@@ -91,8 +91,13 @@ export function reconcileCloudProviderAuth(input: {
   provider: Provider;
   token: string;
   authType: "oauth" | "apiKey";
+  usePaprProxy?: boolean;
 }): CloudProviderAuthResolution {
   const token = input.token.trim();
+  // Papr AI proxy: the token is the user's Papr API key, never a provider key.
+  if (input.usePaprProxy) {
+    return { provider: input.provider, authType: "apiKey", token, usePaprProxy: true };
+  }
   const keyName = PROVIDER_KEY_NAMES[input.provider];
 
   if (

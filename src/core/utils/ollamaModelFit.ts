@@ -30,6 +30,28 @@ export const FLINT_MODEL_SIZES: Record<string, number> = {
 
 const FLINT_PREFERENCE_ORDER: readonly string[] = ["flint:latest", "flint:40b", "flint"];
 
+/**
+ * Thinking Machines Inkling 2 Mini — 26B MoE (~5B active), natively 4-bit, ~20GB on Ollama.
+ * Middle layers are looped at inference (more compute per token, not more RAM). Needs 32GB+.
+ */
+export const INKLING_RAM_REQUIREMENTS: Record<string, number> = {
+  "inkling-2-mini:latest": 32,
+  "inkling-2-mini:26b-a5b": 32,
+  "inkling-2-mini": 32,
+};
+
+export const INKLING_MODEL_SIZES: Record<string, number> = {
+  "inkling-2-mini:latest": 20,
+  "inkling-2-mini:26b-a5b": 20,
+  "inkling-2-mini": 20,
+};
+
+const INKLING_PREFERENCE_ORDER: readonly string[] = [
+  "inkling-2-mini:latest",
+  "inkling-2-mini:26b-a5b",
+  "inkling-2-mini",
+];
+
 export const QWEN_MODEL_SIZES: Record<string, number> = {
   "qwen3.5:0.8b": 1.0,
   "qwen3.5:2b": 2.7,
@@ -155,14 +177,42 @@ export function getRecommendedFlintModel(totalRamGb?: number): string {
   return pickFittingOllamaModelId(FLINT_RAM_REQUIREMENTS, FLINT_PREFERENCE_ORDER, totalRamGb);
 }
 
+export function getRecommendedInklingModel(totalRamGb?: number): string {
+  if (totalRamGb === undefined || !Number.isFinite(totalRamGb) || totalRamGb <= 0) {
+    return "inkling-2-mini:latest";
+  }
+  return pickFittingOllamaModelId(INKLING_RAM_REQUIREMENTS, INKLING_PREFERENCE_ORDER, totalRamGb);
+}
+
 export function getOllamaRamRequirementGb(modelId: string): number | undefined {
   const baseId = modelId.split("/").pop() ?? modelId;
   return (
     FLINT_RAM_REQUIREMENTS[baseId] ??
+    INKLING_RAM_REQUIREMENTS[baseId] ??
     QWEN_RAM_REQUIREMENTS[baseId] ??
     GEMMA4_RAM_REQUIREMENTS[baseId] ??
     GEMMA_RAM_REQUIREMENTS[baseId]
   );
+}
+
+/** Local Ollama model families Paprwork ships in the picker (id prefix before ":"). */
+const OLLAMA_MODEL_FAMILIES = new Set(["qwen3.5", "flint", "inkling-2-mini", "gemma4", "gemma3"]);
+
+/**
+ * True when a model id is one of our local Ollama models (e.g. "inkling-2-mini:latest").
+ * Lets jobs that set only `model` still route to Ollama and stay desktop-only.
+ */
+export function isKnownOllamaModelId(modelId: string | undefined | null): boolean {
+  if (!modelId) return false;
+  const baseId = modelId.split("/").pop() ?? modelId;
+  if (getOllamaRamRequirementGb(baseId) !== undefined) return true;
+  return OLLAMA_MODEL_FAMILIES.has(baseId.split(":")[0]);
+}
+
+/** Provider for a job: explicit provider wins; otherwise infer "ollama" from a local model id. */
+export function inferJobProvider(provider: string | undefined, model: string | undefined): string | undefined {
+  if (provider) return provider;
+  return isKnownOllamaModelId(model) ? "ollama" : undefined;
 }
 
 export function ollamaModelFitsHostRam(modelId: string, totalRamGb: number): boolean {

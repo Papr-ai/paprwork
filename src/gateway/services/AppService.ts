@@ -30,6 +30,8 @@ import {
   type AppDataSourceRole,
   type AppDataSourcesFile,
   buildAppDbTsContent,
+  exportedNames,
+  namesImportedFromDb,
   dbHasOnlyBaselineTables,
   omitUnlinkedDataSources,
   parseDataSourcesFile,
@@ -1415,7 +1417,10 @@ export class AppService {
     // "not found" — which the caller reports as the app not being here.
     await this.initialize();
 
-    const app = this.apps.get(id);
+    let app = this.apps.get(id);
+    if (!app && process.env.GATEWAY_MODE === "cloud_agent") {
+      app = (await this.hydrateCloudCatalogApp(id)) ?? undefined;
+    }
     if (!app) {
       return null;
     }
@@ -1844,6 +1849,18 @@ export class AppService {
     const { removeAppPublishPrefs } = await import("./cloudPublishPrefs.js");
     removeAppPublishPrefs(id, this.paprRootDir);
 
+    // No token should outlive the app: a reinstall must ask the server again
+    // instead of reusing a token that may point at a different copy.
+    try {
+      const { forgetTursoCredentialsForApp } = await import("./tursoCredentialsForApp.js");
+      await forgetTursoCredentialsForApp(id, "app deleted");
+    } catch (error) {
+      console.warn(
+        `[AppService] Could not drop cached database tokens for ${id}:`,
+        error instanceof Error ? error.message : error,
+      );
+    }
+
     try {
       const { removeSharedPrimaryTursoEntriesForApp } = await import(
         "./sharedPrimaryTursoStore.js"
@@ -2035,6 +2052,47 @@ export class AppService {
       .catch(() => {
         /* non-fatal */
       });
+  }
+
+  /**
+   * Cloud workspace runs start with no apps on disk. When the agent asks for one of the
+   * user's own published apps, load its code from the app repo and index it so the normal
+   * read/edit tools (and the writer push) work on the real app instead of a new copy.
+   */
+  private async hydrateCloudCatalogApp(id: string): Promise<MiniApp | null> {
+    try {
+      const { fetchCloudAccessibleApps, isOwnCatalogApp, cloneCatalogAppIntoSandbox } =
+        await import("./cloudAgentGateway/cloudAppCatalog.js");
+      const entry = (await fetchCloudAccessibleApps()).find((a) => a.appId === id);
+      if (!entry || !isOwnCatalogApp(entry)) return null;
+      if (!(await cloneCatalogAppIntoSandbox(this.appsDir, id))) return null;
+      // Code alone isn't enough: connect the app's databases too, or every
+      // read/write in this run fails with "not available in this cloud run".
+      const { registerCatalogAppDatabases } = await import(
+        "./cloudAgentGateway/catalogAppDatabases.js"
+      );
+      await registerCatalogAppDatabases(path.dirname(this.appsDir), id);
+      const hints = await this.readMetadataHintsFromAppDir(path.join(this.appsDir, id));
+      const now = new Date().toISOString();
+      const scope = readActiveAppWorkspaceScope();
+      const app: MiniApp = {
+        id,
+        title: hints.title ?? entry.name ?? entry.slug ?? id,
+        description: hints.description ?? entry.description ?? "",
+        type: "app",
+        createdAt: now,
+        updatedAt: hints.updatedAt ?? entry.updatedAt ?? now,
+        ownerUserId: getPaprUserId()!.trim(),
+        ...(scope ? withWorkspaceScope({}, scope) : {}),
+        ...((hints.icon ?? entry.icon) ? { icon: (hints.icon ?? entry.icon)! } : {}),
+      };
+      this.apps.set(id, app);
+      await this.saveApps();
+      return app;
+    } catch (err) {
+      console.warn(`[AppService] Could not load cloud app ${id}:`, (err as Error).message);
+      return null;
+    }
   }
 
   async listApps(): Promise<MiniApp[]> {
@@ -2428,6 +2486,24 @@ export class AppService {
 
       // Rebuild + iframe reload are handled by the filesystem watcher (debounced)
       // so multi-file agent edits coalesce into a single build/reload cycle.
+
+      // Cloud runs don't run the app file watcher (and apps loaded from the
+      // catalog mid-run are never registered with it), so queue the writer
+      // push here. Without this an agent edit in the cloud never reaches the
+      // live app. The debouncer dedupes with the watcher path.
+      if (process.env.GATEWAY_MODE === "cloud_agent") {
+        try {
+          const { notifyCloudSandboxAppSave } = await import(
+            "./cloudAgentGateway/cloudAppWriterDebouncedPush.js"
+          );
+          notifyCloudSandboxAppSave(appId);
+        } catch (notifyError) {
+          console.warn(
+            `[AppService] Cloud writer notify failed for ${appId}:`,
+            (notifyError as Error).message,
+          );
+        }
+      }
 
       return true;
     } catch (error) {
@@ -2963,6 +3039,20 @@ export class AppService {
       issues.push(...checkMiniAppCssCoverageAndShrink(appId, fileContents));
     } catch (lintError) {
       console.warn("[AppService] CSS coverage lint failed:", lintError);
+    }
+    try {
+      const indexHtml = fileContents.get("index.html");
+      if (indexHtml !== undefined) {
+        const { checkMiniAppAssetRefs } = await import(
+          "../utils/miniAppAssetRefLint.js"
+        );
+        const existing = new Set(
+          filesToCheck.map((f) => path.relative(appPath, f).split(path.sep).join("/")),
+        );
+        issues.push(...checkMiniAppAssetRefs(indexHtml, existing));
+      }
+    } catch (lintError) {
+      console.warn("[AppService] Asset reference lint failed:", lintError);
     }
     try {
       const { checkFrontendSqlOveruse } = await import(
@@ -3899,11 +3989,51 @@ export class AppService {
       if (existing === content) {
         return;
       }
+      // Never regenerate db.ts out from under its importers. Apps add helpers
+      // to db.ts (esc, runJob) and older generators exported APP_ID/SOURCE_ID;
+      // overwriting dropped those names and the app stopped building
+      // (Reddit Research Agent, SEO Audit).
+      const missing = await this.dbTsImportsMissingFrom(appPath, content);
+      if (missing.length > 0) {
+        console.warn(
+          `[AppService] Keeping db.ts for ${appId}: app imports ${missing.join(", ")} which the generated db.ts does not export`,
+        );
+        return;
+      }
     } catch {
       // create below
     }
 
     await fs.writeFile(dbTsPath, content, "utf8");
+  }
+
+  /** Names app source files import from db.ts that `nextDbTs` would not export. */
+  private async dbTsImportsMissingFrom(appPath: string, nextDbTs: string): Promise<string[]> {
+    const provided = exportedNames(nextDbTs);
+    const missing = new Set<string>();
+    const walk = async (dir: string, depth: number): Promise<void> => {
+      let entries: import("fs").Dirent[];
+      try {
+        entries = await fs.readdir(dir, { withFileTypes: true });
+      } catch {
+        return;
+      }
+      for (const entry of entries) {
+        const full = path.join(dir, entry.name);
+        if (entry.isDirectory()) {
+          if (depth < 4 && !["dist", "node_modules", "data", "backend", "jobs", "__papr__"].includes(entry.name) && !entry.name.startsWith(".")) {
+            await walk(full, depth + 1);
+          }
+        } else if (/\.(tsx?|jsx?)$/.test(entry.name) && !/^db\.(ts|js)$/.test(entry.name)) {
+          const src = await fs.readFile(full, "utf8").catch(() => "");
+          for (const name of namesImportedFromDb(src)) {
+            if (!provided.has(name)) missing.add(name);
+          }
+        }
+      }
+    };
+    await walk(appPath, 0);
+    return [...missing].sort();
   }
 
   async linkAppDataSource(

@@ -8,6 +8,7 @@
  *   - /api/app/backend/:action → AppBackendService (handler runs with the run's vault keys)
  *   - /internal/backend-db/*   → papr_db proxy for those handlers
  *   - /api/db/query|write      → the app's linked sources
+ *   - /api/llm/complete        → one model call (papr_llm) on the run's vault credentials
  *   - /api/files/*             → App Files (papr_files.add/url in jobs), stored in the
  *                                app's linked database and uploaded with the run's key
  * Reads/writes resolve through the registry, which seedCloudDatabaseRegistry marks
@@ -17,6 +18,7 @@
  */
 
 import fs from "fs/promises";
+import { recordPreviewLoadedRows } from "../../utils/previewLoadedData.js";
 import path from "path";
 import express from "express";
 import { getPaprRoot } from "../../../core/utils/paprRoot.js";
@@ -29,6 +31,8 @@ import {
 } from "../cloudDirect/cloudDirectDb.js";
 import { createDesktopBackendDbProxyRouter } from "../appRuntime/backendDbProxy.js";
 import { registerAppFilesRoutes } from "../appFiles/appFilesRoutes.js";
+import { registerModelCallRoutes } from "../llm/registerModelCallRoutes.js";
+import { registerSandboxAppPreviewRoutes } from "./sandboxAppPreview.js";
 import { assertReadOnlySql, assertWriteSql } from "../appRuntime/sqlValidation.js";
 import { httpStatusForDbRouteError } from "../tursoReplica/replicaSchemaQueryErrorMessage.js";
 
@@ -70,8 +74,21 @@ async function write(_appId: string, source: AppDataSource, sql: string, params?
   return cloudDirectWrite(source, sql, params);
 }
 
-function appIdFrom(body: { appId?: string }): string {
-  const appId = body.appId?.trim() || process.env.APP_ID?.trim();
+/**
+ * Body appId, then the app page that made the call (the headless preview loads
+ * apps from /apps/{appId}/ here, and db.ts never sends an id), then APP_ID.
+ */
+function appIdFrom(body: { appId?: string } | undefined, req?: express.Request): string {
+  const fromReferer = (() => {
+    const referer = req?.headers.referer;
+    if (typeof referer !== "string") return undefined;
+    try {
+      return new URL(referer).pathname.match(/^\/apps\/([^/]+)\//)?.[1];
+    } catch {
+      return undefined;
+    }
+  })();
+  const appId = body?.appId?.trim() || fromReferer || process.env.APP_ID?.trim();
   if (!appId) throw Object.assign(new Error("appId is required"), { status: 400 });
   return appId;
 }
@@ -103,24 +120,71 @@ export function createSandboxLocalApi(): express.Express {
     dbWrite: (appId, source, sql, params) => write(appId, source as AppDataSource, sql, params),
   });
 
+  // papr_llm.complete in cloud runs: same helper, credentials from the run's vault.
+  registerModelCallRoutes(app);
+
   app.post("/api/db/query", async (req, res) => {
     try {
       const { sql, params, sourceId } = req.body as { sql?: string; params?: unknown[]; sourceId?: string };
       if (!sql) return void res.status(400).json({ error: "sql is required" });
       assertReadOnlySql(sql);
-      const appId = appIdFrom(req.body);
-      res.json(await query(appId, await resolveSource(appId, sourceId, "read"), sql, params));
+      const appId = appIdFrom(req.body, req);
+      const source = await resolveSource(appId, sourceId, "read");
+      const result = await query(appId, source, sql, params);
+      recordPreviewLoadedRows(appId, `db/query ${source.alias}`, result.rows);
+      res.json(result);
     } catch (err) {
       sendError(res, err);
     }
   });
+
+  // Generated db.ts and most app code batch reads on load.
+  const handleBatch = async (req: express.Request, res: express.Response) => {
+    try {
+      const { statements, sourceId: batchSourceId } = req.body as {
+        sourceId?: string;
+        statements?: Array<{ sourceId?: string; sql?: string; params?: unknown[] }>;
+      };
+      if (!Array.isArray(statements) || statements.length === 0) {
+        return void res.status(400).json({ error: "non-empty statements[] is required" });
+      }
+      if (statements.length > 25) {
+        return void res.status(400).json({ error: "Batch limited to 25 statements" });
+      }
+      const appId = appIdFrom(req.body, req);
+      const results = await Promise.all(
+        statements.map(async (stmt) => {
+          try {
+            if (!stmt?.sql) return { ok: false, error: "sql is required" };
+            assertReadOnlySql(stmt.sql);
+            const source = await resolveSource(appId, stmt.sourceId ?? batchSourceId, "read");
+            return { ok: true, ...(await query(appId, source, stmt.sql, stmt.params)), source: source.alias };
+          } catch (err) {
+            return { ok: false, error: (err as Error).message };
+          }
+        }),
+      );
+      for (const r of results) {
+        if ("rows" in r && r.rows) recordPreviewLoadedRows(appId, "db/batch", r.rows);
+      }
+      res.json({ results });
+    } catch (err) {
+      sendError(res, err);
+    }
+  };
+  app.post("/api/db/batch", handleBatch);
+  app.post("/api/db/query-batch", handleBatch);
+  app.post("/api/db/read-batch", handleBatch);
+
+  // /apps/{appId}/… so the headless preview can render the run's apps.
+  registerSandboxAppPreviewRoutes(app);
 
   app.post("/api/db/write", async (req, res) => {
     try {
       const { sql, params, sourceId } = req.body as { sql?: string; params?: unknown[]; sourceId?: string };
       if (!sql) return void res.status(400).json({ error: "sql is required" });
       assertWriteSql(sql);
-      const appId = appIdFrom(req.body);
+      const appId = appIdFrom(req.body, req);
       res.json(await write(appId, await resolveSource(appId, sourceId, "write"), sql, params));
     } catch (err) {
       sendError(res, err);
@@ -130,7 +194,7 @@ export function createSandboxLocalApi(): express.Express {
   app.post("/api/app/backend/:action", async (req, res) => {
     try {
       const body = req.body as { appId?: string; params?: Record<string, string> };
-      const appId = appIdFrom(body);
+      const appId = appIdFrom(body, req);
       const action = req.params.action?.trim();
       const { parseAppBackendManifest, backendManifestRelativePath } = await import(
         "../appRuntime/appBackendManifest.js"

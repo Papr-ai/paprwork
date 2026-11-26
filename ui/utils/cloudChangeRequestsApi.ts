@@ -290,12 +290,34 @@ export async function fetchIncomingCloudChangeRequests(): Promise<
   return enrichRequestsWithWorkspaceMembers(normalized);
 }
 
+/** Accept refused until the approver confirms: the change can delete or rewrite the team's data. */
+export class DestructiveChangeError extends Error {
+  constructor(
+    message: string,
+    readonly changes: string[],
+  ) {
+    super(message);
+    this.name = "DestructiveChangeError";
+  }
+}
+
+function destructiveChangesFrom(body: unknown): string[] | null {
+  if (!body || typeof body !== "object") return null;
+  const d = (body as Record<string, unknown>).detail;
+  if (!d || typeof d !== "object") return null;
+  const rec = d as Record<string, unknown>;
+  if (rec.code !== "destructive_change" || !Array.isArray(rec.destructiveChanges)) return null;
+  return rec.destructiveChanges.filter((c): c is string => typeof c === "string");
+}
+
 export async function resolveCloudChangeRequest(
   requestId: string,
   action: "approve" | "reject",
+  opts: { confirmDestructive?: boolean } = {},
 ): Promise<void> {
+  const qs = action === "approve" && opts.confirmDestructive ? "?confirmDestructive=true" : "";
   const res = await fetch(
-    `${GATEWAY}/api/cloud/apps/changes/${encodeURIComponent(requestId)}/${action}`,
+    `${GATEWAY}/api/cloud/apps/changes/${encodeURIComponent(requestId)}/${action}${qs}`,
     { method: "POST" },
   );
   let body: unknown;
@@ -305,6 +327,8 @@ export async function resolveCloudChangeRequest(
     body = null;
   }
   if (!res.ok) {
+    const changes = destructiveChangesFrom(body);
+    if (changes) throw new DestructiveChangeError(parseErrorMessage(body, res.status), changes);
     throw new Error(parseErrorMessage(body, res.status));
   }
   if (typeof window !== "undefined") {

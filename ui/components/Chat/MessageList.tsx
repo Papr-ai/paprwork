@@ -75,7 +75,7 @@ export const MessageList: React.FC<MessageListProps> = ({
   const messagesEndRef = useRef<HTMLDivElement>(null);
   const activeRequest = usePermissionStore((s) => s.activeRequest);
   const autoScrollEnabled = useRef(true);
-  /** User scrolled away from the live bottom — show "Jump to latest". */
+  /** User scrolled away from the live bottom — show the scroll-to-latest button. */
   const [detached, setDetached] = useState(false);
   const lastScrollHeight = useRef(0);
   const previousMessageCount = useRef(messages.length);
@@ -173,6 +173,11 @@ export const MessageList: React.FC<MessageListProps> = ({
   const showHistoryLoadingIndicator =
     isLoading && !streamUiActive && !hasStreamingAssistantMessage;
 
+  // The scroll container only exists once there is something to show; the
+  // empty state renders a different div without listRef. Re-run the listener
+  // effect when the list mounts, or a chat that opened empty never detaches.
+  const listMounted = filteredMessages.length > 0 || Boolean(isLoading);
+
   // Detect scroll position for auto-scroll and load-more triggers
   useEffect(() => {
     const listElement = listRef.current;
@@ -251,7 +256,7 @@ export const MessageList: React.FC<MessageListProps> = ({
       listElement.removeEventListener("touchmove", handleTouchMove);
       listElement.removeEventListener("keydown", handleKeyDown);
     };
-  }, []);
+  }, [listMounted]);
 
   const jumpToLatest = useCallback(() => {
     const listElement = listRef.current;
@@ -625,13 +630,13 @@ export const MessageList: React.FC<MessageListProps> = ({
             type="button"
             className="message-list__jump-btn"
             data-testid="jump-to-latest"
-            aria-label="Jump to latest message"
+            aria-label="Scroll to latest message"
+            title="Scroll to latest"
             onClick={jumpToLatest}
           >
-            <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+            <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.25" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
               <path d="M12 5v14M5 12l7 7 7-7" />
             </svg>
-            {streamUiActive || hasStreamingAssistantMessage ? "New activity" : "Latest"}
           </button>
         </div>
       )}

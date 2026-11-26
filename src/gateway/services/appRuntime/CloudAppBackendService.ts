@@ -77,9 +77,10 @@ export function assertActionEffectAllowed(
 }
 
 /**
- * Read-only callers get the backend DB proxy only (it enforces canWrite).
- * Direct Turso URL/token pairs would let a handler write around it — the
- * memory-minted token is not read-only today.
+ * Cloud backend handlers get the backend DB proxy only — for every caller,
+ * including the publisher. The proxy enforces canWrite, :caller_id binding,
+ * read-only probe sessions and engine-table guards; a direct Turso URL/token
+ * would let a handler go around all of them.
  */
 export function stripDirectDbCredentials(env: Record<string, string>): Record<string, string> {
   const out: Record<string, string> = {};
@@ -233,9 +234,11 @@ export class CloudAppBackendService {
       params: input.params,
       vaultEnv,
       databaseEnv: {
-        ...(input.cloudAccess && !input.cloudAccess.canWrite
-          ? stripDirectDbCredentials(databaseEnv)
-          : databaseEnv),
+        // Every caller — owner, admin, maintainer, visitor — reaches the
+        // database only through the proxy. Direct Turso credentials would let
+        // a handler skip the proxy's ACL, caller binding, read-only probe
+        // sessions and engine-table guards. Write access is enforced there.
+        ...stripDirectDbCredentials(databaseEnv),
         ...proxyEnv,
       },
       callerIdentity: input.callerIdentity,

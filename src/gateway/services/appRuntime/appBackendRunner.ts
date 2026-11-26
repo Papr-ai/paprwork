@@ -2,6 +2,7 @@
  * Shared backend handler execution (desktop + Cloud App Host).
  */
 
+import { jobSdkEnv } from "../jobs/jobSdkEnv.js";
 import { spawn } from "child_process";
 import * as fs from "fs/promises";
 import * as os from "os";
@@ -73,6 +74,9 @@ export function buildBackendActionEnv(input: {
     })) {
       env[key] = String(value);
     }
+    // Bundled helpers (papr_llm, papr_files) importable from backend actions,
+    // same as from jobs.
+    Object.assign(env, jobSdkEnv(env.PYTHONPATH));
   if (mergedParams) {
     env.PAPR_ACTION_PARAMS = JSON.stringify(mergedParams);
     for (const [key, value] of Object.entries(mergedParams)) {

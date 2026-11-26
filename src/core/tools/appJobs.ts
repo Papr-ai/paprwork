@@ -1,4 +1,5 @@
 import { gatewayBackgroundBudget } from "../../gateway/services/gatewayBackgroundBudget.js";
+import { inferJobProvider } from "../utils/ollamaModelFit.js";
 import { createTool } from "@mastra/core/tools";
 import { z } from "zod";
 import { isPlatformInjectedEnvKey } from "../utils/platformInjectedEnvKeys.js";
@@ -438,9 +439,10 @@ const LLM_SDK_PACKAGES = new Set([
 
 const AGENT_JOB_LLM_REMINDER =
   "⚠️ LLM IN SCRIPT JOB: This job appears to call OpenAI/Anthropic/Gemini directly. " +
-  "Prefer type: \"agent\" — built-in OAuth/API routing, full tool access (bash, files, browser), " +
-  "delivery, recipes, and no LLM SDK boilerplate. " +
-  "Script jobs with LLM SDKs are ONLY for fixed pipelines: read known data → single LLM call → write SQLite (no tools/exploration). " +
+  "Prefer type: \"subagent\" — built-in sign-in/API routing, caching, tools, delivery, recipes, no SDK code. " +
+  "Use a sub-agent profile runtime to replace the system prompt or turn memory/wiki/tools off for neutral or cheap calls. " +
+  "Keep a script ONLY when the model call is a step inside script code that is already running (row loop, pandas/scraping pipeline), " +
+  "and then call models via `from papr_llm import complete` (runs on the gateway's model credentials, fallbacks and caching; no model key needed in requiredKeys), not raw SDKs. " +
   "Example: create_job({ type: \"agent\", command: \"Analyze leads and save top 5 to registry DB\", writeDbIds: [dbId], provider: \"anthropic\" }) " +
   "Read: read_skill({ skillId: \"preloaded-agent-job-output-guide\" })";
 
@@ -682,6 +684,12 @@ const createJobSchemaCore = z
     .describe(
       "Provider for agent/subagent jobs. Overrides default. Example: 'openai', 'anthropic', 'ollama'",
     ),
+  executionCapability: z
+    .enum(["local-only", "local-preferred", "cloud-preferred"])
+    .optional()
+    .describe(
+      "Cloud placement. Omit: app-linked → local-preferred, standalone → local-only, desktop-only code → local-only automatically; subagent jobs use the profile's value.",
+    ),
   model: z
     .enum([
       // Anthropic
@@ -716,7 +724,10 @@ const createJobSchemaCore = z
       "gemini-3.6-flash",
       "gemini-3.7-flash",
       "gemini-3.8-flash",
+      "gemini-4-carbon",
+      "gemini-4-neon",
       "gemini-4-argon",
+      "gemini-4-hydrogen",
       "gemini-3.1-pro-preview",
       // Ollama - Qwen
       "qwen3.5:0.8b",
@@ -728,6 +739,9 @@ const createJobSchemaCore = z
       // Ollama - Recursive Flint
       "flint:latest",
       "flint:40b",
+      // Ollama - Thinking Machines Inkling 2 Mini (looped)
+      "inkling-2-mini:latest",
+      "inkling-2-mini:26b-a5b",
       // Ollama - Gemma 4
       "gemma4:e2b",
       "gemma4:e4b",
@@ -894,11 +908,51 @@ function resolveAppFiles(
     { filename: "app.ts", content: javascript },
   ];
 
+  // The agent's CSS is the app's own stylesheet. base.css is reserved for the
+  // Liquid Glass design system (added in execute); writing the agent's CSS
+  // there replaced the design system and left HTML that links style.css unstyled.
   if (css !== null) {
-    files.push({ filename: "base.css", content: css });
+    files.push({ filename: "style.css", content: css });
   }
 
   return files;
+}
+
+/**
+ * Make sure index.html loads the stylesheets create_app wrote. Agents link
+ * whatever name they imagine (style.css, styles.css, nothing at all), so a
+ * stylesheet that exists but is never linked renders as browser defaults.
+ * Skips sheets already linked or imported from the TS entry (bundled into dist/app.css).
+ */
+export function linkCreatedStylesheets(
+  files: Array<{ filename: string; content: string }>,
+): Array<{ filename: string; content: string }> {
+  const index = files.find((f) => f.filename === "index.html");
+  if (!index) return files;
+  const entry = files.find((f) => /^(app|main)\.tsx?$/.test(f.filename));
+  const isLoaded = (sheet: string): boolean => {
+    const name = sheet.replace(".", "\\.");
+    const linked = new RegExp(`href=["'](?:\\./)?${name}["'?]`, "i");
+    const imported = new RegExp(`import\\s+['"]\\./${name}['"]`);
+    return linked.test(index.content) || Boolean(entry && imported.test(entry.content));
+  };
+  const has = (sheet: string) => files.some((f) => f.filename === sheet);
+  let html = index.content;
+  const firstSheet = /<link\b[^>]*rel=["']stylesheet["'][^>]*>/i;
+  const insertBeforeHeadEnd = (tag: string) =>
+    /<\/head>/i.test(html) ? html.replace(/<\/head>/i, `  ${tag}\n</head>`) : `${tag}\n${html}`;
+  // Design system first so the app's own rules win the cascade.
+  if (has("base.css") && !isLoaded("base.css")) {
+    const tag = '<link rel="stylesheet" href="base.css">';
+    html = firstSheet.test(html)
+      ? html.replace(firstSheet, (m) => `${tag}\n  ${m}`)
+      : insertBeforeHeadEnd(tag);
+  }
+  if (has("style.css") && !isLoaded("style.css")) {
+    html = insertBeforeHeadEnd('<link rel="stylesheet" href="style.css">');
+  }
+  if (html === index.content) return files;
+  return files.map((f) => (f === index ? { ...f, content: html } : f));
 }
 
 export const createAppTool = createTool({
@@ -931,16 +985,15 @@ export const createAppTool = createTool({
     const appService = getAppService();
     await appService.initialize();
 
-    const files = resolveAppFiles(args);
+    let files = resolveAppFiles(args);
 
-    // Auto-inject Liquid Glass base CSS if no stylesheet was provided
-    const hasStylesheet = files.some(
-      (f) => f.filename === "base.css" || f.filename === "style.css",
-    );
-    if (!hasStylesheet) {
+    // Always ship the Liquid Glass design system as base.css (tokens, glass,
+    // typography). The agent's own CSS lives in style.css on top of it.
+    if (!files.some((f) => f.filename === "base.css")) {
       const baseCss = await loadLiquidGlassBase();
       files.push({ filename: "base.css", content: baseCss });
     }
+    files = linkCreatedStylesheets(files);
 
     const app = await appService.createApp(
       args.title,
@@ -1116,8 +1169,8 @@ export const createJobTool = createTool({
     "Use folder for pipeline stage grouping (ingestion, processing), not app linkage. " +
     "For pipelines that should run automatically when a parent job finishes, each dependsOn entry MUST include autoTrigger: true (same for subagent→subagent as python→subagent). " +
     "Without autoTrigger, dependencies only order runs when you start the job another way. " +
-    "\n\nLLM tasks: Prefer type: 'agent' for any job that needs AI reasoning, tools, or exploration. " +
-    "Do NOT create python/node jobs with anthropic/openai SDK packages unless it is a fixed pipeline (read data → single LLM call → write SQLite). " +
+    "\n\nModel calls: default to type: 'subagent' (shape it with the profile runtime: replace system prompt, memory/wiki/tools off for neutral or cheap calls). " +
+    "Use a python/node job that calls a model only when the call is a step inside script code that is already running (row loop, pandas/scraping pipeline) — via the bundled papr_llm helper, never raw anthropic/openai SDKs. " +
     "\n\nAgent job model selection: " +
     "Use 'provider' and 'model' fields for direct override (type: 'agent', same behavior, just different model). " +
     "Use subagent (type: 'subagent' with subAgentId) when you need custom system prompt or restricted tools. " +
@@ -1186,9 +1239,10 @@ export const createJobTool = createTool({
       maxTurns: args.maxTurns,
       memoryPolicy: args.memoryPolicy,
       reportChatId: args.reportChatId,
-      provider: args.provider,
+      provider: inferJobProvider(args.provider, args.model),
       model: args.model,
       recipe: args.recipe,
+      executionCapability: args.executionCapability,
     });
 
     const isScriptJob = ["python", "node", "bash", "shell", "swift"].includes(
@@ -2122,7 +2176,10 @@ const updateJobSchema = z.object({
       "gemini-3.6-flash",
       "gemini-3.7-flash",
       "gemini-3.8-flash",
+      "gemini-4-carbon",
+      "gemini-4-neon",
       "gemini-4-argon",
+      "gemini-4-hydrogen",
       "gemini-3.1-pro-preview",
       // Ollama - Qwen
       "qwen3.5:0.8b",
@@ -2134,6 +2191,9 @@ const updateJobSchema = z.object({
       // Ollama - Recursive Flint
       "flint:latest",
       "flint:40b",
+      // Ollama - Thinking Machines Inkling 2 Mini (looped)
+      "inkling-2-mini:latest",
+      "inkling-2-mini:26b-a5b",
       // Ollama - Gemma 4
       "gemma4:e2b",
       "gemma4:e4b",
@@ -2609,6 +2669,30 @@ export const listAppsTool = createTool({
       favorite: app.favorite,
     }));
 
+    // Cloud runs start with no apps on disk: also list the user's published apps (their own
+    // can be opened and edited by id; the code loads on first use) with their real links.
+    let cloudApps: Array<Record<string, unknown>> | undefined;
+    if (process.env.GATEWAY_MODE === "cloud_agent") {
+      const { fetchCloudAccessibleApps, isOwnCatalogApp } = await import(
+        "../../gateway/services/cloudAgentGateway/cloudAppCatalog.js"
+      );
+      const { shareLinksForCatalogApps } = await import(
+        "../../gateway/services/cloudAgentGateway/cloudAppShareLinks.js"
+      );
+      const local = new Set(appsData.map((a) => a.id));
+      const remote = (await fetchCloudAccessibleApps()).filter((a) => !local.has(a.appId));
+      const links = await shareLinksForCatalogApps(remote, isOwnCatalogApp);
+      cloudApps = remote.map((a) => ({
+        id: a.appId,
+        title: a.name ?? a.slug,
+        description: a.catalogHeadline ?? a.description ?? undefined,
+        link: links.get(a.appId)?.shareLink ?? a.shareUrl,
+        linkWho: links.get(a.appId)?.shareLinkWho,
+        updatedAt: a.updatedAt ?? undefined,
+        editable: isOwnCatalogApp(a),
+      }));
+    }
+
     const workspace = getPaprWorkspacePathsForAgent();
 
     return {
@@ -2616,6 +2700,13 @@ export const listAppsTool = createTool({
       data: {
         apps: asToonOrRows("apps", appsData),
         count: appsData.length,
+        ...(cloudApps
+          ? {
+              publishedApps: cloudApps,
+              publishedAppsTip:
+                "Their published apps. Share only these links. To change one marked editable, use its id with read_app_file / edit_app_file (the code loads on first use) — do not create a new app.",
+            }
+          : {}),
         appsRoot: workspace.appsRoot,
         paprHome: workspace.paprHome,
         tip:
@@ -2906,8 +2997,13 @@ Common use cases:
       await import("../../gateway/services/JobsService.js");
     const jobsService = getJobsService();
     await jobsService.initialize();
+    const inferredProvider =
+      rest.model !== undefined && rest.provider === undefined
+        ? inferJobProvider(undefined, rest.model)
+        : undefined;
     const job = await jobsService.updateJob(jobId, {
       ...rest,
+      ...(inferredProvider ? { provider: inferredProvider as typeof rest.provider } : {}),
       ...(requiredKeys !== undefined
         ? { requiredKeys: jobRequiredKeyNames(requiredKeys) }
         : {}),
@@ -4481,7 +4577,7 @@ IMPORTANT: Run this after creating/editing app files to catch issues early!`,
           "",
           errorList,
           "",
-          "Fix runtime JS errors before proceeding. Sources: auto preview webview + errors forwarded from the app iframe while the user tests.",
+          "Fix these before proceeding. Sources: auto preview webview, errors forwarded from the app iframe, failed backend actions, and [data] checks (data the app loaded on first load that never reached the screen).",
           runtimeCheck.preview.skippedReason
             ? `(Preview note: ${runtimeCheck.preview.skippedReason})`
             : "",

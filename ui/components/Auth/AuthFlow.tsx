@@ -24,6 +24,7 @@ import {
 } from "./OrgNamespaceSetup";
 import { ConnectAIStep } from "./ConnectAIStep";
 import { RecommendStep } from "./RecommendStep";
+import { PlanStep } from "./PlanStep";
 import { transitionTo } from "../../utils/onboardingState";
 import {
   fetchRemoteOnboarding,
@@ -91,6 +92,12 @@ export function AuthFlow({ onComplete, devPreview, resume }: AuthFlowProps) {
   const [returnedToConnect, setReturnedToConnect] = useState(false);
   /** True once main sends org/namespace setup — blocks signin → connect race. */
   const orgSetupPendingRef = useRef(false);
+  /**
+   * "Pick your plan" right after this user creates a new org. Local UI state on
+   * purpose (not a persisted stage): it only makes sense in the moment the org
+   * was made; on a relaunch the choice is still in Settings -> Billing.
+   */
+  const [showPlanStep, setShowPlanStep] = useState(false);
 
   // Server-side breadcrumb for resume + funnel drop-off. Not load-bearing for
   // navigation — the stage machine is still driven locally.
@@ -202,9 +209,20 @@ export function AuthFlow({ onComplete, devPreview, resume }: AuthFlowProps) {
         source="auth_wall"
         onComplete={() => {
           orgSetupPendingRef.current = false;
+          // A new org means this user owns it and can buy: offer the plan first.
+          if (setupRequest.needsOrg) setShowPlanStep(true);
           setSetupRequest(null);
           setStage("connect");
         }}
+      />
+    );
+  }
+
+  if (showPlanStep && stage === "connect") {
+    return (
+      <PlanStep
+        previewMode={Boolean(devPreview)}
+        onDone={() => setShowPlanStep(false)}
       />
     );
   }

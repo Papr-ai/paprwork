@@ -8,6 +8,50 @@ export type SubAgentIconName =
   | "pen"
   | "chart";
 
+/**
+ * How a sub-agent run is assembled. Every field is optional and defaults to
+ * the full Pen runtime, so existing profiles behave exactly as before.
+ */
+export interface SubAgentRuntimeOptions {
+  /**
+   * append (default): the profile prompt rides on top of Pen's full system
+   * prompt. replace: the profile prompt IS the system prompt — no Pen
+   * instructions, skills or platform docs. A blank prompt in replace mode
+   * becomes a one-line neutral assistant prompt.
+   */
+  systemPromptMode?: "append" | "replace";
+  /** Papr memory catalog, goals and use cases in context. Default true. */
+  memoryContext?: boolean;
+  /** Local wiki graph catalog in context. Default true. */
+  wikiContext?: boolean;
+  /** Papr tools. false = no tools at all (allowedToolIds ignored). Default true. */
+  tools?: boolean;
+  /** Provider-native web search (ChatGPT/OpenAI web_search, Gemini Google Search). Default true. */
+  nativeWebSearch?: boolean;
+  /** Anthropic prompt caching (system 1h + conversation 5m; long retention on sign-in). Default true. */
+  promptCaching?: boolean;
+  /** Stale tool-result compaction and oldest-turn trimming. Default true. */
+  contextTrimming?: boolean;
+}
+
+/** Resolved runtime options with every default filled in. */
+export function resolveSubAgentRuntime(
+  runtime?: SubAgentRuntimeOptions,
+): Required<SubAgentRuntimeOptions> {
+  return {
+    systemPromptMode: runtime?.systemPromptMode ?? "append",
+    memoryContext: runtime?.memoryContext ?? true,
+    wikiContext: runtime?.wikiContext ?? true,
+    tools: runtime?.tools ?? true,
+    nativeWebSearch: runtime?.nativeWebSearch ?? true,
+    promptCaching: runtime?.promptCaching ?? true,
+    contextTrimming: runtime?.contextTrimming ?? true,
+  };
+}
+
+/** Neutral system prompt used when replace mode is given a blank prompt. */
+export const BLANK_SUBAGENT_SYSTEM_PROMPT = "You are a helpful assistant.";
+
 export interface SubAgentProfile {
   id: string;
   name: string;
@@ -26,6 +70,13 @@ export interface SubAgentProfile {
   memoryPolicy?: "none" | "summary" | "full";
   /** Icon name for sidebar/mini-chat (robot, search, code, pen, chart) */
   icon?: SubAgentIconName;
+  /** Runtime assembly: replace system prompt, memory/wiki/tools/search/caching switches. */
+  runtime?: SubAgentRuntimeOptions;
+  /**
+   * Default placement for jobs that run this profile (cloud sync on). A job's own
+   * executionCapability wins; unset = the job default (local-preferred when app-linked).
+   */
+  executionCapability?: "local-only" | "local-preferred" | "cloud-preferred";
   createdAt: string;
   updatedAt: string;
   runCount: number;

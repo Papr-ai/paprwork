@@ -1207,6 +1207,16 @@ ${customKeysList}
 - User can set "always allow" to skip prompts
 - Keys are sanitized in output (shown as \`***\`)
 
+## Sharing keys with teammates (built in — use it)
+
+When a teammate needs a key the user already has (e.g. an installed app needs \`X_BEARER_TOKEN\`), the answer is **Papr key sharing**, not copying the value:
+- The owner opens **Settings → Integration Keys → (key) → Who can use it** and picks **Selected members**, **Team** or **Organization**, then Save.
+- Teammates then get it automatically, as a read-only mirror under the same name. It works in their desktop jobs, bash and agent sessions as \`\${KEY_NAME}\` and in their cloud app backends. They don't paste anything and can't see or edit the value.
+- \`list_keys\` shows \`sharedWith\` for each key. Check it before saying a key isn't shared.
+- **Never** suggest Bitwarden, 1Password, Slack, email or "a secure channel" to hand a key to a Papr teammate. Never ask anyone to paste a key in chat.
+- Point out the trade-offs when they matter: a shared key uses the owner's quota and billing, and the owner can stop sharing at any time. Suggest a separate personal key only when the teammate needs their own account (e.g. their own LinkedIn session) or the owner doesn't want to share.
+- For an app whose visitors should use the publisher's key, declare it with \`provider: "owner"\` (declare_app_keys). That's a different job from sharing with teammates.
+
 **For detailed OAuth vs API key routing, permission system, and best practices, read:**
 \`read_skill({ skillId: "preloaded-api-key-testing" })\``;
   }
@@ -1268,8 +1278,17 @@ Search results include:
 - Attribution and confidence scores
 
 **Note:** Prefer native web search over curl/bash for general web queries. Only use curl for specific API calls or scraping tasks.`;
+    } else if (provider === "openrouter") {
+      return `# Web Search (built in)
+
+Web search runs automatically for this model: when you need current information,
+search the web and the results come back with source URLs. Cite the URLs you used.
+
+Use it for current events, latest versions or docs, prices, and facts that may have
+changed. Use browser tools for a specific page you need to read or interact with,
+and curl for APIs.`;
     }
-    
+
     // For Anthropic and other providers without native search, return empty string
     // (They should use browser tools or curl as needed)
     return "";
@@ -1545,7 +1564,7 @@ Full guide: \`src/resources/agent-docs/APP_FILES_GUIDE.md\` § Agent-generated i
   private buildMemoryToolsSection(): string {
     return `# Papr Memory Tools
 
-**Requires PAPR_API_KEY.** If not configured, tell the user they can get a free API key at **https://dashboard.papr.ai** and set it in Settings. Memory tools will fail without this key.
+**Requires Papr sign-in.** Signing in to Papr Work sets up memory automatically (no API key to copy). If memory tools fail with a missing key, tell the user to sign in under **Settings → Account**. For plans, credits, upgrades, invoices or payment methods, send them to **Settings → Billing** in Papr Work — everything is managed there. Do NOT send Papr Work users to dashboard.papr.ai: that is the developer dashboard for building on the Memory API, and visiting it is never needed to use Papr Work.
 
 ## When to Use Each Tool
 
@@ -2125,6 +2144,7 @@ An @Name in the user's message is **context for you**, not a message to that per
 - \`list_mentions\` box=sent shows what the user is waiting on and who answered, with the thread so far, progress (asked, in_progress, needs_reply = their move, done, cant, closed) and the app it's about (pass appId/appName to mention_person when an ask concerns an app).
 - If \`mention_person\` says that person already has an open ask to the user, it's their request: answer it with \`answer_mention\` (status open) so it stays one thread. Don't start a second one unless it's a different topic (force: true).
 - \`follow_up_mention\` works on asks the user sent: reply adds to the thread, nudge checks in, close withdraws one that was answered elsewhere, duplicated or no longer needed. Check list_mentions box=sent before sending a new ask on a topic that already has one.
+- If a teammate asks for an API key or token, don't draft "send it via Bitwarden/secure channel" or "make your own". The user can share it in **Settings → Integration Keys → Who can use it** (Selected members / Team / Organization). See the API Keys section.
 - A message that starts with **"<Name> mentioned you"** is a teammate asking the user something. Help them answer: when they approve the suggested reply or write their own, send it with \`answer_mention\` (status open = they're on it / in progress, done = finished, dismissed = can't). If the reply asks the sender for something you need to continue, add needsReply: true so it shows as waiting on them, not 'on it'. Never send a reply they haven't approved.
 - A message "<Name> finished: …" means it's the user's turn on work they were waiting on. Help them pick up where they left off.`;
   }
@@ -2176,8 +2196,8 @@ Papr Work is an app platform, not just a chat bot. Build automations with durabl
 - **LinkedIn cookie-only fallback:** \`\${LINKEDIN_LI_AT}\` when not using \`linkedin-api\` — often blocked; prefer CDP on desktop.
 - **All other platforms (X, Reddit, Instagram, …):** \`\${TWITTER_*}\`, \`\${REDDIT_*}\`, \`\${INSTAGRAM_*}\` + headless Playwright / \`requests\` / bash. **Do NOT** use \`*-api\` CDP requirements. Papr Chrome is sign-in only — not job runtime. Works in **cloud** when vault keys are synced.
 
-✅ Agent job: built-in OAuth/subscription routing, tools, delivery, recipes — no LLM SDK boilerplate
-❌ Python + \`requirements: ["anthropic"]\` + direct API calls — only for fixed pipelines (read DB → one LLM call → write SQLite)
+✅ **Any model call → \`subagent\` job by default.** Sign-in/API-key routing, caching, trimming, tools, delivery, recipes — no SDK code. Shape the profile with \`runtime\`: \`systemPromptMode: "replace"\` for a focused writer/classifier/scorer; also \`memoryContext: false, wikiContext: false, tools: false\` for a neutral or cheapest call (evals, "is X recommended" checks). Keep \`promptCaching\`/\`contextTrimming\` on.
+⚠️ **Model calls from Python/Node — only when the call is a step inside script code that is already running** (a row loop, a pandas/scraping pipeline, a backend action post-processing its own result). Everything else is a subagent job: results stream back via subscribeJobEvents, web search works on every provider, and a neutral profile sends the same request every time. In scripts call through \`from papr_llm import complete\` (bundled; runs on the gateway's model credentials, fallbacks and caching — no model key in requiredKeys; other API keys the script uses still go there). Never hand-write \`anthropic.Anthropic(...)\` / \`api.openai.com\` calls.
 
 \`create_job\` will warn with \`_agentJobReminder\` if you add LLM SDK packages or API keys to a script job.
 
@@ -2533,18 +2553,15 @@ await create_job({
 
 \`\`\`python
 # backend/save_invoice.py — papr_db.py scaffolded on app create (local + cloud)
-from papr_db import connect, execute
+from papr_db import connect, query, write
 
-con = connect("billing")  # explicit alias when 2+ linked DBs; never sqlite3.connect(APP_DB)
-rows = execute(
-    con,
-    "INSERT INTO invoices (amount) VALUES (?) RETURNING id, amount",
-    [100],
-)  # list[dict] — works desktop (local SQLite) and cloud (Turso)
-con.close()
+con = connect("billing")  # alias of the linked DB; never sqlite3.connect
+rows = query(con, "SELECT id, amount FROM invoices WHERE paid = ?", [0]).rows  # list of plain dicts
+new_id = write(con, "INSERT INTO invoices (amount) VALUES (?)", [100]).last_insert_rowid
+changed = write(con, "UPDATE invoices SET paid = 1 WHERE id = ?", [new_id]).changes
 \`\`\`
 
-**Backend DB rules (Python):** Always \`from papr_db import connect\` — gateway sets \`PAPR_DB_MODE\` to \`local\` (file at \`APP_DB\`) or \`turso\` (HTTP). \`sqlite3.connect()\` only works on desktop. After plain \`INSERT\`, use \`con.lastrowid\` or \`cursor().lastrowid\`. No multi-statement transactions across \`execute()\` calls on cloud (each statement is one HTTP round trip) — **mini-app frontends** use \`/api/db/write-batch\` with \`atomic: true\` for multi-statement writes. **SQL handlers:** use Python + \`papr_db\`; Node/TS backends have no cross-env DB helper — use Python for DB access or call \`/api/db/*\` from the frontend.
+**Backend DB rules (Python):** Use only \`query(con, sql, params).rows\` (reads → list of plain dicts) and \`write(con, sql, params)\` (\`.changes\`, \`.last_insert_rowid\`). Both run through the gateway on desktop and cloud. Don't write sqlite3-style code (\`con.execute().fetchall()\`, cursors, \`dict(zip(...))\`) and don't use \`RETURNING\`. No transactions across calls — **mini-app frontends** use \`/api/db/write-batch\` with \`atomic: true\` for multi-statement writes. Node/TS backends have no DB helper — use Python or call \`/api/db/*\` from the frontend.
 
 \`\`\`javascript
 // Frontend — optional params.sourceId overrides manifest

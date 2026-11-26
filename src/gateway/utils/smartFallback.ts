@@ -201,6 +201,27 @@ const MODEL_CAPABILITIES: Record<string, ModelCapabilities> = {
     cost: "medium",
     specialties: ["agentic", "coding", "software-engineering", "frontier-flash"],
   },
+  "gemini-4-carbon": {
+    reasoningLevel: "advanced",
+    contextWindow: 1048576,
+    speed: "slow",
+    cost: "expensive",
+    specialties: ["reasoning", "coding", "software-engineering", "science", "agentic"],
+  },
+  "gemini-4-neon": {
+    reasoningLevel: "advanced",
+    contextWindow: 1048576,
+    speed: "fast",
+    cost: "expensive",
+    specialties: ["coding", "knowledge-work", "agentic"],
+  },
+  "gemini-4-hydrogen": {
+    reasoningLevel: "advanced",
+    contextWindow: 1048576,
+    speed: "fast",
+    cost: "medium",
+    specialties: ["coding", "agentic", "tool-use"],
+  },
   "gemini-4-argon": {
     reasoningLevel: "advanced",
     contextWindow: 1048576,
@@ -297,6 +318,7 @@ export async function getBestFallbackModel(
     zai: "glm-5.2",
     groq: "openai/gpt-oss-120b",
     moonshot: "kimi-k3",
+    openrouter: "thinkingmachines/inkling-2-mini",
   };
   if (!originalCapabilities) {
     const firstAvailable = available[0];
@@ -440,6 +462,12 @@ export function getUpgradeModelForTask(
       coding: "kimi-k3",
       writing: "kimi-k3",
       general: "kimi-k3",
+    },
+    openrouter: {
+      reasoning: "deepseek/deepseek-v4-pro",
+      coding: "deepseek/deepseek-v4-pro",
+      writing: "thinkingmachines/inkling-2-mini",
+      general: "thinkingmachines/inkling-2-mini",
     },
   };
 
