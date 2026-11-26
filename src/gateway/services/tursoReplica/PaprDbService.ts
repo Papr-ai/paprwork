@@ -500,16 +500,34 @@ export async function paprDbQuery(options: {
   sql: string;
   params?: unknown[];
   limit?: number;
+  target?: "preview" | "live";
+  appId?: string;
 }): Promise<{
   rows: Record<string, unknown>[];
   count: number;
   truncated: boolean;
   backend: "cloud-direct" | "turso-replica" | "local";
+  target: string;
 }> {
   await initializeDatabaseRegistry();
-  const source = resolveSource({ dbId: options.dbId, localPath: options.localPath });
+  const real = resolveSource({ dbId: options.dbId, localPath: options.localPath });
   const { assertReadOnlySql } = await import("../appRuntime/sqlValidation.js");
   assertReadOnlySql(options.sql);
+  const { resolveAgentDbTarget } = await import("../previewData/agentDbTarget.js");
+  const resolved = await resolveAgentDbTarget(real, options);
+  const result = await queryResolvedSource(resolved.source, options);
+  return { ...result, target: resolved.label };
+}
+
+async function queryResolvedSource(
+  source: AppDataSource,
+  options: { sql: string; params?: unknown[]; limit?: number },
+): Promise<{
+  rows: Record<string, unknown>[];
+  count: number;
+  truncated: boolean;
+  backend: "cloud-direct" | "turso-replica" | "local";
+}> {
   const limit = Math.max(1, Math.min(options.limit ?? 200, 1000));
   const cap = (rows: Record<string, unknown>[]) => ({
     rows: rows.slice(0, limit),
@@ -548,17 +566,47 @@ export async function paprDbExec(options: {
   localPath?: string;
   sql: string;
   params?: unknown[];
+  target?: "preview" | "live";
+  appId?: string;
+  confirmedWithUser?: boolean;
 }): Promise<{
+  changes: number;
+  lastInsertRowid: number;
+  pendingPush: boolean;
+  backend: "turso-replica" | "legacy-local" | "cloud-direct" | "preview-copy";
+  target: string;
+}> {
+  await initializeDatabaseRegistry();
+  const real = resolveSource({
+    dbId: options.dbId,
+    localPath: options.localPath,
+  });
+  const { resolveAgentDbTarget, assertLiveWriteConfirmed } = await import("../previewData/agentDbTarget.js");
+  const resolved = await resolveAgentDbTarget(real, options);
+  if (resolved.target === "preview") {
+    assertPaprDbExecAllowed(options.sql);
+    const { default: Database } = await import("better-sqlite3");
+    const db = new Database(resolved.source.dbPath);
+    try {
+      const r = db.prepare(options.sql).run(...((options.params ?? []) as never[]));
+      return { changes: r.changes, lastInsertRowid: Number(r.lastInsertRowid), pendingPush: false, backend: "preview-copy", target: resolved.label };
+    } finally {
+      db.close();
+    }
+  }
+  assertLiveWriteConfirmed(resolved, options.confirmedWithUser, options.sql);
+  return { ...(await execOnLiveSource(real, options)), target: resolved.label };
+}
+
+async function execOnLiveSource(
+  source: AppDataSource,
+  options: { sql: string; params?: unknown[] },
+): Promise<{
   changes: number;
   lastInsertRowid: number;
   pendingPush: boolean;
   backend: "turso-replica" | "legacy-local" | "cloud-direct";
 }> {
-  await initializeDatabaseRegistry();
-  const source = resolveSource({
-    dbId: options.dbId,
-    localPath: options.localPath,
-  });
 
   // Cloud-direct: no local file — the Turso primary is the only copy.
   const { isCloudDirectSource, cloudDirectWrite } = await import(

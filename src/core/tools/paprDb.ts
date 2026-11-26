@@ -96,7 +96,19 @@ export const paprDbPullTool = createTool({
   },
 });
 
+const targetFields = {
+  target: z
+    .enum(["preview", "live"])
+    .optional()
+    .describe(
+      "preview = the app's test copy (your pending data change; rows are thrown away). live = the team's real data. " +
+        "Required when the database has a preview; use the view the user has open and say which you used.",
+    ),
+  appId: z.string().min(1).optional().describe("App whose preview to use, when several apps share this database"),
+};
+
 const paprDbQuerySchema = dbRefSchema.extend({
+  ...targetFields,
   sql: z.string().min(1).describe("SELECT or WITH … SELECT only"),
   params: z.array(z.unknown()).optional().describe("Bound params"),
   limit: z.number().int().min(1).max(1000).optional().describe("Max rows returned (default 200)"),
@@ -124,6 +136,11 @@ export const paprDbQueryTool = createTool({
 });
 
 const paprDbExecSchema = dbRefSchema.extend({
+  ...targetFields,
+  confirmedWithUser: z
+    .boolean()
+    .optional()
+    .describe("Teammate on the team's data writing Live rows: true only after the user agreed (you told them how many rows)"),
   sql: z.string().min(1).describe("SQL to execute (DML or DDL)"),
   params: z.array(z.unknown()).optional().describe("Bound params for DML"),
 });
