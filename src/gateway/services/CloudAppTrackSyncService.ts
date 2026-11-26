@@ -36,6 +36,7 @@ import {
   type CloudAppInstallInput,
 } from "./CloudAppInstallService.js";
 import { getAppService } from "./AppService.js";
+import { isUnlinkedDatabaseMigrationPath } from "./syncV3/syncPulledSchemaOwnerMigrations.js";
 import { isLocallyRebuiltAppPath } from "./syncV3/platformGeneratedAppPaths.js";
 import { decideTrackPullAction } from "./cloudSync/trackPullOnPublishLogic.js";
 import type { InstallDeniedReason } from "./CloudAppInstallService.js";
@@ -561,6 +562,12 @@ export class CloudAppTrackSyncService {
           continue;
         }
 
+        // A database this copy doesn't link: nothing to write it to. Skip, don't fail.
+        if (await isUnlinkedDatabaseMigrationPath(appId, filename)) {
+          skippedFiles.push(filename);
+          continue;
+        }
+
         const written = await write(filename, upstreamContent);
         (written ? updatedFiles : failedFiles).push(filename);
       }
@@ -640,6 +647,12 @@ export class CloudAppTrackSyncService {
       // Linked-job install replaces job folders wholesale with the publisher's
       // copy. Remember the collaborator's job code first so edits survive.
       const paprRoot = getPaprRoot();
+      if (!dryRun) {
+        // Migrations deleted on the web stay here (history): move aside any an
+        // older build filed under the wrong database, or it is pending forever.
+        const { quarantineMisfiledForApp } = await import("./jobs/misfiledMigrations.js");
+        await quarantineMisfiledForApp(paprRoot, appId).catch(() => []);
+      }
       const jobIdsBefore = resolveAppDependentJobIds(paprRoot, appId);
       const localJobFiles = new Map<string, Map<string, string>>();
       if (!options.discardLocal) {

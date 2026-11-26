@@ -759,6 +759,13 @@ export async function pullAppCodeFromRepo(
       registryMigrationsCopied.push(registryRelativePath);
     }
 
+    // A migration deleted on the web stays here (history), so one an older
+    // build misfiled would stay pending forever: move those aside.
+    {
+      const { quarantineMisfiledForApp } = await import("../jobs/misfiledMigrations.js");
+      await quarantineMisfiledForApp(paprDir, trimmed).catch(() => []);
+    }
+
     if (deletedFiles.length > 0) {
       console.log(`[PullAppCode] ${trimmed}: removed ${deletedFiles.length} file(s) deleted on the web`);
     }
