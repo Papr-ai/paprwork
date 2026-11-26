@@ -43,7 +43,7 @@ describe("resolveViewPill", () => {
 
   it("waiting names the reviewer; declined is red with See why", () => {
     expect(resolveViewPill({ ...base, copyBar: chip("Proposal sent", "idle", "view_proposal", "View") }).preview.label)
-      .toBe("Waiting for amir");
+      .toBe("Waiting for review");
     expect(resolveViewPill({ ...base, copyBar: chip("Proposal declined", "bad", "see_decline", "See why") }).preview)
       .toMatchObject({ tone: "warn", verb: "See why" });
   });
@@ -86,7 +86,7 @@ describe("viewDot", () => {
     expect(viewDot("live", { label: "Up to date", tone: "ok" })).toBeNull();
     expect(viewDot("live", { label: "Offline", tone: "warn" })).toBe("warn");
     expect(viewDot("preview", { label: "Same as Live", tone: "idle", empty: true })).toBeNull();
-    expect(viewDot("preview", { label: "Waiting for amir", tone: "idle" })).toBeNull();
+    expect(viewDot("preview", { label: "Waiting for review", tone: "idle" })).toBeNull();
     expect(viewDot("preview", { label: "Declined", tone: "warn" })).toBe("warn");
   });
 });

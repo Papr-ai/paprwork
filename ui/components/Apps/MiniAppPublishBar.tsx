@@ -978,7 +978,11 @@ export function MiniAppPublishBar({
   // the fetch returns pending rows (errors, preparing uploads, or a cleared list
   // would otherwise remove the only entry point after we dropped auto-open).
   const showContributionsInbox = showOwnerChangeRequests;
-  const contributionsBadgeCount = incomingChanges.open.length;
+  // Reviewing from a copy: this copy's own proposals aren't "waiting for review"
+  // by you (Preview already shows them as Your changes), so they're not in the
+  // badge, the review list, or the Preview switcher.
+  const othersProposals = incomingChanges.open.filter((r) => r.installedAppId !== appId);
+  const contributionsBadgeCount = othersProposals.length;
 
   const takeOffWeb = () => {
     void cloud.unpublish();
@@ -1852,10 +1856,6 @@ export function MiniAppPublishBar({
   // 8d: try one proposal at a time in Preview (Live + only its files, test data).
   const [trying, setTrying] = useState<{ id: string; title: string } | null>(null);
   const [tryError, setTryError] = useState<string | null>(null);
-  // Proposals to try are other people's. One this copy sent is already "Your
-  // changes" (and once accepted it's in Live), so listing it again showed the
-  // same change twice and kept it after Live said accepted.
-  const othersProposals = incomingChanges.open.filter((r) => r.installedAppId !== appId);
   const previewChoices = barV2 && othersProposals.length > 0
     ? [
         { id: null, label: "Your changes", sub: pill.preview.empty ? "Same as Live" : pill.preview.label },
@@ -2607,7 +2607,7 @@ export function MiniAppPublishBar({
               appPublished={cloud.live}
               showHeader={false}
               requests={incomingChanges.requests}
-              pending={incomingChanges.open}
+              pending={othersProposals}
               loading={incomingChanges.loading}
               error={incomingChanges.error}
               onReload={incomingChanges.reload}

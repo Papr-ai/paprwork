@@ -99,7 +99,8 @@ function previewWords(chip: CopyBar["chip"], slug: string): PillStatus {
     case "publish":
       return { label: "Not published yet", tone: "warn", verb: "Publish", action: "publish" };
     case "view_proposal":
-      return { label: `Waiting for ${slug}`, tone: "idle", verb: "View", action: "view_proposal" };
+      // The copy only knows the app's slug, not who reviews it: name the step, not a URL.
+      return { label: "Waiting for review", tone: "idle", verb: "View", action: "view_proposal", hint: `Sent. Waiting for ${slug}'s owner to review it.` };
     case "update_and_repropose":
       return { label: "Needs updating", tone: "warn", verb: "Update", action: "update_and_repropose" };
     case "see_decline":
