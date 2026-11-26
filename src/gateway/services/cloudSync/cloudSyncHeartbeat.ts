@@ -245,10 +245,21 @@ export function startDesktopHeartbeat(host: CloudSyncPeriodicHost): void {
   startRuntimeDispatchSubscriber();
 }
 
+async function settleHoldsQuietly(): Promise<void> {
+  await import("../tursoReplica/settleProposalHolds.js")
+    .then(({ settleProposalHolds }) => settleProposalHolds())
+    .catch(() => []);
+}
+
 export function startPeriodicPull(host: CloudSyncPeriodicHost): void {
   host.setPullTimer(async () => {
     if (host.isSyncing() || host.getSyncStatus() === "queuing") return;
     if (Date.now() < host.getPullBackoffUntilMs()) return;
+    // Teammate schema changes held for review: settle once the publisher has
+    // approved (cloud ledger has them) or rejected the proposal. Every tick,
+    // even when the namespace pull below is deferred by a pending upload
+    // (audit A2: one unpublished edit anywhere used to block this forever).
+    await settleHoldsQuietly();
     try {
       const deferPull = await host.shouldDeferGitPull();
       if (deferPull.defer) {
@@ -260,11 +271,6 @@ export function startPeriodicPull(host: CloudSyncPeriodicHost): void {
       }
       await host.tryAutoReconcileRemoteGit();
       await host.pull();
-      // Teammate schema changes held for review: settle once the publisher has
-      // approved (cloud ledger has them) or rejected the proposal.
-      await import("../tursoReplica/settleProposalHolds.js")
-        .then(({ settleProposalHolds }) => settleProposalHolds())
-        .catch(() => []);
       // The 5-min tick is the only round trip we make, so anything that needs
       // asking the web rides along with it — including incoming contributions,
       // which the renderer refetches when this lands.

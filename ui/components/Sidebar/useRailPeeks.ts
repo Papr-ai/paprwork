@@ -12,8 +12,9 @@ import type { Artifact } from "../../stores/artifactsStore";
 import type { SidebarFavorite } from "./useSidebarFavorites";
 import { relativeTime, type PeekGroup, type PeekRow } from "./RailPeek";
 
-const RECENT_CHATS = 6;
-const RECENT_ARTIFACTS = 5;
+// The peek scrolls (header + footer stay put), so show a real list, not a teaser.
+const RECENT_CHATS = 50;
+const RECENT_ARTIFACTS = 30;
 
 const time = (iso?: string): number => (iso ? new Date(iso).getTime() || 0 : 0);
 
