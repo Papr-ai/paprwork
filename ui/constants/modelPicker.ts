@@ -93,6 +93,24 @@ export const PICKER_DEFAULT_MODEL_IDS: readonly string[] = [
   "gemini-3.5-flash-lite",
   "gemini-3.8-flash",
   "gemini-4-argon",
+  "gemini-4-neon",
+  "gemini-3.1-pro-preview",
+];
+
+/** Defaults before Gemini 4 Neon — upgrade exact saved lists. */
+export const PRE_GEMINI_4_NEON_PICKER_DEFAULT_MODEL_IDS: readonly string[] = [
+  "auto",
+  "claude-sonnet-5-5",
+  "claude-opus-5",
+  "claude-opus-5-5",
+  "claude-fable-5-2",
+  "gpt-5-6-sol",
+  "gpt-6-astra",
+  "glm-5.2",
+  "qwen/qwen3-32b",
+  "gemini-3.5-flash-lite",
+  "gemini-3.8-flash",
+  "gemini-4-argon",
   "gemini-3.1-pro-preview",
 ];
 
@@ -277,6 +295,10 @@ export function migrateEnabledPickerModelIds(
   if (
     sameModelIdSet(enabledIds, PRE_FABLE_52_GEMINI_4_PICKER_DEFAULT_MODEL_IDS)
   ) {
+    return [...PICKER_DEFAULT_MODEL_IDS];
+  }
+
+  if (sameModelIdSet(enabledIds, PRE_GEMINI_4_NEON_PICKER_DEFAULT_MODEL_IDS)) {
     return [...PICKER_DEFAULT_MODEL_IDS];
   }
 
