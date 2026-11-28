@@ -4,6 +4,7 @@ import {
   PICKER_DEFAULT_MODEL_IDS,
   PRE_GEMINI_36_PICKER_DEFAULT_MODEL_IDS,
   PRE_FABLE_52_GEMINI_4_PICKER_DEFAULT_MODEL_IDS,
+  PRE_GEMINI_4_NEON_PICKER_DEFAULT_MODEL_IDS,
   PRE_GEMINI_38_PICKER_DEFAULT_MODEL_IDS,
   PRE_OPUS_55_PICKER_DEFAULT_MODEL_IDS,
   PRE_SONNET_55_PICKER_DEFAULT_MODEL_IDS,
@@ -26,7 +27,7 @@ describe("modelPicker", () => {
   });
 
   test("default list includes Sonnet 5.5, Opus 5.5, Fable 5.2, Gemini 4, and cloud models", () => {
-    expect(PICKER_DEFAULT_MODEL_IDS).toHaveLength(13);
+    expect(PICKER_DEFAULT_MODEL_IDS).toHaveLength(14);
     expect(PICKER_DEFAULT_MODEL_IDS[0]).toBe("auto");
     expect(PICKER_DEFAULT_MODEL_IDS).toContain("claude-sonnet-5-5");
     expect(PICKER_DEFAULT_MODEL_IDS).not.toContain("claude-sonnet-5");
@@ -34,6 +35,7 @@ describe("modelPicker", () => {
     expect(PICKER_DEFAULT_MODEL_IDS).toContain("claude-fable-5-2");
     expect(PICKER_DEFAULT_MODEL_IDS).not.toContain("claude-fable-5-1");
     expect(PICKER_DEFAULT_MODEL_IDS).toContain("gemini-4-argon");
+    expect(PICKER_DEFAULT_MODEL_IDS).toContain("gemini-4-neon");
     expect(PICKER_DEFAULT_MODEL_IDS).not.toContain("claude-sonnet-4-6");
     expect(PICKER_DEFAULT_MODEL_IDS).not.toContain("claude-opus-4-6");
     expect(PICKER_DEFAULT_MODEL_IDS).toContain("gpt-5-6-sol");
@@ -262,5 +264,18 @@ describe("modelPicker", () => {
       "claude-fable-5-2",
       "gpt-5-6-sol",
     ]);
+  });
+
+  test("upgrades the pre-Neon default list to include Gemini 4 Neon", () => {
+    const migrated = resolveEnabledPickerModelIds([
+      ...PRE_GEMINI_4_NEON_PICKER_DEFAULT_MODEL_IDS,
+    ]);
+    expect(migrated).toEqual([...PICKER_DEFAULT_MODEL_IDS]);
+    expect(migrated).toContain("gemini-4-neon");
+  });
+
+  test("keeps a customized list untouched (no Neon forced in)", () => {
+    const custom = ["claude-sonnet-5-5", "gemini-4-argon"];
+    expect(resolveEnabledPickerModelIds(custom)).not.toContain("gemini-4-neon");
   });
 });
